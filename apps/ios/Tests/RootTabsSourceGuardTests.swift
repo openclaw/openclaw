@@ -510,7 +510,7 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.matches(of: /gatewayAction: \{ self\.openGatewayEntryPoint\(\) \}/).count == 1)
         #expect(!rootSource.contains("showGatewayActions"))
         #expect(!rootSource.contains("gatewayActionsDialog"))
-        #expect(rootSource.contains("private func openGatewayEntryPoint()"))
+        #expect(rootSource.contains("private func openGatewayEntryPoint(startScreen: OnboardingWizardStartScreen = .automatic)"))
         #expect(overviewSource.contains("Button(action: self.openSettings)"))
         #expect(overviewSource.contains(".accessibilityHint(\"Opens Settings / Gateway\")"))
         #expect(agentSource.contains("let openSettings: (() -> Void)?"))
@@ -636,10 +636,14 @@ struct RootTabsSourceGuardTests {
         #expect(rootSource.contains("self.maybeRequestLocalNetworkAccess(reason: \"onboarding_dismissed\")"))
         #expect(rootSource.contains("self.requestLocalNetworkAccess(reason: \"gateway_setup_deeplink\")"))
         #expect(rootSource.contains("guard self.didEvaluateOnboarding else { return }"))
+        #expect(rootSource.contains(
+            "guard self.hasConnectedOnce || self.onboardingComplete || self.hasExistingGatewayConfig() else {"))
         #expect(rootSource.contains("onRequestLocalNetworkAccess: { reason in"))
 
-        #expect(onboardingSource.contains("self.requestLocalNetworkAccess(reason: \"onboarding_continue\")"))
-        #expect(onboardingSource.contains("self.requestLocalNetworkAccessIfPastIntro(reason: \"onboarding_appear\")"))
+        #expect(onboardingSource.contains("case .mode, .connect, .auth:"))
+        #expect(onboardingSource.contains("case .intro, .welcome, .setupGateway, .success:"))
+        #expect(onboardingSource.contains("self.requestLocalNetworkAccessIfNeeded(reason: \"onboarding_appear\")"))
+        #expect(onboardingSource.contains("self.requestLocalNetworkAccessIfNeeded(reason: \"onboarding_step\")"))
         #expect(actionsSource.contains("self.gatewayController.requestLocalNetworkAccess(reason: \"settings_preflight\")"))
     }
 

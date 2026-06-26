@@ -42,6 +42,8 @@ struct RootTabs: View {
     @State private var didApplyInitialChatSession: Bool = false
     @State private var handledGatewaySetupRequestID: Int = 0
     @State private var suppressedExecApprovalPromptIDForNotificationSettings: String?
+    @State private var activePreviewTourStep: PreviewTourStep?
+    @State private var onboardingStartScreen: OnboardingWizardStartScreen = .automatic
 
     private static var initialTab: AppTab {
         let arguments = ProcessInfo.processInfo.arguments
@@ -577,12 +579,18 @@ struct RootTabs: View {
 
     private func rootOverlays(_ content: some View) -> some View {
         content
-            .overlay(alignment: .top) {
-                if self.appModel.isAppleReviewDemoModeEnabled {
-                    RootTabsPreviewModeBanner(action: { self.openGatewayEntryPoint() })
-                        .padding(.horizontal, 12)
-                        .safeAreaPadding(.top, self.appModel.lastGatewayProblem == nil ? 10 : 86)
-                        .transition(.move(edge: .top).combined(with: .opacity))
+            .overlay(alignment: .bottom) {
+                if self.appModel.isAppleReviewDemoModeEnabled,
+                   let activePreviewTourStep = self.activePreviewTourStep
+                {
+                    RootTabsPreviewTourCard(
+                        step: activePreviewTourStep,
+                        nextTitle: activePreviewTourStep.next == nil ? "Set up Gateway" : "Next",
+                        onNext: { self.advancePreviewTour() },
+                        onSkip: { self.endPreviewTour() })
+                        .padding(.horizontal, 14)
+                        .safeAreaPadding(.bottom, 74)
+                        .transition(.move(edge: .bottom).combined(with: .opacity))
                 }
             }
             .overlay(alignment: .top) {
@@ -787,16 +795,19 @@ struct RootTabs: View {
             .fullScreenCover(isPresented: self.$showOnboarding) {
                 OnboardingWizardView(
                     allowSkip: self.onboardingAllowSkip,
+                    startScreen: self.onboardingStartScreen,
                     onRequestLocalNetworkAccess: { reason in
                         self.requestLocalNetworkAccess(reason: reason)
                     },
                     onClose: { reason in
+                        OnboardingStateStore.markFirstRunIntroSeen()
+                        self.onboardingStartScreen = .automatic
                         self.showOnboarding = false
                         switch reason {
                         case .dismissed:
                             break
                         case .explore:
-                            self.selectSidebarDestination(.overview)
+                            self.startPreviewTour()
                         }
                     })
                     .environment(self.appModel)
@@ -954,7 +965,7 @@ extension RootTabs {
         }
     }
 
-    private func openGatewayEntryPoint() {
+    private func openGatewayEntryPoint(startScreen: OnboardingWizardStartScreen = .automatic) {
         let route = Self.gatewayEntryPresentationRoute(
             gatewayConnected: self.appModel.isOperatorGatewayConnected,
             hasConnectedOnce: self.hasConnectedOnce,
@@ -973,6 +984,7 @@ extension RootTabs {
         self.presentedSheet = nil
         self.showGatewayProblemDetails = false
         self.onboardingAllowSkip = true
+        self.onboardingStartScreen = startScreen
         self.showOnboarding = true
     }
 
@@ -1012,6 +1024,36 @@ extension RootTabs {
             }
         }
         self.suppressedExecApprovalPromptIDForNotificationSettings = nil
+    }
+
+    private func startPreviewTour() {
+        self.setPreviewTourStep(.chat)
+    }
+
+    private func advancePreviewTour() {
+        guard let activePreviewTourStep else { return }
+        guard let nextStep = activePreviewTourStep.next else {
+            self.endPreviewTour()
+            self.openGatewayEntryPoint(startScreen: .setupGateway)
+            return
+        }
+        self.setPreviewTourStep(nextStep)
+    }
+
+    private func endPreviewTour() {
+        self.activePreviewTourStep = nil
+    }
+
+    private func setPreviewTourStep(_ step: PreviewTourStep) {
+        self.activePreviewTourStep = step
+        switch step {
+        case .chat:
+            self.selectSidebarDestination(.chat)
+        case .talk:
+            self.selectSidebarDestination(.talk)
+        case .approvals:
+            self.selectSettingsRoute(.approvals)
+        }
     }
 
     private func showSidebar() {
@@ -1090,6 +1132,7 @@ extension RootTabs {
     private func evaluateOnboardingPresentation(force: Bool) {
         if force {
             self.onboardingAllowSkip = true
+            self.onboardingStartScreen = .setupGateway
             self.showOnboarding = true
             return
         }
@@ -1156,6 +1199,9 @@ extension RootTabs {
         guard self.didEvaluateOnboarding else { return }
         guard self.scenePhase == .active else { return }
         guard !self.showOnboarding else { return }
+        guard self.hasConnectedOnce || self.onboardingComplete || self.hasExistingGatewayConfig() else {
+            return
+        }
         self.requestLocalNetworkAccess(reason: reason)
     }
 
@@ -1212,37 +1258,93 @@ private struct RootTabsHomeCanvasAgentCard: Codable {
     var isActive: Bool
 }
 
-private struct RootTabsPreviewModeBanner: View {
-    let action: () -> Void
+private enum PreviewTourStep: CaseIterable {
+    case chat
+    case talk
+    case approvals
+
+    var index: Int {
+        Self.allCases.firstIndex(of: self).map { $0 + 1 } ?? 1
+    }
+
+    var next: Self? {
+        let allCases = Self.allCases
+        guard let currentIndex = allCases.firstIndex(of: self) else { return nil }
+        let nextIndex = allCases.index(after: currentIndex)
+        guard allCases.indices.contains(nextIndex) else { return nil }
+        return allCases[nextIndex]
+    }
+
+    var title: String {
+        switch self {
+        case .chat:
+            "Chat with agents"
+        case .talk:
+            "See voice controls"
+        case .approvals:
+            "Review approvals"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .chat:
+            "Sample chat shows how a Gateway-backed agent can keep context moving from your phone."
+        case .talk:
+            "Talk shows where realtime voice lives once a Gateway provides the needed voice session."
+        case .approvals:
+            "Approvals are examples only here. Pair a Gateway before OpenClaw can approve real actions."
+        }
+    }
+}
+
+private struct RootTabsPreviewTourCard: View {
+    let step: PreviewTourStep
+    let nextTitle: String
+    let onNext: () -> Void
+    let onSkip: () -> Void
 
     var body: some View {
-        Button(action: self.action) {
-            HStack(spacing: 8) {
-                OpenClawProMark(size: 18, shadowRadius: 2)
-                    .accessibilityHidden(true)
-                Text("Demo")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.primary)
-                Spacer(minLength: 8)
-                Text("Set up OpenClaw")
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("Preview \(self.step.index) of \(PreviewTourStep.allCases.count)")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(OpenClawBrand.accent)
-                Image(systemName: "chevron.right")
-                    .font(.caption2.weight(.bold))
+                Spacer(minLength: 12)
+                Button("Skip") {
+                    self.onSkip()
+                }
+                .font(.caption.weight(.semibold))
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(self.step.title)
+                    .font(.headline)
+                Text(self.step.detail)
+                    .font(.footnote)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(.regularMaterial, in: Capsule())
-            .overlay {
-                Capsule()
-                    .strokeBorder(Color.primary.opacity(0.08))
+
+            Button {
+                self.onNext()
+            } label: {
+                Text(self.nextTitle)
+                    .frame(maxWidth: .infinity)
             }
-            .shadow(color: .black.opacity(0.07), radius: 8, y: 3)
+            .buttonStyle(.borderedProminent)
+            .controlSize(.regular)
         }
-        .buttonStyle(.plain)
-        .frame(maxWidth: 380)
-        .accessibilityLabel("Demo mode. Set up OpenClaw.")
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+        .shadow(color: .black.opacity(0.1), radius: 14, y: 6)
+        .frame(maxWidth: 430)
     }
 }
 

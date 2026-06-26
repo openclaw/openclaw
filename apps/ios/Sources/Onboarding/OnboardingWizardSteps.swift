@@ -106,14 +106,10 @@ struct OnboardingWelcomeStep: View {
                         .padding(.horizontal, 24)
                         .padding(.top, 8)
 
-                    OnboardingPreviewStrip()
-                        .padding(.horizontal, 24)
-                        .padding(.top, 14)
-
                     VStack(spacing: 0) {
                         OnboardingChoiceButton(
-                            title: "Try a demo",
-                            subtitle: "Preview chat, tasks, and approvals with sample data.",
+                            title: "Explore a preview",
+                            subtitle: "Open a sample workspace and tap around before setup.",
                             systemImage: "rectangle.stack.fill",
                             iconColor: OpenClawBrand.info,
                             action: self.onExploreOpenClaw)
@@ -144,7 +140,7 @@ struct OnboardingWelcomeStep: View {
                     .padding(.top, 22)
 
                     Text(
-                        "Preview uses sample data. Pair a Gateway when you're ready to use your real workspace.")
+                        "Preview uses sample data. Pair a Gateway when you're ready to run real agents and actions.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                         .multilineTextAlignment(.center)
@@ -336,39 +332,6 @@ struct OnboardingGatewaySetupStep: View {
         .onChange(of: self.platform) { _, _ in
             self.commandCopyFeedback = nil
         }
-    }
-}
-
-private struct OnboardingPreviewStrip: View {
-    private let items = [
-        ("Chat", "bubble.left.and.text.bubble.right.fill"),
-        ("Tasks", "checklist"),
-        ("Approvals", "hand.raised.fill"),
-    ]
-
-    var body: some View {
-        HStack(spacing: 8) {
-            ForEach(self.items, id: \.0) { title, icon in
-                HStack(spacing: 6) {
-                    Image(systemName: icon)
-                        .font(.caption.weight(.semibold))
-                    Text(title)
-                        .font(.caption.weight(.semibold))
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.82)
-                }
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 10)
-                .padding(.vertical, 7)
-                .frame(maxWidth: .infinity)
-                .background {
-                    Capsule()
-                        .fill(Color(uiColor: .secondarySystemGroupedBackground))
-                }
-            }
-        }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Demo includes chat, tasks, and approvals")
     }
 }
 

@@ -14,12 +14,14 @@ private enum OnboardingStep: Int, CaseIterable {
     case auth
     case success
 
-    var previous: Self? {
+    func previous(startScreen: OnboardingWizardStartScreen) -> Self? {
         switch self {
         case .intro, .welcome, .success:
             nil
-        case .setupGateway, .mode:
-            .welcome
+        case .setupGateway:
+            startScreen == .setupGateway ? nil : .welcome
+        case .mode:
+            startScreen == .setupGateway ? .setupGateway : .welcome
         case .connect:
             .mode
         case .auth:
@@ -46,9 +48,19 @@ private enum OnboardingStep: Int, CaseIterable {
         }
     }
 
-    var canGoBack: Bool {
-        self != .intro && self != .welcome && self != .success
+    var requestsLocalNetworkAccess: Bool {
+        switch self {
+        case .mode, .connect, .auth:
+            true
+        case .intro, .welcome, .setupGateway, .success:
+            false
+        }
     }
+}
+
+enum OnboardingWizardStartScreen {
+    case automatic
+    case setupGateway
 }
 
 struct OnboardingWizardView: View {
@@ -89,23 +101,42 @@ struct OnboardingWizardView: View {
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
     let allowSkip: Bool
+    let startScreen: OnboardingWizardStartScreen
     let onRequestLocalNetworkAccess: (String) -> Void
     let onClose: (CloseReason) -> Void
 
     init(
         allowSkip: Bool,
+        startScreen: OnboardingWizardStartScreen = .automatic,
         onRequestLocalNetworkAccess: @escaping (String) -> Void,
         onClose: @escaping (CloseReason) -> Void)
     {
         self.allowSkip = allowSkip
+        self.startScreen = startScreen
         self.onRequestLocalNetworkAccess = onRequestLocalNetworkAccess
         self.onClose = onClose
-        _step = State(
-            initialValue: OnboardingStateStore.shouldPresentFirstRunIntro() ? .intro : .welcome)
+        _step = State(initialValue: Self.initialStep(startScreen: startScreen))
+    }
+
+    private static func initialStep(startScreen: OnboardingWizardStartScreen) -> OnboardingStep {
+        switch startScreen {
+        case .automatic:
+            OnboardingStateStore.shouldPresentFirstRunIntro() ? .intro : .welcome
+        case .setupGateway:
+            .setupGateway
+        }
     }
 
     private var isFullScreenStep: Bool {
         self.step == .intro || self.step == .welcome || self.step == .setupGateway || self.step == .success
+    }
+
+    private var previousStep: OnboardingStep? {
+        self.step.previous(startScreen: self.startScreen)
+    }
+
+    private var canNavigateBack: Bool {
+        self.previousStep != nil
     }
 
     private var currentProblem: GatewayConnectionProblem? {
@@ -155,7 +186,7 @@ struct OnboardingWizardView: View {
                     }
                 }
                 ToolbarItem(placement: .topBarLeading) {
-                    if self.step.canGoBack {
+                    if self.canNavigateBack {
                         Button {
                             self.navigateBack()
                         } label: {
@@ -255,11 +286,14 @@ struct OnboardingWizardView: View {
             }
             .onAppear {
                 self.initializeState()
-                self.requestLocalNetworkAccessIfPastIntro(reason: "onboarding_appear")
+                self.requestLocalNetworkAccessIfNeeded(reason: "onboarding_appear")
             }
             .onDisappear {
                 self.discoveryRestartTask?.cancel()
                 self.discoveryRestartTask = nil
+            }
+            .onChange(of: self.step) { _, _ in
+                self.requestLocalNetworkAccessIfNeeded(reason: "onboarding_step")
             }
             .onChange(of: self.discoveryDomain) { _, _ in
                 self.scheduleDiscoveryRestart()
@@ -912,13 +946,12 @@ extension OnboardingWizardView {
 
     private func advanceFromIntro() {
         OnboardingStateStore.markFirstRunIntroSeen()
-        self.requestLocalNetworkAccess(reason: "onboarding_continue")
         self.statusLine = "In your OpenClaw chat, run /pair qr, then scan the code here."
         self.step = .welcome
     }
 
-    private func requestLocalNetworkAccessIfPastIntro(reason: String) {
-        guard self.step != .intro else { return }
+    private func requestLocalNetworkAccessIfNeeded(reason: String) {
+        guard self.step.requestsLocalNetworkAccess else { return }
         self.requestLocalNetworkAccess(reason: reason)
     }
 
@@ -927,7 +960,7 @@ extension OnboardingWizardView {
     }
 
     private func navigateBack() {
-        guard let target = self.step.previous else { return }
+        guard let target = self.previousStep else { return }
         self.connectingGatewayID = nil
         self.connectMessage = nil
         self.step = target

@@ -16,6 +16,22 @@ import Testing
             hasSavedGatewayConnection: false))
     }
 
+    @Test @MainActor func doesNotAutoPresentAgainAfterFirstRunIntroWasSeen() {
+        let testDefaults = self.makeDefaults()
+        let defaults = testDefaults.defaults
+        defer { self.reset(testDefaults) }
+
+        let appModel = NodeAppModel()
+        appModel.gatewayServerName = nil
+
+        OnboardingStateStore.markFirstRunIntroSeen(defaults: defaults)
+
+        #expect(!OnboardingStateStore.shouldPresentOnLaunch(
+            appModel: appModel,
+            defaults: defaults,
+            hasSavedGatewayConnection: false))
+    }
+
     @Test @MainActor func doesNotPresentWhenConnected() {
         let testDefaults = self.makeDefaults()
         let defaults = testDefaults.defaults

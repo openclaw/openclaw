@@ -266,10 +266,10 @@ extension RootTabs {
         if shouldPresentOnLaunch {
             return .onboarding
         }
-        if !hasConnectedOnce || !onboardingComplete {
-            return .onboarding
+        if hasConnectedOnce || onboardingComplete {
+            return .settings
         }
-        return .settings
+        return .none
     }
 
     static func shouldPresentQuickSetup(
