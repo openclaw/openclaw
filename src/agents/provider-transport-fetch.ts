@@ -120,10 +120,9 @@ function sanitizeOpenAISdkSseResponse(
                   // the body as `data: ${data}` would double-prefix every frame to
                   // `data: data: {...}` and break JSON.parse in the SDK. Pass the
                   // already-SSE body through verbatim (tolerating both `{...}` and
-                  // `data: {...}` shapes) and normalize it to a single trailing
-                  // event terminator.
-                  const normalizedSse = data.replace(/(?:\r\n|\n|\r)+$/u, "");
-                  controller.enqueue(encoder.encode(`${normalizedSse}\n\n`));
+                  // `data: {...}` shapes). `data` is already trimmed, so appending a
+                  // single event terminator yields well-formed SSE.
+                  controller.enqueue(encoder.encode(`${data}\n\n`));
                 } else {
                   controller.enqueue(encoder.encode(`data: ${data}\n\n`));
                 }
