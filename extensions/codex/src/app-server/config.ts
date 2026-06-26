@@ -167,6 +167,7 @@ export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
   command: string;
   commandSource?: CodexAppServerCommandSource;
+  managedFallbackCommandPaths?: string[];
   args: string[];
   url?: string;
   authToken?: string;
@@ -876,6 +877,7 @@ export function codexAppServerStartOptionsKey(
     transport: options.transport,
     command: options.command,
     commandSource: options.commandSource ?? null,
+    managedFallbackCommandPaths: [...(options.managedFallbackCommandPaths ?? [])],
     args: options.args,
     url: options.url ?? null,
     authToken: hashSecretForKey(options.authToken, "authToken"),

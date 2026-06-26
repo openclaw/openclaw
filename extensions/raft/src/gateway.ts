@@ -65,6 +65,8 @@ function spawnRaftBridge(params: {
   endpoint: string;
   token: string;
 }): RaftBridgeProcess {
+  // Raft owns the fixed bridge command. OpenClaw passes profile/loopback
+  // endpoint/token as separate argv/env fields; wake payloads never reach argv.
   return spawn(
     "raft",
     [
