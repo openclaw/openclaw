@@ -17,11 +17,16 @@ import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/art
 import { readFileRangeAsync } from "../config/sessions/file-range.js";
 import {
   branchSessionFromCompactionCheckpoint,
+  loadSessionEntry,
   loadTranscriptEventsSync,
   restoreSessionFromCompactionCheckpoint,
   type SessionCompactionCheckpointMutationResult,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import {
+  branchSqliteCompactionCheckpointSession,
+  restoreSqliteCompactionCheckpointSession,
+} from "../config/sessions/session-accessor.sqlite.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
@@ -612,6 +617,21 @@ function cloneCheckpointSessionEntry(params: {
 async function branchCheckpointSessionFromStoredBoundary(
   params: BranchCheckpointSessionParams,
 ): Promise<CompactionCheckpointSessionMutationResult> {
+  if (
+    shouldRouteCheckpointSessionMutationToSqlite({
+      checkpointId: params.checkpointId,
+      sessionKey: params.sourceStoreKey ?? params.sourceKey,
+      storePath: params.storePath,
+    })
+  ) {
+    return await branchSqliteCompactionCheckpointSession({
+      storePath: params.storePath,
+      sourceKey: params.sourceKey,
+      nextKey: params.nextKey,
+      checkpointId: params.checkpointId,
+      ...(params.sourceStoreKey ? { sourceStoreKey: params.sourceStoreKey } : {}),
+    });
+  }
   return await branchSessionFromCompactionCheckpoint({
     storePath: params.storePath,
     sourceKey: params.sourceKey,
@@ -639,6 +659,20 @@ async function branchCheckpointSessionFromStoredBoundary(
 async function restoreCheckpointSessionFromStoredBoundary(
   params: RestoreCheckpointSessionParams,
 ): Promise<CompactionCheckpointSessionMutationResult> {
+  if (
+    shouldRouteCheckpointSessionMutationToSqlite({
+      checkpointId: params.checkpointId,
+      sessionKey: params.sessionStoreKey ?? params.sessionKey,
+      storePath: params.storePath,
+    })
+  ) {
+    return await restoreSqliteCompactionCheckpointSession({
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+      checkpointId: params.checkpointId,
+      ...(params.sessionStoreKey ? { sessionStoreKey: params.sessionStoreKey } : {}),
+    });
+  }
   return await restoreSessionFromCompactionCheckpoint({
     storePath: params.storePath,
     sessionKey: params.sessionKey,
@@ -655,6 +689,30 @@ async function restoreCheckpointSessionFromStoredBoundary(
         preserveCompactionCheckpoints: true,
       }),
   });
+}
+
+function shouldRouteCheckpointSessionMutationToSqlite(params: {
+  checkpointId: string;
+  sessionKey: string;
+  storePath: string;
+}): boolean {
+  const entry = loadSessionEntry({
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
+  if (!entry) {
+    return false;
+  }
+  if (parseSqliteSessionFileMarker(entry.sessionFile)) {
+    return true;
+  }
+  const checkpoint = entry.compactionCheckpoints?.find(
+    (candidate) => candidate.checkpointId === params.checkpointId,
+  );
+  return Boolean(
+    parseSqliteSessionFileMarker(checkpoint?.preCompaction.sessionFile) ||
+    parseSqliteSessionFileMarker(checkpoint?.postCompaction.sessionFile),
+  );
 }
 
 /**

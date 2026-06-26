@@ -8,9 +8,11 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import type { SessionCompactionCheckpoint } from "../config/sessions.js";
 import {
   appendTranscriptEvent,
   appendTranscriptMessage,
+  loadTranscriptEvents,
   upsertSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
@@ -74,6 +76,18 @@ function expectNonEmptyStringField(value: unknown, message: string): string {
     throw new Error(message);
   }
   return value;
+}
+
+function isAssistantTextEvent(event: unknown, text: string): boolean {
+  if (!event || typeof event !== "object" || Array.isArray(event)) {
+    return false;
+  }
+  const message = (event as { message?: unknown }).message;
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return false;
+  }
+  const candidate = message as { role?: unknown; content?: unknown };
+  return candidate.role === "assistant" && candidate.content === text;
 }
 
 async function makeTempSessionStore(prefix: string, sessionId = TEST_SESSION_ID) {
@@ -309,6 +323,120 @@ describe("session-compaction-checkpoints", () => {
       entryId: compactionId,
       leafId: compactionId,
     });
+  });
+
+  test("checkpoint store branches and restores SQLite marker checkpoints from rows", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-sqlite-branch-"));
+    tempDirs.push(dir);
+    const storePath = path.join(dir, "openclaw-agent.sqlite");
+    const sessionId = "sqlite-checkpoint-branch-source";
+    const sessionKey = MAIN_SESSION_KEY;
+    const scope = {
+      agentId: MAIN_AGENT_ID,
+      sessionId,
+      sessionKey,
+      storePath,
+    };
+    const marker = formatSqliteSessionFileMarker({
+      agentId: MAIN_AGENT_ID,
+      sessionId,
+      storePath,
+    });
+
+    await upsertSessionEntry(scope, {
+      sessionId,
+      sessionFile: marker,
+      updatedAt: Date.now(),
+    });
+    await appendTranscriptEvent(scope, {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: sessionId,
+      timestamp: "2026-06-26T12:00:00.000Z",
+      cwd: dir,
+    });
+    await appendTranscriptMessage(scope, {
+      message: { role: "user", content: "branch from sqlite checkpoint", timestamp: 1 },
+      now: Date.parse("2026-06-26T12:00:01.000Z"),
+    });
+    await appendTranscriptMessage(scope, {
+      message: {
+        role: "assistant",
+        content: "checkpoint branch source",
+        timestamp: 2,
+      } as AssistantMessage,
+      now: Date.parse("2026-06-26T12:00:02.000Z"),
+    });
+    const sourceLeafId = requireNonEmptyString(
+      SessionManager.open(marker).getLeafId(),
+      "SQLite source leaf id missing",
+    );
+    const checkpoint: SessionCompactionCheckpoint = {
+      checkpointId: "sqlite-checkpoint-branch",
+      sessionKey,
+      sessionId,
+      createdAt: Date.now(),
+      reason: "manual",
+      tokensBefore: 100,
+      tokensAfter: 40,
+      preCompaction: {
+        sessionId,
+        leafId: sourceLeafId,
+        entryId: sourceLeafId,
+      },
+      postCompaction: {
+        sessionId,
+        sessionFile: marker,
+        leafId: sourceLeafId,
+        entryId: sourceLeafId,
+      },
+    };
+    await upsertSessionEntry(scope, {
+      sessionId,
+      sessionFile: marker,
+      updatedAt: Date.now(),
+      compactionCheckpoints: [checkpoint],
+    });
+
+    const store = createFileBackedCompactionCheckpointStore();
+    const branchKey = "agent:main:checkpoint-branch";
+    const branched = await store.branchCheckpointSession({
+      storePath,
+      sourceKey: sessionKey,
+      nextKey: branchKey,
+      checkpointId: checkpoint.checkpointId,
+    });
+    const restored = await store.restoreCheckpointSession({
+      storePath,
+      sessionKey,
+      checkpointId: checkpoint.checkpointId,
+    });
+
+    if (branched.status !== "created" || restored.status !== "created") {
+      throw new Error("expected SQLite checkpoint branch and restore");
+    }
+    expect(branched.entry.sessionFile).toContain("sqlite:main:");
+    expect(restored.entry.sessionFile).toContain("sqlite:main:");
+    expect(fsSync.readdirSync(dir).some((file) => file.endsWith(".jsonl"))).toBe(false);
+
+    const branchEvents = await loadTranscriptEvents({
+      agentId: MAIN_AGENT_ID,
+      sessionId: branched.entry.sessionId,
+      sessionKey: branchKey,
+      storePath,
+    });
+    const restoredEvents = await loadTranscriptEvents({
+      agentId: MAIN_AGENT_ID,
+      sessionId: restored.entry.sessionId,
+      sessionKey,
+      storePath,
+    });
+    expect(
+      branchEvents.some((event) => isAssistantTextEvent(event, "checkpoint branch source")),
+    ).toBe(true);
+    expect(
+      restoredEvents.some((event) => isAssistantTextEvent(event, "checkpoint branch source")),
+    ).toBe(true);
   });
 
   test("async capture derives session metadata without synchronous SessionManager.open", async () => {
