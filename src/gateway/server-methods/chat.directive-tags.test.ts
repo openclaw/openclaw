@@ -16,11 +16,16 @@ import { CHAT_SEND_SESSION_KEY_MAX_LENGTH } from "../../../packages/gateway-prot
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
-import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
+import {
+  appendTranscriptMessage,
+  loadSessionEntry as loadSqliteSessionEntry,
+  loadTranscriptEventsSync,
+  type SessionTranscriptWriteScope,
+  upsertSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import { getAgentRunContext } from "../../infra/agent-events.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { readSessionTranscriptIndex } from "../session-transcript-index.fs.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mockState = vi.hoisted(() => ({
@@ -82,7 +87,10 @@ const mockState = vi.hoisted(() => ({
   lastDispatchUserTurnInput: undefined as unknown,
   modelCatalog: null as ModelCatalogEntry[] | null,
   emittedTranscriptUpdates: [] as Array<{
-    sessionFile: string;
+    sessionFile?: string;
+    target?: { agentId: string; sessionId: string; sessionKey: string };
+    agentId?: string;
+    sessionId?: string;
     sessionKey?: string;
     message?: unknown;
     messageId?: string;
@@ -110,7 +118,17 @@ const mockState = vi.hoisted(() => ({
 }));
 
 function readTranscriptJsonLines(transcriptPath: string): Array<Record<string, unknown>> {
+  const sqliteEvents = loadTranscriptEventsSync(transcriptScope()).filter(
+    (event): event is Record<string, unknown> =>
+      Boolean(event) && typeof event === "object" && !Array.isArray(event),
+  );
+  if (sqliteEvents.length > 0) {
+    return sqliteEvents;
+  }
   const entries: Array<Record<string, unknown>> = [];
+  if (!fs.existsSync(transcriptPath)) {
+    return entries;
+  }
   for (const line of fs.readFileSync(transcriptPath, "utf-8").split("\n")) {
     if (line.length > 0) {
       entries.push(JSON.parse(line) as Record<string, unknown>);
@@ -341,7 +359,23 @@ vi.mock("../../plugins/hook-runner-global.js", () => ({
 vi.mock("../../sessions/transcript-events.js", () => ({
   emitSessionTranscriptUpdate: vi.fn(
     (update: {
-      sessionFile: string;
+      sessionFile?: string;
+      target?: { agentId: string; sessionId: string; sessionKey: string };
+      agentId?: string;
+      sessionId?: string;
+      sessionKey?: string;
+      message?: unknown;
+      messageId?: string;
+    }) => {
+      mockState.emittedTranscriptUpdates.push(update);
+    },
+  ),
+  emitInternalSessionTranscriptUpdate: vi.fn(
+    (update: {
+      sessionFile?: string;
+      target?: { agentId: string; sessionId: string; sessionKey: string };
+      agentId?: string;
+      sessionId?: string;
       sessionKey?: string;
       message?: unknown;
       messageId?: string;
@@ -452,6 +486,12 @@ function createTranscriptFixture(prefix: string) {
   return dir;
 }
 
+function createSqliteTranscriptFixture(prefix: string) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  mockState.transcriptPath = path.join(dir, "sess.jsonl");
+  return dir;
+}
+
 async function withTranscriptFixtureState(
   prefix: string,
   run: (fixtureDir: string) => Promise<void>,
@@ -460,14 +500,42 @@ async function withTranscriptFixtureState(
   await withEnvAsync({ OPENCLAW_STATE_DIR: fixtureDir }, async () => await run(fixtureDir));
 }
 
+async function withSqliteTranscriptFixtureState(
+  prefix: string,
+  run: (fixtureDir: string) => Promise<void>,
+): Promise<void> {
+  const fixtureDir = createSqliteTranscriptFixture(prefix);
+  await withEnvAsync({ OPENCLAW_STATE_DIR: fixtureDir }, async () => await run(fixtureDir));
+}
+
+function transcriptScope(): SessionTranscriptWriteScope {
+  return {
+    agentId: "main",
+    sessionId: mockState.sessionId,
+    sessionKey: "main",
+    storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
+  };
+}
+
+async function seedSqliteSessionEntry(entry: Record<string, unknown> = {}): Promise<void> {
+  await upsertSessionEntry(transcriptScope(), {
+    sessionId: mockState.sessionId,
+    ...entry,
+  });
+}
+
+function readSqliteMainSessionEntry(): Record<string, any> | undefined {
+  return loadSqliteSessionEntry(transcriptScope()) as Record<string, any> | undefined;
+}
+
 async function appendSourceReplyMirrorEntry(params: {
   idempotencyKey?: string;
   text: string;
   provider?: string;
   model?: string;
 }) {
-  await appendSessionTranscriptMessage({
-    transcriptPath: mockState.transcriptPath,
+  await appendTranscriptMessage(transcriptScope(), {
+    idempotencyLookup: "scan",
     now: 0,
     message: {
       role: "assistant",
@@ -497,17 +565,14 @@ async function appendSourceReplyMirrorEntry(params: {
 }
 
 async function readActiveAssistantTranscriptMessages(): Promise<Array<Record<string, unknown>>> {
-  const index = await readSessionTranscriptIndex(mockState.transcriptPath);
-  return (
-    index?.entries
-      .map((entry) => entry.record.message)
-      .filter(
-        (message): message is Record<string, unknown> =>
-          typeof message === "object" &&
-          message !== null &&
-          (message as { role?: unknown }).role === "assistant",
-      ) ?? []
-  );
+  return readTranscriptJsonLines(mockState.transcriptPath)
+    .map((entry) => entry.message)
+    .filter(
+      (message): message is Record<string, unknown> =>
+        typeof message === "object" &&
+        message !== null &&
+        (message as { role?: unknown }).role === "assistant",
+    );
 }
 
 function extractFirstTextBlock(payload: unknown): string | undefined {
@@ -947,6 +1012,27 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           (message as { role?: unknown }).role === "assistant",
       );
     expect(persistedAssistant?.idempotencyKey).toBe("idem-final-mirror");
+  });
+
+  it("persists non-agent delivery mirrors to SQLite without creating active JSONL", async () => {
+    await withSqliteTranscriptFixtureState("openclaw-chat-send-final-sqlite-", async () => {
+      mockState.finalText = "sqlite mirror text";
+      const respond = vi.fn();
+      const context = createChatContext();
+
+      await runNonStreamingChatSend({
+        context,
+        respond,
+        idempotencyKey: "idem-final-sqlite",
+        expectBroadcast: false,
+      });
+
+      expect(fs.existsSync(mockState.transcriptPath)).toBe(false);
+      const assistantEntries = await readActiveAssistantTranscriptMessages();
+      expect(assistantEntries).toHaveLength(1);
+      expect(assistantEntries[0]?.idempotencyKey).toBe("idem-final-sqlite");
+      expect(JSON.stringify(assistantEntries[0])).toContain("sqlite mirror text");
+    });
   });
 
   it("registers tool-event recipients for clients advertising tool-events capability", async () => {
@@ -1536,19 +1622,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         const mirrorIdempotencyKey = "idem-agent-source-reply-media:internal-source-reply:0";
         const updatedAt = Date.parse("2026-05-18T11:00:00.000Z");
         const rewrittenAt = Date.parse("2026-05-18T11:05:00.000Z");
-        const storePath = path.join(path.dirname(mockState.transcriptPath), "sessions.json");
-        fs.writeFileSync(
-          storePath,
-          JSON.stringify({
-            main: {
-              sessionId: mockState.sessionId,
-              sessionFile: mockState.transcriptPath,
-              updatedAt,
-              status: "done",
-            },
-          }),
-          "utf-8",
-        );
+        await seedSqliteSessionEntry({
+          sessionFile: mockState.transcriptPath,
+          updatedAt,
+          status: "done",
+        });
         await appendSourceReplyMirrorEntry({
           idempotencyKey: mirrorIdempotencyKey,
           text: "Codex source reply with media",
@@ -1608,16 +1686,66 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
           expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
           expect(JSON.stringify(assistantEntries[0])).not.toContain(mediaUrl);
-          const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
-            string,
-            { updatedAt?: number; status?: string }
-          >;
-          expect(store.main?.updatedAt).toBeGreaterThanOrEqual(rewrittenAt);
-          expect(store.main?.updatedAt).toBeGreaterThan(updatedAt);
-          expect(store.main?.status).toBe("done");
+          const entry = readSqliteMainSessionEntry();
+          expect(entry?.updatedAt).toBeGreaterThanOrEqual(rewrittenAt);
+          expect(entry?.updatedAt).toBeGreaterThan(updatedAt);
+          expect(entry?.status).toBe("done");
         } finally {
           vi.useRealTimers();
         }
+      },
+    );
+  });
+
+  it("rewrites source reply mirrors in SQLite without creating active JSONL", async () => {
+    await withSqliteTranscriptFixtureState(
+      "openclaw-chat-send-agent-source-reply-sqlite-",
+      async (fixtureDir) => {
+        const mediaUrl = `data:image/png;base64,${TINY_PNG_BASE64}`;
+        const savedImagePath = path.join(fixtureDir, "source-reply-sqlite.png");
+        fs.writeFileSync(savedImagePath, Buffer.from(TINY_PNG_BASE64, "base64"));
+        mockState.savedMediaResults = [{ path: savedImagePath, contentType: "image/png" }];
+        const mirrorIdempotencyKey = "idem-source-reply-sqlite:internal-source-reply:0";
+        await appendSourceReplyMirrorEntry({
+          idempotencyKey: mirrorIdempotencyKey,
+          text: "SQLite source reply with media",
+        });
+        mockState.triggerAgentRunStart = true;
+        mockState.dispatchedReplies = [
+          {
+            kind: "final",
+            payload: setReplyPayloadMetadata(
+              {
+                text: "SQLite source reply with media",
+                mediaUrls: [mediaUrl],
+              },
+              {
+                sourceReplyTranscriptMirror: {
+                  sessionKey: "main",
+                  text: "SQLite source reply with media",
+                  mediaUrls: [mediaUrl],
+                  idempotencyKey: mirrorIdempotencyKey,
+                },
+              },
+            ),
+          },
+        ];
+        const respond = vi.fn();
+        const context = createChatContext();
+
+        await runNonStreamingChatSend({
+          context,
+          respond,
+          idempotencyKey: "idem-source-reply-sqlite",
+          message: "hello from codex",
+        });
+
+        expect(fs.existsSync(mockState.transcriptPath)).toBe(false);
+        const assistantEntries = await readActiveAssistantTranscriptMessages();
+        expect(assistantEntries).toHaveLength(1);
+        expect(assistantEntries[0]?.idempotencyKey).toBe(mirrorIdempotencyKey);
+        expect(JSON.stringify(assistantEntries[0])).toContain("/api/chat/media/outgoing/");
+        expect(JSON.stringify(assistantEntries[0])).not.toContain(mediaUrl);
       },
     );
   });
@@ -3230,6 +3358,30 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(extractFirstTextBlock(broadcastPayload)).toBe("");
   });
 
+  it("chat.inject persists to SQLite without creating active JSONL", async () => {
+    await withSqliteTranscriptFixtureState("openclaw-chat-inject-sqlite-", async () => {
+      const respond = vi.fn();
+      const context = createChatContext();
+
+      await chatHandlers["chat.inject"]({
+        params: { sessionKey: "main", message: "hello sqlite inject" },
+        respond,
+        req: {} as never,
+        client: null as never,
+        isWebchatConnect: () => false,
+        context: context as GatewayRequestContext,
+      });
+
+      const [ok, payload] = lastRespondCall(respond) ?? [];
+      expect(ok).toBe(true);
+      expect(payload?.ok).toBe(true);
+      expect(fs.existsSync(mockState.transcriptPath)).toBe(false);
+      const assistantEntries = await readActiveAssistantTranscriptMessages();
+      expect(assistantEntries).toHaveLength(1);
+      expect(JSON.stringify(assistantEntries[0])).toContain("hello sqlite inject");
+    });
+  });
+
   it("chat.send non-streaming final keeps message defined for directive-only assistant text", async () => {
     createTranscriptFixture("openclaw-chat-send-directive-only-");
     mockState.finalText = "[[reply_to_current]]";
@@ -3355,19 +3507,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     const fixtureDir = createTranscriptFixture("openclaw-chat-inject-registry-marker-");
     const updatedAt = Date.parse("2026-05-18T11:00:00.000Z");
     const appendedAt = Date.parse("2026-05-18T11:05:00.000Z");
-    const storePath = path.join(path.dirname(mockState.transcriptPath), "sessions.json");
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify({
-        main: {
-          sessionId: mockState.sessionId,
-          sessionFile: mockState.transcriptPath,
-          updatedAt,
-          status: "done",
-        },
-      }),
-      "utf-8",
-    );
+    await seedSqliteSessionEntry({
+      sessionFile: mockState.transcriptPath,
+      updatedAt,
+      status: "done",
+    });
     const respond = vi.fn();
     const context = createChatContext();
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -3387,12 +3531,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
       const response = lastRespondCall(respond);
       expect(response?.[0]).toBe(true);
-      const store = JSON.parse(fs.readFileSync(storePath, "utf-8")) as Record<
-        string,
-        { updatedAt?: number; status?: string }
-      >;
-      expect(store.main?.updatedAt).toBe(appendedAt);
-      expect(store.main?.status).toBe("done");
+      const entry = readSqliteMainSessionEntry();
+      expect(entry?.updatedAt).toBe(appendedAt);
+      expect(entry?.status).toBe("done");
     } finally {
       vi.useRealTimers();
       fs.rmSync(fixtureDir, { recursive: true, force: true });
