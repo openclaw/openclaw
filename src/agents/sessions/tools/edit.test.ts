@@ -311,6 +311,41 @@ describe("edit tool", () => {
     ).toEqual({ diff: "", firstChangedLine: undefined });
   });
 
+  it("shows an empty preview for a fuzzy net no-op", async () => {
+    const readFile = vi.fn(async () => Buffer.from("foo\n"));
+    const operations: EditOperations = {
+      access: async () => {},
+      readFile,
+      writeFile: async () => {},
+    };
+    const tool = createEditToolDefinition("/workspace", { operations });
+    const args = {
+      path: "remote.txt",
+      edits: [{ oldText: "foo ", newText: "foo" }],
+    };
+    const context = {
+      args,
+      argsComplete: true,
+      cwd: "/workspace",
+      executionStarted: false,
+      expanded: false,
+      invalidate: vi.fn(),
+      isError: false,
+      isPartial: false,
+      lastComponent: undefined,
+      showImages: false,
+      state: {},
+      toolCallId: "call-preview-fuzzy-no-op",
+    };
+
+    const component = tool.renderCall?.(args, testTheme, context);
+    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+
+    expect(
+      (component as { preview?: { error?: string; diff?: string } } | undefined)?.preview,
+    ).toEqual({ diff: "", firstChangedLine: undefined });
+  });
+
   it("does not hide a mismatched no-op edit", async () => {
     const filePath = await createTempFile("actual content\n");
     const tool = createEditTool(tmpDir);

@@ -511,6 +511,9 @@ export async function computeEditsDiff(
     // Generate the diff
     return generateDiffString(baseContent, newContent);
   } catch (err) {
+    if (err instanceof EditNoChangeError) {
+      return { diff: "", firstChangedLine: undefined };
+    }
     return { error: err instanceof Error ? err.message : String(err) };
   }
 }
