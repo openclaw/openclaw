@@ -2553,6 +2553,47 @@ describe("legacy model compat migrate", () => {
     expect(merged).toEqual({ streaming: false, alias: "legacy-four" });
   });
 
+  it("does not pollute prototypes when the first colliding entry carries a blocked key", () => {
+    const polluted = JSON.parse(
+      '{"agents":{"defaults":{"models":{"openai/gpt-4o":{"__proto__":{"polluted":true},"fallback":["openai/gpt-4o"],"streaming":false},"openai/gpt-4":{"alias":"legacy-four"}}}}}',
+    );
+    const res = migrateLegacyConfigForTest(polluted);
+
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    const merged = res.config?.agents?.defaults?.models?.["openai/gpt-5.5"] as Record<
+      string,
+      unknown
+    >;
+    expect(Object.getOwnPropertyNames(merged)).not.toContain("__proto__");
+    expect(Object.getPrototypeOf(merged)).toBe(Object.prototype);
+    expect(merged.polluted).toBeUndefined();
+    expect(merged).toEqual({
+      fallback: ["openai/gpt-5.5"],
+      streaming: false,
+      alias: "legacy-four",
+    });
+  });
+
+  it("names the retired source key when the canonical key follows the retired key", () => {
+    const res = migrateLegacyConfigForTest({
+      agents: {
+        defaults: {
+          models: {
+            "openai/gpt-4": { alias: "legacy-four" },
+            "openai/gpt-5.5": { streaming: false },
+          },
+        },
+      },
+    });
+
+    const mergeChanges = res.changes.filter(
+      (change) => change.includes("config.agents.defaults.models key") && change.includes("Merged"),
+    );
+    expect(mergeChanges).toEqual([
+      'Merged config.agents.defaults.models key "openai/gpt-4" into "openai/gpt-5.5".',
+    ]);
+  });
+
   it("removes unrecognized model compat thinkingFormat values", () => {
     const res = migrateLegacyConfigForTest({
       models: {

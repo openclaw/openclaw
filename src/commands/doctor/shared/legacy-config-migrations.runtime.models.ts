@@ -857,7 +857,13 @@ function mergeModelRefMapEntries(
   if (!existingRecord || !incomingRecord) {
     return { value: existing, conflicts: existingRecord || incomingRecord ? ["value"] : [] };
   }
-  const merged: Record<string, unknown> = { ...existingRecord };
+  const merged: Record<string, unknown> = {};
+  for (const [field, existingValue] of Object.entries(existingRecord)) {
+    if (isBlockedObjectKey(field)) {
+      continue;
+    }
+    merged[field] = existingValue;
+  }
   const conflicts: string[] = [];
   for (const [field, incomingValue] of Object.entries(incomingRecord)) {
     if (incomingValue === undefined || isBlockedObjectKey(field)) {
@@ -897,6 +903,7 @@ function rewriteModelRefMapKeys(
   let changed = false;
   const next: Record<string, unknown> = {};
   const canonicalKeys = new Set<string>();
+  const retiredSourceKeys = new Map<string, string>();
   for (const [key, child] of Object.entries(record)) {
     const upgradedKey = upgradeRetiredModelRef(key);
     const nextKey = upgradedKey ?? key;
@@ -909,17 +916,20 @@ function rewriteModelRefMapKeys(
     }
     if (Object.hasOwn(next, nextKey)) {
       const existing = next[nextKey];
-      const { value, conflicts } =
-        isCanonicalEntry && !canonicalKeys.has(nextKey)
-          ? mergeModelRefMapEntries(child, existing)
-          : mergeModelRefMapEntries(existing, child);
+      const canonicalWins = isCanonicalEntry && !canonicalKeys.has(nextKey);
+      const { value, conflicts } = canonicalWins
+        ? mergeModelRefMapEntries(child, existing)
+        : mergeModelRefMapEntries(existing, child);
       setModelRefMapEntry(next, nextKey, value);
+      const sourceKey = canonicalWins ? (retiredSourceKeys.get(nextKey) ?? key) : key;
       if (conflicts.length > 0) {
         changes.push(
-          `Merged ${path} key ${JSON.stringify(key)} into ${JSON.stringify(nextKey)}; kept existing values for conflicting fields: ${conflicts.join(", ")}.`,
+          `Merged ${path} key ${JSON.stringify(sourceKey)} into ${JSON.stringify(nextKey)}; kept existing values for conflicting fields: ${conflicts.join(", ")}.`,
         );
       } else {
-        changes.push(`Merged ${path} key ${JSON.stringify(key)} into ${JSON.stringify(nextKey)}.`);
+        changes.push(
+          `Merged ${path} key ${JSON.stringify(sourceKey)} into ${JSON.stringify(nextKey)}.`,
+        );
       }
       if (isCanonicalEntry) {
         canonicalKeys.add(nextKey);
@@ -929,6 +939,8 @@ function rewriteModelRefMapKeys(
     setModelRefMapEntry(next, nextKey, child);
     if (isCanonicalEntry) {
       canonicalKeys.add(nextKey);
+    } else {
+      retiredSourceKeys.set(nextKey, key);
     }
   }
   return { value: changed ? next : record, changed };
