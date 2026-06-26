@@ -23,7 +23,7 @@ Use with `$release-openclaw-maintainer`, `$release-openclaw-ci`, `$one-password`
 
 ## GitHub Secrets
 
-Target private repo environment: `openclaw/releases-private`, env `mac-release`.
+Target private repo environment: `openclaw/releases`, env `mac-release`.
 
 Set only after local notary auth validation:
 
@@ -52,10 +52,25 @@ Do not update these from mixed sources. All three ASC fields must come from the 
 
 ## Dispatch
 
+Public handoff validation:
+
+```bash
+gh workflow run macos-release.yml --repo openclaw/openclaw \
+  --ref release/YYYY.M.PATCH \
+  -f tag=vYYYY.M.PATCH \
+  -f preflight_only=true \
+  -f public_release_branch=release/YYYY.M.PATCH
+```
+
+- Use the public release branch as the workflow ref so the Actions list displays
+  `release/YYYY.M.PATCH`, matching prior stable macOS handoff runs.
+- Do not use `--ref main` or `--ref vYYYY.M.PATCH` for this public handoff
+  validation. The workflow checks out the tag from the `tag` input internally.
+
 Private preflight:
 
 ```bash
-gh workflow run openclaw-macos-publish.yml --repo openclaw/releases-private --ref main \
+gh workflow run openclaw-macos-publish.yml --repo openclaw/releases --ref main \
   -f tag=vYYYY.M.PATCH \
   -f source_ref=release/YYYY.M.PATCH \
   -f preflight_only=true \
@@ -67,7 +82,7 @@ gh workflow run openclaw-macos-publish.yml --repo openclaw/releases-private --re
 Private validation for a branch-variation preflight:
 
 ```bash
-gh workflow run openclaw-macos-validate.yml --repo openclaw/releases-private --ref main \
+gh workflow run openclaw-macos-validate.yml --repo openclaw/releases --ref main \
   -f tag=vYYYY.M.PATCH \
   -f source_ref=release/YYYY.M.PATCH
 ```
@@ -75,7 +90,7 @@ gh workflow run openclaw-macos-validate.yml --repo openclaw/releases-private --r
 Real publish:
 
 ```bash
-gh workflow run openclaw-macos-publish.yml --repo openclaw/releases-private --ref main \
+gh workflow run openclaw-macos-publish.yml --repo openclaw/releases --ref main \
   -f tag=vYYYY.M.PATCH \
   -f preflight_only=false \
   -f smoke_test_only=false \
@@ -84,6 +99,11 @@ gh workflow run openclaw-macos-publish.yml --repo openclaw/releases-private --re
   -f allow_late_calver_recovery=false \
   -f public_release_branch=release/YYYY.M.PATCH
 ```
+
+- Private `openclaw/releases` publish/validate workflows run from their own
+  trusted `main` workflow ref. Real publish has a guard that rejects any other
+  workflow ref. That displayed `main` ref is expected; the public OpenClaw
+  source is selected by `tag` and optional `source_ref`.
 
 ## Verify
 
