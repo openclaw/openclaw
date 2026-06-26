@@ -532,7 +532,7 @@ export function resolveClaudeBridgeStartEnv(params: {
   configuredEnv?: Record<string, string>;
   resolvedApiKey?: string;
 }): Record<string, string> | undefined {
-  const env = { ...(params.configuredEnv ?? {}) };
+  const env = { ...params.configuredEnv };
   const resolvedApiKey = params.resolvedApiKey?.trim();
   if (resolvedApiKey && !env.ANTHROPIC_API_KEY?.trim()) {
     env.ANTHROPIC_API_KEY = resolvedApiKey;
