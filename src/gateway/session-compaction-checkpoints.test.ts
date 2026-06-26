@@ -439,6 +439,85 @@ describe("session-compaction-checkpoints", () => {
     ).toBe(true);
   });
 
+  test("checkpoint store keeps legacy snapshot forks for SQLite marker entries", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-sqlite-legacy-"));
+    tempDirs.push(dir);
+    const storePath = path.join(dir, "openclaw-agent.sqlite");
+    const sessionId = "sqlite-checkpoint-legacy-source";
+    const sessionKey = MAIN_SESSION_KEY;
+    const marker = formatSqliteSessionFileMarker({
+      agentId: MAIN_AGENT_ID,
+      sessionId,
+      storePath,
+    });
+    const legacySnapshotFile = path.join(dir, "legacy.checkpoint.jsonl");
+    await fs.writeFile(
+      legacySnapshotFile,
+      [
+        {
+          type: "session",
+          version: CURRENT_SESSION_VERSION,
+          id: sessionId,
+          timestamp: "2026-06-26T12:00:00.000Z",
+          cwd: dir,
+        },
+        {
+          type: "message",
+          id: "legacy-leaf",
+          parentId: null,
+          timestamp: "2026-06-26T12:00:01.000Z",
+          message: { role: "assistant", content: "legacy checkpoint source" },
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf-8",
+    );
+    await upsertSessionEntry(
+      {
+        agentId: MAIN_AGENT_ID,
+        sessionId,
+        sessionKey,
+        storePath,
+      },
+      {
+        sessionId,
+        sessionFile: marker,
+        updatedAt: Date.now(),
+        compactionCheckpoints: [
+          {
+            checkpointId: "legacy-file-checkpoint",
+            sessionKey,
+            sessionId,
+            createdAt: Date.now(),
+            reason: "manual",
+            preCompaction: {
+              sessionId,
+              sessionFile: legacySnapshotFile,
+              leafId: "legacy-leaf",
+            },
+            postCompaction: { sessionId },
+          } satisfies SessionCompactionCheckpoint,
+        ],
+      },
+    );
+
+    const branched = await createFileBackedCompactionCheckpointStore().branchCheckpointSession({
+      storePath,
+      sourceKey: sessionKey,
+      nextKey: "agent:main:legacy-checkpoint-branch",
+      checkpointId: "legacy-file-checkpoint",
+    });
+
+    if (branched.status !== "created") {
+      throw new Error("expected legacy checkpoint branch");
+    }
+    expect(branched.entry.sessionFile).toMatch(/\.jsonl$/);
+    expect(await fs.readFile(branched.entry.sessionFile, "utf-8")).toContain(
+      "legacy checkpoint source",
+    );
+  });
+
   test("async capture derives session metadata without synchronous SessionManager.open", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-async-metadata-"));
     tempDirs.push(dir);
