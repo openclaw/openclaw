@@ -66,6 +66,33 @@ async function resolveLmstudioApiKey(
 }
 
 /** Creates the LM Studio embedding provider client and preloads the target model before return. */
+/** Resolves embedding model context length from model-level config (preferred) or provider-level defaults. */
+export async function resolveEmbeddingModelContextLength(
+  modelConfig: Record<string, unknown> | undefined,
+  providerConfig: Record<string, unknown> | undefined,
+): Promise<number | undefined> {
+  const { asPositiveSafeInteger } = await import("openclaw/plugin-sdk/string-coerce-runtime");
+  // Model-level contextTokens take highest priority
+  const modelTokens = modelConfig ? asPositiveSafeInteger(modelConfig.contextTokens) : undefined;
+  if (modelTokens !== undefined) {
+    return modelTokens;
+  }
+  // Then model-level contextWindow
+  const modelWindow = modelConfig ? asPositiveSafeInteger(modelConfig.contextWindow) : undefined;
+  if (modelWindow !== undefined) {
+    return modelWindow;
+  }
+  // Provider-level contextTokens as fallback
+  const providerTokens = providerConfig
+    ? asPositiveSafeInteger(providerConfig.contextTokens)
+    : undefined;
+  if (providerTokens !== undefined) {
+    return providerTokens;
+  }
+  // Provider-level contextWindow as last resort
+  return providerConfig ? asPositiveSafeInteger(providerConfig.contextWindow) : undefined;
+}
+
 export async function createLmstudioEmbeddingProvider(
   options: MemoryEmbeddingProviderCreateOptions,
 ): Promise<{ provider: MemoryEmbeddingProvider; client: LmstudioEmbeddingClient }> {
@@ -120,6 +147,12 @@ export async function createLmstudioEmbeddingProvider(
     ssrfPolicy,
   };
 
+  const modelConfig = providerConfig?.models?.find((m) => m.id === model);
+  const requestedContextLength = await resolveEmbeddingModelContextLength(
+    modelConfig,
+    providerConfig as Record<string, unknown> | undefined,
+  );
+
   try {
     await ensureLmstudioModelLoaded({
       baseUrl,
@@ -128,6 +161,7 @@ export async function createLmstudioEmbeddingProvider(
       ssrfPolicy,
       modelKey: model,
       timeoutMs: 120_000,
+      requestedContextLength,
     });
   } catch (error) {
     log.warn("lmstudio embeddings warmup failed; continuing without preload", {
