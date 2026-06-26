@@ -477,6 +477,10 @@ describe("plugins cli list", () => {
     expect(refreshPluginRegistry).not.toHaveBeenCalled();
     expect(runtimeLogs.join("\n")).toContain("State:");
     expect(runtimeLogs.join("\n")).toContain("stale");
+    expect(runtimeLogs.join("\n")).toContain("Current:");
+    expect(runtimeLogs.join("\n")).toContain("1/2 enabled plugins");
+    expect(runtimeLogs.join("\n")).toContain("Persisted:");
+    expect(runtimeLogs.join("\n")).toContain("1/1 enabled plugins");
     expect(runtimeLogs.join("\n")).toContain("Refresh reasons:");
     expect(runtimeLogs.join("\n")).toContain("openclaw plugins registry --refresh");
   });

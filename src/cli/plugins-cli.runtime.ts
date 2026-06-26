@@ -40,7 +40,13 @@ const loadPluginsRegistryRefresh = createModuleLoader(
 );
 
 function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
-  return plugins.filter((plugin) => plugin.enabled).length;
+  let enabled = 0;
+  for (const plugin of plugins) {
+    if (plugin.enabled) {
+      enabled += 1;
+    }
+  }
+  return enabled;
 }
 
 function formatRegistryState(state: "missing" | "fresh" | "stale"): string {
