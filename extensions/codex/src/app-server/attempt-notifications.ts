@@ -79,8 +79,26 @@ export function updateActiveCompletionBlockerItemIds(
     return;
   }
   const item = readCodexNotificationItem(notification.params);
-  if (item && codexExecutionToolName(item)) {
+  if (item && isCompletionBlockingItem(item)) {
     activeItemIds.add(itemId);
+  }
+}
+
+function isCompletionBlockingItem(item: CodexThreadItem): boolean {
+  // Codex emits paired item/started and item/completed notifications for these
+  // execution items. Completion must not time out while any pair is still open.
+  switch (item.type) {
+    case "collabAgentToolCall":
+    case "commandExecution":
+    case "dynamicToolCall":
+    case "fileChange":
+    case "imageGeneration":
+    case "imageView":
+    case "mcpToolCall":
+    case "webSearch":
+      return true;
+    default:
+      return false;
   }
 }
 

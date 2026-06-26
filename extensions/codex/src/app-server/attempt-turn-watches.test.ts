@@ -1,6 +1,7 @@
 // Codex tests cover attempt turn watches plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { updateActiveCompletionBlockerItemIds } from "./attempt-notifications.js";
 import { createCodexAttemptTurnWatchController } from "./attempt-turn-watches.js";
 
 describe("Codex app-server attempt turn watches", () => {
@@ -244,4 +245,42 @@ describe("Codex app-server attempt turn watches", () => {
     ]);
     expect(harness.abortController.signal.reason).toBe("turn_progress_idle_timeout");
   });
+});
+
+describe("Codex completion blocker item tracking", () => {
+  it.each([
+    "collabAgentToolCall",
+    "commandExecution",
+    "dynamicToolCall",
+    "fileChange",
+    "imageGeneration",
+    "imageView",
+    "mcpToolCall",
+    "webSearch",
+  ])("tracks the %s lifecycle", (type) => {
+    const activeItemIds = new Set<string>();
+    updateActiveCompletionBlockerItemIds(
+      { method: "item/started", params: { item: { id: "item-1", type } } },
+      activeItemIds,
+    );
+    expect(activeItemIds).toEqual(new Set(["item-1"]));
+
+    updateActiveCompletionBlockerItemIds(
+      { method: "item/completed", params: { item: { id: "item-1", type } } },
+      activeItemIds,
+    );
+    expect(activeItemIds).toEqual(new Set());
+  });
+
+  it.each(["agentMessage", "contextCompaction", "plan", "reasoning", "subAgentActivity"])(
+    "does not track the %s lifecycle",
+    (type) => {
+      const activeItemIds = new Set<string>();
+      updateActiveCompletionBlockerItemIds(
+        { method: "item/started", params: { item: { id: "item-1", type } } },
+        activeItemIds,
+      );
+      expect(activeItemIds).toEqual(new Set());
+    },
+  );
 });
