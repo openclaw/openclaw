@@ -137,7 +137,9 @@ describe("ChatLog", () => {
     expect(chatLog.children.length).toBe(1);
 
     // Wait past the 50ms TTL so the marker expires.
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    await new Promise((resolve) => {
+      setTimeout(resolve, 60);
+    });
 
     // Live final: same text, has runId, but marker already expired.
     chatLog.finalizeAssistant("Hello from Telegram", "run-telegram");
