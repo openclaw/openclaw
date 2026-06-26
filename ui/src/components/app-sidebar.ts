@@ -9,7 +9,7 @@ import {
   SIDEBAR_SECTIONS,
   titleForRoute,
 } from "../app-navigation.ts";
-import { pathForRoute, type RouteId } from "../app-routes.ts";
+import { pathForRoute, searchForSession, type RouteId } from "../app-routes.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { controlUiPublicAssetPath } from "../app/public-assets.ts";
 import type { ThemeMode } from "../app/theme.ts";
@@ -19,11 +19,9 @@ import { t } from "../i18n/index.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../lib/external-link.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
-import { resolveSessionNavigation, resolveSessionCreateParams } from "../lib/sessions/index.ts";
+import { resolveSessionNavigation } from "../lib/sessions/index.ts";
 import type { RouteLocation } from "../router/types.ts";
 import { icons } from "./icons.ts";
-
-export const SESSION_NAVIGATED_EVENT = "openclaw-session-navigated";
 
 type SidebarRecentSession = {
   key: string;
@@ -33,8 +31,6 @@ type SidebarRecentSession = {
   active: boolean;
   hasActiveRun: boolean;
 };
-
-const routePreloadTimers = new WeakMap<EventTarget, ReturnType<typeof setTimeout>>();
 
 export class AppSidebar extends LitElement {
   override createRenderRoot() {
@@ -53,7 +49,11 @@ export class AppSidebar extends LitElement {
   @property({ attribute: false }) onToggleCollapsed?: () => void;
   @property({ attribute: false }) onToggleGroup?: (label: string) => void;
   @property({ attribute: false }) onToggleRecentSessions?: () => void;
-  @property({ attribute: false }) onNavigate?: (routeId: NavigationRouteId) => void;
+  @property({ attribute: false })
+  onNavigate?: (
+    routeId: NavigationRouteId,
+    options?: Pick<RouteLocation, "search" | "hash">,
+  ) => void;
   @property({ attribute: false }) onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
 
   @consume({ context: applicationContext, subscribe: false })
@@ -64,6 +64,10 @@ export class AppSidebar extends LitElement {
   private stopSessionsSubscription: (() => void) | undefined;
   private stopAgentSelectionSubscription: (() => void) | undefined;
   private stopGatewaySubscription: (() => void) | undefined;
+  private readonly routePreloadTimers = new Map<
+    EventTarget,
+    ReturnType<typeof globalThis.setTimeout>
+  >();
 
   override connectedCallback() {
     super.connectedCallback();
@@ -78,6 +82,10 @@ export class AppSidebar extends LitElement {
     this.stopAgentSelectionSubscription = undefined;
     this.stopGatewaySubscription?.();
     this.stopGatewaySubscription = undefined;
+    for (const timer of this.routePreloadTimers.values()) {
+      globalThis.clearTimeout(timer);
+    }
+    this.routePreloadTimers.clear();
     super.disconnectedCallback();
   }
 
@@ -140,9 +148,7 @@ export class AppSidebar extends LitElement {
       key: row.key,
       label: resolveSessionDisplayName(row.key, row),
       meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a",
-      href: `${pathForRoute("chat", context?.basePath ?? "")}?session=${encodeURIComponent(
-        row.key,
-      )}`,
+      href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
       active: row.key === routeSessionKey,
       hasActiveRun: Boolean(row.hasActiveRun),
     }));
@@ -163,14 +169,9 @@ export class AppSidebar extends LitElement {
   }
 
   private readonly selectSession = (sessionKey: string) => {
-    const context = this.context;
-    if (!context) {
-      return;
-    }
-    context.replace("chat", {
-      search: `?session=${encodeURIComponent(sessionKey)}`,
+    this.onNavigate?.("chat", {
+      search: searchForSession(sessionKey),
     });
-    this.dispatchEvent(new Event(SESSION_NAVIGATED_EVENT, { bubbles: true, composed: true }));
   };
 
   private readonly createSession = async () => {
@@ -184,9 +185,8 @@ export class AppSidebar extends LitElement {
       return;
     }
     const nextSessionKey = await context.sessions.create({
-      ...resolveSessionCreateParams(routeSessionKey, selectedAgentId, {
-        emitCommandHooksWithoutParent: false,
-      }),
+      currentSessionKey: routeSessionKey,
+      agentId: selectedAgentId,
     });
     if (nextSessionKey) {
       this.selectSession(nextSessionKey);
@@ -202,15 +202,16 @@ export class AppSidebar extends LitElement {
       return;
     }
     const start = () => {
-      routePreloadTimers.delete(target);
+      this.routePreloadTimers.delete(target);
       void this.onPreloadRoute?.(routeId).catch(() => undefined);
     };
     if (immediate) {
+      this.cancelPreload(event);
       start();
       return;
     }
-    if (!routePreloadTimers.has(target)) {
-      routePreloadTimers.set(target, globalThis.setTimeout(start, 50));
+    if (!this.routePreloadTimers.has(target)) {
+      this.routePreloadTimers.set(target, globalThis.setTimeout(start, 50));
     }
   }
 
@@ -219,10 +220,10 @@ export class AppSidebar extends LitElement {
     if (!target) {
       return;
     }
-    const timer = routePreloadTimers.get(target);
+    const timer = this.routePreloadTimers.get(target);
     if (timer !== undefined) {
       globalThis.clearTimeout(timer);
-      routePreloadTimers.delete(target);
+      this.routePreloadTimers.delete(target);
     }
   }
 
@@ -251,7 +252,7 @@ export class AppSidebar extends LitElement {
     const routeSessionKey = routeId === "chat" ? this.getRouteSessionKey() : "";
     const href =
       routeSessionKey && routeId === "chat"
-        ? `${pathForRoute("chat", this.basePath)}?session=${encodeURIComponent(routeSessionKey)}`
+        ? `${pathForRoute("chat", this.basePath)}${searchForSession(routeSessionKey)}`
         : pathForRoute(routeId as RouteId, this.basePath);
     return html`
       <a

@@ -1,18 +1,11 @@
-export function resolveSessionCreateParams(
-  sessionKey: string,
-  agentId: string,
-  options: { emitCommandHooksWithoutParent?: boolean } = {},
-) {
+export function resolveSessionCreateParams(sessionKey = "", agentId?: string) {
   const normalizedSessionKey = sessionKey.trim();
   const parentSessionKey =
     normalizedSessionKey && normalizedSessionKey.toLowerCase() !== "unknown"
       ? normalizedSessionKey
       : undefined;
   return {
-    agentId,
+    ...(agentId?.trim() ? { agentId: agentId.trim() } : {}),
     ...(parentSessionKey ? { parentSessionKey, emitCommandHooks: true } : {}),
-    ...(parentSessionKey === undefined && options.emitCommandHooksWithoutParent !== undefined
-      ? { emitCommandHooks: options.emitCommandHooksWithoutParent }
-      : {}),
   };
 }

@@ -8,6 +8,7 @@ import type {
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../api/types.ts";
+import { searchForSession } from "../../app-routes.ts";
 import {
   fetchAssistantIdentity,
   loadLocalAssistantIdentity,
@@ -37,11 +38,7 @@ import {
   resolveAgentIdFromSessionKey,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/session-key.ts";
-import {
-  resolveSessionCreateParams,
-  scopedAgentParamsForSession,
-  type SessionCapability,
-} from "../../lib/sessions/index.ts";
+import { scopedAgentParamsForSession, type SessionCapability } from "../../lib/sessions/index.ts";
 import {
   dismissChatError,
   dismissRealtimeTalkError,
@@ -861,11 +858,10 @@ export class ChatPage extends LitElement {
     const preservedDraft = state.chatMessage;
     const preservedAttachments = state.chatAttachments;
     const nextSessionKey = await this.context.sessions.create({
-      ...resolveSessionCreateParams(
-        previousSessionKey,
+      currentSessionKey: previousSessionKey,
+      agentId:
         scopedAgentParamsForSession(state, previousSessionKey).agentId ??
-          resolveAgentIdFromSessionKey(previousSessionKey),
-      ),
+        resolveAgentIdFromSessionKey(previousSessionKey),
     });
     if (
       !nextSessionKey ||
@@ -891,7 +887,7 @@ export class ChatPage extends LitElement {
     state.chatAttachments = preservedAttachments;
     state.requestUpdate?.();
     this.context.replace("chat", {
-      search: `?session=${encodeURIComponent(nextSessionKey)}`,
+      search: searchForSession(nextSessionKey),
     });
     return true;
   };
@@ -1108,7 +1104,7 @@ export class ChatPage extends LitElement {
       sessionKey: state.sessionKey,
       onSessionKeyChange: (next) => {
         this.context.replace("chat", {
-          search: `?session=${encodeURIComponent(next)}`,
+          search: searchForSession(next),
         });
       },
       thinkingLevel: state.chatThinkingLevel,
@@ -1200,12 +1196,12 @@ export class ChatPage extends LitElement {
         this.context.agentSelection.set(agentId);
         const nextSessionKey = buildAgentMainSessionKey({ agentId });
         this.context.replace("chat", {
-          search: `?session=${encodeURIComponent(nextSessionKey)}`,
+          search: searchForSession(nextSessionKey),
         });
       },
       onSessionSelect: (next) => {
         this.context.replace("chat", {
-          search: `?session=${encodeURIComponent(next)}`,
+          search: searchForSession(next),
         });
       },
       sidebarOpen: state.sidebarOpen,

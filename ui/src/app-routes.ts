@@ -129,3 +129,7 @@ export function locationForRoute(routeId: RouteId, basePath: string): RouteLocat
     hash: "",
   };
 }
+
+export function searchForSession(sessionKey: string): string {
+  return `?session=${encodeURIComponent(sessionKey)}`;
+}

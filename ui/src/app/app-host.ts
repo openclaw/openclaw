@@ -1,8 +1,8 @@
 import { consume, ContextProvider } from "@lit/context";
 import { html, LitElement, nothing } from "lit";
 import { property, query, state } from "lit/decorators.js";
-import type { RouteId } from "../app-routes.ts";
-import { SESSION_NAVIGATED_EVENT } from "../components/app-sidebar.ts";
+import { searchForSession, type RouteId } from "../app-routes.ts";
+import "../components/app-sidebar.ts";
 import "../components/app-topbar.ts";
 import "../components/exec-approval.ts";
 import "../components/gateway-url-confirmation.ts";
@@ -22,10 +22,14 @@ import {
   restoreNativeTitleTooltip,
 } from "../lib/dom-tooltips.ts";
 import { bootstrapApplication, type ApplicationRuntime } from "./bootstrap.ts";
-import { applicationContext, type ApplicationContext } from "./context.ts";
+import {
+  applicationContext,
+  type ApplicationContext,
+  type ApplicationNavigationOptions,
+} from "./context.ts";
 import type { ApplicationOverlaySnapshot } from "./overlays.ts";
-import { type RouterOutletSelection } from "./router-outlet.ts";
 import "./router-outlet.ts";
+import { type RouterOutletSelection } from "./router-outlet.ts";
 
 const ACTIVE_ROUTE_IDS = ["chat"] as const;
 
@@ -212,7 +216,6 @@ class OpenClawShell extends LitElement {
   @query("openclaw-command-palette") private commandPalette?: CommandPalette;
   private commandPaletteTarget?: CommandPaletteTargetDetail;
   private navDrawerTrigger: HTMLElement | null = null;
-
   private stopGatewaySubscription: (() => void) | undefined;
   private stopNavigationSubscription: (() => void) | undefined;
   private stopRouteSubscription: (() => void) | undefined;
@@ -242,7 +245,6 @@ class OpenClawShell extends LitElement {
     super.connectedCallback();
     this.startSubscriptions();
     this.addEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
-    this.addEventListener(SESSION_NAVIGATED_EVENT, this.handleSessionNavigated);
     this.addEventListener("pointerover", this.nativeTitleTooltipPointerOver);
     this.addEventListener("pointerout", this.nativeTitleTooltipPointerOut);
     this.addEventListener("focusin", this.nativeTitleTooltipFocusIn);
@@ -291,7 +293,6 @@ class OpenClawShell extends LitElement {
 
   override disconnectedCallback() {
     this.removeEventListener(COMMAND_PALETTE_TARGET_EVENT, this.handleCommandPaletteTarget);
-    this.removeEventListener(SESSION_NAVIGATED_EVENT, this.handleSessionNavigated);
     this.stopGatewaySubscription?.();
     this.stopGatewaySubscription = undefined;
     this.stopNavigationSubscription?.();
@@ -316,22 +317,23 @@ class OpenClawShell extends LitElement {
     this.requestUpdate();
   };
 
-  private navigate(routeId: string) {
+  private navigate(routeId: string, options?: ApplicationNavigationOptions) {
     const context = this.context;
-    if (!context) {
+    if (!context || routeId !== "chat") {
       return;
     }
-    if (routeId === "chat") {
-      const renderedMatch = this.routeSelection.pending ?? this.routeSelection.active;
-      const sessionKey =
-        new URLSearchParams(renderedMatch?.location.search).get("session")?.trim() ||
-        context.gateway.snapshot.sessionKey.trim();
-      if (sessionKey) {
-        context.navigate(routeId, {
-          search: `?session=${encodeURIComponent(sessionKey)}`,
-        });
-      }
-    }
+    const renderedMatch = this.routeSelection.pending ?? this.routeSelection.active;
+    const sessionKey =
+      new URLSearchParams(renderedMatch?.location.search).get("session")?.trim() ||
+      context.gateway.snapshot.sessionKey.trim();
+    const navigationOptions =
+      options ??
+      (sessionKey
+        ? {
+            search: searchForSession(sessionKey),
+          }
+        : undefined);
+    context.navigate("chat", navigationOptions);
     this.closeNavDrawer({ restoreFocus: true });
   }
 
@@ -381,10 +383,6 @@ class OpenClawShell extends LitElement {
       this.commandPaletteTarget = undefined;
     }
     this.requestUpdate();
-  };
-
-  private readonly handleSessionNavigated = () => {
-    this.closeNavDrawer({ restoreFocus: true });
   };
 
   private readonly updateGatewayStatus = (snapshot: {
@@ -453,7 +451,8 @@ class OpenClawShell extends LitElement {
           .onboarding=${this.onboarding}
           .onOpenPalette=${this.openPalette}
           .onToggleDrawer=${(trigger: HTMLElement) => this.toggleNavDrawer(trigger)}
-          .onNavigate=${(routeId: string) => this.navigate(routeId)}
+          .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
+            this.navigate(routeId, options)}
         ></openclaw-app-topbar>
         <div class="shell-nav">
           <openclaw-app-sidebar
@@ -489,7 +488,8 @@ class OpenClawShell extends LitElement {
               context.navigation.update({
                 recentSessionsCollapsed: !context.navigation.snapshot.recentSessionsCollapsed,
               })}
-            .onNavigate=${(routeId: string) => this.navigate(routeId)}
+            .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
+              this.navigate(routeId, options)}
             .onPreloadRoute=${(routeId: string) =>
               routeId === "chat" ? context.preload(routeId) : Promise.resolve()}
           ></openclaw-app-sidebar>
