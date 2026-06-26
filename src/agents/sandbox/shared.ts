@@ -10,6 +10,8 @@ import { resolveUserPath } from "../../utils.js";
 import { resolveAgentIdFromSessionKey } from "../agent-scope.js";
 import { hashTextSha256 } from "./hash.js";
 
+const DOCKER_NAME_MAX_LENGTH = 63;
+
 /** Converts an arbitrary session key into a bounded filesystem/container-safe slug. */
 export function slugifySessionKey(value: string) {
   const trimmed = value.trim() || "session";
@@ -30,6 +32,30 @@ export function slugifySessionKey(value: string) {
     return `${base}-workspace-${workspaceScopeHash}-${hash}`;
   }
   return `${base}-${hash}`;
+}
+
+/** Formats a Docker/container runtime name while preserving the unique slug suffix. */
+export function formatSandboxContainerName(prefix: string, scopeKey: string) {
+  const slug = scopeKey.trim() === "shared" ? "shared" : slugifySessionKey(scopeKey);
+  const name = `${prefix}${slug}`;
+  if (name.length <= DOCKER_NAME_MAX_LENGTH) {
+    return name;
+  }
+
+  const suffix =
+    slug.match(/-workspace-[a-f0-9]{8}-[a-f0-9]{8}$/i)?.[0] ??
+    slug.match(/-[a-f0-9]{8}$/i)?.[0] ??
+    `-${hashTextSha256(slug).slice(0, 8)}`;
+  const slugBudget = DOCKER_NAME_MAX_LENGTH - prefix.length;
+  if (slugBudget > suffix.length) {
+    const baseBudget = slugBudget - suffix.length;
+    const base = slug.slice(0, baseBudget).replace(/-+$/g, "") || "session".slice(0, baseBudget);
+    return `${prefix}${base}${suffix}`;
+  }
+
+  const fallbackSuffix = `-${hashTextSha256(name).slice(0, 8)}`;
+  const prefixBudget = Math.max(0, DOCKER_NAME_MAX_LENGTH - fallbackSuffix.length);
+  return `${prefix.slice(0, prefixBudget).replace(/-+$/g, "")}${fallbackSuffix}`;
 }
 
 /** Resolves the per-session sandbox workspace directory under the configured sandbox root. */

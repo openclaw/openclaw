@@ -5,8 +5,16 @@ import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { registerSandboxBackend } from "./sandbox/backend.js";
+import {
+  DEFAULT_SANDBOX_BROWSER_PREFIX,
+  DEFAULT_SANDBOX_CONTAINER_PREFIX,
+} from "./sandbox/constants.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
-import { resolveSandboxScopeKey, slugifySessionKey } from "./sandbox/shared.js";
+import {
+  formatSandboxContainerName,
+  resolveSandboxScopeKey,
+  slugifySessionKey,
+} from "./sandbox/shared.js";
 
 const updateRegistryMock = vi.hoisted(() => vi.fn());
 const syncSkillsToWorkspaceMock = vi.hoisted(() => vi.fn(async () => undefined));
@@ -70,6 +78,23 @@ describe("resolveSandboxScopeKey", () => {
     expect(slugifySessionKey("agent:poly:msteams:channel-1:workspace:1234abcd")).toMatch(
       /^agent-poly-msteams-chann-workspace-1234abcd-[a-f0-9]{8}$/,
     );
+  });
+
+  it("keeps workspace uniqueness suffixes inside default container name limits", () => {
+    const first = "agent:poly:msteams:channel-with-shared-readable-prefix-alpha:workspace:1234abcd";
+    const second = "agent:poly:msteams:channel-with-shared-readable-prefix-beta:workspace:1234abcd";
+
+    const dockerFirst = formatSandboxContainerName(DEFAULT_SANDBOX_CONTAINER_PREFIX, first);
+    const dockerSecond = formatSandboxContainerName(DEFAULT_SANDBOX_CONTAINER_PREFIX, second);
+    const browserFirst = formatSandboxContainerName(DEFAULT_SANDBOX_BROWSER_PREFIX, first);
+    const browserSecond = formatSandboxContainerName(DEFAULT_SANDBOX_BROWSER_PREFIX, second);
+
+    for (const name of [dockerFirst, dockerSecond, browserFirst, browserSecond]) {
+      expect(name.length).toBeLessThanOrEqual(63);
+      expect(name).toMatch(/-workspace-1234abcd-[a-f0-9]{8}$/);
+    }
+    expect(dockerFirst).not.toBe(dockerSecond);
+    expect(browserFirst).not.toBe(browserSecond);
   });
 
   it("scopes session sandboxes by workspace", () => {

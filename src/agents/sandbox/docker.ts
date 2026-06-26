@@ -179,7 +179,11 @@ import {
 } from "./config-hash.js";
 import { DEFAULT_SANDBOX_IMAGE } from "./constants.js";
 import { readRegistryEntry, updateRegistry } from "./registry.js";
-import { resolveSandboxAgentId, resolveSandboxScopeKey, slugifySessionKey } from "./shared.js";
+import {
+  formatSandboxContainerName,
+  resolveSandboxAgentId,
+  resolveSandboxScopeKey,
+} from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 import {
@@ -603,9 +607,7 @@ export async function ensureSandboxContainer(params: {
     resolveSandboxScopeKey(params.cfg.scope, params.sessionKey, {
       workspaceDir: params.agentWorkspaceDir,
     });
-  const slug = params.cfg.scope === "shared" ? "shared" : slugifySessionKey(scopeKey);
-  const name = `${params.cfg.docker.containerPrefix}${slug}`;
-  const containerName = name.slice(0, 63);
+  const containerName = formatSandboxContainerName(params.cfg.docker.containerPrefix, scopeKey);
   const readOnlyWorkspaceSkillMounts = resolveReadOnlyWorkspaceSkillMounts({
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,

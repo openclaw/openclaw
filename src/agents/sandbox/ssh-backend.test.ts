@@ -213,6 +213,13 @@ describe("ssh sandbox backend", () => {
     expect(commandParams.remoteCommand).toContain("/remote/openclaw/openclaw-ssh-agent-worker");
   });
 
+  it("preserves the legacy shared SSH runtime id", () => {
+    const runtimePaths = resolveSshRuntimePaths("/remote/openclaw", "shared");
+
+    expect(runtimePaths.runtimeId).toBe("openclaw-ssh-shared-8198076c");
+    expect(runtimePaths.runtimeRootDir).toBe("/remote/openclaw/openclaw-ssh-shared-8198076c");
+  });
+
   it("removes runtimes by deleting the remote scope root", async () => {
     await sshSandboxBackendManager.removeRuntime({
       entry: {

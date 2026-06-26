@@ -444,5 +444,8 @@ export function resolveSshRuntimePaths(
 }
 
 function buildSshSandboxRuntimeId(scopeKey: string): string {
+  if ((scopeKey.trim() || "session") === "shared") {
+    return "openclaw-ssh-shared-8198076c";
+  }
   return `openclaw-ssh-${slugifySessionKey(scopeKey)}`;
 }
