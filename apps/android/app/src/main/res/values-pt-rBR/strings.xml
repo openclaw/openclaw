@@ -1,0 +1,34 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="gateway_connection">Conexão do Gateway</string>
+    <string name="connect_gateway">Conectar Gateway</string>
+    <string name="disconnect">Desconectar</string>
+    <string name="trust_this_gateway">Confiar neste gateway?</string>
+    <string name="trust_and_continue">Confiar e continuar</string>
+    <string name="cancel">Cancelar</string>
+    <string name="endpoint">Endpoint</string>
+    <string name="status">Status</string>
+    <string name="connected_gateway_ready">Seu gateway está ativo e pronto.</string>
+    <string name="connect_gateway_get_started">Conecte-se ao seu gateway para começar.</string>
+    <string name="copy_report_for_claw">Copiar relatório para o Claw</string>
+    <string name="advanced_controls">Controles avançados</string>
+    <string name="connection_method">Método de conexão</string>
+    <string name="setup_code">Código de configuração</string>
+    <string name="manual">Manual</string>
+    <string name="paste_setup_code">Colar código de configuração</string>
+    <string name="host">Host</string>
+    <string name="use_tls">Usar TLS</string>
+    <string name="token_optional">Token (opcional)</string>
+    <string name="password">Senha</string>
+    <string name="run_onboarding_again">Executar integração novamente</string>
+    <string name="resolved_endpoint">Endpoint resolvido</string>
+    <string name="gateway_setup">Configuração do Gateway</string>
+    <string name="connect_to_gateway">Conecte-se ao seu Gateway</string>
+    <string name="scan_setup_code">Escanear código de configuração</string>
+    <string name="use_gateway_qr">Use o QR do seu Gateway ou o código de configuração</string>
+    <string name="nearby_gateway">Gateway próximo</string>
+    <string name="enter_gateway_url">Inserir URL do gateway</string>
+    <string name="connect_manual_url">Conectar usando uma URL manual</string>
+    <string name="permissions">Permissões</string>
+    <string name="done">Concluído</string>
+</resources>
