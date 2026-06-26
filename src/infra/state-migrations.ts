@@ -3133,13 +3133,14 @@ function pickLatestLegacyDirectEntry(
     if (!normalized) {
       continue;
     }
-    if (normalized === "global") {
+    const normalizedLower = normalizeLowercaseStringOrEmpty(normalized);
+    if (normalizedLower === "global") {
       continue;
     }
-    if (normalized.startsWith("agent:")) {
+    if (normalizedLower.startsWith("agent:")) {
       continue;
     }
-    if (normalizeLowercaseStringOrEmpty(normalized).startsWith("subagent:")) {
+    if (normalizedLower.startsWith("subagent:")) {
       continue;
     }
     if (isLegacyGroupKey(normalized) || isSurfaceGroupKey(normalized)) {

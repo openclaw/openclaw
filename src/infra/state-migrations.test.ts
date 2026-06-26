@@ -453,6 +453,13 @@ describe("state migrations", () => {
     >;
     targetStore["agent:main:desk"] = { sessionId: "explicit-foreign", updatedAt: 30 };
     await fs.writeFile(targetStorePath, `${JSON.stringify(targetStore, null, 2)}\n`, "utf8");
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    const legacyStore = JSON.parse(await fs.readFile(legacyStorePath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    legacyStore["Agent:main:desk"] = { sessionId: "mixed-case-foreign", updatedAt: 40 };
+    await fs.writeFile(legacyStorePath, `${JSON.stringify(legacyStore, null, 2)}\n`, "utf8");
 
     const detected = await detectLegacyStateMigrations({
       cfg,
@@ -492,6 +499,7 @@ describe("state migrations", () => {
       "generic-group-session",
     );
     expect(mergedStore["agent:main:desk"]?.sessionId).toBe("explicit-foreign");
+    expect(mergedStore["Agent:main:desk"]?.sessionId).toBe("mixed-case-foreign");
 
     await expect(
       fs.readFile(path.join(stateDir, "agents", "worker-1", "sessions", "trace.jsonl"), "utf8"),
