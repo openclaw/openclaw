@@ -266,6 +266,29 @@ function pushQaReportDetailsBlock(lines: string[], label: string, details: strin
   lines.push("", "```text", details, "```");
 }
 
+function countQaReportOutcomes(
+  checks: readonly QaReportCheck[],
+  scenarios: readonly QaReportScenario[],
+): { passCount: number; failCount: number } {
+  let passCount = 0;
+  let failCount = 0;
+  for (const check of checks) {
+    if (check.status === "pass") {
+      passCount += 1;
+    } else if (check.status === "fail") {
+      failCount += 1;
+    }
+  }
+  for (const scenario of scenarios) {
+    if (scenario.status === "pass") {
+      passCount += 1;
+    } else if (scenario.status === "fail") {
+      failCount += 1;
+    }
+  }
+  return { passCount, failCount };
+}
+
 /** Render checks, scenarios, timeline, and notes into the standard QA markdown report format. */
 export function renderQaMarkdownReport(params: {
   title: string;
@@ -278,12 +301,7 @@ export function renderQaMarkdownReport(params: {
 }) {
   const checks = params.checks ?? [];
   const scenarios = params.scenarios ?? [];
-  const passCount =
-    checks.filter((check) => check.status === "pass").length +
-    scenarios.filter((scenario) => scenario.status === "pass").length;
-  const failCount =
-    checks.filter((check) => check.status === "fail").length +
-    scenarios.filter((scenario) => scenario.status === "fail").length;
+  const { passCount, failCount } = countQaReportOutcomes(checks, scenarios);
 
   const lines = [
     `# ${params.title}`,
