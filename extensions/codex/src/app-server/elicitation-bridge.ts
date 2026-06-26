@@ -340,10 +340,11 @@ function allowedPluginPolicyApprovalDecisions(
   mode: "allow" | "deny" | "auto" | "always",
   approvalPrompt: BridgeableApprovalElicitation,
 ): ExecApprovalDecision[] {
+  const allowedDecisions = approvalPrompt.allowedDecisions ?? ["allow-once", "deny"];
   if (mode !== "always") {
-    return approvalPrompt.allowedDecisions;
+    return allowedDecisions;
   }
-  return approvalPrompt.allowedDecisions.filter((decision) => decision !== "allow-always");
+  return allowedDecisions.filter((decision) => decision !== "allow-always");
 }
 
 function oneShotPluginPolicyApprovalOutcome(
