@@ -827,10 +827,11 @@ type FallbackRunnerParams = {
 };
 
 type ModelSwitchOptions = ConstructorParameters<typeof LiveSessionModelSwitchError>[0];
+type TestPayload = { text: string; isError?: boolean; isReasoning?: boolean };
 
 function makeSuccessResult(provider: string, model: string) {
   return {
-    payloads: [{ text: "ok" }],
+    payloads: [{ text: "ok" }] as TestPayload[],
     meta: {
       durationMs: 100,
       aborted: false,
@@ -842,7 +843,7 @@ function makeSuccessResult(provider: string, model: string) {
 
 function makeEmptyResult(provider: string, model: string) {
   return {
-    payloads: [],
+    payloads: [] as TestPayload[],
     meta: {
       durationMs: 30_000,
       aborted: false,
