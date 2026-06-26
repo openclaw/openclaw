@@ -1165,8 +1165,10 @@ async function scanTranscriptFile(params: {
         // above.
         entry.costTotal = undefined;
         entry.costBreakdown = undefined;
-      } else if (entry.costTotal === undefined) {
-        // Fill in missing cost estimates.
+      } else if (entry.costTotal === undefined || entry.costTotal === 0) {
+        // Fill in missing or zero cost estimates. Some providers (e.g. DeepSeek V4)
+        // return cost.total=0 but have known pricing; treat $0 as missing so the
+        // estimate path runs (#97047).
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
       }
     }

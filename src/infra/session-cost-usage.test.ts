@@ -300,6 +300,64 @@ describe("session cost usage", () => {
     });
   });
 
+  it("estimates cost when pricing is known but API returns cost.total=0 (DeepSeek V4)", async () => {
+    const root = await makeSessionCostRoot("cost-known-pricing-api-zero");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    // DeepSeek V4 returns cost.total=0 in API response, but the model has known
+    // positive pricing configured. The scan should estimate cost from token counts
+    // rather than accepting the $0 as fact (#97047).
+    const entry = {
+      type: "message",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        usage: {
+          input: 95029,
+          output: 465,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 95494,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    };
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-dsv4.jsonl"),
+      transcriptText("sess-dsv4", entry),
+      "utf-8",
+    );
+
+    // Positive pricing is configured for DeepSeek V4
+    const config = {
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-flash",
+                cost: { input: 0.14, output: 0.28, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    clearGatewayModelPricingCacheState();
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30, config });
+      expect(summary.totals.totalTokens).toBe(95494);
+      // Cost should be estimated from tokens and known pricing, not stuck at $0.
+      expect(summary.totals.totalCost).toBeGreaterThan(0);
+      expect(summary.totals.missingCostEntries).toBe(0);
+    });
+  });
+
   it("treats a pre-upgrade (older-version) durable cache as stale so unpriced usage is rebuilt", async () => {
     const root = await makeSessionCostRoot("cost-cache-upgrade");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
