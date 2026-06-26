@@ -579,6 +579,47 @@ describe("state migrations", () => {
     await expectMissingPath(resolveChannelAllowFromPath("chatapp", env, "beta"));
   });
 
+  it("preserves non-main owners while merging into a shared store", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const targetStorePath = path.join(stateDir, "agents", "ops", "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(targetStorePath), { recursive: true });
+    await fs.writeFile(
+      targetStorePath,
+      JSON.stringify({
+        "agent:ops:main": { sessionId: "ops-session", updatedAt: 10 },
+      }),
+      "utf8",
+    );
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
+    await fs.writeFile(
+      legacyStorePath,
+      JSON.stringify({
+        "agent:research:main": { sessionId: "research-session", updatedAt: 20 },
+      }),
+      "utf8",
+    );
+    const cfg = {
+      session: { mainKey: "work", store: targetStorePath },
+      agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
+    } as OpenClawConfig;
+    const detected = await detectLegacyStateMigrations({ cfg, env, homedir: () => root });
+    expect(detected.sessions.preserveAmbiguousKeys).toBe(true);
+
+    await runLegacyStateMigrations({ detected, config: cfg, now: () => 1234 });
+
+    const store = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
+      string,
+      { sessionId: string }
+    >;
+    expect(store["agent:ops:work"]?.sessionId).toBe("ops-session");
+    expect(store["agent:research:work"]?.sessionId).toBe("research-session");
+    expect(store["agent:ops:main"]).toBeUndefined();
+    expect(store["agent:research:main"]).toBeUndefined();
+  });
+
   it("preserves plugin ownership captured before an aliased store rewrite", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");

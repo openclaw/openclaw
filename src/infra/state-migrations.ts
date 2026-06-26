@@ -3029,14 +3029,20 @@ function canonicalizeSessionKeyForAgent(params: {
   mainKey: string;
   scope?: SessionScope;
   skipCrossAgentRemap?: boolean;
+  preserveCanonicalAgentOwner?: boolean;
   preserveAmbiguousKeys?: boolean;
   preserveForeignMainAliases?: boolean;
 }): string {
-  const agentId = normalizeAgentId(params.agentId);
   const raw = params.key.trim();
   if (!raw) {
     return raw;
   }
+  // Shared stores may contain rows for several agents. Canonicalize a valid
+  // wrapper within its declared owner so another agent pass cannot adopt it.
+  const parsedOwner = params.preserveCanonicalAgentOwner
+    ? resolveCanonicalAgentSessionOwner(raw)
+    : undefined;
+  const agentId = parsedOwner ?? normalizeAgentId(params.agentId);
   const rawLower = normalizeLowercaseStringOrEmpty(raw);
   const normalized = normalizeSessionKeyPreservingOpaquePeerIds(raw);
   if (rawLower === "global" || rawLower === "unknown") {
@@ -3225,6 +3231,7 @@ function canonicalizeSessionStore(params: {
   mainKey: string;
   scope?: SessionScope;
   skipCrossAgentRemap?: boolean;
+  preserveCanonicalAgentOwner?: boolean;
   preserveAmbiguousKeys?: boolean;
   preserveForeignMainAliases?: boolean;
 }): { store: Record<string, SessionEntryLike>; legacyKeys: string[] } {
@@ -3242,6 +3249,7 @@ function canonicalizeSessionStore(params: {
       mainKey: params.mainKey,
       scope: params.scope,
       skipCrossAgentRemap: params.skipCrossAgentRemap,
+      preserveCanonicalAgentOwner: params.preserveCanonicalAgentOwner,
       preserveAmbiguousKeys: params.preserveAmbiguousKeys,
       preserveForeignMainAliases: params.preserveForeignMainAliases,
     });
@@ -3613,6 +3621,8 @@ function listLegacySessionKeys(params: {
       agentId: params.agentId,
       mainKey: params.mainKey,
       scope: params.scope,
+      skipCrossAgentRemap: params.preserveAmbiguousKeys,
+      preserveCanonicalAgentOwner: params.preserveAmbiguousKeys,
       preserveAmbiguousKeys: params.preserveAmbiguousKeys,
       preserveForeignMainAliases: params.preserveForeignMainAliases,
     });
@@ -4389,6 +4399,8 @@ async function migrateLegacySessions(
     agentId: detected.targetAgentId,
     mainKey: detected.targetMainKey,
     scope: detected.targetScope,
+    skipCrossAgentRemap: detected.sessions.preserveAmbiguousKeys,
+    preserveCanonicalAgentOwner: detected.sessions.preserveAmbiguousKeys,
     preserveAmbiguousKeys: detected.sessions.preserveAmbiguousKeys,
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
   });
@@ -4397,6 +4409,7 @@ async function migrateLegacySessions(
     agentId: detected.targetAgentId,
     mainKey: detected.targetMainKey,
     scope: detected.targetScope,
+    preserveCanonicalAgentOwner: detected.sessions.preserveAmbiguousKeys,
     preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
   });
   const preservedLegacyForeignMainAliasCount = detected.sessions.preserveForeignMainAliases
@@ -5173,11 +5186,9 @@ export async function migrateOrphanedSessionKeys(params: {
       continue;
     }
 
-    // When multiple agents share a single store file (session.store without
-    // {agentId}), run canonicalization once per agent so each agent's keys are
-    // handled correctly. Skip cross-agent "agent:main:*" remapping when "main"
-    // is a legitimate configured agent to avoid merging its data into another
-    // agent's namespace.
+    // A physical store can have several owners. Canonicalize valid scoped rows
+    // within their declared owner on every pass so iteration order cannot move
+    // one agent's history into another namespace.
     let working = parsed.store;
     let totalLegacy = 0;
     const hasDistinctAliases = aliasedStorePaths.has(storePath);
@@ -5204,9 +5215,8 @@ export async function migrateOrphanedSessionKeys(params: {
         agentId: storeAgentId,
         mainKey,
         scope,
-        // When multiple agents share the store and "main" is one of them,
-        // agent:main:* keys are legitimate — don't cross-agent remap them.
-        skipCrossAgentRemap: storeAgentIds.size > 1 && storeAgentIds.has(DEFAULT_AGENT_ID),
+        skipCrossAgentRemap: preserveAmbiguousKeys,
+        preserveCanonicalAgentOwner: preserveAmbiguousKeys,
         preserveAmbiguousKeys,
         preserveForeignMainAliases: pluginForeignMainAliasRisk,
       });

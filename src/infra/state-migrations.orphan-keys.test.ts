@@ -629,6 +629,30 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
+  it("canonicalizes non-main shared rows within their declared owners", async () => {
+    await withStateFixture(async ({ tmpDir, stateDir }) => {
+      const sharedStorePath = path.join(tmpDir, "shared-sessions.json");
+      writeStore(sharedStorePath, {
+        "agent:ops:main": { sessionId: "ops-session", updatedAt: 1000 },
+        "agent:research:main": { sessionId: "research-session", updatedAt: 2000 },
+      });
+      const cfg = {
+        session: { mainKey: "work", store: sharedStorePath },
+        agents: { list: [{ id: "ops", default: true }, { id: "research" }] },
+      } as OpenClawConfig;
+
+      const result = await migrateFixtureState(stateDir, cfg);
+
+      const store = readStore(sharedStorePath);
+      expect(requireStoreEntry(store, "agent:ops:work").sessionId).toBe("ops-session");
+      expect(requireStoreEntry(store, "agent:research:work").sessionId).toBe("research-session");
+      expect(store["agent:ops:main"]).toBeUndefined();
+      expect(store["agent:research:main"]).toBeUndefined();
+      expect(result.changes).toHaveLength(1);
+      expect(result.warnings).toHaveLength(0);
+    });
+  });
+
   it("preserves bare main aliases when a store has multiple possible owners", async () => {
     await withStateFixture(async ({ tmpDir, stateDir }) => {
       const sharedStorePath = path.join(tmpDir, "shared-sessions.json");
