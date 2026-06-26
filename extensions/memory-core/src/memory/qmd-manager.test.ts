@@ -400,7 +400,7 @@ describe("QmdMemoryManager", () => {
       memory: {
         backend: "qmd",
         qmd: {
-          ...(cfg.memory?.qmd ?? {}),
+          ...cfg.memory?.qmd,
           paths: [{ path: otherWorkspaceDir, pattern: "**/*.md", name: "workspace" }],
         },
       },

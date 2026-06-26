@@ -180,7 +180,12 @@ describe("qmd-runtime-cache", () => {
       ...context,
       collections: context.collections.map((collection) =>
         collection.name === "project-notes"
-          ? { ...collection, path: `${collection.path}-moved` }
+          ? {
+              name: collection.name,
+              kind: collection.kind,
+              path: `${collection.path}-moved`,
+              pattern: collection.pattern,
+            }
           : collection,
       ),
     };

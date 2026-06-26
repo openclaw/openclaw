@@ -183,7 +183,7 @@ function applyManagerDebug(
   return {
     ...result,
     debug: {
-      ...(result.debug ?? {}),
+      ...result.debug,
       ...debug,
     },
   };

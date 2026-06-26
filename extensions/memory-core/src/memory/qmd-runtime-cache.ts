@@ -229,7 +229,7 @@ function normalizeCollectionValidationEntry(
     return undefined;
   }
 
-  const validation = record.validation as unknown;
+  const validation = record.validation;
   if (typeof validation !== "object" || validation === null) {
     return undefined;
   }
@@ -292,7 +292,7 @@ function normalizeMultiCollectionProbeEntry(
     return undefined;
   }
 
-  const probe = record.multiCollectionProbe as unknown;
+  const probe = record.multiCollectionProbe;
   if (typeof probe !== "object" || probe === null) {
     return undefined;
   }

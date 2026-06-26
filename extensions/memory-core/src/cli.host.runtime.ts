@@ -24,4 +24,4 @@ export {
   listMemoryFiles,
   normalizeExtraMemoryPaths,
 } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-export { getMemorySearchManager } from "openclaw/plugin-sdk/memory-core-engine-runtime";
+export { getMemorySearchManager } from "./memory/index.js";
