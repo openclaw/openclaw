@@ -67,7 +67,11 @@ function createInvokeParams(cfg: Record<string, unknown>) {
       await imageHandlers["image.providers"]({
         respond: respond as never,
         context: { getRuntimeConfig: () => cfg } as never,
-      }),
+        params: {},
+        client: null,
+        req: { type: "req", id: "req-1", method: "image.providers" },
+        isWebchatConnect: () => false,
+      } as never),
   };
 }
 
