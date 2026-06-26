@@ -69,6 +69,11 @@ type ApplyPatchToolDetails = {
   summary: ApplyPatchSummary;
 };
 
+function normalizeUpdateComparison(content: string): string {
+  const normalized = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+  return normalized.length === 0 || normalized.endsWith("\n") ? normalized : `${normalized}\n`;
+}
+
 type SandboxApplyPatchConfig = {
   root: string;
   bridge: SandboxFsBridge;
@@ -208,7 +213,7 @@ export async function applyPatch(
       }
     } else {
       const existing = await fileOps.readFile(target.resolved);
-      if (existing === applied) {
+      if (normalizeUpdateComparison(existing) === applied) {
         noOpPaths.add(target.display);
       } else {
         noOpPaths.delete(target.display);
