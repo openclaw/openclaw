@@ -365,6 +365,7 @@ function resolveLastRunStatusFilter(opts?: CronListPageOptions): CronJobsLastRun
     opts?.lastRunStatus === "ok" ||
     opts?.lastRunStatus === "error" ||
     opts?.lastRunStatus === "skipped" ||
+    opts?.lastRunStatus === "deferred" ||
     opts?.lastRunStatus === "unknown"
   ) {
     return opts.lastRunStatus;
@@ -746,6 +747,17 @@ function tryFinishManualTaskRun(
         endedAt: params.endedAt,
         lastEventAt: params.endedAt,
         terminalSummary: params.coreResult.summary ?? undefined,
+      });
+      return;
+    }
+    if (params.coreResult.status === "deferred") {
+      completeTaskRunByRunId({
+        runId: params.taskRunId,
+        runtime: "cron",
+        endedAt: params.endedAt,
+        lastEventAt: params.endedAt,
+        progressSummary: null,
+        terminalSummary: params.coreResult.summary ?? "Deferred to descendant tasks.",
       });
       return;
     }

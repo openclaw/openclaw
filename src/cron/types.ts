@@ -78,7 +78,7 @@ export type CronDeliveryPatch = Partial<Pick<CronDelivery, "mode" | "bestEffort"
 };
 
 /** Execution outcome, separate from delivery outcome. */
-export type CronRunStatus = "ok" | "error" | "skipped";
+export type CronRunStatus = "ok" | "error" | "skipped" | "deferred";
 
 /** Delivery outcome for completion or failure-notification sends. */
 export type CronDeliveryStatus = "delivered" | "not-delivered" | "unknown" | "not-requested";
@@ -290,7 +290,7 @@ export type CronJobState = {
   /** Preferred execution outcome field. */
   lastRunStatus?: CronRunStatus;
   /** @deprecated Use lastRunStatus. */
-  lastStatus?: "ok" | "error" | "skipped";
+  lastStatus?: CronRunStatus;
   lastError?: string;
   lastDiagnostics?: CronRunDiagnostics;
   lastDiagnosticSummary?: string;

@@ -7,6 +7,7 @@ import type {
   CronRunDiagnostics,
   CronRunDiagnosticSeverity,
   CronRunDiagnosticSource,
+  CronRunStatus,
 } from "./types.js";
 
 const MAX_ENTRIES = 10;
@@ -236,7 +237,7 @@ export function createCronRunDiagnosticsFromExecDetails(
   opts?: {
     nowMs?: () => number;
     toolName?: string;
-    finalStatus?: "ok" | "error" | "skipped";
+    finalStatus?: CronRunStatus;
   },
 ): CronRunDiagnostics | undefined {
   if (!isRecord(details)) {
@@ -275,7 +276,7 @@ export function createCronRunDiagnosticsFromExecDetails(
 /** Extracts tool-call failure diagnostics from an agent reply payload. */
 export function createCronRunDiagnosticsFromToolPayload(
   payload: unknown,
-  opts?: { nowMs?: () => number; finalStatus?: "ok" | "error" | "skipped" },
+  opts?: { nowMs?: () => number; finalStatus?: CronRunStatus },
 ): CronRunDiagnostics | undefined {
   if (!isRecord(payload)) {
     return undefined;
@@ -305,7 +306,7 @@ export function createCronRunDiagnosticsFromToolPayload(
 /** Extracts cron run diagnostics from agent result payloads and metadata. */
 export function createCronRunDiagnosticsFromAgentResult(
   result: unknown,
-  opts?: { nowMs?: () => number; finalStatus?: "ok" | "error" | "skipped" },
+  opts?: { nowMs?: () => number; finalStatus?: CronRunStatus },
 ): CronRunDiagnostics | undefined {
   const record = isRecord(result) ? result : {};
   const meta =

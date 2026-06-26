@@ -1573,6 +1573,7 @@ export const pl: TranslationMap = {
       runStatusOk: "OK",
       runStatusError: "Błąd",
       runStatusSkipped: "Pominięto",
+      runStatusDeferred: "Deferred",
       runStatusUnknown: "Nieznane",
       deliveryDelivered: "Dostarczono",
       deliveryNotDelivered: "Nie dostarczono",

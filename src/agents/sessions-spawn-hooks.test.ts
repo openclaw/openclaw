@@ -283,6 +283,17 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
   });
 
   it("binds the subagent thread in core and emits subagent_spawned with requester metadata", async () => {
+    bindingMocks.bind.mockImplementationOnce(async (request: TestBindingRequest) => ({
+      targetSessionKey: request.targetSessionKey,
+      targetKind: request.targetKind,
+      status: "active",
+      conversation: {
+        channel: request.conversation.channel,
+        accountId: request.conversation.accountId ?? "default",
+        conversationId: "child-thread-999",
+        parentConversationId: "123",
+      },
+    }));
     const result = await spawn({
       label: "research",
       model: "openai/gpt-5.4",
@@ -333,6 +344,18 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
       },
       "binding conversation",
     );
+    const agentRequest = findGatewayRequest("agent");
+    expectFields(
+      agentRequest?.params,
+      {
+        channel: "discord",
+        accountId: "work",
+        to: "channel:child-thread-999",
+        deliver: true,
+      },
+      "agent request params",
+    );
+    expect(requireRecord(agentRequest?.params, "agent request params").threadId).toBeUndefined();
 
     expect(hookRunnerMocks.runSubagentSpawned).toHaveBeenCalledTimes(1);
     const [event, ctx] = requireSpawnedHookCall();
@@ -518,6 +541,16 @@ describe("sessions_spawn subagent lifecycle hooks", () => {
         error: "Session failed to start",
       },
       "ended event",
+    );
+    expectFields(
+      event.requesterOrigin,
+      {
+        channel: "discord",
+        accountId: "work",
+        to: "channel:123",
+        threadId: "456",
+      },
+      "ended requester origin",
     );
     const deleteCall = findGatewayRequest("sessions.delete");
     expectFields(

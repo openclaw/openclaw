@@ -16,6 +16,7 @@ import { createLazyImportLoader, createLazyPromiseLoader } from "../shared/lazy-
 import { importRuntimeModule } from "../shared/runtime-import.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { isAgentLifecycleYieldedWaiting } from "./agent-lifecycle-parent-state.js";
 import {
   ackLeasedAgentSteeringItemsFromSubagentRuns,
   leasePendingAgentSteeringItemsFromSubagentRuns,
@@ -418,6 +419,63 @@ function completeSubagentRunInBackground(params: CompleteSubagentRunParams, sour
   void completeSubagentRunWithRecovery(params, source);
 }
 
+function resumeYieldedSubagentRun(runId: string, entry: SubagentRunRecord): boolean {
+  if (entry.pauseReason !== "sessions_yield") {
+    return false;
+  }
+
+  const pendingDescendants = countPendingDescendantRuns(entry.childSessionKey);
+  if (pendingDescendants > 0) {
+    if (entry.wakeOnDescendantSettle !== true) {
+      entry.wakeOnDescendantSettle = true;
+      persistSubagentRuns();
+    }
+    return true;
+  }
+
+  const scopedChildren = listRunsForRequesterFromRuns(subagentRuns, entry.childSessionKey, {
+    requesterRunId: runId,
+  });
+  if (scopedChildren.length === 0) {
+    completeSubagentRunInBackground(
+      {
+        runId,
+        endedAt: Date.now(),
+        outcome: {
+          status: "error",
+          error: "sessions_yield ended the turn, but no active descendant subagent runs were found",
+        },
+        reason: SUBAGENT_ENDED_REASON_ERROR,
+        sendFarewell: true,
+        accountId: entry.requesterOrigin?.accountId,
+        triggerCleanup: true,
+        startedAt: entry.startedAt,
+      },
+      "yielded-run-without-descendants",
+    );
+    return true;
+  }
+
+  if (entry.wakeOnDescendantSettle !== true) {
+    entry.wakeOnDescendantSettle = true;
+    persistSubagentRuns();
+  }
+  completeSubagentRunInBackground(
+    {
+      runId,
+      endedAt: Date.now(),
+      outcome: { status: "ok" },
+      reason: SUBAGENT_ENDED_REASON_COMPLETE,
+      sendFarewell: true,
+      accountId: entry.requesterOrigin?.accountId,
+      triggerCleanup: true,
+      startedAt: entry.startedAt,
+    },
+    "yielded-run-descendants-settled",
+  );
+  return true;
+}
+
 function schedulePendingLifecycleError(params: {
   runId: string;
   endedAt: number;
@@ -626,7 +684,7 @@ function resumeSubagentRun(runId: string) {
   if (typeof entry.endedAt === "number" && isDeliverySuspended(entry)) {
     return;
   }
-  if (entry.pauseReason === "sessions_yield") {
+  if (resumeYieldedSubagentRun(runId, entry)) {
     return;
   }
   // Skip entries that have exhausted their retry budget or expired (#18264).
@@ -1099,7 +1157,14 @@ function ensureListener() {
       // sessions_yield ends the turn by aborting the run signal, so a yielded
       // terminal can also look aborted. An explicit yield is authoritative — pause,
       // don't kill — else the tracking task settles `cancelled` with a false notice (#92448).
-      if (evt.data?.yielded === true) {
+      if (
+        isAgentLifecycleYieldedWaiting({
+          yielded: evt.data?.yielded === true ? true : undefined,
+          livenessState,
+          phase: typeof phase === "string" ? phase : undefined,
+          stopReason,
+        })
+      ) {
         // Drop any grace timer from an earlier aborted/error terminal so it can't
         // later fire and settle this now-paused run with a false notice.
         clearPendingLifecycleError(evt.runId);
@@ -1280,6 +1345,9 @@ export function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
 export const testing = {
   async sweepOnceForTests() {
     await sweepSubagentRuns();
+  },
+  resumeRunForTests(runId: string) {
+    resumeSubagentRun(runId);
   },
   setDepsForTest(overrides?: Partial<SubagentRegistryDeps>) {
     subagentRegistryDeps = overrides

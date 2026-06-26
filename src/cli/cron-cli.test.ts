@@ -255,7 +255,7 @@ async function runCronRunAndCaptureExit(params: {
   ran?: boolean;
   enqueued?: boolean;
   runId?: string;
-  runStatus?: "ok" | "error" | "skipped";
+  runStatus?: "ok" | "error" | "skipped" | "deferred";
   args?: string[];
 }) {
   resetGatewayMock();
@@ -337,6 +337,7 @@ describe("cron cli", () => {
     { status: "ok" as const, expectedExitCode: 0 },
     { status: "error" as const, expectedExitCode: 1 },
     { status: "skipped" as const, expectedExitCode: 1 },
+    { status: "deferred" as const, expectedExitCode: 1 },
   ])(
     "waits for queued cron run completion with status $status",
     async ({ status, expectedExitCode }) => {

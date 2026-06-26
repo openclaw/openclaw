@@ -63,7 +63,10 @@ const CronSessionTargetSchema = Type.Union([
 const CronWakeModeSchema = Type.Union([Type.Literal("next-heartbeat"), Type.Literal("now")]);
 /** Run status factory reused for the active field and deprecated alias metadata. */
 function cronRunStatusSchema(options: Record<string, unknown> = {}) {
-  return Type.Union([Type.Literal("ok"), Type.Literal("error"), Type.Literal("skipped")], options);
+  return Type.Union(
+    [Type.Literal("ok"), Type.Literal("error"), Type.Literal("skipped"), Type.Literal("deferred")],
+    options,
+  );
 }
 
 const CronRunStatusSchema = cronRunStatusSchema();
@@ -88,6 +91,7 @@ const CronJobsLastRunStatusFilterSchema = Type.Union([
   Type.Literal("ok"),
   Type.Literal("error"),
   Type.Literal("skipped"),
+  Type.Literal("deferred"),
   Type.Literal("unknown"),
 ]);
 const CronJobsSortBySchema = Type.Union([
@@ -100,11 +104,13 @@ const CronRunsStatusFilterSchema = Type.Union([
   Type.Literal("ok"),
   Type.Literal("error"),
   Type.Literal("skipped"),
+  Type.Literal("deferred"),
 ]);
 const CronRunsStatusValueSchema = Type.Union([
   Type.Literal("ok"),
   Type.Literal("error"),
   Type.Literal("skipped"),
+  Type.Literal("deferred"),
 ]);
 const CronDeliveryStatusSchema = Type.Union([
   Type.Literal("delivered"),
@@ -533,7 +539,7 @@ export const CronRunsParamsSchema = Type.Object(
     runId: Type.Optional(NonEmptyString),
     limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
     offset: Type.Optional(Type.Integer({ minimum: 0 })),
-    statuses: Type.Optional(Type.Array(CronRunsStatusValueSchema, { minItems: 1, maxItems: 3 })),
+    statuses: Type.Optional(Type.Array(CronRunsStatusValueSchema, { minItems: 1, maxItems: 4 })),
     status: Type.Optional(CronRunsStatusFilterSchema),
     deliveryStatuses: Type.Optional(
       Type.Array(CronDeliveryStatusSchema, { minItems: 1, maxItems: 4 }),

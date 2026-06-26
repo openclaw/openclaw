@@ -26,7 +26,7 @@ import type { CronDeliveryStatus, CronRunStatus } from "./types.js";
 export type { CronRunLogEntry } from "./run-log-types.js";
 
 type CronRunLogSortDir = "asc" | "desc";
-type CronRunLogStatusFilter = "all" | "ok" | "error" | "skipped";
+type CronRunLogStatusFilter = "all" | CronRunStatus;
 
 type ReadCronRunLogPageOptions = {
   limit?: number;
@@ -194,7 +194,13 @@ export function readCronRunLogEntriesSync(params: {
 }
 
 function normalizeRunStatusFilter(status?: string): CronRunLogStatusFilter {
-  if (status === "ok" || status === "error" || status === "skipped" || status === "all") {
+  if (
+    status === "ok" ||
+    status === "error" ||
+    status === "skipped" ||
+    status === "deferred" ||
+    status === "all"
+  ) {
     return status;
   }
   return "all";
@@ -207,7 +213,7 @@ function normalizeRunStatuses(opts?: {
   if (Array.isArray(opts?.statuses) && opts.statuses.length > 0) {
     const filtered = opts.statuses.filter(
       (status): status is CronRunStatus =>
-        status === "ok" || status === "error" || status === "skipped",
+        status === "ok" || status === "error" || status === "skipped" || status === "deferred",
     );
     if (filtered.length > 0) {
       return uniqueValues(filtered);

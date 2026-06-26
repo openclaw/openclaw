@@ -1573,6 +1573,7 @@ export const ja_JP: TranslationMap = {
       runStatusOk: "OK",
       runStatusError: "エラー",
       runStatusSkipped: "スキップ",
+      runStatusDeferred: "Deferred",
       runStatusUnknown: "不明",
       deliveryDelivered: "配信済み",
       deliveryNotDelivered: "未配信",

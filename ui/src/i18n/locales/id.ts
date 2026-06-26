@@ -1567,6 +1567,7 @@ export const id: TranslationMap = {
       runStatusOk: "OK",
       runStatusError: "Kesalahan",
       runStatusSkipped: "Dilewati",
+      runStatusDeferred: "Deferred",
       runStatusUnknown: "Tidak diketahui",
       deliveryDelivered: "Terkirim",
       deliveryNotDelivered: "Tidak terkirim",

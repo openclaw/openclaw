@@ -45,7 +45,7 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { createCronExecutionId } from "../run-id.js";
 import { hasScheduledNextRunAtMs } from "../service/jobs.js";
-import type { CronJob, CronRunTelemetry } from "../types.js";
+import type { CronJob, CronRunDiagnostics, CronRunTelemetry } from "../types.js";
 import type { DeliveryTargetResolution } from "./delivery-target.js";
 import { pickLastNonEmptyTextFromPayloads, pickSummaryFromOutput } from "./helpers.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
@@ -117,6 +117,7 @@ type DispatchCronDeliveryParams = {
   deliveryBestEffort: boolean;
   deliveryPayloadHasStructuredContent: boolean;
   deliveryPayloads: ReplyPayload[];
+  yielded?: boolean;
   synthesizedText?: string;
   ttsAuto?: TtsAutoMode;
   summary?: string;
@@ -164,6 +165,23 @@ const PERMANENT_DIRECT_CRON_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /recipient is not a valid/i,
   /outbound not configured for channel/i,
 ];
+
+function cronDeliveryDiagnostic(params: {
+  severity: "warn" | "error";
+  message: string;
+}): CronRunDiagnostics {
+  return {
+    summary: params.message,
+    entries: [
+      {
+        ts: Date.now(),
+        source: "delivery",
+        severity: params.severity,
+        message: params.message,
+      },
+    ],
+  };
+}
 
 const STALE_CRON_DELIVERY_MAX_START_DELAY_MS = 3 * 60 * 60_000;
 
@@ -1282,6 +1300,63 @@ export async function dispatchCronDelivery(
     }
   };
 
+  const classifyDeferredDescendantHandoff = async (): Promise<RunCronAgentTurnResult | null> => {
+    const initialSynthesizedText = synthesizedText?.trim() ?? "";
+    const expectedSubagentFollowup = initialSynthesizedText
+      ? expectsSubagentFollowup(initialSynthesizedText)
+      : false;
+    const subagentRegistryRuntime = await loadDeliverySubagentRegistryRuntime();
+    const subagentFollowupSessionKey = params.runSessionKey;
+    const activeSubagentRuns = subagentRegistryRuntime.countActiveDescendantRuns(
+      subagentFollowupSessionKey,
+    );
+    const shouldCheckCompletedDescendants =
+      activeSubagentRuns === 0 &&
+      initialSynthesizedText !== "" &&
+      (isLikelyInterimCronMessage(initialSynthesizedText) || expectedSubagentFollowup);
+    const subagentFollowupRuntime =
+      shouldCheckCompletedDescendants || activeSubagentRuns > 0 || expectedSubagentFollowup
+        ? await loadSubagentFollowupRuntime()
+        : undefined;
+    const completedDescendantReply = shouldCheckCompletedDescendants
+      ? await subagentFollowupRuntime?.readDescendantSubagentFallbackReply({
+          sessionKey: subagentFollowupSessionKey,
+          runStartedAt: params.runStartedAt,
+        })
+      : undefined;
+    if (params.yielded === true && activeSubagentRuns === 0 && !completedDescendantReply) {
+      const message =
+        "cron isolated agent yielded, but no active descendant run was found for follow-up";
+      deliveryAttempted = true;
+      return params.withRunSession({
+        status: "error",
+        error: message,
+        summary,
+        outputText,
+        delivered: false,
+        deliveryAttempted,
+        diagnostics: cronDeliveryDiagnostic({ severity: "error", message }),
+        ...params.telemetry,
+      });
+    }
+    if (activeSubagentRuns > 0) {
+      const message =
+        params.yielded === true
+          ? "cron isolated agent yielded while descendant runs are still active"
+          : "cron isolated agent is waiting for descendant runs to finish";
+      deliveryAttempted = true;
+      return params.withRunSession({
+        status: "deferred",
+        summary,
+        outputText,
+        deliveryAttempted,
+        diagnostics: cronDeliveryDiagnostic({ severity: "warn", message }),
+        ...params.telemetry,
+      });
+    }
+    return null;
+  };
+
   const finalizeTextDelivery = async (
     delivery: SuccessfulDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
@@ -1296,7 +1371,8 @@ export async function dispatchCronDelivery(
       subagentFollowupSessionKey,
     );
     const shouldCheckCompletedDescendants =
-      activeSubagentRuns === 0 && isLikelyInterimCronMessage(initialSynthesizedText);
+      activeSubagentRuns === 0 &&
+      (isLikelyInterimCronMessage(initialSynthesizedText) || expectedSubagentFollowup);
     const needsSubagentFollowupRuntime =
       shouldCheckCompletedDescendants || activeSubagentRuns > 0 || expectedSubagentFollowup;
     const subagentFollowupRuntime = needsSubagentFollowupRuntime
@@ -1314,6 +1390,21 @@ export async function dispatchCronDelivery(
         })
       : undefined;
     const hadDescendants = activeSubagentRuns > 0 || Boolean(completedDescendantReply);
+    if (params.yielded === true && activeSubagentRuns === 0 && !completedDescendantReply) {
+      const message =
+        "cron isolated agent yielded, but no active descendant run was found for follow-up";
+      deliveryAttempted = true;
+      return params.withRunSession({
+        status: "error",
+        error: message,
+        summary,
+        outputText,
+        delivered: false,
+        deliveryAttempted,
+        diagnostics: cronDeliveryDiagnostic({ severity: "error", message }),
+        ...params.telemetry,
+      });
+    }
     if (!params.deliveryBestEffort && (activeSubagentRuns > 0 || expectedSubagentFollowup)) {
       let finalReply = await subagentFollowupRuntime?.waitForDescendantSubagentSummary({
         sessionKey: subagentFollowupSessionKey,
@@ -1344,16 +1435,21 @@ export async function dispatchCronDelivery(
       synthesizedText = completedDescendantReply;
       deliveryPayloads = [{ text: completedDescendantReply }];
     }
-    if (!params.deliveryBestEffort && activeSubagentRuns > 0) {
+    if (activeSubagentRuns > 0) {
       // Parent orchestration is still in progress; avoid announcing a partial
-      // update to the main requester. Mark deliveryAttempted so the timer does
-      // not fire a redundant enqueueSystemEvent fallback (double-announce bug).
+      // update to the main requester. A yielded parent is not complete yet, so
+      // record a deferred run instead of an ordinary ok/not-delivered result.
       deliveryAttempted = true;
+      const message =
+        params.yielded === true
+          ? "cron isolated agent yielded while descendant runs are still active"
+          : "cron isolated agent is waiting for descendant runs to finish";
       return params.withRunSession({
-        status: "ok",
+        status: "deferred",
         summary,
         outputText,
         deliveryAttempted,
+        diagnostics: cronDeliveryDiagnostic({ severity: "warn", message }),
         ...params.telemetry,
       });
     }
@@ -1395,6 +1491,11 @@ export async function dispatchCronDelivery(
     }
     return await deliverViaDirectAndCleanup(delivery, { retryTransient: true });
   };
+
+  const deferredDescendantHandoff = await classifyDeferredDescendantHandoff();
+  if (deferredDescendantHandoff) {
+    return buildDeliveryState(deferredDescendantHandoff);
+  }
 
   if (params.deliveryRequested && !params.skipHeartbeatDelivery && !sourceDeliverySatisfied) {
     if (!params.resolvedDelivery.ok) {

@@ -1,15 +1,3 @@
-/**
- * Tests for the double-announce bug in cron delivery dispatch.
- *
- * Bug: early return paths in text finalization (active subagent suppression
- * and stale interim message suppression) returned without setting
- * deliveryAttempted = true. The timer saw deliveryAttempted = false and
- * fired enqueueSystemEvent as a fallback, causing a second delivery.
- *
- * Fix: both early return paths now set deliveryAttempted = true before
- * returning so the timer correctly skips the system-event fallback.
- */
-
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
 
@@ -204,6 +192,10 @@ function makeBaseParams(overrides: {
   deliveryBestEffort?: boolean;
   runSessionKey?: string;
   resolvedDeliveryMode?: "explicit" | "implicit";
+  yielded?: boolean;
+  deliveryPayloadHasStructuredContent?: boolean;
+  skipHeartbeatDelivery?: boolean;
+  sourceDeliverySatisfied?: boolean;
 }): Parameters<typeof dispatchCronDelivery>[0] {
   const resolvedDelivery = {
     ...makeResolvedDelivery(),
@@ -230,16 +222,17 @@ function makeBaseParams(overrides: {
     timeoutMs: 30_000,
     resolvedDelivery,
     deliveryRequested: overrides.deliveryRequested ?? true,
-    skipHeartbeatDelivery: false,
+    skipHeartbeatDelivery: overrides.skipHeartbeatDelivery ?? false,
     sourceDeliveryOutcome: {
       visibleDeliveries: [],
       verifiedMessageToolDelivery: false,
-      satisfiesSourceDelivery: false,
+      satisfiesSourceDelivery: overrides.sourceDeliverySatisfied ?? false,
       unverifiedMessageToolDelivery: false,
     },
     deliveryBestEffort: overrides.deliveryBestEffort ?? false,
-    deliveryPayloadHasStructuredContent: false,
+    deliveryPayloadHasStructuredContent: overrides.deliveryPayloadHasStructuredContent ?? false,
     deliveryPayloads: overrides.synthesizedText ? [{ text: overrides.synthesizedText }] : [],
+    yielded: overrides.yielded,
     synthesizedText: overrides.synthesizedText ?? "on it",
     summary: overrides.synthesizedText ?? "on it",
     outputText: overrides.synthesizedText ?? "on it",
@@ -326,24 +319,140 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     vi.unstubAllEnvs();
   });
 
-  it("early return (active subagent) sets deliveryAttempted=true so timer skips enqueueSystemEvent", async () => {
-    // countActiveDescendantRuns returns >0 → enters wait block; still >0 after wait → early return
+  it("records active yielded subagent orchestration as deferred instead of ok", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(2);
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
 
-    const params = makeBaseParams({ synthesizedText: "on it" });
+    const params = makeBaseParams({ synthesizedText: "Turn yielded.", yielded: true });
     const state = await dispatchCronDelivery(params);
 
-    // deliveryAttempted must be true so timer does NOT fire enqueueSystemEvent
     expect(state.deliveryAttempted).toBe(true);
-    expect(waitForDescendantSubagentSummary).toHaveBeenCalledTimes(1);
-
-    // No announce should have been attempted (subagents still running)
+    expectResultFields(state.result, {
+      status: "deferred",
+      deliveryAttempted: true,
+    });
+    expect(state.result?.diagnostics?.summary).toContain("yielded");
+    expect(waitForDescendantSubagentSummary).not.toHaveBeenCalled();
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("bestEffort delivery skips active subagent wait and sends the cron reply", async () => {
+  it("records active yielded structured delivery as deferred before direct delivery", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(1);
+
+    const params = makeBaseParams({
+      synthesizedText: "Turn yielded.",
+      yielded: true,
+      deliveryPayloadHasStructuredContent: true,
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expectResultFields(state.result, {
+      status: "deferred",
+      deliveryAttempted: true,
+    });
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("records active yielded no-delivery runs as deferred", async () => {
+    vi.mocked(countActiveDescendantRuns).mockReturnValue(1);
+
+    const params = makeBaseParams({
+      synthesizedText: "Turn yielded.",
+      yielded: true,
+      deliveryRequested: false,
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expectResultFields(state.result, {
+      status: "deferred",
+      deliveryAttempted: true,
+    });
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("records yielded source-satisfied runs without descendants as an error", async () => {
+    const params = makeBaseParams({
+      synthesizedText: "Turn yielded.",
+      yielded: true,
+      sourceDeliverySatisfied: true,
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.deliveryAttempted).toBe(true);
+    expectResultFields(state.result, {
+      status: "error",
+      delivered: false,
+      deliveryAttempted: true,
+    });
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+  });
+
+  it("records yielded parent without active descendants as an error", async () => {
+    const params = makeBaseParams({ synthesizedText: "Turn yielded.", yielded: true });
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(state.deliveryAttempted).toBe(true);
+    expectResultFields(state.result, {
+      status: "error",
+      delivered: false,
+      deliveryAttempted: true,
+    });
+    expect(state.result?.error).toContain("yielded");
+    expect(state.result?.diagnostics?.summary).toContain("yielded");
+  });
+
+  it("records yielded expected follow-up without real descendants as an error", async () => {
+    vi.mocked(expectsSubagentFollowup).mockReturnValue(true);
+
+    const params = makeBaseParams({
+      synthesizedText: "Spawned a subagent; it will auto-announce when done.",
+      yielded: true,
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(readDescendantSubagentFallbackReply).toHaveBeenCalledWith({
+      sessionKey: "agent:main",
+      runStartedAt: params.runStartedAt,
+    });
+    expect(waitForDescendantSubagentSummary).not.toHaveBeenCalled();
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    expect(state.deliveryAttempted).toBe(true);
+    expectResultFields(state.result, {
+      status: "error",
+      delivered: false,
+      deliveryAttempted: true,
+    });
+    expect(state.result?.error).toContain("yielded");
+  });
+
+  it("uses completed descendant output for yielded expected follow-up runs", async () => {
+    vi.mocked(expectsSubagentFollowup).mockReturnValue(true);
+    vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(
+      "Completed descendant summary.",
+    );
+
+    const params = makeBaseParams({
+      synthesizedText: "Spawned a subagent; it will auto-announce when done.",
+      yielded: true,
+    });
+    const state = await dispatchCronDelivery(params);
+
+    expect(readDescendantSubagentFallbackReply).toHaveBeenCalledWith({
+      sessionKey: "agent:main",
+      runStartedAt: params.runStartedAt,
+    });
+    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+    expectDeliveryCall(0, {
+      payloads: [{ text: "Completed descendant summary." }],
+    });
+    expect(state.delivered).toBe(true);
+  });
+
+  it("defers yielded bestEffort delivery while descendant runs remain active", async () => {
     vi.mocked(countActiveDescendantRuns).mockReturnValue(2);
     vi.mocked(waitForDescendantSubagentSummary).mockResolvedValue(undefined);
     vi.mocked(readDescendantSubagentFallbackReply).mockResolvedValue(undefined);
@@ -351,19 +460,19 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const params = makeBaseParams({
       synthesizedText: "Parent cron summary is ready.",
       deliveryBestEffort: true,
+      yielded: true,
     });
     const state = await dispatchCronDelivery(params);
 
     expect(waitForDescendantSubagentSummary).not.toHaveBeenCalled();
-    expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
-    expectDeliveryCall(0, {
-      channel: "telegram",
-      to: "123456",
-      payloads: [{ text: "Parent cron summary is ready." }],
-      skipQueue: true,
-    });
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(state.deliveryAttempted).toBe(true);
-    expect(state.delivered).toBe(true);
+    expect(state.delivered).toBe(false);
+    expectResultFields(state.result, {
+      status: "deferred",
+      deliveryAttempted: true,
+    });
+    expect(state.result?.diagnostics?.summary).toContain("yielded");
   });
 
   it("sends announce fallback when source delivery is not satisfied", async () => {
@@ -806,7 +915,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
   });
 
   it("early return (stale interim suppression) sets deliveryAttempted=true so timer skips enqueueSystemEvent", async () => {
-    // First countActiveDescendantRuns call returns >0 (had descendants), second returns 0
     vi.mocked(countActiveDescendantRuns)
       .mockReturnValueOnce(2) // initial check → hadDescendants=true, enters wait block
       .mockReturnValueOnce(0); // second check after wait → activeSubagentRuns=0
@@ -818,7 +926,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     const params = makeBaseParams({ synthesizedText: "on it, pulling everything together" });
     const state = await dispatchCronDelivery(params);
 
-    // deliveryAttempted must be true so timer does NOT fire enqueueSystemEvent
     expect(state.deliveryAttempted).toBe(true);
 
     // No direct delivery should have been sent (stale interim suppressed)
@@ -1882,7 +1989,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
         delivered: false,
         deliveryAttempted: true,
       });
-      // deliveryAttempted must be true so the heartbeat timer does not fire
       // a fallback enqueueSystemEvent with the control-token text.
       expect(state.deliveryAttempted).toBe(true);
     },

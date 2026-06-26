@@ -1559,6 +1559,7 @@ export const vi: TranslationMap = {
       runStatusOk: "OK",
       runStatusError: "Lỗi",
       runStatusSkipped: "Đã bỏ qua",
+      runStatusDeferred: "Deferred",
       runStatusUnknown: "Không rõ",
       deliveryDelivered: "Đã gửi",
       deliveryNotDelivered: "Chưa gửi",

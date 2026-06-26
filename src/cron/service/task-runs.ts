@@ -124,6 +124,17 @@ export function tryFinishCronTaskRun(
       });
       return;
     }
+    if (result.status === "deferred") {
+      completeTaskRunByRunId({
+        runId: result.taskRunId,
+        runtime: "cron",
+        endedAt: result.endedAt,
+        lastEventAt: result.endedAt,
+        progressSummary: null,
+        terminalSummary: result.summary ?? "Deferred to descendant tasks.",
+      });
+      return;
+    }
     failTaskRunByRunId({
       runId: result.taskRunId,
       runtime: "cron",

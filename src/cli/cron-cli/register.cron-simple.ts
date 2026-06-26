@@ -33,7 +33,7 @@ type CronRunCommandResult = {
 };
 
 type CronRunLogEntryResult = {
-  status?: "ok" | "error" | "skipped";
+  status?: "ok" | "error" | "skipped" | "deferred";
 };
 
 function sleep(ms: number): Promise<void> {
@@ -78,7 +78,12 @@ async function waitForCronRunCompletion(params: {
       limit: 1,
     })) as { entries?: CronRunLogEntryResult[] };
     const entry = page.entries?.[0];
-    if (entry?.status === "ok" || entry?.status === "error" || entry?.status === "skipped") {
+    if (
+      entry?.status === "ok" ||
+      entry?.status === "error" ||
+      entry?.status === "skipped" ||
+      entry?.status === "deferred"
+    ) {
       return entry;
     }
     const elapsedMs = Date.now() - startedAt;
