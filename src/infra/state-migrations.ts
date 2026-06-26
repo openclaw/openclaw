@@ -2998,9 +2998,10 @@ async function runLegacyMigrationPlans(
 
 function isLegacyDefaultMainAliasKey(key: string, mainKey: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(key.trim());
+  const canonicalMainKey = normalizeMainKey(mainKey);
   return (
     lower === `agent:${DEFAULT_AGENT_ID}:${DEFAULT_MAIN_KEY}` ||
-    lower === `agent:${DEFAULT_AGENT_ID}:${mainKey}`
+    lower === `agent:${DEFAULT_AGENT_ID}:${canonicalMainKey}`
   );
 }
 

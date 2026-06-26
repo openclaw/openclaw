@@ -445,12 +445,13 @@ describe("state migrations", () => {
 
   it("runs legacy state migrations and canonicalizes the merged session store", async () => {
     const { root, stateDir, env, cfg } = await createLegacyStateFixture({ includePreKey: true });
+    cfg.session = { ...cfg.session, mainKey: "Desk" };
     const targetStorePath = path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json");
     const targetStore = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
       string,
       unknown
     >;
-    targetStore["agent:main:main"] = { sessionId: "explicit-foreign", updatedAt: 30 };
+    targetStore["agent:main:desk"] = { sessionId: "explicit-foreign", updatedAt: 30 };
     await fs.writeFile(targetStorePath, `${JSON.stringify(targetStore, null, 2)}\n`, "utf8");
 
     const detected = await detectLegacyStateMigrations({
@@ -490,7 +491,7 @@ describe("state migrations", () => {
     expect(mergedStore["agent:worker-1:unknown:group:legacy-room"]?.sessionId).toBe(
       "generic-group-session",
     );
-    expect(mergedStore["agent:main:main"]?.sessionId).toBe("explicit-foreign");
+    expect(mergedStore["agent:main:desk"]?.sessionId).toBe("explicit-foreign");
 
     await expect(
       fs.readFile(path.join(stateDir, "agents", "worker-1", "sessions", "trace.jsonl"), "utf8"),
