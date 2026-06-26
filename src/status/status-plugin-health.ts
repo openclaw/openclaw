@@ -157,6 +157,35 @@ function hasDependencyIssue(plugin: PluginHealthRecord): boolean {
   );
 }
 
+type PluginRecordSummary = {
+  loadedIds: string[];
+  disabled: number;
+  errors: PluginHealthRecord[];
+  dependencyIssues: PluginHealthRecord[];
+};
+
+function summarizePluginRecords(plugins: readonly PluginHealthRecord[]): PluginRecordSummary {
+  const loadedIds: string[] = [];
+  const errors: PluginHealthRecord[] = [];
+  const dependencyIssues: PluginHealthRecord[] = [];
+  let disabled = 0;
+
+  for (const plugin of plugins) {
+    if (plugin.status === "loaded") {
+      loadedIds.push(plugin.id);
+    } else if (plugin.status === "disabled") {
+      disabled += 1;
+    } else if (plugin.status === "error") {
+      errors.push(plugin);
+    }
+    if (hasDependencyIssue(plugin)) {
+      dependencyIssues.push(plugin);
+    }
+  }
+
+  return { loadedIds, disabled, errors, dependencyIssues };
+}
+
 function shouldSuppressChannelPluginDiagnostic(
   diagnostic: PluginDiagnosticRecord,
   channelPluginFailures: readonly ChannelPluginFailureRecord[],
@@ -186,10 +215,16 @@ function countProblemDiagnostics(diagnostics: readonly PluginDiagnosticRecord[])
   errors: number;
   warnings: number;
 } {
-  return {
-    errors: diagnostics.filter((entry) => entry.level === "error").length,
-    warnings: diagnostics.filter((entry) => entry.level === "warn").length,
-  };
+  let errors = 0;
+  let warnings = 0;
+  for (const entry of diagnostics) {
+    if (entry.level === "error") {
+      errors += 1;
+    } else if (entry.level === "warn") {
+      warnings += 1;
+    }
+  }
+  return { errors, warnings };
 }
 
 export function isChannelPluginFailureDiagnostic(diagnostic: PluginDiagnosticRecord): boolean {
@@ -200,9 +235,12 @@ function formatCount(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-export function formatCompactPluginHealthLine(snapshot: StatusPluginHealthSnapshot): string {
-  const loadErrors = snapshot.plugins.filter((plugin) => plugin.status === "error").length;
-  const dependencyIssues = snapshot.plugins.filter(hasDependencyIssue).length;
+function formatCompactPluginHealthLineFromSummary(
+  snapshot: StatusPluginHealthSnapshot,
+  pluginSummary: PluginRecordSummary,
+): string {
+  const loadErrors = pluginSummary.errors.length;
+  const dependencyIssues = pluginSummary.dependencyIssues.length;
   const diagnosticErrors = countProblemDiagnostics(getReportableDiagnostics(snapshot)).errors;
   const quarantines = snapshot.contextEngineQuarantines.length;
   const runtimeToolQuarantines = snapshot.runtimeToolQuarantines?.length ?? 0;
@@ -222,6 +260,10 @@ export function formatCompactPluginHealthLine(snapshot: StatusPluginHealthSnapsh
   return parts.length === 0 ? "🔌 Plugins: OK" : `⚠️ Plugins: ${parts.join(" · ")}`;
 }
 
+export function formatCompactPluginHealthLine(snapshot: StatusPluginHealthSnapshot): string {
+  return formatCompactPluginHealthLineFromSummary(snapshot, summarizePluginRecords(snapshot.plugins));
+}
+
 function formatPluginList(ids: readonly string[], limit: number): string {
   if (ids.length === 0) {
     return "none";
@@ -235,17 +277,12 @@ function byLocale(left: string, right: string): number {
 }
 
 export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot): string {
-  const loaded = snapshot.plugins
-    .filter((plugin) => plugin.status === "loaded")
-    .map((plugin) => plugin.id)
-    .toSorted(byLocale);
-  const disabled = snapshot.plugins.filter((plugin) => plugin.status === "disabled").length;
-  const errors = snapshot.plugins
-    .filter((plugin) => plugin.status === "error")
-    .toSorted((left, right) => byLocale(left.id, right.id));
-  const dependencyIssues = snapshot.plugins
-    .filter(hasDependencyIssue)
-    .toSorted((left, right) => byLocale(left.id, right.id));
+  const pluginSummary = summarizePluginRecords(snapshot.plugins);
+  const loaded = pluginSummary.loadedIds.toSorted(byLocale);
+  const errors = pluginSummary.errors.toSorted((left, right) => byLocale(left.id, right.id));
+  const dependencyIssues = pluginSummary.dependencyIssues.toSorted((left, right) =>
+    byLocale(left.id, right.id),
+  );
   const diagnostics = getReportableDiagnostics(snapshot);
   const diagnosticCounts = countProblemDiagnostics(diagnostics);
   const contextEngineQuarantines = snapshot.contextEngineQuarantines.toSorted((left, right) =>
@@ -261,9 +298,9 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
     byLocale(left.channelId, right.channelId),
   );
   const lines = [
-    formatCompactPluginHealthLine(snapshot),
+    formatCompactPluginHealthLineFromSummary(snapshot, pluginSummary),
     `Loaded: ${loaded.length}${loaded.length > 0 ? ` (${formatPluginList(loaded, 8)})` : ""}`,
-    `Disabled: ${disabled}`,
+    `Disabled: ${pluginSummary.disabled}`,
   ];
 
   if (errors.length > 0) {
