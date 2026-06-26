@@ -400,18 +400,7 @@ export function createEditToolDefinition(
           throw new Error("Operation aborted");
         }
 
-        // Filter out no-op entries (oldText === newText) before execution.
-        // If all entries are no-op, return a terminal result.
         const realEdits = originalEdits.filter((e) => e.oldText !== e.newText);
-        if (realEdits.length === 0) {
-          return {
-            ...textResult(
-              `No changes made to ${path}. The replacement text is identical to the original.`,
-              undefined,
-            ),
-            terminate: true,
-          };
-        }
 
         try {
           await ops.access(absolutePath);
@@ -435,6 +424,22 @@ export function createEditToolDefinition(
           const { bom, text: content } = stripBom(rawContent);
           const originalEnding = detectLineEnding(content);
           const normalizedContent = normalizeToLF(content);
+          // Validate every requested target against the original file, but do
+          // not let equal-text entries rewrite content through fuzzy matching.
+          applyEditsToNormalizedContent(
+            normalizedContent,
+            originalEdits.map((edit) => ({ ...edit, newText: "" })),
+            path,
+          );
+          if (realEdits.length === 0) {
+            return {
+              ...textResult(
+                `No changes made to ${path}. The replacement text is identical to the original.`,
+                undefined,
+              ),
+              terminate: true,
+            };
+          }
           const { baseContent, newContent } = applyEditsToNormalizedContent(
             normalizedContent,
             realEdits,
@@ -487,7 +492,7 @@ export function createEditToolDefinition(
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
             throw appendMismatchHint(normalizedError, currentContent);
           }
-          // Terminal no-op: the edit produced identical content.
+          // Terminal no-op: the edit matched but produced identical content.
           if (normalizedError.message.includes("No changes made to")) {
             return {
               ...textResult(

@@ -11,7 +11,7 @@ import {
   createRebindableDirectoryAlias,
   withRealpathSymlinkRebindRace,
 } from "../test-utils/symlink-rebind-race.js";
-import { applyPatch } from "./apply-patch.js";
+import { applyPatch, createApplyPatchTool } from "./apply-patch.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 
 async function withTempDir<T>(fn: (dir: string) => Promise<T>) {
@@ -49,9 +49,9 @@ function createMemoryPatchSandbox(initialFiles: Record<string, string> = {}) {
       containerPath: `/sandbox/${filePath}`,
     }),
     readFile: async ({ filePath }) => Buffer.from(files.get(filePath) ?? "", "utf8"),
-    writeFile: async ({ filePath, data }) => {
+    writeFile: vi.fn(async ({ filePath, data }) => {
       files.set(filePath, Buffer.isBuffer(data) ? data.toString("utf8") : data);
-    },
+    }),
     remove: async ({ filePath }) => {
       files.delete(filePath);
     },
@@ -72,6 +72,7 @@ function createMemoryPatchSandbox(initialFiles: Record<string, string> = {}) {
   };
   return {
     files,
+    bridge,
     options: {
       cwd: "/local/workspace",
       sandbox: {
@@ -153,6 +154,31 @@ describe("applyPatch", () => {
 
     expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbaz\n");
     expect(result.summary.modified).toEqual(["source.txt"]);
+  });
+
+  it("returns a terminal no-op without rewriting unchanged update hunks", async () => {
+    const memory = createMemoryPatchSandbox({
+      "source.txt": "foo\nbar\n",
+    });
+    const patch = `*** Begin Patch
+*** Update File: source.txt
+@@
+ foo
+-bar
++bar
+*** End Patch`;
+
+    const result = await applyPatch(patch, memory.options);
+
+    expect(result.noOp).toBe(true);
+    expect(result.text).toBe("No changes made to source.txt.");
+    expect(result.summary).toEqual({ added: [], modified: [], deleted: [] });
+    expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbar\n");
+    expect(memory.bridge.writeFile).not.toHaveBeenCalled();
+
+    const tool = createApplyPatchTool(memory.options);
+    const toolResult = await tool.execute("call-no-op", { input: patch }, undefined);
+    expect(toolResult.terminate).toBe(true);
   });
 
   it("applies context-only insertions at the requested context", async () => {

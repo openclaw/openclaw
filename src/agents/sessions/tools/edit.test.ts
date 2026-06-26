@@ -197,6 +197,39 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("unchanged content\n");
   });
 
+  it("does not hide a mismatched no-op edit", async () => {
+    const filePath = await createTempFile("actual content\n");
+    const tool = createEditTool(tmpDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "missing", newText: "missing" }],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(/Current file contents:\nactual content/);
+  });
+
+  it("does not rewrite fuzzy-matched no-op text", async () => {
+    const filePath = await createTempFile("foo\n");
+    const tool = createEditTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [{ oldText: "foo ", newText: "foo " }],
+      },
+      undefined,
+    );
+
+    expect((result as any).terminate).toBe(true);
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo\n");
+  });
+
   it("preserves valid sibling edits when batch contains a no-op entry", async () => {
     const filePath = await createTempFile("alpha beta gamma\n");
     const tool = createEditTool(tmpDir);
