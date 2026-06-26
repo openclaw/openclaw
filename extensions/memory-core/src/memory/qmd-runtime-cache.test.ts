@@ -1,6 +1,6 @@
 import path from "node:path";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   configureMemoryCoreDreamingState,
   configureMemoryCoreDreamingStateForTests,
@@ -25,14 +25,11 @@ import {
   writeQmdMultiCollectionProbeCache,
 } from "./qmd-runtime-cache.js";
 
-const tempRoots = createTempDirTracker();
-
 beforeAll(async () => {
   await configureMemoryCoreDreamingStateForTests();
 });
 
 afterAll(async () => {
-  tempRoots.cleanup();
   resetMemoryCoreDreamingStateForTests();
 });
 
@@ -52,8 +49,8 @@ afterEach(async () => {
   await clearStore(QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_NAMESPACE);
 });
 
-async function makeWorkspace(): Promise<string> {
-  return tempRoots.make("qmd-runtime-cache-");
+async function withWorkspace<T>(run: (workspaceDir: string) => Promise<T>): Promise<T> {
+  return await withTempDir("qmd-runtime-cache-", run);
 }
 
 function managedCollections(): QmdRuntimeManagedCollection[] {
@@ -102,190 +99,201 @@ function multiCollectionProbeContext(
 
 describe("qmd-runtime-cache", () => {
   it("writes and reads collection validation cache entries", async () => {
-    const workspaceDir = await makeWorkspace();
-    const context = collectionValidationContext(workspaceDir);
-    const writeStartedAtMs = 1_000;
+    await withWorkspace(async (workspaceDir) => {
+      const context = collectionValidationContext(workspaceDir);
+      const writeStartedAtMs = 1_000;
 
-    const writeOk = await writeQmdCollectionValidationCache(context, writeStartedAtMs);
-    expect(writeOk).toBe(true);
+      const writeOk = await writeQmdCollectionValidationCache(context, writeStartedAtMs);
+      expect(writeOk).toBe(true);
 
-    const read = await readQmdCollectionValidationCache(
-      { ...context, sources: ["sessions", "memory"] },
-      writeStartedAtMs + 1,
-    );
-    expect(read).toMatchObject({
-      state: "hit",
-      value: {
-        validation: {
-          ok: true,
-          collectionCount: context.collections.length,
+      const read = await readQmdCollectionValidationCache(
+        { ...context, sources: ["sessions", "memory"] },
+        writeStartedAtMs + 1,
+      );
+      expect(read).toMatchObject({
+        state: "hit",
+        value: {
+          validation: {
+            ok: true,
+            collectionCount: context.collections.length,
+          },
         },
-      },
+      });
     });
   });
 
   it("writes and reads multi-collection probe cache entries", async () => {
-    const workspaceDir = await makeWorkspace();
-    const context = multiCollectionProbeContext(workspaceDir);
-    const writeStartedAtMs = 2_000;
+    await withWorkspace(async (workspaceDir) => {
+      const context = multiCollectionProbeContext(workspaceDir);
+      const writeStartedAtMs = 2_000;
 
-    const writeOk = await writeQmdMultiCollectionProbeCache(context, true, writeStartedAtMs);
-    expect(writeOk).toBe(true);
+      const writeOk = await writeQmdMultiCollectionProbeCache(context, true, writeStartedAtMs);
+      expect(writeOk).toBe(true);
 
-    const read = await readQmdMultiCollectionProbeCache(context, writeStartedAtMs + 1);
-    expect(read).toMatchObject({
-      state: "hit",
-      value: {
-        multiCollectionProbe: {
-          supported: true,
+      const read = await readQmdMultiCollectionProbeCache(context, writeStartedAtMs + 1);
+      expect(read).toMatchObject({
+        state: "hit",
+        value: {
+          multiCollectionProbe: {
+            supported: true,
+          },
         },
-      },
+      });
     });
   });
 
   it("scopes cache entries by workspace", async () => {
-    const firstWorkspace = await makeWorkspace();
-    const secondWorkspace = await makeWorkspace();
-    const context = collectionValidationContext(firstWorkspace);
+    await withWorkspace(async (firstWorkspace) => {
+      await withWorkspace(async (secondWorkspace) => {
+        const context = collectionValidationContext(firstWorkspace);
 
-    expect(await writeQmdCollectionValidationCache(context, 3_000)).toBe(true);
+        expect(await writeQmdCollectionValidationCache(context, 3_000)).toBe(true);
 
-    const sameLogicalDifferentWorkspace: QmdRuntimeCollectionValidationCacheContext = {
-      ...context,
-      workspaceDir: secondWorkspace,
-      qmdIndexPath: path.join(secondWorkspace, ".openclaw", "index.sqlite"),
-    };
+        const sameLogicalDifferentWorkspace: QmdRuntimeCollectionValidationCacheContext = {
+          ...context,
+          workspaceDir: secondWorkspace,
+          qmdIndexPath: path.join(secondWorkspace, ".openclaw", "index.sqlite"),
+        };
 
-    const miss = await readQmdCollectionValidationCache(sameLogicalDifferentWorkspace, 3_001);
-    expect(miss).toStrictEqual({ state: "miss" });
+        const miss = await readQmdCollectionValidationCache(sameLogicalDifferentWorkspace, 3_001);
+        expect(miss).toStrictEqual({ state: "miss" });
+      });
+    });
   });
 
   it("misses collection validation cache when managed collection paths change", async () => {
-    const workspaceDir = await makeWorkspace();
-    const context = collectionValidationContext(workspaceDir);
+    await withWorkspace(async (workspaceDir) => {
+      const context = collectionValidationContext(workspaceDir);
 
-    expect(await writeQmdCollectionValidationCache(context, 3_500)).toBe(true);
+      expect(await writeQmdCollectionValidationCache(context, 3_500)).toBe(true);
 
-    const changedContext: QmdRuntimeCollectionValidationCacheContext = {
-      ...context,
-      collections: context.collections.map((collection) =>
-        collection.name === "project-notes"
-          ? {
-              name: collection.name,
-              kind: collection.kind,
-              path: `${collection.path}-moved`,
-              pattern: collection.pattern,
-            }
-          : collection,
-      ),
-    };
+      const changedContext: QmdRuntimeCollectionValidationCacheContext = {
+        ...context,
+        collections: context.collections.map((collection) =>
+          collection.name === "project-notes"
+            ? {
+                name: collection.name,
+                kind: collection.kind,
+                path: `${collection.path}-moved`,
+                pattern: collection.pattern,
+              }
+            : collection,
+        ),
+      };
 
-    expect(await readQmdCollectionValidationCache(changedContext, 3_501)).toStrictEqual({
-      state: "miss",
+      expect(await readQmdCollectionValidationCache(changedContext, 3_501)).toStrictEqual({
+        state: "miss",
+      });
     });
   });
 
   it("misses validation and probe caches when qmd runtime environment changes", async () => {
-    const workspaceDir = await makeWorkspace();
-    const validationContext = {
-      ...collectionValidationContext(workspaceDir),
-      qmdEnvironmentHash: "env-a",
-    };
-    const probeContext = {
-      ...multiCollectionProbeContext(workspaceDir),
-      qmdEnvironmentHash: "env-a",
-    };
+    await withWorkspace(async (workspaceDir) => {
+      const validationContext = {
+        ...collectionValidationContext(workspaceDir),
+        qmdEnvironmentHash: "env-a",
+      };
+      const probeContext = {
+        ...multiCollectionProbeContext(workspaceDir),
+        qmdEnvironmentHash: "env-a",
+      };
 
-    expect(await writeQmdCollectionValidationCache(validationContext, 3_600)).toBe(true);
-    expect(await writeQmdMultiCollectionProbeCache(probeContext, true, 3_600)).toBe(true);
+      expect(await writeQmdCollectionValidationCache(validationContext, 3_600)).toBe(true);
+      expect(await writeQmdMultiCollectionProbeCache(probeContext, true, 3_600)).toBe(true);
 
-    expect(
-      await readQmdCollectionValidationCache(
-        { ...validationContext, qmdEnvironmentHash: "env-b" },
-        3_601,
-      ),
-    ).toStrictEqual({ state: "miss" });
-    expect(
-      await readQmdMultiCollectionProbeCache(
-        { ...probeContext, qmdEnvironmentHash: "env-b" },
-        3_601,
-      ),
-    ).toStrictEqual({ state: "miss" });
+      expect(
+        await readQmdCollectionValidationCache(
+          { ...validationContext, qmdEnvironmentHash: "env-b" },
+          3_601,
+        ),
+      ).toStrictEqual({ state: "miss" });
+      expect(
+        await readQmdMultiCollectionProbeCache(
+          { ...probeContext, qmdEnvironmentHash: "env-b" },
+          3_601,
+        ),
+      ).toStrictEqual({ state: "miss" });
+    });
   });
 
   it("treats cache misses for malformed values and expired entries", async () => {
-    const workspaceDir = await makeWorkspace();
-    const context = multiCollectionProbeContext(workspaceDir);
-    const nowMs = 4_000;
-    await writeQmdMultiCollectionProbeCache(context, false, nowMs);
+    await withWorkspace(async (workspaceDir) => {
+      const context = multiCollectionProbeContext(workspaceDir);
+      const nowMs = 4_000;
+      await writeQmdMultiCollectionProbeCache(context, false, nowMs);
 
-    const key = memoryCoreWorkspaceEntryKey(
-      workspaceDir,
-      `qmd-runtime-cache.multi-collection-probe:${buildQmdMultiCollectionProbeCacheContextHash(context)}`,
-    );
-    const store = openMemoryCoreStateStore({
-      namespace: QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_NAMESPACE,
-      maxEntries: 1_000,
+      const key = memoryCoreWorkspaceEntryKey(
+        workspaceDir,
+        `qmd-runtime-cache.multi-collection-probe:${buildQmdMultiCollectionProbeCacheContextHash(context)}`,
+      );
+      const store = openMemoryCoreStateStore({
+        namespace: QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_NAMESPACE,
+        maxEntries: 1_000,
+      });
+
+      await store.register(key, {
+        version: 1,
+        createdAtMs: "bad",
+        expiresAtMs: 0,
+        keyHash: "bad",
+        multiCollectionProbe: { supported: true },
+      });
+
+      const malformed = await readQmdMultiCollectionProbeCache(context, nowMs + 1);
+      expect(malformed).toStrictEqual({ state: "miss" });
+
+      const expired = await readQmdMultiCollectionProbeCache(
+        context,
+        nowMs + QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_TTL_MS + 1,
+      );
+      expect(expired).toStrictEqual({ state: "miss" });
     });
-
-    await store.register(key, {
-      version: 1,
-      createdAtMs: "bad",
-      expiresAtMs: 0,
-      keyHash: "bad",
-      multiCollectionProbe: { supported: true },
-    });
-
-    const malformed = await readQmdMultiCollectionProbeCache(context, nowMs + 1);
-    expect(malformed).toStrictEqual({ state: "miss" });
-
-    const expired = await readQmdMultiCollectionProbeCache(
-      context,
-      nowMs + QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_TTL_MS + 1,
-    );
-    expect(expired).toStrictEqual({ state: "miss" });
   });
 
   it("uses separate namespaces for validation and probe entries", async () => {
-    const workspaceDir = await makeWorkspace();
-    const validationContext = collectionValidationContext(workspaceDir);
-    const probeContext = multiCollectionProbeContext(workspaceDir);
+    await withWorkspace(async (workspaceDir) => {
+      const validationContext = collectionValidationContext(workspaceDir);
+      const probeContext = multiCollectionProbeContext(workspaceDir);
 
-    expect(await writeQmdCollectionValidationCache(validationContext, 5_000)).toBe(true);
-    expect(await writeQmdMultiCollectionProbeCache(probeContext, true, 5_000)).toBe(true);
+      expect(await writeQmdCollectionValidationCache(validationContext, 5_000)).toBe(true);
+      expect(await writeQmdMultiCollectionProbeCache(probeContext, true, 5_000)).toBe(true);
 
-    const validationStore = openMemoryCoreStateStore({
-      namespace: QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_NAMESPACE,
-      maxEntries: 1_000,
+      const validationStore = openMemoryCoreStateStore({
+        namespace: QMD_RUNTIME_CACHE_COLLECTION_VALIDATION_NAMESPACE,
+        maxEntries: 1_000,
+      });
+      const probeStore = openMemoryCoreStateStore({
+        namespace: QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_NAMESPACE,
+        maxEntries: 1_000,
+      });
+
+      expect((await validationStore.entries()).length).toBeGreaterThan(0);
+      expect((await probeStore.entries()).length).toBeGreaterThan(0);
     });
-    const probeStore = openMemoryCoreStateStore({
-      namespace: QMD_RUNTIME_CACHE_MULTI_COLLECTION_PROBE_NAMESPACE,
-      maxEntries: 1_000,
-    });
-
-    expect((await validationStore.entries()).length).toBeGreaterThan(0);
-    expect((await probeStore.entries()).length).toBeGreaterThan(0);
   });
 
   it("fails open when state store is unavailable", async () => {
-    const workspaceDir = await makeWorkspace();
-    const validationContext = collectionValidationContext(workspaceDir);
-    const probeContext = multiCollectionProbeContext(workspaceDir);
+    await withWorkspace(async (workspaceDir) => {
+      const validationContext = collectionValidationContext(workspaceDir);
+      const probeContext = multiCollectionProbeContext(workspaceDir);
 
-    configureMemoryCoreDreamingState(() => {
-      throw new Error("state store unavailable");
-    });
-
-    try {
-      expect(await readQmdCollectionValidationCache(validationContext)).toStrictEqual({
-        state: "miss",
+      configureMemoryCoreDreamingState(() => {
+        throw new Error("state store unavailable");
       });
-      expect(await writeQmdCollectionValidationCache(validationContext)).toBe(false);
-      expect(await readQmdMultiCollectionProbeCache(probeContext)).toStrictEqual({ state: "miss" });
-      expect(await writeQmdMultiCollectionProbeCache(probeContext, true)).toBe(false);
-    } finally {
-      await configureMemoryCoreDreamingStateForTests();
-    }
+
+      try {
+        expect(await readQmdCollectionValidationCache(validationContext)).toStrictEqual({
+          state: "miss",
+        });
+        expect(await writeQmdCollectionValidationCache(validationContext)).toBe(false);
+        expect(await readQmdMultiCollectionProbeCache(probeContext)).toStrictEqual({
+          state: "miss",
+        });
+        expect(await writeQmdMultiCollectionProbeCache(probeContext, true)).toBe(false);
+      } finally {
+        await configureMemoryCoreDreamingStateForTests();
+      }
+    });
   });
 
   it("exposes bounded TTL windows", () => {
@@ -294,19 +302,22 @@ describe("qmd-runtime-cache", () => {
   });
 
   it("can clear cache keys explicitly", async () => {
-    const workspaceDir = await makeWorkspace();
-    const validationContext = collectionValidationContext(workspaceDir);
-    const probeContext = multiCollectionProbeContext(workspaceDir);
+    await withWorkspace(async (workspaceDir) => {
+      const validationContext = collectionValidationContext(workspaceDir);
+      const probeContext = multiCollectionProbeContext(workspaceDir);
 
-    expect(await writeQmdCollectionValidationCache(validationContext)).toBe(true);
-    expect(await writeQmdMultiCollectionProbeCache(probeContext, true)).toBe(true);
+      expect(await writeQmdCollectionValidationCache(validationContext)).toBe(true);
+      expect(await writeQmdMultiCollectionProbeCache(probeContext, true)).toBe(true);
 
-    await clearQmdCollectionValidationCache(validationContext);
-    await clearQmdMultiCollectionProbeCache(probeContext);
+      await clearQmdCollectionValidationCache(validationContext);
+      await clearQmdMultiCollectionProbeCache(probeContext);
 
-    expect(await readQmdCollectionValidationCache(validationContext)).toStrictEqual({
-      state: "miss",
+      expect(await readQmdCollectionValidationCache(validationContext)).toStrictEqual({
+        state: "miss",
+      });
+      expect(await readQmdMultiCollectionProbeCache(probeContext)).toStrictEqual({
+        state: "miss",
+      });
     });
-    expect(await readQmdMultiCollectionProbeCache(probeContext)).toStrictEqual({ state: "miss" });
   });
 });
