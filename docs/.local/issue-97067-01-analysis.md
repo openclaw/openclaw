@@ -1,4 +1,5 @@
 <!-- Language: Chinese (Simplified) -->
+
 # Issue #97067 分析报告
 
 **分析时间**: 2026-06-27T01:53:00+08:00
@@ -7,12 +8,12 @@
 
 ## 元数据
 
-| 字段 | 值 |
-|------|-----|
-| 类型 | bug |
-| 严重性 | P2 |
-| 标签 | bug, P2, impact:session-state, impact:message-loss |
-| 指派人 | 无 |
+| 字段   | 值                                                 |
+| ------ | -------------------------------------------------- |
+| 类型   | bug                                                |
+| 严重性 | P2                                                 |
+| 标签   | bug, P2, impact:session-state, impact:message-loss |
+| 指派人 | 无                                                 |
 
 ## 问题描述
 
