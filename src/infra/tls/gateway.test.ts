@@ -193,6 +193,58 @@ describe("loadGatewayTlsRuntime", () => {
     expect(result.keyPath).not.toContain("gateway-key.pem");
   });
 
+  it("upgrades existing CN-only OpenClaw-generated cert to include subjectAltName", async () => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "gateway-cert.pem");
+    const keyPath = path.join(dir, "gateway-key.pem");
+
+    // Generate a CN-only cert directly via openssl (simulating pre-fix OpenClaw)
+    const { execFile } = await import("node:child_process");
+    const { promisify } = await import("node:util");
+    const execFileAsync = promisify(execFile);
+    await execFileAsync("openssl", [
+      "req",
+      "-x509",
+      "-newkey",
+      "rsa:2048",
+      "-sha256",
+      "-days",
+      "3650",
+      "-nodes",
+      "-keyout",
+      keyPath,
+      "-out",
+      certPath,
+      "-subj",
+      "/CN=openclaw-gateway",
+      // no -addext → intentionally CN-only
+    ]);
+
+    // Verify the cert is CN-only (no SAN)
+    const fs = await import("node:fs/promises");
+    const x509Before = new X509Certificate(await fs.readFile(certPath, "utf8"));
+    expect(x509Before.subject).toContain("CN=openclaw-gateway");
+    expect(x509Before.subjectAltName).toBeFalsy();
+
+    // Load with autoGenerate=true — should detect and regenerate
+    const result = await loadGatewayTlsRuntime({
+      enabled: true,
+      certPath,
+      keyPath,
+      autoGenerate: true,
+    });
+
+    expect(result.enabled).toBe(true);
+    expect(result.error).toBeUndefined();
+
+    // After upgrade, cert must have SANs
+    const certPem = await fs.readFile(certPath, "utf8");
+    const x509After = new X509Certificate(certPem);
+    expect(x509After.subjectAltName).toBeTruthy();
+    expect(x509After.subjectAltName).toContain("DNS:localhost");
+    expect(x509After.subjectAltName).toContain("IP Address:127.0.0.1");
+  });
+
   it("generates cert with subjectAltName for localhost and hostname", async () => {
     const dir = await createTempDir();
     const certPath = path.join(dir, "gateway-cert.pem");
