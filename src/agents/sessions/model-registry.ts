@@ -162,7 +162,16 @@ const ModelDefinitionSchema = Type.Object({
   baseUrl: Type.Optional(Type.String({ minLength: 1 })),
   reasoning: Type.Optional(Type.Boolean()),
   thinkingLevelMap: Type.Optional(ThinkingLevelMapSchema),
-  input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
+  input: Type.Optional(
+    Type.Array(
+      Type.Union([
+        Type.Literal("text"),
+        Type.Literal("image"),
+        Type.Literal("video"),
+        Type.Literal("audio"),
+      ]),
+    ),
+  ),
   cost: Type.Optional(
     Type.Object({
       input: Type.Number(),
