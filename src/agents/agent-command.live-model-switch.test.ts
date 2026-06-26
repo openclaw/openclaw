@@ -2537,6 +2537,34 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     );
   });
 
+  it("passes SQLite transcript markers to visible agent attempts", async () => {
+    setupSingleAttemptFallback();
+    const visibleEntry: SessionEntry = {
+      sessionId: "session-1",
+      updatedAt: 1,
+      sessionFile: "/tmp/session.jsonl",
+    };
+    const sessionStore: Record<string, SessionEntry> = { "agent:main:main": visibleEntry };
+    state.sessionEntryMock = visibleEntry;
+    state.sessionStoreMock = sessionStore;
+    state.storePathMock = "/tmp/openclaw-session-store.json";
+    const attemptCalls: Array<{ sessionFile?: string; sessionEntry?: SessionEntry }> = [];
+    state.runAgentAttemptMock.mockImplementation(async (params) => {
+      attemptCalls.push(params as { sessionFile?: string; sessionEntry?: SessionEntry });
+      return makeSuccessResult("openai", "gpt-5.4");
+    });
+
+    await agentCommand({
+      message: "visible run",
+      to: "+1234567890",
+    });
+
+    expect(attemptCalls).toHaveLength(1);
+    expect(attemptCalls[0]?.sessionFile).toBe(
+      "sqlite:default:session-1:/tmp/openclaw-session-store.json",
+    );
+  });
+
   it("keeps internal session-effect CLI runs out of visible session state", async () => {
     setupSingleAttemptFallback();
     const visibleEntry: SessionEntry = {
