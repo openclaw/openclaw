@@ -647,6 +647,10 @@ jobs:
         if: needs.preflight.outputs.run_control_ui_i18n == 'true'
         run: pnpm ui:i18n:check
 
+      - name: Check native app i18n inventory
+        if: needs.preflight.outputs.run_macos == 'true' || needs.preflight.outputs.run_android == 'true'
+        run: pnpm native:i18n:check
+
       - name: Pack built runtime artifacts
         run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime
 
