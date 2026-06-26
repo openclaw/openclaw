@@ -24,16 +24,30 @@ OpenClaw agent or Gateway.
 ```bash
 openclaw skills search "calendar"
 openclaw skills install @owner/<slug>
+openclaw skills install @owner/<slug> --acknowledge-clawhub-risk
 openclaw skills update @owner/<slug>
+openclaw skills update @owner/<slug> --acknowledge-clawhub-risk
 openclaw skills verify @owner/<slug>
 
 openclaw plugins search "calendar"
 openclaw plugins install clawhub:<package>
+openclaw plugins install clawhub:<package> --acknowledge-clawhub-risk
 openclaw plugins update <id-or-npm-spec>
 ```
 
 Skill installs target the active workspace `skills/` directory by default. Add
 `--global` to install into the shared managed skills directory.
+
+OpenClaw checks the selected community ClawHub skill or plugin trust state
+before downloading it. Versioned community skill and plugin releases use
+exact-release trust metadata; resolver-backed GitHub skills rely on ClawHub's
+install resolver to enforce scan and force-install policy before it returns a
+pinned commit. Malicious or blocked community releases are refused. Risky
+community releases require review and `--acknowledge-clawhub-risk` when a
+non-interactive command should continue after that review.
+
+Official ClawHub publishers/packages and bundled OpenClaw sources bypass this
+release-trust prompt and security-verdict fetch during install and update.
 
 Plugin installs use the `clawhub:` prefix when you want ClawHub resolution
 instead of npm or another install source.

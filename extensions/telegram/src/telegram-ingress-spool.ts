@@ -38,6 +38,9 @@ export type TelegramSpooledUpdate = {
   path: string;
   update: unknown;
   receivedAt: number;
+  attempts?: number;
+  lastAttemptAt?: number;
+  lastError?: string;
   claim?: TelegramSpooledUpdateClaimOwner;
 };
 
@@ -166,6 +169,9 @@ function parseQueueRecord(
     path: pendingPath(spoolDir, payload.updateId),
     update: payload.update,
     receivedAt: payload.receivedAt,
+    attempts: record.attempts,
+    ...(record.lastAttemptAt === undefined ? {} : { lastAttemptAt: record.lastAttemptAt }),
+    ...(record.lastError === undefined ? {} : { lastError: record.lastError }),
   };
 }
 
@@ -267,9 +273,28 @@ export async function claimTelegramSpooledUpdate(
 
 export async function releaseTelegramSpooledUpdateClaim(
   update: ClaimedTelegramSpooledUpdate,
+  options?: { lastError?: string; releasedAt?: number },
 ): Promise<void> {
   await createTelegramIngressQueue(path.dirname(update.pendingPath)).release(
     queueMutationTarget(update),
+    options,
+  );
+}
+
+export async function refreshTelegramSpooledUpdateClaim(
+  update: ClaimedTelegramSpooledUpdate,
+  options?: { refreshedAt?: number },
+): Promise<boolean> {
+  const claimToken = update.claim?.claimToken;
+  if (!claimToken) {
+    return false;
+  }
+  const queue = createTelegramIngressQueue(path.dirname(update.pendingPath));
+  return (
+    (await queue.refreshClaim?.(
+      { id: queueEventId(update.updateId), claim: { token: claimToken } },
+      options,
+    )) ?? false
   );
 }
 

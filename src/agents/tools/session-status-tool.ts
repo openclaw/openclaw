@@ -3,8 +3,8 @@
  *
  * Reports and updates session runtime state, model overrides, visibility, task status, and delivery context.
  */
+import { randomUUID } from "node:crypto";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
 import type {
   ElevatedLevel,
@@ -14,11 +14,9 @@ import type {
 } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
-  loadSessionStore,
-  mergeSessionEntry,
+  patchSessionEntryWithKey,
   resolveStorePath,
   type SessionEntry,
-  updateSessionStore,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
@@ -26,7 +24,6 @@ import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import {
   buildAgentMainSessionKey,
-  DEFAULT_AGENT_ID,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
@@ -60,11 +57,16 @@ import {
 import type { AnyAgentTool } from "./common.js";
 import { normalizeToolModelOverride, readStringParam } from "./common.js";
 import {
+  listImplicitDefaultDirectFallbackKeys,
+  resolveImplicitCurrentSessionFallback,
+  resolveSessionStatusEntry,
+  resolveStoreScopedRequesterKey,
+} from "./session-status-session-resolve.js";
+import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
   resolveCurrentSessionClientAlias,
   resolveEffectiveSessionToolsVisibility,
-  resolveInternalSessionKey,
   resolveSandboxedSessionToolContext,
   resolveSessionReference,
   resolveVisibleSessionReference,
@@ -86,121 +88,6 @@ const commandsStatusRuntimeLoader = createLazyImportLoader<CommandsStatusRuntime
 
 function loadCommandsStatusRuntime(): Promise<CommandsStatusRuntimeModule> {
   return commandsStatusRuntimeLoader.load();
-}
-
-function resolveSessionEntry(params: {
-  store: Record<string, SessionEntry>;
-  keyRaw: string;
-  alias: string;
-  mainKey: string;
-  requesterInternalKey?: string;
-  includeAliasFallback?: boolean;
-}): { key: string; entry: SessionEntry } | null {
-  const keyRaw = params.keyRaw.trim();
-  if (!keyRaw) {
-    return null;
-  }
-  const includeAliasFallback = params.includeAliasFallback ?? true;
-  const internal = resolveInternalSessionKey({
-    key: keyRaw,
-    alias: params.alias,
-    mainKey: params.mainKey,
-    requesterInternalKey: params.requesterInternalKey,
-  });
-
-  const candidates: string[] = [keyRaw];
-  if (!keyRaw.startsWith("agent:")) {
-    candidates.push(`agent:${DEFAULT_AGENT_ID}:${keyRaw}`);
-  }
-  if (includeAliasFallback && internal !== keyRaw) {
-    candidates.push(internal);
-  }
-  if (includeAliasFallback && !keyRaw.startsWith("agent:")) {
-    const agentInternal = `agent:${DEFAULT_AGENT_ID}:${internal}`;
-    const agentRaw = `agent:${DEFAULT_AGENT_ID}:${keyRaw}`;
-    if (agentInternal !== agentRaw) {
-      candidates.push(agentInternal);
-    }
-  }
-  if (includeAliasFallback && (keyRaw === "main" || keyRaw === "current")) {
-    const defaultMainKey = buildAgentMainSessionKey({
-      agentId: DEFAULT_AGENT_ID,
-      mainKey: params.mainKey,
-    });
-    if (!candidates.includes(defaultMainKey)) {
-      candidates.push(defaultMainKey);
-    }
-  }
-
-  for (const key of candidates) {
-    const entry = params.store[key];
-    if (entry) {
-      return { key, entry };
-    }
-  }
-
-  return null;
-}
-
-function resolveStoreScopedRequesterKey(params: {
-  requesterKey: string;
-  agentId: string;
-  mainKey: string;
-}) {
-  const parsed = parseAgentSessionKey(params.requesterKey);
-  if (!parsed || parsed.agentId !== params.agentId) {
-    return params.requesterKey;
-  }
-  return parsed.rest === params.mainKey ? params.mainKey : params.requesterKey;
-}
-
-function synthesizeImplicitCurrentSessionEntry(): SessionEntry {
-  return {
-    sessionId: "",
-    updatedAt: Date.now(),
-  };
-}
-
-function resolveImplicitCurrentSessionFallback(params: {
-  allowFallback: boolean;
-  fallbackKey: string;
-}): { key: string; entry: SessionEntry } | null {
-  const fallbackKey = params.fallbackKey.trim();
-  if (!params.allowFallback || !fallbackKey) {
-    return null;
-  }
-  return {
-    key: fallbackKey,
-    entry: synthesizeImplicitCurrentSessionEntry(),
-  };
-}
-
-function listImplicitDefaultDirectFallbackKeys(params: {
-  keyRaw: string;
-  mainKey: string;
-}): string[] {
-  const parsed = parseAgentSessionKey(params.keyRaw.trim());
-  if (!parsed) {
-    return [];
-  }
-  const parts = parsed.rest.split(":");
-  if (parts.length < 4 || parts[1] !== "default" || parts[2] !== "direct") {
-    return [];
-  }
-  const channel = parts[0];
-  const peerParts = parts.slice(3);
-  if (!channel || peerParts.length === 0) {
-    return [];
-  }
-  const candidates = [
-    `agent:${parsed.agentId}:${channel}:direct:${peerParts.join(":")}`,
-    buildAgentMainSessionKey({
-      agentId: parsed.agentId,
-      mainKey: params.mainKey,
-    }),
-    params.mainKey,
-  ];
-  return uniqueStrings(candidates);
 }
 
 type ActiveStatusModelIdentity = { provider?: string; model: string };
@@ -642,7 +529,6 @@ export function createSessionStatusTool(opts?: {
         ? resolveAgentIdFromSessionKey(requestedKeyInput)
         : requesterAgentId;
       let storePath = resolveStorePath(cfg.session?.store, { agentId });
-      let store = loadSessionStore(storePath);
       let storeScopedRequesterKey = resolveStoreScopedRequesterKey({
         requesterKey: effectiveRequesterKey,
         agentId,
@@ -650,8 +536,9 @@ export function createSessionStatusTool(opts?: {
       });
 
       // Resolve against the requester-scoped store first to avoid leaking default agent data.
-      let resolved = resolveSessionEntry({
-        store,
+      let resolved = resolveSessionStatusEntry({
+        cfg,
+        agentId,
         keyRaw: requestedKeyRaw,
         alias,
         mainKey,
@@ -687,14 +574,14 @@ export function createSessionStatusTool(opts?: {
           requestedKeyInput = requestedKeyRaw.trim();
           agentId = resolveAgentIdFromSessionKey(visibleSession.key);
           storePath = resolveStorePath(cfg.session?.store, { agentId });
-          store = loadSessionStore(storePath);
           storeScopedRequesterKey = resolveStoreScopedRequesterKey({
             requesterKey: effectiveRequesterKey,
             agentId,
             mainKey,
           });
-          resolved = resolveSessionEntry({
-            store,
+          resolved = resolveSessionStatusEntry({
+            cfg,
+            agentId,
             keyRaw: requestedKeyRaw,
             alias,
             mainKey,
@@ -706,8 +593,9 @@ export function createSessionStatusTool(opts?: {
       }
 
       if (!resolved && requestedKeyInput === "current" && effectiveRequesterLookupKey) {
-        resolved = resolveSessionEntry({
-          store,
+        resolved = resolveSessionStatusEntry({
+          cfg,
+          agentId,
           keyRaw: effectiveRequesterLookupKey,
           alias,
           mainKey,
@@ -717,8 +605,9 @@ export function createSessionStatusTool(opts?: {
       }
 
       if (!resolved && requestedKeyInput === "current") {
-        resolved = resolveSessionEntry({
-          store,
+        resolved = resolveSessionStatusEntry({
+          cfg,
+          agentId,
           keyRaw: requestedKeyRaw,
           alias,
           mainKey,
@@ -732,8 +621,9 @@ export function createSessionStatusTool(opts?: {
           keyRaw: requestedKeyRaw,
           mainKey,
         })) {
-          resolved = resolveSessionEntry({
-            store,
+          resolved = resolveSessionStatusEntry({
+            cfg,
+            agentId,
             keyRaw: fallbackKey,
             alias,
             mainKey,
@@ -750,7 +640,9 @@ export function createSessionStatusTool(opts?: {
       if (!resolved) {
         const runSessionFallbackKey = opts?.runSessionKey?.trim();
         const fallback = resolveImplicitCurrentSessionFallback({
+          agentId,
           allowFallback: isSemanticCurrentRequest || requestedKeyParam === undefined,
+          cfg,
           fallbackKey:
             (isSemanticCurrentRequest || isImplicitRunSessionStatus) && runSessionFallbackKey
               ? runSessionFallbackKey
@@ -793,46 +685,66 @@ export function createSessionStatusTool(opts?: {
           sessionEntry: resolved.entry,
           agentId,
         });
+        const modelSelection =
+          selection.kind === "reset"
+            ? {
+                provider: configured.provider,
+                model: configured.model,
+                isDefault: true,
+              }
+            : {
+                provider: selection.provider,
+                model: selection.model,
+                isDefault: selection.isDefault,
+              };
         const nextEntry: SessionEntry = { ...resolved.entry };
         const applied = applyModelOverrideToSessionEntry({
           entry: nextEntry,
-          selection:
-            selection.kind === "reset"
-              ? {
-                  provider: configured.provider,
-                  model: configured.model,
-                  isDefault: true,
-                }
-              : {
-                  provider: selection.provider,
-                  model: selection.model,
-                  isDefault: selection.isDefault,
-                },
+          selection: modelSelection,
           markLiveSwitchPending: true,
         });
         if (applied.updated) {
-          const persistedEntry = nextEntry.sessionId.trim()
-            ? nextEntry
-            : (() => {
-                const persistedEntryPatch: Partial<SessionEntry> = { ...nextEntry };
-                delete persistedEntryPatch.sessionId;
-                const existingEntry = store[resolved.key];
-                const existingWithValidSessionId = existingEntry?.sessionId?.trim()
-                  ? existingEntry
-                  : undefined;
-                return mergeSessionEntry(existingWithValidSessionId, persistedEntryPatch);
-              })();
-          store[resolved.key] = persistedEntry;
-          await updateSessionStore(storePath, (nextStore) => {
-            nextStore[resolved.key] = persistedEntry;
-          });
-          resolved.entry = persistedEntry;
+          const patchResult = await patchSessionEntryWithKey(
+            {
+              agentId,
+              sessionKey: resolved.key,
+              storePath,
+            },
+            (entry, context) => {
+              const persistedEntryPatch: SessionEntry = { ...entry };
+              applyModelOverrideToSessionEntry({
+                entry: persistedEntryPatch,
+                selection: modelSelection,
+                markLiveSwitchPending: true,
+              });
+              if (
+                !persistedEntryPatch.sessionId.trim() &&
+                !context.existingEntry?.sessionId?.trim()
+              ) {
+                persistedEntryPatch.sessionId = randomUUID();
+              }
+              return persistedEntryPatch;
+            },
+            {
+              fallbackEntry: resolved.persisted ? undefined : resolved.entry,
+              replaceEntry: true,
+            },
+          );
+          if (!patchResult) {
+            throw new Error(`Unknown sessionKey: ${resolved.key}`);
+          }
+          const persistedEntry = patchResult.entry;
+          resolved = {
+            entry: persistedEntry,
+            key: patchResult.sessionKey,
+            persisted: true,
+          };
           triggerSessionPatchHook({
             cfg,
             sessionEntry: persistedEntry,
-            sessionKey: resolved.key,
+            sessionKey: patchResult.sessionKey,
             patch: {
-              key: resolved.key,
+              key: patchResult.sessionKey,
               model: selection.kind === "reset" ? null : `${selection.provider}/${selection.model}`,
             },
           });

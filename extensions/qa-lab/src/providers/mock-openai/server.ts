@@ -2612,8 +2612,8 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (/memory tools check/i.test(prompt)) {
-    if (!toolOutput) {
+  if (/memory tools check/i.test(allInputText)) {
+    if (!scenarioToolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
         query: "project codename ORBIT-9",
         maxResults: 3,
@@ -2623,10 +2623,7 @@ async function buildResponsesPayload(
       ? (toolJson.results as Array<Record<string, unknown>>)
       : [];
     const first = results[0];
-    if (
-      typeof first?.path === "string" &&
-      (typeof first.startLine === "number" || typeof first.endLine === "number")
-    ) {
+    if (typeof first?.path === "string") {
       const from =
         typeof first.startLine === "number"
           ? Math.max(1, first.startLine)
