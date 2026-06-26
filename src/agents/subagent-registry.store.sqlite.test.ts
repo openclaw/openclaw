@@ -99,6 +99,46 @@ describe("subagent registry sqlite store", () => {
     });
   });
 
+  it("does not restore delivered requester-consumed runs as pending because payload metadata remains", async () => {
+    await withTempStateEnv(async () => {
+      const run = createRun({
+        delivery: {
+          status: "delivered",
+          deliveredAt: 300,
+          requesterConsumedAt: 300,
+          requesterConsumedKind: "cron_descendant_fallback",
+          requesterConsumedBySessionKey: "agent:main:main",
+          requesterConsumedRunStartedAt: 100,
+          requesterConsumedMetadata: {
+            consumerRunId: "cron-run",
+            deliveryTextHash: "abc123",
+          },
+          payload: {
+            requesterSessionKey: "agent:main:main",
+            requesterDisplayKey: "main",
+            childSessionKey: "agent:main:subagent:one",
+            childRunId: "run-one",
+            task: "check sqlite persistence",
+            startedAt: 110,
+            endedAt: 250,
+            outcome: { status: "ok" },
+            expectsCompletionMessage: true,
+          },
+        },
+      });
+
+      saveSubagentRegistryToSqlite(new Map([[run.runId, run]]));
+
+      const restored = loadSubagentRegistryFromSqlite().get(run.runId);
+      expect(restored?.delivery).toMatchObject({
+        status: "delivered",
+        requesterConsumedKind: "cron_descendant_fallback",
+        requesterConsumedAt: 300,
+      });
+      expect(restored?.delivery?.lastError ?? undefined).toBeUndefined();
+    });
+  });
+
   it("uses save calls as whole-registry snapshots", async () => {
     await withTempStateEnv(async () => {
       const first = createRun({ runId: "run-one", childSessionKey: "agent:main:subagent:one" });

@@ -58,6 +58,14 @@ export type SubagentCompletionDeliveryState = {
   enqueuedAt?: number;
   deliveredAt?: number;
   announcedAt?: number;
+  requesterConsumedAt?: number;
+  requesterConsumedKind?: "cron_descendant_fallback" | "subagent_descendant_result";
+  requesterConsumedBySessionKey?: string;
+  requesterConsumedRunStartedAt?: number;
+  requesterConsumedMetadata?: {
+    consumerRunId?: string;
+    deliveryTextHash?: string;
+  };
   lastAttemptAt?: number;
   attemptCount?: number;
   lastError?: string | null;

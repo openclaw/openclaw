@@ -371,9 +371,9 @@ function selectChildCompletionResultText(child: ChildCompletionRow): string | un
   )?.trim();
 }
 
-export function buildChildCompletionFindings(
-  children: Array<ChildCompletionRow>,
-): string | undefined {
+export function buildChildCompletionFindingsWithRuns(
+  children: (ChildCompletionRow & { runId?: string })[],
+): { text: string; consumedRunIds: string[] } | undefined {
   const sorted = [...children].toSorted((a, b) => {
     if (a.createdAt !== b.createdAt) {
       return a.createdAt - b.createdAt;
@@ -384,6 +384,7 @@ export function buildChildCompletionFindings(
   });
 
   const sections: string[] = [];
+  const consumedRunIds: string[] = [];
   for (const [index, child] of sorted.entries()) {
     const resultText = selectChildCompletionResultText(child);
     const outcome = describeSubagentOutcome(child.outcome);
@@ -405,37 +406,26 @@ export function buildChildCompletionFindings(
         "\n",
       ),
     );
+    if (typeof child.runId === "string" && child.runId.trim()) {
+      consumedRunIds.push(child.runId);
+    }
   }
 
   if (sections.length === 0) {
     return undefined;
   }
 
-  return ["Child completion results:", "", ...sections].join("\n\n");
+  return { text: ["Child completion results:", "", ...sections].join("\n\n"), consumedRunIds };
 }
 
-export function dedupeLatestChildCompletionRows(
-  children: Array<{
-    childSessionKey: string;
-    task: string;
-    label?: string;
-    createdAt: number;
-    endedAt?: number;
-    frozenResultText?: string | null;
-    completion?: {
-      resultText?: string | null;
-      fallbackResultText?: string | null;
-    };
-    delivery?: {
-      payload?: {
-        frozenResultText?: string | null;
-        fallbackFrozenResultText?: string | null;
-      };
-    };
-    outcome?: SubagentRunOutcome;
-  }>,
-) {
-  const latestByChildSessionKey = new Map<string, (typeof children)[number]>();
+export function buildChildCompletionFindings(
+  children: Array<ChildCompletionRow>,
+): string | undefined {
+  return buildChildCompletionFindingsWithRuns(children)?.text;
+}
+
+export function dedupeLatestChildCompletionRows<T extends ChildCompletionRow>(children: T[]): T[] {
+  const latestByChildSessionKey = new Map<string, T>();
   for (const child of children) {
     const existing = latestByChildSessionKey.get(child.childSessionKey);
     if (!existing || child.createdAt > existing.createdAt) {

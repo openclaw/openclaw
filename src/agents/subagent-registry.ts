@@ -1539,3 +1539,5 @@ export function initSubagentRegistry() {
 // provider as a side effect (see subagent-registry-maintenance.ts).
 export { listSessionMaintenanceProtectedSubagentSessionKeys } from "./subagent-registry-maintenance.js";
 export { testing as __testing };
+
+export { markDescendantCompletionConsumedByRequester } from "./subagent-registry-consumption.js";

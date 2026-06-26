@@ -164,6 +164,7 @@ describe("subagent registry lifecycle error grace", () => {
       getRuntimeConfig: loadConfigMock as typeof import("../config/config.js").getRuntimeConfig,
       onAgentEvent:
         onAgentEventMock as unknown as typeof import("../infra/agent-events.js").onAgentEvent,
+      ensureRuntimePluginsLoaded: vi.fn(),
     });
     subagentAnnounceTesting.setDepsForTest({
       callGateway: callGatewayMock as typeof import("../gateway/call.js").callGateway,
@@ -179,6 +180,8 @@ describe("subagent registry lifecycle error grace", () => {
         resolveRequesterForChildSession: mod.resolveRequesterForChildSession,
         shouldIgnorePostCompletionAnnounceForSession:
           mod.shouldIgnorePostCompletionAnnounceForSession,
+        markDescendantCompletionConsumedByRequester:
+          mod.markDescendantCompletionConsumedByRequester,
       }),
     });
     subagentAnnounceDeliveryTesting.setDepsForTest({
