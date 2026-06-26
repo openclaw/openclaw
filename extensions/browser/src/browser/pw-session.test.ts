@@ -359,3 +359,165 @@ describe("pw-session ensurePageState", () => {
     expect(state2.requests).toStrictEqual([]);
   });
 });
+
+describe("pw-session action download capture", () => {
+  it("captures multiple concurrent downloads within one action", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    const capture = beginActionDownloadCaptureOnPage(page);
+
+    const saveAsA = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "download-a", "utf8");
+    });
+    const saveAsB = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "download-b", "utf8");
+    });
+    const saveAsC = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "download-c", "utf8");
+    });
+
+    handlers.get("download")?.[0]?.({
+      suggestedFilename: () => "a.txt",
+      saveAs: saveAsA,
+    });
+    handlers.get("download")?.[0]?.({
+      suggestedFilename: () => "b.txt",
+      saveAs: saveAsB,
+    });
+    handlers.get("download")?.[0]?.({
+      suggestedFilename: () => "c.txt",
+      saveAs: saveAsC,
+    });
+
+    const result = await capture.drain();
+    capture.dispose();
+
+    expect(result?.count).toBe(3);
+    expect(result?.recent.map((d) => d.suggestedFilename)).toEqual(["a.txt", "b.txt", "c.txt"]);
+    for (const d of result?.recent ?? []) {
+      expect(path.dirname(d.savedPath)).toBe(DEFAULT_DOWNLOAD_DIR);
+    }
+  });
+
+  it("dispose prevents new downloads from being captured after disposal", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+    const capture = beginActionDownloadCaptureOnPage(page);
+
+    const saveAs = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "pre-dispose", "utf8");
+    });
+    handlers.get("download")?.[0]?.({
+      suggestedFilename: () => "pre.txt",
+      saveAs,
+    });
+
+    const result = await capture.drain();
+    expect(result?.count).toBe(1);
+
+    capture.dispose();
+
+    // After dispose, a new download is fired. The page's download handler
+    // looks at state.actionDownloadCaptures.at(-1), but our capture was
+    // removed from the list. The download should fall through to
+    // managedSave.catch(() => {}) without being captured.
+    const saveAs2 = vi.fn(async () => {});
+    handlers.get("download")?.[0]?.({
+      suggestedFilename: () => "post.txt",
+      saveAs: saveAs2,
+    });
+
+    // The disposed capture won't see new downloads from the page handler.
+    // But it may still return its previously captured results on re-drain
+    // since capture.promises is not cleared by dispose.
+    const afterDispose = await capture.drain();
+    // The key assertion: the post-dispose download's saveAs was never called
+    // because it wasn't captured (fell through to managedSave.catch).
+    expect(saveAs2).not.toHaveBeenCalled();
+  });
+
+  it("double dispose is safe", () => {
+    const { page } = fakePage();
+    ensurePageState(page);
+    const capture = beginActionDownloadCaptureOnPage(page);
+
+    capture.dispose();
+    expect(() => capture.dispose()).not.toThrow();
+  });
+
+  it("broadcasts downloads to all active captures to prevent misattribution", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+
+    const capture1 = beginActionDownloadCaptureOnPage(page);
+    const capture2 = beginActionDownloadCaptureOnPage(page);
+
+    const saveAs = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "shared", "utf8");
+    });
+    handlers.get("download")?.[0]?.({
+      suggestedFilename: () => "shared.txt",
+      saveAs,
+    });
+
+    // Both captures receive the download, preventing misattribution
+    const result1 = await capture1.drain();
+    const result2 = await capture2.drain();
+
+    expect(result1?.count).toBe(1);
+    expect(result1?.recent[0]?.suggestedFilename).toBe("shared.txt");
+    expect(result2?.count).toBe(1);
+    expect(result2?.recent[0]?.suggestedFilename).toBe("shared.txt");
+    expect(result1?.recent[0]?.savedPath).toBe(result2?.recent[0]?.savedPath);
+
+    capture1.dispose();
+    capture2.dispose();
+  });
+
+  it("non-overlapping sequential captures see their own downloads", async () => {
+    const { page, handlers } = fakePage();
+    ensurePageState(page);
+
+    const capture1 = beginActionDownloadCaptureOnPage(page);
+    const saveAs1 = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "first", "utf8");
+    });
+    handlers.get("download")?.[0]?.({
+      suggestedFilename: () => "first.txt",
+      saveAs: saveAs1,
+    });
+    const result1 = await capture1.drain();
+    capture1.dispose();
+
+    expect(result1?.count).toBe(1);
+    expect(result1?.recent[0]?.suggestedFilename).toBe("first.txt");
+
+    // Second capture starts after first is disposed
+    const capture2 = beginActionDownloadCaptureOnPage(page);
+    const saveAs2 = vi.fn(async (outPath: string) => {
+      await fs.writeFile(outPath, "second", "utf8");
+    });
+    handlers.get("download")?.[0]?.({
+      suggestedFilename: () => "second.txt",
+      saveAs: saveAs2,
+    });
+    const result2 = await capture2.drain();
+    capture2.dispose();
+
+    expect(result2?.count).toBe(1);
+    expect(result2?.recent[0]?.suggestedFilename).toBe("second.txt");
+    expect(saveAs1).toHaveBeenCalledTimes(1);
+    expect(saveAs2).toHaveBeenCalledTimes(1);
+  });
+
+  it("graceMs=0 returns immediately when no download has arrived", async () => {
+    const { page } = fakePage();
+    ensurePageState(page);
+    const capture = beginActionDownloadCaptureOnPage(page);
+
+    const result = await capture.drain({ graceMs: 0 });
+    capture.dispose();
+
+    expect(result).toBeUndefined();
+  });
+});
