@@ -211,6 +211,11 @@ each carrier call should start with fresh context, for example reception,
 booking, IVR, or Google Meet bridge flows where the same phone number may
 represent different meetings.
 
+Voice Call stores generated session keys under the configured agent namespace
+(`agent:<agentId>:voice:*`) so call memory survives Gateway session-key
+canonicalization after restarts. Explicit session keys provided by integrations
+are preserved as-is.
+
 ## Realtime voice conversations
 
 `realtime` selects a full-duplex realtime voice provider for live call
