@@ -18,6 +18,11 @@ import {
   type CodexAppServerApprovalPolicy,
   type CodexAppServerSandboxMode,
 } from "./config.js";
+import {
+  readGeeRuntimePreparedFactsRecord,
+  type GeeRuntimePreparedFacts,
+} from "./gee-runtime-envelope.js";
+import type { TurnOwnerDecision } from "./mcp-thread-config.js";
 import type { PluginAppPolicyContext } from "./plugin-thread-config.js";
 import type { CodexServiceTier } from "./protocol.js";
 
@@ -73,6 +78,8 @@ export type CodexAppServerThreadBinding = {
   webSearchThreadConfigFingerprint?: string;
   userMcpServersFingerprint?: string;
   mcpServersFingerprint?: string;
+  mcpOwnershipDecisions?: Record<string, TurnOwnerDecision>;
+  geeRuntimePreparedFacts?: Record<string, GeeRuntimePreparedFacts>;
   nativeHookRelayGeneration?: string;
   appServerRuntimeFingerprint?: string;
   pluginAppsFingerprint?: string;
@@ -210,6 +217,8 @@ export async function readCodexAppServerBinding(
           : undefined,
       mcpServersFingerprint:
         typeof parsed.mcpServersFingerprint === "string" ? parsed.mcpServersFingerprint : undefined,
+      mcpOwnershipDecisions: readMcpOwnershipDecisions(parsed.mcpOwnershipDecisions),
+      geeRuntimePreparedFacts: readGeeRuntimePreparedFactsRecord(parsed.geeRuntimePreparedFacts),
       nativeHookRelayGeneration:
         typeof parsed.nativeHookRelayGeneration === "string" &&
         parsed.nativeHookRelayGeneration.trim()
@@ -279,6 +288,8 @@ export async function writeCodexAppServerBinding(
       webSearchThreadConfigFingerprint: binding.webSearchThreadConfigFingerprint,
       userMcpServersFingerprint: binding.userMcpServersFingerprint,
       mcpServersFingerprint: binding.mcpServersFingerprint,
+      mcpOwnershipDecisions: binding.mcpOwnershipDecisions,
+      geeRuntimePreparedFacts: binding.geeRuntimePreparedFacts,
       nativeHookRelayGeneration: binding.nativeHookRelayGeneration,
       appServerRuntimeFingerprint: binding.appServerRuntimeFingerprint,
       pluginAppsFingerprint: binding.pluginAppsFingerprint,
@@ -337,6 +348,62 @@ function readContextEngineProjectionBinding(
     epoch: record.epoch,
     fingerprint: typeof record.fingerprint === "string" ? record.fingerprint : undefined,
   };
+}
+
+function readMcpOwnershipDecisions(value: unknown): Record<string, TurnOwnerDecision> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const decisions: Record<string, TurnOwnerDecision> = {};
+  for (const [endpointId, rawDecision] of Object.entries(value)) {
+    const decision = readTurnOwnerDecision(endpointId, rawDecision);
+    if (!decision) {
+      return undefined;
+    }
+    decisions[endpointId] = decision;
+  }
+  return decisions;
+}
+
+function readTurnOwnerDecision(endpointId: string, value: unknown): TurnOwnerDecision | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  const owner = readRuntimeEnvelopeOwner(record.owner);
+  const reason = readTurnOwnerDecisionReason(record.reason);
+  if (!owner || !reason || record.endpointId !== endpointId || typeof record.auditId !== "string") {
+    return undefined;
+  }
+  const decision: TurnOwnerDecision = {
+    owner,
+    reason,
+    endpointId,
+    auditId: record.auditId,
+  };
+  if (typeof record.threadOwnerId === "string") {
+    decision.threadOwnerId = record.threadOwnerId;
+  }
+  if (typeof record.dispatcherId === "string") {
+    decision.dispatcherId = record.dispatcherId;
+  }
+  if (typeof record.geeId === "string") {
+    decision.geeId = record.geeId;
+  }
+  return decision;
+}
+
+function readRuntimeEnvelopeOwner(value: unknown): TurnOwnerDecision["owner"] | undefined {
+  return value === "openclaw" || value === "gee" ? value : undefined;
+}
+
+function readTurnOwnerDecisionReason(value: unknown): TurnOwnerDecision["reason"] | undefined {
+  return value === "endpoint-owner" ||
+    value === "thread-owner" ||
+    value === "dispatcher-decision" ||
+    value === "standalone-default"
+    ? value
+    : undefined;
 }
 
 function readPluginAppPolicyContext(

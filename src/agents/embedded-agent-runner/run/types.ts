@@ -30,6 +30,18 @@ import type { EmbeddedRunLivenessState } from "../types.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js";
 
+export type EmbeddedRunGeeRuntimePreparedFact = {
+  kind: "gee-runtime-prepared-facts";
+  version: 1;
+  hostMode: "gee-hosted";
+  envelope: unknown;
+};
+
+export type EmbeddedRunGeeRuntimePreparedFacts = Record<
+  string,
+  EmbeddedRunGeeRuntimePreparedFact
+>;
+
 type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedAgentParams,
   | "provider"
@@ -81,6 +93,8 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   agentHarnessId?: string;
   /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
   runtimePlan?: AgentRuntimePlan;
+  /** Gee-owned prepared facts for a Gee-hosted OpenClaw turn. */
+  geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
   /** Host-issued scope for harnesses that mirror native child runs into task state. */
   agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
   /** Live observer called after wrapped tool outcomes are recorded. */

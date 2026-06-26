@@ -21,6 +21,7 @@ export type OpenClawPluginToolOptions = {
   agentDir?: string;
   workspaceDir?: string;
   config?: OpenClawConfig;
+  geeRuntimePreparedFacts?: Record<string, unknown>;
   fsPolicy?: ToolFsPolicy;
   modelProvider?: string;
   modelId?: string;
@@ -78,6 +79,7 @@ export function resolveOpenClawPluginToolInputs(params: {
   return {
     context: {
       config: options?.config,
+      geeRuntimePreparedFacts: options?.geeRuntimePreparedFacts,
       runtimeConfig,
       getRuntimeConfig,
       fsPolicy: options?.fsPolicy,

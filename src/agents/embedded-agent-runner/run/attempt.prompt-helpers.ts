@@ -566,6 +566,7 @@ type AfterTurnRuntimeContextAttempt = Pick<
   | "extraSystemPrompt"
   | "ownerNumbers"
   | "authProfileId"
+  | "geeRuntimePreparedFacts"
 > & {
   sessionId?: EmbeddedRunAttemptParams["sessionId"];
 };
@@ -592,6 +593,7 @@ export function buildAfterTurnRuntimeContext(params: {
       currentThreadTs: params.attempt.currentThreadTs,
       currentMessageId: params.attempt.currentMessageId,
       authProfileId: params.attempt.authProfileId,
+      geeRuntimePreparedFacts: params.attempt.geeRuntimePreparedFacts,
       workspaceDir: params.workspaceDir,
       cwd: params.cwd,
       agentDir: params.agentDir,

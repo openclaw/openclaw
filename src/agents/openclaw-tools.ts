@@ -35,6 +35,7 @@ import {
   collectPresentOpenClawTools,
   shouldIncludeUpdatePlanToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
+import type { EmbeddedRunGeeRuntimePreparedFacts } from "./embedded-agent-runner/run/types.js";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
 import type { SpawnedToolContext } from "./spawned-context.js";
 import type { ToolFsPolicy } from "./tool-fs-policy.js";
@@ -107,6 +108,7 @@ export function createOpenClawTools(
     fsPolicy?: ToolFsPolicy;
     sandboxed?: boolean;
     config?: OpenClawConfig;
+    geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
     pluginToolAllowlist?: string[];
     pluginToolDenylist?: string[];
     /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */

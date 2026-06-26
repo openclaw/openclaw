@@ -22,6 +22,7 @@ import {
   openAIProviderUsesCodexRuntimeByDefault,
   resolveSelectedOpenAIRuntimeProvider,
 } from "../openai-routing.js";
+import type { EmbeddedRunGeeRuntimePreparedFacts } from "./run/types.js";
 
 type EmbeddedCompactionRuntimeContext = {
   sessionKey?: string;
@@ -34,6 +35,7 @@ type EmbeddedCompactionRuntimeContext = {
   currentMessageId?: string | number;
   authProfileId?: string;
   agentHarnessId?: string;
+  geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
   workspaceDir: string;
   cwd?: string;
   agentDir: string;
@@ -249,6 +251,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
   currentThreadTs?: string | null;
   currentMessageId?: string | number | null;
   authProfileId?: string | null;
+  geeRuntimePreparedFacts?: EmbeddedRunGeeRuntimePreparedFacts;
   workspaceDir: string;
   cwd?: string | null;
   agentDir: string;
@@ -293,6 +296,7 @@ export function buildEmbeddedCompactionRuntimeContext(params: {
     currentMessageId: params.currentMessageId ?? undefined,
     authProfileId: resolved.authProfileId,
     agentHarnessId,
+    geeRuntimePreparedFacts: params.geeRuntimePreparedFacts,
     workspaceDir: params.workspaceDir,
     cwd: params.cwd ?? undefined,
     agentDir: params.agentDir,
