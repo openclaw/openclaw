@@ -293,9 +293,11 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
   );
   lines.push(`Reply with: /approve ${request.id} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "Allow Always is unavailable because the effective policy requires approval every time.",
-    );
+    const reason =
+      request.request.ask === "always" || request.request.ask == null
+        ? "Allow Always is unavailable because the effective policy requires approval every time."
+        : "Allow Always is unavailable because this command cannot be saved for future use (e.g., shell redirection or one-shot arguments).";
+    lines.push(reason);
   }
   return lines.join("\n");
 }

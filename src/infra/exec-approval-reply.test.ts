@@ -382,6 +382,19 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).not.toContain("requires approval every time");
   });
 
+  it("defaults to policy reason when ask is not provided", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-no-ask",
+      approvalSlug: "slug-no-ask",
+      command: "echo ok",
+      host: "gateway",
+      allowedDecisions: ["allow-once", "deny"],
+    });
+
+    expect(payload.text).toContain("requires approval every time");
+    expect(payload.text).not.toContain("cannot be saved for future use");
+  });
+
   it("stores agent and session metadata for downstream suppression checks", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-meta",

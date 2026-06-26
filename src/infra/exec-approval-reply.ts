@@ -376,8 +376,12 @@ export function buildExecApprovalPendingReplyPayload(
     lines.push(secondaryFence);
   }
   if (!allowedDecisions.includes("allow-always")) {
+    // When ask=always, the policy truly requires every-time approval.
+    // When ask is known but not "always", Allow Always is excluded because
+    // the command is one-shot (e.g. shell redirection). When ask is
+    // unavailable, default to the policy message to stay safe (#97069).
     const reason =
-      params.ask === "always"
+      params.ask === "always" || params.ask == null
         ? "The effective approval policy requires approval every time, so Allow Always is unavailable."
         : "Allow Always is unavailable because this command cannot be saved for future use (e.g., shell redirection or one-shot arguments).";
     lines.push(reason);
