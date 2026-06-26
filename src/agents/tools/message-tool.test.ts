@@ -735,6 +735,52 @@ describe("message tool secret scoping", () => {
     expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.telegram.botToken"]);
   });
 
+  it("preserves empty opaque target segments in inferred session delivery", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {
+          channels: {
+            telegram: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+            },
+          },
+        } as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:telegram:group:room::part",
+      },
+    });
+
+    expect(input?.toolContext?.currentChannelProvider).toBe("telegram");
+    expect(input?.toolContext?.currentChannelId).toBe("room::part");
+  });
+
+  it("does not infer delivery from empty structural session segments", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {
+          channels: {
+            telegram: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+            },
+          },
+        } as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:telegram::group:room",
+      },
+    });
+
+    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+    expect(input?.toolContext?.currentChannelId).toBeUndefined();
+  });
+
   it("preserves direct session keys as explicit user targets when ambient channel drifted to webchat", async () => {
     mockSendResult({ channel: "discord", to: "user:123456789" });
 

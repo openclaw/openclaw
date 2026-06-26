@@ -882,7 +882,7 @@ function inferDeliveryFromSessionKey(
   if (!parsed) {
     return null;
   }
-  const parts = parsed.rest.split(":").filter(Boolean);
+  const parts = parsed.rest.split(":");
   if (parts.length < 3) {
     return null;
   }
@@ -891,7 +891,11 @@ function inferDeliveryFromSessionKey(
     return null;
   }
   if (parts.length >= 4 && (parts[2] === "direct" || parts[2] === "dm")) {
-    const accountId = resolveAgentAccountId(parts[1]);
+    const rawAccountId = normalizeOptionalString(parts[1]);
+    if (!rawAccountId || !normalizeOptionalString(parts[3])) {
+      return null;
+    }
+    const accountId = resolveAgentAccountId(rawAccountId);
     const to = parts.slice(3).join(":").trim();
     return to
       ? {
@@ -904,6 +908,9 @@ function inferDeliveryFromSessionKey(
   }
   const peerKind = parts[1] ?? "";
   if (SESSION_DELIVERY_PEER_KINDS.has(peerKind)) {
+    if (!normalizeOptionalString(parts[2])) {
+      return null;
+    }
     const to = parts.slice(2).join(":").trim();
     return to
       ? {

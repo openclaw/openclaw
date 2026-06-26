@@ -597,6 +597,10 @@ describe("Integration: saveSessionStore with pruning", () => {
             lastChannel: "telegram",
             lastTo: "6101296751",
           },
+          "agent:main:telegram::direct:malformed": {
+            sessionId: "malformed-session",
+            updatedAt: now,
+          },
         } satisfies Record<string, SessionEntry>,
         null,
         2,
@@ -614,8 +618,9 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const preview = dryRun.previewResults[0];
     expect(preview?.summary.dmScopeRetired).toBe(1);
-    expect(preview?.summary.afterCount).toBe(1);
+    expect(preview?.summary.afterCount).toBe(2);
     expect(preview?.dmScopeRetiredKeys.has("agent:main:telegram:direct:6101296751")).toBe(true);
+    expect(preview?.dmScopeRetiredKeys.has("agent:main:telegram::direct:malformed")).toBe(false);
     expect(preview?.summary.unreferencedArtifacts.removedFiles).toBe(0);
     await expectPathExists(directTranscript);
   });
