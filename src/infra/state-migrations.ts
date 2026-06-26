@@ -96,6 +96,12 @@ import {
 } from "./state-migrations.fs.js";
 import { normalizeVoiceWakeRoutingConfig } from "./voicewake-routing.js";
 
+type SessionStoreAliasPlan = {
+  hasDistinctAliases: boolean;
+  hasFinalSymlink: boolean;
+  writePaths: string[];
+};
+
 export type LegacyStateDetection = {
   targetAgentId: string;
   targetMainKey: string;
@@ -111,7 +117,7 @@ export type LegacyStateDetection = {
     legacyKeys: string[];
     preserveAmbiguousKeys: boolean;
     preserveForeignMainAliases: boolean;
-    targetStoreHasDistinctAlias: boolean;
+    targetStoreAliases: SessionStoreAliasPlan;
   };
   agentDir: {
     legacyDir: string;
@@ -4089,9 +4095,10 @@ export async function detectLegacyStateMigrations(params: {
     preserveForeignMainAliases:
       params.sessionStoreOwnership?.preserveForeignMainAliases === true ||
       currentSessionStoreOwnership.preserveForeignMainAliases,
-    targetStoreHasDistinctAlias:
-      params.sessionStoreOwnership?.targetStoreHasDistinctAlias === true ||
-      currentSessionStoreOwnership.targetStoreHasDistinctAlias,
+    targetStoreAliases: mergeSessionStoreAliasPlans(
+      params.sessionStoreOwnership?.targetStoreAliases,
+      currentSessionStoreOwnership.targetStoreAliases,
+    ),
   };
   const { preserveForeignMainAliases } = sessionStoreOwnership;
   const legacySessionEntries = safeReadDir(sessionsLegacyDir);
@@ -4288,7 +4295,7 @@ export async function detectLegacyStateMigrations(params: {
       legacyKeys,
       preserveAmbiguousKeys: sessionStoreOwnership.preserveAmbiguousKeys,
       preserveForeignMainAliases,
-      targetStoreHasDistinctAlias: sessionStoreOwnership.targetStoreHasDistinctAlias,
+      targetStoreAliases: sessionStoreOwnership.targetStoreAliases,
     },
     agentDir: {
       legacyDir: legacyAgentDir,
@@ -4372,6 +4379,12 @@ async function migrateLegacySessions(
     : { store: {}, ok: true };
   const legacyStore = legacyParsed.store;
   const targetStore = targetParsed.store;
+  if (detected.sessions.targetStoreAliases.hasFinalSymlink) {
+    warnings.push(
+      `Deferred legacy session migration in final-component symlink store ${detected.sessions.targetStorePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
+    );
+    return { changes, warnings };
+  }
 
   const ambiguousAliasedKeys = new Set(
     [...Object.keys(targetStore), ...Object.keys(legacyStore)].filter(
@@ -4383,7 +4396,7 @@ async function migrateLegacySessions(
   );
   // Atomic replacement separates filesystem aliases. Defer the whole merge so
   // a later startup cannot treat each pathname as a different session owner.
-  if (detected.sessions.targetStoreHasDistinctAlias && ambiguousAliasedKeys.size > 0) {
+  if (detected.sessions.targetStoreAliases.hasDistinctAliases && ambiguousAliasedKeys.size > 0) {
     warnings.push(
       aliasedSessionStoreMigrationWarning({
         subject: "migration of",
@@ -4493,9 +4506,7 @@ async function migrateLegacySessions(
       }
       normalized[key] = normalizedEntry;
     }
-    await saveSessionStore(detected.sessions.targetStorePath, normalized, {
-      skipMaintenance: true,
-    });
+    await saveSessionStoreToPaths(detected.sessions.targetStoreAliases.writePaths, normalized);
     if (migratedDirectChatKey) {
       changes.push(`Migrated latest direct-chat session → ${migratedDirectChatKey}`);
     }
@@ -4568,9 +4579,7 @@ async function migrateLegacySessions(
           normalized[key] = normalizedEntry;
         }
       }
-      await saveSessionStore(detected.sessions.targetStorePath, normalized, {
-        skipMaintenance: true,
-      });
+      await saveSessionStoreToPaths(detected.sessions.targetStoreAliases.writePaths, normalized);
       changes.push("Rewrote migrated session transcript paths");
     }
   }
@@ -5095,27 +5104,15 @@ export async function migrateOrphanedSessionKeys(params: {
   // A single path may be shared by multiple agents when session.store
   // does not contain {agentId}.
   const storeMap = new Map<string, Set<string>>();
-  const aliasedStorePaths = new Set<string>();
-  const distinctStoreAliasPaths = new Map<string, Set<string>>();
-  const finalSymlinkStorePaths = new Set<string>();
+  const storeAliasCandidates = new Map<string, Set<string>>();
   const addToStoreMap = (p: string, id: string) => {
     // Existing aliases are one ownership surface. Group them before any atomic
     // rewrite can replace one pathname and hide their original identity.
     const storePath =
       [...storeMap.keys()].find((candidate) => sessionStorePathsMatch(candidate, p)) ?? p;
-    const isFinalSymlink = sessionStorePathIsFinalSymlink(p);
-    const hasDistinctEntry = sessionStorePathsHaveDistinctEntries(storePath, p);
-    if (isFinalSymlink || hasDistinctEntry) {
-      aliasedStorePaths.add(storePath);
-    }
-    if (isFinalSymlink) {
-      finalSymlinkStorePaths.add(storePath);
-    }
-    if (hasDistinctEntry) {
-      const aliasPaths = distinctStoreAliasPaths.get(storePath) ?? new Set([storePath]);
-      aliasPaths.add(p);
-      distinctStoreAliasPaths.set(storePath, aliasPaths);
-    }
+    const aliasCandidates = storeAliasCandidates.get(storePath) ?? new Set([storePath]);
+    aliasCandidates.add(p);
+    storeAliasCandidates.set(storePath, aliasCandidates);
     const existing = storeMap.get(storePath);
     if (existing) {
       existing.add(id);
@@ -5203,7 +5200,11 @@ export async function migrateOrphanedSessionKeys(params: {
     // one agent's history into another namespace.
     let working = parsed.store;
     let totalLegacy = 0;
-    const hasDistinctAliases = aliasedStorePaths.has(storePath);
+    const storeAliases = resolveSessionStoreAliasPlan(
+      storePath,
+      storeAliasCandidates.get(storePath) ?? [storePath],
+    );
+    const hasDistinctAliases = storeAliases.hasDistinctAliases;
     const preserveAmbiguousKeys =
       hasDistinctAliases || storePath === fixedCustomStorePath || storeAgentIds.size > 1;
     const preservedAmbiguousKeyCount = Object.keys(working).filter(
@@ -5245,7 +5246,7 @@ export async function migrateOrphanedSessionKeys(params: {
     if (totalLegacy === 0) {
       continue;
     }
-    if (finalSymlinkStorePaths.has(storePath)) {
+    if (storeAliases.hasFinalSymlink) {
       warnings.push(
         `Deferred session key migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
       );
@@ -5260,10 +5261,7 @@ export async function migrateOrphanedSessionKeys(params: {
       }
     }
     try {
-      const writePaths = distinctStoreAliasPaths.get(storePath) ?? [storePath];
-      for (const writePath of writePaths) {
-        await saveSessionStore(writePath, normalized, { skipMaintenance: true });
-      }
+      await saveSessionStoreToPaths(storeAliases.writePaths, normalized);
       changes.push(`Canonicalized ${totalLegacy} orphaned session key(s) in ${storePath}`);
     } catch (err) {
       warnings.push(`Failed to write canonicalized store ${storePath}: ${String(err)}`);
@@ -5340,7 +5338,7 @@ async function migrateLegacyAcpSessionMetadata(params: {
   const storeGroups: Array<{
     target: (typeof targets)[number];
     agentIds: Set<string>;
-    hasDistinctAliases: boolean;
+    aliasCandidates: Set<string>;
   }> = [];
 
   for (const target of targets) {
@@ -5350,30 +5348,34 @@ async function migrateLegacyAcpSessionMetadata(params: {
     const group = storeGroups.find(({ target: existing }) =>
       sessionStorePathsMatch(existing.storePath, target.storePath),
     );
+    const matchingDeclaredTargets = declaredTargets.filter((declaredTarget) =>
+      sessionStorePathsMatch(target.storePath, declaredTarget.storePath),
+    );
     if (group) {
       group.agentIds.add(normalizeAgentId(target.agentId));
-      group.hasDistinctAliases ||= sessionStorePathsHaveDistinctEntries(
-        group.target.storePath,
-        target.storePath,
-      );
+      group.aliasCandidates.add(target.storePath);
+      for (const declaredTarget of matchingDeclaredTargets) {
+        group.agentIds.add(declaredTarget.agentId);
+        group.aliasCandidates.add(declaredTarget.storePath);
+      }
       continue;
     }
     storeGroups.push({
       target,
       agentIds: new Set([
         normalizeAgentId(target.agentId),
-        ...declaredTargets
-          .filter((declaredTarget) =>
-            sessionStorePathsMatch(target.storePath, declaredTarget.storePath),
-          )
-          .map((declaredTarget) => declaredTarget.agentId),
+        ...matchingDeclaredTargets.map((declaredTarget) => declaredTarget.agentId),
       ]),
-      hasDistinctAliases: sessionStorePathIsFinalSymlink(target.storePath),
+      aliasCandidates: new Set([
+        target.storePath,
+        ...matchingDeclaredTargets.map((declaredTarget) => declaredTarget.storePath),
+      ]),
     });
   }
 
-  for (const { target, agentIds, hasDistinctAliases } of storeGroups) {
+  for (const { target, agentIds, aliasCandidates } of storeGroups) {
     const storePath = target.storePath;
+    const storeAliases = resolveSessionStoreAliasPlan(storePath, aliasCandidates);
     const pluginForeignMainAliasRisk = pluginTargets.some((pluginTarget) =>
       sessionStorePathsMatch(storePath, pluginTarget.storePath),
     );
@@ -5395,7 +5397,13 @@ async function migrateLegacyAcpSessionMetadata(params: {
     const hasLegacyAcpMetadata = Object.values(parsed.store).some(
       (entry) => normalizeSessionEntry(entry)?.acp !== undefined,
     );
-    if (hasLegacyAcpMetadata && ambiguousKeyCount > 0 && hasDistinctAliases) {
+    if (hasLegacyAcpMetadata && storeAliases.hasFinalSymlink) {
+      warnings.push(
+        `Deferred ACP metadata migration in final-component symlink store ${storePath}; configure one canonical session.store path, then rerun openclaw doctor --fix`,
+      );
+      continue;
+    }
+    if (hasLegacyAcpMetadata && ambiguousKeyCount > 0 && storeAliases.hasDistinctAliases) {
       // Removing ACP metadata rewrites the store and would split its aliases.
       warnings.push(
         aliasedSessionStoreMigrationWarning({
@@ -5458,7 +5466,7 @@ async function migrateLegacyAcpSessionMetadata(params: {
       continue;
     }
     try {
-      await saveSessionStore(storePath, normalized, { skipMaintenance: true });
+      await saveSessionStoreToPaths(storeAliases.writePaths, normalized);
       changes.push(
         `Migrated ${migrated} ACP session metadata ${migrated === 1 ? "row" : "rows"} → shared SQLite state`,
       );
@@ -5519,10 +5527,57 @@ function sessionStorePathsHaveDistinctEntries(left: string, right: string): bool
   }
 }
 
+function resolveSessionStoreAliasPlan(
+  storePath: string,
+  candidatePaths: Iterable<string>,
+): SessionStoreAliasPlan {
+  const writePaths = new Set([storePath]);
+  let hasDistinctEntries = false;
+  let hasFinalSymlink = sessionStorePathIsFinalSymlink(storePath);
+  for (const candidatePath of candidatePaths) {
+    if (!sessionStorePathsMatch(storePath, candidatePath)) {
+      continue;
+    }
+    hasFinalSymlink ||= sessionStorePathIsFinalSymlink(candidatePath);
+    if (sessionStorePathsHaveDistinctEntries(storePath, candidatePath)) {
+      hasDistinctEntries = true;
+      writePaths.add(candidatePath);
+    }
+  }
+  return {
+    hasDistinctAliases: hasFinalSymlink || hasDistinctEntries,
+    hasFinalSymlink,
+    writePaths: [...writePaths],
+  };
+}
+
+function mergeSessionStoreAliasPlans(
+  left: SessionStoreAliasPlan | undefined,
+  right: SessionStoreAliasPlan,
+): SessionStoreAliasPlan {
+  if (!left) {
+    return right;
+  }
+  return {
+    hasDistinctAliases: left.hasDistinctAliases || right.hasDistinctAliases,
+    hasFinalSymlink: left.hasFinalSymlink || right.hasFinalSymlink,
+    writePaths: [...new Set([...left.writePaths, ...right.writePaths])],
+  };
+}
+
+async function saveSessionStoreToPaths(
+  storePaths: Iterable<string>,
+  store: Record<string, SessionEntry>,
+): Promise<void> {
+  for (const storePath of new Set(storePaths)) {
+    await saveSessionStore(storePath, store, { skipMaintenance: true });
+  }
+}
+
 type SessionStoreOwnership = {
   preserveAmbiguousKeys: boolean;
   preserveForeignMainAliases: boolean;
-  targetStoreHasDistinctAlias: boolean;
+  targetStoreAliases: SessionStoreAliasPlan;
 };
 
 function resolveSessionStoreOwnership(params: {
@@ -5576,15 +5631,8 @@ function resolveSessionStoreOwnership(params: {
       candidateStorePaths.push(path.join(agentsDir, entry.name, "sessions", "sessions.json"));
     }
   }
-  const targetStoreHasDistinctAlias =
-    sessionStorePathIsFinalSymlink(targetStorePath) ||
-    candidateStorePaths.some((candidatePath) => {
-      return (
-        sessionStorePathsMatch(candidatePath, targetStorePath) &&
-        sessionStorePathsHaveDistinctEntries(candidatePath, targetStorePath)
-      );
-    });
-  return { preserveAmbiguousKeys, preserveForeignMainAliases, targetStoreHasDistinctAlias };
+  const targetStoreAliases = resolveSessionStoreAliasPlan(targetStorePath, candidateStorePaths);
+  return { preserveAmbiguousKeys, preserveForeignMainAliases, targetStoreAliases };
 }
 
 export async function autoMigrateLegacyState(params: {
