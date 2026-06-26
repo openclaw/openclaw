@@ -71,8 +71,22 @@ function findCasePreservingPeerDescriptor(
 }
 
 export function requiresFoldedSessionKeyAliasProof(sessionKey: string | undefined | null): boolean {
-  const ref = parseRawSessionConversationRef(sessionKey);
-  const descriptor = findCasePreservingPeerDescriptor(ref?.channel, ref?.kind);
+  const raw = normalizeOptionalString(sessionKey);
+  if (!raw) {
+    return false;
+  }
+  const parts = raw.split(":");
+  let bodyStartIndex = 0;
+  while (
+    parts.length - bodyStartIndex >= 3 &&
+    normalizeOptionalLowercaseString(parts[bodyStartIndex]) === "agent"
+  ) {
+    bodyStartIndex += 2;
+  }
+  const descriptor = findCasePreservingPeerDescriptor(
+    parts[bodyStartIndex],
+    parts[bodyStartIndex + 1],
+  );
   return descriptor?.span === "tail";
 }
 
@@ -167,10 +181,9 @@ function collectCasePreservedSpans(raw: string): PreservedSpan[] {
             spans.push({ start: threadIdStart, end: raw.length, trim: false });
           }
         };
-        // Tail: anchored after one or more agent ownership wrappers; preserve
-        // through key end. Plugins may scope an opaque foreign key under their
-        // configured agent without making the inner identity a route.
-        const scopedRe = new RegExp(`^(?:agent:[^:]+:)+${channel}:${kind}:`, "i");
+        // Preserve tails behind nested or malformed ownership wrappers without
+        // treating an inner channel-shaped identity as a runtime route.
+        const scopedRe = new RegExp(`^(?:agent:[^:]*:)+${channel}:${kind}:`, "i");
         const scopedMatch = scopedRe.exec(raw);
         if (scopedMatch) {
           collectTailSpan(scopedMatch[0].length);
@@ -332,13 +345,10 @@ export function parseRawSessionConversationRef(
   }
 
   const rawParts = raw.split(":").filter(Boolean);
-  let bodyStartIndex = 0;
-  while (
-    rawParts.length - bodyStartIndex >= 3 &&
-    normalizeOptionalLowercaseString(rawParts[bodyStartIndex]) === "agent"
-  ) {
-    bodyStartIndex += 2;
-  }
+  // Only the outer ownership wrapper is authoritative for routing. Any inner
+  // agent-shaped identity is opaque plugin input and must not inherit policy.
+  const bodyStartIndex =
+    rawParts.length >= 3 && normalizeOptionalLowercaseString(rawParts[0]) === "agent" ? 2 : 0;
   const parts = rawParts.slice(bodyStartIndex);
   if (parts.length < 3) {
     return null;

@@ -408,6 +408,12 @@ describe("resolveVoiceCallConfig session routing", () => {
     expect(
       resolveVoiceCallAgentSessionKey({
         config,
+        sessionKey: "agent::Matrix:Channel:!RoomAbC:example.org",
+      }),
+    ).toBe("agent:voice:agent::matrix:channel:!RoomAbC:example.org");
+    expect(
+      resolveVoiceCallAgentSessionKey({
+        config,
         sessionKey: "agent:other:room::part",
       }),
     ).toBe("agent:voice:agent:other:room::part");

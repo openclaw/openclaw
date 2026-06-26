@@ -356,6 +356,32 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
+  it("canonicalizes global main aliases in shared stores", async () => {
+    await withStateFixture(async ({ tmpDir, stateDir }) => {
+      const sharedStorePath = path.join(tmpDir, "shared-sessions.json");
+      writeStore(sharedStorePath, {
+        global: { sessionId: "stale-global", updatedAt: 1000 },
+        main: { sessionId: "bare-main", updatedAt: 2000 },
+        "agent:main:main": { sessionId: "legacy-main", updatedAt: 3000 },
+        "agent:main:work": { sessionId: "fresh-main", updatedAt: 4000 },
+      });
+      const cfg = {
+        session: { scope: "global", mainKey: "work", store: sharedStorePath },
+        agents: { list: [{ id: "main" }, { id: "ops", default: true }] },
+      } as OpenClawConfig;
+
+      const result = await migrateFixtureState(stateDir, cfg);
+
+      const store = readStore(sharedStorePath);
+      expect(requireStoreEntry(store, "global").sessionId).toBe("fresh-main");
+      expect(store.main).toBeUndefined();
+      expect(store["agent:main:main"]).toBeUndefined();
+      expect(store["agent:main:work"]).toBeUndefined();
+      expect(result.changes).toHaveLength(1);
+      expect(result.warnings).toHaveLength(0);
+    });
+  });
+
   it("does not assign legacy default-main aliases among non-main shared owners", async () => {
     await withStateFixture(async ({ tmpDir, stateDir }) => {
       const sharedStorePath = path.join(tmpDir, "shared-sessions.json");

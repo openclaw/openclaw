@@ -3016,6 +3016,15 @@ function canonicalizeSessionKeyForAgent(params: {
   const legacyDefaultMainAlias =
     rawLower === `agent:${DEFAULT_AGENT_ID}:${DEFAULT_MAIN_KEY}` ||
     rawLower === `agent:${DEFAULT_AGENT_ID}:${params.mainKey}`;
+  const canonicalMain = canonicalizeMainSessionAlias({
+    cfg: { session: { scope: params.scope, mainKey: params.mainKey } },
+    agentId,
+    sessionKey: normalized,
+  });
+  // Global scope has one owner, so recognized main aliases are never ambiguous.
+  if (params.scope === "global" && canonicalMain === "global") {
+    return canonicalMain;
+  }
   // Unscoped and legacy default-main keys in a potentially shared store have no durable owner.
   // Keep it untouched instead of assigning another agent's history by iteration order.
   if (params.preserveAmbiguousKeys && (!rawLower.startsWith("agent:") || legacyDefaultMainAlias)) {
@@ -3040,11 +3049,6 @@ function canonicalizeSessionKeyForAgent(params: {
     }
   }
 
-  const canonicalMain = canonicalizeMainSessionAlias({
-    cfg: { session: { scope: params.scope, mainKey: params.mainKey } },
-    agentId,
-    sessionKey: normalized,
-  });
   if (canonicalMain !== normalized) {
     return normalizeLowercaseStringOrEmpty(canonicalMain);
   }
@@ -3238,10 +3242,20 @@ function canonicalizeSessionStore(params: {
   return { store: canonical, legacyKeys };
 }
 
-function isAmbiguousSharedStoreKey(key: string, mainKey: string): boolean {
+function isAmbiguousSharedStoreKey(key: string, mainKey: string, scope?: SessionScope): boolean {
   const raw = key.trim();
   const lower = normalizeLowercaseStringOrEmpty(raw);
   if (!raw || lower === "global" || lower === "unknown") {
+    return false;
+  }
+  if (
+    scope === "global" &&
+    canonicalizeMainSessionAlias({
+      cfg: { session: { scope, mainKey } },
+      agentId: DEFAULT_AGENT_ID,
+      sessionKey: lower,
+    }) === "global"
+  ) {
     return false;
   }
   return (
@@ -5037,7 +5051,7 @@ export async function migrateOrphanedSessionKeys(params: {
     let totalLegacy = 0;
     const preserveAmbiguousKeys = storePath === fixedCustomStorePath || storeAgentIds.size > 1;
     const preservedAmbiguousKeyCount = preserveAmbiguousKeys
-      ? Object.keys(working).filter((key) => isAmbiguousSharedStoreKey(key, mainKey)).length
+      ? Object.keys(working).filter((key) => isAmbiguousSharedStoreKey(key, mainKey, scope)).length
       : 0;
     for (const storeAgentId of storeAgentIds) {
       const { store: canonicalized, legacyKeys } = canonicalizeSessionStore({
