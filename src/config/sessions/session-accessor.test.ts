@@ -461,6 +461,43 @@ describe("session accessor seam", () => {
     });
   });
 
+  it("commits reply session initialization from a guarded legacy alias snapshot", async () => {
+    const sessionKey = "agent:main:main";
+    await applySessionEntryLifecycleMutation({
+      storePath,
+      upserts: [
+        {
+          sessionKey: "Agent:Main:Main",
+          entry: {
+            sessionId: "legacy-alias-session",
+            updatedAt: 10,
+          },
+        },
+      ],
+    });
+
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      previousEntry: snapshot.currentEntry,
+      sessionEntry: {
+        sessionId: "next-session",
+        updatedAt: 20,
+      },
+      sessionKey,
+      storePath,
+    });
+
+    expect(committed.ok).toBe(true);
+    if (!committed.ok) {
+      throw new Error("expected reply session initialization to commit");
+    }
+    expect(committed.sessionEntry.sessionId).toBe("next-session");
+    expect(loadSessionEntry({ sessionKey, storePath })?.sessionId).toBe("next-session");
+  });
+
   it("rejects reply session initialization when the entry is deleted during prepare", async () => {
     const sessionKey = "agent:main:main";
     await upsertSessionEntry(
