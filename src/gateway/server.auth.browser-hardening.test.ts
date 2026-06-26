@@ -133,11 +133,15 @@ function expectOriginNotAllowed(res: GatewayConnectResponse) {
 
 function expectRetryLater(res: GatewayConnectResponse, retryLater: boolean) {
   expect(res.ok).toBe(false);
-  const expectation = expect(res.error?.message ?? "");
+  const message = res.error?.message ?? "";
   if (retryLater) {
-    expectation.toContain("retry later");
+    // A locked-out connect can surface through either the shared-secret/token
+    // bucket ("retry later") or, when the handshake carries a device, the
+    // pre-auth device-signature bucket ("device signature rate-limited") that
+    // gates crypto.verify before the token check. Both are valid lockouts.
+    expect(message.includes("retry later") || message.includes("rate-limited")).toBe(true);
   } else {
-    expectation.not.toContain("retry later");
+    expect(message).not.toContain("retry later");
   }
 }
 

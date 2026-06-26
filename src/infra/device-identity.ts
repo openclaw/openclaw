@@ -34,6 +34,18 @@ function resolveDefaultIdentityPath(): string {
 const ED25519_SPKI_PREFIX = Buffer.from("302a300506032b6570032100", "hex");
 const ED25519_PKCS8_PRIVATE_PREFIX = Buffer.from("302e020100300506032b657004220420", "hex");
 
+export const ED25519_RAW_PUBLIC_KEY_BYTES = 32;
+export const ED25519_SIGNATURE_BYTES = 64;
+
+// Hard input-length caps applied before any crypto parsing. PEM-wrapped
+// Ed25519 SPKI is ~120 chars; raw base64url is 43 chars. 1024 chars covers
+// every valid Ed25519 form with comfortable margin while bounding the work
+// an attacker can force by sending oversized strings into createPublicKey.
+export const MAX_DEVICE_PUBLIC_KEY_INPUT_CHARS = 1024;
+// Base64url-encoded 64-byte signature is 86 chars (88 with padding).
+// 256 covers any plausible encoding without paying for arbitrary input.
+export const MAX_DEVICE_SIGNATURE_INPUT_CHARS = 256;
+
 function base64UrlEncode(buf: Buffer): string {
   return buf.toString("base64").replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/g, "");
 }
@@ -60,6 +72,46 @@ function publicKeyPemFromRaw(publicKeyRaw: Buffer): string {
 
 function privateKeyPemFromRaw(privateKeyRaw: Buffer): string {
   return pemEncode("PRIVATE KEY", Buffer.concat([ED25519_PKCS8_PRIVATE_PREFIX, privateKeyRaw]));
+}
+
+function looksLikePemPublicKey(input: string): boolean {
+  return input.includes("BEGIN");
+}
+
+// Returns true when `input` could plausibly decode to a valid Ed25519 public
+// key. Bounds the input length cheaply and validates the raw byte count for
+// the base64url path. The PEM path is only length-bounded here; full ASN.1
+// validation is left to crypto.createPublicKey.
+export function isPlausibleDevicePublicKeyInput(input: unknown): input is string {
+  if (typeof input !== "string") {
+    return false;
+  }
+  const length = input.length;
+  if (length === 0 || length > MAX_DEVICE_PUBLIC_KEY_INPUT_CHARS) {
+    return false;
+  }
+  if (looksLikePemPublicKey(input)) {
+    return true;
+  }
+  const raw = base64UrlDecode(input);
+  return raw.length === ED25519_RAW_PUBLIC_KEY_BYTES;
+}
+
+// Returns true when `input` could plausibly decode to a 64-byte Ed25519
+// signature. Mirrors verifyDeviceSignature's base64url-then-base64 fallback
+// so the cheap pre-check accepts every input the slow path would have.
+export function isPlausibleDeviceSignatureInput(input: unknown): input is string {
+  if (typeof input !== "string") {
+    return false;
+  }
+  const length = input.length;
+  if (length === 0 || length > MAX_DEVICE_SIGNATURE_INPUT_CHARS) {
+    return false;
+  }
+  if (base64UrlDecode(input).length === ED25519_SIGNATURE_BYTES) {
+    return true;
+  }
+  return Buffer.from(input, "base64").length === ED25519_SIGNATURE_BYTES;
 }
 
 function derivePublicKeyRaw(publicKeyPem: string): Buffer {
@@ -291,8 +343,11 @@ export function signDevicePayload(privateKeyPem: string, payload: string): strin
 
 /** Normalize PEM or raw base64/base64url public keys to canonical raw base64url bytes. */
 export function normalizeDevicePublicKeyBase64Url(publicKey: string): string | null {
+  if (!isPlausibleDevicePublicKeyInput(publicKey)) {
+    return null;
+  }
   try {
-    if (publicKey.includes("BEGIN")) {
+    if (looksLikePemPublicKey(publicKey)) {
       return base64UrlEncode(derivePublicKeyRaw(publicKey));
     }
     const raw = base64UrlDecode(publicKey);
@@ -307,8 +362,11 @@ export function normalizeDevicePublicKeyBase64Url(publicKey: string): string | n
 
 /** Derive the stable device id from PEM or raw base64/base64url public key material. */
 export function deriveDeviceIdFromPublicKey(publicKey: string): string | null {
+  if (!isPlausibleDevicePublicKeyInput(publicKey)) {
+    return null;
+  }
   try {
-    const raw = publicKey.includes("BEGIN")
+    const raw = looksLikePemPublicKey(publicKey)
       ? derivePublicKeyRaw(publicKey)
       : base64UrlDecode(publicKey);
     if (raw.length === 0) {
@@ -331,8 +389,19 @@ export function verifyDeviceSignature(
   payload: string,
   signatureBase64Url: string,
 ): boolean {
+  // Cheap shape pre-check: reject malformed public keys / signatures before
+  // crypto.createPublicKey or crypto.verify get a chance to do real work.
+  // This denies the pre-auth Ed25519-verify CPU-amplification attack where
+  // an unauthenticated attacker can otherwise force one full key-parse plus
+  // verify per handshake (and the v3-then-v2 fallback doubles that).
+  if (
+    !isPlausibleDevicePublicKeyInput(publicKey) ||
+    !isPlausibleDeviceSignatureInput(signatureBase64Url)
+  ) {
+    return false;
+  }
   try {
-    const key = publicKey.includes("BEGIN")
+    const key = looksLikePemPublicKey(publicKey)
       ? crypto.createPublicKey(publicKey)
       : crypto.createPublicKey({
           key: Buffer.concat([ED25519_SPKI_PREFIX, base64UrlDecode(publicKey)]),

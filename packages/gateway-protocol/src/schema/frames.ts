@@ -1,6 +1,12 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
-import { GatewayClientIdSchema, GatewayClientModeSchema, NonEmptyString } from "./primitives.js";
+import {
+  DeviceHandshakePublicKeyString,
+  DeviceHandshakeSignatureString,
+  GatewayClientIdSchema,
+  GatewayClientModeSchema,
+  NonEmptyString,
+} from "./primitives.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
 
 /**
@@ -54,8 +60,8 @@ export const ConnectParamsSchema = Type.Object(
       Type.Object(
         {
           id: NonEmptyString,
-          publicKey: NonEmptyString,
-          signature: NonEmptyString,
+          publicKey: DeviceHandshakePublicKeyString,
+          signature: DeviceHandshakeSignatureString,
           signedAt: Type.Integer({ minimum: 0 }),
           nonce: NonEmptyString,
         },
