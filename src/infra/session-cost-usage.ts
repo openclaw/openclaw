@@ -964,17 +964,17 @@ const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | unde
 };
 
 const parseTimestamp = (entry: Record<string, unknown>): Date | undefined => {
-  const raw = entry.timestamp;
-  if (typeof raw === "string") {
-    const parsed = new Date(raw);
-    if (!Number.isNaN(parsed.valueOf())) {
-      return parsed;
-    }
-  }
   const message = entry.message as Record<string, unknown> | undefined;
   const messageTimestamp = asFiniteNumber(message?.timestamp);
   if (messageTimestamp !== undefined) {
     const parsed = new Date(messageTimestamp);
+    if (!Number.isNaN(parsed.valueOf())) {
+      return parsed;
+    }
+  }
+  const raw = entry.timestamp;
+  if (typeof raw === "string") {
+    const parsed = new Date(raw);
     if (!Number.isNaN(parsed.valueOf())) {
       return parsed;
     }
@@ -1451,20 +1451,11 @@ export function resolveExistingUsageSessionFile(params: {
   const entryMarker = parseSqliteSessionFileMarker(params.sessionEntry?.sessionFile);
   const explicitMarker = parseSqliteSessionFileMarker(params.sessionFile);
   const sqliteMarker = entryMarker ?? explicitMarker;
-  if (sqliteMarker && (!sessionId || sqliteMarker.sessionId === sessionId)) {
-    try {
-      if (
-        loadTranscriptEventsSync({
-          agentId: sqliteMarker.agentId,
-          sessionId: sqliteMarker.sessionId,
-          storePath: sqliteMarker.storePath,
-        }).length > 0
-      ) {
-        return formatSqliteSessionFileMarker(sqliteMarker);
-      }
-    } catch {
-      return params.sessionFile ?? params.sessionEntry?.sessionFile;
+  if (sqliteMarker) {
+    if (sessionId && sqliteMarker.sessionId !== sessionId) {
+      return undefined;
     }
+    return formatSqliteSessionFileMarker(sqliteMarker);
   }
 
   const candidate =

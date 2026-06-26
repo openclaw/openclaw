@@ -26,6 +26,7 @@ import {
   loadSessionUsageTimeSeries,
   requestCostUsageCacheRefresh,
   refreshCostUsageCache,
+  resolveExistingUsageSessionFile,
 } from "./session-cost-usage.js";
 
 describe("session cost usage", () => {
@@ -251,13 +252,13 @@ describe("session cost usage", () => {
       expect(bulk.cacheStatus.status).toBe("fresh");
       expect(bulk.summaries[0]?.totalTokens).toBe(18);
 
-      const summaryFromFallbackPath = await loadSessionCostSummary({
+      const summaryFromStalePath = await loadSessionCostSummary({
         agentId: "main",
         sessionEntry,
         sessionFile: legacyJsonl,
         sessionId,
       });
-      expect(summaryFromFallbackPath?.totalTokens).toBe(18);
+      expect(summaryFromStalePath?.totalTokens).toBe(18);
 
       await expect(loadSessionUsageTimeSeries({ agentId: "main", sessionFile })).resolves.toEqual({
         sessionId: undefined,
@@ -311,6 +312,48 @@ describe("session cost usage", () => {
           }),
         ]),
       );
+    });
+  });
+
+  it("does not fall back from empty SQLite transcripts to stale JSONL usage files", async () => {
+    const root = await makeSessionCostRoot("sqlite-cost-empty");
+    const storePath = path.join(root, "agents", "main", "sessions", "sessions.json");
+    const sessionKey = "agent:main:empty-sqlite-cost";
+    const sessionId = "empty-sqlite-cost-session";
+    const sqliteMarker = `sqlite:main:${sessionId}:${storePath}`;
+    const legacyJsonl = path.join(path.dirname(storePath), `${sessionId}.jsonl`);
+
+    await withStateDir(root, async () => {
+      await upsertSessionEntry(
+        { sessionKey, storePath },
+        {
+          sessionFile: sqliteMarker,
+          sessionId,
+          updatedAt: Date.UTC(2026, 5, 25, 12, 0, 0),
+        },
+      );
+      await fs.mkdir(path.dirname(legacyJsonl), { recursive: true });
+      await fs.writeFile(
+        legacyJsonl,
+        transcriptText(sessionId, {
+          type: "message",
+          timestamp: "2026-06-25T12:00:00.000Z",
+          message: {
+            role: "assistant",
+            usage: { input: 100, output: 100, totalTokens: 200, cost: { total: 0.2 } },
+          },
+        }),
+        "utf-8",
+      );
+
+      expect(
+        resolveExistingUsageSessionFile({
+          agentId: "main",
+          sessionEntry: { sessionFile: sqliteMarker, sessionId },
+          sessionFile: legacyJsonl,
+          sessionId,
+        }),
+      ).toBe(sqliteMarker);
     });
   });
 

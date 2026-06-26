@@ -75,7 +75,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     };
   };
 
-  function writeTranscriptStore() {
+  function writeTranscriptStore(entry: Partial<Record<string, unknown>> = {}) {
     fs.writeFileSync(
       fixture.storePath(),
       JSON.stringify({
@@ -83,6 +83,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
           sessionId,
           chatType: "direct",
           channel: "discord",
+          ...entry,
         },
       }),
       "utf-8",
@@ -1024,11 +1025,18 @@ describe("appendAssistantMessageToSessionTranscript", () => {
 
   it("resolves recent transcript context from session identity", async () => {
     writeTranscriptStore();
-    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
-    await appendSessionTranscriptMessage({
-      transcriptPath: sessionFile,
-      message: { role: "user", content: "from shared session", timestamp: 4_000 },
-    });
+    await persistSessionTranscriptTurn(
+      {
+        agentId: "main",
+        sessionId,
+        sessionKey,
+        storePath: fixture.storePath(),
+      },
+      {
+        updateMode: "none",
+        messages: [{ message: { role: "user", content: "from shared session", timestamp: 4_000 } }],
+      },
+    );
 
     await expect(
       readRecentUserAssistantTextForSession({
@@ -1119,6 +1127,25 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     ).resolves.toEqual([]);
   });
 
+  it("does not fall back to stale JSONL when SQLite has no transcript rows", async () => {
+    writeTranscriptStore({
+      sessionFile: `sqlite:main:${sessionId}:${fixture.storePath()}`,
+    });
+    const sessionFile = resolveSessionTranscriptPathInDir(sessionId, fixture.sessionsDir());
+    await appendSessionTranscriptMessage({
+      transcriptPath: sessionFile,
+      message: { role: "user", content: "stale jsonl context", timestamp: 1_000 },
+    });
+
+    await expect(
+      readRecentUserAssistantTextForSession({
+        sessionKey,
+        storePath: fixture.storePath(),
+        beforeTimestampMs: 5_000,
+      }),
+    ).resolves.toEqual([]);
+  });
+
   it("ignores stored session files outside the sessions directory for recent context", async () => {
     const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), "transcript-outside-"));
     try {
@@ -1143,6 +1170,18 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         transcriptPath: sessionFile,
         message: { role: "user", content: "contained text", timestamp: 2_000 },
       });
+      await persistSessionTranscriptTurn(
+        {
+          agentId: "main",
+          sessionId,
+          sessionKey,
+          storePath: fixture.storePath(),
+        },
+        {
+          updateMode: "none",
+          messages: [{ message: { role: "user", content: "sqlite text", timestamp: 2_500 } }],
+        },
+      );
 
       await expect(
         readRecentUserAssistantTextForSession({
@@ -1154,8 +1193,8 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         {
           id: expect.any(String),
           role: "user",
-          text: "contained text",
-          timestamp: 2_000,
+          text: "sqlite text",
+          timestamp: 2_500,
         },
       ]);
     } finally {
