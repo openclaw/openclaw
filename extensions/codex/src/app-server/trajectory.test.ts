@@ -253,4 +253,113 @@ describe("Codex trajectory recorder", () => {
     expect(parsed.data?.truncated).toBe(true);
     expect(parsed.data?.reason).toBe("trajectory-event-size-limit");
   });
+
+  it("keeps compiled context when tool schema descriptors throw", async () => {
+    const tmpDir = makeTempDir();
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt: {
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        sessionId: "session-1",
+        sessionKey: "agent:main:session-1",
+        model: { api: "responses" },
+      } as never,
+      env: {},
+    });
+    let nameReads = 0;
+    const unreadableNameTool = {
+      inputSchema: { type: "object" },
+      get name() {
+        throw new Error("tool name getter exploded");
+      },
+    };
+    const unreadableDescriptionTool = {
+      name: "descriptionless",
+      inputSchema: { type: "object" },
+      get description() {
+        throw new Error("tool description getter exploded");
+      },
+    };
+    const unreadableSchemaTool = {
+      name: "schema",
+      description: "bad schema",
+      get inputSchema() {
+        throw new Error("tool schema getter exploded");
+      },
+    };
+    const singleReadNameTool = {
+      description: "single read",
+      inputSchema: { type: "object" },
+      get name() {
+        nameReads += 1;
+        if (nameReads > 1) {
+          throw new Error("tool name read twice");
+        }
+        return " single_read ";
+      },
+    };
+    const nestedSchema = { type: "object" };
+    Object.defineProperty(nestedSchema, "properties", {
+      get() {
+        throw new Error("schema field getter exploded");
+      },
+      enumerable: true,
+    });
+    const proxySchema = new Proxy(
+      { type: "object" },
+      {
+        ownKeys() {
+          throw new Error("schema keys exploded");
+        },
+      },
+    );
+    const proxyArray = new Proxy([{ ok: true }], {
+      get(target, property, receiver) {
+        if (property === "0") {
+          throw new Error("schema array item exploded");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+
+    const trajectoryRecorder = expectTrajectoryRecorder(recorder);
+    recordCodexTrajectoryContext(trajectoryRecorder, {
+      attempt: {
+        sessionFile: path.join(tmpDir, "session.jsonl"),
+        sessionId: "session-1",
+        prompt: "hello",
+        model: { api: "responses" },
+      },
+      developerInstructions: "system",
+      tools: [
+        unreadableNameTool,
+        unreadableDescriptionTool,
+        unreadableSchemaTool,
+        singleReadNameTool,
+        { name: "nested", description: "nested schema", inputSchema: nestedSchema },
+        { name: "proxy", inputSchema: proxySchema },
+        { name: "array", inputSchema: proxyArray },
+        { name: "healthy", inputSchema: { type: "object", properties: { value: {} } } },
+      ],
+    } as never);
+    await trajectoryRecorder.flush();
+
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
+    );
+    expect(parsed.data?.tools).toEqual([
+      { name: "array", parameters: ["<unreadable>"] },
+      { name: "descriptionless", parameters: { type: "object" } },
+      { name: "healthy", parameters: { type: "object", properties: { value: {} } } },
+      {
+        name: "nested",
+        description: "nested schema",
+        parameters: { type: "object", properties: "<unreadable>" },
+      },
+      { name: "proxy", parameters: "<unreadable>" },
+      { name: "schema", description: "bad schema", parameters: "<unreadable>" },
+      { name: "single_read", description: "single read", parameters: { type: "object" } },
+    ]);
+    expect(nameReads).toBe(1);
+  });
 });
