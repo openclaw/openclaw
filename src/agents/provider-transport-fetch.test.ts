@@ -1162,6 +1162,60 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("does not double-prefix SSE bodies mislabeled as JSON by streaming gateways", async () => {
+    const encoder = new TextEncoder();
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(
+              encoder.encode(
+                'data: {"id":"a","choices":[{"index":0,"delta":{"content":"Hi","role":"assistant"}}]}\n\n',
+              ),
+            );
+            controller.enqueue(
+              encoder.encode(
+                'data: {"id":"a","choices":[{"index":0,"delta":{"content":" there"}}]}\n\n',
+              ),
+            );
+            controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+            controller.close();
+          },
+        }),
+        // Real SSE body, but mislabeled with a JSON content-type, as some
+        // OpenAI-compatible gateways (vLLM, Ollama, custom proxies) return.
+        { headers: { "content-type": "application/json; charset=utf-8" } },
+      ),
+      finalUrl: "https://gateway.example/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "MiniMax-M3",
+      provider: "hetu",
+      api: "openai-completions",
+      baseUrl: "https://gateway.example/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://gateway.example/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "MiniMax-M3", stream: true }),
+      },
+    );
+
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+    expect(items).toEqual([
+      { id: "a", choices: [{ index: 0, delta: { content: "Hi", role: "assistant" } }] },
+      { id: "a", choices: [{ index: 0, delta: { content: " there" } }] },
+    ]);
+  });
+
   it("does not clone Request bodies while checking for streaming JSON fallbacks", async () => {
     const cloneSpy = vi.spyOn(Request.prototype, "clone");
     fetchWithSsrFGuardMock.mockResolvedValue({

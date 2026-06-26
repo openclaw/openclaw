@@ -114,7 +114,19 @@ function sanitizeOpenAISdkSseResponse(
               buffer += decoder.decode();
               const data = buffer.trim();
               if (data) {
-                controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+                if (classifyOpenAISdkStreamBodyPrefix(data) === "sse") {
+                  // Some OpenAI-compatible gateways stream real SSE
+                  // (`data: {...}`) but mislabel the response as JSON. Re-wrapping
+                  // the body as `data: ${data}` would double-prefix every frame to
+                  // `data: data: {...}` and break JSON.parse in the SDK. Pass the
+                  // already-SSE body through verbatim (tolerating both `{...}` and
+                  // `data: {...}` shapes) and normalize it to a single trailing
+                  // event terminator.
+                  const normalizedSse = data.replace(/(?:\r\n|\n|\r)+$/u, "");
+                  controller.enqueue(encoder.encode(`${normalizedSse}\n\n`));
+                } else {
+                  controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+                }
               }
               controller.enqueue(encoder.encode("data: [DONE]\n\n"));
               controller.close();
