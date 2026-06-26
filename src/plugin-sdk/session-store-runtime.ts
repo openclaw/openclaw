@@ -1,6 +1,17 @@
 // Narrow session-store helpers for channel hot paths.
 
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { getRuntimeConfig } from "../config/io.js";
+import { resolveSessionLifecycleTimestamps } from "../config/sessions/lifecycle.js";
 import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
+import {
+  evaluateSessionFreshness as evaluateSessionFreshnessImpl,
+  resolveSessionResetPolicy as resolveSessionResetPolicyImpl,
+  type SessionFreshness,
+  type SessionResetPolicy,
+  type SessionResetType,
+} from "../config/sessions/reset.js";
 import {
   cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
   listSessionEntries as listAccessorSessionEntries,
@@ -15,6 +26,8 @@ import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/sto
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { SessionConfig, SessionResetConfig } from "../config/types.base.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 
 type SessionStoreReadParams = {
   agentId?: string;
@@ -51,6 +64,36 @@ type PatchSessionEntryParams = SessionStoreReadParams & {
 
 type ReadSessionUpdatedAtParams = SessionStoreReadParams;
 
+export type ResolveSessionEntryFreshnessParams = SessionStoreReadParams & {
+  now?: number;
+  resetOverride?: SessionResetConfig;
+  resetType: SessionResetType;
+  sessionCfg?: SessionConfig;
+};
+
+export type SessionEntryLifecycleTimestamps = {
+  sessionStartedAt?: number;
+  lastInteractionAt?: number;
+};
+
+export type ResolvedSessionEntryFreshness =
+  | {
+      state: "missing";
+      entry: undefined;
+      freshness: undefined;
+      lifecycleTimestamps: SessionEntryLifecycleTimestamps;
+      resetPolicy: SessionResetPolicy;
+      resetType: SessionResetType;
+    }
+  | {
+      state: "fresh" | "stale";
+      entry: SessionEntry;
+      freshness: SessionFreshness;
+      lifecycleTimestamps: SessionEntryLifecycleTimestamps;
+      resetPolicy: SessionResetPolicy;
+      resetType: SessionResetType;
+    };
+
 type UpdateSessionStoreEntryParams = {
   storePath: string;
   sessionKey: string;
@@ -80,6 +123,24 @@ type SessionLifecycleArtifactsCleanupResult = {
   archivedTranscriptArtifacts: number;
   removedEntries: number;
 };
+
+function hasProviderOwnedSession(entry: SessionEntry | undefined): boolean {
+  const provider = normalizeOptionalString(entry?.providerOverride ?? entry?.modelProvider);
+  if (!entry || !provider) {
+    return false;
+  }
+  const normalizedProvider = normalizeProviderId(provider);
+  if (normalizeOptionalString(entry.cliSessionBindings?.[normalizedProvider]?.sessionId)) {
+    return true;
+  }
+  if (normalizeOptionalString(entry.cliSessionIds?.[normalizedProvider])) {
+    return true;
+  }
+  return (
+    normalizedProvider === "claude-cli" &&
+    Boolean(normalizeOptionalString(entry.claudeCliSessionId))
+  );
+}
 
 function toSessionAccessScope(params: SessionStoreReadParams): SessionAccessScope {
   // Maintainer note: keep this adapter narrow so plugin callers retain the
@@ -141,6 +202,67 @@ export async function patchSessionEntry(
 /** Reads the last activity timestamp for one session entry. */
 export function readSessionUpdatedAt(params: ReadSessionUpdatedAtParams): number | undefined {
   return readAccessorSessionUpdatedAt(toSessionAccessScope(params));
+}
+
+/** Resolves one session entry's reset freshness using the runtime lifecycle rules. */
+export function resolveSessionEntryFreshness(
+  params: ResolveSessionEntryFreshnessParams,
+): ResolvedSessionEntryFreshness {
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+  const sessionCfg = params.sessionCfg ?? getRuntimeConfig().session;
+  const storePath =
+    params.storePath ??
+    resolveSessionStorePath(sessionCfg?.store, {
+      agentId,
+      env: params.env,
+    });
+  const entry = loadSessionEntry(
+    toSessionAccessScope({
+      ...params,
+      agentId,
+      storePath,
+    }),
+  );
+  const resetType = params.resetType;
+  const resetPolicy = resolveSessionResetPolicyImpl({
+    sessionCfg,
+    resetType,
+    resetOverride: params.resetOverride,
+  });
+  const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
+    entry,
+    agentId,
+    storePath,
+  });
+  const base = {
+    lifecycleTimestamps,
+    resetPolicy,
+    resetType,
+  };
+  if (!entry) {
+    return {
+      state: "missing",
+      entry: undefined,
+      freshness: undefined,
+      ...base,
+    };
+  }
+  const freshness =
+    resetPolicy.configured !== true && hasProviderOwnedSession(entry)
+      ? ({ fresh: true } satisfies SessionFreshness)
+      : evaluateSessionFreshnessImpl({
+          updatedAt: entry.updatedAt,
+          sessionStartedAt: lifecycleTimestamps.sessionStartedAt,
+          lastInteractionAt: lifecycleTimestamps.lastInteractionAt,
+          now: params.now ?? Date.now(),
+          policy: resetPolicy,
+        });
+  return {
+    state: freshness.fresh ? "fresh" : "stale",
+    entry,
+    freshness,
+    ...base,
+  };
 }
 
 /** Updates an existing session entry by store path and session key. */
