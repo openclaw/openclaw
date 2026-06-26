@@ -523,7 +523,6 @@ export function buildChannelInboundEventContext(
     ImplicitMentionKinds: params.access?.mentions?.implicitMentionKinds,
     RequireMention: params.access?.mentions?.requireMention,
     EffectiveWasMentioned: params.access?.mentions?.effectiveWasMentioned,
-    MentionShouldSkip: params.access?.mentions?.shouldSkip,
     MentionSource: params.access?.mentions?.mentionSource,
     CommandAuthorized: resolveAccessFactsCommandAuthorized(params.access) === true,
     CommandTurn: commandTurn,
