@@ -883,6 +883,12 @@ function ensureGatewaySupportsRequiredMethods(params: {
   }
 }
 
+function isRequiredAgentRuntimeIdentityConnectError(err: Error): boolean {
+  return err.message.includes(
+    "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+  );
+}
+
 async function executeGatewayRequestWithScopes<T>(params: {
   opts: CallGatewayBaseOptions;
   scopes: OperatorScope[] | undefined;
@@ -1048,8 +1054,12 @@ async function executeGatewayRequestWithScopes<T>(params: {
       },
       onConnectError: (err) => {
         const isGatewayClientRequestError = err.name === "GatewayClientRequestError";
+        const isAgentRuntimeIdentityConnectError =
+          Boolean(opts.agentRuntimeIdentityToken) &&
+          isRequiredAgentRuntimeIdentityConnectError(err);
         const shouldSurface =
           isGatewayConnectAssemblyError(err) ||
+          isAgentRuntimeIdentityConnectError ||
           (surfaceGatewayClientRequestErrors && isGatewayClientRequestError);
         if (settled || !shouldSurface) {
           return;
@@ -1205,7 +1215,9 @@ async function callGatewayWithScopes<T = Record<string, unknown>>(
     connectionDetails,
     deviceIdentity,
     surfaceGatewayClientRequestErrors:
-      useStoredDeviceAuth || opts.requireLocalBackendSharedAuth === true,
+      useStoredDeviceAuth ||
+      opts.requireLocalBackendSharedAuth === true ||
+      Boolean(opts.agentRuntimeIdentityToken),
   });
 }
 

@@ -346,6 +346,59 @@ describe("gateway tool defaults", () => {
     expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
   });
 
+  it("explains stale gateway cron connection metadata rejections", async () => {
+    mocks.callGateway.mockRejectedValueOnce(
+      new Error(
+        "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'",
+      ),
+    );
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+        async () => {
+          await callGatewayTool("cron.remove", {}, { id: "job-1" });
+        },
+      ),
+    ).rejects.toThrow(
+      "The running Gateway is from an older OpenClaw build and rejected current agent cron connection metadata. Restart the Gateway with `openclaw gateway restart`, then retry.",
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+  });
+
+  it("explains fail-closed stale gateway cron identity rejections", async () => {
+    mocks.callGateway.mockRejectedValueOnce(
+      new Error(
+        "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+      ),
+    );
+
+    await expect(
+      withGatewayToolCallerIdentity(
+        { agentId: "ops", sessionKey: "agent:ops:telegram:direct:alice" },
+        async () => {
+          await callGatewayTool("cron.remove", {}, { id: "job-1" });
+        },
+      ),
+    ).rejects.toThrow(
+      "The running Gateway is from an older OpenClaw build and rejected current agent cron connection metadata. Restart the Gateway with `openclaw gateway restart`, then retry.",
+    );
+
+    const call = capturedGatewayCall();
+    expect(call.agentRuntimeIdentityToken).toEqual(expect.any(String));
+  });
+
+  it("does not rewrite stale gateway validation errors for unscoped cron calls", async () => {
+    const originalError = new Error(
+      "invalid connect params: at /auth: unexpected property 'agentRuntimeIdentityToken'",
+    );
+    mocks.callGateway.mockRejectedValueOnce(originalError);
+
+    await expect(callGatewayTool("cron.remove", {}, { id: "job-1" })).rejects.toBe(originalError);
+  });
+
   it("fails contextual cron calls closed for gatewayUrl overrides", async () => {
     await expect(
       withGatewayToolCallerIdentity(

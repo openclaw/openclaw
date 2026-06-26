@@ -295,6 +295,32 @@ function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
   return mintAgentRuntimeIdentityToken(identity);
 }
 
+function isStaleGatewayAgentRuntimeIdentityRejection(error: unknown): boolean {
+  const message = formatErrorMessage(error);
+  if (
+    message.includes(
+      "gateway rejected required agent runtime identity auth field; refusing to retry without it",
+    )
+  ) {
+    return true;
+  }
+  return (
+    message.includes("invalid connect params") &&
+    message.includes("/auth") &&
+    message.includes("unexpected property 'agentRuntimeIdentityToken'")
+  );
+}
+
+function staleGatewayAgentRuntimeIdentityError(cause: unknown): Error {
+  return new Error(
+    [
+      "The running Gateway is from an older OpenClaw build and rejected current agent cron connection metadata.",
+      "Restart the Gateway with `openclaw gateway restart`, then retry.",
+    ].join(" "),
+    { cause },
+  );
+}
+
 /**
  * Calls a gateway method as the agent-tool backend client with least-privilege scopes.
  */
@@ -323,19 +349,26 @@ export async function callGatewayTool<T = Record<string, unknown>>(
     opts,
     target: gateway.target,
   });
-  return await callGateway<T>({
-    url: gateway.url,
-    token: gateway.token,
-    method,
-    params,
-    timeoutMs: gateway.timeoutMs,
-    expectFinal: extra?.expectFinal,
-    clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
-    clientDisplayName: "agent",
-    mode: GATEWAY_CLIENT_MODES.BACKEND,
-    ...(approvalRuntimeToken ? { approvalRuntimeToken } : {}),
-    ...(agentRuntimeIdentityToken ? { agentRuntimeIdentityToken } : {}),
-    ...(deviceIdentity ? { deviceIdentity } : {}),
-    scopes,
-  });
+  try {
+    return await callGateway<T>({
+      url: gateway.url,
+      token: gateway.token,
+      method,
+      params,
+      timeoutMs: gateway.timeoutMs,
+      expectFinal: extra?.expectFinal,
+      clientName: GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
+      clientDisplayName: "agent",
+      mode: GATEWAY_CLIENT_MODES.BACKEND,
+      ...(approvalRuntimeToken ? { approvalRuntimeToken } : {}),
+      ...(agentRuntimeIdentityToken ? { agentRuntimeIdentityToken } : {}),
+      ...(deviceIdentity ? { deviceIdentity } : {}),
+      scopes,
+    });
+  } catch (error) {
+    if (agentRuntimeIdentityToken && isStaleGatewayAgentRuntimeIdentityRejection(error)) {
+      throw staleGatewayAgentRuntimeIdentityError(error);
+    }
+    throw error;
+  }
 }
