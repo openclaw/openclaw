@@ -134,6 +134,9 @@ function resolveSessionStoreTranscriptCorpusSource(
     return null;
   }
   if (sqliteMarker) {
+    if (!sessionFile) {
+      return null;
+    }
     if (
       sqliteMarker.sessionId !== sessionId ||
       normalizeAgentId(sqliteMarker.agentId) !== normalizeAgentId(agentId) ||
