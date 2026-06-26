@@ -3246,7 +3246,7 @@ describe("handleAbortChat", () => {
     expect(host.chatMessage).toBe("");
   });
 
-  it("routes typed stop to the only active channel session when the local chat run id is not set", async () => {
+  it("does not retarget typed stop from main to the only active channel session", async () => {
     const request = vi.fn(async () => ({ aborted: true }));
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
@@ -3265,21 +3265,22 @@ describe("handleAbortChat", () => {
     await handleSendChat(host);
 
     expect(request).toHaveBeenCalledWith("chat.abort", {
-      sessionKey: "agent:main:openclaw-weixin:direct:o9cq806y9qtmkjteaum8nyfvjtl8@im.wechat",
+      sessionKey: "agent:main",
     });
     expect(host.chatMessage).toBe("");
   });
 
-  it("routes typed stop to a running channel session even when hasActiveRun is stale false", async () => {
+  it("sends typed stop to the selected channel session when the channel is explicit", async () => {
     const request = vi.fn(async () => ({ aborted: true }));
+    const sessionKey = "agent:main:openclaw-weixin:direct:o9cq806y9qtmkjteaum8nyfvjtl8@im.wechat";
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
       chatRunId: null,
       chatMessage: "/stop",
-      sessionKey: "agent:main",
+      sessionKey,
       sessionsResult: createSessionsResult([
         row("agent:main", { hasActiveRun: false, status: "running" }),
-        row("agent:main:openclaw-weixin:direct:o9cq806y9qtmkjteaum8nyfvjtl8@im.wechat", {
+        row(sessionKey, {
           hasActiveRun: false,
           status: "running",
         }),
@@ -3289,12 +3290,12 @@ describe("handleAbortChat", () => {
     await handleSendChat(host);
 
     expect(request).toHaveBeenCalledWith("chat.abort", {
-      sessionKey: "agent:main:openclaw-weixin:direct:o9cq806y9qtmkjteaum8nyfvjtl8@im.wechat",
+      sessionKey,
     });
     expect(host.chatMessage).toBe("");
   });
 
-  it("routes typed stop to active channel sessions without direct or group markers", async () => {
+  it("does not retarget typed stop to active channel sessions without direct or group markers", async () => {
     const request = vi.fn(async () => ({ aborted: true }));
     const host = makeHost({
       client: { request } as unknown as ChatHost["client"],
@@ -3312,7 +3313,7 @@ describe("handleAbortChat", () => {
     await handleSendChat(host);
 
     expect(request).toHaveBeenCalledWith("chat.abort", {
-      sessionKey: "agent:main:telegram:8661849123:topic:4052",
+      sessionKey: "agent:main",
     });
   });
 

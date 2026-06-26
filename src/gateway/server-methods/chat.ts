@@ -624,44 +624,6 @@ function isExplicitChannelScopedSessionKey(sessionKey: string): boolean {
   return parts.length > 1;
 }
 
-function sessionKeyBelongsToAgent(
-  sessionKey: string,
-  agentId: string | undefined,
-  defaultAgentId: string,
-): boolean {
-  const expectedAgentId = normalizeAgentId(agentId ?? defaultAgentId);
-  const actualAgentId = parseAgentSessionKey(sessionKey)?.agentId ?? defaultAgentId;
-  return normalizeAgentId(actualAgentId) === expectedAgentId;
-}
-
-function resolveUniqueHiddenChannelAbortFallbackSessionKey(params: {
-  context: GatewayRequestContext;
-  agentId: string | undefined;
-  defaultAgentId: string;
-}): string | undefined {
-  const candidates = new Set<string>();
-  for (const active of params.context.chatAbortControllers.values()) {
-    if (
-      active.controlUiVisible === false &&
-      isExplicitChannelScopedSessionKey(active.sessionKey) &&
-      sessionKeyBelongsToAgent(active.sessionKey, params.agentId, params.defaultAgentId)
-    ) {
-      candidates.add(active.sessionKey);
-    }
-  }
-  for (const [key, entry] of params.context.dedupe) {
-    const run = readPreRegisteredAgentRun({ key, entry, includeHidden: true });
-    if (
-      run?.payload.controlUiVisible === false &&
-      isExplicitChannelScopedSessionKey(run.sessionKey) &&
-      sessionKeyBelongsToAgent(run.sessionKey, params.agentId, params.defaultAgentId)
-    ) {
-      candidates.add(run.sessionKey);
-    }
-  }
-  return candidates.size === 1 ? candidates.values().next().value : undefined;
-}
-
 type ChatSendDeliveryEntry = {
   route?: ChannelRouteRef;
   deliveryContext?: {
@@ -3335,20 +3297,9 @@ export const chatHandlers: GatewayRequestHandlers = {
     const requester = resolveChatAbortRequester(client);
 
     if (!runId) {
-      const canUseHiddenChannelFallback =
-        !isExplicitChannelScopedSessionKey(rawSessionKey) &&
-        !isExplicitChannelScopedSessionKey(canonicalAbortSessionKey);
-      const fallbackChannelSessionKey = canUseHiddenChannelFallback
-        ? resolveUniqueHiddenChannelAbortFallbackSessionKey({
-            context,
-            agentId: abortAgentId,
-            defaultAgentId,
-          })
-        : undefined;
-      const sessionKeyAliases = uniqueStrings([
-        ...(canonicalAbortSessionKey === rawSessionKey ? [] : [rawSessionKey]),
-        ...(fallbackChannelSessionKey ? [fallbackChannelSessionKey] : []),
-      ]);
+      const sessionKeyAliases = uniqueStrings(
+        canonicalAbortSessionKey === rawSessionKey ? [] : [rawSessionKey],
+      );
       const res = await abortChatRunsForSessionKeyWithPartials({
         context,
         ops,
@@ -3671,20 +3622,7 @@ export const chatHandlers: GatewayRequestHandlers = {
       const defaultAgentId = resolveDefaultAgentId(cfg);
       const stopAgentId =
         sessionKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
-      const canUseHiddenChannelFallback =
-        !isExplicitChannelScopedSessionKey(rawSessionKey) &&
-        !isExplicitChannelScopedSessionKey(sessionKey);
-      const fallbackChannelSessionKey = canUseHiddenChannelFallback
-        ? resolveUniqueHiddenChannelAbortFallbackSessionKey({
-            context,
-            agentId: stopAgentId,
-            defaultAgentId,
-          })
-        : undefined;
-      const sessionKeyAliases = uniqueStrings([
-        ...(sessionKey === rawSessionKey ? [] : [sessionKey]),
-        ...(fallbackChannelSessionKey ? [fallbackChannelSessionKey] : []),
-      ]);
+      const sessionKeyAliases = uniqueStrings(sessionKey === rawSessionKey ? [] : [sessionKey]);
       const res = await abortChatRunsForSessionKeyWithPartials({
         context,
         ops: createChatAbortOps(context),
@@ -3692,7 +3630,7 @@ export const chatHandlers: GatewayRequestHandlers = {
         sessionKeyAliases: sessionKeyAliases.length > 0 ? sessionKeyAliases : undefined,
         agentId: stopAgentId,
         sessionId: entry?.sessionId,
-        ...(fallbackChannelSessionKey ? {} : { persistSessionKey: sessionKey }),
+        persistSessionKey: sessionKey,
         defaultAgentId,
         abortOrigin: "stop-command",
         stopReason: "stop",

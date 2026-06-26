@@ -508,7 +508,7 @@ describe("chat abort transcript persistence", () => {
     expect(context.chatAbortControllers.has("run-stop-raw-alias")).toBe(false);
   });
 
-  it("plain stop sent to main aborts the only hidden channel run for that agent", async () => {
+  it("plain stop sent to main does not infer the only hidden channel run for that agent", async () => {
     const respond = vi.fn();
     const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
     const active = createActiveRun(sessionKey, { controlUiVisible: false });
@@ -535,12 +535,14 @@ describe("chat abort transcript persistence", () => {
 
     const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
-    expectAbortPayload(payload, { runIds: ["run-hidden-wechat"] });
-    expect(active.controller.signal.aborted).toBe(true);
-    expect(context.chatAbortControllers.has("run-hidden-wechat")).toBe(false);
+    const actual = expectRecord(payload, "abort payload");
+    expect(actual.aborted).toBe(false);
+    expect(actual.runIds).toEqual([]);
+    expect(active.controller.signal.aborted).toBe(false);
+    expect(context.chatAbortControllers.has("run-hidden-wechat")).toBe(true);
   });
 
-  it("main chat.abort aborts the only hidden channel run for that agent", async () => {
+  it("main chat.abort does not infer the only hidden channel run for that agent", async () => {
     const respond = vi.fn();
     const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
     const active = createActiveRun(sessionKey, { controlUiVisible: false });
@@ -565,9 +567,11 @@ describe("chat abort transcript persistence", () => {
 
     const [ok, payload] = requireLastRespondCall(respond);
     expect(ok).toBe(true);
-    expectAbortPayload(payload, { runIds: ["run-hidden-wechat-abort"] });
-    expect(active.controller.signal.aborted).toBe(true);
-    expect(context.chatAbortControllers.has("run-hidden-wechat-abort")).toBe(false);
+    const actual = expectRecord(payload, "abort payload");
+    expect(actual.aborted).toBe(false);
+    expect(actual.runIds).toEqual([]);
+    expect(active.controller.signal.aborted).toBe(false);
+    expect(context.chatAbortControllers.has("run-hidden-wechat-abort")).toBe(true);
   });
 
   it("admin chat.abort aborts an active channel reply operation without a chat abort controller", async () => {

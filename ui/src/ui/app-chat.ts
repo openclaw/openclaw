@@ -266,70 +266,12 @@ export function hasAbortableSessionRun(host: {
   );
 }
 
-function isSessionAbortTargetActive(session: GatewaySessionRow): boolean {
-  return isSessionRunActive(session) || session.status === "running";
-}
-
-const CHANNEL_AGNOSTIC_ABORT_SCOPES = new Set([
-  "agent",
-  "global",
-  "unknown",
-  "main",
-  "direct",
-  "dm",
-  "group",
-  "channel",
-  "dashboard",
-  "cron",
-  "run",
-  "subagent",
-  "acp",
-  "thread",
-  "topic",
-]);
-function isExplicitChannelScopedSessionKey(sessionKey: string): boolean {
-  const scoped = parseAgentSessionKey(sessionKey)?.rest ?? sessionKey;
-  const parts = scoped
-    .split(":", 3)
-    .map((part) => part.trim().toLowerCase())
-    .filter(Boolean);
-  const sessionScopeHead = parts[0];
-  if (!sessionScopeHead || CHANNEL_AGNOSTIC_ABORT_SCOPES.has(sessionScopeHead)) {
-    return false;
-  }
-  return parts.length > 1;
-}
-
-function resolveAbortFallbackAgentId(host: ChatHost): string {
-  return (
-    parseAgentSessionKey(host.sessionKey)?.agentId ??
-    scopedAgentListParamsForSession(host, host.sessionKey).agentId ??
-    resolveUiDefaultAgentId(host)
-  );
-}
-
-function sessionBelongsToAbortFallbackAgent(sessionKey: string, agentId: string): boolean {
-  return (parseAgentSessionKey(sessionKey)?.agentId ?? DEFAULT_AGENT_ID) === agentId;
-}
-
 function resolveAbortTarget(host: ChatHost): ChatAbortTarget {
   const selectedActiveSession = host.sessionsResult?.sessions.find(
     (session) =>
       areUiSessionKeysEquivalent(session.key, host.sessionKey) && isSessionRunActive(session),
   );
-  const fallbackAgentId = resolveAbortFallbackAgentId(host);
-  const fallbackActiveChannelSessions =
-    selectedActiveSession || host.chatRunId
-      ? []
-      : (host.sessionsResult?.sessions.filter(
-          (session) =>
-            isSessionAbortTargetActive(session) &&
-            isExplicitChannelScopedSessionKey(session.key) &&
-            sessionBelongsToAbortFallbackAgent(session.key, fallbackAgentId),
-        ) ?? []);
-  const targetSession =
-    selectedActiveSession ??
-    (fallbackActiveChannelSessions.length === 1 ? fallbackActiveChannelSessions[0] : undefined);
+  const targetSession = selectedActiveSession;
   const sessionKey = targetSession?.key ?? host.sessionKey;
   return {
     runId: host.chatRunId,
