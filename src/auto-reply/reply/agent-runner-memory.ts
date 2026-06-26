@@ -31,6 +31,7 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
@@ -418,6 +419,12 @@ function resolveSessionLogPath(
       (sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined)?.transcriptPath,
     );
     const sessionFile = normalizeOptionalString(sessionEntry?.sessionFile) || transcriptPath;
+    if (!sessionFile) {
+      return undefined;
+    }
+    if (parseSqliteSessionFileMarker(sessionFile)) {
+      return sessionFile;
+    }
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
     const pathOpts = resolveSessionFilePathOptions({
       agentId,
@@ -425,11 +432,7 @@ function resolveSessionLogPath(
     });
     // Normalize sessionFile through resolveSessionFilePath so relative entries
     // are resolved against the sessions dir/store layout, not process.cwd().
-    return resolveSessionFilePath(
-      sessionId,
-      sessionFile ? { sessionFile } : sessionEntry,
-      pathOpts,
-    );
+    return resolveSessionFilePath(sessionId, { sessionFile }, pathOpts);
   } catch {
     return undefined;
   }
@@ -510,6 +513,9 @@ async function readSessionLogSnapshot(params: {
     params.opts,
   );
   if (!logPath) {
+    return {};
+  }
+  if (parseSqliteSessionFileMarker(logPath)) {
     return {};
   }
 
@@ -629,22 +635,16 @@ async function estimatePromptTokensFromSessionTranscript(params: {
   sessionId?: string;
   sessionEntry?: SessionEntry;
   sessionKey?: string;
-  sessionFile?: string;
   storePath?: string;
 }): Promise<TranscriptTokenEstimate | undefined> {
   const sessionId = normalizeOptionalString(params.sessionId);
   if (!sessionId) {
     return undefined;
   }
-  const fallbackSessionFile = normalizeOptionalString(params.sessionFile);
-  const sessionEntryForTranscript =
-    params.sessionEntry?.sessionFile || !fallbackSessionFile
-      ? params.sessionEntry
-      : ({ ...params.sessionEntry, sessionFile: fallbackSessionFile } as SessionEntry);
   try {
     const snapshot = await readSessionLogSnapshot({
       sessionId,
-      sessionEntry: sessionEntryForTranscript,
+      sessionEntry: params.sessionEntry,
       sessionKey: params.sessionKey,
       opts: { storePath: params.storePath },
       includeByteSize: true,
@@ -678,7 +678,7 @@ async function estimatePromptTokensFromSessionTranscript(params: {
     const messages = (await readSessionMessagesAsync(
       sessionId,
       params.storePath,
-      sessionEntryForTranscript?.sessionFile,
+      params.sessionEntry?.sessionFile,
       {
         mode: "recent",
         maxMessages: 200,
@@ -826,17 +826,13 @@ export async function runPreflightCompactionIfNeeded(params: {
           sessionId: entry.sessionId,
           sessionEntry: entry,
           sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
-          sessionFile: entry.sessionFile ?? params.followupRun.run.sessionFile,
           storePath: params.storePath,
         });
   const transcriptSizeSnapshot =
     shouldCheckActiveTranscriptBytes && transcriptUsageTokens?.transcriptByteSize === undefined
       ? await readSessionLogSnapshot({
           sessionId: entry.sessionId,
-          sessionEntry:
-            entry.sessionFile || !params.followupRun.run.sessionFile
-              ? entry
-              : { ...entry, sessionFile: params.followupRun.run.sessionFile },
+          sessionEntry: entry,
           sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
           opts: { storePath: params.storePath },
           includeByteSize: true,
@@ -939,10 +935,14 @@ export async function runPreflightCompactionIfNeeded(params: {
     await notifyStartCompaction();
     const sessionFile = resolveSessionLogPath(
       entry.sessionId,
-      entry.sessionFile ? entry : { ...entry, sessionFile: params.followupRun.run.sessionFile },
+      entry,
       params.sessionKey ?? params.followupRun.run.sessionKey,
       { storePath: params.storePath },
     );
+    if (!sessionFile) {
+      await notifyTerminalCompaction("skipped");
+      return entry ?? params.sessionEntry;
+    }
     const result = await deps.compactEmbeddedAgentSession({
       sessionId: entry.sessionId,
       sessionKey: params.sessionKey,
@@ -956,7 +956,7 @@ export async function runPreflightCompactionIfNeeded(params: {
       senderName: params.followupRun.run.senderName,
       senderUsername: params.followupRun.run.senderUsername,
       senderE164: params.followupRun.run.senderE164,
-      sessionFile: sessionFile ?? params.followupRun.run.sessionFile,
+      sessionFile,
       workspaceDir: params.followupRun.run.workspaceDir,
       cwd: params.followupRun.run.cwd,
       agentDir: params.followupRun.run.agentDir,
