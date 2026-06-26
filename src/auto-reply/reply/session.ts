@@ -196,9 +196,11 @@ export type SessionInitResult = {
 };
 
 export type InitSessionStateParams = {
+  abortSignal?: AbortSignal;
   cfg: OpenClawConfig;
   commandAuthorized: boolean;
   ctx: MsgContext;
+  expectedExistingSessionId?: string;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
 };
@@ -503,6 +505,10 @@ async function initSessionStateAttemptLocked(
     Boolean(entry?.sessionId) &&
     typeof entry?.updatedAt === "number" &&
     Number.isFinite(entry.updatedAt);
+  const expectedExistingSessionId = params.expectedExistingSessionId?.trim() || undefined;
+  if (expectedExistingSessionId && entry?.sessionId !== expectedExistingSessionId) {
+    throw new Error(`session rebound for sessionKey: ${sessionKey}`);
+  }
   const requestedSessionId = params.requestedSessionId?.trim() || undefined;
   const requestedCurrentSession = Boolean(
     requestedSessionId && entry?.sessionId && entry.sessionId === requestedSessionId,
@@ -856,6 +862,9 @@ async function initSessionStateAttemptLocked(
         ctx.MessageThreadId ?? threadIdFromSessionKey,
       )
     : undefined;
+  if (params.abortSignal?.aborted === true) {
+    throw new Error("reply session initialization aborted");
+  }
   if (isNewSession) {
     sessionEntry.compactionCount = 0;
     sessionEntry.memoryFlushCompactionCount = undefined;
@@ -912,8 +921,11 @@ async function initSessionStateAttemptLocked(
         entry: sessionEntry,
         warning,
       }),
-    prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) =>
-      await prepareReplySessionParentFork({
+    prepareSessionEntry: async ({ readEntry, sessionEntry: entryToCommit }) => {
+      if (params.abortSignal?.aborted === true) {
+        throw new Error("reply session initialization aborted");
+      }
+      return await prepareReplySessionParentFork({
         agentId,
         alreadyForked,
         parentSessionKey,
@@ -922,7 +934,8 @@ async function initSessionStateAttemptLocked(
         sessionKey,
         storePath,
         warn: (message) => log.warn(message),
-      }),
+      });
+    },
     previousEntry: previousSessionEntry,
     retiredEntry: retiredLegacyMainDelivery,
     sessionEntry,

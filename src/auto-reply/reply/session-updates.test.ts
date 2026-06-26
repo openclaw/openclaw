@@ -12,6 +12,7 @@ const {
   resolveAgentConfigMock,
   resolveSessionAgentIdMock,
   resolveAgentIdFromSessionKeyMock,
+  updateSessionEntryMock,
 } = vi.hoisted(() => ({
   buildWorkspaceSkillSnapshotMock: vi.fn((..._args: unknown[]) => ({
     prompt: "",
@@ -29,6 +30,7 @@ const {
   resolveAgentConfigMock: vi.fn(() => undefined),
   resolveSessionAgentIdMock: vi.fn(() => "writer"),
   resolveAgentIdFromSessionKeyMock: vi.fn(() => "main"),
+  updateSessionEntryMock: vi.fn(),
 }));
 
 vi.mock("../../agents/agent-scope.js", () => ({
@@ -59,6 +61,11 @@ vi.mock("../../config/sessions.js", () => ({
   resolveSessionFilePathOptions: vi.fn(),
 }));
 
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  patchSessionEntry: vi.fn(),
+  updateSessionEntry: updateSessionEntryMock,
+}));
+
 vi.mock("../../routing/session-key.js", () => ({
   normalizeAgentId: (id: string) => id,
   normalizeMainKey: (key?: string) => key ?? "main",
@@ -81,6 +88,8 @@ describe("ensureSkillSnapshot", () => {
     resolveAgentConfigMock.mockReturnValue(undefined);
     resolveSessionAgentIdMock.mockReturnValue("writer");
     resolveAgentIdFromSessionKeyMock.mockReturnValue("main");
+    updateSessionEntryMock.mockReset();
+    updateSessionEntryMock.mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -115,5 +124,36 @@ describe("ensureSkillSnapshot", () => {
     expect(workspaceDir).toBe(TEST_WORKSPACE_DIR);
     expect(snapshotParams.agentId).toBe("writer");
     expect(resolveAgentIdFromSessionKeyMock).not.toHaveBeenCalled();
+  });
+
+  it("does not recreate a deleted first-turn session entry when persisting skills", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    const sessionKey = "agent:main:main";
+    const sessionEntry = {
+      sessionId: "deleted-session",
+      updatedAt: 10,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const result = await ensureSkillSnapshot({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      sessionId: "deleted-session",
+      storePath: "/tmp/sessions.json",
+      isFirstTurnInSession: true,
+      workspaceDir: TEST_WORKSPACE_DIR,
+      cfg: {},
+    });
+
+    expect(updateSessionEntryMock).toHaveBeenCalledWith(
+      {
+        storePath: "/tmp/sessions.json",
+        sessionKey,
+      },
+      expect.any(Function),
+    );
+    expect(result.systemSent).toBe(true);
+    expect(sessionStore[sessionKey]?.systemSent).toBe(true);
   });
 });

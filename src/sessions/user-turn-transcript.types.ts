@@ -38,6 +38,7 @@ export type UserTurnBeforeMessageWrite = (params: {
 
 type UserTurnTranscriptPersistenceTarget = {
   sessionId: string;
+  expectedSessionId?: string;
   sessionKey: string;
   sessionEntry: UserTurnSessionEntry | undefined;
   sessionStore?: Record<string, UserTurnSessionEntry>;

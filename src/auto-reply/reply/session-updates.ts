@@ -4,7 +4,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { canExecRequestNode } from "../../agents/exec-defaults.js";
 import { resolveCompactionSessionFile, type SessionEntry } from "../../config/sessions.js";
-import { patchSessionEntry, upsertSessionEntry } from "../../config/sessions/session-accessor.js";
+import { patchSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   forgetActiveSessionForShutdown,
@@ -41,13 +41,20 @@ async function persistSessionEntryUpdate(params: {
   if (!params.storePath || !params.sessionKey) {
     return;
   }
-  await upsertSessionEntry(
+  const persistedEntry = await updateSessionEntry(
     {
       storePath: params.storePath,
       sessionKey: params.sessionKey,
     },
-    params.nextEntry,
+    () => params.nextEntry,
   );
+  if (persistedEntry) {
+    if (params.sessionEntryHandle) {
+      params.sessionEntryHandle.replaceCurrent(persistedEntry);
+    } else if (params.sessionStore && params.sessionKey) {
+      params.sessionStore[params.sessionKey] = persistedEntry;
+    }
+  }
 }
 
 function emitCompactionSessionLifecycleHooks(params: {

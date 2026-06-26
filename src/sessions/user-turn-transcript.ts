@@ -49,6 +49,7 @@ type PersistUserTurnTranscriptParams = {
   input?: UserTurnInput;
   message?: PersistedUserTurnMessage;
   sessionId: string;
+  expectedSessionId?: string;
   sessionKey: string;
   sessionEntry: UserTurnSessionEntry | undefined;
   sessionStore?: Record<string, UserTurnSessionEntry>;
@@ -421,6 +422,7 @@ export async function persistUserTurnTranscript(
     {
       ...(params.cwd ? { cwd: params.cwd } : {}),
       ...(params.config ? { config: params.config as OpenClawConfig } : {}),
+      ...(params.expectedSessionId ? { expectedSessionId: params.expectedSessionId } : {}),
       updateMode: params.updateMode ?? "inline",
       messages: [
         {

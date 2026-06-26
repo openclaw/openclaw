@@ -477,7 +477,13 @@ export async function getReplyFromConfig(
         initSessionState({
           ctx: finalized,
           cfg,
+          ...(internalResolvedOpts?.abortSignal
+            ? { abortSignal: internalResolvedOpts.abortSignal }
+            : {}),
           commandAuthorized,
+          ...(internalResolvedOpts?.expectedExistingSessionId
+            ? { expectedExistingSessionId: internalResolvedOpts.expectedExistingSessionId }
+            : {}),
           requestedSessionId: internalResolvedOpts?.requestedSessionId,
           resumeRequestedSession: internalResolvedOpts?.resumeRequestedSession,
         }),
