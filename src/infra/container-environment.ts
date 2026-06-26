@@ -3,7 +3,7 @@ import fs from "node:fs";
 
 /**
  * Detect whether the current process is running inside a container
- * (Docker, Podman, or Kubernetes).
+ * (Docker, Podman, Kubernetes, LXC, Fly Machines, or Cloudflare Sandbox).
  *
  * Uses two reliable heuristics:
  * - Presence of common container sentinel files.
@@ -39,7 +39,7 @@ function detectContainerEnvironment(): boolean {
   try {
     const cgroup = fs.readFileSync("/proc/1/cgroup", "utf8");
     if (
-      /\/docker\/|cri-containerd-[0-9a-f]|containerd\/[0-9a-f]{64}|\/kubepods[/.]|\blxc\b/.test(
+      /\/docker\/|cri-containerd-[0-9a-f]|containerd\/[0-9a-f]{64}|\/kubepods[/.]|\blxc\b|cloudchamber/.test(
         cgroup,
       )
     ) {
