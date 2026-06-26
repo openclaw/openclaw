@@ -431,7 +431,7 @@ export interface ContextEngine {
    */
   compact(params: {
     sessionId: string;
-    sessionKey?: string;
+    sessionKey: string;
     /** Caller-resolved owner agent for global session aliases. */
     agentId?: string;
     /** Storage-neutral runtime session target for delegated compaction. */

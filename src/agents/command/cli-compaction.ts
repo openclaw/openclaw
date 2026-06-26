@@ -305,8 +305,11 @@ async function compactCliTranscript(params: {
       params.contextEngine,
       {
         sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-        sessionFile: params.sessionFile,
+        sessionKey: params.sessionKey || params.sessionId,
+        sessionTarget: {
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey || params.sessionId,
+        },
         tokenBudget: params.contextTokenBudget,
         currentTokenCount: params.currentTokenCount,
         force: true,

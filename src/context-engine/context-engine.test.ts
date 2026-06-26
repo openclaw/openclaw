@@ -160,7 +160,7 @@ class MockContextEngine implements ContextEngine {
 
   async compact(_params: {
     sessionId: string;
-    sessionKey?: string;
+    sessionKey: string;
     agentId?: string;
     sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
@@ -237,7 +237,7 @@ class LegacySessionKeyStrictEngine implements ContextEngine {
 
   async compact(params: {
     sessionId: string;
-    sessionKey?: string;
+    sessionKey: string;
     agentId?: string;
     sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
@@ -307,7 +307,7 @@ class SessionKeyRuntimeErrorEngine implements ContextEngine {
 
   async compact(_params: {
     sessionId: string;
-    sessionKey?: string;
+    sessionKey: string;
     agentId?: string;
     sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
@@ -370,7 +370,7 @@ class LegacyAssembleStrictEngine implements ContextEngine {
 
   async compact(_params: {
     sessionId: string;
-    sessionKey?: string;
+    sessionKey: string;
     agentId?: string;
     sessionTarget?: ContextEngineSessionTarget;
     tokenBudget?: number;
@@ -462,7 +462,7 @@ class LegacyRuntimeSettingsStrictEngine implements ContextEngine {
 
   async compact(params: {
     sessionId: string;
-    sessionKey?: string;
+    sessionKey: string;
     agentId?: string;
     sessionTarget?: ContextEngineSessionTarget;
     runtimeSettings?: unknown;
@@ -529,7 +529,7 @@ class LegacyRuntimeThenAssembleStrictEngine implements ContextEngine {
 
   async compact(_params: {
     sessionId: string;
-    sessionKey?: string;
+    sessionKey: string;
     agentId?: string;
     sessionTarget?: ContextEngineSessionTarget;
   }): Promise<CompactResult> {

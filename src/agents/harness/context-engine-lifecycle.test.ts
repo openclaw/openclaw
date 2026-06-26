@@ -226,7 +226,10 @@ describe("harness context engine lifecycle", () => {
       {
         sessionId: sessionParams.sessionId,
         sessionKey: sessionParams.sessionKey,
-        sessionFile: sessionParams.sessionFile,
+        sessionTarget: {
+          sessionId: sessionParams.sessionId,
+          sessionKey: sessionParams.sessionKey,
+        },
         tokenBudget: 2048,
         runtimeSettings: compactRuntimeSettings,
       },
