@@ -10,10 +10,7 @@ import { sanitizeAgentId } from "../../routing/session-key.js";
 import { defaultRuntime } from "../../runtime.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { addGatewayClientOptions, callGatewayFromCli } from "../gateway-rpc.js";
-import {
-  parsePositiveIntOrUndefined,
-  parseStrictPositiveIntOrUndefined,
-} from "../program/helpers.js";
+import { parseStrictPositiveIntOrUndefined } from "../program/helpers.js";
 import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
 import {
   getCronChannelOptions,
@@ -243,7 +240,10 @@ export function registerCronAddCommand(cron: Command) {
                     "Invalid --no-output-timeout-seconds (must be a positive integer).",
                   );
                 }
-                const outputMaxBytes = parsePositiveIntOrUndefined(opts.outputMaxBytes);
+                const outputMaxBytes = parseStrictPositiveIntOrUndefined(opts.outputMaxBytes);
+                if (opts.outputMaxBytes !== undefined && outputMaxBytes === undefined) {
+                  throw new Error("Invalid --output-max-bytes (must be a positive integer).");
+                }
                 return {
                   kind: "command" as const,
                   argv: commandArgv ?? ["sh", "-lc", commandShell ?? ""],
