@@ -5,6 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
+import { applyEditsToNormalizedContent } from "./edit-diff.js";
 import { createEditTool, createEditToolDefinition, type EditOperations } from "./edit.js";
 
 const testTheme = {
@@ -173,5 +174,92 @@ describe("edit tool", () => {
     expect((component as { preview?: { diff?: string } } | undefined)?.preview?.diff).toContain(
       "remote changed",
     );
+  });
+});
+
+describe("applyEditsToNormalizedContent candidate hints", () => {
+  it("shows nearest candidate with similarity score on match failure", () => {
+    const content = 'function hello() {\n  console.log("Hello");\n  return 42;\n}\n';
+    try {
+      applyEditsToNormalizedContent(
+        content,
+        [{ oldText: 'console.log("hello")', newText: 'console.log("Hi")' }],
+        "test.js",
+      );
+      expect.fail("should have thrown");
+    } catch (e) {
+      const msg = (e as Error).message;
+      expect(msg).toContain("console.log");
+      expect(msg).toContain("% match");
+      expect(msg).toContain("line 2");
+    }
+  });
+
+  it("shows match hint with indentation hint for whitespace mismatch", () => {
+    const content = "const x = 1;\nconst y = 2;\nconst z = 3;\n";
+    try {
+      applyEditsToNormalizedContent(
+        content,
+        [{ oldText: "  const y = 2", newText: "  const y = 999" }],
+        "test.js",
+      );
+      expect.fail("should have thrown");
+    } catch (e) {
+      const msg = (e as Error).message;
+      expect(msg).toContain("% match");
+      expect(msg).toContain("whitespace");
+    }
+  });
+
+  it("shows candidate hint with multi-line oldText using first line only", () => {
+    const content = "first line\nsecond line\nthird line\n";
+    try {
+      applyEditsToNormalizedContent(
+        content,
+        [{ oldText: "wrong line\nwith extra", newText: "replacement" }],
+        "test.js",
+      );
+      expect.fail("should have thrown");
+    } catch (e) {
+      const msg = (e as Error).message;
+      expect(msg).toContain("% match");
+    }
+  });
+
+  it("includes edit index prefix for multi-edit scenarios", () => {
+    const content = "line A\nline B\nline\n";
+    try {
+      applyEditsToNormalizedContent(
+        content,
+        [
+          { oldText: "line A", newText: "changed A" },
+          { oldText: "lina misspell", newText: "replacement" },
+        ],
+        "test.js",
+      );
+      expect.fail("should have thrown");
+    } catch (e) {
+      const msg = (e as Error).message;
+      expect(msg).toContain("edits[1]");
+      expect(msg).toContain("% match");
+    }
+  });
+
+  it("does not produce unbounded output on large content", () => {
+    const largeContent = Array.from({ length: 1000 }, (_, i) => `line ${i}: some content`).join(
+      "\n",
+    );
+    try {
+      applyEditsToNormalizedContent(
+        largeContent,
+        [{ oldText: "nonexistent text", newText: "replacement" }],
+        "large.js",
+      );
+      expect.fail("should have thrown");
+    } catch (e) {
+      const msg = (e as Error).message;
+      expect(msg).toContain("Could not find");
+      expect(msg.split("\n").length).toBeLessThan(10);
+    }
   });
 });
