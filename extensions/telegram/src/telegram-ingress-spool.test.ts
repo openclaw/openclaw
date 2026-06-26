@@ -207,6 +207,32 @@ describe("Telegram ingress spool", () => {
     });
   });
 
+  it("does not claim outside the provided candidate update ids", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 200, message: { chat: { id: 1 }, message_id: 1, text: "first" } },
+        now: 1,
+      });
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 201, message: { chat: { id: 2 }, message_id: 1, text: "later" } },
+        now: 2,
+      });
+
+      const claimed = await claimNextTelegramSpooledUpdate({
+        spoolDir,
+        blockedLaneKeys: ["telegram:1"],
+        candidateUpdateIds: [200],
+      });
+
+      expect(claimed).toBeNull();
+      expect(
+        (await listTelegramSpooledUpdates({ spoolDir })).map((update) => update.updateId),
+      ).toEqual([200, 201]);
+    });
+  });
+
   it("releases failed claims back to the pending spool", async () => {
     await withTempSpool(async (spoolDir) => {
       await writeTelegramSpooledUpdate({

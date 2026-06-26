@@ -139,6 +139,7 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
     staleMs?: number;
     orderBy?: "received" | "id";
     scanLimit?: number;
+    candidateIds?: Iterable<string>;
     deriveLaneKey?: (record: ChannelIngressQueueRecord<TPayload, TMetadata>) => string | undefined;
   }): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
   claim(
@@ -337,6 +338,10 @@ function normalizedProtectedIds(ids: Iterable<string> | undefined): string[] {
   return [...(ids ?? [])].map((id) => id.trim()).filter(Boolean);
 }
 
+function normalizedCandidateIds(ids: Iterable<string> | undefined): string[] | undefined {
+  return ids === undefined ? undefined : [...ids].map((id) => id.trim()).filter(Boolean);
+}
+
 function queueNameForParts(channelId: string, accountId: string): string {
   // JSON tuple encoding keeps channel/account scopes unambiguous even when ids contain separators.
   return JSON.stringify([channelId, accountId]);
@@ -462,6 +467,10 @@ export function createChannelIngressQueue<
     const blocked = new Set(
       [...(claimOptions?.blockedLaneKeys ?? [])].map((key) => key.trim()).filter(Boolean),
     );
+    const candidateIds = normalizedCandidateIds(claimOptions?.candidateIds);
+    if (candidateIds?.length === 0) {
+      return null;
+    }
     const database = openStateDatabase(options.stateDir);
     return runOpenClawStateWriteTransaction(
       (tx) => {
@@ -472,6 +481,9 @@ export function createChannelIngressQueue<
           .where("queue_name", "=", queueName)
           .where("status", "=", "pending");
         let select = baseSelect;
+        if (candidateIds) {
+          select = select.where("event_id", "in", candidateIds);
+        }
         if (blocked.size > 0 && !claimOptions?.deriveLaneKey) {
           select = select.where((eb) =>
             eb.or([eb("lane_key", "is", null), eb("lane_key", "not in", [...blocked])]),

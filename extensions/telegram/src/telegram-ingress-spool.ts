@@ -288,12 +288,16 @@ export async function claimNextTelegramSpooledUpdate(params: {
   spoolDir: string;
   blockedLaneKeys?: Iterable<string>;
   botInfo?: TelegramBotInfo;
+  candidateUpdateIds?: Iterable<number>;
   scanLimit?: number;
 }): Promise<ClaimedTelegramSpooledUpdate | null> {
   const queue = createTelegramIngressQueue(params.spoolDir);
   const claimed = await queue.claimNext({
     ownerId: TELEGRAM_SPOOLED_UPDATE_PROCESS_ID,
     blockedLaneKeys: params.blockedLaneKeys,
+    ...(params.candidateUpdateIds === undefined
+      ? {}
+      : { candidateIds: [...params.candidateUpdateIds].map(queueEventId) }),
     orderBy: "id",
     scanLimit: params.scanLimit,
     deriveLaneKey: (record) => spooledUpdateLaneKey(record.payload.update, params.botInfo),

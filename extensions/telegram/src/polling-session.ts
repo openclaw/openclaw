@@ -566,6 +566,7 @@ export class TelegramPollingSession {
 
   async #claimNextSpooledUpdate(params: {
     blockedLaneKeys: Set<string>;
+    candidateUpdateIds: readonly number[];
     spoolDir: string;
   }): Promise<ClaimedTelegramSpooledUpdate | null> {
     try {
@@ -573,6 +574,7 @@ export class TelegramPollingSession {
         spoolDir: params.spoolDir,
         blockedLaneKeys: params.blockedLaneKeys,
         botInfo: this.opts.botInfo,
+        candidateUpdateIds: params.candidateUpdateIds,
         scanLimit: TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT,
       });
     } catch (err) {
@@ -942,6 +944,7 @@ export class TelegramPollingSession {
       spoolDir: params.spoolDir,
       limit: TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT,
     });
+    const candidateUpdateIds = updates.map((update) => update.updateId);
     const blockedByLane = new Set<string>();
     const retryDelayedLaneKeys = new Set<string>();
     for (const update of updates) {
@@ -966,6 +969,7 @@ export class TelegramPollingSession {
       }
       const claimedUpdate = await this.#claimNextSpooledUpdate({
         blockedLaneKeys,
+        candidateUpdateIds,
         spoolDir: params.spoolDir,
       });
       if (!claimedUpdate) {

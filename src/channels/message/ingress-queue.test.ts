@@ -273,6 +273,29 @@ describe("channel ingress queue", () => {
     });
   });
 
+  it("claims next only from candidate ids when provided", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => clock++,
+      });
+
+      await queue.enqueue("a", { text: "outside snapshot" }, { receivedAt: 1 });
+      await queue.enqueue("b", { text: "inside snapshot" }, { receivedAt: 2 });
+
+      expect(
+        await queue.claimNext({
+          ownerId: "worker",
+          candidateIds: ["b"],
+        }),
+      ).toMatchObject({ id: "b" });
+      expect(await queue.claimNext({ candidateIds: [] })).toBeNull();
+    });
+  });
+
   it("derives missing lane keys before claiming next", async () => {
     await withTempState(async (stateDir) => {
       let clock = 1;
