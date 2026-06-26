@@ -12,8 +12,10 @@ import {
 } from "../gateway/cli-session-hydrate.claude.js";
 import { type NodeAttachForwarder, startNodeAttachForwarder } from "./attach-forwarder.js";
 
+// Non-generic on purpose: the real generic GatewayClient satisfies it, and we cast each result —
+// keeps the seam trivially mockable in tests without generic-vs-concrete assignability errors.
 type AttachClient = {
-  request<T>(method: string, params: Record<string, unknown>): Promise<T>;
+  request(method: string, params: Record<string, unknown>): Promise<unknown>;
 };
 
 export type NodeAttachLaunch = {
@@ -35,16 +37,14 @@ export async function prepareNodeAttach(params: {
   homeDir?: string;
 }): Promise<NodeAttachLaunch> {
   const { client, cwd, nowMs, homeDir } = params;
-  const grant = await client.request<{ sessionKey: string; token: string; expiresAtMs: number }>(
-    "node.attachGrant",
-    {},
-  );
-  const { messages } = await client.request<{ messages: HydrationMessage[] }>(
-    "node.attachHydrate",
-    {
-      grantToken: grant.token,
-    },
-  );
+  const grant = (await client.request("node.attachGrant", {})) as {
+    sessionKey: string;
+    token: string;
+    expiresAtMs: number;
+  };
+  const { messages } = (await client.request("node.attachHydrate", {
+    grantToken: grant.token,
+  })) as { messages: HydrationMessage[] };
   // Fresh local cli session id; hydrate the gateway conversation under it so --resume picks it up.
   const cliSessionId = randomUUID();
   const transcriptPath = hydrateClaudeCliTranscript({

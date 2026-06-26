@@ -1,4 +1,5 @@
 // Tests node pairing identity persistence and validation.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
@@ -672,8 +673,9 @@ describe("node pairing tokens", () => {
 describe("attach-permission pairing approval is admin-gated", () => {
   test("a COMMANDLESS attach request is denied to a pairing-only caller, approved by an admin", () =>
     withNodePairingDir(async (baseDir) => {
+      const nodeId = `attach-node-${randomUUID()}`; // unique per run — isolate from shared-dir state
       const request = await requestNodePairing(
-        { nodeId: "attach-node", platform: "darwin", permissions: { attach: true } },
+        { nodeId, platform: "darwin", permissions: { attach: true } },
         baseDir,
       );
       // pairing scope alone must NOT grant a node `attach` — that reaches the owner's main session
@@ -683,7 +685,7 @@ describe("attach-permission pairing approval is admin-gated", () => {
         baseDir,
       );
       expect(denied).toEqual({ status: "forbidden", missingScope: "operator.admin" });
-      expect(await findPairedNode("attach-node", baseDir)).toBeNull(); // not paired
+      expect(await findPairedNode(nodeId, baseDir)).toBeNull(); // not paired
 
       // an operator.admin caller may approve it; the attach permission persists on the paired node
       const approved = await approveNodePairing(
@@ -692,8 +694,8 @@ describe("attach-permission pairing approval is admin-gated", () => {
         baseDir,
       );
       expect(approved && "node" in approved).toBe(true);
-      expect(await findPairedNode("attach-node", baseDir)).toMatchObject({
-        nodeId: "attach-node",
+      expect(await findPairedNode(nodeId, baseDir)).toMatchObject({
+        nodeId,
         permissions: { attach: true },
       });
     }));

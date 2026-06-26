@@ -5,6 +5,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const spawnedChild = Object.assign(new EventEmitter(), { kill: vi.fn() });
 vi.mock("node:child_process", () => ({ spawn: vi.fn(() => spawnedChild) }));
 
+// The node conduit is lazy-imported on the node path; mock it so we can assert routing + teardown.
+const nodeClose = vi.fn(async () => {});
+const nodeAttachMock = vi.fn(async () => ({
+  sessionKey: "agent:main:node",
+  mcpConfig: { mcpServers: { openclaw: { type: "http", url: "http://127.0.0.1:7777/mcp" } } },
+  env: { OPENCLAW_MCP_TOKEN: "node-tok" },
+  launchArgs: ["--resume", "sid-node"],
+  close: nodeClose,
+}));
+vi.mock("./node-cli/attach.js", () => ({ runNodeAttach: nodeAttachMock }));
+
 const gatewayCalls: Array<{
   method: string;
   params: Record<string, unknown>;
@@ -56,6 +67,7 @@ vi.mock("../runtime.js", () => ({
 }));
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => ({}) }));
 
+import { spawn } from "node:child_process";
 import { callGateway } from "../gateway/call.js";
 import { registerAttachCli } from "./attach-cli.js";
 
@@ -76,6 +88,9 @@ describe("openclaw attach (action)", () => {
     exitCode = undefined;
     spawnedChild.removeAllListeners();
     spawnedChild.kill.mockClear();
+    nodeAttachMock.mockClear();
+    nodeClose.mockClear();
+    vi.mocked(spawn).mockClear();
   });
 
   it("--print-config: mints + writes config + prints launch, does NOT revoke or name a nonexistent command", async () => {
@@ -167,5 +182,41 @@ describe("openclaw attach (action)", () => {
     } as never);
     await runAttach("--print-config");
     expect(exitCode).toBe(1);
+  });
+
+  it("--via node uses the conduit (no attach.grant) and spawns with the hydration --resume args", async () => {
+    await runAttach("--via", "node");
+    expect(nodeAttachMock).toHaveBeenCalledTimes(1);
+    expect(gatewayCalls.find((c) => c.method === "attach.grant")).toBeUndefined();
+    const spawnArgs = vi.mocked(spawn).mock.calls.at(-1)?.[1];
+    expect(spawnArgs).toEqual(["--mcp-config", expect.any(String), "--resume", "sid-node"]);
+    // the conduit (forwarder + node link) is torn down on child exit
+    spawnedChild.emit("exit", 0, null);
+    await tick();
+    await tick();
+    expect(nodeClose).toHaveBeenCalledTimes(1);
+    expect(exitCode).toBe(0);
+  });
+
+  it("--via node rejects --print-config (the in-process forwarder can't outlive it)", async () => {
+    await runAttach("--via", "node", "--print-config");
+    expect(exitCode).toBe(1);
+    expect(nodeAttachMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an invalid --via without minting or connecting", async () => {
+    await runAttach("--via", "carrier-pigeon");
+    expect(exitCode).toBe(1);
+    expect(gatewayCalls.find((c) => c.method === "attach.grant")).toBeUndefined();
+    expect(nodeAttachMock).not.toHaveBeenCalled();
+  });
+
+  it("--via auto falls back to the node conduit when the gateway-host grant fails", async () => {
+    vi.mocked(callGateway).mockRejectedValueOnce(new Error("missing scope: operator.admin"));
+    await runAttach(); // auto
+    expect(nodeAttachMock).toHaveBeenCalledTimes(1);
+    spawnedChild.emit("exit", 0, null);
+    await tick();
+    await tick();
   });
 });

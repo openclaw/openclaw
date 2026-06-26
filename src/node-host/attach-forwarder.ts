@@ -6,9 +6,10 @@
 // header (the node never sees it at rest) and is forwarded per request; scope is bound to the grant.
 import http from "node:http";
 
-/** Minimal request/response client surface (GatewayClient.request) so this stays unit-testable. */
+/** Minimal request client surface (a subset of GatewayClient.request) so this stays unit-testable.
+ *  Non-generic on purpose: the real generic client satisfies it, and the relay casts the one result. */
 type RelayClient = {
-  request<T>(method: string, params: Record<string, unknown>): Promise<T>;
+  request(method: string, params: Record<string, unknown>): Promise<unknown>;
 };
 
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
@@ -63,8 +64,9 @@ export function startNodeAttachForwarder(params: {
       }
       // .then/.catch (not an async IIFE) keeps the rejection handled — no floating promise.
       void client
-        .request<{ mcpResponse: unknown }>("node.attachRelay", { grantToken, mcpMessage })
-        .then(({ mcpResponse }) => {
+        .request("node.attachRelay", { grantToken, mcpMessage })
+        .then((relayed) => {
+          const { mcpResponse } = (relayed ?? {}) as { mcpResponse?: unknown };
           // A notification (no response) relays back as null — emit 202 with no body, like loopback.
           if (mcpResponse === null || mcpResponse === undefined) {
             endSafely(res, 202);
