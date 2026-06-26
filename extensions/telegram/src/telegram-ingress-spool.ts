@@ -281,6 +281,23 @@ export async function releaseTelegramSpooledUpdateClaim(
   );
 }
 
+export async function refreshTelegramSpooledUpdateClaim(
+  update: ClaimedTelegramSpooledUpdate,
+  options?: { refreshedAt?: number },
+): Promise<boolean> {
+  const claimToken = update.claim?.claimToken;
+  if (!claimToken) {
+    return false;
+  }
+  const queue = createTelegramIngressQueue(path.dirname(update.pendingPath));
+  return (
+    (await queue.refreshClaim?.(
+      { id: queueEventId(update.updateId), claim: { token: claimToken } },
+      options,
+    )) ?? false
+  );
+}
+
 export async function failTelegramSpooledUpdateClaim(params: {
   update: ClaimedTelegramSpooledUpdate;
   reason: string;
