@@ -486,6 +486,51 @@ function hasRecoveredInstallRecordsMissingFromPersistedIndex(
   });
 }
 
+/** Collect all plugin IDs referenced in the user config (entries, allow, slots). */
+function collectConfiguredPluginIds(config: LoadPluginRegistryParams["config"]): Set<string> {
+  const plugins = normalizePluginsConfig(config?.plugins);
+  const pluginIds = new Set<string>();
+  for (const pluginId of plugins.allow) {
+    pluginIds.add(pluginId);
+  }
+  for (const pluginId of Object.keys(plugins.entries)) {
+    pluginIds.add(pluginId);
+  }
+  for (const pluginId of Object.values(plugins.slots)) {
+    if (typeof pluginId === "string" && pluginId.trim() && pluginId !== "none") {
+      pluginIds.add(pluginId);
+    }
+  }
+  return pluginIds;
+}
+
+/** Returns true when a configured plugin is missing from the persisted index
+ * but exists under the global extensions root.  This detects source-root
+ * plugins added after the index was last written (e.g. git-cloned extensions
+ * that appear in `plugins list` but cause `plugins.slots.*: plugin not found`). */
+function hasConfiguredGlobalSourcePluginMissingFromPersistedIndex(
+  params: LoadPluginRegistryParams,
+  index: InstalledPluginIndex,
+  env: NodeJS.ProcessEnv,
+): boolean {
+  const configuredPluginIds = collectConfiguredPluginIds(params.config);
+  if (configuredPluginIds.size === 0) {
+    return false;
+  }
+  const persistedPluginIds = new Set(index.plugins.map((plugin) => plugin.pluginId));
+  const globalExtensionsRoot = resolvePluginCacheInputs({
+    workspaceDir: params.workspaceDir,
+    loadPaths: normalizePluginsConfig(params.config?.plugins).loadPaths,
+    env,
+  }).roots.global;
+  return [...configuredPluginIds].some((pluginId) => {
+    if (persistedPluginIds.has(pluginId)) {
+      return false;
+    }
+    return fs.existsSync(path.join(globalExtensionsRoot, pluginId, "openclaw.plugin.json"));
+  });
+}
+
 export function loadPluginRegistrySnapshotWithMetadata(
   params: LoadPluginRegistryParams = {},
 ): PluginRegistrySnapshotResult {
@@ -573,6 +618,15 @@ export function loadPluginRegistrySnapshotWithMetadata(
           code: "persisted-registry-stale-source",
           message:
             "Persisted plugin registry is missing recoverable managed npm plugins; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
+        });
+      } else if (
+        hasConfiguredGlobalSourcePluginMissingFromPersistedIndex(params, persistedIndex, env)
+      ) {
+        diagnostics.push({
+          level: "warn",
+          code: "persisted-registry-stale-source",
+          message:
+            "Persisted plugin registry is missing configured source-root plugins; using derived plugin index. Run `openclaw plugins registry --refresh` to update the persisted registry.",
         });
       } else {
         const persistedResult: PluginRegistrySnapshotResult = {
