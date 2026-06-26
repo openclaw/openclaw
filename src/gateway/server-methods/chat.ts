@@ -3969,6 +3969,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             startedAt: number;
           }
         | undefined;
+      let acceptedUserTurnSessionId = entry?.sessionId;
       const userTurnRecorder: UserTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
         input: baseUserTurnInput,
         resolveInput: () => userTurnInputPromise,
@@ -3978,11 +3979,7 @@ export const chatHandlers: GatewayRequestHandlers = {
             store: latestStore,
             entry: latestEntry,
           } = loadSessionEntry(sessionKey, sessionLoadOptions);
-          const expectedInitialSessionId = entry?.sessionId;
-          if (
-            !latestEntry?.sessionId ||
-            (expectedInitialSessionId && latestEntry.sessionId !== expectedInitialSessionId)
-          ) {
+          if (!latestEntry?.sessionId || latestEntry.sessionId !== acceptedUserTurnSessionId) {
             return undefined;
           }
           return {
@@ -4219,6 +4216,9 @@ export const chatHandlers: GatewayRequestHandlers = {
               fastModeOverride: p.fastMode,
               userTurnTranscriptRecorder: userTurnRecorder,
               fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
+              onSessionPrepared: (binding) => {
+                acceptedUserTurnSessionId = binding.sessionId;
+              },
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
                 emitServerTiming(
