@@ -67,7 +67,22 @@ describe("node attach forwarder (PR5 conduit)", () => {
       method: "tools/list",
     });
     expect(status).toBe(502);
-    expect(json.error.code).toBe(-32001);
+    expect(json).toMatchObject({ jsonrpc: "2.0", id: 1, error: { code: -32001 } }); // error envelope carries the request id
+  });
+
+  it("rejects a body over the 4MB cap without relaying it", async () => {
+    const request = vi.fn(async () => ({ mcpResponse: { ok: 1 } }));
+    fwd = await startNodeAttachForwarder({ client: { request } });
+    const huge = "x".repeat(4 * 1024 * 1024 + 1024); // > MAX_BODY_BYTES
+    // the server destroys the request once the body exceeds the cap → the connection resets
+    await expect(
+      fetch(fwd.url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: huge,
+      }),
+    ).rejects.toThrow();
+    expect(request).not.toHaveBeenCalled(); // never relayed an over-cap body
   });
 
   it("declines the GET notification stream with 405 (no server-initiated events)", async () => {
