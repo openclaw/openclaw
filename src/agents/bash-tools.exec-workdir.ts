@@ -335,7 +335,7 @@ async function resolveSandboxWorkdir(params: {
 export function formatUnavailableWorkdirFailure(workdir: string): string {
   return [
     `workdir "${workdir}" is unavailable or not a directory: command was not executed.`,
-    "workdir is treated as a literal path; shell expansions are not applied.",
+    'workdir is treated as a literal path; shell expansions such as "~" are not applied.',
     "Use an existing directory, omit an explicit workdir to use the default cwd, or update the configured default cwd.",
   ].join(" ");
 }
