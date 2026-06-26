@@ -918,6 +918,67 @@ describe("durable continuation_work dispatch", () => {
     ]);
   });
 
+  it("keeps idle-retry failure recovery when normal scheduling arms the session timer", async () => {
+    const sessionKey = "agent:main:idle-waiter-failure-plus-normal-work";
+    mockSessionStore[sessionKey] = { sessionKey };
+    mainQueueSize = 1;
+    commandLaneIdleError = new Error("idle waiter unavailable");
+    enqueuePendingWork({
+      sessionKey,
+      hop: 2,
+      delayMs: 0,
+      electedAt: Date.now(),
+      dueAt: Date.now(),
+      maxChainLength: 8,
+      reason: "parked after idle waiter failure",
+    });
+
+    const result = await dispatchPendingContinuationWork({ sessionKey });
+
+    expect(result).toEqual({ dispatched: 0, failed: 0, reaped: 0 });
+    commandLaneIdleError = undefined;
+    mainQueueSize = 0;
+
+    await scheduleContinuationWork({
+      config,
+      sessionKey,
+      chainState: {
+        currentChainCount: 0,
+        chainStartedAt: Date.now(),
+        accumulatedChainTokens: 0,
+      },
+      request: {
+        delaySeconds: 45,
+        reason: "normal work should not clobber idle-retry recovery",
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await waitForTurnGrantCount(1);
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({
+          Body: expect.stringContaining("parked after idle waiter failure"),
+        }),
+      }),
+    ]);
+
+    await vi.advanceTimersByTimeAsync(15_000);
+    await waitForTurnGrantCount(2);
+    expect(turnGrants).toEqual([
+      expect.objectContaining({
+        context: expect.objectContaining({
+          Body: expect.stringContaining("parked after idle waiter failure"),
+        }),
+      }),
+      expect.objectContaining({
+        context: expect.objectContaining({
+          Body: expect.stringContaining("normal work should not clobber idle-retry recovery"),
+        }),
+      }),
+    ]);
+  });
+
   it("busy-skips a main-session continuation when the global main lane is busy", async () => {
     const sessionKey = "agent:main:main-lane-busy-positive-control";
     mockSessionStore[sessionKey] = { sessionKey };

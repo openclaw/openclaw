@@ -45,6 +45,7 @@ const RUNNING_WORK_RECOVERY_STALE_MS = 60_000;
 const SUPERSEDED_GRACE_MULTIPLIER = 2;
 
 const workTimers = new Map<string, NodeJS.Timeout>();
+const idleRetryFailureTimers = new Map<string, { fireAt: number; handle: NodeJS.Timeout }>();
 const idleRetryControllers = new Map<string, AbortController>();
 
 function formatErrorMessage(err: unknown): string {
@@ -60,6 +61,15 @@ function clearWorkTimer(sessionKey: string): void {
   workTimers.delete(sessionKey);
 }
 
+function clearIdleRetryFailureTimer(sessionKey: string): void {
+  const existing = idleRetryFailureTimers.get(sessionKey);
+  if (!existing) {
+    return;
+  }
+  clearTimeout(existing.handle);
+  idleRetryFailureTimers.delete(sessionKey);
+}
+
 function clearIdleRetryControllersForTests(): void {
   for (const controller of idleRetryControllers.values()) {
     controller.abort();
@@ -67,11 +77,7 @@ function clearIdleRetryControllersForTests(): void {
   idleRetryControllers.clear();
 }
 
-function armWorkTimer(
-  sessionKey: string,
-  fireAt: number,
-  options: { includeIdleRetry?: boolean } = {},
-): void {
+function armWorkTimer(sessionKey: string, fireAt: number): void {
   clearWorkTimer(sessionKey);
   const fireIn = Math.max(0, fireAt - Date.now());
   log.info(
@@ -82,7 +88,6 @@ function armWorkTimer(
     log.info(`[continuation:work-hedge-fired] session=${sessionKey}`);
     void dispatchPendingContinuationWork({
       sessionKey,
-      includeIdleRetry: options.includeIdleRetry === true,
       recoverRunning: true,
       includeRunningUpdatedAtOrBefore: Date.now() - RUNNING_WORK_RECOVERY_STALE_MS,
       includeRunningIdleRetry: true,
@@ -91,11 +96,42 @@ function armWorkTimer(
       .catch((err: unknown) => {
         const message = formatErrorMessage(err);
         log.error(`[continuation:work-hedge-error] error=${message} session=${sessionKey}`);
-        armNextWorkTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS, options);
+        armNextWorkTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS);
       });
   }, fireIn);
   handle.unref();
   workTimers.set(sessionKey, handle);
+}
+
+function armIdleRetryFailureTimer(sessionKey: string, fireAt: number): void {
+  const existing = idleRetryFailureTimers.get(sessionKey);
+  if (existing && existing.fireAt <= fireAt) {
+    return;
+  }
+  clearIdleRetryFailureTimer(sessionKey);
+  const fireIn = Math.max(0, fireAt - Date.now());
+  log.info(
+    `[continuation:work-idle-retry-recovery-armed] fireIn=${fireIn}ms fireAt=${fireAt} session=${sessionKey}`,
+  );
+  const handle = setTimeout(() => {
+    idleRetryFailureTimers.delete(sessionKey);
+    log.info(`[continuation:work-idle-retry-recovery-fired] session=${sessionKey}`);
+    void dispatchPendingContinuationWork({
+      sessionKey,
+      includeIdleRetry: true,
+      recoverRunning: true,
+      includeRunningUpdatedAtOrBefore: Date.now() - RUNNING_WORK_RECOVERY_STALE_MS,
+      includeRunningIdleRetry: true,
+    }).catch((err: unknown) => {
+      const message = formatErrorMessage(err);
+      log.error(
+        `[continuation:work-idle-retry-recovery-error] error=${message} session=${sessionKey}`,
+      );
+      armIdleRetryFailureTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS);
+    });
+  }, fireIn);
+  handle.unref();
+  idleRetryFailureTimers.set(sessionKey, { fireAt, handle });
 }
 
 export function resetContinuationWorkDispatchForTests(): void {
@@ -103,6 +139,10 @@ export function resetContinuationWorkDispatchForTests(): void {
     clearTimeout(handle);
   }
   workTimers.clear();
+  for (const { handle } of idleRetryFailureTimers.values()) {
+    clearTimeout(handle);
+  }
+  idleRetryFailureTimers.clear();
   clearIdleRetryControllersForTests();
 }
 
@@ -308,6 +348,7 @@ function registerIdleRetry(sessionKey: string, trigger: ContinuationIdleRetryTri
     log.info(
       `[continuation:work-idle-retry-fired] trigger=${idleRetryTriggerLabel(trigger)} waitMs=${Date.now() - armedAt} session=${sessionKey}`,
     );
+    clearIdleRetryFailureTimer(sessionKey);
     await dispatchPendingContinuationWork({ sessionKey, includeIdleRetry: true });
   })().catch((err: unknown) => {
     idleRetryControllers.delete(key);
@@ -318,9 +359,7 @@ function registerIdleRetry(sessionKey: string, trigger: ContinuationIdleRetryTri
     log.error(
       `[continuation:work-idle-retry-error] trigger=${idleRetryTriggerLabel(trigger)} error=${message} session=${sessionKey}`,
     );
-    armNextWorkTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS, {
-      includeIdleRetry: true,
-    });
+    armIdleRetryFailureTimer(sessionKey, Date.now() + HEDGE_DISPATCH_FAILURE_RETRY_MS);
   });
 }
 
@@ -462,18 +501,14 @@ function earlierDueAt(left: number | undefined, right: number | undefined): numb
   return right === undefined ? left : Math.min(left, right);
 }
 
-function armNextWorkTimer(
-  sessionKey: string,
-  dueAt: number,
-  options: { includeIdleRetry?: boolean } = {},
-): void {
+function armNextWorkTimer(sessionKey: string, dueAt: number): void {
   const soonestQueued = peekSoonestQueuedWorkDueAt(sessionKey);
   const runningRecoveryDueAt = peekSoonestRunningWorkRecoveryDueAt(
     sessionKey,
     RUNNING_WORK_RECOVERY_STALE_MS,
   );
   const soonest = earlierDueAt(earlierDueAt(dueAt, soonestQueued), runningRecoveryDueAt);
-  armWorkTimer(sessionKey, soonest ?? dueAt, options);
+  armWorkTimer(sessionKey, soonest ?? dueAt);
 }
 
 /**
