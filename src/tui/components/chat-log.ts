@@ -34,6 +34,11 @@ export class ChatLog extends Container {
   private btwMessage: BtwInlineMessage | null = null;
   private toolsExpanded = false;
   private repeatableSystemMessage: RepeatableSystemMessage | null = null;
+  // Tracks the most recent history replay assistant row (no runId) so a
+  // subsequent live final with the same text can be suppressed as a duplicate.
+  // Cleared whenever a non-assistant component is appended (#96967).
+  private lastHistoryAssistant: { component: AssistantMessageComponent; text: string } | null =
+    null;
 
   constructor(maxComponents = 180) {
     super();
@@ -68,6 +73,9 @@ export class ChatLog extends Container {
     if (this.repeatableSystemMessage?.component === component) {
       this.repeatableSystemMessage = null;
     }
+    if (this.lastHistoryAssistant?.component === component) {
+      this.lastHistoryAssistant = null;
+    }
   }
 
   private pruneOverflow() {
@@ -88,6 +96,7 @@ export class ChatLog extends Container {
 
   private appendNonSystem(component: Component) {
     this.repeatableSystemMessage = null;
+    this.lastHistoryAssistant = null;
     this.append(component);
   }
 
@@ -98,6 +107,7 @@ export class ChatLog extends Container {
     this.pendingSystemNotices.clear();
     this.btwMessage = null;
     this.repeatableSystemMessage = null;
+    this.lastHistoryAssistant = null;
     if (!opts?.preservePendingUsers) {
       this.pendingUsers.clear();
     }
@@ -308,9 +318,30 @@ export class ChatLog extends Container {
     if (existing) {
       existing.setText(text);
       this.streamingRuns.delete(effectiveRunId);
+      this.lastHistoryAssistant = null;
       return;
     }
-    this.appendNonSystem(new AssistantMessageComponent(text));
+    // History replay uses finalizeAssistant(text) without a runId, followed by
+    // a live final with a runId. When the text matches and no other component
+    // was appended in between, suppress the live final to avoid a visible
+    // duplicate row after sessions.changed reload (#96967).
+    if (runId && this.lastHistoryAssistant) {
+      const lastChild = this.children[this.children.length - 1];
+      if (
+        lastChild === (this.lastHistoryAssistant.component as Component) &&
+        this.lastHistoryAssistant.text === text
+      ) {
+        this.lastHistoryAssistant = null;
+        return;
+      }
+    }
+    const component = new AssistantMessageComponent(text);
+    this.appendNonSystem(component);
+    // Track history-replay rows (no runId) after appending so appendNonSystem
+    // does not clear the reference. Live finals do not need tracking.
+    if (!runId) {
+      this.lastHistoryAssistant = { component, text };
+    }
   }
 
   dropAssistant(runId?: string) {

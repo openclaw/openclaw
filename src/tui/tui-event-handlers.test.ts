@@ -954,6 +954,79 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(chatLog.startTool).not.toHaveBeenCalled();
   });
 
+  it("allows late displayable final after sessions.changed clears display state (#96967)", () => {
+    const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-telegram" },
+    });
+
+    // First final populates both finalizedRunsWithDisplay and chatFinalizedRunsWithDisplay.
+    handleChatEvent({
+      runId: "run-telegram",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "Hello from Telegram" }] },
+    });
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
+    chatLog.finalizeAssistant.mockClear();
+    chatLog.dropAssistant.mockClear();
+
+    // sessions.changed reload clears both display-state maps.
+    // chatFinalizedRuns persists for delta dedup but chatFinalizedRunsWithDisplay
+    // is cleared because prior display is not proof of current visibility after
+    // the chat log was cleared and loadHistory() may not have replayed the row.
+    handleSessionsChangedEvent({
+      sessionKey: state.currentSessionKey,
+      reason: "new",
+      sessionId: state.currentSessionId ?? undefined,
+      updatedAt: 200,
+    } satisfies SessionChangedEvent);
+
+    // Late displayable final for the same runId — allowed through because
+    // chatFinalizedRunsWithDisplay was cleared and the TUI may have no
+    // visible assistant reply after the reload (#96980 review feedback).
+    handleChatEvent({
+      runId: "run-telegram",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "Recovery attempt" }] },
+    });
+
+    expect(chatLog.finalizeAssistant).toHaveBeenCalledTimes(1);
+  });
+
+  it("deduplicates late chat delta after sessions.changed clears finalizedRuns (#96967)", () => {
+    const { state, chatLog, handleChatEvent, handleSessionsChangedEvent } = createHandlersHarness({
+      state: { activeChatRunId: "run-telegram" },
+    });
+
+    // First final populates maps.
+    handleChatEvent({
+      runId: "run-telegram",
+      sessionKey: state.currentSessionKey,
+      state: "final",
+      message: { content: [{ type: "text", text: "Hello" }] },
+    });
+    chatLog.updateAssistant.mockClear();
+
+    // sessions.changed reload.
+    handleSessionsChangedEvent({
+      sessionKey: state.currentSessionKey,
+      reason: "reset",
+      sessionId: state.currentSessionId ?? undefined,
+      updatedAt: 200,
+    } satisfies SessionChangedEvent);
+
+    // Late delta for same runId — silently dropped by chatFinalizedRuns.
+    handleChatEvent({
+      runId: "run-telegram",
+      sessionKey: state.currentSessionKey,
+      state: "delta",
+      text: "stale stream chunk",
+    });
+
+    expect(chatLog.updateAssistant).not.toHaveBeenCalled();
+  });
+
   it("ignores sessions.changed reset events for other sessions", () => {
     const { state, loadHistory, setActivityStatus, handleSessionsChangedEvent } =
       createHandlersHarness({
