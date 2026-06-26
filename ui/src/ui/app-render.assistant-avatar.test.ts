@@ -326,6 +326,34 @@ describe("renderApp assistant avatar routing", () => {
     });
   });
 
+  it("prioritizes chatAvatarUrl over the assistant agent route for configAssistantAvatarUrl", () => {
+    renderApp(
+      createState({
+        chatAvatarUrl: "https://example.com/identity-avatar.png",
+        chatAvatarStatus: "url",
+        assistantAgentId: "main",
+        assistantAvatar: "/avatar/main",
+      }),
+    );
+
+    expect(quickSettingsProps.current?.assistantAvatarUrl).toBe(
+      "https://example.com/identity-avatar.png",
+    );
+  });
+
+  it("falls back to the assistant agent route when chatAvatarUrl is null and avatar status is local", () => {
+    renderApp(
+      createState({
+        chatAvatarUrl: null,
+        assistantAvatarStatus: "local",
+        assistantAgentId: "main",
+        basePath: "",
+      }),
+    );
+
+    expect(quickSettingsProps.current?.assistantAvatarUrl).toBe("/avatar/main");
+  });
+
   it("applies the configured chat message width as a shell CSS variable", () => {
     const container = document.createElement("div");
 
