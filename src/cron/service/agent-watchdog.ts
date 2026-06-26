@@ -61,8 +61,10 @@ export type CronAgentWatchdog = {
 export function createCronAgentWatchdog(params: {
   deferUntilRunner: boolean;
   jobTimeoutMs: number;
+  setupTimeoutMs?: number;
   triggerTimeout: (reason: string) => void;
 }): CronAgentWatchdog {
+  const setupTimeoutMs = params.setupTimeoutMs ?? CRON_AGENT_SETUP_WATCHDOG_MS;
   let state: CronAgentWatchdogState = params.deferUntilRunner ? "waiting_for_runner" : "executing";
   let timeoutId: NodeJS.Timeout | undefined;
   let setupTimeoutId: NodeJS.Timeout | undefined;
@@ -142,7 +144,7 @@ export function createCronAgentWatchdog(params: {
           if (state === "waiting_for_runner") {
             setTimedOut(setupTimeoutErrorMessage(activeExecution));
           }
-        }, CRON_AGENT_SETUP_WATCHDOG_MS);
+        }, setupTimeoutMs);
         return;
       }
       startTimeout();

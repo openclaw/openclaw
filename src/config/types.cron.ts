@@ -59,6 +59,12 @@ export type CronConfig = {
     maxBytes?: number | string;
     keepLines?: number;
   };
+  /**
+   * Timeout in milliseconds for isolated-agent setup before the watchdog fires.
+   * Increasing this gives slower environments (memory pressure, model warmup)
+   * more time before the cron subsystem considers setup stalled. Default: 60_000.
+   */
+  isolatedAgentSetupTimeoutMs?: number;
   failureAlert?: CronFailureAlertConfig;
   /** Default destination for failure notifications across all cron jobs. */
   failureDestination?: CronFailureDestinationConfig;

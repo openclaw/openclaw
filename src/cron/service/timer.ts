@@ -233,9 +233,12 @@ export async function executeJobCoreWithTimeout(
       }
       resolveTimeout?.(timeoutMarker);
     };
+    const setupTimeoutMs =
+      state.deps.cronConfig?.isolatedAgentSetupTimeoutMs ?? CRON_AGENT_SETUP_WATCHDOG_MS;
     const watchdog = createCronAgentWatchdog({
       deferUntilRunner: deferTimeoutUntilExecutionStart,
       jobTimeoutMs,
+      setupTimeoutMs,
       triggerTimeout,
     });
     const noteLaneState = (info?: { waiting?: boolean }) => {
@@ -278,7 +281,7 @@ export async function executeJobCoreWithTimeout(
         job.sessionTarget === "isolated" && isSetupTimeoutErrorText(error) && !observedLaneWait
           ? {
               error,
-              timeoutMs: CRON_AGENT_SETUP_WATCHDOG_MS,
+              timeoutMs: setupTimeoutMs,
               otherCronJobsActiveAtTimeout: false,
             }
           : undefined;
