@@ -568,4 +568,96 @@ describe("verifyGoogleChatRequest", () => {
     });
     expect(release).toHaveBeenCalledOnce();
   });
+
+  describe("bounded JSON read (readProviderJsonResponse delegation)", () => {
+    afterEach(() => {
+      authTesting.resetGoogleChatAuthForTests();
+      mocks.fetchWithSsrFGuard.mockClear();
+      vi.unstubAllGlobals();
+    });
+
+    it("cancels oversized cert fetch JSON body via the 16 MiB provider cap", async () => {
+      const ONE_MIB = 1024 * 1024;
+      const TOTAL_CHUNKS = 32;
+      const chunk = new Uint8Array(ONE_MIB);
+
+      let bytesPulled = 0;
+      let canceled = false;
+      const oversizedJson = new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (bytesPulled >= TOTAL_CHUNKS * ONE_MIB) {
+              controller.close();
+              return;
+            }
+            bytesPulled += chunk.length;
+            controller.enqueue(chunk);
+          },
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+      const release = vi.fn(async () => {});
+      const oversizedBodyFetch = vi.fn().mockResolvedValue({ response: oversizedJson, release });
+      mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: oversizedJson,
+        release,
+      });
+
+      const result = await verifyGoogleChatRequest({
+        bearer: "token",
+        audienceType: "project-number",
+        audience: "123456789",
+      });
+
+      expect(result.ok).toBe(false);
+      expect(result.reason).toMatch(/JSON response exceeds 16777216 bytes/);
+      expect(canceled).toBe(true);
+      expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+      expect(release).toHaveBeenCalledOnce();
+    });
+
+    it("rejects oversized sendMessage JSON body via the 16 MiB provider cap", async () => {
+      const ONE_MIB = 1024 * 1024;
+      const TOTAL_CHUNKS = 32;
+      const chunk = new Uint8Array(ONE_MIB);
+
+      let bytesPulled = 0;
+      let canceled = false;
+      const oversizedJson = new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (bytesPulled >= TOTAL_CHUNKS * ONE_MIB) {
+              controller.close();
+              return;
+            }
+            bytesPulled += chunk.length;
+            controller.enqueue(chunk);
+          },
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+      const release = vi.fn(async () => {});
+      mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: oversizedJson,
+        release,
+      });
+
+      await expect(
+        sendGoogleChatMessage({
+          account,
+          space: "spaces/AAA",
+          text: "hello",
+        }),
+      ).rejects.toThrow(/Google Chat API request failed: JSON response exceeds 16777216 bytes/);
+
+      expect(canceled).toBe(true);
+      expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+    });
+  });
 });
