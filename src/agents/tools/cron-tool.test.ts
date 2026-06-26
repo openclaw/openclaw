@@ -1935,6 +1935,25 @@ describe("cron tool", () => {
     expect(callGatewayMock).not.toHaveBeenCalled();
   });
 
+  it("allows unscoped operator cron.update agentId retargeting", async () => {
+    callGatewayMock.mockResolvedValueOnce({ ok: true });
+    const tool = createTestCronTool();
+
+    await tool.execute("call-unscoped-update-agent-id", {
+      action: "update",
+      id: "job-1",
+      patch: { agentId: "worker" },
+    });
+
+    const params = expectSingleGatewayCallMethod("cron.update") as
+      | { id?: string; patch?: { agentId?: string }; callerScope?: unknown }
+      | undefined;
+    expect(params).toEqual({
+      id: "job-1",
+      patch: { agentId: "worker" },
+    });
+  });
+
   it("rejects foreign sessionTarget retargeting on update", async () => {
     const tool = createTestCronTool({
       agentSessionKey: "agent:agent-123:telegram:direct:channing",

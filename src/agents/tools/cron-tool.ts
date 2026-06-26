@@ -1156,7 +1156,7 @@ Use jobId canonical; id accepted compat. contextMessages (0-10) adds previous me
           if (recoveredFlatPatch && isEmptyRecoveredCronPatch(patch)) {
             throw new Error("patch required");
           }
-          if ("agentId" in patch) {
+          if (callerScope && "agentId" in patch) {
             throw new Error("cron patch agentId cannot be changed by the agent cron tool");
           }
           if (callerScope) {
