@@ -44,13 +44,7 @@ function normalizeExplicitWorkdirInput(workdir: string | undefined): NormalizedW
     return { kind: "omitted" };
   }
   const value = normalizeOptionalString(workdir);
-  if (!value) {
-    return { kind: "blank", raw: workdir };
-  }
-  return {
-    kind: "specified",
-    value: expandHomePrefix(value, { home: resolveRequiredOsHomeDir() }),
-  };
+  return value ? { kind: "specified", value } : { kind: "blank", raw: workdir };
 }
 
 function unavailable(requestedCwd: string): ExecWorkdirResolution {
@@ -383,6 +377,9 @@ export async function resolveExecWorkdir(params: {
   if (!requestedCwd) {
     return unavailable("current working directory");
   }
-  const resolved = resolveExistingHostWorkdir(requestedCwd);
-  return resolved ? { kind: "local", hostCwd: resolved } : unavailable(requestedCwd);
+  // Expand leading ~ only for local (gateway) execution.
+  const hostCwd = resolveExistingHostWorkdir(
+    expandHomePrefix(requestedCwd, { home: resolveRequiredOsHomeDir() }),
+  );
+  return hostCwd ? { kind: "local", hostCwd } : unavailable(requestedCwd);
 }

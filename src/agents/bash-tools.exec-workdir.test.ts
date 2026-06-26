@@ -629,4 +629,13 @@ describe("resolveExecWorkdir", () => {
       }),
     ).resolves.toEqual({ kind: "unavailable", requestedCwd: "   " });
   });
+
+  it("preserves leading tilde in node workdirs without local expansion", async () => {
+    await expect(
+      resolveExecWorkdir({
+        host: "node",
+        workdir: "~/project",
+      }),
+    ).resolves.toEqual({ kind: "node", remoteCwd: "~/project" });
+  });
 });
