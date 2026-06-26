@@ -11,6 +11,7 @@ export type ReplySessionBinding = {
 };
 
 export type InternalReplySessionOptions = {
+  expectedExistingSessionId?: string;
   requestedSessionId?: string;
   resumeRequestedSession?: boolean;
 };

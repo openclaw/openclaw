@@ -2201,7 +2201,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       reason,
     });
   },
-  "sessions.delete": async ({ params, respond, client, isWebchatConnect, context }) => {
+  "sessions.delete": async ({ req, params, respond, client, isWebchatConnect, context }) => {
     if (!assertValidParams(params, validateSessionsDeleteParams, "sessions.delete", respond)) {
       return;
     }
@@ -2249,6 +2249,29 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       agentId: requestedAgentId,
     });
     if (rejectPluginRuntimeDeleteMismatch({ client, key: canonicalKey ?? key, entry, respond })) {
+      return;
+    }
+    let abortResult:
+      | {
+          ok: boolean;
+          error?: ReturnType<typeof errorShape>;
+        }
+      | undefined;
+    await chatHandlers["chat.abort"]({
+      req,
+      params: {
+        sessionKey: key,
+        ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
+      },
+      respond: (ok, _payload, error) => {
+        abortResult = { ok, ...(error ? { error } : {}) };
+      },
+      context,
+      client,
+      isWebchatConnect,
+    });
+    if (abortResult?.ok === false) {
+      respond(false, undefined, abortResult.error);
       return;
     }
     const mutationCleanupError = await cleanupSessionBeforeMutation({

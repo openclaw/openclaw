@@ -117,4 +117,33 @@ describe("persistSessionEntry", () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it("does not recreate a deleted persisted entry from stale local memory", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-store-"));
+    try {
+      const storePath = path.join(dir, "sessions.json");
+      const sessionStore = {
+        main: {
+          sessionId: "deleted-session",
+          updatedAt: 1,
+        },
+      };
+
+      const persisted = await persistSessionEntry({
+        sessionStore,
+        sessionKey: "main",
+        storePath,
+        entry: {
+          sessionId: "deleted-session",
+          updatedAt: 2,
+        },
+      });
+
+      expect(persisted).toBeUndefined();
+      expect(sessionStore.main).toBeUndefined();
+      expect(fs.existsSync(storePath)).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

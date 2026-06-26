@@ -461,6 +461,43 @@ describe("session accessor seam", () => {
     });
   });
 
+  it("rejects reply session initialization when the entry is deleted during prepare", async () => {
+    const sessionKey = "agent:main:main";
+    await upsertSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "first-session",
+        updatedAt: 10,
+      },
+    );
+    const snapshot = loadReplySessionInitializationSnapshot({ sessionKey, storePath });
+
+    const committed = await commitReplySessionInitialization({
+      activeSessionKey: sessionKey,
+      agentId: "main",
+      expectedRevision: snapshot.revision,
+      prepareSessionEntry: async ({ sessionEntry }) => {
+        await applySessionEntryLifecycleMutation({
+          removals: [{ sessionKey }],
+          storePath,
+        });
+        return sessionEntry;
+      },
+      sessionEntry: {
+        sessionId: "stale-session",
+        updatedAt: 30,
+      },
+      sessionKey,
+      storePath,
+    });
+
+    expect(committed).toMatchObject({
+      ok: false,
+      reason: "stale-snapshot",
+    });
+    expect(loadSessionEntry({ sessionKey, storePath })).toBeUndefined();
+  });
+
   it("updates existing entries without creating missing sessions", async () => {
     const scope = {
       sessionKey: "agent:main:main",

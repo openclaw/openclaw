@@ -1797,13 +1797,34 @@ export async function commitReplySessionInitialization(params: {
     sessionEntry: preparedSessionEntry,
     storePath: params.storePath,
   });
-  store[resolved.normalizedKey] = sessionEntry;
+  let staleCommit:
+    | {
+        currentEntry?: SessionEntry;
+        revision: string;
+      }
+    | undefined;
   const upserts: SessionEntryLifecycleUpsert[] = [
-    { sessionKey: resolved.normalizedKey, entry: sessionEntry },
+    {
+      sessionKey: resolved.normalizedKey,
+      buildEntry: ({ currentEntry }) => {
+        const commitRevision = createReplySessionInitializationRevision(currentEntry);
+        if (commitRevision !== params.expectedRevision) {
+          staleCommit = {
+            ...(currentEntry ? { currentEntry: { ...currentEntry } } : {}),
+            revision: commitRevision,
+          };
+          return null;
+        }
+        return sessionEntry;
+      },
+    },
   ];
   if (params.retiredEntry) {
-    store[params.retiredEntry.key] = params.retiredEntry.entry;
-    upserts.push({ sessionKey: params.retiredEntry.key, entry: params.retiredEntry.entry });
+    const retiredEntry = params.retiredEntry;
+    upserts.push({
+      sessionKey: retiredEntry.key,
+      buildEntry: () => (staleCommit ? null : retiredEntry.entry),
+    });
   }
   await applySessionEntryLifecycleMutation({
     activeSessionKey: params.activeSessionKey,
@@ -1811,6 +1832,18 @@ export async function commitReplySessionInitialization(params: {
     storePath: params.storePath,
     upserts,
   });
+  if (staleCommit) {
+    return {
+      ok: false,
+      ...(staleCommit.currentEntry ? { currentEntry: staleCommit.currentEntry } : {}),
+      reason: "stale-snapshot",
+      revision: staleCommit.revision,
+    };
+  }
+  store[resolved.normalizedKey] = sessionEntry;
+  if (params.retiredEntry) {
+    store[params.retiredEntry.key] = params.retiredEntry.entry;
+  }
   const committed: ReplySessionInitializationCommitResult = {
     ok: true,
     previousSessionTranscript: {},

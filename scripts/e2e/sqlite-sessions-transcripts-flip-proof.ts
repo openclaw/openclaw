@@ -38,6 +38,7 @@ type FileInventoryEntry = {
 };
 
 type SqliteSessionEntryEvidence = {
+  entry?: Record<string, unknown>;
   sessionId: string;
   sessionKey: string;
   transcriptEvents: number;
@@ -66,6 +67,9 @@ export type SqliteSessionsTranscriptsFlipProofReport = {
   ok: boolean;
   agentId: string;
   checkpoints: ProofCheckpoint[];
+  concurrentDeleteSessionKey: string;
+  concurrentResetSessionKey: string;
+  concurrentSendSessionKey: string;
   deleteSessionKey: string;
   failures: string[];
   fullTurnAssistantText: string;
@@ -84,6 +88,9 @@ type ProofContext = {
   agentDbPath: string;
   agentId: string;
   archiveRoots: string[];
+  concurrentDeleteSessionKey: string;
+  concurrentResetSessionKey: string;
+  concurrentSendSessionKey: string;
   deleteSessionKey: string;
   fullTurnAssistantText: string;
   fullTurnSessionKey: string;
@@ -106,6 +113,11 @@ type RunOptions = {
 const AGENT_ID = "main";
 const RESET_SESSION_KEY = "agent:main:main";
 const DELETE_SESSION_KEY = "agent:main:dashboard:sqlite-delete";
+const CONCURRENT_SEND_SESSION_KEY = "agent:main:dashboard:sqlite-concurrent-send";
+const CONCURRENT_RESET_SESSION_KEY = "agent:main:dashboard:sqlite-concurrent-reset";
+const CONCURRENT_DELETE_SESSION_KEY = "agent:main:dashboard:sqlite-concurrent-delete";
+const CONCURRENT_SEND_TEXT = "sqlite concurrent send history reset";
+const CONCURRENT_DELETE_TEXT = "sqlite concurrent delete while send is active";
 const FULL_TURN_ASSISTANT_TEXT = "OPENCLAW_E2E_OK_12";
 const FULL_TURN_SESSION_KEY = "agent:main:dashboard:sqlite-full-turn";
 const SHARED_SESSION_KEYS = [
@@ -249,6 +261,9 @@ export async function runSqliteSessionsTranscriptsFlipProof(
       await requireMockOpenAiRequest(context.mockOpenAiRequestLog);
       await record("after-full-agent-turn");
 
+      await runConcurrentMultiClientLifecycle(inst, context, restartedClient);
+      await record("after-concurrent-multi-client");
+
       const resetSessionId = await resetSession(restartedClient, context.resetSessionKey);
       await record("after-sessions-reset");
 
@@ -289,6 +304,9 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     ok: failures.length === 0,
     agentId: context.agentId,
     checkpoints,
+    concurrentDeleteSessionKey: context.concurrentDeleteSessionKey,
+    concurrentResetSessionKey: context.concurrentResetSessionKey,
+    concurrentSendSessionKey: context.concurrentSendSessionKey,
     deleteSessionKey: context.deleteSessionKey,
     failures,
     fullTurnAssistantText: context.fullTurnAssistantText,
@@ -321,6 +339,9 @@ function buildProofContext(stateDir: string): ProofContext {
     agentDbPath: path.join(agentDir, "agent", "openclaw-agent.sqlite"),
     agentId: AGENT_ID,
     archiveRoots: [path.join(agentDir, "session-sqlite-import-archive"), activeSessionsDir],
+    concurrentDeleteSessionKey: CONCURRENT_DELETE_SESSION_KEY,
+    concurrentResetSessionKey: CONCURRENT_RESET_SESSION_KEY,
+    concurrentSendSessionKey: CONCURRENT_SEND_SESSION_KEY,
     deleteSessionKey: DELETE_SESSION_KEY,
     fullTurnAssistantText: FULL_TURN_ASSISTANT_TEXT,
     fullTurnSessionKey: FULL_TURN_SESSION_KEY,
@@ -335,6 +356,9 @@ function buildProofContext(stateDir: string): ProofContext {
     trackedSessionKeys: [
       RESET_SESSION_KEY,
       DELETE_SESSION_KEY,
+      CONCURRENT_SEND_SESSION_KEY,
+      CONCURRENT_RESET_SESSION_KEY,
+      CONCURRENT_DELETE_SESSION_KEY,
       FULL_TURN_SESSION_KEY,
       ...SHARED_SESSION_KEYS,
       ...OLD_STATE_SESSION_KEYS,
@@ -469,6 +493,8 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
   await fs.mkdir(path.join(context.stateDir, "agent"), { recursive: true });
   const now = Date.now();
   const entries = {
+    [context.concurrentDeleteSessionKey]: legacyEntry("sqlite-concurrent-delete", now - 8_000),
+    [context.concurrentResetSessionKey]: legacyEntry("sqlite-concurrent-reset", now - 9_000),
     [context.deleteSessionKey]: legacyEntry("sqlite-delete-session", now - 1_000),
     [context.sharedSessionKeys[0]]: legacyEntry("sqlite-shared-session", now - 2_000, {
       sessionFile: "sqlite-shared-a.jsonl",
@@ -511,6 +537,22 @@ async function seedLegacySessionStore(context: ProofContext): Promise<void> {
   await writeTranscript(context.activeSessionsDir, "sqlite-delete-session", [
     legacySessionEvent("sqlite-delete-session"),
     { type: "message", id: "sqlite-delete-1", message: { role: "user", content: "delete me" } },
+  ]);
+  await writeTranscript(context.activeSessionsDir, "sqlite-concurrent-reset", [
+    legacySessionEvent("sqlite-concurrent-reset"),
+    {
+      type: "message",
+      id: "sqlite-concurrent-reset-1",
+      message: { role: "user", content: "concurrent reset seed" },
+    },
+  ]);
+  await writeTranscript(context.activeSessionsDir, "sqlite-concurrent-delete", [
+    legacySessionEvent("sqlite-concurrent-delete"),
+    {
+      type: "message",
+      id: "sqlite-concurrent-delete-1",
+      message: { role: "user", content: "concurrent delete seed" },
+    },
   ]);
   await writeTranscript(context.activeSessionsDir, "sqlite-shared-a", [
     legacySessionEvent("sqlite-shared-session"),
@@ -650,6 +692,90 @@ async function appendProofMessage(
   }
 }
 
+async function runConcurrentMultiClientLifecycle(
+  inst: Awaited<ReturnType<typeof createOpenClawTestInstance>>,
+  context: ProofContext,
+  primaryClient: Awaited<ReturnType<typeof connectGatewayClient>>,
+): Promise<void> {
+  const historyClient = await connectGatewayClient({
+    url: inst.url,
+    token: inst.gatewayToken,
+    clientDisplayName: "sqlite-sessions-transcripts-flip-proof-concurrent-history",
+    requestTimeoutMs: 20_000,
+    timeoutMs: 20_000,
+  });
+  const lifecycleClient = await connectGatewayClient({
+    url: inst.url,
+    token: inst.gatewayToken,
+    clientDisplayName: "sqlite-sessions-transcripts-flip-proof-concurrent-lifecycle",
+    requestTimeoutMs: 20_000,
+    timeoutMs: 20_000,
+  });
+  try {
+    const sendPromise = sendGatewayUserMessage(
+      primaryClient,
+      context.concurrentSendSessionKey,
+      CONCURRENT_SEND_TEXT,
+    );
+    const historyPromise = requireHistoryContains(
+      historyClient,
+      context.concurrentResetSessionKey,
+      "concurrent reset seed",
+    );
+    const resetPromise = resetSession(lifecycleClient, context.concurrentResetSessionKey);
+
+    const [sendRunId, , resetSessionId] = await Promise.all([
+      sendPromise,
+      historyPromise,
+      resetPromise,
+    ]);
+    await waitForAgentRunOk(primaryClient, sendRunId);
+    const sendSessionId = await waitForSqliteSessionId(
+      context.agentDbPath,
+      context.concurrentSendSessionKey,
+    );
+    await waitForSqliteMessageContains(
+      context.agentDbPath,
+      sendSessionId,
+      "user",
+      CONCURRENT_SEND_TEXT,
+    );
+    await waitForSqliteMessageContains(
+      context.agentDbPath,
+      sendSessionId,
+      "assistant",
+      context.fullTurnAssistantText,
+    );
+    await waitForTrackedSessionId(
+      context.agentDbPath,
+      context.concurrentResetSessionKey,
+      resetSessionId,
+    );
+
+    const deleteRunId = await sendGatewayUserMessage(
+      historyClient,
+      context.concurrentDeleteSessionKey,
+      CONCURRENT_DELETE_TEXT,
+    );
+    const deleteHistoryPromise = lifecycleClient.request(
+      "chat.history",
+      { sessionKey: context.concurrentDeleteSessionKey, limit: 50 },
+      { timeoutMs: 20_000 },
+    );
+    await Promise.all([
+      deleteHistoryPromise,
+      deleteSession(primaryClient, context.concurrentDeleteSessionKey),
+    ]);
+    await waitForAgentRunSettled(historyClient, deleteRunId);
+    await waitForSessionEntryAbsent(context.agentDbPath, context.concurrentDeleteSessionKey);
+  } finally {
+    await Promise.all([
+      disconnectGatewayClient(historyClient),
+      disconnectGatewayClient(lifecycleClient),
+    ]);
+  }
+}
+
 async function resetSession(
   client: Awaited<ReturnType<typeof connectGatewayClient>>,
   key: string,
@@ -695,6 +821,30 @@ async function waitForAgentRunOk(
   );
   if (result?.status !== "ok") {
     throw new Error(`agent.wait failed for ${runId}: ${JSON.stringify(result)}`);
+  }
+}
+
+async function waitForAgentRunSettled(
+  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  runId: string,
+): Promise<void> {
+  const result: { endedAt?: number; status?: string; stopReason?: string } = await client.request(
+    "agent.wait",
+    { runId, timeoutMs: 60_000 },
+    { timeoutMs: 65_000 },
+  );
+  if (typeof result?.status !== "string") {
+    throw new Error(`agent.wait returned no status for ${runId}: ${JSON.stringify(result)}`);
+  }
+  if (
+    result.status === "timeout" &&
+    (result.stopReason === "rpc" || result.stopReason === "stop") &&
+    typeof result.endedAt === "number"
+  ) {
+    return;
+  }
+  if (result.status === "timeout") {
+    throw new Error(`agent.wait timed out for ${runId}: ${JSON.stringify(result)}`);
   }
 }
 
@@ -782,6 +932,47 @@ async function waitForSqliteSessionId(dbPath: string, sessionKey: string): Promi
     await sleep(50);
   }
   throw new Error(`timed out waiting for SQLite session entry for ${sessionKey}`);
+}
+
+async function waitForTrackedSessionId(
+  dbPath: string,
+  sessionKey: string,
+  expectedSessionId: string,
+): Promise<void> {
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    const row = readSqliteEvidence(dbPath, [sessionKey]).trackedEntries.find(
+      (entry) => entry.sessionKey === sessionKey,
+    );
+    if (row?.sessionId === expectedSessionId) {
+      return;
+    }
+    await sleep(50);
+  }
+  throw new Error(
+    `timed out waiting for SQLite session entry ${sessionKey} to point at ${expectedSessionId}`,
+  );
+}
+
+async function waitForSessionEntryAbsent(dbPath: string, sessionKey: string): Promise<void> {
+  const deadline = Date.now() + 20_000;
+  let absentSince: number | undefined;
+  while (Date.now() < deadline) {
+    const row = readSqliteEvidence(dbPath, [sessionKey]).trackedEntries.find(
+      (entry) => entry.sessionKey === sessionKey,
+    );
+    if (!row) {
+      absentSince ??= Date.now();
+      if (Date.now() - absentSince >= 1_500) {
+        return;
+      }
+      await sleep(50);
+      continue;
+    }
+    absentSince = undefined;
+    await sleep(50);
+  }
+  throw new Error(`timed out waiting for SQLite session entry deletion for ${sessionKey}`);
 }
 
 async function waitForSqliteMessageContains(
@@ -967,11 +1158,11 @@ function readTrackedEntries(
 ): SqliteSessionEntryEvidence[] {
   const rows = db
     .prepare(
-      `SELECT session_key AS sessionKey, session_id AS sessionId
+      `SELECT session_key AS sessionKey, session_id AS sessionId, entry_json AS entryJson
        FROM session_entries
        ORDER BY session_key ASC`,
     )
-    .all() as Array<{ sessionId?: unknown; sessionKey?: unknown }>;
+    .all() as Array<{ entryJson?: unknown; sessionId?: unknown; sessionKey?: unknown }>;
   return rows
     .filter(
       (row) =>
@@ -981,6 +1172,7 @@ function readTrackedEntries(
     .map((row) => {
       const sessionId = typeof row.sessionId === "string" ? row.sessionId : "";
       return {
+        ...(typeof row.entryJson === "string" ? { entry: parseEntryJson(row.entryJson) } : {}),
         sessionId,
         sessionKey: typeof row.sessionKey === "string" ? row.sessionKey : "",
         transcriptEvents: scalarNumber(
@@ -990,6 +1182,20 @@ function readTrackedEntries(
         ),
       };
     });
+}
+
+function parseEntryJson(entryJson: string): Record<string, unknown> | undefined {
+  try {
+    const parsed = JSON.parse(entryJson) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return undefined;
+    }
+    const entry = { ...(parsed as Record<string, unknown>) };
+    delete entry.skillsSnapshot;
+    return entry;
+  } catch {
+    return undefined;
+  }
 }
 
 function scalarNumber(db: DatabaseSync, sql: string, values: unknown[] = []): number {

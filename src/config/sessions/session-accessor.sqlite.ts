@@ -456,7 +456,7 @@ export async function deleteSqliteSessionEntryLifecycle(
   params: DeleteSessionEntryLifecycleParams,
 ): Promise<DeleteSessionEntryLifecycleResult> {
   const resolved = resolveSqliteStoreScope(params.storePath);
-  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+  const result = await runExclusiveSqliteSessionWrite(resolved, async () => {
     let result: DeleteSessionEntryLifecycleResult = {
       archivedTranscripts: [],
       deleted: false,
@@ -483,9 +483,17 @@ export async function deleteSqliteSessionEntryLifecycle(
         ...(current.entry.sessionId ? { deletedSessionId: current.entry.sessionId } : {}),
       };
     }, toDatabaseOptions(resolved));
-    emitArchivedSqliteTranscriptUpdates(result.archivedTranscripts);
     return result;
   });
+  if (result.deleted) {
+    await runExclusiveSqliteSessionWrite(resolved, async () => {
+      runOpenClawAgentWriteTransaction((database) => {
+        deleteSqliteLifecycleTargetRows(database, params.target);
+      }, toDatabaseOptions(resolved));
+    });
+  }
+  emitArchivedSqliteTranscriptUpdates(result.archivedTranscripts);
+  return result;
 }
 
 /** Applies exact lifecycle removals/upserts using SQLite session rows. */
