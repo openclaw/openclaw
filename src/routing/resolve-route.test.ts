@@ -564,7 +564,7 @@ describe("resolveAgentRoute", () => {
     expectRouteResolutionCase({ routeParams, expected });
   });
 
-  test("missing accountId in binding matches all accounts (wildcard)", () => {
+  test("missing accountId in binding matches default account only", () => {
     const cfg: OpenClawConfig = {
       bindings: [{ agentId: "defaultAcct", match: { channel: "whatsapp" } }],
     };
@@ -578,12 +578,13 @@ describe("resolveAgentRoute", () => {
       }),
       {
         agentId: "defaultacct",
-        matchedBy: "binding.channel",
+        matchedBy: "binding.account",
       },
     );
 
-    // When route uses a non-default accountId, the binding should still match
-    // because missing accountId in the match is treated as a wildcard (*).
+    // When route uses a non-default accountId, the binding should NOT match
+    // because missing accountId in the match is scoped to the default account.
+    // The route falls through to the default agent.
     expectResolvedRoute(
       resolveRoute({
         cfg,
@@ -592,8 +593,8 @@ describe("resolveAgentRoute", () => {
         peer: { kind: "direct", id: "+1000" },
       }),
       {
-        agentId: "defaultacct",
-        matchedBy: "binding.channel",
+        agentId: "main",
+        matchedBy: "default",
       },
     );
   });

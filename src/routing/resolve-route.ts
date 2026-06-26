@@ -511,7 +511,7 @@ function normalizeBindingMatch(
 ): NormalizedBindingMatch {
   const rawRoles = match?.roles;
   return {
-    accountPattern: (match?.accountId ?? "*").trim() || "*",
+    accountPattern: (match?.accountId ?? "").trim(),
     peer: normalizePeerConstraint(match?.peer),
     guildId: normalizeId(match?.guildId) || null,
     teamId: normalizeId(match?.teamId) || null,
