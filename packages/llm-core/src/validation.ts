@@ -160,6 +160,41 @@ function coercePrimitiveByType(value: unknown, type: string): unknown {
       }
       return value;
     }
+    case "array": {
+      // Some providers (e.g. MiMo, Ollama) serialize array arguments as JSON
+      // strings. Parse them back so schema validation sees a real array.
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (trimmed.startsWith("[")) {
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (Array.isArray(parsed)) {
+              return parsed;
+            }
+          } catch {
+            // Not valid JSON; leave the value untouched for normal validation.
+          }
+        }
+      }
+      return value;
+    }
+    case "object": {
+      // Mirror the array case for object-typed parameters serialized as JSON strings.
+      if (typeof value === "string") {
+        const trimmed = value.trim();
+        if (trimmed.startsWith("{")) {
+          try {
+            const parsed = JSON.parse(trimmed);
+            if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+              return parsed;
+            }
+          } catch {
+            // Not valid JSON; leave the value untouched for normal validation.
+          }
+        }
+      }
+      return value;
+    }
     default:
       return value;
   }
