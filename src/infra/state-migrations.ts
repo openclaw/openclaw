@@ -4974,7 +4974,6 @@ export async function runLegacyStateMigrations(params: {
     cfg: params.config ?? ({} as OpenClawConfig),
     env: { ...process.env, OPENCLAW_STATE_DIR: detected.stateDir },
     now,
-    preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
   });
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
@@ -5070,7 +5069,7 @@ export async function migrateOrphanedSessionKeys(params: {
     // rewrite can replace one pathname and hide their original identity.
     const storePath =
       [...storeMap.keys()].find((candidate) => sessionStorePathsMatch(candidate, p)) ?? p;
-    if (storePath !== p) {
+    if (sessionStorePathsHaveDistinctEntries(storePath, p)) {
       aliasedStorePaths.add(storePath);
     }
     const existing = storeMap.get(storePath);
@@ -5231,16 +5230,43 @@ async function migrateLegacyAcpSessionMetadata(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   now?: () => number;
-  preserveForeignMainAliases?: boolean;
+  pluginSessionStoreAgentIds?: readonly string[];
 }): Promise<{ changes: string[]; warnings: string[] }> {
   const changes: string[] = [];
   const warnings: string[] = [];
   const env = params.env ?? process.env;
   const now = params.now ?? (() => Date.now());
+  const stateDir = resolveStateDir(env);
+  const storeConfig = params.cfg.session?.store;
   const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env });
+  const pluginAgentIds =
+    params.pluginSessionStoreAgentIds ??
+    listPluginDoctorSessionStoreAgentIds({
+      config: params.cfg,
+      env,
+      pluginIds: collectRelevantDoctorPluginIds(params.cfg),
+    });
+  const pluginTargets = pluginAgentIds
+    .map((id) => normalizeAgentId(id))
+    .filter((id) => id !== DEFAULT_AGENT_ID)
+    .map((agentId) => ({
+      agentId,
+      storePath: storeConfig
+        ? resolveStorePathFromTemplate(storeConfig, agentId, env)
+        : path.join(stateDir, "agents", agentId, "sessions", "sessions.json"),
+    }));
+  for (const pluginTarget of pluginTargets) {
+    if (
+      !targets.some(
+        (target) =>
+          target.agentId === pluginTarget.agentId && target.storePath === pluginTarget.storePath,
+      )
+    ) {
+      targets.push(pluginTarget);
+    }
+  }
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
   const scope = params.cfg.session?.scope as SessionScope | undefined;
-  const storeConfig = params.cfg.session?.store;
   const fixedCustomStorePath =
     typeof storeConfig === "string" && storeConfig.length > 0 && !storeConfig.includes("{agentId}")
       ? resolveStorePathFromTemplate(
@@ -5262,7 +5288,10 @@ async function migrateLegacyAcpSessionMetadata(params: {
       sessionStorePathsMatch(existing.storePath, target.storePath),
     );
     if (group) {
-      group.hasDistinctAliases ||= group.target.storePath !== target.storePath;
+      group.hasDistinctAliases ||= sessionStorePathsHaveDistinctEntries(
+        group.target.storePath,
+        target.storePath,
+      );
       continue;
     }
     storeGroups.push({ target, hasDistinctAliases: false });
@@ -5270,6 +5299,9 @@ async function migrateLegacyAcpSessionMetadata(params: {
 
   for (const { target, hasDistinctAliases } of storeGroups) {
     const storePath = target.storePath;
+    const pluginForeignMainAliasRisk = pluginTargets.some((pluginTarget) =>
+      sessionStorePathsMatch(storePath, pluginTarget.storePath),
+    );
     let parsed: ReturnType<typeof readSessionStoreJson5>;
     try {
       parsed = readSessionStoreJson5(storePath);
@@ -5283,7 +5315,7 @@ async function migrateLegacyAcpSessionMetadata(params: {
     const ambiguousKeyCount = Object.keys(parsed.store).filter(
       (key) =>
         isAmbiguousSharedStoreKey(key, mainKey, scope) ||
-        (params.preserveForeignMainAliases && isLegacyDefaultMainAliasKey(key, mainKey)),
+        (pluginForeignMainAliasRisk && isLegacyDefaultMainAliasKey(key, mainKey)),
     ).length;
     const hasLegacyAcpMetadata = Object.values(parsed.store).some(
       (entry) => normalizeSessionEntry(entry)?.acp !== undefined,
@@ -5312,10 +5344,10 @@ async function migrateLegacyAcpSessionMetadata(params: {
         const ambiguousFixedStoreKey =
           fixedCustomStorePath !== undefined &&
           sessionStorePathsMatch(storePath, fixedCustomStorePath) &&
-          (isAmbiguousSharedStoreKey(sessionKey, mainKey, scope) ||
-            (params.preserveForeignMainAliases &&
-              isLegacyDefaultMainAliasKey(sessionKey, mainKey)));
-        if (ambiguousFixedStoreKey) {
+          isAmbiguousSharedStoreKey(sessionKey, mainKey, scope);
+        const foreignMainAlias =
+          pluginForeignMainAliasRisk && isLegacyDefaultMainAliasKey(sessionKey, mainKey);
+        if (ambiguousFixedStoreKey || foreignMainAlias) {
           preserved++;
           normalized[sessionKey] = normalizedEntry;
           continue;
@@ -5384,6 +5416,19 @@ function sessionStorePathsMatch(left: string, right: string): boolean {
   }
 }
 
+function sessionStorePathsHaveDistinctEntries(left: string, right: string): boolean {
+  if (left === right) {
+    return false;
+  }
+  try {
+    // Symlink spellings of one directory entry are safe to replace atomically;
+    // hard links resolve to distinct pathnames and would split on replacement.
+    return fs.realpathSync.native(left) !== fs.realpathSync.native(right);
+  } catch {
+    return true;
+  }
+}
+
 type SessionStoreOwnership = {
   preserveAmbiguousKeys: boolean;
   preserveForeignMainAliases: boolean;
@@ -5441,7 +5486,8 @@ function resolveSessionStoreOwnership(params: {
   }
   const targetStoreHasDistinctAlias = candidateStorePaths.some((candidatePath) => {
     return (
-      candidatePath !== targetStorePath && sessionStorePathsMatch(candidatePath, targetStorePath)
+      sessionStorePathsMatch(candidatePath, targetStorePath) &&
+      sessionStorePathsHaveDistinctEntries(candidatePath, targetStorePath)
     );
   });
   return { preserveAmbiguousKeys, preserveForeignMainAliases, targetStoreHasDistinctAlias };
@@ -5503,7 +5549,7 @@ export async function autoMigrateLegacyState(params: {
     cfg: params.cfg,
     env,
     now: params.now,
-    preserveForeignMainAliases: sessionStoreOwnership.preserveForeignMainAliases,
+    pluginSessionStoreAgentIds,
   });
 
   const logMigrationResults = (changes: string[], warnings: string[]) => {
@@ -5734,7 +5780,7 @@ export async function autoMigrateLegacyState(params: {
     cfg: params.cfg,
     env,
     now,
-    preserveForeignMainAliases: sessionStoreOwnership.preserveForeignMainAliases,
+    pluginSessionStoreAgentIds,
   });
   const agentDir = await migrateLegacyAgentDir(detected, now);
   const channelPlans = await runLegacyMigrationPlans(
