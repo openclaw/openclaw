@@ -1806,11 +1806,16 @@ export async function commitReplySessionInitialization(params: {
   const upserts: SessionEntryLifecycleUpsert[] = [
     {
       sessionKey: resolved.normalizedKey,
-      buildEntry: ({ currentEntry }) => {
-        const commitRevision = createReplySessionInitializationRevision(currentEntry);
+      buildEntry: ({ store }) => {
+        const commitResolved = resolveSessionStoreEntry({
+          store,
+          sessionKey: params.sessionKey,
+        });
+        const commitEntry = commitResolved.existing;
+        const commitRevision = createReplySessionInitializationRevision(commitEntry);
         if (commitRevision !== params.expectedRevision) {
           staleCommit = {
-            ...(currentEntry ? { currentEntry: { ...currentEntry } } : {}),
+            ...(commitEntry ? { currentEntry: { ...commitEntry } } : {}),
             revision: commitRevision,
           };
           return null;
