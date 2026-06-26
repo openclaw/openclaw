@@ -219,6 +219,44 @@ describe("edit tool", () => {
     ).toBeUndefined();
   });
 
+  it("validates no-op targets in mixed previews", async () => {
+    const readFile = vi.fn(async () => Buffer.from("alpha beta\n"));
+    const operations: EditOperations = {
+      access: async () => {},
+      readFile,
+      writeFile: async () => {},
+    };
+    const tool = createEditToolDefinition("/workspace", { operations });
+    const args = {
+      path: "remote.txt",
+      edits: [
+        { oldText: "missing", newText: "missing" },
+        { oldText: "alpha", newText: "ALPHA" },
+      ],
+    };
+    const context = {
+      args,
+      argsComplete: true,
+      cwd: "/workspace",
+      executionStarted: false,
+      expanded: false,
+      invalidate: vi.fn(),
+      isError: false,
+      isPartial: false,
+      lastComponent: undefined,
+      showImages: false,
+      state: {},
+      toolCallId: "call-preview-invalid-no-op",
+    };
+
+    const component = tool.renderCall?.(args, testTheme, context);
+    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+
+    expect((component as { preview?: { error?: string } } | undefined)?.preview?.error).toContain(
+      "Could not find the exact text",
+    );
+  });
+
   it("returns terminal no-op when oldText equals newText", async () => {
     const filePath = await createTempFile("unchanged content\n");
     const tool = createEditTool(tmpDir);

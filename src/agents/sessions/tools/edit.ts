@@ -28,6 +28,7 @@ import {
   normalizeToLF,
   restoreLineEndings,
   stripBom,
+  validateNoOpEditTargets,
 } from "./edit-diff.js";
 import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { resolveToCwd } from "./path-utils.js";
@@ -430,30 +431,7 @@ export function createEditToolDefinition(
           const originalEnding = detectLineEnding(content);
           const normalizedContent = normalizeToLF(content);
           const noOpEdits = originalEdits.filter((edit) => edit.oldText === edit.newText);
-          if (noOpEdits.length > 0) {
-            // Validate no-op targets together so duplicate/overlapping no-ops
-            // still fail, without letting fuzzy matches affect real edits.
-            applyEditsToNormalizedContent(
-              normalizedContent,
-              noOpEdits.map((edit) => ({ oldText: edit.oldText, newText: "" })),
-              path,
-            );
-          }
-          const exactNoOpEdits = noOpEdits.filter((edit) =>
-            normalizedContent.includes(normalizeToLF(edit.oldText)),
-          );
-          if (exactNoOpEdits.length > 0 && realEdits.length > 0) {
-            // Preserve the documented overlap contract for exact no-op
-            // targets while keeping fuzzy no-ops out of this pass.
-            applyEditsToNormalizedContent(
-              normalizedContent,
-              [...exactNoOpEdits, ...realEdits].map((edit) => ({
-                oldText: edit.oldText,
-                newText: "",
-              })),
-              path,
-            );
-          }
+          validateNoOpEditTargets(normalizedContent, noOpEdits, realEdits, path);
           if (realEdits.length === 0) {
             return {
               ...textResult(
@@ -546,17 +524,14 @@ export function createEditToolDefinition(
       if (context.argsComplete && previewInput && !component.preview && !component.previewPending) {
         component.previewPending = true;
         const requestKey = argsKey;
-        void computeEditsDiff(
-          previewInput.path,
-          filterNoOpEdits(previewInput.edits),
-          context.cwd,
-          ops,
-        ).then((preview) => {
-          if (component.previewArgsKey === requestKey) {
-            setEditPreview(component, preview, requestKey);
-            context.invalidate();
-          }
-        });
+        void computeEditsDiff(previewInput.path, previewInput.edits, context.cwd, ops).then(
+          (preview) => {
+            if (component.previewArgsKey === requestKey) {
+              setEditPreview(component, preview, requestKey);
+              context.invalidate();
+            }
+          },
+        );
       }
 
       return buildEditCallComponent(component, args, theme);

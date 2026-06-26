@@ -427,6 +427,34 @@ export interface EditDiffError {
   error: string;
 }
 
+export function validateNoOpEditTargets(
+  normalizedContent: string,
+  noOpEdits: Edit[],
+  realEdits: Edit[],
+  path: string,
+): void {
+  if (noOpEdits.length > 0) {
+    applyEditsToNormalizedContent(
+      normalizedContent,
+      noOpEdits.map((edit) => ({ oldText: edit.oldText, newText: "" })),
+      path,
+    );
+  }
+  const exactNoOpEdits = noOpEdits.filter((edit) =>
+    normalizedContent.includes(normalizeToLF(edit.oldText)),
+  );
+  if (exactNoOpEdits.length > 0 && realEdits.length > 0) {
+    applyEditsToNormalizedContent(
+      normalizedContent,
+      [...exactNoOpEdits, ...realEdits].map((edit) => ({
+        oldText: edit.oldText,
+        newText: "",
+      })),
+      path,
+    );
+  }
+}
+
 /**
  * Compute the diff for one or more edit operations without applying them.
  * Used for preview rendering in the TUI before the tool executes.
@@ -468,9 +496,12 @@ export async function computeEditsDiff(
     // Strip BOM before matching (LLM won't include invisible BOM in oldText)
     const { text: content } = stripBom(rawContent);
     const normalizedContent = normalizeToLF(content);
+    const noOpEdits = edits.filter((edit) => edit.oldText === edit.newText);
+    const realEdits = edits.filter((edit) => edit.oldText !== edit.newText);
+    validateNoOpEditTargets(normalizedContent, noOpEdits, realEdits, path);
     const { baseContent, newContent } = applyEditsToNormalizedContent(
       normalizedContent,
-      edits,
+      realEdits,
       path,
     );
 
