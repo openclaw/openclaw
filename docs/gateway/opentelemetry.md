@@ -371,10 +371,44 @@ to them directly without OTLP export.
 
 **Model usage**
 
-- `model.usage` - tokens, cost, duration, context, provider/model/channel,
-  session ids. `usage` is provider/turn accounting for cost and telemetry;
-  `context.used` is the current prompt/context snapshot and can be lower than
-  provider `usage.total` when cached input or tool-loop calls are involved.
+- `model.usage` - emitted after an agent turn when diagnostics are enabled and
+  usage is nonzero. The event carries the following fields:
+
+  Shared diagnostic envelope (added by the dispatcher before listeners receive
+  the event):
+  - `ts`: Unix timestamp in milliseconds when the event was dispatched.
+  - `seq`: Monotonically increasing sequence number within the diagnostic
+    session.
+  - `trace`: Optional distributed-trace context (`traceparent`, etc.).
+
+  Model-usage payload:
+  - `type`: `"model.usage"`.
+  - `sessionKey`: Session identifier string.
+  - `sessionId`: Session identifier string.
+  - `channel`: Originating channel, e.g. `"telegram"`, `"discord"`, or `"web"`.
+  - `agentId`: Active agent id.
+  - `provider`: Model provider name, e.g. `"openai"` or `"anthropic"`.
+  - `model`: Model identifier, e.g. `"gpt-4o"` or `"claude-sonnet-4-20250514"`.
+  - `usage.input`: Input token count.
+  - `usage.output`: Output token count.
+  - `usage.cacheRead`: Cached input tokens read from the provider prompt cache.
+  - `usage.cacheWrite`: Cached input tokens written to the provider prompt cache.
+  - `usage.promptTokens`: Prompt tokens; may differ from `usage.input` when
+    caching is involved.
+  - `usage.total`: Total token count.
+  - `context.limit`: Context-window token limit for the model.
+  - `context.used`: Actual context tokens used; can be lower than
+    `usage.total` when cached input or tool-loop calls are involved.
+  - `costUsd`: Estimated cost in USD; omitted when cost configuration is
+    unavailable.
+  - `durationMs`: Total turn duration in milliseconds.
+  - `lastCallUsage`: Per-call usage breakdown from the last individual API call
+    (optional). When present it contains the same shape as `usage`:
+    `input`, `output`, `cacheRead`, `cacheWrite`, and `total`.
+
+  `usage` is provider/turn accounting for cost and telemetry; `context.used`
+  is the current prompt/context snapshot and can be lower than provider
+  `usage.total` when cached input or tool-loop calls are involved.
 
 **Message flow**
 
