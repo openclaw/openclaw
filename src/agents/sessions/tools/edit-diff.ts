@@ -6,6 +6,7 @@
 import { constants } from "node:fs";
 import { access, readFile } from "node:fs/promises";
 import * as Diff from "diff";
+import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
 import { resolveToCwd } from "./path-utils.js";
 
 export function detectLineEnding(content: string): "\r\n" | "\n" {
@@ -145,14 +146,49 @@ function countOccurrences(content: string, oldText: string): number {
   return fuzzyContent.split(fuzzyOldText).length - 1;
 }
 
-function getNotFoundError(path: string, editIndex: number, totalEdits: number): Error {
-  if (totalEdits === 1) {
-    return new Error(
-      `Could not find the exact text in ${path}. The old text must match exactly including all whitespace and newlines.`,
-    );
+function getNotFoundError(
+  path: string,
+  editIndex: number,
+  totalEdits: number,
+  content?: string,
+  oldText?: string,
+): Error {
+  const prefix =
+    totalEdits === 1 ? "Could not find the exact text" : `Could not find edits[${editIndex}]`;
+  let hint = "";
+  if (content && oldText) {
+    // Score each line by similarity to the first line of oldText.
+    // Cap inputs to avoid unbounded CPU on large / minified files (P1).
+    const oldTextFirstLine = oldText.split("\n")[0]?.trim().slice(0, 200) ?? "";
+    if (oldTextFirstLine.length > 0) {
+      const MAX_LINES = 3000;
+      const MAX_LINE_LEN = 200;
+      const lines = content.split("\n");
+      const scored = lines
+        .slice(0, MAX_LINES)
+        .map((line, idx) => {
+          const trimmed = line.trim().slice(0, MAX_LINE_LEN);
+          const dist = levenshteinDistance(trimmed, oldTextFirstLine);
+          const maxLen = Math.max(trimmed.length, oldTextFirstLine.length);
+          return { lineNum: idx + 1, line: trimmed, score: maxLen > 0 ? 1 - dist / maxLen : 0 };
+        })
+        .filter((s) => s.score > 0.3)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, 3);
+      if (scored.length > 0) {
+        hint =
+          "\n" +
+          scored
+            .map(
+              (s) =>
+                `  near line ${s.lineNum}: "${s.line}" (${Math.round(s.score * 100)}% match, check whitespace/indentation)`,
+            )
+            .join("\n");
+      }
+    }
   }
   return new Error(
-    `Could not find edits[${editIndex}] in ${path}. The oldText must match exactly including all whitespace and newlines.`,
+    `${prefix} in ${path}. The old text must match exactly including all whitespace and newlines.${hint}`,
   );
 }
 
@@ -224,7 +260,7 @@ export function applyEditsToNormalizedContent(
     const edit = normalizedEdits[i];
     const matchResult = fuzzyFindText(baseContent, edit.oldText);
     if (!matchResult.found) {
-      throw getNotFoundError(path, i, normalizedEdits.length);
+      throw getNotFoundError(path, i, normalizedEdits.length, baseContent, edit.oldText);
     }
 
     const occurrences = countOccurrences(baseContent, edit.oldText);
