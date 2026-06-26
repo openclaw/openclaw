@@ -1,5 +1,6 @@
 // Duckduckgo plugin module implements ddg client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
@@ -36,21 +37,49 @@ type DuckDuckGoResult = {
 };
 
 function decodeHtmlEntities(text: string): string {
-  return text
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&apos;/g, "'")
-    .replace(/&#39;/g, "'")
-    .replace(/&#x27;/g, "'")
-    .replace(/&#x2F;/g, "/")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&ndash;/g, "-")
-    .replace(/&mdash;/g, "--")
-    .replace(/&hellip;/g, "...")
-    .replace(/&#(\d+);/g, (_, code) => String.fromCodePoint(Number(code)))
-    .replace(/&#x([0-9a-f]+);/gi, (_, code) => String.fromCodePoint(Number.parseInt(code, 16)));
+  return text.replace(
+    /&(?:lt|gt|quot|apos|#39|#x27|#x2F|nbsp|ndash|mdash|hellip|amp|#\d+|#x[0-9a-f]+);/gi,
+    (entity) => {
+      const normalized = entity.toLowerCase();
+      if (normalized === "&lt;") {
+        return "<";
+      }
+      if (normalized === "&gt;") {
+        return ">";
+      }
+      if (normalized === "&quot;") {
+        return '"';
+      }
+      if (normalized === "&apos;" || normalized === "&#39;" || normalized === "&#x27;") {
+        return "'";
+      }
+      if (normalized === "&#x2f;") {
+        return "/";
+      }
+      if (normalized === "&nbsp;") {
+        return " ";
+      }
+      if (normalized === "&ndash;") {
+        return "-";
+      }
+      if (normalized === "&mdash;") {
+        return "--";
+      }
+      if (normalized === "&hellip;") {
+        return "...";
+      }
+      if (normalized === "&amp;") {
+        return "&";
+      }
+      if (normalized.startsWith("&#x")) {
+        return String.fromCodePoint(Number.parseInt(normalized.slice(3, -1), 16));
+      }
+      if (normalized.startsWith("&#")) {
+        return String.fromCodePoint(Number.parseInt(normalized.slice(2, -1), 10));
+      }
+      return entity;
+    },
+  );
 }
 
 function stripHtml(html: string): string {
@@ -83,6 +112,10 @@ function isBotChallenge(html: string): boolean {
     return false;
   }
   return /g-recaptcha|are you a human|id="challenge-form"|name="challenge"/i.test(html);
+}
+
+async function readDuckDuckGoHtmlResponse(response: Response): Promise<string> {
+  return await readProviderTextResponse(response, "DuckDuckGo search");
 }
 
 function parseDuckDuckGoHtml(html: string): DuckDuckGoResult[] {
@@ -174,7 +207,7 @@ export async function runDuckDuckGoSearch(params: {
         );
       }
 
-      const html = await response.text();
+      const html = await readDuckDuckGoHtmlResponse(response);
       if (isBotChallenge(html)) {
         throw new Error("DuckDuckGo returned a bot-detection challenge.");
       }
@@ -210,5 +243,6 @@ export const testing = {
   decodeHtmlEntities,
   isBotChallenge,
   parseDuckDuckGoHtml,
+  readDuckDuckGoHtmlResponse,
 };
 export { testing as __testing };

@@ -1863,6 +1863,7 @@ export async function runDiscordQaLive(params: {
     generatedAt: finishedAt,
     primaryModel,
     providerMode,
+    repoRoot,
     transportId: "discord",
   });
   await fs.writeFile(
