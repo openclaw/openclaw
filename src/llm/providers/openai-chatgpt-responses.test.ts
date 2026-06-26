@@ -187,6 +187,46 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(result.errorMessage).toContain("Codex SSE response exceeded max buffer size");
   });
 
+  it("handles a large transport chunk containing many valid SSE events", async () => {
+    // Regression: one TCP read can deliver >64 KiB of already-delimited SSE
+    // events; the cap must apply only to the unterminated tail, not the full chunk.
+    const encoder = new TextEncoder();
+    const oversized = "x".repeat(65 * 1024);
+    // Mix many valid events with the oversized tail
+    const manyValidEvents = Array.from({ length: 300 }, () => 'data: {"type":"ping"}\n\n').join("");
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              controller.enqueue(encoder.encode(manyValidEvents + oversized));
+              controller.close();
+            },
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "text/event-stream" },
+          },
+        );
+      }),
+    );
+
+    const stream = streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct-1",
+        },
+      }),
+      transport: "sse",
+    });
+
+    const result = await stream.result();
+    // Valid events should be processed; only the oversized tail triggers the cap
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("Codex SSE response exceeded max buffer size");
+  });
+
   it("does not replay Responses item ids for store-disabled ChatGPT requests", async () => {
     let capturedPayload:
       | {

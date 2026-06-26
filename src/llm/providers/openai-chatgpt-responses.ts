@@ -737,11 +737,6 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
         break;
       }
       buffer += decoder.decode(value, { stream: true });
-      if (buffer.length > SSE_PARSE_MAX_BUFFER_BYTES) {
-        throw new CodexProtocolError(
-          `Codex SSE response exceeded max buffer size (${SSE_PARSE_MAX_BUFFER_BYTES} bytes)`,
-        );
-      }
 
       let idx = buffer.indexOf("\n\n");
       while (idx !== -1) {
@@ -766,6 +761,12 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
           }
         }
         idx = buffer.indexOf("\n\n");
+      }
+
+      if (buffer.length > SSE_PARSE_MAX_BUFFER_BYTES) {
+        throw new CodexProtocolError(
+          `Codex SSE response exceeded max buffer size (${SSE_PARSE_MAX_BUFFER_BYTES} bytes)`,
+        );
       }
     }
   } finally {
