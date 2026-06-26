@@ -5,13 +5,13 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   clearSessionStoreCacheForTest,
   loadSessionStore,
   updateSessionStore,
-} from "openclaw/plugin-sdk/session-store-runtime";
-import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+} from "../../../src/config/sessions/store.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 
 const TELEGRAM_DIRECT_KEY = "agent:main:telegram:direct:7463849194";

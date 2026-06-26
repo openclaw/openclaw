@@ -93,7 +93,7 @@ import {
   resolveMemorySourceExistingHash,
 } from "./manager-source-state.js";
 import {
-  markMemoryTargetSessionFilesDirty,
+  markMemoryTargetArchiveFilesDirty,
   runMemoryTargetedSessionSync,
 } from "./manager-targeted-sync.js";
 import {
@@ -509,7 +509,7 @@ export abstract class MemoryManagerSyncOps {
     shouldSyncSessions: boolean;
     needsFullReindex: boolean;
     needsFullSessionReindex?: boolean;
-    targetSessionFiles?: string[];
+    targetArchiveFiles?: string[];
     progress?: MemorySyncProgressState;
   }): Promise<void> {
     const memoryPlan = params.shouldSyncMemory
@@ -520,9 +520,9 @@ export abstract class MemoryManagerSyncOps {
         })
       : this.emptySourceSyncPlan();
     if (params.shouldSyncSessions) {
-      await this.syncSessionFiles({
+      await this.syncArchiveFiles({
         needsFullReindex: params.needsFullSessionReindex ?? params.needsFullReindex,
-        targetSessionFiles: params.targetSessionFiles,
+        targetArchiveFiles: params.targetArchiveFiles,
         progress: params.progress,
         deferIndex: true,
         prefixIndexItems: memoryPlan.indexItems,
@@ -1611,7 +1611,7 @@ export abstract class MemoryManagerSyncOps {
     const pendingTargets = Array.from(this.sessionPendingTargets.values());
     this.sessionPendingFiles.clear();
     this.sessionPendingTargets.clear();
-    pending.push(...Array.from(await this.resolveSessionFilesForSyncTargets(pendingTargets)));
+    pending.push(...Array.from(await this.resolveArchiveFilesForSyncTargets(pendingTargets)));
     let shouldSync = false;
     for (const sessionFile of pending) {
       if (!path.isAbsolute(sessionFile)) {
@@ -1827,11 +1827,11 @@ export abstract class MemoryManagerSyncOps {
     };
   }
 
-  private normalizeTargetSessionFiles(
-    sessionFiles?: string[],
+  private normalizeTargetArchiveFiles(
+    archiveFiles?: string[],
     corpusEntries: readonly SessionTranscriptCorpusEntry[] = [],
   ): Set<string> | null {
-    if (!sessionFiles || sessionFiles.length === 0) {
+    if (!archiveFiles || archiveFiles.length === 0) {
       return null;
     }
     const normalized = new Set<string>();
@@ -1840,7 +1840,7 @@ export abstract class MemoryManagerSyncOps {
         .filter((entry) => entry.transcriptSource !== "sqlite")
         .map((entry) => path.resolve(entry.sessionFile)),
     );
-    for (const sessionFile of sessionFiles) {
+    for (const sessionFile of archiveFiles) {
       const trimmed = sessionFile.trim();
       if (!trimmed) {
         continue;
@@ -1884,7 +1884,7 @@ export abstract class MemoryManagerSyncOps {
     return normalized.size > 0 ? normalized : null;
   }
 
-  private async resolveSessionFilesForSyncTargets(
+  private async resolveArchiveFilesForSyncTargets(
     sessions?: Iterable<MemorySessionSyncTarget> | null,
     knownCorpusEntries?: readonly SessionTranscriptCorpusEntry[],
   ): Promise<Set<string>> {
@@ -1931,16 +1931,16 @@ export abstract class MemoryManagerSyncOps {
     return files;
   }
 
-  private async combineTargetSessionFiles(params: {
+  private async combineTargetArchiveFiles(params: {
     sessions?: MemorySessionSyncTarget[];
-    sessionFiles?: string[];
+    archiveFiles?: string[];
   }): Promise<Set<string> | null> {
     const files = new Set<string>();
     const corpusEntries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId);
-    for (const file of this.normalizeTargetSessionFiles(params.sessionFiles, corpusEntries) ?? []) {
+    for (const file of this.normalizeTargetArchiveFiles(params.archiveFiles, corpusEntries) ?? []) {
       files.add(file);
     }
-    for (const file of await this.resolveSessionFilesForSyncTargets(
+    for (const file of await this.resolveArchiveFilesForSyncTargets(
       this.normalizeTargetSessions(params.sessions)?.values(),
       corpusEntries,
     )) {
@@ -2133,9 +2133,9 @@ export abstract class MemoryManagerSyncOps {
     return this.emptySourceSyncPlan();
   }
 
-  private async syncSessionFiles(params: {
+  private async syncArchiveFiles(params: {
     needsFullReindex: boolean;
-    targetSessionFiles?: string[];
+    targetArchiveFiles?: string[];
     progress?: MemorySyncProgressState;
     deferIndex?: boolean;
     prefixIndexItems?: MemoryIndexWorkItem[];
@@ -2158,21 +2158,21 @@ export abstract class MemoryManagerSyncOps {
         : null;
 
     const corpusEntries = await listSessionTranscriptCorpusEntriesForAgent(this.agentId);
-    const targetSessionFiles = params.needsFullReindex
+    const targetArchiveFiles = params.needsFullReindex
       ? null
-      : this.normalizeTargetSessionFiles(params.targetSessionFiles, corpusEntries);
+      : this.normalizeTargetArchiveFiles(params.targetArchiveFiles, corpusEntries);
     const corpusEntryByPath = new Map<string, SessionTranscriptCorpusEntry>(
       corpusEntries.map((entry) => [entry.sessionFile, entry]),
     );
-    const files = targetSessionFiles
-      ? Array.from(targetSessionFiles)
+    const files = targetArchiveFiles
+      ? Array.from(targetArchiveFiles)
       : corpusEntries.map((entry) => entry.sessionFile);
     const sessionPlan = resolveMemorySessionSyncPlan({
       needsFullReindex: params.needsFullReindex,
       files,
-      targetSessionFiles,
+      targetArchiveFiles,
       sessionsDirtyFiles: this.sessionsDirtyFiles,
-      existingRows: targetSessionFiles
+      existingRows: targetArchiveFiles
         ? null
         : loadMemorySourceFileState({
             db: this.db,
@@ -2188,7 +2188,7 @@ export abstract class MemoryManagerSyncOps {
       files: files.length,
       indexAll,
       dirtyFiles: this.sessionsDirtyFiles.size,
-      targetedFiles: targetSessionFiles?.size ?? 0,
+      targetedFiles: targetArchiveFiles?.size ?? 0,
       batch: this.batch.enabled,
       concurrency: this.getIndexConcurrency(),
     });
@@ -2454,15 +2454,15 @@ export abstract class MemoryManagerSyncOps {
     }
     const vectorReady = await this.ensureVectorReady();
     const meta = this.readMeta();
-    const targetSessionFiles = await this.combineTargetSessionFiles({
+    const targetArchiveFiles = await this.combineTargetArchiveFiles({
       sessions: params?.sessions,
-      sessionFiles: params?.sessionFiles,
+      archiveFiles: params?.archiveFiles,
     });
-    const hasTargetSessionFiles = targetSessionFiles !== null;
-    if (this.hasRequestedTargetSessionSync(params) && !hasTargetSessionFiles) {
+    const hasTargetArchiveFiles = targetArchiveFiles !== null;
+    if (this.hasRequestedTargetSessionSync(params) && !hasTargetArchiveFiles) {
       return;
     }
-    if (params?.reason === "cli" && !params.force && !hasTargetSessionFiles) {
+    if (params?.reason === "cli" && !params.force && !hasTargetArchiveFiles) {
       await this.markSessionStartupCatchupDirtyFiles();
     }
     const indexIdentity = resolveMemoryIndexIdentityState({
@@ -2509,13 +2509,13 @@ export abstract class MemoryManagerSyncOps {
       this.settings.provider === "none" ||
       hasOnlyFtsChunks;
     const needsMissingIdentityReindex =
-      indexIdentity.status === "missing" && !hasTargetSessionFiles && canRebuildMissingIdentity;
+      indexIdentity.status === "missing" && !hasTargetArchiveFiles && canRebuildMissingIdentity;
     const needsExplicitIdentityReindex =
-      params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetSessionFiles;
+      params?.reason === "cli" && indexIdentity.status !== "valid" && !hasTargetArchiveFiles;
     const canRunRetryFullReindex =
       indexIdentity.status !== "missing" || needsInitialIndex || canRebuildMissingIdentity;
     const needsFullReindex =
-      (params?.force && !hasTargetSessionFiles) ||
+      (params?.force && !hasTargetArchiveFiles) ||
       needsInitialIndex ||
       needsMissingIdentityReindex ||
       needsExplicitIdentityReindex ||
@@ -2524,9 +2524,9 @@ export abstract class MemoryManagerSyncOps {
     const needsFullSessionReindex = needsFullReindex || this.sessionsFullRetryDirty;
     if (indexIdentity.status !== "valid" && !needsFullReindex) {
       this.dirty = true;
-      const sessionsDirty = markMemoryTargetSessionFilesDirty({
+      const sessionsDirty = markMemoryTargetArchiveFilesDirty({
         sessionsDirtyFiles: this.sessionsDirtyFiles,
-        targetSessionFiles,
+        targetArchiveFiles,
       });
       if (sessionsDirty) {
         this.sessionsDirty = true;
@@ -2536,13 +2536,13 @@ export abstract class MemoryManagerSyncOps {
     if (!needsFullSessionReindex) {
       const targetedSessionSync = await runMemoryTargetedSessionSync({
         hasSessionSource: this.sources.has("sessions"),
-        targetSessionFiles,
+        targetArchiveFiles,
         reason: params?.reason,
         progress: progress ?? undefined,
         sessionsFullRetryDirty: this.sessionsFullRetryDirty,
         sessionsDirtyFiles: this.sessionsDirtyFiles,
-        syncSessionFiles: async (targetedParams) => {
-          await this.syncSessionFiles(targetedParams);
+        syncArchiveFiles: async (targetedParams) => {
+          await this.syncArchiveFiles(targetedParams);
         },
         shouldFallbackOnError: (err) => this.shouldFallbackOnError(err),
         activateFallbackProvider: async (reason) => await this.activateFallbackProvider(reason),
@@ -2564,7 +2564,7 @@ export abstract class MemoryManagerSyncOps {
 
       const shouldSyncMemory =
         this.sources.has("memory") &&
-        ((!hasTargetSessionFiles && params?.force) || needsFullReindex || this.dirty);
+        ((!hasTargetArchiveFiles && params?.force) || needsFullReindex || this.dirty);
       const shouldSyncSessions = this.shouldSyncSessions(params, needsFullReindex);
 
       if (this.shouldDeferSourceWideBatch()) {
@@ -2573,7 +2573,7 @@ export abstract class MemoryManagerSyncOps {
           shouldSyncSessions,
           needsFullReindex,
           needsFullSessionReindex,
-          targetSessionFiles: targetSessionFiles ? Array.from(targetSessionFiles) : undefined,
+          targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
           progress: progress ?? undefined,
         });
         if (shouldSyncMemory) {
@@ -2591,9 +2591,9 @@ export abstract class MemoryManagerSyncOps {
         }
 
         if (shouldSyncSessions) {
-          await this.syncSessionFiles({
+          await this.syncArchiveFiles({
             needsFullReindex: needsFullSessionReindex,
-            targetSessionFiles: targetSessionFiles ? Array.from(targetSessionFiles) : undefined,
+            targetArchiveFiles: targetArchiveFiles ? Array.from(targetArchiveFiles) : undefined,
             progress: progress ?? undefined,
           });
           this.clearSessionRetryState();
@@ -2606,7 +2606,7 @@ export abstract class MemoryManagerSyncOps {
       const activated =
         this.shouldFallbackOnError(err) && (await this.activateFallbackProvider(reason));
       if (activated) {
-        if (needsFullReindex && !hasTargetSessionFiles) {
+        if (needsFullReindex && !hasTargetArchiveFiles) {
           await this.runInPlaceReindex({
             reason: params?.reason ?? "fallback",
             force: true,
@@ -2630,7 +2630,7 @@ export abstract class MemoryManagerSyncOps {
   private hasRequestedTargetSessionSync(params?: MemorySyncParams): boolean {
     return Boolean(
       params?.sessions?.some((session) => session.sessionId.trim().length > 0) ||
-      params?.sessionFiles?.some((sessionFile) => sessionFile.trim().length > 0),
+      params?.archiveFiles?.some((sessionFile) => sessionFile.trim().length > 0),
     );
   }
 
@@ -2780,7 +2780,7 @@ export abstract class MemoryManagerSyncOps {
         }
 
         if (shouldSyncSessions) {
-          await this.syncSessionFiles({ needsFullReindex: true, progress: params.progress });
+          await this.syncArchiveFiles({ needsFullReindex: true, progress: params.progress });
           this.clearSessionRetryState();
         } else {
           this.refreshSessionDirtyFlag();

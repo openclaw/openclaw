@@ -9,8 +9,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearSessionStoreCacheForTest,
-  saveSessionStore,
-  type SessionEntry,
+  upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChannelType, type AutocompleteInteraction } from "../internal/discord.js";
@@ -139,18 +138,16 @@ async function saveSessionOverride(params: {
   modelOverride: string;
 }): Promise<void> {
   fs.mkdirSync(path.dirname(STORE_PATH), { recursive: true });
-  await saveSessionStore(
-    STORE_PATH,
-    {
-      [SESSION_KEY]: {
-        sessionId: "main",
-        updatedAt: Date.now(),
-        providerOverride: params.providerOverride,
-        modelOverride: params.modelOverride,
-      },
-    } satisfies Record<string, SessionEntry>,
-    { skipMaintenance: true },
-  );
+  await upsertSessionEntry({
+    storePath: STORE_PATH,
+    sessionKey: SESSION_KEY,
+    entry: {
+      sessionId: "main",
+      updatedAt: Date.now(),
+      providerOverride: params.providerOverride,
+      modelOverride: params.modelOverride,
+    },
+  });
 }
 
 function installProviderThinkingRegistryForTest(): void {

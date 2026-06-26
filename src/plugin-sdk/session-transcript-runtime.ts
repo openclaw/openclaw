@@ -54,32 +54,22 @@ export type {
 
 export type SessionTranscriptEvent = unknown;
 
-export type SessionTranscriptTargetParams = SessionTranscriptReadParams & {
-  /**
-   * @deprecated Prefer `{ agentId, sessionKey, sessionId }`. Runtime helpers
-   * use the canonical SQLite transcript identity; this field is accepted only
-   * while older command payloads still carry a transcript locator.
-   */
-  sessionFile?: string;
-};
+export type SessionTranscriptTargetParams = SessionTranscriptReadParams;
 
 export type SessionTranscriptTarget = SessionTranscriptIdentity & {
-  targetKind: "legacy-transcript-locator" | "runtime-session";
+  targetKind: "runtime-session";
 };
 
-/**
- * @deprecated Use SessionTranscriptTarget with `{ agentId, sessionKey,
- * sessionId }`. Active transcript file targets are transitional only and will
- * be removed with the SQLite session/transcript storage flip.
- */
-export type SessionTranscriptLegacyFileTarget = SessionTranscriptTarget & {
-  /**
-   * @deprecated Use SessionTranscriptTarget with `{ agentId, sessionKey,
-   * sessionId }`. This is a transitional locator for callers that still pass
-   * `sessionFile` through plugin command handlers. SQLite-backed sessions
-   * return an opaque locator, not a readable JSONL file path.
-   */
+export type SessionTranscriptFileTargetParams = {
+  agentId?: string;
   sessionFile: string;
+  sessionId: string;
+  sessionKey?: string;
+};
+
+export type SessionTranscriptFileTarget = SessionTranscriptIdentity & {
+  sessionFile: string;
+  targetKind: "transcript-file";
 };
 
 export type SessionTranscriptAppendMessageParams<TMessage> = SessionTranscriptTargetParams &
@@ -98,14 +88,22 @@ export type SessionTranscriptWriteLockParams = SessionTranscriptTargetParams & {
   config?: TranscriptMessageAppendOptions<unknown>["config"];
 };
 
+export type SessionTranscriptFileWriteLockParams = SessionTranscriptFileTargetParams & {
+  config?: TranscriptMessageAppendOptions<unknown>["config"];
+};
+
 export type SessionTranscriptWriteLockContext = {
   appendMessage: <TMessage>(
     options: Omit<TranscriptMessageAppendOptions<TMessage>, "config">,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   publishUpdate: (update?: TranscriptUpdatePayload) => Promise<void>;
   readEvents: () => Promise<SessionTranscriptEvent[]>;
-  target: SessionTranscriptTarget;
+  target: SessionTranscriptTarget | SessionTranscriptFileTarget;
 };
+
+type SessionTranscriptMirrorAppendResult =
+  | { ok: true; messageId: string }
+  | Extract<SessionTranscriptAppendResult, { ok: false }>;
 
 /**
  * Resolves the public identity for a transcript without returning its file path.
@@ -133,25 +131,22 @@ export async function resolveSessionTranscriptTarget(
   const target = await resolveSessionTranscriptRuntimeReadTarget(params);
   return projectPublicTarget({
     ...target,
-    targetKind: params.sessionFile?.trim() ? "legacy-transcript-locator" : "runtime-session",
+    targetKind: "runtime-session",
   });
 }
 
-/**
- * @deprecated Use resolveSessionTranscriptTarget with `{ agentId, sessionKey,
- * sessionId }`. This resolves the current opaque transcript locator for
- * legacy plugin command calls that still require `sessionFile`.
- */
-export async function resolveSessionTranscriptLegacyFileTarget(
-  params: SessionTranscriptTargetParams,
-): Promise<SessionTranscriptLegacyFileTarget> {
-  const target = await resolveSessionTranscriptRuntimeTarget(params);
+/** Resolves an explicit support/archive transcript file target. */
+export function resolveSessionTranscriptFileTarget(
+  params: SessionTranscriptFileTargetParams,
+): SessionTranscriptFileTarget {
+  const agentId = normalizeAgentId(params.agentId);
   return {
-    ...projectPublicTarget({
-      ...target,
-      targetKind: params.sessionFile?.trim() ? "legacy-transcript-locator" : "runtime-session",
-    }),
-    sessionFile: target.sessionFile,
+    agentId,
+    memoryKey: formatSessionTranscriptMemoryHitKey({ agentId, sessionId: params.sessionId }),
+    sessionFile: params.sessionFile,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey ?? "",
+    targetKind: "transcript-file",
   };
 }
 
@@ -178,7 +173,7 @@ export async function readLatestAssistantTextByIdentity(
  */
 export async function appendAssistantMirrorMessageByIdentity(
   params: SessionTranscriptAssistantMirrorAppendParams,
-): Promise<SessionTranscriptAppendResult> {
+): Promise<SessionTranscriptMirrorAppendResult> {
   const text = resolveMirroredTranscriptText({
     ...(params.mediaUrls !== undefined ? { mediaUrls: params.mediaUrls } : {}),
     ...(params.text !== undefined ? { text: params.text } : {}),
@@ -212,7 +207,6 @@ export async function appendAssistantMirrorMessageByIdentity(
       return {
         ok: true,
         messageId: latestEquivalentAssistantId,
-        sessionFile: target.sessionFile,
       };
     }
     const appendResult = await locked.appendMessage({
@@ -238,7 +232,6 @@ export async function appendAssistantMirrorMessageByIdentity(
     return {
       ok: true,
       messageId: appendResult.messageId,
-      sessionFile: target.sessionFile,
     };
   });
 }
@@ -278,6 +271,24 @@ export async function publishSessionTranscriptUpdateByIdentity(
   );
 }
 
+/** Publishes a transcript update for an explicit support/archive transcript file. */
+export function publishSessionTranscriptFileUpdate(
+  params: SessionTranscriptFileTargetParams & { update?: TranscriptUpdatePayload },
+): void {
+  const target = resolveSessionTranscriptFileTarget(params);
+  emitSessionTranscriptUpdate({
+    ...params.update,
+    agentId: target.agentId,
+    sessionFile: target.sessionFile,
+    sessionKey: target.sessionKey,
+    target: {
+      agentId: target.agentId,
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+    },
+  });
+}
+
 /**
  * Runs transcript work under the write lock for the resolved scoped target.
  */
@@ -285,14 +296,10 @@ export async function withSessionTranscriptWriteLock<T>(
   params: SessionTranscriptWriteLockParams,
   run: (context: SessionTranscriptWriteLockContext) => Promise<T> | T,
 ): Promise<T> {
-  const legacyExplicitSessionFile = params.sessionFile?.trim();
-  if (legacyExplicitSessionFile && !params.sessionKey.trim()) {
-    return await withLegacySessionTranscriptFileWriteLock(params, legacyExplicitSessionFile, run);
-  }
   const storageTarget = await resolveSessionTranscriptRuntimeTarget(params);
   const target = projectPublicTarget({
     ...storageTarget,
-    targetKind: params.sessionFile?.trim() ? "legacy-transcript-locator" : "runtime-session",
+    targetKind: "runtime-session",
   });
   const boundScope = {
     ...params,
@@ -327,32 +334,26 @@ export async function withSessionTranscriptWriteLock<T>(
   return result;
 }
 
-async function withLegacySessionTranscriptFileWriteLock<T>(
-  params: SessionTranscriptWriteLockParams,
-  sessionFile: string,
+/** Runs transcript work under the write lock for an explicit support/archive transcript file. */
+export async function withSessionTranscriptFileWriteLock<T>(
+  params: SessionTranscriptFileWriteLockParams,
   run: (context: SessionTranscriptWriteLockContext) => Promise<T> | T,
 ): Promise<T> {
-  const agentId = normalizeAgentId(params.agentId);
-  const target = projectPublicTarget({
-    agentId,
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    targetKind: "legacy-transcript-locator",
-  });
+  const target = resolveSessionTranscriptFileTarget(params);
   const queuedUpdates: Array<TranscriptUpdatePayload | undefined> = [];
   const result = await runSessionTranscriptAppendTransaction(
     {
       config: params.config,
-      transcriptPath: sessionFile,
+      transcriptPath: target.sessionFile,
     },
     (transaction) =>
       run({
         target,
-        readEvents: () => readLegacySessionTranscriptEvents(sessionFile),
+        readEvents: () => readSessionTranscriptFileEvents(target.sessionFile),
         appendMessage: (options) =>
           transaction.appendMessage({
             ...options,
-            sessionId: params.sessionId,
+            sessionId: target.sessionId,
           }),
         publishUpdate: async (update) => {
           queuedUpdates.push(update ? { ...update } : undefined);
@@ -360,22 +361,12 @@ async function withLegacySessionTranscriptFileWriteLock<T>(
       }),
   );
   for (const update of queuedUpdates) {
-    emitSessionTranscriptUpdate({
-      ...update,
-      agentId,
-      sessionFile,
-      sessionKey: params.sessionKey,
-      target: {
-        agentId,
-        sessionId: params.sessionId,
-        sessionKey: params.sessionKey,
-      },
-    });
+    publishSessionTranscriptFileUpdate({ ...target, update });
   }
   return result;
 }
 
-async function readLegacySessionTranscriptEvents(
+async function readSessionTranscriptFileEvents(
   sessionFile: string,
 ): Promise<SessionTranscriptEvent[]> {
   const events: SessionTranscriptEvent[] = [];

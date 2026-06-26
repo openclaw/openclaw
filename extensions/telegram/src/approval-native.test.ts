@@ -1,8 +1,9 @@
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { saveSessionStore, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it } from "vitest";
+import { saveSessionStore } from "../../../src/config/sessions/store.js";
+import type { SessionEntry } from "../../../src/config/sessions/types.js";
 import { telegramApprovalCapability } from "./approval-native.js";
 
 function buildConfig(

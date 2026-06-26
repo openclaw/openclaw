@@ -57,11 +57,13 @@ export {
   parseUsageCountedSessionIdFromFileName,
 } from "../../../../src/config/sessions/artifacts.js";
 export { canonicalizeMainSessionAlias } from "../../../../src/config/sessions/main-session.js";
-export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
+export {
+  resolveSessionFilePath,
+  resolveSessionTranscriptsDirForAgent,
+} from "../../../../src/config/sessions/paths.js";
 export {
   loadTranscriptEventsSync,
   listSessionEntries,
-  resolveSessionFilePath,
   resolveStorePath,
 } from "../../../../src/plugin-sdk/session-store-runtime.js";
 export { parseSqliteSessionFileMarker } from "../../../../src/config/sessions/sqlite-marker.js";

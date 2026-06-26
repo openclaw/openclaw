@@ -580,10 +580,10 @@ Completed consolidation/deletion highlights:
 - Channel session runtime types now expose `{agentId, sessionKey}` for
   updated-at reads, inbound metadata, and last-route updates. The old
   `saveSessionStore(storePath, store)` compatibility type is gone.
-- Plugin runtime, extension API, and `config/sessions` barrel surfaces now steer
-  plugin code to SQLite-backed session row helpers. Root library compatibility
-  exports (`loadSessionStore`, `saveSessionStore`, `resolveStorePath`) remain as
-  deprecated shims for existing consumers. The old
+- Plugin runtime, extension API, and plugin SDK session surfaces now expose
+  SQLite-backed session row helpers instead of active-session whole-store/file
+  compatibility helpers. Root library compatibility exports remain available
+  only outside the plugin SDK for legacy internal and migration callers. The old
   `resolveLegacySessionStorePath` helper is gone; legacy `sessions.json` path
   construction is now local to migration and test fixtures.
 - `src/config/sessions/session-entries.sqlite.ts` now stores canonical session
