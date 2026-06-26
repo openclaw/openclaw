@@ -824,6 +824,12 @@ export type PluginHookSubagentEndedEvent = {
   reason: string;
   sendFarewell?: boolean;
   accountId?: string;
+  requesterOrigin?: {
+    channel?: string;
+    accountId?: string;
+    to?: string;
+    threadId?: string | number;
+  };
   runId?: string;
   endedAt?: number;
   outcome?: "ok" | "error" | "timeout" | "killed" | "reset" | "deleted";
@@ -845,7 +851,7 @@ export type PluginHookGatewayStopEvent = {
   reason?: string;
 };
 
-export type PluginHookGatewayCronRunStatus = "ok" | "error" | "skipped";
+export type PluginHookGatewayCronRunStatus = "ok" | "error" | "skipped" | "deferred";
 
 export type PluginHookGatewayCronDeliveryStatus =
   | "not-requested"

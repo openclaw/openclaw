@@ -113,6 +113,7 @@ export async function emitSubagentEndedHookOnce(params: {
           reason: params.reason,
           sendFarewell: params.sendFarewell,
           accountId: params.accountId,
+          requesterOrigin: params.entry.requesterOrigin,
           runId: params.entry.runId,
           endedAt: params.entry.endedAt,
           outcome: params.outcome,

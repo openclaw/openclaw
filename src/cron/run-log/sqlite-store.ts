@@ -87,7 +87,13 @@ export function parseStoredRunLogEntry(row: CronRunLogRow): CronRunLogEntry | nu
     ...parsed,
     ts: normalizeSqliteNumber(row.ts) ?? parsed.ts,
     jobId: row.job_id,
-    status: (row.status as CronRunStatus | null) ?? parsed.status,
+    status:
+      (row.status === "ok" ||
+      row.status === "error" ||
+      row.status === "skipped" ||
+      row.status === "deferred"
+        ? (row.status as CronRunStatus)
+        : null) ?? parsed.status,
     error: row.error ?? parsed.error,
     summary: row.summary ?? parsed.summary,
     delivered: integerToBoolean(row.delivered) ?? parsed.delivered,

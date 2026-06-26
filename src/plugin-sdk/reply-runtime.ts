@@ -55,6 +55,14 @@ export type {
   ReplyDispatcherWithTypingOptions,
 } from "../auto-reply/reply/reply-dispatcher.js";
 export { createReplyReferencePlanner } from "../auto-reply/reply/reply-reference.js";
+export {
+  classifyAgentLifecycleParentState,
+  isAgentLifecycleYieldedWaiting,
+} from "../agents/agent-lifecycle-parent-state.js";
+export type {
+  AgentLifecycleParentState,
+  AgentLifecycleReplyEvent,
+} from "../agents/agent-lifecycle-parent-state.js";
 export type {
   GetReplyOptions,
   BlockReplyContext,

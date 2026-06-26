@@ -60,6 +60,21 @@ function createOkIsolatedCronState(params: { storePath: string; now: number; sum
   });
 }
 
+function createDeferredIsolatedCronState(params: { storePath: string; now: number }) {
+  return createCronServiceState({
+    storePath: params.storePath,
+    cronEnabled: true,
+    log: logger,
+    nowMs: () => params.now,
+    enqueueSystemEvent: vi.fn(),
+    requestHeartbeat: vi.fn(),
+    runIsolatedAgentJob: vi.fn(async () => ({
+      status: "deferred" as const,
+      summary: "waiting on descendant",
+    })),
+  });
+}
+
 function createInterruptedMainJob(now: number): CronJob {
   return {
     id: "startup-interrupted",
@@ -171,6 +186,7 @@ function expectTaskRun(params: {
   status: string;
   sourceId: string;
   progressSummary?: string;
+  terminalSummary?: string;
 }) {
   const task = findTaskByRunId(params.runId);
   expect(task?.runtime).toBe(params.runtime);
@@ -178,6 +194,9 @@ function expectTaskRun(params: {
   expect(task?.sourceId).toBe(params.sourceId);
   if (params.progressSummary !== undefined) {
     expect(task?.progressSummary).toBe(params.progressSummary);
+  }
+  if (params.terminalSummary !== undefined) {
+    expect(task?.terminalSummary).toBe(params.terminalSummary);
   }
 }
 
@@ -460,6 +479,33 @@ describe("cron service ops seam coverage", () => {
         status: "timed_out",
         sourceId: "isolated-timeout",
       });
+    });
+  });
+
+  it("completes deferred manual runs in the shared task registry", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+
+    await withStateDirForStorePath(storePath, async () => {
+      await writeDueIsolatedJobSnapshot(storePath, now);
+
+      const state = createDeferredIsolatedCronState({ storePath, now });
+
+      await expect(run(state, "isolated-timeout", "force")).resolves.toEqual({
+        ok: true,
+        ran: true,
+      });
+
+      expectTaskRun({
+        runId: `cron:isolated-timeout:${now}`,
+        runtime: "cron",
+        status: "succeeded",
+        sourceId: "isolated-timeout",
+        terminalSummary: "waiting on descendant",
+      });
+      const task = findTaskByRunId(`cron:isolated-timeout:${now}`);
+      expect(task?.progressSummary).toBeUndefined();
+      expect(formatTaskStatusDetail(task!)).toBe("waiting on descendant");
     });
   });
 

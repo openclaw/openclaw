@@ -1570,6 +1570,7 @@ export const uk: TranslationMap = {
       runStatusOk: "OK",
       runStatusError: "Помилка",
       runStatusSkipped: "Пропущено",
+      runStatusDeferred: "Deferred",
       runStatusUnknown: "Невідомо",
       deliveryDelivered: "Доставлено",
       deliveryNotDelivered: "Не доставлено",

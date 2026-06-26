@@ -109,6 +109,7 @@ function getRunStatusOptions(): Array<{ value: CronRunsStatusValue; label: strin
     { value: "ok", label: t("cron.runs.runStatusOk") },
     { value: "error", label: t("cron.runs.runStatusError") },
     { value: "skipped", label: t("cron.runs.runStatusSkipped") },
+    { value: "deferred", label: t("cron.runs.runStatusDeferred") },
   ];
 }
 
@@ -546,6 +547,7 @@ export function renderCron(props: CronProps) {
                   <option value="ok">${t("cron.runs.runStatusOk")}</option>
                   <option value="error">${t("cron.runs.runStatusError")}</option>
                   <option value="skipped">${t("cron.runs.runStatusSkipped")}</option>
+                  <option value="deferred">${t("cron.runs.runStatusDeferred")}</option>
                   <option value="unknown">${t("cron.runs.runStatusUnknown")}</option>
                 </select>
               </label>
@@ -1802,7 +1804,9 @@ function renderJobState(job: CronJob) {
         ? "cron-job-status-error"
         : rawStatus === "skipped"
           ? "cron-job-status-skipped"
-          : "cron-job-status-na";
+          : rawStatus === "deferred"
+            ? "cron-job-status-skipped"
+            : "cron-job-status-na";
   const statusLabel =
     rawStatus === "ok"
       ? t("cron.runs.runStatusOk")
@@ -1810,7 +1814,9 @@ function renderJobState(job: CronJob) {
         ? t("cron.runs.runStatusError")
         : rawStatus === "skipped"
           ? t("cron.runs.runStatusSkipped")
-          : t("cron.runs.runStatusUnknown");
+          : rawStatus === "deferred"
+            ? t("cron.runs.runStatusDeferred")
+            : t("cron.runs.runStatusUnknown");
   const nextRunAtMs = job.state?.nextRunAtMs;
   const lastRunAtMs = job.state?.lastRunAtMs;
 
@@ -1844,6 +1850,8 @@ function runStatusLabel(value: string): string {
       return t("cron.runs.runStatusError");
     case "skipped":
       return t("cron.runs.runStatusSkipped");
+    case "deferred":
+      return t("cron.runs.runStatusDeferred");
     default:
       return t("cron.runs.runStatusUnknown");
   }

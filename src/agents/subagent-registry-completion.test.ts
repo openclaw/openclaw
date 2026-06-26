@@ -107,11 +107,32 @@ describe("emitSubagentEndedHookOnce", () => {
       runSubagentEnded: lifecycleMocks.runSubagentEnded,
     });
 
-    const params = createEmitParams();
+    const params = createEmitParams({
+      entry: {
+        ...createRunEntry(),
+        requesterOrigin: {
+          channel: "discord",
+          accountId: "work",
+          to: "channel:123",
+          threadId: "456",
+        },
+      },
+    });
     const emitted = await mod.emitSubagentEndedHookOnce(params);
 
     expect(emitted).toBe(true);
     expect(lifecycleMocks.runSubagentEnded).toHaveBeenCalledTimes(1);
+    expect(lifecycleMocks.runSubagentEnded).toHaveBeenCalledWith(
+      expect.objectContaining({
+        requesterOrigin: {
+          channel: "discord",
+          accountId: "work",
+          to: "channel:123",
+          threadId: "456",
+        },
+      }),
+      expect.any(Object),
+    );
     expect(typeof params.entry.endedHookEmittedAt).toBe("number");
     expect(params.persist).toHaveBeenCalledTimes(1);
   });

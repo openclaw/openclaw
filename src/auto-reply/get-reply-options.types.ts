@@ -1,4 +1,5 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
+import type { AgentLifecycleReplyEvent } from "../agents/agent-lifecycle-parent-state.js";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -208,6 +209,8 @@ export type GetReplyOptions = {
   onCompactionStart?: () => Promise<void> | void;
   /** Called when context auto-compaction completes. */
   onCompactionEnd?: () => Promise<void> | void;
+  /** Called for coarse agent lifecycle state useful to channel-owned progress UI. */
+  onLifecycleEvent?: (payload: AgentLifecycleReplyEvent) => Promise<void> | void;
   /** Called when the actual model is selected (including after fallback).
    * Use this to get model/provider/thinkLevel for responsePrefix template interpolation. */
   onModelSelected?: (ctx: ModelSelectedContext) => void;

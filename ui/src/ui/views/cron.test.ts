@@ -172,6 +172,7 @@ describe("cron view", () => {
       { type: "checkbox", value: "ok" },
       { type: "checkbox", value: "error" },
       { type: "checkbox", value: "skipped" },
+      { type: "checkbox", value: "deferred" },
       { type: "checkbox", value: "delivered" },
       { type: "checkbox", value: "not-delivered" },
       { type: "checkbox", value: "unknown" },

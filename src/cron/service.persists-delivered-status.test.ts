@@ -34,6 +34,13 @@ function buildAnnounceIsolatedAgentTurnJob(name: string): CronAddInput {
   };
 }
 
+function buildOneShotAnnounceIsolatedAgentTurnJob(name: string): CronAddInput {
+  return {
+    ...buildAnnounceIsolatedAgentTurnJob(name),
+    schedule: { kind: "at", at: new Date(Date.now() + 1_000).toISOString() },
+  };
+}
+
 function buildAnnounceWithFailureDestinationJob(name: string): CronAddInput {
   return {
     ...buildAnnounceIsolatedAgentTurnJob(name),
@@ -89,11 +96,12 @@ function buildMainSessionSystemEventJob(name: string): CronAddInput {
 
 function createIsolatedCronWithFinishedBarrier(params: {
   storePath: string;
-  status?: "ok" | "error";
+  status?: "ok" | "error" | "deferred";
   delivered?: boolean;
   error?: string;
   onFinished?: (evt: {
     jobId: string;
+    status?: string;
     delivered?: boolean;
     deliveryStatus?: string;
     failureNotificationDelivery?: {
@@ -120,6 +128,7 @@ function createIsolatedCronWithFinishedBarrier(params: {
       if (evt.action === "finished") {
         params.onFinished?.({
           jobId: evt.jobId,
+          status: evt.status,
           delivered: evt.delivered,
           deliveryStatus: evt.deliveryStatus,
           failureNotificationDelivery: evt.failureNotificationDelivery,
@@ -187,11 +196,12 @@ function expectDeliveryNotRequested(
 
 async function runIsolatedJobAndReadState(params: {
   job: CronAddInput;
-  status?: "ok" | "error";
+  status?: "ok" | "error" | "deferred";
   delivered?: boolean;
   error?: string;
   onFinished?: (evt: {
     jobId: string;
+    status?: string;
     delivered?: boolean;
     deliveryStatus?: string;
     failureNotificationDelivery?: {
@@ -422,6 +432,42 @@ describe("CronService persists delivered status", () => {
     expect(updated?.state.lastDelivered).toBeUndefined();
     expect(updated?.state.lastDeliveryStatus).toBe("unknown");
     expect(updated?.state.lastDeliveryError).toBeUndefined();
+  });
+
+  it("persists deferred isolated yield as waiting with unknown delivery", async () => {
+    let capturedEvent:
+      | { jobId: string; status?: string; delivered?: boolean; deliveryStatus?: string }
+      | undefined;
+    const updated = await runIsolatedJobAndReadState({
+      job: buildAnnounceIsolatedAgentTurnJob("delivery-deferred"),
+      status: "deferred",
+      onFinished: (evt) => {
+        capturedEvent = evt;
+      },
+    });
+
+    expect(updated?.state.lastRunStatus).toBe("deferred");
+    expect(updated?.state.lastDelivered).toBeUndefined();
+    expect(updated?.state.lastDeliveryStatus).toBe("unknown");
+    expect(updated?.state.lastDeliveryError).toBeUndefined();
+    expect(capturedEvent).toMatchObject({
+      status: "deferred",
+      deliveryStatus: "unknown",
+    });
+    expect(capturedEvent?.delivered).toBeUndefined();
+  });
+
+  it("disables one-shot jobs after deferred isolated yield handoff", async () => {
+    const updated = await runIsolatedJobAndReadState({
+      job: buildOneShotAnnounceIsolatedAgentTurnJob("one-shot-delivery-deferred"),
+      status: "deferred",
+    });
+
+    expect(updated?.enabled).toBe(false);
+    expect(updated?.state.nextRunAtMs).toBeUndefined();
+    expect(updated?.state.lastRunStatus).toBe("deferred");
+    expect(updated?.state.lastDelivered).toBeUndefined();
+    expect(updated?.state.lastDeliveryStatus).toBe("unknown");
   });
 
   it("does not set lastDelivered for main session jobs", async () => {

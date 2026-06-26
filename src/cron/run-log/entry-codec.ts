@@ -4,7 +4,7 @@ import type { FailoverReason } from "../../agents/embedded-agent-helpers/types.j
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
 import { normalizeCronRunDiagnostics } from "../run-diagnostics.js";
 import type { CronRunLogEntry } from "../run-log-types.js";
-import type { CronDeliveryStatus } from "../types.js";
+import type { CronDeliveryStatus, CronRunStatus } from "../types.js";
 
 const CRON_FAILOVER_REASONS = new Set<FailoverReason>([
   "auth",
@@ -26,6 +26,12 @@ const CRON_FAILOVER_REASONS = new Set<FailoverReason>([
 function normalizeCronRunLogErrorReason(value: unknown): FailoverReason | undefined {
   return typeof value === "string" && CRON_FAILOVER_REASONS.has(value as FailoverReason)
     ? (value as FailoverReason)
+    : undefined;
+}
+
+function normalizeCronRunLogStatus(value: unknown): CronRunStatus | undefined {
+  return value === "ok" || value === "error" || value === "skipped" || value === "deferred"
+    ? value
     : undefined;
 }
 
@@ -71,7 +77,7 @@ export function parseCronRunLogEntryObject(
     ts: entryObj.ts,
     jobId: entryObj.jobId,
     action: "finished",
-    status: entryObj.status,
+    status: normalizeCronRunLogStatus(entryObj.status),
     error: normalizedError,
     errorReason: normalizedErrorReason,
     summary: entryObj.summary,

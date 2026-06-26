@@ -277,8 +277,12 @@ export function createDiscordDraftPreviewController(params: {
       }
       await draftStream.flush();
     },
-    async cleanup() {
+    async cleanup(options?: { preserveInProgress?: boolean }) {
       try {
+        if (options?.preserveInProgress) {
+          await draftStream?.flush();
+          return;
+        }
         progressDraft.cancel();
         if (!finalReplyDelivered) {
           await draftStream?.discardPending();

@@ -559,7 +559,7 @@ function isScheduledTerminalOneShotRetry(
   ) {
     return false;
   }
-  if (lastRunStatus === "error") {
+  if (lastRunStatus === "error" || lastRunStatus === "deferred") {
     return true;
   }
   return (
@@ -629,6 +629,9 @@ function resolveDeliveryState(params: {
       error: params.error,
       failureNotification: { status: "unknown" },
     };
+  }
+  if (params.runStatus === "deferred") {
+    return { status: "unknown", failureNotification: { status: "not-requested" } };
   }
   if (params.delivered === true) {
     return {
@@ -790,8 +793,13 @@ export function applyJobResult(
             "cron: disabling one-shot job after disabled heartbeat retries",
           );
         }
-      } else if (result.status === "ok" || result.status === "skipped") {
-        // One-shot done or skipped: disable to prevent tight-loop (#11452).
+      } else if (
+        result.status === "ok" ||
+        result.status === "skipped" ||
+        result.status === "deferred"
+      ) {
+        // One-shot done, skipped, or handed off to a descendant: disable to prevent
+        // tight-loop (#11452) while preserving the deferred state for inspection.
         job.enabled = false;
         job.state.nextRunAtMs = undefined;
       } else if (result.status === "error") {

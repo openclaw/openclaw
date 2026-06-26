@@ -35,7 +35,11 @@ import {
   isReplyPayloadNonTerminalToolErrorWarning,
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
-import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+import {
+  isAgentLifecycleYieldedWaiting,
+  type ReplyDispatchKind,
+  type ReplyPayload,
+} from "openclaw/plugin-sdk/reply-runtime";
 import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { readLatestAssistantTextByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -908,6 +912,7 @@ async function processDiscordMessageInner(
     null;
   let dispatchError = false;
   let dispatchAborted = false;
+  let yieldedParentPaused = false;
   const deliverPendingToolWarningFinalIfNeeded = async () => {
     if (!pendingToolWarningFinal || userFacingFinalDelivered || isProcessAborted(abortSignal)) {
       return undefined;
@@ -1132,6 +1137,13 @@ async function processDiscordMessageInner(
           statusReactions.cancelPending();
           await statusReactions.setThinking();
         },
+        onLifecycleEvent: async (payload) => {
+          if (isAgentLifecycleYieldedWaiting(payload)) {
+            yieldedParentPaused = true;
+            await draftPreview.pushToolProgress("Waiting for subagent completion events.");
+            await statusReactions.setTool("sessions_yield");
+          }
+        },
       },
     });
     if (!preparedResult.dispatched) {
@@ -1151,10 +1163,12 @@ async function processDiscordMessageInner(
     throw err;
   } finally {
     endDiscordInboundEventDeliveryCorrelation();
-    await draftPreview.cleanup();
+    await draftPreview.cleanup({ preserveInProgress: yieldedParentPaused });
     const finalDeliveryFailed = (dispatchResult?.failedCounts?.final ?? 0) > 0;
     if (statusReactionsActive) {
-      if (dispatchAborted) {
+      if (yieldedParentPaused) {
+        statusReactions.cancelPending();
+      } else if (dispatchAborted) {
         if (removeAckAfterReply) {
           void statusReactions.clear();
         } else {

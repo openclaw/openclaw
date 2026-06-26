@@ -199,11 +199,21 @@ describe("cron run log", () => {
           sessionKey: "agent:main:cron:a:run:run-123",
         },
       });
+      await appendCronRunLog({
+        storePath,
+        entry: {
+          ts: 4,
+          jobId: "a",
+          action: "finished",
+          status: "deferred",
+          summary: "waiting on descendant",
+        },
+      });
 
       const allA = (
         await readCronRunLogEntriesPage({ storePath, jobId: "a", limit: 10, sortDir: "asc" })
       ).entries;
-      expect(allA.map((e) => e.jobId)).toEqual(["a", "a"]);
+      expect(allA.map((e) => e.jobId)).toEqual(["a", "a", "a"]);
 
       const onlyA = (
         await readCronRunLogEntriesPage({
@@ -213,7 +223,7 @@ describe("cron run log", () => {
           sortDir: "asc",
         })
       ).entries;
-      expect(onlyA.map((e) => e.ts)).toEqual([1, 3]);
+      expect(onlyA.map((e) => e.ts)).toEqual([1, 3, 4]);
 
       const lastOne = (
         await readCronRunLogEntriesPage({
@@ -223,9 +233,19 @@ describe("cron run log", () => {
           sortDir: "desc",
         })
       ).entries;
-      expect(lastOne.map((e) => e.ts)).toEqual([3]);
-      expect(lastOne[0]?.sessionId).toBe("run-123");
-      expect(lastOne[0]?.sessionKey).toBe("agent:main:cron:a:run:run-123");
+      expect(lastOne.map((e) => e.ts)).toEqual([4]);
+      expect(lastOne[0]?.status).toBe("deferred");
+      expect(lastOne[0]?.summary).toBe("waiting on descendant");
+
+      const onlyDeferred = (
+        await readCronRunLogEntriesPage({
+          storePath,
+          limit: 10,
+          status: "deferred",
+          sortDir: "asc",
+        })
+      ).entries;
+      expect(onlyDeferred.map((e) => e.ts)).toEqual([4]);
 
       const onlyB = (
         await readCronRunLogEntriesPage({

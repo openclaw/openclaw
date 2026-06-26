@@ -1580,6 +1580,7 @@ export const de: TranslationMap = {
       runStatusOk: "OK",
       runStatusError: "Fehler",
       runStatusSkipped: "Übersprungen",
+      runStatusDeferred: "Deferred",
       runStatusUnknown: "Unbekannt",
       deliveryDelivered: "Zugestellt",
       deliveryNotDelivered: "Nicht zugestellt",

@@ -1550,6 +1550,7 @@ export const ar: TranslationMap = {
       runStatusOk: "حسنًا",
       runStatusError: "خطأ",
       runStatusSkipped: "تم التخطي",
+      runStatusDeferred: "Deferred",
       runStatusUnknown: "غير معروف",
       deliveryDelivered: "تم التسليم",
       deliveryNotDelivered: "لم يتم التسليم",

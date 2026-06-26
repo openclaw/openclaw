@@ -1573,6 +1573,7 @@ export const nl: TranslationMap = {
       runStatusOk: "OK",
       runStatusError: "Fout",
       runStatusSkipped: "Overgeslagen",
+      runStatusDeferred: "Deferred",
       runStatusUnknown: "Onbekend",
       deliveryDelivered: "Geleverd",
       deliveryNotDelivered: "Niet geleverd",

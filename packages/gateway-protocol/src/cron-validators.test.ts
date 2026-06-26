@@ -312,7 +312,7 @@ describe("cron protocol validators", () => {
       validateCronRunsParams({
         scope: "all",
         limit: 25,
-        statuses: ["ok", "error"],
+        statuses: ["ok", "error", "skipped", "deferred"],
         deliveryStatuses: ["delivered", "not-requested"],
         query: "fail",
         sortDir: "desc",

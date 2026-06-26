@@ -1279,6 +1279,7 @@ async function finalizeCronRun(params: {
     deliveryBestEffort: resolveCronDeliveryBestEffort(prepared.input.job),
     deliveryPayloadHasStructuredContent,
     deliveryPayloads,
+    yielded: finalRunResult.meta?.yielded === true,
     synthesizedText,
     ttsAuto: prepared.cronSession.sessionEntry.ttsAuto,
     summary,

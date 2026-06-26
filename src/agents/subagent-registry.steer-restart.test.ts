@@ -14,6 +14,7 @@ let lifecycleHandler:
         endedAt?: number;
         aborted?: boolean;
         error?: string;
+        yielded?: boolean;
       };
     }) => void)
   | undefined;
@@ -275,6 +276,8 @@ describe("subagent registry steer restarts", () => {
       endedAt?: number;
       aborted?: boolean;
       error?: string;
+      yielded?: boolean;
+      phase?: string;
     } = {},
   ) => {
     lifecycleHandler?.({
@@ -830,6 +833,128 @@ describe("subagent registry steer restarts", () => {
     );
     expect(countMatching(childRunIds, (id) => id === "run-parent")).toBe(2);
     expect(countMatching(childRunIds, (id) => id === "run-child")).toBe(1);
+  });
+
+  it("reconciles a yielded parent after its child succeeds without interim parent delivery", async () => {
+    registerRun({
+      runId: "run-yield-parent-success",
+      childSessionKey: "agent:main:subagent:yield-parent-success",
+      task: "yield parent waits",
+      expectsCompletionMessage: true,
+    });
+    registerRun({
+      runId: "run-yield-child-success",
+      childSessionKey: "agent:main:subagent:yield-parent-success:subagent:child",
+      requesterSessionKey: "agent:main:subagent:yield-parent-success",
+      requesterDisplayKey: "yield-parent-success",
+      task: "child succeeds",
+    });
+
+    emitLifecycleEnd("run-yield-parent-success", {
+      startedAt: 100,
+      endedAt: Date.now(),
+      yielded: true,
+    });
+
+    await waitForRegistrySideEffect(() => {
+      const parentCalls = announceSpy.mock.calls.filter(
+        ([arg]) =>
+          ((arg ?? {}) as { childRunId?: string }).childRunId === "run-yield-parent-success",
+      );
+      expect(parentCalls).toHaveLength(0);
+    });
+
+    emitLifecycleEnd("run-yield-child-success", {
+      startedAt: 200,
+      endedAt: Date.now(),
+    });
+
+    await waitForRegistrySideEffect(() => {
+      const childRunIds = announceSpy.mock.calls.map(
+        (call) => ((call[0] ?? {}) as { childRunId?: string }).childRunId,
+      );
+      expect(countMatching(childRunIds, (id) => id === "run-yield-child-success")).toBe(1);
+      expect(countMatching(childRunIds, (id) => id === "run-yield-parent-success")).toBe(1);
+    });
+
+    const parentCall = announceSpy.mock.calls.find(
+      ([arg]) => ((arg ?? {}) as { childRunId?: string }).childRunId === "run-yield-parent-success",
+    )?.[0] as { outcome?: { status?: string }; wakeOnDescendantSettle?: boolean } | undefined;
+    expect(parentCall?.outcome?.status).toBe("ok");
+    expect(parentCall?.wakeOnDescendantSettle).toBe(true);
+  });
+
+  it("reconciles a yielded parent after child failure so diagnostics can wake the parent", async () => {
+    registerRun({
+      runId: "run-yield-parent-failure",
+      childSessionKey: "agent:main:subagent:yield-parent-failure",
+      task: "yield parent waits for failed child",
+      expectsCompletionMessage: true,
+    });
+    registerRun({
+      runId: "run-yield-child-failure",
+      childSessionKey: "agent:main:subagent:yield-parent-failure:subagent:child",
+      requesterSessionKey: "agent:main:subagent:yield-parent-failure",
+      requesterDisplayKey: "yield-parent-failure",
+      task: "child fails",
+    });
+
+    emitLifecycleEnd("run-yield-parent-failure", {
+      startedAt: 100,
+      endedAt: Date.now(),
+      yielded: true,
+    });
+    emitLifecycleEnd("run-yield-child-failure", {
+      startedAt: 200,
+      endedAt: Date.now(),
+      error: "child failed while collecting evidence",
+      phase: "error",
+    });
+
+    await vi.waitFor(
+      () => {
+        const childCall = announceSpy.mock.calls.find(
+          ([arg]) =>
+            ((arg ?? {}) as { childRunId?: string }).childRunId === "run-yield-child-failure",
+        )?.[0] as { outcome?: { status?: string; error?: string } } | undefined;
+        expect(childCall?.outcome?.status).toBe("error");
+        expect(childCall?.outcome?.error).toContain("child failed while collecting evidence");
+      },
+      { interval: 1, timeout: 16_000 },
+    );
+
+    await waitForRegistrySideEffect(() => {
+      const parentCall = announceSpy.mock.calls.find(
+        ([arg]) =>
+          ((arg ?? {}) as { childRunId?: string }).childRunId === "run-yield-parent-failure",
+      )?.[0] as { wakeOnDescendantSettle?: boolean } | undefined;
+      expect(parentCall?.wakeOnDescendantSettle).toBe(true);
+    });
+  });
+
+  it("fails a yielded parent with no active child instead of delivering a false interim", async () => {
+    registerRun({
+      runId: "run-yield-parent-no-child",
+      childSessionKey: "agent:main:subagent:yield-parent-no-child",
+      task: "yield parent has no child",
+      expectsCompletionMessage: true,
+    });
+
+    emitLifecycleEnd("run-yield-parent-no-child", {
+      startedAt: 100,
+      endedAt: Date.now(),
+      yielded: true,
+    });
+    mod.testing.resumeRunForTests("run-yield-parent-no-child");
+
+    await waitForRegistrySideEffect(() => {
+      const parentCall = announceSpy.mock.calls.find(
+        ([arg]) =>
+          ((arg ?? {}) as { childRunId?: string }).childRunId === "run-yield-parent-no-child",
+      )?.[0] as { outcome?: { status?: string; error?: string } } | undefined;
+      expect(parentCall?.outcome?.status).toBe("error");
+      expect(parentCall?.outcome?.error).toContain("sessions_yield ended the turn");
+    });
   });
 
   it("retries completion-mode announce delivery with backoff and suspends after retry limit", async () => {

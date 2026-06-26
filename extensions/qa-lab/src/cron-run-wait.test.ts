@@ -33,6 +33,26 @@ describe("waitForCronRunCompletion", () => {
     );
   });
 
+  it("returns deferred runs as completed handoffs", async () => {
+    const callGateway = vi
+      .fn<
+        (method: string, rpcParams?: unknown, opts?: { timeoutMs?: number }) => Promise<unknown>
+      >()
+      .mockResolvedValueOnce({
+        entries: [{ ts: 180, status: "deferred", summary: "descendants still running" }],
+      });
+
+    const result = await waitForCronRunCompletion({
+      callGateway,
+      jobId: "dreaming-job",
+      afterTs: 150,
+      timeoutMs: 100,
+      intervalMs: 0,
+    });
+
+    expect(result).toEqual({ ts: 180, status: "deferred", summary: "descendants still running" });
+  });
+
   it("surfaces recent run history on timeout", async () => {
     const callGateway = vi
       .fn<

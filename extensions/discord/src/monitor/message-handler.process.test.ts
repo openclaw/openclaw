@@ -182,6 +182,12 @@ type DispatchInboundParams = {
     suppressTyping?: boolean;
     onCompactionStart?: () => Promise<void> | void;
     onCompactionEnd?: () => Promise<void> | void;
+    onLifecycleEvent?: (payload: {
+      phase?: string;
+      yielded?: boolean;
+      livenessState?: string;
+      stopReason?: string;
+    }) => Promise<void> | void;
     onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
     onAssistantMessageStart?: () => Promise<void> | void;
     allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
@@ -241,6 +247,7 @@ let notifyDiscordInboundEventOutboundSuccess: typeof import("../inbound-event-de
 let createDiscordReplyTypingFeedback: typeof import("./reply-typing-feedback.js").createDiscordReplyTypingFeedback;
 
 vi.mock("openclaw/plugin-sdk/reply-runtime", () => ({
+  isAgentLifecycleYieldedWaiting: (payload: { yielded?: boolean }) => payload.yielded === true,
   dispatchReplyWithBufferedBlockDispatcher: async (params: {
     dispatcherOptions: {
       beforeDeliver?: (
@@ -3001,6 +3008,43 @@ describe("processDiscordMessage draft streaming", () => {
 
     expect(draftStream.update).not.toHaveBeenCalled();
     expect(draftStream.flush).not.toHaveBeenCalled();
+  });
+
+  it("preserves Discord progress state when a parent turn yields while waiting on subagents", async () => {
+    const draftStream = createMockDraftStreamForTest();
+
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      await params?.replyOptions?.onItemEvent?.({ progressText: "spawned child session" });
+      await params?.replyOptions?.onLifecycleEvent?.({
+        phase: "end",
+        yielded: true,
+        livenessState: "paused",
+        stopReason: "end_turn",
+      });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createAutomaticSourceDeliveryContext({
+      discordConfig: {
+        streaming: {
+          mode: "progress",
+          progress: {
+            label: "Shelling",
+          },
+        },
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(draftStream.update).toHaveBeenCalledWith(
+      "Shelling\n\n🛠️ Exec\n• spawned child session\n• Waiting for subagent completion events.",
+    );
+    expect(draftStream.flush).toHaveBeenCalled();
+    expect(draftStream.discardPending).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expect(getReactionEmojis()).not.toContain(DEFAULT_EMOJIS.done);
   });
 
   it("keeps Discord progress drafts instead of delivering text-only interim blocks after work expands", async () => {

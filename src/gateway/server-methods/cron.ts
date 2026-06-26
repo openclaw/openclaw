@@ -47,8 +47,8 @@ type CronRunsRequestParams = CronJobIdParams & {
   runId?: string;
   limit?: number;
   offset?: number;
-  statuses?: Array<"ok" | "error" | "skipped">;
-  status?: "all" | "ok" | "error" | "skipped";
+  statuses?: Array<"ok" | "error" | "skipped" | "deferred">;
+  status?: "all" | "ok" | "error" | "skipped" | "deferred";
   deliveryStatuses?: Array<"delivered" | "not-delivered" | "unknown" | "not-requested">;
   deliveryStatus?: "delivered" | "not-delivered" | "unknown" | "not-requested";
   query?: string;
@@ -369,7 +369,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       query?: string;
       enabled?: "all" | "enabled" | "disabled";
       scheduleKind?: "all" | "at" | "every" | "cron";
-      lastRunStatus?: "all" | "ok" | "error" | "skipped" | "unknown";
+      lastRunStatus?: "all" | "ok" | "error" | "skipped" | "deferred" | "unknown";
       sortBy?: "nextRunAtMs" | "updatedAtMs" | "name";
       sortDir?: "asc" | "desc";
       agentId?: string;

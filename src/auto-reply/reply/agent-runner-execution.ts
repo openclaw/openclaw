@@ -2632,6 +2632,14 @@ export async function runAgentTurnWithFallback(params: {
                       if (evt.stream !== "lifecycle" || hasLifecyclePhase) {
                         notifyAgentRunStart();
                       }
+                      if (evt.stream === "lifecycle") {
+                        await params.opts?.onLifecycleEvent?.({
+                          phase: readStringValue(evt.data.phase),
+                          yielded: evt.data.yielded === true ? true : undefined,
+                          livenessState: readStringValue(evt.data.livenessState),
+                          stopReason: readStringValue(evt.data.stopReason),
+                        });
+                      }
                       // Trigger typing when tools start executing.
                       // Must await to ensure typing indicator starts before tool summaries are emitted.
                       if (evt.stream === "tool") {

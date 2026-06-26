@@ -1067,6 +1067,23 @@ function hasRoutableDeliveryOrigin(
   return Boolean(origin?.channel && origin.to);
 }
 
+function mergeThreadBoundChildOrigin(
+  deliveryOrigin: DeliveryContext | undefined,
+  fallbackOrigin: DeliveryContext | undefined,
+): DeliveryContext | undefined {
+  const merged = mergeDeliveryContext(deliveryOrigin, fallbackOrigin);
+  if (
+    merged &&
+    deliveryOrigin?.to &&
+    !Object.hasOwn(deliveryOrigin, "threadId") &&
+    Object.hasOwn(merged, "threadId")
+  ) {
+    const { threadId: _threadId, ...withoutInheritedThreadId } = merged;
+    return withoutInheritedThreadId;
+  }
+  return merged;
+}
+
 export async function spawnSubagentDirect(
   params: SpawnSubagentParams,
   ctx: SpawnSubagentContext,
@@ -1211,6 +1228,7 @@ export async function spawnSubagentDirect(
       ? { threadId: ctx.agentThreadId }
       : {}),
   });
+  const sourceRequesterOrigin = requesterOrigin;
   let childSessionOrigin = resolveRequesterOriginForChild({
     cfg,
     targetAgentId,
@@ -1419,7 +1437,8 @@ export async function spawnSubagentDirect(
     threadBindingReady = true;
     hasBoundThreadDeliveryOrigin = hasRoutableDeliveryOrigin(bindResult.deliveryOrigin);
     childSessionOrigin =
-      mergeDeliveryContext(bindResult.deliveryOrigin, childSessionOrigin) ?? childSessionOrigin;
+      mergeThreadBoundChildOrigin(bindResult.deliveryOrigin, childSessionOrigin) ??
+      childSessionOrigin;
   }
   const mountPathHint = sanitizeMountPathHint(params.attachMountPath);
 
@@ -1606,6 +1625,7 @@ export async function spawnSubagentDirect(
               reason: "spawn-failed",
               sendFarewell: true,
               accountId: childSessionOrigin?.accountId,
+              requesterOrigin: sourceRequesterOrigin,
               runId: childRunId,
               outcome: "error",
               error: "Session failed to start",
@@ -1653,7 +1673,7 @@ export async function spawnSubagentDirect(
       childSessionKey,
       controllerSessionKey: ownership.controllerSessionKey,
       requesterSessionKey: ownership.completionRequesterSessionKey,
-      requesterOrigin,
+      requesterOrigin: sourceRequesterOrigin,
       requesterDisplayKey: ownership.completionRequesterDisplayKey,
       task,
       taskName,
@@ -1710,10 +1730,10 @@ export async function spawnSubagentDirect(
           agentId: targetAgentId,
           label: label || undefined,
           requester: {
-            channel: requesterOrigin?.channel,
-            accountId: requesterOrigin?.accountId,
-            to: requesterOrigin?.to,
-            threadId: requesterOrigin?.threadId,
+            channel: sourceRequesterOrigin?.channel,
+            accountId: sourceRequesterOrigin?.accountId,
+            to: sourceRequesterOrigin?.to,
+            threadId: sourceRequesterOrigin?.threadId,
           },
           threadRequested: requestThreadBinding,
           mode: spawnMode,

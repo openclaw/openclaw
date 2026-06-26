@@ -272,6 +272,12 @@ the current child sessions, run ids, statuses, labels, tasks, and
 block are quoted as data, not instructions, because they can originate
 from user/model-provided spawn arguments.
 
+If a human sends another message while a requester is yielded, that message
+starts a normal turn for the same requester session. OpenClaw keeps the yielded
+run visible as waiting on descendant completion rather than converting the
+yielded turn into a stale final reply. When the descendant completion arrives,
+the completion event is handed back to the requester for synthesis.
+
 ## Tool: `subagents`
 
 Lists spawned sub-agent runs owned by the requester session. It is scoped
