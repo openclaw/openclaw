@@ -89,6 +89,67 @@ describe("source delivery plan", () => {
     ]);
   });
 
+  it("satisfies message-tool-owned source delivery after a verified send to the planned target", () => {
+    const contract = createSourceDeliveryPlan({
+      owner: "message_tool",
+      reason: "room_event",
+      target: { channel: "discord", to: "channel:1467271397540630621" },
+    });
+
+    const outcome = resolveSourceDeliveryOutcome(contract, {
+      didSendViaMessageTool: true,
+      messageToolSentTargets: [
+        {
+          tool: "message",
+          provider: "discord",
+          to: "channel:1467271397540630621",
+          text: "sent through message tool",
+        },
+      ],
+    });
+
+    expect(outcome.verifiedMessageToolDelivery).toBe(true);
+    expect(outcome.satisfiesSourceDelivery).toBe(true);
+    expect(outcome.unverifiedMessageToolDelivery).toBe(false);
+    expect(outcome.visibleDeliveries).toEqual([
+      {
+        via: "message_tool",
+        verifiedTarget: true,
+        target: {
+          tool: "message",
+          provider: "discord",
+          to: "channel:1467271397540630621",
+          text: "sent through message tool",
+        },
+      },
+    ]);
+  });
+
+  it("keeps message-tool-owned delivery unsatisfied when the send target does not match", () => {
+    const contract = createSourceDeliveryPlan({
+      owner: "message_tool",
+      reason: "room_event",
+      target: { channel: "discord", to: "channel:1467271397540630621" },
+    });
+
+    const outcome = resolveSourceDeliveryOutcome(contract, {
+      didSendViaMessageTool: true,
+      messageToolSentTargets: [
+        {
+          tool: "message",
+          provider: "discord",
+          to: "channel:999",
+          text: "sent somewhere else",
+        },
+      ],
+    });
+
+    expect(outcome.verifiedMessageToolDelivery).toBe(false);
+    expect(outcome.satisfiesSourceDelivery).toBe(false);
+    expect(outcome.unverifiedMessageToolDelivery).toBe(true);
+    expect(outcome.visibleDeliveries[0]?.verifiedTarget).toBe(false);
+  });
+
   it("keeps unverified message-tool sends visible to fallback/error handling", () => {
     const contract = createSourceDeliveryPlan({
       owner: "message_tool_then_direct_fallback",

@@ -260,11 +260,13 @@ export function resolveSourceDeliveryOutcome(
   const hasVerifiedMessageToolDelivery = visibleDeliveries.some(
     (delivery) => didSendViaMessageTool && delivery.verifiedTarget,
   );
+  const satisfiesSourceDeliveryWithMessageTool =
+    hasVerifiedMessageToolDelivery &&
+    (isMessageToolOwnedDelivery(plan.owner) || plan.fallback.skipWhenMessageToolSentToTarget);
   return {
     visibleDeliveries,
     verifiedMessageToolDelivery: hasVerifiedMessageToolDelivery,
-    satisfiesSourceDelivery:
-      plan.fallback.skipWhenMessageToolSentToTarget && hasVerifiedMessageToolDelivery,
+    satisfiesSourceDelivery: satisfiesSourceDeliveryWithMessageTool,
     unverifiedMessageToolDelivery:
       didSendViaMessageTool && sentTargets.length > 0 && !hasVerifiedMessageToolDelivery,
   };

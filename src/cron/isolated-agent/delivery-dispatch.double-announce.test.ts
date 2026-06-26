@@ -148,6 +148,10 @@ import {
   resolveOutboundSessionRoute,
 } from "../../infra/outbound/outbound-session.js";
 import { buildOutboundSessionContext } from "../../infra/outbound/session-context.js";
+import {
+  createSourceDeliveryPlan,
+  resolveSourceDeliveryOutcome,
+} from "../../infra/outbound/source-delivery-plan.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import {
   dispatchCronDelivery,
@@ -378,6 +382,36 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       payloads: [{ text: "Fallback cron summary." }],
       skipQueue: true,
     });
+    expect(state.deliveryAttempted).toBe(true);
+    expect(state.delivered).toBe(true);
+  });
+
+  it("keeps final assistant text private after a verified message-tool-owned send", async () => {
+    const sourceDelivery = createSourceDeliveryPlan({
+      owner: "message_tool",
+      reason: "room_event",
+      target: { channel: "telegram", to: "123456" },
+    });
+    const params = makeBaseParams({ synthesizedText: "Private trailing summary." });
+    params.sourceDeliveryOutcome = resolveSourceDeliveryOutcome(sourceDelivery, {
+      didSendViaMessageTool: true,
+      messageToolSentTargets: [
+        {
+          tool: "message",
+          provider: "telegram",
+          to: "123456",
+          text: "Visible message-tool reply.",
+        },
+      ],
+    });
+
+    expect(sourceDelivery.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(params.sourceDeliveryOutcome.verifiedMessageToolDelivery).toBe(true);
+    expect(params.sourceDeliveryOutcome.satisfiesSourceDelivery).toBe(true);
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
     expect(state.deliveryAttempted).toBe(true);
     expect(state.delivered).toBe(true);
   });
