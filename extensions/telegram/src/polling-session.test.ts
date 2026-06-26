@@ -1067,13 +1067,13 @@ describe("TelegramPollingSession", () => {
           const queue = createChannelIngressQueue({ ...options, channelId: "telegram" });
           return {
             ...queue,
-            claim: async (...args: Parameters<typeof queue.claim>) => {
-              if (args[0] === "0000000000000001" && !blockedFirstClaim) {
+            claimNext: async (...args: Parameters<typeof queue.claimNext>) => {
+              if (!blockedFirstClaim) {
                 blockedFirstClaim = true;
                 firstClaimStarted?.();
                 await firstClaimGate;
               }
-              return queue.claim(...args);
+              return queue.claimNext(...args);
             },
           };
         },

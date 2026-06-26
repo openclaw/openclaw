@@ -34,7 +34,7 @@ import { TelegramPollingTransportState } from "./polling-transport-state.js";
 import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import {
-  claimTelegramSpooledUpdate,
+  claimNextTelegramSpooledUpdate,
   deleteTelegramSpooledUpdate,
   failTelegramSpooledUpdateClaim,
   isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
@@ -564,14 +564,20 @@ export class TelegramPollingSession {
     }
   }
 
-  async #claimSpooledUpdate(
-    update: TelegramSpooledUpdate,
-  ): Promise<ClaimedTelegramSpooledUpdate | null> {
+  async #claimNextSpooledUpdate(params: {
+    blockedLaneKeys: Set<string>;
+    spoolDir: string;
+  }): Promise<ClaimedTelegramSpooledUpdate | null> {
     try {
-      return await claimTelegramSpooledUpdate(update);
+      return await claimNextTelegramSpooledUpdate({
+        spoolDir: params.spoolDir,
+        blockedLaneKeys: params.blockedLaneKeys,
+        botInfo: this.opts.botInfo,
+        scanLimit: TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT,
+      });
     } catch (err) {
       this.opts.log(
-        `[telegram][diag] spooled update ${update.updateId} claim failed; keeping for retry: ${formatErrorMessage(err)}`,
+        `[telegram][diag] spooled update claim failed; keeping pending updates for retry: ${formatErrorMessage(err)}`,
       );
       return null;
     }
@@ -875,8 +881,12 @@ export class TelegramPollingSession {
   }
 
   #spooledUpdateLaneKey(update: TelegramSpooledUpdate): string {
+    return this.#rawSpooledUpdateLaneKey(update.update);
+  }
+
+  #rawSpooledUpdateLaneKey(update: unknown): string {
     return getTelegramSequentialKey({
-      update: update.update as Parameters<typeof getTelegramSequentialKey>[0]["update"],
+      update: update as Parameters<typeof getTelegramSequentialKey>[0]["update"],
       ...(this.opts.botInfo ? { me: this.opts.botInfo } : {}),
     });
   }
@@ -933,27 +943,42 @@ export class TelegramPollingSession {
       limit: TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT,
     });
     const blockedByLane = new Set<string>();
-    let started = 0;
+    const retryDelayedLaneKeys = new Set<string>();
     for (const update of updates) {
       const laneKey = this.#spooledUpdateLaneKey(update);
-      if (this.opts.abortSignal?.aborted) {
-        break;
-      }
-      if (resolveSpooledUpdateRetryDelayMs(update) > 0) {
-        claimedLaneKeys.add(laneKey);
-        continue;
-      }
       const handlerKey = buildSpooledUpdateHandlerKey({ spoolDir: params.spoolDir, laneKey });
       if (activeSpooledUpdateHandlersByLane.has(handlerKey)) {
         blockedByLane.add(handlerKey);
-        continue;
       }
-      if (claimedLaneKeys.has(laneKey)) {
-        continue;
+      if (resolveSpooledUpdateRetryDelayMs(update) > 0) {
+        retryDelayedLaneKeys.add(laneKey);
       }
-      const claimedUpdate = await this.#claimSpooledUpdate(update);
+    }
+    const blockedLaneKeys = new Set([
+      ...activeLaneKeys,
+      ...claimedLaneKeys,
+      ...retryDelayedLaneKeys,
+    ]);
+    let started = 0;
+    while (started < TELEGRAM_SPOOLED_DRAIN_START_LIMIT) {
+      if (this.opts.abortSignal?.aborted) {
+        break;
+      }
+      const claimedUpdate = await this.#claimNextSpooledUpdate({
+        blockedLaneKeys,
+        spoolDir: params.spoolDir,
+      });
       if (!claimedUpdate) {
-        claimedLaneKeys.add(laneKey);
+        break;
+      }
+      const laneKey = this.#spooledUpdateLaneKey(claimedUpdate);
+      const handlerKey = buildSpooledUpdateHandlerKey({ spoolDir: params.spoolDir, laneKey });
+      if (activeSpooledUpdateHandlersByLane.has(handlerKey)) {
+        blockedByLane.add(handlerKey);
+        await releaseTelegramSpooledUpdateClaim(claimedUpdate, {
+          lastError: "active Telegram spool handler already owns this lane",
+        });
+        blockedLaneKeys.add(laneKey);
         continue;
       }
       const stopClaimRefresh = this.#startSpooledUpdateClaimRefresh(claimedUpdate);
@@ -967,13 +992,13 @@ export class TelegramPollingSession {
         laneKey,
         task: handler,
         update: claimedUpdate,
-        updateId: update.updateId,
+        updateId: claimedUpdate.updateId,
         startedAt: Date.now(),
         stopClaimRefresh,
       };
       activeSpooledUpdateHandlersByLane.set(handlerKey, state);
       this.#spooledUpdateHandlerKeys.add(handlerKey);
-      claimedLaneKeys.add(laneKey);
+      blockedLaneKeys.add(laneKey);
       void handler.finally(() => {
         if (
           !deferredSpooledUpdateClaimsByKey.has(buildDeferredSpooledUpdateClaimKey(claimedUpdate))
@@ -986,9 +1011,6 @@ export class TelegramPollingSession {
         this.#spooledUpdateHandlerKeys.delete(handlerKey);
       });
       started += 1;
-      if (started >= TELEGRAM_SPOOLED_DRAIN_START_LIMIT) {
-        break;
-      }
     }
     return { blockedByLane, started };
   }
@@ -1216,6 +1238,7 @@ export class TelegramPollingSession {
         void writeTelegramSpooledUpdate({
           spoolDir,
           update: message.update,
+          laneKey: this.#rawSpooledUpdateLaneKey(message.update),
         }).then(
           (updateId) => {
             ackSpooledUpdate(message.requestId, { ok: true, updateId });

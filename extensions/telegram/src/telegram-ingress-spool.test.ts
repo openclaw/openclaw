@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { clearTelegramRuntime, setTelegramRuntime } from "./runtime.js";
 import type { TelegramRuntime } from "./runtime.types.js";
 import {
+  claimNextTelegramSpooledUpdate,
   claimTelegramSpooledUpdate,
   deleteTelegramSpooledUpdate,
   failTelegramSpooledUpdateClaim,
@@ -115,6 +116,94 @@ describe("Telegram ingress spool", () => {
       }
       await deleteTelegramSpooledUpdate(claimed);
       expect(await listTelegramSpooledUpdateClaims({ spoolDir })).toEqual([]);
+    });
+  });
+
+  it("claims next update through the native ingress queue in update id order", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 101, message: { chat: { id: 1 }, message_id: 1, text: "second" } },
+        now: 1,
+      });
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 100, message: { chat: { id: 1 }, message_id: 2, text: "first" } },
+        now: 2,
+      });
+
+      const claimed = await claimNextTelegramSpooledUpdate({ spoolDir });
+
+      expect(claimed?.updateId).toBe(100);
+      expect(await listTelegramSpooledUpdates({ spoolDir })).toHaveLength(1);
+      expect(
+        (await listTelegramSpooledUpdateClaims({ spoolDir })).map((claim) => claim.updateId),
+      ).toEqual([100]);
+    });
+  });
+
+  it("derives lane keys while claiming legacy rows without stored lane keys", async () => {
+    await withTempSpool(async (spoolDir) => {
+      const stateDir = path.dirname(path.dirname(spoolDir));
+      const queue = createChannelIngressQueue<{
+        version: 1;
+        updateId: number;
+        receivedAt: number;
+        update: unknown;
+      }>({
+        channelId: "telegram",
+        accountId: "test",
+        stateDir,
+      });
+      await queue.enqueue(
+        "0000000000000042",
+        {
+          version: 1,
+          updateId: 42,
+          receivedAt: 1,
+          update: {
+            update_id: 42,
+            message: {
+              chat: { id: 100, type: "supergroup", is_forum: true },
+              is_topic_message: true,
+              message_id: 1,
+              message_thread_id: 10,
+              text: "blocked topic",
+            },
+          },
+        },
+        { receivedAt: 1 },
+      );
+      await queue.enqueue(
+        "0000000000000043",
+        {
+          version: 1,
+          updateId: 43,
+          receivedAt: 2,
+          update: {
+            update_id: 43,
+            message: {
+              chat: { id: 100, type: "supergroup", is_forum: true },
+              is_topic_message: true,
+              message_id: 2,
+              message_thread_id: 11,
+              text: "open topic",
+            },
+          },
+        },
+        { receivedAt: 2 },
+      );
+
+      const claimed = await claimNextTelegramSpooledUpdate({
+        spoolDir,
+        blockedLaneKeys: ["telegram:100:topic:10"],
+      });
+
+      expect(claimed?.updateId).toBe(43);
+      expect(claimed?.claim?.claimToken).toEqual(expect.any(String));
+      expect(
+        (await listTelegramSpooledUpdates({ spoolDir })).map((update) => update.updateId),
+      ).toEqual([42]);
     });
   });
 

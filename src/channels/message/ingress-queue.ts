@@ -137,6 +137,9 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
     ownerId?: string;
     blockedLaneKeys?: Iterable<string>;
     staleMs?: number;
+    orderBy?: "received" | "id";
+    scanLimit?: number;
+    deriveLaneKey?: (record: ChannelIngressQueueRecord<TPayload, TMetadata>) => string | undefined;
   }): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
   claim(
     id: string,
@@ -322,6 +325,10 @@ function normalizeLimit(limit: number | "all" | undefined): number {
   return limit === "all" ? Number.MAX_SAFE_INTEGER : Math.max(1, Math.floor(limit ?? 100));
 }
 
+function normalizeScanLimit(limit: number | undefined): number {
+  return Math.max(1, Math.floor(limit ?? 100));
+}
+
 function normalizeMaxEntries(value: number | undefined): number | null {
   return value === undefined ? null : Math.max(0, Math.floor(value));
 }
@@ -461,22 +468,33 @@ export function createChannelIngressQueue<
         const kysely = getChannelIngressKysely(tx.db);
         const baseSelect = kysely
           .selectFrom("channel_ingress_events")
-          .select(["event_id", "lane_key"])
+          .selectAll()
           .where("queue_name", "=", queueName)
           .where("status", "=", "pending");
-        const select =
-          blocked.size === 0
-            ? baseSelect
-            : baseSelect.where((eb) =>
-                eb.or([eb("lane_key", "is", null), eb("lane_key", "not in", [...blocked])]),
-              );
-        const selected = executeSqliteQueryTakeFirstSync(
-          tx.db,
-          select.orderBy("received_at", "asc").orderBy("event_id", "asc").limit(1),
-        );
+        let select = baseSelect;
+        if (blocked.size > 0 && !claimOptions?.deriveLaneKey) {
+          select = select.where((eb) =>
+            eb.or([eb("lane_key", "is", null), eb("lane_key", "not in", [...blocked])]),
+          );
+        }
+        let orderedSelect =
+          claimOptions?.orderBy === "id"
+            ? select.orderBy("event_id", "asc")
+            : select.orderBy("received_at", "asc").orderBy("event_id", "asc");
+        orderedSelect =
+          claimOptions?.deriveLaneKey === undefined
+            ? orderedSelect.limit(1)
+            : orderedSelect.limit(normalizeScanLimit(claimOptions.scanLimit));
+        const rows = executeSqliteQuerySync(tx.db, orderedSelect).rows;
+        const selected = rows.find((row) => {
+          const laneKey = row.lane_key ?? claimOptions?.deriveLaneKey?.(baseRecord(row));
+          return !laneKey || !blocked.has(laneKey);
+        });
         if (!selected) {
           return null;
         }
+        const derivedLaneKey =
+          selected.lane_key ?? claimOptions?.deriveLaneKey?.(baseRecord(selected));
         const token = randomUUID();
         const claimedAt = now();
         const ownerId = normalizePart(claimOptions?.ownerId, `${process.pid}`);
@@ -489,6 +507,7 @@ export function createChannelIngressQueue<
               claim_token: token,
               claim_owner: ownerId,
               claimed_at: claimedAt,
+              ...(derivedLaneKey ? { lane_key: derivedLaneKey } : {}),
               updated_at: claimedAt,
             })
             .where("queue_name", "=", queueName)

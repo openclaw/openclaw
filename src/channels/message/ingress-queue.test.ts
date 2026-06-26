@@ -251,6 +251,55 @@ describe("channel ingress queue", () => {
     });
   });
 
+  it("claims next pending row by id when requested", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => clock++,
+      });
+
+      await queue.enqueue("0002", { text: "second" }, { receivedAt: 1 });
+      await queue.enqueue("0001", { text: "first" }, { receivedAt: 2 });
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        orderBy: "id",
+      });
+
+      expect(claimed?.id).toBe("0001");
+    });
+  });
+
+  it("derives missing lane keys before claiming next", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createChannelIngressQueue<{ lane: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => clock++,
+      });
+
+      await queue.enqueue("a", { lane: "blocked" }, { receivedAt: 1 });
+      await queue.enqueue("b", { lane: "open" }, { receivedAt: 2 });
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        blockedLaneKeys: ["blocked"],
+        deriveLaneKey: (record) => record.payload.lane,
+      });
+
+      expect(claimed?.id).toBe("b");
+      expect(claimed?.laneKey).toBe("open");
+      expect(
+        (await queue.listPending()).find((record) => record.id === "a")?.laneKey,
+      ).toBeUndefined();
+    });
+  });
+
   it("requires claim tokens before mutating claimed rows", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueue<{ text: string }>({

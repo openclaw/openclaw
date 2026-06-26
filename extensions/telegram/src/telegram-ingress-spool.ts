@@ -9,7 +9,9 @@ import type {
   ChannelIngressQueueRecord,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import type { TelegramBotInfo } from "./bot-info.js";
 import { getTelegramRuntime } from "./runtime.js";
+import { getTelegramSequentialKey } from "./sequential-key.js";
 import { normalizeTelegramStateAccountId } from "./state-account-id.js";
 
 const SPOOL_VERSION = 1;
@@ -196,6 +198,13 @@ function parseQueueClaim(
   };
 }
 
+function spooledUpdateLaneKey(update: unknown, botInfo?: TelegramBotInfo): string {
+  return getTelegramSequentialKey({
+    update: update as Parameters<typeof getTelegramSequentialKey>[0]["update"],
+    ...(botInfo ? { me: botInfo } : {}),
+  });
+}
+
 function sortTelegramUpdates<T extends TelegramSpooledUpdate>(updates: T[]): T[] {
   return updates.toSorted((a, b) => a.updateId - b.updateId);
 }
@@ -219,6 +228,7 @@ export function isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(
 export async function writeTelegramSpooledUpdate(params: {
   spoolDir: string;
   update: unknown;
+  laneKey?: string;
   now?: number;
 }): Promise<number> {
   const updateId = resolveTelegramUpdateId(params.update);
@@ -236,7 +246,10 @@ export async function writeTelegramSpooledUpdate(params: {
       receivedAt,
       update: params.update,
     },
-    { receivedAt },
+    {
+      receivedAt,
+      laneKey: params.laneKey ?? spooledUpdateLaneKey(params.update),
+    },
   );
   return updateId;
 }
@@ -269,6 +282,34 @@ export async function claimTelegramSpooledUpdate(
     ownerId: TELEGRAM_SPOOLED_UPDATE_PROCESS_ID,
   });
   return claimed ? parseQueueClaim(spoolDir, claimed) : null;
+}
+
+export async function claimNextTelegramSpooledUpdate(params: {
+  spoolDir: string;
+  blockedLaneKeys?: Iterable<string>;
+  botInfo?: TelegramBotInfo;
+  scanLimit?: number;
+}): Promise<ClaimedTelegramSpooledUpdate | null> {
+  const queue = createTelegramIngressQueue(params.spoolDir);
+  const claimed = await queue.claimNext({
+    ownerId: TELEGRAM_SPOOLED_UPDATE_PROCESS_ID,
+    blockedLaneKeys: params.blockedLaneKeys,
+    orderBy: "id",
+    scanLimit: params.scanLimit,
+    deriveLaneKey: (record) => spooledUpdateLaneKey(record.payload.update, params.botInfo),
+  });
+  if (!claimed) {
+    return null;
+  }
+  const update = parseQueueClaim(params.spoolDir, claimed);
+  if (update) {
+    return update;
+  }
+  await queue.fail(claimed, {
+    reason: "invalid-spooled-update",
+    message: "Telegram spooled update payload was invalid.",
+  });
+  return null;
 }
 
 export async function releaseTelegramSpooledUpdateClaim(
