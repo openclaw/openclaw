@@ -118,7 +118,7 @@ Notes:
 - `tools.exec.ask` (default: `off`)
 - No-approval host exec is the default for gateway + node. If you want approvals/allowlist behavior, tighten both `tools.exec.*` and the host approvals file; see [Exec approvals](/tools/exec-approvals#yolo-mode-no-approval).
 - YOLO comes from the host-policy defaults (`security=full`, `ask=off`), not from `host=auto`. If you want to force gateway or node routing, set `tools.exec.host` or use `/exec host=...`.
-- In `security=full` plus `ask=off` mode, host exec follows the configured policy directly; there is no extra heuristic command-obfuscation prefilter or script-preflight rejection layer.
+- In `security=full` mode, host exec follows the configured policy directly; there is no extra heuristic command-obfuscation prefilter or ambiguous-interpreter rejection layer. This applies regardless of `ask` mode — `ask` controls approval prompts, not trust level. File content validation (shell variable injection checks) still runs whenever a concrete script target path can be extracted from the command.
 - `tools.exec.node` (default: unset)
 - `tools.exec.strictInlineEval` (default: false): when true, inline interpreter eval forms such as `python -c`, `node -e`, `ruby -e`, `perl -e`, `php -r`, `lua -e`, and `osascript -e` require reviewer or explicit approval. In `mode=auto`, the normal exec approval path may let the native auto reviewer allow a clearly low-risk one-off command; direct node-host `system.run` calls still require an explicit approval because they cannot hand the command to a human approval route. If the reviewer asks, the request goes to a human. `allow-always` can still persist benign interpreter/script invocations, but inline-eval forms do not become durable allow rules.
 - `tools.exec.commandHighlighting` (default: false): when true, approval prompts can highlight parser-derived command spans in the command text. Set to `true` globally or per agent to enable command text highlighting without changing exec approval policy.
@@ -179,7 +179,7 @@ Example:
 It updates **session state only** and does not write config. Authorized external channel senders may
 set these session defaults. Internal gateway/webchat clients need `operator.admin` to persist them.
 To hard-disable exec, deny it via tool policy (`tools.deny: ["exec"]` or per-agent). Host approvals
-still apply unless you explicitly set `security=full` and `ask=off`.
+still apply unless you explicitly set `security=full`.
 
 ## Exec approvals (companion app / node host)
 
