@@ -18,6 +18,7 @@ import {
   type QaReportCheck,
 } from "openclaw/plugin-sdk/qa-runtime";
 import { normalizeQaProviderMode, type QaProviderModeInput } from "../../run-config.js";
+import { createLiveTransportQaRunId } from "../../shared/live-transport-artifacts.js";
 import { buildMatrixQaObservedEventsArtifact } from "../../substrate/artifacts.js";
 import { provisionMatrixQaRoom, type MatrixQaProvisionResult } from "../../substrate/client.js";
 import {
@@ -29,7 +30,6 @@ import {
 } from "../../substrate/config.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { startMatrixQaHarness } from "../../substrate/harness.runtime.js";
-import { createLiveTransportQaRunId } from "../../shared/live-transport-artifacts.js";
 import { resolveMatrixQaModels, type ResolvedMatrixQaModels } from "./model-selection.js";
 import type { MatrixQaSyncStreams } from "./scenario-runtime-shared.js";
 import {
@@ -325,10 +325,16 @@ async function cleanupMatrixQaResource(params: {
 }
 
 function countMatrixQaStatuses(entries: Array<{ status: "fail" | "pass" | "skip" }>) {
-  return {
-    failed: entries.filter((entry) => entry.status === "fail").length,
-    passed: entries.filter((entry) => entry.status === "pass").length,
-  };
+  let failed = 0;
+  let passed = 0;
+  for (const entry of entries) {
+    if (entry.status === "fail") {
+      failed += 1;
+    } else if (entry.status === "pass") {
+      passed += 1;
+    }
+  }
+  return { failed, passed };
 }
 
 function formatMatrixQaScenarioDetails(params: { details: string; configSummary?: string }) {
