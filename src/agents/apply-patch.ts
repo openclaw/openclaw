@@ -193,9 +193,14 @@ export async function applyPatch(
       const moveResolvesToSource =
         path.resolve(moveTarget.resolved) === path.resolve(target.resolved);
       const destination = moveResolvesToSource ? target.resolved : moveTarget.resolved;
-      const existing = moveResolvesToSource ? await fileOps.readFile(target.resolved) : undefined;
-      if (moveResolvesToSource && normalizeUpdateComparison(existing) === applied) {
-        noOpPaths.add(target.display);
+      if (moveResolvesToSource) {
+        const existing = await fileOps.readFile(target.resolved);
+        if (normalizeUpdateComparison(existing) === applied) {
+          noOpPaths.add(target.display);
+        } else {
+          noOpPaths.delete(target.display);
+          await fileOps.writeFile(destination, applied);
+        }
       } else {
         noOpPaths.delete(target.display);
         await fileOps.writeFile(destination, applied);
