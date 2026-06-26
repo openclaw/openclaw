@@ -20,6 +20,7 @@ const targets = [
   "test",
   "skills",
   "openclaw.mjs",
+  "proof-94212-v2.ts",
   "config/knip.config.ts",
   "tsdown.config.ts",
   "vitest.config.ts",
