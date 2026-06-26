@@ -22,6 +22,11 @@ export function resetOutboundChannelResolutionStateForTest(): void {
   resetOutboundChannelBootstrapStateForTests();
 }
 
+// Delivery gating is operation-specific: a text send needs a text sender, a poll
+// send needs sendPoll(). A single surface can serve one without the other, so
+// resolution must know which operation it is gating.
+export type OutboundSendOperation = "text" | "poll";
+
 /** Normalizes a raw channel id and rejects non-deliverable/internal channels. */
 export function normalizeDeliverableOutboundChannel(
   raw?: string | null,
@@ -199,28 +204,42 @@ function resolveActivatedOutboundPluginFromRuntimeRegistries(
   return resolveValueFromRuntimeRegistries(channel, resolveActivatedOutboundPlugin);
 }
 
-// Delivery gating: only plugins that can actually emit a message qualify for the
-// hot send path, so setup-only/non-send shells are skipped before delivery.
-function channelPluginCanSend(plugin: ChannelPlugin | undefined): boolean {
+// Delivery gating: only plugins that can actually emit the requested send
+// operation qualify for the hot send path, so setup-only/non-send shells and
+// surfaces that cannot serve this operation are skipped before delivery.
+function channelPluginCanSend(
+  plugin: ChannelPlugin | undefined,
+  operation: OutboundSendOperation,
+): boolean {
   const outbound = plugin?.outbound;
-  // Gateway-mode plugins deliver through callMessageGateway and carry no local
-  // send methods; the send-capability gate only guards direct delivery and
-  // recovery, so a declared gateway plugin is deliverable on its own.
-  if (outbound?.deliveryMode === "gateway") {
+  const isGateway = outbound?.deliveryMode === "gateway";
+  // Poll routes through sendPoll() (message.ts) and the gateway poll path
+  // (server-methods/send.ts), both gated solely by outbound.sendPoll — gateway
+  // mode does not exempt it. A surface without sendPoll would later throw
+  // "Unsupported poll channel", so the poll gate always requires sendPoll, even
+  // for gateway-mode plugins.
+  if (operation === "poll") {
+    return Boolean(outbound?.sendPoll);
+  }
+  // Gateway-mode plugins deliver text through callMessageGateway and carry no
+  // local send methods, so a declared gateway plugin is text-deliverable on its
+  // own.
+  if (isGateway) {
     return true;
   }
-  // Direct/hybrid delivery flows through createPluginHandler (deliver.ts), which
-  // returns null unless a text sender exists, so media/payload/formatted-only
-  // surfaces riding that handler are not independently deliverable and would
-  // later fail with "Outbound not configured". Poll is the one non-text surface
-  // that delivers on its own: sendPoll() (message.ts) routes through the gateway
-  // gated solely by outbound.sendPoll. Gate on exactly those deliverable terms.
-  return Boolean(outbound?.sendText ?? plugin?.message?.send?.text ?? outbound?.sendPoll);
+  // Text/media/formatted direct delivery flows through createPluginHandler
+  // (deliver.ts), which returns null unless a text sender exists, so a poll-only
+  // surface would later fail with "Outbound not configured". Gate text on a real
+  // text sender only.
+  return Boolean(outbound?.sendText ?? plugin?.message?.send?.text);
 }
 
-function resolveSendCapablePluginFromRuntimeRegistries(channel: string): ChannelPlugin | undefined {
+function resolveSendCapablePluginFromRuntimeRegistries(
+  channel: string,
+  operation: OutboundSendOperation,
+): ChannelPlugin | undefined {
   return resolveValueFromRuntimeRegistries(channel, (plugin) =>
-    channelPluginCanSend(plugin) ? plugin : undefined,
+    channelPluginCanSend(plugin, operation) ? plugin : undefined,
   );
 }
 
@@ -275,6 +294,7 @@ export function resolveOutboundChannelPluginForDelivery(params: {
   channel: string;
   cfg?: OpenClawConfig;
   allowBootstrap?: boolean;
+  operation: OutboundSendOperation;
 }): ChannelPlugin | undefined {
   // Reuse the shared normalize-with-bootstrap path so external channel
   // ids/aliases whose runtime is not yet registered resolve the same way as the
@@ -285,19 +305,21 @@ export function resolveOutboundChannelPluginForDelivery(params: {
     return undefined;
   }
 
-  // The send-capability gate stays here so a setup-only shell can never shadow
-  // the real runtime sender on the hot send path.
+  const { operation } = params;
+  // The send-capability gate stays here so a setup-only shell — or a surface
+  // that cannot serve this operation — can never shadow the real runtime sender
+  // on the hot send path.
   const resolveCurrent = () => {
     const loaded = getLoadedChannelPlugin(normalized);
-    if (channelPluginCanSend(loaded)) {
+    if (channelPluginCanSend(loaded, operation)) {
       return loaded;
     }
-    const runtime = resolveSendCapablePluginFromRuntimeRegistries(normalized);
+    const runtime = resolveSendCapablePluginFromRuntimeRegistries(normalized, operation);
     if (runtime) {
       return runtime;
     }
     const bundled = getChannelPlugin(normalized);
-    return channelPluginCanSend(bundled) ? bundled : undefined;
+    return channelPluginCanSend(bundled, operation) ? bundled : undefined;
   };
 
   const current = resolveCurrent();

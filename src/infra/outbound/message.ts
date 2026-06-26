@@ -8,6 +8,7 @@ import type { OutboundMediaAccess } from "../../media/load-options.js";
 import type { PollInput } from "../../polls.js";
 import { normalizePollInput } from "../../polls.js";
 import { resolveOutboundChannelPluginForDelivery } from "./channel-resolution.js";
+import type { OutboundSendOperation } from "./channel-resolution.js";
 import { resolveMessageChannelSelection } from "./channel-selection.js";
 import {
   resolveOutboundDurableFinalDeliverySupport,
@@ -179,14 +180,26 @@ async function resolveRequiredChannel(params: {
   ).channel;
 }
 
-function resolveRequiredPlugin(channel: string, cfg: OpenClawConfig) {
+function resolveRequiredPlugin(
+  channel: string,
+  cfg: OpenClawConfig,
+  operation: OutboundSendOperation,
+) {
   // allowBootstrap: this preflight runs before the durable delivery path that
   // lazily bootstraps the runtime sender (deliver.ts loadBootstrappedOutboundAdapter).
   // Without it, a setup-only loaded shell (e.g. qqbot during onboarding) fails the
   // send-capability gate and throws "Unknown channel" before the runtime send plugin
   // is materialized. Bootstrapping here is idempotent and keeps the setup-shell from
   // shadowing the send-capable runtime plugin.
-  const plugin = resolveOutboundChannelPluginForDelivery({ channel, cfg, allowBootstrap: true });
+  // operation gates the resolver to the surface this send actually uses: a
+  // text-only registration must not win a poll send, and a poll-only one must
+  // not win a text send.
+  const plugin = resolveOutboundChannelPluginForDelivery({
+    channel,
+    cfg,
+    allowBootstrap: true,
+    operation,
+  });
   if (!plugin) {
     throw new Error(`Unknown channel: ${channel}`);
   }
@@ -308,7 +321,7 @@ async function resolveGatewayIdempotencyKey(idempotencyKey?: string): Promise<st
 export async function sendMessage(params: MessageSendParams): Promise<MessageSendResult> {
   const cfg = await resolveMessageConfig(params.cfg);
   const channel = await resolveRequiredChannel({ cfg, channel: params.channel });
-  const plugin = resolveRequiredPlugin(channel, cfg);
+  const plugin = resolveRequiredPlugin(channel, cfg, "text");
   const deliveryMode = plugin.outbound?.deliveryMode ?? "direct";
   const mediaSources = [params.mediaUrl, ...(params.mediaUrls ?? [])].filter(
     (source): source is string => Boolean(source),
@@ -471,7 +484,7 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
     durationSeconds: params.durationSeconds,
     durationHours: params.durationHours,
   };
-  const plugin = resolveRequiredPlugin(channel, cfg);
+  const plugin = resolveRequiredPlugin(channel, cfg, "poll");
   const outbound = plugin?.outbound;
   if (!outbound?.sendPoll) {
     throw new Error(`Unsupported poll channel: ${channel}`);

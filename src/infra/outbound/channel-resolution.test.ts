@@ -624,6 +624,7 @@ describe("outbound channel resolution", () => {
       channelResolution.resolveOutboundChannelPluginForDelivery({
         channel: "alpha",
         cfg: {} as never,
+        operation: "text",
       }),
     ).toBeUndefined();
   });
@@ -641,6 +642,7 @@ describe("outbound channel resolution", () => {
       channelResolution.resolveOutboundChannelPluginForDelivery({
         channel: "alpha",
         cfg: {} as never,
+        operation: "text",
       }),
     ).toBe(registryPlugin);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
@@ -660,6 +662,7 @@ describe("outbound channel resolution", () => {
         channel: "alpha",
         cfg: { channels: {} } as never,
         allowBootstrap: true,
+        operation: "text",
       }),
     ).toBe(sendCapable);
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledOnce();
@@ -714,6 +717,7 @@ describe("outbound channel resolution", () => {
       channelResolution.resolveOutboundChannelPluginForDelivery({
         channel: "alpha",
         cfg: {} as never,
+        operation: "text",
       }),
     ).toBeUndefined();
   });
@@ -723,12 +727,42 @@ describe("outbound channel resolution", () => {
     getLoadedChannelPluginMock.mockReturnValue(gatewayPlugin);
     const channelResolution = await importChannelResolution("delivery-gateway-only");
 
+    // Gateway plugins deliver text through callMessageGateway with no local send
+    // method, so the gateway short-circuit qualifies them for text.
     expect(
       channelResolution.resolveOutboundChannelPluginForDelivery({
         channel: "alpha",
         cfg: {} as never,
+        operation: "text",
       }),
     ).toBe(gatewayPlugin);
+    // But poll always requires outbound.sendPoll (the gateway poll path rejects a
+    // pollless surface), so a gateway plugin without sendPoll must NOT resolve
+    // for a poll send.
+    expect(
+      channelResolution.resolveOutboundChannelPluginForDelivery({
+        channel: "alpha",
+        cfg: {} as never,
+        operation: "poll",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("delivery resolver resolves a gateway-mode plugin with sendPoll for a poll send", async () => {
+    const gatewayPollPlugin = {
+      id: "alpha",
+      outbound: { deliveryMode: "gateway", sendPoll: vi.fn() },
+    };
+    getLoadedChannelPluginMock.mockReturnValue(gatewayPollPlugin);
+    const channelResolution = await importChannelResolution("delivery-gateway-poll");
+
+    expect(
+      channelResolution.resolveOutboundChannelPluginForDelivery({
+        channel: "alpha",
+        cfg: {} as never,
+        operation: "poll",
+      }),
+    ).toBe(gatewayPollPlugin);
   });
 
   it("delivery resolver resolves a plugin sending text via message.send.text", async () => {
@@ -740,6 +774,7 @@ describe("outbound channel resolution", () => {
       channelResolution.resolveOutboundChannelPluginForDelivery({
         channel: "alpha",
         cfg: {} as never,
+        operation: "text",
       }),
     ).toBe(plugin);
   });
@@ -753,13 +788,14 @@ describe("outbound channel resolution", () => {
       channelResolution.resolveOutboundChannelPluginForDelivery({
         channel: "alpha",
         cfg: {} as never,
+        operation: "text",
       }),
     ).toBe(plugin);
   });
 
-  it("delivery resolver resolves a poll-only non-gateway plugin", async () => {
+  it("delivery resolver resolves a poll-only non-gateway plugin for a poll send", async () => {
     // sendPoll() routes through the gateway gated only by outbound.sendPoll, so
-    // a direct poll-only plugin is independently deliverable.
+    // a direct poll-only plugin is independently deliverable for a poll send.
     const plugin = { id: "alpha", outbound: { deliveryMode: "direct", sendPoll: vi.fn() } };
     getLoadedChannelPluginMock.mockReturnValue(plugin);
     const channelResolution = await importChannelResolution("delivery-poll-only");
@@ -768,8 +804,51 @@ describe("outbound channel resolution", () => {
       channelResolution.resolveOutboundChannelPluginForDelivery({
         channel: "alpha",
         cfg: {} as never,
+        operation: "poll",
       }),
     ).toBe(plugin);
+  });
+
+  it("delivery resolver text send skips a poll-only registration and returns a text-capable fallback", async () => {
+    // A poll-only direct registration cannot deliver text (it would later fail
+    // with "Outbound not configured"), so a text send must skip it and resolve
+    // the text-capable runtime fallback instead of letting it win the lookup.
+    const pollOnlyLoaded = { id: "alpha", outbound: { deliveryMode: "direct", sendPoll: vi.fn() } };
+    const textCapable = createSendingPlugin("alpha");
+    getLoadedChannelPluginMock.mockReturnValue(pollOnlyLoaded);
+    getChannelPluginMock.mockReturnValue(undefined);
+    getActivePluginRegistryMock.mockReturnValue({ channels: [{ plugin: textCapable }] });
+    getActivePluginChannelRegistryMock.mockReturnValue({ channels: [{ plugin: textCapable }] });
+    const channelResolution = await importChannelResolution("delivery-poll-only-not-shadow-text");
+
+    expect(
+      channelResolution.resolveOutboundChannelPluginForDelivery({
+        channel: "alpha",
+        cfg: {} as never,
+        operation: "text",
+      }),
+    ).toBe(textCapable);
+  });
+
+  it("delivery resolver poll send skips a text-only registration and returns a poll-capable fallback", async () => {
+    // A text-only direct registration cannot deliver a poll (sendPoll() would
+    // throw "Unsupported poll channel"), so a poll send must skip it and resolve
+    // the poll-capable runtime fallback instead of letting it win the lookup.
+    const textOnlyLoaded = { id: "alpha", outbound: { deliveryMode: "direct", sendText: vi.fn() } };
+    const pollCapable = { id: "alpha", outbound: { deliveryMode: "direct", sendPoll: vi.fn() } };
+    getLoadedChannelPluginMock.mockReturnValue(textOnlyLoaded);
+    getChannelPluginMock.mockReturnValue(undefined);
+    getActivePluginRegistryMock.mockReturnValue({ channels: [{ plugin: pollCapable }] });
+    getActivePluginChannelRegistryMock.mockReturnValue({ channels: [{ plugin: pollCapable }] });
+    const channelResolution = await importChannelResolution("delivery-text-only-not-shadow-poll");
+
+    expect(
+      channelResolution.resolveOutboundChannelPluginForDelivery({
+        channel: "alpha",
+        cfg: {} as never,
+        operation: "poll",
+      }),
+    ).toBe(pollCapable);
   });
 
   it("delivery resolver resolves an external channel from the active registry when the pin is stale without bootstrapping", async () => {
@@ -791,6 +870,7 @@ describe("outbound channel resolution", () => {
         channel: "external-channel",
         cfg: { channels: {} } as never,
         allowBootstrap: true,
+        operation: "text",
       }),
     ).toBe(plugin);
     expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
@@ -817,6 +897,7 @@ describe("outbound channel resolution", () => {
         channel: "external-channel",
         cfg: { channels: {} } as never,
         allowBootstrap: true,
+        operation: "text",
       }),
     ).toBe(plugin);
     expect(resolveRuntimePluginRegistryMock).toHaveBeenCalledTimes(1);
