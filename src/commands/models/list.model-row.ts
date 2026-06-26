@@ -1,5 +1,6 @@
-/** Converts registry/catalog models into printable model-list rows. */
 import { modelKey } from "../../agents/model-ref-shared.js";
+/** Converts registry/catalog models into printable model-list rows. */
+import type { Model } from "../../llm/types.js";
 import { isLocalBaseUrl } from "./list.local-url.js";
 import type { ModelRow } from "./list.types.js";
 
@@ -8,7 +9,10 @@ export type ListRowModel = {
   id: string;
   name: string;
   provider: string;
-  input: Array<"text" | "image" | "document">;
+  // Derive from the registry Model contract (text/image/video/audio) plus the
+  // config-catalog-only "document" modality, so a widened Model.input cannot
+  // drift out of the list-row type the registry feeds into.
+  input: Array<Model["input"][number] | "document">;
   baseUrl?: string;
   contextWindow?: number | null;
   contextTokens?: number | null;
