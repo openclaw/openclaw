@@ -548,8 +548,11 @@ const ModelProvidersSchema = z
       // Normalize baseURL alias → canonical baseUrl (mutate in-place;
       // downstream code only reads baseUrl, never the untyped baseURL).
       const raw = provider as Record<string, unknown>;
-      if (typeof raw.baseURL === "string" && !provider.baseUrl) {
-        raw.baseUrl = raw.baseURL;
+      if (typeof raw.baseURL === "string") {
+        if (!provider.baseUrl) {
+          raw.baseUrl = raw.baseURL;
+        }
+        delete raw.baseURL;
       }
       if (isBuiltInModelProviderOverlayId(providerId)) {
         continue;

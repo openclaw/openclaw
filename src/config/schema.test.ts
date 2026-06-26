@@ -880,9 +880,10 @@ describe("config schema", () => {
     });
     const openai = result.models?.providers?.openai;
     expect(openai?.baseUrl).toBe("http://127.0.0.1:11434/v1");
+    expect((openai as Record<string, unknown>)?.baseURL).toBeUndefined();
   });
 
-  it("keeps baseUrl when already set and ignores baseURL", () => {
+  it("keeps baseUrl when already set and deletes baseURL alias", () => {
     const result = OpenClawSchema.parse({
       agents: {
         defaults: {
@@ -900,6 +901,7 @@ describe("config schema", () => {
     });
     const openai = result.models?.providers?.openai;
     expect(openai?.baseUrl).toBe("https://my-proxy.example.com/v1");
+    expect((openai as Record<string, unknown>)?.baseURL).toBeUndefined();
   });
 
   it("rejects allowPrivateNetwork on media-understanding request config", () => {
