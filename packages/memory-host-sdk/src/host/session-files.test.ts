@@ -91,7 +91,6 @@ describe("listSessionFilesForAgent", () => {
     fsSync.mkdirSync(path.join(sessionsDir, "archive"), { recursive: true });
 
     const included = [
-      "active.jsonl",
       "active.jsonl.reset.2026-02-16T22-26-33.000Z",
       "active.jsonl.deleted.2026-02-16T22-27-33.000Z",
     ];
@@ -115,7 +114,7 @@ describe("listSessionFilesForAgent", () => {
 });
 
 describe("listSessionTranscriptCorpusEntriesForAgent", () => {
-  it("lists active session entries with accessor-backed identity and classification", async () => {
+  it("omits active JSONL session entries from accessor-backed corpus entries", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
     fsSync.writeFileSync(path.join(sessionsDir, "narrative.jsonl"), "");
@@ -127,16 +126,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       },
     });
 
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([
-      {
-        agentId: "main",
-        artifactKind: "active-session",
-        generatedByDreamingNarrative: true,
-        sessionFile: path.join(sessionsDir, "narrative.jsonl"),
-        sessionId: "narrative",
-        sessionKey: "agent:main:dreaming-narrative-run-1",
-      },
-    ]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
 
   it("keeps archive artifacts in the corpus and inherits active session classification", async () => {
@@ -156,9 +146,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
 
     const classification = loadSessionTranscriptClassificationForAgent("main");
 
-    expect(classification.cronRunTranscriptPaths).toEqual(
-      new Set([activePath, archivePath].map((filePath) => path.resolve(filePath))),
-    );
+    expect(classification.cronRunTranscriptPaths).toEqual(new Set([path.resolve(archivePath)]));
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual({
       agentId: "main",
       artifactKind: "archive-artifact",
@@ -291,36 +279,8 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
 
     const classification = loadSessionTranscriptClassificationForAgent("main");
 
-    expect(classification.cronRunTranscriptPaths).toEqual(
-      new Set(
-        [cronPath, spawnedChildPath, keyedChildPath, orphanChildPath].map((filePath) =>
-          path.resolve(filePath),
-        ),
-      ),
-    );
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          generatedByCronRun: true,
-          sessionFile: spawnedChildPath,
-          sessionKey: "agent:main:subagent:spawned-child",
-        }),
-        expect.objectContaining({
-          generatedByCronRun: true,
-          sessionFile: keyedChildPath,
-          sessionKey: "agent:main:subagent:keyed-child",
-        }),
-        expect.objectContaining({
-          generatedByCronRun: true,
-          sessionFile: orphanChildPath,
-          sessionKey: "agent:main:subagent:orphan-child",
-        }),
-        expect.objectContaining({
-          sessionFile: normalPath,
-          sessionKey: "agent:main:subagent:normal-child",
-        }),
-      ]),
-    );
+    expect(classification.cronRunTranscriptPaths).toEqual(new Set());
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
     const entries = await listSessionTranscriptCorpusEntriesForAgent("main");
     expect(entries.find((entry) => entry.sessionFile === normalPath)?.generatedByCronRun).toBe(
       undefined,
@@ -426,14 +386,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       }),
     );
 
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([
-      {
-        agentId: "main",
-        artifactKind: "orphan-file-artifact",
-        sessionFile,
-        sessionId: "active",
-      },
-    ]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
 
   it("rejects relative sessionFile values that escape through nested segments", async () => {
@@ -474,23 +427,16 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
 
-  it("treats a transcript whose active row lacks sessionId as an orphan artifact", async () => {
+  it("omits loose non-archive JSONL transcripts from the corpus", async () => {
     const sessionsDir = path.join(tmpDir, "agents", "main", "sessions");
     fsSync.mkdirSync(sessionsDir, { recursive: true });
     const sessionFile = path.join(sessionsDir, "active-thread-456.jsonl");
     fsSync.writeFileSync(sessionFile, "");
 
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([
-      {
-        agentId: "main",
-        artifactKind: "orphan-file-artifact",
-        sessionFile,
-        sessionId: "active-thread-456",
-      },
-    ]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
 
-  it("lists active transcripts from a custom session store", async () => {
+  it("omits active JSONL transcripts from a custom session store", async () => {
     const sessionsDir = path.join(tmpDir, "custom-sessions");
     const sessionFile = path.join(sessionsDir, "custom-thread.jsonl");
     const storePath = path.join(sessionsDir, "sessions.json");
@@ -509,16 +455,8 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       },
     });
 
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([sessionFile]);
-    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([
-      {
-        agentId: "main",
-        artifactKind: "active-session",
-        sessionFile,
-        sessionId: "custom-thread",
-        sessionKey: "agent:main:chat:custom",
-      },
-    ]);
+    await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
+    await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([]);
   });
 
   it("keeps unowned archives from an agent-owned fixed session store", async () => {
@@ -573,7 +511,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       },
     });
 
-    await expect(listSessionFilesForAgent("main")).resolves.toEqual([sessionFile, archivePath]);
+    await expect(listSessionFilesForAgent("main")).resolves.toEqual([archivePath]);
   });
 
   it("keeps legacy session keys in non-main per-agent stores", async () => {
@@ -591,7 +529,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
       }),
     );
 
-    await expect(listSessionFilesForAgent("ops")).resolves.toEqual([sessionFile]);
+    await expect(listSessionFilesForAgent("ops")).resolves.toEqual([]);
     await expect(listSessionFilesForAgent("main")).resolves.toEqual([]);
   });
 
@@ -618,7 +556,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     clearRuntimeConfigSnapshot();
     clearConfigCache();
 
-    await expect(listSessionFilesForAgent("ops")).resolves.toEqual([sessionFile]);
+    await expect(listSessionFilesForAgent("ops")).resolves.toEqual([]);
   });
 });
 
