@@ -6,6 +6,14 @@ import os from "node:os";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
 import type { SessionCompactionCheckpoint } from "../config/sessions.js";
+import {
+  appendTranscriptMessage,
+  appendTranscriptEvent,
+  loadSessionEntry as loadAccessorSessionEntry,
+  loadTranscriptEvents,
+  patchSessionEntry as patchAccessorSessionEntry,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   embeddedRunMock,
@@ -407,38 +415,110 @@ test("sessions.compaction.* scopes selected global checkpoints to the requested 
 
 test("sessions.compact without maxLines runs embedded manual compaction for checkpoint-capable flows", async () => {
   const { dir, storePath } = await createSessionStoreDir();
-  await fs.writeFile(
-    path.join(dir, "sess-main.jsonl"),
-    `${JSON.stringify({ role: "user", content: "hello" })}\n`,
-    "utf-8",
-  );
-  await writeSessionStore({
-    entries: {
-      main: sessionStoreEntry("sess-main", {
-        spawnedCwd: "/tmp/task-repo",
-        thinkingLevel: "medium",
-        reasoningLevel: "stream",
-        contextBudgetStatus: {
-          schemaVersion: 1,
-          source: "pre-prompt-estimate",
-          updatedAt: Date.now() - 5_000,
-          provider: "anthropic",
-          model: "claude-opus-4-6",
-          route: "fits",
-          shouldCompact: false,
-          estimatedPromptTokens: 120,
-          contextTokenBudget: 200,
-          promptBudgetBeforeReserve: 180,
-          reserveTokens: 20,
-          effectiveReserveTokens: 20,
-          remainingPromptBudgetTokens: 60,
-          overflowTokens: 0,
-          toolResultReducibleChars: 0,
-          messageCount: 2,
-          unwindowedMessageCount: 2,
+  const sessionScope = {
+    agentId: "main",
+    sessionId: "sess-main",
+    sessionKey: "agent:main:main",
+    storePath,
+  };
+  await upsertSessionEntry(sessionScope, {
+    ...sessionStoreEntry("sess-main", {
+      spawnedCwd: "/tmp/task-repo",
+      thinkingLevel: "medium",
+      reasoningLevel: "stream",
+      contextBudgetStatus: {
+        schemaVersion: 1,
+        source: "pre-prompt-estimate",
+        updatedAt: Date.now() - 5_000,
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        route: "fits",
+        shouldCompact: false,
+        estimatedPromptTokens: 120,
+        contextTokenBudget: 200,
+        promptBudgetBeforeReserve: 180,
+        reserveTokens: 20,
+        effectiveReserveTokens: 20,
+        remainingPromptBudgetTokens: 60,
+        overflowTokens: 0,
+        toolResultReducibleChars: 0,
+        messageCount: 2,
+        unwindowedMessageCount: 2,
+      },
+    }),
+  });
+  await appendTranscriptEvent(sessionScope, {
+    type: "session",
+    version: 3,
+    id: "sess-main",
+    timestamp: "2026-06-19T12:00:00.000Z",
+    cwd: "/tmp",
+  });
+  const seedMessage = await appendTranscriptMessage(sessionScope, {
+    message: { role: "user", content: "hello", timestamp: 1 },
+    now: Date.parse("2026-06-19T12:00:01.000Z"),
+  });
+  embeddedRunMock.compactEmbeddedAgentSession.mockImplementationOnce(async (params) => {
+    const call = params as {
+      sessionTarget?: {
+        agentId?: string;
+        sessionId?: string;
+        sessionKey?: string;
+        storePath?: string;
+      };
+    };
+    if (
+      !call.sessionTarget?.agentId ||
+      !call.sessionTarget.sessionId ||
+      !call.sessionTarget.sessionKey ||
+      !call.sessionTarget.storePath
+    ) {
+      throw new Error("expected SQLite session target");
+    }
+    const targetScope = {
+      agentId: call.sessionTarget.agentId,
+      sessionId: call.sessionTarget.sessionId,
+      sessionKey: call.sessionTarget.sessionKey,
+      storePath: call.sessionTarget.storePath,
+    };
+    const rows = await loadTranscriptEvents(targetScope);
+    expect(rows).toHaveLength(2);
+    await appendTranscriptEvent(targetScope, {
+      type: "compaction",
+      id: "compact-1",
+      parentId: seedMessage.messageId,
+      timestamp: "2026-06-19T12:00:02.000Z",
+      summary: "summary",
+      firstKeptEntryId: seedMessage.messageId,
+      tokensBefore: 120,
+      tokensAfter: 80,
+    });
+    await patchAccessorSessionEntry(targetScope, (entry) => ({
+      ...entry,
+      compactionCheckpoints: [
+        {
+          checkpointId: "checkpoint-sqlite",
+          sessionKey: targetScope.sessionKey,
+          sessionId: targetScope.sessionId,
+          createdAt: Date.now(),
+          reason: "manual",
+          summary: "summary",
+          firstKeptEntryId: seedMessage.messageId,
+          preCompaction: { sessionId: targetScope.sessionId },
+          postCompaction: { sessionId: targetScope.sessionId, entryId: "compact-1" },
         },
-      }),
-    },
+      ],
+    }));
+    return {
+      ok: true,
+      compacted: true,
+      result: {
+        summary: "summary",
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 120,
+        tokensAfter: 80,
+      },
+    };
   });
 
   const { ws } = await openClient();
@@ -496,6 +576,12 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
         sessionFile?: string;
         sessionId?: string;
         sessionKey?: string;
+        sessionTarget?: {
+          agentId?: string;
+          sessionId?: string;
+          sessionKey?: string;
+          storePath?: string;
+        };
         thinkLevel?: string;
         trigger?: string;
         workspaceDir?: string;
@@ -513,7 +599,13 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   if (!compactionCall.sessionFile) {
     throw new Error("expected embedded compaction session file");
   }
-  expect(path.basename(compactionCall.sessionFile)).toBe("sess-main.jsonl");
+  expect(compactionCall.sessionFile).toContain(`sqlite:main:sess-main:${storePath}`);
+  expect(compactionCall.sessionTarget).toEqual({
+    agentId: "main",
+    sessionId: "sess-main",
+    sessionKey: "agent:main:main",
+    storePath,
+  });
   expect(compactionCall.workspaceDir).toBe(path.join(os.tmpdir(), "openclaw-gateway-test"));
   expect(compactionCall.cwd).toBe("/tmp/task-repo");
   expect(callConfig.agents?.defaults?.model?.primary).toBe("anthropic/claude-opus-4-6");
@@ -533,19 +625,27 @@ test("sessions.compact without maxLines runs embedded manual compaction for chec
   });
   expect(compactionCall.trigger).toBe("manual");
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    {
-      compactionCount?: number;
-      contextBudgetStatus?: unknown;
-      totalTokens?: number;
-      totalTokensFresh?: boolean;
-    }
-  >;
-  expect(store["agent:main:main"]?.compactionCount).toBe(1);
-  expect(store["agent:main:main"]?.contextBudgetStatus).toBeUndefined();
-  expect(store["agent:main:main"]?.totalTokens).toBe(80);
-  expect(store["agent:main:main"]?.totalTokensFresh).toBe(true);
+  const sqliteRows = await loadTranscriptEvents(sessionScope);
+  expect(sqliteRows).toHaveLength(3);
+  expect(sqliteRows.at(-1)).toMatchObject({
+    type: "compaction",
+    summary: "summary",
+  });
+  await expect(fs.readdir(dir)).resolves.not.toContain("sess-main.jsonl");
+  const storedEntry = loadAccessorSessionEntry(sessionScope) as
+    | {
+        compactionCheckpoints?: unknown[];
+        compactionCount?: number;
+        contextBudgetStatus?: unknown;
+        totalTokens?: number;
+        totalTokensFresh?: boolean;
+      }
+    | undefined;
+  expect(storedEntry?.compactionCount).toBe(1);
+  expect(storedEntry?.compactionCheckpoints).toHaveLength(1);
+  expect(storedEntry?.contextBudgetStatus).toBeUndefined();
+  expect(storedEntry?.totalTokens).toBe(80);
+  expect(storedEntry?.totalTokensFresh).toBe(true);
 
   ws.close();
 });
