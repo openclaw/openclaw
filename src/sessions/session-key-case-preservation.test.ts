@@ -73,6 +73,7 @@ describe("parseRawSessionConversationRef", () => {
   it.each([
     "agent::matrix:channel:room",
     "agent:voice::matrix:channel:room",
+    "agent:voice:agent:channel:room",
     "agent:voice:matrix::room",
     "agent:voice:matrix:channel::room",
   ])("rejects empty structural segments in %s", (sessionKey) => {

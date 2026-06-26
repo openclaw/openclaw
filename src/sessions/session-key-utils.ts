@@ -353,6 +353,9 @@ export function parseRawSessionConversationRef(
   }
   const bodyStartIndex = hasAgentWrapper ? 2 : 0;
   const parts = rawParts.slice(bodyStartIndex);
+  if (normalizeOptionalLowercaseString(parts[0]) === "agent") {
+    return null;
+  }
   // Empty opaque tail segments are valid (for example compressed IPv6), but
   // structural owner/channel/kind/first-id segments must be present.
   if (parts.length < 3 || !normalizeOptionalString(parts[2])) {

@@ -5497,8 +5497,36 @@ function sessionStorePathsMatch(left: string, right: string): boolean {
   }
   try {
     return sameFileIdentity(fs.statSync(left), fs.statSync(right));
-  } catch {
-    return false;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
+      return false;
+    }
+    const resolvedLeft = resolvePathThroughExistingParents(left);
+    const resolvedRight = resolvePathThroughExistingParents(right);
+    return resolvedLeft !== undefined && resolvedLeft === resolvedRight;
+  }
+}
+
+function resolvePathThroughExistingParents(filePath: string): string | undefined {
+  const resolvedPath = path.resolve(filePath);
+  const suffix = [path.basename(resolvedPath)];
+  let parentPath = path.dirname(resolvedPath);
+  while (true) {
+    try {
+      return path.join(fs.realpathSync.native(parentPath), ...suffix);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        return undefined;
+      }
+      const nextParent = path.dirname(parentPath);
+      if (nextParent === parentPath) {
+        return undefined;
+      }
+      suffix.unshift(path.basename(parentPath));
+      parentPath = nextParent;
+    }
   }
 }
 
@@ -5522,8 +5550,14 @@ function sessionStorePathsHaveDistinctEntries(left: string, right: string): bool
     }
     // Hard links resolve to distinct pathnames and split on replacement.
     return fs.realpathSync.native(left) !== fs.realpathSync.native(right);
-  } catch {
-    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== "ENOENT" && code !== "ENOTDIR") {
+      return true;
+    }
+    const resolvedLeft = resolvePathThroughExistingParents(left);
+    const resolvedRight = resolvePathThroughExistingParents(right);
+    return resolvedLeft === undefined || resolvedLeft !== resolvedRight;
   }
 }
 

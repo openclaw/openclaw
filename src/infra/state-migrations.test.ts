@@ -655,6 +655,51 @@ describe("state migrations", () => {
     );
   });
 
+  it("preserves shared ownership through missing parent-symlink store paths", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    const agentsDir = path.join(stateDir, "agents");
+    await fs.mkdir(agentsDir, { recursive: true });
+    const aliasAgentsDir = path.join(root, "agents-alias");
+    await fs.symlink(agentsDir, aliasAgentsDir, "dir");
+    const configuredStorePath = path.join(aliasAgentsDir, "ops", "sessions", "sessions.json");
+    const targetStorePath = path.join(agentsDir, "ops", "sessions", "sessions.json");
+    const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
+    await fs.mkdir(path.dirname(legacyStorePath), { recursive: true });
+    await fs.writeFile(
+      legacyStorePath,
+      JSON.stringify({
+        "agent:main:work": { sessionId: "foreign-main", updatedAt: 10 },
+      }),
+      "utf8",
+    );
+    const cfg = {
+      session: { mainKey: "work", store: configuredStorePath },
+      agents: { list: [{ id: "ops", default: true }] },
+    } as OpenClawConfig;
+    const detected = await detectLegacyStateMigrations({
+      cfg,
+      env,
+      homedir: () => root,
+      pluginSessionStoreAgentIds: ["voice"],
+    });
+    expect(detected.sessions.preserveAmbiguousKeys).toBe(true);
+    expect(detected.sessions.preserveForeignMainAliases).toBe(true);
+
+    await runLegacyStateMigrations({ detected, config: cfg, now: () => 1234 });
+
+    const store = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
+      string,
+      { sessionId: string }
+    >;
+    expect(store["agent:main:work"]?.sessionId).toBe("foreign-main");
+    expect(store["agent:ops:work"]).toBeUndefined();
+    await expect(fs.readFile(configuredStorePath, "utf8")).resolves.toBe(
+      await fs.readFile(targetStorePath, "utf8"),
+    );
+  });
+
   it("preserves plugin ownership captured before an aliased store rewrite", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
