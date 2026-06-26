@@ -15,6 +15,7 @@ import { Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { textResult } from "../../tools/common.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { resolveToCwd } from "./path-utils.js";
@@ -395,13 +396,11 @@ export function createWriteToolDefinition(
         const precheck = await readOriginalWriteState(absolutePath, content, ops);
         if (precheck.state === "same") {
           return {
-            content: [
-              {
-                type: "text" as const,
-                text: `No changes: content is identical to existing ${path}`,
-              },
-            ],
-            details: undefined,
+            ...textResult(`No changes: content is identical to existing ${path}`, {
+              status: "blocked" as const,
+              reason: "no-op-write" as const,
+            }),
+            terminate: true,
           };
         }
         try {

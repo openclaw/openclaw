@@ -13,6 +13,7 @@ import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { textResult } from "../../tools/common.js";
 import type { ToolDefinition } from "../extensions/types.js";
 import {
   applyEditsToNormalizedContent,
@@ -390,13 +391,11 @@ export function createEditToolDefinition(
         // Detect no-op edits where oldText === newText.
         if (edits.some((e) => e.oldText === e.newText)) {
           return {
-            content: [
-              {
-                type: "text",
-                text: `No changes: one or more edits have identical old and new text in ${path}.`,
-              },
-            ],
-            details: undefined,
+            ...textResult(
+              `No changes: one or more edits have identical old and new text in ${path}.`,
+              { status: "blocked" as const, reason: "no-op-edit" as const },
+            ),
+            terminate: true,
           };
         }
 
@@ -427,6 +426,17 @@ export function createEditToolDefinition(
             edits,
             path,
           );
+
+          // No changes after applying edits — no-op.
+          if (baseContent === newContent) {
+            return {
+              ...textResult(`No changes: edits produced no diff in ${path}.`, {
+                status: "blocked" as const,
+                reason: "no-op-edit" as const,
+              }),
+              terminate: true,
+            };
+          }
           const finalContent = bom + restoreLineEndings(newContent, originalEnding);
           await ops.writeFile(absolutePath, finalContent);
           if (signal?.aborted) {
