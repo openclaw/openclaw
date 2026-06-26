@@ -43,15 +43,16 @@ function createMemoryPatchSandbox(initialFiles: Record<string, string> = {}) {
   const files = new Map<string, string>(
     Object.entries(initialFiles).map(([filePath, contents]) => [`/sandbox/${filePath}`, contents]),
   );
+  const writeFile = vi.fn(async ({ filePath, data }) => {
+    files.set(filePath, Buffer.isBuffer(data) ? data.toString("utf8") : data);
+  });
   const bridge: SandboxFsBridge = {
     resolvePath: ({ filePath }) => ({
       relativePath: filePath,
       containerPath: `/sandbox/${filePath}`,
     }),
     readFile: async ({ filePath }) => Buffer.from(files.get(filePath) ?? "", "utf8"),
-    writeFile: vi.fn(async ({ filePath, data }) => {
-      files.set(filePath, Buffer.isBuffer(data) ? data.toString("utf8") : data);
-    }),
+    writeFile,
     remove: async ({ filePath }) => {
       files.delete(filePath);
     },
@@ -73,6 +74,7 @@ function createMemoryPatchSandbox(initialFiles: Record<string, string> = {}) {
   return {
     files,
     bridge,
+    writeFile,
     options: {
       cwd: "/local/workspace",
       sandbox: {
@@ -174,7 +176,7 @@ describe("applyPatch", () => {
     expect(result.text).toBe("No changes made to source.txt.");
     expect(result.summary).toEqual({ added: [], modified: [], deleted: [] });
     expect(memory.files.get("/sandbox/source.txt")).toBe("foo\nbar\n");
-    expect(memory.bridge.writeFile).not.toHaveBeenCalled();
+    expect(memory.writeFile.mock.calls).toHaveLength(0);
 
     const tool = createApplyPatchTool(memory.options);
     const toolResult = await tool.execute("call-no-op", { input: patch }, undefined);

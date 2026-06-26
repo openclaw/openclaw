@@ -230,6 +230,25 @@ describe("edit tool", () => {
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo\n");
   });
 
+  it("preserves real sibling edits beside a fuzzy no-op", async () => {
+    const filePath = await createTempFile("foo\u00a0bar\n");
+    const tool = createEditTool(tmpDir);
+
+    await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [
+          { oldText: "foo bar", newText: "foo bar" },
+          { oldText: "foo\u00a0", newText: "baz" },
+        ],
+      },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("bazbar\n");
+  });
+
   it("preserves valid sibling edits when batch contains a no-op entry", async () => {
     const filePath = await createTempFile("alpha beta gamma\n");
     const tool = createEditTool(tmpDir);

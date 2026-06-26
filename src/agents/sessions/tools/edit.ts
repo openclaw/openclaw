@@ -424,13 +424,17 @@ export function createEditToolDefinition(
           const { bom, text: content } = stripBom(rawContent);
           const originalEnding = detectLineEnding(content);
           const normalizedContent = normalizeToLF(content);
-          // Validate every requested target against the original file, but do
-          // not let equal-text entries rewrite content through fuzzy matching.
-          applyEditsToNormalizedContent(
-            normalizedContent,
-            originalEdits.map((edit) => ({ ...edit, newText: "" })),
-            path,
-          );
+          // Validate no-op targets independently so one fuzzy match cannot
+          // normalize away distinctions needed by real sibling edits.
+          for (const edit of originalEdits) {
+            if (edit.oldText === edit.newText) {
+              applyEditsToNormalizedContent(
+                normalizedContent,
+                [{ oldText: edit.oldText, newText: "" }],
+                path,
+              );
+            }
+          }
           if (realEdits.length === 0) {
             return {
               ...textResult(
