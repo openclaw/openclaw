@@ -105,6 +105,46 @@ describe("buildFeishuPostMessagePayload", () => {
       },
     });
   });
+
+  // FIX #97074: normalize single newlines for Feishu post+md rendering
+  it("upgrades single \\n to \\n\\n for paragraph breaks", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "Hello\nWorld",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("Hello\n\nWorld");
+  });
+
+  // FIX #97074: preserve existing double newlines
+  it("preserves existing \\n\\n sequences unchanged", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "Paragraph 1\n\nParagraph 2\n\nParagraph 3",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("Paragraph 1\n\nParagraph 2\n\nParagraph 3");
+  });
+
+  // FIX #97074: handle mixed single and double newlines
+  it("handles mixed single and double newlines", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "Line A\nLine B\n\nLine C\nLine D",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("Line A\n\nLine B\n\nLine C\n\nLine D");
+  });
+
+  // FIX #97074: preserve newlines inside fenced code blocks
+  it("preserves single newlines inside fenced code blocks", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "Before\n```\ncode\nblock\n```\nAfter",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("Before\n\n```\ncode\nblock\n```\n\nAfter");
+  });
 });
 
 describe("getMessageFeishu", () => {

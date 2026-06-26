@@ -571,6 +571,23 @@ function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostM
   return elements;
 }
 
+/**
+ * Normalize single newlines to double newlines for Feishu post+md rendering.
+ * Feishu's post+md treats \n\n as a paragraph break but \n alone as a space,
+ * which causes multi-line text to appear cramped. This function upgrades single
+ * \n to \n\n while preserving existing \n\n sequences and fenced code blocks.
+ *
+ * FIX #97074: Single \n rendered as space in Feishu post+md messages.
+ */
+function normalizeFeishuNewlines(text: string): string {
+  const parts = text.split(/(```[\s\S]*?```)/g);
+  for (let i = 0; i < parts.length; i += 2) {
+    // Even indices are non-code sections; odd indices are code blocks (preserved)
+    parts[i] = parts[i].replace(/(?<!\n)\n(?!\n)/g, "\n\n");
+  }
+  return parts.join("");
+}
+
 export function buildFeishuPostMessagePayload(params: {
   messageText: string;
   mentions?: MentionTarget[];
@@ -583,7 +600,7 @@ export function buildFeishuPostMessagePayload(params: {
     ...buildFeishuPostMentionElements(mentions),
     {
       tag: "md",
-      text: messageText,
+      text: normalizeFeishuNewlines(messageText),
     },
   ];
   return {
