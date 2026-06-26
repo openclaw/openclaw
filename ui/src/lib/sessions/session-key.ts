@@ -3,7 +3,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../lib/string-coerce.ts";
+} from "../string-coerce.ts";
 
 export type ParsedAgentSessionKey = {
   agentId: string;
@@ -17,6 +17,11 @@ export type UiSessionDefaultsHost = {
   assistantAgentId?: string | null;
   agentsList?: { defaultId?: string | null; mainKey?: string | null } | null;
   hello?: { snapshot?: unknown } | null;
+};
+
+type UiSessionDefaults = {
+  defaultAgentId?: string | null;
+  mainKey?: string | null;
 };
 
 const VALID_ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/i;
@@ -90,15 +95,13 @@ function normalizeSessionKeyForUiComparison(sessionKey: string | undefined | nul
 
 function readSessionDefaults(
   host: Pick<UiSessionDefaultsHost, "hello">,
-): { defaultAgentId?: string | null; mainKey?: string | null } | undefined {
+): UiSessionDefaults | undefined {
   const snapshot = host.hello?.snapshot;
   if (!snapshot || typeof snapshot !== "object" || !("sessionDefaults" in snapshot)) {
     return undefined;
   }
   const defaults = snapshot.sessionDefaults;
-  return defaults && typeof defaults === "object"
-    ? (defaults as { defaultAgentId?: string | null; mainKey?: string | null })
-    : undefined;
+  return defaults && typeof defaults === "object" ? (defaults as UiSessionDefaults) : undefined;
 }
 
 export function resolveUiConfiguredMainKey(

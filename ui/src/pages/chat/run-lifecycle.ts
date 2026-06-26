@@ -1,6 +1,6 @@
 import type { GatewaySessionRow, SessionRunStatus, SessionsListResult } from "../../api/types.ts";
-import { uiSessionRowMatchesSelectedChat } from "../../lib/session-key.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { uiSessionRowMatchesSelectedChat } from "../../lib/sessions/session-key.ts";
 // Control UI chat module implements run lifecycle behavior.
 import {
   resetToolStream,

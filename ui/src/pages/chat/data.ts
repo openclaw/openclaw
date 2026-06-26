@@ -10,14 +10,6 @@ import type {
   ModelCatalogEntry,
 } from "../../api/types.ts";
 import type { SessionsListResult } from "../../api/types.ts";
-import {
-  areUiSessionKeysEquivalent,
-  isUiGlobalSessionKey,
-  normalizeAgentId,
-  parseAgentSessionKey,
-  resolveUiGlobalAliasAgentId,
-  resolveUiSelectedGlobalAgentId,
-} from "../../lib/session-key.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   scopedAgentIdForSession,
@@ -26,6 +18,14 @@ import {
   visibleSessionMatches,
   type SessionCapability,
 } from "../../lib/sessions/index.ts";
+import {
+  areUiSessionKeysEquivalent,
+  isUiGlobalSessionKey,
+  normalizeAgentId,
+  parseAgentSessionKey,
+  resolveUiGlobalAliasAgentId,
+  resolveUiSelectedGlobalAgentId,
+} from "../../lib/sessions/session-key.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

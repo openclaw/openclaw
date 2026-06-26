@@ -2,7 +2,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
-} from "../../lib/session-key.ts";
+} from "../../lib/sessions/session-key.ts";
 // Control UI controller manages skill workshop gateway state.
 import type { GatewayBrowserClient } from "../../ui/gateway.ts";
 import type {

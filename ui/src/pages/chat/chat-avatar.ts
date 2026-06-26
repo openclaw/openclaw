@@ -14,7 +14,7 @@ import {
   isUiGlobalSessionKey,
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
-} from "../../lib/session-key.ts";
+} from "../../lib/sessions/session-key.ts";
 import { resolveControlUiAuthHeader } from "../../ui/control-ui-auth.ts";
 import {
   assistantAvatarFallbackUrl,

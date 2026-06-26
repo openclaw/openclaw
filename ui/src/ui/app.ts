@@ -44,7 +44,7 @@ import {
 } from "../app/theme.ts";
 import { i18n, I18nController, isSupportedLocale, t } from "../i18n/index.ts";
 import { normalizeAssistantIdentity } from "../lib/assistant-identity.ts";
-import { resolveAgentIdFromSessionKey } from "../lib/session-key.ts";
+import { resolveAgentIdFromSessionKey } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
 import type { ActivityEntry, ActivityStatus } from "../pages/activity/data.ts";
 import {

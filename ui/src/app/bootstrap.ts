@@ -8,14 +8,17 @@ import {
   inferBasePathFromPathname,
   locationForRoute,
   normalizeBasePath,
+  pathForRoute,
+  routeIdFromPath,
   startApplicationRouter,
   type AppRouteModule,
   type ApplicationRouter,
   type RouteId,
 } from "../app-routes.ts";
 import { createAgentIdentityCapability } from "../lib/agents/identity.ts";
-import { createSessionCapability } from "../lib/sessions/index.ts";
+import { createSessionCapability, resolveSessionKey } from "../lib/sessions/index.ts";
 import { generateUUID } from "../lib/uuid.ts";
+import type { RouteLocation } from "../router/types.ts";
 import { createAgentSelectionCapability } from "./agent-selection.ts";
 import { createBrowserHistory } from "./browser.ts";
 import type {
@@ -39,6 +42,27 @@ import {
 } from "./settings.ts";
 import { startThemeTransition } from "./theme-transition.ts";
 import { resolveTheme, type ThemeMode } from "./theme.ts";
+
+function normalizeInitialApplicationLocation(
+  location: RouteLocation,
+  basePath: string,
+  sessionKey: string,
+) {
+  const routeId = routeIdFromPath(location.pathname, basePath);
+  if ((routeId !== null && routeId !== "chat") || !sessionKey.trim()) {
+    return location;
+  }
+
+  const search = new URLSearchParams(location.search);
+  if (!search.get("session")?.trim()) {
+    search.set("session", sessionKey);
+  }
+  return {
+    ...location,
+    pathname: routeId === null ? pathForRoute("chat", basePath) : location.pathname,
+    search: `?${search.toString()}`,
+  };
+}
 
 function applyStartupPresentation(settings: ReturnType<typeof loadSettings>): void {
   if (typeof document === "undefined") {
@@ -226,12 +250,26 @@ function createApplicationGateway(
           return;
         }
         const sessionDefaults = readSessionDefaults(hello);
+        const sessionKey = resolveSessionKey(snapshot.sessionKey, hello);
+        const lastActiveSessionKey = resolveSessionKey(settings.lastActiveSessionKey, hello);
+        if (
+          sessionKey !== settings.sessionKey ||
+          lastActiveSessionKey !== settings.lastActiveSessionKey
+        ) {
+          settings = {
+            ...settings,
+            sessionKey,
+            lastActiveSessionKey,
+          };
+          saveSettings(settings);
+        }
         setSnapshot({
           ...snapshot,
           client: nextClient,
           connected: true,
           hello,
           assistantAgentId: sessionDefaults?.defaultAgentId ?? "main",
+          sessionKey,
           lastError: null,
           lastErrorCode: null,
         });
@@ -340,13 +378,21 @@ export function bootstrapApplication(): ApplicationRuntime {
   if (startup.changed) {
     saveSettings(startup.settings);
   }
+  const basePath = normalizeBasePath(
+    inferBasePathFromPathname(startup.location.pathname || globalThis.location?.pathname || "/"),
+  );
+  const initialLocation = normalizeInitialApplicationLocation(
+    startup.location,
+    basePath,
+    startup.settings.sessionKey,
+  );
   const currentLocation = history.location();
   if (
-    currentLocation.pathname !== startup.location.pathname ||
-    currentLocation.search !== startup.location.search ||
-    currentLocation.hash !== startup.location.hash
+    currentLocation.pathname !== initialLocation.pathname ||
+    currentLocation.search !== initialLocation.search ||
+    currentLocation.hash !== initialLocation.hash
   ) {
-    history.replace(startup.location);
+    history.replace(initialLocation);
   }
 
   const settings = startup.settings;
@@ -358,9 +404,6 @@ export function bootstrapApplication(): ApplicationRuntime {
   const navigation = createApplicationNavigationPreferences(settings);
   const theme = createApplicationTheme(settings);
   applyStartupPresentation(settings);
-  const basePath = normalizeBasePath(
-    inferBasePathFromPathname(globalThis.location?.pathname ?? "/"),
-  );
   const identity = loadLocalUserIdentity();
   const router = createApplicationRouter();
   let pendingGatewayConnection =
@@ -433,8 +476,9 @@ export function bootstrapApplication(): ApplicationRuntime {
     confirmPendingGatewayConnection,
     cancelPendingGatewayConnection,
     start: async () => {
+      const routerStart = startApplicationRouter(router, history, basePath, context);
       gateway.start();
-      await startApplicationRouter(router, history, basePath, context);
+      await routerStart;
     },
     stop: () => {
       router.stop();

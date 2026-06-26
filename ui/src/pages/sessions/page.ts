@@ -7,8 +7,8 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
-import { parseAgentSessionKey } from "../../lib/session-key.ts";
 import { filterSessionRows, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { renderSessions } from "./view.ts";
 
 function parseFilterInteger(value: string): number | undefined {

@@ -33,7 +33,7 @@ import {
   resolveUiDefaultAgentId,
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
-} from "../lib/session-key.ts";
+} from "../lib/sessions/session-key.ts";
 import { loadAgents, type AgentsState } from "../pages/agents/data.ts";
 import { refreshChatAvatar } from "../pages/chat/chat-avatar.ts";
 import {

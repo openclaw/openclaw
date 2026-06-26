@@ -150,7 +150,7 @@ export class AppSidebar extends LitElement {
       label: resolveSessionDisplayName(row.key, row),
       meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a",
       href: `${pathForRoute("chat", context?.basePath ?? "")}${searchForSession(row.key)}`,
-      active: row.key === routeSessionKey,
+      active: row.key === navigation.currentSessionKey,
       hasActiveRun: Boolean(row.hasActiveRun),
     }));
     const newSessionDisabled =

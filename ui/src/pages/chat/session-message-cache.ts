@@ -8,7 +8,7 @@ import {
   resolveUiDefaultAgentId,
   resolveUiSelectedGlobalAgentId,
   type UiSessionDefaultsHost,
-} from "../../lib/session-key.ts";
+} from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { getSessionCacheValue, setSessionCacheValue } from "./session-cache.ts";
 

@@ -20,7 +20,7 @@ import {
   DEFAULT_AGENT_ID,
   normalizeAgentId,
   parseAgentSessionKey,
-} from "../../lib/session-key.ts";
+} from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import { formatConnectError } from "../../ui/connect-error.ts";

@@ -11,7 +11,6 @@ import type {
   SessionWorkspaceGetResult,
   SessionWorkspaceListResult,
 } from "../../api/types.ts";
-import { normalizeAgentId } from "../session-key.ts";
 import {
   requestSessionCreate,
   resolveSessionCreateParams,
@@ -31,6 +30,7 @@ import {
   reconcileSessionHistory,
   type SessionReconcileOptions,
 } from "./reconcile.ts";
+import { normalizeAgentId } from "./session-key.ts";
 export {
   buildSessionUsageDateParams,
   requestSessionUsage,
@@ -176,6 +176,7 @@ export type SessionCapability = {
 
 export { requestSessionCreate } from "./create.ts";
 export type { SessionCreateParams } from "./create.ts";
+export { resolveSessionKey } from "./navigation.ts";
 export {
   filterSessionRows,
   getVisibleSessionRows,

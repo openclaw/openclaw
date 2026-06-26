@@ -22,7 +22,7 @@ import {
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
-} from "../lib/session-key.ts";
+} from "../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../lib/string-coerce.ts";
 import { refreshChat } from "../pages/chat/data.ts";
 import { createChatSessionsLoadOverrides } from "../pages/chat/session-scope.ts";

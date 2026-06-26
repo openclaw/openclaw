@@ -2,6 +2,11 @@ import type { GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { isCronSessionKey } from "../session-display.ts";
 import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "../string-coerce.ts";
+import {
   isUiGlobalSessionKey,
   isSessionKeyTiedToAgent,
   isSubagentSessionKey,
@@ -11,8 +16,7 @@ import {
   resolveUiGlobalAliasAgentId,
   resolveUiKnownSelectedGlobalAgentId,
   resolveUiSelectedGlobalAgentId,
-} from "../session-key.ts";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+} from "./session-key.ts";
 export type SessionNavigationInput = {
   result: SessionsListResult | null;
   sessionKey: string;
@@ -41,6 +45,46 @@ export type SessionScopeHost = {
 export type SessionScopeHostWithKey = SessionScopeHost & {
   sessionKey: string;
 };
+
+type SessionDefaults = {
+  defaultAgentId?: string | null;
+  mainKey?: string | null;
+  mainSessionKey?: string | null;
+};
+
+function readSessionDefaults(
+  host: Pick<SessionNavigationInput, "hello">,
+): SessionDefaults | undefined {
+  const snapshot = host.hello?.snapshot;
+  if (!snapshot || typeof snapshot !== "object" || !("sessionDefaults" in snapshot)) {
+    return undefined;
+  }
+  const defaults = snapshot.sessionDefaults;
+  return defaults && typeof defaults === "object" ? (defaults as SessionDefaults) : undefined;
+}
+
+export function resolveSessionKey(
+  sessionKey: string | undefined | null,
+  hello: GatewayHelloOk | null | undefined,
+): string {
+  const raw = normalizeOptionalString(sessionKey) ?? "";
+  const defaults = readSessionDefaults({ hello });
+  const mainSessionKey = normalizeOptionalString(defaults?.mainSessionKey);
+  if (!mainSessionKey) {
+    return raw;
+  }
+  if (!raw) {
+    return mainSessionKey;
+  }
+  const mainKey = normalizeOptionalLowercaseString(defaults?.mainKey) ?? "main";
+  const defaultAgentId = normalizeOptionalString(defaults?.defaultAgentId);
+  const isAlias =
+    raw === "main" ||
+    raw === mainKey ||
+    (defaultAgentId &&
+      (raw === `agent:${defaultAgentId}:main` || raw === `agent:${defaultAgentId}:${mainKey}`));
+  return isAlias ? mainSessionKey : raw;
+}
 
 function readHelloDefaultAgentId(host: Pick<SessionScopeHost, "hello">): string | undefined {
   const snapshot = host.hello?.snapshot as
@@ -155,7 +199,7 @@ export function getVisibleSessionRows(
 }
 
 export function resolveSessionNavigation(input: SessionNavigationInput): SessionNavigation {
-  const currentSessionKey = input.sessionKey.trim();
+  const currentSessionKey = resolveSessionKey(input.sessionKey, input.hello);
   const defaultAgentId = resolveUiSelectedGlobalAgentId({
     assistantAgentId: input.assistantAgentId,
     hello: input.hello,

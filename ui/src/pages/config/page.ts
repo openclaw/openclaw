@@ -5,13 +5,13 @@ import { loadLocalAssistantIdentity } from "../../app/assistant-identity.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
+import { requestSessionPatch, type SessionPatch } from "../../lib/sessions/index.ts";
 import {
   buildAgentMainSessionKey,
   isUiGlobalSessionKey,
   parseAgentSessionKey,
   resolveUiSelectedGlobalAgentId,
-} from "../../lib/session-key.ts";
-import { requestSessionPatch, type SessionPatch } from "../../lib/sessions/index.ts";
+} from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { setAssistantAvatarOverride } from "../../ui/controllers/assistant-identity.ts";

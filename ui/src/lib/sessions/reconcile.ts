@@ -1,11 +1,11 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { isSessionRunActive } from "../session-run-state.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
-} from "../session-key.ts";
-import { isSessionRunActive } from "../session-run-state.ts";
+} from "./session-key.ts";
 
 export type SessionReconcileOptions = {
   resultAgentId?: string | null;

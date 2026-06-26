@@ -2677,21 +2677,10 @@ export function renderChat(props: ChatProps) {
     }
   };
 
-  const syncComposerValue = (
-    target: HTMLTextAreaElement,
-    options: { forceCommit?: boolean } = {},
-  ) => {
+  const syncComposerValue = (target: HTMLTextAreaElement) => {
     adjustTextareaHeight(target);
     draftMirror.value = target.value;
-    const hostDraftNeeded = isBusy || showAbortableUi || props.queue.length > 0;
-    if (
-      options.forceCommit ||
-      hostDraftNeeded ||
-      target.value.startsWith("/") ||
-      hasVisibleSlashMenuState()
-    ) {
-      commitComposerDraft(props, target.value);
-    }
+    commitComposerDraft(props, target.value);
     updateSlashMenu(target.value, requestUpdate, props, {}, () => target.value);
   };
   const handleBeforeInput = (e: InputEvent) => {
@@ -2718,7 +2707,7 @@ export function renderChat(props: ChatProps) {
   };
   const handleCompositionEnd = (e: CompositionEvent) => {
     vs.composerComposing = false;
-    syncComposerValue(e.target as HTMLTextAreaElement, { forceCommit: true });
+    syncComposerValue(e.target as HTMLTextAreaElement);
   };
   const handleBlur = (e: FocusEvent) => {
     const target = e.target as HTMLTextAreaElement;

@@ -1,5 +1,5 @@
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import { normalizeAgentId } from "../lib/session-key.ts";
+import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 
 type AgentSelectionGateway = {
   readonly snapshot: {

@@ -32,7 +32,7 @@ import {
   normalizeAgentId,
   isSubagentSessionKey,
   parseAgentSessionKey,
-} from "../lib/session-key.ts";
+} from "../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { resolveAgentIdForSession } from "../pages/chat/chat-avatar.ts";
 import { resetChatStateForSessionSwitch } from "../pages/chat/session-switch.ts";

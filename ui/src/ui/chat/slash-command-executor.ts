@@ -17,9 +17,13 @@ import type {
   ModelCatalogEntry,
   SessionsListResult,
 } from "../../api/types.ts";
-import { DEFAULT_AGENT_ID, DEFAULT_MAIN_KEY, parseAgentSessionKey } from "../../lib/session-key.ts";
 import { sessionModelMatchesDefaults } from "../../lib/session-model-defaults.ts";
 import type { SessionCapability, SessionPatch } from "../../lib/sessions/index.ts";
+import {
+  DEFAULT_AGENT_ID,
+  DEFAULT_MAIN_KEY,
+  parseAgentSessionKey,
+} from "../../lib/sessions/session-key.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,

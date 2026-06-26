@@ -32,13 +32,17 @@ import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
+  resolveSessionKey,
+  scopedAgentParamsForSession,
+  type SessionCapability,
+} from "../../lib/sessions/index.ts";
+import {
   buildAgentMainSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
   resolveUiSelectedGlobalAgentId,
-} from "../../lib/session-key.ts";
-import { scopedAgentParamsForSession, type SessionCapability } from "../../lib/sessions/index.ts";
+} from "../../lib/sessions/session-key.ts";
 import {
   dismissChatError,
   dismissRealtimeTalkError,
@@ -61,6 +65,11 @@ import { applyModelCatalogResult, loadModels } from "../../ui/controllers/models
 import type { EmbedSandboxMode } from "../../ui/embed-sandbox.ts";
 import type { SidebarContent } from "../../ui/sidebar-content.ts";
 import { refreshChatAvatar } from "./chat-avatar.ts";
+import {
+  CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS,
+  persistChatComposerState,
+  restoreChatComposerState,
+} from "./composer-persistence.ts";
 import {
   clearChatHistory,
   handleAbortChat,
@@ -503,7 +512,7 @@ function createPageState(
     client: null,
     connected: false,
     hello: null,
-    assistantAgentId: null,
+    assistantAgentId: context.agentSelection.state.selectedId,
     sessionKey: settings.sessionKey,
     chatLoading: false,
     chatSending: false,
@@ -809,6 +818,45 @@ export class ChatPage extends LitElement {
   private stopGatewayEvents: (() => void) | undefined;
   private stopSessionsSubscription: (() => void) | undefined;
   private connectedClient: GatewayBrowserClient | null = null;
+  private composerPersistenceTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
+  private composerPersistenceReady = false;
+  private lastPersistedComposer: {
+    sessionKey: string;
+    chatMessage: string;
+    chatQueue: ChatQueueItem[];
+  } | null = null;
+
+  private persistComposer(immediate = false) {
+    const state = this.state;
+    if (!this.composerPersistenceReady || !state) {
+      return;
+    }
+    const last = this.lastPersistedComposer;
+    const unchanged =
+      last?.sessionKey === state.sessionKey &&
+      last.chatMessage === state.chatMessage &&
+      last.chatQueue === state.chatQueue;
+    if (unchanged) {
+      return;
+    }
+    if (this.composerPersistenceTimer !== null) {
+      globalThis.clearTimeout(this.composerPersistenceTimer);
+      this.composerPersistenceTimer = null;
+    }
+    if (!immediate) {
+      this.composerPersistenceTimer = globalThis.setTimeout(
+        () => this.persistComposer(true),
+        CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS,
+      );
+      return;
+    }
+    persistChatComposerState(state);
+    this.lastPersistedComposer = {
+      sessionKey: state.sessionKey,
+      chatMessage: state.chatMessage,
+      chatQueue: state.chatQueue,
+    };
+  }
 
   private readonly handleCommandPaletteSlashCommand = (command: string) => {
     const state = this.state;
@@ -985,18 +1033,42 @@ export class ChatPage extends LitElement {
     super.connectedCallback();
     document.addEventListener("keydown", this.handleDocumentKeydown, true);
     document.addEventListener("pointerdown", this.handleDocumentPointerdown, true);
-    this.state = createPageState(this.context, () => this.requestUpdate(), this);
+    this.state = createPageState(
+      this.context,
+      () => {
+        if (this.lastPersistedComposer?.chatQueue !== this.state?.chatQueue) {
+          this.persistComposer(true);
+        }
+        this.requestUpdate();
+      },
+      this,
+    );
+    const handleChatDraftChange = this.state.handleChatDraftChange;
+    this.state.handleChatDraftChange = (next) => {
+      handleChatDraftChange(next);
+      this.persistComposer();
+    };
     this.announceCommandPaletteTarget(this.handleCommandPaletteSlashCommand);
     if (this.data?.sessionKey) {
-      this.state.sessionKey = this.data.sessionKey;
+      this.state.sessionKey = resolveSessionKey(
+        this.data.sessionKey,
+        this.context.gateway.snapshot.hello,
+      );
       const agentId = parseAgentSessionKey(this.data.sessionKey)?.agentId;
       if (agentId) {
         this.context.agentSelection.set(agentId);
       }
     }
+    restoreChatComposerState(this.state, { preserveCurrent: true });
     if (this.data?.draft !== undefined) {
       this.state.handleChatDraftChange(this.data.draft);
     }
+    this.composerPersistenceReady = true;
+    this.lastPersistedComposer = {
+      sessionKey: this.state.sessionKey,
+      chatMessage: this.state.chatMessage,
+      chatQueue: this.state.chatQueue,
+    };
     this.stopGatewaySnapshot = this.context.gateway.subscribe((snapshot) => {
       this.applyGatewaySnapshot(snapshot);
     });
@@ -1015,7 +1087,10 @@ export class ChatPage extends LitElement {
 
   override willUpdate(changedProperties: Map<PropertyKey, unknown>) {
     if (changedProperties.has("data") && this.state && this.data) {
-      const nextSessionKey = this.data.sessionKey;
+      const nextSessionKey = resolveSessionKey(
+        this.data.sessionKey,
+        this.context.gateway.snapshot.hello,
+      );
       if (nextSessionKey && nextSessionKey !== this.state.sessionKey) {
         switchChatSession(this.state as never, nextSessionKey, {
           syncUrl: false,
@@ -1029,6 +1104,8 @@ export class ChatPage extends LitElement {
   }
 
   override disconnectedCallback() {
+    this.persistComposer(true);
+    this.composerPersistenceReady = false;
     this.announceCommandPaletteTarget(null);
     document.removeEventListener("keydown", this.handleDocumentKeydown, true);
     document.removeEventListener("pointerdown", this.handleDocumentPointerdown, true);
@@ -1074,7 +1151,21 @@ export class ChatPage extends LitElement {
     state.connected = snapshot.connected;
     state.hello = snapshot.hello;
     state.assistantAgentId = snapshot.assistantAgentId;
+    const previousSessionKey = state.sessionKey;
     state.sessionKey = snapshot.sessionKey || state.sessionKey;
+    if (state.sessionKey !== state.settings.sessionKey) {
+      state.settings = {
+        ...state.settings,
+        sessionKey: state.sessionKey,
+        lastActiveSessionKey: state.sessionKey,
+      };
+    }
+    if (state.sessionKey !== previousSessionKey) {
+      restoreChatComposerState(state, {
+        preserveCurrent: true,
+        sessionKey: state.sessionKey,
+      });
+    }
     state.assistantName = this.context.assistantName;
     if (!snapshot.connected) {
       this.connectedClient = null;

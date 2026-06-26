@@ -1,11 +1,11 @@
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { ArtifactDownloadResult, SessionWorkspaceListResult } from "../../api/types.ts";
-import { resolveAgentIdFromSessionKey, normalizeAgentId } from "../../lib/session-key.ts";
 import {
   scopedAgentParamsForSession,
   type SessionCapability,
   type SessionScopeHost,
 } from "../../lib/sessions/index.ts";
+import { resolveAgentIdFromSessionKey, normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../../lib/string-coerce.ts";
 import type { SidebarContent } from "../../ui/sidebar-content.ts";
 import type { ChatProps } from "./view.ts";

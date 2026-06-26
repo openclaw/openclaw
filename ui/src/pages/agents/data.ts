@@ -8,7 +8,7 @@ import type {
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
-import { resolveAgentIdFromSessionKey } from "../../lib/session-key.ts";
+import { resolveAgentIdFromSessionKey } from "../../lib/sessions/session-key.ts";
 import {
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,

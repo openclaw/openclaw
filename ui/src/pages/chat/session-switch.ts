@@ -1,16 +1,16 @@
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
+  scopedAgentListParamsForSession,
+  unsubscribeSessionMessages,
+  type SessionCapability,
+} from "../../lib/sessions/index.ts";
+import {
   isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveUiGlobalAliasAgentId,
   resolveUiSelectedGlobalAgentId,
-} from "../../lib/session-key.ts";
-import {
-  scopedAgentListParamsForSession,
-  unsubscribeSessionMessages,
-  type SessionCapability,
-} from "../../lib/sessions/index.ts";
+} from "../../lib/sessions/session-key.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { resetChatSessionPickerState } from "../../ui/chat/session-controls.ts";
 import { refreshSlashCommands } from "../../ui/chat/slash-commands.ts";

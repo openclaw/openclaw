@@ -1,4 +1,8 @@
-import { DEFAULT_AGENT_ID, normalizeAgentId, parseAgentSessionKey } from "../../lib/session-key.ts";
+import {
+  DEFAULT_AGENT_ID,
+  normalizeAgentId,
+  parseAgentSessionKey,
+} from "../../lib/sessions/session-key.ts";
 // Control UI chat module implements composer persistence behavior.
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
@@ -7,6 +11,7 @@ import type { ChatAttachment, ChatQueueItem, ChatQueueSkillWorkshopRevision } fr
 const STORAGE_KEY_PREFIX = "openclaw.control.chatComposer.v1:";
 const MAX_STORED_SESSIONS = 20;
 const MAX_STORED_QUEUE_ITEMS = 50;
+export const CHAT_COMPOSER_DRAFT_PERSIST_DELAY_MS = 200;
 export const INTERRUPTED_MODEL_WAIT_ERROR =
   "Model selection was interrupted. Review and retry when ready.";
 

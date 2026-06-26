@@ -1,6 +1,7 @@
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
-import { resolveAgentIdFromSessionKey } from "../../lib/session-key.ts";
+import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import { resolveAgentIdFromSessionKey } from "../../lib/sessions/session-key.ts";
 import type { RouteLocation } from "../../router/index.ts";
 import { definePage } from "../../router/index.ts";
 
@@ -20,7 +21,10 @@ export const page = definePage({
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
     `${sessionKeyFromLocation(location) ?? ""}\u0000${draftFromLocation(location) ?? ""}`,
   loader: async (context: ApplicationContext, { location }) => {
-    const sessionKey = sessionKeyFromLocation(location) ?? context.gateway.snapshot.sessionKey;
+    const sessionKey = resolveSessionKey(
+      sessionKeyFromLocation(location) ?? context.gateway.snapshot.sessionKey,
+      context.gateway.snapshot.hello,
+    );
     return {
       sessionKey,
       draft: draftFromLocation(location),
