@@ -3920,6 +3920,10 @@ describe("embedded attempt session lock lifecycle", () => {
     const sessionFile = await createTempSessionFile();
     const events: string[] = [];
     let releaseActiveWrite!: () => void;
+    let onCallbackStarted!: () => void;
+    const callbackStarted = new Promise<void>((resolve) => {
+      onCallbackStarted = resolve;
+    });
     const activeWriteStarted = new Promise<void>((resolve) => {
       releaseActiveWrite = () => {
         events.push("active-finish");
@@ -3941,11 +3945,14 @@ describe("embedded attempt session lock lifecycle", () => {
     await controller.reacquireAfterPrompt();
     const activeWrite = controller.withSessionWriteLock(async () => {
       events.push("active-start");
+      onCallbackStarted();
       await activeWriteStarted;
     });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+
+    // Wait for the activeWrite callback to start (lock acquired) before
+    // modifying the session file externally — otherwise the fence check
+    // inside the physical lock scope can catch the change and reject.
+    await callbackStarted;
     await fs.appendFile(sessionFile, '{"type":"message","id":"external"}\n', "utf8");
 
     let takeoverSettled = false;
