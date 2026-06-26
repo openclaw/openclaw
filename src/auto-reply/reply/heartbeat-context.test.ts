@@ -5,7 +5,9 @@ import { buildInboundUserContextPrefix } from "./inbound-meta.js";
 
 function parseConversationInfoPayload(text: string): Record<string, unknown> {
   const jsonMatch = text.match(/```json\n([\s\S]*?)\n```/);
-  if (!jsonMatch) return {};
+  if (!jsonMatch) {
+    return {};
+  }
   try {
     return JSON.parse(jsonMatch[1]) as Record<string, unknown>;
   } catch {
