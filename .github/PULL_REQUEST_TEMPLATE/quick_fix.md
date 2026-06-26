@@ -1,28 +1,26 @@
-## What Problem This Solves
-Briefly describe the small fix and why it matters.
+<!--
+Quick Fix template
 
+Use this for small fixes, typos, documentation updates, and low‑risk maintenance changes.
+
+Direct template URL pattern:
+https://github.com/openclaw/openclaw/compare/main...YOUR_USERNAME:YOUR_BRANCH?quick_pull=1&template=quick_fix.md
+-->
+
+## Summary
+Briefly describe the fix in 1–2 sentences.
 Fixes #
-
-## Why This Change Was Made
-Describe what changed in 1-2 sentences.
 
 ## Type of Change
 - [ ] Bug fix
 - [ ] Documentation fix
-- [ ] Typo/grammar fix
+- [ ] Typo or grammar fix
 - [ ] Small maintenance change
 
-## User Impact
-Explain the user-visible or contributor-visible impact. Use "None" if internal only.
+## Verification
+- [ ] I reviewed the changed files
+- [ ] I verified the change matches the linked issue or intended fix
+- [ ] No runtime tests were needed because this is a docs/template‑only change
 
-## Evidence
-- Commands run:
-- Observed result:
-- What was not tested:
-
-## Risk Checklist
-- User-visible behavior changed: Yes / No
-- Config, migration, environment, security, auth, secrets, network, or tool execution behavior changed: Yes / No
-
-## AI-Assisted Disclosure
-- [ ] This PR was AI-assisted; I understand the change and verified the diff.
+## Notes
+Add any extra reviewer context here.

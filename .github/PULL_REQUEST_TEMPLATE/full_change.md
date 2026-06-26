@@ -1,72 +1,47 @@
-## Summary
+<!--
+Full Change template
 
-Describe the intent and outcome in 2-5 bullets.
-Avoid restating the diff; reviewers and bots can read the changed files.
+Use this for features, behavior changes, refactors, compatibility changes, security‑sensitive work, or anything that needs detailed review context.
 
-- 
-- 
+Direct template URL pattern:
+https://github.com/openclaw/openclaw/compare/main...YOUR_USERNAME:YOUR_BRANCH?quick_pull=1&template=full_change.md
+-->
 
-## Linked Context
+<!--
+    Optional linked context:
+    Add a visible `Closes #<issue-number>` or `Related: #<issue-number>`
+    below this comment.
 
-Closes #
-Related #
+    Required PR title:
+    type: user-facing description
+    Use a parenthesized scope only when it adds clarity:
+    fix(auth): login redirect loops when session cookie is expired
 
-Was this requested by a maintainer or owner?
+    Types: feat, fix, improve, refactor, docs, chore.
+    For fixes, describe the user-visible symptom and trigger:
+    fix: task list fails to load when user has no environments
+    Avoid implementation details such as:
+    fix: add null check to task query
+-->
 
 ## What Problem This Solves
-
-Describe the concrete user, product, or operational problem.
-For fixes, explain who experiences the issue, what they see, and when it happens.
+Describe the concrete user, product, or operational problem.  For fixes, begin with a sentence like “Fixes an issue where users \<do X\> would \<experience Y\> when \<condition\>.”  Name the affected UI surface or workflow and avoid code‑level detail here.
 
 ## Why This Change Was Made
-
-Explain the shipped solution, key design decisions, and relevant non-goals.
-Include implementation detail only when it helps reviewers understand behavior or risk.
-
-## Real Behavior Proof
-
-External contributors should include useful after-fix evidence from a real OpenClaw setup when behavior changes.
-
-- Behavior or issue addressed:
-- Real environment tested:
-- Exact steps or command run after this patch:
-- Evidence after fix:
-- Observed result after fix:
-- What was not tested:
-- Proof limitations or environment constraints:
-- Before evidence, if useful:
-
-## Tests and Validation
-
-List focused validation commands and results.
-
-- 
+In one or two sentences, explain the complete shipped solution, key design decisions, and any relevant boundaries or non‑goals.  Include implementation detail only when it helps reviewers understand user‑visible behavior or risk; avoid file‑by‑file narration.
 
 ## User Impact
-
-Describe who benefits from the change and whether any workflow, config, migration, or compatibility behavior changes.
-
-## Risk Checklist
-
-- User-visible behavior changed: Yes / No
-- Config, environment, or migration behavior changed: Yes / No
-- Security, auth, secrets, network, or tool execution behavior changed: Yes / No
-- Highest-risk area:
-- Mitigation or reviewer focus:
+State what users, operators, maintainers or contributors can now do or expect.  Lead with the concrete benefit and use user‑facing language.  If there is no user‑visible impact, say so plainly.
 
 ## Evidence
+Show the most useful proof that this change works.  Screenshots, screencasts, terminal output, focused tests, CI results, live observations, redacted logs, and artifact links are all useful.  Include before/after evidence for visual changes when it clarifies the result.  Reviewers will inspect the code, tests and CI; use this section to make validation easy to understand rather than restating the diff.
 
-Paste the most useful validation output, screenshot link, recording, terminal output, redacted log, or artifact link.
+## Risk and Compatibility
+Describe any risk, migration impact, or compatibility concern.  If the change is low risk, say why.  If there are migration steps or backwards‑compatibility changes, outline them here.
 
-## Current Review State
+## Review Notes
+Add any extra context that will help reviewers understand the PR.
 
-- Next action:
-- Waiting on:
-- Bot or reviewer comments addressed:
-
-## AI-Assisted Disclosure
-
-- [ ] This PR was AI-assisted.
-- [ ] I understand what the change does.
-- [ ] I included prompts, session logs, or a short explanation where useful.
-- [ ] I addressed or resolved relevant bot review conversations.
+## AI‑Assisted Disclosure
+- [ ] This PR was not AI‑assisted.
+- [ ] This PR was AI‑assisted, and I reviewed the generated changes before submitting.
