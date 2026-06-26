@@ -29,7 +29,7 @@ import {
   type CodexPluginOwnedApp,
   type CodexPluginRuntimeRequest,
 } from "./plugin-inventory.js";
-import type { JsonObject, JsonValue } from "./protocol.js";
+import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
 
 /** Policy context for one app id exposed by a configured Codex plugin. */
 export type PluginAppPolicyContextEntry = {
@@ -52,7 +52,7 @@ export type PluginAppPolicyContext = {
 export type CodexPluginThreadConfigDiagnostic =
   | CodexPluginInventoryDiagnostic
   | {
-      code: "plugin_activation_failed" | "app_not_ready";
+      code: "plugin_activation_failed" | "app_not_ready" | "approval_overrides_clear_failed";
       plugin?: ResolvedCodexPluginPolicy;
       message: string;
     };
@@ -250,6 +250,17 @@ export async function buildCodexPluginThreadConfig(
         });
         continue;
       }
+      if (
+        record.policy.destructiveApprovalMode === "always" &&
+        !(await clearPersistedAppToolApprovalOverrides({
+          request: params.request,
+          plugin: record.policy,
+          app,
+          diagnostics,
+        }))
+      ) {
+        continue;
+      }
       const appConfig: JsonObject = {
         enabled: true,
         destructive_enabled: record.policy.allowDestructiveActions,
@@ -365,6 +376,67 @@ function buildPluginAppPolicyContext(
     apps,
     pluginAppIds,
   };
+}
+
+async function clearPersistedAppToolApprovalOverrides(params: {
+  request: CodexPluginRuntimeRequest;
+  plugin: ResolvedCodexPluginPolicy;
+  app: CodexPluginOwnedApp;
+  diagnostics: CodexPluginThreadConfigDiagnostic[];
+}): Promise<boolean> {
+  try {
+    for (const toolName of await readPersistedAppToolApprovalOverrideNames(params)) {
+      await params.request("config/value/write", {
+        keyPath: `apps.${quoteConfigKeyPathSegment(params.app.id)}.tools.${quoteConfigKeyPathSegment(
+          toolName,
+        )}.approval_mode`,
+        value: null,
+        mergeStrategy: "replace",
+      });
+    }
+    return true;
+  } catch (error) {
+    params.diagnostics.push({
+      code: "approval_overrides_clear_failed",
+      plugin: params.plugin,
+      message: `Could not clear durable Codex app approval overrides for ${params.app.id}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    });
+    return false;
+  }
+}
+
+async function readPersistedAppToolApprovalOverrideNames(params: {
+  request: CodexPluginRuntimeRequest;
+  app: CodexPluginOwnedApp;
+}): Promise<string[]> {
+  const response = await params.request("config/read", { includeLayers: false });
+  const config = isJsonObject(response) ? response.config : undefined;
+  const appsRoot = isJsonObject(config) ? config.apps : undefined;
+  const nestedApps = isJsonObject(appsRoot) ? appsRoot.apps : undefined;
+  const appConfig = isJsonObject(appsRoot)
+    ? (appsRoot[params.app.id] ??
+      (isJsonObject(nestedApps) ? nestedApps[params.app.id] : undefined))
+    : undefined;
+  const tools = isJsonObject(appConfig) ? appConfig.tools : undefined;
+  if (!isJsonObject(tools)) {
+    return [];
+  }
+  return Object.entries(tools)
+    .filter(([, value]) => hasPersistedToolApprovalOverride(value))
+    .map(([toolName]) => toolName)
+    .toSorted();
+}
+
+function hasPersistedToolApprovalOverride(value: JsonValue): boolean {
+  return (
+    isJsonObject(value) && (value.approval_mode !== undefined || value.approvalMode !== undefined)
+  );
+}
+
+function quoteConfigKeyPathSegment(segment: string): string {
+  return `"${segment.replace(/["\\]/g, (char) => `\\${char}`)}"`;
 }
 
 function shouldWaitForInitialAppInventory(
