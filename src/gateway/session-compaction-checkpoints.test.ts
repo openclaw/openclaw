@@ -8,6 +8,12 @@ import path from "node:path";
 import { CURRENT_SESSION_VERSION, SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, test, vi } from "vitest";
+import {
+  appendTranscriptEvent,
+  appendTranscriptMessage,
+  upsertSessionEntry,
+} from "../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureCompactionCheckpointSnapshotAsync,
@@ -232,6 +238,77 @@ describe("session-compaction-checkpoints", () => {
       copyFileSyncSpy.mockRestore();
       sessionManagerOpenSpy.mockRestore();
     }
+  });
+
+  test("async capture reads SQLite marker sessions without active transcript files", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-sqlite-"));
+    tempDirs.push(dir);
+    const storePath = path.join(dir, "openclaw-agent.sqlite");
+    const sessionId = "sqlite-checkpoint-session";
+    const sessionKey = MAIN_SESSION_KEY;
+    const scope = {
+      agentId: MAIN_AGENT_ID,
+      sessionId,
+      sessionKey,
+      storePath,
+    };
+    const marker = formatSqliteSessionFileMarker({
+      agentId: MAIN_AGENT_ID,
+      sessionId,
+      storePath,
+    });
+
+    await upsertSessionEntry(scope, {
+      sessionId,
+      sessionFile: marker,
+      updatedAt: Date.now(),
+    });
+    await appendTranscriptEvent(scope, {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: sessionId,
+      timestamp: "2026-06-26T12:00:00.000Z",
+      cwd: dir,
+    });
+    await appendTranscriptMessage(scope, {
+      message: { role: "user", content: "compact sqlite rows", timestamp: 1 },
+      now: Date.parse("2026-06-26T12:00:01.000Z"),
+    });
+    await appendTranscriptMessage(scope, {
+      message: {
+        role: "assistant",
+        content: "sqlite rows are active",
+        timestamp: 2,
+      } as AssistantMessage,
+      now: Date.parse("2026-06-26T12:00:02.000Z"),
+    });
+
+    const sessionManager = SessionManager.open(marker);
+    const leafId = requireNonEmptyString(sessionManager.getLeafId(), "SQLite leaf id missing");
+    const snapshot = await captureCompactionCheckpointSnapshotAsync({
+      sessionManager,
+      sessionFile: marker,
+    });
+
+    expect(fsSync.existsSync(marker)).toBe(false);
+    expect(fsSync.readdirSync(dir).some((file) => file.endsWith(".jsonl"))).toBe(false);
+    expect(snapshot).toMatchObject({
+      sessionId,
+      leafId,
+      entryId: leafId,
+    });
+    expect(await readSessionLeafStateFromTranscriptAsync(marker)).toEqual({
+      entryId: leafId,
+      leafId,
+    });
+
+    const compactionId = sessionManager.appendCompaction("sqlite checkpoint summary", leafId, 42, {
+      manual: true,
+    });
+    expect(await readSessionLeafStateFromTranscriptAsync(marker)).toEqual({
+      entryId: compactionId,
+      leafId: compactionId,
+    });
   });
 
   test("async capture derives session metadata without synchronous SessionManager.open", async () => {
