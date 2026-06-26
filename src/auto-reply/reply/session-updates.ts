@@ -58,6 +58,10 @@ async function persistSessionEntryUpdate(params: {
     }
     return persistedEntry;
   }
+  params.sessionEntryHandle?.clearCurrent();
+  if (params.sessionStore && params.sessionKey) {
+    delete params.sessionStore[params.sessionKey];
+  }
   return undefined;
 }
 
