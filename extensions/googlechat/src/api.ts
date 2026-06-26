@@ -2,7 +2,10 @@
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  readProviderJsonResponse,
+  readResponseTextLimited,
+} from "openclaw/plugin-sdk/provider-http";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
@@ -54,7 +57,7 @@ async function withGoogleChatResponse<T>(params: {
   });
   try {
     if (!response.ok) {
-      const text = await response.text().catch(() => "");
+      const text = await readResponseTextLimited(response).catch(() => "");
       throw new Error(`${errorPrefix} ${response.status}: ${text || response.statusText}`);
     }
     return await handleResponse(response);

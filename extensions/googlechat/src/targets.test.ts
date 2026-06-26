@@ -658,5 +658,47 @@ describe("verifyGoogleChatRequest", () => {
       expect(canceled).toBe(true);
       expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
     });
+
+    it("caps non-OK sendMessage error bodies before formatting the API error", async () => {
+      const ONE_MIB = 1024 * 1024;
+      const TOTAL_CHUNKS = 32;
+      const chunk = new TextEncoder().encode("x".repeat(ONE_MIB));
+
+      let bytesPulled = 0;
+      let canceled = false;
+      const oversizedError = new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            if (bytesPulled >= TOTAL_CHUNKS * ONE_MIB) {
+              controller.close();
+              return;
+            }
+            bytesPulled += chunk.length;
+            controller.enqueue(chunk);
+          },
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 500, statusText: "Internal Server Error" },
+      );
+      const release = vi.fn(async () => {});
+      mocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: oversizedError,
+        release,
+      });
+
+      await expect(
+        sendGoogleChatMessage({
+          account,
+          space: "spaces/AAA",
+          text: "hello",
+        }),
+      ).rejects.toThrow(/^Google Chat API 500: x+/);
+
+      expect(canceled).toBe(true);
+      expect(bytesPulled).toBeLessThan(TOTAL_CHUNKS * ONE_MIB);
+      expect(release).toHaveBeenCalledOnce();
+    });
   });
 });
