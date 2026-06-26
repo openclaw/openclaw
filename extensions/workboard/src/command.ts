@@ -89,6 +89,7 @@ export async function handleWorkboardCommand(params: {
         "/workboard list",
         "/workboard show <card-id>",
         "/workboard create <title>",
+        "/workboard move <card-id> --status <status>",
         "/workboard dispatch",
       ].join("\n"),
     };
@@ -137,6 +138,45 @@ export async function handleWorkboardCommand(params: {
         ),
       ].join("\n"),
     };
+  }
+  if (action === "move") {
+    const accessError = requireWriteAccess(params);
+    if (accessError) {
+      return accessError;
+    }
+    const id = rest[0];
+    const statusIndex = rest.indexOf("--status");
+    const status = statusIndex >= 0 ? rest[statusIndex + 1] : undefined;
+    if (!id) {
+      return { text: "Usage: /workboard move <card-id> --status <status>", isError: true };
+    }
+    if (!status) {
+      return { text: "Usage: /workboard move <card-id> --status <status>", isError: true };
+    }
+    const cards = await params.store.list();
+    const { card, error } = resolveWorkboardCardByIdOrPrefix(cards, id);
+    if (!card) {
+      return { text: error, isError: true };
+    }
+    const validStatuses = [
+      "triage",
+      "backlog",
+      "todo",
+      "scheduled",
+      "ready",
+      "running",
+      "review",
+      "blocked",
+      "done",
+    ];
+    if (!validStatuses.includes(status)) {
+      return {
+        text: `status must be one of: ${validStatuses.join(", ")}.`,
+        isError: true,
+      };
+    }
+    const updated = await params.store.move(card.id, status, undefined);
+    return { text: formatCardLine(updated) };
   }
   return { text: `Unknown Workboard action: ${action}`, isError: true };
 }

@@ -241,6 +241,7 @@ The plugin registers a root CLI command:
 openclaw workboard list
 openclaw workboard create "Fix stale card lifecycle" --priority high --labels bug,workboard
 openclaw workboard show <card-id>
+openclaw workboard move <card-id> --status running [--token <claim-token>]
 openclaw workboard dispatch
 ```
 

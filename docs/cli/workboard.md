@@ -100,17 +100,18 @@ artifacts, worker logs, protocol state, diagnostics, and automation metadata.
 ```bash
 openclaw workboard move 7f4a2c10 --status running
 openclaw workboard move 7f4a2c10 --status running --json
+openclaw workboard move 7f4a2c10 --status running --token "<claim-token>"
 ```
 
 `move` moves a card to a different status (column). The target status must be
 one of the valid Workboard statuses: `triage`, `backlog`, `todo`, `scheduled`,
 `ready`, `running`, `review`, `blocked`, or `done`.
 
-If the card has an active claim, the move requires the claim token returned by
-`workboard_claim`. Cards without a claim can be moved by anyone. The CLI path
-validates claim scope before queuing the mutation, so the check and the status
-write happen in the same queued mutation — preventing a race where another
-agent claims the card between the authorization check and the write.
+If the card has an active claim, pass the claim token returned by
+`workboard_claim` via `--token`. Cards without a claim can be moved by anyone.
+The claim check and the status write happen inside the same queued mutation,
+preventing a race where another agent claims the card between the authorization
+check and the write.
 
 Text output prints the updated card line:
 

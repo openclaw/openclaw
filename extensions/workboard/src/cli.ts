@@ -159,8 +159,9 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
     .argument("<id>", "Card id or prefix")
     .description("Move a Workboard card to a different status (column)")
     .option("--status <status>", "Target status")
+    .option("--token <token>", "Claim token for claimed cards")
     .option("--json", "Print JSON", false)
-    .action(async (id: string, options: JsonOptions & { status?: string }) => {
+    .action(async (id: string, options: JsonOptions & { status?: string; token?: string }) => {
       if (!options.status) {
         throw new Error("--status is required. Use: workboard move <id> --status <status>");
       }
@@ -172,7 +173,8 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       if (!(WORKBOARD_STATUSES as readonly string[]).includes(options.status)) {
         throw new Error(`status must be one of: ${WORKBOARD_STATUSES.join(", ")}.`);
       }
-      const updated = await params.store.move(card.id, options.status, undefined);
+      const scope = options.token ? { ownerId: "cli", token: options.token } : undefined;
+      const updated = await params.store.move(card.id, options.status, undefined, scope);
       if (options.json) {
         writeJson({ card: redactClaimToken(updated) });
       } else {
