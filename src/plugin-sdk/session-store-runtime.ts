@@ -3,6 +3,7 @@
 import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
 import {
   cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
+  deleteSessionEntryLifecycle as deleteAccessorSessionEntryLifecycle,
   loadTranscriptEventsSync as loadAccessorTranscriptEventsSync,
   listSessionEntries as listAccessorSessionEntries,
   loadSessionEntry,
@@ -12,7 +13,6 @@ import {
   type SessionAccessScope,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -65,6 +65,10 @@ type UpsertSessionEntryParams = SessionStoreReadParams & {
   entry: SessionEntry;
 };
 
+type DeleteSessionEntryParams = SessionStoreReadParams & {
+  archiveTranscript?: boolean;
+};
+
 type SessionLifecycleArtifactsCleanupParams = {
   agentId?: string;
   archiveRemovedEntryTranscripts?: boolean;
@@ -96,14 +100,6 @@ function toSessionAccessScope(params: SessionStoreReadParams): SessionAccessScop
     ...(params.storePath !== undefined ? { storePath: params.storePath } : {}),
   };
 }
-
-/**
- * @deprecated Use getSessionEntry/listSessionEntries for reads and
- * patchSessionEntry/upsertSessionEntry for writes. This whole-store helper is
- * kept only during the transition before SQLite migration. Callers must
- * migrate away from reading sessions.json directly.
- */
-export const loadSessionStore = loadSessionStoreImpl;
 
 /** Loads one session entry by agent/session identity. */
 export function getSessionEntry(params: SessionStoreReadParams): SessionEntry | undefined {
@@ -178,6 +174,26 @@ export async function upsertSessionEntry(params: UpsertSessionEntryParams): Prom
   await replaceSessionEntry(toSessionAccessScope(params), params.entry);
 }
 
+/** Deletes one session entry by agent/session identity. */
+export async function deleteSessionEntry(params: DeleteSessionEntryParams): Promise<boolean> {
+  const storePath =
+    params.storePath ??
+    resolveSessionStorePath(undefined, {
+      agentId: params.agentId,
+      env: params.env,
+    });
+  const result = await deleteAccessorSessionEntryLifecycle({
+    ...(params.agentId !== undefined ? { agentId: params.agentId } : {}),
+    archiveTranscript: params.archiveTranscript ?? false,
+    storePath,
+    target: {
+      canonicalKey: params.sessionKey,
+      storeKeys: [params.sessionKey],
+    },
+  });
+  return result.deleted;
+}
+
 /** Cleans stale lifecycle-owned session entries and orphan transcripts for one agent store. */
 export async function cleanupSessionLifecycleArtifacts(
   params: SessionLifecycleArtifactsCleanupParams,
@@ -202,13 +218,6 @@ export async function cleanupSessionLifecycleArtifacts(
 export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
 export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js";
 export { resolveSessionTranscriptPathInDir, resolveStorePath } from "../config/sessions/paths.js";
-/**
- * @deprecated Use getSessionEntry to read session metadata by agent/session
- * identity instead of resolving transcript file paths. This file-path helper
- * is kept only during the transition before SQLite migration. Callers must
- * migrate away from resolving transcript file paths directly.
- */
-export { resolveSessionFilePath } from "../config/sessions/paths.js";
 export {
   readLatestAssistantTextFromSessionTranscript,
   readRecentUserAssistantTextForSession,
@@ -222,15 +231,6 @@ export {
   recordSessionMetaFromInbound,
   updateLastRoute,
 } from "../config/sessions/store.js";
-/**
- * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. These
- * whole-store helpers are kept only during the transition before SQLite
- * migration. Callers must migrate away from reading or writing sessions.json.
- */
-export { saveSessionStore, updateSessionStore } from "../config/sessions/store.js";
-// Maintainer note: keep saveSessionStore/updateSessionStore grouped as one
-// compatibility operation. A SQLite bridge must diff before/after store shapes,
-// apply changed/deleted rows in one write transaction, and publish after commit.
 export {
   evaluateSessionFreshness,
   resolveChannelResetConfig,

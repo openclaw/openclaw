@@ -10,7 +10,7 @@ import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { ensureAgentWorkspace } from "../../agents/workspace.js";
 import { normalizeThinkLevel, resolveThinkingProfile } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
-import { resolveSessionFilePath, resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveStorePath } from "../../config/sessions/paths.js";
 import {
   listSessionEntries as listAccessorSessionEntries,
   loadSessionEntry,
@@ -20,12 +20,7 @@ import {
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../../config/sessions/store-maintenance.js";
-import {
-  loadSessionStore,
-  saveSessionStore,
-  updateSessionStore,
-  type ResolvedSessionMaintenanceConfigInput,
-} from "../../config/sessions/store.js";
+import type { ResolvedSessionMaintenanceConfigInput } from "../../config/sessions/store.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
 import { defineCachedValue } from "./runtime-cache.js";
@@ -202,11 +197,7 @@ export function createRuntimeAgent(): PluginRuntime["agent"] {
     listSessionEntries,
     patchSessionEntry,
     upsertSessionEntry,
-    loadSessionStore,
-    saveSessionStore,
-    updateSessionStore,
     updateSessionStoreEntry,
-    resolveSessionFilePath,
   }));
 
   return agentRuntime as PluginRuntime["agent"];

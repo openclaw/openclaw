@@ -2,8 +2,13 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { saveSessionStore } from "../../../src/config/sessions/store.js";
+import type { SessionEntry } from "../../../src/config/sessions/types.js";
+import {
+  listSessionEntries,
+  upsertSessionEntry,
+} from "../../../src/plugin-sdk/session-store-runtime.js";
 import type { OpenClawConfig } from "../runtime-api.js";
 import { isFeishuSessionStoreKey, runFeishuDoctorSequence } from "./doctor.js";
 
@@ -59,11 +64,22 @@ function storePath(agentId = "main"): string {
   return path.join(sessionsDir(agentId), "sessions.json");
 }
 
-function writeStore(entries: Record<string, unknown>, agentId = "main"): string {
+async function writeStore(entries: Record<string, unknown>, agentId = "main"): Promise<string> {
   const target = storePath(agentId);
   fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.writeFileSync(target, JSON.stringify(entries, null, 2));
+  await saveSessionStore(target, entries as Record<string, SessionEntry>, {
+    skipMaintenance: true,
+  });
+  for (const [sessionKey, entry] of Object.entries(entries as Record<string, SessionEntry>)) {
+    await upsertSessionEntry({ agentId, storePath: target, sessionKey, entry });
+  }
   return target;
+}
+
+function readStoreEntries(target: string): Record<string, SessionEntry> {
+  return Object.fromEntries(
+    listSessionEntries({ storePath: target }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
 }
 
 function writeTranscript(sessionId: string, lines: unknown[], agentId = "main"): string {
@@ -131,7 +147,7 @@ describe("Feishu doctor state repair", () => {
     fs.writeFileSync(path.join(feishuDedupDir, "default.json"), JSON.stringify({ msg1: 1 }));
 
     writeTranscript("sess-ok", [sessionHeader("sess-ok"), userMessage("hello")]);
-    writeStore({
+    await writeStore({
       "agent:main:feishu:direct:ou_user": {
         sessionId: "sess-ok",
         sessionFile: "sess-ok.jsonl",
@@ -149,21 +165,21 @@ describe("Feishu doctor state repair", () => {
   });
 
   it("keeps custom-store sessions with canonical absolute transcripts", async () => {
+    const customStorePath = path.join(stateDir(), "custom-sessions", "sessions.json");
     const transcriptPath = writeTranscript("sess-abs", [
       sessionHeader("sess-abs"),
       userMessage("hello"),
     ]);
-    const customStorePath = path.join(stateDir(), "custom-sessions", "sessions.json");
-    fs.mkdirSync(path.dirname(customStorePath), { recursive: true });
-    fs.writeFileSync(
+    await saveSessionStore(
       customStorePath,
-      JSON.stringify({
+      {
         "agent:main:feishu:direct:ou_user": {
           sessionId: "sess-abs",
           sessionFile: transcriptPath,
           updatedAt: Date.now(),
         },
-      }),
+      },
+      { skipMaintenance: true },
     );
 
     const result = await runFeishuDoctorSequence({
@@ -171,6 +187,24 @@ describe("Feishu doctor state repair", () => {
         ...feishuConfig(),
         session: { store: customStorePath },
       } as OpenClawConfig,
+      env: process.env,
+      shouldRepair: false,
+    });
+
+    expect(result).toEqual({ changeNotes: [], warningNotes: [] });
+  });
+
+  it("keeps SQLite-backed Feishu session rows without file inspection", async () => {
+    await writeStore({
+      "agent:main:feishu:direct:ou_user": {
+        sessionId: "sess-sqlite",
+        sessionFile: `sqlite:main:sess-sqlite:${storePath()}`,
+        updatedAt: Date.now(),
+      },
+    });
+
+    const result = await runFeishuDoctorSequence({
+      cfg: feishuConfig(),
       env: process.env,
       shouldRepair: false,
     });
@@ -187,7 +221,7 @@ describe("Feishu doctor state repair", () => {
       userMessage("world"),
       userMessage(""),
     ]);
-    writeStore({
+    await writeStore({
       "agent:main:feishu:direct:ou_user": {
         sessionId: "sess-separated-blanks",
         sessionFile: "sess-separated-blanks.jsonl",
@@ -230,7 +264,7 @@ describe("Feishu doctor state repair", () => {
       sessionHeader("sess-ok"),
       userMessage("hello"),
     ]);
-    const targetStorePath = writeStore({
+    const targetStorePath = await writeStore({
       "agent:main:feishu:direct:ou_user": {
         sessionId: "sess-ok",
         sessionFile: "sess-ok.jsonl",
@@ -248,7 +282,7 @@ describe("Feishu doctor state repair", () => {
     expect(result.changeNotes.join("\n")).toContain("Rebuilt Feishu runtime state: yes");
     expect(result.changeNotes.join("\n")).toContain("Removed 0 Feishu-scoped session entries");
 
-    const store = loadSessionStore(targetStorePath, { skipCache: true });
+    const store = readStoreEntries(targetStorePath);
     expect(store["agent:main:feishu:direct:ou_user"]).toBeDefined();
     expect(fs.existsSync(transcriptPath)).toBe(true);
 
@@ -286,7 +320,7 @@ describe("Feishu doctor state repair", () => {
       userMessage(""),
     ]);
 
-    const targetStorePath = writeStore({
+    const targetStorePath = await writeStore({
       "agent:main:feishu:direct:ou_user": {
         sessionId: "sess-bad",
         sessionFile: "sess-bad.jsonl",
@@ -326,7 +360,7 @@ describe("Feishu doctor state repair", () => {
       true,
     );
 
-    const store = loadSessionStore(targetStorePath, { skipCache: true });
+    const store = readStoreEntries(targetStorePath);
     expect(store["agent:main:feishu:direct:ou_user"]).toBeUndefined();
     expect(store["agent:codex:acp:binding:feishu:default:abc123"]).toBeDefined();
     expect(store["agent:main:discord:direct:user"]).toBeDefined();
@@ -352,7 +386,7 @@ describe("Feishu doctor state repair", () => {
       userMessage(""),
       userMessage(""),
     ]);
-    const targetStorePath = writeStore({
+    const targetStorePath = await writeStore({
       "agent:main:main": {
         sessionId: "sess-default-feishu-bad",
         sessionFile: "sess-default-feishu-bad.jsonl",
@@ -374,7 +408,7 @@ describe("Feishu doctor state repair", () => {
     });
 
     expect(result.warningNotes).toEqual([]);
-    const store = loadSessionStore(targetStorePath, { skipCache: true });
+    const store = readStoreEntries(targetStorePath);
     expect(store["agent:main:main"]).toBeUndefined();
     expect(store["agent:main:main-non-feishu"]).toBeDefined();
     expect(fs.existsSync(transcriptPath)).toBe(false);

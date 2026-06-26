@@ -9,10 +9,10 @@ import {
   type EmbeddedRunAttemptResult,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
-  publishSessionTranscriptUpdateByIdentity,
-  withSessionTranscriptWriteLock,
-  type SessionTranscriptTargetParams,
-  type SessionTranscriptWriteLockParams,
+  publishSessionTranscriptFileUpdate,
+  withSessionTranscriptFileWriteLock,
+  type SessionTranscriptFileTargetParams,
+  type SessionTranscriptFileWriteLockParams,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -279,7 +279,7 @@ export async function mirrorCodexAppServerTranscript(params: {
   agentId?: string;
   messages: AgentMessage[];
   idempotencyScope?: string;
-  config?: SessionTranscriptWriteLockParams["config"];
+  config?: SessionTranscriptFileWriteLockParams["config"];
 }): Promise<CodexAppServerTranscriptMirrorResult> {
   const messages = params.messages.filter(
     (message): message is MirroredAgentMessage =>
@@ -290,7 +290,7 @@ export async function mirrorCodexAppServerTranscript(params: {
   }
 
   const transcriptTarget = resolveCodexMirrorTranscriptTarget(params);
-  const { appendedUpdates, userMessagesPresent } = await withSessionTranscriptWriteLock(
+  const { appendedUpdates, userMessagesPresent } = await withSessionTranscriptFileWriteLock(
     { ...transcriptTarget, config: params.config },
     async (transcript) => {
       const nextAppendedUpdates: Array<{
@@ -363,7 +363,7 @@ export async function mirrorCodexAppServerTranscript(params: {
   );
 
   for (const update of appendedUpdates) {
-    await publishSessionTranscriptUpdateByIdentity({
+    publishSessionTranscriptFileUpdate({
       ...transcriptTarget,
       update: {
         ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
@@ -383,7 +383,7 @@ function resolveCodexMirrorTranscriptTarget(params: {
   sessionFile: string;
   sessionId: string;
   sessionKey?: string;
-}): SessionTranscriptTargetParams {
+}): SessionTranscriptFileTargetParams {
   return {
     ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionFile: params.sessionFile,

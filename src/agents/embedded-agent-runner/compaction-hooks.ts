@@ -67,7 +67,7 @@ async function runPostCompactionSessionMemorySync(params: {
               },
             ],
           }
-        : { sessionFiles: [sessionFile] }),
+        : { archiveFiles: [sessionFile] }),
     });
   } catch (err) {
     log.warn(`memory sync skipped (post-compaction): ${formatErrorMessage(err)}`);

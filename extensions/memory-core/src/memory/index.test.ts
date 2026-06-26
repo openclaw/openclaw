@@ -1286,7 +1286,7 @@ describe("memory index", () => {
         expect(nextManager.status().dirty).toBe(true);
         embedBatchCalls = 0;
 
-        await nextManager.sync({ reason: "test", sessionFiles: [sessionFile] });
+        await nextManager.sync({ reason: "test", archiveFiles: [sessionFile] });
 
         expect(embedBatchCalls).toBe(0);
         expect(nextManager.status().dirty).toBe(true);
@@ -1348,12 +1348,12 @@ describe("memory index", () => {
       try {
         const fields = nextManager as unknown as {
           dirty: boolean;
-          syncSessionFiles: (params: unknown) => Promise<void>;
+          syncArchiveFiles: (params: unknown) => Promise<void>;
         };
-        const syncSessionFiles = fields.syncSessionFiles.bind(nextManager);
-        fields.syncSessionFiles = async (params) => {
+        const syncArchiveFiles = fields.syncArchiveFiles.bind(nextManager);
+        fields.syncArchiveFiles = async (params) => {
           fields.dirty = true;
-          await syncSessionFiles(params);
+          await syncArchiveFiles(params);
         };
 
         await nextManager.sync({ reason: "test", force: true });
@@ -1429,7 +1429,7 @@ describe("memory index", () => {
           runSyncWithReadonlyRecovery: (params?: {
             reason?: string;
             force?: boolean;
-            sessionFiles?: string[];
+            archiveFiles?: string[];
             progress?: (update: unknown) => void;
           }) => Promise<void>;
         }

@@ -17,11 +17,11 @@ afterEach(() => {
 });
 
 describe("transcript events", () => {
-  it("emits trimmed session file updates", () => {
+  it("emits trimmed archive file updates", () => {
     const listener = vi.fn();
     cleanup.push(onSessionTranscriptUpdate(listener));
 
-    emitSessionTranscriptUpdate("  /tmp/session.jsonl  ");
+    emitSessionTranscriptUpdate({ sessionFile: "  /tmp/session.jsonl  " });
 
     expect(listener).toHaveBeenCalledTimes(1);
     expect(listener).toHaveBeenCalledWith({ sessionFile: "/tmp/session.jsonl" });
@@ -50,7 +50,7 @@ describe("transcript events", () => {
     });
   });
 
-  it("does not expose identity-only updates to public listeners", () => {
+  it("exposes identity-only updates to public listeners", () => {
     const listener = vi.fn();
     cleanup.push(onSessionTranscriptUpdate(listener));
 
@@ -61,9 +61,19 @@ describe("transcript events", () => {
         sessionKey: " agent:main:main ",
       },
       messageId: " msg-1 ",
-    } as unknown as SessionTranscriptUpdate);
+    });
 
-    expect(listener).not.toHaveBeenCalled();
+    expect(listener).toHaveBeenCalledWith({
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+      },
+      agentId: "main",
+      sessionId: "sess-1",
+      sessionKey: "agent:main:main",
+      messageId: "msg-1",
+    });
   });
 
   it("emits storage-neutral identity updates to internal listeners", () => {
@@ -161,7 +171,7 @@ describe("transcript events", () => {
     cleanup.push(onSessionTranscriptUpdate(first));
     cleanup.push(onSessionTranscriptUpdate(second));
 
-    expect(emitSessionTranscriptUpdate("/tmp/session.jsonl")).toBeUndefined();
+    expect(emitSessionTranscriptUpdate({ sessionFile: "/tmp/session.jsonl" })).toBeUndefined();
     expect(first).toHaveBeenCalledTimes(1);
     expect(second).toHaveBeenCalledTimes(1);
   });

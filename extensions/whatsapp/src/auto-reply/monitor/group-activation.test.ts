@@ -2,9 +2,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { saveSessionStore, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadSessionStore } from "../config.runtime.js";
+import { loadSessionStore } from "../../../../../src/config/sessions/store-load.js";
+import { saveSessionStore } from "../../../../../src/config/sessions/store.js";
+import type { SessionEntry } from "../../../../../src/config/sessions/types.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 
 const GROUP_CONVERSATION_ID = "123@g.us";

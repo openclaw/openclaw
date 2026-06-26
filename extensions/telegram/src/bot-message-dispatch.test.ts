@@ -74,12 +74,11 @@ const appendAssistantMirrorMessageByIdentity = vi.hoisted(() =>
     (
       params?: unknown,
     ) => Promise<
-      | { ok: true; sessionFile: string; messageId: string }
+      | { ok: true; messageId: string }
       | { ok: false; reason: string; code?: "blocked" | "session-rebound" }
     >
   >(async () => ({
     ok: true,
-    sessionFile: "/tmp/sessions/s1.jsonl",
     messageId: "m1",
   })),
 );
@@ -199,7 +198,6 @@ const telegramDepsForTest: TelegramBotDeps = {
   getRuntimeConfig: loadConfig as TelegramBotDeps["getRuntimeConfig"],
   resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
   getSessionEntry: getSessionEntry as TelegramBotDeps["getSessionEntry"],
-  loadSessionStore: loadSessionStore as TelegramBotDeps["loadSessionStore"],
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
   upsertChannelPairingRequest:
@@ -317,7 +315,6 @@ describe("dispatchTelegramMessage draft streaming", () => {
     readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
     appendAssistantMirrorMessageByIdentity.mockResolvedValue({
       ok: true,
-      sessionFile: "/tmp/sessions/s1.jsonl",
       messageId: "m1",
     });
     loadSessionStore.mockReturnValue({});
