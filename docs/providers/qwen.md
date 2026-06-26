@@ -267,13 +267,14 @@ Availability can still vary by endpoint and billing plan even when a model is
 present in the static catalog.
 </Note>
 
-The `qwen-token-plan` provider ships its own 12-model chat catalog (default
+The `qwen-token-plan` provider ships its own 14-model chat catalog (default
 `qwen-token-plan/qwen3.7-plus`), shared across both regions: `qwen3.7-max`,
 `qwen3.7-plus`, `qwen3.6-plus`, `qwen3.6-flash`, `deepseek-v4-pro`,
-`deepseek-v4-flash`, `deepseek-v3.2`, `kimi-k2.6`, `kimi-k2.5`, `glm-5.1`,
-`glm-5`, and `MiniMax-M2.5`. All carry zeroed cost because the plan bills by a
-shared Credit pool rather than per token. Image-generation models from the plan
-are intentionally excluded from this chat catalog.
+`deepseek-v4-flash`, `deepseek-v3.2`, `kimi-k2.7-code`, `kimi-k2.6`,
+`kimi-k2.5`, `glm-5.2`, `glm-5.1`, `glm-5`, and `MiniMax-M2.5`. All carry zeroed
+cost because the plan bills by a shared Credit pool rather than per token.
+Image-generation models from the plan are intentionally excluded from this chat
+catalog.
 
 ## Thinking Controls
 
