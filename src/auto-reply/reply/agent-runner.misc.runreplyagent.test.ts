@@ -2972,8 +2972,9 @@ describe("runReplyAgent transient HTTP retry", () => {
           },
         },
       })
-      .mockImplementationOnce(async () => {
+      .mockImplementationOnce(async (params) => {
         expect(replyRunRegistry.resolveSessionId(sessionKey)).toBe("reset-session");
+        expect(params.suppressNextUserMessagePersistence).toBe(true);
         return {
           payloads: [{ text: "Recovered response" }],
           meta: {
@@ -3053,6 +3054,7 @@ describe("runReplyAgent transient HTTP retry", () => {
       : result;
     expectRecordFields(payload, { text: "Recovered response" }, "reply result");
     expect(followupRun.run.sessionId).toBe("reset-session");
+    expect(followupRun.run.suppressNextUserMessagePersistence).toBeUndefined();
     expect(sessionStore[sessionKey]?.sessionId).toBe("reset-session");
     expect(sessionStore[sessionKey]?.systemSent).toBe(false);
     expect(sessionStore[sessionKey]?.totalTokens).toBeUndefined();

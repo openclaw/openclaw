@@ -1900,10 +1900,21 @@ export async function runReplyAgent(params: {
       });
       if (didReset) {
         replyOperation.updateSessionId(followupRun.run.sessionId);
-        runOutcome = await traceAgentPhase(
-          "reply.run_agent_turn_after_session_reset",
-          runAgentTurn,
-        );
+        const previousUserPersistenceSuppression =
+          followupRun.run.suppressNextUserMessagePersistence;
+        followupRun.run.suppressNextUserMessagePersistence = true;
+        try {
+          runOutcome = await traceAgentPhase(
+            "reply.run_agent_turn_after_session_reset",
+            runAgentTurn,
+          );
+        } finally {
+          if (previousUserPersistenceSuppression === undefined) {
+            delete followupRun.run.suppressNextUserMessagePersistence;
+          } else {
+            followupRun.run.suppressNextUserMessagePersistence = previousUserPersistenceSuppression;
+          }
+        }
         emitAgentEvent({
           runId: runOutcome.kind === "success" ? runOutcome.runId : retryLifecycleRunId,
           sessionKey,
