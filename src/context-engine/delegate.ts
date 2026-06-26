@@ -39,11 +39,13 @@ export async function delegateCompactionToRuntime(
   const { compactEmbeddedAgentSessionDirect } = await loadCompactRuntime();
   type RuntimeCompactionParams = Parameters<typeof compactEmbeddedAgentSessionDirect>[0];
 
-  // runtimeContext carries the full CompactEmbeddedAgentSessionParams fields set
-  // by runtime callers. We spread them and override the fields that come from
-  // the public ContextEngine compact() signature directly.
+  // runtimeContext carries host-resolved runtime fields set by internal
+  // callers. Keep the public delegate keyed by session identity, not by the
+  // active transcript artifact that the runtime may resolve internally.
   const runtimeContext = (params.runtimeContext ?? {}) as ContextEngineRuntimeContext &
     Partial<RuntimeCompactionParams>;
+  const { sessionFile: _legacySessionFile, ...runtimeContextParams } = runtimeContext;
+  const sessionTarget = params.sessionTarget ?? runtimeContext.sessionTarget;
   const currentTokenCount =
     params.currentTokenCount ??
     (typeof runtimeContext.currentTokenCount === "number" &&
@@ -53,9 +55,11 @@ export async function delegateCompactionToRuntime(
       : undefined);
 
   const result = await compactEmbeddedAgentSessionDirect({
-    ...runtimeContext,
+    ...runtimeContextParams,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionId: params.sessionId,
-    sessionFile: params.sessionFile,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    ...(sessionTarget ? { sessionTarget } : {}),
     tokenBudget: params.tokenBudget,
     ...(currentTokenCount !== undefined ? { currentTokenCount } : {}),
     force: params.force,
@@ -77,7 +81,6 @@ export async function delegateCompactionToRuntime(
           tokensAfter: result.result.tokensAfter,
           details: result.result.details,
           sessionId: result.result.sessionId,
-          sessionFile: result.result.sessionFile,
         }
       : undefined,
   };
