@@ -10,7 +10,7 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
     expect(report.ok).toBe(true);
     expect(report.checkpoints.map((checkpoint) => checkpoint.label)).toEqual([
       "seeded-legacy-store",
-      "after-doctor-import",
+      "after-doctor-fix",
       "after-doctor-inspect",
       "after-doctor-validate",
       "gateway-started",
@@ -27,6 +27,15 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
       report.checkpoints
         .filter((checkpoint) => checkpoint.label !== "seeded-legacy-store")
         .every((checkpoint) => checkpoint.activeJsonl.length === 0),
+    ).toBe(true);
+    expect(
+      report.checkpoints.some(
+        (checkpoint) =>
+          checkpoint.label === "after-doctor-fix" &&
+          checkpoint.doctor?.mode === "fix" &&
+          checkpoint.sqlite.sessionEntries >= 4 &&
+          checkpoint.sqlite.transcriptEvents >= 8,
+      ),
     ).toBe(true);
     expect(
       report.checkpoints.some(

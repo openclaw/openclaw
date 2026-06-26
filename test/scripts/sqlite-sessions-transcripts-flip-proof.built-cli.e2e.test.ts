@@ -19,6 +19,15 @@ describe("SQLite sessions/transcripts flip built CLI proof", () => {
     expect(
       report.checkpoints.some(
         (checkpoint) =>
+          checkpoint.label === "after-doctor-fix" &&
+          checkpoint.doctor?.mode === "fix" &&
+          checkpoint.sqlite.sessionEntries >= 4 &&
+          checkpoint.sqlite.transcriptEvents >= 8,
+      ),
+    ).toBe(true);
+    expect(
+      report.checkpoints.some(
+        (checkpoint) =>
           checkpoint.label === "after-chat-send" &&
           checkpoint.sqlite.trackedEntries.some(
             (entry) => entry.sessionKey === report.resetSessionKey && entry.transcriptEvents >= 3,
