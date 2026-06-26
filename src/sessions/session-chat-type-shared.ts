@@ -17,12 +17,24 @@ export type CanonicalSessionPeerShape = {
   chatType: Exclude<SessionKeyChatType, "unknown">;
 };
 
+export function hasAmbiguousCanonicalSessionPeerShape(scopedSessionKey: string): boolean {
+  const parts = scopedSessionKey.split(":");
+  if (parts[0] === "agent") {
+    return false;
+  }
+  const hasChannelPeerShape = Boolean(parts[0] && isCanonicalPeerKind(parts[1]) && parts[2]);
+  const hasAccountPeerShape = Boolean(
+    parts[0] && parts[1] && isCanonicalPeerKind(parts[2]) && parts[3],
+  );
+  return hasChannelPeerShape && hasAccountPeerShape;
+}
+
 export function parseCanonicalSessionPeerShape(
   scopedSessionKey: string,
 ): CanonicalSessionPeerShape | undefined {
   const parts = scopedSessionKey.split(":");
   // A second agent wrapper is opaque plugin identity, never a channel route.
-  if (parts[0] === "agent") {
+  if (parts[0] === "agent" || hasAmbiguousCanonicalSessionPeerShape(scopedSessionKey)) {
     return undefined;
   }
   let channel: string | undefined;

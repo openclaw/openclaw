@@ -106,6 +106,12 @@ describe("resolveSendPolicy", () => {
       expected: "deny",
     },
     {
+      name: "ambiguous account and peer-kind tokens fail closed",
+      cfg: cfgWithRules([{ action: "deny", match: { chatType: "direct" } }]),
+      sessionKey: "agent:main:telegram:group:direct:user",
+      expected: "deny",
+    },
+    {
       name: "channel-scoped deny ignores later peer-kind-looking tokens in non-channel keys",
       cfg: cfgWithRules([{ action: "deny", match: { channel: "demo-channel" } }]),
       sessionKey: "demo-channel:not-a-peer-kind:user-1:direct",
@@ -138,6 +144,12 @@ describe("resolveSendPolicy", () => {
       resolveSendPolicy({
         cfg,
         sessionKey: "agent:voice:agent:other:matrix:channel:!room:example.org",
+      }),
+    ).toBe("deny");
+    expect(
+      resolveSendPolicy({
+        cfg,
+        sessionKey: "agent:voice:agent:voice::matrix:channel:!roomabc:example.org",
       }),
     ).toBe("deny");
   });

@@ -6,7 +6,10 @@ import {
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { SessionChatType, SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { parseCanonicalSessionPeerShape } from "./session-chat-type-shared.js";
+import {
+  hasAmbiguousCanonicalSessionPeerShape,
+  parseCanonicalSessionPeerShape,
+} from "./session-chat-type-shared.js";
 import { deriveSessionChatType } from "./session-chat-type.js";
 
 /** Session send-policy decision after config and per-session overrides are evaluated. */
@@ -64,6 +67,11 @@ function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
   return undefined;
 }
 
+function hasAmbiguousPeerShape(key?: string): boolean {
+  const normalizedKey = normalizeOptionalLowercaseString(stripAgentSessionKeyPrefix(key));
+  return normalizedKey ? hasAmbiguousCanonicalSessionPeerShape(normalizedKey) : false;
+}
+
 /** Resolves whether a session send is allowed by entry override and config rules. */
 export function resolveSendPolicy(params: {
   cfg: OpenClawConfig;
@@ -80,6 +88,11 @@ export function resolveSendPolicy(params: {
   const policy = params.cfg.session?.sendPolicy;
   if (!policy) {
     return "allow";
+  }
+  // The legacy key grammar cannot distinguish a peer-kind-shaped account id
+  // from a channel peer. Never let that ambiguity satisfy an allow policy.
+  if (hasAmbiguousPeerShape(params.sessionKey)) {
+    return "deny";
   }
 
   const rawSessionKey = params.sessionKey ?? "";

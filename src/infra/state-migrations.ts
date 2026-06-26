@@ -4452,7 +4452,7 @@ async function migrateLegacySessions(
     (legacyParsed.ok || targetParsed.ok) &&
     (Object.keys(legacyStore).length > 0 || Object.keys(targetStore).length > 0)
   ) {
-    const normalized: Record<string, SessionEntry> = {};
+    const normalized = Object.create(null) as Record<string, SessionEntry>;
     for (const [key, entry] of Object.entries(merged)) {
       const normalizedEntry = normalizeSessionEntry(entry);
       if (!normalizedEntry) {
@@ -5297,7 +5297,7 @@ async function migrateLegacyAcpSessionMetadata(params: {
       continue;
     }
 
-    const normalized: Record<string, SessionEntry> = {};
+    const normalized = Object.create(null) as Record<string, SessionEntry>;
     let migrated = 0;
     let preserved = 0;
     for (const [sessionKey, entry] of Object.entries(parsed.store)) {

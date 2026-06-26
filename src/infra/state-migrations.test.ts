@@ -464,6 +464,22 @@ describe("state migrations", () => {
         lastActivityAt: 20,
       },
     };
+    targetStore["agent:worker-1:acp:task"] = {
+      sessionId: "canonical-acp",
+      updatedAt: 15,
+      acp: {
+        backend: "test",
+        agent: "worker-1",
+        runtimeSessionName: "canonical-runtime",
+        mode: "persistent",
+        state: "idle",
+        lastActivityAt: 15,
+      },
+    };
+    Object.defineProperty(targetStore, "__proto__", {
+      value: { sessionId: "prototype-row", updatedAt: 10 },
+      enumerable: true,
+    });
     await fs.writeFile(targetStorePath, `${JSON.stringify(targetStore, null, 2)}\n`, "utf8");
     cfg.session = { ...cfg.session, store: targetStorePath };
     const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
@@ -498,6 +514,7 @@ describe("state migrations", () => {
       `Migrated latest direct-chat session → agent:worker-1:desk`,
       `Merged sessions store → ${path.join(stateDir, "agents", "worker-1", "sessions", "sessions.json")}`,
       "Moved trace.jsonl → agents/worker-1/sessions",
+      "Migrated 1 ACP session metadata row → shared SQLite state",
       "Moved agent file settings.json → agents/worker-1/agent",
       `Moved MobileAuth auth creds.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "creds.json")}`,
       `Moved MobileAuth auth pre-key-1.json → ${path.join(stateDir, "credentials", "mobileauth", "default", "pre-key-1.json")}`,
@@ -520,6 +537,11 @@ describe("state migrations", () => {
     expect(mergedStore["voice:15550001111"]?.sessionId).toBe("shared-voice");
     expect(mergedStore["voice:15550001111"]?.acp).toBeDefined();
     expect(mergedStore["agent:worker-1:voice:15550001111"]).toBeUndefined();
+    expect(Object.hasOwn(mergedStore, "__proto__")).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(mergedStore, "__proto__")?.value.sessionId).toBe(
+      "prototype-row",
+    );
+    expect(mergedStore["agent:worker-1:acp:task"]?.acp).toBeUndefined();
 
     await expect(
       fs.readFile(path.join(stateDir, "agents", "worker-1", "sessions", "trace.jsonl"), "utf8"),

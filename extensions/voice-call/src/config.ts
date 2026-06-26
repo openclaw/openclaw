@@ -3,6 +3,7 @@ import { REALTIME_VOICE_AGENT_CONSULT_TOOL_POLICIES } from "openclaw/plugin-sdk/
 import {
   normalizeAgentId,
   normalizeSessionKeyPreservingOpaquePeerIds,
+  parseAgentSessionKey,
 } from "openclaw/plugin-sdk/routing";
 import {
   buildSecretInputSchema,
@@ -764,8 +765,7 @@ export function resolveVoiceCallAgentSessionKey(params: {
     return lower;
   }
   const normalizedInput = normalizeSessionKeyPreservingOpaquePeerIds(sessionKey);
-  const scopedHead = /^agent:([^:]+):(.+)$/u.exec(normalizedInput);
-  const scopedAgentId = scopedHead?.[1];
+  const scopedAgentId = parseAgentSessionKey(normalizedInput)?.agentId;
   const isConfiguredAgentKey =
     scopedAgentId !== undefined &&
     normalizeAgentId(scopedAgentId) === scopedAgentId &&

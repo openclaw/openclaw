@@ -143,6 +143,7 @@ describe("deriveSessionChatTypeFromKey", () => {
     { key: "agent:voice:agent:other:matrix:channel:!room:example.org", expected: "unknown" },
     { key: "agent:main:direct", expected: "unknown" },
     { key: "agent:main:demo:acct:channel", expected: "unknown" },
+    { key: "agent:main:telegram:group:direct:user", expected: "unknown" },
     { key: "agent:main:demo::channel:room", expected: "unknown" },
     { key: "agent::demo:direct:user", expected: "unknown" },
     { key: "agent:main:main", expected: "unknown" },
