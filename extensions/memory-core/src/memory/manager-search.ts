@@ -58,8 +58,13 @@ function scoreFallbackKeywordResult(params: {
   const textTokens = normalizeSearchTokens(params.text);
   const textTokenSet = new Set(textTokens);
   const pathLower = params.path.toLowerCase();
-  const overlap = queryTokens.filter((token) => textTokenSet.has(token)).length;
-  const uniqueQueryOverlap = overlap / Math.max(new Set(queryTokens).size, 1);
+  let overlap = 0;
+  for (const token of queryTokens) {
+    if (textTokenSet.has(token)) {
+      overlap += 1;
+    }
+  }
+  const uniqueQueryOverlap = overlap / queryTokens.length;
   const density = overlap / Math.max(textTokenSet.size, 1);
   const pathBoost = queryTokens.reduce(
     (score, token) => score + (pathLower.includes(token) ? 0.18 : 0),
