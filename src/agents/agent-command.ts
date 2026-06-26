@@ -971,7 +971,7 @@ async function agentCommandInternal(
             allowCreateRestartRecoveryEntry,
           ),
       });
-      sessionEntry = persisted ?? sessionEntry;
+      sessionEntry = persisted;
       trackedRestartRecoveryDeliveryContext =
         Boolean(persisted?.restartRecoveryDeliveryContext) &&
         persisted?.restartRecoveryDeliveryRunId === runId;
@@ -1254,13 +1254,13 @@ async function agentCommandInternal(
         sessionStartedAt: current.sessionStartedAt ?? now,
         skillsSnapshot,
       };
-      await persistSessionEntry({
+      const persisted = await persistSessionEntry({
         sessionStore,
         sessionKey,
         storePath,
         entry: next,
       });
-      sessionEntry = next;
+      sessionEntry = persisted;
     }
 
     // Persist explicit /command overrides to the session store when we have a key.
@@ -1287,13 +1287,13 @@ async function agentCommandInternal(
         next.thinkingLevel = thinkOverride;
       }
       applyVerboseOverride(next, verboseOverride);
-      await persistSessionEntry({
+      const persisted = await persistSessionEntry({
         sessionStore,
         sessionKey,
         storePath,
         entry: next,
       });
-      sessionEntry = next;
+      sessionEntry = persisted;
     }
 
     const configuredDefaultRef = resolveDefaultModelForAgent({
@@ -1377,29 +1377,33 @@ async function agentCommandInternal(
         });
         if (updated) {
           storedModelOverrideSource = undefined;
-          await persistSessionEntry({
+          const persisted = await persistSessionEntry({
             sessionStore,
             sessionKey,
             storePath,
             entry,
           });
+          sessionEntry = persisted;
         }
       }
-      const repaired = repairProviderWrappedModelOverride({
-        entry,
-        defaultProvider,
-        defaultModel,
-      });
+      const repaired = sessionEntry
+        ? repairProviderWrappedModelOverride({
+            entry,
+            defaultProvider,
+            defaultModel,
+          })
+        : { updated: false };
       if (repaired.updated) {
-        await persistSessionEntry({
+        const persisted = await persistSessionEntry({
           sessionStore,
           sessionKey,
           storePath,
           entry,
         });
+        sessionEntry = persisted;
       }
-      const overrideProvider = sessionEntry.providerOverride?.trim() || defaultProvider;
-      const overrideModel = sessionEntry.modelOverride?.trim();
+      const overrideProvider = sessionEntry?.providerOverride?.trim() || defaultProvider;
+      const overrideModel = sessionEntry?.modelOverride?.trim();
       if (overrideModel) {
         const normalizedOverride = normalizeAgentCommandModelRef(
           cfg,
@@ -1414,12 +1418,13 @@ async function agentCommandInternal(
             selection: { provider: defaultProvider, model: defaultModel, isDefault: true },
           });
           if (updated) {
-            await persistSessionEntry({
+            const persisted = await persistSessionEntry({
               sessionStore,
               sessionKey,
               storePath,
               entry,
             });
+            sessionEntry = persisted;
           }
         }
       }
@@ -2056,7 +2061,7 @@ async function agentCommandInternal(
                 current && entryMatchesAutoFallbackPrimaryProbe(current, autoFallbackPrimaryProbe),
               ),
           });
-          sessionEntry = persistedEntry ?? sessionEntry;
+          sessionEntry = persistedEntry;
         }
         if (fallbackResult.attempts.length > 0 && result.meta.agentMeta) {
           result = {
@@ -2323,22 +2328,24 @@ async function agentCommandInternal(
 
         if (combinedPayload) {
           const entry = sessionStore[sessionKey] ?? sessionEntry;
-          const next: SessionEntry = {
-            ...entry,
-            pendingFinalDelivery: true,
-            pendingFinalDeliveryText: combinedPayload,
-            pendingFinalDeliveryContext: currentRunDeliveryContext,
-            pendingFinalDeliveryCreatedAt: now,
-            updatedAt: now,
-          };
-          const persisted = await persistSessionEntry({
-            sessionStore,
-            sessionKey,
-            storePath,
-            entry: next,
-            shouldPersist: (current) => shouldPersistCurrentRunSessionCleanup(current, sessionId),
-          });
-          sessionEntry = persisted ?? sessionEntry;
+          if (entry) {
+            const next: SessionEntry = {
+              ...entry,
+              pendingFinalDelivery: true,
+              pendingFinalDeliveryText: combinedPayload,
+              pendingFinalDeliveryContext: currentRunDeliveryContext,
+              pendingFinalDeliveryCreatedAt: now,
+              updatedAt: now,
+            };
+            const persisted = await persistSessionEntry({
+              sessionStore,
+              sessionKey,
+              storePath,
+              entry: next,
+              shouldPersist: (current) => shouldPersistCurrentRunSessionCleanup(current, sessionId),
+            });
+            sessionEntry = persisted;
+          }
         }
       }
 
@@ -2392,9 +2399,9 @@ async function agentCommandInternal(
         const noPendingTextForThisRun =
           opts.deliver === true &&
           pendingFinalDeliveryTextForThisRun === undefined &&
-          entry.pendingFinalDelivery === true &&
+          entry?.pendingFinalDelivery === true &&
           !entry.pendingFinalDeliveryText;
-        if (deliveryResult?.deliverySucceeded === true || noPendingTextForThisRun) {
+        if (entry && (deliveryResult?.deliverySucceeded === true || noPendingTextForThisRun)) {
           const next = clearPendingFinalDeliveryFields(entry, Date.now());
           const persisted = await persistSessionEntry({
             sessionStore,
@@ -2403,7 +2410,7 @@ async function agentCommandInternal(
             entry: next,
             shouldPersist: (current) => shouldPersistCurrentRunSessionCleanup(current, sessionId),
           });
-          sessionEntry = persisted ?? sessionEntry;
+          sessionEntry = persisted;
         }
       }
 
@@ -2441,7 +2448,7 @@ async function agentCommandInternal(
             shouldPersist: (current) =>
               shouldPersistRestartRecoveryCleanup(current, sessionId, runId),
           });
-          sessionEntry = persisted ?? sessionEntry;
+          sessionEntry = persisted;
         }
       } catch (error) {
         log.warn(
