@@ -319,11 +319,7 @@ async function readJsonResponse<T>(params: {
   });
   try {
     await assertOkOrThrowHttpError(response, params.errorPrefix);
-    try {
-      return (await readProviderJsonResponse(response, params.errorPrefix)) as T;
-    } catch (cause) {
-      throw new Error(`${params.errorPrefix}: malformed JSON response`, { cause });
-    }
+    return (await readProviderJsonResponse(response, params.errorPrefix)) as T;
   } finally {
     await release();
   }
