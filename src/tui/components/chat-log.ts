@@ -334,6 +334,10 @@ export class ChatLog extends Container {
         this.lastHistoryAssistant = null;
         return;
       }
+      // A live final with a runId arrived. The replay/live-final race window
+      // is now closed regardless of match — clear the marker so old history
+      // rows cannot suppress a later legitimate same-text final-only run.
+      this.lastHistoryAssistant = null;
     }
     const component = new AssistantMessageComponent(text);
     this.appendNonSystem(component);
