@@ -51,7 +51,20 @@ vi.mock("./config.js", () => ({
       normalizedPhone ? `${prefix}:${normalizedPhone}` : `${prefix}:${params.callId}`
     ).toLowerCase();
   },
-  resolveVoiceCallEffectiveConfig: (config: VoiceCallConfig) => ({ config }),
+  resolveVoiceCallNumberRouteKeyForCall: (call: {
+    direction?: "inbound" | "outbound";
+    to?: string;
+    metadata?: { numberRouteKey?: unknown };
+  }) =>
+    typeof call.metadata?.numberRouteKey === "string"
+      ? call.metadata.numberRouteKey
+      : call.direction === "inbound"
+        ? call.to
+        : undefined,
+  resolveVoiceCallEffectiveConfig: (config: VoiceCallConfig, numberRouteKey?: string) => {
+    const route = numberRouteKey ? config.numbers[numberRouteKey] : undefined;
+    return route ? { config: { ...config, ...route }, numberRouteKey } : { config };
+  },
   resolveVoiceCallConfig: mocks.resolveVoiceCallConfig,
   resolveTwilioAuthToken: mocks.resolveTwilioAuthToken,
   validateProviderConfig: mocks.validateProviderConfig,
@@ -385,9 +398,13 @@ describe("createVoiceCallRuntime lifecycle", () => {
     await runtime.stop();
   });
 
-  it("wires the shared realtime agent consult tool and handler", async () => {
+  it("wires realtime consults and keeps outbound calls off inbound number routes", async () => {
     const config = createBaseConfig();
     config.inboundPolicy = "allowlist";
+    config.numbers["+15550009999"] = {
+      agentId: "inbound-route",
+      responseModel: "openai/gpt-5.5",
+    };
     config.realtime.enabled = true;
     config.realtime.tools = [
       {

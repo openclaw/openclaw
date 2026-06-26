@@ -441,6 +441,40 @@ describe("voice-call outbound helpers", () => {
     });
   });
 
+  it("keeps top-level TTS for outbound calls to a number with an inbound route", async () => {
+    const call = {
+      callId: "call-1",
+      providerCallId: "provider-1",
+      direction: "outbound",
+      state: "active",
+      to: "+15550002222",
+    };
+    const playTts = vi.fn(async () => {});
+    const ctx = {
+      activeCalls: new Map([["call-1", call]]),
+      providerCallIdMap: new Map(),
+      provider: { name: "twilio", playTts },
+      config: {
+        tts: { provider: "openai", providers: { openai: { voice: "coral" } } },
+        numbers: {
+          "+15550002222": {
+            tts: { providers: { openai: { voice: "alloy" } } },
+          },
+        },
+      },
+      storePath: "/tmp/voice-call.json",
+    };
+
+    await expect(speak(ctx as never, "call-1", "hello")).resolves.toEqual({ success: true });
+
+    expect(playTts).toHaveBeenCalledWith({
+      callId: "call-1",
+      providerCallId: "provider-1",
+      text: "hello",
+      voice: "coral",
+    });
+  });
+
   it("sends DTMF through connected provider calls", async () => {
     const call = { callId: "call-1", providerCallId: "provider-1", state: "active" };
     const sendDtmfProvider = vi.fn(async () => {});

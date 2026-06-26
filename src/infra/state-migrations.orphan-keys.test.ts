@@ -229,6 +229,72 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
+  it.each([
+    { scope: undefined, canonicalMainKey: "agent:voice:main" },
+    { scope: "global" as const, canonicalMainKey: "global" },
+  ])(
+    "preserves opaque foreign main aliases in plugin-owned $scope stores",
+    async ({ scope, canonicalMainKey }) => {
+      await withStateFixture(async ({ tmpDir, stateDir }) => {
+        const storeTemplate = path.join(tmpDir, "stores", "{agentId}", "sessions.json");
+        const voiceStorePath = path.join(tmpDir, "stores", "voice", "sessions.json");
+        writeStore(voiceStorePath, {
+          "agent:main:main": { sessionId: "explicit-foreign", updatedAt: 3000 },
+          [canonicalMainKey]: { sessionId: "voice-main", updatedAt: 1000 },
+          "voice:15550001111": { sessionId: "legacy-voice", updatedAt: 2000 },
+        });
+        const cfg = {
+          session: { store: storeTemplate, scope },
+          agents: { list: [{ id: "main", default: true }] },
+          plugins: {
+            entries: {
+              "voice-call": { config: { agentId: "voice" } },
+            },
+          },
+        } as OpenClawConfig;
+
+        const result = await migrateFixtureState(stateDir, cfg);
+
+        const store = readStore(voiceStorePath);
+        expect(requireStoreEntry(store, "agent:main:main").sessionId).toBe("explicit-foreign");
+        expect(requireStoreEntry(store, canonicalMainKey).sessionId).toBe("voice-main");
+        expect(requireStoreEntry(store, "agent:voice:voice:15550001111").sessionId).toBe(
+          "legacy-voice",
+        );
+        expect(store["voice:15550001111"]).toBeUndefined();
+        expect(result.changes).toHaveLength(1);
+        expect(result.warnings).toHaveLength(1);
+      });
+    },
+  );
+
+  it("preserves foreign main aliases before global canonicalization in shared plugin stores", async () => {
+    await withStateFixture(async ({ tmpDir, stateDir }) => {
+      const sharedStorePath = path.join(tmpDir, "shared-sessions.json");
+      writeStore(sharedStorePath, {
+        "agent:main:main": { sessionId: "ambiguous-main", updatedAt: 2000 },
+        global: { sessionId: "real-global", updatedAt: 1000 },
+      });
+      const cfg = {
+        session: { store: sharedStorePath, scope: "global" },
+        agents: { list: [{ id: "main", default: true }] },
+        plugins: {
+          entries: {
+            "voice-call": { config: { agentId: "voice" } },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await migrateFixtureState(stateDir, cfg);
+
+      const store = readStore(sharedStorePath);
+      expect(requireStoreEntry(store, "agent:main:main").sessionId).toBe("ambiguous-main");
+      expect(requireStoreEntry(store, "global").sessionId).toBe("real-global");
+      expect(result.changes).toHaveLength(0);
+      expect(result.warnings).toHaveLength(1);
+    });
+  });
+
   it("renames same-agent main aliases when mainKey changes", async () => {
     await withStateFixture(async ({ stateDir }) => {
       const storePath = opsSessionStorePath(stateDir);

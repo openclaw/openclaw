@@ -6,6 +6,7 @@ import {
   resolveTwilioAuthToken,
   resolveVoiceCallEffectiveConfig,
   resolveVoiceCallNumberRouteKey,
+  resolveVoiceCallNumberRouteKeyForCall,
   resolveVoiceCallSessionKey,
   validateProviderConfig,
   normalizeVoiceCallConfig,
@@ -531,6 +532,28 @@ describe("resolveVoiceCallConfig session routing", () => {
     expect(effective.numberRouteKey).toBeUndefined();
     expect(effective.config).toBe(config);
     expect(effective.config.inboundGreeting).toBe("Hello from global.");
+  });
+
+  it("uses dialed-number fallback only for inbound calls", () => {
+    expect(
+      resolveVoiceCallNumberRouteKeyForCall({
+        direction: "inbound",
+        to: "+15550001111",
+      }),
+    ).toBe("+15550001111");
+    expect(
+      resolveVoiceCallNumberRouteKeyForCall({
+        direction: "outbound",
+        to: "+15550001111",
+      }),
+    ).toBeUndefined();
+    expect(
+      resolveVoiceCallNumberRouteKeyForCall({
+        direction: "outbound",
+        to: "+15550001111",
+        metadata: { numberRouteKey: "+15550002222" },
+      }),
+    ).toBe("+15550002222");
   });
 });
 

@@ -577,6 +577,19 @@ export function resolveVoiceCallNumberRouteKey(
   );
 }
 
+/** Resolve inbound-only number routing from a persisted call record. */
+export function resolveVoiceCallNumberRouteKeyForCall(call: {
+  direction?: "inbound" | "outbound";
+  to?: string;
+  metadata?: { numberRouteKey?: unknown };
+}): string | undefined {
+  const storedRouteKey = call.metadata?.numberRouteKey;
+  if (typeof storedRouteKey === "string") {
+    return storedRouteKey;
+  }
+  return call.direction === "inbound" ? call.to : undefined;
+}
+
 export function resolveVoiceCallEffectiveConfig(
   config: VoiceCallConfig,
   phoneOrRouteKey: string | undefined,

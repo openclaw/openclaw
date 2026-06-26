@@ -2995,6 +2995,14 @@ async function runLegacyMigrationPlans(
   return { changes, warnings };
 }
 
+function isLegacyDefaultMainAliasKey(key: string, mainKey: string): boolean {
+  const lower = normalizeLowercaseStringOrEmpty(key.trim());
+  return (
+    lower === `agent:${DEFAULT_AGENT_ID}:${DEFAULT_MAIN_KEY}` ||
+    lower === `agent:${DEFAULT_AGENT_ID}:${mainKey}`
+  );
+}
+
 function canonicalizeSessionKeyForAgent(params: {
   key: string;
   agentId: string;
@@ -3002,6 +3010,7 @@ function canonicalizeSessionKeyForAgent(params: {
   scope?: SessionScope;
   skipCrossAgentRemap?: boolean;
   preserveAmbiguousKeys?: boolean;
+  preserveForeignMainAliases?: boolean;
 }): string {
   const agentId = normalizeAgentId(params.agentId);
   const raw = params.key.trim();
@@ -3013,9 +3022,12 @@ function canonicalizeSessionKeyForAgent(params: {
   if (rawLower === "global" || rawLower === "unknown") {
     return rawLower;
   }
-  const legacyDefaultMainAlias =
-    rawLower === `agent:${DEFAULT_AGENT_ID}:${DEFAULT_MAIN_KEY}` ||
-    rawLower === `agent:${DEFAULT_AGENT_ID}:${params.mainKey}`;
+  const legacyDefaultMainAlias = isLegacyDefaultMainAliasKey(rawLower, params.mainKey);
+  // Plugin-routed stores can contain either a core orphan or an opaque explicit
+  // key with this shape. Without row provenance, never merge the two.
+  if (params.preserveForeignMainAliases && legacyDefaultMainAlias) {
+    return params.key;
+  }
   const canonicalMain = canonicalizeMainSessionAlias({
     cfg: { session: { scope: params.scope, mainKey: params.mainKey } },
     agentId,
@@ -3190,6 +3202,7 @@ function canonicalizeSessionStore(params: {
   scope?: SessionScope;
   skipCrossAgentRemap?: boolean;
   preserveAmbiguousKeys?: boolean;
+  preserveForeignMainAliases?: boolean;
 }): { store: Record<string, SessionEntryLike>; legacyKeys: string[] } {
   const canonical = Object.create(null) as Record<string, SessionEntryLike>;
   const meta = new Map<string, { isCanonical: boolean; updatedAt: number }>();
@@ -3206,6 +3219,7 @@ function canonicalizeSessionStore(params: {
       scope: params.scope,
       skipCrossAgentRemap: params.skipCrossAgentRemap,
       preserveAmbiguousKeys: params.preserveAmbiguousKeys,
+      preserveForeignMainAliases: params.preserveForeignMainAliases,
     });
     const isCanonical = canonicalKey === key;
     if (!isCanonical) {
@@ -3258,11 +3272,7 @@ function isAmbiguousSharedStoreKey(key: string, mainKey: string, scope?: Session
   ) {
     return false;
   }
-  return (
-    !lower.startsWith("agent:") ||
-    lower === `agent:${DEFAULT_AGENT_ID}:${DEFAULT_MAIN_KEY}` ||
-    lower === `agent:${DEFAULT_AGENT_ID}:${mainKey}`
-  );
+  return !lower.startsWith("agent:") || isLegacyDefaultMainAliasKey(lower, mainKey);
 }
 
 function resolveStaleLegacySessionFile(params: {
@@ -4953,6 +4963,7 @@ export async function migrateOrphanedSessionKeys(params: {
       env,
       pluginIds: collectRelevantDoctorPluginIds(params.cfg),
     });
+  const pluginAgentIdSet = new Set(pluginAgentIds.map((id) => normalizeAgentId(id)));
   const fixedCustomStore =
     typeof storeConfig === "string" && storeConfig.length > 0 && !storeConfig.includes("{agentId}");
 
@@ -5050,9 +5061,14 @@ export async function migrateOrphanedSessionKeys(params: {
     let working = parsed.store;
     let totalLegacy = 0;
     const preserveAmbiguousKeys = storePath === fixedCustomStorePath || storeAgentIds.size > 1;
-    const preservedAmbiguousKeyCount = preserveAmbiguousKeys
-      ? Object.keys(working).filter((key) => isAmbiguousSharedStoreKey(key, mainKey, scope)).length
-      : 0;
+    const pluginForeignMainAliasRisk = [...storeAgentIds].some(
+      (id) => pluginAgentIdSet.has(id) && id !== DEFAULT_AGENT_ID,
+    );
+    const preservedAmbiguousKeyCount = Object.keys(working).filter(
+      (key) =>
+        (preserveAmbiguousKeys && isAmbiguousSharedStoreKey(key, mainKey, scope)) ||
+        (pluginForeignMainAliasRisk && isLegacyDefaultMainAliasKey(key, mainKey)),
+    ).length;
     for (const storeAgentId of storeAgentIds) {
       const { store: canonicalized, legacyKeys } = canonicalizeSessionStore({
         store: working,
@@ -5063,6 +5079,7 @@ export async function migrateOrphanedSessionKeys(params: {
         // agent:main:* keys are legitimate — don't cross-agent remap them.
         skipCrossAgentRemap: storeAgentIds.size > 1 && storeAgentIds.has(DEFAULT_AGENT_ID),
         preserveAmbiguousKeys,
+        preserveForeignMainAliases: pluginForeignMainAliasRisk,
       });
       working = canonicalized;
       // Each pass only counts keys it changed from the current working store, so
