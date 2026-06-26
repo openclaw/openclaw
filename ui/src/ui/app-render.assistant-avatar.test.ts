@@ -341,7 +341,7 @@ describe("renderApp assistant avatar routing", () => {
     );
   });
 
-  it("falls back to the assistant agent route when chatAvatarUrl is null and avatar status is local", () => {
+  it("returns null for configAssistantAvatarUrl when chatAvatarUrl is null and avatar status is local (protected route)", () => {
     renderApp(
       createState({
         chatAvatarUrl: null,
@@ -351,7 +351,7 @@ describe("renderApp assistant avatar routing", () => {
       }),
     );
 
-    expect(quickSettingsProps.current?.assistantAvatarUrl).toBe("/avatar/main");
+    expect(quickSettingsProps.current?.assistantAvatarUrl).toBeNull();
   });
 
   it("applies the configured chat message width as a shell CSS variable", () => {

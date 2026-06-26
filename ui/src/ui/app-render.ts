@@ -1443,8 +1443,8 @@ export function renderApp(state: AppViewState) {
   const configAssistantAvatarUrl =
     localAssistantAvatarOverride ??
     state.chatAvatarUrl ??
-    (configAssistantAvatarStatus === "local" && state.assistantAgentId
-      ? buildAssistantAvatarRoute(state.basePath, state.assistantAgentId)
+    (configAssistantAvatarStatus === "local"
+      ? null
       : configAssistantAvatarMissing
         ? null
         : (assistantAvatarUrl ?? null));
