@@ -208,39 +208,47 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: providerHttpMocks.resolveApiKeyForProviderMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
-  assertOkOrThrowHttpError: providerHttpMocks.assertOkOrThrowHttpErrorMock,
-  assertOkOrThrowProviderError: providerHttpMocks.assertOkOrThrowProviderErrorMock,
-  createProviderOperationDeadline: ({
-    label,
-    timeoutMs,
-  }: {
-    label: string;
-    timeoutMs?: number;
-  }) => ({
-    label,
-    timeoutMs,
-  }),
-  createProviderOperationTimeoutResolver:
-    ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
-    () =>
+vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
+  // Keep readProviderJsonResponse REAL (via importActual) so provider success
+  // paths that read JSON through the shared bounded reader actually stream and
+  // cancel oversized bodies under test instead of hitting a stub. The transport
+  // and config seams stay mocked so each test can inject responses.
+  const actual = await importActual<typeof import("openclaw/plugin-sdk/provider-http")>();
+  return {
+    readProviderJsonResponse: actual.readProviderJsonResponse,
+    assertOkOrThrowHttpError: providerHttpMocks.assertOkOrThrowHttpErrorMock,
+    assertOkOrThrowProviderError: providerHttpMocks.assertOkOrThrowProviderErrorMock,
+    createProviderOperationDeadline: ({
+      label,
+      timeoutMs,
+    }: {
+      label: string;
+      timeoutMs?: number;
+    }) => ({
+      label,
+      timeoutMs,
+    }),
+    createProviderOperationTimeoutResolver:
+      ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
+      () =>
+        defaultTimeoutMs,
+    executeProviderOperationWithRetry: providerHttpMocks.executeProviderOperationWithRetryMock,
+    fetchProviderDownloadResponse: providerHttpMocks.fetchProviderDownloadResponseMock,
+    fetchProviderOperationResponse: providerHttpMocks.fetchProviderOperationResponseMock,
+    fetchWithTimeout: providerHttpMocks.fetchWithTimeoutMock,
+    fetchWithTimeoutGuarded: providerHttpMocks.fetchWithTimeoutGuardedMock,
+    pollProviderOperationJson: providerHttpMocks.pollProviderOperationJsonMock,
+    postJsonRequest: providerHttpMocks.postJsonRequestMock,
+    postMultipartRequest: providerHttpMocks.postMultipartRequestMock,
+    providerOperationRetryConfig: (_stage: string) => true,
+    resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
       defaultTimeoutMs,
-  executeProviderOperationWithRetry: providerHttpMocks.executeProviderOperationWithRetryMock,
-  fetchProviderDownloadResponse: providerHttpMocks.fetchProviderDownloadResponseMock,
-  fetchProviderOperationResponse: providerHttpMocks.fetchProviderOperationResponseMock,
-  fetchWithTimeout: providerHttpMocks.fetchWithTimeoutMock,
-  fetchWithTimeoutGuarded: providerHttpMocks.fetchWithTimeoutGuardedMock,
-  pollProviderOperationJson: providerHttpMocks.pollProviderOperationJsonMock,
-  postJsonRequest: providerHttpMocks.postJsonRequestMock,
-  postMultipartRequest: providerHttpMocks.postMultipartRequestMock,
-  providerOperationRetryConfig: (_stage: string) => true,
-  resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
-    defaultTimeoutMs,
-  resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
-  sanitizeConfiguredModelProviderRequest:
-    providerHttpMocks.sanitizeConfiguredModelProviderRequestMock,
-  waitProviderOperationPollInterval: async () => {},
-}));
+    resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
+    sanitizeConfiguredModelProviderRequest:
+      providerHttpMocks.sanitizeConfiguredModelProviderRequestMock,
+    waitProviderOperationPollInterval: async () => {},
+  };
+});
 
 export function getProviderHttpMocks(): ProviderHttpMocks {
   return providerHttpMocks;
