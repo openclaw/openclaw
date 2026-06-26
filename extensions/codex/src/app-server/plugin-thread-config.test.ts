@@ -180,6 +180,7 @@ describe("Codex plugin thread config", () => {
         nextCursor: null,
       }),
     });
+    let configReadCount = 0;
     const request = vi.fn(async (method: string) => {
       if (method === "plugin/list") {
         return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
@@ -192,6 +193,22 @@ describe("Codex plugin thread config", () => {
         );
       }
       if (method === "config/read") {
+        configReadCount += 1;
+        if (configReadCount > 1) {
+          return {
+            config: {
+              apps: {
+                "google-calendar-app": {
+                  tools: {
+                    "calendar/read": {
+                      enabled: false,
+                    },
+                  },
+                },
+              },
+            },
+          };
+        }
         return {
           config: {
             apps: {
@@ -250,6 +267,7 @@ describe("Codex plugin thread config", () => {
       destructiveApprovalMode: "always",
     });
     expect(request).toHaveBeenCalledWith("config/read", { includeLayers: false });
+    expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(2);
     expect(request).toHaveBeenCalledWith("config/value/write", {
       keyPath: 'apps."google-calendar-app".tools."calendar/create".approval_mode',
       value: null,
@@ -265,6 +283,192 @@ describe("Codex plugin thread config", () => {
       value: null,
       mergeStrategy: "replace",
     });
+  });
+
+  it("omits always policy apps when cwd effective approval overrides remain after cleanup", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [appInfo("google-calendar-app", true)],
+        nextCursor: null,
+      }),
+    });
+    let configReadCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginDetail(
+          "google-calendar",
+          [appSummary("google-calendar-app")],
+          ["google-calendar"],
+        );
+      }
+      if (method === "config/read") {
+        configReadCount += 1;
+        return {
+          config: {
+            apps: {
+              "google-calendar-app": {
+                tools: {
+                  "calendar/create": {
+                    approval_mode: "approve",
+                    source: configReadCount === 1 ? "user" : "project",
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      if (method === "config/value/write") {
+        return { status: "ok" };
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          allow_destructive_actions: "always",
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      configCwd: "/repo/project",
+      nowMs: 1,
+      request,
+    });
+
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
+    });
+    expect(config.policyContext.apps).toStrictEqual({});
+    expect(request).toHaveBeenCalledWith("config/read", {
+      includeLayers: false,
+      cwd: "/repo/project",
+    });
+    expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(2);
+    expect(config.diagnostics).toStrictEqual([
+      {
+        code: "approval_overrides_clear_failed",
+        plugin: {
+          configKey: "google-calendar",
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          pluginName: "google-calendar",
+          enabled: true,
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "always",
+        },
+        message:
+          "Could not clear durable Codex app approval overrides for google-calendar-app: effective approval overrides remain for calendar/create",
+      },
+    ]);
+  });
+
+  it("omits always policy apps when approval override writes are overridden", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [appInfo("google-calendar-app", true)],
+        nextCursor: null,
+      }),
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginDetail(
+          "google-calendar",
+          [appSummary("google-calendar-app")],
+          ["google-calendar"],
+        );
+      }
+      if (method === "config/read") {
+        return {
+          config: {
+            apps: {
+              "google-calendar-app": {
+                tools: {
+                  "calendar/create": {
+                    approval_mode: "approve",
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      if (method === "config/value/write") {
+        return { status: "okOverridden" };
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          allow_destructive_actions: "always",
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      configCwd: "/repo/project",
+      nowMs: 1,
+      request,
+    });
+
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
+    });
+    expect(config.policyContext.apps).toStrictEqual({});
+    expect(config.diagnostics).toStrictEqual([
+      {
+        code: "approval_overrides_clear_failed",
+        plugin: {
+          configKey: "google-calendar",
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          pluginName: "google-calendar",
+          enabled: true,
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "always",
+        },
+        message:
+          "Could not clear durable Codex app approval overrides for google-calendar-app: approval override for calendar/create is controlled by another config layer",
+      },
+    ]);
   });
 
   it("omits always policy apps when durable approval override cleanup fails", async () => {

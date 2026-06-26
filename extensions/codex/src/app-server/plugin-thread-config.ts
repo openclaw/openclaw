@@ -72,6 +72,7 @@ export type CodexPluginThreadConfig = {
 export type BuildCodexPluginThreadConfigParams = {
   pluginConfig?: unknown;
   request: CodexPluginRuntimeRequest;
+  configCwd?: string;
   appCache?: CodexAppInventoryCache;
   appCacheKey: string;
   nowMs?: number;
@@ -254,6 +255,7 @@ export async function buildCodexPluginThreadConfig(
         record.policy.destructiveApprovalMode === "always" &&
         !(await clearPersistedAppToolApprovalOverrides({
           request: params.request,
+          configCwd: params.configCwd,
           plugin: record.policy,
           app,
           diagnostics,
@@ -380,19 +382,30 @@ function buildPluginAppPolicyContext(
 
 async function clearPersistedAppToolApprovalOverrides(params: {
   request: CodexPluginRuntimeRequest;
+  configCwd?: string;
   plugin: ResolvedCodexPluginPolicy;
   app: CodexPluginOwnedApp;
   diagnostics: CodexPluginThreadConfigDiagnostic[];
 }): Promise<boolean> {
   try {
-    for (const toolName of await readPersistedAppToolApprovalOverrideNames(params)) {
-      await params.request("config/value/write", {
+    const overrideNames = await readPersistedAppToolApprovalOverrideNames(params);
+    for (const toolName of overrideNames) {
+      const response = await params.request("config/value/write", {
         keyPath: `apps.${quoteConfigKeyPathSegment(params.app.id)}.tools.${quoteConfigKeyPathSegment(
           toolName,
         )}.approval_mode`,
         value: null,
         mergeStrategy: "replace",
       });
+      if (isOverriddenConfigWriteResponse(response)) {
+        throw new Error(`approval override for ${toolName} is controlled by another config layer`);
+      }
+    }
+    const remainingOverrideNames = await readPersistedAppToolApprovalOverrideNames(params);
+    if (remainingOverrideNames.length > 0) {
+      throw new Error(
+        `effective approval overrides remain for ${remainingOverrideNames.join(", ")}`,
+      );
     }
     return true;
   } catch (error) {
@@ -409,9 +422,13 @@ async function clearPersistedAppToolApprovalOverrides(params: {
 
 async function readPersistedAppToolApprovalOverrideNames(params: {
   request: CodexPluginRuntimeRequest;
+  configCwd?: string;
   app: CodexPluginOwnedApp;
 }): Promise<string[]> {
-  const response = await params.request("config/read", { includeLayers: false });
+  const response = await params.request("config/read", {
+    includeLayers: false,
+    ...(params.configCwd ? { cwd: params.configCwd } : {}),
+  });
   const config = isJsonObject(response) ? response.config : undefined;
   const appsRoot = isJsonObject(config) ? config.apps : undefined;
   const nestedApps = isJsonObject(appsRoot) ? appsRoot.apps : undefined;
@@ -433,6 +450,10 @@ function hasPersistedToolApprovalOverride(value: JsonValue): boolean {
   return (
     isJsonObject(value) && (value.approval_mode !== undefined || value.approvalMode !== undefined)
   );
+}
+
+function isOverriddenConfigWriteResponse(response: unknown): boolean {
+  return isJsonObject(response) && response.status === "okOverridden";
 }
 
 function quoteConfigKeyPathSegment(segment: string): string {
