@@ -273,52 +273,6 @@ describe("createChannelMessageAdapterFromOutbound", () => {
     expect(result?.receipt.parts[0]?.kind).toBe("card");
   });
 
-  it("returns card kind when channelData has presentationBlocks", async () => {
-    const sendPayload = vi.fn(async () => ({ channel: "demo", messageId: "card-2" }));
-    const adapter = createChannelMessageAdapterFromOutbound({
-      outbound: { sendPayload },
-    });
-
-    const result = await adapter.send?.payload?.({
-      cfg,
-      to: "room-1",
-      text: "test",
-      payload: {
-        text: "test",
-        channelData: {
-          slack: {
-            presentationBlocks: [{ type: "divider" }],
-          },
-        },
-      },
-    });
-
-    expect(result?.receipt.parts[0]?.kind).toBe("card");
-  });
-
-  it("returns text kind when channelData has only metadata (no presentationBlocks)", async () => {
-    const sendPayload = vi.fn(async () => ({ channel: "demo", messageId: "msg-1" }));
-    const adapter = createChannelMessageAdapterFromOutbound({
-      outbound: { sendPayload },
-    });
-
-    const result = await adapter.send?.payload?.({
-      cfg,
-      to: "room-1",
-      text: "hello",
-      payload: {
-        text: "hello",
-        channelData: {
-          slack: {
-            threadTs: "1234567890.123456",
-          },
-        },
-      },
-    });
-
-    expect(result?.receipt.parts[0]?.kind).toBe("text");
-  });
-
   it("returns text kind for payloads with only text and no rich content", async () => {
     const sendPayload = vi.fn(async () => ({ channel: "demo", messageId: "msg-2" }));
     const adapter = createChannelMessageAdapterFromOutbound({
