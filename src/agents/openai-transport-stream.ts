@@ -3296,16 +3296,6 @@ function createDeepSeekDsmlToolCallRecoverer() {
   let buffer = "";
   let bufferBytes = 0;
 
-  const emitAndSlice = (text: string): void => {
-    buffer = buffer.slice(text.length);
-    bufferBytes -= Buffer.byteLength(text, "utf8");
-  };
-
-  const clearBuffer = (): void => {
-    buffer = "";
-    bufferBytes = 0;
-  };
-
   const consume = (final: boolean): DeepSeekDsmlRecoveredPart[] => {
     const output: DeepSeekDsmlRecoveredPart[] = [];
     while (buffer) {
@@ -3313,7 +3303,8 @@ function createDeepSeekDsmlToolCallRecoverer() {
       if (!open) {
         if (final) {
           output.push({ kind: "text", text: buffer });
-          clearBuffer();
+          buffer = "";
+          bufferBytes = 0;
           return output;
         }
         const keep = longestDeepSeekDsmlToolOpenPrefixSuffixLength(buffer);
@@ -3321,7 +3312,8 @@ function createDeepSeekDsmlToolCallRecoverer() {
         if (emitLength > 0) {
           const emitted = buffer.slice(0, emitLength);
           output.push({ kind: "text", text: emitted });
-          emitAndSlice(emitted);
+          bufferBytes -= Buffer.byteLength(emitted, "utf8");
+          buffer = buffer.slice(emitted.length);
         }
         return output;
       }
@@ -3329,7 +3321,8 @@ function createDeepSeekDsmlToolCallRecoverer() {
       if (open.index > 0) {
         const prefix = buffer.slice(0, open.index);
         output.push({ kind: "text", text: prefix });
-        emitAndSlice(prefix);
+        bufferBytes -= Buffer.byteLength(prefix, "utf8");
+        buffer = buffer.slice(prefix.length);
       }
 
       const afterOpen = buffer.slice(open.token.length);
@@ -3337,7 +3330,8 @@ function createDeepSeekDsmlToolCallRecoverer() {
       if (!close) {
         if (final || bufferBytes > MAX_DSML_RECOVERY_BUFFER_BYTES) {
           output.push({ kind: "text", text: buffer });
-          clearBuffer();
+          buffer = "";
+          bufferBytes = 0;
         }
         return output;
       }
@@ -3350,7 +3344,8 @@ function createDeepSeekDsmlToolCallRecoverer() {
       } else {
         output.push({ kind: "text", text: blockText });
       }
-      emitAndSlice(blockText);
+      bufferBytes -= Buffer.byteLength(blockText, "utf8");
+      buffer = buffer.slice(blockText.length);
     }
     return output;
   };
