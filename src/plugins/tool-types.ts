@@ -1,6 +1,7 @@
-// Defines plugin tool metadata and filesystem policy types.
 import type { ToolFsPolicy } from "../agents/tool-fs-policy.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+// Defines plugin tool metadata and filesystem policy types.
+import type { SourceActorRole } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -15,7 +16,7 @@ export type OpenClawPluginSourceActorContext = {
   id: string;
   peerId?: string;
   displayName?: string;
-  role?: string;
+  role?: SourceActorRole;
   context?: string;
 };
 

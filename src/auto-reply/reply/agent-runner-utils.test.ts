@@ -421,6 +421,30 @@ describe("agent-runner-utils", () => {
     });
   });
 
+  it("drops non-canonical source actor roles in embedded runs", () => {
+    const run = makeRun();
+
+    const resolved = buildEmbeddedRunExecutionParams({
+      run,
+      sessionCtx: {
+        Provider: "signal",
+        To: "group-1",
+        SourceActor: {
+          id: "signal:+15550001",
+          role: "user" as never,
+        },
+      },
+      hasRepliedRef: undefined,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+      runId: "run-1",
+    });
+
+    expect(resolved.senderContext.sourceActor).toStrictEqual({
+      id: "signal:+15550001",
+    });
+  });
+
   it("uses telegram plugin threading context for native commands", () => {
     hoisted.getChannelPluginMock.mockReturnValue({
       threading: {

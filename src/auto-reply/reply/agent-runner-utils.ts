@@ -25,7 +25,7 @@ import {
 } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
-import type { TemplateContext } from "../templating.js";
+import type { SourceActorRole, TemplateContext } from "../templating.js";
 import {
   resolveProviderScopedAuthProfile,
   resolveRunAuthProfile,
@@ -38,6 +38,13 @@ import { resolveOriginMessageProvider, resolveOriginMessageTo } from "./origin-r
 import type { FollowupRun } from "./queue.js";
 
 const BUN_FETCH_SOCKET_ERROR_RE = /socket connection was closed unexpectedly/i;
+const SOURCE_ACTOR_ROLES = new Set<SourceActorRole>([
+  "operator",
+  "participant",
+  "self",
+  "system",
+  "external",
+]);
 type EmbeddedReplyRoute = Pick<
   FollowupRun,
   | "originatingChannel"
@@ -322,7 +329,7 @@ function normalizeSourceActorContext(
   }
   const peerId = normalizeOptionalString(sourceActor?.peerId);
   const displayName = normalizeOptionalString(sourceActor?.displayName);
-  const role = normalizeOptionalString(sourceActor?.role);
+  const role = normalizeSourceActorRole(sourceActor?.role);
   const context = normalizeOptionalString(sourceActor?.context);
   return {
     id,
@@ -331,6 +338,14 @@ function normalizeSourceActorContext(
     ...(role ? { role } : {}),
     ...(context ? { context } : {}),
   };
+}
+
+function normalizeSourceActorRole(role: unknown): SourceActorRole | undefined {
+  const normalized = normalizeOptionalString(role);
+  if (SOURCE_ACTOR_ROLES.has(normalized as SourceActorRole)) {
+    return normalized as SourceActorRole;
+  }
+  return undefined;
 }
 
 /** Builds execution-specific embedded run params for queued reply dispatch. */
