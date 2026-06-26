@@ -407,6 +407,7 @@ describe("voice-call outbound helpers", () => {
     const call = {
       callId: "call-1",
       providerCallId: "provider-1",
+      direction: "inbound",
       state: "active",
       to: "+15550002222",
       metadata: { numberRouteKey: "+15550002222" },

@@ -549,11 +549,18 @@ describe("resolveVoiceCallConfig session routing", () => {
     ).toBeUndefined();
     expect(
       resolveVoiceCallNumberRouteKeyForCall({
-        direction: "outbound",
+        direction: "inbound",
         to: "+15550001111",
         metadata: { numberRouteKey: "+15550002222" },
       }),
     ).toBe("+15550002222");
+    expect(
+      resolveVoiceCallNumberRouteKeyForCall({
+        direction: "outbound",
+        to: "+15550001111",
+        metadata: { numberRouteKey: "+15550002222" },
+      }),
+    ).toBeUndefined();
   });
 });
 

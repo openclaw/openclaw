@@ -56,11 +56,11 @@ vi.mock("./config.js", () => ({
     to?: string;
     metadata?: { numberRouteKey?: unknown };
   }) =>
-    typeof call.metadata?.numberRouteKey === "string"
-      ? call.metadata.numberRouteKey
-      : call.direction === "inbound"
-        ? call.to
-        : undefined,
+    call.direction === "inbound"
+      ? typeof call.metadata?.numberRouteKey === "string"
+        ? call.metadata.numberRouteKey
+        : call.to
+      : undefined,
   resolveVoiceCallEffectiveConfig: (config: VoiceCallConfig, numberRouteKey?: string) => {
     const route = numberRouteKey ? config.numbers[numberRouteKey] : undefined;
     return route ? { config: { ...config, ...route }, numberRouteKey } : { config };

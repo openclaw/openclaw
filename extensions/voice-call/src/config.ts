@@ -583,11 +583,14 @@ export function resolveVoiceCallNumberRouteKeyForCall(call: {
   to?: string;
   metadata?: { numberRouteKey?: unknown };
 }): string | undefined {
+  if (call.direction !== "inbound") {
+    return undefined;
+  }
   const storedRouteKey = call.metadata?.numberRouteKey;
   if (typeof storedRouteKey === "string") {
     return storedRouteKey;
   }
-  return call.direction === "inbound" ? call.to : undefined;
+  return call.to;
 }
 
 export function resolveVoiceCallEffectiveConfig(
