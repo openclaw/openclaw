@@ -84,6 +84,21 @@ export function expectChannelInboundContextContract(ctx: MsgContext) {
         normalizeContextString(ctx.SourceActor.peerId),
       );
     }
+    if (ctx.SourceActorDisplayName != null && ctx.SourceActor.displayName != null) {
+      expect(normalizeContextString(ctx.SourceActorDisplayName)).toBe(
+        normalizeContextString(ctx.SourceActor.displayName),
+      );
+    }
+    if (ctx.SourceActorRole != null && ctx.SourceActor.role != null) {
+      expect(normalizeContextString(ctx.SourceActorRole)).toBe(
+        normalizeContextString(ctx.SourceActor.role),
+      );
+    }
+    if (ctx.SourceActorContext != null && ctx.SourceActor.context != null) {
+      expect(normalizeContextString(ctx.SourceActorContext)).toBe(
+        normalizeContextString(ctx.SourceActor.context),
+      );
+    }
   }
 }
 
