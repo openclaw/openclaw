@@ -286,6 +286,22 @@ Feishu/Lark supports streaming replies via interactive cards. When enabled, the 
 
 Set `streaming: false` to send the complete reply in one message. `blockStreaming` is off by default; enable it only when you want completed assistant blocks flushed before the final reply.
 
+If Feishu/Lark shows only the client-upgrade fallback text instead of the
+assistant's final answer, the chat surface is not rendering the interactive
+CardKit message. Use plain rendering for that account while you investigate the
+client or tenant compatibility:
+
+```json5
+{
+  channels: {
+    feishu: {
+      streaming: false,
+      renderMode: "raw",
+    },
+  },
+}
+```
+
 ### Quota optimization
 
 Reduce the number of Feishu/Lark API calls with two optional flags:
@@ -583,6 +599,7 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.dynamicAgentCreation.maxAgents`         | Maximum number of dynamic agents to create                                       | unlimited                            |
 | `channels.feishu.textChunkLimit`                         | Message chunk size                                                               | `2000`                               |
 | `channels.feishu.mediaMaxMb`                             | Media size limit                                                                 | `30`                                 |
+| `channels.feishu.renderMode`                             | Message rendering mode (`auto`, `raw`, or `card`)                                | `auto`                               |
 | `channels.feishu.streaming`                              | Streaming card output                                                            | `true`                               |
 | `channels.feishu.blockStreaming`                         | Completed-block reply streaming                                                  | `false`                              |
 | `channels.feishu.typingIndicator`                        | Send typing reactions                                                            | `true`                               |
