@@ -112,30 +112,40 @@ function stringArrayField(value: Record<string, unknown>, key: string): string[]
   return field as string[];
 }
 
+const MXC_TEST_ENV_KEYS = [
+  "APPDATA",
+  "ComSpec",
+  "LOCALAPPDATA",
+  "NUMBER_OF_PROCESSORS",
+  "OPENCLAW_MXC_HOST_SECRET_TEST",
+  "OPENCLAW_MXC_SECRET_TEST",
+  "ProgramData",
+  "ProgramFiles",
+  "ProgramFiles(x86)",
+  "ProgramW6432",
+  "SystemDrive",
+  "SystemRoot",
+  "TEMP",
+  "TMP",
+  "USERPROFILE",
+  "WINDIR",
+] as const;
+
+type MxcTestEnvKey = (typeof MXC_TEST_ENV_KEYS)[number];
+
 async function withProcessEnv(
-  overrides: Record<string, string | undefined>,
+  overrides: Partial<Record<MxcTestEnvKey, string | undefined>>,
   run: () => Promise<void>,
 ): Promise<void> {
-  const original = new Map<string, string | undefined>();
-  for (const [key, value] of Object.entries(overrides)) {
-    original.set(key, process.env[key]);
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-
   try {
-    await run();
-  } finally {
-    for (const [key, value] of original) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
+    for (const key of MXC_TEST_ENV_KEYS) {
+      if (Object.hasOwn(overrides, key)) {
+        vi.stubEnv(key, overrides[key]);
       }
     }
+    await run();
+  } finally {
+    vi.unstubAllEnvs();
   }
 }
 
@@ -190,7 +200,7 @@ describe("createMxcSandboxBackendHandle", () => {
     const processContainer = objectField(cfg, "processContainer");
     const ui = objectField(cfg, "ui");
     const expectedShell = process.env.ComSpec?.trim() || "cmd.exe";
-    expect(cfg.version).toBe("0.8.0-alpha");
+    expect(cfg.version).toBe("0.7.0-alpha");
     expect(cfg.containment).toBe("process");
     expect(cfg.lxc).toBeUndefined();
     expect(processContainer).toEqual({

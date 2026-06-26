@@ -1,15 +1,49 @@
-# MXC sandbox execution plugin
+# @openclaw/mxc-sandbox
 
-Use the MXC plugin to run OpenClaw tool execution through MXC on Windows.
+Official MXC sandbox execution plugin for OpenClaw.
 
-This plugin is an early prerelease for testing. It has not shipped in a stable
-OpenClaw release, so expect configuration and readiness behavior to change as
-MXC host support matures.
+This plugin lets OpenClaw run tool execution through MXC on Windows hosts with
+ProcessContainer support.
+
+## Install
+
+```bash
+openclaw plugins install @openclaw/mxc-sandbox
+```
+
+Restart the Gateway after installing or updating the plugin.
+
+## Configure
+
+After installing the plugin, configure an agent to use the `mxc` sandbox backend:
+
+```json5
+{
+  agents: {
+    defaults: {
+      sandbox: {
+        mode: "all",
+        backend: "mxc",
+        workspaceAccess: "none",
+      },
+    },
+  },
+}
+```
+
+This plugin is an early prerelease for testing, so expect configuration and
+readiness behavior to change as MXC host support matures.
+
+## Package
+
+- Plugin id: `mxc`
+- Package: `@openclaw/mxc-sandbox`
+- Minimum OpenClaw host: `2026.6.10`
 
 ## Supported
 
 - Windows hosts with the MXC executor installed through `@microsoft/mxc-sdk`.
-- Explicit opt-in with the bundled `mxc` plugin and `sandbox.backend: "mxc"`.
+- Explicit opt-in after plugin install with `sandbox.backend: "mxc"`.
 - MXC `process` containment, which resolves to Windows ProcessContainer.
 - `workspaceAccess`:
   - `none`: isolated sandbox workspace is writable.

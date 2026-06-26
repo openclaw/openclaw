@@ -1,8 +1,11 @@
 {
-  "name": "@openclaw/mxc",
-  "version": "2026.4.25",
-  "private": true,
+  "name": "@openclaw/mxc-sandbox",
+  "version": "2026.6.10",
   "description": "OpenClaw MXC sandbox execution plugin for MXC-capable hosts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
   "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -15,13 +18,27 @@
     "extensions": [
       "./index.ts"
     ],
+    "install": {
+      "npmSpec": "@openclaw/mxc-sandbox",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.6.10"
+    },
+    "compat": {
+      "pluginApi": ">=2026.6.10"
+    },
     "build": {
+      "openclawVersion": "2026.6.10",
+      "bundledDist": false,
       "staticAssets": [
         {
           "source": "./src/mxc-spawn-launcher.mjs",
           "output": "mxc-spawn-launcher.mjs"
         }
       ]
+    },
+    "release": {
+      "publishToClawHub": true,
+      "publishToNpm": true
     }
   }
 }

@@ -84,7 +84,7 @@ type MxcLauncherOptions = {
   usePty?: boolean;
 };
 
-const MXC_SCHEMA_VERSION = "0.8.0-alpha";
+const MXC_SCHEMA_VERSION = "0.7.0-alpha";
 const PROCESS_CONTAINER_NAME_MAX_LEN = 64;
 
 type MxcExecFinalizeToken = {
