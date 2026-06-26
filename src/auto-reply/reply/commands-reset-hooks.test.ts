@@ -780,6 +780,86 @@ describe("handleCommands reset hooks", () => {
     expect(result).toBeNull();
   });
 
+  it("keeps native provider/model plus prompt title args available for model fallthrough", async () => {
+    const params = buildResetParams(
+      "/new openai gpt-5.5 summarize this",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://example.invalid",
+              models: [
+                {
+                  id: "gpt-5.5",
+                  name: "GPT 5.5",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 128_000,
+                  maxTokens: 16_000,
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "openai gpt-5.5 summarize this" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toBeNull();
+  });
+
+  it("allows slashes in native structured /new title args", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey: "agent:main:main",
+      entry: { sessionId: "fresh-session", updatedAt: 1, totalTokens: 0, totalTokensFresh: true },
+    });
+    const params = buildResetParams(
+      "/new Q3/Q4 planning",
+      {
+        commands: { text: true },
+        channels: { discord: { allowFrom: ["*"] } },
+      } as OpenClawConfig,
+      {
+        CommandSource: "native",
+        CommandArgs: { values: { title: "Q3/Q4 planning" } },
+        Provider: "discord",
+        Surface: "discord",
+      },
+    );
+    params.storePath = storePath;
+    params.sessionStore = {
+      "agent:main:main": {
+        sessionId: "fresh-session",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    };
+    params.sessionEntry = params.sessionStore["agent:main:main"];
+
+    const result = await maybeHandleResetCommand(params);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "✅ New session started as “Q3/Q4 planning”." },
+    });
+    expect(getSessionEntry({ storePath, sessionKey: "agent:main:main" })?.label).toBe(
+      "Q3/Q4 planning",
+    );
+  });
+
   it("parses native /new name syntax before writing session labels", async () => {
     const storePath = await createStorePath();
     await upsertSessionEntry({

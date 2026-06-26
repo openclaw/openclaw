@@ -90,8 +90,8 @@ function buildDeleteParams(
 
 describe("delete session command", () => {
   it("parses supported aliases and ignores other commands", () => {
-    expect(parseDeleteSessionCommand("/close")).toEqual({ command: "/close" });
-    expect(parseDeleteSessionCommand("/DELETE now")).toEqual({ command: "/delete" });
+    expect(parseDeleteSessionCommand("/close")).toEqual({ command: "/close", tail: "" });
+    expect(parseDeleteSessionCommand("/DELETE now")).toEqual({ command: "/delete", tail: "now" });
     expect(parseDeleteSessionCommand("/name Demo")).toBeNull();
   });
 
@@ -136,6 +136,30 @@ describe("delete session command", () => {
     expect(takeCommandSessionMetadataChanges(params.ctx)).toEqual([
       { sessionKey, reason: "command-metadata" },
     ]);
+  });
+
+  it("rejects delete command arguments instead of deleting the current session", async () => {
+    const storePath = await createStorePath();
+    await upsertSessionEntry({
+      storePath,
+      sessionKey,
+      entry: {
+        sessionId: "delete-me",
+        updatedAt: 1,
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+    });
+    const params = buildDeleteParams("/delete Planning notes", storePath);
+
+    const result = await handleDeleteSessionCommand(params, true);
+
+    expect(result).toEqual({
+      shouldContinue: false,
+      reply: { text: "/delete only deletes the current session and does not accept arguments." },
+    });
+    expect(callGatewayMock).not.toHaveBeenCalled();
+    expect(getSessionEntry({ storePath, sessionKey })?.sessionId).toBe("delete-me");
   });
 
   it("does not delete the main session", async () => {

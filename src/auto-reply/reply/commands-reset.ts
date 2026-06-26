@@ -71,7 +71,7 @@ function isModelRefTail(params: HandleCommandsParams, tail: string): boolean {
   }
   const refs = collectConfiguredModelRefs(params);
   const tokens = normalized.split(/\s+/);
-  if (tokens.length === 2) {
+  if (tokens.length >= 2) {
     const [provider, model] = tokens;
     if (provider && model && refs.has(provider)) {
       return refs.has(`${provider}/${model}`) || refs.has(model) || MODEL_REF_PREFIX_RE.test(model);
@@ -87,9 +87,6 @@ function isModelRefTail(params: HandleCommandsParams, tail: string): boolean {
     return true;
   }
   if (refs.has(normalized)) {
-    return true;
-  }
-  if (normalized.includes("/")) {
     return true;
   }
   return MODEL_REF_PREFIX_RE.test(normalized);

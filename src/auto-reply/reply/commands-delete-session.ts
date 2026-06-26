@@ -11,7 +11,9 @@ import type {
 
 const DELETE_SESSION_COMMANDS = new Set(["/close", "/delete"]);
 
-export function parseDeleteSessionCommand(raw: string): { command: "/close" | "/delete" } | null {
+export function parseDeleteSessionCommand(
+  raw: string,
+): { command: "/close" | "/delete"; tail: string } | null {
   const trimmed = raw.trim();
   const commandEnd = trimmed.search(/\s/);
   const commandToken = commandEnd === -1 ? trimmed : trimmed.slice(0, commandEnd);
@@ -19,7 +21,10 @@ export function parseDeleteSessionCommand(raw: string): { command: "/close" | "/
   if (!DELETE_SESSION_COMMANDS.has(normalized)) {
     return null;
   }
-  return { command: normalized as "/close" | "/delete" };
+  return {
+    command: normalized as "/close" | "/delete",
+    tail: commandEnd === -1 ? "" : trimmed.slice(commandEnd).trim(),
+  };
 }
 
 function deleteSessionReply(text: string): CommandHandlerResult {
@@ -38,6 +43,11 @@ export const handleDeleteSessionCommand: CommandHandler = async (params, allowTe
   const parsed = parseDeleteSessionCommand(params.command.commandBodyNormalized);
   if (!parsed) {
     return null;
+  }
+  if (parsed.tail) {
+    return deleteSessionReply(
+      `${parsed.command} only deletes the current session and does not accept arguments.`,
+    );
   }
   const unauthorized = rejectUnauthorizedCommand(params, parsed.command);
   if (unauthorized) {
