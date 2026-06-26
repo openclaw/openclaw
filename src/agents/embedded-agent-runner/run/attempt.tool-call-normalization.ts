@@ -891,7 +891,7 @@ function isRetainableNonVisibleBlock(block: Record<string, unknown>): boolean {
   return block.type === "thinking" || block.type === "redacted_thinking";
 }
 
-const STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS = new Set<unknown>(["stop"]);
+const STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS = new Set<unknown>(["stop", "toolUse"]);
 const STANDALONE_TEXT_TOOL_CALL_SCRUB_STOP_REASONS = new Set<unknown>(["stop", "length"]);
 
 function extractStandaloneTextToolCallCandidateForStopReasons(
@@ -1019,7 +1019,7 @@ function wrapStreamPromoteStandaloneTextToolCalls(
       createPromotedToolCallEvents,
       matcher,
       normalizeDoneMessage: ({ message, reason }) => {
-        if (reason === "stop") {
+        if (STANDALONE_TEXT_TOOL_CALL_PROMOTION_STOP_REASONS.has(reason)) {
           return normalizeMessage(message);
         }
         const scrubbed = scrubOverCapPlainTextToolCallMessage({

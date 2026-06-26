@@ -95,6 +95,38 @@ describe("extractAssistantText", () => {
     );
   });
 
+  it("strips standalone invoke tool calls without Minimax markers", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `<invoke name="Bash">\n<parameter name="command">ls</parameter>\n</invoke>`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("");
+  });
+
+  it("strips call-led invoke tool calls embedded after prose", () => {
+    const msg = makeAssistantMessage({
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: `Checking.\ncall\n<invoke name="Bash">\n<parameter name="command">ls</parameter>\n</invoke>`,
+        },
+      ],
+      timestamp: Date.now(),
+    });
+
+    const result = extractAssistantText(msg);
+    expect(result).toBe("Checking.");
+  });
+
   it("preserves normal text without tool invocations", () => {
     const msg = makeAssistantMessage({
       role: "assistant",

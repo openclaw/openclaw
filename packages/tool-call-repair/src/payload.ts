@@ -126,6 +126,14 @@ function parseXmlishFunctionOpening(text: string, start: number): PlainTextToolC
   return { end: start + match[0].length, name: match[1], requiresClosing: false };
 }
 
+function parseXmlishInvokeOpening(text: string, start: number): PlainTextToolCallOpening | null {
+  const match = /^<invoke\s+name=["']([A-Za-z0-9_.:-]{1,120})["']\s*>\s*/i.exec(text.slice(start));
+  if (!match?.[1]) {
+    return null;
+  }
+  return { end: start + match[0].length, name: match[1], requiresClosing: true };
+}
+
 function parseOpening(text: string, start: number): PlainTextToolCallOpening | null {
   return parseBracketOpening(text, start) ?? parseHarmonyOpening(text, start);
 }
@@ -223,7 +231,9 @@ type XmlishParameterBlockBounds = {
 
 function findXmlishParameterBlock(text: string, start: number): XmlishParameterBlockBounds | null {
   const cursor = skipWhitespace(text, start);
-  const openMatch = /^<parameter=([A-Za-z0-9_.:-]{1,120})>/i.exec(text.slice(cursor));
+  const openMatch = /^<parameter(?:=|\s+name=["'])([A-Za-z0-9_.:-]{1,120})(?:["']\s*)?>/i.exec(
+    text.slice(cursor),
+  );
   if (!openMatch?.[1]) {
     return null;
   }
@@ -282,9 +292,11 @@ function extractXmlishParameterValue(text: string, start: number, end: number): 
 
 function consumeXmlishFunctionClose(text: string, start: number): number | null {
   const cursor = skipWhitespace(text, start);
-  return text.slice(cursor).toLowerCase().startsWith("</function>")
-    ? cursor + "</function>".length
-    : null;
+  const lower = text.slice(cursor).toLowerCase();
+  if (lower.startsWith("</function>")) {
+    return cursor + "</function>".length;
+  }
+  return lower.startsWith("</invoke>") ? cursor + "</invoke>".length : null;
 }
 
 function consumeOptionalXmlishFunctionClose(text: string, start: number): number {
@@ -316,7 +328,11 @@ function parseXmlishPlainTextToolCallBlockEndAt(text: string, start: number): nu
 }
 
 function parseXmlishOpening(text: string, start: number): PlainTextToolCallOpening | null {
-  return parseBracketOpening(text, start) ?? parseXmlishFunctionOpening(text, start);
+  return (
+    parseBracketOpening(text, start) ??
+    parseXmlishFunctionOpening(text, start) ??
+    parseXmlishInvokeOpening(text, start)
+  );
 }
 
 function parseXmlishPlainTextToolCallBlockAt(
@@ -376,6 +392,9 @@ export function parseStandalonePlainTextToolCallBlocks(
 ): PlainTextToolCallBlock[] | null {
   const blocks: PlainTextToolCallBlock[] = [];
   let cursor = skipWhitespace(text, 0);
+  if (/^call\b/i.test(text.slice(cursor))) {
+    cursor = skipWhitespace(text, cursor + "call".length);
+  }
   while (cursor < text.length) {
     const block =
       parsePlainTextToolCallBlockAt(text, cursor, options) ??
@@ -395,7 +414,9 @@ export function stripPlainTextToolCallBlocks(text: string): string {
     !text ||
     (!/\[(?:tool:)?[A-Za-z0-9_-]+\]/.test(text) &&
       !/(?:^|\n)\s*(?:<\|channel\|>)?(?:commentary|analysis|final)\s+to=/.test(text) &&
-      !/(?:^|\n)\s*<function=[A-Za-z0-9_.:-]{1,120}>/i.test(text))
+      !/(?:^|\n)\s*(?:call\s+)?<(?:function=[A-Za-z0-9_.:-]{1,120}|invoke\s+name=["'][A-Za-z0-9_.:-]{1,120}["']\s*>)/i.test(
+        text,
+      ))
   ) {
     return text;
   }
@@ -409,8 +430,19 @@ export function stripPlainTextToolCallBlocks(text: string): string {
       continue;
     }
     const blockStart = skipHorizontalWhitespace(text, index);
-    const block = parsePlainTextToolCallBlockAt(text, blockStart);
-    const blockEnd = block?.end ?? parseXmlishPlainTextToolCallBlockEndAt(text, blockStart);
+    const afterCallLeadIn = /^call\b/i.test(text.slice(blockStart))
+      ? skipWhitespace(text, blockStart + "call".length)
+      : blockStart;
+    const block = parsePlainTextToolCallBlockAt(text, afterCallLeadIn);
+    const allowXmlishStandaloneBlock =
+      blockStart === 0 ||
+      afterCallLeadIn !== blockStart ||
+      !/^<invoke\s+name=/i.test(text.slice(afterCallLeadIn));
+    const blockEnd =
+      block?.end ??
+      (allowXmlishStandaloneBlock
+        ? parseXmlishPlainTextToolCallBlockEndAt(text, afterCallLeadIn)
+        : null);
     if (blockEnd === null) {
       index += 1;
       continue;

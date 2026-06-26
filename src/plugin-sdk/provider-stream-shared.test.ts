@@ -385,7 +385,7 @@ describe("createPlainTextToolCallCompatWrapper", () => {
     ]);
   });
 
-  it("promotes complete under-cap text tool calls for non-stop terminal reasons", async () => {
+  it("promotes complete under-cap text tool calls for length terminal reasons", async () => {
     const rawToolText = '[tool:read] {"path":"/tmp/file.txt"}';
     const baseStreamFn: StreamFn = () =>
       createEventStream([
@@ -415,9 +415,69 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       "toolcall_delta",
       "done",
     ]);
-    const done = events.at(-1) as { reason?: unknown; message?: { stopReason?: unknown } };
+    const done = events.at(-1) as {
+      reason?: unknown;
+      message?: { content?: unknown; stopReason?: unknown };
+    };
     expect(done.reason).toBe("toolUse");
     expect(done.message?.stopReason).toBe("toolUse");
+    expect(done.message?.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "read",
+        arguments: { path: "/tmp/file.txt" },
+      }),
+    ]);
+  });
+
+  it("promotes XML invoke text tool calls that terminate with toolUse", async () => {
+    const rawToolText = [
+      "call",
+      '<invoke name="read">',
+      '<parameter name="path">src/index.ts</parameter>',
+      "</invoke>",
+    ].join("\n");
+    const baseStreamFn: StreamFn = () =>
+      createEventStream([
+        {
+          type: "done",
+          reason: "toolUse",
+          message: {
+            role: "assistant",
+            content: rawToolText,
+            stopReason: "toolUse",
+          },
+        },
+      ]);
+    const wrapped = createPlainTextToolCallCompatWrapper(baseStreamFn);
+    const events: unknown[] = [];
+
+    for await (const event of wrapped(
+      {} as never,
+      { tools: [{ name: "read" }] } as never,
+      {},
+    ) as AsyncIterable<unknown>) {
+      events.push(event);
+    }
+
+    expect(events.map((event) => (event as { type?: string }).type)).toEqual([
+      "toolcall_start",
+      "toolcall_delta",
+      "done",
+    ]);
+    const done = events.at(-1) as {
+      reason?: unknown;
+      message?: { content?: unknown; stopReason?: unknown };
+    };
+    expect(done.reason).toBe("toolUse");
+    expect(done.message?.stopReason).toBe("toolUse");
+    expect(done.message?.content).toEqual([
+      expect.objectContaining({
+        type: "toolCall",
+        name: "read",
+        arguments: { path: "src/index.ts" },
+      }),
+    ]);
   });
 
   it("passes through bracketed text when no configured tool names match", async () => {
@@ -809,6 +869,43 @@ describe("createPlainTextToolCallCompatWrapper", () => {
       } as never);
 
       const event = await nextEvent(iterator, "converted bracketed XML tool call");
+      expect(event.type).toBe("toolcall_start");
+    } finally {
+      source.end();
+      await iterator.return?.();
+    }
+  });
+
+  it("keeps invoke XML parameter tool calls buffered for conversion", async () => {
+    const { source, stream } = createControlledPlainTextToolCallCompatStream();
+    const iterator = (await resolveStream(stream))[Symbol.asyncIterator]();
+    const rawToolText = [
+      "call",
+      '<invoke name="read">',
+      '<parameter name="path">src/index.ts</parameter>',
+      "</invoke>",
+    ].join("\n");
+
+    try {
+      source.push({ type: "start", partial: { content: [] } } as never);
+      expect((await nextEvent(iterator, "start")).type).toBe("start");
+
+      source.push({
+        type: "text_delta",
+        contentIndex: 0,
+        delta: rawToolText,
+      } as never);
+      source.push({
+        type: "done",
+        reason: "toolUse",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: rawToolText }],
+          stopReason: "toolUse",
+        },
+      } as never);
+
+      const event = await nextEvent(iterator, "converted invoke XML tool call");
       expect(event.type).toBe("toolcall_start");
     } finally {
       source.end();

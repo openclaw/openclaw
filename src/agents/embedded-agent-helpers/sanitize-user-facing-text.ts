@@ -424,6 +424,14 @@ export function isLikelyHttpErrorText(raw: string): boolean {
   return HTTP_ERROR_HINTS.some((hint) => message.includes(hint));
 }
 
+function stripPlainTextToolCallBlocksForUserFacingText(text: string): string {
+  const xmlishToolCallIndex = text.search(/<invoke\b|<function=/i);
+  const prefix = xmlishToolCallIndex >= 0 ? text.slice(0, xmlishToolCallIndex).trim() : "";
+  if (prefix && !/\bcall$/i.test(prefix)) {
+    return text;
+  }
+  return stripPlainTextToolCallBlocks(text);
+}
 export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: boolean }): string {
   const raw = coerceChatContentText(text);
   if (!raw) {
@@ -441,7 +449,7 @@ export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: bo
   const withoutInternalTraceLines = errorContext
     ? stripAssistantInternalTraceLines(withoutPlaceholder)
     : withoutPlaceholder;
-  const withoutToolCallBlocks = stripPlainTextToolCallBlocks(
+  const withoutToolCallBlocks = stripPlainTextToolCallBlocksForUserFacingText(
     stripLegacyBracketToolCallBlocks(withoutInternalTraceLines),
   );
   const trimmed = withoutToolCallBlocks.trim();

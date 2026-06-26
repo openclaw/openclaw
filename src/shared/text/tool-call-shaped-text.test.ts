@@ -30,6 +30,14 @@ describe("detectToolCallShapedText", () => {
     });
   });
 
+  it("detects XML invoke tool text", () => {
+    expect(
+      detectToolCallShapedText(
+        'call\n<invoke name="exec">\n<parameter name="command">date</parameter>\n</invoke>',
+      ),
+    ).toEqual({ kind: "xml_tool_call", toolName: "exec" });
+  });
+
   it("detects legacy uppercase TOOL_CALL assistant text", () => {
     expect(
       detectToolCallShapedText(

@@ -98,7 +98,7 @@ function shouldInsertStructuralLineBreak(left: string, right: string): boolean {
   }
   const trimmedLeft = left.trimEnd();
   return (
-    /<parameter=[A-Za-z0-9_.:-]{1,120}>$/iu.test(trimmedLeft) ||
+    /<parameter(?:=|\s+name=["'])[A-Za-z0-9_.:-]{1,120}(?:["']\s*)?>$/iu.test(trimmedLeft) ||
     /^\[[A-Za-z0-9_-]+\]$/u.test(trimmedLeft)
   );
 }
