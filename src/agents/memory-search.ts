@@ -135,6 +135,12 @@ const DEFAULT_REMOTE_BATCH_POLL_INTERVAL_MS = 2_000;
 const DEFAULT_REMOTE_BATCH_TIMEOUT_MINUTES = 60;
 const MAX_REMOTE_BATCH_TIMEOUT_MINUTES = Math.floor(MAX_TIMER_TIMEOUT_MS / 60_000);
 
+type ConfiguredMemoryEmbeddingProvider = {
+  defaultModel?: string;
+  transport?: "local" | "remote";
+  supportsMultimodalEmbeddings?: (params: { model: string }) => boolean;
+};
+
 function resolveRemoteBatchPollIntervalMs(
   overrideValue: number | undefined,
   defaultValue: number | undefined,
@@ -178,10 +184,14 @@ function normalizeSources(
 function getConfiguredMemoryEmbeddingProvider(
   providerId: string,
   cfg: OpenClawConfig,
-): ReturnType<typeof getMemoryEmbeddingProvider> {
+): ConfiguredMemoryEmbeddingProvider | undefined {
   const directAdapter = getMemoryEmbeddingProvider(providerId);
   if (directAdapter) {
     return directAdapter;
+  }
+  const genericAdapter = getEmbeddingProvider(providerId, cfg);
+  if (genericAdapter) {
+    return genericAdapter;
   }
   const providerConfig = findNormalizedProviderValue(cfg.models?.providers, providerId);
   const ownerApi = providerConfig?.api?.trim();
