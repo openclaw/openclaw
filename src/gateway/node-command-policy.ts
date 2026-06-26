@@ -49,6 +49,13 @@ const SMS_DANGEROUS_COMMANDS = ["sms.send", "sms.search"];
 
 const TALK_PTT_COMMANDS = ["talk.ptt.start", "talk.ptt.stop", "talk.ptt.cancel", "talk.ptt.once"];
 
+const OPENPHONE_ANDROID_READ_COMMANDS = [
+  "canvas.snapshot",
+  "openphone.screen.get",
+  "openphone.local.screen_understanding",
+  "openphone.jobs.list",
+];
+
 // iOS nodes don't implement system.run/which, but they do support notifications.
 const IOS_SYSTEM_COMMANDS = [NODE_SYSTEM_NOTIFY_COMMAND];
 
@@ -143,7 +150,7 @@ const DEVICE_FAMILY_TOKEN_RULES: ReadonlyArray<{
   tokens: readonly string[];
 }> = [
   { id: "ios", tokens: ["iphone", "ipad", "ios"] },
-  { id: "android", tokens: ["android"] },
+  { id: "android", tokens: ["android", "openphone"] },
   { id: "macos", tokens: ["mac"] },
   { id: "windows", tokens: ["windows"] },
   { id: "linux", tokens: ["linux"] },
@@ -164,7 +171,7 @@ function platformMatchesDeviceFamily(
     case "ios":
       return family === "" || /^(?:iphone|ipad|ios)$/.test(family);
     case "android":
-      return family === "" || family === "android";
+      return family === "" || /^(?:android|openphone)$/.test(family);
     case "macos":
       return family === "mac";
     case "windows":
@@ -322,6 +329,16 @@ function hasTalkSurface(node?: NodeCommandPolicyNode): boolean {
   );
 }
 
+function isOpenPhoneAndroidNode(node: NodeCommandPolicyNode | undefined): boolean {
+  if (!node) {
+    return false;
+  }
+  return (
+    normalizePlatformId(node.platform, node.deviceFamily) === "android" &&
+    normalizeDeviceMetadataForPolicy(node.deviceFamily) === "openphone"
+  );
+}
+
 function resolveNodeCommandAllowlistInternal(
   cfg: OpenClawConfig,
   node?: NodeCommandPolicyNode,
@@ -334,6 +351,7 @@ function resolveNodeCommandAllowlistInternal(
     includeDesktopHostCommands: options?.includeDesktopHostCommands,
   });
   const talkCommands = hasTalkSurface(node) ? TALK_PTT_COMMANDS : [];
+  const openPhoneCommands = isOpenPhoneAndroidNode(node) ? OPENPHONE_ANDROID_READ_COMMANDS : [];
   const pluginDefaults = listDefaultPluginNodeCommands(platformId);
   const approved = filterApprovedRuntimeCommands({
     platformId,
@@ -345,7 +363,7 @@ function resolveNodeCommandAllowlistInternal(
   // Dangerous plugin commands are excluded from plugin defaults. Explicit
   // gateway.nodes.allowCommands below can still opt them in for operators.
   const allow = new Set(
-    [...base, ...talkCommands, ...pluginDefaults, ...approved, ...extra]
+    [...base, ...talkCommands, ...openPhoneCommands, ...pluginDefaults, ...approved, ...extra]
       .map((cmd) => cmd.trim())
       .filter((cmd) => cmd && !dangerousPluginCommands.has(cmd)),
   );

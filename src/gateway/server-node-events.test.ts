@@ -764,6 +764,122 @@ describe("node exec events", () => {
   });
 });
 
+describe("openphone attention events", () => {
+  beforeEach(() => {
+    resetNodeEventDeduplicationForTests();
+    agentCommandMock.mockClear();
+    canonicalizeSessionEntryAliasesMock.mockClear();
+    loadSessionEntryMock.mockClear();
+    agentCommandMock.mockResolvedValue({ status: "ok" } as never);
+    canonicalizeSessionEntryAliasesMock.mockImplementation(async ({ target, update }) => {
+      const entry = update ? await update(undefined) : undefined;
+      return { canonicalKey: target.canonicalKey, entry };
+    });
+    loadSessionEntryMock.mockImplementation((sessionKey: string) => buildSessionLookup(sessionKey));
+  });
+
+  it("dispatches OpenPhone attention events as node agent runs", async () => {
+    const addChatRun = vi.fn();
+    const nodeSubscribe = vi.fn();
+    const ctx = buildCtx();
+    ctx.addChatRun = addChatRun;
+    ctx.nodeSubscribe = nodeSubscribe;
+
+    const result = await handleNodeEvent(ctx, "pixel-1", {
+      event: "openphone.attention.requested",
+      payloadJSON: JSON.stringify({
+        attention_id: "attn-1",
+        phone_session_id: "phone-sess-1",
+        source: "classic_voice",
+        autonomy: "reviewed",
+        text: "Open settings and show battery usage",
+        include_screen: true,
+        context: {
+          foreground_package: "com.android.launcher3",
+        },
+      }),
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      event: "openphone.attention.requested",
+      handled: true,
+      reason: "dispatched",
+    });
+    expect(loadSessionEntryMock).toHaveBeenCalledWith("openphone:pixel-1:phone-sess-1");
+    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+    expect(nodeSubscribe).toHaveBeenCalledWith("pixel-1", "openphone:pixel-1:phone-sess-1");
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    const opts = mockCallArg(agentCommandMock);
+    expectFields(opts, {
+      sessionKey: "openphone:pixel-1:phone-sess-1",
+      deliver: false,
+      messageChannel: "node",
+      thinking: "low",
+    });
+    const optsRecord = opts as Record<string, unknown>;
+    expect(String(optsRecord.message)).toContain("Open settings and show battery usage");
+    expect(String(optsRecord.message)).toContain("OpenPhone request context:");
+    expect(String(optsRecord.message)).toContain("OpenPhone device-control instructions:");
+    expect(String(optsRecord.message)).toContain('node="pixel-1"');
+    expect(String(optsRecord.message)).toContain('invokeCommand="openphone.screen.get"');
+    expect(String(optsRecord.message)).toContain("Before answering screen/app/UI questions");
+    expectFields(optsRecord.inputProvenance, {
+      kind: "external_user",
+      sourceChannel: "openphone",
+      sourceTool: "gateway.openphone.attention",
+    });
+    expect(addChatRun).toHaveBeenCalledTimes(1);
+    const [runId, runMetadata] = mockCall(addChatRun) ?? [];
+    expect(runId).toBe(optsRecord.runId);
+    expectFields(runMetadata, {
+      sessionKey: "openphone:pixel-1:phone-sess-1",
+      clientRunId: "openphone-attn-1",
+    });
+  });
+
+  it("dedupes repeated OpenPhone attention ids from the same node", async () => {
+    const ctx = buildCtx();
+    const payloadJSON = JSON.stringify({
+      attention_id: "attn-dupe",
+      phone_session_id: "phone-sess-dupe",
+      text: "Summarize my screen",
+    });
+
+    await handleNodeEvent(ctx, "pixel-dupe", {
+      event: "openphone.attention.requested",
+      payloadJSON,
+    });
+    const result = await handleNodeEvent(ctx, "pixel-dupe", {
+      event: "openphone.attention.requested",
+      payloadJSON,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      event: "openphone.attention.requested",
+      handled: true,
+      reason: "duplicate_attention",
+    });
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
+    expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores OpenPhone attention events without text", async () => {
+    const ctx = buildCtx();
+    await handleNodeEvent(ctx, "pixel-empty", {
+      event: "openphone.attention.requested",
+      payloadJSON: JSON.stringify({
+        attention_id: "attn-empty",
+        phone_session_id: "phone-sess-empty",
+      }),
+    });
+
+    expect(agentCommandMock).not.toHaveBeenCalled();
+    expect(canonicalizeSessionEntryAliasesMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("voice transcript events", () => {
   beforeEach(() => {
     agentCommandMock.mockClear();

@@ -51,12 +51,15 @@ const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
 const MAX_NOTIFICATION_EVENT_TEXT_CHARS = 120;
 const VOICE_TRANSCRIPT_DEDUPE_WINDOW_MS = 1500;
 const MAX_RECENT_VOICE_TRANSCRIPTS = 200;
+const OPENPHONE_ATTENTION_DEDUPE_WINDOW_MS = 10 * 60 * 1000;
+const MAX_RECENT_OPENPHONE_ATTENTIONS = 1024;
 const EXEC_FINISHED_RUN_DEDUPE_WINDOW_MS = 10 * 60 * 1000;
 const MAX_RECENT_EXEC_FINISHED_RUNS = 2000;
 const NODE_PRESENCE_PERSIST_MIN_INTERVAL_MS = 60_000;
 const MAX_RECENT_NODE_PRESENCE_KEYS = 1024;
 
 const recentVoiceTranscripts = new Map<string, { fingerprint: string; ts: number }>();
+const recentOpenPhoneAttentions = new Map<string, number>();
 const recentExecFinishedRuns = new Map<string, number>();
 const recentNodePresencePersistAt = new Map<string, number>();
 
@@ -81,6 +84,137 @@ function dispatchNodeAgentCommand(
   void agentCommandFromIngress(input, defaultRuntime, ctx.deps).catch((err: unknown) => {
     ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
   });
+}
+
+function resolveOpenPhoneAttentionSessionKey(
+  nodeId: string,
+  obj: Record<string, unknown>,
+): string {
+  const explicit =
+    normalizeOptionalString(obj.sessionKey) ?? normalizeOptionalString(obj.session_key);
+  if (explicit) {
+    return explicit;
+  }
+  const phoneSessionId =
+    normalizeOptionalString(obj.phone_session_id) ??
+    normalizeOptionalString(obj.phoneSessionId) ??
+    normalizeOptionalString(obj.sessionId);
+  return phoneSessionId ? `openphone:${nodeId}:${phoneSessionId}` : `openphone:${nodeId}`;
+}
+
+function resolveOpenPhoneAttentionId(obj: Record<string, unknown>): string {
+  return (
+    normalizeOptionalString(obj.attention_id) ??
+    normalizeOptionalString(obj.attentionId) ??
+    normalizeOptionalString(obj.eventId) ??
+    ""
+  );
+}
+
+function shouldDropDuplicateOpenPhoneAttention(params: {
+  nodeId: string;
+  attentionId: string;
+  now: number;
+}): boolean {
+  if (!params.attentionId) {
+    return false;
+  }
+  const fingerprint = `${params.nodeId}:${params.attentionId}`;
+  const previousTs = recentOpenPhoneAttentions.get(fingerprint);
+  if (
+    typeof previousTs === "number" &&
+    params.now - previousTs <= OPENPHONE_ATTENTION_DEDUPE_WINDOW_MS
+  ) {
+    return true;
+  }
+
+  recentOpenPhoneAttentions.set(fingerprint, params.now);
+  pruneBoundedTimestampMap(recentOpenPhoneAttentions, {
+    now: params.now,
+    ttlMs: OPENPHONE_ATTENTION_DEDUPE_WINDOW_MS,
+    maxEntries: MAX_RECENT_OPENPHONE_ATTENTIONS,
+  });
+  return false;
+}
+
+function compactOpenPhoneContextForPrompt(raw: unknown): string {
+  if (typeof raw !== "object" || raw === null) {
+    return "";
+  }
+  let encoded = "";
+  try {
+    encoded = JSON.stringify(raw);
+  } catch {
+    return "";
+  }
+  if (!encoded || encoded === "{}") {
+    return "";
+  }
+  return encoded.length <= 4000 ? encoded : `${encoded.slice(0, 3999)}…`;
+}
+
+function buildOpenPhoneAttentionMessage(params: {
+  nodeId: string;
+  text: string;
+  sessionKey: string;
+  obj: Record<string, unknown>;
+}): string {
+  const phoneSessionId =
+    normalizeOptionalString(params.obj.phone_session_id) ??
+    normalizeOptionalString(params.obj.phoneSessionId) ??
+    normalizeOptionalString(params.obj.sessionId) ??
+    "";
+  const source = normalizeLowercaseStringOrEmpty(params.obj.source) || "openphone";
+  const autonomy = normalizeLowercaseStringOrEmpty(params.obj.autonomy) || "";
+  const context = compactOpenPhoneContextForPrompt(params.obj.context);
+  const requestContext: Record<string, unknown> = {
+    nodeId: params.nodeId,
+    sessionKey: params.sessionKey,
+    source,
+  };
+  if (phoneSessionId) {
+    requestContext.phoneSessionId = phoneSessionId;
+  }
+  if (autonomy) {
+    requestContext.autonomy = autonomy;
+  }
+  if (params.obj.include_screen === true) {
+    requestContext.includeScreen = true;
+  }
+  if (context) {
+    requestContext.contextJson = context;
+  }
+  const instructions = buildOpenPhoneAttentionToolingInstructions({
+    nodeId: params.nodeId,
+    includeScreen: params.obj.include_screen === true,
+  });
+  return `${params.text}\n\nOpenPhone request context:\n${JSON.stringify(requestContext)}\n\n${instructions}`;
+}
+
+function buildOpenPhoneAttentionToolingInstructions(params: {
+  nodeId: string;
+  includeScreen: boolean;
+}): string {
+  const screenInvokeParams = JSON.stringify({
+    include_screenshot: false,
+    include_activity: true,
+    include_ui_tree: true,
+    reason: "answer the OpenPhone user from the current phone screen",
+  });
+  const lines = [
+    "OpenPhone device-control instructions:",
+    `- The user is asking from a live OpenPhone Android node. Target node: ${params.nodeId}.`,
+    "- Use the `nodes` tool to inspect or control this phone. Do not claim you cannot see the phone when the relevant node tool is available.",
+    `- To read the current phone screen, call \`nodes\` with action=\"invoke\", node=\"${params.nodeId}\", invokeCommand=\"openphone.screen.get\", invokeParamsJson=${JSON.stringify(screenInvokeParams)}.`,
+    "- For phone actions, call `nodes` with action=\"invoke\" and the matching OpenPhone command, for example openphone.url.open, openphone.app.open, openphone.ui.tap, openphone.ui.type_text, or notifications.open.",
+    "- Mutating phone actions may require local user confirmation on the Android device; wait for the tool result and report whether it was approved, denied, or completed.",
+  ];
+  if (params.includeScreen) {
+    lines.push(
+      "- This request asked to include the screen. Before answering screen/app/UI questions, read the phone screen with openphone.screen.get.",
+    );
+  }
+  return lines.join("\n");
 }
 
 function resolveVoiceTranscriptFingerprint(obj: Record<string, unknown>, text: string): string {
@@ -219,6 +353,7 @@ function pruneBoundedTimestampMap(
 
 export function resetNodeEventDeduplicationForTests() {
   recentVoiceTranscripts.clear();
+  recentOpenPhoneAttentions.clear();
   recentExecFinishedRuns.clear();
   recentNodePresencePersistAt.clear();
 }
@@ -383,6 +518,74 @@ export const handleNodeEvent = async (
   opts?: { connId?: string; deviceId?: string },
 ): Promise<NodeEventHandleResult | undefined> => {
   switch (evt.event) {
+    case "openphone.attention.requested": {
+      const obj = parsePayloadObject(evt.payloadJSON);
+      if (!obj) {
+        return undefined;
+      }
+      const text =
+        normalizeOptionalString(obj.text) ?? normalizeOptionalString(obj.message) ?? "";
+      if (!text || text.length > 20_000) {
+        return undefined;
+      }
+      const attentionId = resolveOpenPhoneAttentionId(obj);
+      const now = Date.now();
+      if (
+        shouldDropDuplicateOpenPhoneAttention({
+          nodeId,
+          attentionId,
+          now,
+        })
+      ) {
+        return {
+          ok: true,
+          event: evt.event,
+          handled: true,
+          reason: "duplicate_attention",
+        };
+      }
+
+      const sessionKeyRaw = resolveOpenPhoneAttentionSessionKey(nodeId, obj);
+      const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKeyRaw);
+      const sessionId = entry?.sessionId ?? randomUUID();
+      await touchSessionStore({
+        storePath,
+        canonicalKey,
+        storeKeys,
+        entry,
+        sessionId,
+        now,
+      });
+      const runId = randomUUID();
+      const clientRunId = attentionId ? `openphone-${attentionId}` : `openphone-${randomUUID()}`;
+      ctx.nodeSubscribe(nodeId, canonicalKey);
+      ctx.addChatRun(runId, {
+        sessionKey: canonicalKey,
+        clientRunId,
+      });
+
+      dispatchNodeAgentCommand(ctx, nodeId, {
+        runId,
+        message: buildOpenPhoneAttentionMessage({
+          nodeId,
+          text,
+          sessionKey: canonicalKey,
+          obj,
+        }),
+        sessionId,
+        sessionKey: canonicalKey,
+        thinking: "low",
+        deliver: false,
+        messageChannel: "node",
+        inputProvenance: {
+          kind: "external_user",
+          sourceChannel: "openphone",
+          sourceTool: "gateway.openphone.attention",
+        },
+        allowModelOverride: false,
+      });
+      return { ok: true, event: evt.event, handled: true, reason: "dispatched" };
+    }
     case "voice.transcript": {
       const obj = parsePayloadObject(evt.payloadJSON);
       if (!obj) {

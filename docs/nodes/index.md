@@ -211,6 +211,15 @@ Dangerous or privacy-heavy commands such as `camera.snap`, `camera.clip`, and
 `gateway.nodes.allowCommands`. `gateway.nodes.denyCommands` always wins over
 defaults and extra allowlist entries.
 
+OpenPhone Android nodes identify as `platform: "android"` with
+`deviceFamily: "OpenPhone"`. The gateway treats them as Android nodes and
+allows read-only OpenPhone commands such as `openphone.screen.get`,
+`openphone.local.screen_understanding`, and `openphone.jobs.list` when the node
+declares them. Phone-mutating or privacy-heavy commands, including UI input,
+app/url opens, calendar writes, and SMS search/send, still require explicit
+`gateway.nodes.allowCommands` opt-in and remain subject to the phone's local
+confirmation and policy checks.
+
 Plugin-owned node commands can add a Gateway node-invoke policy. That policy
 runs after the allowlist check and before forwarding to the node, so raw
 `node.invoke`, CLI helpers, and dedicated agent tools share the same plugin
@@ -219,6 +228,31 @@ permission boundary. Dangerous plugin node commands still require explicit
 
 After a node changes its declared command list, reject the old device pairing
 and approve the new request so the gateway stores the updated command snapshot.
+
+### OpenPhone attention events
+
+OpenPhone Android nodes can ask the gateway agent to handle a phone-originated
+task by sending:
+
+```json
+{
+  "event": "openphone.attention.requested",
+  "payload": {
+    "attention_id": "attn_...",
+    "phone_session_id": "phone_sess_...",
+    "source": "chat",
+    "text": "Open settings and show me battery usage",
+    "autonomy": "reviewed",
+    "include_screen": true
+  }
+}
+```
+
+The gateway routes this event into an agent run using the OpenPhone node
+session key. If `sessionKey` is omitted, the gateway uses
+`openphone:<nodeId>:<phone_session_id>` when `phone_session_id` is present, or
+`openphone:<nodeId>` otherwise. The node can subscribe to the same session with
+`chat.subscribe` to receive existing `chat` and `agent` session fanout events.
 
 ## Config (`openclaw.json`)
 
@@ -235,7 +269,7 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
         autoApproveCidrs: ["192.168.1.0/24"],
       },
       // Opt into dangerous/privacy-heavy node commands (camera.snap, etc.).
-      allowCommands: ["camera.snap", "screen.record"],
+      allowCommands: ["camera.snap", "screen.record", "openphone.ui.tap"],
       // Block exact command names even if defaults or allowCommands include them.
       denyCommands: ["camera.clip"],
     },

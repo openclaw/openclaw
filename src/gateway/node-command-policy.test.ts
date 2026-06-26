@@ -176,6 +176,44 @@ describe("gateway/node-command-policy", () => {
     expect(macAllowlist.has("screen.snapshot")).toBe(false);
   });
 
+  it("recognizes OpenPhone Android nodes and allows read-only OpenPhone commands", () => {
+    const cfg = {} as OpenClawConfig;
+    const allowlist = resolveNodeCommandAllowlist(cfg, {
+      platform: "android",
+      deviceFamily: "OpenPhone",
+      commands: [
+        "canvas.snapshot",
+        "openphone.screen.get",
+        "openphone.jobs.list",
+        "openphone.ui.tap",
+        "sms.search",
+      ],
+    });
+
+    expect(allowlist.has("device.info")).toBe(true);
+    expect(allowlist.has("device.apps")).toBe(true);
+    expect(allowlist.has("canvas.snapshot")).toBe(true);
+    expect(allowlist.has("openphone.screen.get")).toBe(true);
+    expect(allowlist.has("openphone.local.screen_understanding")).toBe(true);
+    expect(allowlist.has("openphone.jobs.list")).toBe(true);
+    expect(allowlist.has("openphone.ui.tap")).toBe(false);
+    expect(allowlist.has("sms.search")).toBe(false);
+    expect(
+      isNodeCommandAllowed({
+        command: "openphone.screen.get",
+        declaredCommands: ["openphone.screen.get"],
+        allowlist,
+      }),
+    ).toEqual({ ok: true });
+    expect(
+      isNodeCommandAllowed({
+        command: "canvas.snapshot",
+        declaredCommands: ["canvas.snapshot"],
+        allowlist,
+      }),
+    ).toEqual({ ok: true });
+  });
+
   it("keeps explicitly approved host commands for desktop platforms", () => {
     const cfg = {} as OpenClawConfig;
     const cases = [
