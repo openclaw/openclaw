@@ -111,11 +111,20 @@ export async function listMemoryWikiImportRuns(
     .map((record) => normalizeImportRunSummary(record))
     .filter((entry): entry is MemoryWikiImportRunSummary => entry !== null)
     .toSorted((left, right) => right.appliedAt.localeCompare(left.appliedAt));
+  let activeRuns = 0;
+  let rolledBackRuns = 0;
+  for (const run of runs) {
+    if (run.status === "applied") {
+      activeRuns += 1;
+    } else if (run.status === "rolled_back") {
+      rolledBackRuns += 1;
+    }
+  }
 
   return {
     runs: runs.slice(0, limit),
     totalRuns: runs.length,
-    activeRuns: runs.filter((entry) => entry.status === "applied").length,
-    rolledBackRuns: runs.filter((entry) => entry.status === "rolled_back").length,
+    activeRuns,
+    rolledBackRuns,
   };
 }
