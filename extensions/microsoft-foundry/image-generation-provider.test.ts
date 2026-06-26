@@ -49,15 +49,22 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
-  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  createProviderOperationDeadline: createProviderOperationDeadlineMock,
-  postJsonRequest: postJsonRequestMock,
-  postMultipartRequest: postMultipartRequestMock,
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-  resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
-  sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
-}));
+// Transport helpers are mocked per-test, but readProviderJsonResponse is kept
+// REAL (via importActual) so the byte-bounded reader actually caps oversized
+// inline MAI image JSON instead of a stub.
+vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
+  const actual = await importActual<typeof import("openclaw/plugin-sdk/provider-http")>();
+  return {
+    readProviderJsonResponse: actual.readProviderJsonResponse,
+    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+    createProviderOperationDeadline: createProviderOperationDeadlineMock,
+    postJsonRequest: postJsonRequestMock,
+    postMultipartRequest: postMultipartRequestMock,
+    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+    resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
+    sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
+  };
+});
 
 vi.mock("./runtime.js", () => ({
   prepareFoundryRuntimeAuth: prepareFoundryRuntimeAuthMock,
@@ -105,6 +112,36 @@ function buildConfig(
 function releasedJson(payload: unknown) {
   return {
     response: Response.json(payload),
+    release: vi.fn(async () => {}),
+  };
+}
+
+// The image-sized JSON cap (64 MiB) matches the source constant
+// MAX_IMAGE_GENERATION_JSON_BYTES.
+const IMAGE_JSON_CAP_BYTES = 64 * 1024 * 1024;
+
+// Builds a JSON body larger than the image cap so the bounded reader cancels the
+// stream mid-flight instead of buffering the whole advertised payload.
+function releasedOversizedJson() {
+  const ONE_MIB = 1024 * 1024;
+  const TOTAL_CHUNKS = 65; // > 64 MiB cap.
+  const chunk = new Uint8Array(ONE_MIB);
+  let pulled = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulled >= TOTAL_CHUNKS) {
+        controller.close();
+        return;
+      }
+      pulled += 1;
+      controller.enqueue(chunk);
+    },
+  });
+  return {
+    response: new Response(body, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
     release: vi.fn(async () => {}),
   };
 }
@@ -225,6 +262,38 @@ describe("microsoft foundry image generation provider", () => {
     expect(result.model).toBe("image-deployment");
     expect(result.images[0]?.buffer.toString()).toBe("png");
     expect(result.images[0]?.mimeType).toBe("image/png");
+  });
+
+  it("parses a valid inline MAI image response within the image-sized JSON cap", async () => {
+    // ~4 MiB of base64 image data: above bare metadata but well under the 64 MiB
+    // image cap.
+    const bigBase64 = Buffer.alloc(4 * 1024 * 1024, "a").toString("base64");
+    postJsonRequestMock.mockResolvedValue(releasedJson({ data: [{ b64_json: bigBase64 }] }));
+    const provider = buildMicrosoftFoundryImageGenerationProvider();
+
+    const result = await provider.generateImage({
+      provider: PROVIDER_ID,
+      model: "image-deployment",
+      prompt: "large valid render",
+      cfg: buildConfig(),
+    });
+
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0]?.buffer.length).toBe(4 * 1024 * 1024);
+  });
+
+  it("rejects MAI image responses that exceed the image-sized JSON cap", async () => {
+    postJsonRequestMock.mockResolvedValue(releasedOversizedJson());
+    const provider = buildMicrosoftFoundryImageGenerationProvider();
+
+    await expect(
+      provider.generateImage({
+        provider: PROVIDER_ID,
+        model: "image-deployment",
+        prompt: "oversized render",
+        cfg: buildConfig(),
+      }),
+    ).rejects.toThrow(`exceeds ${IMAGE_JSON_CAP_BYTES} bytes`);
   });
 
   it("uses AZURE_OPENAI_ENDPOINT when env API-key auth has no configured base URL", async () => {

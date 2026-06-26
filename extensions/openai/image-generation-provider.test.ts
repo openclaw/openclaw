@@ -60,13 +60,20 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
-  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  postJsonRequest: postJsonRequestMock,
-  postMultipartRequest: postMultipartRequestMock,
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-  sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
-}));
+// Transport helpers are mocked per-test, but readProviderJsonResponse is kept
+// REAL (via importActual) so the byte-bounded reader actually caps oversized
+// inline image JSON instead of a stub.
+vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
+  const actual = await importActual<typeof import("openclaw/plugin-sdk/provider-http")>();
+  return {
+    readProviderJsonResponse: actual.readProviderJsonResponse,
+    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+    postJsonRequest: postJsonRequestMock,
+    postMultipartRequest: postMultipartRequestMock,
+    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+    sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
+  };
+});
 
 vi.mock("openclaw/plugin-sdk/logging-core", () => ({
   createSubsystemLogger: vi.fn(() => ({
@@ -77,18 +84,57 @@ vi.mock("openclaw/plugin-sdk/logging-core", () => ({
   })),
 }));
 
-function mockGeneratedPngResponse() {
-  const response = {
-    json: async () => ({
-      data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
+// Image success responses are now read through the byte-bounded reader, so the
+// mocked responses must expose a real readable body (not just a json() shim).
+function streamedJsonResponse(payload: unknown): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
+        controller.close();
+      },
     }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
+// The image-sized JSON cap (64 MiB) matches the source constant
+// MAX_IMAGE_GENERATION_JSON_BYTES.
+const IMAGE_JSON_CAP_BYTES = 64 * 1024 * 1024;
+
+// Builds a JSON body larger than the image cap so the bounded reader cancels the
+// stream mid-flight instead of buffering the whole advertised payload.
+function makeOversizedJsonResponse(): Response {
+  const ONE_MIB = 1024 * 1024;
+  const TOTAL_CHUNKS = 65; // > 64 MiB cap.
+  const chunk = new Uint8Array(ONE_MIB);
+  let pulled = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulled >= TOTAL_CHUNKS) {
+        controller.close();
+        return;
+      }
+      pulled += 1;
+      controller.enqueue(chunk);
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function mockGeneratedPngResponse() {
+  const payload = {
+    data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
   };
   postJsonRequestMock.mockResolvedValue({
-    response,
+    response: streamedJsonResponse(payload),
     release: vi.fn(async () => {}),
   });
   postMultipartRequestMock.mockResolvedValue({
-    response,
+    response: streamedJsonResponse(payload),
     release: vi.fn(async () => {}),
   });
 }
@@ -579,7 +625,7 @@ describe("openai image generation provider", () => {
 
   it("wraps malformed successful OpenAI image responses", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: { json: async () => ({ data: { b64_json: "not-an-array" } }) },
+      response: streamedJsonResponse({ data: { b64_json: "not-an-array" } }),
       release: vi.fn(async () => {}),
     });
 
@@ -592,6 +638,44 @@ describe("openai image generation provider", () => {
         cfg: {},
       }),
     ).rejects.toThrow("OpenAI image generation response malformed");
+  });
+
+  it("parses a valid inline OpenAI image response within the image-sized JSON cap", async () => {
+    // ~4 MiB of base64 image data: above bare metadata but well under the 64 MiB
+    // image cap (would also exceed the generic 16 MiB default if combined).
+    const bigBase64 = Buffer.alloc(4 * 1024 * 1024, "a").toString("base64");
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({ data: [{ b64_json: bigBase64 }] }),
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openai",
+      model: "gpt-image-2",
+      prompt: "large valid image",
+      cfg: {},
+    });
+
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0]?.buffer.length).toBe(4 * 1024 * 1024);
+  });
+
+  it("rejects OpenAI image responses that exceed the image-sized JSON cap", async () => {
+    postJsonRequestMock.mockResolvedValue({
+      response: makeOversizedJsonResponse(),
+      release: vi.fn(async () => {}),
+    });
+
+    const provider = buildOpenAIImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openai",
+        model: "gpt-image-2",
+        prompt: "oversized image",
+        cfg: {},
+      }),
+    ).rejects.toThrow(`exceeds ${IMAGE_JSON_CAP_BYTES} bytes`);
   });
 
   it("forwards generation count and custom size overrides", async () => {

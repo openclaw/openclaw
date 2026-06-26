@@ -7,6 +7,7 @@ import {
   createProviderOperationDeadline,
   postJsonRequest,
   postMultipartRequest,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
@@ -24,6 +25,13 @@ import type {
 // Factory for providers that expose OpenAI-style /images/generations and
 // /images/edits endpoints while still allowing provider-specific bodies.
 type ModelProviderConfig = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
+
+// Image success responses carry inline base64 (`b64_json`) payloads and these
+// providers allow multiple results / high-resolution outputs, so the generic
+// 16 MiB provider JSON cap would reject otherwise-valid responses. Use an
+// image-sized cap that matches the OpenAI Codex image read budget
+// (`MAX_CODEX_IMAGE_SSE_BYTES` / `MAX_CODEX_IMAGE_BASE64_CHARS`).
+const IMAGE_GENERATION_JSON_RESPONSE_MAX_BYTES = 64 * 1024 * 1024;
 
 /** OpenAI-compatible image endpoint mode. */
 export type OpenAiCompatibleImageRequestMode = "generate" | "edit";
@@ -269,7 +277,12 @@ export function createOpenAiCompatibleImageGenerationProvider(
             ? (options.failureLabels?.edit ?? `${options.label} image edit failed`)
             : (options.failureLabels?.generate ?? `${options.label} image generation failed`),
         );
-        const images = parseOpenAiCompatibleImageResponse(await response.json(), {
+        const responseBody = await readProviderJsonResponse(
+          response,
+          mode === "edit" ? `${options.label} image edit` : `${options.label} image generation`,
+          { maxBytes: IMAGE_GENERATION_JSON_RESPONSE_MAX_BYTES },
+        );
+        const images = parseOpenAiCompatibleImageResponse(responseBody, {
           ...options.response,
           malformedResponseError:
             mode === "edit"

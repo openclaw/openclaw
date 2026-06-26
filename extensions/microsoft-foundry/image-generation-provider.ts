@@ -18,6 +18,7 @@ import {
   createProviderOperationDeadline,
   postJsonRequest,
   postMultipartRequest,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
   resolveProviderOperationTimeoutMs,
   sanitizeConfiguredModelProviderRequest,
@@ -36,6 +37,10 @@ import {
 } from "./shared.js";
 
 const DEFAULT_TIMEOUT_MS = 600_000;
+// MAI image responses return inline base64 image data, which can exceed the
+// generic 16 MiB provider JSON cap for multi-image / high-resolution outputs.
+// Match the OpenAI Codex image read budget so valid responses still parse.
+const MAX_IMAGE_GENERATION_JSON_BYTES = 64 * 1024 * 1024;
 const DEFAULT_IMAGE_SIZE = { width: 1024, height: 1024 };
 const MAI_MIN_IMAGE_SIDE_PX = 768;
 const MAI_MAX_IMAGE_PIXELS = 1_048_576;
@@ -368,7 +373,12 @@ export function buildMicrosoftFoundryImageGenerationProvider(): ImageGenerationP
       try {
         await assertOkOrThrowHttpError(response, `${label} failed`);
         return {
-          images: parseMaiImageResponse(await response.json(), label),
+          images: parseMaiImageResponse(
+            await readProviderJsonResponse(response, label, {
+              maxBytes: MAX_IMAGE_GENERATION_JSON_BYTES,
+            }),
+            label,
+          ),
           model,
         };
       } finally {

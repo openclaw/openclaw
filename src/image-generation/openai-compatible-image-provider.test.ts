@@ -51,15 +51,63 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", () => ({
-  assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
-  createProviderOperationDeadline: createProviderOperationDeadlineMock,
-  postJsonRequest: postJsonRequestMock,
-  postMultipartRequest: postMultipartRequestMock,
-  resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
-  resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
-  sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
-}));
+// The transport helpers are mocked so each test injects its own response, but
+// readProviderJsonResponse is kept REAL (via importActual) so the byte-bounded
+// reader actually streams and caps oversized inline image JSON under test.
+vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
+  const actual = await importActual<typeof import("openclaw/plugin-sdk/provider-http")>();
+  return {
+    readProviderJsonResponse: actual.readProviderJsonResponse,
+    assertOkOrThrowHttpError: assertOkOrThrowHttpErrorMock,
+    createProviderOperationDeadline: createProviderOperationDeadlineMock,
+    postJsonRequest: postJsonRequestMock,
+    postMultipartRequest: postMultipartRequestMock,
+    resolveProviderHttpRequestConfig: resolveProviderHttpRequestConfigMock,
+    resolveProviderOperationTimeoutMs: resolveProviderOperationTimeoutMsMock,
+    sanitizeConfiguredModelProviderRequest: sanitizeConfiguredModelProviderRequestMock,
+  };
+});
+
+// Image success responses are now read through the byte-bounded reader, so the
+// mocked responses must expose a real readable body (not just a json() shim).
+function streamedJsonResponse(payload: unknown): Response {
+  return new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode(JSON.stringify(payload)));
+        controller.close();
+      },
+    }),
+    { status: 200, headers: { "content-type": "application/json" } },
+  );
+}
+
+// The image-sized JSON cap (64 MiB) matches the source constant
+// IMAGE_GENERATION_JSON_RESPONSE_MAX_BYTES.
+const IMAGE_JSON_CAP_BYTES = 64 * 1024 * 1024;
+
+// Builds a JSON body larger than the image cap so the bounded reader cancels the
+// stream mid-flight instead of buffering the whole advertised payload.
+function makeOversizedJsonResponse(): Response {
+  const ONE_MIB = 1024 * 1024;
+  const TOTAL_CHUNKS = 65; // > 64 MiB cap.
+  const chunk = new Uint8Array(ONE_MIB);
+  let pulled = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulled >= TOTAL_CHUNKS) {
+        controller.close();
+        return;
+      }
+      pulled += 1;
+      controller.enqueue(chunk);
+    },
+  });
+  return new Response(body, {
+    status: 200,
+    headers: { "content-type": "application/json" },
+  });
+}
 
 function requireFirstRequestHeaders(mock: ReturnType<typeof vi.fn>): Headers {
   const [call] = mock.mock.calls;
@@ -138,8 +186,11 @@ function mockGeneratedResponse() {
       },
     ],
   };
-  postJsonRequestMock.mockResolvedValue({ response: { json: async () => payload }, release });
-  postMultipartRequestMock.mockResolvedValue({ response: { json: async () => payload }, release });
+  postJsonRequestMock.mockResolvedValue({ response: streamedJsonResponse(payload), release });
+  postMultipartRequestMock.mockResolvedValue({
+    response: streamedJsonResponse(payload),
+    release,
+  });
   return release;
 }
 
@@ -250,7 +301,7 @@ describe("OpenAI-compatible image provider helper", () => {
 
   it("honors default operation timeouts and empty-response errors", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: { json: async () => ({ data: [] }) },
+      response: streamedJsonResponse({ data: [] }),
       release: vi.fn(async () => {}),
     });
     const provider = createProvider({
@@ -282,7 +333,7 @@ describe("OpenAI-compatible image provider helper", () => {
 
   it("wraps malformed successful image responses with provider-owned errors", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: { json: async () => ({ data: { b64_json: "not-an-array" } }) },
+      response: streamedJsonResponse({ data: { b64_json: "not-an-array" } }),
       release: vi.fn(async () => {}),
     });
     const provider = createProvider();
@@ -295,5 +346,46 @@ describe("OpenAI-compatible image provider helper", () => {
         cfg: {} as never,
       }),
     ).rejects.toThrow("Sample image generation response malformed");
+  });
+
+  it("parses a valid inline image response within the image-sized JSON cap", async () => {
+    // ~4 MiB of base64 image data: above the bare metadata size but well under
+    // the 64 MiB image cap (and would also pass the generic 16 MiB default).
+    const bigBase64 = Buffer.alloc(4 * 1024 * 1024, "a").toString("base64");
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: streamedJsonResponse({ data: [{ b64_json: bigBase64 }] }),
+      release,
+    });
+    const provider = createProvider();
+
+    const result = await provider.generateImage({
+      provider: "sample",
+      model: "sample-image",
+      prompt: "large valid image",
+      cfg: {} as never,
+    });
+
+    expect(result.images).toHaveLength(1);
+    expect(result.images[0]?.buffer.length).toBe(4 * 1024 * 1024);
+    expect(release).toHaveBeenCalledOnce();
+  });
+
+  it("rejects inline image responses that exceed the image-sized JSON cap", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: makeOversizedJsonResponse(),
+      release,
+    });
+    const provider = createProvider();
+
+    await expect(
+      provider.generateImage({
+        provider: "sample",
+        model: "sample-image",
+        prompt: "oversized image",
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow(`exceeds ${IMAGE_JSON_CAP_BYTES} bytes`);
   });
 });

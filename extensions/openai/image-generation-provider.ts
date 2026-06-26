@@ -24,6 +24,7 @@ import {
   assertOkOrThrowHttpError,
   postJsonRequest,
   postMultipartRequest,
+  readProviderJsonResponse,
   resolveProviderHttpRequestConfig,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
@@ -61,6 +62,10 @@ const OPENAI_MAX_IMAGE_RESULTS = 4;
 const MAX_CODEX_IMAGE_SSE_BYTES = 64 * 1024 * 1024;
 const MAX_CODEX_IMAGE_SSE_EVENTS = 512;
 const MAX_CODEX_IMAGE_BASE64_CHARS = 64 * 1024 * 1024;
+// Inline `b64_json` image responses (up to OPENAI_MAX_IMAGE_RESULTS results at
+// high resolution) can exceed the generic 16 MiB provider JSON cap, so the
+// success-path JSON read uses the same image budget as the Codex image paths.
+const MAX_IMAGE_GENERATION_JSON_BYTES = 64 * 1024 * 1024;
 const LOG_VALUE_MAX_CHARS = 256;
 const MOCK_OPENAI_PROVIDER_ID = "mock-openai";
 const OPENAI_OUTPUT_FORMATS = ["png", "jpeg", "webp"] as const;
@@ -1012,7 +1017,11 @@ export function buildOpenAIImageGenerationProvider(): ImageGenerationProvider {
           isEdit ? "OpenAI image edit failed" : "OpenAI image generation failed",
         );
 
-        const data = await response.json();
+        const data = await readProviderJsonResponse(
+          response,
+          isEdit ? "OpenAI image edit" : "OpenAI image generation",
+          { maxBytes: MAX_IMAGE_GENERATION_JSON_BYTES },
+        );
         const output = resolveOutputMime(req.outputFormat);
         const images = parseOpenAiCompatibleImageResponse(data, {
           defaultMimeType: output.mimeType,
