@@ -119,26 +119,29 @@ function firstRuntimeParityScenario() {
 
 describe("qa agentic parity report", () => {
   it("computes first-wave parity metrics from suite summaries", () => {
-    const summary: QaParitySuiteSummary = {
-      scenarios: [
-        { name: "Approval turn tool followthrough", status: "pass" },
-        {
-          name: "Compaction retry after mutating tool",
-          status: "fail",
-          details: "incomplete turn detected",
-        },
-      ],
-    };
+    const summary = JSON.parse(
+      JSON.stringify({
+        scenarios: [
+          { name: "Approval turn tool followthrough", status: "pass" },
+          {
+            name: "Compaction retry after mutating tool",
+            status: "fail",
+            details: "incomplete turn detected",
+          },
+          { name: "Model switch with tool continuity", status: "unknown" },
+        ],
+      }),
+    ) as QaParitySuiteSummary;
 
     expect(computeQaAgenticParityMetrics(summary)).toEqual({
-      totalScenarios: 2,
+      totalScenarios: 3,
       passedScenarios: 1,
-      failedScenarios: 1,
-      completionRate: 0.5,
+      failedScenarios: 2,
+      completionRate: 1 / 3,
       unintendedStopCount: 1,
-      unintendedStopRate: 0.5,
+      unintendedStopRate: 1 / 3,
       validToolCallCount: 1,
-      validToolCallRate: 0.5,
+      validToolCallRate: 1 / 3,
       fakeSuccessCount: 0,
     });
   });

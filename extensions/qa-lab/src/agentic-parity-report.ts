@@ -195,8 +195,15 @@ export function computeQaAgenticParityMetrics(
     QA_AGENTIC_PARITY_TOOL_BACKED_SCENARIO_TITLES,
   );
   const totalScenarios = scenarios.length;
-  const passedScenarios = scenarios.filter((scenario) => scenario.status === "pass").length;
-  const failedScenarios = scenarios.filter((scenario) => scenario.status === "fail").length;
+  let passedScenarios = 0;
+  let failedScenarios = 0;
+  for (const scenario of scenarios) {
+    if (scenario.status === "pass") {
+      passedScenarios += 1;
+    } else if (scenario.status === "fail") {
+      failedScenarios += 1;
+    }
+  }
   const unintendedStopCount = scenarios.filter(
     (scenario) =>
       scenario.status !== "pass" && scenarioHasPattern(scenario, UNINTENDED_STOP_PATTERNS),
