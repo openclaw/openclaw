@@ -47,9 +47,8 @@ After applying or updating a host agent runtime boundary:
 
 1. Confirm the host-level entrypoint exits non-zero with the refusal message.
 2. Confirm `openclaw gateway status` shows the Gateway runtime is running and
-   healthy.
-3. Confirm `openclaw agents list` returns expected agents from the managed
-   runtime.
+   healthy. Use `--require-rpc` for a stronger read-scope probe.
+3. Confirm `openclaw agents list` returns the expected configured agents.
 4. Confirm no stale host-level agent processes remain after cleanup.
 
 ## See also
