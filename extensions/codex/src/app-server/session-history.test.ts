@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { CURRENT_SESSION_VERSION } from "openclaw/plugin-sdk/agent-sessions";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
+import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 
@@ -59,7 +61,55 @@ function mirroredTarget(sessionFile: string) {
   };
 }
 
+async function writeSqliteSession(): Promise<{ marker: string; sessionKey: string }> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-session-history-sqlite-"));
+  tempDirs.push(dir);
+  const storePath = path.join(dir, "openclaw-agent.sqlite");
+  const sessionId = "codex-sqlite-session";
+  const sessionKey = "agent:main:codex-sqlite";
+  const marker = `sqlite:main:${sessionId}:${storePath}`;
+  const scope = {
+    agentId: "main",
+    sessionId,
+    sessionKey,
+    storePath,
+  };
+  await upsertSessionEntry({
+    ...scope,
+    entry: {
+      sessionFile: marker,
+      sessionId,
+      updatedAt: 1,
+    },
+  });
+  await appendSessionTranscriptMessageByIdentity({
+    ...scope,
+    message: { role: "user", content: "sqlite prompt", timestamp: 1 },
+  });
+  await appendSessionTranscriptMessageByIdentity({
+    ...scope,
+    message: { role: "assistant", content: "sqlite answer", timestamp: 2 },
+  });
+  return { marker, sessionKey };
+}
+
 describe("readCodexMirroredSessionHistoryMessages", () => {
+  it("replays SQLite marker history by session identity", async () => {
+    const { marker, sessionKey } = await writeSqliteSession();
+
+    await expect(
+      readCodexMirroredSessionHistoryMessages({
+        agentId: "main",
+        sessionFile: marker,
+        sessionId: "codex-sqlite-session",
+        sessionKey,
+      }),
+    ).resolves.toMatchObject([
+      { role: "user", content: "sqlite prompt" },
+      { role: "assistant", content: "sqlite answer" },
+    ]);
+  });
+
   it("replays only the branch selected by a leaf control", async () => {
     const sessionFile = await writeSession([
       messageEntry({ id: "root", parentId: null, role: "user", content: "root prompt" }),
