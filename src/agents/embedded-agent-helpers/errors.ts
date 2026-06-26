@@ -808,6 +808,14 @@ function classifyFailoverClassificationFromHttpStatus(
     if (message && isBilling429MessageForProvider(message, provider)) {
       return toReasonClassification("billing");
     }
+    // Some providers (e.g. Z.ai/GLM) return HTTP 429 with an "overloaded"
+    // message body when their model fleet is at capacity — this is a
+    // transient server-side overload, not a per-account rate limit.
+    // Classify it as "overloaded" so the runner retries with backoff
+    // instead of immediately falling over to the next model.
+    if (messageReason === "overloaded") {
+      return messageClassification;
+    }
     return toReasonClassification("rate_limit");
   }
   if (status === 401 || status === 403) {
@@ -1031,11 +1039,16 @@ function classifyFailoverClassificationFromMessage(
   if (isPeriodicUsageLimitErrorMessage(raw)) {
     return toReasonClassification(isBillingErrorMessage(raw) ? "billing" : "rate_limit");
   }
-  if (isRateLimitErrorMessage(raw)) {
-    return toReasonClassification("rate_limit");
-  }
+  // Check overloaded BEFORE rate limit: some providers (Z.ai/GLM, Anthropic)
+  // return HTTP 429 with an "overloaded" message body when their model fleet
+  // is at capacity. The rateLimit pattern /429/ would match these first,
+  // misclassifying a transient server-side overload as a per-account rate
+  // limit and triggering immediate model fallback instead of retry-with-backoff.
   if (isOverloadedErrorMessage(raw)) {
     return toReasonClassification("overloaded");
+  }
+  if (isRateLimitErrorMessage(raw)) {
+    return toReasonClassification("rate_limit");
   }
   if (
     isStructuredServerErrorMessage(raw) &&
