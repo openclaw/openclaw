@@ -106,6 +106,7 @@ export type LegacyStateDetection = {
     hasLegacy: boolean;
     legacyKeys: string[];
     preserveForeignMainAliases: boolean;
+    targetStoreHasDistinctAlias: boolean;
   };
   agentDir: {
     legacyDir: string;
@@ -3278,6 +3279,14 @@ function isAmbiguousSharedStoreKey(key: string, mainKey: string, scope?: Session
   return !lower.startsWith("agent:") || isLegacyDefaultMainAliasKey(lower, mainKey);
 }
 
+function aliasedSessionStoreMigrationWarning(params: {
+  subject: "migration of" | "ACP metadata migration for";
+  count: number;
+  storePath: string;
+}): string {
+  return `Deferred ${params.subject} ${params.count} ambiguous session key(s) in aliased store ${params.storePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`;
+}
+
 function resolveStaleLegacySessionFile(params: {
   entry: unknown;
   legacyDir: string;
@@ -4006,7 +4015,7 @@ export async function detectLegacyStateMigrations(params: {
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
   pluginSessionStoreAgentIds?: readonly string[];
-  preserveForeignMainAliases?: boolean;
+  sessionStoreOwnership?: SessionStoreOwnership;
 }): Promise<LegacyStateDetection> {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
@@ -4034,15 +4043,22 @@ export async function detectLegacyStateMigrations(params: {
       env,
       pluginIds: collectRelevantDoctorPluginIds(pluginConfig),
     });
-  const preserveForeignMainAliases =
-    params.preserveForeignMainAliases === true ||
-    hasForeignPluginSessionStoreAlias({
-      cfg: params.cfg,
-      env,
-      stateDir,
-      targetAgentId,
-      pluginSessionStoreAgentIds,
-    });
+  const currentSessionStoreOwnership = resolveSessionStoreOwnership({
+    cfg: params.cfg,
+    env,
+    stateDir,
+    targetAgentId,
+    pluginSessionStoreAgentIds,
+  });
+  const sessionStoreOwnership: SessionStoreOwnership = {
+    preserveForeignMainAliases:
+      params.sessionStoreOwnership?.preserveForeignMainAliases === true ||
+      currentSessionStoreOwnership.preserveForeignMainAliases,
+    targetStoreHasDistinctAlias:
+      params.sessionStoreOwnership?.targetStoreHasDistinctAlias === true ||
+      currentSessionStoreOwnership.targetStoreHasDistinctAlias,
+  };
+  const { preserveForeignMainAliases } = sessionStoreOwnership;
   const legacySessionEntries = safeReadDir(sessionsLegacyDir);
   const hasLegacySessions =
     fileExists(sessionsLegacyStorePath) ||
@@ -4235,6 +4251,7 @@ export async function detectLegacyStateMigrations(params: {
       hasLegacy: hasLegacySessions || legacyKeys.length > 0 || hasStaleSessionFiles,
       legacyKeys,
       preserveForeignMainAliases,
+      targetStoreHasDistinctAlias: sessionStoreOwnership.targetStoreHasDistinctAlias,
     },
     agentDir: {
       legacyDir: legacyAgentDir,
@@ -4318,6 +4335,26 @@ async function migrateLegacySessions(
     : { store: {}, ok: true };
   const legacyStore = legacyParsed.store;
   const targetStore = targetParsed.store;
+
+  const ambiguousAliasedKeys = new Set(
+    [...Object.keys(targetStore), ...Object.keys(legacyStore)].filter(
+      (key) =>
+        isAmbiguousSharedStoreKey(key, detected.targetMainKey, detected.targetScope) ||
+        isLegacyDefaultMainAliasKey(key, detected.targetMainKey),
+    ),
+  );
+  // Atomic replacement separates filesystem aliases. Defer the whole merge so
+  // a later startup cannot treat each pathname as a different session owner.
+  if (detected.sessions.targetStoreHasDistinctAlias && ambiguousAliasedKeys.size > 0) {
+    warnings.push(
+      aliasedSessionStoreMigrationWarning({
+        subject: "migration of",
+        count: ambiguousAliasedKeys.size,
+        storePath: detected.sessions.targetStorePath,
+      }),
+    );
+    return { changes, warnings };
+  }
 
   const canonicalizedTarget = canonicalizeSessionStore({
     store: targetStore,
@@ -5016,11 +5053,15 @@ export async function migrateOrphanedSessionKeys(params: {
   // A single path may be shared by multiple agents when session.store
   // does not contain {agentId}.
   const storeMap = new Map<string, Set<string>>();
+  const aliasedStorePaths = new Set<string>();
   const addToStoreMap = (p: string, id: string) => {
     // Existing aliases are one ownership surface. Group them before any atomic
     // rewrite can replace one pathname and hide their original identity.
     const storePath =
       [...storeMap.keys()].find((candidate) => sessionStorePathsMatch(candidate, p)) ?? p;
+    if (storePath !== p) {
+      aliasedStorePaths.add(storePath);
+    }
     const existing = storeMap.get(storePath);
     if (existing) {
       existing.add(id);
@@ -5113,12 +5154,25 @@ export async function migrateOrphanedSessionKeys(params: {
     // agent's namespace.
     let working = parsed.store;
     let totalLegacy = 0;
-    const preserveAmbiguousKeys = storePath === fixedCustomStorePath || storeAgentIds.size > 1;
+    const hasDistinctAliases = aliasedStorePaths.has(storePath);
+    const preserveAmbiguousKeys =
+      hasDistinctAliases || storePath === fixedCustomStorePath || storeAgentIds.size > 1;
     const preservedAmbiguousKeyCount = Object.keys(working).filter(
       (key) =>
         (preserveAmbiguousKeys && isAmbiguousSharedStoreKey(key, mainKey, scope)) ||
-        (pluginForeignMainAliasRisk && isLegacyDefaultMainAliasKey(key, mainKey)),
+        ((hasDistinctAliases || pluginForeignMainAliasRisk) &&
+          isLegacyDefaultMainAliasKey(key, mainKey)),
     ).length;
+    if (hasDistinctAliases && preservedAmbiguousKeyCount > 0) {
+      warnings.push(
+        aliasedSessionStoreMigrationWarning({
+          subject: "migration of",
+          count: preservedAmbiguousKeyCount,
+          storePath,
+        }),
+      );
+      continue;
+    }
     for (const storeAgentId of storeAgentIds) {
       const { store: canonicalized, legacyKeys } = canonicalizeSessionStore({
         store: working,
@@ -5175,14 +5229,27 @@ async function migrateLegacyAcpSessionMetadata(params: {
   const targets = resolveAllAgentSessionStoreTargetsSync(params.cfg, { env });
   const mainKey = normalizeMainKey(params.cfg.session?.mainKey);
   const scope = params.cfg.session?.scope as SessionScope | undefined;
-  const seenStorePaths = new Set<string>();
+  const storeGroups: Array<{
+    target: (typeof targets)[number];
+    hasDistinctAliases: boolean;
+  }> = [];
 
   for (const target of targets) {
-    const storePath = target.storePath;
-    if (seenStorePaths.has(storePath) || !fileExists(storePath)) {
+    if (!fileExists(target.storePath)) {
       continue;
     }
-    seenStorePaths.add(storePath);
+    const group = storeGroups.find(({ target: existing }) =>
+      sessionStorePathsMatch(existing.storePath, target.storePath),
+    );
+    if (group) {
+      group.hasDistinctAliases ||= group.target.storePath !== target.storePath;
+      continue;
+    }
+    storeGroups.push({ target, hasDistinctAliases: false });
+  }
+
+  for (const { target, hasDistinctAliases } of storeGroups) {
+    const storePath = target.storePath;
     let parsed: ReturnType<typeof readSessionStoreJson5>;
     try {
       parsed = readSessionStoreJson5(storePath);
@@ -5191,6 +5258,24 @@ async function migrateLegacyAcpSessionMetadata(params: {
       continue;
     }
     if (!parsed.ok) {
+      continue;
+    }
+    const ambiguousKeyCount = Object.keys(parsed.store).filter(
+      (key) =>
+        isAmbiguousSharedStoreKey(key, mainKey, scope) || isLegacyDefaultMainAliasKey(key, mainKey),
+    ).length;
+    const hasLegacyAcpMetadata = Object.values(parsed.store).some(
+      (entry) => normalizeSessionEntry(entry)?.acp !== undefined,
+    );
+    if (hasLegacyAcpMetadata && ambiguousKeyCount > 0 && hasDistinctAliases) {
+      // Removing ACP metadata rewrites the store and would split its aliases.
+      warnings.push(
+        aliasedSessionStoreMigrationWarning({
+          subject: "ACP metadata migration for",
+          count: ambiguousKeyCount,
+          storePath,
+        }),
+      );
       continue;
     }
 
@@ -5261,13 +5346,18 @@ function sessionStorePathsMatch(left: string, right: string): boolean {
   }
 }
 
-function hasForeignPluginSessionStoreAlias(params: {
+type SessionStoreOwnership = {
+  preserveForeignMainAliases: boolean;
+  targetStoreHasDistinctAlias: boolean;
+};
+
+function resolveSessionStoreOwnership(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir: string;
   targetAgentId: string;
   pluginSessionStoreAgentIds: readonly string[];
-}): boolean {
+}): SessionStoreOwnership {
   const targetStorePath = path.join(
     params.stateDir,
     "agents",
@@ -5276,16 +5366,37 @@ function hasForeignPluginSessionStoreAlias(params: {
     "sessions.json",
   );
   const configuredStore = params.cfg.session?.store;
-  return params.pluginSessionStoreAgentIds.some((pluginAgentId) => {
+  const resolveAgentStorePath = (agentId: string) =>
+    configuredStore
+      ? resolveStorePathFromTemplate(configuredStore, agentId, params.env)
+      : path.join(params.stateDir, "agents", agentId, "sessions", "sessions.json");
+  const preserveForeignMainAliases = params.pluginSessionStoreAgentIds.some((pluginAgentId) => {
     const id = normalizeAgentId(pluginAgentId);
     if (id === DEFAULT_AGENT_ID) {
       return false;
     }
-    const pluginStorePath = configuredStore
-      ? resolveStorePathFromTemplate(configuredStore, id, params.env)
-      : path.join(params.stateDir, "agents", id, "sessions", "sessions.json");
-    return sessionStorePathsMatch(pluginStorePath, targetStorePath);
+    return sessionStorePathsMatch(resolveAgentStorePath(id), targetStorePath);
   });
+  const candidateAgentIds = new Set([
+    params.targetAgentId,
+    ...(Array.isArray(params.cfg.agents?.list) ? params.cfg.agents.list : []).flatMap((entry) =>
+      entry?.id ? [normalizeAgentId(entry.id)] : [],
+    ),
+    ...params.pluginSessionStoreAgentIds.map((id) => normalizeAgentId(id)),
+  ]);
+  const candidateStorePaths = [...candidateAgentIds].map(resolveAgentStorePath);
+  const agentsDir = path.join(params.stateDir, "agents");
+  for (const entry of safeReadDir(agentsDir)) {
+    if (entry.isDirectory()) {
+      candidateStorePaths.push(path.join(agentsDir, entry.name, "sessions", "sessions.json"));
+    }
+  }
+  const targetStoreHasDistinctAlias = candidateStorePaths.some((candidatePath) => {
+    return (
+      candidatePath !== targetStorePath && sessionStorePathsMatch(candidatePath, targetStorePath)
+    );
+  });
+  return { preserveForeignMainAliases, targetStoreHasDistinctAlias };
 }
 
 export async function autoMigrateLegacyState(params: {
@@ -5325,7 +5436,7 @@ export async function autoMigrateLegacyState(params: {
   });
   // Capture ownership before orphan-key rewrites. Atomic replacement can split
   // a configured filesystem alias from the standard target pathname.
-  const preserveForeignMainAliases = hasForeignPluginSessionStoreAlias({
+  const sessionStoreOwnership = resolveSessionStoreOwnership({
     cfg: params.cfg,
     env,
     stateDir,
@@ -5364,7 +5475,7 @@ export async function autoMigrateLegacyState(params: {
     cfg: params.cfg,
     pluginDoctorConfig: params.pluginDoctorConfig,
     pluginSessionStoreAgentIds,
-    preserveForeignMainAliases,
+    sessionStoreOwnership,
     env,
     homedir: params.homedir,
   });

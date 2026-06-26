@@ -327,12 +327,13 @@ describe("migrateOrphanedSessionKeys", () => {
       const standardStorePath = path.join(stateDir, "agents", "voice", "sessions", "sessions.json");
       writeStore(standardStorePath, {
         "voice:15550001111": { sessionId: "legacy-voice", updatedAt: 2000 },
+        "agent:voice:MixedCase": { sessionId: "scoped", updatedAt: 1000 },
       });
       const configuredStorePath = path.join(tmpDir, "configured-sessions.json");
       fs.linkSync(standardStorePath, configuredStorePath);
       const cfg = {
         session: { store: configuredStorePath },
-        agents: { list: [{ id: "voice", default: true }] },
+        agents: { list: [{ id: "ops", default: true }] },
         plugins: {
           entries: {
             "voice-call": { config: { agentId: "voice" } },
@@ -341,14 +342,21 @@ describe("migrateOrphanedSessionKeys", () => {
       } as OpenClawConfig;
 
       const result = await migrateFixtureState(stateDir, cfg);
+      const rerun = await migrateFixtureState(stateDir, cfg);
 
       expect(result.changes).toHaveLength(0);
       expect(result.warnings).toEqual([
-        `Preserved 1 ambiguous session key(s) in potentially shared store ${configuredStorePath}`,
+        `Deferred migration of 1 ambiguous session key(s) in aliased store ${configuredStorePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
       ]);
+      expect(rerun).toEqual(result);
       expect(requireStoreEntry(readStore(standardStorePath), "voice:15550001111").sessionId).toBe(
         "legacy-voice",
       );
+      expect(
+        requireStoreEntry(readStore(standardStorePath), "agent:voice:MixedCase").sessionId,
+      ).toBe("scoped");
+      expect(readStore(standardStorePath)["agent:ops:voice:15550001111"]).toBeUndefined();
+      expect(readStore(standardStorePath)["agent:voice:voice:15550001111"]).toBeUndefined();
       expect(fs.statSync(configuredStorePath).ino).toBe(fs.statSync(standardStorePath).ino);
     });
   });

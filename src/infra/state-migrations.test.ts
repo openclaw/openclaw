@@ -453,9 +453,7 @@ describe("state migrations", () => {
     >;
     targetStore["agent:main:desk"] = { sessionId: "explicit-foreign", updatedAt: 30 };
     await fs.writeFile(targetStorePath, `${JSON.stringify(targetStore, null, 2)}\n`, "utf8");
-    const aliasedStorePath = path.join(root, "aliased-sessions.json");
-    await fs.link(targetStorePath, aliasedStorePath);
-    cfg.session = { ...cfg.session, store: aliasedStorePath };
+    cfg.session = { ...cfg.session, store: targetStorePath };
     const legacyStorePath = path.join(stateDir, "sessions", "sessions.json");
     const legacyStore = JSON.parse(await fs.readFile(legacyStorePath, "utf8")) as Record<
       string,
@@ -471,6 +469,7 @@ describe("state migrations", () => {
       pluginSessionStoreAgentIds: ["worker-1"],
     });
     expect(detected.sessions.preserveForeignMainAliases).toBe(true);
+    expect(detected.sessions.targetStoreHasDistinctAlias).toBe(false);
     const result = await runLegacyStateMigrations({
       detected,
       now: () => 1234,
@@ -547,7 +546,18 @@ describe("state migrations", () => {
       targetStorePath,
       JSON.stringify({
         "agent:main:desk": { sessionId: "foreign-main", updatedAt: 30 },
-        "agent:worker-1:main": { sessionId: "worker-main", updatedAt: 20 },
+        "agent:worker-1:main": {
+          sessionId: "worker-main",
+          updatedAt: 20,
+          acp: {
+            backend: "test",
+            agent: "worker-1",
+            runtimeSessionName: "legacy-runtime",
+            mode: "persistent",
+            state: "idle",
+            lastActivityAt: 20,
+          },
+        },
         "voice:15550001111": { sessionId: "legacy-voice", updatedAt: 10 },
       }),
       "utf8",
@@ -564,14 +574,26 @@ describe("state migrations", () => {
       },
     } as OpenClawConfig;
 
-    await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
 
     const targetStore = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
       string,
       { sessionId: string }
     >;
     expect(targetStore["agent:main:desk"]?.sessionId).toBe("foreign-main");
-    expect(targetStore["agent:worker-1:desk"]?.sessionId).toBe("worker-main");
+    expect(targetStore["agent:worker-1:main"]?.sessionId).toBe("worker-main");
+    expect(targetStore["agent:worker-1:desk"]).toBeUndefined();
+    expect(targetStore["agent:worker-1:main"]).toHaveProperty("acp");
+    expect(fsSync.statSync(configuredStorePath).ino).toBe(fsSync.statSync(targetStorePath).ino);
+    expect(result.warnings).toContain(
+      `Deferred migration of 2 ambiguous session key(s) in aliased store ${configuredStorePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
+    );
+    expect(result.warnings).toContain(
+      `Deferred migration of 2 ambiguous session key(s) in aliased store ${targetStorePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
+    );
+    expect(result.warnings).toContain(
+      `Deferred ACP metadata migration for 2 ambiguous session key(s) in aliased store ${configuredStorePath}; remove filesystem aliases or configure one canonical session.store path, then rerun openclaw doctor --fix`,
+    );
   });
 
   it("migrates legacy delivery queue files into shared SQLite state", async () => {
