@@ -141,10 +141,12 @@ Workboard also exposes optional agent tools for board-aware workflows:
   stale card events.
 - `workboard_boards`, `workboard_stats`, `workboard_promote`,
   `workboard_reassign`, `workboard_reclaim`, `workboard_comment`,
-  `workboard_proof`, `workboard_unblock`, and `workboard_dispatch` let an agent
-  inspect board namespaces, view queue stats, recover stuck work, add handoff
-  notes, attach proof or artifact references, move blocked work back to `todo`,
-  and nudge dependency promotion or stale-claim cleanup.
+  `workboard_move`, `workboard_proof`, `workboard_unblock`, and
+  `workboard_dispatch` let an agent inspect board namespaces, view queue stats,
+  recover stuck work, add handoff notes, attach proof or artifact references,
+  move cards between statuses (columns) with claim scope enforcement, move
+  blocked work back to `todo`, and nudge dependency promotion or stale-claim
+  cleanup.
 
 Claimed cards reject agent-tool mutations from other agents unless the caller
 has the claim token returned by `workboard_claim`. Dashboard operators still use
@@ -250,10 +252,11 @@ surface as command errors, as do failures for explicit `--url` or `--token`
 targets.
 
 The `/workboard` slash command supports the same compact operator path:
-`/workboard list`, `/workboard show <card-id>`, `/workboard create <title>`, and
-`/workboard dispatch`. List and show are read operations for authorized command
-senders. Create and dispatch require owner status on chat surfaces or a Gateway
-client with `operator.write` or `operator.admin`.
+`/workboard list`, `/workboard show <card-id>`, `/workboard create <title>`,
+`/workboard move <card-id> --status <status>`, and `/workboard dispatch`. List
+and show are read operations for authorized command senders. Create, move, and
+dispatch require owner status on chat surfaces or a Gateway client with
+`operator.write` or `operator.admin`.
 
 See [Workboard CLI](/cli/workboard) for command flags, JSON output, Gateway
 fallback behavior, unambiguous id-prefix handling, dispatch selection rules, and

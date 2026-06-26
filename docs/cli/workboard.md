@@ -25,6 +25,7 @@ openclaw gateway restart
 openclaw workboard list [--board <id>] [--status <status>] [--include-archived] [--json]
 openclaw workboard create <title...> [--notes <text>] [--status <status>] [--priority <priority>] [--agent <id>] [--board <id>] [--labels <items>] [--json]
 openclaw workboard show <id> [--json]
+openclaw workboard move <id> --status <status> [--json]
 openclaw workboard dispatch [--url <url>] [--token <token>] [--timeout <ms>] [--json]
 ```
 
@@ -93,6 +94,31 @@ openclaw workboard show 7f4a2c10 --json
 Text output prints the compact card line and notes. JSON output returns the full
 card record, including execution metadata, attempts, comments, links, proof,
 artifacts, worker logs, protocol state, diagnostics, and automation metadata.
+
+## `move`
+
+```bash
+openclaw workboard move 7f4a2c10 --status running
+openclaw workboard move 7f4a2c10 --status running --json
+```
+
+`move` moves a card to a different status (column). The target status must be
+one of the valid Workboard statuses: `triage`, `backlog`, `todo`, `scheduled`,
+`ready`, `running`, `review`, `blocked`, or `done`.
+
+If the card has an active claim, the move requires the claim token returned by
+`workboard_claim`. Cards without a claim can be moved by anyone. The CLI path
+validates claim scope before queuing the mutation, so the check and the status
+write happen in the same queued mutation — preventing a race where another
+agent claims the card between the authorization check and the write.
+
+Text output prints the updated card line:
+
+```
+7f4a2c10  running   high    default agent-a  Fix stale worker heartbeat
+```
+
+JSON output returns the full card record with the claim token redacted.
 
 ## `dispatch`
 
@@ -166,6 +192,7 @@ Command-capable channels can use the matching slash command:
 /workboard list
 /workboard show 7f4a2c10
 /workboard create Fix stale worker heartbeat
+/workboard move 7f4a2c10 --status running
 /workboard dispatch
 ```
 
@@ -174,9 +201,9 @@ same claim, worker-start, and failure behavior as the dashboard and CLI Gateway
 path.
 
 `/workboard list` and `/workboard show` are read commands for authorized command
-senders. `/workboard create` and `/workboard dispatch` mutate board state and
-require owner status on chat surfaces or a Gateway client with `operator.write`
-or `operator.admin`.
+senders. `/workboard create`, `/workboard move`, and `/workboard dispatch` mutate
+board state and require owner status on chat surfaces or a Gateway client with
+`operator.write` or `operator.admin`.
 
 ## Permissions
 

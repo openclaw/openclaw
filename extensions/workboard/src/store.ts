@@ -2834,14 +2834,23 @@ export class WorkboardStore {
     position: unknown,
     scope?: WorkboardMutationScope,
   ): Promise<WorkboardCard> {
-    const existing = await this.get(id);
-    if (!existing) {
-      throw new Error(`card "${id}" not found.`);
-    }
-    assertCanMutateClaimedCard(existing, scope);
-    return await this.update(id, {
-      status,
-      position,
+    return await this.enqueueMutation(async () => {
+      const existing = await this.get(id);
+      if (!existing) {
+        throw new Error(`card "${id}" not found.`);
+      }
+      assertCanMutateClaimedCard(existing, scope);
+      return await this.updateCard(
+        id,
+        {
+          status,
+          position,
+        },
+        {
+          allowMetadataDependencyLinks: false,
+          enforceStatusHolds: true,
+        },
+      );
     });
   }
 
