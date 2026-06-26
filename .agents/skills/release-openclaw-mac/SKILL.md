@@ -5,7 +5,7 @@ description: "Run or recover OpenClaw macOS release signing, notarization, appca
 
 # OpenClaw Mac Release
 
-Use with `$release-openclaw-maintainer`, `$release-openclaw-ci`, `$one-password`, and `$release-private` if it exists when stable macOS assets, private mac preflight, notarization, appcast promotion, or mac release recovery is involved.
+Use with `$release-openclaw-maintainer`, `$release-openclaw-ci`, `$one-password`, and `$release-private` if it exists when stable macOS assets, release-ops mac preflight, notarization, appcast promotion, or mac release recovery is involved.
 
 ## Credentials
 
@@ -23,7 +23,7 @@ Use with `$release-openclaw-maintainer`, `$release-openclaw-ci`, `$one-password`
 
 ## GitHub Secrets
 
-Target private repo environment: `openclaw/releases`, env `mac-release`.
+Target release-ops repo environment: `openclaw/releases`, env `mac-release`.
 
 Set only after local notary auth validation:
 
@@ -35,12 +35,20 @@ Do not update these from mixed sources. All three ASC fields must come from the 
 
 ## Workflow Shape
 
+- `openclaw/openclaw` is the public product repo. Its GitHub Releases page is
+  where macOS assets are ultimately attached.
+- `openclaw/openclaw` `macos-release.yml` is public handoff validation only.
+  It never signs, notarizes, or uploads macOS assets, regardless of
+  `preflight_only`.
+- `openclaw/releases` is the restricted release-ops repo. Its macOS workflows
+  sign, notarize, validate, and promote assets onto the
+  `openclaw/openclaw` GitHub release.
 - Public release branch may carry mac-only packaging fixes after the stable tag/npm are already live.
-- Use `source_ref=release/YYYY.M.PATCH` for private mac preflight/validation when building that branch variation.
+- Use `source_ref=release/YYYY.M.PATCH` for release-ops mac preflight/validation when building that branch variation.
 - Keep `tag=vYYYY.M.PATCH` pointing at the original stable release commit.
 - Real mac publish must reuse:
-  - a successful private mac preflight run for the same tag/source SHA
-  - a successful private mac validation run for the same tag/source SHA
+  - a successful release-ops mac preflight run for the same tag/source SHA
+  - a successful release-ops mac validation run for the same tag/source SHA
 - If preflight source SHA differs from tag SHA, validation must also use the same `source_ref`; promotion rejects mismatched proof.
 
 ## Notarization
@@ -67,7 +75,7 @@ gh workflow run macos-release.yml --repo openclaw/openclaw \
 - Do not use `--ref main` or `--ref vYYYY.M.PATCH` for this public handoff
   validation. The workflow checks out the tag from the `tag` input internally.
 
-Private preflight:
+Release-ops preflight:
 
 ```bash
 gh workflow run openclaw-macos-publish.yml --repo openclaw/releases --ref main \
@@ -79,7 +87,7 @@ gh workflow run openclaw-macos-publish.yml --repo openclaw/releases --ref main \
   -f public_release_branch=release/YYYY.M.PATCH
 ```
 
-Private validation for a branch-variation preflight:
+Release-ops validation for a branch-variation preflight:
 
 ```bash
 gh workflow run openclaw-macos-validate.yml --repo openclaw/releases --ref main \
@@ -100,7 +108,7 @@ gh workflow run openclaw-macos-publish.yml --repo openclaw/releases --ref main \
   -f public_release_branch=release/YYYY.M.PATCH
 ```
 
-- Private `openclaw/releases` publish/validate workflows run from their own
+- Release-ops `openclaw/releases` publish/validate workflows run from their own
   trusted `main` workflow ref. Real publish has a guard that rejects any other
   workflow ref. That displayed `main` ref is expected; the public OpenClaw
   source is selected by `tag` and optional `source_ref`.
