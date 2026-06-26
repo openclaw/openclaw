@@ -38,7 +38,7 @@ describe("fetchCodexUsage", () => {
       const headers = (init?.headers as Record<string, string> | undefined) ?? {};
       expect(headers["ChatGPT-Account-Id"]).toBe("acct-1");
       expect(headers.originator).toBe("openclaw");
-      expect(headers["User-Agent"]).toMatch(/^openclaw\//);
+      expect(headers["User-Agent"]).toContain("Mozilla/5.0");
       return makeResponse(200, {
         rate_limit: {
           primary_window: {
