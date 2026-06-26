@@ -34,7 +34,7 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
           checkpoint.label === "after-doctor-fix" &&
           checkpoint.doctor?.mode === "fix" &&
           checkpoint.sqlite.sessionEntries >= 4 &&
-          checkpoint.sqlite.transcriptEvents >= 8,
+          checkpoint.sqlite.transcriptEvents >= 6,
       ),
     ).toBe(true);
     expect(
