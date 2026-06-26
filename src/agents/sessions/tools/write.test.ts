@@ -134,7 +134,8 @@ describe("write tool", () => {
       undefined,
     );
 
-    expect(result.content[0].text).toContain("No changes made");
+    const tc0 = result.content[0];
+    expect("text" in tc0 ? tc0.text : "").toContain("No changes made");
     expect((result as any).terminate).toBe(true);
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("hello\n");
   });
@@ -150,7 +151,8 @@ describe("write tool", () => {
       undefined,
     );
 
-    expect(result.content[0].text).toContain("Successfully wrote");
+    const tc1 = result.content[0];
+    expect("text" in tc1 ? tc1.text : "").toContain("Successfully wrote");
     await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("new\n");
   });
 });
