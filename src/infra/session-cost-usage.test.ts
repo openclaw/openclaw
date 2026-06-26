@@ -300,6 +300,74 @@ describe("session cost usage", () => {
     });
   });
 
+  it("estimates known-priced token usage when the transcript recorded a zero total", async () => {
+    const root = await makeSessionCostRoot("cost-known-pricing-zero-total");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-deepseek-v4.jsonl");
+    const timestamp = "2026-02-05T12:00:00.000Z";
+    const entry = {
+      type: "message",
+      timestamp,
+      message: {
+        role: "assistant",
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        content: "ok",
+        usage: {
+          input: 10_000,
+          output: 5_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 15_000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    };
+    await fs.writeFile(sessionFile, transcriptText("sess-deepseek-v4", entry), "utf-8");
+
+    const config = {
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-flash",
+                cost: { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+    const expectedCost = 0.0028;
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5, 23, 59, 59, 999),
+        config,
+      });
+      expect(summary.totals.totalTokens).toBe(15_000);
+      expect(summary.totals.totalCost).toBeCloseTo(expectedCost, 8);
+      expect(summary.totals.missingCostEntries).toBe(0);
+
+      await refreshCostUsageCache({ config, sessionFiles: [sessionFile] });
+      const cached = await loadCostUsageSummaryFromCache({
+        startMs: Date.UTC(2026, 1, 5),
+        endMs: Date.UTC(2026, 1, 5, 23, 59, 59, 999),
+        config,
+        requestRefresh: false,
+      });
+      expect(cached.totals.totalCost).toBeCloseTo(expectedCost, 8);
+      expect(cached.cacheStatus?.status).toBe("fresh");
+
+      const logs = await loadSessionLogs({ sessionId: "sess-deepseek-v4", config });
+      expect(logs?.[0]?.tokens).toBe(15_000);
+      expect(logs?.[0]?.cost).toBeCloseTo(expectedCost, 8);
+    });
+  });
+
   it("treats a pre-upgrade (older-version) durable cache as stale so unpriced usage is rebuilt", async () => {
     const root = await makeSessionCostRoot("cost-cache-upgrade");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -326,16 +394,16 @@ describe("session cost usage", () => {
 
     clearGatewayModelPricingCacheState();
     await withStateDir(root, async () => {
-      // Simulate a durable cache written by a build from before this change: refresh
-      // under the current code, then stamp the cache with an older semantics version.
+      // Simulate a durable cache written by a build from before the current cache
+      // semantics: refresh under the current code, then stamp an older version.
       await refreshCostUsageCache({ sessionFiles: [sessionFile] });
       const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
       const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as { version: number };
-      cache.version = 3;
+      cache.version = 4;
       await fs.writeFile(cachePath, `${JSON.stringify(cache)}\n`, "utf-8");
 
       // The pre-upgrade cache must be treated as stale (not served), forcing a rebuild
-      // under the new missing-cost semantics instead of reusing old complete-$0 totals.
+      // under current cost semantics instead of reusing old complete-$0 totals.
       const cached = await loadSessionCostSummaryFromCache({
         sessionId: "sess-upgrade",
         sessionFile,

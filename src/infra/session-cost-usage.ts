@@ -75,10 +75,10 @@ export type {
 } from "./session-cost-usage.types.js";
 
 // Bump when the *meaning* of cached totals changes (not just their inputs), so durable
-// caches written by older builds are rebuilt instead of served stale. Bumped to 4:
-// unpriced (unknown) zero-cost usage now counts toward missingCostEntries, so a warm
-// cache from a pre-change build would otherwise keep reporting the old complete-$0 totals.
-const USAGE_COST_CACHE_VERSION = 4;
+// caches written by older builds are rebuilt instead of served stale. Bumped to 5:
+// recorded zero costs for known-priced token usage are recomputed, and unpriced
+// zero-cost usage counts toward missingCostEntries.
+const USAGE_COST_CACHE_VERSION = 5;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
 const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
@@ -1046,6 +1046,15 @@ const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): b
   return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
 };
 
+const shouldRecomputeRecordedZeroCost = (params: {
+  cost: ReturnType<typeof resolveModelCostConfig>;
+  costTotal: number | undefined;
+  usage: NormalizedUsage;
+}): boolean =>
+  params.costTotal === 0 &&
+  isModelPricingKnown(params.cost) &&
+  computeUsageTokenTotals(params.usage).totalTokens > 0;
+
 type UsageCostResolver = (params: {
   provider?: string;
   model?: string;
@@ -1144,6 +1153,8 @@ async function scanTranscriptFile(params: {
         provider: entry.provider,
         model: entry.model,
       });
+      const usageTotals = computeUsageTokenTotals(entry.usage);
+      const pricingKnown = isModelPricingKnown(cost);
       if (cost?.tieredPricing && cost.tieredPricing.length > 0) {
         // When tiered pricing is configured, always recompute to override
         // the flat-rate cost that the transport layer wrote into the transcript.
@@ -1152,9 +1163,9 @@ async function scanTranscriptFile(params: {
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
         entry.costBreakdown = undefined;
       } else if (
-        !isModelPricingKnown(cost) &&
+        !pricingKnown &&
         (entry.costTotal === undefined || entry.costTotal === 0) &&
-        computeUsageTokenTotals(entry.usage).totalTokens > 0
+        usageTotals.totalTokens > 0
       ) {
         // Pricing for this model is unknown: it has no positive per-token rate and no
         // trustworthy recorded cost. The transport either recorded nothing or a
@@ -1165,9 +1176,14 @@ async function scanTranscriptFile(params: {
         // above.
         entry.costTotal = undefined;
         entry.costBreakdown = undefined;
-      } else if (entry.costTotal === undefined) {
-        // Fill in missing cost estimates.
+      } else if (
+        entry.costTotal === undefined ||
+        (pricingKnown && entry.costTotal === 0 && usageTotals.totalTokens > 0)
+      ) {
+        // Fill in missing estimates and override fabricated API-provided zeros
+        // for known-priced models such as DeepSeek V4.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+        entry.costBreakdown = undefined;
       }
     }
 
@@ -2639,13 +2655,20 @@ export async function loadSessionLogs(params: {
               (usage.cacheRead ?? 0) +
               (usage.cacheWrite ?? 0);
           const breakdown = extractCostBreakdown(usageRaw);
-          if (breakdown?.total !== undefined) {
+          const costConfig = resolveCost({
+            provider: message.provider as string | undefined,
+            model: message.model as string | undefined,
+          });
+          if (
+            breakdown?.total !== undefined &&
+            !shouldRecomputeRecordedZeroCost({
+              usage,
+              cost: costConfig,
+              costTotal: breakdown.total,
+            })
+          ) {
             cost = breakdown.total;
           } else {
-            const costConfig = resolveCost({
-              provider: message.provider as string | undefined,
-              model: message.model as string | undefined,
-            });
             cost = estimateUsageCost({ usage, cost: costConfig });
           }
         }
