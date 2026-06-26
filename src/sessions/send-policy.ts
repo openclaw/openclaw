@@ -48,6 +48,9 @@ function deriveChannelFromKey(key?: string) {
     return undefined;
   }
   const parts = normalizedKey.split(":").filter(Boolean);
+  if (parts[0] === "agent") {
+    return undefined;
+  }
   // Key layout is <channel>:[<accountId>:]<peerKind>:<peerId>; parts[0] is the
   // channel for account-scoped DM keys too, so channel-scoped rules also fire
   // for per-account-channel-peer sessions, not just 3-part direct/group keys.
@@ -63,18 +66,8 @@ function deriveChannelFromKey(key?: string) {
 
 function deriveChatTypeFromKey(key?: string): SessionChatType | undefined {
   const normalizedKey = normalizeOptionalLowercaseString(stripAgentSessionKeyPrefix(key));
-  if (!normalizedKey) {
+  if (!normalizedKey || normalizedKey.startsWith("agent:")) {
     return undefined;
-  }
-  const tokens = new Set(normalizedKey.split(":").filter(Boolean));
-  if (tokens.has("group")) {
-    return "group";
-  }
-  if (tokens.has("channel")) {
-    return "channel";
-  }
-  if (tokens.has("direct") || tokens.has("dm")) {
-    return "direct";
   }
   const derived = deriveSessionChatType(normalizedKey);
   if (derived !== "unknown") {

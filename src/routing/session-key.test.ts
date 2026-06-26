@@ -136,6 +136,7 @@ describe("deriveSessionChatTypeFromKey", () => {
     { key: "agent:main:whatsapp:123@g.us", expected: "group" },
     { key: "agent:main:telegram:dm:123456", expected: "direct" },
     { key: "telegram:dm:123456", expected: "direct" },
+    { key: "agent:voice:agent:other:matrix:channel:!room:example.org", expected: "unknown" },
     { key: "agent:main:main", expected: "unknown" },
     { key: "agent:main", expected: "unknown" },
     { key: "", expected: "unknown" },
@@ -143,7 +144,7 @@ describe("deriveSessionChatTypeFromKey", () => {
     expect(deriveSessionChatTypeFromKey(key)).toBe(expected);
   });
 
-  it("uses plugin-owned legacy chat-type hooks after generic token parsing", () => {
+  it("uses plugin-owned legacy chat-type hooks after canonical parsing", () => {
     expect(
       deriveSessionChatTypeFromKey("legacy-room:abc", [
         (sessionKey) => (sessionKey.startsWith("legacy-room:") ? "channel" : undefined),

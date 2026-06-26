@@ -102,4 +102,25 @@ describe("resolveSendPolicy", () => {
   ])("$name", ({ cfg, entry, sessionKey, expected }) => {
     expect(resolveSendPolicy({ cfg, entry, sessionKey })).toBe(expected);
   });
+
+  it("does not apply channel allow rules to nested opaque identities", () => {
+    const cfg = {
+      session: {
+        sendPolicy: {
+          default: "deny",
+          rules: [
+            { action: "allow", match: { channel: "matrix" } },
+            { action: "allow", match: { chatType: "channel" } },
+          ],
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      resolveSendPolicy({
+        cfg,
+        sessionKey: "agent:voice:agent:other:matrix:channel:!room:example.org",
+      }),
+    ).toBe("deny");
+  });
 });

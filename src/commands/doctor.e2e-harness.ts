@@ -209,6 +209,7 @@ function createLegacyStateMigrationDetectionResult(params?: {
       targetStorePath: "/tmp/state/agents/main/sessions/sessions.json",
       hasLegacy: params?.hasLegacySessions ?? false,
       legacyKeys: [],
+      preserveForeignMainAliases: false,
     },
     agentDir: {
       legacyDir: "/tmp/state/agent",

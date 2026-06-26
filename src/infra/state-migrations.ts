@@ -105,6 +105,7 @@ export type LegacyStateDetection = {
     targetStorePath: string;
     hasLegacy: boolean;
     legacyKeys: string[];
+    preserveForeignMainAliases: boolean;
   };
   agentDir: {
     legacyDir: string;
@@ -3564,6 +3565,7 @@ function listLegacySessionKeys(params: {
   agentId: string;
   mainKey: string;
   scope?: SessionScope;
+  preserveForeignMainAliases?: boolean;
 }): string[] {
   const legacy: string[] = [];
   for (const key of Object.keys(params.store)) {
@@ -3572,6 +3574,7 @@ function listLegacySessionKeys(params: {
       agentId: params.agentId,
       mainKey: params.mainKey,
       scope: params.scope,
+      preserveForeignMainAliases: params.preserveForeignMainAliases,
     });
     if (canonical !== key) {
       legacy.push(key);
@@ -3993,6 +3996,7 @@ export async function detectLegacyStateMigrations(params: {
   pluginDoctorConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
+  pluginSessionStoreAgentIds?: readonly string[];
 }): Promise<LegacyStateDetection> {
   const env = params.env ?? process.env;
   const homedir = params.homedir ?? os.homedir;
@@ -4012,6 +4016,25 @@ export async function detectLegacyStateMigrations(params: {
   const sessionsLegacyStorePath = path.join(sessionsLegacyDir, "sessions.json");
   const sessionsTargetDir = path.join(stateDir, "agents", targetAgentId, "sessions");
   const sessionsTargetStorePath = path.join(sessionsTargetDir, "sessions.json");
+  const pluginConfig = params.pluginDoctorConfig ?? params.cfg;
+  const pluginSessionStoreAgentIds =
+    params.pluginSessionStoreAgentIds ??
+    listPluginDoctorSessionStoreAgentIds({
+      config: pluginConfig,
+      env,
+      pluginIds: collectRelevantDoctorPluginIds(pluginConfig),
+    });
+  const configuredStore = params.cfg.session?.store;
+  const preserveForeignMainAliases = pluginSessionStoreAgentIds.some((pluginAgentId) => {
+    const id = normalizeAgentId(pluginAgentId);
+    if (id === DEFAULT_AGENT_ID) {
+      return false;
+    }
+    const pluginStorePath = configuredStore
+      ? resolveStorePathFromTemplate(configuredStore, id, env)
+      : path.join(stateDir, "agents", id, "sessions", "sessions.json");
+    return pluginStorePath === sessionsTargetStorePath;
+  });
   const legacySessionEntries = safeReadDir(sessionsLegacyDir);
   const hasLegacySessions =
     fileExists(sessionsLegacyStorePath) ||
@@ -4026,6 +4049,7 @@ export async function detectLegacyStateMigrations(params: {
         agentId: targetAgentId,
         mainKey: targetMainKey,
         scope: targetScope,
+        preserveForeignMainAliases,
       })
     : [];
   const hasStaleSessionFiles =
@@ -4202,6 +4226,7 @@ export async function detectLegacyStateMigrations(params: {
       targetStorePath: sessionsTargetStorePath,
       hasLegacy: hasLegacySessions || legacyKeys.length > 0 || hasStaleSessionFiles,
       legacyKeys,
+      preserveForeignMainAliases,
     },
     agentDir: {
       legacyDir: legacyAgentDir,
@@ -4291,12 +4316,14 @@ async function migrateLegacySessions(
     agentId: detected.targetAgentId,
     mainKey: detected.targetMainKey,
     scope: detected.targetScope,
+    preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
   });
   const canonicalizedLegacy = canonicalizeSessionStore({
     store: legacyStore,
     agentId: detected.targetAgentId,
     mainKey: detected.targetMainKey,
     scope: detected.targetScope,
+    preserveForeignMainAliases: detected.sessions.preserveForeignMainAliases,
   });
 
   let repairedStaleSessionFiles = false;
@@ -5266,6 +5293,7 @@ export async function autoMigrateLegacyState(params: {
   const detected = await detectLegacyStateMigrations({
     cfg: params.cfg,
     pluginDoctorConfig: params.pluginDoctorConfig,
+    pluginSessionStoreAgentIds,
     env,
     homedir: params.homedir,
   });
