@@ -1,0 +1,34 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="gateway_connection">Gatewayverbinding</string>
+    <string name="connect_gateway">Gateway verbinden</string>
+    <string name="disconnect">Verbinding verbreken</string>
+    <string name="trust_this_gateway">Deze gateway vertrouwen?</string>
+    <string name="trust_and_continue">Vertrouwen en doorgaan</string>
+    <string name="cancel">Annuleren</string>
+    <string name="endpoint">Endpoint</string>
+    <string name="status">Status</string>
+    <string name="connected_gateway_ready">Je gateway is actief en klaar voor gebruik.</string>
+    <string name="connect_gateway_get_started">Verbind met je gateway om te beginnen.</string>
+    <string name="copy_report_for_claw">Rapport voor Claw kopiëren</string>
+    <string name="advanced_controls">Geavanceerde bediening</string>
+    <string name="connection_method">Verbindingsmethode</string>
+    <string name="setup_code">Setupcode</string>
+    <string name="manual">Handmatig</string>
+    <string name="paste_setup_code">Setupcode plakken</string>
+    <string name="host">Host</string>
+    <string name="use_tls">TLS gebruiken</string>
+    <string name="token_optional">Token (optioneel)</string>
+    <string name="password">Wachtwoord</string>
+    <string name="run_onboarding_again">Onboarding opnieuw uitvoeren</string>
+    <string name="resolved_endpoint">Opgelost endpoint</string>
+    <string name="gateway_setup">Gateway instellen</string>
+    <string name="connect_to_gateway">Verbinden met je Gateway</string>
+    <string name="scan_setup_code">Setupcode scannen</string>
+    <string name="use_gateway_qr">Gebruik je Gateway-QR-code of setupcode</string>
+    <string name="nearby_gateway">Gateway in de buurt</string>
+    <string name="enter_gateway_url">Gateway-URL invoeren</string>
+    <string name="connect_manual_url">Verbinden met een handmatige URL</string>
+    <string name="permissions">Machtigingen</string>
+    <string name="done">Gereed</string>
+</resources>

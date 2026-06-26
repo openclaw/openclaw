@@ -1,0 +1,34 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="gateway_connection">การเชื่อมต่อเกตเวย์</string>
+    <string name="connect_gateway">เชื่อมต่อเกตเวย์</string>
+    <string name="disconnect">ตัดการเชื่อมต่อ</string>
+    <string name="trust_this_gateway">เชื่อถือเกตเวย์นี้หรือไม่?</string>
+    <string name="trust_and_continue">เชื่อถือและดำเนินการต่อ</string>
+    <string name="cancel">ยกเลิก</string>
+    <string name="endpoint">เอนด์พอยต์</string>
+    <string name="status">สถานะ</string>
+    <string name="connected_gateway_ready">เกตเวย์ของคุณเปิดใช้งานและพร้อมใช้งานแล้ว</string>
+    <string name="connect_gateway_get_started">เชื่อมต่อกับเกตเวย์ของคุณเพื่อเริ่มต้นใช้งาน</string>
+    <string name="copy_report_for_claw">คัดลอกรายงานสำหรับ Claw</string>
+    <string name="advanced_controls">การควบคุมขั้นสูง</string>
+    <string name="connection_method">วิธีการเชื่อมต่อ</string>
+    <string name="setup_code">รหัสตั้งค่า</string>
+    <string name="manual">ด้วยตนเอง</string>
+    <string name="paste_setup_code">วางรหัสตั้งค่า</string>
+    <string name="host">โฮสต์</string>
+    <string name="use_tls">ใช้ TLS</string>
+    <string name="token_optional">โทเค็น (ไม่บังคับ)</string>
+    <string name="password">รหัสผ่าน</string>
+    <string name="run_onboarding_again">เรียกใช้การเริ่มต้นใช้งานอีกครั้ง</string>
+    <string name="resolved_endpoint">เอนด์พอยต์ที่แก้ไขแล้ว</string>
+    <string name="gateway_setup">การตั้งค่าเกตเวย์</string>
+    <string name="connect_to_gateway">เชื่อมต่อกับเกตเวย์ของคุณ</string>
+    <string name="scan_setup_code">สแกนรหัสตั้งค่า</string>
+    <string name="use_gateway_qr">ใช้ QR ของเกตเวย์หรือรหัสตั้งค่าของคุณ</string>
+    <string name="nearby_gateway">เกตเวย์ใกล้เคียง</string>
+    <string name="enter_gateway_url">ป้อน URL เกตเวย์</string>
+    <string name="connect_manual_url">เชื่อมต่อโดยใช้ URL ด้วยตนเอง</string>
+    <string name="permissions">สิทธิ์</string>
+    <string name="done">เสร็จสิ้น</string>
+</resources>

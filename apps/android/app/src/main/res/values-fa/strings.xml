@@ -1,0 +1,34 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="gateway_connection">اتصال دروازه</string>
+    <string name="connect_gateway">اتصال به دروازه</string>
+    <string name="disconnect">قطع اتصال</string>
+    <string name="trust_this_gateway">به این دروازه اعتماد دارید؟</string>
+    <string name="trust_and_continue">اعتماد و ادامه</string>
+    <string name="cancel">لغو</string>
+    <string name="endpoint">نقطه پایانی</string>
+    <string name="status">وضعیت</string>
+    <string name="connected_gateway_ready">دروازه شما فعال و آماده است.</string>
+    <string name="connect_gateway_get_started">برای شروع، به دروازه خود متصل شوید.</string>
+    <string name="copy_report_for_claw">کپی گزارش برای Claw</string>
+    <string name="advanced_controls">کنترل‌های پیشرفته</string>
+    <string name="connection_method">روش اتصال</string>
+    <string name="setup_code">کد راه‌اندازی</string>
+    <string name="manual">دستی</string>
+    <string name="paste_setup_code">کد راه‌اندازی را جای‌گذاری کنید</string>
+    <string name="host">میزبان</string>
+    <string name="use_tls">استفاده از TLS</string>
+    <string name="token_optional">توکن (اختیاری)</string>
+    <string name="password">رمز عبور</string>
+    <string name="run_onboarding_again">اجرای دوباره فرایند شروع به کار</string>
+    <string name="resolved_endpoint">نقطه پایانی حل‌شده</string>
+    <string name="gateway_setup">راه‌اندازی دروازه</string>
+    <string name="connect_to_gateway">به دروازه خود متصل شوید</string>
+    <string name="scan_setup_code">اسکن کد راه‌اندازی</string>
+    <string name="use_gateway_qr">از QR دروازه یا کد راه‌اندازی خود استفاده کنید</string>
+    <string name="nearby_gateway">دروازه نزدیک</string>
+    <string name="enter_gateway_url">URL دروازه را وارد کنید</string>
+    <string name="connect_manual_url">اتصال با استفاده از URL دستی</string>
+    <string name="permissions">مجوزها</string>
+    <string name="done">انجام شد</string>
+</resources>

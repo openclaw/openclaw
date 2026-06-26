@@ -12,7 +12,7 @@
     <string name="connect_gateway_get_started">शुरू करने के लिए अपने गेटवे से कनेक्ट करें।</string>
     <string name="copy_report_for_claw">Claw के लिए रिपोर्ट कॉपी करें</string>
     <string name="advanced_controls">उन्नत नियंत्रण</string>
-    <string name="connection_method">कनेक्शन का तरीका</string>
+    <string name="connection_method">कनेक्शन विधि</string>
     <string name="setup_code">सेटअप कोड</string>
     <string name="manual">मैन्युअल</string>
     <string name="paste_setup_code">सेटअप कोड पेस्ट करें</string>
@@ -21,14 +21,14 @@
     <string name="token_optional">टोकन (वैकल्पिक)</string>
     <string name="password">पासवर्ड</string>
     <string name="run_onboarding_again">ऑनबोर्डिंग फिर से चलाएँ</string>
-    <string name="resolved_endpoint">हल किया गया एंडपॉइंट</string>
+    <string name="resolved_endpoint">रिज़ॉल्व किया गया एंडपॉइंट</string>
     <string name="gateway_setup">गेटवे सेटअप</string>
     <string name="connect_to_gateway">अपने गेटवे से कनेक्ट करें</string>
     <string name="scan_setup_code">सेटअप कोड स्कैन करें</string>
-    <string name="use_gateway_qr">अपने गेटवे का QR या सेटअप कोड उपयोग करें</string>
+    <string name="use_gateway_qr">अपने गेटवे QR या सेटअप कोड का उपयोग करें</string>
     <string name="nearby_gateway">नज़दीकी गेटवे</string>
     <string name="enter_gateway_url">गेटवे URL दर्ज करें</string>
-    <string name="connect_manual_url">मैन्युअल URL से कनेक्ट करें</string>
+    <string name="connect_manual_url">मैन्युअल URL का उपयोग करके कनेक्ट करें</string>
     <string name="permissions">अनुमतियाँ</string>
-    <string name="done">पूर्ण</string>
+    <string name="done">हो गया</string>
 </resources>
