@@ -17,10 +17,12 @@ import { isCompactionCheckpointTranscriptFileName } from "../config/sessions/art
 import { readFileRangeAsync } from "../config/sessions/file-range.js";
 import {
   branchSessionFromCompactionCheckpoint,
+  loadTranscriptEventsSync,
   restoreSessionFromCompactionCheckpoint,
   type SessionCompactionCheckpointMutationResult,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { parseSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { streamSessionTranscriptLines } from "../config/sessions/transcript-stream.js";
 import { scanSessionTranscriptTree } from "../config/sessions/transcript-tree.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
@@ -44,6 +46,9 @@ type SessionLeafState = {
   leafId: string | null;
   entryId: string;
 };
+
+type SessionManagerCheckpointView = Pick<SessionManager, "getLeafId"> &
+  Partial<Pick<SessionManager, "getEntries" | "getSessionId">>;
 
 export function resolveCompactionCheckpointTranscriptPosition(params: {
   preferredLeafId?: string | null;
@@ -347,6 +352,15 @@ export async function readSessionLeafStateFromTranscriptAsync(
   sessionFile: string,
   maxBytes = MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES,
 ): Promise<{ entryId: string; leafId: string | null } | null> {
+  const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
+  if (sqliteMarker) {
+    const records = loadTranscriptEventsSync(sqliteMarker).filter(
+      (event): event is Record<string, unknown> =>
+        Boolean(event) && typeof event === "object" && !Array.isArray(event),
+    );
+    return readSessionLeafStateFromRecords(records);
+  }
+
   let fileHandle: Awaited<ReturnType<typeof fs.open>> | undefined;
   try {
     fileHandle = await fs.open(sessionFile, "r");
@@ -413,6 +427,26 @@ export async function readSessionLeafStateFromTranscriptAsync(
     }
   }
   return null;
+}
+
+function readSessionLeafStateFromRecords(
+  records: readonly Record<string, unknown>[],
+): { entryId: string; leafId: string | null } | null {
+  let latestEntryId: string | undefined;
+  for (const record of records) {
+    if (record.type === "session") {
+      continue;
+    }
+    const entryId = typeof record.id === "string" ? record.id.trim() : "";
+    if (entryId) {
+      latestEntryId = entryId;
+    }
+  }
+  if (!latestEntryId) {
+    return null;
+  }
+  const tree = scanSessionTranscriptTree(records);
+  return { entryId: latestEntryId, leafId: tree.leafId };
 }
 
 export async function forkCompactionCheckpointTranscriptAsync(params: {
@@ -646,7 +680,7 @@ export function createFileBackedCompactionCheckpointStore(): CompactionCheckpoin
  * checkpoints that already have a snapshot file keep working.
  */
 export async function captureCompactionCheckpointSnapshotAsync(params: {
-  sessionManager?: Pick<SessionManager, "getLeafId">;
+  sessionManager?: SessionManagerCheckpointView;
   sessionFile: string;
   maxBytes?: number;
 }): Promise<CapturedCompactionCheckpointSnapshot | null> {
@@ -663,6 +697,30 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
     return null;
   }
   const maxBytes = params.maxBytes ?? MAX_COMPACTION_CHECKPOINT_LEAF_SCAN_BYTES;
+  const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
+  if (sqliteMarker) {
+    if (typeof params.sessionManager?.getEntries !== "function") {
+      return null;
+    }
+    const entryRecords = params.sessionManager.getEntries() as Record<string, unknown>[];
+    const transcriptState = readSessionLeafStateFromRecords(entryRecords);
+    const position = resolveCompactionCheckpointTranscriptPosition({
+      preferredLeafId: liveLeafId,
+      transcriptState,
+    });
+    const leafId = position.leafId;
+    if (!leafId) {
+      return null;
+    }
+    return {
+      sessionId:
+        typeof params.sessionManager.getSessionId === "function"
+          ? params.sessionManager.getSessionId()
+          : sqliteMarker.sessionId,
+      leafId,
+      ...(position.entryId ? { entryId: position.entryId } : {}),
+    };
+  }
   const sessionId = await readSessionIdFromTranscriptHeaderAsync(sessionFile);
   const transcriptState = await readSessionLeafStateFromTranscriptAsync(sessionFile, maxBytes);
   const position = resolveCompactionCheckpointTranscriptPosition({
