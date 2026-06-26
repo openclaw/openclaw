@@ -213,6 +213,31 @@ describe("edit tool", () => {
     ).rejects.toThrow(/Current file contents:\nactual content/);
   });
 
+  it("does not hide unrelated errors that mention no changes", async () => {
+    const filePath = await createTempFile("old content\n");
+    const operations: EditOperations = {
+      access: async (absolutePath) => {
+        await fs.access(absolutePath);
+      },
+      readFile: (absolutePath) => fs.readFile(absolutePath),
+      writeFile: async () => {
+        throw new Error("No changes made to the disk because it is full");
+      },
+    };
+    const tool = createEditTool(tmpDir, { operations });
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "old", newText: "new" }],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow("No changes made to the disk because it is full");
+  });
+
   it("does not rewrite fuzzy-matched no-op text", async () => {
     const filePath = await createTempFile("foo\n");
     const tool = createEditTool(tmpDir);

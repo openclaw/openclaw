@@ -19,6 +19,7 @@ import {
   applyEditsToNormalizedContent,
   computeEditsDiff,
   detectLineEnding,
+  EditNoChangeError,
   type Edit,
   type EditDiffError,
   type EditDiffResult,
@@ -511,7 +512,7 @@ export function createEditToolDefinition(
             throw appendMismatchHint(normalizedError, currentContent);
           }
           // Terminal no-op: the edit matched but produced identical content.
-          if (normalizedError.message.includes("No changes made to")) {
+          if (normalizedError instanceof EditNoChangeError) {
             return {
               ...textResult(
                 `No changes made to ${path}. The replacement produced identical content.`,

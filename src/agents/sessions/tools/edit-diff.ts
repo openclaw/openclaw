@@ -79,6 +79,13 @@ export interface Edit {
   newText: string;
 }
 
+export class EditNoChangeError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "EditNoChangeError";
+  }
+}
+
 interface MatchedEdit {
   editIndex: number;
   matchIndex: number;
@@ -179,13 +186,15 @@ function getEmptyOldTextError(path: string, editIndex: number, totalEdits: numbe
   return new Error(`edits[${editIndex}].oldText must not be empty in ${path}.`);
 }
 
-function getNoChangeError(path: string, totalEdits: number): Error {
+function getNoChangeError(path: string, totalEdits: number): EditNoChangeError {
   if (totalEdits === 1) {
-    return new Error(
+    return new EditNoChangeError(
       `No changes made to ${path}. The replacement produced identical content. This might indicate an issue with special characters or the text not existing as expected.`,
     );
   }
-  return new Error(`No changes made to ${path}. The replacements produced identical content.`);
+  return new EditNoChangeError(
+    `No changes made to ${path}. The replacements produced identical content.`,
+  );
 }
 
 /**
