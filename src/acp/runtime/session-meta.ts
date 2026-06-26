@@ -35,6 +35,7 @@ import { isRecord } from "../../utils.js";
 /** ACP metadata joined with its legacy session-store row and config context. */
 export type AcpSessionStoreEntry = {
   cfg: OpenClawConfig;
+  agentId?: string;
   storePath: string;
   sessionKey: string;
   storeSessionKey: string;
@@ -76,14 +77,18 @@ export function resolveSessionStorePathForAcp(params: {
   sessionKey: string;
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-}): { cfg: OpenClawConfig; storePath: string } {
+}): { cfg: OpenClawConfig; agentId?: string; storePath: string } {
   const cfg = params.cfg ?? getRuntimeConfig();
   const parsed = parseAgentSessionKey(params.sessionKey);
   const storePath = resolveStorePath(cfg.session?.store, {
     agentId: parsed?.agentId,
     env: params.env,
   });
-  return { cfg, storePath };
+  return {
+    cfg,
+    ...(parsed?.agentId ? { agentId: parsed.agentId } : {}),
+    storePath,
+  };
 }
 
 function getAcpSessionKysely(db: DatabaseSync) {
@@ -364,22 +369,24 @@ function readSessionEntryFromStore(params: {
   entry?: SessionEntry;
   storeReadFailed?: boolean;
 } {
-  const { cfg, storePath } = resolveSessionStorePathForAcp({
+  const { cfg, agentId, storePath } = resolveSessionStorePathForAcp({
     sessionKey: params.sessionKey,
     cfg: params.cfg,
     env: params.env,
   });
   try {
     const entries = listSessionEntries({
+      ...(agentId ? { agentId } : {}),
       storePath,
       ...(params.clone === false ? { clone: false } : {}),
     });
     const storeSessionKey = resolveStoreSessionKey(entries, params.sessionKey);
     const entry = entries.find((candidate) => candidate.sessionKey === storeSessionKey)?.entry;
-    return { cfg, storePath, storeSessionKey, entry };
+    return { cfg, agentId, storePath, storeSessionKey, entry };
   } catch {
     return {
       cfg,
+      agentId,
       storePath,
       storeSessionKey: normalizeLowercaseStringOrEmpty(params.sessionKey),
       storeReadFailed: true,
@@ -408,6 +415,7 @@ export function readAcpSessionEntry(params: {
     row && acpSessionRowMatchesEntry(row, storeEntry.entry) ? rowToAcpSessionMeta(row) : undefined;
   return {
     cfg: storeEntry.cfg,
+    agentId: storeEntry.agentId,
     storePath: storeEntry.storePath,
     sessionKey,
     storeSessionKey: storeEntry.storeSessionKey,
@@ -432,7 +440,7 @@ export async function listAcpSessionEntries(params: {
 
   for (const row of rows) {
     const sessionKey = row.session_key;
-    const { storePath } = resolveSessionStorePathForAcp({
+    const { agentId, storePath } = resolveSessionStorePathForAcp({
       sessionKey,
       cfg,
       env: params.env,
@@ -440,6 +448,7 @@ export async function listAcpSessionEntries(params: {
     let sessionEntries: SessionEntrySummary[];
     try {
       sessionEntries = listSessionEntries({
+        ...(agentId ? { agentId } : {}),
         storePath,
         ...(params.clone === false ? { clone: false } : {}),
       });
@@ -455,6 +464,7 @@ export async function listAcpSessionEntries(params: {
     }
     entries.push({
       cfg,
+      agentId,
       storePath,
       sessionKey,
       storeSessionKey,
@@ -568,7 +578,11 @@ export async function upsertAcpSessionMeta(params: {
   if (metaToPersist === null) {
     const patched = entry
       ? await patchSessionEntryWithKey(
-          { storePath: storeEntry.storePath, sessionKey: storageSessionKey },
+          {
+            ...(storeEntry.agentId ? { agentId: storeEntry.agentId } : {}),
+            storePath: storeEntry.storePath,
+            sessionKey: storageSessionKey,
+          },
           (currentEntry) => {
             const next = { ...currentEntry };
             delete next.acp;
@@ -604,7 +618,11 @@ export async function upsertAcpSessionMeta(params: {
     return patched?.entry ?? null;
   }
   const persisted = await patchSessionEntryWithKey(
-    { storePath: storeEntry.storePath, sessionKey: storageSessionKey },
+    {
+      ...(storeEntry.agentId ? { agentId: storeEntry.agentId } : {}),
+      storePath: storeEntry.storePath,
+      sessionKey: storageSessionKey,
+    },
     (currentEntry) => {
       const next = mergeSessionEntry(currentEntry, {
         updatedAt,
