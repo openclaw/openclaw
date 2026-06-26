@@ -434,13 +434,20 @@ export function maybeRepairStalePluginConfig(
     changes.push(
       `- channels: removed ${channelIds.length} stale channel config${channelIds.length === 1 ? "" : "s"} (${channelIds.join(", ")})`,
     );
-    const heartbeatCount = hits.filter((hit) => hit.surface === "heartbeat").length;
+    let heartbeatCount = 0;
+    let modelByChannelCount = 0;
+    for (const hit of hits) {
+      if (hit.surface === "heartbeat") {
+        heartbeatCount += 1;
+      } else if (hit.surface === "modelByChannel") {
+        modelByChannelCount += 1;
+      }
+    }
     if (heartbeatCount > 0) {
       changes.push(
         `- agents heartbeat: removed ${heartbeatCount} stale heartbeat target${heartbeatCount === 1 ? "" : "s"} (${channelIds.join(", ")})`,
       );
     }
-    const modelByChannelCount = hits.filter((hit) => hit.surface === "modelByChannel").length;
     if (modelByChannelCount > 0) {
       changes.push(
         `- channels.modelByChannel: removed ${modelByChannelCount} stale channel model override${modelByChannelCount === 1 ? "" : "s"} (${channelIds.join(", ")})`,
