@@ -12,11 +12,14 @@ function deriveCanonicalSessionChatType(scopedSessionKey: string): SessionKeyCha
   if (parts[0] === "agent") {
     return undefined;
   }
-  const peerKind = CANONICAL_PEER_KINDS.has(parts[1] ?? "")
-    ? parts[1]
-    : CANONICAL_PEER_KINDS.has(parts[2] ?? "")
-      ? parts[2]
-      : undefined;
+  const peerKind =
+    parts[0] === "direct" || parts[0] === "dm"
+      ? parts[0]
+      : CANONICAL_PEER_KINDS.has(parts[1] ?? "")
+        ? parts[1]
+        : CANONICAL_PEER_KINDS.has(parts[2] ?? "")
+          ? parts[2]
+          : undefined;
   if (peerKind === "group" || peerKind === "channel") {
     return peerKind;
   }

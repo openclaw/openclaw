@@ -88,6 +88,18 @@ describe("resolveSendPolicy", () => {
       expected: "deny",
     },
     {
+      name: "chat-type deny fires for a per-peer DM key without session metadata",
+      cfg: cfgWithRules([{ action: "deny", match: { chatType: "direct" } }]),
+      sessionKey: buildAgentPeerSessionKey({
+        agentId: "main",
+        channel: "demo-channel",
+        peerKind: "direct",
+        peerId: "user-1",
+        dmScope: "per-peer",
+      }),
+      expected: "deny",
+    },
+    {
       name: "channel-scoped deny ignores later peer-kind-looking tokens in non-channel keys",
       cfg: cfgWithRules([{ action: "deny", match: { channel: "demo-channel" } }]),
       sessionKey: "demo-channel:not-a-peer-kind:user-1:direct",

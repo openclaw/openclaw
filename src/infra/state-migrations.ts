@@ -3497,6 +3497,7 @@ export function sessionStoreTextMayNeedCanonicalization(params: {
   storeAgentIds: Iterable<string>;
   mainKey: string;
   scope?: SessionScope;
+  preserveForeignMainAliases?: boolean;
 }): boolean {
   const keys = listTopLevelSessionStoreKeys(params.raw);
   if (!keys) {
@@ -3518,6 +3519,12 @@ export function sessionStoreTextMayNeedCanonicalization(params: {
     }
     if (lowerKey === "global" || lowerKey === "unknown") {
       continue;
+    }
+    if (
+      params.preserveForeignMainAliases &&
+      isLegacyDefaultMainAliasKey(lowerKey, params.mainKey)
+    ) {
+      return true;
     }
     if (lowerKey === DEFAULT_MAIN_KEY || lowerKey === params.mainKey) {
       return true;
@@ -5053,6 +5060,9 @@ export async function migrateOrphanedSessionKeys(params: {
     if (!fileExists(storePath)) {
       continue;
     }
+    const pluginForeignMainAliasRisk = [...storeAgentIds].some(
+      (id) => pluginAgentIdSet.has(id) && id !== DEFAULT_AGENT_ID,
+    );
     let raw: string;
     try {
       raw = fs.readFileSync(storePath, "utf-8");
@@ -5066,6 +5076,7 @@ export async function migrateOrphanedSessionKeys(params: {
         storeAgentIds,
         mainKey,
         scope,
+        preserveForeignMainAliases: pluginForeignMainAliasRisk,
       })
     ) {
       continue;
@@ -5089,9 +5100,6 @@ export async function migrateOrphanedSessionKeys(params: {
     let working = parsed.store;
     let totalLegacy = 0;
     const preserveAmbiguousKeys = storePath === fixedCustomStorePath || storeAgentIds.size > 1;
-    const pluginForeignMainAliasRisk = [...storeAgentIds].some(
-      (id) => pluginAgentIdSet.has(id) && id !== DEFAULT_AGENT_ID,
-    );
     const preservedAmbiguousKeyCount = Object.keys(working).filter(
       (key) =>
         (preserveAmbiguousKeys && isAmbiguousSharedStoreKey(key, mainKey, scope)) ||

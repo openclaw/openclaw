@@ -295,6 +295,33 @@ describe("migrateOrphanedSessionKeys", () => {
     });
   });
 
+  it("warns on custom main aliases in fixed plugin stores", async () => {
+    await withStateFixture(async ({ tmpDir, stateDir }) => {
+      const sharedStorePath = path.join(tmpDir, "shared-sessions.json");
+      writeStore(sharedStorePath, {
+        "agent:main:work": { sessionId: "ambiguous-main", updatedAt: 2000 },
+      });
+      const cfg = {
+        session: { mainKey: "work", store: sharedStorePath },
+        agents: { list: [{ id: "main", default: true }] },
+        plugins: {
+          entries: {
+            "voice-call": { config: { agentId: "voice" } },
+          },
+        },
+      } as OpenClawConfig;
+
+      const result = await migrateFixtureState(stateDir, cfg);
+
+      const store = readStore(sharedStorePath);
+      expect(requireStoreEntry(store, "agent:main:work").sessionId).toBe("ambiguous-main");
+      expect(result.changes).toHaveLength(0);
+      expect(result.warnings).toEqual([
+        `Preserved 1 ambiguous session key(s) in potentially shared store ${sharedStorePath}`,
+      ]);
+    });
+  });
+
   it("renames same-agent main aliases when mainKey changes", async () => {
     await withStateFixture(async ({ stateDir }) => {
       const storePath = opsSessionStorePath(stateDir);
