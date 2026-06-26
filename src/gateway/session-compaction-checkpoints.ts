@@ -703,9 +703,6 @@ function shouldRouteCheckpointSessionMutationToSqlite(params: {
   if (!entry) {
     return false;
   }
-  if (parseSqliteSessionFileMarker(entry.sessionFile)) {
-    return true;
-  }
   const checkpoint = entry.compactionCheckpoints?.find(
     (candidate) => candidate.checkpointId === params.checkpointId,
   );
