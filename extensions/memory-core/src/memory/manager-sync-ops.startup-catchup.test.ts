@@ -19,7 +19,11 @@ import {
   clearRuntimeConfigSnapshot,
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { upsertSessionEntry } from "../../../../src/config/sessions/session-accessor.js";
+import {
+  appendTranscriptMessage,
+  upsertSessionEntry,
+} from "../../../../src/config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../../../src/config/sessions/sqlite-marker.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
@@ -596,6 +600,53 @@ describe("session startup catch-up", () => {
 
     expect(harness.indexedPaths).toEqual(["sessions/cron-thread.jsonl"]);
     expect(harness.indexedContents).toEqual([""]);
+  });
+
+  it("keeps targeted SQLite corpus markers during archive-file sync", async () => {
+    const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const sessionId = "sqlite-target";
+    const sessionKey = "agent:main:chat:sqlite-target";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      {
+        cwd: stateDir,
+        message: { role: "user", content: "sqlite targeted memory content" },
+      },
+    );
+    await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }), "utf-8");
+    vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+    const harness = new SessionStartupCatchupHarness([]);
+
+    await (
+      harness as unknown as {
+        syncArchiveFiles: (params: {
+          needsFullReindex: boolean;
+          targetArchiveFiles: string[];
+        }) => Promise<void>;
+      }
+    ).syncArchiveFiles({
+      needsFullReindex: false,
+      targetArchiveFiles: [marker],
+    });
+
+    expect(harness.indexedPaths).toEqual(["sessions/main/sqlite-target"]);
+    expect(harness.indexedContents[0]).toContain("sqlite targeted memory content");
   });
 
   it("queues transcript update identity without requiring a session file", async () => {
