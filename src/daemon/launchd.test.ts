@@ -469,6 +469,7 @@ describe("launchctl list detection", () => {
         "123 0 ai.openclaw.gateway",
         "- 127 ai.openclaw.update.2026.5.12",
         "- 0 ai.openclaw.manual-update.1717168800",
+        "- 0 ai.openclaw.tayoun.update.20260625T201026-0400",
         "8142 0 ai.openclaw.update.2026.5.13-beta.1",
         "- 0 ai.openclaw.manual-updater.1717168800",
         "- 0 com.example.other",
@@ -478,6 +479,10 @@ describe("launchctl list detection", () => {
     expect(jobs).toEqual([
       {
         label: "ai.openclaw.manual-update.1717168800",
+        lastExitStatus: 0,
+      },
+      {
+        label: "ai.openclaw.tayoun.update.20260625T201026-0400",
         lastExitStatus: 0,
       },
       {
@@ -495,11 +500,18 @@ describe("launchctl list detection", () => {
   it.runIf(process.platform === "darwin")(
     "finds stale OpenClaw updater jobs via launchctl list",
     async () => {
-      state.listOutput = "- 127 ai.openclaw.update.2026.5.12\n";
+      state.listOutput = [
+        "- 127 ai.openclaw.update.2026.5.12",
+        "- 0 ai.openclaw.tayoun.update.20260625T201026-0400",
+      ].join("\n");
 
       const jobs = await findStaleOpenClawUpdateLaunchdJobs();
 
       expect(jobs).toEqual([
+        {
+          label: "ai.openclaw.tayoun.update.20260625T201026-0400",
+          lastExitStatus: 0,
+        },
         {
           label: "ai.openclaw.update.2026.5.12",
           lastExitStatus: 127,
@@ -564,6 +576,24 @@ describe("launchctl list detection", () => {
       expect(state.launchctlCalls).toContainEqual([
         "disable",
         `${domain}/ai.openclaw.manual-update.1717168800`,
+      ]);
+      expect(launchctlCommandNames()).not.toContain("remove");
+    },
+  );
+
+  it.runIf(process.platform === "darwin")(
+    "disables the current profile-scoped updater launchd job",
+    async () => {
+      await expect(
+        disableCurrentOpenClawUpdateLaunchdJob({
+          LAUNCH_JOB_LABEL: "ai.openclaw.tayoun.update.20260625T201026-0400",
+        }),
+      ).resolves.toBe(true);
+
+      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      expect(state.launchctlCalls).toContainEqual([
+        "disable",
+        `${domain}/ai.openclaw.tayoun.update.20260625T201026-0400`,
       ]);
       expect(launchctlCommandNames()).not.toContain("remove");
     },
@@ -674,6 +704,20 @@ describe("launchctl list detection", () => {
     },
   );
 
+  it.runIf(process.platform === "darwin")(
+    "does not disable profile-specific gateway jobs that match profile update label shape",
+    async () => {
+      await expect(
+        disableCurrentOpenClawUpdateLaunchdJob({
+          LAUNCH_JOB_LABEL: "ai.openclaw.tayoun.update.20260625T201026-0400",
+          OPENCLAW_PROFILE: "tayoun.update.20260625T201026-0400",
+        }),
+      ).resolves.toBe(false);
+
+      expect(state.launchctlCalls).toEqual([]);
+    },
+  );
+
   it.runIf(process.platform === "darwin")("disables explicit legacy updater jobs", async () => {
     await expect(disableOpenClawUpdateLaunchdJob("ai.openclaw.update.2026.5.12")).resolves.toBe(
       true,
@@ -685,6 +729,21 @@ describe("launchctl list detection", () => {
       `${domain}/ai.openclaw.update.2026.5.12`,
     ]);
   });
+
+  it.runIf(process.platform === "darwin")(
+    "disables explicit profile-scoped updater jobs",
+    async () => {
+      await expect(
+        disableOpenClawUpdateLaunchdJob("ai.openclaw.tayoun.update.20260625T201026-0400"),
+      ).resolves.toBe(true);
+
+      const domain = typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501";
+      expect(state.launchctlCalls).toContainEqual([
+        "disable",
+        `${domain}/ai.openclaw.tayoun.update.20260625T201026-0400`,
+      ]);
+    },
+  );
 
   it.runIf(process.platform === "darwin")("disables explicit manual updater jobs", async () => {
     await expect(

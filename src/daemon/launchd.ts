@@ -51,6 +51,8 @@ const LAUNCH_AGENT_ENV_DIR_NAME = "service-env";
 const LAUNCH_AGENT_STDERR_PATH = "/dev/null";
 const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX = "ai.openclaw.update.";
 const OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN = /^ai\.openclaw\.manual-update\.\d+$/;
+const OPENCLAW_PROFILE_UPDATE_LAUNCHD_LABEL_PATTERN =
+  /^ai\.openclaw\.[A-Za-z0-9_-]+\.update\.[A-Za-z0-9._-]+$/;
 const LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000;
 const LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS = 100;
 
@@ -70,7 +72,13 @@ function normalizeOpenClawUpdateLaunchdLabel(label: unknown): string | null {
   }
   // Manual update jobs include a timestamp-like suffix and should be cleaned up
   // without matching arbitrary ai.openclaw labels.
-  return OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN.test(trimmed) ? trimmed : null;
+  if (OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN.test(trimmed)) {
+    return trimmed;
+  }
+  // Profile-scoped update jobs are submitted as
+  // `ai.openclaw.<profile>.update.<timestamp>`. Recognize only the full shape
+  // so normal profile gateway labels remain protected by isCurrentGatewayLaunchdLabel.
+  return OPENCLAW_PROFILE_UPDATE_LAUNCHD_LABEL_PATTERN.test(trimmed) ? trimmed : null;
 }
 
 function isCurrentGatewayLaunchdLabel(label: string, env: NodeJS.ProcessEnv): boolean {
