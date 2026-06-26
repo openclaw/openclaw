@@ -22,31 +22,33 @@ export { drainFormattedSystemEvents } from "./session-system-events.js";
 export { resetResolvedSkillsCacheForTests } from "../../skills/runtime/session-snapshot.js";
 
 async function persistSessionEntryUpdate(params: {
+  expectedSessionId: string | undefined;
   sessionEntryHandle?: ReplySessionEntryHandle;
   sessionStore?: Record<string, SessionEntry>;
   sessionKey?: string;
   storePath?: string;
   nextEntry: SessionEntry;
-}) {
-  if (params.sessionEntryHandle) {
-    params.sessionEntryHandle.replaceCurrent(params.nextEntry);
-  } else if (params.sessionStore && params.sessionKey) {
-    params.sessionStore[params.sessionKey] = {
-      ...params.sessionStore[params.sessionKey],
-      ...params.nextEntry,
-    };
-  } else {
-    return;
+}): Promise<SessionEntry | undefined> {
+  if (!params.sessionEntryHandle && (!params.sessionStore || !params.sessionKey)) {
+    return undefined;
   }
   if (!params.storePath || !params.sessionKey) {
-    return;
+    if (params.sessionEntryHandle) {
+      params.sessionEntryHandle.replaceCurrent(params.nextEntry);
+    } else if (params.sessionStore && params.sessionKey) {
+      params.sessionStore[params.sessionKey] = {
+        ...params.sessionStore[params.sessionKey],
+        ...params.nextEntry,
+      };
+    }
+    return params.nextEntry;
   }
   const persistedEntry = await updateSessionEntry(
     {
       storePath: params.storePath,
       sessionKey: params.sessionKey,
     },
-    () => params.nextEntry,
+    (entry) => (entry.sessionId === params.expectedSessionId ? params.nextEntry : null),
   );
   if (persistedEntry) {
     if (params.sessionEntryHandle) {
@@ -54,7 +56,9 @@ async function persistSessionEntryUpdate(params: {
     } else if (params.sessionStore && params.sessionKey) {
       params.sessionStore[params.sessionKey] = persistedEntry;
     }
+    return persistedEntry;
   }
+  return undefined;
 }
 
 function emitCompactionSessionLifecycleHooks(params: {
@@ -205,14 +209,16 @@ export async function ensureSkillSnapshot(params: {
       systemSent: true,
       skillsSnapshot: skillSnapshot,
     };
-    await persistSessionEntryUpdate({
+    const persistedEntry = await persistSessionEntryUpdate({
+      expectedSessionId: current.sessionId,
       sessionEntryHandle,
       sessionStore,
       sessionKey,
       storePath,
       nextEntry,
     });
-    systemSent = true;
+    nextEntry = persistedEntry;
+    systemSent = persistedEntry?.systemSent ?? systemSent;
   }
 
   const hasFreshSnapshotInEntry =
@@ -241,7 +247,8 @@ export async function ensureSkillSnapshot(params: {
       updatedAt: Date.now(),
       skillsSnapshot,
     };
-    await persistSessionEntryUpdate({
+    nextEntry = await persistSessionEntryUpdate({
+      expectedSessionId: current.sessionId,
       sessionEntryHandle,
       sessionStore,
       sessionKey,

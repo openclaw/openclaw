@@ -126,7 +126,7 @@ describe("ensureSkillSnapshot", () => {
     expect(resolveAgentIdFromSessionKeyMock).not.toHaveBeenCalled();
   });
 
-  it("does not recreate a deleted first-turn session entry when persisting skills", async () => {
+  it("does not keep a deleted first-turn session entry when persisting skills", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "0");
     const sessionKey = "agent:main:main";
     const sessionEntry = {
@@ -153,7 +153,42 @@ describe("ensureSkillSnapshot", () => {
       },
       expect.any(Function),
     );
-    expect(result.systemSent).toBe(true);
-    expect(sessionStore[sessionKey]?.systemSent).toBe(true);
+    expect(result.sessionEntry).toBeUndefined();
+    expect(result.systemSent).toBe(false);
+    expect(sessionStore[sessionKey]).toEqual(sessionEntry);
+  });
+
+  it("adopts a rebound first-turn session entry instead of overwriting it", async () => {
+    vi.stubEnv("OPENCLAW_TEST_FAST", "0");
+    const sessionKey = "agent:main:main";
+    const sessionEntry = {
+      sessionId: "old-session",
+      updatedAt: 10,
+    };
+    const reboundEntry = {
+      sessionId: "new-session",
+      updatedAt: 20,
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+    updateSessionEntryMock.mockImplementationOnce(async (_scope, update) => {
+      const patch = await update(reboundEntry);
+      expect(patch).toBeNull();
+      return reboundEntry;
+    });
+
+    const result = await ensureSkillSnapshot({
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      sessionId: "old-session",
+      storePath: "/tmp/sessions.json",
+      isFirstTurnInSession: true,
+      workspaceDir: TEST_WORKSPACE_DIR,
+      cfg: {},
+    });
+
+    expect(result.sessionEntry).toEqual(reboundEntry);
+    expect(result.systemSent).toBe(false);
+    expect(sessionStore[sessionKey]).toEqual(reboundEntry);
   });
 });
