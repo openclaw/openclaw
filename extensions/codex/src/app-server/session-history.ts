@@ -11,11 +11,7 @@ import {
   parseSessionEntries,
 } from "openclaw/plugin-sdk/agent-sessions";
 import { listSessionEntries } from "openclaw/plugin-sdk/session-store-runtime";
-import {
-  readSessionTranscriptEvents,
-  resolveSessionTranscriptFileTarget,
-  type SessionTranscriptFileTargetParams,
-} from "openclaw/plugin-sdk/session-transcript-runtime";
+import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { sanitizeCodexHistoryImagePayloads } from "./image-payload-sanitizer.js";
 
 export type CodexMirroredSessionHistoryTarget = {
@@ -84,19 +80,7 @@ async function readCodexMirroredSessionEntries(
       storePath: sqliteMarker.storePath,
     })) as SessionEntry[];
   }
-  resolveSessionTranscriptFileTarget(resolveCodexHistoryTranscriptTarget(target));
   return parseSessionEntries(await fs.readFile(target.sessionFile, "utf-8")) as SessionEntry[];
-}
-
-function resolveCodexHistoryTranscriptTarget(
-  target: CodexMirroredSessionHistoryTarget,
-): SessionTranscriptFileTargetParams {
-  return {
-    ...(target.agentId ? { agentId: target.agentId } : {}),
-    sessionFile: target.sessionFile,
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey ?? "",
-  };
 }
 
 function resolveSqliteMarkerSessionKey(
