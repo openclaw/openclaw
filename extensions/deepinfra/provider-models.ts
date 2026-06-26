@@ -462,14 +462,14 @@ export async function discoverDeepInfraModels(options?: {
   }
   const liveModels = chatModels.map(chatSurfaceModelToModelDefinition);
   const seen = new Set(liveModels.map((model) => model.id));
-  const manifestModels = DEEPINFRA_MODEL_CATALOG.map(buildDeepInfraModelDefinition).filter(
-    (model) => {
-      if (seen.has(model.id)) {
-        return false;
-      }
-      seen.add(model.id);
-      return true;
-    },
-  );
+  const manifestModels: ModelDefinitionConfig[] = [];
+  for (const entry of DEEPINFRA_MODEL_CATALOG) {
+    const model = buildDeepInfraModelDefinition(entry);
+    if (seen.has(model.id)) {
+      continue;
+    }
+    seen.add(model.id);
+    manifestModels.push(model);
+  }
   return [...liveModels, ...manifestModels];
 }

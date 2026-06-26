@@ -215,6 +215,7 @@ describe("discoverDeepInfraModels (chat-only shim)", () => {
       expect(fetchSignal).toBeInstanceOf(AbortSignal);
       expect(fetchHeaders).toBeInstanceOf(Headers);
       expect((fetchHeaders as Headers).get("Accept")).toBe("application/json");
+      expect(models.filter((model) => model.id === "openai/gpt-oss-120b")).toHaveLength(1);
       expect(models).toEqual(
         expectedLiveChatCatalog([
           {
