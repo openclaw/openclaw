@@ -62,22 +62,21 @@ describe("loadProjectContextFiles", () => {
 
   it("excludes parent directories above the workspace boundary", () => {
     // Directory layout:
-    //   tmp/parent/AGENTS.md     ← outside workspace, must NOT be loaded
-    //   tmp/workspace/AGENTS.md  ← workspace root (boundary)
-    //   tmp/workspace/task/      ← cwd (no AGENTS.md here)
+    //   tmp/AGENTS.md              ← actual ANCESTOR above workspace, must NOT be loaded
+    //   tmp/workspace/AGENTS.md    ← workspace root (boundary)
+    //   tmp/workspace/task/        ← cwd (no AGENTS.md here)
     const root = mkdtempSync(join(tmpdir(), "openclaw-boundary-exclusion-"));
     try {
-      const parentDir = join(root, "parent");
       const workspaceDir = join(root, "workspace");
       const cwd = join(workspaceDir, "task");
       const agentDir = join(root, "agent");
 
-      mkdirSync(parentDir, { recursive: true });
       mkdirSync(workspaceDir, { recursive: true });
       mkdirSync(cwd, { recursive: true });
       mkdirSync(agentDir, { recursive: true });
 
-      writeFileSync(join(parentDir, "AGENTS.md"), "# hostile parent", "utf-8");
+      // Hostile AGENTS.md in the actual ancestor above the workspace
+      writeFileSync(join(root, "AGENTS.md"), "# hostile ancestor", "utf-8");
       writeFileSync(join(workspaceDir, "AGENTS.md"), "# trusted workspace", "utf-8");
 
       const result = loadProjectContextFiles({
@@ -91,8 +90,8 @@ describe("loadProjectContextFiles", () => {
       // Workspace AGENTS.md loaded
       expect(paths).toContain(resolve(join(workspaceDir, "AGENTS.md")));
 
-      // Parent (outside workspace boundary) must NOT be loaded
-      expect(paths).not.toContain(resolve(join(parentDir, "AGENTS.md")));
+      // Hostile ancestor (above workspace boundary) must NOT be loaded
+      expect(paths).not.toContain(resolve(join(root, "AGENTS.md")));
 
       // Agent dir context file also loaded (if present)
       // (agentDir is empty in this test so no extra file)
@@ -214,6 +213,82 @@ describe("loadProjectContextFiles", () => {
       // Task cwd is after all ancestors (pushed last)
       expect(wsIdx).toBeLessThan(cwdIdx);
       expect(l1Idx).toBeLessThan(cwdIdx);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("fail-closed when cwd is not inside the workspace boundary", () => {
+    // When cwd resolves to a path outside workspaceDir, the function must
+    // NOT walk ancestors — a relative, symlink-mismatched, or non-descendant
+    // cwd could otherwise bypass the equality stop condition and load context
+    // files from parent directories outside the trusted workspace.
+    const root = mkdtempSync(join(tmpdir(), "openclaw-fail-closed-"));
+    try {
+      const workspaceDir = join(root, "workspace");
+      const cwdOutside = join(root, "other");
+      const agentDir = join(root, "agent");
+
+      mkdirSync(workspaceDir, { recursive: true });
+      mkdirSync(cwdOutside, { recursive: true });
+      mkdirSync(agentDir, { recursive: true });
+
+      writeFileSync(join(root, "AGENTS.md"), "# hostile root", "utf-8");
+      writeFileSync(join(workspaceDir, "AGENTS.md"), "# workspace", "utf-8");
+      writeFileSync(join(cwdOutside, "AGENTS.md"), "# other", "utf-8");
+
+      const result = loadProjectContextFiles({
+        cwd: cwdOutside,
+        agentDir,
+        workspaceDir,
+      });
+
+      // cwd is outside the workspace boundary → no ancestor context files loaded
+      // (agentDir has no AGENTS.md in this test)
+      expect(result.length).toBe(0);
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
+  it("resolves all input paths before the boundary comparison", () => {
+    // All paths passed to loadProjectContextFiles must be resolved before
+    // the containment and equality checks — this prevents a relative or
+    // non-canonical cwd from bypassing the workspace boundary.
+    //
+    // Note: absolute paths are returned by resolve() as-is, so the real
+    // guard is the containment check in the fail-closed test above.
+    // This test verifies the general path-resolution contract.
+    const root = mkdtempSync(join(tmpdir(), "openclaw-path-resolution-"));
+    try {
+      const workspaceDir = join(root, "workspace");
+      const cwd = join(workspaceDir, "task");
+      const agentDir = join(root, "agent");
+
+      mkdirSync(workspaceDir, { recursive: true });
+      mkdirSync(cwd, { recursive: true });
+      mkdirSync(agentDir, { recursive: true });
+
+      writeFileSync(join(root, "AGENTS.md"), "# hostile root", "utf-8");
+      writeFileSync(join(workspaceDir, "AGENTS.md"), "# workspace", "utf-8");
+      writeFileSync(join(cwd, "AGENTS.md"), "# task", "utf-8");
+
+      const result = loadProjectContextFiles({
+        cwd,
+        agentDir,
+        workspaceDir,
+      });
+
+      const paths = result.map((f) => resolve(f.path));
+
+      // Task cwd loaded
+      expect(paths).toContain(resolve(join(cwd, "AGENTS.md")));
+
+      // Workspace root loaded
+      expect(paths).toContain(resolve(join(workspaceDir, "AGENTS.md")));
+
+      // Hostile root AGENTS.md NOT loaded (above workspace boundary)
+      expect(paths).not.toContain(resolve(join(root, "AGENTS.md")));
     } finally {
       rmSync(root, { force: true, recursive: true });
     }

@@ -96,8 +96,8 @@ export function loadProjectContextFiles(options: {
    *  When omitted the boundary falls back to cwd (backward-compatible). */
   workspaceDir?: string;
 }): Array<{ path: string; content: string }> {
-  const resolvedCwd = options.cwd;
-  const resolvedAgentDir = options.agentDir;
+  const resolvedCwd = resolve(options.cwd);
+  const resolvedAgentDir = resolve(options.agentDir);
 
   const contextFiles: Array<{ path: string; content: string }> = [];
   const seenPaths = new Set<string>();
@@ -110,11 +110,22 @@ export function loadProjectContextFiles(options: {
 
   const ancestorContextFiles: Array<{ path: string; content: string }> = [];
 
-  let currentDir = resolvedCwd;
-
   // Use the explicit workspace boundary when provided, otherwise fall back to
   // cwd so existing callers that don't pass workspaceDir are unchanged.
   const boundary = resolve(options.workspaceDir ?? options.cwd);
+
+  // Fail-closed: if cwd is not within the workspace boundary, do not walk
+  // ancestors — a relative, symlink-mismatched, or non-descendant cwd could
+  // otherwise bypass the equality-only stop condition and load context files
+  // from parent directories outside the trusted workspace.
+  if (
+    resolvedCwd !== boundary &&
+    !resolvedCwd.startsWith(boundary.endsWith("/") ? boundary : `${boundary}/`)
+  ) {
+    return contextFiles;
+  }
+
+  let currentDir = resolvedCwd;
 
   while (true) {
     const contextFile = loadContextFileFromDir(currentDir);
