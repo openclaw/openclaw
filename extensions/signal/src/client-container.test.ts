@@ -512,6 +512,41 @@ describe("containerSendMessage", () => {
     // Cleanup
     await fs.rm(tmpDir, { recursive: true });
   });
+
+  it("strips the internal media-store UUID suffix from outbound attachment filenames", async () => {
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+
+    // Mirror the media-store staging shape (`<original-name>---<uuid>.<ext>`)
+    // produced by saveMediaBuffer for every outbound attachment.
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "signal-test-"));
+    const stagedFile = path.join(tmpDir, "report---a1b2c3d4-5678-90ab-cdef-1234567890ab.jpg");
+    await fs.writeFile(stagedFile, Buffer.from([0xff, 0xd8, 0xff, 0xe0])); // JPEG magic bytes
+
+    mockFetch.mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => JSON.stringify({}),
+    });
+
+    await containerSendMessage({
+      baseUrl: "http://localhost:8080",
+      account: "+14259798283",
+      recipients: ["+15550001111"],
+      message: "Photo",
+      attachments: [stagedFile],
+    });
+
+    const body = parseFetchBody();
+    if (!Array.isArray(body.base64_attachments)) {
+      throw new Error("expected base64 attachments array");
+    }
+    // Recipient must see "report.jpg", not "report---<uuid>.jpg".
+    expect(body.base64_attachments[0]).toMatch(/^data:image\/jpeg;filename=report\.jpg;base64,/);
+
+    await fs.rm(tmpDir, { recursive: true });
+  });
 });
 
 describe("containerSendTyping", () => {

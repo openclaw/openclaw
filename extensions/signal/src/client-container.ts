@@ -7,9 +7,12 @@
  */
 
 import fs from "node:fs/promises";
-import nodePath from "node:path";
 import { resolveFetch } from "openclaw/plugin-sdk/fetch-runtime";
-import { detectMime, parseMediaContentLength } from "openclaw/plugin-sdk/media-runtime";
+import {
+  detectMime,
+  extractOriginalFilename,
+  parseMediaContentLength,
+} from "openclaw/plugin-sdk/media-runtime";
 import {
   parseStrictNonNegativeInteger,
   resolveTimerTimeoutMs,
@@ -381,7 +384,11 @@ async function filesToBase64DataUris(filePaths: string[]): Promise<string[]> {
   for (const filePath of filePaths) {
     const buffer = await fs.readFile(filePath);
     const mime = (await detectMime({ buffer, filePath })) ?? "application/octet-stream";
-    const filename = nodePath.basename(filePath);
+    // Outbound media is staged in the media store as `<name>---<uuid>.<ext>`.
+    // Recover the caller-facing name so recipients don't see the internal UUID
+    // suffix; extractOriginalFilename strips only that staging shape and otherwise
+    // returns the plain basename (same helper the msteams channel uses).
+    const filename = extractOriginalFilename(filePath);
     const b64 = buffer.toString("base64");
     results.push(`data:${mime};filename=${filename};base64,${b64}`);
   }
