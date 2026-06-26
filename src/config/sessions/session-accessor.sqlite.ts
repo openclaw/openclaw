@@ -189,6 +189,7 @@ export type SqliteTranscriptWriteLockContext = {
     options: TranscriptMessageAppendOptions<TMessage>,
   ) => Promise<TranscriptMessageAppendResult<TMessage> | undefined>;
   readEvents: () => Promise<TranscriptEvent[]>;
+  replaceEvents: (events: readonly TranscriptEvent[]) => Promise<void>;
 };
 
 const SQLITE_SESSION_WRITER_QUEUES = new Map<string, StoreWriterQueue>();
@@ -845,10 +846,7 @@ export async function replaceSqliteTranscriptEvents(
   const resolved = resolveSqliteTranscriptScope(scope);
   await runExclusiveSqliteSessionWrite(resolved, async () => {
     runOpenClawAgentWriteTransaction((database) => {
-      deleteSqliteTranscriptEventsInTransaction(database, resolved.sessionId);
-      for (const event of events) {
-        appendTranscriptEventInTransaction(database, resolved, event);
-      }
+      replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
     }, toDatabaseOptions(resolved));
   });
 }
@@ -1107,6 +1105,11 @@ export async function withSqliteTranscriptWriteLock<T>(
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     return await run({
       readEvents: async () => loadSqliteTranscriptEventsFromDatabase(database, resolved.sessionId),
+      replaceEvents: async (events) => {
+        runOpenClawAgentWriteTransaction((writeDatabase) => {
+          replaceSqliteTranscriptEventsInTransaction(writeDatabase, resolved, events);
+        }, toDatabaseOptions(resolved));
+      },
       appendMessage: async (options) => {
         let result: TranscriptMessageAppendResult<unknown> | undefined;
         runOpenClawAgentWriteTransaction((writeDatabase) => {
@@ -2719,6 +2722,17 @@ function readActiveTranscriptAppendParentId(
   return resolveVisibleTranscriptAppendParentId(
     loadSqliteTranscriptEventsFromDatabase(database, sessionId),
   );
+}
+
+function replaceSqliteTranscriptEventsInTransaction(
+  database: OpenClawAgentDatabase,
+  resolved: ResolvedTranscriptScope,
+  events: readonly TranscriptEvent[],
+): void {
+  deleteSqliteTranscriptEventsInTransaction(database, resolved.sessionId);
+  for (const event of events) {
+    appendTranscriptEventInTransaction(database, resolved, event);
+  }
 }
 
 function readTranscriptIdentityByEventId(
