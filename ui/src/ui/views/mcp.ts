@@ -104,9 +104,20 @@ export function renderMcp(props: McpViewProps) {
   const rows = Object.entries(getMcpServers(props.configObject))
     .map(([name, server]) => summarizeServer(name, server))
     .toSorted((a, b) => a.name.localeCompare(b.name));
-  const enabledCount = rows.filter((row) => row.enabled).length;
-  const oauthCount = rows.filter((row) => row.auth === "oauth").length;
-  const filteredCount = rows.filter((row) => row.toolFilter).length;
+  let enabledCount = 0;
+  let oauthCount = 0;
+  let filteredCount = 0;
+  for (const row of rows) {
+    if (row.enabled) {
+      enabledCount += 1;
+    }
+    if (row.auth === "oauth") {
+      oauthCount += 1;
+    }
+    if (row.toolFilter) {
+      filteredCount += 1;
+    }
+  }
   const saveDisabled =
     !props.configDirty || !props.connected || props.configApplying || props.configSaving;
   return html`
