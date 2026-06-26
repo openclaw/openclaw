@@ -19,10 +19,7 @@ import {
 
 const DREAMING_NARRATIVE_RUN_PREFIX = "dreaming-narrative-";
 
-export type SessionTranscriptCorpusArtifactKind =
-  | "active-session"
-  | "archive-artifact"
-  | "orphan-file-artifact";
+export type SessionTranscriptCorpusArtifactKind = "active-session" | "archive-artifact";
 
 export type SessionTranscriptCorpusEntry = {
   agentId: string;
@@ -264,14 +261,6 @@ function collectCronGeneratedSessionKeys(
   return cronGeneratedKeys;
 }
 
-function isRegularSessionTranscriptFile(absPath: string): boolean {
-  try {
-    return fsSync.lstatSync(absPath).isFile();
-  } catch {
-    return false;
-  }
-}
-
 function toSessionStoreCorpusEntry(
   agentId: string,
   sessionsDir: string,
@@ -322,6 +311,7 @@ function listSessionTranscriptArtifactFiles(sessionsDir: string): string[] {
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
       .filter((name) => isUsageCountedSessionTranscriptFileName(name))
+      .filter((name) => isSessionArchiveArtifactName(name))
       .map((name) => path.join(sessionsDir, name));
   } catch {
     return [];
@@ -367,9 +357,9 @@ function toArtifactCorpusEntry(
   if (!sessionId) {
     return null;
   }
-  const artifactKind = isSessionArchiveArtifactName(path.basename(artifactPath))
-    ? "archive-artifact"
-    : "orphan-file-artifact";
+  if (!isSessionArchiveArtifactName(path.basename(artifactPath))) {
+    return null;
+  }
   const classification = classifyTranscriptArtifact(
     artifactPath,
     activeEntriesByPath,
@@ -377,7 +367,7 @@ function toArtifactCorpusEntry(
   );
   return {
     agentId,
-    artifactKind,
+    artifactKind: "archive-artifact",
     sessionFile: artifactPath,
     sessionId,
     ...(classification.generatedByDreamingNarrative ? { generatedByDreamingNarrative: true } : {}),
@@ -453,8 +443,7 @@ export function listSessionTranscriptCorpusEntriesForAgentSync(
   }
   const includeUnownedArtifacts = !isSharedFixedStore;
   const corpusEntries = [...activeEntriesBySessionId.values()].filter(
-    (entry) =>
-      entry.transcriptSource === "sqlite" || isRegularSessionTranscriptFile(entry.sessionFile),
+    (entry) => entry.transcriptSource === "sqlite",
   );
   const scannedArtifactPaths = new Set<string>();
   for (const artifactDir of artifactDirsByPath.values()) {
