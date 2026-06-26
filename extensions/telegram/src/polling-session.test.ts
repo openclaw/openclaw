@@ -1682,13 +1682,24 @@ describe("TelegramPollingSession", () => {
               const queue = createChannelIngressQueue({ ...options, channelId: "telegram" });
               return {
                 ...queue,
-                claim: async (...args: Parameters<typeof queue.claim>) => {
-                  if (args[0] === "0000000000000043" && !blockedSecondClaim) {
+                claimNext: async (...args: Parameters<typeof queue.claimNext>) => {
+                  const claimOptions = args[0];
+                  const blockedLaneKeys = claimOptions?.blockedLaneKeys
+                    ? Array.from(claimOptions.blockedLaneKeys)
+                    : [];
+                  const candidateIds = claimOptions?.candidateIds
+                    ? Array.from(claimOptions.candidateIds)
+                    : [];
+                  if (
+                    candidateIds.includes("0000000000000043") &&
+                    blockedLaneKeys.length > 0 &&
+                    !blockedSecondClaim
+                  ) {
                     blockedSecondClaim = true;
                     resolve();
                     await gate;
                   }
-                  return queue.claim(...args);
+                  return queue.claimNext(...args);
                 },
               };
             },
