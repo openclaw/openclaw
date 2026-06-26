@@ -476,9 +476,11 @@ export async function materializeBundleMcpToolsForRun(params: {
       // Strip null-valued optional arguments: some MCP servers treat JSON null differently
       // from an absent key (e.g., coercing null to ""), while the LLM often sends null for
       // unset optional params. Only strip nulls for fields NOT declared as nullable in the
-      // tool's input schema, preserving schema-meaningful nulls for required nullable fields.
-      const schema = tool.inputSchema as Record<string, unknown> | undefined;
-      const cleaned = stripNullOptionalArgs(input, schema);
+      // tool's normalized input schema, preserving schema-meaningful nulls for required nullable
+      // fields. Normalize first so $ref, nullable: true, and other OpenClaw schema conventions
+      // are resolved before nullability classification.
+      const normalizedSchema = normalizeToolParameterSchema(tool.inputSchema as never);
+      const cleaned = stripNullOptionalArgs(input, normalizedSchema as Record<string, unknown>);
       const result = await params.runtime.callTool(tool.serverName, tool.toolName, cleaned);
       return toAgentToolResult({
         serverName: tool.serverName,
