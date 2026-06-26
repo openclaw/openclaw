@@ -652,7 +652,7 @@ describe("telegram media groups", () => {
 
       readRemoteMediaBufferSpy.mockImplementation(
         async (params: { url?: string; filePathHint?: string }) => {
-          const url = String(params.url ?? "");
+          const url = params.url ?? "";
           if (url.includes("album-partial-1.png")) {
             throw new Error(`Telegram media exceeds 20 MB limit: ${url}`);
           }
