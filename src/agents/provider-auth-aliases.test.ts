@@ -270,4 +270,24 @@ describe("provider auth aliases", () => {
     ).toBe("provider-two");
     expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
+
+  it("resolves modelstudio provider through qwen auth alias from qwen manifest metadata", () => {
+    const metadataSnapshot = createPluginMetadataSnapshot({
+      plugins: [
+        createPluginManifestRecord({
+          id: "qwen",
+          origin: "bundled",
+          providerAuthAliases: {
+            modelstudio: "qwen",
+            qwencloud: "qwen",
+          },
+        }),
+      ],
+    });
+
+    expect(resolveProviderIdForAuth("modelstudio", { metadataSnapshot })).toBe("qwen");
+    expect(resolveProviderIdForAuth("qwencloud", { metadataSnapshot })).toBe("qwen");
+    expect(resolveProviderIdForAuth("qwen", { metadataSnapshot })).toBe("qwen");
+    expect(resolveProviderIdForAuth("dashscope", { metadataSnapshot })).toBe("dashscope");
+  });
 });

@@ -59,6 +59,7 @@ import {
 } from "./model-auth-markers.js";
 import { ProviderAuthError, type ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 import { normalizeProviderId } from "./model-selection.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
 export {
   ensureAuthProfileStore,
@@ -1047,6 +1048,41 @@ export async function resolveApiKeyForProvider(params: {
       forceRefresh: params.forceRefresh,
     });
     if (!resolved) {
+      // The profileId may reference an alias provider (e.g. "modelstudio:default"
+      // when profiles are stored under the canonical "qwen:default" provider ID).
+      // Try resolving the provider part through the auth alias map before failing.
+      const colonIdx = profileId.indexOf(":");
+      if (colonIdx > 0) {
+        const profileProvider = profileId.slice(0, colonIdx);
+        const resolvedProvider = resolveProviderIdForAuth(profileProvider, { config: cfg });
+        if (resolvedProvider !== profileProvider) {
+          const aliasResolvedProfileId = `${resolvedProvider}${profileId.slice(colonIdx)}`;
+          const aliasResolved = await resolveApiKeyForProfile({
+            cfg,
+            store,
+            profileId: aliasResolvedProfileId,
+            agentDir,
+            forceRefresh: params.forceRefresh,
+          });
+          if (aliasResolved) {
+            const resolvedAliasId = aliasResolved.profileId ?? aliasResolvedProfileId;
+            const aliasMode = aliasResolved.profileType ?? store.profiles[resolvedAliasId]?.type;
+            const aliasResult: ResolvedProviderAuth = {
+              apiKey: aliasResolved.apiKey,
+              profileId: resolvedAliasId,
+              source: `profile:${resolvedAliasId}`,
+              mode: aliasMode ? profileTypeToAuthMode(aliasMode) : "api-key",
+            };
+            assertAuthModeAllowedForModel({
+              provider,
+              modelApi: params.modelApi,
+              profileId: resolvedAliasId,
+              mode: aliasResult.mode,
+            });
+            return aliasResult;
+          }
+        }
+      }
       throw new Error(`No credentials found for profile "${profileId}".`);
     }
     const resolvedProfileId = resolved.profileId ?? profileId;
