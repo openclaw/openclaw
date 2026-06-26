@@ -4257,7 +4257,9 @@ export const chatHandlers: GatewayRequestHandlers = {
               userTurnTranscriptRecorder: userTurnRecorder,
               fastModeAutoOnSecondsOverride: p.fastAutoOnSeconds,
               onSessionPrepared: (binding) => {
-                acceptedUserTurnSessionId = binding.sessionId;
+                if (binding.sessionKey === sessionKey) {
+                  acceptedUserTurnSessionId = binding.sessionId;
+                }
               },
               onAgentRunStart: (runId) => {
                 agentRunStarted = true;
