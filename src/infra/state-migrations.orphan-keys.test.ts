@@ -212,6 +212,7 @@ describe("migrateOrphanedSessionKeys", () => {
       const voiceStorePath = path.join(tmpDir, "stores", "voice", "sessions.json");
       writeStore(voiceStorePath, {
         "voice:15550001111": { sessionId: "legacy-voice", updatedAt: 2000 },
+        "agent:voice:metadata": { updatedAt: 1500, groupActivation: "always" },
       });
       const cfg = {
         session: { store: storeTemplate },
@@ -232,6 +233,10 @@ describe("migrateOrphanedSessionKeys", () => {
       expect(requireStoreEntry(store, "agent:voice:voice:15550001111").sessionId).toBe(
         "legacy-voice",
       );
+      expect(store["agent:voice:metadata"]).toEqual({
+        updatedAt: 1500,
+        groupActivation: "always",
+      });
       expect(store["voice:15550001111"]).toBeUndefined();
       expect(result.changes).toHaveLength(1);
       expect(result.warnings).toHaveLength(0);

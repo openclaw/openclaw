@@ -20,6 +20,7 @@ import {
 import type { SessionEntry } from "../config/sessions.js";
 import { saveSessionStore } from "../config/sessions.js";
 import { canonicalizeMainSessionAlias } from "../config/sessions/main-session.js";
+import { normalizePersistedSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import {
   listConfiguredSessionStoreAgentIds,
   resolveAllAgentSessionStoreTargetsSync,
@@ -3189,15 +3190,17 @@ function pickLatestLegacyDirectEntry(
 }
 
 function normalizeSessionEntry(entry: SessionEntryLike): SessionEntry | null {
-  const sessionId = typeof entry.sessionId === "string" ? entry.sessionId : null;
-  if (!sessionId) {
+  const shaped = normalizePersistedSessionEntryShape(entry);
+  if (!shaped) {
     return null;
   }
-  const updatedAt =
-    typeof entry.updatedAt === "number" && Number.isFinite(entry.updatedAt)
-      ? entry.updatedAt
-      : Date.now();
-  const normalized = { ...(entry as unknown as SessionEntry), sessionId, updatedAt };
+  const normalized = { ...shaped };
+  if (typeof normalized.sessionId === "string") {
+    normalized.updatedAt =
+      typeof normalized.updatedAt === "number" && Number.isFinite(normalized.updatedAt)
+        ? normalized.updatedAt
+        : Date.now();
+  }
   const rec = normalized as unknown as Record<string, unknown>;
   if (typeof rec.groupChannel !== "string" && typeof rec.room === "string") {
     rec.groupChannel = rec.room;
