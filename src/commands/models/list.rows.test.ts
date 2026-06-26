@@ -241,4 +241,44 @@ describe("appendConfiguredProviderRows", () => {
     expect(mocks.normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledOnce();
     expect(requireOnlyRow(rows).input).toBe("text+image");
   });
+
+  it("preserves audio and video inputs for configured provider models", async () => {
+    const rows: ModelRow[] = [];
+
+    await appendConfiguredProviderRows({
+      rows,
+      seenKeys: new Set(),
+      context: {
+        cfg: {
+          models: {
+            providers: {
+              minimax: {
+                api: "anthropic-messages",
+                baseUrl: "https://api.minimax.io/anthropic",
+                models: [
+                  {
+                    id: "MiniMax-M3",
+                    name: "MiniMax M3",
+                    reasoning: true,
+                    input: ["text", "image", "video", "audio"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 1_000_000,
+                    maxTokens: 131_072,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        authIndex,
+        configuredByKey: new Map(),
+        discoveredKeys: new Set(),
+        filter: { provider: "minimax", local: false },
+        skipRuntimeModelSuppression: true,
+      },
+    });
+
+    expect(requireOnlyRow(rows).input).toBe("text+image+video+audio");
+  });
 });

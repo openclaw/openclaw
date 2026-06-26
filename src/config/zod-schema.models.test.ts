@@ -24,6 +24,27 @@ describe("ModelsConfigSchema", () => {
     expect(result.success).toBe(true);
   });
 
+  it("accepts audio and video input modalities for configured models", () => {
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        minimax: {
+          baseUrl: "https://api.minimax.io/anthropic",
+          api: "anthropic-messages",
+          apiKey: "MINIMAX_API_KEY",
+          models: [
+            {
+              id: "MiniMax-M3",
+              name: "MiniMax M3",
+              input: ["text", "image", "video", "audio"],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it("accepts compat.requiresReasoningContentOnAssistantMessages (issue #89660)", () => {
     // The field is consumed at runtime (detectCompat/getCompat) and is present
     // in the ModelCompat type, but was missing from the strict Zod schema, so a

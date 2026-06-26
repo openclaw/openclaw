@@ -591,7 +591,7 @@ export interface Model<TApi extends Api = Api> {
    * Missing keys use provider defaults. null marks a level as unsupported.
    */
   thinkingLevelMap?: ThinkingLevelMap;
-  input: ("text" | "image")[];
+  input: ("text" | "image" | "audio" | "video")[];
   cost: {
     input: number; // $/million tokens
     output: number; // $/million tokens
