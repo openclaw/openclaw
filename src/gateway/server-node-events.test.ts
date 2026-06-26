@@ -799,6 +799,13 @@ describe("openphone attention events", () => {
           screen_preflight: {
             available: true,
             visible_text: ["Lock screen", "Fri, Jun 26"],
+            screenshot: {
+              encoding: "base64",
+              mime_type: "image/png",
+              width: 360,
+              height: 780,
+              data: "iVBORw0KGgo=",
+            },
           },
         },
       }),
@@ -826,11 +833,19 @@ describe("openphone attention events", () => {
     expect(String(optsRecord.message)).toContain("OpenPhone request context:");
     expect(String(optsRecord.message)).toContain("OpenPhone screen preflight observation:");
     expect(String(optsRecord.message)).toContain("Lock screen");
+    expect(String(optsRecord.message)).toContain("[base64 chars=12]");
+    expect(String(optsRecord.message)).not.toContain("iVBORw0KGgo=");
     expect(String(optsRecord.message)).toContain("OpenPhone device-control instructions:");
     expect(String(optsRecord.message)).toContain("use it as the current phone screen context");
+    expect(String(optsRecord.message)).toContain("screenshot is attached");
     expect(String(optsRecord.message)).toContain('node="pixel-1"');
     expect(String(optsRecord.message)).toContain('invokeCommand="openphone.screen.get"');
+    expect(String(optsRecord.message)).toContain('\\"include_screenshot\\":true');
     expect(String(optsRecord.message)).toContain("Before answering screen/app/UI questions");
+    expect(optsRecord.images).toEqual([
+      { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" },
+    ]);
+    expect(optsRecord.imageOrder).toEqual(["inline"]);
     expectFields(optsRecord.inputProvenance, {
       kind: "external_user",
       sourceChannel: "openphone",

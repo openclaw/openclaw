@@ -71,6 +71,7 @@ export type NodeEventHandleResult = {
 };
 
 type NodeAgentCommandInput = Parameters<typeof agentCommandFromIngress>[0];
+type NodeAgentCommandImage = { type: "image"; data: string; mimeType: string };
 
 function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
@@ -86,10 +87,64 @@ function dispatchNodeAgentCommand(
   });
 }
 
-function resolveOpenPhoneAttentionSessionKey(
-  nodeId: string,
-  obj: Record<string, unknown>,
-): string {
+function redactOpenPhoneImageBytes(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null) {
+    return raw;
+  }
+  let copy: unknown;
+  try {
+    copy = JSON.parse(JSON.stringify(raw)) as unknown;
+  } catch {
+    return raw;
+  }
+  if (typeof copy !== "object" || copy === null) {
+    return copy;
+  }
+  const preflight = (copy as Record<string, unknown>).screen_preflight;
+  if (typeof preflight !== "object" || preflight === null) {
+    return copy;
+  }
+  const screenshot = (preflight as Record<string, unknown>).screenshot;
+  if (typeof screenshot !== "object" || screenshot === null) {
+    return copy;
+  }
+  const data = (screenshot as Record<string, unknown>).data;
+  if (typeof data === "string" && data.length > 0) {
+    (screenshot as Record<string, unknown>).data = `[base64 chars=${data.length}]`;
+  }
+  return copy;
+}
+
+function redactOpenPhonePreflightImageBytes(preflight: unknown): unknown {
+  const redacted = redactOpenPhoneImageBytes({ screen_preflight: preflight });
+  return typeof redacted === "object" && redacted !== null
+    ? ((redacted as Record<string, unknown>).screen_preflight ?? preflight)
+    : preflight;
+}
+
+function extractOpenPhoneAttentionImages(raw: unknown): NodeAgentCommandImage[] {
+  if (typeof raw !== "object" || raw === null) {
+    return [];
+  }
+  const preflight = (raw as Record<string, unknown>).screen_preflight;
+  if (typeof preflight !== "object" || preflight === null) {
+    return [];
+  }
+  const screenshot = (preflight as Record<string, unknown>).screenshot;
+  if (typeof screenshot !== "object" || screenshot === null) {
+    return [];
+  }
+  const record = screenshot as Record<string, unknown>;
+  const data = normalizeOptionalString(record.data);
+  const encoding = normalizeLowercaseStringOrEmpty(record.encoding) || "base64";
+  const mimeType = normalizeLowercaseStringOrEmpty(record.mime_type) || "image/jpeg";
+  if (!data || encoding !== "base64" || !mimeType.startsWith("image/")) {
+    return [];
+  }
+  return [{ type: "image", data, mimeType }];
+}
+
+function resolveOpenPhoneAttentionSessionKey(nodeId: string, obj: Record<string, unknown>): string {
   const explicit =
     normalizeOptionalString(obj.sessionKey) ?? normalizeOptionalString(obj.session_key);
   if (explicit) {
@@ -143,7 +198,7 @@ function compactOpenPhoneContextForPrompt(raw: unknown): string {
   }
   let encoded = "";
   try {
-    encoded = JSON.stringify(raw);
+    encoded = JSON.stringify(redactOpenPhoneImageBytes(raw));
   } catch {
     return "";
   }
@@ -163,7 +218,7 @@ function compactOpenPhoneScreenPreflightForPrompt(raw: unknown): string {
   }
   let encoded = "";
   try {
-    encoded = JSON.stringify(preflight);
+    encoded = JSON.stringify(redactOpenPhonePreflightImageBytes(preflight));
   } catch {
     return "";
   }
@@ -220,7 +275,7 @@ function buildOpenPhoneAttentionToolingInstructions(params: {
   includeScreen: boolean;
 }): string {
   const screenInvokeParams = JSON.stringify({
-    include_screenshot: false,
+    include_screenshot: true,
     include_activity: true,
     include_ui_tree: true,
     reason: "answer the OpenPhone user from the current phone screen",
@@ -228,10 +283,11 @@ function buildOpenPhoneAttentionToolingInstructions(params: {
   const lines = [
     "OpenPhone device-control instructions:",
     "- If an OpenPhone screen preflight observation is present above, use it as the current phone screen context before using workspace/bootstrap context.",
+    "- If an OpenPhone screenshot is attached, treat it as the rendered full-screen phone view and use accessibility metadata only as supporting context.",
     `- The user is asking from a live OpenPhone Android node. Target node: ${params.nodeId}.`,
     "- Use the `nodes` tool to inspect or control this phone. Do not claim you cannot see the phone when the relevant node tool is available.",
     `- To read the current phone screen, call \`nodes\` with action=\"invoke\", node=\"${params.nodeId}\", invokeCommand=\"openphone.screen.get\", invokeParamsJson=${JSON.stringify(screenInvokeParams)}.`,
-    "- For phone actions, call `nodes` with action=\"invoke\" and the matching OpenPhone command, for example openphone.url.open, openphone.app.open, openphone.ui.tap, openphone.ui.type_text, or notifications.open.",
+    '- For phone actions, call `nodes` with action="invoke" and the matching OpenPhone command, for example openphone.url.open, openphone.app.open, openphone.ui.tap, openphone.ui.type_text, or notifications.open.',
     "- Mutating phone actions may require local user confirmation on the Android device; wait for the tool result and report whether it was approved, denied, or completed.",
   ];
   if (params.includeScreen) {
@@ -548,8 +604,7 @@ export const handleNodeEvent = async (
       if (!obj) {
         return undefined;
       }
-      const text =
-        normalizeOptionalString(obj.text) ?? normalizeOptionalString(obj.message) ?? "";
+      const text = normalizeOptionalString(obj.text) ?? normalizeOptionalString(obj.message) ?? "";
       if (!text || text.length > 20_000) {
         return undefined;
       }
@@ -583,6 +638,8 @@ export const handleNodeEvent = async (
       });
       const runId = randomUUID();
       const clientRunId = attentionId ? `openphone-${attentionId}` : `openphone-${randomUUID()}`;
+      const images = extractOpenPhoneAttentionImages(obj.context);
+      const imageOrder: PromptImageOrderEntry[] = images.map((): PromptImageOrderEntry => "inline");
       ctx.nodeSubscribe(nodeId, canonicalKey);
       ctx.addChatRun(runId, {
         sessionKey: canonicalKey,
@@ -601,6 +658,8 @@ export const handleNodeEvent = async (
         sessionKey: canonicalKey,
         thinking: "low",
         deliver: false,
+        images,
+        imageOrder,
         messageChannel: "node",
         inputProvenance: {
           kind: "external_user",
