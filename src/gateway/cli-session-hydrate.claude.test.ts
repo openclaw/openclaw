@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 import { readClaudeCliSessionMessages } from "./cli-session-history.claude.js";
 import {
   buildClaudeCliTranscript,
@@ -178,5 +179,24 @@ describe("PR7 hydration — round-trips through PR4's own reader", () => {
     const dump = JSON.stringify(messages);
     expect(dump).toContain("hello from the gateway session");
     expect(dump).toContain("hi there, picked up where we left off");
+  });
+
+  it("writes under the CANONICAL Claude project dir so `claude --resume` finds it", () => {
+    home = mkdtempSync(join(tmpdir(), "hydr-"));
+    // `_` and `.` are exactly where a hand-rolled `/.→-` encoding diverges from Claude's resolver,
+    // landing the transcript where --resume can't read it (round-trip can't catch this — it scans).
+    const cwd = "/work/my_proj.v2";
+    const path = hydrateClaudeCliTranscript({
+      messages: [{ role: "user", content: "x" }],
+      sessionId: "canon-sid",
+      cwd,
+      nowMs: 0,
+      homeDir: home,
+    });
+    const expectedDir = resolveClaudeCliProjectDirForWorkspace({
+      workspaceDir: cwd,
+      homeDir: home,
+    });
+    expect(path).toBe(join(expectedDir, "canon-sid.jsonl"));
   });
 });

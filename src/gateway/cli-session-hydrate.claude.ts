@@ -5,8 +5,8 @@
 // live: claude --resume reads a transcript built by this and recalls the conversation.
 import { randomUUID } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { join } from "node:path";
+import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 
 /** A gateway-owned (chat.history) message — the canonical conversation the gateway stores. */
 export type HydrationMessage = {
@@ -118,9 +118,10 @@ export function buildClaudeCliTranscript(params: {
 
 /**
  * Write the hydrated transcript to Claude's project dir for `cwd` so `claude --resume <sessionId>`
- * finds it. Returns the path, or undefined when there is nothing to hydrate. NOTE: the project-dir
- * encoding (`/` and `.` → `-`) is Claude's POSIX convention; Windows surfaces use a different scheme
- * (tracked alongside the PR3 Windows caveat).
+ * finds it. Returns the path, or undefined when there is nothing to hydrate. Uses the SAME resolver
+ * Claude Code + the cli-backend use (`resolveClaudeCliProjectDirForWorkspace`: realpath + NFC +
+ * non-alphanumeric→`-` + length cap). A hand-rolled `/.→-` encoding diverges for cwds with `_`,
+ * spaces, symlinked workspaces, or long paths — landing the transcript where `--resume` can't read it.
  */
 export function hydrateClaudeCliTranscript(params: {
   messages: HydrationMessage[];
@@ -133,8 +134,10 @@ export function hydrateClaudeCliTranscript(params: {
   if (!content) {
     return undefined;
   }
-  const projectDir = params.cwd.replace(/[/.]/g, "-");
-  const dir = join(params.homeDir ?? homedir(), ".claude", "projects", projectDir);
+  const dir = resolveClaudeCliProjectDirForWorkspace({
+    workspaceDir: params.cwd,
+    homeDir: params.homeDir,
+  });
   mkdirSync(dir, { recursive: true });
   const path = join(dir, `${params.sessionId}.jsonl`);
   writeFileSync(path, content, { encoding: "utf8", mode: 0o600 });

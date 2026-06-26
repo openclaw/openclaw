@@ -87,21 +87,30 @@ export async function runNodeAttach(params: {
     await closeGatewayClient(client);
     throw new Error("openclaw attach (node): gateway client event loop did not become ready");
   }
-  // Event-loop readiness is not the WS connection; wait until a node request actually lands.
+  // Event-loop readiness is not the WS connection; wait until a node request actually lands. Only the
+  // transient "not connected (yet)" is worth retrying — auth/scope/pairing failures won't self-heal,
+  // so break fast on them and surface the real cause instead of a generic ~10s timeout.
   let connected = false;
+  let lastError: unknown;
   for (let attempt = 0; attempt < 50; attempt += 1) {
     try {
       await client.request("skills.bins", {});
       connected = true;
       break;
-    } catch {
+    } catch (error) {
+      lastError = error;
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/not connected/i.test(message)) {
+        break; // non-transient (bad/expired token, not paired, missing scope) — don't spin
+      }
       await sleep(200);
     }
   }
   if (!connected) {
     await closeGatewayClient(client);
+    const detail = lastError instanceof Error ? lastError.message : "unknown";
     throw new Error(
-      "openclaw attach (node): could not reach the gateway over the node link — is the node paired and the gateway up?",
+      `openclaw attach (node): could not reach the gateway over the node link — ${detail}`,
     );
   }
 
@@ -112,6 +121,14 @@ export async function runNodeAttach(params: {
     env: launch.env,
     launchArgs: launch.launchArgs,
     close: async () => {
+      // Revoke the grant first (node-path symmetry to the gateway-host attach.revoke — a node can't
+      // call that operator.admin method) while the link is still up; then tear down forwarder + link.
+      // All best-effort: the grant's TTL still bounds it if revoke can't be delivered.
+      try {
+        await client.request("node.attachRevoke", { grantToken: launch.env.OPENCLAW_MCP_TOKEN });
+      } catch {
+        // best-effort
+      }
       try {
         await launch.forwarder.close();
       } catch {

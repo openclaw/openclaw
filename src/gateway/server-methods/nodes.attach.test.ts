@@ -84,4 +84,22 @@ describe("node attach handlers (PR5 node conduit)", () => {
     await call("node.attachHydrate", { grantToken: "nope" }, respond);
     expect(respond.mock.calls[0][0]).toBe(false);
   });
+
+  it("node.attachRevoke revokes a node-minted grant by token, and rejects a missing token", async () => {
+    const grantRespond = vi.fn();
+    await call("node.attachGrant", {}, grantRespond);
+    const granted = grantRespond.mock.calls[0]?.[1] as { token: string } | undefined;
+    const token = granted?.token ?? "";
+    expect(token).not.toBe("");
+    expect(resolveAttachGrant(token)).toBeTruthy();
+
+    const revokeRespond = vi.fn();
+    await call("node.attachRevoke", { grantToken: token }, revokeRespond);
+    expect(revokeRespond.mock.calls[0]).toEqual([true, { revoked: true }]);
+    expect(resolveAttachGrant(token)).toBeUndefined(); // grant gone, not lingering to TTL
+
+    const missing = vi.fn();
+    await call("node.attachRevoke", {}, missing);
+    expect(missing.mock.calls[0][0]).toBe(false);
+  });
 });

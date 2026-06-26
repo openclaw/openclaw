@@ -61,7 +61,7 @@ import {
 } from "../../skills/runtime/remote.js";
 import { dispatchAttachMcpMessage } from "../attach-relay.js";
 import { augmentChatHistoryWithCliSessionImports } from "../cli-session-history.js";
-import { mintAttachGrant, resolveAttachGrant } from "../mcp-grant-store.js";
+import { mintAttachGrant, resolveAttachGrant, revokeAttachGrant } from "../mcp-grant-store.js";
 import type { JsonRpcRequest } from "../mcp-http.protocol.js";
 import { createKnownNodeCatalog, getKnownNode, listKnownNodes } from "../node-catalog.js";
 import {
@@ -944,6 +944,18 @@ export const nodeHandlers: GatewayRequestHandlers = {
       token: grant.token,
       expiresAtMs: grant.expiresAtMs,
     });
+  },
+  // Revoke a node-minted grant on attach exit — the node-path symmetry to the gateway-host's
+  // attach.revoke (a node can't call that operator.admin method). The grant token IS the capability
+  // (only its holder has it), so revoke-by-token is safe; this bounds the grant to the session rather
+  // than its TTL. (Revoke-on-unpair/permission-downgrade remains a tracked follow-up.)
+  "node.attachRevoke": async ({ params, respond }) => {
+    const grantToken = normalizeOptionalString(params.grantToken) ?? "";
+    if (!grantToken) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "grantToken required"));
+      return;
+    }
+    respond(true, { revoked: revokeAttachGrant(grantToken) });
   },
   // Hydration source (PR7): return the gateway-OWNED conversation for the grant's session so the node
   // can materialize a local Claude transcript and `claude --resume` it — pick-up-anywhere. Same
