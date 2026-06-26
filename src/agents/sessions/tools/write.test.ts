@@ -98,7 +98,7 @@ describe("write tool", () => {
       type: "text",
       text: `No changes: content is identical to existing ${filePath}`,
     });
-    expect(result.details).toEqual({ status: "blocked", reason: "no-op-write" });
+    expect(result.details).toBeUndefined();
     expect(result.terminate).toBe(true);
   });
 

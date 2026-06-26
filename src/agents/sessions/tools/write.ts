@@ -396,10 +396,7 @@ export function createWriteToolDefinition(
         const precheck = await readOriginalWriteState(absolutePath, content, ops);
         if (precheck.state === "same") {
           return {
-            ...textResult(`No changes: content is identical to existing ${path}`, {
-              status: "blocked" as const,
-              reason: "no-op-write" as const,
-            }),
+            ...textResult(`No changes: content is identical to existing ${path}`, undefined),
             terminate: true,
           };
         }

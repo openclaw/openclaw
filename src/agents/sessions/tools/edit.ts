@@ -393,7 +393,7 @@ export function createEditToolDefinition(
           return {
             ...textResult(
               `No changes: one or more edits have identical old and new text in ${path}.`,
-              { status: "blocked" as const, reason: "no-op-edit" as const },
+              undefined,
             ),
             terminate: true,
           };
@@ -430,10 +430,7 @@ export function createEditToolDefinition(
           // No changes after applying edits — no-op.
           if (baseContent === newContent) {
             return {
-              ...textResult(`No changes: edits produced no diff in ${path}.`, {
-                status: "blocked" as const,
-                reason: "no-op-edit" as const,
-              }),
+              ...textResult(`No changes: edits produced no diff in ${path}.`, undefined),
               terminate: true,
             };
           }
