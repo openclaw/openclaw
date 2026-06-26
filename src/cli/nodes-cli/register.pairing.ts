@@ -6,7 +6,7 @@ import type { OperatorScope } from "../../gateway/method-scopes.js";
 import { resolveNodePairApprovalScopes } from "../../infra/node-pairing-authz.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
-import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
+import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import {
@@ -44,7 +44,8 @@ function normalizeNodePairApproveScopes(scopes: unknown): OperatorScope[] {
 async function resolveApproveScopesForRequest(
   opts: NodesRpcOpts,
   requestId: string,
-): Promise<OperatorScope[]> {
+): Promise<{ scopes: OperatorScope[] }> {
+  let pending: PendingRequest[];
   try {
     const result = await callNodePairApprovalGatewayCli(
       "node.pair.list",
@@ -52,63 +53,55 @@ async function resolveApproveScopesForRequest(
       {},
       { scopes: DEFAULT_NODE_PAIR_APPROVE_SCOPES },
     );
-    const { pending } = parsePairingList(result);
-    const request = pending.find((candidate: PendingRequest) => candidate.requestId === requestId);
-    const scopes = normalizeNodePairApproveScopes(request?.requiredApproveScopes);
-    if (scopes.length > DEFAULT_NODE_PAIR_APPROVE_SCOPES.length) {
-      return scopes;
-    }
-    // Older pending requests only list requested commands; derive approval scopes from them.
-    return resolveNodePairApprovalScopes(request?.commands) as OperatorScope[];
+    pending = parsePairingList(result).pending;
   } catch {
-    return [...DEFAULT_NODE_PAIR_APPROVE_SCOPES];
+    return { scopes: [...DEFAULT_NODE_PAIR_APPROVE_SCOPES] };
   }
+  const pendingRequestIds = pending
+    .map((request) => request.requestId)
+    .filter((id): id is string => typeof id === "string" && id.length > 0);
+  const request = pending.find((candidate) => candidate.requestId === requestId);
+  if (!request) {
+    throw new Error(buildUnknownNodePairRequestIdMessage(requestId, opts, pendingRequestIds));
+  }
+  const declaredScopes = normalizeNodePairApproveScopes(request.requiredApproveScopes);
+  if (declaredScopes.length > DEFAULT_NODE_PAIR_APPROVE_SCOPES.length) {
+    return { scopes: declaredScopes };
+  }
+  // Older pending requests only list requested commands; derive approval scopes from them.
+  return {
+    scopes: resolveNodePairApprovalScopes(request.commands) as OperatorScope[],
+  };
 }
 
 function isUnknownNodePairRequestIdError(error: unknown): boolean {
-  const requestError = error as (Error & { gatewayCode?: unknown; details?: unknown }) | undefined;
-  const details = requestError?.details;
+  const requestError = error as (Error & { gatewayCode?: unknown }) | undefined;
   return (
     requestError instanceof Error &&
     requestError.name === "GatewayClientRequestError" &&
     requestError.gatewayCode === "INVALID_REQUEST" &&
-    requestError.message === "unknown requestId" &&
-    details === undefined
+    requestError.message === "unknown requestId"
   );
 }
 
-function createNodePairRequestIdMessageError(message: string): Error {
-  const error = new Error(message);
-  error.name = "NodePairRequestIdMessageError";
-  error.toString = () => message;
-  return error;
-}
-
-async function buildUnknownNodePairRequestIdMessage(
-  opts: NodesRpcOpts,
+function buildUnknownNodePairRequestIdMessage(
   requestId: string,
-): Promise<string> {
-  let pendingIds: string[];
-  try {
-    const result = await callNodePairApprovalGatewayCli(
-      "node.pair.list",
-      opts,
-      {},
-      { scopes: DEFAULT_NODE_PAIR_APPROVE_SCOPES },
-    );
-    pendingIds = parsePairingList(result)
-      .pending.map((request: PendingRequest) => request.requestId)
-      .filter((id): id is string => typeof id === "string" && id.length > 0);
-  } catch {
-    pendingIds = [];
-  }
+  opts: NodesRpcOpts,
+  pendingRequestIds?: string[],
+): string {
   const lines = [`Unknown node pairing requestId: ${requestId}`];
-  if (pendingIds.length > 0) {
-    lines.push(`Pending requestIds: ${pendingIds.join(", ")}`);
-  } else {
-    lines.push("No pending node pairing requests are currently visible.");
+  if (pendingRequestIds !== undefined) {
+    if (pendingRequestIds.length > 0) {
+      lines.push(`Pending requestIds: ${pendingRequestIds.join(", ")}`);
+    } else {
+      lines.push("No pending node pairing requests are currently visible.");
+    }
   }
   lines.push(`Run ${formatCliCommand("openclaw nodes pending")} to inspect current requests.`);
+  const connectionReminder = formatConnectionFlagReminder(opts);
+  if (connectionReminder) {
+    lines.push(connectionReminder);
+  }
   return lines.join("\n");
 }
 
@@ -153,7 +146,7 @@ export function registerNodesPairingCommands(nodes: Command) {
       .argument("<requestId>", "Pending request id")
       .action(async (requestId: string, opts: NodesRpcOpts) => {
         await runNodesCommand("approve", async () => {
-          const scopes = await resolveApproveScopesForRequest(opts, requestId);
+          const { scopes } = await resolveApproveScopesForRequest(opts, requestId);
           let result: unknown;
           try {
             result = await callNodePairApprovalGatewayCli(
@@ -170,9 +163,7 @@ export function registerNodesPairingCommands(nodes: Command) {
             if (!isUnknownNodePairRequestIdError(error)) {
               throw error;
             }
-            throw createNodePairRequestIdMessageError(
-              await buildUnknownNodePairRequestIdMessage(opts, requestId),
-            );
+            throw new Error(buildUnknownNodePairRequestIdMessage(requestId, opts));
           }
           defaultRuntime.writeJson(result);
         });
