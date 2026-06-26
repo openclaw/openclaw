@@ -153,6 +153,26 @@ function compactOpenPhoneContextForPrompt(raw: unknown): string {
   return encoded.length <= 4000 ? encoded : `${encoded.slice(0, 3999)}…`;
 }
 
+function compactOpenPhoneScreenPreflightForPrompt(raw: unknown): string {
+  if (typeof raw !== "object" || raw === null) {
+    return "";
+  }
+  const preflight = (raw as Record<string, unknown>).screen_preflight;
+  if (typeof preflight !== "object" || preflight === null) {
+    return "";
+  }
+  let encoded = "";
+  try {
+    encoded = JSON.stringify(preflight);
+  } catch {
+    return "";
+  }
+  if (!encoded || encoded === "{}") {
+    return "";
+  }
+  return encoded.length <= 6000 ? encoded : `${encoded.slice(0, 5999)}…`;
+}
+
 function buildOpenPhoneAttentionMessage(params: {
   nodeId: string;
   text: string;
@@ -167,6 +187,7 @@ function buildOpenPhoneAttentionMessage(params: {
   const source = normalizeLowercaseStringOrEmpty(params.obj.source) || "openphone";
   const autonomy = normalizeLowercaseStringOrEmpty(params.obj.autonomy) || "";
   const context = compactOpenPhoneContextForPrompt(params.obj.context);
+  const screenPreflight = compactOpenPhoneScreenPreflightForPrompt(params.obj.context);
   const requestContext: Record<string, unknown> = {
     nodeId: params.nodeId,
     sessionKey: params.sessionKey,
@@ -188,7 +209,10 @@ function buildOpenPhoneAttentionMessage(params: {
     nodeId: params.nodeId,
     includeScreen: params.obj.include_screen === true,
   });
-  return `${params.text}\n\nOpenPhone request context:\n${JSON.stringify(requestContext)}\n\n${instructions}`;
+  const preflightBlock = screenPreflight
+    ? `\n\nOpenPhone screen preflight observation:\n${screenPreflight}`
+    : "";
+  return `${params.text}\n\nOpenPhone request context:\n${JSON.stringify(requestContext)}${preflightBlock}\n\n${instructions}`;
 }
 
 function buildOpenPhoneAttentionToolingInstructions(params: {
@@ -203,6 +227,7 @@ function buildOpenPhoneAttentionToolingInstructions(params: {
   });
   const lines = [
     "OpenPhone device-control instructions:",
+    "- If an OpenPhone screen preflight observation is present above, use it as the current phone screen context before using workspace/bootstrap context.",
     `- The user is asking from a live OpenPhone Android node. Target node: ${params.nodeId}.`,
     "- Use the `nodes` tool to inspect or control this phone. Do not claim you cannot see the phone when the relevant node tool is available.",
     `- To read the current phone screen, call \`nodes\` with action=\"invoke\", node=\"${params.nodeId}\", invokeCommand=\"openphone.screen.get\", invokeParamsJson=${JSON.stringify(screenInvokeParams)}.`,

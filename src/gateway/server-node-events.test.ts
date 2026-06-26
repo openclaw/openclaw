@@ -796,6 +796,10 @@ describe("openphone attention events", () => {
         include_screen: true,
         context: {
           foreground_package: "com.android.launcher3",
+          screen_preflight: {
+            available: true,
+            visible_text: ["Lock screen", "Fri, Jun 26"],
+          },
         },
       }),
     });
@@ -820,7 +824,10 @@ describe("openphone attention events", () => {
     const optsRecord = opts as Record<string, unknown>;
     expect(String(optsRecord.message)).toContain("Open settings and show battery usage");
     expect(String(optsRecord.message)).toContain("OpenPhone request context:");
+    expect(String(optsRecord.message)).toContain("OpenPhone screen preflight observation:");
+    expect(String(optsRecord.message)).toContain("Lock screen");
     expect(String(optsRecord.message)).toContain("OpenPhone device-control instructions:");
+    expect(String(optsRecord.message)).toContain("use it as the current phone screen context");
     expect(String(optsRecord.message)).toContain('node="pixel-1"');
     expect(String(optsRecord.message)).toContain('invokeCommand="openphone.screen.get"');
     expect(String(optsRecord.message)).toContain("Before answering screen/app/UI questions");
