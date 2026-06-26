@@ -645,6 +645,29 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Allow Always is unavailable");
   });
 
+  it("explains non-persistable commands in forwarded fallback text", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          allowedDecisions: ["allow-once", "deny"],
+          unavailableDecisions: ["allow-always"],
+          allowAlwaysUnavailableReason: "non-persistable-command",
+        },
+      }),
+    ).resolves.toBe(true);
+    await Promise.resolve();
+    const text = getFirstDeliveryText(deliver);
+    expect(text).toContain("Reply with: /approve req-1 allow-once|deny");
+    expect(text).toContain(
+      "This command cannot be safely saved as an Allow Always rule, so Allow Always is unavailable.",
+    );
+    expect(text).not.toContain("effective policy still requires per-run approval");
+  });
+
   it.each([
     {
       command: "bash safe\u200B.sh",

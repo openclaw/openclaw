@@ -40,6 +40,7 @@ export type ExecApprovalViewBase = ApprovalViewBase & {
   approvalKind: "exec";
   ask?: string | null;
   agentId?: string | null;
+  allowAlwaysUnavailableReason?: "approval-policy-always" | "non-persistable-command";
   warningText?: string | null;
   commandAnalysis?: CommandExplanationSummary | null;
   commandText: string;

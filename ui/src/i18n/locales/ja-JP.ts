@@ -374,6 +374,8 @@ export const ja_JP: TranslationMap = {
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable:
       "有効な承認ポリシーでは毎回承認が必要なため、Allow Always は利用できません。",
+    allowAlwaysUnavailableNonPersistable:
+      "This command cannot be safely saved as an Allow Always rule, so Allow Always is unavailable.",
     deny: "Deny",
     labels: {
       host: "Host",

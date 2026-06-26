@@ -222,6 +222,7 @@ describe("exec approval reply helpers", () => {
             approvalSlug: " slug-1 ",
             agentId: " agent-1 ",
             allowedDecisions: ["allow-once", "bad", "deny", "allow-always", 3],
+            allowAlwaysUnavailableReason: "non-persistable-command",
             sessionKey: " session-1 ",
           },
         },
@@ -232,6 +233,7 @@ describe("exec approval reply helpers", () => {
       approvalKind: "exec",
       agentId: "agent-1",
       allowedDecisions: ["allow-once", "deny", "allow-always"],
+      allowAlwaysUnavailableReason: "non-persistable-command",
       sessionKey: "session-1",
     });
   });
@@ -366,6 +368,27 @@ describe("exec approval reply helpers", () => {
       ],
     });
     expect(payload.interactive).toBeUndefined();
+  });
+
+  it("explains non-persistable commands when allow-always is unavailable", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-one-shot",
+      approvalSlug: "slug-one",
+      allowedDecisions: ["allow-once", "deny"],
+      allowAlwaysUnavailableReason: "non-persistable-command",
+      command: "openclaw --version 2>&1",
+      host: "gateway",
+    });
+
+    expect(payload.text).toContain(
+      "This command cannot be safely saved as an Allow Always rule, so Allow Always is unavailable.",
+    );
+    expect(payload.text).not.toContain("requires approval every time");
+    expect(payload.channelData).toMatchObject({
+      execApproval: {
+        allowAlwaysUnavailableReason: "non-persistable-command",
+      },
+    });
   });
 
   it("stores agent and session metadata for downstream suppression checks", () => {

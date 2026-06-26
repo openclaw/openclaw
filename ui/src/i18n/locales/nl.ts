@@ -373,6 +373,8 @@ export const nl: TranslationMap = {
     alwaysAllow: "Altijd toestaan",
     allowAlwaysUnavailable:
       "Het effectieve goedkeuringsbeleid vereist elke keer goedkeuring, dus Altijd toestaan is niet beschikbaar.",
+    allowAlwaysUnavailableNonPersistable:
+      "This command cannot be safely saved as an Allow Always rule, so Allow Always is unavailable.",
     deny: "Weigeren",
     labels: {
       host: "Host",

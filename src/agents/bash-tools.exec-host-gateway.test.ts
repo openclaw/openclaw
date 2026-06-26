@@ -102,6 +102,22 @@ const resolveExecApprovalUnavailableDecisionsMock = vi.hoisted(() =>
         : [],
   ),
 );
+const resolveExecApprovalAllowAlwaysUnavailableReasonMock = vi.hoisted(() =>
+  vi.fn(
+    (params?: {
+      ask?: string | null;
+      allowAlwaysPersistence?: { kind: string } | null;
+    }): "approval-policy-always" | "non-persistable-command" | null => {
+      if (params?.ask === "always") {
+        return "approval-policy-always";
+      }
+      if (params?.allowAlwaysPersistence?.kind === "one-shot") {
+        return "non-persistable-command";
+      }
+      return null;
+    },
+  ),
+);
 const buildEnforcedShellCommandMock = vi.hoisted(() =>
   vi.fn((): { ok: boolean; reason?: string; command?: string } => ({
     ok: false,
@@ -161,6 +177,8 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
   resolveApprovalAuditTrustPath: vi.fn(() => null),
   resolveAllowAlwaysPatterns: vi.fn(() => []),
   resolveExecApprovalAllowedDecisions: resolveExecApprovalAllowedDecisionsMock,
+  resolveExecApprovalAllowAlwaysUnavailableReason:
+    resolveExecApprovalAllowAlwaysUnavailableReasonMock,
   resolveExecApprovalUnavailableDecisions: resolveExecApprovalUnavailableDecisionsMock,
   addAllowlistEntry: vi.fn(),
   addDurableCommandApproval: vi.fn(),
@@ -811,6 +829,7 @@ describe("processGatewayAllowlist", () => {
     expect(buildExecApprovalPendingToolResultMock).toHaveBeenCalledWith(
       expect.objectContaining({
         allowedDecisions: ["allow-once", "deny"],
+        allowAlwaysUnavailableReason: "non-persistable-command",
       }),
     );
   });

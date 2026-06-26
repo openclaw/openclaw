@@ -24,6 +24,7 @@ import {
   recordAllowlistMatchesUse,
   resolveApprovalAuditTrustPath,
   resolveAllowAlwaysPersistenceDecision,
+  resolveExecApprovalAllowAlwaysUnavailableReason,
   resolveExecApprovalUnavailableDecisions,
   requiresExecApproval,
 } from "../infra/exec-approvals.js";
@@ -597,9 +598,16 @@ export async function processGatewayAllowlist(
     ask: hostAsk,
     allowAlwaysPersistence: effectiveAllowAlwaysPersistence,
   });
+  const allowAlwaysUnavailableReason = resolveExecApprovalAllowAlwaysUnavailableReason({
+    ask: hostAsk,
+    allowAlwaysPersistence: effectiveAllowAlwaysPersistence,
+  });
   const unavailableDecisionRequestParams =
     approvalUnavailableDecisions.length > 0
-      ? { unavailableDecisions: approvalUnavailableDecisions }
+      ? {
+          unavailableDecisions: approvalUnavailableDecisions,
+          allowAlwaysUnavailableReason,
+        }
       : {};
   if (requiresSecurityAuditSuppressionApproval) {
     params.warnings.push(
@@ -1015,6 +1023,7 @@ export async function processGatewayAllowlist(
         sentApproverDms,
         unavailableReason,
         allowedDecisions: approvalAllowedDecisions,
+        allowAlwaysUnavailableReason,
       }),
     };
   }
