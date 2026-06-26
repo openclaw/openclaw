@@ -2,11 +2,7 @@
 import { spawn } from "node:child_process";
 import { accessSync, closeSync, constants, openSync, readSync, statSync } from "node:fs";
 import path from "node:path";
-import {
-  buildCmdExeCommandLine,
-  resolvePathEnvKey,
-  resolveWindowsCmdExePath,
-} from "./windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolvePathEnvKey } from "./windows-cmd-helpers.mjs";
 
 function getPortableBasename(value) {
   return value.split(/[/\\]/).at(-1) ?? value;
@@ -65,10 +61,8 @@ function findExecutableOnPath(command, envPath, platform, env, cwd) {
   }
   const extensions =
     platform === "win32"
-      ? (
-          env[Object.keys(env).find((key) => key.toLowerCase() === "pathext") ?? "PATHEXT"] ??
-          ".COM;.EXE;.BAT;.CMD"
-        )
+      ? (env[Object.keys(env).find((key) => key.toLowerCase() === "pathext") ?? "PATHEXT"] ??
+          ".COM;.EXE;.BAT;.CMD")
           .split(";")
           .filter(Boolean)
           .map((extension) => extension.toLowerCase())
@@ -81,7 +75,7 @@ function findExecutableOnPath(command, envPath, platform, env, cwd) {
     const resolvedDirectory = path.isAbsolute(directory) ? directory : path.resolve(cwd, directory);
     for (const extension of extensions) {
       const candidate = path.join(resolvedDirectory, `${command}${extension}`);
-      if (platform === "win32" ? isFile(candidate) : isExecutableFile(candidate)) {
+      if ((platform === "win32" ? isFile(candidate) : isExecutableFile(candidate))) {
         return candidate;
       }
     }
@@ -125,8 +119,8 @@ export function resolvePnpmRunner(params = {}) {
   const npmExecPath = params.npmExecPath ?? process.env.npm_execpath;
   const nodeExecPath = params.nodeExecPath ?? process.execPath;
   const platform = params.platform ?? process.platform;
+  const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
   const env = params.env ?? process.env;
-  const comSpec = params.comSpec ?? (platform === "win32" ? resolveWindowsCmdExePath(env) : "");
   const envPath = env[platform === "win32" ? resolvePathEnvKey(env) : "PATH"];
   const cwd = params.cwd ?? process.cwd();
 
