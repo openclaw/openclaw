@@ -1,0 +1,14 @@
+{
+  "name": "@openclaw/herdr-state",
+  "version": "2026.6.10",
+  "description": "Herdr pane state bridge for OpenClaw TUI",
+  "type": "module",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}

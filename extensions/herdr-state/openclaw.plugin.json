@@ -1,0 +1,14 @@
+{
+  "id": "herdr-state",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefaultOnPlatforms": ["darwin", "linux"],
+  "name": "Herdr State Bridge",
+  "description": "Reports OpenClaw TUI idle, working, and blocked state to the containing Herdr pane.",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
