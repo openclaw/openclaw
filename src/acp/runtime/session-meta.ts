@@ -9,7 +9,6 @@ import {
   patchSessionEntryWithKey,
   type SessionEntrySummary,
 } from "../../config/sessions/session-accessor.js";
-import { updateSessionStore } from "../../config/sessions/store.js";
 import {
   mergeSessionEntry,
   type AcpSessionRuntimeOptions,
@@ -505,27 +504,26 @@ async function clearLegacyEmbeddedAcpMetadata(params: {
   if (sessionKeys.size === 0) {
     return;
   }
-  await updateSessionStore(
-    params.storePath,
-    (store) => {
-      let changed = false;
-      for (const sessionKey of sessionKeys) {
-        const entry = store[sessionKey];
-        if (!entry?.acp) {
-          continue;
+  for (const sessionKey of sessionKeys) {
+    await patchSessionEntryWithKey(
+      {
+        storePath: params.storePath,
+        sessionKey,
+      },
+      (entry) => {
+        if (!entry.acp) {
+          return null;
         }
         const next = { ...entry };
         delete next.acp;
-        store[sessionKey] = next;
-        changed = true;
-      }
-      return changed;
-    },
-    {
-      skipMaintenance: true,
-      skipSaveWhenResult: (changed) => !changed,
-    },
-  );
+        return next;
+      },
+      {
+        replaceEntry: true,
+        skipMaintenance: true,
+      },
+    );
+  }
 }
 
 export async function upsertAcpSessionMeta(params: {
