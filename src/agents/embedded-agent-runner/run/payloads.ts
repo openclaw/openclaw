@@ -316,6 +316,10 @@ export function buildEmbeddedRunPayloads(params: {
   const deliveredSourceReplyViaMessageTool =
     params.sourceReplyDeliveryMode === "message_tool_only" &&
     params.didDeliverSourceReplyViaMessageTool === true;
+  const shouldDeliverMessageToolOnlyAssistantFallback =
+    params.sourceReplyDeliveryMode === "message_tool_only" &&
+    !hasSourceReplyPayload &&
+    !deliveredSourceReplyViaMessageTool;
 
   const useMarkdown = params.toolResultFormat === "markdown";
   const suppressAssistantArtifacts =
@@ -526,6 +530,15 @@ export function buildEmbeddedRunPayloads(params: {
       replyToId,
       replyToTag,
       replyToCurrent,
+      ...(shouldDeliverMessageToolOnlyAssistantFallback
+        ? {
+            sourceReplyMirror: {
+              idempotencyKey: params.runId
+                ? `${params.runId}:message-tool-only-final-fallback:${replyItems.length}`
+                : undefined,
+            },
+          }
+        : {}),
     });
     hasUserFacingAssistantReply = true;
     if (cleanedText && hasExplicitMutatingToolFailureAcknowledgement(cleanedText)) {

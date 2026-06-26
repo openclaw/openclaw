@@ -333,6 +333,51 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
   });
 
+  it("falls back to native source delivery when message-tool-only final text was not sent", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Long report generated in final answer."],
+      sourceReplyDeliveryMode: "message_tool_only",
+      sessionKey: "agent:main",
+      agentId: "main",
+      runId: "run-1",
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Long report generated in final answer.");
+    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplyTranscriptMirror: {
+        sessionKey: "agent:main",
+        agentId: "main",
+        text: "Long report generated in final answer.",
+        idempotencyKey: "run-1:message-tool-only-final-fallback:0",
+      },
+    });
+  });
+
+  it("falls back when message-tool-only final text followed an unproved message-tool send", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["Report text that still needs delivery."],
+      didSendViaMessagingTool: true,
+      sourceReplyDeliveryMode: "message_tool_only",
+      sessionKey: "agent:main",
+      agentId: "main",
+      runId: "run-1",
+    });
+
+    expect(payloads).toHaveLength(1);
+    expect(payloads[0]?.text).toBe("Report text that still needs delivery.");
+    expect(getReplyPayloadMetadata(payloads[0] as object)).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplyTranscriptMirror: {
+        sessionKey: "agent:main",
+        agentId: "main",
+        text: "Report text that still needs delivery.",
+        idempotencyKey: "run-1:message-tool-only-final-fallback:0",
+      },
+    });
+  });
+
   it("ignores accumulated internal/status text after the final answer", () => {
     const payloads = buildPayloads({
       assistantTexts: [
