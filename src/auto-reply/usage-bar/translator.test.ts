@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { buildUsageContract } from "./contract.js";
+import { DEFAULT_USAGE_BAR_TEMPLATE } from "./default-template.js";
 import { renderUsageBar, type UsageBarTemplate } from "./translator.js";
 
 const SCALES = {
@@ -204,5 +205,41 @@ describe("usage-bar end-to-end with buildUsageContract", () => {
       { text: " | ${cost.turn_usd|fixed:4}" },
     ];
     expect(renderUsageBar(tpl(pieces), contract)).toBe("opus46 | med🐌 | 📚 [⣿⣿⣿⣧⠐]272k | $0.0377");
+  });
+
+  it("default template hides context bar on Discord surface for CLI backends", () => {
+    const contract = buildUsageContract(
+      {
+        provider: "anthropic",
+        model: "claude-cli",
+        fastMode: false,
+        contextTokenBudget: 272000,
+        contextUsedTokens: 250000,
+        usage: { input: 250000, output: 100, cacheRead: 0, cacheWrite: 0, total: 250100 },
+        isCliBackend: true,
+      },
+      "discord",
+    );
+    const rendered = renderUsageBar(DEFAULT_USAGE_BAR_TEMPLATE, contract);
+    expect(rendered).not.toContain("📚");
+    expect(rendered).not.toContain("272k");
+  });
+
+  it("default template shows context bar on Discord surface for non-CLI backends", () => {
+    const contract = buildUsageContract(
+      {
+        provider: "anthropic",
+        model: "claude-opus-4-6",
+        fastMode: false,
+        contextTokenBudget: 272000,
+        contextUsedTokens: 250000,
+        usage: { input: 250000, output: 100, cacheRead: 0, cacheWrite: 0, total: 250100 },
+        isCliBackend: false,
+      },
+      "discord",
+    );
+    const rendered = renderUsageBar(DEFAULT_USAGE_BAR_TEMPLATE, contract);
+    expect(rendered).toContain("📚");
+    expect(rendered).toContain("272k");
   });
 });
