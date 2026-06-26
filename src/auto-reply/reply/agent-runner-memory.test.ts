@@ -1334,8 +1334,10 @@ describe("runMemoryFlushIfNeeded", () => {
   });
 
   it("passes resolved context budget and auth profile to preflight compaction", async () => {
+    const sessionFile = path.join(rootDir, "budget-session.jsonl");
     const sessionEntry: SessionEntry = {
       sessionId: "session",
+      sessionFile,
       updatedAt: Date.now(),
       totalTokens: 245_000,
       totalTokensFresh: true,
@@ -1613,6 +1615,7 @@ describe("runMemoryFlushIfNeeded", () => {
     });
     const sessionEntry: SessionEntry = {
       sessionId: "session",
+      sessionFile: path.join(rootDir, "required-preflight-session.jsonl"),
       updatedAt: Date.now(),
       totalTokens: 180_499,
       totalTokensFresh: true,
@@ -1838,7 +1841,7 @@ describe("runMemoryFlushIfNeeded", () => {
     expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
-  it("uses the active run sessionFile when the session entry has no transcript path", async () => {
+  it("does not use the active run sessionFile when the session entry has no transcript path", async () => {
     const sessionFile = path.join(rootDir, "active-run-session.jsonl");
     await fs.writeFile(
       sessionFile,
@@ -1882,10 +1885,7 @@ describe("runMemoryFlushIfNeeded", () => {
       replyOperation: createReplyOperation(),
     });
 
-    expect(compactEmbeddedAgentSessionMock).toHaveBeenCalledTimes(1);
-    const compactCall = requireCompactEmbeddedAgentSessionCall();
-    expect(compactCall.sessionId).toBe("session");
-    expect(compactCall.sessionFile).toContain("active-run-session.jsonl");
+    expect(compactEmbeddedAgentSessionMock).not.toHaveBeenCalled();
   });
 
   it("keeps preflight compaction conservative for content appended after latest usage", async () => {
