@@ -22,6 +22,7 @@ import {
   type SessionStoreTarget,
 } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 
 export type DoctorSessionSqliteMode = "dry-run" | "import" | "validate" | "inspect";
@@ -29,6 +30,7 @@ export type DoctorSessionSqliteMode = "dry-run" | "import" | "validate" | "inspe
 export type DoctorSessionSqliteOptions = {
   allAgents?: boolean;
   agent?: string;
+  cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   mode: DoctorSessionSqliteMode;
   store?: string;
@@ -88,11 +90,13 @@ export async function runDoctorSessionSqlite(
   options: DoctorSessionSqliteOptions,
 ): Promise<DoctorSessionSqliteReport> {
   const env = options.env ?? process.env;
-  const cfg = loadConfig({
-    pin: false,
-    skipPluginValidation: true,
-    skipShellEnvFallback: true,
-  });
+  const cfg =
+    options.cfg ??
+    loadConfig({
+      pin: false,
+      skipPluginValidation: true,
+      skipShellEnvFallback: true,
+    });
   const targets = resolveDoctorSessionSqliteTargets({
     allAgents: options.allAgents,
     agent: options.agent,
@@ -110,7 +114,7 @@ export async function runDoctorSessionSqlite(
 function resolveDoctorSessionSqliteTargets(params: {
   allAgents?: boolean;
   agent?: string;
-  cfg: ReturnType<typeof loadConfig>;
+  cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   store?: string;
 }): SessionStoreTarget[] {

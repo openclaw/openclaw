@@ -93,7 +93,7 @@ All session state is owned by the **gateway**. UI clients query the gateway for
 session data.
 
 - **Runtime session rows:** `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
-- **Transcript files:** `~/.openclaw/agents/<agentId>/sessions/<sessionId>.jsonl`
+- **Archived transcript files:** `~/.openclaw/agents/<agentId>/sessions/`
 - **Legacy row migration source:** `~/.openclaw/agents/<agentId>/sessions/sessions.json`
 
 The session rows in the per-agent SQLite database keep separate lifecycle
@@ -104,14 +104,15 @@ timestamps:
 - `updatedAt`: last store-row mutation; useful for listing and pruning, but not
   authoritative for daily/idle reset freshness.
 
-During migration from older installs, rows without `sessionStartedAt` are
-resolved from the legacy transcript JSONL session header when available. If an
-older row also lacks `lastInteractionAt`, idle freshness falls back to that
-session start time, not to later bookkeeping writes. Use
-`openclaw doctor --session-sqlite inspect --session-sqlite-all-agents` to
-inspect legacy `sessions.json` and JSONL state, then follow the
-[Doctor migration sequence](/cli/doctor#session-sqlite-migration) before
-relying on the SQLite session row store.
+During migration from older installs, gateway startup and `openclaw doctor
+--fix` import legacy `sessions.json` rows and hot transcript JSONL history into
+SQLite automatically. Rows without `sessionStartedAt` are resolved from the
+legacy transcript JSONL session header when available. If an older row also
+lacks `lastInteractionAt`, idle freshness falls back to that session start time,
+not to later bookkeeping writes. Use `openclaw doctor --session-sqlite inspect
+--session-sqlite-all-agents` and the [Doctor migration
+sequence](/cli/doctor#session-sqlite-migration) when you want explicit
+inspection or validation evidence.
 
 ## Session maintenance
 
