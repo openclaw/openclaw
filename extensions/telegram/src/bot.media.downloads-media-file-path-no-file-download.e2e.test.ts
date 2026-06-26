@@ -1,7 +1,10 @@
 // Telegram tests cover bot.mediaownloads media file path no file download plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { telegramBotDepsForTest } from "./bot.media.e2e-harness.js";
-import { setNextSavedMediaPath } from "./bot.media.e2e-harness.js";
+import {
+  readRemoteMediaBufferSpy,
+  setNextSavedMediaPath,
+  telegramBotDepsForTest,
+} from "./bot.media.e2e-harness.js";
 import {
   TELEGRAM_TEST_TIMINGS,
   createBotHandler,
@@ -624,6 +627,120 @@ describe("telegram media groups", () => {
         setTimeoutSpy.mockRestore();
         clearTimeoutSpy.mockRestore();
         fetchSpy.mockRestore();
+      }
+    },
+    MEDIA_GROUP_TEST_TIMEOUT_MS,
+  );
+
+  it(
+    "omits skipped album siblings from prompt context",
+    async () => {
+      const runtimeError = vi.fn();
+      const { handler, replySpy } = await createBotHandlerWithOptions({ runtimeError });
+      let nextTimerHandle = 1;
+      const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout").mockImplementation(() => {
+        const handle = nextTimerHandle;
+        nextTimerHandle += 1;
+        return handle as unknown as ReturnType<typeof setTimeout>;
+      });
+      const clearTimeoutSpy = vi.spyOn(globalThis, "clearTimeout");
+      const savedPaths = [
+        "/tmp/media/inbound/album-partial-2.png",
+        "/tmp/media/inbound/album-partial-3.png",
+      ];
+      const pngBytes = Buffer.from(new Uint8Array([0x89, 0x50, 0x4e, 0x47]));
+
+      readRemoteMediaBufferSpy.mockImplementation(
+        async (params: { url?: string; filePathHint?: string }) => {
+          const url = String(params.url ?? "");
+          if (url.includes("album-partial-1.png")) {
+            throw new Error(`Telegram media exceeds 20 MB limit: ${url}`);
+          }
+          return {
+            buffer: pngBytes,
+            contentType: "image/png",
+            fileName: params.filePathHint,
+          };
+        },
+      );
+
+      try {
+        for (const path of savedPaths) {
+          setNextSavedMediaPath({ path, contentType: "image/png" });
+        }
+
+        for (const message of [
+          {
+            message: {
+              chat: { id: 42, type: "private" as const },
+              from: { id: 777, is_bot: false, first_name: "Ada" },
+              message_id: 501,
+              date: 1736380800,
+              media_group_id: "album-partial-context",
+              photo: [{ file_id: "album-partial-photo-1" }],
+            },
+            getFile: async () => ({ file_path: "photos/album-partial-1.png" }),
+          },
+          {
+            message: {
+              chat: { id: 42, type: "private" as const },
+              from: { id: 777, is_bot: false, first_name: "Ada" },
+              message_id: 502,
+              caption: "Here is a partial album",
+              date: 1736380801,
+              media_group_id: "album-partial-context",
+              photo: [{ file_id: "album-partial-photo-2" }],
+            },
+            getFile: async () => ({ file_path: "photos/album-partial-2.png" }),
+          },
+          {
+            message: {
+              chat: { id: 42, type: "private" as const },
+              from: { id: 777, is_bot: false, first_name: "Ada" },
+              message_id: 503,
+              date: 1736380802,
+              media_group_id: "album-partial-context",
+              photo: [{ file_id: "album-partial-photo-3" }],
+            },
+            getFile: async () => ({ file_path: "photos/album-partial-3.png" }),
+          },
+        ]) {
+          await handler({
+            message: message.message,
+            me: { username: "openclaw_bot" },
+            getFile: message.getFile,
+          });
+        }
+
+        await flushActiveScheduledTimersForDelay({
+          setTimeoutSpy,
+          clearTimeoutSpy,
+          delayMs: TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+          expectedCount: 1,
+        });
+        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(1));
+
+        expect(runtimeError).not.toHaveBeenCalled();
+        const payload = replyPayload(replySpy);
+        expect(payload.Body).toContain("Here is a partial album");
+        expect(payload.MediaPaths).toEqual(savedPaths);
+        const messagesById = conversationMessages(payload);
+        expect(messagesById.get("501")).toBeUndefined();
+        expect(messagesById.get("503")?.media_path).toBe("media://inbound/album-partial-3.png");
+        expect(messagesById.get("503")?.media_ref).toBeUndefined();
+        expect(JSON.stringify(payload.UntrustedStructuredContext)).not.toContain(
+          "telegram:file/album-partial-photo-1",
+        );
+      } finally {
+        for (const timer of resolveActiveScheduledTimersForDelay(
+          setTimeoutSpy,
+          clearTimeoutSpy,
+          TELEGRAM_TEST_TIMINGS.mediaGroupFlushMs,
+        )) {
+          clearTimeout(timer.handle);
+        }
+        setTimeoutSpy.mockRestore();
+        clearTimeoutSpy.mockRestore();
       }
     },
     MEDIA_GROUP_TEST_TIMEOUT_MS,

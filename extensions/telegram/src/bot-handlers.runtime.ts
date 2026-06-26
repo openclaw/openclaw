@@ -1003,13 +1003,25 @@ export const registerTelegramHandlers = ({
         }).catch(() => {});
       }
 
+      // Only successfully downloaded album items have hydrated prompt media.
+      // Skipped siblings still have raw telegram:file refs in the cache.
+      const allAlbumMessageIds = entry.messages.flatMap(({ msg }) =>
+        typeof msg.message_id === "number" ? [String(msg.message_id)] : [],
+      );
+      const hydratedAlbumMessageIds = allMedia.flatMap((media) =>
+        media.sourceMessageId ? [media.sourceMessageId] : [],
+      );
+      const hydratedAlbumMessageIdSet = new Set(hydratedAlbumMessageIds);
+      const skippedAlbumMessageIds = allAlbumMessageIds.filter(
+        (messageId) => !hydratedAlbumMessageIdSet.has(messageId),
+      );
+
       const result = await processMessageWithReplyChain({
         ctx: primaryEntry.ctx,
         msg: primaryEntry.msg,
         allMedia,
-        promptContextExtraMessageIds: entry.messages.flatMap(({ msg }) =>
-          typeof msg.message_id === "number" ? [String(msg.message_id)] : [],
-        ),
+        promptContextExtraMessageIds: hydratedAlbumMessageIds,
+        promptContextExcludedMessageIds: skippedAlbumMessageIds,
         storeAllowFrom: entry.storeAllowFrom,
         options: {
           ...promptContextBoundaryOptions(entry.promptContextMinTimestampMs),
@@ -1238,6 +1250,7 @@ export const registerTelegramHandlers = ({
     options?: TelegramMessageContextOptions,
     mediaByMessageId?: ReadonlyMap<string, TelegramMediaRef>,
     extraMessageIds?: readonly string[],
+    excludedMessageIds?: readonly string[],
   ): Promise<TelegramPromptContextEntry[]> => {
     const isGroup = msg.chat.type === "group" || msg.chat.type === "supergroup";
     const groupHistoryContextMode = isGroup
@@ -1299,8 +1312,16 @@ export const registerTelegramHandlers = ({
         entry.node.messageId ? [[entry.node.messageId, entry] as const] : [],
       ),
     );
+    const excludedMessageIdSet = new Set(excludedMessageIds ?? []);
+    for (const excludedMessageId of excludedMessageIdSet) {
+      conversationContextById.delete(excludedMessageId);
+    }
     for (const extraMessageId of new Set(extraMessageIds ?? [])) {
-      if (extraMessageId === messageId || conversationContextById.has(extraMessageId)) {
+      if (
+        extraMessageId === messageId ||
+        excludedMessageIdSet.has(extraMessageId) ||
+        conversationContextById.has(extraMessageId)
+      ) {
         continue;
       }
       const node = await messageCache.get({
@@ -1399,6 +1420,7 @@ export const registerTelegramHandlers = ({
     msg: Message;
     allMedia: TelegramMediaRef[];
     promptContextExtraMessageIds?: string[];
+    promptContextExcludedMessageIds?: string[];
     storeAllowFrom: string[];
     options?: TelegramMessageContextOptions;
     dispatchDedupeKeys?: string[];
@@ -1504,6 +1526,7 @@ export const registerTelegramHandlers = ({
         params.options,
         promptContextMediaByMessageId,
         params.promptContextExtraMessageIds,
+        params.promptContextExcludedMessageIds,
       );
       const result = await processMessage(
         params.ctx,
