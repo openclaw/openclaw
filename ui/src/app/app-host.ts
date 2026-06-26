@@ -358,8 +358,8 @@ class OpenClawShell extends LitElement {
             search: searchForSession(sessionKey),
           }
         : undefined);
-    context.navigate("chat", navigationOptions);
     this.closeNavDrawer({ restoreFocus: true });
+    context.navigate("chat", navigationOptions);
   }
 
   private toggleNavDrawer(trigger: HTMLElement) {
@@ -511,6 +511,8 @@ class OpenClawShell extends LitElement {
               context.navigation.update({
                 recentSessionsCollapsed: !context.navigation.snapshot.recentSessionsCollapsed,
               })}
+            .onNavigate=${(routeId: string, options?: ApplicationNavigationOptions) =>
+              this.navigate(routeId, options)}
             .onPreloadRoute=${(routeId: string) =>
               routeId === "chat" ? context.preload(routeId) : Promise.resolve()}
           ></openclaw-app-sidebar>

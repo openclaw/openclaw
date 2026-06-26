@@ -49,6 +49,11 @@ export class AppSidebar extends LitElement {
   @property({ attribute: false }) onToggleCollapsed?: () => void;
   @property({ attribute: false }) onToggleGroup?: (label: string) => void;
   @property({ attribute: false }) onToggleRecentSessions?: () => void;
+  @property({ attribute: false })
+  onNavigate?: (
+    routeId: NavigationRouteId,
+    options?: Pick<RouteLocation, "search" | "hash">,
+  ) => void;
   @property({ attribute: false }) onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
 
   @consume({ context: applicationContext, subscribe: false })
@@ -164,7 +169,7 @@ export class AppSidebar extends LitElement {
   }
 
   private readonly selectSession = (sessionKey: string) => {
-    this.context?.navigate("chat", {
+    this.onNavigate?.("chat", {
       search: searchForSession(sessionKey),
     });
   };
@@ -270,16 +275,14 @@ export class AppSidebar extends LitElement {
             return;
           }
           event.preventDefault();
-          if (routeId === "chat") {
-            this.context?.navigate(
-              "chat",
-              routeSessionKey
-                ? {
-                    search: searchForSession(routeSessionKey),
-                  }
-                : undefined,
-            );
-          }
+          this.onNavigate?.(
+            routeId,
+            routeId === "chat" && routeSessionKey
+              ? {
+                  search: searchForSession(routeSessionKey),
+                }
+              : undefined,
+          );
         }}
         title=${titleForRoute(routeId)}
       >
