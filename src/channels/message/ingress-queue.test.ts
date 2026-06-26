@@ -323,6 +323,35 @@ describe("channel ingress queue", () => {
     });
   });
 
+  it("blocks lanes claimed by candidate rows before claiming later candidates", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createChannelIngressQueue<{ lane: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => clock++,
+      });
+
+      await queue.enqueue("a", { lane: "chat-1" }, { receivedAt: 1 });
+      await queue.enqueue("b", { lane: "chat-1" }, { receivedAt: 2 });
+      await queue.enqueue("c", { lane: "chat-2" }, { receivedAt: 3 });
+      await queue.claim("a", { ownerId: "sibling-worker" });
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        candidateIds: ["a", "b", "c"],
+        orderBy: "id",
+        deriveLaneKey: (record) => record.payload.lane,
+      });
+
+      expect(claimed?.id).toBe("c");
+      expect(claimed?.laneKey).toBe("chat-2");
+      const sameLanePending = (await queue.listPending()).find((record) => record.id === "b");
+      expect(sameLanePending?.laneKey).toBeUndefined();
+    });
+  });
+
   it("requires claim tokens before mutating claimed rows", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueue<{ text: string }>({

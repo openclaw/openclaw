@@ -475,6 +475,26 @@ export function createChannelIngressQueue<
     return runOpenClawStateWriteTransaction(
       (tx) => {
         const kysely = getChannelIngressKysely(tx.db);
+        let effectiveBlocked = blocked;
+        if (candidateIds && candidateIds.length > 0) {
+          // Candidate snapshots can race a sibling drainer. If an earlier
+          // candidate is now claimed, its lane must block later same-lane rows.
+          const claimedCandidateRows = executeSqliteQuerySync(
+            tx.db,
+            kysely
+              .selectFrom("channel_ingress_events")
+              .selectAll()
+              .where("queue_name", "=", queueName)
+              .where("status", "=", "claimed")
+              .where("event_id", "in", candidateIds),
+          ).rows;
+          const claimedCandidateLaneKeys = claimedCandidateRows
+            .map((row) => row.lane_key ?? claimOptions?.deriveLaneKey?.(baseRecord(row)))
+            .filter((laneKey): laneKey is string => Boolean(laneKey));
+          if (claimedCandidateLaneKeys.length > 0) {
+            effectiveBlocked = new Set([...blocked, ...claimedCandidateLaneKeys]);
+          }
+        }
         const baseSelect = kysely
           .selectFrom("channel_ingress_events")
           .selectAll()
@@ -484,9 +504,9 @@ export function createChannelIngressQueue<
         if (candidateIds) {
           select = select.where("event_id", "in", candidateIds);
         }
-        if (blocked.size > 0 && !claimOptions?.deriveLaneKey) {
+        if (effectiveBlocked.size > 0 && !claimOptions?.deriveLaneKey) {
           select = select.where((eb) =>
-            eb.or([eb("lane_key", "is", null), eb("lane_key", "not in", [...blocked])]),
+            eb.or([eb("lane_key", "is", null), eb("lane_key", "not in", [...effectiveBlocked])]),
           );
         }
         let orderedSelect =
@@ -500,7 +520,7 @@ export function createChannelIngressQueue<
         const rows = executeSqliteQuerySync(tx.db, orderedSelect).rows;
         const selected = rows.find((row) => {
           const laneKey = row.lane_key ?? claimOptions?.deriveLaneKey?.(baseRecord(row));
-          return !laneKey || !blocked.has(laneKey);
+          return !laneKey || !effectiveBlocked.has(laneKey);
         });
         if (!selected) {
           return null;
