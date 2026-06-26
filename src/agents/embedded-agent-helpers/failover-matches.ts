@@ -215,6 +215,7 @@ const ERROR_PATTERNS = {
     /requires?\s+more\s+credits/i,
     /out of extra usage/i,
     /draw from your extra usage/i,
+    /claim it at claude\.ai\/settings\/usage/i,
     /extra usage is required(?: for long context requests)?/i,
     // Chinese provider billing messages
     "余额不足",

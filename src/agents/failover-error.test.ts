@@ -857,6 +857,32 @@ describe("failover-error", () => {
     ).toBe("billing");
   });
 
+  it("classifies Anthropic extra-usage limit errors as billing for model fallback", () => {
+    const message =
+      "Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.";
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        provider: "anthropic",
+        message,
+      }),
+    ).toBe("billing");
+    expect(
+      resolveFailoverReasonFromError({
+        message: `API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"${message}"}}`,
+      }),
+    ).toBe("billing");
+  });
+
+  it("does not treat unrelated extra-usage wording as billing", () => {
+    expect(
+      resolveFailoverReasonFromError({
+        status: 400,
+        message: "This report includes an extra usage section for dashboard context.",
+      }),
+    ).toBe("format");
+  });
+
   it("infers format errors from error messages", () => {
     expect(
       resolveFailoverReasonFromError({

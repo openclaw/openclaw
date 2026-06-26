@@ -147,6 +147,7 @@ describe("isBillingErrorMessage", () => {
         "This model requires more credits to use",
         "This endpoint require more credits",
         "You're out of extra usage. Add more at claude.ai/settings/usage and keep going.",
+        "Third-party apps now draw from your extra usage, not your plan limits. We've added a $200 credit to get you started. Claim it at claude.ai/settings/usage and keep going.",
         "Extra usage is required for long context requests.",
       ],
       expected: true,
@@ -188,6 +189,12 @@ describe("isBillingErrorMessage", () => {
     },
   ])("$name", ({ samples, expected }) => {
     expectMessageMatches(isBillingErrorMessage, samples, expected);
+  });
+
+  it("does not false-positive on generic extra usage wording", () => {
+    expect(
+      isBillingErrorMessage("This report includes an extra usage section for dashboard context."),
+    ).toBe(false);
   });
 
   it("does not false-positive on long assistant responses mentioning billing keywords", () => {
