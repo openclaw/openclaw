@@ -13,7 +13,7 @@ import {
 import { sleep } from "../../src/utils.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
 
-type DoctorMode = "import" | "inspect" | "validate";
+type DoctorMode = "fix" | "inspect" | "validate";
 
 type DoctorCommandEvidence = {
   code: number | null;
@@ -130,8 +130,8 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     await seedLegacySessionStore(context);
     await record("seeded-legacy-store");
 
-    const importDoctor = await runDoctor(inst, "import", context.storePath);
-    await record("after-doctor-import", importDoctor);
+    const fixDoctor = await runDoctorFix(inst);
+    await record("after-doctor-fix", fixDoctor);
 
     const inspectDoctor = await runDoctor(inst, "inspect", context.storePath);
     await record("after-doctor-inspect", inspectDoctor);
@@ -331,7 +331,7 @@ async function writeTranscript(
 
 async function runDoctor(
   inst: Awaited<ReturnType<typeof createOpenClawTestInstance>>,
-  mode: DoctorMode,
+  mode: Exclude<DoctorMode, "fix">,
   storePath: string,
 ): Promise<DoctorCommandEvidence> {
   const result = await inst.cli(
@@ -347,6 +347,20 @@ async function runDoctor(
     ...(parsed && typeof parsed.totals === "object"
       ? { totals: parsed.totals as Record<string, unknown> }
       : {}),
+  };
+}
+
+async function runDoctorFix(
+  inst: Awaited<ReturnType<typeof createOpenClawTestInstance>>,
+): Promise<DoctorCommandEvidence> {
+  const result = await inst.cli(["doctor", "--fix", "--yes", "--non-interactive"], {
+    timeoutMs: 90_000,
+  });
+  return {
+    code: result.code,
+    mode: "fix",
+    stderrTail: tail(result.stderr),
+    stdoutTail: tail(result.stdout),
   };
 }
 
@@ -701,6 +715,12 @@ function validateCheckpointInvariants(
   }
   if (checkpoint.label.startsWith("after-doctor") && checkpoint.doctor?.code !== 0) {
     failures.push(`${checkpoint.label}: doctor ${checkpoint.doctor.mode} exited non-zero`);
+  }
+  if (
+    checkpoint.label === "after-doctor-fix" &&
+    (checkpoint.sqlite.sessionEntries === 0 || checkpoint.sqlite.transcriptEvents === 0)
+  ) {
+    failures.push(`${checkpoint.label}: doctor --fix did not import sessions into SQLite`);
   }
   if (
     checkpoint.label.startsWith("after-doctor") &&
