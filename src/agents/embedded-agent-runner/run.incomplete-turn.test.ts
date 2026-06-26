@@ -24,11 +24,13 @@ import {
   extractPlanningOnlyPlanDetails,
   isLikelyExecutionAckPrompt,
   PLANNING_ONLY_RETRY_INSTRUCTION,
+  POST_TOOL_CONTINUATION_RETRY_INSTRUCTION,
   REASONING_ONLY_RETRY_INSTRUCTION,
   resolveAckExecutionFastPathInstruction,
   resolveEmptyResponseRetryInstruction,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  resolvePostToolContinuationRetryInstruction,
   isIncompleteTerminalAssistantTurn,
   resolveIncompleteTurnPayloadText,
   resolveReasoningOnlyRetryInstruction,
@@ -745,6 +747,72 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     const secondCall = runAttemptCall(1);
     expect(secondCall.prompt).toContain(EMPTY_RESPONSE_RETRY_INSTRUCTION);
     expectWarnMessageWith("empty response detected");
+  });
+
+  it("retries post-tool progress-only Codex turns with a transcript continuation instruction", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedResolveModelAsync.mockResolvedValue({
+      model: {
+        id: "gpt-5.5",
+        provider: "openai-codex",
+        contextWindow: 200000,
+        api: "openai-codex-responses",
+      },
+      error: null,
+      authStorage: {
+        setRuntimeApiKey: vi.fn(),
+      },
+      modelRegistry: {},
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        toolMetas: [{ toolName: "bash", meta: "mkdir -p sample_logs reports" }],
+        assistantTexts: [
+          "Now let me create the sample logs — covering all three formats with realistic attack scenarios.",
+        ],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          content: [
+            {
+              type: "text",
+              text: "Now let me create the sample logs — covering all three formats with realistic attack scenarios.",
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["Created the sample logs and completed the incident response package."],
+        lastAssistant: {
+          role: "assistant",
+          stopReason: "stop",
+          provider: "openai-codex",
+          model: "gpt-5.5",
+          content: [
+            {
+              type: "text",
+              text: "Created the sample logs and completed the incident response package.",
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "openai-codex",
+      model: "gpt-5.5",
+      runId: "run-post-tool-progress-only-continuation",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toContain(POST_TOOL_CONTINUATION_RETRY_INSTRUCTION);
+    expectWarnMessageWith("post-tool progress-only assistant turn detected");
   });
 
   it("retries replay-safe missing terminal assistant turns once with the same prompt", async () => {
@@ -2684,6 +2752,88 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     });
 
     expect(retryInstruction).toBeNull();
+  });
+
+  it("continues post-tool progress-only Codex turns instead of treating them as final", () => {
+    const attempt = makeAttemptResult({
+      toolMetas: [{ toolName: "bash", meta: "mkdir -p sample_logs reports" }],
+      assistantTexts: [
+        "Now let me create the sample logs — covering all three formats with realistic attack scenarios.",
+      ],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        content: [
+          {
+            type: "text",
+            text: "Now let me create the sample logs — covering all three formats with realistic attack scenarios.",
+          },
+        ],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      resolvePostToolContinuationRetryInstruction({
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+        modelApi: "openai-codex-responses",
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(POST_TOOL_CONTINUATION_RETRY_INSTRUCTION);
+  });
+
+  it("continues terse post-tool construction announcements from Codex app-server", () => {
+    const attempt = makeAttemptResult({
+      toolMetas: [{ toolName: "bash", meta: "cat > auth.py" }],
+      assistantTexts: ["Now the Flask server with all API endpoints."],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Now the Flask server with all API endpoints." }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      resolvePostToolContinuationRetryInstruction({
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+        modelApi: "openai-codex-responses",
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBe(POST_TOOL_CONTINUATION_RETRY_INSTRUCTION);
+  });
+
+  it("does not continue post-tool final summaries", () => {
+    const attempt = makeAttemptResult({
+      toolMetas: [{ toolName: "bash", meta: "npm test" }],
+      assistantTexts: ["Done. Implemented the server and verified the tests."],
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        provider: "openai-codex",
+        model: "gpt-5.5",
+        content: [{ type: "text", text: "Done. Implemented the server and verified the tests." }],
+      } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    });
+
+    expect(
+      resolvePostToolContinuationRetryInstruction({
+        provider: "openai-codex",
+        modelId: "gpt-5.5",
+        modelApi: "openai-codex-responses",
+        aborted: false,
+        timedOut: false,
+        attempt,
+      }),
+    ).toBeNull();
   });
 });
 

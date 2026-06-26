@@ -207,6 +207,8 @@ export const REASONING_ONLY_RETRY_INSTRUCTION =
   "The previous assistant turn recorded reasoning but did not produce a user-visible answer. Continue from that partial turn and produce the visible answer now. Do not restate the reasoning or restart from scratch.";
 export const EMPTY_RESPONSE_RETRY_INSTRUCTION =
   "The previous attempt did not produce a user-visible answer. Continue from the current state and produce the visible answer now. Do not restart from scratch.";
+export const POST_TOOL_CONTINUATION_RETRY_INSTRUCTION =
+  "The previous assistant turn ended with progress-only text after tool work. Continue from the current transcript and finish the next concrete task step now. Do not restart from scratch, do not repeat completed tools, and produce the final deliverables before replying.";
 export const ACK_EXECUTION_FAST_PATH_INSTRUCTION =
   "The latest user message is a short approval to proceed. Do not recap or restate the plan. Start with the first concrete tool action immediately. Keep any user-facing follow-up brief and natural.";
 export const STRICT_AGENTIC_BLOCKED_TEXT =
@@ -717,6 +719,15 @@ function shouldApplyNonVisibleTurnRetryGuard(params: {
   );
 }
 
+function shouldApplyPostToolContinuationRetryGuard(params: {
+  provider?: string;
+  modelId?: string;
+  modelApi?: string;
+  executionContract?: string;
+}): boolean {
+  return shouldApplyPlanningOnlyRetryGuard(params) || shouldApplyNonVisibleTurnRetryGuard(params);
+}
+
 function isIncompleteTurnRecoverySupportedProviderModel(params: {
   provider?: string;
   modelId?: string;
@@ -872,6 +883,62 @@ function isSingleActionThenNarrativePattern(params: {
     SINGLE_ACTION_EXPLICIT_CONTINUATION_RE.test(text) ||
     SINGLE_ACTION_MULTI_STEP_PROMISE_RE.test(text)
   );
+}
+
+const POST_TOOL_CONTINUATION_ACTION_RE =
+  /\b(?:create|write|add|implement|build|update|finish|complete|test|verify|run|generate|prepare|wire|set up|start|continue)\b/i;
+const POST_TOOL_CONTINUATION_INTENT_RE =
+  /^\s*(?:(?:now|next|then|after(?:wards)?)[, ]+)?(?:let me|i(?:'ll| will| am going to|'m going to)|i need to|i can)\b/i;
+const POST_TOOL_TERSE_CONSTRUCTION_RE =
+  /^\s*(?:now|next|then|after(?:wards)?)[, ]+the\s+\w+[\s\S]{0,120}\bwith\b/i;
+const POST_TOOL_COMPLETION_RE =
+  /\b(?:done|finished|implemented|updated|fixed|changed|created|wrote|added|built|completed|verified|tested|ran|all set|summary|run_summary|final)\b/i;
+
+export function resolvePostToolContinuationRetryInstruction(params: {
+  provider?: string;
+  modelId?: string;
+  modelApi?: string;
+  executionContract?: string;
+  aborted: boolean;
+  timedOut: boolean;
+  attempt: PlanningOnlyAttempt;
+}): string | null {
+  if (
+    !shouldApplyPostToolContinuationRetryGuard({
+      provider: params.provider,
+      modelId: params.modelId,
+      modelApi: params.modelApi,
+      executionContract: params.executionContract,
+    }) ||
+    params.aborted ||
+    params.timedOut ||
+    params.attempt.clientToolCalls ||
+    params.attempt.yieldDetected ||
+    params.attempt.didSendDeterministicApprovalPrompt ||
+    params.attempt.lastToolError ||
+    hasAcceptedSessionSpawn(params.attempt.acceptedSessionSpawns) ||
+    !hasNonPlanToolActivity(params.attempt.toolMetas) ||
+    hasMessagingToolDeliveryEvidence(params.attempt)
+  ) {
+    return null;
+  }
+
+  const stopReason = params.attempt.lastAssistant?.stopReason;
+  if (stopReason && stopReason !== "stop") {
+    return null;
+  }
+
+  const text = (params.attempt.assistantTexts ?? []).join("\n\n").trim();
+  if (!text || text.length > PLANNING_ONLY_MAX_VISIBLE_TEXT || text.includes("```")) {
+    return null;
+  }
+  if (POST_TOOL_COMPLETION_RE.test(text)) {
+    return null;
+  }
+  const intentToContinue =
+    POST_TOOL_TERSE_CONSTRUCTION_RE.test(text) ||
+    (POST_TOOL_CONTINUATION_INTENT_RE.test(text) && POST_TOOL_CONTINUATION_ACTION_RE.test(text));
+  return intentToContinue ? POST_TOOL_CONTINUATION_RETRY_INSTRUCTION : null;
 }
 
 export function resolvePlanningOnlyRetryLimit(

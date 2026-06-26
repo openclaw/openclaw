@@ -169,6 +169,7 @@ import {
   resolveIncompleteTurnPayloadText,
   resolvePlanningOnlyRetryLimit,
   resolvePlanningOnlyRetryInstruction,
+  resolvePostToolContinuationRetryInstruction,
   resolveReasoningOnlyRetryInstruction,
   resolveSilentToolResultReplyPayload,
   STRICT_AGENTIC_BLOCKED_TEXT,
@@ -1198,6 +1199,7 @@ export async function runEmbeddedAgent(
       };
       let lastRetryFailoverReason: FailoverReason | null = null;
       let planningOnlyRetryInstruction: string | null = null;
+      let postToolContinuationRetryInstruction: string | null = null;
       let reasoningOnlyRetryInstruction: string | null = null;
       let emptyResponseRetryInstruction: string | null = null;
       let compactionContinuationRetryInstruction: string | null = null;
@@ -1467,6 +1469,7 @@ export async function runEmbeddedAgent(
           const promptAdditions = [
             ackExecutionFastPathInstruction,
             planningOnlyRetryInstruction,
+            postToolContinuationRetryInstruction,
             reasoningOnlyRetryInstruction,
             emptyResponseRetryInstruction,
             compactionContinuationRetryInstruction,
@@ -3067,6 +3070,17 @@ export async function runEmbeddedAgent(
                 timedOut,
                 attempt,
               });
+          const nextPostToolContinuationRetryInstruction = emptyAssistantReplyIsSilent
+            ? null
+            : resolvePostToolContinuationRetryInstruction({
+                provider: activeErrorContext.provider,
+                modelId: activeErrorContext.model,
+                modelApi: effectiveModel.api,
+                executionContract,
+                aborted,
+                timedOut,
+                attempt,
+              });
           const nextEmptyResponseRetryInstruction = emptyAssistantReplyIsSilent
             ? null
             : resolveEmptyResponseRetryInstruction({
@@ -3079,6 +3093,9 @@ export async function runEmbeddedAgent(
                 timedOut,
                 attempt,
               });
+          if (!nextPostToolContinuationRetryInstruction) {
+            postToolContinuationRetryInstruction = null;
+          }
           if (
             nextPlanningOnlyRetryInstruction &&
             planningOnlyRetryAttempts < maxPlanningOnlyRetryAttempts
@@ -3119,6 +3136,20 @@ export async function runEmbeddedAgent(
                 `provider=${provider}/${modelId} harness=${sanitizeForLog(agentHarness.id)} ` +
                 `contract=${executionContract} configured=${configuredExecutionContractForLog} — retrying ` +
                 `${planningOnlyRetryAttempts}/${maxPlanningOnlyRetryAttempts} with act-now steer`,
+            );
+            continue;
+          }
+          if (
+            !nextPlanningOnlyRetryInstruction &&
+            nextPostToolContinuationRetryInstruction &&
+            planningOnlyRetryAttempts < maxPlanningOnlyRetryAttempts
+          ) {
+            planningOnlyRetryAttempts += 1;
+            postToolContinuationRetryInstruction = nextPostToolContinuationRetryInstruction;
+            log.warn(
+              `post-tool progress-only assistant turn detected: runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${activeErrorContext.provider}/${activeErrorContext.model} harness=${sanitizeForLog(agentHarness.id)} — retrying ` +
+                `${planningOnlyRetryAttempts}/${maxPlanningOnlyRetryAttempts} with continuation steer`,
             );
             continue;
           }

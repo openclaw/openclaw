@@ -956,7 +956,7 @@ export async function runCodexAppServerAttempt(
     options.turnCompletionIdleTimeoutMs ?? appServer.turnCompletionIdleTimeoutMs,
   );
   const turnAssistantCompletionIdleTimeoutMs = resolveCodexTurnAssistantCompletionIdleTimeoutMs(
-    options.turnAssistantCompletionIdleTimeoutMs,
+    options.turnAssistantCompletionIdleTimeoutMs ?? appServer.turnAssistantCompletionIdleTimeoutMs,
   );
   const postToolRawAssistantCompletionIdleTimeoutMs =
     resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(

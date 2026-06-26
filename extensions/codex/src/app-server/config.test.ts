@@ -95,6 +95,7 @@ describe("Codex app-server config", () => {
           serviceTier: "flex",
           codeModeOnly: true,
           turnCompletionIdleTimeoutMs: 120_000,
+          turnAssistantCompletionIdleTimeoutMs: 600_000,
           postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
         },
       },
@@ -111,6 +112,7 @@ describe("Codex app-server config", () => {
       serviceTier: "flex",
       codeModeOnly: true,
       turnCompletionIdleTimeoutMs: 120_000,
+      turnAssistantCompletionIdleTimeoutMs: 600_000,
       postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
     });
     expectFields(runtime.start, "runtime start", {
