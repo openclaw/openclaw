@@ -836,6 +836,9 @@ async function waitForAgentRunSettled(
   if (typeof result?.status !== "string") {
     throw new Error(`agent.wait returned no status for ${runId}: ${JSON.stringify(result)}`);
   }
+  if (result.status === "ok") {
+    return;
+  }
   if (
     result.status === "timeout" &&
     (result.stopReason === "rpc" || result.stopReason === "stop") &&
@@ -843,9 +846,7 @@ async function waitForAgentRunSettled(
   ) {
     return;
   }
-  if (result.status === "timeout") {
-    throw new Error(`agent.wait timed out for ${runId}: ${JSON.stringify(result)}`);
-  }
+  throw new Error(`agent.wait did not settle acceptably for ${runId}: ${JSON.stringify(result)}`);
 }
 
 async function deleteSession(
