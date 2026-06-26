@@ -599,6 +599,17 @@ export function buildInboundUserContextPrefix(
     sender_id: shouldIncludeConversationInfo
       ? normalizePromptMetadataString(ctx.SenderId)
       : undefined,
+    source_actor_id: normalizePromptMetadataString(ctx.SourceActor?.id ?? ctx.SourceActorId),
+    source_actor_peer_id: normalizePromptMetadataString(
+      ctx.SourceActor?.peerId ?? ctx.SourceActorPeerId,
+    ),
+    source_actor_display_name: normalizePromptMetadataString(
+      ctx.SourceActor?.displayName ?? ctx.SourceActorDisplayName,
+    ),
+    source_actor_role: normalizePromptMetadataString(ctx.SourceActor?.role ?? ctx.SourceActorRole),
+    source_actor_context: normalizePromptMetadataString(
+      ctx.SourceActor?.context ?? ctx.SourceActorContext,
+    ),
     conversation_label: isDirect ? undefined : normalizePromptMetadataString(ctx.ConversationLabel),
     sender: shouldIncludeConversationInfo
       ? (normalizePromptMetadataString(ctx.SenderName) ??

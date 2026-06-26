@@ -20,6 +20,29 @@ describe("openclaw plugin tool context", () => {
     expect(result.context.requesterSenderId).toBe("trusted-sender");
   });
 
+  it("forwards runtime source actor context", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        sourceActor: {
+          id: "signal:+15550001",
+          peerId: "signal:uuid-1",
+          displayName: "Alice",
+          role: "participant",
+          context: "signal",
+        },
+      },
+    });
+
+    expect(result.context.sourceActor).toStrictEqual({
+      id: "signal:+15550001",
+      peerId: "signal:uuid-1",
+      displayName: "Alice",
+      role: "participant",
+      context: "signal",
+    });
+  });
+
   it("forwards fs policy for plugin tool sandbox enforcement", () => {
     const result = resolveOpenClawPluginToolInputs({
       options: {

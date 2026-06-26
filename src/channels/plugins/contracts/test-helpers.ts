@@ -70,6 +70,36 @@ export function expectChannelInboundContextContract(ctx: MsgContext) {
   if (ctx.SenderId != null) {
     expect(normalizeContextString(ctx.SenderId)).toBeTruthy();
   }
+
+  if (ctx.SourceActor != null) {
+    expect(ctx.SourceActor).toBeTypeOf("object");
+    expect(normalizeContextString(ctx.SourceActor.id)).toBeTruthy();
+    if (ctx.SourceActorId != null) {
+      expect(normalizeContextString(ctx.SourceActorId)).toBe(
+        normalizeContextString(ctx.SourceActor.id),
+      );
+    }
+    if (ctx.SourceActorPeerId != null && ctx.SourceActor.peerId != null) {
+      expect(normalizeContextString(ctx.SourceActorPeerId)).toBe(
+        normalizeContextString(ctx.SourceActor.peerId),
+      );
+    }
+    if (ctx.SourceActorDisplayName != null && ctx.SourceActor.displayName != null) {
+      expect(normalizeContextString(ctx.SourceActorDisplayName)).toBe(
+        normalizeContextString(ctx.SourceActor.displayName),
+      );
+    }
+    if (ctx.SourceActorRole != null && ctx.SourceActor.role != null) {
+      expect(normalizeContextString(ctx.SourceActorRole)).toBe(
+        normalizeContextString(ctx.SourceActor.role),
+      );
+    }
+    if (ctx.SourceActorContext != null && ctx.SourceActor.context != null) {
+      expect(normalizeContextString(ctx.SourceActorContext)).toBe(
+        normalizeContextString(ctx.SourceActor.context),
+      );
+    }
+  }
 }
 
 export function expectChannelTurnDispatchResultContract(

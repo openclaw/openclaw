@@ -1275,6 +1275,7 @@ export async function runEmbeddedAttempt(
             senderName: params.senderName,
             senderUsername: params.senderUsername,
             senderE164: params.senderE164,
+            sourceActor: params.sourceActor,
             senderIsOwner: params.senderIsOwner,
             allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
             sessionKey: sandboxSessionKey,

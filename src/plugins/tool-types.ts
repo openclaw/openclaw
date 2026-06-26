@@ -1,6 +1,7 @@
-// Defines plugin tool metadata and filesystem policy types.
 import type { ToolFsPolicy } from "../agents/tool-fs-policy.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+// Defines plugin tool metadata and filesystem policy types.
+import type { SourceActorRole } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
@@ -9,6 +10,14 @@ export type OpenClawPluginActiveModelContext = {
   provider?: string;
   modelId?: string;
   modelRef?: string;
+};
+
+export type OpenClawPluginSourceActorContext = {
+  id: string;
+  peerId?: string;
+  displayName?: string;
+  role?: SourceActorRole;
+  context?: string;
 };
 
 /** Trusted execution context passed to plugin-owned agent tool factories. */
@@ -46,6 +55,8 @@ export type OpenClawPluginToolContext = {
   deliveryContext?: DeliveryContext;
   /** Trusted sender id from inbound context (runtime-provided, not tool args). */
   requesterSenderId?: string;
+  /** Runtime-provided actor for the current inbound source message, when known. */
+  sourceActor?: OpenClawPluginSourceActorContext;
   sandboxed?: boolean;
   /**
    * True for explicit one-shot local CLI runs that must release plugin-owned

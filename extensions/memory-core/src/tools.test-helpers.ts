@@ -1,3 +1,4 @@
+import type { MemorySourceActorContext } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 // Memory Core helper module supports tools helpers behavior.
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../api.js";
@@ -15,12 +16,14 @@ export function createMemorySearchToolOrThrow(params?: {
   config?: OpenClawConfig;
   agentId?: string;
   agentSessionKey?: string;
+  sourceActor?: MemorySourceActorContext;
   oneShotCliRun?: boolean;
 }) {
   const tool = createMemorySearchTool({
     config: params?.config ?? createDefaultMemoryToolConfig(),
     ...(params?.agentId ? { agentId: params.agentId } : {}),
     ...(params?.agentSessionKey ? { agentSessionKey: params.agentSessionKey } : {}),
+    ...(params?.sourceActor ? { sourceActor: params.sourceActor } : {}),
     ...(params?.oneShotCliRun ? { oneShotCliRun: params.oneShotCliRun } : {}),
   });
   if (!tool) {
@@ -31,8 +34,12 @@ export function createMemorySearchToolOrThrow(params?: {
 
 export function createMemoryGetToolOrThrow(
   config: OpenClawConfig = createDefaultMemoryToolConfig(),
+  options?: { sourceActor?: MemorySourceActorContext },
 ) {
-  const tool = createMemoryGetTool({ config });
+  const tool = createMemoryGetTool({
+    config,
+    ...(options?.sourceActor ? { sourceActor: options.sourceActor } : {}),
+  });
   if (!tool) {
     throw new Error("tool missing");
   }

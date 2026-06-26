@@ -40,6 +40,7 @@ export type {
   MemoryPluginPublicArtifactsProvider,
   MemoryPluginRuntime,
   MemoryPromptSectionBuilder,
+  MemorySourceActorContext,
 } from "../plugins/memory-state.js";
 export {
   buildMemoryPromptSection as buildActiveMemoryPromptSection,
