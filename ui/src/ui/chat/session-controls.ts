@@ -562,15 +562,15 @@ function updateChatSessionPickerCachedLabel(
   }
   state.chatSessionPickerResult = {
     ...result,
-    sessions: result.sessions.map((row) =>
-      row.key === key
-        ? {
-            ...row,
-            label: label ?? undefined,
-            displayName: label === null ? undefined : row.displayName,
-          }
-        : row,
-    ),
+    sessions: result.sessions.map((row) => {
+      if (row.key !== key) {
+        return row;
+      }
+      return Object.assign({}, row, {
+        label: label ?? undefined,
+        displayName: label === null ? undefined : row.displayName,
+      });
+    }),
   };
 }
 
