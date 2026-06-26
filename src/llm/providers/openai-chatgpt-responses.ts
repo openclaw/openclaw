@@ -716,6 +716,11 @@ function normalizeCodexStatus(status: unknown): CodexResponseStatus | undefined 
 // SSE Parsing
 // ============================================================================
 
+/** Upper bound for the internal SSE line-buffer. A response that cannot find
+ *  a `\n\n` boundary within this many characters is almost certainly hostile
+ *  or broken — cap the buffer rather than letting it grow unbounded. */
+const SSE_PARSE_MAX_BUFFER_BYTES = 64 * 1024;
+
 async function* parseSSE(response: Response): AsyncGenerator<Record<string, unknown>> {
   if (!response.body) {
     return;
@@ -732,6 +737,11 @@ async function* parseSSE(response: Response): AsyncGenerator<Record<string, unkn
         break;
       }
       buffer += decoder.decode(value, { stream: true });
+      if (buffer.length > SSE_PARSE_MAX_BUFFER_BYTES) {
+        throw new CodexProtocolError(
+          `Codex SSE response exceeded max buffer size (${SSE_PARSE_MAX_BUFFER_BYTES} bytes)`,
+        );
+      }
 
       let idx = buffer.indexOf("\n\n");
       while (idx !== -1) {
