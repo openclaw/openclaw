@@ -254,6 +254,7 @@ async function resolveCliContextCompactionSuccess(params: {
   sessionFile: string;
   sessionId: string;
   sessionKey: string;
+  storePath?: string;
 }): Promise<{
   maintenanceSessionFile: string;
   maintenanceSessionId: string;
@@ -281,7 +282,12 @@ async function resolveCliContextCompactionSuccess(params: {
     config: params.cfg,
     sessionId: resultSessionId,
     sessionKey: resultSessionTarget?.sessionKey ?? params.sessionKey,
-    ...(resultSessionTarget ? { sessionTarget: resultSessionTarget } : {}),
+    sessionTarget: {
+      ...(resultSessionTarget ?? {}),
+      ...(params.storePath && !resultSessionTarget?.storePath
+        ? { storePath: params.storePath }
+        : {}),
+    },
   });
   return {
     maintenanceSessionFile: resolvedTarget.sessionFile,
@@ -298,6 +304,7 @@ async function compactCliTranscript(params: {
   sessionKey: string;
   sessionFile: string;
   sessionManager: SessionManagerLike;
+  storePath?: string;
   cfg: OpenClawConfig;
   workspaceDir: string;
   cwd?: string;
@@ -357,6 +364,7 @@ async function compactCliTranscript(params: {
         sessionTarget: {
           sessionId: params.sessionId,
           sessionKey: params.sessionKey || params.sessionId,
+          ...(params.storePath ? { storePath: params.storePath } : {}),
         },
         tokenBudget: params.contextTokenBudget,
         currentTokenCount: params.currentTokenCount,
@@ -400,6 +408,7 @@ async function compactCliTranscript(params: {
     sessionFile: params.sessionFile,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
+    storePath: params.storePath,
   });
   try {
     await cliCompactionDeps.runContextEngineMaintenance({
@@ -704,6 +713,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       sessionKey: params.sessionKey,
       sessionFile,
       sessionManager,
+      storePath: params.storePath,
       cfg: params.cfg,
       workspaceDir: params.workspaceDir,
       cwd: params.cwd,

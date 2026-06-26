@@ -178,7 +178,7 @@ describe("runCliTurnCompactionLifecycle", () => {
     const compactCall = compactCalls[0];
     expect(compactCall?.sessionId).toBe(sessionId);
     expect(compactCall?.sessionKey).toBe(sessionKey);
-    expect(compactCall?.sessionTarget).toEqual({ sessionId, sessionKey });
+    expect(compactCall?.sessionTarget).toEqual({ sessionId, sessionKey, storePath });
     expect(compactCall?.tokenBudget).toBe(1_000);
     expect(compactCall?.currentTokenCount).toBe(950);
     expect(compactCall?.force).toBe(true);
@@ -291,6 +291,7 @@ describe("runCliTurnCompactionLifecycle", () => {
       model: "opus",
     });
 
+    expect(compactCalls[0]?.sessionTarget).toEqual({ sessionId, sessionKey, storePath });
     expect(maintenance).toHaveBeenCalledWith(
       expect.objectContaining({
         sessionId: successorSessionId,
