@@ -1,0 +1,34 @@
+<resources>
+    <string name="app_name">OpenClaw Node</string>
+    <string name="gateway_connection">Подключение к шлюзу</string>
+    <string name="connect_gateway">Подключить шлюз</string>
+    <string name="disconnect">Отключить</string>
+    <string name="trust_this_gateway">Доверять этому шлюзу?</string>
+    <string name="trust_and_continue">Доверять и продолжить</string>
+    <string name="cancel">Отмена</string>
+    <string name="endpoint">Конечная точка</string>
+    <string name="status">Статус</string>
+    <string name="connected_gateway_ready">Шлюз активен и готов к работе.</string>
+    <string name="connect_gateway_get_started">Подключите шлюз, чтобы начать.</string>
+    <string name="copy_report_for_claw">Скопировать отчёт для Claw</string>
+    <string name="advanced_controls">Расширенные настройки</string>
+    <string name="connection_method">Способ подключения</string>
+    <string name="setup_code">Код настройки</string>
+    <string name="manual">Вручную</string>
+    <string name="paste_setup_code">Вставьте код настройки</string>
+    <string name="host">Хост</string>
+    <string name="use_tls">Использовать TLS</string>
+    <string name="token_optional">Токен (необязательно)</string>
+    <string name="password">Пароль</string>
+    <string name="run_onboarding_again">Запустить настройку снова</string>
+    <string name="resolved_endpoint">Определённая конечная точка</string>
+    <string name="gateway_setup">Настройка шлюза</string>
+    <string name="connect_to_gateway">Подключитесь к шлюзу</string>
+    <string name="scan_setup_code">Сканировать код настройки</string>
+    <string name="use_gateway_qr">Используйте QR-код шлюза или код настройки</string>
+    <string name="nearby_gateway">Шлюз поблизости</string>
+    <string name="enter_gateway_url">Введите URL шлюза</string>
+    <string name="connect_manual_url">Подключиться вручную по URL</string>
+    <string name="permissions">Разрешения</string>
+    <string name="done">Готово</string>
+</resources>
