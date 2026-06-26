@@ -572,6 +572,31 @@ describe("deliverReplies", () => {
     expectRecordFields(mockCallArg(sendMessage, 0, 2), { disable_notification: true });
   });
 
+  it("logs and sends the Telegram forum thread for direct auto-reply delivery", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 6,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverWith({
+      replies: [{ text: "hello forum" }],
+      runtime,
+      bot,
+      thread: { id: 42, scope: "forum" },
+    });
+
+    expect(firstMockCallArg(sendMessage, 0)).toBe("123");
+    firstSendText(sendMessage);
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), { message_thread_id: 42 });
+    expect(runtime.log).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "telegram sendMessage ok chat=123 message=6 threadId=42 threadScope=forum",
+      ),
+    );
+  });
+
   it("emits internal message:sent when session hook context is available", async () => {
     const runtime = createRuntime(false);
     const sendMessage = vi.fn().mockResolvedValue({ message_id: 9, chat: { id: "123" } });

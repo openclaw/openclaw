@@ -45,6 +45,12 @@ function createTelegramDeliverySendRetry() {
   });
 }
 
+function formatTelegramThreadLogFields(thread?: TelegramThreadSpec | null): string {
+  const threadId = thread?.id == null ? "none" : String(thread.id);
+  const threadScope = thread?.scope ?? "none";
+  return `threadId=${threadId} threadScope=${threadScope}`;
+}
+
 export async function sendTelegramWithThreadFallback<T>(params: {
   operation: string;
   runtime: RuntimeEnv;
@@ -61,17 +67,20 @@ export async function sendTelegramWithThreadFallback<T>(params: {
     ? (err: unknown) => params.shouldLog!(err) && !shouldSuppressFirstErrorLog(err)
     : (err: unknown) => !shouldSuppressFirstErrorLog(err);
   const requestWithRetry = createTelegramDeliverySendRetry();
+  const threadLogFields = formatTelegramThreadLogFields(params.thread);
   const runLoggedSend = (
     operation: string,
     requestParams: Record<string, unknown>,
     shouldLog?: (err: unknown) => boolean,
-  ) =>
-    withTelegramApiErrorLogging({
-      operation,
+  ) => {
+    const loggedOperation = `${operation} ${threadLogFields}`;
+    return withTelegramApiErrorLogging({
+      operation: loggedOperation,
       runtime: params.runtime,
       ...(shouldLog ? { shouldLog } : {}),
-      fn: () => requestWithRetry(() => params.send(requestParams), operation),
+      fn: () => requestWithRetry(() => params.send(requestParams), loggedOperation),
     });
+  };
 
   try {
     return await runLoggedSend(params.operation, params.requestParams, mergedShouldLog);
@@ -142,7 +151,9 @@ export async function sendTelegramText(
           ...effectiveParams,
         }),
     });
-    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id} (plain)`);
+    runtime.log?.(
+      `telegram sendMessage ok chat=${chatId} message=${res.message_id} ${formatTelegramThreadLogFields(opts?.thread)} (plain)`,
+    );
     return res.message_id;
   };
 
@@ -166,7 +177,9 @@ export async function sendTelegramText(
             ...effectiveParams,
           }),
       });
-      runtime.log?.(`telegram sendRichMessage ok chat=${chatId} message=${res.message_id}`);
+      runtime.log?.(
+        `telegram sendRichMessage ok chat=${chatId} message=${res.message_id} ${formatTelegramThreadLogFields(opts.thread)}`,
+      );
       return res.message_id;
     } catch (err) {
       const errText = formatErrorMessage(err);
@@ -207,7 +220,9 @@ export async function sendTelegramText(
           ...effectiveParams,
         }),
     });
-    runtime.log?.(`telegram sendMessage ok chat=${chatId} message=${res.message_id}`);
+    runtime.log?.(
+      `telegram sendMessage ok chat=${chatId} message=${res.message_id} ${formatTelegramThreadLogFields(opts?.thread)}`,
+    );
     return res.message_id;
   } catch (err) {
     const errText = formatErrorMessage(err);
