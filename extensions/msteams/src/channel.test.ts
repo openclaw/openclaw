@@ -271,6 +271,47 @@ describe("msteams config schema", () => {
     expect(res.success).toBe(true);
   });
 
+  it("rejects duplicate enabled account app IDs", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      accounts: {
+        default: {
+          appId: "shared-app-id",
+          appPassword: "primary-secret",
+          webhook: { port: 3978 },
+        },
+        secondary: {
+          appId: "SHARED-APP-ID",
+          appPassword: "secondary-secret",
+          webhook: { port: 3979 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+  });
+
+  it("allows duplicate app IDs when one account is disabled", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      accounts: {
+        default: {
+          appId: "shared-app-id",
+          appPassword: "primary-secret",
+          webhook: { port: 3978 },
+        },
+        secondary: {
+          enabled: false,
+          appId: "shared-app-id",
+          appPassword: "secondary-secret",
+          webhook: { port: 3979 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
   it("rejects enabled named federated accounts without a certificate or managed identity", () => {
     const res = MSTeamsConfigSchema.safeParse({
       tenantId: "tenant-id",

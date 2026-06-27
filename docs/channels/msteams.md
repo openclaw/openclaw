@@ -101,6 +101,80 @@ The output will show `CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`, and a **Teams Ap
 
 Or use environment variables directly: `MSTEAMS_APP_ID`, `MSTEAMS_APP_PASSWORD`, `MSTEAMS_TENANT_ID`.
 
+<Note>
+Environment variables apply only to the default Microsoft Teams account. Named
+accounts must define their own bot identity in config.
+</Note>
+
+## Multiple Teams bot accounts
+
+Microsoft Teams supports multiple bot accounts under `channels.msteams.accounts`.
+Use one account per Teams bot registration/app identity. Root-level settings act
+as shared defaults, while each named account provides its own bot identity and
+webhook port.
+
+```json5
+{
+  channels: {
+    msteams: {
+      enabled: true,
+      tenantId: "<TENANT_ID>",
+      webhook: { path: "/api/messages" },
+      dmPolicy: "allowlist",
+      allowFrom: ["00000000-0000-0000-0000-000000000000"],
+      groupPolicy: "disabled",
+      defaultAccount: "default",
+      accounts: {
+        default: {
+          name: "Primary Teams bot",
+          appId: "<PRIMARY_CLIENT_ID>",
+          appPassword: "<PRIMARY_CLIENT_SECRET>",
+          webhook: { port: 3978 },
+        },
+        support: {
+          name: "Support Teams bot",
+          appId: "<SUPPORT_CLIENT_ID>",
+          appPassword: "<SUPPORT_CLIENT_SECRET>",
+          webhook: { port: 3979 },
+          groupPolicy: "allowlist",
+          groupAllowFrom: ["accessGroup:support-team"],
+        },
+      },
+    },
+  },
+}
+```
+
+Rules:
+
+- `channels.msteams.enabled = false` disables the whole Teams channel.
+- `channels.msteams.accounts.<id>.enabled = false` disables one Teams bot account.
+- `appId`, `appPassword` for secret auth, and `webhook.port` are account
+  identity fields. Named accounts must set them explicitly; they do not inherit
+  those fields from the root default. Federated-auth accounts can use
+  `certificatePath` or `useManagedIdentity` instead of `appPassword`.
+- `tenantId`, `webhook.path`, access policies, Teams/channel allowlists,
+  streaming, SSO, delegated auth, and other delivery settings can be shared at
+  the root and overridden by an account.
+- Enabled accounts must use unique `appId` values and unique webhook ports.
+- The legacy single-account shape under `channels.msteams.appId`,
+  `channels.msteams.appPassword`, `channels.msteams.tenantId`, and
+  `channels.msteams.webhook` remains supported as the default account.
+- Configure either the root default identity or `accounts.default`, not both.
+
+When using a reverse proxy, route each public Teams bot endpoint to the matching
+local account port. For example:
+
+```text
+/msteams/agents/default/api/messages -> http://127.0.0.1:3978/api/messages
+/msteams/agents/support/api/messages -> http://127.0.0.1:3979/api/messages
+```
+
+<Note>
+The interactive Teams setup wizard currently configures the default account.
+For multiple Teams bot accounts, edit `channels.msteams.accounts` directly.
+</Note>
+
 **5. Install the app in Teams**
 
 `teams app create` will prompt you to install the app - select "Install in Teams". If you skipped it, you can get the link later:

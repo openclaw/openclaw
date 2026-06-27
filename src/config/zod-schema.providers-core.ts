@@ -1691,6 +1691,7 @@ export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
   .strict()
   .superRefine((value, ctx) => {
     const webhookPorts = new Map<number, string>();
+    const appIds = new Map<string, string>();
     const recordWebhookPort = (port: number | undefined, path: Array<string | number>) => {
       if (typeof port !== "number") {
         return;
@@ -1705,6 +1706,22 @@ export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
         return;
       }
       webhookPorts.set(port, path.join("."));
+    };
+    const recordAppId = (appId: string | undefined, path: Array<string | number>) => {
+      const normalized = appId?.trim().toLowerCase();
+      if (!normalized) {
+        return;
+      }
+      const existing = appIds.get(normalized);
+      if (existing) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path,
+          message: `Microsoft Teams appId is already used by ${existing}`,
+        });
+        return;
+      }
+      appIds.set(normalized, path.join("."));
     };
 
     requireOpenAllowFrom({
@@ -1787,6 +1804,7 @@ export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
     }
 
     recordWebhookPort(value.webhook?.port, ["webhook", "port"]);
+    recordAppId(value.appId, ["appId"]);
 
     for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
       if (!account) {
@@ -1901,6 +1919,7 @@ export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
         }
       }
       if (account.enabled !== false) {
+        recordAppId(account.appId, [...path, "appId"]);
         recordWebhookPort(account.webhook?.port, [...path, "webhook", "port"]);
       }
     }
