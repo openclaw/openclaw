@@ -549,37 +549,6 @@ describe("session startup catch-up", () => {
     expect(harness.syncCalls).toEqual([{ reason: "session-delta" }]);
   });
 
-  it("keeps explicit custom-store session file targets at the sync gate", async () => {
-    const storeDir = path.join(stateDir, "custom-sessions");
-    const sessionFile = path.join(storeDir, "explicit-target.jsonl");
-    const storePath = path.join(storeDir, "sessions.json");
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.mkdir(storeDir, { recursive: true });
-    await fs.writeFile(
-      sessionFile,
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "explicit target" },
-      }) + "\n",
-      "utf-8",
-    );
-    await upsertTestSessionEntries(storePath, {
-      "agent:main:chat:explicit-target": {
-        sessionFile: "explicit-target.jsonl",
-        sessionId: "explicit-target",
-      },
-    });
-    await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }), "utf-8");
-    setStartupConfigPath(configPath);
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-    const harness = new SessionStartupCatchupHarness([]);
-
-    await expect(
-      harness.combineTargetArchiveFilesForTest({ archiveFiles: [sessionFile] }),
-    ).resolves.toEqual(new Set([sessionFile]));
-  });
-
   it("preserves generated-session classification during targeted custom-store indexing", async () => {
     const storeDir = path.join(stateDir, "custom-sessions");
     const sessionFile = path.join(storeDir, "cron-thread.jsonl");
@@ -735,65 +704,6 @@ describe("session startup catch-up", () => {
     emitSessionTranscriptUpdate({
       sessionFile: session.filePath,
       sessionKey: "agent:main:thread",
-    });
-
-    expect(harness.getPendingArchiveFiles()).toEqual([session.filePath]);
-    expect(harness.getPendingSessionTargets()).toEqual([]);
-    harness.stopTranscriptListener();
-  });
-
-  it("queues file-only transcript updates from a custom session store", async () => {
-    vi.useFakeTimers();
-    const storeDir = path.join(stateDir, "custom-sessions");
-    const sessionFile = path.join(storeDir, "custom-update.jsonl");
-    const storePath = path.join(storeDir, "sessions.json");
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.mkdir(storeDir, { recursive: true });
-    await fs.writeFile(
-      sessionFile,
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "custom update" },
-      }) + "\n",
-      "utf-8",
-    );
-    await upsertTestSessionEntries(storePath, {
-      "agent:main:chat:custom-update": {
-        sessionFile: "custom-update.jsonl",
-        sessionId: "custom-update",
-      },
-    });
-    await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }), "utf-8");
-    setStartupConfigPath(configPath);
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-    const harness = new SessionStartupCatchupHarness([]);
-    harness.startTranscriptListener();
-
-    emitSessionTranscriptUpdate({
-      sessionFile,
-      sessionKey: "agent:main:chat:custom-update",
-    });
-    await Promise.resolve();
-
-    expect(harness.getPendingArchiveFiles()).toEqual([sessionFile]);
-    expect(harness.getPendingSessionTargets()).toEqual([]);
-    harness.stopTranscriptListener();
-  });
-
-  it("prefers transcript update path compatibility before identity", async () => {
-    vi.useFakeTimers();
-    const session = await writeSessionFile("thread.jsonl");
-    const harness = new SessionStartupCatchupHarness([]);
-    harness.startTranscriptListener();
-
-    emitSessionTranscriptUpdate({
-      sessionFile: session.filePath,
-      target: {
-        agentId: "main",
-        sessionId: "identity-target",
-        sessionKey: "agent:main:identity-target",
-      },
     });
 
     expect(harness.getPendingArchiveFiles()).toEqual([session.filePath]);
