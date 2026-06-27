@@ -742,7 +742,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     for (const event of normalizedEvents) {
       const wrappedHandler: typeof handler = async (evt) => {
         const context = evt.context;
-        const hadPluginConfig = Object.prototype.hasOwnProperty.call(context, "pluginConfig");
+        const hadPluginConfig = Object.hasOwn(context, "pluginConfig");
         const previousPluginConfig = context.pluginConfig;
         // Internal hooks intentionally share one mutable context object across
         // handlers; only pluginConfig stays per-handler and is restored after.
