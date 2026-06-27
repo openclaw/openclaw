@@ -95,7 +95,7 @@ jobs:
           TARGET_BRANCH: ${{ github.event.repository.default_branch }}
         run: |
           set -euo pipefail
-          if git diff --quiet -- apps/.i18n/native; then
+          if ! git status --porcelain -- apps/.i18n/native apps/.i18n/native-source.json | grep -q .; then
             echo "No native locale changes for ${LOCALE}."
             exit 0
           fi
