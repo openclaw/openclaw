@@ -98,7 +98,11 @@ describe("mattermost session route", () => {
       agentId: "main",
       accountId: "acct-1",
       target: "mattermost:channel:grp999",
-      resolvedTarget: { kind: "group" },
+      resolvedTarget: {
+        kind: "group",
+        to: "channel:grp999",
+        source: "directory",
+      },
     });
     const groupRoute = expectRoute(route);
     expect(groupRoute.chatType).toBe("group");
@@ -114,7 +118,11 @@ describe("mattermost session route", () => {
       agentId: "main",
       accountId: "acct-1",
       target: "mattermost:channel:grp999",
-      resolvedTarget: { kind: "group" },
+      resolvedTarget: {
+        kind: "group",
+        to: "channel:grp999",
+        source: "directory",
+      },
     });
     const groupRoute = expectRoute(route);
     expect(groupRoute.chatType).toBe("group");
@@ -133,7 +141,11 @@ describe("mattermost session route", () => {
       agentId: "main",
       accountId: "acct-1",
       target: "mattermost:channel:pub-cold-123",
-      resolvedTarget: { kind: "group" },
+      resolvedTarget: {
+        kind: "group",
+        to: "channel:pub-cold-123",
+        source: "directory",
+      },
     });
     const coldRoute = expectRoute(route);
     expect(coldRoute.chatType).toBe("channel");
