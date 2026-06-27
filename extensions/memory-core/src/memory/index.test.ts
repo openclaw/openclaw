@@ -14,6 +14,10 @@ import {
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  persistSessionTranscriptTurn,
+  upsertSessionEntry,
+} from "../../../../src/config/sessions/session-accessor.js";
 import "./test-runtime-mocks.js";
 import type { MemoryIndexManager } from "./index.js";
 import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
@@ -407,6 +411,45 @@ describe("memory index", () => {
     };
   }
 
+  async function seedMemoryIndexSessionTranscript(params: {
+    messages: Array<{
+      content: string;
+      role: "assistant" | "user";
+      timestamp: number | string;
+    }>;
+    sessionId: string;
+    sessionKey?: string;
+  }): Promise<void> {
+    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const sessionKey = params.sessionKey ?? `agent:main:memory:${params.sessionId}`;
+    const timestamps = params.messages
+      .map((message) =>
+        typeof message.timestamp === "number" ? message.timestamp : Date.parse(message.timestamp),
+      )
+      .filter((timestamp) => Number.isFinite(timestamp));
+    const updatedAt = timestamps.length > 0 ? Math.max(...timestamps) : Date.now();
+    await fs.mkdir(sessionsDir, { recursive: true });
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      { sessionId: params.sessionId, updatedAt },
+    );
+    await persistSessionTranscriptTurn(
+      { agentId: "main", sessionId: params.sessionId, sessionKey, storePath },
+      {
+        messages: params.messages.map((message) => ({
+          message: {
+            role: message.role,
+            timestamp: message.timestamp,
+            content: [{ type: "text", text: message.content }],
+          },
+        })),
+        touchSessionEntry: true,
+        updateMode: "none",
+      },
+    );
+  }
+
   function requireManager(
     result: Awaited<ReturnType<typeof getMemorySearchManager>>,
     missingMessage = "manager missing",
@@ -796,46 +839,26 @@ describe("memory index", () => {
 
   it("batches forced memory and session indexing across files", async () => {
     await fs.writeFile(path.join(memoryDir, "2026-01-13.md"), "# Log\nBeta memory line.");
-    const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-    await fs.mkdir(sessionsDir, { recursive: true });
-    await fs.writeFile(
-      path.join(sessionsDir, "session-alpha.jsonl"),
-      [
-        JSON.stringify({
-          type: "session",
-          id: "session-alpha",
-          timestamp: "2026-04-07T15:24:04.113Z",
-        }),
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "user",
-            timestamp: "2026-04-07T15:25:04.113Z",
-            content: [{ type: "text", text: "Session alpha memory line." }],
-          },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
-    await fs.writeFile(
-      path.join(sessionsDir, "session-beta.jsonl"),
-      [
-        JSON.stringify({
-          type: "session",
-          id: "session-beta",
-          timestamp: "2026-04-07T15:24:04.113Z",
-        }),
-        JSON.stringify({
-          type: "message",
-          message: {
-            role: "assistant",
-            timestamp: "2026-04-07T15:25:04.113Z",
-            content: [{ type: "text", text: "Session beta memory line." }],
-          },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
+    await seedMemoryIndexSessionTranscript({
+      sessionId: "session-alpha",
+      messages: [
+        {
+          role: "user",
+          timestamp: "2026-04-07T15:25:04.113Z",
+          content: "Session alpha memory line.",
+        },
+      ],
+    });
+    await seedMemoryIndexSessionTranscript({
+      sessionId: "session-beta",
+      messages: [
+        {
+          role: "assistant",
+          timestamp: "2026-04-07T15:25:04.113Z",
+          content: "Session beta memory line.",
+        },
+      ],
+    });
     const cfg = createCfg({
       provider: "batch-wide-test",
       batchEnabled: true,
@@ -1131,27 +1154,16 @@ describe("memory index", () => {
   it("clears dirty after sessions-only identity reindex", async () => {
     try {
       setMemoryIndexStateDir(path.join(workspaceDir, ".state-sessions-only-reindex"));
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(sessionsDir, "session-identity.jsonl"),
-        [
-          JSON.stringify({
-            type: "session",
-            id: "session-identity",
-            timestamp: "2026-04-07T15:24:04.113Z",
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "assistant",
-              timestamp: "2026-04-07T15:25:04.113Z",
-              content: [{ type: "text", text: "Session-only identity marker." }],
-            },
-          }),
-        ].join("\n") + "\n",
-        "utf8",
-      );
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "session-identity",
+        messages: [
+          {
+            role: "assistant",
+            timestamp: "2026-04-07T15:25:04.113Z",
+            content: "Session-only identity marker.",
+          },
+        ],
+      });
 
       const oldCfg = createCfg({
         sources: ["sessions"],
@@ -1187,27 +1199,16 @@ describe("memory index", () => {
   it("marks sessions-only indexes dirty when metadata is missing but chunks exist", async () => {
     try {
       setMemoryIndexStateDir(path.join(workspaceDir, ".state-sessions-missing-meta"));
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      await fs.writeFile(
-        path.join(sessionsDir, "session-missing-meta.jsonl"),
-        [
-          JSON.stringify({
-            type: "session",
-            id: "session-missing-meta",
-            timestamp: "2026-04-07T15:24:04.113Z",
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "assistant",
-              timestamp: "2026-04-07T15:25:04.113Z",
-              content: [{ type: "text", text: "Sessions missing metadata marker." }],
-            },
-          }),
-        ].join("\n") + "\n",
-        "utf8",
-      );
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "session-missing-meta",
+        messages: [
+          {
+            role: "assistant",
+            timestamp: "2026-04-07T15:25:04.113Z",
+            content: "Sessions missing metadata marker.",
+          },
+        ],
+      });
 
       const cfg = createCfg({
         sources: ["sessions"],
@@ -2202,37 +2203,22 @@ describe("memory index", () => {
       const staleAt = new Date("2020-01-01T00:00:00.000Z");
       await fs.utimes(memoryPath, staleAt, staleAt);
 
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      const transcriptPath = path.join(sessionsDir, "session-ranking.jsonl");
       const now = Date.parse("2026-04-07T15:25:04.113Z");
-      await fs.writeFile(
-        transcriptPath,
-        [
-          JSON.stringify({
-            type: "session",
-            id: "session-ranking",
-            timestamp: new Date(now - 60_000).toISOString(),
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "user",
-              timestamp: new Date(now - 30_000).toISOString(),
-              content: [{ type: "text", text: "What is the current Project Nebula codename?" }],
-            },
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "assistant",
-              timestamp: new Date(now).toISOString(),
-              content: [{ type: "text", text: "The current Project Nebula codename is ORBIT-10." }],
-            },
-          }),
-        ].join("\n") + "\n",
-        "utf8",
-      );
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "session-ranking",
+        messages: [
+          {
+            role: "user",
+            timestamp: new Date(now - 30_000).toISOString(),
+            content: "What is the current Project Nebula codename?",
+          },
+          {
+            role: "assistant",
+            timestamp: new Date(now).toISOString(),
+            content: "The current Project Nebula codename is ORBIT-10.",
+          },
+        ],
+      });
 
       await manager.sync({ reason: "test", force: true });
       const results = await manager.search("current Project Nebula codename ORBIT-10", {
@@ -2256,28 +2242,16 @@ describe("memory index", () => {
         return;
       }
 
-      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
-      await fs.mkdir(sessionsDir, { recursive: true });
-      const transcriptPath = path.join(sessionsDir, "session-bootstrap.jsonl");
-      await fs.writeFile(
-        transcriptPath,
-        [
-          JSON.stringify({
-            type: "session",
-            id: "session-bootstrap",
-            timestamp: "2026-04-07T15:24:04.113Z",
-          }),
-          JSON.stringify({
-            type: "message",
-            message: {
-              role: "assistant",
-              timestamp: "2026-04-07T15:25:04.113Z",
-              content: [{ type: "text", text: "The current Project Nebula codename is ORBIT-10." }],
-            },
-          }),
-        ].join("\n") + "\n",
-        "utf8",
-      );
+      await seedMemoryIndexSessionTranscript({
+        sessionId: "session-bootstrap",
+        messages: [
+          {
+            role: "assistant",
+            timestamp: "2026-04-07T15:25:04.113Z",
+            content: "The current Project Nebula codename is ORBIT-10.",
+          },
+        ],
+      });
 
       const results = await manager.search("current Project Nebula codename ORBIT-10", {
         minScore: 0,
