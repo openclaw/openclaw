@@ -343,13 +343,30 @@ function dedupeOfficialExternalPluginCatalogEntries(
 ): OfficialExternalPluginCatalogEntry[] {
   const resolved = new Map<string, OfficialExternalPluginCatalogEntry>();
   for (const entry of entries) {
-    const pluginId = resolveOfficialExternalPluginId(entry);
-    const key = pluginId ? `${entry.kind ?? "plugin"}:${pluginId}` : (entry.name ?? "");
+    const key = resolveOfficialExternalPluginCatalogEntryKey(entry);
     if (key && !resolved.has(key)) {
       resolved.set(key, entry);
     }
   }
   return [...resolved.values()];
+}
+
+function resolveOfficialExternalPluginCatalogEntryKey(
+  entry: OfficialExternalPluginCatalogEntry,
+): string | undefined {
+  const pluginId = resolveOfficialExternalPluginId(entry);
+  if (pluginId) {
+    return `${normalizeOptionalString(entry.kind) ?? "plugin"}:${pluginId}`;
+  }
+  const name = normalizeOptionalString(entry.name);
+  if (name) {
+    return name;
+  }
+  const id = normalizeOptionalString(entry.id);
+  if (id) {
+    return `${normalizeOptionalString(entry.kind) ?? normalizeOptionalString(entry.type) ?? "plugin"}:${id}`;
+  }
+  return undefined;
 }
 
 function bundledFallbackResult(

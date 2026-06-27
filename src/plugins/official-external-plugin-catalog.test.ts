@@ -258,6 +258,59 @@ describe("official external plugin catalog", () => {
     }
   });
 
+  it("keeps live ClawHub metadata-only entries after hosted feed loading", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 2,
+      id: "clawhub-official",
+      generatedAt: "2026-06-25T01:19:39.629Z",
+      sequence: 11,
+      entries: [
+        {
+          type: "plugin",
+          id: "@expediagroup/expedia-openclaw",
+          title: "Expedia Travel",
+          version: "1.0.4",
+          state: "available",
+          publisher: {
+            id: "expediagroup",
+            trust: "official",
+          },
+          install: {
+            candidates: [
+              {
+                sourceRef: "public-clawhub",
+                package: "@expediagroup/expedia-openclaw",
+                version: "1.0.4",
+                integrity:
+                  "sha256:b355dda04403becaab8bbab069fd1e7b0578262e7459e598cc5b19615b5bdab9",
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: {
+              "content-length": String(new TextEncoder().encode(body).byteLength),
+            },
+          }),
+      ),
+    });
+
+    expect(result.source).toBe("hosted");
+    expect(result.entries).toHaveLength(1);
+    expect(result.entries[0]).toMatchObject({
+      id: "@expediagroup/expedia-openclaw",
+      title: "Expedia Travel",
+      version: "1.0.4",
+    });
+  });
+
   it("falls back to the bundled catalog when hosted feed validation fails", async () => {
     const result = await loadHostedOfficialExternalPluginCatalogEntries({
       fetchImpl: vi.fn(
