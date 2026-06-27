@@ -10,6 +10,12 @@ describe("native app i18n inventory", () => {
     expect(surfaces).toEqual(new Set(["android", "apple"]));
     expect(entries.every((entry) => entry.id.startsWith(`native.${entry.surface}.`))).toBe(true);
     expect(new Set(entries.map((entry) => entry.id)).size).toBe(entries.length);
+    expect(
+      entries.every(
+        (entry) => !/(?:\/|\\)(?:Tests?|UITests?|test|Preview(?:s)?)(?:\/|\\)/u.test(entry.path),
+      ),
+    ).toBe(true);
+    expect(entries.some((entry) => entry.source === "QR Scanner Unavailable")).toBe(true);
     expect(NATIVE_I18N_LOCALES).toHaveLength(20);
   });
 });

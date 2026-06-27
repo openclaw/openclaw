@@ -4490,6 +4490,14 @@
       "id": "native.apple.0cb64be43c0b3d97"
     },
     {
+      "kind": "ui-modifier",
+      "line": 211,
+      "path": "apps/ios/Sources/Design/SettingsProTab.swift",
+      "source": "Reset Onboarding?",
+      "surface": "apple",
+      "id": "native.apple.22b4d5d925ada9ee"
+    },
+    {
       "kind": "ui-call",
       "line": 212,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
@@ -4514,12 +4522,28 @@
       "id": "native.apple.800904a3c6cdc147"
     },
     {
+      "kind": "ui-modifier",
+      "line": 219,
+      "path": "apps/ios/Sources/Design/SettingsProTab.swift",
+      "source": "QR Scanner Unavailable",
+      "surface": "apple",
+      "id": "native.apple.fed30be42b5be08e"
+    },
+    {
       "kind": "ui-call",
       "line": 225,
       "path": "apps/ios/Sources/Design/SettingsProTab.swift",
       "source": "OK",
       "surface": "apple",
       "id": "native.apple.541078d5af9de662"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 229,
+      "path": "apps/ios/Sources/Design/SettingsProTab.swift",
+      "source": "Enable OpenClaw Hosted Push Relay?",
+      "surface": "apple",
+      "id": "native.apple.f5d47c698ac2e148"
     },
     {
       "kind": "ui-call",
@@ -5536,6 +5560,14 @@
       "source": "Done",
       "surface": "apple",
       "id": "native.apple.7822f4f0f671d841"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 165,
+      "path": "apps/ios/Sources/Onboarding/OnboardingWizardView.swift",
+      "source": "QR Scanner Unavailable",
+      "surface": "apple",
+      "id": "native.apple.a62e0764b51937cb"
     },
     {
       "kind": "ui-call",
@@ -6968,6 +7000,14 @@
       "source": "Do not fail the job if announce fails",
       "surface": "apple",
       "id": "native.apple.75ea8e8d38238dfd"
+    },
+    {
+      "kind": "ui-modifier",
+      "line": 39,
+      "path": "apps/macos/Sources/OpenClaw/CronSettings+Layout.swift",
+      "source": "Delete cron job?",
+      "surface": "apple",
+      "id": "native.apple.2c7610400993c954"
     },
     {
       "kind": "ui-call",
