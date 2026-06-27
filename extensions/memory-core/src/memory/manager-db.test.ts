@@ -238,7 +238,7 @@ describe("memory manager database publication", () => {
     await expect(fs.access(youngShadow)).resolves.toBeUndefined();
   });
 
-  it("reports the first aged orphan cleanup error after attempting every sidecar", async () => {
+  it("keeps aged orphan cleanup best-effort after sidecar errors", async () => {
     const databasePath = path.join(fixtureRoot, "agent.sqlite");
     const database = new DatabaseSync(databasePath);
     database.close();
@@ -267,7 +267,7 @@ describe("memory manager database publication", () => {
       }
     });
 
-    expect(() => cleanupAgedMemoryReindexTempFiles(databasePath)).toThrow("EBUSY");
+    expect(() => cleanupAgedMemoryReindexTempFiles(databasePath)).not.toThrow();
     expect(removedPaths).toEqual([
       oldShadow,
       `${oldShadow}-wal`,

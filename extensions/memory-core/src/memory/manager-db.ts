@@ -259,7 +259,6 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
       }
     }
 
-    let firstCleanupError: Error | undefined;
     for (const shadowBaseName of shadowBaseNames) {
       const filePaths = MEMORY_DATABASE_FILE_SUFFIXES.map((suffix) =>
         path.join(dir, `${shadowBaseName}${suffix}`),
@@ -287,12 +286,11 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
       }
       try {
         removeMemoryDatabaseFiles(path.join(dir, shadowBaseName));
-      } catch (err) {
-        firstCleanupError ??= asError(err);
+      } catch {
+        // This is startup preflight for stale crash leftovers. A locked old
+        // sidecar should not block the new full reindex from doing useful work.
+        continue;
       }
-    }
-    if (firstCleanupError) {
-      throw firstCleanupError;
     }
   } finally {
     try {
