@@ -51,7 +51,7 @@ function setupStore(store: Record<string, TestSessionEntry>) {
       }
       const patch = params.update(current);
       if (!patch) {
-        return null;
+        return current;
       }
       store[params.sessionKey] = patch as TestSessionEntry;
       return store[params.sessionKey];

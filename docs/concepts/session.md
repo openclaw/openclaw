@@ -105,6 +105,8 @@ session data.
 
 - `sessionStartedAt`: when the current `sessionId` began; daily reset uses this.
 - `lastInteractionAt`: last user/channel interaction that extends idle lifetime.
+- `sessionClosedAt`: external thread/channel close time that forces the next
+  user turn to roll over from the closed session.
 - `updatedAt`: last store-row mutation; useful for listing and pruning, but not
   authoritative for daily/idle reset freshness.
 

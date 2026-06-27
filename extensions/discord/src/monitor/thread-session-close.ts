@@ -52,7 +52,8 @@ export async function closeDiscordThreadSessions(params: {
     if (!sessionKeyContainsThreadId(sessionKey) || entry.sessionClosedAt != null) {
       continue;
     }
-    const closed = await patchSessionEntry({
+    let markedClosed = false;
+    await patchSessionEntry({
       storePath,
       sessionKey,
       replaceEntry: true,
@@ -60,15 +61,17 @@ export async function closeDiscordThreadSessions(params: {
         if (current.updatedAt !== entry.updatedAt || current.sessionId !== entry.sessionId) {
           return null;
         }
-        return {
+        const next = {
           ...current,
           lastInteractionAt: undefined,
           sessionClosedAt: closedAt,
           updatedAt: 0,
         };
+        markedClosed = true;
+        return next;
       },
     });
-    if (closed) {
+    if (markedClosed) {
       resetCount += 1;
     }
   }
