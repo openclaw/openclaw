@@ -39,7 +39,10 @@ import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
 } from "../subagent-announce-delivery.js";
-import type { SubagentAnnounceDeliveryFailureReason } from "../subagent-announce-dispatch.js";
+import type {
+  SubagentAnnounceDeliveryFailureReason,
+  SubagentAnnounceDeliveryResult,
+} from "../subagent-announce-dispatch.js";
 import { resolveAnnounceOrigin } from "../subagent-announce-origin.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
@@ -135,12 +138,20 @@ type WakeMediaGenerationTaskCompletionParams = {
   statsLine?: string;
 };
 
+type WakeMediaGenerationTaskCompletionResult = {
+  delivered: boolean;
+  delivery?: SubagentAnnounceDeliveryResult;
+};
+
 type MediaGenerationTaskLifecycle = {
   createTaskRun: (params: CreateMediaGenerationTaskRunParams) => MediaGenerationTaskHandle | null;
   recordTaskProgress: (params: RecordMediaGenerationTaskProgressParams) => void;
   completeTaskRun: (params: CompleteMediaGenerationTaskRunParams) => void;
   failTaskRun: (params: FailMediaGenerationTaskRunParams) => void;
   wakeTaskCompletion: (params: WakeMediaGenerationTaskCompletionParams) => Promise<boolean>;
+  wakeTaskCompletionDetailed?: (
+    params: WakeMediaGenerationTaskCompletionParams,
+  ) => Promise<WakeMediaGenerationTaskCompletionResult>;
 };
 
 function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
@@ -255,6 +266,33 @@ export async function withMediaGenerationTaskKeepalive<T>(params: {
   } finally {
     clearInterval(interval);
   }
+}
+
+function collectMediaGenerationUrls(params: {
+  attachments?: AgentGeneratedAttachment[];
+  mediaUrls?: string[];
+}): string[] {
+  return Array.from(
+    new Set([
+      ...(params.mediaUrls ?? []),
+      ...mediaUrlsFromGeneratedAttachments(params.attachments),
+    ]),
+  );
+}
+
+function canTryDirectMediaFallbackForDelivery(
+  delivery: SubagentAnnounceDeliveryResult | undefined,
+): boolean {
+  return delivery?.reason != null && MEDIA_DIRECT_FALLBACK_DELIVERY_REASONS.has(delivery.reason);
+}
+
+function buildMediaGenerationDirectSuccessContent(params: {
+  label: string;
+  mediaUrls: string[];
+}): string {
+  return params.mediaUrls.length > 0
+    ? `${params.label} completed.`
+    : `${params.label} completed, but the generated media could not be attached here.`;
 }
 
 function completeMediaGenerationTaskRun(params: {
@@ -459,7 +497,7 @@ export function scheduleMediaGenerationTaskCompletion<
     }
     let terminalResult: RequiredCompletionTerminalResult | undefined;
     try {
-      const completionDelivered = await params.lifecycle.wakeTaskCompletion({
+      const completionParams: WakeMediaGenerationTaskCompletionParams = {
         config: params.config,
         handle: params.handle,
         status: "ok",
@@ -467,17 +505,43 @@ export function scheduleMediaGenerationTaskCompletion<
         result: executed.wakeResult,
         attachments: executed.attachments,
         mediaUrls: executed.mediaUrls,
-      });
-      if (!completionDelivered) {
+      };
+      const completionResult = params.lifecycle.wakeTaskCompletionDetailed
+        ? await params.lifecycle.wakeTaskCompletionDetailed(completionParams)
+        : { delivered: await params.lifecycle.wakeTaskCompletion(completionParams) };
+      if (!completionResult.delivered) {
         // A generated result without confirmed delivery is terminally unsafe for task closeout.
         terminalResult = resolveRequiredCompletionDeliveryFailureTerminalResult(
           "completion delivery was not confirmed after successful generation",
         );
+        if (params.handle && canTryDirectMediaFallbackForDelivery(completionResult.delivery)) {
+          const mediaUrls = collectMediaGenerationUrls(executed);
+          const delivered = await tryDeliverMediaGenerationDirect({
+            config: params.config,
+            handle: params.handle,
+            toolName: params.toolName,
+            content: buildMediaGenerationDirectSuccessContent({
+              label: params.toolName,
+              mediaUrls,
+            }),
+            mediaUrls,
+            idempotencySuffix: "blocked",
+          });
+          if (delivered) {
+            terminalResult = undefined;
+          }
+        }
         params.onWakeFailure(
           `${params.toolName} completion delivery was not confirmed after successful generation`,
           {
             taskId: params.handle?.taskId,
             runId: params.handle?.runId,
+            ...(completionResult.delivery?.reason
+              ? { deliveryReason: completionResult.delivery.reason }
+              : {}),
+            ...(completionResult.delivery?.error
+              ? { deliveryError: completionResult.delivery.error }
+              : {}),
           },
         );
       }
@@ -486,19 +550,13 @@ export function scheduleMediaGenerationTaskCompletion<
         formatErrorMessage(error),
       );
       if (params.handle) {
-        const mediaUrls = Array.from(
-          new Set([
-            ...(executed.mediaUrls ?? []),
-            ...mediaUrlsFromGeneratedAttachments(executed.attachments),
-          ]),
-        );
         // If the wake agent path failed after successful generation, try direct channel delivery.
         const delivered = await tryDeliverMediaGenerationDirect({
           config: params.config,
           handle: params.handle,
           toolName: params.toolName,
           content: `${params.toolName} completed.`,
-          mediaUrls,
+          mediaUrls: collectMediaGenerationUrls(executed),
           idempotencySuffix: "blocked",
         });
         if (delivered) {
@@ -537,7 +595,7 @@ export function scheduleMediaGenerationTaskCompletion<
   });
 }
 
-async function wakeMediaGenerationTaskCompletion(params: {
+async function wakeMediaGenerationTaskCompletionDetailed(params: {
   config?: OpenClawConfig;
   handle: MediaGenerationTaskHandle | null;
   status: "ok" | "error";
@@ -550,17 +608,13 @@ async function wakeMediaGenerationTaskCompletion(params: {
   announceType: string;
   toolName: string;
   completionLabel: string;
-}): Promise<boolean> {
+  attemptDirectFallback?: boolean;
+}): Promise<WakeMediaGenerationTaskCompletionResult> {
   if (!params.handle) {
-    return true;
+    return { delivered: true };
   }
   const announceId = `${params.toolName}:${params.handle.taskId}:${params.status}`;
-  const mediaUrls = Array.from(
-    new Set([
-      ...(params.mediaUrls ?? []),
-      ...mediaUrlsFromGeneratedAttachments(params.attachments),
-    ]),
-  );
+  const mediaUrls = collectMediaGenerationUrls(params);
   const internalEvents: AgentInternalEvent[] = [
     {
       type: "task_completion",
@@ -605,7 +659,7 @@ async function wakeMediaGenerationTaskCompletion(params: {
     directIdempotencyKey: announceId,
   });
   if (delivery.delivered) {
-    return true;
+    return { delivered: true, delivery };
   }
   if (delivery.terminal) {
     log.warn("Media generation completion delivery stopped after terminal fallback", {
@@ -614,29 +668,31 @@ async function wakeMediaGenerationTaskCompletion(params: {
       toolName: params.toolName,
       error: delivery.error,
     });
-    return true;
+    return { delivered: true, delivery };
   }
-  const canTryDirectCompletionFallback =
-    delivery.reason != null && MEDIA_DIRECT_FALLBACK_DELIVERY_REASONS.has(delivery.reason);
-  if (params.status === "ok" && canTryDirectCompletionFallback) {
+  if (
+    params.attemptDirectFallback &&
+    params.status === "ok" &&
+    canTryDirectMediaFallbackForDelivery(delivery)
+  ) {
     // Direct fallback is only for successful media where missing attachments would lose the result.
     const label = `${params.completionLabel[0]?.toUpperCase() ?? "M"}${params.completionLabel.slice(1)}`;
     const delivered = await tryDeliverMediaGenerationDirect({
       config: params.config,
       handle: params.handle,
       toolName: params.toolName,
-      content:
-        mediaUrls.length > 0
-          ? `${label} generation completed.`
-          : `${label} generation completed, but the generated media could not be attached here.`,
+      content: buildMediaGenerationDirectSuccessContent({
+        label: `${label} generation`,
+        mediaUrls,
+      }),
       mediaUrls,
       idempotencySuffix: "ok",
     });
     if (delivered) {
-      return true;
+      return { delivered: true, delivery };
     }
   }
-  if (params.status === "error") {
+  if (params.attemptDirectFallback && params.status === "error") {
     const label = `${params.completionLabel[0]?.toUpperCase() ?? "M"}${params.completionLabel.slice(1)}`;
     const delivered = await tryDeliverMediaGenerationDirect({
       config: params.config,
@@ -646,10 +702,10 @@ async function wakeMediaGenerationTaskCompletion(params: {
       idempotencySuffix: "error",
     });
     if (delivered) {
-      return true;
+      return { delivered: true, delivery };
     }
   }
-  if (delivery.error) {
+  if (params.attemptDirectFallback && delivery.error) {
     log.error("Media generation completion wake failed; requester session was not woken", {
       taskId: params.handle.taskId,
       runId: params.handle.runId,
@@ -657,7 +713,28 @@ async function wakeMediaGenerationTaskCompletion(params: {
       error: delivery.error,
     });
   }
-  return false;
+  return { delivered: false, delivery };
+}
+
+async function wakeMediaGenerationTaskCompletion(params: {
+  config?: OpenClawConfig;
+  handle: MediaGenerationTaskHandle | null;
+  status: "ok" | "error";
+  statusLabel: string;
+  result: string;
+  attachments?: AgentGeneratedAttachment[];
+  mediaUrls?: string[];
+  statsLine?: string;
+  eventSource: AgentInternalEvent["source"];
+  announceType: string;
+  toolName: string;
+  completionLabel: string;
+}): Promise<boolean> {
+  const result = await wakeMediaGenerationTaskCompletionDetailed({
+    ...params,
+    attemptDirectFallback: true,
+  });
+  return result.delivered;
 }
 
 async function tryDeliverMediaGenerationDirect(params: {
@@ -753,6 +830,17 @@ export function createMediaGenerationTaskLifecycle(params: {
         announceType: params.announceType,
         toolName: params.toolName,
         completionLabel: params.completionLabel,
+      });
+    },
+
+    async wakeTaskCompletionDetailed(completionParams: WakeMediaGenerationTaskCompletionParams) {
+      return await wakeMediaGenerationTaskCompletionDetailed({
+        ...completionParams,
+        eventSource: params.eventSource,
+        announceType: params.announceType,
+        toolName: params.toolName,
+        completionLabel: params.completionLabel,
+        attemptDirectFallback: false,
       });
     },
   };
