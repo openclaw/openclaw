@@ -561,6 +561,54 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
+
+  it("bounds non-OK ChatGPT response bodies before formatting API errors", async () => {
+    const chunkSize = 1024 * 1024;
+    const totalChunks = 32;
+    const chunk = new TextEncoder()
+      .encode("usage limit ".repeat(Math.ceil(chunkSize / "usage limit ".length)))
+      .subarray(0, chunkSize);
+    let pullCount = 0;
+    let canceled = false;
+    const overflowing = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        pullCount += 1;
+        if (pullCount > totalChunks) {
+          controller.close();
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+      cancel() {
+        canceled = true;
+      },
+    });
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      new Response(overflowing, {
+        status: 400,
+        statusText: "Bad Request",
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const stream = streamOpenAICodexResponses(model, context, {
+      apiKey: createJwt({
+        "https://api.openai.com/auth": {
+          chatgpt_account_id: "acct-1",
+        },
+      }),
+      transport: "sse",
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain("usage limit");
+    expect(result.errorMessage?.length).toBeLessThanOrEqual(16 * 1024);
+    expect(canceled).toBe(true);
+    expect(pullCount).toBe(1);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("parseSSEForTest", () => {

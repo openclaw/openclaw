@@ -67,6 +67,7 @@ const RETRY_AFTER_HTTP_DATE_RE =
   /^(?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4} \d{2}:\d{2}:\d{2} GMT|(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday), \d{2}-(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-\d{2} \d{2}:\d{2}:\d{2} GMT|(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [ \d]\d \d{2}:\d{2}:\d{2} \d{4})$/;
 const CODEX_TOOL_CALL_PROVIDERS = new Set(["openai", "opencode"]);
 const WEBSOCKET_MESSAGE_TOO_BIG_CLOSE_CODE = 1009;
+const OPENAI_CHATGPT_RESPONSES_ERROR_BODY_MAX_BYTES = 16 * 1024;
 const OPENAI_CHATGPT_RESPONSES_SUCCESS_BODY_MAX_BYTES = 16 * 1024 * 1024;
 
 const CODEX_RESPONSE_STATUSES = new Set<CodexResponseStatus>([
@@ -341,7 +342,7 @@ export const streamOpenAICodexResponses: StreamFunction<
             break;
           }
 
-          const errorText = await response.text();
+          const errorText = await readChatGptResponsesErrorTextLimited(response);
           if (attempt < MAX_RETRIES && isRetryableError(response.status, errorText)) {
             let delayMs = BASE_DELAY_MS * 2 ** attempt;
 
@@ -1537,6 +1538,53 @@ async function processWebSocketStream(
 // ============================================================================
 // Error Handling
 // ============================================================================
+
+async function readChatGptResponsesErrorTextLimited(response: Response): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return "";
+  }
+
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = "";
+  let reachedLimit = false;
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (!value || value.byteLength === 0) {
+        continue;
+      }
+      const remaining = OPENAI_CHATGPT_RESPONSES_ERROR_BODY_MAX_BYTES - total;
+      if (remaining <= 0) {
+        reachedLimit = true;
+        break;
+      }
+      const chunk = value.byteLength > remaining ? value.subarray(0, remaining) : value;
+      total += chunk.byteLength;
+      text += decoder.decode(chunk, { stream: true });
+      if (total >= OPENAI_CHATGPT_RESPONSES_ERROR_BODY_MAX_BYTES) {
+        reachedLimit = true;
+        break;
+      }
+    }
+    text += decoder.decode();
+  } finally {
+    if (reachedLimit) {
+      // This provider module is browser-safe, so keep error-body capping on Web APIs.
+      await reader.cancel().catch(() => {});
+    }
+    try {
+      reader.releaseLock();
+    } catch {}
+  }
+
+  return text;
+}
 
 async function parseErrorResponse(
   response: Response,
