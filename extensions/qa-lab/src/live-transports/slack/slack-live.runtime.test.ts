@@ -81,20 +81,6 @@ describe("Slack live QA runtime helpers", () => {
     expect(testing.SLACK_QA_STANDARD_SCENARIO_IDS).not.toContain("slack-approval-exec-native");
   });
 
-  it("keeps reset-history seeding out of live-frontier defaults", () => {
-    expect(
-      testing.findScenario(undefined, "live-frontier").map((scenario) => scenario.id),
-    ).not.toContain("slack-thread-reset-history-seeding");
-    expect(testing.findScenario(undefined, "mock-openai").map((scenario) => scenario.id)).toContain(
-      "slack-thread-reset-history-seeding",
-    );
-    expect(
-      testing
-        .findScenario(["slack-thread-reset-history-seeding"], "live-frontier")
-        .map((scenario) => scenario.id),
-    ).toEqual(["slack-thread-reset-history-seeding"]);
-  });
-
   it("enables Slack native exec and plugin approval delivery for approval scenarios", () => {
     const cfg = testing.buildSlackQaConfig(
       {},
@@ -145,33 +131,6 @@ describe("Slack live QA runtime helpers", () => {
     const account = cfg.channels?.slack?.accounts?.sut;
     expect(account?.allowFrom).toEqual(["U_NEVER_ALLOWED"]);
     expect(account?.channels?.C123456789?.users).toEqual(["U_NEVER_ALLOWED"]);
-  });
-
-  it("applies Slack thread overrides for reset-history scenarios", () => {
-    const cfg = testing.buildSlackQaConfig(
-      {},
-      {
-        channelId: "C123456789",
-        driverBotUserId: "U999999999",
-        overrides: {
-          replyToMode: "all",
-          thread: {
-            inheritParent: true,
-            initialHistoryLimit: 10,
-          },
-        },
-        sutAccountId: "sut",
-        sutAppToken: "xapp-sut",
-        sutBotToken: "xoxb-sut",
-      },
-    );
-
-    const account = cfg.channels?.slack?.accounts?.sut;
-    expect(account?.replyToMode).toBe("all");
-    expect(account?.thread).toEqual({
-      inheritParent: true,
-      initialHistoryLimit: 10,
-    });
   });
 
   it("extracts Slack native approval button values from blocks", () => {

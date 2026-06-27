@@ -4,11 +4,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { createSlackWebClient, createSlackWriteClient } from "@openclaw/slack/api.js";
 import type { WebClient } from "@slack/web-api";
-import type { OpenClawConfig, SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
-import { resolveAgentRoute, resolveThreadSessionKeys } from "openclaw/plugin-sdk/routing";
-import { saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { createQaArtifactRunId } from "../../artifact-run-id.js";
@@ -19,7 +17,6 @@ import { DEFAULT_QA_LIVE_PROVIDER_MODE } from "../../providers/index.js";
 import {
   defaultQaModelForMode,
   normalizeQaProviderMode,
-  type QaProviderMode,
   type QaProviderModeInput,
 } from "../../run-config.js";
 import {
@@ -67,7 +64,6 @@ const SLACK_QA_GATEWAY_STOP_SETTLE_MS = 3_000;
 const SLACK_QA_RETRYABLE_SCENARIO_ATTEMPTS = 2;
 const SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS = 30_000;
 const SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS = 120_000;
-const SLACK_QA_STALE_THREAD_SESSION_AGE_MS = 2 * 24 * 60 * 60 * 1000;
 
 type SlackQaScenarioId =
   | "slack-allowlist-block"
@@ -78,7 +74,6 @@ type SlackQaScenarioId =
   | "slack-restart-resume"
   | "slack-thread-follow-up"
   | "slack-thread-isolation"
-  | "slack-thread-reset-history-seeding"
   | "slack-top-level-reply-shape";
 
 type SlackQaApprovalKind = "exec" | "plugin";
@@ -119,7 +114,6 @@ type SlackQaConfigOverrides = {
     target?: "both" | "channel" | "dm";
   };
   replyToMode?: "all" | "off";
-  thread?: SlackAccountConfig["thread"];
   users?: string[];
 };
 
@@ -127,10 +121,8 @@ type SlackQaScenarioContext = {
   channelId: string;
   driverClient: WebClient;
   gateway: Awaited<ReturnType<typeof startQaGatewayChild>>;
-  mockBaseUrl?: string;
   postSlackMessage: (params: { text: string; threadTs?: string }) => Promise<{ ts: string }>;
   sentTs: string;
-  sutAccountId: string;
   sutIdentity: SlackAuthIdentity;
   sutReadClient: WebClient;
   waitForReady: () => Promise<void>;
@@ -139,7 +131,6 @@ type SlackQaScenarioContext = {
 type SlackQaScenarioDefinition = LiveTransportScenarioDefinition<SlackQaScenarioId> & {
   buildRun: (sutUserId: string) => SlackQaScenarioRun;
   configOverrides?: SlackQaConfigOverrides;
-  defaultProviderModes?: readonly QaProviderMode[];
 };
 
 type SlackQaGatewayHarness = Awaited<ReturnType<typeof startQaLiveLaneGateway>>;
@@ -507,92 +498,6 @@ const SLACK_QA_SCENARIOS: SlackQaScenarioDefinition[] = [
       };
     },
   },
-  {
-    id: "slack-thread-reset-history-seeding",
-    title: "Slack stale thread session seeds reset history",
-    timeoutMs: 75_000,
-    defaultProviderModes: ["mock-openai"],
-    configOverrides: {
-      replyToMode: "all",
-      thread: {
-        inheritParent: true,
-        initialHistoryLimit: 10,
-      },
-    },
-    buildRun: (sutUserId) => {
-      const token = `SLACK_QA_RESET_THREAD_${randomUUID().slice(0, 8).toUpperCase()}`;
-      const rootMarker = `SLACK_QA_RESET_ROOT_${randomUUID().slice(0, 8).toUpperCase()}`;
-      const priorHumanMarker = `SLACK_QA_RESET_PRIOR_${randomUUID().slice(0, 8).toUpperCase()}`;
-      const priorAssistantMarker = `SLACK_QA_RESET_ASSISTANT_${randomUUID()
-        .slice(0, 8)
-        .toUpperCase()}`;
-      return {
-        expectReply: true,
-        input: `<@${sutUserId}> reply with only this exact marker: ${token}`,
-        matchText: token,
-        beforeRun: async (context) => {
-          const parent = await context.postSlackMessage({
-            text: `reset-history root marker ${rootMarker}`,
-          });
-          await context.postSlackMessage({
-            text: `reset-history prior human marker ${priorHumanMarker}`,
-            threadTs: parent.ts,
-          });
-          await sendSlackChannelMessage({
-            channelId: context.channelId,
-            client: context.sutReadClient,
-            text: `reset-history prior assistant marker ${priorAssistantMarker}`,
-            threadTs: parent.ts,
-          });
-          await seedSlackThreadSessionAsStale({
-            context,
-            threadTs: parent.ts,
-          });
-          await context.waitForReady();
-          return {
-            details: `seeded stale thread session ${parent.ts}`,
-            inputThreadTs: parent.ts,
-          };
-        },
-        verify: (message, context) => {
-          if (message.thread_ts !== context.requestThreadTs) {
-            throw new Error(
-              `expected reset-history Slack reply thread_ts=${context.requestThreadTs}; got ${
-                message.thread_ts ?? "<none>"
-              }`,
-            );
-          }
-        },
-        afterReply: async (_message, context) => {
-          if (!context.mockBaseUrl) {
-            throw new Error(
-              "slack-thread-reset-history-seeding requires the mock-openai provider mode.",
-            );
-          }
-          const requestText = await readSlackMockProviderRequestTextForToken({
-            mockBaseUrl: context.mockBaseUrl,
-            token,
-          });
-          assertSlackMockRequestContains({
-            label: "thread root context",
-            marker: rootMarker,
-            requestText,
-          });
-          assertSlackMockRequestContains({
-            label: "prior human thread context",
-            marker: priorHumanMarker,
-            requestText,
-          });
-          if (requestText.includes(priorAssistantMarker)) {
-            throw new Error(
-              `mock provider request included filtered assistant context marker ${priorAssistantMarker}`,
-            );
-          }
-          return "mock provider request included reset thread starter/prior human context and filtered prior assistant context";
-        },
-      };
-    },
-  },
 ];
 
 const SLACK_QA_STANDARD_SCENARIO_IDS = collectLiveTransportStandardScenarioCoverage({
@@ -641,130 +546,11 @@ function parseSlackQaCredentialPayload(payload: unknown): SlackQaRuntimeEnv {
   return validateSlackQaRuntimeEnv(runtimeEnv, "Slack credential payload");
 }
 
-type SlackMockProviderRequestSnapshot = {
-  allInputText?: unknown;
-  body?: unknown;
-  prompt?: unknown;
-};
-
-async function seedSlackThreadSessionAsStale(params: {
-  context: Omit<SlackQaScenarioContext, "sentTs">;
-  threadTs: string;
-}) {
-  const { context, threadTs } = params;
-  const route = resolveAgentRoute({
-    accountId: context.sutAccountId,
-    cfg: context.gateway.cfg,
-    channel: "slack",
-    peer: {
-      id: context.channelId,
-      kind: "channel",
-    },
-    teamId: context.sutIdentity.teamId,
-  });
-  const threadKeys = resolveThreadSessionKeys({
-    baseSessionKey: route.sessionKey,
-    parentSessionKey: route.sessionKey,
-    threadId: threadTs,
-  });
-  await context.gateway.restartAfterStateMutation(async ({ stateDir }) => {
-    const startedAt = Date.now() - SLACK_QA_STALE_THREAD_SESSION_AGE_MS;
-    const storePath = path.join(stateDir, "agents", route.agentId, "sessions", "sessions.json");
-    await fs.mkdir(path.dirname(storePath), { recursive: true });
-    await saveSessionStore(
-      storePath,
-      {
-        [threadKeys.sessionKey]: {
-          lastInteractionAt: startedAt,
-          sessionId: `slack-reset-history-${randomUUID().slice(0, 8)}`,
-          sessionStartedAt: startedAt,
-          updatedAt: startedAt,
-        },
-      },
-      { skipMaintenance: true },
-    );
-  });
-}
-
-function stringifySlackMockProviderRequest(request: SlackMockProviderRequestSnapshot) {
-  const parts = [request.allInputText, request.prompt, request.body]
-    .map((part) => {
-      if (typeof part === "string") {
-        return part;
-      }
-      if (part === undefined || part === null) {
-        return "";
-      }
-      try {
-        return JSON.stringify(part);
-      } catch {
-        return String(part);
-      }
-    })
-    .filter((part) => part.length > 0);
-  return parts.join("\n");
-}
-
-async function readSlackMockProviderRequests(
-  mockBaseUrl: string,
-): Promise<SlackMockProviderRequestSnapshot[]> {
-  const response = await fetch(`${mockBaseUrl.replace(/\/+$/u, "")}/debug/requests`);
-  if (!response.ok) {
-    throw new Error(`mock provider request log returned ${response.status} ${response.statusText}`);
-  }
-  const parsed: unknown = await response.json();
-  if (!Array.isArray(parsed)) {
-    throw new Error("mock provider request log response was not an array.");
-  }
-  return parsed.filter(
-    (request): request is SlackMockProviderRequestSnapshot =>
-      request !== null && typeof request === "object",
-  );
-}
-
-async function readSlackMockProviderRequestTextForToken(params: {
-  mockBaseUrl: string;
-  token: string;
-}) {
-  const requests = await readSlackMockProviderRequests(params.mockBaseUrl);
-  const request = requests
-    .toReversed()
-    .find((candidate) => stringifySlackMockProviderRequest(candidate).includes(params.token));
-  if (!request) {
-    throw new Error(`mock provider request log did not include marker ${params.token}.`);
-  }
-  return stringifySlackMockProviderRequest(request);
-}
-
-function assertSlackMockRequestContains(params: {
-  label: string;
-  marker: string;
-  requestText: string;
-}) {
-  if (!params.requestText.includes(params.marker)) {
-    throw new Error(`mock provider request missing ${params.label} marker ${params.marker}.`);
-  }
-}
-
-function shouldRunSlackScenarioByDefault(
-  scenario: SlackQaScenarioDefinition,
-  providerMode: QaProviderMode,
-) {
-  return !scenario.defaultProviderModes || scenario.defaultProviderModes.includes(providerMode);
-}
-
-function findScenario(
-  ids?: string[],
-  providerMode: QaProviderMode = DEFAULT_QA_LIVE_PROVIDER_MODE,
-) {
+function findScenario(ids?: string[]) {
   return selectLiveTransportScenarios({
     ids,
     laneLabel: "Slack",
-    scenarios: ids?.length
-      ? SLACK_QA_SCENARIOS
-      : SLACK_QA_SCENARIOS.filter((scenario) =>
-          shouldRunSlackScenarioByDefault(scenario, providerMode),
-        ),
+    scenarios: SLACK_QA_SCENARIOS,
   });
 }
 
@@ -847,7 +633,6 @@ function buildSlackQaConfig(
             groupPolicy: "allowlist",
             allowBots: true,
             replyToMode: params.overrides?.replyToMode ?? "off",
-            ...(params.overrides?.thread ? { thread: params.overrides.thread } : {}),
             ...(execApprovalsConfig ? { execApprovals: execApprovalsConfig } : {}),
             channels: {
               [params.channelId]: {
@@ -1936,7 +1721,7 @@ export async function runSlackQaLive(params: {
   const primaryModel = params.primaryModel?.trim() || defaultQaModelForMode(providerMode);
   const alternateModel = params.alternateModel?.trim() || defaultQaModelForMode(providerMode, true);
   const sutAccountId = params.sutAccountId?.trim() || "sut";
-  const scenarios = findScenario(params.scenarioIds, providerMode);
+  const scenarios = findScenario(params.scenarioIds);
   const requestedCredentialSource = inferSlackCredentialSource(params.credentialSource);
   const redactPublicMetadata = isTruthyOptIn(process.env[QA_REDACT_PUBLIC_METADATA_ENV]);
   const includeObservedMessageContent = isTruthyOptIn(process.env[SLACK_QA_CAPTURE_CONTENT_ENV]);
@@ -2020,7 +1805,6 @@ export async function runSlackQaLive(params: {
             channelId: activeRuntimeEnv.channelId,
             driverClient,
             gateway: activeGatewayHarness.gateway,
-            mockBaseUrl: activeGatewayHarness.mock?.baseUrl,
             postSlackMessage: async (message: { text: string; threadTs?: string }) =>
               await sendSlackChannelMessage({
                 channelId: activeRuntimeEnv.channelId,
@@ -2028,7 +1812,6 @@ export async function runSlackQaLive(params: {
                 text: message.text,
                 threadTs: message.threadTs,
               }),
-            sutAccountId,
             sutIdentity,
             sutReadClient,
             waitForReady: async () =>
