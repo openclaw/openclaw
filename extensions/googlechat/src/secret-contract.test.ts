@@ -64,6 +64,47 @@ describe("googlechat secret contract", () => {
     expect(context.warnings).toStrictEqual([]);
   });
 
+  it("warns when account serviceAccountRef overrides plaintext serviceAccount", () => {
+    const sourceConfig = {
+      channels: {
+        googlechat: {
+          enabled: true,
+          accounts: {
+            work: {
+              enabled: true,
+              serviceAccount: { client_email: "legacy@example.com" },
+              serviceAccountRef: {
+                source: "env",
+                provider: "default",
+                id: "GOOGLECHAT_SERVICE_ACCOUNT",
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const context = createResolverContext({
+      sourceConfig,
+      env: {},
+    });
+
+    collectRuntimeConfigAssignments({
+      config: structuredClone(sourceConfig),
+      defaults: undefined,
+      context,
+    });
+
+    expect(context.assignments.map((assignment) => assignment.path)).toStrictEqual([
+      "channels.googlechat.accounts.work.serviceAccount",
+    ]);
+    expect(context.warnings).toContainEqual({
+      code: "SECRETS_REF_OVERRIDES_PLAINTEXT",
+      path: "channels.googlechat.accounts.work",
+      message:
+        "channels.googlechat.accounts.work: serviceAccountRef is set; runtime will ignore plaintext serviceAccount.",
+    });
+  });
+
   it("does not resolve top-level serviceAccount refs for file-backed accounts", () => {
     const sourceConfig = {
       channels: {

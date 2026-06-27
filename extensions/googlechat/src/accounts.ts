@@ -50,7 +50,7 @@ function hasOwnCredentialKey(
   config: Partial<GoogleChatAccountConfig>,
   key: (typeof credentialKeys)[number],
 ): boolean {
-  return Object.prototype.hasOwnProperty.call(config, key);
+  return Object.hasOwn(config, key);
 }
 
 function mergeGoogleChatAccountConfig(
