@@ -35,6 +35,8 @@ import {
   resolveSessionTranscriptPath,
   runCliAgent,
   runWithModelFallback,
+  classifyEmbeddedAgentRunResultForModelFallback,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
 } from "./run-execution.runtime.js";
 import { resolveCronFallbacksOverride } from "./run-fallback-policy.js";
 import type {
@@ -299,6 +301,13 @@ export function createCronPromptExecutor(params: {
         });
       },
       fallbacksOverride: cronFallbacksOverride,
+      classifyResult: ({ provider, model, result }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider,
+          model,
+          result,
+        }),
+      mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
       classifyResult: ({ provider, model, result }) =>
         classifyEmbeddedAgentRunResultForModelFallback({
           provider,
