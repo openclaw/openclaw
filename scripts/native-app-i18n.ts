@@ -890,6 +890,8 @@ async function loadGlossary(locale: string): Promise<Array<{ source: string; tar
 }
 
 async function syncNativeLocale(locale: string, entries: NativeI18nEntry[]) {
+  // Native runtime resources are owned by the Android and Apple slices; these
+  // artifacts keep the shared translation-memory handoff current between them.
   const artifactPath = path.join(TRANSLATIONS_DIR, `${locale}.json`);
   let previous: NativeTranslationArtifact = { entries: [], locale, version: 1 };
   try {
