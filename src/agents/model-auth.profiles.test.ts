@@ -511,6 +511,54 @@ describe("getApiKeyForModel", () => {
     ).rejects.toThrow(/requires an OpenAI API key profile/);
   });
 
+  it("accepts an explicit OpenAI OAuth profile for audio transcriptions", async () => {
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth" as const,
+          provider: "openai",
+          ...oauthFixture,
+        },
+      },
+    };
+
+    const resolved = await resolveApiKeyForProvider({
+      provider: "openai",
+      modelApi: "openai-audio-transcriptions",
+      profileId: "openai:chatgpt",
+      lockedProfile: true,
+      store,
+    });
+
+    expect(resolved).toMatchObject({
+      apiKey: oauthFixture.access,
+      mode: "oauth",
+      profileId: "openai:chatgpt",
+    });
+  });
+
+  it("treats OpenAI OAuth profiles as available for audio transcriptions", async () => {
+    const store = {
+      version: 1 as const,
+      profiles: {
+        "openai:chatgpt": {
+          type: "oauth" as const,
+          provider: "openai",
+          ...oauthFixture,
+        },
+      },
+    };
+
+    await expect(
+      hasAvailableAuthForProvider({
+        provider: "openai",
+        modelApi: "openai-audio-transcriptions",
+        store,
+      }),
+    ).resolves.toBe(true);
+  });
+
   it("uses the config default agent dir when resolving provider profiles", async () => {
     await withOpenClawTestState(
       {

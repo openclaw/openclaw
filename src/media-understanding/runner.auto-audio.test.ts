@@ -107,13 +107,13 @@ describe("runCapability auto audio entries", () => {
     expect(result.decision.outcome).toBe("success");
   });
 
-  it("skips OpenAI audio auto-selection when only ChatGPT OAuth is available", async () => {
+  it("uses OpenAI audio auto-selection when ChatGPT OAuth is available", async () => {
     const modelAuth = await import("../agents/model-auth.js");
     const hasAvailableAuthForProvider = vi.mocked(modelAuth.hasAvailableAuthForProvider);
     const resolveApiKeyForProvider = vi.mocked(modelAuth.resolveApiKeyForProvider);
     hasAvailableAuthForProvider.mockImplementation(async (params) => {
       if (params.provider === "openai") {
-        return params.modelApi === undefined;
+        return params.modelApi === "openai-audio-transcriptions";
       }
       return params.provider === "mistral";
     });
@@ -124,9 +124,9 @@ describe("runCapability auto audio entries", () => {
     }));
 
     try {
-      await withAudioFixture("openclaw-auto-audio-oauth-skip", async ({ ctx, media, cache }) => {
+      await withAudioFixture("openclaw-auto-audio-oauth-openai", async ({ ctx, media, cache }) => {
         const openAiTranscribe = vi.fn(async (req: AudioTranscriptionRequest) => ({
-          text: "openai",
+          text: `openai:${req.apiKey}`,
           model: req.model ?? "unknown",
         }));
         const mistralTranscribe = vi.fn(async (req: AudioTranscriptionRequest) => ({
@@ -171,12 +171,12 @@ describe("runCapability auto audio entries", () => {
         expect(requireCapabilityOutput(result, 0)).toEqual({
           kind: "audio.transcription",
           attachmentIndex: 0,
-          provider: "mistral",
-          model: "voxtral-mini-latest",
-          text: "mistral:mistral-key",
+          provider: "openai",
+          model: "gpt-4o-transcribe",
+          text: "openai:openai-key",
         });
-        expect(openAiTranscribe).not.toHaveBeenCalled();
-        expect(mistralTranscribe).toHaveBeenCalledTimes(1);
+        expect(openAiTranscribe).toHaveBeenCalledTimes(1);
+        expect(mistralTranscribe).not.toHaveBeenCalled();
       });
 
       expect(hasAvailableAuthForProvider).toHaveBeenCalledWith(

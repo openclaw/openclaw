@@ -234,9 +234,9 @@ describe("runCapability local no-auth audio providers", () => {
     });
   });
 
-  it("uses OpenAI API key auth for audio when the default OpenAI profile is OAuth", async () => {
+  it("uses an explicit OpenAI OAuth profile for audio transcriptions", async () => {
     await withIsolatedAgentDir(async (agentDir) => {
-      await withEnvAsync({ ...AUTH_ENV, OPENAI_API_KEY: "env-openai-audio-key" }, async () => {
+      await withEnvAsync({ ...AUTH_ENV, OPENAI_API_KEY: undefined }, async () => {
         saveAuthProfileStore(
           {
             version: 1,
@@ -246,7 +246,7 @@ describe("runCapability local no-auth audio providers", () => {
                 provider: "openai",
                 access: "oauth-chat-token",
                 refresh: "oauth-refresh-token",
-                expires: Date.now() + 60_000,
+                expires: Date.now() + 3_600_000,
               },
             },
           },
@@ -254,13 +254,17 @@ describe("runCapability local no-auth audio providers", () => {
           { filterExternalAuthProfiles: false, syncExternalCli: false },
         );
         await withAudioFixture(
-          "openclaw-openai-audio-oauth-env-key",
+          "openclaw-openai-audio-oauth-profile",
           async ({ ctx, media, cache }) => {
             const transcribeAudio = vi.fn(async (req: AudioTranscriptionRequest) => ({
               text: `auth:${req.apiKey}`,
               model: req.model,
             }));
-            const cfg = createAudioCfg({ provider: "openai", model: "whisper-1" });
+            const cfg = createAudioCfg({
+              provider: "openai",
+              model: "gpt-4o-mini-transcribe",
+              entry: { profile: "openai:default" },
+            });
 
             const result = await runCapability({
               capability: "audio",
@@ -275,9 +279,9 @@ describe("runCapability local no-auth audio providers", () => {
             });
 
             expect(result.decision.outcome).toBe("success");
-            expect(result.outputs[0]?.text).toBe("auth:env-openai-audio-key");
+            expect(result.outputs[0]?.text).toBe("auth:oauth-chat-token");
             expect(transcribeAudio).toHaveBeenCalledTimes(1);
-            expect(transcribeAudio.mock.calls[0]?.[0].apiKey).toBe("env-openai-audio-key");
+            expect(transcribeAudio.mock.calls[0]?.[0].apiKey).toBe("oauth-chat-token");
           },
         );
       });
