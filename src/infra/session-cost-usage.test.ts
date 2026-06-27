@@ -300,6 +300,68 @@ describe("session cost usage", () => {
     });
   });
 
+  it("recomputes cost when a priced model's transport records $0 against non-zero tokens", async () => {
+    // DeepSeek V4 (and similar) returns `usage.cost.total: 0` even for billable
+    // turns. Pricing is known, so the prior all-zero/unknown-pricing branch does
+    // not fire, and the recorded 0 must not be accepted as a confident $0.
+    const root = await makeSessionCostRoot("cost-priced-zero-transport");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const entry = {
+      type: "message",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        usage: {
+          input: 10_000,
+          output: 5_000,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 15_000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    };
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-1.jsonl"),
+      transcriptText("sess-1", entry),
+      "utf-8",
+    );
+
+    // Real per-token rates — pricing IS known, so the all-zero branch must not
+    // mark this as missing. The transport-recorded $0 must be replaced by an
+    // estimate derived from these rates.
+    const config = {
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-flash",
+                // $/million tokens: input ¥14, output ¥28 (issue reports
+                // ¥0.14/10K input and ¥0.28/10K output for v4-flash).
+                cost: { input: 14, output: 28, cacheRead: 0, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    clearGatewayModelPricingCacheState();
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30, config });
+      expect(summary.totals.totalTokens).toBe(15_000);
+      // 10_000 * 14 / 1_000_000 + 5_000 * 28 / 1_000_000 = 0.14 + 0.14 = 0.28
+      expect(summary.totals.totalCost).toBeCloseTo(0.28, 6);
+      expect(summary.totals.missingCostEntries).toBe(0);
+    });
+  });
+
   it("treats a pre-upgrade (older-version) durable cache as stale so unpriced usage is rebuilt", async () => {
     const root = await makeSessionCostRoot("cost-cache-upgrade");
     const sessionsDir = path.join(root, "agents", "main", "sessions");

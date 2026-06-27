@@ -1165,9 +1165,16 @@ async function scanTranscriptFile(params: {
         // above.
         entry.costTotal = undefined;
         entry.costBreakdown = undefined;
-      } else if (entry.costTotal === undefined) {
-        // Fill in missing cost estimates.
+      } else if (
+        entry.costTotal === undefined ||
+        (entry.costTotal === 0 && computeUsageTokenTotals(entry.usage).totalTokens > 0)
+      ) {
+        // Fill in missing cost estimates, and recompute when the transport recorded a
+        // misleading $0 against non-zero token usage on a model whose per-token rates
+        // are known (e.g., DeepSeek V4 returns `usage.cost.total: 0` even for billable
+        // turns). A genuine $0 with zero tokens stays a $0.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+        entry.costBreakdown = undefined;
       }
     }
 
