@@ -411,7 +411,13 @@ describe("official external plugin catalog", () => {
     });
     const seeded = await loadHostedOfficialExternalPluginCatalogEntries({
       snapshotStore: createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(),
-      fetchImpl: vi.fn(async () => new Response(body, { status: 200 })),
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { etag: '"snapshot-v1"' },
+          }),
+      ),
     });
     if (seeded.source !== "hosted") {
       throw new Error("expected seeded hosted feed");
@@ -426,7 +432,14 @@ describe("official external plugin catalog", () => {
 
     const result = await loadHostedOfficialExternalPluginCatalogEntries({
       snapshotStore,
-      fetchImpl: vi.fn(async () => new Response(null, { status: 304 })),
+      ifNoneMatch: '"snapshot-v1"',
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(null, {
+            status: 304,
+            headers: { etag: '"snapshot-v1"' },
+          }),
+      ),
     });
 
     expect(result.source).toBe("hosted-snapshot");
@@ -435,6 +448,60 @@ describe("official external plugin catalog", () => {
       expect(result.error).toContain("HTTP 304");
       expect(result.snapshot.savedAt).toBe("2026-06-22T01:02:03.000Z");
       expect(result.metadata.checksum).toBe(seeded.metadata.checksum);
+    }
+  });
+
+  it("does not use a stale snapshot when HTTP 304 validators do not match", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 4,
+      entries: [
+        {
+          name: "@openclaw/stale-snapshot-proof",
+          kind: "plugin",
+          openclaw: { plugin: { id: "stale-snapshot-proof" } },
+        },
+      ],
+    });
+    const seeded = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(),
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { etag: '"snapshot-v1"' },
+          }),
+      ),
+    });
+    if (seeded.source !== "hosted") {
+      throw new Error("expected seeded hosted feed");
+    }
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore([
+      {
+        body,
+        metadata: seeded.metadata,
+        savedAt: "2026-06-22T01:02:03.000Z",
+      },
+    ]);
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      ifNoneMatch: '"snapshot-v2"',
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(null, {
+            status: 304,
+            headers: { etag: '"snapshot-v2"' },
+          }),
+      ),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("snapshot fallback failed");
+      expect(result.error).toContain("ETag");
     }
   });
 
@@ -474,6 +541,46 @@ describe("official external plugin catalog", () => {
     ]);
     if (result.source === "hosted-snapshot") {
       expect(result.error).toContain("JSON");
+    }
+  });
+
+  it("does not use a stale snapshot when hosted validation fails with unmatched validators", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 5,
+      entries: [
+        {
+          name: "@openclaw/stale-validation-snapshot-proof",
+          kind: "plugin",
+          openclaw: { plugin: { id: "stale-validation-snapshot-proof" } },
+        },
+      ],
+    });
+    const seeded = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(),
+      fetchImpl: vi.fn(
+        async () => new Response(body, { status: 200, headers: { etag: '"snapshot-v1"' } }),
+      ),
+    });
+    if (seeded.source !== "hosted") {
+      throw new Error("expected seeded hosted feed");
+    }
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore([
+      { body, metadata: seeded.metadata, savedAt: "2026-06-22T01:02:03.000Z" },
+    ]);
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      ifNoneMatch: '"snapshot-v2"',
+      fetchImpl: vi.fn(async () => new Response("{ nope", { status: 200 })),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("snapshot fallback failed");
+      expect(result.error).toContain("ETag");
     }
   });
 

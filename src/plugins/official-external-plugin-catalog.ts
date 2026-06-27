@@ -408,7 +408,14 @@ function loadHostedCatalogSnapshotResult(params: {
   snapshot: HostedOfficialExternalPluginCatalogSnapshot;
   error: unknown;
   expectedSha256?: string;
+  ifNoneMatch?: string;
+  ifModifiedSince?: string;
 }): HostedOfficialExternalPluginCatalogLoadResult {
+  assertSnapshotMatchesRequestValidators({
+    snapshot: params.snapshot,
+    ifNoneMatch: params.ifNoneMatch,
+    ifModifiedSince: params.ifModifiedSince,
+  });
   const checksum = sha256Hex(params.snapshot.body);
   if (checksum !== params.snapshot.metadata.checksum) {
     throw new Error("hosted catalog snapshot checksum mismatch");
@@ -432,12 +439,31 @@ function loadHostedCatalogSnapshotResult(params: {
   };
 }
 
+function assertSnapshotMatchesRequestValidators(params: {
+  snapshot: HostedOfficialExternalPluginCatalogSnapshot;
+  ifNoneMatch?: string;
+  ifModifiedSince?: string;
+}): void {
+  if (params.ifNoneMatch && params.snapshot.metadata.etag !== params.ifNoneMatch) {
+    throw new Error("hosted catalog snapshot ETag did not match request validator");
+  }
+  if (
+    !params.ifNoneMatch &&
+    params.ifModifiedSince &&
+    params.snapshot.metadata.lastModified !== params.ifModifiedSince
+  ) {
+    throw new Error("hosted catalog snapshot Last-Modified did not match request validator");
+  }
+}
+
 async function snapshotOrBundledFallbackResult(params: {
   error: unknown;
   snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore;
   url: string;
   metadata?: HostedOfficialExternalPluginCatalogLoadResult["metadata"];
   expectedSha256?: string;
+  ifNoneMatch?: string;
+  ifModifiedSince?: string;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
   if (params.snapshotStore) {
     try {
@@ -447,6 +473,8 @@ async function snapshotOrBundledFallbackResult(params: {
           snapshot,
           error: params.error,
           expectedSha256: params.expectedSha256,
+          ifNoneMatch: params.ifNoneMatch,
+          ifModifiedSince: params.ifModifiedSince,
         });
       }
     } catch (snapshotErr) {
@@ -538,6 +566,8 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         url: url.href,
         metadata: base,
         expectedSha256,
+        ifNoneMatch,
+        ifModifiedSince,
       });
     }
     if (!response.ok) {
@@ -547,6 +577,8 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         url: url.href,
         metadata: base,
         expectedSha256,
+        ifNoneMatch,
+        ifModifiedSince,
       });
     }
     const body = await readHostedCatalogResponseText({
@@ -564,6 +596,8 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         url: url.href,
         metadata,
         expectedSha256,
+        ifNoneMatch,
+        ifModifiedSince,
       });
     }
     const raw = JSON.parse(body) as unknown;
@@ -574,6 +608,8 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         url: url.href,
         metadata,
         expectedSha256,
+        ifNoneMatch,
+        ifModifiedSince,
       });
     }
     await params?.snapshotStore
@@ -597,6 +633,8 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       snapshotStore: params?.snapshotStore,
       url: url.href,
       expectedSha256,
+      ifNoneMatch,
+      ifModifiedSince,
     });
   } finally {
     if (response?.bodyUsed !== true) {
