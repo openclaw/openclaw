@@ -34,7 +34,11 @@ function extractAdaptiveCardSubmittedData(value: unknown): unknown {
     return value;
   }
   const action = isRecord(value.action) ? value.action : undefined;
-  if (action && normalizeOptionalLowercaseString(action.type) === "action.submit" && "data" in action) {
+  if (
+    action &&
+    normalizeOptionalLowercaseString(action.type) === "action.submit" &&
+    "data" in action
+  ) {
     return action.data;
   }
   return value;
@@ -84,6 +88,7 @@ async function isInvokeAuthorized(params: {
   const { context, deps, deniedLogs, includeInvokeName = false } = params;
   const resolved = await resolveMSTeamsSenderAccess({
     cfg: deps.cfg,
+    accountId: deps.accountId,
     activity: context.activity,
   });
   const { msteamsCfg, isDirectMessage, conversationId, senderId } = resolved;

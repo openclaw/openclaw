@@ -1,16 +1,21 @@
 // Msteams plugin module implements monitor behavior.
 import type { Request, Response } from "express";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   DEFAULT_WEBHOOK_MAX_BODY_BYTES,
   isDangerousNameMatchingEnabled,
   keepHttpServerTaskAlive,
   mergeAllowlist,
   summarizeMapping,
+  type MSTeamsConfig,
   type OpenClawConfig,
   type RuntimeEnv,
 } from "../runtime-api.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
-import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
+import {
+  createAccountScopedMSTeamsConversationStore,
+  createMSTeamsConversationStoreState,
+} from "./conversation-store-state.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
 import { runMSTeamsFeedbackInvokeHandler } from "./feedback-invoke.js";
@@ -48,6 +53,8 @@ import { applyMSTeamsWebhookTimeouts } from "./webhook-timeouts.js";
 
 type MonitorMSTeamsOpts = {
   cfg: OpenClawConfig;
+  accountId?: string;
+  msteamsCfg?: MSTeamsConfig;
   runtime?: RuntimeEnv;
   abortSignal?: AbortSignal;
   conversationStore?: MSTeamsConversationStore;
@@ -59,19 +66,43 @@ type MonitorMSTeamsResult = {
   shutdown: () => Promise<void>;
 };
 
+function createAccountScopedPollStore(
+  store: MSTeamsPollStore,
+  accountId: string,
+): MSTeamsPollStore {
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return store;
+  }
+  const prefix = `${accountId}:`;
+  const scopedId = (pollId: string) => `${prefix}${pollId}`;
+  return {
+    createPoll: async (poll) => await store.createPoll({ ...poll, id: scopedId(poll.id) }),
+    getPoll: async (pollId) => await store.getPoll(scopedId(pollId)),
+    recordVote: async (params) =>
+      await store.recordVote({ ...params, pollId: scopedId(params.pollId) }),
+  };
+}
+
 export async function monitorMSTeamsProvider(
   opts: MonitorMSTeamsOpts,
 ): Promise<MonitorMSTeamsResult> {
   const core = getMSTeamsRuntime();
   const log = core.logging.getChildLogger({ name: "msteams" });
+  const accountId = opts.accountId ?? DEFAULT_ACCOUNT_ID;
   let cfg = opts.cfg;
-  let msteamsCfg = cfg.channels?.msteams;
+  let msteamsCfg = opts.msteamsCfg ?? cfg.channels?.msteams;
   if (!msteamsCfg?.enabled) {
     log.debug?.("msteams provider disabled");
     return { app: null, shutdown: async () => {} };
   }
 
-  const creds = resolveMSTeamsCredentials(msteamsCfg);
+  const creds = resolveMSTeamsCredentials(msteamsCfg, {
+    allowEnvFallback: accountId === DEFAULT_ACCOUNT_ID,
+    pathPrefix:
+      accountId === DEFAULT_ACCOUNT_ID
+        ? "channels.msteams"
+        : `channels.msteams.accounts.${accountId}`,
+  });
   if (!creds) {
     log.error("msteams credentials not configured");
     return { app: null, shutdown: async () => {} };
@@ -253,8 +284,14 @@ export async function monitorMSTeamsProvider(
     typeof agentDefaults?.mediaMaxMb === "number" && agentDefaults.mediaMaxMb > 0
       ? Math.floor(agentDefaults.mediaMaxMb * MB)
       : 8 * MB;
-  const conversationStore = opts.conversationStore ?? createMSTeamsConversationStoreState();
-  const pollStore = opts.pollStore ?? createMSTeamsPollStoreState();
+  const conversationStore = createAccountScopedMSTeamsConversationStore(
+    opts.conversationStore ?? createMSTeamsConversationStoreState(),
+    accountId,
+  );
+  const pollStore = createAccountScopedPollStore(
+    opts.pollStore ?? createMSTeamsPollStoreState(),
+    accountId,
+  );
 
   log.info(`starting provider (port ${port})`);
 
@@ -352,6 +389,7 @@ export async function monitorMSTeamsProvider(
   const handler = buildActivityHandler();
   const handlerDeps: MSTeamsMessageHandlerDeps = {
     cfg,
+    accountId,
     runtime,
     appId,
     app,

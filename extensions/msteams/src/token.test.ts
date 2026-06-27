@@ -110,6 +110,14 @@ describe("token – secret credentials", () => {
     });
   });
 
+  it("can disable env fallback for named accounts", () => {
+    process.env.MSTEAMS_APP_ID = "env-app-id";
+    process.env.MSTEAMS_APP_PASSWORD = "env-app-pw";
+    process.env.MSTEAMS_TENANT_ID = "env-tenant-id";
+
+    expect(resolveMSTeamsCredentials(undefined, { allowEnvFallback: false })).toBeUndefined();
+  });
+
   it("returns undefined when appPassword is missing", () => {
     const cfg = { appId: "app-id", tenantId: "tenant-id" } as any;
     expect(resolveMSTeamsCredentials(cfg)).toBeUndefined();

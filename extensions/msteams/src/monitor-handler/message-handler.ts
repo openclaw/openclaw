@@ -181,6 +181,7 @@ function buildStoredConversationReference(params: {
 export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
   const {
     cfg,
+    accountId,
     runtime,
     appId,
     app,
@@ -303,6 +304,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       groupPolicy,
     } = await resolveMSTeamsSenderAccess({
       cfg,
+      accountId,
       activity,
       hasControlCommand: isControlCommand,
     });
@@ -483,6 +485,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "msteams",
+      accountId,
       teamId,
       peer: {
         kind: isDirectMessage ? "direct" : isChannel ? "channel" : "group",

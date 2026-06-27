@@ -41,6 +41,7 @@ function normalizeIngressValue(value?: string | null): string | null {
 
 export async function resolveMSTeamsSenderAccess(params: {
   cfg: OpenClawConfig;
+  accountId?: string;
   activity: MSTeamsTurnContext["activity"];
   hasControlCommand?: boolean;
 }) {
@@ -56,7 +57,7 @@ export async function resolveMSTeamsSenderAccess(params: {
   const pairing = createChannelPairingController({
     core,
     channel: "msteams",
-    accountId: DEFAULT_ACCOUNT_ID,
+    accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
   });
   const dmPolicy = msteamsCfg?.dmPolicy ?? "pairing";
   const configuredDmAllowFrom = msteamsCfg?.allowFrom ?? [];

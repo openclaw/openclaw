@@ -1,5 +1,6 @@
 // Msteams plugin module implements conversation store state behavior.
 import crypto from "node:crypto";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import {
   findPreferredDmConversationByUserId,
   mergeStoredConversationReference,
@@ -225,5 +226,53 @@ export function createMSTeamsConversationStoreState(
     remove,
     findPreferredDmByUserId,
     findByUserId: findPreferredDmByUserId,
+  };
+}
+
+export function createAccountScopedMSTeamsConversationStore(
+  store: MSTeamsConversationStore,
+  accountId: string,
+): MSTeamsConversationStore {
+  if (accountId === DEFAULT_ACCOUNT_ID) {
+    return store;
+  }
+  const prefix = `${accountId}:`;
+  const scopedId = (conversationId: string) => `${prefix}${conversationId}`;
+  const unscopedId = (conversationId: string) =>
+    conversationId.startsWith(prefix) ? conversationId.slice(prefix.length) : conversationId;
+  const unscopedReference = (reference: Awaited<ReturnType<MSTeamsConversationStore["get"]>>) =>
+    reference
+      ? {
+          ...reference,
+          conversation: reference.conversation
+            ? {
+                ...reference.conversation,
+                id: unscopedId(reference.conversation.id ?? ""),
+              }
+            : reference.conversation,
+        }
+      : null;
+  const listScoped = async () =>
+    (await store.list())
+      .filter((entry) => entry.conversationId.startsWith(prefix))
+      .map((entry) => ({
+        ...entry,
+        conversationId: unscopedId(entry.conversationId),
+        reference: unscopedReference(entry.reference) ?? entry.reference,
+      }));
+  return {
+    upsert: async (conversationId, reference) =>
+      await store.upsert(scopedId(conversationId), reference),
+    get: async (conversationId) => unscopedReference(await store.get(scopedId(conversationId))),
+    remove: async (conversationId) => await store.remove(scopedId(conversationId)),
+    list: listScoped,
+    findPreferredDmByUserId: async (id) =>
+      (await listScoped()).find(
+        (entry) => entry.reference.user?.id === id || entry.reference.aadObjectId === id,
+      ) ?? null,
+    findByUserId: async (id) =>
+      (await listScoped()).find(
+        (entry) => entry.reference.user?.id === id || entry.reference.aadObjectId === id,
+      ) ?? null,
   };
 }

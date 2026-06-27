@@ -2,6 +2,11 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { MSTeamsConfigSchema } from "../config-api.js";
+import {
+  listMSTeamsAccountIds,
+  resolveMSTeamsAccount,
+  resolveMSTeamsAccountConfig,
+} from "./accounts.js";
 import { msTeamsApprovalAuth } from "./approval-auth.js";
 import { msteamsPlugin } from "./channel.js";
 
@@ -167,6 +172,136 @@ describe("msteams config schema", () => {
     });
 
     expect(res.success).toBe(false);
+  });
+
+  it("accepts named Teams bot accounts with explicit identities and ports", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      webhook: { path: "/api/messages" },
+      accounts: {
+        default: {
+          appId: "dale-app-id",
+          appPassword: "dale-secret",
+          webhook: { port: 3978 },
+        },
+        legal: {
+          appId: "legal-app-id",
+          appPassword: "legal-secret",
+          webhook: { port: 3979 },
+        },
+      },
+      defaultAccount: "default",
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects named accounts that would inherit identity or port from root", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      appId: "dale-app-id",
+      appPassword: "dale-secret",
+      tenantId: "tenant-id",
+      webhook: { port: 3978, path: "/api/messages" },
+      accounts: {
+        legal: {
+          appId: "legal-app-id",
+          appPassword: "legal-secret",
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+  });
+
+  it("rejects simultaneous root and accounts.default identity definitions", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      appId: "root-app-id",
+      appPassword: "root-secret",
+      tenantId: "tenant-id",
+      accounts: {
+        default: {
+          appId: "default-app-id",
+          appPassword: "default-secret",
+          webhook: { port: 3978 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+  });
+});
+
+describe("msteams account config", () => {
+  it("lists root default and named accounts", () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          appId: "dale-app-id",
+          appPassword: "dale-secret",
+          tenantId: "tenant-id",
+          webhook: { port: 3978 },
+          accounts: {
+            legal: {
+              appId: "legal-app-id",
+              appPassword: "legal-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(listMSTeamsAccountIds(cfg)).toEqual(["default", "legal"]);
+  });
+
+  it("inherits shared webhook path but not identity or port for named accounts", () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          appId: "dale-app-id",
+          appPassword: "dale-secret",
+          tenantId: "tenant-id",
+          webhook: { port: 3978, path: "/api/messages" },
+          dmPolicy: "open",
+          allowFrom: ["*"],
+          accounts: {
+            legal: {
+              appId: "legal-app-id",
+              appPassword: "legal-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const legal = resolveMSTeamsAccountConfig(cfg, "legal");
+
+    expect(legal.appId).toBe("legal-app-id");
+    expect(legal.appPassword).toBe("legal-secret");
+    expect(legal.tenantId).toBe("tenant-id");
+    expect(legal.webhook).toEqual({ port: 3979, path: "/api/messages" });
+    expect(legal.allowFrom).toEqual(["*"]);
+  });
+
+  it("marks named accounts without explicit identity as unconfigured", () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          appId: "dale-app-id",
+          appPassword: "dale-secret",
+          tenantId: "tenant-id",
+          webhook: { port: 3978, path: "/api/messages" },
+          accounts: {
+            legal: {
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(resolveMSTeamsAccount({ cfg, accountId: "legal" }).configured).toBe(false);
   });
 });
 
