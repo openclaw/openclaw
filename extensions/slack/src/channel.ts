@@ -313,6 +313,7 @@ async function resolveSlackOutboundSessionRoute(params: {
   accountId?: string | null;
   target: string;
   replyToId?: string | null;
+  replyToIsExplicit?: boolean;
   threadId?: string | number | null;
   currentSessionKey?: string | null;
 }) {
@@ -374,6 +375,12 @@ async function resolveSlackOutboundSessionRoute(params: {
     replyToId: params.replyToId,
     threadId: params.threadId,
     currentSessionKey: params.currentSessionKey,
+    // Inherited Slack child-reply timestamps should not create new
+    // delivery-mirror sessions; prefer the recovered thread session
+    // when the reply target was not explicitly specified.
+    precedence: params.replyToIsExplicit
+      ? ["replyToId", "threadId", "currentSession"]
+      : ["currentSession", "threadId", "replyToId"],
     canRecoverCurrentThread: () =>
       shouldRecoverSlackThreadFromCurrentSession({
         cfg: params.cfg,
@@ -663,8 +670,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         }
         return resolveTargetsWithOptionalToken({
           token:
-            normalizeOptionalString(account.userToken) ??
-            normalizeOptionalString(account.botToken),
+            normalizeOptionalString(account.userToken) ?? normalizeOptionalString(account.botToken),
           inputs,
           missingTokenNote: "missing Slack token",
           resolveWithToken: async ({ token, inputs: inputsLocal }) =>
