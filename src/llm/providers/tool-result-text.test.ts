@@ -15,6 +15,7 @@ describe("extractToolResultText", () => {
       },
     ]);
 
+    expect(text.length).toBeGreaterThan(1_200);
     expect(text).toContain(tail);
     expect(text).not.toContain("... (");
   });
