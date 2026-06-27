@@ -129,9 +129,21 @@ export function assertMemoryWikiSourceSyncStateCapacity(params: {
   group: MemoryWikiImportedSourceGroup;
   incomingCount: number;
 }): void {
-  const retainedOtherGroupCount = Object.values(params.state.entries).filter(
-    (entry) => entry.group !== params.group,
-  ).length;
+  let retainedOtherGroupCount = 0;
+  const retainedLimit = MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES - params.incomingCount;
+  for (const syncKey in params.state.entries) {
+    const entry = params.state.entries[syncKey];
+    if (!entry || entry.group === params.group) {
+      continue;
+    }
+    retainedOtherGroupCount += 1;
+    if (retainedOtherGroupCount > retainedLimit) {
+      const projectedCount = retainedOtherGroupCount + params.incomingCount;
+      throw new Error(
+        `Memory Wiki source sync state exceeds SQLite entry limit (${projectedCount}/${MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES})`,
+      );
+    }
+  }
   const projectedCount = retainedOtherGroupCount + params.incomingCount;
   if (projectedCount > MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES) {
     throw new Error(
