@@ -313,8 +313,14 @@ function buildLintReportBody(issues: MemoryWikiLintIssue[]): string {
     return "No issues found.";
   }
 
-  const errors = issues.filter((issue) => issue.severity === "error");
-  const warnings = issues.filter((issue) => issue.severity === "warning");
+  const issuesBySeverity = issues.reduce(
+    (groups, issue) => {
+      groups[issue.severity].push(issue);
+      return groups;
+    },
+    { error: [] as MemoryWikiLintIssue[], warning: [] as MemoryWikiLintIssue[] },
+  );
+  const { error: errors, warning: warnings } = issuesBySeverity;
   const byCategory = buildIssuesByCategory(issues);
   const lines = [`- Errors: ${errors.length}`, `- Warnings: ${warnings.length}`];
 
