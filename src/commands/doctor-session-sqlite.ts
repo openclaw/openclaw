@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { loadConfig } from "../config/io.js";
+import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import {
@@ -90,13 +90,7 @@ export async function runDoctorSessionSqlite(
   options: DoctorSessionSqliteOptions,
 ): Promise<DoctorSessionSqliteReport> {
   const env = options.env ?? process.env;
-  const cfg =
-    options.cfg ??
-    loadConfig({
-      pin: false,
-      skipPluginValidation: true,
-      skipShellEnvFallback: true,
-    });
+  const cfg = resolveDoctorSessionSqliteConfig(options);
   const targets = resolveDoctorSessionSqliteTargets({
     allAgents: options.allAgents,
     agent: options.agent,
@@ -109,6 +103,15 @@ export async function runDoctorSessionSqlite(
     reports.push(await inspectOrMigrateTarget({ env, mode: options.mode, target }));
   }
   return summarizeDoctorSessionSqliteReport(options.mode, reports);
+}
+
+// Direct store migrations are already fully scoped by the path; broader agent
+// discovery needs the current runtime config boundary.
+function resolveDoctorSessionSqliteConfig(options: DoctorSessionSqliteOptions): OpenClawConfig {
+  if (options.cfg) {
+    return options.cfg;
+  }
+  return options.store ? {} : getRuntimeConfig();
 }
 
 function resolveDoctorSessionSqliteTargets(params: {
