@@ -29,6 +29,7 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { createReplyOperation, testing as replyRunRegistryTesting } from "./reply-run-registry.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
@@ -467,6 +468,7 @@ beforeEach(() => {
 });
 afterEach(async () => {
   resetSystemEventsForTest();
+  replyRunRegistryTesting.resetReplyRunRegistry();
   await sessionMcpTesting.resetSessionMcpRuntimeManager();
 });
 describe("initSessionState guarded initialization", () => {
@@ -3704,6 +3706,93 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
         entry.startsWith(`${existingSessionId}.jsonl.reset.`),
       );
       expect(archived).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps an active reply run on the current transcript across an implicit daily reset boundary", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-active-run-daily-rollover-");
+      const sessionKey = "agent:main:telegram:dm:active-run-daily-user";
+      const existingSessionId = "active-run-daily-session";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+
+      const activeOperation = createReplyOperation({
+        sessionKey,
+        sessionId: existingSessionId,
+        resetTriggered: false,
+      });
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const activeResult = await initSessionState({
+        ctx: {
+          Body: "hello",
+          RawBody: "hello",
+          CommandBody: "hello",
+          From: "user-active-run",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(activeResult.isNewSession).toBe(false);
+      expect(activeResult.sessionId).toBe(existingSessionId);
+      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
+      const archivedWhileActive = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+      );
+      expect(archivedWhileActive).toHaveLength(0);
+
+      activeOperation.complete();
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          ...activeResult.sessionEntry,
+          sessionId: existingSessionId,
+          updatedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+          lastInteractionAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+          sessionStartedAt: new Date(2026, 0, 18, 3, 0, 0).getTime(),
+        },
+      });
+
+      const rolloverResult = await initSessionState({
+        ctx: {
+          Body: "hello again",
+          RawBody: "hello again",
+          CommandBody: "hello again",
+          From: "user-active-run",
+          To: "bot",
+          ChatType: "direct",
+          SessionKey: sessionKey,
+          Provider: "telegram",
+          Surface: "telegram",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(rolloverResult.isNewSession).toBe(true);
+      expect(rolloverResult.sessionId).not.toBe(existingSessionId);
+      expect(await fs.stat(transcriptPath).catch(() => null)).toBeNull();
+      const archivedAfterCompletion = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+      );
+      expect(archivedAfterCompletion).toHaveLength(1);
     } finally {
       vi.useRealTimers();
     }

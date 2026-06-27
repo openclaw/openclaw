@@ -72,6 +72,7 @@ import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { isReplyRunActiveForSessionId } from "./reply-run-registry.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
@@ -495,7 +496,12 @@ async function initSessionStateAttemptLocked(
   // resume signal is allowed to suppress configured idle/daily rollover.
   const reconnectResumeRequested =
     params.resumeRequestedSession === true && requestedCurrentSession;
-  const skipImplicitExpiry = hasProviderOwnedSession(entry) && resetPolicy.configured !== true;
+  const activeReplyRunForCurrentEntry = Boolean(
+    entry?.sessionId && isReplyRunActiveForSessionId(entry.sessionId),
+  );
+  const skipImplicitExpiry =
+    (hasProviderOwnedSession(entry) || activeReplyRunForCurrentEntry) &&
+    resetPolicy.configured !== true;
   const lifecycleTimestamps = resolveSessionLifecycleTimestamps({
     entry,
     agentId,
@@ -544,9 +550,11 @@ async function initSessionStateAttemptLocked(
       (softResetAllowed && canReuseExistingEntry)) &&
       !terminalMainTranscriptNewerThanRegistry);
   // Capture the current session entry before any reset so its transcript can be
-  // archived afterward.  We need to do this for both explicit resets (/new, /reset)
-  // and for scheduled/daily resets where the session has become stale (!freshEntry).
-  // Without this, daily-reset transcripts are left as orphaned files on disk (#35481).
+  // archived afterward. We intentionally suppress implicit stale rollover while a
+  // reply run is still active for this session, otherwise a daily boundary can rename
+  // the live transcript mid-run and split the running turn's output across files (#96546).
+  // We still archive both explicit resets (/new, /reset) and scheduled/daily resets
+  // once the active run has finished so stale transcripts are not left orphaned (#35481).
   const previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
   const previousSessionEndReason = resetTriggered
     ? resolveExplicitSessionEndReason(matchedResetTriggerLower)
