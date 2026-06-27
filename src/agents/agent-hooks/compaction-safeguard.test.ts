@@ -325,6 +325,51 @@ describe("compaction-safeguard tool failures", () => {
     const section = formatToolFailuresSection(failures);
     expect(section).toBe("");
   });
+
+  it("skips sessions_spawn with status accepted even when isError is true (#96833)", () => {
+    // Legacy transcripts may have sessions_spawn results with
+    // isError:true and status:"accepted". These are NOT failures.
+    const messages: AgentMessage[] = [
+      {
+        role: "toolResult",
+        toolCallId: "call-spawn-1",
+        toolName: "sessions_spawn",
+        isError: true,
+        details: {
+          status: "accepted",
+          childSessionKey: "agent:main:subagent:abc",
+          runId: "run-001",
+          mode: "run",
+        },
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              status: "accepted",
+              childSessionKey: "agent:main:subagent:abc",
+              runId: "run-001",
+              mode: "run",
+            }),
+          },
+        ],
+        timestamp: Date.now(),
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call-exec-1",
+        toolName: "exec",
+        isError: true,
+        details: { exitCode: 1, status: "error" },
+        content: [{ type: "text", text: "command failed" }],
+        timestamp: Date.now(),
+      },
+    ];
+
+    const failures = collectToolFailures(messages);
+    // Only the exec failure should be collected, not sessions_spawn
+    expect(failures).toHaveLength(1);
+    expect(failures[0].toolName).toBe("exec");
+  });
 });
 
 describe("compaction-safeguard summary budgets", () => {

@@ -17,6 +17,12 @@ export function readToolResultStatus(result: unknown): string | undefined {
 export function isToolResultError(result: unknown): boolean {
   const details = readToolResultDetails(result);
   const normalized = readToolResultStatus(result);
+  // sessions_spawn with status "accepted" is never an error (#96833).
+  // Child session was successfully launched — the tool name happens to
+  // contain "spawn" but the result is a successful handoff.
+  if (normalized === "accepted") {
+    return false;
+  }
   const explicitlySuccessful = details?.ok === true || details?.success === true;
   if (details?.ok === false || details?.success === false) {
     return true;

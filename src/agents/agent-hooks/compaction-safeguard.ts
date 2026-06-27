@@ -457,6 +457,21 @@ function collectToolFailures(messages: AgentMessage[]): ToolFailure[] {
       typeof toolResult.toolName === "string" && toolResult.toolName.trim()
         ? toolResult.toolName
         : "tool";
+
+    // sessions_spawn with status "accepted" is never a failure (#96833).
+    // Legacy transcripts may have isError:true on accepted spawns; skip them.
+    if (toolName === "sessions_spawn") {
+      const details = toolResult.details;
+      if (
+        details &&
+        typeof details === "object" &&
+        !Array.isArray(details) &&
+        (details as Record<string, unknown>).status === "accepted"
+      ) {
+        continue;
+      }
+    }
+
     const rawText = extractToolResultText(toolResult.content);
     const meta = formatToolFailureMeta(toolResult.details);
     const normalized = normalizeFailureText(rawText);
