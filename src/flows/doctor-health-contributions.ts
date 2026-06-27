@@ -1282,6 +1282,36 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:state-integrity",
       label: "State integrity",
+      healthChecks: {
+        id: "core/doctor/state-integrity",
+        description: "State directory, config permission, and runtime state issues are findings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { detectStateIntegrityHealthIssues, stateIntegrityIssueToHealthFinding } =
+            await import("../commands/doctor-state-integrity.js");
+          return detectStateIntegrityHealthIssues(ctx.cfg, {
+            configPath: ctx.configPath,
+            env: process.env,
+          }).map(stateIntegrityIssueToHealthFinding);
+        },
+        async repair(ctx) {
+          const { detectStateIntegrityHealthIssues, stateIntegrityIssueToRepairEffect } =
+            await import("../commands/doctor-state-integrity.js");
+          const effects = detectStateIntegrityHealthIssues(ctx.cfg, {
+            configPath: ctx.configPath,
+            env: process.env,
+          }).map(stateIntegrityIssueToRepairEffect);
+          if (ctx.dryRun === true) {
+            return { status: "repaired", changes: [], effects };
+          }
+          return {
+            status: "skipped",
+            reason: "legacy doctor state integrity contribution owns state repairs",
+            changes: [],
+            effects,
+          };
+        },
+      },
       run: runStateIntegrityHealth,
     }),
     createDoctorHealthContribution({
