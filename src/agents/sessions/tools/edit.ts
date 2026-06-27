@@ -12,6 +12,7 @@ import {
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import * as Diff from "diff";
 import { Type } from "typebox";
+import { levenshteinDistance } from "../../../shared/levenshtein-distance.js";
 import { renderDiff } from "../../modes/interactive/components/diff.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { textResult } from "../../tools/common.js";
@@ -196,36 +197,6 @@ function truncateForScore(text: string): string {
     : text.slice(0, EDIT_MISMATCH_SCORE_TEXT_LIMIT);
 }
 
-function levenshteinDistance(a: string, b: string): number {
-  if (a === b) {
-    return 0;
-  }
-  if (a.length === 0) {
-    return b.length;
-  }
-  if (b.length === 0) {
-    return a.length;
-  }
-
-  const previous = Array.from({ length: b.length + 1 }, (_, index) => index);
-  const current = new Array<number>(b.length + 1);
-  for (let i = 1; i <= a.length; i++) {
-    current[0] = i;
-    for (let j = 1; j <= b.length; j++) {
-      const substitutionCost = a[i - 1] === b[j - 1] ? 0 : 1;
-      current[j] = Math.min(
-        previous[j] + 1,
-        current[j - 1] + 1,
-        previous[j - 1] + substitutionCost,
-      );
-    }
-    for (let j = 0; j < previous.length; j++) {
-      previous[j] = current[j];
-    }
-  }
-  return previous[b.length];
-}
-
 function similarityScore(a: string, b: string): number {
   const left = truncateForScore(a);
   const right = truncateForScore(b);
@@ -263,8 +234,15 @@ function cheapCandidateScore(target: string, candidate: string): number {
 function leadingWhitespaceDescription(line: string): string {
   const match = line.match(/^[\t ]*/);
   const value = match?.[0] ?? "";
-  const spaces = [...value].filter((char) => char === " ").length;
-  const tabs = [...value].filter((char) => char === "\t").length;
+  let spaces = 0;
+  let tabs = 0;
+  for (const char of value) {
+    if (char === " ") {
+      spaces += 1;
+    } else {
+      tabs += 1;
+    }
+  }
   const parts: string[] = [];
   if (spaces > 0) {
     parts.push(`${spaces} spaces`);
@@ -364,14 +342,14 @@ function findNearestEditCandidates(
   }
 
   return prefiltered
-    .sort((a, b) => b.cheapScore - a.cheapScore || a.startLine - b.startLine)
+    .toSorted((a, b) => b.cheapScore - a.cheapScore || a.startLine - b.startLine)
     .slice(0, EDIT_MISMATCH_PREFILTER_LIMIT)
     .map((candidate) => ({
       startLine: candidate.startLine,
       text: candidate.text,
       score: scoreCandidate(targetText, candidate.text),
     }))
-    .sort((a, b) => b.score - a.score || a.startLine - b.startLine)
+    .toSorted((a, b) => b.score - a.score || a.startLine - b.startLine)
     .slice(0, EDIT_MISMATCH_CANDIDATE_LIMIT);
 }
 

@@ -60,7 +60,7 @@ describe("edit tool", () => {
         undefined,
       ),
     ).rejects.toThrow(
-      /Nearest candidate lines:\nCandidate 1 \(line 2\):\n  indentation: expected 6 spaces, candidate 2 spaces\n- "      return value;"\n\+ "  return value;"/,
+      /Nearest candidate lines:\nCandidate 1 \(line 2\):\n {2}indentation: expected 6 spaces, candidate 2 spaces\n- " {6}return value;"\n\+ " {2}return value;"/,
     );
   });
 
@@ -78,7 +78,7 @@ describe("edit tool", () => {
         undefined,
       ),
     ).rejects.toThrow(
-      /Candidate 1 \(line 2\):\n  indentation: expected 4 spaces, candidate 2 spaces\n  "  beta"\n- "    gamma"\n\+ "  gamma"/,
+      /Candidate 1 \(line 2\):\n {2}indentation: expected 4 spaces, candidate 2 spaces\n {2}" {2}beta"\n- " {4}gamma"\n\+ " {2}gamma"/,
     );
   });
 
