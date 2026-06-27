@@ -594,7 +594,7 @@ describe("CronService failure alerts", () => {
     const store = await makeStorePath();
     const sendCronFailureAlert = vi.fn(async () => undefined);
     // 209 code units: emoji (surrogate pair) at positions 199-200 straddles the 200-unit boundary
-    const longError = "x".repeat(199) + "🎉" + "trailing";
+    const longError = `${"x".repeat(199)}🎉trailing`;
     const runIsolatedAgentJob = vi.fn(async () => ({
       status: "error" as const,
       error: longError,
@@ -622,7 +622,9 @@ describe("CronService failure alerts", () => {
     expect(sendCronFailureAlert).toHaveBeenCalledTimes(1);
     const alertText = alertCallArg(sendCronFailureAlert).text;
     expect(typeof alertText).toBe("string");
-    if (typeof alertText !== "string") throw new Error("expected failure alert text");
+    if (typeof alertText !== "string") {
+      throw new Error("expected failure alert text");
+    }
 
     // Verify no dangling surrogates in the truncated error text.
     // Must check every character including the last: a dangling high surrogate
