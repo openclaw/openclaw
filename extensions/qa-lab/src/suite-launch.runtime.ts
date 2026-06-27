@@ -12,12 +12,21 @@ import {
 } from "./evidence-summary.js";
 import { isQaFastModeEnabled } from "./model-selection.js";
 import { DEFAULT_QA_PROVIDER_MODE } from "./providers/index.js";
+import {
+  defaultQaSuiteConcurrencyForTransport,
+  normalizeQaTransportId,
+} from "./qa-transport-registry.js";
 import { defaultQaModelForMode, normalizeQaProviderMode } from "./run-config.js";
 import {
   readQaBootstrapScenarioCatalog,
   type QaSeedScenarioWithSource,
 } from "./scenario-catalog.js";
-import { normalizeQaSuiteConcurrency, resolveQaSuiteOutputDir } from "./suite-planning.js";
+import {
+  normalizeQaSuiteConcurrency,
+  resolveQaSuiteOutputDir,
+  resolveQaSuiteWorkerStartStaggerMs,
+  scenarioRequiresIsolatedQaSuiteWorker,
+} from "./suite-planning.js";
 import {
   buildQaSuiteSummaryJson,
   type QaSuiteResult,
@@ -63,9 +72,38 @@ type QaSuiteExecutionPlan =
       testFileScenariosByKind: Map<QaTestFileExecutionKind, QaTestFileScenario[]>;
     };
 
+const MAX_SHARED_FLOW_PARTITIONS = 4;
+const MAX_ISOLATED_FLOW_CONCURRENCY = 8;
+const ISOLATED_FLOW_WORKER_START_STAGGER_MS = 500;
+
+type QaUnifiedPartitionResult = {
+  evidenceSummaries: QaEvidenceSummaryJson[];
+  scenarioResults: Array<{
+    result: QaSuiteScenarioResult;
+    scenarioId: string;
+  }>;
+};
+
+type QaUnifiedPartitionTask = {
+  run: () => Promise<QaUnifiedPartitionResult>;
+  weight: number;
+};
+
 async function loadQaLabServerRuntime() {
   const { startQaLabServer } = await import("./lab-server.js");
   return startQaLabServer;
+}
+
+async function loadQaFlowSuiteRuntime() {
+  const [{ runQaFlowSuite }, startLab] = await Promise.all([
+    import("./suite.js"),
+    loadQaLabServerRuntime(),
+  ]);
+  return async (params: QaSuiteRunParams | undefined) =>
+    await runQaFlowSuite({
+      ...params,
+      startLab: params?.startLab ?? startLab,
+    });
 }
 
 function resolveRequestedScenarios(params: {
@@ -131,11 +169,13 @@ async function runQaTestFileSuiteFromRuntime(params: {
   const providerMode = normalizeQaProviderMode(runParams?.providerMode ?? DEFAULT_QA_PROVIDER_MODE);
   const primaryModel = runParams?.primaryModel?.trim() || defaultQaModelForMode(providerMode);
   return await runQaTestFileScenarios({
+    evidenceMode: runParams?.evidenceMode,
     repoRoot,
     outputDir,
     providerMode,
     primaryModel,
     scenarios: params.scenarios,
+    writeEvidenceFile: runParams?.writeEvidenceFile,
   });
 }
 
@@ -155,19 +195,133 @@ function suitePartitionOutputDir(outputDir: string, kind: "flow" | QaTestFileExe
   return path.join(outputDir, kind);
 }
 
+function flowSuitePartitionOutputDir(outputDir: string, partition: string) {
+  return path.join(suitePartitionOutputDir(outputDir, "flow"), partition);
+}
+
+function partitionSharedFlowScenarios(
+  scenarios: readonly QaSeedScenarioWithSource[],
+  concurrency: number,
+) {
+  const partitionCount = Math.min(
+    Math.max(1, Math.floor(concurrency)),
+    MAX_SHARED_FLOW_PARTITIONS,
+    scenarios.length,
+  );
+  const partitions = Array.from({ length: partitionCount }, (): QaSeedScenarioWithSource[] => []);
+  for (const [index, scenario] of scenarios.entries()) {
+    const partition = partitions[index % partitionCount];
+    if (!partition) {
+      throw new Error("failed to partition shared QA flow scenarios");
+    }
+    partition.push(scenario);
+  }
+  return partitions.filter((partition) => partition.length > 0);
+}
+
+async function runWeightedUnifiedPartitionTasks(
+  tasks: readonly QaUnifiedPartitionTask[],
+  maxWeight: number,
+) {
+  if (tasks.length === 0) {
+    return [];
+  }
+  const limit = Math.max(1, Math.floor(maxWeight));
+  const results: QaUnifiedPartitionResult[] = [];
+  let activeWeight = 0;
+  let settled = 0;
+  let nextIndex = 0;
+  return await new Promise<QaUnifiedPartitionResult[]>((resolve, reject) => {
+    let firstError: Error | undefined;
+    let finished = false;
+    const finishIfSettled = () => {
+      if (finished || activeWeight > 0) {
+        return;
+      }
+      finished = true;
+      if (firstError) {
+        reject(firstError);
+        return;
+      }
+      resolve(results);
+    };
+    const launch = () => {
+      if (firstError) {
+        finishIfSettled();
+        return;
+      }
+      while (nextIndex < tasks.length) {
+        const task = tasks[nextIndex];
+        if (!task) {
+          return;
+        }
+        const taskWeight = Math.max(1, Math.min(limit, Math.floor(task.weight)));
+        if (activeWeight > 0 && activeWeight + taskWeight > limit) {
+          return;
+        }
+        const index = nextIndex;
+        nextIndex += 1;
+        activeWeight += taskWeight;
+        task.run().then(
+          (result) => {
+            results[index] = result;
+            activeWeight -= taskWeight;
+            settled += 1;
+            if (settled === tasks.length) {
+              finishIfSettled();
+              return;
+            }
+            launch();
+          },
+          (error: unknown) => {
+            firstError = error instanceof Error ? error : new Error(String(error));
+            activeWeight -= taskWeight;
+            settled += 1;
+            finishIfSettled();
+          },
+        );
+      }
+      if (settled === tasks.length) {
+        finishIfSettled();
+      }
+    };
+    launch();
+  });
+}
+
 async function readQaSuiteEvidenceSummary(evidencePath: string) {
   return validateQaEvidenceSummaryJson(JSON.parse(await fs.readFile(evidencePath, "utf8")));
+}
+
+async function resolveQaSuiteResultEvidenceSummary(result: {
+  evidence?: QaEvidenceSummaryJson;
+  evidencePath: string;
+}) {
+  return result.evidence ?? (await readQaSuiteEvidenceSummary(result.evidencePath));
 }
 
 function mergeQaEvidenceSummaries(params: {
   evidenceSummaries: readonly QaEvidenceSummaryJson[];
   generatedAt: string;
 }) {
+  const profiles = [
+    ...new Set(
+      params.evidenceSummaries
+        .map((summary) => summary.profile?.trim())
+        .filter((profile): profile is string => Boolean(profile)),
+    ),
+  ];
   return validateQaEvidenceSummaryJson({
     kind: QA_EVIDENCE_SUMMARY_KIND,
     schemaVersion: QA_EVIDENCE_SUMMARY_SCHEMA_VERSION,
     generatedAt: params.generatedAt,
+    evidenceMode:
+      params.evidenceSummaries.length > 0 &&
+      params.evidenceSummaries.every((summary) => summary.evidenceMode === "slim")
+        ? "slim"
+        : "full",
     entries: params.evidenceSummaries.flatMap((summary) => summary.entries),
+    profile: profiles.length === 1 ? profiles[0] : undefined,
   });
 }
 
@@ -283,48 +437,148 @@ async function runUnifiedQaSuite(params: {
     typeof params.runParams?.fastMode === "boolean"
       ? params.runParams.fastMode
       : isQaFastModeEnabled({ primaryModel, alternateModel });
+  const transportId = normalizeQaTransportId(params.runParams?.transportId);
+  const defaultConcurrency = params.runParams?.channelDriverSelection
+    ? 1
+    : defaultQaSuiteConcurrencyForTransport(transportId);
   const concurrency = normalizeQaSuiteConcurrency(
     params.runParams?.concurrency,
     params.plan.scenarios.length,
+    defaultConcurrency,
   );
   const evidenceSummaries: QaEvidenceSummaryJson[] = [];
   const scenarioResultsById = new Map<string, QaSuiteScenarioResult>();
+  const sharedFlowPartitionTasks: QaUnifiedPartitionTask[] = [];
+  const isolatedFlowPartitionTasks: QaUnifiedPartitionTask[] = [];
+  const testFilePartitionTasks: QaUnifiedPartitionTask[] = [];
   if (params.plan.flowScenarios.length > 0) {
-    const flowResult = await runQaFlowSuiteFromRuntime({
-      ...params.runParams,
-      outputDir: suitePartitionOutputDir(outputDir, "flow"),
-      providerMode,
-      primaryModel,
-      alternateModel,
-      fastMode,
-      scenarioIds: params.plan.flowScenarios.map((scenario) => scenario.id),
-    });
-    for (const [index, scenario] of params.plan.flowScenarios.entries()) {
-      const result = flowResult.scenarios[index];
-      if (result) {
-        scenarioResultsById.set(scenario.id, result);
+    const sharedFlowScenarios = params.plan.flowScenarios.filter(
+      (scenario) => !scenarioRequiresIsolatedQaSuiteWorker(scenario),
+    );
+    const isolatedFlowScenarios = params.plan.flowScenarios.filter(
+      scenarioRequiresIsolatedQaSuiteWorker,
+    );
+    const sharedFlowPartitions = partitionSharedFlowScenarios(sharedFlowScenarios, concurrency);
+    const isolatedFlowConcurrency = Math.min(
+      concurrency,
+      MAX_ISOLATED_FLOW_CONCURRENCY,
+      isolatedFlowScenarios.length,
+    );
+    const isolatedFlowPartitions =
+      isolatedFlowConcurrency === 1 && isolatedFlowScenarios.length > 1
+        ? isolatedFlowScenarios.map((scenario, index) => ({
+            kind: `isolated-${index + 1}`,
+            scenarios: [scenario],
+            concurrency: 1,
+          }))
+        : [
+            {
+              kind: "isolated",
+              scenarios: isolatedFlowScenarios,
+              concurrency: isolatedFlowConcurrency,
+            },
+          ];
+    const flowPartitions = [
+      ...sharedFlowPartitions.map((scenarios, index) => ({
+        kind: sharedFlowPartitions.length === 1 ? "shared" : `shared-${index + 1}`,
+        scenarios,
+        concurrency: 1,
+      })),
+      ...isolatedFlowPartitions,
+    ].filter((partition) => partition.scenarios.length > 0);
+    const runFlowSuite = await loadQaFlowSuiteRuntime();
+    for (const partition of flowPartitions) {
+      const isolatedPartition =
+        partition.kind === "isolated" || partition.kind.startsWith("isolated-");
+      const task = {
+        weight: partition.concurrency,
+        run: async () => {
+          const result = await runFlowSuite({
+            ...params.runParams,
+            outputDir:
+              flowPartitions.length === 1
+                ? suitePartitionOutputDir(outputDir, "flow")
+                : flowSuitePartitionOutputDir(outputDir, partition.kind),
+            writeEvidenceFile: false,
+            providerMode,
+            primaryModel,
+            alternateModel,
+            fastMode,
+            concurrency: partition.concurrency,
+            workerStartStaggerMs: isolatedPartition
+              ? (params.runParams?.workerStartStaggerMs ??
+                resolveQaSuiteWorkerStartStaggerMs(
+                  partition.concurrency,
+                  process.env,
+                  ISOLATED_FLOW_WORKER_START_STAGGER_MS,
+                ))
+              : params.runParams?.workerStartStaggerMs,
+            scenarioIds: partition.scenarios.map((scenario) => scenario.id),
+          });
+          const scenarioResults: QaUnifiedPartitionResult["scenarioResults"] = [];
+          for (const [index, scenario] of partition.scenarios.entries()) {
+            const scenarioResult = result.scenarios[index];
+            if (scenarioResult) {
+              scenarioResults.push({ scenarioId: scenario.id, result: scenarioResult });
+            }
+          }
+          return {
+            evidenceSummaries: [await resolveQaSuiteResultEvidenceSummary(result)],
+            scenarioResults,
+          };
+        },
+      } satisfies QaUnifiedPartitionTask;
+      if (isolatedPartition) {
+        isolatedFlowPartitionTasks.push(task);
+      } else {
+        sharedFlowPartitionTasks.push(task);
       }
     }
-    evidenceSummaries.push(await readQaSuiteEvidenceSummary(flowResult.evidencePath));
   }
-  for (const [kind, testFileScenarios] of params.plan.testFileScenariosByKind) {
-    const result = await runQaTestFileSuiteFromRuntime({
-      runParams: {
-        ...params.runParams,
-        outputDir: suitePartitionOutputDir(outputDir, kind),
-        providerMode,
-        primaryModel,
-        scenarioIds: testFileScenarios.map((scenario) => scenario.id),
+  if (params.plan.testFileScenariosByKind.size > 0) {
+    testFilePartitionTasks.push({
+      weight: 1,
+      run: async () => {
+        const testFileEvidenceSummaries: QaEvidenceSummaryJson[] = [];
+        const testFileScenarioResults: QaUnifiedPartitionResult["scenarioResults"] = [];
+        for (const [kind, testFileScenarios] of params.plan.testFileScenariosByKind) {
+          const result = await runQaTestFileSuiteFromRuntime({
+            runParams: {
+              ...params.runParams,
+              outputDir: suitePartitionOutputDir(outputDir, kind),
+              writeEvidenceFile: false,
+              providerMode,
+              primaryModel,
+              scenarioIds: testFileScenarios.map((scenario) => scenario.id),
+            },
+            scenarios: testFileScenarios,
+          });
+          testFileEvidenceSummaries.push(await resolveQaSuiteResultEvidenceSummary(result));
+          testFileScenarioResults.push(
+            ...result.results.map((scenarioResult) => ({
+              scenarioId: scenarioResult.scenario.id,
+              result: testFileScenarioResultToSuiteScenario(scenarioResult, repoRoot),
+            })),
+          );
+        }
+        return {
+          evidenceSummaries: testFileEvidenceSummaries,
+          scenarioResults: testFileScenarioResults,
+        };
       },
-      scenarios: testFileScenarios,
     });
-    for (const scenarioResult of result.results) {
-      scenarioResultsById.set(
-        scenarioResult.scenario.id,
-        testFileScenarioResultToSuiteScenario(scenarioResult, repoRoot),
-      );
+  }
+  const partitionTasks = [
+    ...sharedFlowPartitionTasks,
+    ...testFilePartitionTasks,
+    ...isolatedFlowPartitionTasks,
+  ];
+  const partitionResults = await runWeightedUnifiedPartitionTasks(partitionTasks, concurrency);
+  for (const partitionResult of partitionResults) {
+    for (const scenarioResult of partitionResult.scenarioResults) {
+      scenarioResultsById.set(scenarioResult.scenarioId, scenarioResult.result);
     }
-    evidenceSummaries.push(await readQaSuiteEvidenceSummary(result.evidencePath));
+    evidenceSummaries.push(...partitionResult.evidenceSummaries);
   }
   const finishedAt = new Date();
   const evidence = mergeQaEvidenceSummaries({
@@ -386,10 +640,7 @@ export async function runQaSuite(...args: [QaSuiteRunParams?]): Promise<QaSuiteR
 export async function runQaFlowSuiteFromRuntime(
   ...args: [QaSuiteRunParams?]
 ): Promise<QaSuiteResult> {
-  const { runQaFlowSuite } = await import("./suite.js");
-  const params = args[0];
-  return await runQaFlowSuite({
-    ...params,
-    startLab: params?.startLab ?? (await loadQaLabServerRuntime()),
-  });
+  return await (
+    await loadQaFlowSuiteRuntime()
+  )(args[0]);
 }

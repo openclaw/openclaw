@@ -39,12 +39,19 @@ export function preExecutionTimeoutErrorMessage(execution?: CronAgentExecutionSt
 }
 
 /** Extracts a human timeout/abort reason, falling back to the canonical cron timeout text. */
-export function abortErrorMessage(signal?: AbortSignal): string {
-  const reason = signal?.reason;
+export function resolveCronAbortReasonText(reason: unknown): string | undefined {
   if (typeof reason === "string" && reason.trim()) {
     return reason.trim();
   }
-  return timeoutErrorMessage();
+  if (reason instanceof Error && reason.message.trim()) {
+    return reason.message.trim();
+  }
+  return undefined;
+}
+
+/** Extracts a human timeout/abort reason, falling back to the canonical cron timeout text. */
+export function abortErrorMessage(signal?: AbortSignal): string {
+  return resolveCronAbortReasonText(signal?.reason) ?? timeoutErrorMessage();
 }
 
 function isAbortError(err: unknown): boolean {

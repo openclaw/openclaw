@@ -1,6 +1,7 @@
 // Fetches Claude provider usage windows.
 import {
   buildUsageHttpErrorSnapshot,
+  discardUsageResponseBody,
   fetchJson,
   readUsageJson,
 } from "./provider-usage.fetch.shared.js";
@@ -85,6 +86,7 @@ async function fetchClaudeWebUsage(
     fetchFn,
   );
   if (!orgRes.ok) {
+    await discardUsageResponseBody(orgRes);
     return null;
   }
 
@@ -105,6 +107,7 @@ async function fetchClaudeWebUsage(
     fetchFn,
   );
   if (!usageRes.ok) {
+    await discardUsageResponseBody(usageRes);
     return null;
   }
 

@@ -235,6 +235,8 @@ export function buildEmbeddedRunPayloads(params: {
   sessionKey: string;
   provider?: string;
   model?: string;
+  /** Credential auth mode for billing copy (#80877). */
+  authMode?: string;
   verboseLevel?: VerboseLevel;
   reasoningLevel?: ReasoningLevel;
   thinkingLevel?: ThinkLevel;
@@ -342,12 +344,14 @@ export function buildEmbeddedRunPayloads(params: {
               sessionKey: params.sessionKey,
               provider: params.provider,
               model: params.model,
+              authMode: params.authMode,
             })
           : formatAssistantErrorText(assistantForPayload, {
               cfg: params.config,
               sessionKey: params.sessionKey,
               provider: params.provider,
               model: params.model,
+              authMode: params.authMode,
             })
       : undefined;
   const rawErrorFingerprint = rawErrorMessage
@@ -500,7 +504,7 @@ export function buildEmbeddedRunPayloads(params: {
                 : []
         ).filter((text) => !shouldSuppressRawErrorText(text));
 
-  let hasUserFacingAssistantReply = hasSourceReplyPayload;
+  let hasUserFacingAssistantReply = hasSourceReplyPayload || deliveredSourceReplyViaMessageTool;
   const hasUserFacingErrorReply = replyItems.some((item) => item.isError === true);
   let hasUserFacingFailureAcknowledgement = false;
   for (const text of answerTexts) {

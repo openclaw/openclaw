@@ -127,13 +127,6 @@ export type QueueEvent =
       raw: Record<string, unknown>;
     };
 
-/** Claude channel permission notification payload before it is assigned an event cursor. */
-export type ClaudePermissionRequest = {
-  toolName: string;
-  description: string;
-  inputPreview: string;
-};
-
 /** Cursor and optional session filter used by event polling and waiting. */
 export type WaitFilter = {
   afterCursor: number;

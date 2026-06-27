@@ -8,6 +8,12 @@ import {
 } from "../infra/agent-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  buildBlockedToolResult,
+  recordAdjustedParamsForToolCall,
+  recordStructuredReplayTrustForToolCall,
+  testing as beforeToolCallTesting,
+} from "./agent-tools.before-tool-call.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
 import {
   handleToolExecutionEnd,
@@ -328,9 +334,53 @@ describe("handleToolExecutionStart read path checks", () => {
     expect(ctx.state.itemActiveIds.has("tool:tool-await-flush")).toBe(true);
     expect(ctx.state.itemActiveIds.has("command:tool-await-flush")).toBe(true);
   });
+
+  it("keeps processing tool start when progress callbacks throw", async () => {
+    const { ctx, warn, onExecutionPhase, onAgentEvent } = createTestContext();
+    onExecutionPhase.mockImplementation(() => {
+      throw new Error("phase exploded");
+    });
+    onAgentEvent.mockImplementation(() => {
+      throw new Error("event exploded");
+    });
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-callback-throws",
+      args: { command: "echo hi" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+
+    expect(ctx.state.toolMetaById.has("tool-callback-throws")).toBe(true);
+    expect(ctx.state.itemStartedCount).toBe(2);
+    expect(warn).toHaveBeenCalledWith(
+      expect.stringContaining("tool execution phase callback failed"),
+    );
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tool agent event callback failed"));
+  });
+
+  it("does not leak unhandled rejections when tool start progress rejects", async () => {
+    const { ctx, warn, onAgentEvent } = createTestContext();
+    onAgentEvent.mockRejectedValue(new Error("progress failed"));
+
+    const evt: ToolExecutionStartEvent = {
+      type: "tool_execution_start",
+      toolName: "exec",
+      toolCallId: "tool-callback-rejects",
+      args: { command: "echo hi" },
+    };
+
+    await handleToolExecutionStart(ctx, evt);
+    await Promise.resolve();
+
+    expect(ctx.state.toolMetaById.has("tool-callback-rejects")).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("tool agent event callback failed"));
+  });
 });
 
-describe("handleToolExecutionEnd cron.add commitment tracking", () => {
+describe("handleToolExecutionEnd cron mutation tracking", () => {
   it("increments successfulCronAdds when cron add succeeds", async () => {
     const { ctx } = createTestContext();
     await handleToolExecutionStart(
@@ -355,6 +405,7 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     );
 
     expect(ctx.state.successfulCronAdds).toBe(1);
+    expect(ctx.state.replayState.hadPotentialSideEffects).toBe(true);
   });
 
   it("does not increment successfulCronAdds when cron add fails", async () => {
@@ -383,6 +434,178 @@ describe("handleToolExecutionEnd cron.add commitment tracking", () => {
     expect(ctx.state.successfulCronAdds).toBe(0);
     expect(ctx.state.itemCompletedCount).toBe(1);
     expect(ctx.state.itemActiveIds.size).toBe(0);
+  });
+
+  it("keeps pre-execution cron failures replay-safe", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId: "tool-cron-invalid",
+        args: { action: "add" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId: "tool-cron-invalid",
+        isError: true,
+        executionStarted: false,
+        result: { details: { status: "error", error: "job required" } },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+    expect(ctx.state.lastToolError?.mutatingAction).toBe(false);
+  });
+
+  it("keeps a policy-blocked cron mutation replay-safe", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-cron-blocked";
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId,
+        args: { action: "add", job: { name: "reminder" } },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId,
+        isError: false,
+        result: buildBlockedToolResult({
+          reason: "blocked by policy",
+          toolCallId,
+          runId: "run-test",
+        }),
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: false,
+      hadPotentialSideEffects: false,
+    });
+    expect(ctx.state.lastToolError?.mutatingAction).toBe(false);
+  });
+
+  it("keeps executed mutations replay-unsafe when middleware rewrites the result as blocked", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-cron-rewritten-blocked";
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId,
+        args: { action: "add", job: { name: "reminder" } },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId,
+        isError: true,
+        result: {
+          content: [{ type: "text", text: "blocked by middleware" }],
+          details: {
+            status: "blocked",
+            deniedReason: "plugin-before-tool-call",
+            reason: "blocked by middleware",
+          },
+        },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+    expect(ctx.state.lastToolError?.mutatingAction).toBe(true);
+  });
+
+  it("records structured core read actions as replay-safe", async () => {
+    for (const [toolName, action] of [
+      ["cron", "status"],
+      ["gateway", "config.get"],
+      ["gateway", "config.schema.lookup"],
+      ["nodes", "status"],
+      ["nodes", "describe"],
+      ["nodes", "pending"],
+    ] as const) {
+      const { ctx } = createTestContext();
+      const toolCallId = `tool-${toolName}-${action}`;
+      recordStructuredReplayTrustForToolCall(
+        toolCallId,
+        { name: toolName, execute: vi.fn() } as never,
+        "run-test",
+      );
+      await handleToolExecutionStart(
+        ctx as never,
+        {
+          type: "tool_execution_start",
+          toolName,
+          toolCallId,
+          args: { action },
+        } as never,
+      );
+      await handleToolExecutionEnd(
+        ctx as never,
+        {
+          type: "tool_execution_end",
+          toolName,
+          toolCallId,
+          isError: false,
+          result: { details: { ok: true } },
+        } as never,
+      );
+
+      expect(ctx.state.replayState.hadPotentialSideEffects, `${toolName}.${action}`).toBe(false);
+    }
+  });
+
+  it("does not trust replay-safe names without concrete instance provenance", async () => {
+    const { ctx } = createTestContext();
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "search",
+        toolCallId: "tool-shadowed-search",
+        args: { query: "scheduler" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "search",
+        toolCallId: "tool-shadowed-search",
+        isError: false,
+        result: { matches: [] },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
   });
 });
 
@@ -622,6 +845,338 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
   });
 
+  it("keeps failed mutating tool attempts replay-invalid", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-partial-failure",
+        args: { command: "printf changed > /tmp/demo.txt && false" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-partial-failure",
+        isError: true,
+        result: { error: "Command exited with code 1" },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it("keeps unclassified interactive tool calls replay-invalid", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "browser",
+        toolCallId: "tool-browser-click",
+        args: { action: "act", kind: "click", ref: "e12" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "browser",
+        toolCallId: "tool-browser-click",
+        isError: false,
+        result: { details: { ok: true } },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it("uses hook-adjusted args for replay safety", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-cron-hook-rewrite";
+    const adjustedParamsKey = beforeToolCallTesting.buildAdjustedParamsKey({
+      runId: "run-test",
+      toolCallId,
+    });
+    beforeToolCallTesting.adjustedParamsByToolCallId.set(adjustedParamsKey, {
+      action: "add",
+      job: { name: "rewritten mutation" },
+    });
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId,
+        args: { action: "status" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId,
+        isError: false,
+        result: { ok: true },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+    expect(ctx.state.successfulCronAdds).toBe(1);
+    expect(beforeToolCallTesting.adjustedParamsByToolCallId.has(adjustedParamsKey)).toBe(false);
+  });
+
+  it("snapshots hook-adjusted args before result middleware can mutate them", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-cron-mutable-adjusted-args";
+    const executedArgs = {
+      action: "add",
+      job: { name: "rewritten mutation" },
+    };
+    recordAdjustedParamsForToolCall(toolCallId, executedArgs, "run-test");
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId,
+        args: { action: "status" },
+      } as never,
+    );
+    executedArgs.action = "status";
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId,
+        isError: false,
+        result: { ok: true },
+      } as never,
+    );
+
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+    expect(ctx.state.successfulCronAdds).toBe(1);
+  });
+
+  it("uses hook-adjusted message arguments for delivery telemetry", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-message-hook-rewrite";
+    const adjustedParamsKey = beforeToolCallTesting.buildAdjustedParamsKey({
+      runId: "run-test",
+      toolCallId,
+    });
+    beforeToolCallTesting.adjustedParamsByToolCallId.set(adjustedParamsKey, {
+      action: "send",
+      provider: "telegram",
+      to: "chat-rewritten",
+      text: "rewritten delivery",
+      mediaUrl: "/tmp/rewritten.png",
+    });
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: { action: "status" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result: { details: { messageId: "message-rewritten" } },
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTexts).toEqual(["rewritten delivery"]);
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual(["/tmp/rewritten.png"]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      {
+        tool: "message",
+        provider: "telegram",
+        to: "chat-rewritten",
+        threadId: undefined,
+        text: "rewritten delivery",
+        mediaUrls: ["/tmp/rewritten.png"],
+      },
+    ]);
+  });
+
+  it("records reply target evidence without treating it as terminal send evidence", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-message-reply-target";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "reply",
+          provider: "telegram",
+          target: "chat-reply",
+          message: "visible reply",
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result: { ok: true },
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTexts).toEqual([]);
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual([]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat-reply",
+      }),
+    ]);
+  });
+
+  it("records conversation creation target evidence", async () => {
+    const { ctx } = createTestContext();
+    const toolCallId = "tool-message-thread-create-target";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "thread-create",
+          provider: "telegram",
+          target: "chat-thread",
+          message: "new thread",
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result: { ok: true, thread: { id: "thread-1" } },
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "telegram",
+        to: "chat-thread",
+      }),
+    ]);
+  });
+
+  it.each([
+    { name: "dry-run", result: { ok: true, dryRun: true } },
+    { name: "suppressed", result: { ok: true, status: "suppressed" } },
+  ])("does not record target evidence for $name reply results", async ({ result }) => {
+    const { ctx } = createTestContext();
+    const toolCallId = `tool-message-reply-${result.status ?? "dry-run"}`;
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "message",
+        toolCallId,
+        args: {
+          action: "reply",
+          provider: "telegram",
+          target: "chat-reply",
+          message: "visible reply",
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "message",
+        toolCallId,
+        isError: false,
+        result,
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTexts).toEqual([]);
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual([]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([]);
+  });
+
+  it("does not treat text or media arguments on non-messaging tools as delivery", async () => {
+    const { ctx } = createTestContext();
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "cron",
+        toolCallId: "tool-cron-wake",
+        args: {
+          action: "wake",
+          text: "not an outbound message",
+          mediaUrl: "/tmp/not-an-outbound-message.png",
+        },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "cron",
+        toolCallId: "tool-cron-wake",
+        isError: false,
+        result: { details: { status: "ok" } },
+      } as never,
+    );
+
+    expect(ctx.state.messagingToolSentTexts).toEqual([]);
+    expect(ctx.state.messagingToolSentMediaUrls).toEqual([]);
+    expect(ctx.state.messagingToolSentTargets).toEqual([]);
+  });
+
   it("marks successful legacy subagents control actions as replay-invalid", async () => {
     const { ctx } = createTestContext();
 
@@ -655,7 +1210,7 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
     });
   });
 
-  it("keeps read-only subagents list actions replay-safe", async () => {
+  it("keeps action-dependent subagents calls replay-unsafe", async () => {
     const { ctx } = createTestContext();
 
     await handleToolExecutionStart(
@@ -681,6 +1236,39 @@ describe("handleToolExecutionEnd mutating failure recovery", () => {
       } as never,
     );
 
+    expect(ctx.state.replayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+  });
+
+  it("keeps audited core read-only tools replay-safe", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.replaySafeToolNames = new Set(["search"]);
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "search",
+        toolCallId: "tool-search",
+        args: { query: "scheduler" },
+      } as never,
+    );
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "search",
+        toolCallId: "tool-search",
+        isError: false,
+        result: { matches: [] },
+      } as never,
+    );
+
+    expect(ctx.state.toolMetas).toEqual([
+      expect.objectContaining({ toolName: "search", replaySafe: true }),
+    ]);
     expect(ctx.state.replayState).toEqual({
       replayInvalid: false,
       hadPotentialSideEffects: false,
@@ -1578,6 +2166,69 @@ describe("messaging tool media URL tracking", () => {
     });
   });
 
+  it("preserves the pre-send reply state when committing implicit thread evidence", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: {
+            ...createChannelTestPluginBase({ id: "slack" }),
+            messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+            threading: {
+              resolveAutoThreadId: ({
+                toolContext,
+              }: {
+                toolContext?: {
+                  currentThreadTs?: string;
+                  replyToMode?: "off" | "first" | "all" | "batched";
+                  hasRepliedRef?: { value: boolean };
+                };
+              }) =>
+                toolContext?.replyToMode === "first" && !toolContext.hasRepliedRef?.value
+                  ? toolContext.currentThreadTs
+                  : undefined,
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const { ctx } = createTestContext();
+    ctx.params.currentChannelId = "D1";
+    ctx.params.currentMessagingTarget = "user:u1";
+    ctx.params.currentThreadId = "171.222";
+    ctx.params.replyToMode = "first";
+    ctx.params.hasRepliedRef = { value: false };
+
+    await handleToolExecutionStart(ctx, {
+      type: "tool_execution_start",
+      toolName: "message",
+      toolCallId: "tool-first-threaded-message",
+      args: {
+        action: "send",
+        provider: "slack",
+        to: "user:U1",
+        content: "hi",
+      },
+    });
+    ctx.params.hasRepliedRef.value = true;
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "message",
+      toolCallId: "tool-first-threaded-message",
+      isError: false,
+      result: { details: { messageId: "message-1" } },
+    });
+
+    expectRecordFields(requireSingleMessagingTarget(ctx), "messaging target", {
+      provider: "slack",
+      to: "user:u1",
+      threadId: "171.222",
+      threadImplicit: true,
+      text: "hi",
+    });
+  });
+
   it("reconciles unresolved send targets from successful provider results", async () => {
     setActivePluginRegistry(
       createTestRegistry([
@@ -1716,6 +2367,7 @@ describe("messaging tool media URL tracking", () => {
           {
             type: "text",
             text: JSON.stringify({
+              ok: true,
               mediaUrls: ["file:///img-a.jpg", "file:///img-b.jpg"],
             }),
           },

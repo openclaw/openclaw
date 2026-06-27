@@ -21,12 +21,10 @@ export const coreChannelTestRoots = channelTestRoots.filter(
   (root) => !root.startsWith(BUNDLED_PLUGIN_PATH_PREFIX),
 );
 export const channelTestPrefixes = channelTestRoots.map((root) => `${root}/`);
-export const channelTestInclude = channelTestRoots.map((root) => `${root}/**/*.test.ts`);
 export const extensionChannelTestInclude = extensionChannelTestRoots.map(
   (root) => `${root}/**/*.test.ts`,
 );
 export const coreChannelTestInclude = coreChannelTestRoots.map((root) => `${root}/**/*.test.ts`);
-export const channelTestExclude = channelTestRoots.map((root) => `${root}/**`);
 
 const extensionChannelRootOverrideBasenames = new Map();
 for (const file of extensionRoutedChannelTestFiles) {

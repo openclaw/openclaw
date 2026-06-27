@@ -72,7 +72,9 @@ export type SubscribeEmbeddedAgentSessionParams = {
     data: Record<string, unknown>;
     sessionKey?: string;
   }) => void | Promise<void>;
+  onToolStreamBoundary?: () => void | Promise<void>;
   onHeartbeatToolResponse?: (response: HeartbeatToolResponse) => void | Promise<void>;
+  /** "finishing" defers both success and error terminal ownership to the caller. */
   terminalLifecyclePhase?: "end" | "finishing";
   /** Read immediately before terminal lifecycle emission. */
   isTerminalAborted?: () => boolean | undefined;
@@ -93,6 +95,13 @@ export type SubscribeEmbeddedAgentSessionParams = {
   onBeforeLifecycleTerminal?: () => void | Promise<void>;
   enforceFinalTag?: boolean;
   silentExpected?: boolean;
+  /**
+   * Skip per-chunk live visible-text parsing in handleMessageUpdate. Set for runs
+   * with no live stream consumer — notably subagents, whose result is read back
+   * from the final message_end path. Suppressing intermediate passes does not
+   * change final output.
+   */
+  suppressLiveStreamOutput?: boolean;
   config?: OpenClawConfig;
   sessionKey?: string;
   /** Current transport channel resolved for this run. */
@@ -115,6 +124,8 @@ export type SubscribeEmbeddedAgentSessionParams = {
    * Exact raw names of OpenClaw tools registered for this run.
    */
   builtinToolNames?: ReadonlySet<string>;
+  /** Exact registered tool names whose concrete instances are safe to replay. */
+  replaySafeToolNames?: ReadonlySet<string>;
   /**
    * Exact raw names allowed to emit local media paths for this run.
    * Includes core trusted tools plus bundled plugin tools proven from the

@@ -1,67 +1,88 @@
 // Tests CLI dispatch arguments and runtime selection for agent runner turns.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
-
-const cliDispatchMocks = vi.hoisted(() => ({
-  emitAgentEvent: vi.fn(),
-  runCliAgent: vi.fn(),
-}));
-
-vi.mock("../../agents/cli-runner.js", () => ({
-  runCliAgent: (...args: unknown[]) => cliDispatchMocks.runCliAgent(...args),
-}));
-
-vi.mock("../../infra/agent-events.js", () => ({
-  emitAgentEvent: (...args: unknown[]) => cliDispatchMocks.emitAgentEvent(...args),
-  onAgentEvent: vi.fn(() => () => undefined),
-  withAgentRunLifecycleGeneration: (_generation: string, run: () => unknown) => run(),
-}));
-
+import {
+  emitAgentEvent,
+  getAgentEventLifecycleGeneration,
+  onAgentEvent,
+  resetAgentEventsForTest,
+} from "../../infra/agent-events.js";
 import {
   createCliToolSummaryTracker,
   keepCliSessionBindingOnlyWhenReused,
   runCliAgentWithLifecycle,
 } from "./agent-runner-cli-dispatch.js";
 
+const cliDispatchState = vi.hoisted(() => ({
+  runCliAgentMock: vi.fn(),
+}));
+
+vi.mock("../../agents/cli-runner.js", () => ({
+  runCliAgent: (...args: unknown[]) => cliDispatchState.runCliAgentMock(...args),
+}));
+
+afterEach(() => {
+  vi.useRealTimers();
+  resetAgentEventsForTest();
+  cliDispatchState.runCliAgentMock.mockReset();
+});
+
 describe("runCliAgentWithLifecycle", () => {
   it("keeps the captured lifecycle generation on start and terminal events", async () => {
-    cliDispatchMocks.emitAgentEvent.mockClear();
-    cliDispatchMocks.runCliAgent.mockResolvedValueOnce({
+    const events: Array<{
+      stream?: string;
+      lifecycleGeneration?: string;
+      data?: Record<string, unknown>;
+    }> = [];
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const stop = onAgentEvent((event) => {
+      if (event.runId === "run-before-restart") {
+        events.push(event);
+      }
+    });
+    cliDispatchState.runCliAgentMock.mockResolvedValueOnce({
       payloads: [],
       meta: { durationMs: 1 },
     } satisfies EmbeddedAgentRunResult);
 
-    await runCliAgentWithLifecycle({
-      runId: "run-before-restart",
-      lifecycleGeneration: "pre-restart-generation",
-      provider: "claude-cli",
-      runParams: {
-        sessionId: "session-1",
-        sessionFile: "/tmp/session.jsonl",
-        workspaceDir: "/tmp/workspace",
-        prompt: "hello",
-        provider: "claude-cli",
-        model: "claude",
-        thinkLevel: "off",
-        timeoutMs: 1_000,
+    try {
+      await runCliAgentWithLifecycle({
         runId: "run-before-restart",
-      },
-    });
+        lifecycleGeneration,
+        provider: "claude-cli",
+        runParams: {
+          sessionId: "session-1",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          prompt: "hello",
+          provider: "claude-cli",
+          model: "claude",
+          thinkLevel: "off",
+          timeoutMs: 1_000,
+          runId: "run-before-restart",
+        },
+      });
+    } finally {
+      stop();
+    }
 
-    const lifecycleEvents = cliDispatchMocks.emitAgentEvent.mock.calls
-      .map(([event]) => event as { stream?: string; lifecycleGeneration?: string })
-      .filter((event) => event.stream === "lifecycle");
+    const lifecycleEvents = events.filter((event) => event.stream === "lifecycle");
     expect(lifecycleEvents).toHaveLength(2);
     expect(
-      lifecycleEvents.every((event) => event.lifecycleGeneration === "pre-restart-generation"),
+      lifecycleEvents.every((event) => event.lifecycleGeneration === lifecycleGeneration),
     ).toBe(true);
   });
 
   it("preserves restart ownership when the CLI resolves after cancellation", async () => {
-    cliDispatchMocks.emitAgentEvent.mockClear();
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    const stop = onAgentEvent((event) => {
+      if (event.runId === "run-restart") {
+        events.push(event);
+      }
+    });
     const controller = new AbortController();
-    cliDispatchMocks.runCliAgent.mockImplementationOnce(async () => {
+    cliDispatchState.runCliAgentMock.mockImplementationOnce(async () => {
       controller.abort(createAgentRunRestartAbortError());
       return {
         payloads: [{ text: "stale result" }],
@@ -87,19 +108,63 @@ describe("runCliAgentWithLifecycle", () => {
         },
       }),
     ).rejects.toThrow("agent run aborted for restart");
+    stop();
 
-    const terminal = cliDispatchMocks.emitAgentEvent.mock.calls
-      .map(([event]) => event as { stream?: string; data?: Record<string, unknown> })
-      .find((event) => event.stream === "lifecycle" && event.data?.phase === "error");
+    const terminal = events.find(
+      (event) => event.stream === "lifecycle" && event.data?.phase === "error",
+    );
     expect(terminal?.data).toMatchObject({
       aborted: true,
       stopReason: "restart",
     });
-    expect(
-      cliDispatchMocks.emitAgentEvent.mock.calls.some(
-        ([event]) => (event as { stream?: string }).stream === "assistant",
-      ),
-    ).toBe(false);
+    expect(events.some((event) => event.stream === "assistant")).toBe(false);
+  });
+
+  it("propagates yielded result metadata on lifecycle end", async () => {
+    const events: Array<{ stream?: string; data?: Record<string, unknown> }> = [];
+    const stop = onAgentEvent((event) => {
+      if (event.runId === "run-yielded") {
+        events.push(event);
+      }
+    });
+    cliDispatchState.runCliAgentMock.mockResolvedValueOnce({
+      payloads: [],
+      meta: {
+        durationMs: 1,
+        yielded: true,
+        livenessState: "paused",
+        stopReason: "end_turn",
+      },
+    } satisfies EmbeddedAgentRunResult);
+
+    try {
+      await runCliAgentWithLifecycle({
+        runId: "run-yielded",
+        provider: "claude-cli",
+        runParams: {
+          sessionId: "session-1",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/tmp/workspace",
+          prompt: "hello",
+          provider: "claude-cli",
+          model: "claude",
+          thinkLevel: "off",
+          timeoutMs: 1_000,
+          runId: "run-yielded",
+        },
+      });
+    } finally {
+      stop();
+    }
+
+    const terminal = events.find(
+      (event) => event.stream === "lifecycle" && event.data?.phase === "end",
+    );
+    expect(terminal?.data).toMatchObject({
+      yielded: true,
+      livenessState: "paused",
+      stopReason: "end_turn",
+    });
   });
 });
 
@@ -232,5 +297,71 @@ describe("createCliToolSummaryTracker", () => {
     });
     await tracker.noteToolEvent({ ...resultEvent, toolCallId: "unseen" });
     expect(deliver).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("runCliAgentWithLifecycle fast auto progress", () => {
+  it("emits auto-off after the first CLI tool boundary past the threshold", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(1_000);
+    const events: Array<{ stream: string; data: Record<string, unknown> }> = [];
+    const stop = onAgentEvent((evt) => {
+      if (evt.runId === "run-fast-cli") {
+        events.push({ stream: evt.stream, data: evt.data });
+      }
+    });
+    const progressPayloads: string[] = [];
+    cliDispatchState.runCliAgentMock.mockImplementation(async () => {
+      emitAgentEvent({
+        runId: "run-fast-cli",
+        stream: "tool",
+        data: { phase: "start", name: "bash", toolCallId: "call-1" },
+      });
+      vi.setSystemTime(7_100);
+      emitAgentEvent({
+        runId: "run-fast-cli",
+        stream: "tool",
+        data: { phase: "result", name: "bash", toolCallId: "call-1" },
+      });
+      return {
+        payloads: [{ text: "done" }],
+        meta: {
+          durationMs: 7_100,
+          agentMeta: { sessionId: "session-1", provider: "codex-cli", model: "gpt-5.5" },
+        },
+      } satisfies EmbeddedAgentRunResult;
+    });
+
+    await runCliAgentWithLifecycle({
+      runId: "run-fast-cli",
+      provider: "codex-cli",
+      runParams: {
+        sessionId: "session-1",
+        sessionKey: "agent:main:cli-fast",
+        sessionFile: "/tmp/session.jsonl",
+        workspaceDir: "/tmp/workspace",
+        prompt: "run one tool",
+        provider: "codex-cli",
+        model: "gpt-5.5",
+        timeoutMs: 60_000,
+        runId: "run-fast-cli",
+        fastMode: "auto",
+        fastModeStartedAtMs: 1_000,
+        fastModeAutoOnSeconds: 5,
+      },
+      onFastModeAutoProgress: async (payload) => {
+        if (payload.text) {
+          progressPayloads.push(payload.text);
+        }
+      },
+    });
+    stop();
+
+    const summaries = events
+      .filter((event) => event.stream === "item")
+      .map((event) => event.data.summary);
+    expect(summaries).toContain("💨Fast: auto-off(6s>=5s)");
+    expect(summaries).toContain("💨Fast: auto-on");
+    expect(progressPayloads).toEqual(["💨Fast: auto-off(6s>=5s)", "💨Fast: auto-on"]);
   });
 });

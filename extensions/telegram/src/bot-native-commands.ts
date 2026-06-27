@@ -1,6 +1,5 @@
 // Telegram plugin module implements bot native commands behavior.
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import type { Bot, Context } from "grammy";
 import {
   loadModelCatalog,
@@ -13,11 +12,13 @@ import { resolveNativeCommandSessionTargets } from "openclaw/plugin-sdk/command-
 import {
   buildCommandTextFromArgs,
   findCommandByNativeName,
+  formatFastModeCurrentStatus,
   formatCommandArgMenuTitle,
   listNativeCommandSpecs,
   listNativeCommandSpecsForConfig,
   parseCommandArgs,
   resolveCommandArgMenu,
+  resolveFastModeState,
   resolveStoredModelOverride,
   type CommandArgs,
 } from "openclaw/plugin-sdk/command-auth-native";
@@ -38,12 +39,11 @@ import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getChildLogger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import {
-  loadSessionStore,
-  resolveAndPersistSessionFile,
-  resolveSessionStoreEntry,
-  resolveSessionTranscriptPathInDir,
+  getSessionEntry,
   resolveStorePath,
+  type SessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
+import { resolveSessionTranscriptLegacyFileTarget } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -121,6 +121,7 @@ type TelegramNativeReplyChannelData = {
   buttons?: TelegramInlineButtons;
   pin?: boolean;
 };
+type FastModeState = ReturnType<typeof resolveFastModeState>;
 type TelegramResolvedGroupConfig = {
   groupConfig?: TelegramGroupConfig | TelegramDirectConfig;
   topicConfig?: TelegramTopicConfig;
@@ -147,6 +148,25 @@ type TelegramNativeCommandThreadContext = {
   threadSpec: ReturnType<typeof resolveTelegramThreadSpec>;
   threadParams: ReturnType<typeof buildTelegramThreadParams>;
 };
+
+function buildTelegramCommandMenuModelContext(params: {
+  provider: string;
+  model: string;
+  thinkingLevel?: string;
+  fastMode?: SessionEntry["fastMode"];
+}): {
+  provider: string;
+  model: string;
+  thinkingLevel?: string;
+  fastMode?: SessionEntry["fastMode"];
+} {
+  return {
+    provider: params.provider,
+    model: params.model,
+    ...(params.thinkingLevel ? { thinkingLevel: params.thinkingLevel } : {}),
+    ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
+  };
+}
 
 let telegramNativeCommandDeliveryRuntimePromise:
   | Promise<typeof import("./bot-native-commands.delivery.runtime.js")>
@@ -178,7 +198,7 @@ function resolveTelegramProgressPlaceholder(command: {
   return text ? text : null;
 }
 
-async function resolveTelegramCommandSessionFile(params: {
+async function resolveTelegramCommandTranscriptContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
@@ -190,29 +210,23 @@ async function resolveTelegramCommandSessionFile(params: {
   }
   try {
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    const store = loadSessionStore(storePath);
-    const resolved = resolveSessionStoreEntry({ store, sessionKey });
-    const sessionId = resolved.existing?.sessionId?.trim() || randomUUID();
-    const authProfileId = normalizeOptionalString(resolved.existing?.authProfileOverride);
-    const sessionsDir = path.dirname(storePath);
-    const fallbackSessionFile = resolveSessionTranscriptPathInDir(
-      sessionId,
-      sessionsDir,
-      params.threadId,
-    );
-    const persisted = await resolveAndPersistSessionFile({
-      sessionId,
-      sessionKey: resolved.normalizedKey,
-      sessionStore: store,
-      storePath,
-      sessionEntry: resolved.existing,
+    const entry = getSessionEntry({
       agentId: params.agentId,
-      sessionsDir,
-      fallbackSessionFile,
+      sessionKey,
+      storePath,
+    });
+    const sessionId = entry?.sessionId?.trim() || randomUUID();
+    const authProfileId = normalizeOptionalString(entry?.authProfileOverride);
+    const target = await resolveSessionTranscriptLegacyFileTarget({
+      agentId: params.agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+      ...(params.threadId !== undefined ? { threadId: params.threadId } : {}),
     });
     return {
       sessionId,
-      sessionFile: persisted.sessionFile,
+      sessionFile: target.sessionFile,
       ...(authProfileId ? { authProfileId } : {}),
     };
   } catch {
@@ -224,7 +238,12 @@ function resolveTelegramCommandMenuModelContext(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
-}): { provider?: string; model?: string; thinkingLevel?: string } {
+}): {
+  provider?: string;
+  model?: string;
+  thinkingLevel?: string;
+  fastMode?: SessionEntry["fastMode"];
+} {
   if (!params.sessionKey.trim()) {
     return {};
   }
@@ -234,28 +253,30 @@ function resolveTelegramCommandMenuModelContext(params: {
       cfg: params.cfg,
       agentId: params.agentId,
     });
-    const store = loadSessionStore(storePath);
-    const entry = resolveSessionStoreEntry({ store, sessionKey: params.sessionKey }).existing;
+    const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
     const thinkingLevel = normalizeOptionalString(entry?.thinkingLevel);
+    const fastMode = entry?.fastMode;
     if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
-      return {
+      return buildTelegramCommandMenuModelContext({
         provider: defaultModel.provider,
         model: defaultModel.model,
         ...(thinkingLevel ? { thinkingLevel } : {}),
-      };
+        ...(fastMode !== undefined ? { fastMode } : {}),
+      });
     }
     const override = resolveStoredModelOverride({
       sessionEntry: entry,
-      sessionStore: store,
+      loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
       sessionKey: params.sessionKey,
       defaultProvider: defaultModel.provider,
     });
     if (override?.model) {
-      return {
+      return buildTelegramCommandMenuModelContext({
         provider: override.provider || defaultModel.provider,
         model: override.model,
         ...(thinkingLevel ? { thinkingLevel } : {}),
-      };
+        ...(fastMode !== undefined ? { fastMode } : {}),
+      });
     }
     const provider =
       normalizeOptionalString(entry?.providerOverride) ??
@@ -266,9 +287,90 @@ function resolveTelegramCommandMenuModelContext(params: {
       ...(provider ? { provider } : {}),
       ...(model ? { model } : {}),
       ...(thinkingLevel ? { thinkingLevel } : {}),
+      ...(fastMode !== undefined ? { fastMode } : {}),
     };
   } catch {
     return {};
+  }
+}
+
+function resolveTelegramFastCommandModelContext(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+}): {
+  provider?: string;
+  model?: string;
+} {
+  const defaultModel = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  const fallback = () => ({
+    provider: defaultModel.provider,
+    model: defaultModel.model,
+  });
+  if (!params.sessionKey.trim()) {
+    return fallback();
+  }
+  try {
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+    const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
+    if (entry?.modelOverrideSource === "auto" && normalizeOptionalString(entry.modelOverride)) {
+      return fallback();
+    }
+    const override = resolveStoredModelOverride({
+      sessionEntry: entry,
+      loadSessionEntry: (sessionKey) => getSessionEntry({ storePath, sessionKey }),
+      sessionKey: params.sessionKey,
+      defaultProvider: defaultModel.provider,
+    });
+    return {
+      provider: override?.provider ?? defaultModel.provider,
+      model: override?.model ?? defaultModel.model,
+    };
+  } catch {
+    return fallback();
+  }
+}
+
+function resolveTelegramFastCommandState(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+}): FastModeState {
+  const defaultModel = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+  });
+  const fallback = () =>
+    resolveFastModeState({
+      cfg: params.cfg,
+      provider: defaultModel.provider,
+      model: defaultModel.model,
+      agentId: params.agentId,
+    });
+  if (!params.sessionKey.trim()) {
+    return fallback();
+  }
+  try {
+    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
+    const entry = getSessionEntry({ storePath, sessionKey: params.sessionKey });
+    const modelContext = resolveTelegramFastCommandModelContext(params);
+    return resolveFastModeState({
+      cfg: params.cfg,
+      provider: modelContext.provider ?? defaultModel.provider,
+      model: modelContext.model ?? defaultModel.model,
+      agentId: params.agentId,
+      sessionEntry:
+        entry?.fastMode !== undefined
+          ? {
+              fastMode: entry.fastMode,
+            }
+          : undefined,
+    });
+  } catch {
+    return fallback();
   }
 }
 
@@ -317,12 +419,30 @@ function formatTelegramCommandArgMenuTitle(params: {
   command: NonNullable<ReturnType<typeof findCommandByNativeName>>;
   menu: NonNullable<ReturnType<typeof resolveCommandArgMenu>>;
   currentThinkingLevel?: string;
+  currentFastModeStatus?: string;
 }): string {
   const title = formatCommandArgMenuTitle({ command: params.command, menu: params.menu });
-  if (params.command.key !== "think" || !params.currentThinkingLevel) {
-    return title;
+  if (params.command.key === "think" && params.currentThinkingLevel) {
+    return `Current thinking level: ${params.currentThinkingLevel}.\n${title}`;
   }
-  return `Current thinking level: ${params.currentThinkingLevel}.\n${title}`;
+  if (params.command.key === "fast" && params.currentFastModeStatus) {
+    const options = params.menu.choices
+      .map((choice) => choice.label.trim())
+      .filter(Boolean)
+      .join(", ");
+    return options
+      ? `${params.currentFastModeStatus}\nOptions: ${options}.`
+      : params.currentFastModeStatus;
+  }
+  return title;
+}
+
+function resolveTelegramFastMenuCurrentStatus(params: { state: FastModeState }): string {
+  return formatFastModeCurrentStatus({
+    mode: params.state.mode,
+    source: params.state.source,
+    fastAutoOnSeconds: params.state.fastAutoOnSeconds,
+  });
 }
 
 function resolveTelegramNativeReplyChannelData(
@@ -951,6 +1071,7 @@ export const registerTelegramNativeCommands = ({
       cfg: runtimeCfg,
       channel: "telegram",
       accountId: route.accountId,
+      supportsBlockTables: true,
     });
     const chunkMode = nativeCommandRuntime.resolveChunkMode(
       runtimeCfg,
@@ -972,6 +1093,7 @@ export const registerTelegramNativeCommands = ({
     tableMode: ReturnType<typeof resolveMarkdownTableMode>;
     chunkMode: TelegramChunkMode;
     linkPreview?: boolean;
+    richMessages?: boolean;
   }) => ({
     cfg: params.cfg,
     chatId: String(params.chatId),
@@ -991,6 +1113,7 @@ export const registerTelegramNativeCommands = ({
     tableMode: params.tableMode,
     chunkMode: params.chunkMode,
     linkPreview: params.linkPreview,
+    richMessages: params.richMessages,
   });
   const resolveCommandTargetSessionKey = (params: {
     runtimeCfg: OpenClawConfig;
@@ -1124,20 +1247,45 @@ export const registerTelegramNativeCommands = ({
           commandDefinition.args?.some(
             (arg) => typeof arg.choices === "function" && commandArgs?.values?.[arg.name] == null,
           );
-        const menuModelContext =
-          commandDefinition && menuNeedsModelContext
-            ? resolveTelegramCommandMenuModelContext({
+        const targetSessionKeyForMenu =
+          commandDefinition && menuNeedsModelContext ? await resolveTargetSessionKey() : "";
+        const fastCommandState =
+          commandDefinition?.key === "fast" && menuNeedsModelContext
+            ? resolveTelegramFastCommandState({
                 cfg: runtimeCfg,
                 agentId: route.agentId,
-                sessionKey: await resolveTargetSessionKey(),
+                sessionKey: targetSessionKeyForMenu,
               })
+            : undefined;
+        const fastMenuModelContext =
+          commandDefinition?.key === "fast" && menuNeedsModelContext
+            ? resolveTelegramFastCommandModelContext({
+                cfg: runtimeCfg,
+                agentId: route.agentId,
+                sessionKey: targetSessionKeyForMenu,
+              })
+            : undefined;
+        const menuModelContext =
+          commandDefinition && menuNeedsModelContext
+            ? (fastMenuModelContext ??
+              resolveTelegramCommandMenuModelContext({
+                cfg: runtimeCfg,
+                agentId: route.agentId,
+                sessionKey: targetSessionKeyForMenu,
+              }))
             : {};
+        // Native /think choices need live-discovery metadata; empty keeps config fallback.
+        const menuModelCatalog =
+          commandDefinition?.key === "think" && menuNeedsModelContext
+            ? await loadModelCatalog({ config: runtimeCfg })
+            : undefined;
         const menu = commandDefinition
           ? resolveCommandArgMenu({
               command: commandDefinition,
               args: commandArgs,
               cfg: runtimeCfg,
               ...menuModelContext,
+              ...(menuModelCatalog?.length ? { catalog: menuModelCatalog } : {}),
             })
           : null;
         if (menu && commandDefinition) {
@@ -1150,6 +1298,18 @@ export const registerTelegramNativeCommands = ({
                     cfg: runtimeCfg,
                     agentId: route.agentId,
                     ...menuModelContext,
+                  })
+                : undefined,
+            currentFastModeStatus:
+              commandDefinition.key === "fast"
+                ? resolveTelegramFastMenuCurrentStatus({
+                    state:
+                      fastCommandState ??
+                      resolveTelegramFastCommandState({
+                        cfg: runtimeCfg,
+                        agentId: route.agentId,
+                        sessionKey: targetSessionKeyForMenu,
+                      }),
                   })
                 : undefined,
           });
@@ -1208,6 +1368,7 @@ export const registerTelegramNativeCommands = ({
           tableMode,
           chunkMode,
           linkPreview: runtimeTelegramCfg.linkPreview,
+          richMessages: runtimeTelegramCfg.richMessages,
         });
         let topicName: string | undefined;
         if (isForum && resolvedThreadId != null) {
@@ -1430,6 +1591,7 @@ export const registerTelegramNativeCommands = ({
           tableMode,
           chunkMode,
           linkPreview: runtimeTelegramCfg.linkPreview,
+          richMessages: runtimeTelegramCfg.richMessages,
         });
         const from = isGroup ? buildTelegramGroupFrom(chatId, threadSpec.id) : `telegram:${chatId}`;
         const to = `telegram:${chatId}`;
@@ -1459,7 +1621,7 @@ export const registerTelegramNativeCommands = ({
           }
         }
 
-        const sessionFileContext = await resolveTelegramCommandSessionFile({
+        const transcriptContext = await resolveTelegramCommandTranscriptContext({
           cfg: runtimeCfg,
           agentId: route.agentId,
           sessionKey: targetSessionKey,
@@ -1476,10 +1638,10 @@ export const registerTelegramNativeCommands = ({
             senderIsOwner,
             agentId: route.agentId,
             sessionKey: targetSessionKey,
-            sessionId: sessionFileContext.sessionId,
-            sessionFile: sessionFileContext.sessionFile,
+            sessionId: transcriptContext.sessionId,
+            sessionFile: transcriptContext.sessionFile,
             authProfileId:
-              sessionFileContext.authProfileId ?? targetSessionEntry?.authProfileOverride,
+              transcriptContext.authProfileId ?? targetSessionEntry?.authProfileOverride,
             commandBody,
             config: runtimeCfg,
             from,

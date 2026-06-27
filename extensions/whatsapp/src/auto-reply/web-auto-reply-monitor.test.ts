@@ -5,7 +5,7 @@ import path from "node:path";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
-import type { WebInboundMessage } from "../inbound/types.js";
+import type { AdmittedWebInboundMessage } from "../inbound/types.js";
 import { buildMentionConfig } from "./mentions.js";
 import { applyGroupGating, type GroupHistoryEntry } from "./monitor/group-gating.js";
 import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
@@ -41,14 +41,13 @@ const makeConfig = (overrides: Record<string, unknown>) =>
 
 async function runGroupGating(params: {
   cfg: import("openclaw/plugin-sdk/config-contracts").OpenClawConfig;
-  msg: WebInboundMessage;
-  conversationId?: string;
+  msg: AdmittedWebInboundMessage;
   agentId?: string;
   selfChatMode?: boolean;
   authDir?: string;
 }) {
   const groupHistories = new Map<string, GroupHistoryEntry[]>();
-  const conversationId = params.conversationId ?? "123@g.us";
+  const conversationId = params.msg.admission?.conversation.id ?? "123@g.us";
   const agentId = params.agentId ?? "main";
   const sessionKey = `agent:${agentId}:whatsapp:group:${conversationId}`;
   const baseMentionConfig = buildMentionConfig(params.cfg, undefined);
@@ -56,7 +55,6 @@ async function runGroupGating(params: {
   const result = await applyGroupGating({
     cfg: params.cfg,
     msg: params.msg,
-    conversationId,
     groupHistoryKey: `whatsapp:default:group:${conversationId}`,
     agentId,
     sessionKey,
@@ -73,10 +71,8 @@ async function runGroupGating(params: {
 }
 
 type TestMessageOverrides = {
-  accountId?: string;
+  admission?: NonNullable<Parameters<typeof createTestWebInboundMessage>[0]>["admission"];
   body?: string;
-  conversationId?: string;
-  from?: string;
   id?: string;
   mentionedJids?: string[];
   replyToBody?: string;
@@ -93,7 +89,8 @@ type TestMessageOverrides = {
   to?: string;
 };
 
-function createGroupMessage(overrides: TestMessageOverrides = {}): WebInboundMessage {
+function createGroupMessage(overrides: TestMessageOverrides = {}): AdmittedWebInboundMessage {
+  const conversationId = overrides.admission?.conversation?.id ?? "123@g.us";
   return createTestWebInboundMessage({
     event: {
       id: overrides.id ?? "g1",
@@ -103,7 +100,7 @@ function createGroupMessage(overrides: TestMessageOverrides = {}): WebInboundMes
       body: overrides.body ?? "hello group",
     },
     platform: {
-      chatJid: "123@g.us",
+      chatJid: conversationId,
       recipientJid: overrides.to ?? "+2",
       senderE164: overrides.senderE164 ?? "+111",
       senderJid: overrides.senderJid,
@@ -111,10 +108,23 @@ function createGroupMessage(overrides: TestMessageOverrides = {}): WebInboundMes
       selfE164: overrides.selfE164 ?? "+999",
       selfJid: overrides.selfJid,
     },
-    from: overrides.from ?? "123@g.us",
-    conversationId: overrides.conversationId ?? overrides.from ?? "123@g.us",
-    chatType: "group",
-    accountId: overrides.accountId ?? "default",
+    admission: {
+      ...overrides.admission,
+      accountId: overrides.admission?.accountId ?? "default",
+      conversation: {
+        kind: "group",
+        id: conversationId,
+        ...overrides.admission?.conversation,
+      },
+      sender: {
+        id: overrides.senderJid ?? overrides.senderE164 ?? "+111",
+        ...overrides.admission?.sender,
+      },
+      senderAccess: {
+        reasonCode: "group_policy_allowed",
+        ...overrides.admission?.senderAccess,
+      },
+    },
     quote: overrides.replyToBody
       ? {
           id: overrides.replyToId,
@@ -134,19 +144,50 @@ function createGroupMessage(overrides: TestMessageOverrides = {}): WebInboundMes
   });
 }
 
-function createDirectMessage(overrides: TestMessageOverrides = {}): WebInboundMessage {
-  const msg = createGroupMessage(overrides);
-  return {
-    ...msg,
-    from: overrides.from ?? "+1555",
-    conversationId: overrides.conversationId ?? overrides.from ?? "+1555",
-    chatType: "direct",
-    group: undefined,
-    platform: {
-      ...msg.platform,
-      chatJid: overrides.from ?? "+1555",
+function createDirectMessage(overrides: TestMessageOverrides = {}): AdmittedWebInboundMessage {
+  const conversationId = overrides.admission?.conversation?.id ?? "+1555";
+  return createTestWebInboundMessage({
+    event: {
+      id: overrides.id ?? "d1",
+      timestamp: overrides.timestamp,
     },
-  };
+    payload: {
+      body: overrides.body ?? "hello direct",
+    },
+    platform: {
+      chatJid: conversationId,
+      recipientJid: overrides.to ?? "+2",
+      senderE164: overrides.senderE164 ?? conversationId,
+      senderJid: overrides.senderJid,
+      senderName: overrides.senderName ?? "Alice",
+      selfE164: overrides.selfE164 ?? "+999",
+      selfJid: overrides.selfJid,
+    },
+    admission: {
+      ...overrides.admission,
+      accountId: overrides.admission?.accountId ?? "default",
+      conversation: {
+        kind: "direct",
+        id: conversationId,
+        ...overrides.admission?.conversation,
+      },
+      sender: {
+        id: overrides.senderJid ?? overrides.senderE164 ?? conversationId,
+        ...overrides.admission?.sender,
+      },
+    },
+    quote: overrides.replyToBody
+      ? {
+          id: overrides.replyToId,
+          body: overrides.replyToBody,
+          sender: {
+            displayName: overrides.replyToSender,
+            jid: overrides.replyToSenderJid,
+            e164: overrides.replyToSenderE164,
+          },
+        }
+      : undefined,
+  });
 }
 
 function makeOwnerGroupConfig() {
@@ -224,7 +265,7 @@ describe("applyGroupGating", () => {
       msg: createGroupMessage({
         id: "m1",
         to: "+15550000",
-        accountId: "default",
+        admission: { accountId: "default" },
         body: "following up",
         timestamp: Date.now(),
         selfJid: "15551234567@s.whatsapp.net",
@@ -256,7 +297,7 @@ describe("applyGroupGating", () => {
       msg: createGroupMessage({
         id: "m-self-reply",
         to: "+15550000",
-        accountId: "default",
+        admission: { accountId: "default" },
         body: "following up on my own message",
         timestamp: Date.now(),
         senderE164: "+15551234567",
@@ -290,7 +331,7 @@ describe("applyGroupGating", () => {
       msg: createGroupMessage({
         id: "m-other-reply",
         to: "+15550000",
-        accountId: "default",
+        admission: { accountId: "default" },
         body: "following up on bot reply",
         timestamp: Date.now(),
         senderE164: "+15559999999",
@@ -327,7 +368,7 @@ describe("applyGroupGating", () => {
     });
     const msg = createGroupMessage({
       id: "g-self-lid-mention",
-      accountId: "default",
+      admission: { accountId: "default" },
       body: "@216372600647751 can you see this?",
       mentionedJids: ["216372600647751@lid"],
       senderE164: "+15550001111",
@@ -369,7 +410,7 @@ describe("applyGroupGating", () => {
       msg: createGroupMessage({
         id: "m-account-override",
         to: "+15550000",
-        accountId: "work",
+        admission: { accountId: "work" },
         body: "following up on bot reply",
         timestamp: Date.now(),
         senderE164: "+15551234567",
@@ -406,7 +447,7 @@ describe("applyGroupGating", () => {
       cfg,
       msg: createGroupMessage({
         id: "g-account-policy",
-        accountId: "work",
+        admission: { accountId: "work" },
         body: "following up",
         senderE164: "+111",
         senderJid: "111@s.whatsapp.net",
@@ -447,7 +488,7 @@ describe("applyGroupGating", () => {
       cfg,
       msg: createGroupMessage({
         id: "g-default-inheritance",
-        accountId: "work",
+        admission: { accountId: "work" },
         body: "plain group message",
         senderE164: "+111",
         senderJid: "111@s.whatsapp.net",
@@ -484,7 +525,7 @@ describe("applyGroupGating", () => {
       cfg,
       msg: createGroupMessage({
         id: "g-empty-group-allow-fallback",
-        accountId: "work",
+        admission: { accountId: "work" },
         body: "plain group message",
         senderE164: "+111",
         senderJid: "111@s.whatsapp.net",
@@ -514,7 +555,7 @@ describe("applyGroupGating", () => {
       cfg,
       msg: createGroupMessage({
         id: "g-account-owner",
-        accountId: "work",
+        admission: { accountId: "work" },
         body: "/new",
         senderE164: "+111",
         senderName: "Owner",
@@ -705,7 +746,7 @@ describe("buildInboundLine", () => {
       cfg: makeInboundCfg(""),
       agentId: "main",
       msg: createGroupMessage({
-        accountId: "default",
+        admission: { accountId: "default" },
         body: "ping",
         timestamp: 1700000000000,
         senderJid: "111@s.whatsapp.net",
@@ -723,7 +764,11 @@ describe("buildInboundLine", () => {
       cfg: makeInboundCfg(""),
       agentId: "main",
       msg: createDirectMessage({
-        from: "+1555",
+        admission: {
+          conversation: {
+            id: "+1555",
+          },
+        },
         body: "hello",
         replyToId: "q1",
         replyToBody: "original",
@@ -742,7 +787,11 @@ describe("buildInboundLine", () => {
       cfg: makeInboundCfg("[PFX]"),
       agentId: "main",
       msg: createDirectMessage({
-        from: "+1555",
+        admission: {
+          conversation: {
+            id: "+1555",
+          },
+        },
         body: "ping",
         to: "+2666",
       }),
@@ -757,7 +806,11 @@ describe("buildInboundLine", () => {
       cfg: makeInboundCfg(""),
       agentId: "main",
       msg: createDirectMessage({
-        from: "whatsapp:+15550001111",
+        admission: {
+          conversation: {
+            id: "whatsapp:+15550001111",
+          },
+        },
         body: "ping",
         to: "+2666",
       }),

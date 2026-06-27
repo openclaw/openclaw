@@ -8,6 +8,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { completeSimple, type AssistantMessage, type Model } from "openclaw/plugin-sdk/llm";
 import * as ts from "typescript";
 import { formatErrorMessage } from "../src/infra/errors.ts";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 interface TranslationMap {
   [key: string]: string | TranslationMap;
@@ -25,6 +26,11 @@ type LocaleEntry = {
 type GlossaryEntry = {
   source: string;
   target: string;
+};
+
+type RunProcessParentSignalState = {
+  done: boolean;
+  signal: NodeJS.Signals | null;
 };
 
 type TranslationMemoryEntry = {
@@ -102,6 +108,7 @@ const DEFAULT_PROMPT_TIMEOUT_MS = 120_000;
 const RUN_PROCESS_OUTPUT_MAX_CHARS = 1024 * 1024;
 const RUN_PROCESS_TIMEOUT_MS = 120_000;
 const RUN_PROCESS_KILL_GRACE_MS = 5_000;
+const activeRunProcessParentSignals = new Set<RunProcessParentSignalState>();
 const PROGRESS_HEARTBEAT_MS = 30_000;
 const ENV_PROVIDER = "OPENCLAW_CONTROL_UI_I18N_PROVIDER";
 const ENV_MODEL = "OPENCLAW_CONTROL_UI_I18N_MODEL";
@@ -144,6 +151,7 @@ const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "ja-JP", fileName: "ja-JP.ts", exportName: "ja_JP", languageKey: "jaJP" },
   { locale: "ko", fileName: "ko.ts", exportName: "ko", languageKey: "ko" },
   { locale: "fr", fileName: "fr.ts", exportName: "fr", languageKey: "fr" },
+  { locale: "hi", fileName: "hi.ts", exportName: "hi", languageKey: "hi" },
   { locale: "ar", fileName: "ar.ts", exportName: "ar", languageKey: "ar" },
   { locale: "it", fileName: "it.ts", exportName: "it", languageKey: "it" },
   { locale: "tr", fileName: "tr.ts", exportName: "tr", languageKey: "tr" },
@@ -154,6 +162,7 @@ const LOCALE_ENTRIES: readonly LocaleEntry[] = [
   { locale: "vi", fileName: "vi.ts", exportName: "vi", languageKey: "vi" },
   { locale: "nl", fileName: "nl.ts", exportName: "nl", languageKey: "nl" },
   { locale: "fa", fileName: "fa.ts", exportName: "fa", languageKey: "fa" },
+  { locale: "ru", fileName: "ru.ts", exportName: "ru", languageKey: "ru" },
 ];
 
 const DEFAULT_GLOSSARY: readonly GlossaryEntry[] = [
@@ -236,6 +245,8 @@ function prettyLanguageLabel(locale: string): string {
       return "Korean";
     case "fr":
       return "French";
+    case "hi":
+      return "Hindi";
     case "ar":
       return "Arabic";
     case "it":
@@ -256,6 +267,8 @@ function prettyLanguageLabel(locale: string): string {
       return "Dutch";
     case "fa":
       return "Persian";
+    case "ru":
+      return "Russian";
     case "de":
       return "German";
     case "es":
@@ -991,6 +1004,15 @@ function formatProcessOutput(capture: ProcessOutputCapture): string {
   return `[output truncated ${capture.truncatedChars} chars; showing tail]\n${capture.text}`;
 }
 
+function maybeReraiseRunProcessParentSignal(signal: NodeJS.Signals): void {
+  for (const state of activeRunProcessParentSignals) {
+    if (state.signal === null || !state.done) {
+      return;
+    }
+  }
+  process.kill(process.pid, signal);
+}
+
 export async function runProcess(
   executable: string,
   args: string[],
@@ -1015,6 +1037,9 @@ export async function runProcess(
     let waitingForKillGrace = false;
     let childClosedResult: { code: number | null; signal: NodeJS.Signals | null } | null = null;
     let killTimer: ReturnType<typeof setTimeout> | undefined;
+    let parentSignalPending: NodeJS.Signals | null = null;
+    const parentSignalState: RunProcessParentSignalState = { done: false, signal: null };
+    activeRunProcessParentSignals.add(parentSignalState);
     const parentSignalHandlers: { handler: () => void; signal: NodeJS.Signals }[] = [];
     const cleanupParentSignalHandlers = () => {
       for (const { signal, handler } of parentSignalHandlers) {
@@ -1030,7 +1055,7 @@ export async function runProcess(
       if (force) {
         taskkillArgs.push("/F");
       }
-      const result = spawnSync("taskkill.exe", taskkillArgs, { stdio: "ignore" });
+      const result = spawnSync(resolveWindowsTaskkillPath(), taskkillArgs, { stdio: "ignore" });
       return result.status === 0;
     };
     const signalChild = (signal: NodeJS.Signals) => {
@@ -1058,9 +1083,28 @@ export async function runProcess(
     };
     const relayParentSignal = (signal: NodeJS.Signals) => {
       const handler = () => {
+        parentSignalPending = signal;
+        parentSignalState.signal = signal;
         signalChild(signal);
         cleanupParentSignalHandlers();
-        process.kill(process.pid, signal);
+        if (!processGroupIsAlive()) {
+          parentSignalState.done = true;
+          maybeReraiseRunProcessParentSignal(signal);
+          return;
+        }
+        if (killTimer) {
+          clearTimeout(killTimer);
+        }
+        waitingForKillGrace = true;
+        // Keep this timer ref'ed so parent signal relay can force-kill stubborn
+        // process groups before re-raising the original signal.
+        killTimer = setTimeout(() => {
+          waitingForKillGrace = false;
+          killTimer = undefined;
+          signalChild("SIGKILL");
+          parentSignalState.done = true;
+          maybeReraiseRunProcessParentSignal(signal);
+        }, killGraceMs);
       };
       parentSignalHandlers.push({ handler, signal });
       process.once(signal, handler);
@@ -1087,8 +1131,11 @@ export async function runProcess(
       }
       settled = true;
       clearTimeout(timeout);
-      if (killTimer) {
+      if (!parentSignalPending && killTimer) {
         clearTimeout(killTimer);
+      }
+      if (!parentSignalPending) {
+        activeRunProcessParentSignals.delete(parentSignalState);
       }
       cleanupParentSignalHandlers();
       callback();
@@ -1158,6 +1205,19 @@ export async function runProcess(
       child.stdin.end();
     }
     child.once("close", (code, signal) => {
+      if (parentSignalPending) {
+        if (processGroupIsAlive()) {
+          childClosedResult = { code, signal };
+          return;
+        }
+        if (killTimer) {
+          clearTimeout(killTimer);
+          killTimer = undefined;
+        }
+        parentSignalState.done = true;
+        maybeReraiseRunProcessParentSignal(parentSignalPending);
+        return;
+      }
       if (waitingForKillGrace && processGroupIsAlive()) {
         childClosedResult = { code, signal };
         return;

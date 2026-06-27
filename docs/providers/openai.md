@@ -506,6 +506,9 @@ openclaw infer image generate \
 Use the same `--output-format` and `--background` flags with
 `openclaw infer image edit` when starting from an input file.
 `--openai-background` remains available as an OpenAI-specific alias.
+Use `--quality low|medium|high|auto` when you need to control OpenAI Images
+quality and cost. Use `--openai-moderation low|auto` to pass OpenAI's
+provider-specific moderation hint from either `image generate` or `image edit`.
 
 For ChatGPT/Codex OAuth installs, keep the same `openai/gpt-image-2` ref. When an
 `openai` OAuth profile is configured, OpenClaw resolves that stored OAuth
@@ -912,17 +915,17 @@ the Server-side compaction accordion below.
   <Accordion title="Fast mode">
     OpenClaw exposes a shared fast-mode toggle for `openai/*`:
 
-    - **Chat/UI:** `/fast status|on|off`
+    - **Chat/UI:** `/fast status|auto|on|off`
     - **Config:** `agents.defaults.models["<provider>/<model>"].params.fastMode`
 
-    When enabled, OpenClaw maps fast mode to OpenAI priority processing (`service_tier = "priority"`). Existing `service_tier` values are preserved, and fast mode does not rewrite `reasoning` or `text.verbosity`.
+    When enabled, OpenClaw maps fast mode to OpenAI priority processing (`service_tier = "priority"`). Existing `service_tier` values are preserved, and fast mode does not rewrite `reasoning` or `text.verbosity`. `fastMode: "auto"` starts new model calls fast until the auto cutoff, then starts later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds; set `params.fastAutoOnSeconds` on the active model to change it.
 
     ```json5
     {
       agents: {
         defaults: {
           models: {
-            "openai/gpt-5.5": { params: { fastMode: true } },
+            "openai/gpt-5.5": { params: { fastMode: "auto", fastAutoOnSeconds: 30 } },
           },
         },
       },
@@ -1040,10 +1043,11 @@ the Server-side compaction accordion below.
     ```
 
     With `strict-agentic`, OpenClaw:
-    - No longer treats a plan-only turn as successful progress when a tool action is available
-    - Retries the turn with an act-now steer
     - Auto-enables `update_plan` for substantial work
-    - Surfaces an explicit blocked state if the model keeps planning without acting
+    - Retries structurally empty or reasoning-only turns with a visible-answer continuation
+    - Uses explicit harness plan events when the selected harness provides them
+
+    OpenClaw does not classify assistant prose to decide whether a turn is a plan, progress update, or final answer.
 
     <Note>
     Scoped to OpenAI and Codex GPT-5-family runs only. Other providers and older model families keep default behavior.

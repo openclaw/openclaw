@@ -111,6 +111,7 @@ function createLazyDefaultRuntime(params: AcpxRuntimeFactoryParams): AcpxRuntime
         }),
         probeAgent: params.pluginConfig.probeAgent,
         mcpServers: toAcpMcpServers(params.pluginConfig.mcpServers),
+        openclawToolsMcpBridgeEnabled: params.pluginConfig.openClawToolsMcpBridge,
         permissionMode: params.pluginConfig.permissionMode,
         nonInteractivePermissions: params.pluginConfig.nonInteractivePermissions,
         timeoutMs: resolveAcpxTimerTimeoutMs(params.pluginConfig.timeoutSeconds),

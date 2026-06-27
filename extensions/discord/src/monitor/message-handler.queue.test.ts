@@ -222,6 +222,34 @@ describe("createDiscordMessageHandler queue behavior", () => {
     );
   });
 
+  it("keeps the configured typing cadence for prestarted feedback", async () => {
+    preflightDiscordMessageMock.mockReset();
+    processDiscordMessageMock.mockReset();
+    preflightDiscordMessageMock.mockImplementation(async () =>
+      createAcceptedDmPreflightContext({
+        cfg: {
+          ...createPreflightContext().cfg,
+          agents: { defaults: { typingIntervalSeconds: 7 } },
+          session: { typingIntervalSeconds: 5 },
+        },
+      }),
+    );
+    processDiscordMessageMock.mockResolvedValue(undefined);
+    const replyTypingFeedback = createReplyTypingFeedbackMock("dm-1");
+    const createReplyTypingFeedback = vi.fn(() => replyTypingFeedback);
+
+    const handler = createDiscordMessageHandler({
+      ...createDiscordHandlerParams(),
+      testing: { createReplyTypingFeedback },
+    });
+    await handler(createMessageData("m-typing-cadence", "dm-1") as never, {} as never);
+    await flushQueueWork();
+
+    expect(createReplyTypingFeedback).toHaveBeenCalledWith(
+      expect.objectContaining({ keepaliveIntervalMs: 7_000 }),
+    );
+  });
+
   it("keeps accepted DM dispatch running when accepted typing feedback fails", async () => {
     preflightDiscordMessageMock.mockReset();
     processDiscordMessageMock.mockReset();

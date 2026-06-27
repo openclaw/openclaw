@@ -9,6 +9,7 @@ import {
   type AuthProfileStore,
   isProfileInCooldown,
   resolveProfilesUnavailableReason,
+  resolveSubscriptionAuthModeForProfiles,
 } from "../../auth-profiles.js";
 import { formatAuthProfileFailureMessage } from "../../auth-profiles/failure-copy.js";
 import {
@@ -338,10 +339,20 @@ export function createEmbeddedRunAuthController(params: {
         env: process.env,
       });
     if (params.fallbackConfigured) {
+      const authMode =
+        reason === "billing"
+          ? resolveSubscriptionAuthModeForProfiles({
+              store: params.authStore,
+              profileIds: failoverParams.allInCooldown
+                ? params.profileCandidates
+                : [params.profileCandidates[params.getProfileIndex()]],
+            })
+          : undefined;
       throw new FailoverError(message, {
         reason,
         provider,
         model: modelId,
+        authMode,
         status: resolveFailoverStatus(reason),
         authProfileFailure: { allInCooldown: failoverParams.allInCooldown },
         cause: failoverParams.error,

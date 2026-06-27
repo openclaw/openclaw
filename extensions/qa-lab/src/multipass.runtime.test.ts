@@ -158,6 +158,37 @@ describe("qa multipass runtime", () => {
     expect(plan.qaCommand).toEqual(expect.arrayContaining(["--runtime-pair", "openclaw,codex"]));
   });
 
+  it("forwards channel-driver suite selection into the guest qa suite command", () => {
+    const plan = createQaMultipassPlan({
+      repoRoot: process.cwd(),
+      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "crabline-channel-driver-test"),
+      channelDriverSelection: {
+        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+        channel: "telegram",
+        channelDriver: "crabline",
+        smokeArtifactPath: "crabline-fake-provider-smoke.json",
+      },
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(plan.qaCommand).toEqual(
+      expect.arrayContaining(["--channel-driver", "crabline", "--channel", "telegram"]),
+    );
+  });
+
+  it("forwards suite plugin enablements into the guest qa suite command", () => {
+    const plan = createQaMultipassPlan({
+      repoRoot: process.cwd(),
+      outputDir: path.join(process.cwd(), ".artifacts", "qa-e2e", "multipass-enable-plugin-test"),
+      enabledPluginIds: ["browser", "memory-core", "browser"],
+      scenarioIds: ["channel-chat-baseline"],
+    });
+
+    expect(plan.qaCommand).toEqual(
+      expect.arrayContaining(["--enable-plugin", "browser", "--enable-plugin", "memory-core"]),
+    );
+  });
+
   it("redacts forwarded live secrets in the persisted artifact script", () => {
     vi.stubEnv("OPENAI_API_KEY", "test-openai-key");
     const plan = createQaMultipassPlan({

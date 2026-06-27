@@ -12,7 +12,7 @@ Adds Qwen, Qwen Cloud, Model Studio, DashScope, Qwen Oauth, Qwen Portal, Qwen CL
 ## Distribution
 
 - Package: `@openclaw/qwen-provider`
-- Install route: included in OpenClaw
+- Install route: npm; ClawHub: `clawhub:@openclaw/qwen-provider`
 
 ## Surface
 

@@ -145,15 +145,15 @@ publish and sync.
 
 | Action                             | Command                                                |
 | ---------------------------------- | ------------------------------------------------------ |
-| Install a skill into the workspace | `openclaw skills install <slug>`                       |
+| Install a skill into the workspace | `openclaw skills install @owner/<slug>`                |
 | Install from a Git repository      | `openclaw skills install git:owner/repo@ref`           |
 | Install a local skill directory    | `openclaw skills install ./path/to/skill --as my-tool` |
-| Install for all local agents       | `openclaw skills install <slug> --global`              |
+| Install for all local agents       | `openclaw skills install @owner/<slug> --global`       |
 | Update all workspace skills        | `openclaw skills update --all`                         |
-| Update a shared managed skill      | `openclaw skills update <slug> --global`               |
+| Update a shared managed skill      | `openclaw skills update @owner/<slug> --global`        |
 | Update all shared managed skills   | `openclaw skills update --all --global`                |
-| Verify a skill's trust envelope    | `openclaw skills verify <slug>`                        |
-| Print the generated Skill Card     | `openclaw skills verify <slug> --card`                 |
+| Verify a skill's trust envelope    | `openclaw skills verify @owner/<slug>`                 |
+| Print the generated Skill Card     | `openclaw skills verify @owner/<slug> --card`          |
 | Publish / sync via ClawHub CLI     | `clawhub sync --all`                                   |
 
 <AccordionGroup>
@@ -171,15 +171,17 @@ publish and sync.
 
   </Accordion>
   <Accordion title="Verification and security scanning">
-    `openclaw skills verify <slug>` asks ClawHub for the skill's
+    `openclaw skills verify @owner/<slug>` asks ClawHub for the skill's
     `clawhub.skill.verify.v1` trust envelope. Installed ClawHub skills verify
     against the version and registry recorded in `.clawhub/origin.json`.
+    Bare slugs remain accepted for existing installed or unambiguous skills, but
+    owner-qualified refs avoid publisher ambiguity.
 
     ClawHub skill pages expose the latest security scan state before install,
     with detail pages for VirusTotal, ClawScan, and static analysis. The
     command exits non-zero when ClawHub marks verification as failed. Publishers
     recover false positives through the ClawHub dashboard or
-    `clawhub skill rescan <slug>`.
+    `clawhub skill rescan @owner/<slug>`.
 
   </Accordion>
   <Accordion title="Private archive installs">

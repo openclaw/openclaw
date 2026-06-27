@@ -21,6 +21,7 @@ import {
   readCodexNotificationItem,
   readNotificationItemId,
   shouldDisarmAssistantCompletionIdleWatch,
+  updateActiveCompletionBlockerItemIds,
   updateActiveTurnItemIds,
 } from "./attempt-notifications.js";
 import { CODEX_POST_REASONING_REPLY_IDLE_TIMEOUT_MS } from "./attempt-timeouts.js";
@@ -92,6 +93,7 @@ export function applyCodexTurnNotificationState(params: {
   currentPromptTexts: string[];
   turnWatches: CodexAttemptTurnWatchController;
   activeTurnItemIds: Set<string>;
+  activeCompletionBlockerItemIds: Set<string>;
   activeAppServerTurnRequests: number;
   pendingOpenClawDynamicToolCompletionIds: Set<string>;
   turnCrossedToolHandoff: boolean;
@@ -128,6 +130,7 @@ export function applyCodexTurnNotificationState(params: {
     });
     params.onReportExecutionNotification(notification);
     updateActiveTurnItemIds(notification, params.activeTurnItemIds);
+    updateActiveCompletionBlockerItemIds(notification, params.activeCompletionBlockerItemIds);
     if (notification.method === "item/completed" && params.activeTurnItemIds.size === 0) {
       params.onScheduleTerminalDynamicToolReleaseCheck();
     }

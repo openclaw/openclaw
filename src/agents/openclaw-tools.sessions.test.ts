@@ -198,6 +198,7 @@ type SessionsSendDetails = {
   runId?: string;
   reply?: string;
   error?: string;
+  sentBeforeError?: boolean;
   sessionKey?: string;
   delivery?: {
     status?: string;
@@ -1223,6 +1224,7 @@ describe("sessions tools", () => {
     expect(details.status).toBe("timeout");
     expect(details.error).toBe("429 RESOURCE_EXHAUSTED");
     expect(details.runId).toBe("run-pending-model-error");
+    expect(details.sentBeforeError).toBe(true);
     expect(details.delivery?.status).toBe("pending");
     expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
     await vi.waitFor(() =>
@@ -1949,11 +1951,48 @@ describe("sessions tools", () => {
     const details = sessionsSendDetails(result.details);
     expect(details.status).toBe("timeout");
     expect(details.error).toBe("agent run timed out");
+    expect(details.sentBeforeError).toBe(true);
     expect(details.sessionKey).toBe(targetKey);
     await new Promise<void>((resolve) => {
       setImmediate(resolve);
     });
     expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
+  });
+
+  it("sessions_send preserves delivery evidence for post-start agent errors", async () => {
+    const targetKey = "agent:director1:main";
+    callGatewayMock.mockImplementation(async (opts: unknown) => {
+      const request = opts as { method?: string };
+      if (request.method === "agent") {
+        return { runId: "run-error", status: "accepted", acceptedAt: 2000 };
+      }
+      if (request.method === "agent.wait") {
+        return { runId: "run-error", status: "error", error: "agent failed" };
+      }
+      if (request.method === "chat.history") {
+        return { messages: [] };
+      }
+      return {};
+    });
+
+    const tool = createOpenClawTools({
+      agentSessionKey: "agent:main:main",
+      agentChannel: "discord",
+    }).find((candidate) => candidate.name === "sessions_send");
+    if (!tool) {
+      throw new Error("missing sessions_send tool");
+    }
+
+    const result = await tool.execute("call-error", {
+      sessionKey: targetKey,
+      message: "ping",
+      timeoutSeconds: 1,
+    });
+    const details = sessionsSendDetails(result.details);
+    expect(details.status).toBe("error");
+    expect(details.error).toBe("agent failed");
+    expect(details.sentBeforeError).toBe(true);
+    expect(details.sessionKey).toBe(targetKey);
   });
 
   it("sessions_send skips duplicate A2A delivery for waited parent-owned native subagents", async () => {

@@ -355,17 +355,47 @@ function policyRuleValueIsValid(metadata: PolicyRuleMetadata, value: unknown): b
     case "string":
       return typeof value === "string" && policyStringIsAllowed(metadata, value);
     case "string-list":
-      return (
-        Array.isArray(value) &&
-        value.every(
-          (entry) =>
-            typeof entry === "string" &&
-            entry.trim() !== "" &&
-            policyStringIsAllowed(metadata, entry),
-        )
+      if (!Array.isArray(value)) {
+        return false;
+      }
+      if (isExecApprovalAllowlistExpectedRule(metadata)) {
+        return value.every(isExecApprovalAllowlistRequirement);
+      }
+      return value.every(
+        (entry) =>
+          typeof entry === "string" &&
+          entry.trim() !== "" &&
+          policyStringIsAllowed(metadata, entry),
       );
   }
   return false;
+}
+
+function isExecApprovalAllowlistExpectedRule(metadata: PolicyRuleMetadata): boolean {
+  return metadata.policyPath.join(".") === "execApprovals.agents.allowlist.expected";
+}
+
+function unsupportedPolicyKey(
+  value: Record<string, unknown>,
+  supported: readonly string[],
+): string | undefined {
+  return Object.keys(value).find((key) => !supported.includes(key));
+}
+
+function isExecApprovalAllowlistRequirement(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim() !== "";
+  }
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (unsupportedPolicyKey(value, ["argPattern", "pattern"]) !== undefined) {
+    return false;
+  }
+  if (typeof value.pattern !== "string" || value.pattern.trim() === "") {
+    return false;
+  }
+  return value.argPattern === undefined || typeof value.argPattern === "string";
 }
 
 function policyStringIsAllowed(metadata: PolicyRuleMetadata, value: string): boolean {
@@ -506,7 +536,25 @@ function collectScopedPolicyRuleClaims(document: PolicyDocument): readonly Polic
       }
     }
   }
-  return claims;
+  return coalesceScopedPolicyRuleClaims(claims);
+}
+
+function coalesceScopedPolicyRuleClaims(
+  claims: readonly PolicyRuleClaim[],
+): readonly PolicyRuleClaim[] {
+  const byKey = new Map<string, PolicyRuleClaim>();
+  for (const claim of claims) {
+    const previous = byKey.get(claim.key);
+    if (
+      previous !== undefined &&
+      isPolicyValueAtLeastAsStrict(previous.metadata, claim.value, previous.value)
+    ) {
+      byKey.set(claim.key, claim);
+      continue;
+    }
+    byKey.set(claim.key, previous ?? claim);
+  }
+  return [...byKey.values()];
 }
 
 function normalizeSelectorValues(

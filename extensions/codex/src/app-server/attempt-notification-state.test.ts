@@ -56,6 +56,7 @@ function applyNotification(
     currentPromptTexts: [],
     turnWatches,
     activeTurnItemIds: new Set<string>(),
+    activeCompletionBlockerItemIds: new Set<string>(),
     activeAppServerTurnRequests: 0,
     pendingOpenClawDynamicToolCompletionIds: new Set<string>(),
     turnCrossedToolHandoff: false,

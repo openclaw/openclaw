@@ -160,6 +160,25 @@ describe("tool search gateway e2e lane assertions", () => {
     ).toThrow(`code lane did not bridge-call ${targetTool}`);
   });
 
+  it("rejects code lane proof that also exposes the direct target tool", () => {
+    expect(() =>
+      assertToolSearchLaneResults({
+        normal,
+        targetTool,
+        code: {
+          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+          providerDeclaredToolCount: 2,
+          providerPlannedTools: ["tool_search_code", targetTool],
+          providerRawBytes: 4_000,
+          sessionLogToolMentions: {
+            tool_search_code: 1,
+            [targetTool]: 1,
+          },
+        },
+      }),
+    ).toThrow(`code lane exposed direct provider tool ${targetTool}`);
+  });
+
   it("rejects normal lane output that only echoes the target tool name", () => {
     expect(() =>
       assertToolSearchLaneResults({
@@ -182,5 +201,31 @@ describe("tool search gateway e2e lane assertions", () => {
         },
       }),
     ).toThrow(`normal lane did not call ${targetTool}`);
+  });
+
+  it("rejects normal lane proof that uses the Tool Search bridge", () => {
+    expect(() =>
+      assertToolSearchLaneResults({
+        targetTool,
+        normal: {
+          ...normal,
+          providerPlannedTools: [targetTool, "tool_search_code"],
+          sessionLogToolMentions: {
+            tool_search_code: 1,
+            [targetTool]: 1,
+          },
+        },
+        code: {
+          gatewayOutputText: `FAKE_PLUGIN_OK ${targetTool}`,
+          providerDeclaredToolCount: 1,
+          providerPlannedTools: ["tool_search_code"],
+          providerRawBytes: 4_000,
+          sessionLogToolMentions: {
+            tool_search_code: 1,
+            [targetTool]: 1,
+          },
+        },
+      }),
+    ).toThrow("normal lane unexpectedly used Tool Search bridge");
   });
 });

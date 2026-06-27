@@ -9,14 +9,9 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { setAwsSharedIniFileLoaderForTest } from "./aws-credential-refresh.js";
 import { supportsBedrockPromptCaching } from "./bedrock-options.js";
 import { resetBedrockDiscoveryCacheForTest } from "./discovery.js";
 import amazonBedrockPlugin from "./index.js";
-import {
-  resetBedrockAppProfileCacheEligibilityForTest,
-  setBedrockAppProfileControlPlaneForTest,
-} from "./register.sync.runtime.js";
 
 type BedrockClientResult =
   | {
@@ -96,6 +91,10 @@ vi.mock("@aws-sdk/client-bedrock", () => {
   };
 });
 
+vi.mock("@smithy/shared-ini-file-loader", () => ({
+  loadSharedConfigFiles: refreshSharedConfigCache,
+}));
+
 type RegisteredProviderPlugin = Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
 
 /** Register the amazon-bedrock plugin with an optional pluginConfig override. */
@@ -149,6 +148,8 @@ const ANTHROPIC_MODEL_DESCRIPTOR = {
 
 const APP_INFERENCE_PROFILE_ARN =
   "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/my-claude-profile";
+const OPUS_APP_INFERENCE_PROFILE_ARN =
+  "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/opus-temperature-profile";
 const APP_INFERENCE_PROFILE_DESCRIPTOR = {
   api: "openai-completions",
   provider: "amazon-bedrock",
@@ -267,26 +268,12 @@ describe("amazon-bedrock provider plugin", () => {
     inferenceProfileGetResults.length = 0;
     bedrockClientConfigs.length = 0;
     refreshSharedConfigCache.mockClear();
-    setAwsSharedIniFileLoaderForTest({ loadSharedConfigFiles: refreshSharedConfigCache });
     sendBedrockCommand.mockClear();
     resetBedrockDiscoveryCacheForTest();
-    resetBedrockAppProfileCacheEligibilityForTest();
-    setBedrockAppProfileControlPlaneForTest((region) => ({
-      async getInferenceProfile(input) {
-        class GetInferenceProfileCommand {
-          constructor(readonly inputLocal: Record<string, unknown> = {}) {}
-        }
-        bedrockClientConfigs.push(region ? { region } : {});
-        return await sendBedrockCommand(new GetInferenceProfileCommand(input));
-      },
-    }));
   });
 
   afterEach(() => {
-    setBedrockAppProfileControlPlaneForTest(undefined);
-    setAwsSharedIniFileLoaderForTest(undefined);
     resetBedrockDiscoveryCacheForTest();
-    resetBedrockAppProfileCacheEligibilityForTest();
   });
 
   afterAll(() => {
@@ -1501,8 +1488,8 @@ describe("amazon-bedrock provider plugin", () => {
 
       await callWrappedStreamWithPayload(
         provider,
-        APP_INFERENCE_PROFILE_ARN,
-        APP_INFERENCE_PROFILE_DESCRIPTOR,
+        OPUS_APP_INFERENCE_PROFILE_ARN,
+        makeAppInferenceProfileDescriptor(OPUS_APP_INFERENCE_PROFILE_ARN),
         { temperature: 0.3, maxTokens: 10, cacheRetention: "short" },
         payload,
       );

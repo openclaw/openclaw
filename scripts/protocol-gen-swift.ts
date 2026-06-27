@@ -77,7 +77,8 @@ const DEFAULTED_OPTIONAL_INIT_PARAM_ENTRIES: readonly [string, readonly string[]
   ["ChatHistoryParams", ["agentId"]],
   ["ChatInjectParams", ["agentId"]],
   ["ChatSendParams", ["agentId"]],
-  ["MessageActionParams", ["inboundTurnKind"]],
+  ["MessageActionParams", ["inboundTurnKind", "requesterAccountId"]],
+  ["CronListParams", ["compact"]],
   ["CronRunLogEntry", ["errorReason", "failureNotificationDelivery"]],
   ["ExecApprovalRequestParams", ["requireDeliveryRoute", "suppressDelivery"]],
   ["AgentSummary", ["thinkingLevels", "thinkingOptions", "thinkingDefault"]],
@@ -140,6 +141,33 @@ function safeName(name: string) {
     return `_${cc}`;
   }
   return cc;
+}
+
+function swiftStoredPropertyName(structName: string, key: string): string {
+  if (structName === "ChatSendParams" && key === "fastMode") {
+    return "fastmodevalue";
+  }
+  if (structName === "ChatSendParams" && key === "fast_seconds") {
+    return "fastseconds";
+  }
+  return safeName(key);
+}
+
+function swiftInitializerName(structName: string, key: string): string {
+  if (structName === "ChatSendParams" && key === "fastMode") {
+    return "fastmodevalue";
+  }
+  if (structName === "ChatSendParams" && key === "fast_seconds") {
+    return "fastseconds";
+  }
+  return safeName(key);
+}
+
+function swiftCompatibilityPropertyLines(structName: string, key: string): string[] {
+  if (structName === "ChatSendParams" && key === "fastMode") {
+    return ["    public var fastmode: Bool? { fastmodevalue?.value as? Bool }"];
+  }
+  return [];
 }
 
 // filled later once schemas are loaded
@@ -216,6 +244,22 @@ function swiftType(schema: JsonSchema, required: boolean, allowStructuralNamed =
   return isOptional ? `${base}?` : base;
 }
 
+function stringEnumCases(schema: JsonSchema): string[] | undefined {
+  if (schema.type === "string" && schema.enum) {
+    return schema.enum.every((value) => typeof value === "string") ? schema.enum : undefined;
+  }
+
+  const variants = schema.oneOf ?? schema.anyOf;
+  if (!variants?.length) {
+    return undefined;
+  }
+
+  const cases = variants
+    .map((variant) => literalSchemaValue(variant))
+    .filter((value): value is string => typeof value === "string");
+  return cases.length === variants.length ? cases : undefined;
+}
+
 function swiftInitializerParam(params: {
   structName: string;
   key: string;
@@ -235,13 +279,26 @@ function swiftInitializerParam(params: {
 }
 
 function emitEnum(name: string, schema: JsonSchema): string {
-  const cases = schema.enum ?? [];
+  const cases = stringEnumCases(schema) ?? [];
   return [
     `public enum ${name}: String, Codable, Sendable {`,
     ...cases.map((value) => `    case ${safeName(value)} = "${value}"`),
     "}",
     "",
   ].join("\n");
+}
+
+function stringLiteralUnionValues(schema: JsonSchema): string[] | undefined {
+  const branches = schema.oneOf ?? schema.anyOf;
+  if (!branches || branches.length < 2) {
+    return undefined;
+  }
+  const values = branches.map((branch) => literalSchemaValue(branch));
+  if (values.some((value) => typeof value !== "string")) {
+    return undefined;
+  }
+  const stringValues = values as string[];
+  return new Set(stringValues).size === stringValues.length ? stringValues : undefined;
 }
 
 function emitStruct(name: string, schema: JsonSchema): string {
@@ -361,9 +418,10 @@ function emitStruct(name: string, schema: JsonSchema): string {
   lines.push(`public struct ${name}: Codable, Sendable {`);
   const codingKeys: string[] = [];
   for (const [key, propSchema] of Object.entries(props)) {
-    const propName = safeName(key);
+    const propName = swiftStoredPropertyName(name, key);
     const propType = swiftType(propSchema, required.has(key), true);
     lines.push(`    public let ${propName}: ${propType}`);
+    lines.push(...swiftCompatibilityPropertyLines(name, key));
     if (propName !== key) {
       codingKeys.push(`        case ${propName} = "${key}"`);
     } else {
@@ -374,7 +432,7 @@ function emitStruct(name: string, schema: JsonSchema): string {
     "\n    public init(\n" +
       Object.entries(props)
         .map(([key, prop]) => {
-          const propName = safeName(key);
+          const propName = swiftInitializerName(name, key);
           const req = required.has(key);
           return `        ${swiftInitializerParam({
             structName: name,
@@ -389,17 +447,70 @@ function emitStruct(name: string, schema: JsonSchema): string {
       "    {\n" +
       Object.entries(props)
         .map(([key]) => {
-          const propName = safeName(key);
-          return `        self.${propName} = ${propName}`;
+          const propName = swiftStoredPropertyName(name, key);
+          const paramName = swiftInitializerName(name, key);
+          return `        self.${propName} = ${paramName}`;
         })
         .join("\n") +
-      "\n    }\n\n" +
+      "\n    }" +
+      emitStructCompatibilityInitializer(name, props, required) +
+      "\n\n" +
       "    private enum CodingKeys: String, CodingKey {\n" +
       codingKeys.join("\n") +
       "\n    }\n}",
   );
   lines.push("");
   return lines.join("\n");
+}
+
+function emitStructCompatibilityInitializer(
+  name: string,
+  props: Record<string, JsonSchema>,
+  required: Set<string>,
+): string {
+  if (name !== "ChatSendParams" || !props.fastMode) {
+    return "";
+  }
+  const legacyKeys = Object.keys(props).filter(
+    (key) => key !== "fastAutoOnSeconds" && key !== "fast_seconds",
+  );
+  const initializerParams = legacyKeys.map((key) => {
+    const prop = props[key];
+    if (!prop) {
+      throw new Error(`missing ${name}.${key} schema`);
+    }
+    const propName = swiftInitializerName(name, key);
+    if (key === "fastMode") {
+      return "        fastmode: Bool?";
+    }
+    return `        ${swiftInitializerParam({
+      structName: name,
+      key,
+      name: propName,
+      schema: prop,
+      required: required.has(key),
+    })}`;
+  });
+  const delegatedArgs = Object.keys(props).map((key) => {
+    const propName = swiftInitializerName(name, key);
+    if (key === "fastMode") {
+      return "            fastmodevalue: fastmode.map { AnyCodable($0) }";
+    }
+    if (key === "fastAutoOnSeconds" || key === "fast_seconds") {
+      return `            ${propName}: nil`;
+    }
+    return `            ${propName}: ${propName}`;
+  });
+  return (
+    "\n\n    public init(\n" +
+    initializerParams.join(",\n") +
+    ")\n" +
+    "    {\n" +
+    "        self.init(\n" +
+    delegatedArgs.join(",\n") +
+    ")\n" +
+    "    }"
+  );
 }
 
 function literalSchemaValue(schema: JsonSchema): boolean | number | string | null | undefined {
@@ -606,8 +717,13 @@ async function generate() {
     if (name === "GatewayFrame") {
       continue;
     }
-    if (schema.type === "string" && schema.enum) {
+    if (stringEnumCases(schema)) {
       parts.push(emitEnum(name, schema));
+      continue;
+    }
+    const literalUnionValues = stringLiteralUnionValues(schema);
+    if (literalUnionValues) {
+      parts.push(emitEnum(name, { enum: literalUnionValues }));
     }
   }
 
