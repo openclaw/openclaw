@@ -2,10 +2,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import {
+  getSessionEntry,
+  upsertSessionEntry,
+  type SessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { loadSessionStore } from "../../../../../src/config/sessions/store-load.js";
-import { saveSessionStore } from "../../../../../src/config/sessions/store.js";
-import type { SessionEntry } from "../../../../../src/config/sessions/types.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../../../../src/state/openclaw-agent-db.js";
 import { resolveGroupActivationFor } from "./group-activation.js";
 
 const GROUP_CONVERSATION_ID = "123@g.us";
@@ -23,9 +26,11 @@ async function makeSessionStore(
 ): Promise<{ storePath: string; cleanup: () => Promise<void> }> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-"));
   const storePath = path.join(dir, "sessions.json");
-  await saveSessionStore(storePath, entries as Record<string, SessionEntry>, {
-    skipMaintenance: true,
-  });
+  await Promise.all(
+    Object.entries(entries as Record<string, SessionEntry>).map(([sessionKey, entry]) =>
+      upsertSessionEntry({ storePath, sessionKey, entry }),
+    ),
+  );
   return {
     storePath,
     cleanup: async () => {
@@ -57,10 +62,24 @@ const expectWorkGroupActivationEntry = async (
   assertEntry?: (entry: SessionStoreEntry | undefined) => void,
 ) => {
   await vi.waitFor(() => {
-    const scopedEntry = loadSessionStore(storePath, { skipCache: true })[WORK_GROUP_SESSION_KEY];
+    const scopedEntry = getSessionEntry({
+      storePath,
+      sessionKey: WORK_GROUP_SESSION_KEY,
+      readConsistency: "latest",
+    });
     expect(scopedEntry?.groupActivation).toBe("always");
     assertEntry?.(scopedEntry);
   });
+};
+
+const expectNoWorkGroupActivationEntry = (storePath: string) => {
+  expect(
+    getSessionEntry({
+      storePath,
+      sessionKey: WORK_GROUP_SESSION_KEY,
+      readConsistency: "latest",
+    }),
+  ).toBeUndefined();
 };
 
 const expectResolvedWorkGroupActivation = async (
@@ -76,12 +95,13 @@ describe("resolveGroupActivationFor", () => {
   const cleanups: Array<() => Promise<void>> = [];
 
   afterEach(async () => {
+    closeOpenClawAgentDatabasesForTest();
     while (cleanups.length > 0) {
       await cleanups.pop()?.();
     }
   });
 
-  it("reads legacy named-account group activation and backfills the scoped key", async () => {
+  it("reads legacy named-account group activation without synthesizing a scoped session", async () => {
     const { storePath, cleanup } = await makeSessionStore({
       [LEGACY_GROUP_SESSION_KEY]: {
         groupActivation: "always",
@@ -91,16 +111,16 @@ describe("resolveGroupActivationFor", () => {
     });
     cleanups.push(cleanup);
 
-    await expectResolvedWorkGroupActivation(storePath, (scopedEntry) => {
-      expect(scopedEntry?.sessionId).toBeUndefined();
-      expect(scopedEntry?.updatedAt).toBeUndefined();
-    });
+    const activation = await resolveWorkGroupActivation(storePath);
+    expect(activation).toBe("always");
+    expectNoWorkGroupActivationEntry(storePath);
   });
 
   it("preserves legacy group activation when the scoped entry already exists without activation", async () => {
     const { storePath, cleanup } = await makeSessionStore({
       [LEGACY_GROUP_SESSION_KEY]: {
         groupActivation: "always",
+        sessionId: "legacy-session",
       },
       [WORK_GROUP_SESSION_KEY]: {
         sessionId: "scoped-session",
@@ -113,10 +133,11 @@ describe("resolveGroupActivationFor", () => {
     });
   });
 
-  it("does not wake the default account from an activation-only legacy group entry in multi-account setups", async () => {
+  it("does not wake the default account from a work-account scoped group activation", async () => {
     const { storePath, cleanup } = await makeSessionStore({
-      [LEGACY_GROUP_SESSION_KEY]: {
+      [WORK_GROUP_SESSION_KEY]: {
         groupActivation: "always",
+        sessionId: "work-session",
       },
     });
     cleanups.push(cleanup);
@@ -163,6 +184,7 @@ describe("resolveGroupActivationFor", () => {
     const { storePath, cleanup } = await makeSessionStore({
       [LEGACY_GROUP_SESSION_KEY]: {
         groupActivation: "always",
+        sessionId: "legacy-session",
       },
     });
     cleanups.push(cleanup);
