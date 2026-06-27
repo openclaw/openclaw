@@ -26,8 +26,9 @@ import {
   isLocalPath as isLocalFilePath,
   normalizePath,
 } from "../utils/platform.js";
-import { normalizeLowercaseStringOrEmpty, sanitizeFileName } from "../utils/string-normalize.js";
+import { normalizeLowercaseStringOrEmpty } from "../utils/string-normalize.js";
 import { audioFileToSilkBase64, shouldTranscodeVoice, waitForFile } from "./outbound-audio-port.js";
+import { resolveOutboundFileName } from "./outbound-file-name.js";
 import {
   buildDailyLimitExceededResult,
   buildFileTooLargeResult,
@@ -545,7 +546,7 @@ export async function sendDocument(
   }
   const mediaPath = resolvedMediaPath.mediaPath;
   const isHttp = mediaPath.startsWith("http://") || mediaPath.startsWith("https://");
-  const fileName = sanitizeFileName(path.basename(mediaPath));
+  const fileName = await resolveOutboundFileName(mediaPath);
 
   if (isHttp && !shouldDirectUploadUrl(ctx.account)) {
     debugLog(`sendDocument: urlDirectUpload=false, downloading URL first...`);
@@ -600,7 +601,7 @@ async function sendDocumentFromLocal(
   ctx: MediaTargetContext,
   mediaPath: string,
 ): Promise<OutboundResult> {
-  const fileName = sanitizeFileName(path.basename(mediaPath));
+  const fileName = await resolveOutboundFileName(mediaPath);
 
   if (!(await fileExistsAsync(mediaPath))) {
     return { channel: "qqbot", error: "File not found" };

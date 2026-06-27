@@ -19,8 +19,8 @@ import {
 } from "../utils/payload.js";
 import { normalizePath } from "../utils/platform.js";
 import { normalizeLowercaseStringOrEmpty } from "../utils/string-normalize.js";
-import { sanitizeFileName } from "../utils/string-normalize.js";
 import { openLocalFile } from "./media-source.js";
+import { resolveOutboundFileName } from "./outbound-file-name.js";
 import {
   sendText as senderSendText,
   sendMedia as senderSendMedia,
@@ -545,7 +545,7 @@ async function handleFilePayload(ctx: ReplyContext, payload: MediaPayload): Prom
     const filePath = resolved.path;
     const isHttpUrl = resolved.isHttpUrl;
 
-    const fileName = sanitizeFileName(path.basename(filePath));
+    const fileName = await resolveOutboundFileName(filePath);
     log?.debug?.(
       `File send: ${describeMediaTargetForLog(filePath, isHttpUrl)} (${isHttpUrl ? "URL" : "local"})`,
     );
