@@ -29,7 +29,11 @@ import {
   emitAgentItemEvent,
   emitAgentPatchSummaryEvent,
 } from "../infra/agent-events.js";
-import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+import {
+  normalizeExecApprovalAllowAlwaysUnavailableReason,
+  type ExecApprovalAllowAlwaysUnavailableReason,
+  type ExecApprovalDecision,
+} from "../infra/exec-approvals.js";
 import type { PluginHookAfterToolCallEvent } from "../plugins/types.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { truncateUtf16Safe } from "../utils.js";
@@ -579,6 +583,7 @@ function readExecApprovalPendingDetails(result: unknown): {
   approvalSlug: string;
   expiresAtMs?: number;
   allowedDecisions?: readonly ExecApprovalDecision[];
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason;
   host: "gateway" | "node";
   command: string;
   cwd?: string;
@@ -613,6 +618,9 @@ function readExecApprovalPendingDetails(result: unknown): {
             decision === "allow-once" || decision === "allow-always" || decision === "deny",
         )
       : undefined,
+    allowAlwaysUnavailableReason: normalizeExecApprovalAllowAlwaysUnavailableReason(
+      readStringValue(details.allowAlwaysUnavailableReason),
+    ),
     host,
     command,
     cwd: readStringValue(details.cwd),
@@ -692,6 +700,7 @@ async function emitToolResultOutput(params: {
           approvalId: approvalPending.approvalId,
           approvalSlug: approvalPending.approvalSlug,
           allowedDecisions: approvalPending.allowedDecisions,
+          allowAlwaysUnavailableReason: approvalPending.allowAlwaysUnavailableReason,
           command: approvalPending.command,
           cwd: approvalPending.cwd,
           host: approvalPending.host,

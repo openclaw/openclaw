@@ -12,6 +12,8 @@ import {
   type ExecApprovalPendingReplyParams,
   type ExecApprovalReplyDecision,
 } from "../infra/exec-approval-reply.js";
+import { formatExecApprovalAllowAlwaysUnavailableText } from "../infra/exec-approval-unavailable-reason.js";
+import type { ExecApprovalAllowAlwaysUnavailableReason } from "../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import {
   buildApprovalPendingReplyPayload,
@@ -21,6 +23,9 @@ export { shouldSuppressLocalNativeExecApprovalPrompt } from "./approval-native-h
 import type { ReplyPayload } from "./reply-payload.js";
 
 type ApprovalKind = "exec" | "plugin";
+const APPROVAL_REACTION_ALLOW_ALWAYS_POLICY_UNAVAILABLE_TEXT =
+  "Allow Always is unavailable because the effective policy requires approval every time.";
+
 type KeyedStore<TValue> = {
   register(key: string, value: TValue, opts?: { ttlMs?: number }): Promise<void>;
   lookup(key: string): Promise<TValue | undefined>;
@@ -208,11 +213,14 @@ function buildDecisionText(allowedDecisions: readonly ExecApprovalReplyDecision[
 function buildManualInstructionSection(params: {
   approvalId: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason | null;
 }): string[] {
   const lines: string[] = [];
   if (!params.allowedDecisions.includes("allow-always")) {
     lines.push(
-      "Allow Always is unavailable because the effective policy requires approval every time.",
+      params.allowAlwaysUnavailableReason === "one-shot"
+        ? formatExecApprovalAllowAlwaysUnavailableText(params.allowAlwaysUnavailableReason)
+        : APPROVAL_REACTION_ALLOW_ALWAYS_POLICY_UNAVAILABLE_TEXT,
     );
   }
   if (params.allowedDecisions.length > 0) {
@@ -307,6 +315,8 @@ function buildApprovalReactionPromptText(params: {
   const manualInstructions = buildManualInstructionSection({
     approvalId: view.approvalId,
     allowedDecisions,
+    allowAlwaysUnavailableReason:
+      view.approvalKind === "exec" ? view.allowAlwaysUnavailableReason : undefined,
   });
   if (manualInstructions.length > 0) {
     sections.push(manualInstructions.join("\n"));
@@ -412,6 +422,10 @@ export function buildApprovalReactionPendingContent(params: {
             ask: params.view.ask ?? null,
             agentId: params.view.agentId ?? null,
             allowedDecisions: reactionPayload.allowedDecisions,
+            allowAlwaysUnavailableReason:
+              params.view.approvalKind === "exec"
+                ? params.view.allowAlwaysUnavailableReason
+                : undefined,
             command: params.view.commandText,
             cwd: params.view.cwd ?? undefined,
             host: params.view.host === "node" ? "node" : "gateway",

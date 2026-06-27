@@ -645,6 +645,28 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Allow Always is unavailable");
   });
 
+  it("explains one-shot allow-always unavailability in forwarded fallback text", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          unavailableDecisions: ["allow-always"],
+          allowAlwaysUnavailableReason: "one-shot",
+        },
+      }),
+    ).resolves.toBe(true);
+    await Promise.resolve();
+    const text = getFirstDeliveryText(deliver);
+    expect(text).toContain("Reply with: /approve req-1 allow-once|deny");
+    expect(text).toContain(
+      "Allow Always is unavailable because this command cannot be safely saved as a reusable approval.",
+    );
+    expect(text).not.toContain("effective policy requires approval every time");
+  });
+
   it.each([
     {
       command: "bash safe\u200B.sh",

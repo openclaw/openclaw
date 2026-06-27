@@ -4,6 +4,7 @@ import type { ChannelApprovalKind } from "./approval-types.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";
 import type {
   ExecApprovalDecision,
+  ExecApprovalAllowAlwaysUnavailableReason,
   ExecApprovalRequest,
   ExecApprovalResolved,
 } from "./exec-approvals.js";
@@ -39,6 +40,7 @@ type ApprovalViewBase = {
 export type ExecApprovalViewBase = ApprovalViewBase & {
   approvalKind: "exec";
   ask?: string | null;
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason | null;
   agentId?: string | null;
   warningText?: string | null;
   commandAnalysis?: CommandExplanationSummary | null;

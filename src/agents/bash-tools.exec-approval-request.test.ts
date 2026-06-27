@@ -58,8 +58,10 @@ function restoreProcessPlatformForTest(): void {
 }
 
 type ApprovalRequestPayload = {
+  allowAlwaysUnavailableReason?: string;
   approvalReviewerDeviceIds?: string[];
   commandSpans?: Array<{ startIndex: number; endIndex: number }>;
+  unavailableDecisions?: string[];
 };
 
 function requireApprovalRequestPayload(callIndex: number): ApprovalRequestPayload {
@@ -175,6 +177,25 @@ describe("exec approval requests", () => {
 
     const payload = requireApprovalRequestPayload(0);
     expect(payload?.approvalReviewerDeviceIds).toEqual(["device-ios-reviewer"]);
+  });
+
+  it("passes allow-always unavailable reasons into host approval registration payloads", async () => {
+    vi.mocked(callGatewayTool).mockResolvedValue({ id: "approval-id", expiresAtMs: 1234 });
+
+    await registerExecApprovalRequestForHost({
+      approvalId: "approval-id",
+      command: "ls *.ts",
+      unavailableDecisions: ["allow-always"],
+      allowAlwaysUnavailableReason: "one-shot",
+      workdir: "/tmp/project",
+      host: "node",
+      security: "allowlist",
+      ask: "on-miss",
+    });
+
+    const payload = requireApprovalRequestPayload(0);
+    expect(payload?.unavailableDecisions).toEqual(["allow-always"]);
+    expect(payload?.allowAlwaysUnavailableReason).toBe("one-shot");
   });
 
   it("does not generate command spans by default", async () => {

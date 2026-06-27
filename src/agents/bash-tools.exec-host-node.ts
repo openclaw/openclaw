@@ -11,6 +11,7 @@ import {
   maxAsk,
   requiresExecApproval,
   resolveExecApprovalAllowedDecisions,
+  resolveExecApprovalAllowAlwaysUnavailableReason,
   resolveExecApprovalUnavailableDecisions,
 } from "../infra/exec-approvals.js";
 import { defaultExecAutoReviewer, type ExecAutoReviewInput } from "../infra/exec-auto-review.js";
@@ -142,8 +143,17 @@ export async function executeNodeHostCommand(
     ask: approvalDecisionAsk,
     allowAlwaysPersistence,
   });
+  const allowAlwaysUnavailableReason = resolveExecApprovalAllowAlwaysUnavailableReason({
+    ask: approvalDecisionAsk,
+    allowAlwaysPersistence,
+  });
   const unavailableDecisionRequestParams =
-    unavailableDecisions.length > 0 ? { unavailableDecisions } : {};
+    unavailableDecisions.length > 0
+      ? {
+          unavailableDecisions,
+          ...(allowAlwaysUnavailableReason ? { allowAlwaysUnavailableReason } : {}),
+        }
+      : {};
   const requiresAsk =
     requiresExecApproval({
       ask: hostAsk,
@@ -456,6 +466,7 @@ export async function executeNodeHostCommand(
           sentApproverDms,
           unavailableReason,
           allowedDecisions,
+          allowAlwaysUnavailableReason,
           nodeId: target.nodeId,
         });
       }

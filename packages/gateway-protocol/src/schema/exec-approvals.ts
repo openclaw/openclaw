@@ -157,6 +157,9 @@ export const ExecApprovalRequestParamsSchema = Type.Object(
         maxItems: 1,
       }),
     ),
+    allowAlwaysUnavailableReason: Type.Optional(
+      Type.Union([Type.Literal("policy-always"), Type.Literal("one-shot")]),
+    ),
     commandSpans: Type.Optional(
       Type.Array(
         Type.Object(

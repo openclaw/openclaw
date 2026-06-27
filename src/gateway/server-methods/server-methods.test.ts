@@ -2646,6 +2646,7 @@ describe("exec approval handlers", () => {
         validateExecApprovalRequestParams({
           ...baseParams,
           unavailableDecisions: ["allow-always"],
+          allowAlwaysUnavailableReason: "one-shot",
         }),
       ).toBe(true);
     });
@@ -3402,6 +3403,55 @@ describe("exec approval handlers", () => {
 
     await requestPromise;
     expect(allowOnceRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  });
+
+  it("rejects allow-always with a one-shot unavailable reason", async () => {
+    const { handlers, broadcasts, respond, context } = createExecApprovalFixture();
+
+    const requestPromise = requestExecApproval({
+      handlers,
+      respond,
+      context,
+      params: {
+        twoPhase: true,
+        unavailableDecisions: ["allow-always"],
+        allowAlwaysUnavailableReason: "one-shot",
+      },
+    });
+    const { id, request } = await waitForRequestedExecApprovalPayload(broadcasts);
+
+    expect(request.allowAlwaysUnavailableReason).toBe("one-shot");
+
+    const resolveRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      decision: "allow-always",
+      respond: resolveRespond,
+      context,
+    });
+
+    expect(mockCallArg(resolveRespond)).toBe(false);
+    expect(mockCallArg(resolveRespond, 0, 1)).toBeUndefined();
+    expectRecordFields(mockCallArg(resolveRespond, 0, 2), {
+      message:
+        "allow-always is unavailable because this command cannot be safely saved as a reusable approval",
+    });
+    expectRecordFields((mockCallArg(resolveRespond, 0, 2) as Record<string, unknown>).details, {
+      allowAlwaysUnavailableReason: "one-shot",
+    });
+
+    const denyRespond = vi.fn();
+    await resolveExecApproval({
+      handlers,
+      id,
+      decision: "deny",
+      respond: denyRespond,
+      context,
+    });
+
+    await requestPromise;
+    expect(denyRespond).toHaveBeenCalledWith(true, { ok: true }, undefined);
   });
 
   it("keeps baseline decisions available when allow-always is unavailable", async () => {

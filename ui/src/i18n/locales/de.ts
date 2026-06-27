@@ -374,6 +374,8 @@ export const de: TranslationMap = {
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable:
       "Die wirksame Genehmigungsrichtlinie erfordert jedes Mal eine Genehmigung, daher ist Immer erlauben nicht verfügbar.",
+    allowAlwaysUnavailableOneShot:
+      "Allow Always is unavailable because this command cannot be safely saved as a reusable approval.",
     deny: "Deny",
     labels: {
       host: "Host",

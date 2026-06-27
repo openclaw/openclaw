@@ -31,7 +31,9 @@ import {
   sanitizeExecApprovalWarningText,
 } from "./exec-approval-command-display.js";
 import { formatExecApprovalExpiresIn } from "./exec-approval-reply.js";
+import { formatExecApprovalAllowAlwaysUnavailableText } from "./exec-approval-unavailable-reason.js";
 import {
+  resolveExecApprovalRequestAllowAlwaysUnavailableReason,
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
@@ -239,6 +241,9 @@ function formatApprovalCommand(command: string): { inline: boolean; text: string
 
 export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, nowMs: number) {
   const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(request.request);
+  const allowAlwaysUnavailableReason = resolveExecApprovalRequestAllowAlwaysUnavailableReason(
+    request.request,
+  );
   const decisionText = allowedDecisions.join("|");
   const lines: string[] = ["🔒 Exec approval required", `ID: ${request.id}`];
   const warningText = request.request.warningText?.trim();
@@ -293,9 +298,7 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
   );
   lines.push(`Reply with: /approve ${request.id} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "Allow Always is unavailable because the effective policy requires approval every time.",
-    );
+    lines.push(formatExecApprovalAllowAlwaysUnavailableText(allowAlwaysUnavailableReason));
   }
   return lines.join("\n");
 }

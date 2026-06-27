@@ -112,6 +112,7 @@ describe("exec approvals protocol validators", () => {
       validateExecApprovalRequestParams({
         command: "echo hi",
         unavailableDecisions: ["allow-always"],
+        allowAlwaysUnavailableReason: "one-shot",
       }),
     ).toBe(true);
 
@@ -128,5 +129,25 @@ describe("exec approvals protocol validators", () => {
         }),
       ).toBe(false);
     }
+  });
+
+  it("accepts only known allow-always unavailable reasons", () => {
+    for (const allowAlwaysUnavailableReason of ["policy-always", "one-shot"]) {
+      expect(
+        validateExecApprovalRequestParams({
+          command: "echo hi",
+          unavailableDecisions: ["allow-always"],
+          allowAlwaysUnavailableReason,
+        }),
+      ).toBe(true);
+    }
+
+    expect(
+      validateExecApprovalRequestParams({
+        command: "echo hi",
+        unavailableDecisions: ["allow-always"],
+        allowAlwaysUnavailableReason: "unknown",
+      }),
+    ).toBe(false);
   });
 });

@@ -1547,6 +1547,42 @@ describe("handleToolExecutionEnd exec approval prompts", () => {
     ]);
   });
 
+  it("preserves allow-always unavailable reasons from tool details", async () => {
+    const { ctx } = createTestContext();
+    const onToolResult = vi.fn();
+    ctx.params.onToolResult = onToolResult;
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-approval-one-shot",
+        isError: false,
+        result: {
+          details: {
+            status: "approval-pending",
+            approvalId: "12345678-1234-1234-1234-123456789012",
+            approvalSlug: "12345678",
+            expiresAtMs: 1_800_000_000_000,
+            allowedDecisions: ["allow-once", "deny"],
+            allowAlwaysUnavailableReason: "one-shot",
+            host: "gateway",
+            command: "npm view diver name version description",
+          },
+        },
+      } as never,
+    );
+
+    const result = requireMockCallArg(onToolResult, 0, "tool result");
+    expect(requireString(result.text, "tool result text")).toContain(
+      "Allow Always is unavailable because this command cannot be safely saved as a reusable approval.",
+    );
+    expect(requireString(result.text, "tool result text")).not.toContain(
+      "effective approval policy requires approval every time",
+    );
+  });
+
   it("emits a deterministic unavailable payload when the initiating surface cannot approve", async () => {
     const { ctx } = createTestContext();
     const onToolResult = vi.fn();

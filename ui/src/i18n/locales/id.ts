@@ -371,6 +371,8 @@ export const id: TranslationMap = {
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable:
       "Kebijakan persetujuan yang berlaku mengharuskan persetujuan setiap kali, sehingga Izinkan Selalu tidak tersedia.",
+    allowAlwaysUnavailableOneShot:
+      "Allow Always is unavailable because this command cannot be safely saved as a reusable approval.",
     deny: "Deny",
     labels: {
       host: "Host",

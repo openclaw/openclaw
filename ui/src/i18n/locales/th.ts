@@ -369,6 +369,8 @@ export const th: TranslationMap = {
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable:
       "นโยบายการอนุมัติที่มีผลบังคับใช้กำหนดให้ต้องอนุมัติทุกครั้ง ดังนั้น Allow Always จึงไม่พร้อมใช้งาน",
+    allowAlwaysUnavailableOneShot:
+      "Allow Always is unavailable because this command cannot be safely saved as a reusable approval.",
     deny: "Deny",
     labels: {
       host: "Host",

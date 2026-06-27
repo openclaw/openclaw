@@ -371,6 +371,8 @@ export const vi: TranslationMap = {
     alwaysAllow: "Luôn cho phép",
     allowAlwaysUnavailable:
       "Chính sách phê duyệt có hiệu lực yêu cầu phê duyệt mọi lần, vì vậy Không cho phép Luôn cho phép.",
+    allowAlwaysUnavailableOneShot:
+      "Allow Always is unavailable because this command cannot be safely saved as a reusable approval.",
     deny: "Từ chối",
     labels: {
       host: "Máy chủ",

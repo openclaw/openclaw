@@ -158,6 +158,25 @@ describe("approval and confirmation modals", () => {
     );
   });
 
+  it("explains one-shot unavailable exec approval decisions", async () => {
+    const request = createExecRequest();
+    request.request.allowedDecisions = ["allow-once", "deny"];
+    request.request.allowAlwaysUnavailableReason = "one-shot";
+
+    render(renderExecApprovalPrompt(createExecState({ execApprovalQueue: [request] })), container);
+
+    await getRenderedDialog();
+
+    expect(
+      Array.from(container.querySelectorAll(".exec-approval-actions button")).map((button) =>
+        button.textContent?.trim(),
+      ),
+    ).toEqual(["Allow once", "Deny"]);
+    expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
+      "Allow Always is unavailable because this command cannot be safely saved as a reusable approval.",
+    );
+  });
+
   it("falls back to ask when exec approval decisions are omitted", async () => {
     const request = createExecRequest();
     request.request.ask = "always";

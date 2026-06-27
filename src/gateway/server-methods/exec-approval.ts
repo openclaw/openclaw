@@ -19,9 +19,12 @@ import {
   sanitizeExecApprovalWarningText,
 } from "../../infra/exec-approval-command-display.js";
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
+import { formatExecApprovalAllowAlwaysUnavailableErrorMessage } from "../../infra/exec-approval-unavailable-reason.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
+  normalizeExecApprovalAllowAlwaysUnavailableReason,
   normalizeExecApprovalUnavailableDecisions,
+  resolveExecApprovalRequestAllowAlwaysUnavailableReason,
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
@@ -171,6 +174,7 @@ export function createExecApprovalHandlers(
         ask?: string;
         warningText?: string | null;
         unavailableDecisions?: string[];
+        allowAlwaysUnavailableReason?: string;
         commandSpans?: {
           startIndex: number;
           endIndex: number;
@@ -305,6 +309,9 @@ export function createExecApprovalHandlers(
       const unavailableDecisions = normalizeExecApprovalUnavailableDecisions(
         p.unavailableDecisions,
       );
+      const allowAlwaysUnavailableReason = normalizeExecApprovalAllowAlwaysUnavailableReason(
+        p.allowAlwaysUnavailableReason,
+      );
       const request = {
         command: sanitizedCommandText,
         commandPreview:
@@ -324,6 +331,7 @@ export function createExecApprovalHandlers(
         commandAnalysis,
         commandSpans,
         unavailableDecisions: unavailableDecisions.length > 0 ? unavailableDecisions : undefined,
+        allowAlwaysUnavailableReason,
         allowedDecisions: resolveExecApprovalRequestAllowedDecisions({
           ask: p.ask ?? null,
           unavailableDecisions,
@@ -457,11 +465,19 @@ export function createExecApprovalHandlers(
           const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(snapshot.request);
           return allowedDecisions.includes(decision)
             ? null
-            : {
-                message:
-                  "allow-always is unavailable because the effective policy requires approval every time",
-                details: APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS,
-              };
+            : (() => {
+                const allowAlwaysUnavailableReason =
+                  resolveExecApprovalRequestAllowAlwaysUnavailableReason(snapshot.request);
+                return {
+                  message: formatExecApprovalAllowAlwaysUnavailableErrorMessage(
+                    allowAlwaysUnavailableReason,
+                  ),
+                  details: {
+                    ...APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS,
+                    allowAlwaysUnavailableReason,
+                  },
+                };
+              })();
         },
         resolvedEventName: "exec.approval.resolved",
         buildResolvedEvent: ({

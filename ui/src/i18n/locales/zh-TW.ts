@@ -368,6 +368,8 @@ export const zh_TW: TranslationMap = {
     allowOnce: "Allow once",
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable: "有效的核准政策要求每次都需核准，因此「一律允許」無法使用。",
+    allowAlwaysUnavailableOneShot:
+      "Allow Always is unavailable because this command cannot be safely saved as a reusable approval.",
     deny: "Deny",
     labels: {
       host: "Host",

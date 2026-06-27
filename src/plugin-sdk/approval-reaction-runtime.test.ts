@@ -187,6 +187,26 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     });
   });
 
+  it("explains one-shot exec reaction prompts without blaming policy", () => {
+    const payload = buildApprovalReactionPromptPayloadForRequest({
+      request: {
+        ...execRequest,
+        request: {
+          ...execRequest.request,
+          unavailableDecisions: ["allow-always"],
+          allowAlwaysUnavailableReason: "one-shot",
+        },
+      },
+      nowMs: 1_000,
+    });
+
+    expect(payload.text).toContain(
+      "Allow Always is unavailable because this command cannot be safely saved as a reusable approval.",
+    );
+    expect(payload.text).not.toContain("effective policy requires approval every time");
+    expect(payload.text).toContain("Reply with: /approve exec-approval-123 allow-once|deny");
+  });
+
   it("keeps plugin command actions visible for custom prompt views", () => {
     const payload = buildApprovalPendingPromptPayload({
       request: {

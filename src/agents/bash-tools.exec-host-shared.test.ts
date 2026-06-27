@@ -554,6 +554,36 @@ describe("buildExecApprovalPendingToolResult", () => {
     expect(text).not.toContain("native chat exec approvals are not configured on Discord");
   });
 
+  it("explains one-shot allow-always unavailability in local approval prompts", () => {
+    const result = buildExecApprovalPendingToolResult({
+      host: "gateway",
+      command: "openclaw --version 2>&1",
+      cwd: process.cwd(),
+      warningText: "",
+      approvalId: "approval-id",
+      approvalSlug: "approval-slug",
+      expiresAtMs: Date.now() + 60_000,
+      initiatingSurface: {
+        kind: "disabled",
+        channel: "discord",
+        channelLabel: "Discord",
+        accountId: "default",
+      },
+      sentApproverDms: false,
+      unavailableReason: null,
+      allowedDecisions: ["allow-once", "deny"],
+      allowAlwaysUnavailableReason: "one-shot",
+    });
+
+    const text = result.content.find((part) => part.type === "text")?.text ?? "";
+    expect(result.details.status).toBe("approval-pending");
+    expect(result.details.allowAlwaysUnavailableReason).toBe("one-shot");
+    expect(text).toContain(
+      "Allow Always is unavailable because this command cannot be safely saved as a reusable approval.",
+    );
+    expect(text).not.toContain("effective approval policy requires approval every time");
+  });
+
   it("returns an unavailable reply when Discord exec approvals are disabled", () => {
     const result = buildDisabledSurfaceApprovalResult({
       channel: "discord",

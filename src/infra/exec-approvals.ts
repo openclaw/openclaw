@@ -221,6 +221,7 @@ export type ExecApprovalRequestPayload = {
   commandAnalysis?: CommandExplanationSummary | null;
   commandSpans?: ExecApprovalCommandSpan[];
   unavailableDecisions?: readonly ExecApprovalUnavailableDecision[];
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason;
   allowedDecisions?: readonly ExecApprovalDecision[];
   agentId?: string | null;
   resolvedPath?: string | null;
@@ -1783,9 +1784,18 @@ export const OPTIONAL_EXEC_APPROVAL_DECISIONS = [
   "allow-always",
 ] as const satisfies readonly ExecApprovalDecision[];
 export type ExecApprovalUnavailableDecision = (typeof OPTIONAL_EXEC_APPROVAL_DECISIONS)[number];
+export const EXEC_APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_REASONS = [
+  "policy-always",
+  "one-shot",
+] as const;
+export type ExecApprovalAllowAlwaysUnavailableReason =
+  (typeof EXEC_APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_REASONS)[number];
 
 const OPTIONAL_EXEC_APPROVAL_DECISION_SET: ReadonlySet<string> = new Set(
   OPTIONAL_EXEC_APPROVAL_DECISIONS,
+);
+const EXEC_APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_REASON_SET: ReadonlySet<string> = new Set(
+  EXEC_APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_REASONS,
 );
 
 function isOptionalExecApprovalDecision(
@@ -1816,6 +1826,14 @@ export function normalizeExecApprovalUnavailableDecisions(
   return OPTIONAL_EXEC_APPROVAL_DECISIONS.filter((decision) => unavailable.has(decision));
 }
 
+export function normalizeExecApprovalAllowAlwaysUnavailableReason(
+  reason?: string | null,
+): ExecApprovalAllowAlwaysUnavailableReason | undefined {
+  return reason && EXEC_APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_REASON_SET.has(reason)
+    ? (reason as ExecApprovalAllowAlwaysUnavailableReason)
+    : undefined;
+}
+
 export function resolveExecApprovalAllowedDecisions(params?: {
   ask?: string | null;
   allowAlwaysPersistence?: AllowAlwaysPersistenceDecision | null;
@@ -1833,6 +1851,40 @@ export function resolveExecApprovalUnavailableDecisions(params?: {
 }): readonly ExecApprovalUnavailableDecision[] {
   const allowed = new Set(resolveExecApprovalAllowedDecisions(params));
   return OPTIONAL_EXEC_APPROVAL_DECISIONS.filter((decision) => !allowed.has(decision));
+}
+
+export function resolveExecApprovalAllowAlwaysUnavailableReason(params?: {
+  ask?: string | null;
+  allowAlwaysPersistence?: AllowAlwaysPersistenceDecision | null;
+}): ExecApprovalAllowAlwaysUnavailableReason | undefined {
+  const ask = normalizeExecAsk(params?.ask);
+  if (ask === "always") {
+    return "policy-always";
+  }
+  if (params?.allowAlwaysPersistence?.kind === "one-shot") {
+    return "one-shot";
+  }
+  return undefined;
+}
+
+export function resolveExecApprovalRequestAllowAlwaysUnavailableReason(params?: {
+  ask?: string | null;
+  unavailableDecisions?: readonly ExecApprovalUnavailableDecision[] | readonly string[] | null;
+  allowAlwaysUnavailableReason?: string | null;
+}): ExecApprovalAllowAlwaysUnavailableReason | undefined {
+  const normalizedReason = normalizeExecApprovalAllowAlwaysUnavailableReason(
+    params?.allowAlwaysUnavailableReason,
+  );
+  if (normalizedReason) {
+    return normalizedReason;
+  }
+  if (normalizeExecAsk(params?.ask) === "always") {
+    return "policy-always";
+  }
+  const unavailableDecisions = collectExecApprovalUnavailableDecisionSet(
+    params?.unavailableDecisions,
+  );
+  return unavailableDecisions.has("allow-always") ? "policy-always" : undefined;
 }
 
 export function resolveExecApprovalRequestAllowedDecisions(params?: {

@@ -11,9 +11,11 @@ import {
   resolveEventSessionKeyForPolicy,
   scopedHeartbeatWakeOptionsForPolicy,
 } from "../infra/event-session-routing.js";
+import { formatExecApprovalAllowAlwaysUnavailableText } from "../infra/exec-approval-unavailable-reason.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
+  type ExecApprovalAllowAlwaysUnavailableReason,
   type ExecHost,
   type ExecApprovalDecision,
   type ExecTarget,
@@ -368,6 +370,7 @@ export function buildApprovalPendingMessage(params: {
   approvalSlug: string;
   approvalId: string;
   allowedDecisions?: readonly ExecApprovalDecision[];
+  allowAlwaysUnavailableReason?: ExecApprovalAllowAlwaysUnavailableReason;
   command: string;
   cwd: string | undefined;
   host: "gateway" | "node";
@@ -401,9 +404,7 @@ export function buildApprovalPendingMessage(params: {
   );
   lines.push(`Reply with: /approve ${params.approvalSlug} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
-    );
+    lines.push(formatExecApprovalAllowAlwaysUnavailableText(params.allowAlwaysUnavailableReason));
   }
   lines.push("If the short code is ambiguous, use the full id in /approve.");
   return lines.join("\n");

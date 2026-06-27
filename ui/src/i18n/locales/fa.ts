@@ -372,6 +372,8 @@ export const fa: TranslationMap = {
     alwaysAllow: "همیشه مجاز کن",
     allowAlwaysUnavailable:
       "سیاست تأیید مؤثر هر بار به تأیید نیاز دارد، بنابراین «همیشه مجاز باشد» در دسترس نیست.",
+    allowAlwaysUnavailableOneShot:
+      "Allow Always is unavailable because this command cannot be safely saved as a reusable approval.",
     deny: "رد کردن",
     labels: {
       host: "میزبان",

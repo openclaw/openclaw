@@ -13,6 +13,7 @@ import {
   commandRequiresSecurityAuditSuppressionApproval,
   type ExecAsk,
   resolveExecApprovalAllowedDecisions,
+  resolveExecApprovalAllowAlwaysUnavailableReason,
   type ExecCommandSegment,
   type ExecSecurity,
   type ExecSegmentSatisfiedBy,
@@ -597,9 +598,18 @@ export async function processGatewayAllowlist(
     ask: hostAsk,
     allowAlwaysPersistence: effectiveAllowAlwaysPersistence,
   });
+  const approvalAllowAlwaysUnavailableReason = resolveExecApprovalAllowAlwaysUnavailableReason({
+    ask: hostAsk,
+    allowAlwaysPersistence: effectiveAllowAlwaysPersistence,
+  });
   const unavailableDecisionRequestParams =
     approvalUnavailableDecisions.length > 0
-      ? { unavailableDecisions: approvalUnavailableDecisions }
+      ? {
+          unavailableDecisions: approvalUnavailableDecisions,
+          ...(approvalAllowAlwaysUnavailableReason
+            ? { allowAlwaysUnavailableReason: approvalAllowAlwaysUnavailableReason }
+            : {}),
+        }
       : {};
   if (requiresSecurityAuditSuppressionApproval) {
     params.warnings.push(
@@ -1015,6 +1025,7 @@ export async function processGatewayAllowlist(
         sentApproverDms,
         unavailableReason,
         allowedDecisions: approvalAllowedDecisions,
+        allowAlwaysUnavailableReason: approvalAllowAlwaysUnavailableReason,
       }),
     };
   }

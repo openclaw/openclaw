@@ -369,6 +369,8 @@ export const en: TranslationMap = {
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable:
       "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    allowAlwaysUnavailableOneShot:
+      "Allow Always is unavailable because this command cannot be safely saved as a reusable approval.",
     deny: "Deny",
     labels: {
       host: "Host",

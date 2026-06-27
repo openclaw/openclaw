@@ -17,9 +17,11 @@ import {
   listNativeExecApprovalClientLabels,
   supportsNativeExecApprovalClient,
 } from "./exec-approval-surface.js";
+import { formatExecApprovalAllowAlwaysUnavailableText } from "./exec-approval-unavailable-reason.js";
 import {
   resolveExecApprovalAllowedDecisions,
   type ExecApprovalDecision,
+  type ExecApprovalRequestPayload,
   type ExecHost,
 } from "./exec-approvals.js";
 
@@ -53,6 +55,7 @@ export type ExecApprovalPendingReplyParams = {
   ask?: string | null;
   agentId?: string | null;
   allowedDecisions?: readonly ExecApprovalReplyDecision[];
+  allowAlwaysUnavailableReason?: ExecApprovalRequestPayload["allowAlwaysUnavailableReason"];
   command: string;
   cwd?: string;
   host: ExecHost;
@@ -376,9 +379,7 @@ export function buildExecApprovalPendingReplyPayload(
     lines.push(secondaryFence);
   }
   if (!allowedDecisions.includes("allow-always")) {
-    lines.push(
-      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
-    );
+    lines.push(formatExecApprovalAllowAlwaysUnavailableText(params.allowAlwaysUnavailableReason));
   }
   const info: string[] = [];
   info.push(`Host: ${params.host}`);

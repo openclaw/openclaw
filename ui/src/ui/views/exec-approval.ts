@@ -155,7 +155,13 @@ function renderUnavailableDecisionWarning(
 ) {
   return active.kind !== "exec" || decisions.includes("allow-always")
     ? nothing
-    : html`<div class="exec-approval-warning">${t("execApproval.allowAlwaysUnavailable")}</div>`;
+    : html`<div class="exec-approval-warning">
+        ${t(
+          active.request.allowAlwaysUnavailableReason === "one-shot"
+            ? "execApproval.allowAlwaysUnavailableOneShot"
+            : "execApproval.allowAlwaysUnavailable",
+        )}
+      </div>`;
 }
 
 export function renderExecApprovalPrompt(state: AppViewState) {

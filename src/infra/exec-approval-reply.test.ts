@@ -368,6 +368,22 @@ describe("exec approval reply helpers", () => {
     expect(payload.interactive).toBeUndefined();
   });
 
+  it("explains one-shot allow-always unavailability without blaming policy", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-one-shot",
+      approvalSlug: "slug-one-shot",
+      allowedDecisions: ["allow-once", "deny"],
+      allowAlwaysUnavailableReason: "one-shot",
+      command: "openclaw --version 2>&1",
+      host: "gateway",
+    });
+
+    expect(payload.text).toContain(
+      "Allow Always is unavailable because this command cannot be safely saved as a reusable approval.",
+    );
+    expect(payload.text).not.toContain("effective approval policy requires approval every time");
+  });
+
   it("stores agent and session metadata for downstream suppression checks", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-meta",

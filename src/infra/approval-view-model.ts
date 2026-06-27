@@ -12,6 +12,7 @@ import type {
 import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-display.js";
 import { buildExecApprovalActionDescriptors } from "./exec-approval-reply.js";
 import {
+  resolveExecApprovalRequestAllowAlwaysUnavailableReason,
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequest,
 } from "./exec-approvals.js";
@@ -71,6 +72,8 @@ function buildExecViewBase<TPhase extends ApprovalPhase>(
     description: phase === "pending" ? "A command needs your approval." : null,
     metadata: buildExecMetadata(request),
     ask: request.request.ask ?? null,
+    allowAlwaysUnavailableReason:
+      resolveExecApprovalRequestAllowAlwaysUnavailableReason(request.request) ?? null,
     agentId: request.request.agentId ?? null,
     warningText: request.request.warningText ?? null,
     commandAnalysis: request.request.commandAnalysis ?? null,
