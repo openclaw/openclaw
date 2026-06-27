@@ -9,7 +9,14 @@ import {
   type ThinkingLevel,
 } from "openclaw/plugin-sdk/llm";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import { createProviderHttpError } from "openclaw/plugin-sdk/provider-http";
+import {
+  collectProviderApiKeysForExecution,
+  executeWithApiKeyRotation,
+} from "openclaw/plugin-sdk/provider-auth-runtime";
+import {
+  createProviderHttpError,
+  providerOperationRetryConfig,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   buildGuardedModelFetch,
   coerceTransportToolCallArguments,
@@ -792,6 +799,26 @@ function buildGoogleHeaders(
   );
 }
 
+function isGoogleOauthApiKey(apiKey: string | undefined): boolean {
+  return Boolean(
+    apiKey?.trimStart().startsWith("{") && parseGeminiAuth(apiKey).headers.Authorization,
+  );
+}
+
+function collectGoogleTransportApiKeys(params: {
+  kind: CanonicalGoogleTransportApi;
+  provider: string;
+  primaryApiKey: string | undefined;
+}): string[] {
+  if (params.kind !== "google-generative-ai" || isGoogleOauthApiKey(params.primaryApiKey)) {
+    return [];
+  }
+  return collectProviderApiKeysForExecution({
+    provider: params.provider,
+    primaryApiKey: params.primaryApiKey,
+  });
+}
+
 async function buildGoogleVertexHeaders(
   model: GoogleTransportModel,
   apiKey: string | undefined,
@@ -1248,22 +1275,39 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           params = nextParams as GoogleGenerateContentRequest;
         }
         const requestUrl = buildGoogleTransportRequestUrl(kind, model, options);
-        const requestHeaders = await buildGoogleTransportHeaders({
+        const fetchImpl = (options as { fetch?: typeof fetch } | undefined)?.fetch;
+        const openSse = async (apiKeyForRequest: string | undefined) => {
+          const requestHeaders = await buildGoogleTransportHeaders({
+            kind,
+            model,
+            apiKey: apiKeyForRequest,
+            optionHeaders: options?.headers,
+            fetchImpl,
+          });
+          return await openGoogleSseChunks({
+            kind,
+            model,
+            options,
+            guardedFetch,
+            url: requestUrl,
+            headers: requestHeaders,
+            request: params,
+          });
+        };
+        const apiKeys = collectGoogleTransportApiKeys({
           kind,
-          model,
-          apiKey,
-          optionHeaders: options?.headers,
-          fetchImpl: (options as { fetch?: typeof fetch } | undefined)?.fetch,
+          provider: model.provider,
+          primaryApiKey: apiKey,
         });
-        const sse = await openGoogleSseChunks({
-          kind,
-          model,
-          options,
-          guardedFetch,
-          url: requestUrl,
-          headers: requestHeaders,
-          request: params,
-        });
+        const sse =
+          apiKeys.length > 0
+            ? await executeWithApiKeyRotation({
+                provider: model.provider,
+                apiKeys,
+                transientRetry: providerOperationRetryConfig("read"),
+                execute: openSse,
+              })
+            : await openSse(apiKey);
         stream.push({ type: "start", partial: output as never });
         let currentBlockIndex = -1;
         const toolCallBlocksById = new Map<
