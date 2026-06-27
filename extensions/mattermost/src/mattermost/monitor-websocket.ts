@@ -129,10 +129,14 @@ const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url, opti
   }) as MattermostWebSocketLike;
 };
 
+function isMattermostPostEvent(event: string | undefined): event is "posted" | "post_edited" {
+  return event === "posted" || event === "post_edited";
+}
+
 function parsePostedPayload(
   payload: MattermostEventPayload,
 ): { payload: MattermostEventPayload; post: MattermostPost } | null {
-  if (payload.event !== "posted") {
+  if (!isMattermostPostEvent(payload.event)) {
     return null;
   }
   const postData = payload.data?.post;
@@ -372,9 +376,6 @@ export function createMattermostConnectOnce(
             return;
           }
 
-          if (payload.event !== "posted") {
-            return;
-          }
           const parsed = parsePostedPayload(payload);
           if (!parsed) {
             return;
