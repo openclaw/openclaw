@@ -563,7 +563,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         },
         listPeers: async ({ cfg, accountId, query, limit }) => {
           const msteamsCfg = resolveMSTeamsAccountConfig(cfg, accountId);
-          return await listDirectoryEntriesFromSources({
+          return listDirectoryEntriesFromSources({
             kind: "user",
             sources: [msteamsCfg.allowFrom ?? [], Object.keys(msteamsCfg.dms ?? {})],
             query,
@@ -580,7 +580,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         },
         listGroups: async ({ cfg, accountId, query, limit }) => {
           const msteamsCfg = resolveMSTeamsAccountConfig(cfg, accountId);
-          return await listDirectoryEntriesFromSources({
+          return listDirectoryEntriesFromSources({
             kind: "group",
             sources: [
               Object.values(msteamsCfg.teams ?? {}).flatMap((team) =>
@@ -1165,7 +1165,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
           buildProbeChannelStatusSummary(snapshot, {
             port: snapshot.port ?? null,
           }),
-        probeAccount: async ({ cfg, account }) =>
+        probeAccount: async ({ account }) =>
           await (
             await loadMSTeamsChannelRuntime()
           ).probeMSTeams(account.config, {

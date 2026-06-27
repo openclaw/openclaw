@@ -382,6 +382,27 @@ describe("models.pricing", () => {
   });
 });
 
+describe("channels.msteams", () => {
+  it("accepts named account display names", () => {
+    const result = OpenClawSchema.safeParse({
+      channels: {
+        msteams: {
+          tenantId: "tenant-id",
+          accounts: {
+            support: {
+              name: "Support Teams bot",
+              appId: "app-id",
+              appPassword: "app-password",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
 describe("crestodian.rescue", () => {
   it("accepts documented rescue config", () => {
     const result = OpenClawSchema.safeParse({

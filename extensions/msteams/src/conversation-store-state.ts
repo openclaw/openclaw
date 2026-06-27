@@ -255,11 +255,12 @@ export function createAccountScopedMSTeamsConversationStore(
   const listScoped = async () =>
     (await store.list())
       .filter((entry) => entry.conversationId.startsWith(prefix))
-      .map((entry) => ({
-        ...entry,
-        conversationId: unscopedId(entry.conversationId),
-        reference: unscopedReference(entry.reference) ?? entry.reference,
-      }));
+      .map((entry) => {
+        return Object.assign({}, entry, {
+          conversationId: unscopedId(entry.conversationId),
+          reference: unscopedReference(entry.reference) ?? entry.reference,
+        });
+      });
   return {
     upsert: async (conversationId, reference) =>
       await store.upsert(scopedId(conversationId), reference),

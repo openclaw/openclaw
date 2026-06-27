@@ -5,18 +5,33 @@ import {
   DEFAULT_ACCOUNT_ID,
   createSetupTranslator,
   normalizeAccountId,
+  type ChannelSetupInput,
   type ChannelSetupAdapter,
   type ChannelSetupWizard,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import type { MSTeamsConfig } from "../runtime-api.js";
-import { resolveDefaultMSTeamsAccountId, resolveMSTeamsAccountConfig } from "./accounts.js";
+import {
+  resolveDefaultMSTeamsAccountId,
+  resolveMSTeamsAccountConfig,
+  type MSTeamsMultiAccountConfig,
+} from "./accounts.js";
 import { normalizeSecretInputString } from "./secret-input.js";
 import { hasConfiguredMSTeamsCredentials, resolveMSTeamsCredentials } from "./token.js";
 
 const t = createSetupTranslator();
 const channel = "msteams" as const;
+
+type MSTeamsSetupInput = ChannelSetupInput & {
+  appId?: string;
+  appPassword?: string;
+  tenantId?: string;
+};
+
+type MSTeamsSetupAccountConfig = Partial<MSTeamsConfig> & {
+  name?: string;
+};
 
 function resolveSetupAccountId(cfg: OpenClawConfig, accountId?: string | null): string {
   return normalizeAccountId(accountId ?? resolveDefaultMSTeamsAccountId(cfg));
@@ -25,20 +40,20 @@ function resolveSetupAccountId(cfg: OpenClawConfig, accountId?: string | null): 
 function resolveRawMSTeamsAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
-): Partial<MSTeamsConfig> {
+): MSTeamsSetupAccountConfig {
   const normalized = normalizeAccountId(accountId);
-  const msteams = cfg.channels?.msteams ?? {};
+  const msteams = (cfg.channels?.msteams ?? {}) as MSTeamsMultiAccountConfig;
   return normalized === DEFAULT_ACCOUNT_ID ? msteams : (msteams.accounts?.[normalized] ?? {});
 }
 
 export function patchMSTeamsAccountConfig(params: {
   cfg: OpenClawConfig;
   accountId: string;
-  patch: Partial<MSTeamsConfig>;
+  patch: MSTeamsSetupAccountConfig;
   ensureEnabled?: boolean;
 }): OpenClawConfig {
   const accountId = normalizeAccountId(params.accountId);
-  const msteams = params.cfg.channels?.msteams ?? {};
+  const msteams = (params.cfg.channels?.msteams ?? {}) as MSTeamsMultiAccountConfig;
   const ensureEnabled = params.ensureEnabled ?? true;
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return {
@@ -55,7 +70,7 @@ export function patchMSTeamsAccountConfig(params: {
   }
 
   const accounts = msteams.accounts ?? {};
-  const existing = accounts[accountId] ?? {};
+  const existing = (accounts[accountId] ?? {}) as MSTeamsSetupAccountConfig;
   return {
     ...params.cfg,
     channels: {
@@ -71,7 +86,7 @@ export function patchMSTeamsAccountConfig(params: {
             ...params.patch,
           },
         },
-      },
+      } as MSTeamsMultiAccountConfig,
     },
   };
 }
@@ -111,25 +126,30 @@ export const msteamsSetupAdapter: ChannelSetupAdapter = {
       : cfg;
   },
   validateInput: ({ accountId, input }) => {
-    if (input.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
+    const msteamsInput = input as MSTeamsSetupInput;
+    if (msteamsInput.useEnv && accountId !== DEFAULT_ACCOUNT_ID) {
       return "MSTEAMS_* environment variables can only be used for the default account.";
     }
-    if (!input.useEnv && !(input.appId && input.appPassword && input.tenantId)) {
+    if (
+      !msteamsInput.useEnv &&
+      !(msteamsInput.appId && msteamsInput.appPassword && msteamsInput.tenantId)
+    ) {
       return "MS Teams requires appId, appPassword, and tenantId (or --use-env for the default account).";
     }
     return null;
   },
   applyAccountConfig: ({ cfg, accountId, input }) => {
     const resolvedAccountId = resolveSetupAccountId(cfg, accountId);
-    const patch: Partial<MSTeamsConfig> = {};
-    if (typeof input.appId === "string" && input.appId.trim()) {
-      patch.appId = input.appId.trim();
+    const msteamsInput = input as MSTeamsSetupInput;
+    const patch: MSTeamsSetupAccountConfig = {};
+    if (typeof msteamsInput.appId === "string" && msteamsInput.appId.trim()) {
+      patch.appId = msteamsInput.appId.trim();
     }
-    if (typeof input.appPassword === "string" && input.appPassword.trim()) {
-      patch.appPassword = input.appPassword.trim();
+    if (typeof msteamsInput.appPassword === "string" && msteamsInput.appPassword.trim()) {
+      patch.appPassword = msteamsInput.appPassword.trim();
     }
-    if (typeof input.tenantId === "string" && input.tenantId.trim()) {
-      patch.tenantId = input.tenantId.trim();
+    if (typeof msteamsInput.tenantId === "string" && msteamsInput.tenantId.trim()) {
+      patch.tenantId = msteamsInput.tenantId.trim();
     }
     return patchMSTeamsAccountConfig({
       cfg,
@@ -164,7 +184,7 @@ function setMSTeamsAccountCredentials(params: {
       appPassword: params.appPassword,
       tenantId: params.tenantId,
       ...(params.webhookPort !== undefined
-        ? { webhook: { ...(existing.webhook ?? {}), port: params.webhookPort } }
+        ? { webhook: { ...existing.webhook, port: params.webhookPort } }
         : {}),
     },
   });
@@ -179,7 +199,7 @@ function setMSTeamsAccountWebhookPort(params: {
   return patchMSTeamsAccountConfig({
     cfg: params.cfg,
     accountId: params.accountId,
-    patch: { webhook: { ...(existing.webhook ?? {}), port: params.port } },
+    patch: { webhook: { ...existing.webhook, port: params.port } },
   });
 }
 

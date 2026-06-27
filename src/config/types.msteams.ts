@@ -80,6 +80,8 @@ export type MSTeamsTeamConfig = {
 };
 
 export type MSTeamsConfig = {
+  /** Optional display name for this account (used in CLI/UI lists). */
+  name?: string;
   /** If false, do not start the MS Teams provider. Default: true. */
   enabled?: boolean;
   /** Optional provider capability tags used for agent/runtime guidance. */

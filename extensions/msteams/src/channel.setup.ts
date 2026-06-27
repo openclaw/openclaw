@@ -75,7 +75,7 @@ const msteamsConfigAdapter = {
   deleteAccount: (params: { cfg: OpenClawConfig; accountId: string }) =>
     params.accountId === DEFAULT_ACCOUNT_ID
       ? deleteMSTeamsDefaultAccountIdentity(params.cfg)
-      : msteamsBaseConfigAdapter.deleteAccount(params),
+      : msteamsBaseConfigAdapter.deleteAccount!(params),
 };
 
 export const msteamsSetupPlugin: ChannelPlugin<ResolvedMSTeamsAccount> = {

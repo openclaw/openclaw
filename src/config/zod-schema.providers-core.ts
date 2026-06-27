@@ -1605,6 +1605,7 @@ function isAzureChinaBotFrameworkServiceUrl(value: string): boolean {
 
 const MSTeamsAccountConfigSchema = z
   .object({
+    name: z.string().optional(),
     enabled: z.boolean().optional(),
     capabilities: z.array(z.string()).optional(),
     dangerouslyAllowNameMatching: z.boolean().optional(),

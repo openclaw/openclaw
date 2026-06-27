@@ -8,7 +8,7 @@ import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import type { MSTeamsConfig, OpenClawConfig } from "../runtime-api.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
-type MSTeamsMultiAccountConfig = MSTeamsConfig & {
+export type MSTeamsMultiAccountConfig = MSTeamsConfig & {
   accounts?: Record<string, Partial<MSTeamsConfig>>;
   defaultAccount?: string;
 };
@@ -63,8 +63,8 @@ function clearNamedAccountInheritedIdentity(
   const mergedWebhook = merged.webhook;
   if (mergedWebhook || accountWebhook) {
     next.webhook = {
-      ...(mergedWebhook ?? {}),
-      ...(accountWebhook ?? {}),
+      ...mergedWebhook,
+      ...accountWebhook,
     };
     if (accountWebhook?.port === undefined) {
       delete next.webhook.port;
@@ -79,9 +79,7 @@ export function resolveMSTeamsAccountConfig(
 ): MSTeamsConfig {
   const resolvedAccountId = normalizeAccountId(accountId ?? resolveDefaultMSTeamsAccountId(cfg));
   const channelConfig = cfg.channels?.msteams as MSTeamsMultiAccountConfig | undefined;
-  const account = resolveAccountEntry(channelConfig?.accounts, resolvedAccountId) as
-    | Partial<MSTeamsConfig>
-    | undefined;
+  const account = resolveAccountEntry(channelConfig?.accounts, resolvedAccountId);
   const merged = resolveMergedAccountConfig<MSTeamsConfig>({
     channelConfig,
     accounts: channelConfig?.accounts,
