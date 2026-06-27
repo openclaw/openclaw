@@ -262,6 +262,28 @@ describe("createDeepSeekV4OpenAICompatibleThinkingWrapper", () => {
     expect(payload.messages[3]).toHaveProperty("reasoning_content", "");
     expect(payload.messages[4]).toHaveProperty("reasoning_content", "native reasoning");
   });
+
+  it("removes OpenRouter reasoning envelopes when sending DeepSeek native effort", () => {
+    const payload: Record<string, unknown> = {
+      reasoning: { effort: "high" },
+    };
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload as never, _model as never);
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const wrapped = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn,
+      thinkingLevel: "high",
+      shouldPatchModel: () => true,
+    });
+    void wrapped?.({} as never, { messages: [] } as never, {});
+
+    expect(payload).toEqual({
+      thinking: { type: "enabled" },
+      reasoning_effort: "high",
+    });
+  });
 });
 
 describe("createPayloadPatchStreamWrapper", () => {
