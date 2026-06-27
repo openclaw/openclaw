@@ -403,12 +403,16 @@ export function buildApprovalPendingMessage(params: {
   );
   lines.push(`Reply with: /approve ${params.approvalSlug} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
+    // When `ask` is omitted (e.g. plugin SDK callers passing filtered decisions
+    // without the full exec context), default to the policy-required explanation
+    // rather than the non-persistable message.
     lines.push(
       params.ask !== undefined && params.ask !== "always"
         ? "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content)."
         : "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     );
   }
+
   lines.push("If the short code is ambiguous, use the full id in /approve.");
   return lines.join("\n");
 }

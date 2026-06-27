@@ -376,6 +376,9 @@ export function buildExecApprovalPendingReplyPayload(
     lines.push(secondaryFence);
   }
   if (!allowedDecisions.includes("allow-always")) {
+    // When `ask` is omitted (e.g. plugin SDK callers passing filtered decisions
+    // without the full exec context), default to the policy-required explanation
+    // rather than the non-persistable message.
     lines.push(
       params.ask !== undefined && params.ask !== "always"
         ? "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content)."
