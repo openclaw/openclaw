@@ -126,7 +126,12 @@ describe("structured state integrity findings", () => {
   });
 
   it("maps a missing state directory to a structured finding and dry-run effect", () => {
-    const [issue] = detectStateIntegrityHealthIssues({});
+    const issue = detectStateIntegrityHealthIssues({}).find(
+      (candidate) => candidate.kind === "missing-state-dir",
+    );
+    if (!issue) {
+      throw new Error("expected missing state directory issue");
+    }
 
     expect(issue).toEqual({
       kind: "missing-state-dir",
