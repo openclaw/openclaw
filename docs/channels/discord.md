@@ -78,7 +78,7 @@ You will need to create a new application with a bot, add the bot to your server
   <Step title="Enable Developer Mode and collect your IDs">
     Back in the Discord app, you need to enable Developer Mode so you can copy internal IDs.
 
-    1. Click **User Settings** (gear icon next to your avatar) → **Advanced** → toggle on **Developer Mode**
+    1. Click **User Settings** (gear icon next to your avatar) → Scroll down to **Developer** in the side bar → toggle on **Developer Mode**
     2. Right-click your **server icon** in the sidebar → **Copy Server ID**
     3. Right-click your **own avatar** → **Copy User ID**
 
