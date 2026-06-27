@@ -9,7 +9,7 @@
 > - Priority guide: **P0** = crash/blocker/security, **P1** = significant bug/regression, **P2** = minor bug/enhancement, **P3** = nice-to-have/stale
 > - Items marked _(stale)_ have been flagged by the stale bot due to inactivity
 >
-> **Last updated:** 2026-06-26 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
+> **Last updated:** 2026-06-27 (post-purge audit: refreshed from currently open GitHub issues/PRs and rebuilt from PR #49126 format)
 
 ---
 
@@ -20,9 +20,9 @@
 | MS Teams (channel plugin) | 11     | 47     | 58      | 0      | 58        |
 | Windows platform          | 51     | 40     | 91      | 0      | 91        |
 | WSL                       | 9      | 1      | 10      | 0      | 10        |
-| Azure                     | 8      | 3      | 11      | 0      | 11        |
+| Azure                     | 8      | 4      | 12      | 0      | 12        |
 | SharePoint / M365         | 0      | 0      | 0       | 0      | 0         |
-| **Total**                 | **79** | **91** | **170** | **0**  | **170**   |
+| **Total**                 | **79** | **92** | **171** | **0**  | **171**   |
 
 ---
 
@@ -81,7 +81,7 @@
 | [ ]       | P1       | #75043 | Add provider-aware automatic TTS emotion mapping                                                                      | XL   |                        |
 | [ ]       | P1       | #59986 | refactor(plugins): add lane-oriented channel interface                                                                | XL   |                        |
 | [ ]       | P2       | #96648 | Fix MSTeams card actions with durable receive before ACK                                                              | L    |                        |
-| [ ]       | P2       | #96620 | fix(feishu,browser,msteams,azure-speech,bedrock-mantle,googlechat,huggingface,perplexity): bound JSON response reads  | M    |                        |
+| [ ]       | P2       | #96620 | fix(feishu,browser,msteams,azure-speech,bedrock-mantle,googlechat,huggingface,perplexity): bound JSON response reads  | XS   |                        |
 | [ ]       | P2       | #96578 | fix(msteams): truncate reflection prompt on a UTF-16 boundary                                                         | XS   |                        |
 | [ ]       | P2       | #96571 | fix(msteams): escape markup in mention display names                                                                  | XS   |                        |
 | [ ]       | P2       | #96569 | fix(msteams): keep truncated parent context text well-formed                                                          | XS   |                        |
@@ -153,7 +153,7 @@
 | [ ]       | P2       | #77730 | [Bug]: file-transfer plugin nodeHostCommands not advertised by Windows node host on live handshake (2026.5.3-1)                                                                         | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-live-repro` `issue-rating: 🐚 platinum hermit` `impact:other`                          |             |
 | [ ]       | P2       | #58139 | [Bug]: memory-lancedb plugin fails with Windows Docker bind mount                                                                                                                       | `bug` `bug:behavior` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:linked-pr-open` `clawsweeper:needs-live-repro` +2                                                             |             |
 | [ ]       | P2       | #44291 | Add native PowerShell smoke coverage for contributor commands                                                                                                                           | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-product-decision` `clawsweeper:source-repro` `clawsweeper:linked-pr-open` `issue-rating: 🦞 diamond lobster` +1              |             |
-| [ ]       | P2       | #40694 | Browser-opened temporary tabs/windows should close automatically after task completion                                                                                                  | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:source-repro` `impact:session-state` +1                 |             |
+| [ ]       | P2       | #40694 | Browser-opened temporary tabs/windows should close automatically after task completion                                                                                                  | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:fix-shape-clear` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:source-repro` +2          |             |
 
 ### Feature Requests
 
@@ -165,7 +165,7 @@
 | [ ]       | P0       | #75    | Linux/Windows Clawdbot Apps                                                                                                               | `enhancement` `help wanted` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` +3                                       |             |
 | [ ]       | P2       | #95259 | [Feature Request] Windows 版本缺失「沉浸音效」配置项                                                                                      | `P3` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:needs-live-repro` `issue-rating: 🐚 platinum hermit`    |             |
 | [ ]       | P2       | #46590 | Feature Request: Add `cron` field to Agent configuration for Agent-owned scheduled tasks                                                  | `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `issue-rating: 🌊 off-meta tidepool` `impact:other`                  |             |
-| [ ]       | P2       | #18985 | [Feature]: Supports Windows 11 MSYS environment and Fishshell.                                                                            | `enhancement` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` `clawsweeper:source-repro` +2                          |             |
+| [ ]       | P2       | #18985 | [Feature]: Supports Windows 11 MSYS environment and Fishshell.                                                                            | `enhancement` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:fix-shape-clear` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-product-decision` +4                       |             |
 | [ ]       | P2       | #7057  | Flaky tests on Windows/WSL: timeouts and ENOENT in pi-tools workspace-paths & safe-bins                                                   | `enhancement` `P2` `clawsweeper:no-new-fix-pr` `clawsweeper:needs-maintainer-review` `clawsweeper:needs-live-repro` `issue-rating: 🐚 platinum hermit` +1                        |             |
 
 ---
@@ -174,6 +174,7 @@
 
 | Resolved? | Priority | #      | Title                                                                                                  | Size | Assignee    |
 | --------- | -------- | ------ | ------------------------------------------------------------------------------------------------------ | ---- | ----------- |
+| [ ]       | P0       | #97086 | feat(mxc): add Windows MXC sandbox backend                                                             | XL   |             |
 | [ ]       | P0       | #96164 | fix(exec): resolve PowerShell 7 via where.exe on Windows                                               | S    |             |
 | [ ]       | P0       | #91490 | fix(supervisor): spawn claude .cmd shim correctly on Windows                                           | XS   |             |
 | [ ]       | P0       | #88163 | fix(cli): harden Windows node pairing and approvals                                                    | XL   | @vincentkoc |
@@ -181,7 +182,6 @@
 | [ ]       | P0       | #81443 | fix: resolve QMD Windows shims and guard image URL downloads                                           | XL   | @vincentkoc |
 | [ ]       | P0       | #73751 | fix(exec): decode Windows command output with codepage-aware streaming                                 | M    | @vincentkoc |
 | [ ]       | P0       | #70762 | refactor(agents): share hook history windows                                                           | XL   | @vincentkoc |
-| [ ]       | P1       | #94514 | docs: add Windows pnpm fallback for Corepack EPERM                                                     | XS   |             |
 | [ ]       | P1       | #90365 | test(browser): replace broad win32 skip with dynamic directory symlink check                           | XS   |             |
 | [ ]       | P1       | #90273 | test: make fs-safe hardlink tests compatible with Windows                                              | XS   |             |
 | [ ]       | P1       | #90271 | test: make fs-safe symlink tests compatible with Windows                                               | S    |             |
@@ -192,9 +192,9 @@
 | [ ]       | P2       | #96462 | fix(codex): keep mirrored history continuity for large context windows                                 | S    |             |
 | [ ]       | P2       | #96024 | fix(media): normalize Windows inbound paths case-insensitively                                         | XS   |             |
 | [ ]       | P2       | #95982 | fix(json-parse): exclude code-context tails from Windows-path heuristic (#93139)                       | S    |             |
-| [ ]       | P2       | #95527 | fix(scripts): type windows taskkill helper                                                             | XS   |             |
 | [ ]       | P2       | #95095 | fix(supervisor): probe schtasks directly when env vars are missing                                     | S    |             |
 | [ ]       | P2       | #94576 | fix #92054: resolve claude/codex .cmd shims on Windows                                                 | XS   |             |
+| [ ]       | P2       | #94514 | docs: add Windows pnpm fallback for Corepack EPERM                                                     | XS   |             |
 | [ ]       | P2       | #93299 | fix(daemon): prove Windows schtasks launch without foreground listener [AI]                            | XS   |             |
 | [ ]       | P2       | #92119 | fix(supervisor): resolve Claude/Gemini CLI .cmd shims on Windows [AI-assisted] (alternative to #91490) | XS   | @vincentkoc |
 | [ ]       | P2       | #91610 | ci(windows): add native PowerShell smoke coverage for contributor commands                             | XS   |             |
@@ -271,11 +271,12 @@ _No currently open items found._
 
 ## 8. Azure (Provider / Infrastructure) — PRs
 
-| Resolved? | Priority | #      | Title                                                                    | Size | Assignee |
-| --------- | -------- | ------ | ------------------------------------------------------------------------ | ---- | -------- |
-| [ ]       | P0       | #70922 | refactor(whatsapp): centralize account policy                            | L    |          |
-| [ ]       | P1       | #93833 | fix(azure): responses model aliases route correctly                      | M    |          |
-| [ ]       | P2       | #96000 | fix(session-lock): allow reentrant acquire from inner transcript writers | XS   |          |
+| Resolved? | Priority | #      | Title                                                                            | Size | Assignee |
+| --------- | -------- | ------ | -------------------------------------------------------------------------------- | ---- | -------- |
+| [ ]       | P0       | #70922 | refactor(whatsapp): centralize account policy                                    | L    |          |
+| [ ]       | P1       | #93833 | fix(azure): responses model aliases route correctly                              | M    |          |
+| [ ]       | P2       | #97217 | fix(azure-openai-responses): bound SSE response reads via buildGuardedModelFetch | S    |          |
+| [ ]       | P2       | #96000 | fix(session-lock): allow reentrant acquire from inner transcript writers         | XS   |          |
 
 ---
 
@@ -322,6 +323,7 @@ _No currently open items found._
 | Windows platform          | issue | P0       | #72595 | [Feature]: Feishu channel needs per-channel proxy bypass for mixed Windows proxy setups                                                                  |
 | Windows platform          | issue | P0       | #57775 | Windows headless node host supports exec approvals via CLI, but nodes describe / Control UI do not advertise system.execApprovals.get/set                |
 | Windows platform          | issue | P0       | #75    | Linux/Windows Clawdbot Apps                                                                                                                              |
+| Windows platform          | pr    | P0       | #97086 | feat(mxc): add Windows MXC sandbox backend                                                                                                               |
 | Windows platform          | pr    | P0       | #96164 | fix(exec): resolve PowerShell 7 via where.exe on Windows                                                                                                 |
 | Windows platform          | pr    | P0       | #91490 | fix(supervisor): spawn claude .cmd shim correctly on Windows                                                                                             |
 | Windows platform          | pr    | P0       | #88163 | fix(cli): harden Windows node pairing and approvals                                                                                                      |
@@ -383,7 +385,6 @@ _No currently open items found._
 | Windows platform          | issue | P1       | #63491 | [Bug]: Windows Scheduled Task gateway restart/health becomes inconsistent after ready                                                                                                   |
 | Windows platform          | issue | P1       | #59281 | [Bug]: Windows plugin TS source-loading via jiti is pathologically slow in real production call sites                                                                                   |
 | Windows platform          | issue | P1       | #54669 | [Field Report] Chrome 136+ binds CDP to [::1] (IPv6) on Windows — portproxy v4tov4 breaks silently                                                                                      |
-| Windows platform          | pr    | P1       | #94514 | docs: add Windows pnpm fallback for Corepack EPERM                                                                                                                                      |
 | Windows platform          | pr    | P1       | #90365 | test(browser): replace broad win32 skip with dynamic directory symlink check                                                                                                            |
 | Windows platform          | pr    | P1       | #90273 | test: make fs-safe hardlink tests compatible with Windows                                                                                                                               |
 | Windows platform          | pr    | P1       | #90271 | test: make fs-safe symlink tests compatible with Windows                                                                                                                                |
