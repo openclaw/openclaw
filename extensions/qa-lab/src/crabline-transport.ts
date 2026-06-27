@@ -31,6 +31,16 @@ import type {
 const CRABLINE_TRANSPORT_ID = "crabline";
 const RECORDER_SYNC_INTERVAL_MS = 50;
 
+function countNonEmptyRecorderLines(text: string): number {
+  let count = 0;
+  for (const line of text.split(/\r?\n/u)) {
+    if (line.trim().length > 0) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 type QaCrablineTransportState = QaTransportState & {
   cleanup: () => Promise<void>;
   rememberProviderTarget: (providerTargetKey: string, qaTarget: string) => void;
@@ -145,7 +155,8 @@ function createCrablineState(params: {
           throw error;
         });
       const lines = text.split(/\r?\n/u).filter((line) => line.trim().length > 0);
-      for (const line of lines.slice(recorderLineCursor)) {
+      for (let index = recorderLineCursor; index < lines.length; index += 1) {
+        const line = lines[index];
         const parsed = JSON.parse(line) as unknown;
         const outbound = params.adapter.createOutboundFromRecorderEvent({
           event: parsed,
@@ -176,7 +187,7 @@ function createCrablineState(params: {
       targetByProviderTarget.clear();
       recorderLineCursor = await fs
         .readFile(params.adapter.manifest.recorderPath, "utf8")
-        .then((text) => text.split(/\r?\n/u).filter((line) => line.trim().length > 0).length)
+        .then(countNonEmptyRecorderLines)
         .catch(() => 0);
     },
     getSnapshot: baseState.getSnapshot.bind(baseState),
