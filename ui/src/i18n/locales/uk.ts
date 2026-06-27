@@ -372,6 +372,8 @@ export const uk: TranslationMap = {
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable:
       "Чинна політика схвалення вимагає схвалення щоразу, тому «Дозволяти завжди» недоступно.",
+    allowAlwaysNonPersistable:
+      "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content).",
     deny: "Deny",
     labels: {
       host: "Host",

@@ -455,13 +455,16 @@ export function createExecApprovalHandlers(
         exposeAmbiguousPrefixError: true,
         validateDecision: (snapshot) => {
           const allowedDecisions = resolveExecApprovalRequestAllowedDecisions(snapshot.request);
-          return allowedDecisions.includes(decision)
-            ? null
-            : {
-                message:
-                  "allow-always is unavailable because the effective policy requires approval every time",
-                details: APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS,
-              };
+          if (allowedDecisions.includes(decision)) {
+            return null;
+          }
+          const isPolicyAlways = !snapshot.request.ask || snapshot.request.ask === "always";
+          return {
+            message: isPolicyAlways
+              ? "allow-always is unavailable because the effective policy requires approval every time"
+              : "allow-always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content)",
+            details: APPROVAL_ALLOW_ALWAYS_UNAVAILABLE_DETAILS,
+          };
         },
         resolvedEventName: "exec.approval.resolved",
         buildResolvedEvent: ({

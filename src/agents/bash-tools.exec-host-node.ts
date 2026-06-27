@@ -171,7 +171,7 @@ export async function executeNodeHostCommand(
       host: "node",
       nodeId: target.nodeId,
       security: hostSecurity,
-      ask: hostAsk,
+      ask: approvalDecisionAsk,
       ...unavailableDecisionRequestParams,
       commandHighlighting: params.commandHighlighting,
       ...buildExecApprovalRequesterContext({
@@ -456,6 +456,7 @@ export async function executeNodeHostCommand(
           sentApproverDms,
           unavailableReason,
           allowedDecisions,
+          ask: approvalDecisionAsk,
           nodeId: target.nodeId,
         });
       }

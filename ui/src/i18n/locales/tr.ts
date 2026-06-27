@@ -373,6 +373,8 @@ export const tr: TranslationMap = {
     alwaysAllow: "Always allow",
     allowAlwaysUnavailable:
       "Geçerli onay ilkesi her seferinde onay gerektiriyor, bu nedenle Her Zaman İzin Ver kullanılamıyor.",
+    allowAlwaysNonPersistable:
+      "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content).",
     deny: "Deny",
     labels: {
       host: "Host",

@@ -138,6 +138,25 @@ describe("plugin-sdk/approval-reaction-runtime", () => {
     });
   });
 
+  it("shows non-persistable reason in reaction prompts when allow-always excluded for one-shot", () => {
+    const payload = buildApprovalReactionPromptPayloadForRequest({
+      request: {
+        ...execRequest,
+        request: {
+          ...execRequest.request,
+          ask: "on-miss",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+      },
+      nowMs: 1_000,
+    });
+
+    expect(payload.text).toContain(
+      "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content).",
+    );
+    expect(payload.text).not.toContain("effective policy requires approval");
+  });
+
   it("sanitizes cwd before embedding it in reaction prompts", () => {
     const payload = buildApprovalReactionPromptPayloadForRequest({
       request: {
