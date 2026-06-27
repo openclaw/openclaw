@@ -1261,11 +1261,85 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:release-configured-plugin-installs",
       label: "Configured plugin repair",
+      healthChecks: {
+        id: "core/doctor/configured-plugin-installs",
+        description: "Configured plugin install records and package payloads are repairable.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const {
+            detectConfiguredPluginInstallHealthIssues,
+            configuredPluginInstallIssueToHealthFinding,
+          } = await import("../commands/doctor/shared/missing-configured-plugin-install.js");
+          return (
+            await detectConfiguredPluginInstallHealthIssues({
+              cfg: ctx.cfg,
+              env: process.env,
+            })
+          ).map(configuredPluginInstallIssueToHealthFinding);
+        },
+        async repair(ctx) {
+          const {
+            detectConfiguredPluginInstallHealthIssues,
+            configuredPluginInstallIssueToRepairEffect,
+          } = await import("../commands/doctor/shared/missing-configured-plugin-install.js");
+          const effects = (
+            await detectConfiguredPluginInstallHealthIssues({
+              cfg: ctx.cfg,
+              env: process.env,
+            })
+          ).map(configuredPluginInstallIssueToRepairEffect);
+          if (ctx.dryRun === true) {
+            return { status: "repaired", changes: [], effects };
+          }
+          return {
+            status: "skipped",
+            reason: "legacy doctor configured plugin install repair owns package mutation",
+            changes: [],
+            effects,
+          };
+        },
+      },
       run: runReleaseConfiguredPluginInstallsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:plugin-registry",
       label: "Plugin registry",
+      healthChecks: {
+        id: "core/doctor/plugin-registry",
+        description: "Plugin registry migration, stale shadow, and peer-link issues are findings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { detectPluginRegistryHealthIssues, pluginRegistryIssueToHealthFinding } =
+            await import("../commands/doctor-plugin-registry.js");
+          return (
+            await detectPluginRegistryHealthIssues({
+              config: ctx.cfg,
+              env: process.env,
+              prompter: { shouldRepair: false },
+            })
+          ).map(pluginRegistryIssueToHealthFinding);
+        },
+        async repair(ctx) {
+          const { detectPluginRegistryHealthIssues, pluginRegistryIssueToRepairEffect } =
+            await import("../commands/doctor-plugin-registry.js");
+          const effects = (
+            await detectPluginRegistryHealthIssues({
+              config: ctx.cfg,
+              env: process.env,
+              prompter: { shouldRepair: false },
+            })
+          ).map(pluginRegistryIssueToRepairEffect);
+          if (ctx.dryRun === true) {
+            return { status: "repaired", changes: [], effects };
+          }
+          return {
+            status: "skipped",
+            reason: "legacy doctor plugin registry contribution owns registry repairs",
+            changes: [],
+            effects,
+          };
+        },
+      },
       run: runPluginRegistryHealth,
     }),
     createDoctorHealthContribution({
@@ -1282,6 +1356,36 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:state-integrity",
       label: "State integrity",
+      healthChecks: {
+        id: "core/doctor/state-integrity",
+        description: "State directory, config permission, and runtime state issues are findings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { detectStateIntegrityHealthIssues, stateIntegrityIssueToHealthFinding } =
+            await import("../commands/doctor-state-integrity.js");
+          return detectStateIntegrityHealthIssues(ctx.cfg, {
+            configPath: ctx.configPath,
+            env: process.env,
+          }).map(stateIntegrityIssueToHealthFinding);
+        },
+        async repair(ctx) {
+          const { detectStateIntegrityHealthIssues, stateIntegrityIssueToRepairEffect } =
+            await import("../commands/doctor-state-integrity.js");
+          const effects = detectStateIntegrityHealthIssues(ctx.cfg, {
+            configPath: ctx.configPath,
+            env: process.env,
+          }).map(stateIntegrityIssueToRepairEffect);
+          if (ctx.dryRun === true) {
+            return { status: "repaired", changes: [], effects };
+          }
+          return {
+            status: "skipped",
+            reason: "legacy doctor state integrity contribution owns state repairs",
+            changes: [],
+            effects,
+          };
+        },
+      },
       run: runStateIntegrityHealth,
     }),
     createDoctorHealthContribution({
