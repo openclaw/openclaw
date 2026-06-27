@@ -1112,8 +1112,9 @@ describe("resolveAndPersistSessionFile", () => {
 
     expect(result.sessionFile).toBe(expectedSessionFile);
 
-    const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
-    expect(saved[sessionKey]?.sessionFile).toBe(expectedSessionFile);
+    expect(loadSessionEntry({ storePath: fixture.storePath(), sessionKey })?.sessionFile).toBe(
+      expectedSessionFile,
+    );
   });
 
   it("creates and persists entry when session is not yet present", async () => {
@@ -1137,8 +1138,9 @@ describe("resolveAndPersistSessionFile", () => {
 
     expect(result.sessionFile).toBe(expectedSessionFile);
     expect(result.sessionEntry.sessionId).toBe(sessionId);
-    const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
-    expect(saved[sessionKey]?.sessionFile).toBe(expectedSessionFile);
+    expect(loadSessionEntry({ storePath: fixture.storePath(), sessionKey })?.sessionFile).toBe(
+      expectedSessionFile,
+    );
   });
 
   it("rotates to a new SQLite transcript marker when sessionId changes on the same session key", async () => {
@@ -1177,7 +1179,8 @@ describe("resolveAndPersistSessionFile", () => {
     expect(result.sessionFile).not.toBe(previousSessionFile);
     expect(result.sessionEntry.sessionFile).toBe(expectedNextSessionFile);
 
-    const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
-    expect(saved[sessionKey]?.sessionFile).toBe(expectedNextSessionFile);
+    expect(loadSessionEntry({ storePath: fixture.storePath(), sessionKey })?.sessionFile).toBe(
+      expectedNextSessionFile,
+    );
   });
 });
