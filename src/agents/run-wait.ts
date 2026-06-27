@@ -15,6 +15,10 @@ import { callGateway } from "../gateway/call.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { normalizeBlockedLivenessWaitStatus } from "../shared/agent-liveness.js";
 import {
+  isOpenClawMessageToolMirrorAssistantMessage,
+  isTranscriptOnlyOpenClawAssistantMessage,
+} from "../shared/transcript-only-openclaw-assistant.js";
+import {
   buildAgentRunTerminalOutcomeFromWaitResult,
   type AgentRunTerminalOutcome,
 } from "./agent-run-terminal-outcome.js";
@@ -172,21 +176,10 @@ function normalizePendingRunIds(runIds: Iterable<string>): string[] {
   return [...seen];
 }
 
-function isTranscriptOnlyOpenClawAssistantMessage(message: {
-  role?: unknown;
-  provider?: unknown;
-  model?: unknown;
-  openclawMessageToolMirror?: unknown;
-}): boolean {
-  if (message.role !== "assistant") {
-    return false;
-  }
-  if (message.openclawMessageToolMirror !== undefined) {
-    return true;
-  }
+function isWaitedReplyTranscriptArtifact(message: unknown): boolean {
   return (
-    message.provider === "openclaw" &&
-    (message.model === "delivery-mirror" || message.model === "gateway-injected")
+    isTranscriptOnlyOpenClawAssistantMessage(message) ||
+    isOpenClawMessageToolMirrorAssistantMessage(message)
   );
 }
 
@@ -199,7 +192,7 @@ function resolveLatestAssistantReplySnapshot(messages: unknown[]): AssistantRepl
     if ((candidate as { role?: unknown }).role !== "assistant") {
       continue;
     }
-    if (isTranscriptOnlyOpenClawAssistantMessage(candidate)) {
+    if (isWaitedReplyTranscriptArtifact(candidate)) {
       return {};
     }
     const text = extractAssistantText(candidate);
@@ -215,6 +208,25 @@ function resolveLatestAssistantReplySnapshot(messages: unknown[]): AssistantRepl
     return { text, fingerprint };
   }
   return {};
+}
+
+export function hasUpdatedAssistantReplySnapshot(
+  latestReply: AssistantReplySnapshot,
+  baseline: AssistantReplySnapshot | undefined,
+): boolean {
+  if (!latestReply.text) {
+    return false;
+  }
+  if (!baseline) {
+    return true;
+  }
+  if (baseline.fingerprint !== undefined) {
+    return latestReply.fingerprint !== baseline.fingerprint;
+  }
+  if (baseline.text !== undefined) {
+    return latestReply.text !== baseline.text;
+  }
+  return true;
 }
 
 /** Read the latest non-tool assistant message for a session. */
@@ -313,11 +325,9 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
     limit: params.limit,
     callGateway: params.callGateway,
   });
-  const baselineFingerprint = params.baseline?.fingerprint;
-  const replyText =
-    latestReply.text && (!baselineFingerprint || latestReply.fingerprint !== baselineFingerprint)
-      ? latestReply.text
-      : undefined;
+  const replyText = hasUpdatedAssistantReplySnapshot(latestReply, params.baseline)
+    ? latestReply.text
+    : undefined;
   return {
     ...wait,
     replyText,

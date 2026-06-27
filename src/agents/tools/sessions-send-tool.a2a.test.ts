@@ -15,13 +15,17 @@ vi.mock("../../gateway/call.js", () => ({
   callGateway: (opts: unknown) => callGatewayMock(opts),
 }));
 
-vi.mock("../run-wait.js", () => ({
-  waitForAgentRun: vi.fn().mockResolvedValue({ status: "ok" }),
-  readLatestAssistantReplySnapshot: vi.fn().mockResolvedValue({
-    text: "Test announce reply",
-    fingerprint: "test-announce-reply",
-  }),
-}));
+vi.mock("../run-wait.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../run-wait.js")>();
+  return {
+    ...actual,
+    waitForAgentRun: vi.fn().mockResolvedValue({ status: "ok" }),
+    readLatestAssistantReplySnapshot: vi.fn().mockResolvedValue({
+      text: "Test announce reply",
+      fingerprint: "test-announce-reply",
+    }),
+  };
+});
 
 vi.mock("./agent-step.js", () => ({
   runAgentStep: vi.fn().mockResolvedValue("Test announce reply"),
@@ -335,6 +339,31 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
       firstMockArg(vi.mocked(readLatestAssistantReplySnapshot), "assistant reply snapshot")
         .sessionKey,
     ).toBe("agent:main:discord:group:dev");
+    expect(runAgentStep).not.toHaveBeenCalled();
+    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+  });
+
+  it("does not inject a delayed reply that matches a text-only baseline", async () => {
+    vi.mocked(readLatestAssistantReplySnapshot).mockResolvedValueOnce({
+      text: "same reply",
+      fingerprint: "same-reply-new-fingerprint",
+    });
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:discord:group:dev",
+      displayKey: "agent:main:discord:group:dev",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:main:discord:group:req",
+      requesterChannel: "discord",
+      baseline: {
+        text: "same reply",
+      },
+      waitRunId: "run-delayed",
+    });
+
+    expect(firstMockArg(vi.mocked(waitForAgentRun), "agent run wait").runId).toBe("run-delayed");
     expect(runAgentStep).not.toHaveBeenCalled();
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });

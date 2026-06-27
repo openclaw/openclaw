@@ -470,6 +470,36 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
     });
   });
 
+  it("returns undefined when a text-only baseline matches the latest assistant reply", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        status: "ok",
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "same reply" }],
+            timestamp: 42,
+          },
+        ],
+      });
+
+    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+      runId: "run-text-baseline",
+      sessionKey: "agent:main:child",
+      timeoutMs: 1_000,
+      baseline: {
+        text: "same reply",
+      },
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      replyText: undefined,
+    });
+  });
+
   it("does not treat a message-tool delivery mirror as a new waited reply", async () => {
     const baselineMessage = {
       role: "assistant",

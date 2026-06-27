@@ -11,6 +11,7 @@ import type { GatewayMessageChannel } from "../../utils/message-channel.js";
 import { resolveNestedAgentLaneForSession } from "../lanes.js";
 import {
   type AssistantReplySnapshot,
+  hasUpdatedAssistantReplySnapshot,
   readLatestAssistantReplySnapshot,
   waitForAgentRun,
 } from "../run-wait.js";
@@ -99,12 +100,9 @@ export async function runSessionsSendA2AFlow(params: {
           sessionKey: params.targetSessionKey,
           callGateway: sessionsSendA2ADeps.callGateway,
         });
-        const baselineFingerprint = params.baseline?.fingerprint;
-        primaryReply =
-          latestSnapshot.text &&
-          (!baselineFingerprint || latestSnapshot.fingerprint !== baselineFingerprint)
-            ? latestSnapshot.text
-            : undefined;
+        primaryReply = hasUpdatedAssistantReplySnapshot(latestSnapshot, params.baseline)
+          ? latestSnapshot.text
+          : undefined;
         latestReply = primaryReply;
       }
     }
