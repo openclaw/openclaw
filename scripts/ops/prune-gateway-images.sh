@@ -35,6 +35,22 @@ done
 
 command -v docker >/dev/null 2>&1 || { echo "prune: docker not found" >&2; exit 2; }
 
+# Unpin stale tags: the per-agent `openclaw-cli` one-shot service exits 1 by
+# design (restart policy `no`) and is recreated on the next `compose up`. While
+# the exited container lingers it still *references* the image it was built on,
+# which makes the in-use guard below treat long-dead tags as "in use" forever.
+# Remove the exited one-shots first so genuinely-unused tags become reclaimable.
+# Stateless: config + workspace are bind-mounted volumes, untouched by `rm`.
+mapfile -t DEAD_CLI < <(docker ps -a --filter 'name=openclaw-cli-1' --filter 'status=exited' --format '{{.Names}}')
+if [[ "${#DEAD_CLI[@]}" -gt 0 ]]; then
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "prune: would remove ${#DEAD_CLI[@]} exited openclaw-cli one-shot(s): ${DEAD_CLI[*]}"
+  else
+    printf '%s\n' "${DEAD_CLI[@]}" | xargs -r docker rm >/dev/null 2>&1 \
+      && echo "prune: removed ${#DEAD_CLI[@]} exited openclaw-cli one-shot container(s)"
+  fi
+fi
+
 # All local gateway tags, oldest -> newest (version sort handles N>9 correctly).
 mapfile -t ALL_TAGS < <(docker images "$REPO" --format '{{.Tag}}' | grep -vxE '<none>' | sort -uV)
 if [[ "${#ALL_TAGS[@]}" -eq 0 ]]; then
@@ -42,8 +58,16 @@ if [[ "${#ALL_TAGS[@]}" -eq 0 ]]; then
   exit 0
 fi
 
-# Tags referenced by ANY container (running or stopped) — never remove these.
-mapfile -t INUSE_TAGS < <(docker ps -a --format '{{.Image}}' | grep -F "$REPO:" | sed "s#^$REPO:##" | sort -u)
+# Tags referenced by ANY container (running or stopped) — never remove these —
+# EXCLUDING the exited one-shots removed above (live: already gone; dry-run:
+# simulated gone) so the dry-run keep/remove decision matches a live run.
+mapfile -t INUSE_TAGS < <(
+  docker ps -a --format '{{.Names}}'$'\t''{{.Image}}' \
+    | awk -F'\t' -v repo="$REPO:" -v doomed="$(printf '%s\n' "${DEAD_CLI[@]:-}")" '
+        BEGIN { n = split(doomed, d, "\n"); for (i = 1; i <= n; i++) if (d[i] != "") skip[d[i]] = 1 }
+        index($2, repo) == 1 && !($1 in skip) { t = $2; sub(repo, "", t); print t }
+      ' | sort -u
+)
 
 # The KEEP_RECENT most-recent tags (rollback depth), regardless of use.
 mapfile -t RECENT_TAGS < <(printf '%s\n' "${ALL_TAGS[@]}" | tail -n "$KEEP_RECENT")

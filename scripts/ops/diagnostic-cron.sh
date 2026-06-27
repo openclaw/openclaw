@@ -56,11 +56,13 @@ done
 # 2.6 Prune old, UNUSED gateway images on each agent host so a roll never fails
 #     on disk (image drift: each roll pulls a ~8.5 G image; the US host hit 97%
 #     and a pull failed "no space left" on 2026-06-18). prune-gateway-images.sh
-#     keeps in-use tags + the 2 most-recent (rollback); all tags are re-pullable
-#     from Artifact Registry, so removing a local copy is non-destructive.
+#     first removes exited `*-openclaw-cli-1` one-shots (they pin stale tags
+#     through the in-use guard), then keeps in-use tags + the 3 most-recent
+#     (rollback depth for both the fleet + life image tracks); all tags are
+#     re-pullable from Artifact Registry, so removing a local copy is non-destructive.
 for H in 89.167.70.46 5.161.84.219; do
   echo "── gateway-image prune: root@$H ──"
-  ssh -i "$SSH_KEY" -o ConnectTimeout=15 -o BatchMode=yes "root@$H" 'bash -s -- 2' \
+  ssh -i "$SSH_KEY" -o ConnectTimeout=15 -o BatchMode=yes "root@$H" 'bash -s -- 3' \
     < "$REPO/scripts/ops/prune-gateway-images.sh" 2>/dev/null \
     || echo "WARN: gateway-image prune skipped for $H (ssh failed)"
 done
