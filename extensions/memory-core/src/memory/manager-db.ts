@@ -54,6 +54,10 @@ function isRegularFile(filePath: string): boolean {
   }
 }
 
+function asError(value: unknown): Error {
+  return value instanceof Error ? value : new Error(String(value));
+}
+
 function tableExists(db: DatabaseSync, schema: string, tableName: string): boolean {
   const row = db
     .prepare(`SELECT 1 AS ok FROM ${schema}.sqlite_master WHERE type = 'table' AND name = ?`)
@@ -205,12 +209,12 @@ export async function publishMemoryDatabaseTables(params: {
 
 /** Remove one closed shadow memory database and its journal-mode sidecars. */
 export function removeMemoryDatabaseFiles(dbPath: string): void {
-  let firstError: unknown;
+  let firstError: Error | undefined;
   for (const suffix of MEMORY_DATABASE_FILE_SUFFIXES) {
     try {
       fs.rmSync(`${dbPath}${suffix}`, { force: true });
     } catch (err) {
-      firstError ??= err;
+      firstError ??= asError(err);
     }
   }
   if (firstError) {
@@ -255,7 +259,7 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
       }
     }
 
-    let firstCleanupError: unknown;
+    let firstCleanupError: Error | undefined;
     for (const shadowBaseName of shadowBaseNames) {
       const filePaths = MEMORY_DATABASE_FILE_SUFFIXES.map((suffix) =>
         path.join(dir, `${shadowBaseName}${suffix}`),
@@ -284,7 +288,7 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
       try {
         removeMemoryDatabaseFiles(path.join(dir, shadowBaseName));
       } catch (err) {
-        firstCleanupError ??= err;
+        firstCleanupError ??= asError(err);
       }
     }
     if (firstCleanupError) {
