@@ -508,6 +508,26 @@ CREATE TABLE IF NOT EXISTS gateway_restart_intent (
   updated_at_ms INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS gateway_restart_audit (
+  event_key TEXT NOT NULL PRIMARY KEY,
+  event_type TEXT NOT NULL,
+  pid INTEGER NOT NULL,
+  created_at INTEGER NOT NULL,
+  reason TEXT,
+  source TEXT,
+  mode TEXT,
+  delay_ms INTEGER,
+  due_at INTEGER,
+  cooldown_ms INTEGER,
+  coalesced INTEGER,
+  session_key TEXT,
+  audit_json TEXT,
+  preflight_json TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_gateway_restart_audit_created
+  ON gateway_restart_audit(created_at DESC, event_key);
+
 CREATE TABLE IF NOT EXISTS gateway_restart_handoff (
   handoff_key TEXT NOT NULL PRIMARY KEY,
   kind TEXT NOT NULL,

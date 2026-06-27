@@ -124,9 +124,13 @@ export function resetGatewayRestartStateForInProcessRestart(): void {
 
 export type RestartAuditInfo = {
   actor?: string;
+  source?: string;
   deviceId?: string;
   clientIp?: string;
+  sessionKey?: string;
   changedPaths?: string[];
+  context?: Record<string, unknown>;
+  preflight?: unknown;
 };
 
 type GatewayRestartIntentPayload = {
@@ -313,6 +317,89 @@ function summarizeChangedPaths(paths: string[] | undefined, maxPaths = 6): strin
   return `${head},+${paths.length - maxPaths} more`;
 }
 
+type RestartAuditEventType =
+  | "scheduled"
+  | "coalesced"
+  | "rescheduled"
+  | "bypassed_deferral"
+  | "emit_requested"
+  | "emit_failed";
+
+function normalizeRestartAuditString(value: string | undefined, max = 200): string | null {
+  const normalized = value?.trim();
+  return normalized ? normalized.slice(0, max) : null;
+}
+
+function serializeRestartAuditJson(value: unknown): string | null {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  try {
+    const text = JSON.stringify(value);
+    return text.length > 20_000 ? `${text.slice(0, 20_000)}…` : text;
+  } catch {
+    return JSON.stringify({ error: "unserializable" });
+  }
+}
+
+function writeGatewayRestartAuditEventSync(opts: {
+  eventType: RestartAuditEventType;
+  reason?: string;
+  source?: string;
+  mode?: string;
+  delayMs?: number;
+  dueAt?: number;
+  cooldownMs?: number;
+  coalesced?: boolean;
+  sessionKey?: string;
+  audit?: RestartAuditInfo;
+  preflight?: unknown;
+}): void {
+  const createdAt = Date.now();
+  const eventKey = `${createdAt}-${process.pid}-${Math.random().toString(36).slice(2, 10)}`;
+  const auditJson = serializeRestartAuditJson(opts.audit);
+  const preflightJson = serializeRestartAuditJson(opts.preflight ?? opts.audit?.preflight);
+  try {
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        const kysely = getNodeSqliteKysely<OpenClawStateKyselyDatabase>(db);
+        executeSqliteQuerySync(
+          db,
+          kysely.insertInto("gateway_restart_audit").values({
+            audit_json: auditJson,
+            coalesced: opts.coalesced === undefined ? null : opts.coalesced ? 1 : 0,
+            cooldown_ms:
+              typeof opts.cooldownMs === "number" && Number.isFinite(opts.cooldownMs)
+                ? Math.floor(opts.cooldownMs)
+                : null,
+            created_at: createdAt,
+            delay_ms:
+              typeof opts.delayMs === "number" && Number.isFinite(opts.delayMs)
+                ? Math.floor(opts.delayMs)
+                : null,
+            due_at:
+              typeof opts.dueAt === "number" && Number.isFinite(opts.dueAt)
+                ? Math.floor(opts.dueAt)
+                : null,
+            event_key: eventKey,
+            event_type: opts.eventType,
+            mode: normalizeRestartAuditString(opts.mode, 80) ?? null,
+            pid: process.pid,
+            preflight_json: preflightJson,
+            reason: normalizeRestartIntentReason(opts.reason) ?? null,
+            session_key:
+              normalizeRestartAuditString(opts.sessionKey ?? opts.audit?.sessionKey, 512) ?? null,
+            source: normalizeRestartAuditString(opts.source ?? opts.audit?.source) ?? null,
+          }),
+        );
+      },
+      { env: process.env },
+    );
+  } catch (err) {
+    restartLog.warn(`failed to write gateway restart audit event: ${String(err)}`);
+  }
+}
+
 function formatRestartAudit(audit: RestartAuditInfo | undefined): string {
   const actor = typeof audit?.actor === "string" && audit.actor.trim() ? audit.actor.trim() : null;
   const deviceId =
@@ -320,9 +407,17 @@ function formatRestartAudit(audit: RestartAuditInfo | undefined): string {
   const clientIp =
     typeof audit?.clientIp === "string" && audit.clientIp.trim() ? audit.clientIp.trim() : null;
   const changed = summarizeChangedPaths(audit?.changedPaths);
+  const source = normalizeRestartAuditString(audit?.source);
+  const sessionKey = normalizeRestartAuditString(audit?.sessionKey, 512);
   const fields = [];
   if (actor) {
     fields.push(`actor=${actor}`);
+  }
+  if (source) {
+    fields.push(`source=${source}`);
+  }
+  if (sessionKey) {
+    fields.push(`sessionKey=${sessionKey}`);
   }
   if (deviceId) {
     fields.push(`device=${deviceId}`);
@@ -365,6 +460,11 @@ export function emitGatewayRestart(
   emittedRestartToken = cycleToken;
   emittedRestartReason = reasonOverride ?? intent?.reason ?? pendingRestartReason;
   emittedRestartIntent = intent;
+  writeGatewayRestartAuditEventSync({
+    eventType: "emit_requested",
+    reason: emittedRestartReason,
+    source: intent?.reason ?? reasonOverride,
+  });
   authorizeGatewaySigusr1Restart();
   try {
     if (process.listenerCount("SIGUSR1") > 0) {
@@ -388,6 +488,11 @@ export function emitGatewayRestart(
       process.kill(process.pid, "SIGUSR1");
     }
   } catch {
+    writeGatewayRestartAuditEventSync({
+      eventType: "emit_failed",
+      reason: emittedRestartReason,
+      source: intent?.reason ?? reasonOverride,
+    });
     // Roll back the cycle marker so future restart requests can still proceed.
     rollBackGatewayRestartEmission();
     return false;
@@ -848,6 +953,18 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         emittedRestartIntent = { ...emittedRestartIntent, reason };
       }
     }
+    writeGatewayRestartAuditEventSync({
+      eventType: "coalesced",
+      reason,
+      source: opts?.audit?.source,
+      mode,
+      delayMs: 0,
+      dueAt: nowMs,
+      cooldownMs: cooldownMsApplied,
+      coalesced: true,
+      sessionKey: opts?.sessionKey,
+      audit: opts?.audit,
+    });
     restartLog.warn(
       `restart request coalesced (already in-flight) reason=${reason ?? "unspecified"} ${formatRestartAudit(opts?.audit)}`,
     );
@@ -868,6 +985,18 @@ export function scheduleGatewaySigusr1Restart(opts?: {
   if (pendingRestartTimer || pendingRestartPreparing) {
     const remainingMs = pendingRestartPreparing ? 0 : Math.max(0, pendingRestartDueAt - nowMs);
     if (pendingRestartPreparing && skipDeferral && activeDeferralPolls.size > 0) {
+      writeGatewayRestartAuditEventSync({
+        eventType: "bypassed_deferral",
+        reason,
+        source: opts?.audit?.source,
+        mode,
+        delayMs: 0,
+        dueAt: nowMs,
+        cooldownMs: cooldownMsApplied,
+        coalesced: false,
+        sessionKey: opts?.sessionKey,
+        audit: opts?.audit,
+      });
       restartLog.warn(
         `restart request bypassed active deferral reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} ${formatRestartAudit(opts?.audit)}`,
       );
@@ -916,6 +1045,18 @@ export function scheduleGatewaySigusr1Restart(opts?: {
           clearTimeout(pendingRestartTimer);
         }
         pendingRestartTimer = null;
+        writeGatewayRestartAuditEventSync({
+          eventType: "rescheduled",
+          reason,
+          source: opts?.audit?.source,
+          mode,
+          delayMs: Math.max(0, requestedDueAt - nowMs),
+          dueAt: requestedDueAt,
+          cooldownMs: cooldownMsApplied,
+          coalesced: true,
+          sessionKey: opts?.sessionKey,
+          audit: opts?.audit,
+        });
         pendingRestartDueAt = requestedDueAt;
         pendingRestartReason = reason;
         pendingRestartSkipDeferral = pendingRestartSkipDeferral || skipDeferral;
@@ -934,6 +1075,18 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       }
       const preservedEmitHooks = preservePendingHooks ? pendingRestartEmitHooks : undefined;
       const preservedSessionKey = preservePendingHooks ? pendingRestartSessionKey : undefined;
+      writeGatewayRestartAuditEventSync({
+        eventType: "rescheduled",
+        reason,
+        source: opts?.audit?.source,
+        mode,
+        delayMs: Math.max(0, requestedDueAt - nowMs),
+        dueAt: requestedDueAt,
+        cooldownMs: cooldownMsApplied,
+        coalesced: false,
+        sessionKey: opts?.sessionKey,
+        audit: opts?.audit,
+      });
       restartLog.warn(
         `restart request rescheduled earlier reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} oldDelayMs=${remainingMs} newDelayMs=${Math.max(0, requestedDueAt - nowMs)} ${formatRestartAudit(opts?.audit)}`,
       );
@@ -947,6 +1100,18 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         pendingRestartReason = reason;
       }
       pendingRestartSkipDeferral = pendingRestartSkipDeferral || skipDeferral;
+      writeGatewayRestartAuditEventSync({
+        eventType: "coalesced",
+        reason,
+        source: opts?.audit?.source,
+        mode,
+        delayMs: remainingMs,
+        dueAt: pendingRestartDueAt,
+        cooldownMs: cooldownMsApplied,
+        coalesced: true,
+        sessionKey: opts?.sessionKey,
+        audit: opts?.audit,
+      });
       restartLog.warn(
         `restart request coalesced (already scheduled) reason=${reason ?? "unspecified"} pendingReason=${pendingRestartReason ?? "unspecified"} delayMs=${remainingMs} ${formatRestartAudit(opts?.audit)}`,
       );
@@ -969,6 +1134,19 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       };
     }
   }
+
+  writeGatewayRestartAuditEventSync({
+    eventType: "scheduled",
+    reason,
+    source: opts?.audit?.source,
+    mode,
+    delayMs: Math.max(0, requestedDueAt - nowMs),
+    dueAt: requestedDueAt,
+    cooldownMs: cooldownMsApplied,
+    coalesced: false,
+    sessionKey: opts?.sessionKey,
+    audit: opts?.audit,
+  });
 
   pendingRestartDueAt = requestedDueAt;
   pendingRestartReason = reason;

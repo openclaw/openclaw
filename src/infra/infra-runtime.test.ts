@@ -133,7 +133,7 @@ describe("infra runtime", () => {
       expect(consumeGatewaySigusr1RestartAuthorization()).toBe(true);
       expect(consumeGatewaySigusr1RestartAuthorization()).toBe(false);
 
-      await vi.runAllTimersAsync();
+      await vi.runOnlyPendingTimersAsync();
     });
 
     it("tracks external restart policy", () => {

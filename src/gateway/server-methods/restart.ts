@@ -37,6 +37,9 @@ export const restartHandlers: GatewayRequestHandlers = {
       reason: normalizeReason(params.reason),
       delayMs: 0,
       skipDeferral: normalizeSkipDeferral(params.skipDeferral),
+      audit: {
+        source: "gateway.restart.request",
+      },
     });
     respond(true, result);
   },

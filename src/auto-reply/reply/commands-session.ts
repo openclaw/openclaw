@@ -726,6 +726,10 @@ export const handleRestartCommand: CommandHandler = async (params, allowTextComm
     let sentinelWritten = false;
     scheduleGatewaySigusr1Restart({
       reason: "/restart",
+      audit: {
+        source: "slash.restart",
+        sessionKey: sentinelPayload?.sessionKey,
+      },
       // Sibling session-routing guard: /restart writes a session-scoped sentinel
       // with continuation, so the scheduler must own the pending slot under the
       // same key to avoid cross-session continuation overwrite (#86742).
