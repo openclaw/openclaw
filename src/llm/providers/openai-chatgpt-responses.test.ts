@@ -606,7 +606,8 @@ describe("streamOpenAICodexResponses transport", () => {
     expect(result.errorMessage).toContain("usage limit");
     expect(result.errorMessage?.length).toBeLessThanOrEqual(16 * 1024);
     expect(canceled).toBe(true);
-    expect(pullCount).toBe(1);
+    expect(pullCount).toBeGreaterThanOrEqual(1);
+    expect(pullCount).toBeLessThanOrEqual(3);
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

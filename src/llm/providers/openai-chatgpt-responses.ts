@@ -1589,7 +1589,7 @@ async function readChatGptResponsesErrorTextLimited(response: Response): Promise
 async function parseErrorResponse(
   response: Response,
 ): Promise<{ message: string; friendlyMessage?: string }> {
-  const raw = await response.text();
+  const raw = await readChatGptResponsesErrorTextLimited(response);
   let message = raw || response.statusText || "Request failed";
   let friendlyMessage: string | undefined;
 
