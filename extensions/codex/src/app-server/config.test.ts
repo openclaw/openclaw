@@ -119,6 +119,7 @@ describe("Codex app-server config", () => {
           serviceTier: "flex",
           codeModeOnly: true,
           turnCompletionIdleTimeoutMs: 120_000,
+          turnAssistantCompletionIdleTimeoutMs: 30_000,
           postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
         },
       },
@@ -136,6 +137,7 @@ describe("Codex app-server config", () => {
       serviceTier: "flex",
       codeModeOnly: true,
       turnCompletionIdleTimeoutMs: 120_000,
+      turnAssistantCompletionIdleTimeoutMs: 30_000,
       postToolRawAssistantCompletionIdleTimeoutMs: 180_000,
     });
     expectFields(runtime.start, "runtime start", {
@@ -247,6 +249,7 @@ describe("Codex app-server config", () => {
         appServer: {
           requestTimeoutMs: Number.MAX_SAFE_INTEGER,
           turnCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
+          turnAssistantCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
           postToolRawAssistantCompletionIdleTimeoutMs: Number.MAX_SAFE_INTEGER,
         },
       },
@@ -255,6 +258,7 @@ describe("Codex app-server config", () => {
     expectFields(runtime, "runtime", {
       requestTimeoutMs: MAX_TIMER_TIMEOUT_MS,
       turnCompletionIdleTimeoutMs: MAX_TIMER_TIMEOUT_MS,
+      turnAssistantCompletionIdleTimeoutMs: MAX_TIMER_TIMEOUT_MS,
       postToolRawAssistantCompletionIdleTimeoutMs: MAX_TIMER_TIMEOUT_MS,
     });
   });

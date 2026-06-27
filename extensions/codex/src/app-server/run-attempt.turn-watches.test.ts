@@ -3271,7 +3271,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     params.timeoutMs = 200;
 
     const run = runCodexAppServerAttempt(params, {
-      turnAssistantCompletionIdleTimeoutMs: 5,
+      pluginConfig: { appServer: { turnAssistantCompletionIdleTimeoutMs: 5 } },
     });
     await vi.waitFor(
       () =>
