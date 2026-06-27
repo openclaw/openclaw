@@ -38,7 +38,7 @@ const CALLBACK_HOST = resolveCallbackHost();
 const REDIRECT_URI = resolveRedirectUri(CALLBACK_HOST);
 const MANUAL_PROMPT_FALLBACK_MS = 15_000;
 const TOKEN_REQUEST_TIMEOUT_MS = 30_000;
-const OPENAI_OAUTH_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
+const OPENAI_OAUTH_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const SCOPE = "openid profile email offline_access";
 
 type TokenSuccess = { type: "success"; access: string; refresh: string; expires: number };
