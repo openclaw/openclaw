@@ -1707,6 +1707,7 @@ export function configuredPluginInstallIssueToHealthFinding(
         fixHint: "Rerun `openclaw doctor --fix` after the package update completes.",
       };
   }
+  return assertNeverConfiguredPluginInstallIssue(issue);
 }
 
 export function configuredPluginInstallIssueToRepairEffect(
@@ -1750,6 +1751,13 @@ export function configuredPluginInstallIssueToRepairEffect(
         dryRunSafe: true,
       };
   }
+  return assertNeverConfiguredPluginInstallIssue(issue);
+}
+
+function assertNeverConfiguredPluginInstallIssue(issue: never): never {
+  throw new Error(
+    `Unhandled configured plugin install issue kind: ${String((issue as { kind?: unknown }).kind)}`,
+  );
 }
 
 export type RepairMissingPluginInstallsResult = {
