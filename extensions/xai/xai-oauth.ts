@@ -15,6 +15,7 @@ import {
   type ProviderAuthResult,
 } from "openclaw/plugin-sdk/provider-auth";
 import { waitForLocalOAuthCallback } from "openclaw/plugin-sdk/provider-auth-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { applyXaiConfig, XAI_DEFAULT_MODEL_REF } from "./onboard.js";
 import { xaiUserAgent } from "./src/xai-user-agent.js";
 
@@ -117,7 +118,7 @@ function readStringRecord(value: unknown): Record<string, unknown> {
 async function readJsonResponse(response: Response, context: string): Promise<unknown> {
   let body: unknown;
   try {
-    body = await response.json();
+    body = await readProviderJsonResponse(response, "xai.oauth");
   } catch {
     body = null;
   }
@@ -415,7 +416,7 @@ async function pollXaiDeviceCodeToken(
     );
     let body: unknown;
     try {
-      body = await response.json();
+      body = await readProviderJsonResponse(response, "xai.oauth");
     } catch {
       body = null;
     }
