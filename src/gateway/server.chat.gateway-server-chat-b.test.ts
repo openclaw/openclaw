@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
 import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { clearConfigCache } from "../config/config.js";
+import { appendTranscriptEvent, loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { createDeferred } from "../test-utils/deferred.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
@@ -91,13 +92,12 @@ function testSessionFilePath(sessionDir: string, sessionId: string): string {
   return path.join(sessionDir, `${sessionId}.jsonl`);
 }
 
-async function writeMainSessionStore(sessionDir?: string, sessionId = "sess-main") {
+async function writeMainSessionStore(_sessionDir?: string, sessionId = "sess-main") {
   await writeSessionStore({
     entries: {
       main: {
         sessionId,
         updatedAt: futureFixtureUpdatedAt(),
-        ...(sessionDir ? { sessionFile: testSessionFilePath(sessionDir, sessionId) } : {}),
       },
     },
   });
@@ -130,11 +130,28 @@ async function writeGatewayConfig(config: Record<string, unknown>) {
 }
 
 async function writeMainSessionTranscript(
-  sessionDir: string,
+  _sessionDir: string,
   lines: string[],
   sessionId = "sess-main",
 ) {
-  await fs.writeFile(testSessionFilePath(sessionDir, sessionId), `${lines.join("\n")}\n`, "utf-8");
+  const storePath = testState.sessionStorePath;
+  if (!storePath) {
+    throw new Error("session store path was not initialized");
+  }
+  for (const line of lines) {
+    if (!line.trim()) {
+      continue;
+    }
+    await appendTranscriptEvent(
+      {
+        agentId: "main",
+        sessionId,
+        sessionKey: "agent:main:main",
+        storePath,
+      },
+      JSON.parse(line) as unknown,
+    );
+  }
 }
 
 async function removeTempDir(dir: string): Promise<void> {
@@ -2320,12 +2337,13 @@ describe("gateway server chat", () => {
       if (!sessionStorePath) {
         throw new Error("expected session store path");
       }
-      const stored = JSON.parse(await fs.readFile(sessionStorePath, "utf-8")) as Record<
-        string,
-        { lastChannel?: string; lastTo?: string } | undefined
-      >;
-      expect(stored["agent:main:main"]?.lastChannel).toBe("whatsapp");
-      expect(stored["agent:main:main"]?.lastTo).toBe("+1555");
+      const stored = loadSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: sessionStorePath,
+      });
+      expect(stored?.lastChannel).toBe("whatsapp");
+      expect(stored?.lastTo).toBe("+1555");
 
       await vi.waitFor(async () => {
         const completed = await rpcReq<{ status?: string }>(ws, "chat.send", {
