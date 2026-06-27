@@ -173,7 +173,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-68 plugins
+69 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -276,6 +276,8 @@ Each entry lists the package, distribution route, and description.
 - **[raft](/plugins/reference/raft)** (`@openclaw/raft`) - npm; ClawHub. OpenClaw Raft channel plugin for secure CLI wake bridges.
 
 - **[searxng](/plugins/reference/searxng)** (`@openclaw/searxng-plugin`) - npm; ClawHub: `clawhub:@openclaw/searxng-plugin`. Adds web search provider support.
+
+- **[sherpa-onnx-tts](/plugins/reference/sherpa-onnx-tts)** (`@openclaw/sherpa-onnx-tts`) - ClawHub: `clawhub:@openclaw/sherpa-onnx-tts`. Offline local text-to-speech skill using sherpa-onnx.
 
 - **[signal](/plugins/reference/signal)** (`@openclaw/signal`) - npm; ClawHub: `clawhub:@openclaw/signal`. Adds the Signal channel surface for sending and receiving OpenClaw messages.
 

@@ -131,6 +131,7 @@
     "!dist/extensions/openshell/**",
     "!dist/extensions/qwen/**",
     "!dist/extensions/searxng/**",
+    "!dist/extensions/sherpa-onnx-tts/**",
     "!dist/extensions/signal/**",
     "!dist/extensions/slack/**",
     "!dist/extensions/sms/**",

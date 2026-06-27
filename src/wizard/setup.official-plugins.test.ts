@@ -29,10 +29,22 @@ describe("resolveOfficialPluginOnboardingInstallEntries", () => {
     expect(pluginIds).toContain("diagnostics-otel");
     expect(pluginIds).toContain("diagnostics-prometheus");
     expect(pluginIds).toContain("acpx");
+    expect(pluginIds).toContain("sherpa-onnx-tts");
     expect(pluginIds).toContain("tokenjuice");
     expect(pluginIds).not.toContain("brave");
     expect(pluginIds).not.toContain("codex");
     expect(pluginIds).not.toContain("discord");
+  });
+
+  it("keeps ClawHub-only official plugins on their declared install source", () => {
+    const entries = resolveOfficialPluginOnboardingInstallEntries({ config: {} });
+    const sherpa = entries.find((entry) => entry.pluginId === "sherpa-onnx-tts");
+
+    expect(sherpa?.install).toEqual({
+      clawhubSpec: "clawhub:@openclaw/sherpa-onnx-tts",
+      defaultChoice: "clawhub",
+      minHostVersion: ">=2026.6.9",
+    });
   });
 
   it("hides already configured official plugins", () => {

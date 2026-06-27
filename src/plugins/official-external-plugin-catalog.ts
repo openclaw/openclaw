@@ -171,8 +171,10 @@ export function resolveOfficialExternalPluginInstall(
   const manifest = getOfficialExternalPluginCatalogManifest(entry);
   const install = manifest?.install;
   const clawhubSpec = normalizeOptionalString(install?.clawhubSpec);
-  const npmSpec = normalizeOptionalString(install?.npmSpec) ?? normalizeOptionalString(entry.name);
   const localPath = normalizeOptionalString(install?.localPath);
+  const npmSpec =
+    normalizeOptionalString(install?.npmSpec) ??
+    (!clawhubSpec && !localPath ? normalizeOptionalString(entry.name) : undefined);
   if (!clawhubSpec && !npmSpec && !localPath) {
     return null;
   }

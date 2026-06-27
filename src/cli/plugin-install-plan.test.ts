@@ -83,6 +83,7 @@ describe("plugin install plan helpers", () => {
 
     expect(findOfficialExternalPlugin).toHaveBeenCalledWith("brave");
     expect(result).toEqual({
+      source: "npm",
       pluginId: "brave",
       npmSpec: "@openclaw/brave-plugin",
       expectedIntegrity: "sha512-brave",
@@ -107,11 +108,44 @@ describe("plugin install plan helpers", () => {
     expect(findOfficialExternalPlugin).not.toHaveBeenCalled();
   });
 
-  it("skips official external plan without an npm install spec", () => {
+  it("resolves ClawHub-only official external plugin ids before npm fallback", () => {
     const result = resolveOfficialExternalInstallPlanBeforeNpm({
-      rawSpec: "brave",
+      rawSpec: "sherpa-onnx-tts",
       findOfficialExternalPlugin: vi.fn().mockReturnValue({
-        pluginId: "brave",
+        pluginId: "sherpa-onnx-tts",
+        clawhubSpec: "clawhub:@openclaw/sherpa-onnx-tts",
+      }),
+    });
+
+    expect(result).toEqual({
+      source: "clawhub",
+      pluginId: "sherpa-onnx-tts",
+      clawhubSpec: "clawhub:@openclaw/sherpa-onnx-tts",
+    });
+  });
+
+  it("keeps dual-source official external plugin ids on the existing npm pre-plan", () => {
+    const result = resolveOfficialExternalInstallPlanBeforeNpm({
+      rawSpec: "matrix",
+      findOfficialExternalPlugin: vi.fn().mockReturnValue({
+        pluginId: "matrix",
+        clawhubSpec: "clawhub:@openclaw/matrix",
+        npmSpec: "@openclaw/matrix",
+      }),
+    });
+
+    expect(result).toEqual({
+      source: "npm",
+      pluginId: "matrix",
+      npmSpec: "@openclaw/matrix",
+    });
+  });
+
+  it("skips official external plan without an install spec", () => {
+    const result = resolveOfficialExternalInstallPlanBeforeNpm({
+      rawSpec: "demo",
+      findOfficialExternalPlugin: vi.fn().mockReturnValue({
+        pluginId: "demo",
       }),
     });
 
@@ -134,6 +168,21 @@ describe("plugin install plan helpers", () => {
       pluginId: "discord",
       trustedSourceLinkedOfficialInstall: true,
     });
+  });
+
+  it("does not trust npm installs for ClawHub-only official external packages", () => {
+    const findOfficialExternalPackage = vi.fn().mockReturnValue({
+      pluginId: "sherpa-onnx-tts",
+      clawhubSpec: "clawhub:@openclaw/sherpa-onnx-tts",
+    });
+
+    const result = resolveOfficialExternalNpmPackageTrust({
+      npmSpec: "@openclaw/sherpa-onnx-tts",
+      findOfficialExternalPackage,
+    });
+
+    expect(findOfficialExternalPackage).toHaveBeenCalledWith("@openclaw/sherpa-onnx-tts");
+    expect(result).toBeNull();
   });
 
   it("does not trust npm package names outside the official external catalog", () => {

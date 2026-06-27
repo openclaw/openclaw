@@ -12,6 +12,7 @@ type BundledLookup = (params: {
 type OfficialExternalPluginLookup = (pluginId: string) =>
   | {
       pluginId: string;
+      clawhubSpec?: string;
       npmSpec?: string;
       expectedIntegrity?: string;
     }
@@ -111,16 +112,31 @@ export function resolveBundledInstallPlanBeforeNpm(params: {
 export function resolveOfficialExternalInstallPlanBeforeNpm(params: {
   rawSpec: string;
   findOfficialExternalPlugin: OfficialExternalPluginLookup;
-}): { pluginId: string; npmSpec: string; expectedIntegrity?: string } | null {
+}):
+  | { source: "clawhub"; pluginId: string; clawhubSpec: string }
+  | { source: "npm"; pluginId: string; npmSpec: string; expectedIntegrity?: string }
+  | null {
   if (!isBareNpmPackageName(params.rawSpec)) {
     return null;
   }
   const entry = params.findOfficialExternalPlugin(params.rawSpec);
+  const clawhubSpec = entry?.clawhubSpec?.trim();
   const npmSpec = entry?.npmSpec?.trim();
-  if (!entry?.pluginId || !npmSpec) {
+  if (!entry?.pluginId) {
+    return null;
+  }
+  if (!npmSpec && clawhubSpec) {
+    return {
+      source: "clawhub",
+      pluginId: entry.pluginId,
+      clawhubSpec,
+    };
+  }
+  if (!npmSpec) {
     return null;
   }
   return {
+    source: "npm",
     pluginId: entry.pluginId,
     npmSpec,
     ...(entry.expectedIntegrity ? { expectedIntegrity: entry.expectedIntegrity } : {}),
@@ -144,8 +160,11 @@ export function resolveOfficialExternalNpmPackageTrust(params: {
     return null;
   }
   const catalogSpec = entry.npmSpec?.trim();
-  const catalogPackageName = catalogSpec ? parseRegistryNpmSpec(catalogSpec)?.name : undefined;
-  if (catalogPackageName && catalogPackageName !== parsed.name) {
+  if (!catalogSpec) {
+    return null;
+  }
+  const catalogPackageName = parseRegistryNpmSpec(catalogSpec)?.name;
+  if (catalogPackageName !== parsed.name) {
     return null;
   }
   return {
