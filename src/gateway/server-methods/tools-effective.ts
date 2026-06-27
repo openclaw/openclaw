@@ -459,7 +459,10 @@ function resolveTrustedToolsEffectiveContext(params: {
 }) {
   // The effective tools request is read-only but security-sensitive. Derive
   // routing/account/model context from the persisted session, not client params.
-  const loaded = loadSessionEntry(params.sessionKey);
+  const loaded = loadSessionEntry(
+    params.sessionKey,
+    params.requestedAgentId ? { agentId: params.requestedAgentId } : undefined,
+  );
   if (!loaded.entry) {
     params.respond(
       false,

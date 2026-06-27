@@ -590,4 +590,34 @@ describe("tools.effective handler", () => {
     await invoke();
     expectInvalidResponse(respond, 'unknown agent id "other"');
   });
+
+  it("loads global sessions with the requested agent id before matching session agent", async () => {
+    runtimeMocks.listAgentIds.mockReturnValueOnce(["main", "work"]);
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      canonicalKey: "global",
+      entry: {
+        sessionId: "session-work-global",
+        updatedAt: 1,
+        modelProvider: "openai",
+        model: "gpt-4.1",
+      },
+    } as never);
+    runtimeMocks.resolveSessionAgentId.mockReturnValueOnce("work");
+    runtimeMocks.resolveAgentDir.mockReturnValueOnce("/tmp/agents/work/agent");
+    runtimeMocks.resolveAgentWorkspaceDir.mockReturnValueOnce("/tmp/workspace-work");
+    runtimeMocks.resolveEffectiveToolInventory.mockReturnValueOnce(makeCoreInventory());
+
+    const { respond, invoke } = createInvokeParams({
+      sessionKey: "global",
+      agentId: "work",
+    });
+    await invoke();
+
+    expect(runtimeMocks.loadSessionEntry).toHaveBeenCalledWith("global", { agentId: "work" });
+    const call = firstRespondCall(respond);
+    expect(call?.[0]).toBe(true);
+    expect(resolveEffectiveToolInventoryArg()?.agentId).toBe("work");
+    expect(runtimeMocks.resolveAgentDir).toHaveBeenCalledWith({}, "work");
+  });
 });
