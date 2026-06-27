@@ -130,6 +130,66 @@ function createTimedProxylineManagedDispatcher(
   return proxy;
 }
 
+/**
+ * Wraps an EnvHttpProxyAgent so each request is first checked against
+ * the enhanced proxy-bypass matcher (with subdomain/CIDR/wildcard support).
+ * Requests that should bypass the proxy are routed through a direct Agent
+ * instead of the EnvHttpProxyAgent, while requests matching the proxy
+ * configuration use the proxy agent as usual.
+ *
+ * The bypass agent inherits the same timeout and connect policy so bypassed
+ * requests behave identically to proxied ones.
+ */
+function createNoProxyAwareEnvDispatcher(
+  envProxyDispatcher: UndiciDispatcher,
+  bypassAgent: UndiciDispatcher,
+): UndiciDispatcher {
+  return new Proxy(envProxyDispatcher, {
+    get(target, property, receiver) {
+      if (property === "dispatch") {
+        return (options: UndiciDispatchOptions, handler: UndiciDispatchHandler): boolean => {
+          const origin =
+            typeof options.origin === "string"
+              ? options.origin
+              : options.origin instanceof URL
+                ? options.origin.href
+                : undefined;
+          // Global-dispatcher check: use hasEnvHttpProxyAgentConfigured
+          // (which includes ALL_PROXY) instead of the SSRF-safe
+          // HTTP(S)-only shouldUseEnvHttpProxyForUrl, because the
+          // EnvHttpProxyAgent already resolves ALL_PROXY.
+          if (origin && hasEnvHttpProxyAgentConfigured() && matchesNoProxy(origin)) {
+            return bypassAgent.dispatch(options, handler);
+          }
+          return target.dispatch(options, handler);
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      if (typeof value !== "function") {
+        return value;
+      }
+      if (UNDICI_DISPATCHER_LIFECYCLE_METHODS.has(property)) {
+        return (...args: unknown[]) => {
+          // Close/destroy the proxy dispatcher normally.
+          const proxyResult = Reflect.apply(value, target, args);
+          // Also clean up the bypass agent.  Strip any trailing callback to
+          // avoid double-callback when both dispatchers receive the same args.
+          const noCallbackArgs = args.filter((a) => typeof a !== "function");
+          const bypassValue = Reflect.get(bypassAgent, property, bypassAgent);
+          if (typeof bypassValue === "function") {
+            Reflect.apply(bypassValue, bypassAgent, noCallbackArgs);
+          }
+          return proxyResult;
+        };
+      }
+      if (UNDICI_DISPATCH_HELPER_METHODS.has(property)) {
+        return (...args: unknown[]) => Reflect.apply(value, receiver, args);
+      }
+      return value;
+    },
+  });
+}
+
 function resolveDispatcherKind(dispatcher: unknown): DispatcherKind {
   const ctorName = (dispatcher as { constructor?: { name?: string } })?.constructor?.name;
   if (typeof ctorName !== "string" || ctorName.length === 0) {
