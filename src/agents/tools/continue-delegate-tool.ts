@@ -22,7 +22,13 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { readSnakeCaseParamRaw } from "../../param-key.js";
 import { optionalStringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, normalizeToolModelOverride, readNumberParam, readStringParam, ToolInputError } from "./common.js";
+import {
+  jsonResult,
+  normalizeToolModelOverride,
+  readNumberParam,
+  readStringParam,
+  ToolInputError,
+} from "./common.js";
 
 const log = createSubsystemLogger("continuation/delegate-tool");
 
@@ -101,7 +107,7 @@ function readStrictStringArrayParam(
     throw new ToolInputError(`${key} must be an array of non-empty strings.`);
   }
   if (raw.length === 0) {
-    throw new ToolInputError(`${key} must include at least one session key.`);
+    return undefined;
   }
   const values: string[] = [];
   for (const entry of raw) {
