@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { emitSessionTranscriptUpdate } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   resolveSessionTranscriptsDirForAgent,
   type OpenClawConfig,
@@ -62,8 +61,12 @@ type MemoryTranscriptUpdateSubscriber = (
 const MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY = Symbol.for(
   "openclaw.memoryCore.sessionTranscriptUpdateSubscriber",
 );
+const originalMemoryTranscriptUpdateSubscriber = (globalThis as Record<symbol, unknown>)[
+  MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY
+];
 const originalStartupStateDir = process.env.OPENCLAW_STATE_DIR;
 const originalStartupConfigPath = process.env.OPENCLAW_CONFIG_PATH;
+let transcriptUpdateListener: ((update: MemorySessionTranscriptUpdate) => void) | undefined;
 
 type SourceStateRow = { path: string; hash: string; mtime: number; size: number };
 
@@ -86,6 +89,34 @@ function restoreStartupEnv(): void {
   } else {
     Reflect.set(process.env, "OPENCLAW_CONFIG_PATH", originalStartupConfigPath);
   }
+}
+
+function installTestTranscriptUpdateSubscriber(): void {
+  transcriptUpdateListener = undefined;
+  (globalThis as Record<symbol, unknown>)[MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY] = ((
+    listener,
+  ) => {
+    transcriptUpdateListener = listener;
+    return () => {
+      if (transcriptUpdateListener === listener) {
+        transcriptUpdateListener = undefined;
+      }
+    };
+  }) satisfies MemoryTranscriptUpdateSubscriber;
+}
+
+function restoreTestTranscriptUpdateSubscriber(): void {
+  transcriptUpdateListener = undefined;
+  if (originalMemoryTranscriptUpdateSubscriber === undefined) {
+    delete (globalThis as Record<symbol, unknown>)[MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY];
+    return;
+  }
+  (globalThis as Record<symbol, unknown>)[MEMORY_CORE_TRANSCRIPT_UPDATE_SUBSCRIBER_KEY] =
+    originalMemoryTranscriptUpdateSubscriber;
+}
+
+function emitSessionTranscriptUpdate(update: MemorySessionTranscriptUpdate): void {
+  transcriptUpdateListener?.(update);
 }
 
 class SessionStartupCatchupHarness extends MemoryManagerSyncOps {
@@ -260,11 +291,13 @@ describe("session startup catch-up", () => {
   beforeEach(async () => {
     stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-startup-"));
     setStartupStateDir(stateDir);
+    installTestTranscriptUpdateSubscriber();
   });
 
   afterEach(async () => {
     vi.clearAllTimers();
     vi.useRealTimers();
+    restoreTestTranscriptUpdateSubscriber();
     restoreStartupEnv();
     clearRuntimeConfigSnapshot();
     clearConfigCache();
