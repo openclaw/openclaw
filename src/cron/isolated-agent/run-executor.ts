@@ -20,10 +20,12 @@ import {
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import {
   getCliSessionId,
+  classifyEmbeddedAgentRunResultForModelFallback,
   ensureSelectedAgentHarnessPlugin,
   isCliProvider,
   LiveSessionModelSwitchError,
   logWarn,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
   normalizeVerboseLevel,
   registerAgentRunContext,
   resolveBootstrapWarningSignaturesSeen,
@@ -295,6 +297,18 @@ export function createCronPromptExecutor(params: {
         });
       },
       fallbacksOverride: cronFallbacksOverride,
+      // Isolated cron runs share the same embedded/CLI result shape as live agent
+      // turns, so classify empty/zero-token/reasoning-only results the same way.
+      // Without this, a fallback model that returns a clean stop with no visible
+      // reply is treated as success and the fallback chain stops, leaving the cron
+      // job silently broken (see #97115).
+      classifyResult: ({ provider: providerLocal, model: modelLocal, result: resultLocal }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider: providerLocal,
+          model: modelLocal,
+          result: resultLocal,
+        }),
+      mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
       run: async (providerOverride, modelOverride, runOptions) => {
         if (params.abortSignal?.aborted) {
           throw new Error(params.abortReason());
