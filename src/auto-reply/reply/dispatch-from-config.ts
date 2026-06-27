@@ -95,6 +95,7 @@ import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
+import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import {
   normalizeTtsAutoMode,
@@ -2565,7 +2566,7 @@ export async function dispatchReplyFromConfig(
       if (collapsed.length <= 80) {
         return collapsed;
       }
-      return `${collapsed.slice(0, 77).trimEnd()}...`;
+      return `${truncateUtf16Safe(collapsed, 77).trimEnd()}...`;
     };
     const formatPlanUpdateText = (payload: { explanation?: string; steps?: string[] }) => {
       const explanation = payload.explanation?.replace(/\s+/g, " ").trim();
