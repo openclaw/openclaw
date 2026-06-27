@@ -38,13 +38,13 @@ Do **not** use it when you need local files, your shell, your repo, or paired de
 <Steps>
   <Step title="Provide xAI credentials">
     Sign in with Grok OAuth using an eligible SuperGrok or X Premium subscription,
-    use the remote-friendly device-code flow, or store an API key. OAuth works
-    for `code_execution` and `x_search`; `XAI_API_KEY` or plugin web-search
-    config can also power Grok `web_search`.
+    or store an API key. xAI OAuth uses device-code verification, so it works
+    from remote hosts without a localhost callback. OAuth works for
+    `code_execution` and `x_search`; `XAI_API_KEY` or plugin web-search config
+    can also power Grok `web_search`.
 
     ```bash
     openclaw models auth login --provider xai --method oauth
-    openclaw models auth login --provider xai --device-code
     ```
 
     During a fresh install, the same auth choices are available inside
@@ -52,7 +52,7 @@ Do **not** use it when you need local files, your shell, your repo, or paired de
 
     ```bash
     openclaw onboard --install-daemon
-    openclaw onboard --install-daemon --auth-choice xai-device-code
+    openclaw onboard --install-daemon --auth-choice xai-oauth
     ```
 
     Or use an API key:
