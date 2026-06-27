@@ -1,7 +1,6 @@
-/** File-backed implementation for plugin host-owned session-state cleanup. */
+/** Shared predicates and mutations for plugin host-owned session-state cleanup. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeSessionEntrySlotKey } from "../../plugins/session-entry-slot-keys.js";
-import { updateSessionStore } from "./store.js";
 import type { SessionEntry } from "./types.js";
 
 /** Cleanup variants owned by plugin host lifecycle paths. */
@@ -223,42 +222,4 @@ export function clearPluginHostCleanupTarget(
     return;
   }
   clearPluginOwnedSessionState(entry, params.pluginId, params.sessionEntrySlotKeys);
-}
-
-/** Clears plugin host-owned session state in one store transaction. */
-export async function cleanupPluginHostSessionStore(
-  params: PluginHostSessionCleanupStoreParams,
-): Promise<number> {
-  if (
-    shouldSkipPluginHostCleanupStore(params) ||
-    (params.shouldCleanup && !params.shouldCleanup())
-  ) {
-    return 0;
-  }
-  return await updateSessionStore(
-    params.storePath,
-    (store) => {
-      if (params.shouldCleanup && !params.shouldCleanup()) {
-        return 0;
-      }
-      let clearedInStore = 0;
-      const now = Date.now();
-      for (const [entryKey, entry] of Object.entries(store)) {
-        if (
-          !matchesPluginHostCleanupSession(entryKey, entry, params.sessionKey) ||
-          !hasPluginHostCleanupTarget(entry, params)
-        ) {
-          continue;
-        }
-        clearPluginHostCleanupTarget(entry, params);
-        entry.updatedAt = now;
-        clearedInStore += 1;
-      }
-      return clearedInStore;
-    },
-    {
-      skipSaveWhenResult: (clearedInStore) => clearedInStore === 0,
-      takeCacheOwnership: true,
-    },
-  );
 }
