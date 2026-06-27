@@ -22,6 +22,7 @@ import type {
 } from "./session-utils.fs.js";
 import {
   attachOpenClawTranscriptMeta,
+  buildSessionPreviewItems,
   readFirstUserMessageFromTranscript as readFirstUserMessageFromTranscriptFile,
   readLatestRecentSessionUsageFromTranscriptAsync as readLatestRecentSessionUsageFromTranscriptAsyncFile,
   readLatestSessionUsageFromTranscript as readLatestSessionUsageFromTranscriptFile,
@@ -456,22 +457,7 @@ function buildSqlitePreviewItems(
   maxItems: number,
   maxChars: number,
 ): SessionPreviewItem[] {
-  return readSqliteMessagesSync(target)
-    .flatMap((message) => {
-      const text = extractMessageText(message);
-      if (!text) {
-        return [];
-      }
-      const role = extractMessageRole(message);
-      const normalizedRole =
-        role === "user" || role === "assistant" || role === "system" || role === "tool"
-          ? role
-          : "other";
-      const clipped =
-        maxChars > 3 && text.length > maxChars ? `${text.slice(0, maxChars - 3)}...` : text;
-      return [{ role: normalizedRole, text: clipped } satisfies SessionPreviewItem];
-    })
-    .slice(-maxItems);
+  return buildSessionPreviewItems(readSqliteMessagesSync(target), maxItems, maxChars);
 }
 
 /** Reads display messages from a session transcript through the reader seam. */
