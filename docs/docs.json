@@ -1086,6 +1086,7 @@
                   "install/macos-vm",
                   "install/northflank",
                   "install/oracle",
+                  "install/openclawlaunch",
                   "install/railway",
                   "install/raspberry-pi",
                   "install/render",
