@@ -50,9 +50,13 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const OUTPUT_PATH = path.join(ROOT, "apps", ".i18n", "native-source.json");
 const TRANSLATIONS_DIR = path.join(ROOT, "apps", ".i18n", "native");
-const SOURCE_ROOTS: Record<NativeI18nSurface, string> = {
-  android: path.join(ROOT, "apps", "android", "app", "src", "main"),
-  apple: path.join(ROOT, "apps", "ios"),
+const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
+  android: [path.join(ROOT, "apps", "android", "app", "src", "main")],
+  apple: [
+    path.join(ROOT, "apps", "ios"),
+    path.join(ROOT, "apps", "macos", "Sources"),
+    path.join(ROOT, "apps", "shared", "OpenClawKit", "Sources"),
+  ],
 };
 
 const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
