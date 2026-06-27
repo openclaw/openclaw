@@ -63,7 +63,6 @@ export const fr: TranslationMap = {
     docs: "Documentation",
     theme: "Thème",
     colorMode: "Mode de couleur",
-    colorModeOption: "Mode de couleur : {mode}",
     resources: "Ressources",
     search: "Rechercher",
     save: "Enregistrer",
@@ -203,6 +202,7 @@ export const fr: TranslationMap = {
     inherit: "hériter",
     defaultOption: "Par défaut ({value})",
     offExplicit: "désactivé (explicite)",
+    auto: "auto",
     on: "activé",
     off: "désactivé",
     full: "complet",
@@ -1456,6 +1456,7 @@ export const fr: TranslationMap = {
     jaJP: "日本語 (japonais)",
     ko: "한국어 (coréen)",
     fr: "Français (français)",
+    hi: "हिन्दी (hindi)",
     ar: "العربية (arabe)",
     it: "Italiano (italien)",
     tr: "Türkçe (turc)",
@@ -1466,6 +1467,7 @@ export const fr: TranslationMap = {
     vi: "Tiếng Việt (vietnamien)",
     nl: "Nederlands (néerlandais)",
     fa: "فارسی (persan)",
+    ru: "Русский (russe)",
   },
   cron: {
     quickCreate: {
@@ -1637,6 +1639,7 @@ export const fr: TranslationMap = {
       wakeModeHelp:
         "Maintenant déclenche immédiatement. Prochain heartbeat attend le cycle suivant.",
       payloadKind: "Que faut-il exécuter ?",
+      command: "Command",
       systemEvent: "Publier un message dans la chronologie principale",
       agentTurn: "Exécuter une tâche d’assistant (isolée)",
       systemEventHelp:

@@ -2,7 +2,11 @@
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
-import type { MemorySyncProgressUpdate } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import type {
+  MemorySessionSyncTarget,
+  MemorySyncParams,
+  MemorySyncProgressUpdate,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 const log = createSubsystemLogger("memory");
 
@@ -19,6 +23,7 @@ export type MemoryReadonlyRecoveryState = {
   runSync: (params?: {
     reason?: string;
     force?: boolean;
+    sessions?: MemorySessionSyncTarget[];
     sessionFiles?: string[];
     progress?: (update: MemorySyncProgressUpdate) => void;
   }) => Promise<void>;
@@ -80,12 +85,7 @@ export function extractMemoryErrorReason(err: unknown): string {
 
 export async function runMemorySyncWithReadonlyRecovery(
   state: MemoryReadonlyRecoveryState,
-  params?: {
-    reason?: string;
-    force?: boolean;
-    sessionFiles?: string[];
-    progress?: (update: MemorySyncProgressUpdate) => void;
-  },
+  params?: MemorySyncParams,
 ): Promise<void> {
   try {
     await state.runSync(params);
@@ -121,25 +121,28 @@ export function enqueueMemoryTargetedSessionSync(
     isClosed: () => boolean;
     getSyncing: () => Promise<void> | null;
     getQueuedSessionFiles: () => Set<string>;
+    getQueuedSessions: () => Map<string, MemorySessionSyncTarget>;
     getQueuedSessionSync: () => Promise<void> | null;
     setQueuedSessionSync: (value: Promise<void> | null) => void;
-    sync: (params?: {
-      reason?: string;
-      force?: boolean;
-      sessionFiles?: string[];
-      progress?: (update: MemorySyncProgressUpdate) => void;
-    }) => Promise<void>;
+    sync: (params?: MemorySyncParams) => Promise<void>;
   },
-  sessionFiles?: string[],
+  targets?: Pick<MemorySyncParams, "sessions" | "sessionFiles">,
 ): Promise<void> {
   const queuedSessionFiles = state.getQueuedSessionFiles();
-  for (const sessionFile of sessionFiles ?? []) {
+  for (const sessionFile of targets?.sessionFiles ?? []) {
     const trimmed = sessionFile.trim();
     if (trimmed) {
       queuedSessionFiles.add(trimmed);
     }
   }
-  if (queuedSessionFiles.size === 0) {
+  const queuedSessions = state.getQueuedSessions();
+  for (const session of targets?.sessions ?? []) {
+    const normalized = normalizeQueuedMemorySessionSyncTarget(session);
+    if (normalized) {
+      queuedSessions.set(memorySessionSyncTargetKey(normalized), normalized);
+    }
+  }
+  if (queuedSessionFiles.size === 0 && queuedSessions.size === 0) {
     return state.getSyncing() ?? Promise.resolve();
   }
   if (!state.getQueuedSessionSync()) {
@@ -147,11 +150,17 @@ export function enqueueMemoryTargetedSessionSync(
       (async () => {
         try {
           await state.getSyncing()?.catch(() => undefined);
-          while (!state.isClosed() && state.getQueuedSessionFiles().size > 0) {
+          while (
+            !state.isClosed() &&
+            (state.getQueuedSessionFiles().size > 0 || state.getQueuedSessions().size > 0)
+          ) {
             const pendingSessionFiles = Array.from(state.getQueuedSessionFiles());
+            const pendingSessions = Array.from(state.getQueuedSessions().values());
             state.getQueuedSessionFiles().clear();
+            state.getQueuedSessions().clear();
             await state.sync({
-              reason: "queued-session-files",
+              reason: "queued-sessions",
+              sessions: pendingSessions,
               sessionFiles: pendingSessionFiles,
             });
           }
@@ -162,4 +171,24 @@ export function enqueueMemoryTargetedSessionSync(
     );
   }
   return state.getQueuedSessionSync() ?? Promise.resolve();
+}
+
+function normalizeQueuedMemorySessionSyncTarget(
+  target: MemorySessionSyncTarget,
+): MemorySessionSyncTarget | null {
+  const sessionId = target.sessionId.trim();
+  if (!sessionId) {
+    return null;
+  }
+  const agentId = target.agentId?.trim();
+  const sessionKey = target.sessionKey?.trim();
+  return {
+    ...(agentId ? { agentId } : {}),
+    sessionId,
+    ...(sessionKey ? { sessionKey } : {}),
+  };
+}
+
+function memorySessionSyncTargetKey(target: MemorySessionSyncTarget): string {
+  return [target.agentId ?? "", target.sessionId, target.sessionKey ?? ""].join("\0");
 }

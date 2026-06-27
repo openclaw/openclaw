@@ -8,15 +8,15 @@ source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-openwebui-e2e" OPENCLAW_OPENWEBUI_E2E_IMAGE)"
 OPENWEBUI_IMAGE="${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.8.10}"
-MAX_MEMORY_MIB="${OPENCLAW_OPENWEBUI_MAX_MEMORY_MIB:-8192}"
-MAX_CPU_PERCENT="${OPENCLAW_OPENWEBUI_MAX_CPU_PERCENT:-1600}"
+MAX_MEMORY_MIB="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_OPENWEBUI_MAX_MEMORY_MIB 8192)"
+MAX_CPU_PERCENT="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_OPENWEBUI_MAX_CPU_PERCENT 1600)"
 # Keep the default on the preferred GPT-5 OpenAI model for Open WebUI
 # compatibility smoke. Callers can still override this explicitly.
 MODEL="${OPENCLAW_OPENWEBUI_MODEL:-openai/gpt-5.5}"
 PROMPT_NONCE="OPENWEBUI_DOCKER_E2E_$(date +%s)_$$"
 PROMPT="${OPENCLAW_OPENWEBUI_PROMPT:-Reply with exactly this token and nothing else: ${PROMPT_NONCE}}"
-PORT="${OPENCLAW_OPENWEBUI_GATEWAY_PORT:-18789}"
-WEBUI_PORT="${OPENCLAW_OPENWEBUI_PORT:-8080}"
+PORT="$(docker_e2e_read_tcp_port_env OPENCLAW_OPENWEBUI_GATEWAY_PORT 18789)"
+WEBUI_PORT="$(docker_e2e_read_tcp_port_env OPENCLAW_OPENWEBUI_PORT 8080)"
 TOKEN="openwebui-e2e-$(date +%s)-$$"
 ADMIN_EMAIL="${OPENCLAW_OPENWEBUI_ADMIN_EMAIL:-openwebui-e2e@example.com}"
 ADMIN_PASSWORD="${OPENCLAW_OPENWEBUI_ADMIN_PASSWORD:-OpenWebUI-E2E-Password-$(date +%s)-$$}"
@@ -36,22 +36,6 @@ validate_positive_int() {
   fi
 }
 
-validate_tcp_port() {
-  local label="$1"
-  local value="$2"
-  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
-    echo "invalid $label: $value" >&2
-    exit 2
-  fi
-  local decimal_value=$((10#$value))
-  if [ "$decimal_value" -lt 1 ] || [ "$decimal_value" -gt 65535 ]; then
-    echo "invalid $label: $value" >&2
-    exit 2
-  fi
-}
-
-validate_tcp_port OPENCLAW_OPENWEBUI_GATEWAY_PORT "$PORT"
-validate_tcp_port OPENCLAW_OPENWEBUI_PORT "$WEBUI_PORT"
 validate_positive_int OPENCLAW_OPENWEBUI_PROVIDER_TIMEOUT_SECONDS "$PROVIDER_TIMEOUT_SECONDS"
 PROVIDER_TIMEOUT_SECONDS_DECIMAL=$((10#$PROVIDER_TIMEOUT_SECONDS))
 PROBE_FETCH_TIMEOUT_MS="${OPENCLAW_OPENWEBUI_FETCH_TIMEOUT_MS:-$((PROVIDER_TIMEOUT_SECONDS_DECIMAL * 1000 + 60000))}"

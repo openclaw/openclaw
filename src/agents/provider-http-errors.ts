@@ -13,6 +13,8 @@ export { normalizeOptionalString as trimToUndefined } from "../../packages/norma
 
 const ERROR_BODY_METADATA_LIMIT = 500;
 const PROVIDER_BINARY_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const PROVIDER_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const PROVIDER_TEXT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 /** Returns a plain object view for provider JSON payloads when one exists. */
 export function asObject(value: unknown): Record<string, unknown> | undefined {
@@ -77,9 +79,26 @@ export async function readResponseTextLimited(
       // Stop the upstream body once the diagnostic budget is full.
       await reader.cancel().catch(() => {});
     }
+    try {
+      reader.releaseLock();
+    } catch {}
   }
 
   return text;
+}
+
+/** Reads a successful provider text response under a byte cap. */
+export async function readProviderTextResponse(
+  response: Response,
+  label: string,
+  opts?: { maxBytes?: number },
+): Promise<string> {
+  const maxBytes = opts?.maxBytes ?? PROVIDER_TEXT_RESPONSE_MAX_BYTES;
+  const bytes = await readResponseWithLimit(response, maxBytes, {
+    onOverflow: ({ maxBytes: maxBytesLocal }) =>
+      new Error(`${label}: text response exceeds ${maxBytesLocal} bytes`),
+  });
+  return new TextDecoder().decode(bytes);
 }
 
 /** Formats common provider JSON error payload shapes into one readable detail string. */
@@ -284,10 +303,24 @@ export async function assertOkOrThrowHttpError(response: Response, label: string
   throw await createProviderHttpError(response, label, { statusPrefix: "HTTP " });
 }
 
-/** Parses a provider JSON response and wraps malformed JSON with the caller's label. */
-export async function readProviderJsonResponse<T>(response: Response, label: string): Promise<T> {
+/**
+ * Parses a provider JSON response under a byte cap and wraps malformed JSON with the caller's label.
+ *
+ * The body is read through the same bounded reader as binary responses so a provider that streams an
+ * unbounded JSON body cannot force the runtime to buffer the whole payload before parsing.
+ */
+export async function readProviderJsonResponse<T>(
+  response: Response,
+  label: string,
+  opts?: { maxBytes?: number },
+): Promise<T> {
+  const maxBytes = opts?.maxBytes ?? PROVIDER_JSON_RESPONSE_MAX_BYTES;
+  const bytes = await readResponseWithLimit(response, maxBytes, {
+    onOverflow: ({ maxBytes: maxBytesLocal }) =>
+      new Error(`${label}: JSON response exceeds ${maxBytesLocal} bytes`),
+  });
   try {
-    return (await response.json()) as T;
+    return JSON.parse(new TextDecoder().decode(bytes)) as T;
   } catch (cause) {
     throw new Error(`${label}: malformed JSON response`, { cause });
   }

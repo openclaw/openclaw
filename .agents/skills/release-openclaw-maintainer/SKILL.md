@@ -203,8 +203,9 @@ Stable publication is not complete until `main` carries the actual shipped relea
   validation-only release machinery. If mac packaging needs release-branch-only
   fixes after the stable npm package or GitHub tag is already published, do not
   create a `vYYYY.M.PATCH-N` correction tag just to change the workflow source.
-  Dispatch the private mac workflows for the original `tag=vYYYY.M.PATCH` with
-  `source_ref=release/YYYY.M.PATCH` and `public_release_branch=release/YYYY.M.PATCH`;
+  Dispatch the release-ops mac workflows for the original `tag=vYYYY.M.PATCH`
+  with `source_ref=release/YYYY.M.PATCH` and
+  `public_release_branch=release/YYYY.M.PATCH`;
   provenance checks must prove the source SHA descends from the tag and
   validation/preflight use the same source. Reserve `vYYYY.M.PATCH-N` correction
   tags for emergency hotfixes that must publish a new npm package/release
@@ -579,8 +580,8 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 - Actual npm install/update phases are capped at 5 minutes. If `npm install -g`, installer package install, or `openclaw update` takes longer than 300s in release e2e, stop treating the run as healthy progress and debug the installer/updater or harness.
 - Serialize host build/package mutations ahead of VM lanes. Finish `pnpm build`, `pnpm ui:build`, `pnpm release:check`, install smoke, and any Docker/package-prep lanes before starting Parallels `npm pack` lanes; otherwise `dist` can disappear during VM pack prep and produce false failures.
 - Include mac release readiness in preflight by running the public validation
-  workflow in `openclaw/openclaw` and the real mac preflight in
-  `openclaw/releases-private` for every release.
+  workflow in `openclaw/openclaw` and the release-ops mac preflight in
+  `openclaw/releases` for every release.
 - Treat the `appcast.xml` update on `main` as part of mac release readiness, not an optional follow-up.
 - The workflows remain tag-based. The agent is responsible for making sure
   preflight runs complete successfully before any publish run starts.
@@ -608,16 +609,16 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 ## Use the right auth flow
 
 - OpenClaw publish uses GitHub trusted publishing.
-- Stable npm promotion from `beta` to `latest` uses the private
-  `openclaw/releases-private/.github/workflows/openclaw-npm-dist-tags.yml`
-  workflow because `npm dist-tag` management needs `NPM_TOKEN`, while the
-  public npm release workflow stays OIDC-only.
-- Prefer fixing the private workflow token path over any local 1Password
-  fallback. The desired setup is a granular npm token stored as the private
+- Stable npm promotion from `beta` to `latest` uses the restricted release-ops
+  `openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` workflow
+  because `npm dist-tag` management needs `NPM_TOKEN`, while the public npm
+  release workflow stays OIDC-only.
+- Prefer fixing the release-ops workflow token path over any local 1Password
+  fallback. The desired setup is a granular npm token stored as the release-ops
   repo's `NPM_TOKEN` secret, scoped to the `openclaw` package with read/write
   and 2FA bypass for automation.
-- If the private dist-tag workflow cannot promote because `NPM_TOKEN` is absent
-  or stale, use the local tmux + 1Password fallback:
+- If the release-ops dist-tag workflow cannot promote because `NPM_TOKEN` is
+  absent or stale, use the local tmux + 1Password fallback:
   - Start or reuse a tmux session so interactive `npm login` and OTP prompts
     are observable and recoverable.
   - Hard rule: never run `op` directly in the main agent shell during release
@@ -635,21 +636,21 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   - Verify with a cache-bypassed registry read, for example:
     `npm view openclaw dist-tags --json --prefer-online --cache /tmp/openclaw-npm-cache-verify-$$`
     and `npm view openclaw@latest version dist.tarball --json --prefer-online`.
-- Direct stable publishes can also use that private dist-tag workflow to point
-  `beta` at the already-published `latest` version when the operator wants both
-  tags aligned immediately.
+- Direct stable publishes can also use that release-ops dist-tag workflow to
+  point `beta` at the already-published `latest` version when the operator wants
+  both tags aligned immediately.
 - The publish run must be started manually with `workflow_dispatch`.
-- The npm workflow and the private mac publish workflow accept
+- The npm workflow and the release-ops mac publish workflow accept
   `preflight_only=true` to run validation/build/package steps without uploading
   public release assets.
 - Real npm publish requires a prior successful npm preflight run id and the
   successful Full Release Validation run id for the same tag/SHA so the publish
   job promotes the prepared tarball instead of rebuilding it and attaches the
   correct release evidence.
-- Real private mac publish requires a prior successful private mac preflight
-  run id so the publish job promotes the prepared artifacts instead of
+- Real release-ops mac publish requires a prior successful release-ops mac
+  preflight run id so the publish job promotes the prepared artifacts instead of
   rebuilding or renotarizing them again.
-- The private mac workflow also accepts `smoke_test_only=true` for branch-safe
+- The release-ops mac workflow also accepts `smoke_test_only=true` for branch-safe
   workflow smoke tests that use ad-hoc signing, skip notarization, skip shared
   appcast generation, and do not prove release readiness.
 - `preflight_only=true` on the npm workflow is also the right way to validate an
@@ -670,27 +671,27 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   use only `main` or `release/YYYY.M.PATCH`.
 - `.github/workflows/macos-release.yml` in `openclaw/openclaw` is now a
   public validation-only handoff. It validates the tag/release state and points
-  operators to the private repo. It still rebuilds the JS outputs needed for
+  operators to the release-ops repo. It still rebuilds the JS outputs needed for
   release validation, but it does not sign, notarize, or publish macOS
   artifacts.
-- `openclaw/releases-private/.github/workflows/openclaw-macos-validate.yml`
-  is the required private mac validation lane for `swift test`; keep it green
+- `openclaw/releases/.github/workflows/openclaw-macos-validate.yml` is the
+  required release-ops mac validation lane for `swift test`; keep it green
   before any real stable mac publish run starts.
 - Real mac preflight and real mac publish both use
-  `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`.
-- The private mac validation lane runs on GitHub's standard macOS runner.
-- The private mac preflight path runs on GitHub's xlarge macOS runner and uses
+  `openclaw/releases/.github/workflows/openclaw-macos-publish.yml`.
+- The release-ops mac validation lane runs on GitHub's standard macOS runner.
+- The release-ops mac preflight path runs on GitHub's xlarge macOS runner and uses
   a SwiftPM cache because the build/sign/notarize/package path is CPU-heavy.
-- Private mac preflight uploads notarized build artifacts as workflow artifacts
-  instead of uploading public GitHub release assets.
-- Private smoke-test runs upload ad-hoc, non-notarized build artifacts as
+- Release-ops mac preflight uploads notarized build artifacts as workflow
+  artifacts instead of uploading public GitHub release assets.
+- Release-ops smoke-test runs upload ad-hoc, non-notarized build artifacts as
   workflow artifacts and intentionally skip stable `appcast.xml` generation.
 - For stable releases, npm preflight, Full Release Validation, public mac
-  validation, private mac validation, and private mac preflight must all pass
-  before any real publish run starts. For beta releases, npm preflight and Full
-  Release Validation must pass before npm publish unless the operator explicitly
-  waives the full gate; mac beta validation is still only required when
-  requested.
+  validation, release-ops mac validation, and release-ops mac preflight must all
+  pass before any real publish run starts. For beta releases, npm preflight and
+  Full Release Validation must pass before npm publish unless the operator
+  explicitly waives the full gate; mac beta validation is still only required
+  when requested.
 - Real publish runs may be dispatched from `main` or from a
   `release/YYYY.M.PATCH` branch. For release-branch runs, the tag must be contained
   in that release branch, and the real publish must reuse a successful preflight
@@ -699,21 +700,21 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
   rather than workflow-level SHA pinning.
 - The `npm-release` environment must be approved by `@openclaw/openclaw-release-managers` before publish continues.
 - Mac publish uses
-  `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml` for
-  private mac preflight artifact preparation and real publish artifact
+  `openclaw/releases/.github/workflows/openclaw-macos-publish.yml` for
+  release-ops mac preflight artifact preparation and real publish artifact
   promotion.
-- Real private mac publish uploads the packaged `.zip`, `.dmg`, and
+- Real release-ops mac publish uploads the packaged `.zip`, `.dmg`, and
   `.dSYM.zip` assets to the existing GitHub release in `openclaw/openclaw`
   automatically when `OPENCLAW_PUBLIC_REPO_RELEASE_TOKEN` is present in the
-  private repo `mac-release` environment.
+  release-ops repo `mac-release` environment.
 - For stable releases, the agent must also download the signed
-  `macos-appcast-<tag>` artifact from the successful private mac workflow and
-  then update `appcast.xml` on `main`.
+  `macos-appcast-<tag>` artifact from the successful release-ops mac workflow
+  and then update `appcast.xml` on `main`.
 - For beta mac releases, do not update the shared production `appcast.xml`
   unless a separate beta Sparkle feed exists.
-- The private repo targets a dedicated `mac-release` environment. If the GitHub
-  plan does not yet support required reviewers there, do not assume the
-  environment alone is the approval boundary; rely on private repo access and
+- The release-ops repo targets a dedicated `mac-release` environment. If the
+  GitHub plan does not yet support required reviewers there, do not assume the
+  environment alone is the approval boundary; rely on restricted repo access and
   CODEOWNERS until those settings can be enabled.
 - Do not use `NPM_TOKEN` or the plugin OTP flow for the OpenClaw package
   publish path; package publishing uses trusted publishing.
@@ -800,12 +801,12 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
 18. For stable releases, start `.github/workflows/macos-release.yml` in
     `openclaw/openclaw` and wait for the public validation-only run to pass.
 19. For stable releases, start
-    `openclaw/releases-private/.github/workflows/openclaw-macos-validate.yml`
-    with the same tag and wait for the private mac validation lane to pass.
+    `openclaw/releases/.github/workflows/openclaw-macos-validate.yml` with the
+    same tag and wait for the release-ops mac validation lane to pass.
 20. For stable releases, start
-    `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`
-    with `preflight_only=true` and wait for it to pass. Save that run id because
-    the real publish requires it to reuse the notarized mac artifacts.
+    `openclaw/releases/.github/workflows/openclaw-macos-publish.yml` with
+    `preflight_only=true` and wait for it to pass. Save that run id because the
+    real publish requires it to reuse the notarized mac artifacts.
 21. If any preflight or validation run fails, fix the issue on a new commit,
     delete the tag and any accidental draft/incomplete GitHub release, recreate
     the tag from the fixed commit, and rerun all relevant preflights from
@@ -861,22 +862,23 @@ node --import tsx scripts/openclaw-npm-postpublish-verify.ts <published-version>
     promotion roster when the matching beta already carried the full confidence
     pass: published npm postpublish verify, Docker install/update smoke,
     macOS-only Parallels install/update smoke, and required QA signal.
-    Then start the private
-    `openclaw/releases-private/.github/workflows/openclaw-npm-dist-tags.yml`
-    workflow to promote that stable version from `beta` to `latest`, then
-    verify `latest` now points at that version.
+    Then start the restricted release-ops
+    `openclaw/releases/.github/workflows/openclaw-npm-dist-tags.yml` workflow
+    to promote that stable version from `beta` to `latest`, then verify
+    `latest` now points at that version.
 29. If the stable release was published directly to `latest` and `beta` should
-    follow it, start that same private dist-tag workflow to point `beta` at the
-    stable version, then verify both `latest` and `beta` point at that version.
+    follow it, start that same release-ops dist-tag workflow to point `beta` at
+    the stable version, then verify both `latest` and `beta` point at that
+    version.
 30. For stable releases, start
-    `openclaw/releases-private/.github/workflows/openclaw-macos-publish.yml`
-    for the real publish with the successful private mac `preflight_run_id` and
-    wait for success.
-31. Verify the successful real private mac run uploaded the `.zip`, `.dmg`,
+    `openclaw/releases/.github/workflows/openclaw-macos-publish.yml` for the
+    real publish with the successful release-ops mac `preflight_run_id` and wait
+    for success.
+31. Verify the successful real release-ops mac run uploaded the `.zip`, `.dmg`,
     and `.dSYM.zip` artifacts to the existing GitHub release in
     `openclaw/openclaw`.
 32. For stable releases, download `macos-appcast-<tag>` from the successful
-    private mac run, update `appcast.xml` on `main`, verify the feed, then
+    release-ops mac run, update `appcast.xml` on `main`, verify the feed, then
     complete the **Close stable releases on main** gate.
 33. For beta releases, publish the mac assets only when intentionally requested;
     expect no shared production

@@ -202,6 +202,3 @@ export function resetCronActiveJobs() {
   state.activeJobIds?.clear();
   notifyActiveCronJobWaitersIfEmpty(state);
 }
-
-/** Clears process-global cron active-job state between tests. */
-export const resetCronActiveJobsForTests = resetCronActiveJobs;

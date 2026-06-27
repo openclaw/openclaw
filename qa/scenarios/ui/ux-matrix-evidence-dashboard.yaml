@@ -9,9 +9,9 @@ scenario:
       - qa.artifact-safety
     secondary:
       - ui.control
-      - control-ui
-      - cli-entrypoint
-      - status-snapshots
+      - gateway.control-ui-hosting
+      - cli.entrypoint
+      - cli.status-snapshots
       - tools.evidence
       - workspace.artifacts
   objective: Produce UX Matrix evidence artifacts through the QA Lab script producer contract.
@@ -29,6 +29,7 @@ scenario:
     kind: script
     path: scripts/qa/ux-matrix-evidence-producer.ts
     summary: Script-backed UX Matrix producer that emits QA Lab evidence artifacts.
+    allowBlockedEvidence: true
     args:
       - --artifact-base
       - ${outputDir}

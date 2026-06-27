@@ -192,6 +192,39 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
     }
   });
 
+  it("keeps failed probe retries inside the total timeout", async () => {
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ready: false, failing: ["gateway"] }));
+    });
+    const baseUrl = await listen(server);
+    const out = path.join(makeTempDir(), "ready-timeout.json");
+    const startedAt = Date.now();
+    try {
+      const result = await runProbe([
+        "--base-url",
+        baseUrl,
+        "--path",
+        "/readyz",
+        "--expect",
+        "ready",
+        "--out",
+        out,
+        "--timeout-ms",
+        "50",
+        "--attempt-timeout-ms",
+        "25",
+      ]);
+
+      expect(result.status).not.toBe(0);
+      expect(Date.now() - startedAt).toBeLessThan(300);
+      expect(result.stderr).toContain("probe did not satisfy ready within 50ms");
+      expect(fs.existsSync(out)).toBe(false);
+    } finally {
+      server.close();
+    }
+  });
+
   it("allows degraded ready responses only when degraded readiness is explicit", async () => {
     const server = createHttpServer((_request, response) => {
       response.writeHead(503, { "content-type": "application/json" });
@@ -328,6 +361,49 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
       expect(result.error).toBeUndefined();
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("probe did not satisfy live within 300ms");
+      expect(elapsedMs).toBeLessThan(2_500);
+      expect(fs.existsSync(out)).toBe(false);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      server.close();
+    }
+  });
+
+  it("keeps the attempt timeout active while reading probe bodies", async () => {
+    const sockets = new Set<Socket>();
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.write('{"ok":');
+    });
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+    });
+    const baseUrl = await listen(server);
+    const out = path.join(makeTempDir(), "body-stall.json");
+    const startedAt = Date.now();
+    try {
+      const result = await runProbe([
+        "--base-url",
+        baseUrl,
+        "--path",
+        "/healthz",
+        "--expect",
+        "live",
+        "--out",
+        out,
+        "--timeout-ms",
+        "300",
+        "--attempt-timeout-ms",
+        "100",
+      ]);
+      const elapsedMs = Date.now() - startedAt;
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("probe attempt timed out after 100ms");
       expect(elapsedMs).toBeLessThan(2_500);
       expect(fs.existsSync(out)).toBe(false);
     } finally {

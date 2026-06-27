@@ -51,6 +51,7 @@ export function synthesizeMediaGenerationCatalogEntries<TCapabilities>(params: {
   provider: MediaGenerationCatalogProvider<TCapabilities>;
   modes?: readonly string[];
 }): Array<MediaGenerationCatalogEntry<TCapabilities>> {
+  const defaultModel = uniqueTrimmedStrings([params.provider.defaultModel])[0];
   return uniqueModels(params.provider).map((model) => {
     const entry: MediaGenerationCatalogEntry<TCapabilities> = {
       kind: params.kind,
@@ -62,7 +63,7 @@ export function synthesizeMediaGenerationCatalogEntries<TCapabilities>(params: {
     if (params.provider.label) {
       entry.label = params.provider.label;
     }
-    if (model === params.provider.defaultModel) {
+    if (model === defaultModel) {
       entry.default = true;
     }
     if (params.modes) {

@@ -3813,6 +3813,137 @@ describe("createFollowupRunner messaging delivery and dedupe", () => {
     persistSpy.mockRestore();
   });
 
+  it("appends configured responseUsage footers during followup delivery", async () => {
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
+    const cfg = {
+      messages: {
+        responseUsage: "tokens",
+      },
+    } as OpenClawConfig;
+
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "hello world!" }],
+        meta: {
+          agentMeta: {
+            usage: { input: 1_000, output: 50 },
+            model: "claude-opus-4-6",
+            provider: "anthropic",
+          },
+        },
+      },
+      runnerOverrides: {
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+      },
+      queued: createQueuedRun({
+        run: {
+          config: cfg,
+          messageProvider: "discord",
+          sessionKey,
+        },
+      }),
+    });
+
+    const payload = requireMockCallArg(onBlockReply, 0);
+    expect(payload.text).toContain("hello world!");
+    expect(payload.text).toContain("Usage:");
+    expect(payload.text).toContain("out");
+  });
+
+  it("renders full responseUsage followup footers without exposing the session key", async () => {
+    const sessionKey = "discord:channel:user";
+    const sessionEntry: SessionEntry = { sessionId: "session", updatedAt: Date.now() };
+    const cfg = {
+      messages: {
+        responseUsage: "full",
+        usageTemplate: {
+          output: {
+            default: [
+              {
+                text: "model={model.display_name} tokens={usage.input_tokens|num}/{usage.output_tokens|num}",
+              },
+            ],
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "hello world!" }],
+        meta: {
+          agentMeta: {
+            usage: { input: 1_000, output: 50 },
+            model: "claude-opus-4-6",
+            provider: "anthropic",
+          },
+        },
+      },
+      runnerOverrides: {
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+      },
+      queued: createQueuedRun({
+        run: {
+          config: cfg,
+          messageProvider: "discord",
+          sessionKey,
+        },
+      }),
+    });
+
+    const payload = requireMockCallArg(onBlockReply, 0);
+    expect(payload.text).toContain("hello world!");
+    expect(payload.text).toContain("model=claude-opus-4-6 tokens=1.0k/50");
+    expect(payload.text).not.toContain(sessionKey);
+  });
+
+  it("keeps explicit responseUsage off during followup delivery", async () => {
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      updatedAt: Date.now(),
+      responseUsage: "off",
+    };
+    const cfg = {
+      messages: {
+        responseUsage: "tokens",
+      },
+    } as OpenClawConfig;
+
+    const { onBlockReply } = await runMessagingCase({
+      agentResult: {
+        payloads: [{ text: "hello world!" }],
+        meta: {
+          agentMeta: {
+            usage: { input: 1_000, output: 50 },
+            model: "claude-opus-4-6",
+            provider: "anthropic",
+          },
+        },
+      },
+      runnerOverrides: {
+        sessionEntry,
+        sessionStore: { [sessionKey]: sessionEntry },
+        sessionKey,
+      },
+      queued: createQueuedRun({
+        run: {
+          config: cfg,
+          messageProvider: "discord",
+          sessionKey,
+        },
+      }),
+    });
+
+    const payload = requireMockCallArg(onBlockReply, 0);
+    expect(payload.text).toBe("hello world!");
+  });
+
   it("uses providerUsed for snapshot freshness when agent metadata overrides the run provider", async () => {
     const storePath = "/tmp/openclaw-followup-usage-provider.json";
     const sessionKey = "main";

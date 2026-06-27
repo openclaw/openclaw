@@ -29,7 +29,8 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const PUBLISHED_INSTALLER_BASE_URL = "https://openclaw.ai";
@@ -81,6 +82,17 @@ for (const signal of Object.keys(CROSS_OS_SIGNAL_EXIT_CODES) as NodeJS.Signals[]
       process.exit(forwardedSignalExitCode);
     }, CROSS_OS_PROCESS_TREE_KILL_AFTER_MS);
   });
+}
+
+function exitForwardedSignalWhenChildTreesDone() {
+  if (forwardedSignalExitCode === undefined || CROSS_OS_ACTIVE_CHILD_TREE_KILLERS.size > 0) {
+    return;
+  }
+  if (forwardedSignalForceKillTimer) {
+    clearTimeout(forwardedSignalForceKillTimer);
+    forwardedSignalForceKillTimer = undefined;
+  }
+  process.exit(forwardedSignalExitCode);
 }
 
 const providerConfig = {
@@ -1768,13 +1780,12 @@ export function resolveCommandSpawnInvocation(
   args,
   options = {
     platform: process.platform,
-    comSpec: process.env.ComSpec,
   },
 ) {
   const platform = options.platform ?? process.platform;
   if (platform === "win32" && /\.(cmd|bat)$/iu.test(command)) {
     return {
-      command: options.comSpec ?? process.env.ComSpec ?? "cmd.exe",
+      command: options.comSpec ?? resolveWindowsCmdExePath(options.env ?? process.env),
       args: ["/d", "/s", "/c", buildCmdExeCommandLine(command, args)],
       shell: false,
       windowsVerbatimArguments: true,
@@ -1788,7 +1799,6 @@ export function resolveInstalledCliInvocation(
   args = [],
   options = {
     platform: process.platform,
-    comSpec: process.env.ComSpec,
   },
 ) {
   const platform = options.platform ?? process.platform;
@@ -1811,6 +1821,7 @@ export function resolveInstalledCliInvocation(
   }
   return resolveCommandSpawnInvocation(normalizedCliPath, args, {
     comSpec: options.comSpec,
+    env: options.env,
     platform,
   });
 }
@@ -2017,7 +2028,7 @@ async function verifyFreshShellCommand(params) {
 
 async function runInstalledCli(params) {
   const invocation = resolveInstalledCliInvocation(params.cliPath, params.args, {
-    comSpec: params.env?.ComSpec ?? params.env?.COMSPEC,
+    env: params.env,
     platform: process.platform,
   });
   return runCommandInvocation(invocation, {
@@ -2108,7 +2119,7 @@ async function startManualGatewayFromInstalledCli(params) {
     params.cliPath,
     ["gateway", "run", "--bind", "loopback", "--port", String(params.lane.gatewayPort), "--force"],
     {
-      comSpec: params.env?.ComSpec ?? params.env?.COMSPEC,
+      env: params.env,
       platform: process.platform,
     },
   );
@@ -2554,6 +2565,7 @@ async function configureDiscordSmoke(params) {
 export async function readBoundedCrossOsResponseText(
   response: Response,
   maxChars = CROSS_OS_FETCH_BODY_MAX_CHARS,
+  options: { signal?: AbortSignal | null } = {},
 ): Promise<string> {
   if (!response.body) {
     return "";
@@ -2563,10 +2575,11 @@ export async function readBoundedCrossOsResponseText(
   const decoder = new TextDecoder();
   let text = "";
   let truncated = false;
+  let aborted = false;
 
   try {
     while (text.length <= maxChars) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readCrossOsResponseChunk(reader, options.signal);
       if (done) {
         text += decoder.decode();
         break;
@@ -2579,8 +2592,11 @@ export async function readBoundedCrossOsResponseText(
         break;
       }
     }
+  } catch (error) {
+    aborted = options.signal?.aborted === true;
+    throw error;
   } finally {
-    if (truncated) {
+    if (truncated || aborted) {
       await reader.cancel().catch(() => undefined);
     } else {
       reader.releaseLock();
@@ -2588,6 +2604,36 @@ export async function readBoundedCrossOsResponseText(
   }
 
   return truncated ? `${text}\n[truncated]` : text;
+}
+
+function readCrossOsResponseChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal?: AbortSignal | null,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (!signal) {
+    return reader.read();
+  }
+  if (signal.aborted) {
+    throw crossOsAbortReason(signal);
+  }
+  return new Promise((resolveRead, rejectRead) => {
+    const onAbort = () => rejectRead(crossOsAbortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    reader
+      .read()
+      .then(resolveRead, rejectRead)
+      .finally(() => {
+        signal.removeEventListener("abort", onAbort);
+      });
+  });
+}
+
+function crossOsAbortReason(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    return reason;
+  }
+  return new Error(typeof reason === "string" ? reason : "The operation was aborted.");
 }
 
 export function dashboardHtmlMarkerStatus(html: string): {
@@ -2647,11 +2693,12 @@ async function waitForDiscordMessage(params) {
     let response;
     let text;
     try {
+      const init = buildDiscordFetchInit(params.token);
       response = await fetch(
         `https://discord.com/api/v10/channels/${params.channelId}/messages?limit=20`,
-        buildDiscordFetchInit(params.token),
+        init,
       );
-      text = await readBoundedCrossOsResponseText(response);
+      text = await readBoundedCrossOsResponseText(response, undefined, { signal: init.signal });
     } catch {
       await sleep(2_000);
       continue;
@@ -2680,20 +2727,21 @@ export function buildDiscordFetchInit(token, init = {}) {
 }
 
 async function postDiscordMessage(params) {
+  const init = buildDiscordFetchInit(params.token, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      content: params.content,
+      flags: 4096,
+    }),
+  });
   const response = await fetch(
     `https://discord.com/api/v10/channels/${params.channelId}/messages`,
-    buildDiscordFetchInit(params.token, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        content: params.content,
-        flags: 4096,
-      }),
-    }),
+    init,
   );
-  const text = await readBoundedCrossOsResponseText(response);
+  const text = await readBoundedCrossOsResponseText(response, undefined, { signal: init.signal });
   if (!response.ok) {
     throw new Error(`Failed to post Discord smoke message: ${text}`);
   }
@@ -2704,16 +2752,21 @@ async function postDiscordMessage(params) {
   }
 }
 
-async function deleteDiscordMessage(params) {
+export async function deleteDiscordMessage(params) {
   if (!params.messageId) {
     return;
   }
-  await fetch(
-    `https://discord.com/api/v10/channels/${params.channelId}/messages/${params.messageId}`,
-    buildDiscordFetchInit(params.token, {
-      method: "DELETE",
-    }),
-  ).catch(() => undefined);
+  try {
+    const response = await fetch(
+      `https://discord.com/api/v10/channels/${params.channelId}/messages/${params.messageId}`,
+      buildDiscordFetchInit(params.token, {
+        method: "DELETE",
+      }),
+    );
+    await response.body?.cancel?.().catch(() => undefined);
+  } catch {
+    // Cleanup is best-effort; the smoke result should not fail after readback succeeds.
+  }
 }
 
 async function waitForInstalledDiscordReadback(params) {
@@ -3525,10 +3578,11 @@ async function runDashboardSmoke(params) {
       attempt += 1;
       logStream.write(`${new Date().toISOString()} attempt=${attempt} url=${dashboardUrl}\n`);
       try {
+        const signal = AbortSignal.timeout(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS);
         const response = await fetch(dashboardUrl, {
-          signal: AbortSignal.timeout(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS),
+          signal,
         });
-        const html = await readBoundedCrossOsResponseText(response);
+        const html = await readBoundedCrossOsResponseText(response, undefined, { signal });
         const markers = dashboardHtmlMarkerStatus(html);
         const assetUrls = resolveDashboardAssetUrls(dashboardUrl, html);
         if (response.ok && markers.ready) {
@@ -3569,11 +3623,15 @@ async function stopGateway(gateway) {
       return;
     }
     if (process.platform === "win32") {
-      await runCommand("taskkill", ["/PID", String(gateway.child.pid), "/T", "/F"], {
-        logPath: gateway.logPath,
-        check: false,
-        timeoutMs: 30_000,
-      });
+      await runCommand(
+        resolveWindowsTaskkillPath(),
+        ["/PID", String(gateway.child.pid), "/T", "/F"],
+        {
+          logPath: gateway.logPath,
+          check: false,
+          timeoutMs: 30_000,
+        },
+      );
       const exited = await waitForChildExit(gateway.child, 10_000);
       if (!exited) {
         gateway.child.stdout?.destroy();
@@ -3838,7 +3896,7 @@ function appendBoundedCommandOutput(current, chunk, maxBytes) {
 
 export async function runCommand(command, args, options) {
   const invocation = resolveCommandSpawnInvocation(command, args, {
-    comSpec: options.env?.ComSpec ?? options.env?.COMSPEC,
+    env: options.env,
     platform: process.platform,
   });
   return runCommandInvocation(invocation, options);
@@ -3913,10 +3971,14 @@ async function runCommandInvocation(invocation, options) {
     const requestKill = () => {
       if (process.platform === "win32" && child.pid) {
         try {
-          const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-            stdio: "ignore",
-            windowsHide: true,
-          });
+          const killer = spawn(
+            resolveWindowsTaskkillPath(),
+            ["/PID", String(child.pid), "/T", "/F"],
+            {
+              stdio: "ignore",
+              windowsHide: true,
+            },
+          );
           killer.on("error", () => {
             child.kill();
           });
@@ -3971,15 +4033,23 @@ async function runCommandInvocation(invocation, options) {
     });
 
     child.on("error", (error) => {
+      if (forwardedSignalExitCode !== undefined) {
+        activeChildTree.killChildTree("SIGKILL");
+      }
       activeChildTree.unregister();
       finalize(() => rejectPromise(error));
     });
 
     child.on("close", (exitCode) => {
-      activeChildTree.unregister();
       if (forwardedSignalExitCode !== undefined) {
+        // The leader can exit on SIGTERM while descendants remain in its group.
+        // Kill the group before unregistering so signal forwarding cannot leave them running.
+        activeChildTree.killChildTree("SIGKILL");
+        activeChildTree.unregister();
+        finalize(exitForwardedSignalWhenChildTreesDone);
         return;
       }
+      activeChildTree.unregister();
       finalize(() => {
         const result = {
           exitCode: exitCode ?? 1,

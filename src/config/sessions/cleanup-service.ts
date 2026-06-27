@@ -28,7 +28,9 @@ import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-prese
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
+  pruneStaleModelRunEntries,
   pruneStaleEntries,
+  shouldRunModelRunPrune,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
 import { loadSessionStore } from "./store.js";
@@ -51,6 +53,7 @@ export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
 export type SessionCleanupAction =
   | "keep"
   | "prune-missing"
+  | "prune-model-run"
   | "prune-stale"
   | "cap-overflow"
   | "evict-budget"
@@ -65,6 +68,7 @@ export type SessionCleanupSummary = {
   afterCount: number;
   missing: number;
   dmScopeRetired: number;
+  modelRunPruned: number;
   pruned: number;
   capped: number;
   unreferencedArtifacts: SessionUnreferencedArtifactSweepResult;
@@ -89,6 +93,7 @@ export type SessionsCleanupRunResult = {
     summary: SessionCleanupSummary;
     beforeStore: Record<string, SessionEntry>;
     missingKeys: Set<string>;
+    modelRunPrunedKeys: Set<string>;
     staleKeys: Set<string>;
     cappedKeys: Set<string>;
     budgetEvictedKeys: Set<string>;
@@ -169,6 +174,7 @@ function transcriptHasNoMessageRecords(transcriptPath: string): boolean {
 export function resolveSessionCleanupAction(params: {
   key: string;
   missingKeys: Set<string>;
+  modelRunPrunedKeys: Set<string>;
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
   budgetEvictedKeys: Set<string>;
@@ -179,6 +185,9 @@ export function resolveSessionCleanupAction(params: {
   }
   if (params.missingKeys.has(params.key)) {
     return "prune-missing";
+  }
+  if (params.modelRunPrunedKeys.has(params.key)) {
+    return "prune-model-run";
   }
   if (params.staleKeys.has(params.key)) {
     return "prune-stale";
@@ -208,11 +217,19 @@ function isMainScopeStaleDirectSessionKey(params: {
   if (!parsed || normalizeAgentId(parsed.agentId) !== normalizeAgentId(params.targetAgentId)) {
     return false;
   }
-  const parts = parsed.rest.split(":").filter(Boolean);
+  const parts = parsed.rest.split(":");
+  // A nested agent wrapper is opaque plugin identity, never a stale DM route.
+  if (parts[0] === "agent") {
+    return false;
+  }
   return (
-    (parts.length === 2 && parts[0] === "direct") ||
-    (parts.length === 3 && parts[1] === "direct") ||
-    (parts.length === 4 && parts[2] === "direct")
+    (parts.length === 2 && parts[0] === "direct" && Boolean(parts[1])) ||
+    (parts.length === 3 && Boolean(parts[0]) && parts[1] === "direct" && Boolean(parts[2])) ||
+    (parts.length === 4 &&
+      Boolean(parts[0]) &&
+      Boolean(parts[1]) &&
+      parts[2] === "direct" &&
+      Boolean(parts[3]))
   );
 }
 
@@ -333,6 +350,7 @@ async function previewStoreCleanup(params: {
   const staleKeys = new Set<string>();
   const cappedKeys = new Set<string>();
   const missingKeys = new Set<string>();
+  const modelRunPrunedKeys = new Set<string>();
   const dmScopeRetiredKeys = new Set<string>();
   const missing =
     params.fixMissing === true
@@ -357,6 +375,22 @@ async function previewStoreCleanup(params: {
         })
       : 0;
   const preserveSessionKeys = collectSessionMaintenancePreserveKeys([params.activeKey]);
+  const modelRunPruned = shouldRunModelRunPrune({
+    maintenance: params.maintenance,
+    entryCount: Object.keys(previewStore).length,
+    // `sessions cleanup` applies the cap immediately (apply path forces maintenance and the
+    // preview caps unconditionally below), so mirror that here: prune stale probes before the
+    // forced cap can evict real sessions in their place.
+    force: true,
+  })
+    ? pruneStaleModelRunEntries(previewStore, params.maintenance.modelRunPruneAfterMs, {
+        log: false,
+        preserveKeys: preserveSessionKeys,
+        onPruned: ({ key }) => {
+          modelRunPrunedKeys.add(key);
+        },
+      })
+    : 0;
   const pruned = pruneStaleEntries(previewStore, params.maintenance.pruneAfterMs, {
     log: false,
     preserveKeys: preserveSessionKeys,
@@ -372,6 +406,12 @@ async function previewStoreCleanup(params: {
     },
   });
   const entryCleanupArtifactPaths = new Set<string>();
+  addEntryArtifactPathsToSet({
+    paths: entryCleanupArtifactPaths,
+    store: beforeStore,
+    storePath: params.target.storePath,
+    keys: modelRunPrunedKeys,
+  });
   addEntryArtifactPathsToSet({
     paths: entryCleanupArtifactPaths,
     store: beforeStore,
@@ -422,6 +462,7 @@ async function previewStoreCleanup(params: {
   const wouldMutate =
     missing > 0 ||
     dmScopeRetired > 0 ||
+    modelRunPruned > 0 ||
     pruned > 0 ||
     capped > 0 ||
     unreferencedArtifacts.removedFiles > 0 ||
@@ -437,6 +478,7 @@ async function previewStoreCleanup(params: {
     afterCount: afterPreviewCount,
     missing,
     dmScopeRetired,
+    modelRunPruned,
     pruned,
     capped,
     unreferencedArtifacts,
@@ -448,6 +490,7 @@ async function previewStoreCleanup(params: {
     summary,
     beforeStore,
     missingKeys,
+    modelRunPrunedKeys,
     staleKeys,
     cappedKeys,
     budgetEvictedKeys,
@@ -577,6 +620,7 @@ export async function runSessionsCleanup(params: {
                 afterCount: 0,
                 missing: 0,
                 dmScopeRetired: 0,
+                modelRunPruned: 0,
                 pruned: 0,
                 capped: 0,
                 unreferencedArtifacts,
@@ -599,6 +643,7 @@ export async function runSessionsCleanup(params: {
               afterCount: appliedReport.afterCount,
               missing: missingApplied,
               dmScopeRetired: dmScopeRetiredApplied,
+              modelRunPruned: appliedReport.modelRunPruned,
               pruned: appliedReport.pruned,
               capped: appliedReport.capped,
               unreferencedArtifacts,
@@ -606,6 +651,7 @@ export async function runSessionsCleanup(params: {
               wouldMutate:
                 missingApplied > 0 ||
                 dmScopeRetiredApplied > 0 ||
+                appliedReport.modelRunPruned > 0 ||
                 appliedReport.pruned > 0 ||
                 appliedReport.capped > 0 ||
                 unreferencedArtifacts.removedFiles > 0 ||

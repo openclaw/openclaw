@@ -181,6 +181,27 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     expect(duration.stderr).toContain("invalid OPENCLAW_E2E_SAMPLE_SECONDS: 30s");
   });
 
+  it("reads non-negative integer env values without accepting shell-style sizes", () => {
+    const fallback = runSourcedHelper(
+      'printf "%s" "$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_SAMPLE_BYTES 262144)"',
+    );
+    const zero = runSourcedHelper(
+      'printf "%s" "$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_SAMPLE_BYTES 262144)"',
+      { OPENCLAW_E2E_SAMPLE_BYTES: "0" },
+    );
+    const size = runSourcedHelper(
+      "openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_SAMPLE_BYTES 262144",
+      { OPENCLAW_E2E_SAMPLE_BYTES: "64kb" },
+    );
+
+    expectShellSuccess(fallback);
+    expect(fallback.stdout).toBe("262144");
+    expectShellSuccess(zero);
+    expect(zero.stdout).toBe("0");
+    expect(size.status).toBe(2);
+    expect(size.stderr).toContain("invalid OPENCLAW_E2E_SAMPLE_BYTES: 64kb");
+  });
+
   it("requires /readyz after the gateway ready log", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-readyz-required-"));
     try {
@@ -525,6 +546,27 @@ describe("scripts/lib/openclaw-e2e-instance.sh", () => {
     }
   });
 
+  it.each([
+    ["bytes", "OPENCLAW_E2E_LOG_TAIL_BYTES", "64kb"],
+    ["lines", "OPENCLAW_E2E_LOG_TAIL_LINES", "25 lines"],
+  ])("rejects invalid E2E log tail %s before invoking tail", (_label, envName, value) => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-instance-log-tail-"));
+    try {
+      const logPath = path.join(tempDir, "install.log");
+      fs.writeFileSync(logPath, "old log\nrecent log\n", "utf8");
+
+      const result = runSourcedHelper(`openclaw_e2e_print_log ${shellQuote(logPath)}`, {
+        [envName]: value,
+      });
+
+      expect(result.status).toBe(2);
+      expect(result.stderr).toContain(`invalid ${envName}: ${value}`);
+      expect(result.stdout).not.toContain("old log");
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
   it("bounds commands with the Node watchdog when timeout is unavailable", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-instance-node-watchdog-"));
     try {
@@ -805,6 +847,12 @@ exit 1
     } finally {
       fs.rmSync(tempDir, { force: true, recursive: true });
     }
+  });
+
+  it("cancels HTTP readiness probe response bodies", () => {
+    const helper = fs.readFileSync(helperPath, "utf8");
+
+    expect(helper).toContain("await response?.body?.cancel?.().catch(() => undefined);");
   });
 
   it("does not repeatedly grep the full gateway log while waiting for readiness", () => {

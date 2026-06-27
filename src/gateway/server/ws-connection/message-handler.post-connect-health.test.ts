@@ -9,6 +9,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticSecurityEvent,
 } from "../../../infra/diagnostic-events.js";
+import { mintAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
 import type { ResolvedGatewayAuth } from "../../auth.js";
 import { getOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
 import { handleGatewayRequest } from "../../server-methods.js";
@@ -77,6 +78,9 @@ import { testing, attachGatewayWsMessageHandler } from "./message-handler.js";
 const DEVICE_TOKEN_MUTATION_PARAMS = {
   deviceId: "device-1",
   role: "operator",
+} as const satisfies Record<string, unknown>;
+const NODE_PAIR_REMOVE_PARAMS = {
+  nodeId: "device-1",
 } as const satisfies Record<string, unknown>;
 
 function createLogger() {
@@ -349,6 +353,48 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
     expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
     expect(setCloseCause).toHaveBeenCalledWith("client-invalidated", {
       reason: "device-token-revoked",
+      method: "status.summary",
+    });
+  });
+
+  it("waits for device-backed node removal before dispatching later queued requests", async () => {
+    let releaseMutation: (() => void) | undefined;
+    const close = createCloseMock();
+    const setCloseCause = createSetCloseCauseMock();
+    const client = createConnectedTestClient({ connId: "conn-node-invalidating" });
+    vi.mocked(handleGatewayRequest).mockImplementation(async (opts) => {
+      expect(opts.req.method).toBe("node.pair.remove");
+      await new Promise<void>((resolve) => {
+        releaseMutation = resolve;
+      });
+      client.invalidated = true;
+      client.invalidatedReason = "device-pair-removed";
+    });
+
+    const harness = attachGatewayHarness({
+      connId: "conn-node-invalidating",
+      connectNonce: "nonce-node-invalidating",
+      client,
+      close,
+      setCloseCause,
+    });
+
+    harness.sendRequest("remove-node-1", "node.pair.remove", NODE_PAIR_REMOVE_PARAMS);
+    harness.sendRequest("queued-1", "status.summary");
+
+    await vi.waitFor(() => {
+      expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+      expect(releaseMutation).toBeTypeOf("function");
+    });
+
+    releaseMutation?.();
+
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledWith(4001, "client invalidated: device-pair-removed");
+    });
+    expect(handleGatewayRequest).toHaveBeenCalledTimes(1);
+    expect(setCloseCause).toHaveBeenCalledWith("client-invalidated", {
+      reason: "device-pair-removed",
       method: "status.summary",
     });
   });
@@ -651,6 +697,134 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
       internal?: { approvalRuntime?: boolean };
     } | null;
     expect(connectedClient?.internal?.approvalRuntime).not.toBe(true);
+  });
+
+  it("marks local backend clients with a valid agent runtime identity token", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const harness = attachGatewayHarness({
+      connId: "conn-agent-runtime-token",
+      connectNonce: "nonce-agent-runtime-token",
+      refreshHealthSnapshot,
+    });
+
+    harness.sendConnect("connect-agent-runtime-token", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.write"],
+      caps: [],
+      auth: {
+        agentRuntimeIdentityToken: mintAgentRuntimeIdentityToken({
+          agentId: "ops",
+          sessionKey: "agent:ops:telegram:direct:alice",
+        }),
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(harness.socketSend).toHaveBeenCalled();
+    });
+    const connectedClient = harness.client as {
+      internal?: {
+        agentRuntimeIdentity?: { agentId?: string; sessionKey?: string };
+      };
+    } | null;
+    expect(connectedClient?.internal?.agentRuntimeIdentity).toMatchObject({
+      agentId: "ops",
+      sessionKey: "agent:ops:telegram:direct:alice",
+    });
+  });
+
+  it("rejects agent runtime identity tokens from remote clients", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const close = createCloseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-remote-agent-runtime-token",
+      connectNonce: "nonce-remote-agent-runtime-token",
+      requestHost: "gateway.example.com:18789",
+      remoteAddr: "203.0.113.50",
+      resolvedAuth: {
+        mode: "token",
+        token: "gateway-token",
+        allowTailscale: false,
+      },
+      refreshHealthSnapshot,
+      close,
+    });
+
+    harness.sendConnect("connect-remote-agent-runtime-token", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.write"],
+      caps: [],
+      auth: {
+        token: "gateway-token",
+        agentRuntimeIdentityToken: mintAgentRuntimeIdentityToken({
+          agentId: "ops",
+          sessionKey: "agent:ops:telegram:direct:alice",
+        }),
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledWith(
+        1008,
+        "agent runtime identity token is only accepted from local backend gateway clients",
+      );
+    });
+    expect(harness.client).toBeNull();
+  });
+
+  it("rejects invalid local agent runtime identity tokens", async () => {
+    const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(async () =>
+      createHealthSummary(),
+    );
+    const close = createCloseMock();
+    const harness = attachGatewayHarness({
+      connId: "conn-invalid-agent-runtime-token",
+      connectNonce: "nonce-invalid-agent-runtime-token",
+      refreshHealthSnapshot,
+      close,
+    });
+
+    harness.sendConnect("connect-invalid-agent-runtime-token", {
+      minProtocol: PROTOCOL_VERSION,
+      maxProtocol: PROTOCOL_VERSION,
+      client: {
+        id: "gateway-client",
+        version: "dev",
+        platform: "test",
+        mode: "backend",
+      },
+      role: "operator",
+      scopes: ["operator.write"],
+      caps: [],
+      auth: {
+        agentRuntimeIdentityToken: "not-a-valid-token",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(close).toHaveBeenCalledWith(1008, "invalid agent runtime identity token");
+    });
+    expect(harness.client).toBeNull();
   });
 });
 
