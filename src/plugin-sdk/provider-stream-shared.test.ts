@@ -234,6 +234,30 @@ describe("normalizeOpenAICompatibleReasoningPayload", () => {
 });
 
 describe("createDeepSeekV4OpenAICompatibleThinkingWrapper", () => {
+  it("drops nested reasoning when native DeepSeek V4 reasoning_effort is enabled", () => {
+    const payload = {
+      messages: [],
+      reasoning: { effort: "high" },
+    };
+    const baseStreamFn: StreamFn = (_model, _context, options) => {
+      options?.onPayload?.(payload as never, _model as never);
+      return {} as ReturnType<StreamFn>;
+    };
+
+    const wrapped = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+      baseStreamFn,
+      thinkingLevel: "high",
+      shouldPatchModel: () => true,
+    });
+    void wrapped?.({} as never, {} as never, {});
+
+    expect(payload).toEqual({
+      messages: [],
+      thinking: { type: "enabled" },
+      reasoning_effort: "high",
+    });
+  });
+
   it("backfills reasoning_content on every replayed assistant message when thinking is enabled", () => {
     const payload = {
       messages: [
