@@ -4,9 +4,7 @@ import { createServer } from "node:http";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const pkgRoot = resolve(__dirname, "..");
+const pkgRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const TELEGRAM_BOT_API_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
 const { fetchTelegramChatId } = await import(`${pkgRoot}/extensions/telegram/src/api-fetch.ts`);
@@ -105,7 +103,9 @@ async function withServer(fn) {
   try {
     await fn(port);
   } finally {
-    await new Promise((resolveDone) => server.close(resolveDone));
+    await new Promise((resolveDone) => {
+      server.close(resolveDone);
+    });
   }
 }
 
@@ -119,7 +119,9 @@ await withServer(async (port) => {
     chatId: "OVERSIZED",
     apiRoot: `http://127.0.0.1:${port}`,
   });
-  await new Promise((r) => setTimeout(r, 50));
+  await new Promise((r) => {
+    setTimeout(r, 50);
+  });
   check(
     "oversized getChat fails closed with null (production fetchTelegramChatId)",
     chatId === null,
@@ -134,7 +136,9 @@ await withServer(async (port) => {
   serverBytesWritten = 0;
   const res = await fetch(`http://127.0.0.1:${port}/huge`);
   await res.json().catch(() => undefined);
-  await new Promise((r) => setTimeout(r, 50));
+  await new Promise((r) => {
+    setTimeout(r, 50);
+  });
   check(
     `negative control: unbounded .json() wrote ${serverBytesWritten} bytes (>> ${CAP})`,
     serverBytesWritten > CAP,

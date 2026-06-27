@@ -6,6 +6,11 @@ import { makeProxyFetch } from "./proxy.js";
 
 const TELEGRAM_BOT_API_MAX_RESPONSE_BYTES = 4 * 1024 * 1024;
 
+type TelegramGetChatResponse = {
+  ok?: boolean;
+  result?: { id?: number | string };
+};
+
 export function resolveTelegramChatLookupFetch(params?: {
   proxyUrl?: string;
   network?: TelegramNetworkConfig;
@@ -50,11 +55,11 @@ export async function fetchTelegramChatId(params: {
     if (!res.ok) {
       return null;
     }
-    let data: { ok?: boolean; result?: { id?: number | string } } | null = null;
+    let data: TelegramGetChatResponse | null = null;
     try {
       data = JSON.parse(
         (await readResponseWithLimit(res, TELEGRAM_BOT_API_MAX_RESPONSE_BYTES)).toString("utf8"),
-      ) as typeof data;
+      ) as TelegramGetChatResponse;
     } catch {
       return null;
     }
