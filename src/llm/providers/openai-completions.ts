@@ -51,6 +51,7 @@ import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copi
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "./openai-stop-reason.js";
 import { buildBaseOptions } from "./simple-options.js";
+import { extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 /**
@@ -1128,10 +1129,7 @@ export function convertMessages(
         const toolMsg = transformedMessages[j] as ToolResultMessage;
 
         // Extract text and image content
-        const textResult = toolMsg.content
-          .filter(isTextContentBlock)
-          .map((block) => block.text)
-          .join("\n");
+        const textResult = extractToolResultText(toolMsg.content as Array<Record<string, unknown>>);
         const hasImages = toolMsg.content.some((c) => c.type === "image");
 
         // Always send tool result with text (or placeholder if only images)
