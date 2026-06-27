@@ -522,6 +522,30 @@ describe("slackPlugin status", () => {
     });
   });
 
+  it("preserves reply-first routing when replyToIsExplicit is omitted (backward compat)", async () => {
+    const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
+    if (!resolveRoute) {
+      throw new Error("slack messaging.resolveOutboundSessionRoute unavailable");
+    }
+
+    const route = await resolveRoute({
+      cfg: {} as OpenClawConfig,
+      agentId: "main",
+      target: "channel:C1",
+      currentSessionKey: "agent:main:slack:channel:C1:thread:1712345678.123456",
+      replyToId: "1712345688.654321",
+      // replyToIsExplicit intentionally omitted
+    });
+
+    // Callers that haven't opted into the tri-state signal (e.g. gateway
+    // send with an explicit replyToId) must keep reply-first routing.
+    expectRecordFields(route, "Slack route (omitted explicitness)", {
+      sessionKey: "agent:main:slack:channel:c1:thread:1712345688.654321",
+      baseSessionKey: "agent:main:slack:channel:c1",
+      threadId: "1712345688.654321",
+    });
+  });
+
   it("canonicalizes bare Slack IM channel targets to direct user session routes", async () => {
     const resolveRoute = slackPlugin.messaging?.resolveOutboundSessionRoute;
     if (!resolveRoute) {

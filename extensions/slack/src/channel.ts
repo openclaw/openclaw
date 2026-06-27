@@ -377,10 +377,14 @@ async function resolveSlackOutboundSessionRoute(params: {
     currentSessionKey: params.currentSessionKey,
     // Inherited Slack child-reply timestamps should not create new
     // delivery-mirror sessions; prefer the recovered thread session
-    // when the reply target was not explicitly specified.
-    precedence: params.replyToIsExplicit
-      ? ["replyToId", "threadId", "currentSession"]
-      : ["currentSession", "threadId", "replyToId"],
+    // when the reply target was explicitly marked as inherited.
+    // Omitted (undefined) explicitness preserves the old reply-first
+    // default for callers that haven't opted into the tri-state signal
+    // (e.g. gateway send with an explicit request replyToId).
+    precedence:
+      params.replyToIsExplicit === false
+        ? ["currentSession", "threadId", "replyToId"]
+        : ["replyToId", "threadId", "currentSession"],
     canRecoverCurrentThread: () =>
       shouldRecoverSlackThreadFromCurrentSession({
         cfg: params.cfg,
