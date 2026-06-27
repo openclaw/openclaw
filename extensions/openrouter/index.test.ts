@@ -993,8 +993,9 @@ describe("openrouter provider hooks", () => {
       {},
     );
 
-    expect(capturedPayload?.thinking).toEqual({ type: "enabled" });
-    expect(capturedPayload?.reasoning_effort).toBe("xhigh");
+    expect(capturedPayload).not.toHaveProperty("thinking");
+    expect(capturedPayload).not.toHaveProperty("reasoning_effort");
+    expect(capturedPayload?.reasoning).toEqual({ effort: "xhigh" });
     expect(capturedPayload?.messages).toEqual([
       { role: "user", content: "read file" },
       {
@@ -1007,7 +1008,7 @@ describe("openrouter provider hooks", () => {
     expect(baseStreamFn).toHaveBeenCalledOnce();
   });
 
-  it("keeps OpenRouter DeepSeek V4 reasoning_effort within OpenRouter values", async () => {
+  it("keeps OpenRouter DeepSeek V4 reasoning effort within OpenRouter values", async () => {
     const provider = await registerSingleProviderPlugin(openrouterPlugin);
     const payloads: Array<Record<string, unknown>> = [];
     const baseStreamFn = vi.fn(
@@ -1041,7 +1042,9 @@ describe("openrouter provider hooks", () => {
       );
     }
 
-    expect(payloads.map((payload) => payload.reasoning_effort)).toEqual([
+    expect(payloads.every((payload) => !Object.hasOwn(payload, "thinking"))).toBe(true);
+    expect(payloads.every((payload) => !Object.hasOwn(payload, "reasoning_effort"))).toBe(true);
+    expect(payloads.map((payload) => (payload.reasoning as { effort?: unknown }).effort)).toEqual([
       "minimal",
       "low",
       "medium",

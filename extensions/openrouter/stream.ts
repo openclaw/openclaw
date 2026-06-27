@@ -346,7 +346,7 @@ function createOpenRouterDeepSeekV4ThinkingWrapper(
   baseStreamFn: StreamFn | undefined,
   thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"],
 ): StreamFn | undefined {
-  return createDeepSeekV4OpenAICompatibleThinkingWrapper({
+  const deepSeekV4StreamFn = createDeepSeekV4OpenAICompatibleThinkingWrapper({
     baseStreamFn,
     thinkingLevel,
     shouldPatchModel: shouldPatchDeepSeekV4OpenRouterPayload,
@@ -354,6 +354,22 @@ function createOpenRouterDeepSeekV4ThinkingWrapper(
     shouldBackfillAssistantReasoningContent: (message) =>
       !assistantMessageHasOpenAIToolCalls(message),
   });
+  if (!deepSeekV4StreamFn) {
+    return undefined;
+  }
+  return createPayloadPatchStreamWrapper(
+    deepSeekV4StreamFn,
+    ({ payload }) => {
+      if (!isEnabledReasoningValue(payload.reasoning)) {
+        return;
+      }
+      // OpenRouter proxy reasoning runs first; keep its nested effort while
+      // preserving the DeepSeek V4 replay backfill from the wrapper above.
+      delete payload.thinking;
+      delete payload.reasoning_effort;
+    },
+    { shouldPatch: ({ model }) => shouldPatchDeepSeekV4OpenRouterPayload(model) },
+  );
 }
 
 export function wrapOpenRouterProviderStream(
