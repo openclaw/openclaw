@@ -411,7 +411,8 @@ async function resolveNewerExactPinnedNpmDefaultLine(params: {
   }
   const packageName = resolveNpmSpecPackageName(params.effectiveSpec);
   const exactVersion = resolveExactNpmSpecVersion(params.effectiveSpec);
-  if (!packageName || !exactVersion || params.probeNpmVersion !== exactVersion) {
+  const probeNpmVersion = normalizeExactNpmVersion(params.probeNpmVersion);
+  if (!packageName || !exactVersion || probeNpmVersion !== exactVersion) {
     return undefined;
   }
 
@@ -907,7 +908,20 @@ function resolveNpmSpecPackageName(spec: string | undefined): string | undefined
 
 function resolveExactNpmSpecVersion(spec: string | undefined): string | undefined {
   const parsed = spec ? parseRegistryNpmSpec(spec) : null;
-  return parsed?.selectorKind === "exact-version" ? parsed.selector : undefined;
+  return parsed?.selectorKind === "exact-version"
+    ? normalizeExactNpmVersion(parsed.selector)
+    : undefined;
+}
+
+function normalizeExactNpmVersion(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const trimmed = value.trim();
+  if (!isExactSemverVersion(trimmed)) {
+    return undefined;
+  }
+  return trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
 }
 
 function resolveNpmResultVersion(result: {
