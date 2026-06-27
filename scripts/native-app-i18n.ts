@@ -44,7 +44,7 @@ const ROOT = path.resolve(HERE, "..");
 const OUTPUT_PATH = path.join(ROOT, "apps", ".i18n", "native-source.json");
 const SOURCE_ROOTS: Record<NativeI18nSurface, string> = {
   android: path.join(ROOT, "apps", "android", "app", "src", "main"),
-  apple: path.join(ROOT, "apps"),
+  apple: path.join(ROOT, "apps", "ios"),
 };
 
 const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
@@ -66,7 +66,7 @@ const APPLE_ANY_CALLS = /\b[A-Z][A-Za-z0-9_]*\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_NAMED_ARGUMENTS =
   /\b(?:title|subtitle|label|message|text|prompt|description|help)\s*:\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_PLIST_STRINGS = /<string>([\s\S]*?)<\/string>/gu;
-const GENERATED_PATH_RE = /(?:\/build\/|\/\.gradle\/|\/\.build\/|\/DerivedData\/)/u;
+const GENERATED_PATH_RE = /(?:^|[\\/])(?:build|\.gradle|\.build|DerivedData)(?:$|[\\/])/u;
 const EXCLUDED_PATH_RE = /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
 const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u;
 
