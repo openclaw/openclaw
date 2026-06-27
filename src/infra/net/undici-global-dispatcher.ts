@@ -49,14 +49,13 @@ type TimedProxylineManagedDispatcherState = {
   dispatch: UndiciDispatcher["dispatch"];
 };
 
-/** Manages a shared direct-agent fallback for proxy-bypassed requests. */
-let sharedDirectAgent: UndiciDispatcher | undefined;
-
-function resolveSharedDirectAgent(): UndiciDispatcher {
-  if (!sharedDirectAgent) {
-    sharedDirectAgent = createHttp1Agent(undefined, DEFAULT_UNDICI_STREAM_TIMEOUT_MS);
-  }
-  return sharedDirectAgent;
+/** Creates a direct Agent for proxy-bypassed requests, using the same
+ * timeout and connect policy as the EnvHttpProxyAgent would have used. */
+function createDirectBypassAgent(params: {
+  timeoutMs: number;
+  connect?: Record<string, unknown>;
+}): UndiciDispatcher {
+  return createHttp1Agent(params.connect ? { ...params.connect } : undefined, params.timeoutMs);
 }
 
 const UNDICI_DISPATCH_HELPER_METHODS = new Set<PropertyKey>([
@@ -150,8 +149,14 @@ function createTimedProxylineManagedDispatcher(
  * Requests that should bypass the proxy are routed through a direct Agent
  * instead of the EnvHttpProxyAgent, while requests matching the proxy
  * configuration use the proxy agent as usual.
+ *
+ * The bypass agent inherits the same timeout and connect policy so bypassed
+ * requests behave identically to proxied ones.
  */
-function createNoProxyAwareEnvDispatcher(envProxyDispatcher: UndiciDispatcher): UndiciDispatcher {
+function createNoProxyAwareEnvDispatcher(
+  envProxyDispatcher: UndiciDispatcher,
+  bypassAgent: UndiciDispatcher,
+): UndiciDispatcher {
   return new Proxy(envProxyDispatcher, {
     get(target, property, receiver) {
       if (property === "dispatch") {
@@ -167,7 +172,7 @@ function createNoProxyAwareEnvDispatcher(envProxyDispatcher: UndiciDispatcher): 
           // HTTP(S)-only shouldUseEnvHttpProxyForUrl, because the
           // EnvHttpProxyAgent already resolves ALL_PROXY.
           if (origin && hasEnvHttpProxyAgentConfigured() && matchesNoProxy(origin)) {
-            return resolveSharedDirectAgent().dispatch(options, handler);
+            return bypassAgent.dispatch(options, handler);
           }
           return target.dispatch(options, handler);
         };
@@ -296,7 +301,13 @@ export function ensureGlobalUndiciEnvProxyDispatcher(): void {
   }
   try {
     setGlobalDispatcher(
-      createNoProxyAwareEnvDispatcher(createHttp1EnvHttpProxyAgent(proxyOptions)),
+      createNoProxyAwareEnvDispatcher(
+        createHttp1EnvHttpProxyAgent(proxyOptions),
+        createDirectBypassAgent({
+          timeoutMs: DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
+          connect: proxyOptions?.connect as Record<string, unknown> | undefined,
+        }),
+      ),
     );
     lastAppliedProxyBootstrapKey = nextBootstrapKey;
   } catch {
@@ -338,7 +349,13 @@ function applyGlobalDispatcherStreamTimeouts(params: {
         ...HTTP1_ONLY_DISPATCHER_OPTIONS,
       } as ConstructorParameters<UndiciGlobalDispatcherDeps["EnvHttpProxyAgent"]>[0];
       runtime.setGlobalDispatcher(
-        createNoProxyAwareEnvDispatcher(createHttp1EnvHttpProxyAgent(proxyOptions, timeoutMs)),
+        createNoProxyAwareEnvDispatcher(
+          createHttp1EnvHttpProxyAgent(proxyOptions, timeoutMs),
+          createDirectBypassAgent({
+            timeoutMs,
+            connect: proxyOptions?.connect as Record<string, unknown> | undefined,
+          }),
+        ),
       );
     } else {
       runtime.setGlobalDispatcher(createHttp1Agent(connect ? { connect } : undefined, timeoutMs));
@@ -439,7 +456,12 @@ export function forceResetGlobalDispatcher(opts?: { preserveProxylineManaged?: b
       }
     }
     setGlobalDispatcher(
-      createNoProxyAwareEnvDispatcher(createHttp1EnvHttpProxyAgent(proxyOptions)),
+      createNoProxyAwareEnvDispatcher(
+        createHttp1EnvHttpProxyAgent(proxyOptions),
+        createDirectBypassAgent({
+          timeoutMs: DEFAULT_UNDICI_STREAM_TIMEOUT_MS,
+        }),
+      ),
     );
     lastAppliedProxyBootstrapKey = resolveEnvProxyBootstrapKey(proxyOptions);
   } catch {
