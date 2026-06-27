@@ -5,8 +5,8 @@
  */
 import { copyPluginToolMeta } from "../plugins/tools.js";
 import { bindAbortRelay } from "../utils/fetch-timeout.js";
-import { copyBeforeToolCallHookMarker } from "./agent-tools.before-tool-call.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { copyBeforeToolCallHookMarker } from "./before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta } from "./channel-tools.js";
 
 function throwAbortError(): never {
