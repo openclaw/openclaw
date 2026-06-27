@@ -801,11 +801,16 @@ function isGoogleOauthApiKey(apiKey: string | undefined): boolean {
 }
 
 function collectGoogleTransportApiKeys(params: {
+  baseUrl: string | undefined;
   kind: CanonicalGoogleTransportApi;
   provider: string;
   primaryApiKey: string | undefined;
 }): string[] {
-  if (params.kind !== "google-generative-ai" || isGoogleOauthApiKey(params.primaryApiKey)) {
+  if (
+    params.kind !== "google-generative-ai" ||
+    !isOfficialGoogleGenerativeAiBaseUrl(params.baseUrl) ||
+    isGoogleOauthApiKey(params.primaryApiKey)
+  ) {
     return [];
   }
   return collectProviderApiKeysForExecution({
@@ -1290,6 +1295,7 @@ function createGoogleTransportStreamFn(kind: CanonicalGoogleTransportApi): Strea
           });
         };
         const apiKeys = collectGoogleTransportApiKeys({
+          baseUrl: model.baseUrl,
           kind,
           provider: model.provider,
           primaryApiKey: apiKey,

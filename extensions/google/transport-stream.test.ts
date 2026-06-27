@@ -566,6 +566,47 @@ describe("google transport stream", () => {
     expect(new Headers(init.headers).has("x-goog-api-key")).toBe(false);
   });
 
+  it("does not rotate global Gemini API keys into custom Gemini endpoints", async () => {
+    vi.stubEnv("OPENCLAW_LIVE_GEMINI_KEY", "");
+    vi.stubEnv("GEMINI_API_KEYS", "gemini-env-key");
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: {
+            message: "quota exceeded",
+            status: "RESOURCE_EXHAUSTED",
+          },
+        }),
+        { status: 429, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    const streamFn = createGoogleGenerativeAiTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        buildGeminiModel({
+          provider: "custom-google",
+          baseUrl: "https://proxy.example.com/gemini/v1beta",
+        }),
+        {
+          messages: [{ role: "user", content: "hello", timestamp: 0 }],
+        } as Parameters<typeof streamFn>[1],
+        { apiKey: "explicit-proxy-key" } as Parameters<typeof streamFn>[2],
+      ),
+    );
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(guardedFetchMock).toHaveBeenCalledTimes(1);
+    const guardedCall = requireMockCall(guardedFetchMock, 0, "guarded fetch");
+    expect(guardedCall[0]).toBe(
+      "https://proxy.example.com/gemini/v1beta/models/gemini-2.5-pro:streamGenerateContent?alt=sse",
+    );
+    expectHeaders(requireRequestInit(guardedCall, "guarded fetch"), {
+      "x-goog-api-key": "explicit-proxy-key",
+    });
+  });
+
   it("preserves MAX_TOKENS when the partial response contains a function call", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       buildSseResponse([
