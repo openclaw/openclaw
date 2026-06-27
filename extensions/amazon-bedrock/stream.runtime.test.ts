@@ -512,6 +512,31 @@ describe("Bedrock Fable contract", () => {
 
     expect(activityCount).toBeGreaterThan(0);
   });
+
+  it("sends model.maxTokens via streamSimpleBedrock for Fable 5", async () => {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        { messageStop: { stopReason: "end_turn" } },
+      ]),
+    } as never);
+    const model = fableModel(); // maxTokens: 128000
+
+    await streamSimpleBedrock(model, context(), {
+      reasoning: "high",
+      temperature: 0.2,
+    }).result();
+
+    const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
+    const maxTokens = (command.input?.inferenceConfig as Record<string, unknown>)
+      ?.maxTokens as number;
+
+    // Before fix: 4096 (options.maxTokens default, model.maxTokens ignored).
+    // After fix: 128000 from model.maxTokens via adjustMaxTokensForThinking.
+    expect(maxTokens).toBe(128_000);
+    expect(maxTokens).toBeGreaterThan(4096);
+  });
 });
 
 describe("Bedrock canonical Claude aliases", () => {
@@ -570,6 +595,44 @@ describe("Bedrock canonical Claude aliases", () => {
           output_config: { effort: expectedEffort },
         },
       });
+      // Adaptive-thinking path must populate inferenceConfig.maxTokens
+      // from model.maxTokens (via adjustMaxTokensForThinking) instead of
+      // leaving the legacy 4096 default.
+      const maxTokens = (command.input?.inferenceConfig as Record<string, unknown>)
+        ?.maxTokens as number;
+      expect(maxTokens).toBeGreaterThan(0);
     },
   );
+
+  it("sends model.maxTokens in inferenceConfig for high-context adaptive models", async () => {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        { messageStop: { stopReason: "end_turn" } },
+      ]),
+    } as never);
+    const model = bedrockModel({
+      id: "us.anthropic.claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      maxTokens: 200_000,
+      contextWindow: 1_000_000,
+    });
+
+    await streamSimpleBedrock(
+      model,
+      { messages: [{ role: "user", content: "Reply briefly.", timestamp: 0 }] } as never,
+      { reasoning: "high", temperature: 0.2 },
+    ).result();
+
+    const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
+    const maxTokens = (command.input?.inferenceConfig as Record<string, unknown>)
+      ?.maxTokens as number;
+
+    // Before fix: this was 4096 (options.maxTokens default).
+    // After fix: adjustMaxTokensForThinking uses model.maxTokens (200000)
+    // when no explicit caller cap is set.
+    expect(maxTokens).toBe(200_000);
+    expect(maxTokens).toBeGreaterThan(4096);
+  });
 });
