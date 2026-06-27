@@ -13,17 +13,6 @@ import type {
   ResponseReasoningItem,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
-import {
-  resolveOpenAIReasoningEffortForModel,
-  supportsOpenAIReasoningEffort,
-} from "../../agents/openai-reasoning-effort.js";
-import {
-  createFirstStreamEventAbortController,
-  getFirstStreamEventTimeoutHandler,
-  getFirstStreamEventTimeoutMs,
-  type FirstStreamEventInternalOptions,
-  withFirstStreamEventTimeout,
-} from "../../agents/stream-first-event-timeout.js";
 import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import {
   AZURE_RESPONSES_TEXT_CONTENT_PART_TYPE,
@@ -56,19 +45,12 @@ import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { convertResponsesToolPayload, convertResponsesTools } from "./openai-responses-tools.js";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import { extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 // =============================================================================
 // Utilities
 // =============================================================================
-
-const EMPTY_TOOL_RESULT_TEXT = "(no output)";
-
-function sanitizeToolResultText(text: string, fallback: string): string {
-  const sanitized = sanitizeSurrogates(text);
-  return sanitized.trim().length > 0 ? sanitized : fallback;
-}
 
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
 type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & { id?: string };
@@ -86,10 +68,6 @@ type ResponsesOutputItemDoneEvent = Extract<
   ResponseStreamEvent,
   { type: "response.output_item.done" }
 >;
-type ResponsesInputTokensDetails = {
-  cached_tokens?: number;
-  cache_write_tokens?: number;
-};
 type AzureResponsesContentPartAddedEvent = Omit<ResponsesContentPartAddedEvent, "part"> & {
   part: AzureResponsesTextContentPart;
 };
@@ -211,26 +189,9 @@ type ResponsesStreamClient = {
 type ResponsesLifecycleStreamOptions = Pick<
   StreamOptions,
   "signal" | "timeoutMs" | "maxRetries" | "onPayload" | "onResponse"
-> &
-  FirstStreamEventInternalOptions;
+>;
 
-type OpenAIResponsesProcessStreamOptions = OpenAIResponsesStreamOptions &
-  FirstStreamEventInternalOptions;
-
-export type ResponsesReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-
-function isResponsesReasoningEffort(
-  effort: string | undefined,
-): effort is ResponsesReasoningEffort {
-  return (
-    effort === "minimal" ||
-    effort === "low" ||
-    effort === "medium" ||
-    effort === "high" ||
-    effort === "xhigh" ||
-    effort === "max"
-  );
-}
+export type ResponsesReasoningEffort = "minimal" | "low" | "medium" | "high" | "xhigh";
 export type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
 
 type ResponsesCommonParamsOptions = Pick<StreamOptions, "maxTokens" | "temperature"> & {
@@ -412,11 +373,9 @@ export function convertResponsesMessages<TApi extends Api>(
       }
       messages.push(...output);
     } else if (msg.role === "toolResult") {
-      const textResult = extractToolResultText(msg.content);
-      const sanitizedTextResult = sanitizeSurrogates(textResult);
+      const textResult = extractToolResultText(msg.content as Array<Record<string, unknown>>);
       const hasImages = msg.content.some((c): c is ImageContent => c.type === "image");
-      const mediaPlaceholder = describeToolResultMediaPlaceholder(msg.content);
-      const hasText = sanitizedTextResult.trim().length > 0;
+      const hasText = textResult.length > 0;
       const [callId] = msg.toolCallId.split("|");
 
       let output: string | ResponseFunctionCallOutputItemList;
@@ -426,12 +385,7 @@ export function convertResponsesMessages<TApi extends Api>(
         if (hasText) {
           contentParts.push({
             type: "input_text",
-            text: sanitizedTextResult,
-          });
-        } else if (mediaPlaceholder === "(see attached media)") {
-          contentParts.push({
-            type: "input_text",
-            text: mediaPlaceholder,
+            text: sanitizeSurrogates(textResult),
           });
         }
 
@@ -447,7 +401,7 @@ export function convertResponsesMessages<TApi extends Api>(
 
         output = contentParts;
       } else {
-        output = sanitizeToolResultText(textResult, mediaPlaceholder ?? EMPTY_TOOL_RESULT_TEXT);
+        output = sanitizeSurrogates(hasText ? textResult : "(see attached image)");
       }
 
       messages.push({
@@ -497,18 +451,7 @@ export function resolveResponsesReasoningEffort<TApi extends Api>(
   if (!clampedReasoning || clampedReasoning === "off") {
     return undefined;
   }
-  if (clampedReasoning === "max") {
-    return supportsOpenAIReasoningEffort(model, "max") ? "max" : "xhigh";
-  }
-  if (
-    clampedReasoning === "minimal" &&
-    model.provider === "openai" &&
-    supportsOpenAIReasoningEffort(model, "max")
-  ) {
-    const effort = resolveOpenAIReasoningEffortForModel({ model, effort: "minimal" });
-    return isResponsesReasoningEffort(effort) ? effort : undefined;
-  }
-  return clampedReasoning;
+  return clampedReasoning === "max" ? "xhigh" : clampedReasoning;
 }
 
 export function applyCommonResponsesParams<TApi extends Api>(
@@ -580,12 +523,11 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   options?: ResponsesLifecycleStreamOptions;
   createClient: () => ResponsesStreamClient;
   buildParams: () => ResponseCreateParamsStreaming;
-  processStreamOptions?: OpenAIResponsesProcessStreamOptions;
+  processStreamOptions?: OpenAIResponsesStreamOptions;
   formatError: (error: unknown) => string;
 }): Promise<void> {
   const { stream, model, output, options } = params;
 
-  let firstEventAbort: ReturnType<typeof createFirstStreamEventAbortController> | undefined;
   try {
     const client = params.createClient();
     let requestParams = params.buildParams();
@@ -594,12 +536,8 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       requestParams = nextParams as ResponseCreateParamsStreaming;
     }
 
-    firstEventAbort = createFirstStreamEventAbortController(options?.signal);
     const { data: openaiStream, response } = await client.responses
-      .create(requestParams, {
-        ...buildResponsesRequestOptions(options),
-        signal: firstEventAbort.signal,
-      })
+      .create(requestParams, buildResponsesRequestOptions(options))
       .withResponse();
     await options?.onResponse?.(
       { status: response.status, headers: headersToRecord(response.headers) },
@@ -607,23 +545,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     );
     stream.push({ type: "start", partial: output });
 
-    const firstEventTimeoutMs = getFirstStreamEventTimeoutMs(options);
-    const onFirstEventTimeout = getFirstStreamEventTimeoutHandler(options);
-    const processStreamOptions =
-      params.processStreamOptions ||
-      firstEventTimeoutMs !== undefined ||
-      onFirstEventTimeout !== undefined
-        ? {
-            ...params.processStreamOptions,
-            firstEventTimeoutMs:
-              params.processStreamOptions?.firstEventTimeoutMs ?? firstEventTimeoutMs,
-            abortFirstEventStream:
-              params.processStreamOptions?.abortFirstEventStream ?? firstEventAbort.abort,
-            onFirstEventTimeout:
-              params.processStreamOptions?.onFirstEventTimeout ?? onFirstEventTimeout,
-          }
-        : undefined;
-    await processResponsesStream(openaiStream, output, stream, model, processStreamOptions);
+    await processResponsesStream(openaiStream, output, stream, model, params.processStreamOptions);
 
     if (options?.signal?.aborted) {
       throw new Error("Request was aborted");
@@ -641,8 +563,6 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
     output.errorMessage = params.formatError(error);
     stream.push({ type: "error", reason: output.stopReason, error: output });
     stream.end();
-  } finally {
-    firstEventAbort?.dispose();
   }
 }
 
@@ -655,7 +575,7 @@ export async function processResponsesStream<TApi extends Api>(
   output: AssistantMessage,
   stream: AssistantMessageEventStream,
   model: Model<TApi>,
-  options?: OpenAIResponsesProcessStreamOptions,
+  options?: OpenAIResponsesStreamOptions,
 ): Promise<void> {
   let currentItem:
     | ResponseReasoningItem
@@ -695,17 +615,7 @@ export async function processResponsesStream<TApi extends Api>(
     pendingMessageText = null;
   };
 
-  const guardedStream = withFirstStreamEventTimeout(openaiStream, {
-    provider: model.provider,
-    api: model.api,
-    model: model.id,
-    timeoutMs: options?.firstEventTimeoutMs ?? 0,
-    stage: "responses",
-    abort: options?.abortFirstEventStream,
-    onTimeout: options?.onFirstEventTimeout,
-    hint: "The provider may be stalled while parsing the tool payload; retry with a smaller tool surface or enable OPENCLAW_DEBUG_MODEL_PAYLOAD=tools to inspect exposed tools.",
-  });
-  for await (const event of guardedStream) {
+  for await (const event of openaiStream) {
     if (event.type === "response.created") {
       output.responseId = event.response.id;
     } else if (event.type === "response.output_item.added") {
@@ -1006,18 +916,13 @@ export async function processResponsesStream<TApi extends Api>(
         output.responseId = response.id;
       }
       if (response?.usage) {
-        const inputTokenDetails = response.usage.input_tokens_details as
-          | ResponsesInputTokensDetails
-          | null
-          | undefined;
-        const cachedTokens = inputTokenDetails?.cached_tokens || 0;
-        const cacheWriteTokens = inputTokenDetails?.cache_write_tokens || 0;
+        const cachedTokens = response.usage.input_tokens_details?.cached_tokens || 0;
         output.usage = {
-          // OpenAI includes cache reads and writes in input_tokens, so split both priced buckets.
-          input: Math.max(0, (response.usage.input_tokens || 0) - cachedTokens - cacheWriteTokens),
+          // OpenAI includes cached tokens in input_tokens, so subtract to get non-cached input
+          input: (response.usage.input_tokens || 0) - cachedTokens,
           output: response.usage.output_tokens || 0,
           cacheRead: cachedTokens,
-          cacheWrite: cacheWriteTokens,
+          cacheWrite: 0,
           totalTokens: response.usage.total_tokens || 0,
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
         };
