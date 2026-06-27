@@ -3116,6 +3116,12 @@ async function runEmbeddedAgentInternal(
             );
             const promptFailoverFailure =
               promptFailoverReason !== null || isFailoverErrorMessage(errorText, { provider });
+            const promptTimeoutFallbackSafe =
+              promptErrorSource === "prompt" &&
+              promptFailoverReason === "timeout" &&
+              !attempt.codexAppServerFailure &&
+              attempt.promptTimeoutOutcome?.replayInvalid !== true &&
+              attempt.replayMetadata.replaySafe;
             // Capture the failing profile before auth-profile rotation mutates `lastProfileId`.
             const failedPromptProfileId = lastProfileId;
             const logPromptFailoverDecision = createFailoverDecisionLogger({
@@ -3147,6 +3153,7 @@ async function runEmbeddedAgentInternal(
               failoverFailure: promptFailoverFailure,
               failoverReason: promptFailoverReason,
               harnessOwnsTransport: pluginHarnessOwnsTransport,
+              promptTimeoutFallbackSafe,
               profileRotated: false,
             });
             if (
@@ -3186,6 +3193,7 @@ async function runEmbeddedAgentInternal(
                 failoverFailure: promptFailoverFailure,
                 failoverReason: promptFailoverReason,
                 harnessOwnsTransport: pluginHarnessOwnsTransport,
+                promptTimeoutFallbackSafe,
                 profileRotated: true,
               });
             }
