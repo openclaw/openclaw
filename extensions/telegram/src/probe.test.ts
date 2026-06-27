@@ -362,7 +362,7 @@ describe("probeTelegram retry logic", () => {
 
       const result = await probePromise;
       expect(result.ok).toBe(true);
-      expect(localForceFallback).toHaveBeenCalledWith("probe timeout/network error");
+      expect(localForceFallback).toHaveBeenCalledWith("probe timeout/network error", timeoutError);
       expect(fetchMock).toHaveBeenCalledTimes(3); // 1 failed + 1 getMe success + 1 webhook
     } finally {
       vi.useRealTimers();
