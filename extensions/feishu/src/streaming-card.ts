@@ -116,7 +116,7 @@ async function getToken(creds: Credentials): Promise<string> {
     await release();
     throw new Error(`Token request failed with HTTP ${response.status}`);
   }
-  const data = (await response.json()) as {
+  const data = (await readProviderJsonResponse(response, "streaming-card")) as {
     code: number;
     msg: string;
     tenant_access_token?: string;
@@ -276,7 +276,7 @@ export class FeishuStreamingSession {
       await releaseCreate();
       throw new Error(`Create card request failed with HTTP ${createRes.status}`);
     }
-    const createData = (await createRes.json()) as {
+    const createData = (await readProviderJsonResponse(createRes, "streaming-card")) as {
       code: number;
       msg: string;
       data?: { card_id: string };

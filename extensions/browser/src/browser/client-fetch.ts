@@ -270,7 +270,7 @@ async function fetchHttpJson<T>(
       const text = await res.text().catch(() => "");
       throw new BrowserServiceError(text || `HTTP ${res.status}`);
     }
-    return (await res.json()) as T;
+    return (await readProviderJsonResponse(res, "client-fetch")) as T;
   } finally {
     clearTimeout(t);
     await release?.();

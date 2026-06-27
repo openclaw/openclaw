@@ -112,7 +112,10 @@ async function fetchBotFrameworkAttachmentInfo(params: {
     return undefined;
   }
   try {
-    return (await response.json()) as BotFrameworkAttachmentInfo;
+    return (await readProviderJsonResponse(
+      response,
+      "bot-framework",
+    )) as BotFrameworkAttachmentInfo;
   } catch (err) {
     params.logger?.warn?.("msteams botFramework attachmentInfo parse failed", {
       error: err instanceof Error ? err.message : String(err),

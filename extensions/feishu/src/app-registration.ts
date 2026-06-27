@@ -109,7 +109,7 @@ async function fetchFeishuJson<T>(params: {
   });
   try {
     // Registration poll returns 4xx for pending/error states with a JSON body.
-    return (await response.json()) as T;
+    return (await readProviderJsonResponse(response, "app-registration")) as T;
   } finally {
     await release();
   }

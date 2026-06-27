@@ -110,7 +110,10 @@ export async function readChromeVersion(
       ssrfPolicy,
     );
     try {
-      const data = (await response.json()) as ChromeVersion;
+      const data = (await readProviderJsonResponse(
+        response,
+        "chrome.diagnostics",
+      )) as ChromeVersion;
       if (!data || typeof data !== "object") {
         throw new Error("CDP /json/version returned non-object JSON");
       }

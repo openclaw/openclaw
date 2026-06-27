@@ -306,7 +306,7 @@ export async function fetchJson<T>(
 ): Promise<T> {
   const { response, release } = await fetchCdpChecked(url, timeoutMs, init, ssrfPolicy);
   try {
-    return (await response.json()) as T;
+    return (await readProviderJsonResponse(response, "cdp.helpers")) as T;
   } finally {
     await release();
   }

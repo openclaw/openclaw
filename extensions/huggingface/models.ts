@@ -165,7 +165,7 @@ export async function discoverHuggingfaceModels(
         return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);
       }
 
-      const body = (await response.json()) as OpenAIListModelsResponse;
+      const body = (await readProviderJsonResponse(response, "models")) as OpenAIListModelsResponse;
       const data = body?.data;
       if (!Array.isArray(data) || data.length === 0) {
         return HUGGINGFACE_MODEL_CATALOG.map(buildHuggingfaceModelDefinition);

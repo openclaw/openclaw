@@ -143,7 +143,7 @@ async function fetchGraphCollection(params: {
       return { status, items: [] };
     }
     try {
-      const data = (await response.json()) as { value?: unknown[] };
+      const data = (await readProviderJsonResponse(response, "graph")) as { value?: unknown[] };
       return { status, items: Array.isArray(data.value) ? data.value : [] };
     } catch {
       return { status, items: [] };
@@ -345,7 +345,7 @@ export async function downloadMSTeamsGraphMedia(params: {
           attachments?: GraphAttachment[];
         };
         try {
-          msgData = (await msgRes.json()) as typeof msgData;
+          msgData = (await readProviderJsonResponse(msgRes, "graph")) as typeof msgData;
         } catch (err) {
           debugLog?.debug?.("graph media message parse failed", {
             messageUrl,

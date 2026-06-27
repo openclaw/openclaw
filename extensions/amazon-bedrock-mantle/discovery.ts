@@ -302,7 +302,7 @@ export async function discoverMantleModels(params: {
       return cached?.models ?? [];
     }
 
-    const body = (await response.json()) as OpenAIModelsResponse;
+    const body = (await readProviderJsonResponse(response, "discovery")) as OpenAIModelsResponse;
     const rawModels = body.data ?? [];
 
     const models = rawModels

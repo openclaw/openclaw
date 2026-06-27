@@ -130,7 +130,7 @@ async function callUserTokenService(
   }
   let parsed: unknown;
   try {
-    parsed = await response.json();
+    parsed = await readProviderJsonResponse(response, "sso");
   } catch {
     return { error: "invalid JSON from User Token service", status: response.status };
   }
