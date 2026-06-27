@@ -27,8 +27,15 @@ export function hasAmbiguousCanonicalSessionPeerShape(scopedSessionKey: string):
   const hasAccountPeerShape = Boolean(
     parts[0] && parts[1] && isCanonicalPeerKind(parts[2]) && parts[3],
   );
+  const hasBuiltInLegacyPeerShape =
+    deriveBuiltInLegacySessionChatType(scopedSessionKey) !== undefined;
   return (
-    [hasBareDirectPeerShape, hasChannelPeerShape, hasAccountPeerShape].filter(Boolean).length > 1
+    [
+      hasBareDirectPeerShape,
+      hasChannelPeerShape,
+      hasAccountPeerShape,
+      hasBuiltInLegacyPeerShape,
+    ].filter(Boolean).length > 1
   );
 }
 
