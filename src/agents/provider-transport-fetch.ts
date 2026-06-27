@@ -132,13 +132,14 @@ function sanitizeOpenAISdkSseResponse(
               controller.close();
               return;
             }
-            buffer += decoder.decode(chunk.value, { stream: true });
-            totalBytes += chunk.value.byteLength;
-            if (totalBytes > SSE_SYNTHESIZE_JSON_MAX_BYTES) {
+            const nextTotalBytes = totalBytes + chunk.value.byteLength;
+            if (nextTotalBytes > SSE_SYNTHESIZE_JSON_MAX_BYTES) {
               throw new Error(
                 `Streaming JSON body exceeded ${SSE_SYNTHESIZE_JSON_MAX_BYTES} bytes while synthesizing SSE frames`,
               );
             }
+            totalBytes = nextTotalBytes;
+            buffer += decoder.decode(chunk.value, { stream: true });
           }
         } catch (error) {
           await reader?.cancel(error).catch(() => {});
@@ -191,6 +192,7 @@ function sanitizeOpenAISdkSseResponse(
       if (hasReadableSseData(block)) {
         controller.enqueue(encoder.encode(`${block}${separator}`));
         enqueued += 1;
+        return enqueued;
       }
     }
   };
@@ -202,6 +204,10 @@ function sanitizeOpenAISdkSseResponse(
     async pull(controller) {
       try {
         for (;;) {
+          const pending = enqueueSanitized(controller, "");
+          if (pending > 0) {
+            return;
+          }
           const chunk = await reader?.read();
           if (!chunk || chunk.done) {
             const tail = decoder.decode();

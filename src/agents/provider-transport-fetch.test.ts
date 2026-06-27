@@ -1133,7 +1133,8 @@ describe("buildGuardedModelFetch", () => {
   it("handles a large transport chunk containing many valid small SSE events", async () => {
     // Regression: one TCP read can deliver >64 KiB of already-delimited SSE
     // events; the cap must apply only to the unterminated tail, not the full chunk.
-    const manyEvents = `data: ${JSON.stringify({ ok: true })}\n\n`.repeat(500);
+    const eventCount = 5_000;
+    const manyEvents = `data: ${JSON.stringify({ ok: true })}\n\n`.repeat(eventCount);
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(manyEvents, {
         headers: { "content-type": "text/event-stream" },
@@ -1156,7 +1157,7 @@ describe("buildGuardedModelFetch", () => {
     for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
       items.push(item);
     }
-    expect(items.length).toBe(500);
+    expect(items.length).toBe(eventCount);
     expect(items[0]).toEqual({ ok: true });
   });
 
