@@ -206,6 +206,27 @@ describe("noteMemorySearchHealth", () => {
     expect(message).toContain("openclaw plugins install @openclaw/llama-cpp-provider");
   });
 
+  it("supports silent structured collection through an injected note sink", async () => {
+    const noteFn = vi.fn();
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      includeWorkspaceMemoryHealth: false,
+      noteFn,
+    });
+
+    expect(noteWorkspaceMemoryHealth).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalled();
+    expect(noteFn).toHaveBeenCalledWith(
+      expect.stringContaining('Memory search provider is set to "local"'),
+      "Memory search",
+    );
+  });
+
   it("warns when local provider with default model but gateway probe reports not ready", async () => {
     resolveMemorySearchConfig.mockReturnValue({
       provider: "local",
@@ -475,6 +496,24 @@ describe("noteMemorySearchHealth", () => {
       env: process.env,
       cwd: "/tmp/agent-default/workspace",
     });
+  });
+
+  it("skips QMD binary probing when requested by lint collection", async () => {
+    const qmdCfg = { memory: { backend: "qmd", qmd: { command: "custom-qmd" } } } as OpenClawConfig;
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "auto",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(qmdCfg, {
+      includeWorkspaceMemoryHealth: false,
+      skipQmdBinaryProbe: true,
+    });
+
+    expect(noteWorkspaceMemoryHealth).not.toHaveBeenCalled();
+    expect(checkQmdBinaryAvailability).not.toHaveBeenCalled();
+    expect(note).not.toHaveBeenCalled();
   });
 
   it("warns when QMD backend is active but the qmd binary is unavailable", async () => {
@@ -907,6 +946,25 @@ describe("noteMemorySearchHealth", () => {
     });
 
     expect(note).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve auth profiles when requested by lint callers", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      skipAuthProfileResolution: true,
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    const message = firstNoteMessage();
+    expect(message).toContain('provider is set to "openai"');
+    expect(message).toContain("OPENAI_API_KEY");
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
   });
 
