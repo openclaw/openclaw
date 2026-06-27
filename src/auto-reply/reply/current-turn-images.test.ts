@@ -60,4 +60,35 @@ describe("resolveCurrentTurnImages", () => {
       });
     });
   });
+
+  it("preserves partial results when some attachments fail to resolve", async () => {
+    await withTempDir({ prefix: "openclaw-current-turn-images-" }, async (base) => {
+      const stateDir = path.join(base, "state");
+      const validPath = "media/inbound/valid.jpg";
+      const validAttachmentPath = path.join(stateDir, validPath);
+      const imageBytes = Buffer.from("valid-image-bytes");
+      await fs.mkdir(path.dirname(validAttachmentPath), { recursive: true });
+      await fs.writeFile(validAttachmentPath, imageBytes);
+      process.env.OPENCLAW_STATE_DIR = stateDir;
+      vi.spyOn(process, "cwd").mockReturnValue(path.join(base, "cwd"));
+      await fs.mkdir(path.join(base, "cwd"), { recursive: true });
+
+      const result = await resolveCurrentTurnImages({
+        ctx: {
+          MediaPaths: [validPath, "media/inbound/missing.jpg"],
+          MediaTypes: ["image/jpeg", "image/jpeg"],
+        } satisfies MsgContext,
+        cfg: {} as OpenClawConfig,
+      });
+
+      // missing.jpg doesn't exist → resolveAgentTurnAttachments loads 1/2.
+      // We should preserve the one valid image instead of dropping everything.
+      expect(result.images).toHaveLength(1);
+      expect(result.images?.[0]).toMatchObject({
+        type: "image",
+        data: imageBytes.toString("base64"),
+        mimeType: "image/jpeg",
+      });
+    });
+  });
 });
