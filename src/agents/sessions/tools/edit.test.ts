@@ -46,6 +46,30 @@ describe("edit tool", () => {
     ).rejects.toThrow(/Current file contents:\nactual current content/);
   });
 
+  it("points at the closest line with an indentation note on mismatch", async () => {
+    // File indents the line with 4 spaces; the edit asks for 8, so it cannot match.
+    const filePath = await createTempFile("function f() {\n    return foo();\n}\n");
+    const tool = createEditTool(tmpDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [
+            {
+              oldText: "        return foo();",
+              newText: "        return bar();",
+            },
+          ],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(
+      /Closest line\(s\)[\s\S]*L2:[\s\S]*indentation differs: expected 8 spaces, found 4 spaces/,
+    );
+  });
+
   it("recovers success after a post-write throw when the edit already applied", async () => {
     // Some backends throw after flushing content; a readback match is the
     // contract that lets the tool report success without duplicating edits.

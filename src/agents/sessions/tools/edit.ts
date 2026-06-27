@@ -18,6 +18,7 @@ import type { ToolDefinition } from "../extensions/types.js";
 import {
   applyEditsToNormalizedContent,
   computeEditsDiff,
+  describeClosestLines,
   detectLineEnding,
   EditNoChangeError,
   type Edit,
@@ -173,12 +174,29 @@ function didEditLikelyApply(params: {
   );
 }
 
-function appendMismatchHint(error: Error, currentContent: string): Error {
+/** Pick the oldText that failed to match, so diagnostics target the right edit. */
+function pickUnmatchedOldText(currentContent: string, edits: Edit[]): string {
+  const normalizedCurrent = normalizeToLF(currentContent);
+  for (const edit of edits) {
+    if (!normalizedCurrent.includes(normalizeToLF(edit.oldText))) {
+      return edit.oldText;
+    }
+  }
+  return edits[0]?.oldText ?? "";
+}
+
+function appendMismatchHint(error: Error, currentContent: string, oldText: string): Error {
   const snippet =
     currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
       ? currentContent
       : `${currentContent.slice(0, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
-  const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`, {
+  const closest = describeClosestLines(currentContent, oldText);
+  const sections = [error.message];
+  if (closest) {
+    sections.push(closest);
+  }
+  sections.push(`Current file contents:\n${snippet}`);
+  const enhanced = new Error(sections.join("\n"), {
     cause: error,
   });
   enhanced.stack = error.stack;
@@ -490,7 +508,11 @@ export function createEditToolDefinition(
             };
           }
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
-            throw appendMismatchHint(normalizedError, currentContent);
+            throw appendMismatchHint(
+              normalizedError,
+              currentContent,
+              pickUnmatchedOldText(currentContent, realEdits),
+            );
           }
           // Terminal no-op: the edit matched but produced identical content.
           if (normalizedError instanceof EditNoChangeError) {

@@ -276,6 +276,154 @@ export function applyEditsToNormalizedContent(
   return { baseContent, newContent };
 }
 
+export interface ClosestLine {
+  /** 1-based line number in the file. */
+  lineNumber: number;
+  /** The raw line text from the file. */
+  text: string;
+  /** Levenshtein distance between the trimmed anchor and trimmed line (0 = whitespace-only difference). */
+  distance: number;
+  /** Human-readable note describing the most likely difference. */
+  note: string;
+}
+
+/** Cap comparison length so a few pathologically long lines can't blow up the O(n*m) distance. */
+const CLOSEST_LINE_MAX_COMPARE = 200;
+/** Lines more than 60% different from the anchor are treated as unrelated noise. */
+const CLOSEST_LINE_MAX_DISSIMILARITY = 0.6;
+
+function levenshtein(a: string, b: string): number {
+  if (a === b) {
+    return 0;
+  }
+  const s = a.length > CLOSEST_LINE_MAX_COMPARE ? a.slice(0, CLOSEST_LINE_MAX_COMPARE) : a;
+  const t = b.length > CLOSEST_LINE_MAX_COMPARE ? b.slice(0, CLOSEST_LINE_MAX_COMPARE) : b;
+  const m = s.length;
+  const n = t.length;
+  if (m === 0) {
+    return n;
+  }
+  if (n === 0) {
+    return m;
+  }
+  let prev = new Array<number>(n + 1);
+  let curr = new Array<number>(n + 1);
+  for (let j = 0; j <= n; j++) {
+    prev[j] = j;
+  }
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = s[i - 1] === t[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j] + 1, curr[j - 1] + 1, prev[j - 1] + cost);
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[n];
+}
+
+function describeIndent(ws: string): string {
+  if (ws.length === 0) {
+    return "no indentation";
+  }
+  const spaces = (ws.match(/ /g) ?? []).length;
+  const tabs = (ws.match(/\t/g) ?? []).length;
+  const parts: string[] = [];
+  if (tabs > 0) {
+    parts.push(`${tabs} tab${tabs === 1 ? "" : "s"}`);
+  }
+  if (spaces > 0) {
+    parts.push(`${spaces} space${spaces === 1 ? "" : "s"}`);
+  }
+  return parts.join(" + ");
+}
+
+function leadingWhitespace(line: string): string {
+  return line.match(/^[ \t]*/)?.[0] ?? "";
+}
+
+function firstNonBlankLine(text: string): string | undefined {
+  for (const line of text.split("\n")) {
+    if (line.trim().length > 0) {
+      return line;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Find the lines in `content` most similar to the first non-blank line of `oldText`.
+ *
+ * Purely diagnostic — it never affects matching. Used to explain *why* an edit's
+ * oldText failed to match (wrong indentation, an escaped vs literal character,
+ * a small typo) instead of returning a bare "not found".
+ */
+export function findClosestLines(
+  content: string,
+  oldText: string,
+  maxCandidates = 3,
+): ClosestLine[] {
+  const anchorLine = firstNonBlankLine(oldText);
+  if (anchorLine === undefined) {
+    return [];
+  }
+  const anchorTrimmed = anchorLine.trim();
+  const anchorIndent = leadingWhitespace(anchorLine);
+  const lines = content.split("\n");
+  const scored: ClosestLine[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const lineTrimmed = line.trim();
+    if (lineTrimmed.length === 0) {
+      continue;
+    }
+    const distance = levenshtein(lineTrimmed, anchorTrimmed);
+    const longest = Math.max(lineTrimmed.length, anchorTrimmed.length, 1);
+    if (distance > 0 && distance / longest > CLOSEST_LINE_MAX_DISSIMILARITY) {
+      continue;
+    }
+
+    let note: string;
+    if (distance === 0) {
+      const lineIndent = leadingWhitespace(line);
+      note =
+        lineIndent === anchorIndent
+          ? "matches after trimming — check leading/trailing whitespace"
+          : `indentation differs: expected ${describeIndent(anchorIndent)}, found ${describeIndent(lineIndent)}`;
+    } else {
+      note = "content differs";
+    }
+    scored.push({ lineNumber: i + 1, text: line, distance, note });
+  }
+
+  scored.sort((a, b) => a.distance - b.distance || a.lineNumber - b.lineNumber);
+  return scored.slice(0, maxCandidates);
+}
+
+/**
+ * Render up to `maxCandidates` closest lines as a diagnostic block, or "" when
+ * nothing is close enough to be worth showing. Strings are JSON-escaped so that
+ * whitespace and backslash escapes (e.g. `\b` vs `\\b`) are visible.
+ */
+export function describeClosestLines(content: string, oldText: string, maxCandidates = 3): string {
+  const candidates = findClosestLines(content, oldText, maxCandidates);
+  if (candidates.length === 0) {
+    return "";
+  }
+  const anchor = firstNonBlankLine(oldText)?.trim() ?? "";
+  const width = String(Math.max(...candidates.map((c) => c.lineNumber))).length;
+  const rows = candidates.map((c) => {
+    const ln = String(c.lineNumber).padStart(width, " ");
+    return `  L${ln}: ${JSON.stringify(c.text)}  — ${c.note}`;
+  });
+  return [
+    `Closest line(s) to your oldText (anchor: ${JSON.stringify(anchor)}):`,
+    ...rows,
+    "Strings are shown JSON-escaped so whitespace and backslashes are visible.",
+  ].join("\n");
+}
+
 /** Generate a standard unified patch. */
 export function generateUnifiedPatch(
   path: string,
