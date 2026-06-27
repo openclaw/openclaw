@@ -455,4 +455,4 @@ Telegram user IDs resolved from `channels.telegram.execApprovals.approvers` or
 - [Exec approvals](/tools/exec-approvals) — core policy and approval flow
 - [Exec tool](/tools/exec)
 - [Elevated mode](/tools/elevated)
-- [Skills](/tools/skills) — skill-backed auto-allow behavior
+- [Skills config](/tools/skills-config) — skill-backed auto-allow behavior

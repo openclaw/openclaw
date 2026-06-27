@@ -22,7 +22,7 @@ For a complete map of the docs, see [Docs hubs](/start/hubs).
 - [Pairing (DM and nodes)](/channels/pairing)
 - [Nix mode](/install/nix)
 - [OpenClaw assistant setup](/start/openclaw)
-- [Skills](/tools/skills)
+- [Creating skills](/tools/creating-skills)
 - [Skills config](/tools/skills-config)
 - [Workspace templates](/reference/templates/AGENTS)
 - [RPC adapters](/reference/rpc)

@@ -37,7 +37,7 @@ that agent; if you copy credentials manually, copy only portable static
 `api_key` or `token` profiles.
 </Warning>
 
-Skills are loaded from each agent workspace plus shared roots such as `~/.openclaw/skills`, then filtered by the effective agent skill allowlist when configured. Use `agents.defaults.skills` for a shared baseline and `agents.list[].skills` for per-agent replacement. See [Skills: per-agent vs shared](/tools/skills#per-agent-vs-shared-skills) and [Skills: agent skill allowlists](/tools/skills#agent-allowlists).
+Skills are loaded from each agent workspace plus shared roots such as `~/.openclaw/skills`, then filtered by the effective agent skill allowlist when configured. Use `agents.defaults.skills` for a shared baseline and `agents.list[].skills` for per-agent replacement. See [Skills config](/tools/skills-config#agent-allowlists-agents).
 
 The Gateway can host **one agent** (default) or **many agents** side-by-side.
 

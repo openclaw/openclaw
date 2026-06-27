@@ -442,7 +442,7 @@ watcher is enabled, or on the next agent turn when the watcher detects a change.
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Skills reference" href="/tools/skills" icon="puzzle-piece">
+  <Card title="Skill authoring" href="/tools/creating-skills" icon="puzzle-piece">
     What skills are, loading order, gating, and SKILL.md format.
   </Card>
   <Card title="Creating skills" href="/tools/creating-skills" icon="hammer">

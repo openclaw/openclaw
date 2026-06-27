@@ -200,7 +200,7 @@ See [Talk mode](/nodes/talk).
 Skills can store `apiKey` in `skills.entries.<name>.apiKey`. If a skill uses that key for external
 APIs, it can incur costs according to the skill's provider.
 
-See [Skills](/tools/skills).
+See [Skills config](/tools/skills-config).
 
 ## Related
 

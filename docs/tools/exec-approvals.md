@@ -514,7 +514,7 @@ direct-chat denial when a safe route exists.
   <Card title="Sandbox vs tool policy vs elevated" href="/gateway/sandbox-vs-tool-policy-vs-elevated" icon="sliders">
     When to reach for each control.
   </Card>
-  <Card title="Skills" href="/tools/skills" icon="sparkles">
+  <Card title="Skills config" href="/tools/skills-config" icon="sparkles">
     Skill-backed auto-allow behavior.
   </Card>
 </CardGroup>

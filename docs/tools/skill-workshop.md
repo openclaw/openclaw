@@ -276,7 +276,7 @@ Default state directory: `~/.openclaw`.
 
 ## Related
 
-- [Skills](/tools/skills) for load order, precedence, and visibility
+- [Skills config](/tools/skills-config) for visibility and configuration
 - [Creating skills](/tools/creating-skills) for hand-written `SKILL.md`
   basics
 - [Skills config](/tools/skills-config) for the full `skills.workshop` schema

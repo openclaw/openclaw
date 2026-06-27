@@ -10,7 +10,7 @@ read_when:
 
 Skills teach the agent how and when to use tools. Each skill is a directory
 containing a `SKILL.md` file with YAML frontmatter and markdown instructions.
-OpenClaw loads skills from several roots in a defined [precedence order](/tools/skills#loading-order).
+OpenClaw loads skills from several roots in a defined [precedence order](/tools/skills-config#loading-order-reminder).
 
 ## Create your first skill
 
@@ -113,7 +113,7 @@ OpenClaw loads skills from several roots in a defined [precedence order](/tools/
 | `homepage`                 | —       | URL shown as "Website" in the macOS Skills UI                                    |
 
 For gating fields (`requires.bins`, `requires.env`, etc.) see
-[Skills — Gating](/tools/skills#gating).
+[Skills config](/tools/skills-config#per-skill-entries-skillsentries).
 
 ### Using `{baseDir}`
 
@@ -147,7 +147,7 @@ metadata: { "openclaw": { "requires": { "bins": ["gemini"] }, "primaryEnv": "GEM
     | `os` | Platform filter: `["darwin"]`, `["linux"]`, `["win32"]` |
     | `always` | Set `true` to skip all gates and always include the skill |
 
-    Full reference: [Skills — Gating](/tools/skills#gating).
+    Full reference: [Skills config](/tools/skills-config#per-skill-entries-skillsentries).
 
   </Accordion>
   <Accordion title="Environment and API keys">
@@ -253,7 +253,7 @@ See [Skill Workshop](/tools/skill-workshop) for the full proposal lifecycle.
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Skills reference" href="/tools/skills" icon="puzzle-piece">
+  <Card title="Skills config" href="/tools/skills-config" icon="gear">
     Loading order, gating, allowlists, and SKILL.md format.
   </Card>
   <Card title="Skill Workshop" href="/tools/skill-workshop" icon="flask">

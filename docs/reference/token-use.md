@@ -241,7 +241,7 @@ retired `context-1m-*` beta if it remains in older config.
 - Keep skill descriptions short (skill list is injected into the prompt).
 - Prefer smaller models for verbose, exploratory work.
 
-See [Skills](/tools/skills) for the exact skill list overhead formula.
+See [Skills config](/tools/skills-config) for skill visibility controls.
 
 ## Related
 

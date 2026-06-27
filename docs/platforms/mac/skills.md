@@ -41,5 +41,5 @@ The macOS app surfaces OpenClaw skills via the gateway; it does not parse skills
 
 ## Related
 
-- [Skills](/tools/skills)
+- [Creating skills](/tools/creating-skills)
 - [macOS app](/platforms/macos)

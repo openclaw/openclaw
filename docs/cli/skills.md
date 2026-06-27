@@ -15,7 +15,7 @@ directories, verify ClawHub skills, and update ClawHub-tracked installs.
 
 Related:
 
-- Skills system: [Skills](/tools/skills)
+- Skills system: [Creating skills](/tools/creating-skills)
 - Skill Workshop: [Skill Workshop](/tools/skill-workshop)
 - Skills config: [Skills config](/tools/skills-config)
 - ClawHub installs: [ClawHub](/clawhub/cli)
@@ -170,4 +170,4 @@ openclaw skills workshop quarantine <proposal-id> --reason "Needs security revie
 ## Related
 
 - [CLI reference](/cli)
-- [Skills](/tools/skills)
+- [Creating skills](/tools/creating-skills)

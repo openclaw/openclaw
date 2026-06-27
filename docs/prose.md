@@ -182,7 +182,7 @@ effects. For deterministic, approval-gated workflows, compare with
 ## Related
 
 <CardGroup cols={2}>
-  <Card title="Skills reference" href="/tools/skills" icon="puzzle-piece">
+  <Card title="Skills config" href="/tools/skills-config" icon="gear">
     How OpenProse's skill pack loads and what gates apply.
   </Card>
   <Card title="Subagents" href="/tools/subagents" icon="users">

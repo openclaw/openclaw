@@ -249,4 +249,4 @@ will prompt to install it (npm or a local path) before it can be configured.
 - macOS app onboarding: [Onboarding](/start/onboarding)
 - Config reference: [Gateway configuration](/gateway/configuration)
 - Providers: [WhatsApp](/channels/whatsapp), [Telegram](/channels/telegram), [Discord](/channels/discord), [Google Chat](/channels/googlechat), [Signal](/channels/signal), [iMessage](/channels/imessage)
-- Skills: [Skills](/tools/skills), [Skills config](/tools/skills-config)
+- Skills: [Creating skills](/tools/creating-skills), [Skills config](/tools/skills-config)

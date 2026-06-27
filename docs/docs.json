@@ -766,7 +766,11 @@
     },
     {
       "source": "/skills",
-      "destination": "/tools/skills"
+      "destination": "/tools/skills-config"
+    },
+    {
+      "source": "/tools/skills",
+      "destination": "/tools/skills-config"
     },
     {
       "source": "/skill-workshop",
@@ -1285,7 +1289,6 @@
               {
                 "group": "Skills",
                 "pages": [
-                  "tools/skills",
                   "tools/skill-workshop",
                   "tools/creating-skills",
                   "tools/skills-config",
