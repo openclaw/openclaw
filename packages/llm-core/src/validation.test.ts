@@ -39,4 +39,52 @@ describe("validateToolArguments", () => {
       }),
     ).toThrow(/Validation failed for tool "decimal-tool"/);
   });
+
+  it("reports unreadable tool parameter schemas as unsupported", () => {
+    const hostileTool = {
+      name: "hostile-tool",
+      description: "test tool",
+      get parameters() {
+        throw new Error("parameters getter exploded");
+      },
+    } as Tool;
+
+    expect(() =>
+      validateToolArguments(hostileTool, {
+        type: "toolCall",
+        id: "call-1",
+        name: "hostile-tool",
+        arguments: {},
+      }),
+    ).toThrow(/Unsupported tool schema for "hostile-tool": unreadable schema at parameters/);
+  });
+
+  it("reports unreadable nested JSON schemas as unsupported", () => {
+    const properties: Record<string, unknown> = {};
+    Object.defineProperty(properties, "amount", {
+      enumerable: true,
+      get() {
+        throw new Error("schema properties exploded");
+      },
+    });
+    const hostileTool = {
+      name: "hostile-tool",
+      description: "test tool",
+      parameters: {
+        type: "object",
+        properties,
+      },
+    } as Tool;
+
+    expect(() =>
+      validateToolArguments(hostileTool, {
+        type: "toolCall",
+        id: "call-1",
+        name: "hostile-tool",
+        arguments: { amount: "12" },
+      }),
+    ).toThrow(
+      /Unsupported tool schema for "hostile-tool": unreadable schema at parameters\.properties\.amount/,
+    );
+  });
 });
