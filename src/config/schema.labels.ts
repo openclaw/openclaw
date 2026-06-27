@@ -225,6 +225,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "tools.exec.applyPatch.workspaceOnly": "apply_patch Workspace-Only",
   "tools.exec.applyPatch.allowModels": "apply_patch Model Allowlist",
   "tools.loopDetection.enabled": "Tool-loop Detection",
+  "tools.loopDetection.nativePreToolUseRelay": "Native Pre-tool Loop Relay",
   "tools.loopDetection.historySize": "Tool-loop History Size",
   "tools.loopDetection.warningThreshold": "Tool-loop Warning Threshold",
   "tools.loopDetection.unknownToolThreshold": "Unknown-tool Loop Threshold",

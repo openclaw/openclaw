@@ -112,6 +112,7 @@ export type NativeHookRelayRegistration = {
 export type NativeHookRelayRegistrationHandle = NativeHookRelayRegistration & {
   generation?: string;
   shouldRelayEvent: (event: NativeHookRelayEvent) => boolean;
+  shouldInstallInactivePreToolUseHook: () => boolean;
   commandForEvent: (
     event: NativeHookRelayEvent,
     options?: NativeHookRelayCommandForEventOptions,
@@ -444,6 +445,8 @@ export function registerNativeHookRelay(
   const handle: ActiveNativeHookRelayRegistrationHandle = {
     ...registration,
     shouldRelayEvent: (event) => nativeHookRelayEventHasLocalWork(registration, event),
+    shouldInstallInactivePreToolUseHook: () =>
+      nativePreToolUseMayRunLoopDetection(registration) !== false,
     commandForEvent: (event, options) =>
       buildNativeHookRelayCommand({
         provider: params.provider,
@@ -591,7 +594,7 @@ function nativePreToolUseMayRunLoopDetection(registration: NativeHookRelayRegist
     cfg: registration.config,
     agentId: registration.agentId,
   });
-  return loopDetection?.enabled !== false;
+  return loopDetection?.enabled !== false && loopDetection?.nativePreToolUseRelay !== false;
 }
 
 function nativeHookRelayEventHasLocalWork(

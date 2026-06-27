@@ -222,6 +222,22 @@ describe("Codex native hook relay config", () => {
     });
   });
 
+  it("clears selected inactive PreToolUse when the relay disables inactive hook installs", () => {
+    expect(
+      buildCodexNativeHookRelayConfig({
+        relay: createRelay({
+          inactiveEvents: ["pre_tool_use"],
+          installInactivePreToolUseHook: false,
+        }),
+        events: ["pre_tool_use"],
+      }),
+    ).toEqual({
+      "features.hooks": true,
+      "hooks.PreToolUse": [],
+      "hooks.state": {},
+    });
+  });
+
   it("clears omitted hook events when requested", () => {
     expect(
       buildCodexNativeHookRelayConfig({
@@ -306,6 +322,7 @@ describe("Codex native hook relay config", () => {
 
 function createRelay(options?: {
   inactiveEvents?: readonly NativeHookRelayRegistrationHandle["allowedEvents"][number][];
+  installInactivePreToolUseHook?: boolean;
 }): NativeHookRelayRegistrationHandle {
   const inactiveEvents = new Set(options?.inactiveEvents ?? []);
   return {
@@ -318,6 +335,7 @@ function createRelay(options?: {
     allowedEvents: ["pre_tool_use", "post_tool_use", "permission_request", "before_agent_finalize"],
     expiresAtMs: Date.now() + 1000,
     shouldRelayEvent: (event) => !inactiveEvents.has(event),
+    shouldInstallInactivePreToolUseHook: () => options?.installInactivePreToolUseHook !== false,
     commandForEvent: (event, commandOptions) =>
       `openclaw hooks relay --provider codex --relay-id relay-1 --generation generation-1 --event ${event}${
         event === "pre_tool_use" && inactiveEvents.has(event)

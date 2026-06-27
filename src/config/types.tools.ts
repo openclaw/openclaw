@@ -183,6 +183,8 @@ export type ToolLoopPostCompactionGuardConfig = {
 export type ToolLoopDetectionConfig = {
   /** Enable tool-loop protection (default: false). */
   enabled?: boolean;
+  /** Enable native harness PreToolUse relay for loop-detection checks (default: true unless enabled is false). */
+  nativePreToolUseRelay?: boolean;
   /** Maximum tool call history entries retained for loop detection (default: 30). */
   historySize?: number;
   /** Warning threshold before a warning-only loop classification (default: 10). */
