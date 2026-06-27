@@ -326,8 +326,15 @@ export async function listMemoryWikiImportInsights(
         ? "withheld"
         : "available";
       const exposeImportContent = shouldExposeImportContent(digestStatus);
-      const userTurns = transcriptTurns.filter((turn) => turn.role === "user");
-      const assistantTurns = transcriptTurns.filter((turn) => turn.role === "assistant");
+      let userTurnCount = 0;
+      const assistantTurns: TranscriptTurn[] = [];
+      for (const turn of transcriptTurns) {
+        if (turn.role === "user") {
+          userTurnCount += 1;
+        } else if (turn.role === "assistant") {
+          assistantTurns.push(turn);
+        }
+      }
       const assistantOpener = exposeImportContent
         ? firstParagraph(assistantTurns[0]?.text ?? "")
         : undefined;
@@ -360,7 +367,7 @@ export async function listMemoryWikiImportInsights(
           activeBranchMessages: extractIntegerField(triageLines, "Active-branch messages"),
           userMessageCount: Math.max(
             extractIntegerField(digestLines, "User messages"),
-            userTurns.length,
+            userTurnCount,
           ),
           assistantMessageCount: Math.max(
             extractIntegerField(digestLines, "Assistant messages"),
@@ -401,20 +408,28 @@ export async function listMemoryWikiImportInsights(
   const clusters = [...clustersByKey.entries()]
     .map(([key, clusterItems]) => {
       const sortedItems = [...clusterItems].toSorted(compareItemsByUpdated);
-      const updatedAt = sortedItems
-        .map((item) => item.updatedAt ?? item.createdAt)
-        .find((value): value is string => typeof value === "string" && value.length > 0);
+      let updatedAt: string | undefined;
+      let highRiskCount = 0;
+      let withheldCount = 0;
+      let preferenceSignalCount = 0;
+      for (const item of sortedItems) {
+        updatedAt ??= item.updatedAt ?? item.createdAt;
+        if (item.riskLevel === "high") {
+          highRiskCount += 1;
+        }
+        if (item.digestStatus === "withheld") {
+          withheldCount += 1;
+        }
+        preferenceSignalCount += item.preferenceSignals.length;
+      }
       return Object.assign(
         {
           key,
           label: sortedItems[0]?.topicLabel ?? humanizeLabelSuffix(key),
           itemCount: sortedItems.length,
-          highRiskCount: sortedItems.filter((item) => item.riskLevel === `high`).length,
-          withheldCount: sortedItems.filter((item) => item.digestStatus === `withheld`).length,
-          preferenceSignalCount: sortedItems.reduce(
-            (sum, item) => sum + item.preferenceSignals.length,
-            0,
-          ),
+          highRiskCount,
+          withheldCount,
+          preferenceSignalCount,
         },
         updatedAt ? { updatedAt } : {},
         { items: sortedItems },
