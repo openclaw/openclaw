@@ -105,11 +105,14 @@ than Telegram-visible behavior`. Use this manifest shape and do not create
    send a Telegram message asking the agent to generate an image and include
    `OPENCLAW_E2E_GENERATED_MEDIA_WAKE_FALSE_PROOF` in the message. The trusted
    mock model will first call `image_generate`, then after the tool result will
-   return a text completion that still expects the generated media to be attached
-   through the normal visible-reply contract. Use the same stimulus for baseline
+   return a marker-preserving completion. The local Telegram SUT sets
+   `OPENCLAW_E2E_FORCE_GENERATED_MEDIA_WAKE_FALSE=1`, so a generated image task
+   whose prompt carries the marker forces a recoverable scheduler-level
+   `generated_media_missing` delivery miss. Use the same stimulus for baseline
    and candidate. Expected baseline behavior for the wake-false regression is a
    missing or blocked generated media delivery after the tool completes; expected
-   fixed behavior is exactly one generated image visible in Telegram Desktop.
+   fixed behavior, when the candidate includes the reason-aware scheduler
+   fallback, is exactly one generated image visible in Telegram Desktop.
 5. Create detached worktrees under
    `.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees/baseline` and
    `.artifacts/qa-e2e/mantis/telegram-desktop-proof-worktrees/candidate`, then
