@@ -54,7 +54,7 @@ const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
 const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
 const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
 const APPLE_UI_CALLS =
-  /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
+  /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink|Link|TextEditor|ProgressView|Gauge|DisclosureGroup|ControlGroup|DatePicker|Stepper)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_MODIFIER_CALLS =
   /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help|alert|confirmationDialog)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_CALLS =
@@ -73,7 +73,6 @@ const CONDITIONAL_BRANCHES = [
   /\?\s*"((?:\\.|[^"\\])*)"\s*:\s*"((?:\\.|[^"\\])*)"/gu,
 ];
 const ANDROID_RESOURCE_STRINGS = /<string\b[^>]*>([\s\S]*?)<\/string>/gu;
-const APPLE_ANY_CALLS = /\b[A-Z][A-Za-z0-9_]*\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_NAMED_ARGUMENTS =
   /\b(?:title|subtitle|label|message|text|prompt|description|help)\s*:\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_PLIST_STRINGS = /<string>([\s\S]*?)<\/string>/gu;
@@ -89,6 +88,9 @@ function isTranslatableCandidate(source: string, kind: string): boolean {
   }
   BUILD_SETTING_RE.lastIndex = 0;
   if (/^[a-z0-9_.:/$-]+$/u.test(source) || /^[A-Z0-9_.:/$-]+$/u.test(source)) {
+    return false;
+  }
+  if (/[{}[\]]/u.test(source) && !/(?:\\\(|\$\{)/u.test(source)) {
     return false;
   }
   return kind !== "plist-string" || /\s/u.test(source);
@@ -155,7 +157,7 @@ function decodeLiteral(raw: string): string {
 }
 
 function normalizeSource(source: string): string {
-  return source.replace(/[ \t]+/gu, " ").trim();
+  return source;
 }
 
 function addCandidate(
@@ -167,7 +169,7 @@ function addCandidate(
   line: number,
 ) {
   const normalized = normalizeSource(decodeLiteral(source));
-  if (!normalized || !/\p{L}/u.test(normalized)) {
+  if (!normalized.trim() || !/\p{L}/u.test(normalized)) {
     return;
   }
   if (!isTranslatableCandidate(normalized, kind)) {
@@ -194,7 +196,6 @@ function extractCandidates(
       ? [
           [APPLE_UI_CALLS, "ui-call"],
           [APPLE_MODIFIER_CALLS, "ui-modifier"],
-          [APPLE_ANY_CALLS, "ui-call-generic"],
           [APPLE_NAMED_ARGUMENTS, "ui-named-argument"],
           ...CONDITIONAL_BRANCHES.map((pattern) => [pattern, "conditional-branch"] as const),
         ]
