@@ -8,7 +8,7 @@ export {
   DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH,
 } from "../config/agent-limits.js";
 export { getRuntimeConfig } from "../config/config.js";
-export { loadSessionStore, mergeSessionEntry, updateSessionStore } from "../config/sessions.js";
+export { loadSessionEntry, upsertSessionEntry } from "../config/sessions/session-accessor.js";
 export {
   forkSessionEntryFromParent,
   forkSessionFromParent,
@@ -24,10 +24,7 @@ export {
 } from "../gateway/server-plugins.js";
 export { ADMIN_SCOPE, isAdminOnlyMethod } from "../gateway/method-scopes.js";
 export { getSessionBindingService } from "../infra/outbound/session-binding-service.js";
-export {
-  pruneLegacyStoreKeys,
-  resolveGatewaySessionStoreTarget,
-} from "../gateway/session-utils.js";
+export { resolveGatewaySessionStoreTarget } from "../gateway/session-utils.js";
 export { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 export { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 export {
