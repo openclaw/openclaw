@@ -118,7 +118,6 @@ describe("unit-fast vitest lane", () => {
     expect(testConfig.include).toContain("src/crestodian/rescue-policy.test.ts");
     expect(testConfig.include).toContain("src/crestodian/assistant.configured.test.ts");
     expect(testConfig.include).toContain("src/flows/search-setup.test.ts");
-    expect(testConfig.include).toContain("src/memory-host-sdk/host/backend-config.test.ts");
     expect(testConfig.include).toContain("src/plugins/config-policy.test.ts");
     expect(testConfig.include).toContain("src/proxy-capture/proxy-server.test.ts");
     expect(testConfig.include).toContain("src/talk/agent-consult-tool.test.ts");
@@ -158,6 +157,8 @@ describe("unit-fast vitest lane", () => {
     expect(isUnitFastTestFile("src/plugin-sdk/temp-path.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/agents/sandbox.resolveSandboxContext.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/crestodian/assistant.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/flows/channel-setup.test.ts")).toBe(false);
+    expect(isUnitFastTestFile("src/flows/doctor-health-contributions.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/plugins/install.npm-spec.test.ts")).toBe(false);
     expect(isUnitFastTestFile("src/secrets/runtime.test.ts")).toBe(false);
     expect(resolveUnitFastTestIncludePattern("src/plugin-sdk/temp-path.ts")).toBeNull();

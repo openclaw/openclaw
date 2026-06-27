@@ -107,7 +107,7 @@ extension AgentProTab {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .disabled(self.clawHubLoading || !self.gatewayConnected)
+                    .disabled(self.clawHubLoading || !self.liveGatewayConnected)
                     .accessibilityLabel("Search ClawHub")
                 }
 
@@ -212,6 +212,7 @@ extension AgentProTab {
     }
 
     var skillPolicySummary: String {
+        if self.appModel.isAppleReviewDemoModeEnabled { return "Demo mode keeps live skill changes disabled." }
         guard self.gatewayConnected else { return "Connect a gateway to edit skills." }
         guard let filter = self.agentSkillFilter else {
             return "All available skills are allowed for this agent."
@@ -505,7 +506,7 @@ extension AgentProTab {
 
     func skillEditorSwitchIndicator(isOn: Bool) -> some View {
         Capsule()
-            .fill(isOn ? Color.accentColor : Color.secondary.opacity(0.35))
+            .fill(isOn ? OpenClawBrand.accent : Color.secondary.opacity(0.35))
             .frame(width: 52, height: 32)
             .overlay(alignment: isOn ? .trailing : .leading) {
                 Circle()
@@ -601,7 +602,7 @@ extension AgentProTab {
 
     @MainActor
     func patchAgentSkills(_ skills: [String]?, busyKey: String) async {
-        guard self.gatewayConnected else { return }
+        guard self.liveGatewayConnected else { return }
         self.skillMutationBusyKeys.insert(busyKey)
         self.skillMutationErrorText = nil
         self.skillMutationStatusText = nil
@@ -620,7 +621,10 @@ extension AgentProTab {
             }
 
             let raw = try Self.agentSkillsPatchRaw(agentId: self.activeAgentID, skills: skills)
-            let params = ConfigPatchParams(raw: raw, baseHash: baseHash)
+            let params = ConfigPatchParams(
+                raw: raw,
+                baseHash: baseHash,
+                replacePaths: ["agents.list[].skills"])
             let data = try JSONEncoder().encode(params)
             guard let json = String(data: data, encoding: .utf8) else {
                 throw SkillMutationError.invalidPatchPayload
@@ -676,7 +680,7 @@ extension AgentProTab {
 
     @MainActor
     func installClawHubSkill(_ result: ClawHubSearchResultLite) async {
-        guard self.gatewayConnected else { return }
+        guard self.liveGatewayConnected else { return }
         self.clawHubInstallSlug = result.slug
         self.clawHubErrorText = nil
         defer { self.clawHubInstallSlug = nil }
@@ -692,7 +696,7 @@ extension AgentProTab {
 
     @MainActor
     func searchClawHubSkills() async {
-        guard self.gatewayConnected else { return }
+        guard self.liveGatewayConnected else { return }
         self.clawHubLoading = true
         self.clawHubErrorText = nil
         defer { self.clawHubLoading = false }
@@ -711,6 +715,7 @@ extension AgentProTab {
         _ skill: SkillStatusEntryLite,
         action: () async throws -> String) async
     {
+        guard self.liveGatewayConnected else { return }
         let key = skill.effectiveSkillKey
         self.skillConfigBusyKeys.insert(key)
         self.skillConfigMessages[key] = nil
@@ -733,6 +738,9 @@ extension AgentProTab {
         params: some Encodable,
         timeoutSeconds: Int) async throws -> Data
     {
+        guard self.liveGatewayConnected else {
+            throw SkillMutationError.liveGatewayUnavailable
+        }
         let data = try JSONEncoder().encode(params)
         guard let json = String(data: data, encoding: .utf8) else {
             throw SkillMutationError.invalidPatchPayload
@@ -744,6 +752,9 @@ extension AgentProTab {
     }
 
     func requestConfigSnapshot() async throws -> ConfigSnapshotLite {
+        guard self.liveGatewayConnected else {
+            throw SkillMutationError.liveGatewayUnavailable
+        }
         let data = try await self.appModel.operatorSession.request(
             method: "config.get",
             paramsJSON: "{}",

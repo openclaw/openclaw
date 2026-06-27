@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import path from "node:path";
 import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
 import {
+  isTerminalInteractiveRespawnArgv,
   shouldSkipRespawnForArgv,
   shouldSkipStartupEnvironmentRespawnForArgv,
 } from "./cli/respawn-policy.js";
@@ -14,15 +15,16 @@ import {
   type RespawnChildRuntime,
 } from "./process/respawn-child-runner.js";
 
-export const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
-export const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
-export const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
+const EXPERIMENTAL_WARNING_FLAG = "--disable-warning=ExperimentalWarning";
+const OPENCLAW_NODE_OPTIONS_READY = "OPENCLAW_NODE_OPTIONS_READY";
+const OPENCLAW_NODE_EXTRA_CA_CERTS_READY = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
 const WINDOWS_STACK_SIZE_FLAG = "--stack-size=8192";
 
 type CliRespawnPlan = {
   command: string;
   argv: string[];
   env: NodeJS.ProcessEnv;
+  detachForProcessTree: boolean;
 };
 
 type CliRespawnRuntime = RespawnChildRuntime & {
@@ -33,7 +35,7 @@ function pathModuleForPlatform(platform: NodeJS.Platform): typeof path.posix {
   return platform === "win32" ? path.win32 : path.posix;
 }
 
-export function resolveCliRespawnCommand(params: {
+function resolveCliRespawnCommand(params: {
   execPath: string;
   platform?: NodeJS.Platform;
 }): string {
@@ -113,6 +115,7 @@ export function buildCliRespawnPlan(
       command: resolveCliRespawnCommand({ execPath, platform }),
       argv: [...childExecArgv, ...normalizedArgv.slice(1)],
       env: childEnv,
+      detachForProcessTree: false,
     };
   }
 
@@ -151,6 +154,7 @@ export function buildCliRespawnPlan(
     command: resolveCliRespawnCommand({ execPath, platform }),
     argv: [...childExecArgv, ...argv.slice(1)],
     env: childEnv,
+    detachForProcessTree: !isTerminalInteractiveRespawnArgv(argv),
   };
 }
 
@@ -167,6 +171,7 @@ export function runCliRespawnPlan(
     command: plan.command,
     args: plan.argv,
     env: plan.env,
+    detachForProcessTree: plan.detachForProcessTree,
     runtime,
     onError: (error) => {
       runtime.writeError(

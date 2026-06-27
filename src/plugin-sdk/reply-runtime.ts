@@ -48,6 +48,7 @@ export {
 export type {
   ReplyDispatchKind,
   ReplyDispatcher,
+  ReplyFollowupAdmissionBarrierTimeoutPolicy,
 } from "../auto-reply/reply/reply-dispatcher.types.js";
 export type {
   ReplyDispatcherOptions,

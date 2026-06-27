@@ -274,6 +274,36 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     expect(second.byPluginId.get("demo")).toBe(second.plugins[0]);
   });
 
+  it("does not emit metadata scan spans for hot memo hits", () => {
+    const stateDir = tempStateDir();
+    const timelinePath = path.join(stateDir, "timeline", "metadata.jsonl");
+    const env = {
+      OPENCLAW_DIAGNOSTICS: "timeline",
+      OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: timelinePath,
+    };
+    touchPersistedIndex(stateDir);
+    loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: makeIndex(),
+      diagnostics: [],
+    });
+
+    loadPluginMetadataSnapshot({ config: {}, env, stateDir });
+    loadPluginMetadataSnapshot({ config: {}, env, stateDir });
+    loadPluginMetadataSnapshot({ config: {}, env, stateDir });
+
+    const events = fs
+      .readFileSync(timelinePath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { name?: unknown; type?: unknown });
+    expect(events.map((event) => [event.type, event.name])).toEqual([
+      ["span.start", "plugins.metadata.scan"],
+      ["span.end", "plugins.metadata.scan"],
+    ]);
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+  });
+
   it("skips persisted registry filesystem fingerprints after a process memo hit", () => {
     const stateDir = tempStateDir();
     touchPersistedIndex(stateDir);
@@ -560,6 +590,30 @@ describe("loadPluginMetadataSnapshot process memo", () => {
     loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
 
     expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledOnce();
+  });
+
+  it("memoizes derived snapshots across alternating call shapes", () => {
+    const stateDir = tempStateDir();
+    touchPersistedIndex(stateDir);
+    const workspaceDir = path.join(stateDir, "workspace");
+    // Two call shapes share a persisted index but derive different snapshot
+    // indexes, like the model-catalog build alternating workspace-scoped and
+    // global lookups. Store keys re-derived from snapshot.index never match the
+    // next lookup, so every alternation re-ran the full manifest scan.
+    loadPluginRegistrySnapshotWithMetadata.mockImplementation(
+      (params: { workspaceDir?: string }) => ({
+        source: "derived",
+        snapshot: makeIndex(params.workspaceDir ? "alpha" : "beta"),
+        diagnostics: [],
+      }),
+    );
+
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, workspaceDir });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir });
+    loadPluginMetadataSnapshot({ config: {}, env: {}, stateDir, workspaceDir });
+
+    expect(loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledTimes(2);
   });
 
   it("keeps process-stable derived snapshots when derived plugin files change", () => {

@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { QaBusState } from "./bus-state.js";
+import { QaSuiteInfraError } from "./errors.js";
 import { getQaProvider } from "./providers/index.js";
 import { QaStateBackedTransportAdapter } from "./qa-transport.js";
 import type {
@@ -65,7 +66,8 @@ async function waitForQaChannelReady(params: {
     await sleep(pollIntervalMs);
   }
 
-  throw new Error(
+  throw new QaSuiteInfraError(
+    "transport_ready_timeout",
     [
       `timed out after ${timeoutMs}ms waiting for qa-channel ready`,
       `last status: ${lastAccountStatus}`,
@@ -89,6 +91,7 @@ export function createQaChannelGatewayConfig(params: {
       },
     },
     messages: {
+      visibleReplies: "automatic",
       groupChat: {
         mentionPatterns: ["\\b@?openclaw\\b"],
         visibleReplies: "automatic",

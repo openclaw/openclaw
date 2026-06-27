@@ -32,6 +32,28 @@ export type MemorySyncProgressUpdate = {
   label?: string;
 };
 
+export type MemorySessionSyncTarget = {
+  /** Owning OpenClaw agent. Omit only when the active manager scope already supplies it. */
+  agentId?: string;
+  /** Storage-neutral transcript/session identity. */
+  sessionId: string;
+  /** Optional visible session-store key for callers that already carry it. */
+  sessionKey?: string;
+};
+
+export type MemorySyncParams = {
+  reason?: string;
+  force?: boolean;
+  /** Storage-neutral session transcript targets to refresh. */
+  sessions?: MemorySessionSyncTarget[];
+  /**
+   * @deprecated Use `sessions` with `{ agentId, sessionId, sessionKey? }`.
+   * During the deprecation window only canonical OpenClaw transcript paths are accepted.
+   */
+  sessionFiles?: string[];
+  progress?: (update: MemorySyncProgressUpdate) => void;
+};
+
 /** Runtime backend/mode diagnostics for memory search. */
 export type MemorySearchRuntimeDebug = {
   backend: "builtin" | "qmd";
@@ -101,16 +123,13 @@ export interface MemorySearchManager {
       qmdSearchModeOverride?: "query" | "search" | "vsearch";
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       sources?: MemorySource[];
+      /** Optional caller cancellation; managers consume it where their runtime supports cancellation. */
+      signal?: AbortSignal;
     },
   ): Promise<MemorySearchResult[]>;
   readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
   status(): MemoryProviderStatus;
-  sync?(params?: {
-    reason?: string;
-    force?: boolean;
-    sessionFiles?: string[];
-    progress?: (update: MemorySyncProgressUpdate) => void;
-  }): Promise<void>;
+  sync?(params?: MemorySyncParams): Promise<void>;
   getCachedEmbeddingAvailability?(): MemoryEmbeddingProbeResult | null;
   probeEmbeddingAvailability(): Promise<MemoryEmbeddingProbeResult>;
   probeVectorStoreAvailability?(): Promise<boolean>;

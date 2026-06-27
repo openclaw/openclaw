@@ -12,10 +12,11 @@ import {
   type AnyAgentTool,
   type OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
+import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { TSchema } from "typebox";
+import { configureMemoryCoreDreamingState } from "./src/dreaming-state.js";
 import { registerShortTermPromotionDreaming } from "./src/dreaming.js";
 import { buildMemoryFlushPlan } from "./src/flush-plan.js";
-import { registerBuiltInMemoryEmbeddingProviders } from "./src/memory/provider-adapters.js";
 import { buildPromptSection } from "./src/prompt-section.js";
 
 type MemoryToolsModule = typeof import("./src/tools.js");
@@ -27,6 +28,7 @@ type MemoryToolOptions = {
   agentId?: string;
   agentSessionKey?: string;
   sandboxed?: boolean;
+  oneShotCliRun?: boolean;
 };
 
 let memoryToolsModulePromise: Promise<MemoryToolsModule> | undefined;
@@ -152,6 +154,7 @@ function resolveMemoryToolOptions(ctx: OpenClawPluginToolContext): MemoryToolOpt
     agentId: ctx.agentId,
     agentSessionKey: ctx.sessionKey,
     sandboxed: ctx.sandboxed,
+    oneShotCliRun: ctx.oneShotCliRun,
   };
 }
 
@@ -178,7 +181,9 @@ export default definePluginEntry({
   description: "File-backed memory search tools and CLI",
   kind: "memory",
   register(api) {
-    registerBuiltInMemoryEmbeddingProviders(api);
+    configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
+      api.runtime.state.openKeyedStore<T>(options),
+    );
     registerShortTermPromotionDreaming(api);
     api.registerMemoryCapability({
       promptBuilder: buildPromptSection,

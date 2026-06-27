@@ -1,8 +1,11 @@
 // Control UI tests cover sessions behavior.
-import { existsSync } from "node:fs";
 import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
+import {
+  canRunPlaywrightChromium,
+  resolvePlaywrightChromiumExecutablePath,
+} from "../../test-helpers/control-ui-e2e.ts";
 
 const VIEWPORTS = [
   [375, 812],
@@ -11,9 +14,15 @@ const VIEWPORTS = [
   [1440, 900],
 ] as const;
 
-const describeBrowserLayout = existsSync(chromium.executablePath()) ? describe : describe.skip;
+const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
+  ? describe
+  : describe.skip;
 
-let browser: Browser;
+type BrowserFixture = {
+  browser: Browser;
+  page: Page;
+};
 
 function readUiCss(): string {
   const files = [
@@ -150,82 +159,91 @@ function sessionsTableHtml() {
   `;
 }
 
-async function openFixture(width: number, height: number): Promise<Page> {
-  const page = await browser.newPage({ viewport: { width, height } });
-  await page.setContent(
-    `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${sessionsTableHtml()}</body></html>`,
-  );
-  return page;
+async function openFixture(width: number, height: number): Promise<BrowserFixture> {
+  const browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+  let page: Page | undefined;
+  try {
+    page = await browser.newPage({ viewport: { width, height } });
+    await page.setContent(
+      `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${sessionsTableHtml()}</body></html>`,
+    );
+    return { browser, page };
+  } catch (error) {
+    await page?.close().catch(() => {});
+    await browser.close().catch(() => {});
+    throw error;
+  }
+}
+
+async function closeFixture(fixture: BrowserFixture): Promise<void> {
+  await fixture.page.close().catch(() => {});
+  await fixture.browser.close().catch(() => {});
 }
 
 describeBrowserLayout("sessions responsive browser layout", () => {
-  beforeAll(async () => {
-    browser = await chromium.launch({ headless: true });
-  });
-
-  afterAll(async () => {
-    await browser.close();
-  });
-
   it.each(VIEWPORTS)("keeps compaction details visible at %dx%d", async (width, height) => {
-    const page = await openFixture(width, height);
-    const metrics = await page.evaluate(() => {
-      const container = document.querySelector(".data-table-container");
-      const compaction = document.querySelector(".session-compaction-cell");
-      const trigger = document.querySelector(".session-compaction-trigger");
-      const status = document.querySelector(".session-status-badge");
-      const statusLabel = document.querySelector(".session-status-badge__label");
-      const runtime = document.querySelector(".session-runtime-cell .mono");
-      const kind = document.querySelector(".data-table-badge");
-      const key = document.querySelector(".session-key-cell .session-link");
-      const details = document.querySelector(".session-details-panel");
-      if (
-        !(container instanceof HTMLElement) ||
-        !(compaction instanceof HTMLElement) ||
-        !(status instanceof HTMLElement) ||
-        !(statusLabel instanceof HTMLElement) ||
-        !(runtime instanceof HTMLElement) ||
-        !(kind instanceof HTMLElement) ||
-        !(key instanceof HTMLElement)
-      ) {
-        throw new Error("Missing sessions table fixture elements");
-      }
-      const containerRect = container.getBoundingClientRect();
-      const compactionRect = compaction.getBoundingClientRect();
-      const statusRect = status.getBoundingClientRect();
-      return {
-        bodyOverflow: document.documentElement.scrollWidth - window.innerWidth,
-        compactionText: compaction.textContent?.trim(),
-        statusText: status.textContent?.trim(),
-        runtimeText: runtime.textContent?.trim(),
-        keyWhiteSpace: getComputedStyle(key).whiteSpace,
-        kindWhiteSpace: getComputedStyle(kind).whiteSpace,
-        statusWhiteSpace: getComputedStyle(status).whiteSpace,
-        runtimeWhiteSpace: getComputedStyle(runtime).whiteSpace,
-        hasTrigger: trigger !== null,
-        hasLegacyButton: document.querySelector(".session-checkpoint-toggle") !== null,
-        hasDetails: details !== null,
-        compactionVisible:
-          compactionRect.left >= containerRect.left && compactionRect.right <= containerRect.right,
-        statusVisible:
-          statusRect.left >= containerRect.left && statusRect.right <= containerRect.right,
-      };
-    });
+    const fixture = await openFixture(width, height);
+    const { page } = fixture;
+    try {
+      const metrics = await page.evaluate(() => {
+        const container = document.querySelector(".data-table-container");
+        const compaction = document.querySelector(".session-compaction-cell");
+        const trigger = document.querySelector(".session-compaction-trigger");
+        const status = document.querySelector(".session-status-badge");
+        const statusLabel = document.querySelector(".session-status-badge__label");
+        const runtime = document.querySelector(".session-runtime-cell .mono");
+        const kind = document.querySelector(".data-table-badge");
+        const key = document.querySelector(".session-key-cell .session-link");
+        const details = document.querySelector(".session-details-panel");
+        if (
+          !(container instanceof HTMLElement) ||
+          !(compaction instanceof HTMLElement) ||
+          !(status instanceof HTMLElement) ||
+          !(statusLabel instanceof HTMLElement) ||
+          !(runtime instanceof HTMLElement) ||
+          !(kind instanceof HTMLElement) ||
+          !(key instanceof HTMLElement)
+        ) {
+          throw new Error("Missing sessions table fixture elements");
+        }
+        const containerRect = container.getBoundingClientRect();
+        const compactionRect = compaction.getBoundingClientRect();
+        const statusRect = status.getBoundingClientRect();
+        return {
+          bodyOverflow: document.documentElement.scrollWidth - window.innerWidth,
+          compactionText: compaction.textContent?.trim(),
+          statusText: status.textContent?.trim(),
+          runtimeText: runtime.textContent?.trim(),
+          keyWhiteSpace: getComputedStyle(key).whiteSpace,
+          kindWhiteSpace: getComputedStyle(kind).whiteSpace,
+          statusWhiteSpace: getComputedStyle(status).whiteSpace,
+          runtimeWhiteSpace: getComputedStyle(runtime).whiteSpace,
+          hasTrigger: trigger !== null,
+          hasLegacyButton: document.querySelector(".session-checkpoint-toggle") !== null,
+          hasDetails: details !== null,
+          compactionVisible:
+            compactionRect.left >= containerRect.left &&
+            compactionRect.right <= containerRect.right,
+          statusVisible:
+            statusRect.left >= containerRect.left && statusRect.right <= containerRect.right,
+        };
+      });
 
-    expect(metrics.bodyOverflow).toBeLessThanOrEqual(1);
-    expect(metrics.compactionText).toBe("1 Checkpoint");
-    expect(metrics.statusText).toBe("Live");
-    expect(metrics.runtimeText).toBe("claude-cli (fallback none)");
-    expect(metrics.keyWhiteSpace).toBe("nowrap");
-    expect(metrics.kindWhiteSpace).toBe("nowrap");
-    expect(metrics.statusWhiteSpace).toBe("nowrap");
-    expect(metrics.runtimeWhiteSpace).toBe("nowrap");
-    expect(metrics.hasTrigger).toBe(true);
-    expect(metrics.hasLegacyButton).toBe(false);
-    expect(metrics.hasDetails).toBe(true);
-    expect(metrics.compactionVisible).toBe(true);
-    expect(metrics.statusVisible).toBe(true);
-
-    await page.close();
+      expect(metrics.bodyOverflow).toBeLessThanOrEqual(1);
+      expect(metrics.compactionText).toBe("1 Checkpoint");
+      expect(metrics.statusText).toBe("Live");
+      expect(metrics.runtimeText).toBe("claude-cli (fallback none)");
+      expect(metrics.keyWhiteSpace).toBe("nowrap");
+      expect(metrics.kindWhiteSpace).toBe("nowrap");
+      expect(metrics.statusWhiteSpace).toBe("nowrap");
+      expect(metrics.runtimeWhiteSpace).toBe("nowrap");
+      expect(metrics.hasTrigger).toBe(true);
+      expect(metrics.hasLegacyButton).toBe(false);
+      expect(metrics.hasDetails).toBe(true);
+      expect(metrics.compactionVisible).toBe(true);
+      expect(metrics.statusVisible).toBe(true);
+    } finally {
+      await closeFixture(fixture);
+    }
   });
 });

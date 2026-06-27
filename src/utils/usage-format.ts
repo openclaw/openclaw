@@ -12,6 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getGatewayModelPricingCacheFingerprint } from "../gateway/model-pricing-cache-state.js";
 import { getCachedGatewayModelPricing } from "../gateway/model-pricing-cache.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
+export { formatTokenCount } from "./token-format.js";
 
 /**
  * A single tier in a tiered-pricing schedule.  Prices are expressed as
@@ -21,7 +22,7 @@ import { tryReadJsonSync } from "../infra/json-files.js";
  * token counts.  The tiers MUST be sorted in ascending `range[0]` order
  * with no gaps.
  */
-export type PricingTier = {
+type PricingTier = {
   input: number;
   output: number;
   cacheRead: number;
@@ -51,7 +52,7 @@ export type ModelCostConfig = {
   tieredPricing?: PricingTier[];
 };
 
-export type UsageTotals = {
+type UsageTotals = {
   input?: number;
   output?: number;
   cacheRead?: number;
@@ -99,33 +100,10 @@ let providerCostIndexByConfig = new WeakMap<
 let modelKeyCache = new Map<string, string | null>();
 let sortedPricingTiersByInput = new WeakMap<PricingTier[], PricingTier[]>();
 
-/** Formats a token count for compact human-facing status text. */
-export function formatTokenCount(value?: number): string {
-  if (value === undefined || !Number.isFinite(value)) {
-    return "0";
-  }
-  const safe = Math.max(0, value);
-  if (safe >= 1_000_000) {
-    return `${(safe / 1_000_000).toFixed(1)}m`;
-  }
-  if (safe >= 1_000) {
-    const precision = safe >= 10_000 ? 0 : 1;
-    const formattedThousands = (safe / 1_000).toFixed(precision);
-    if (Number(formattedThousands) >= 1_000) {
-      return `${(safe / 1_000_000).toFixed(1)}m`;
-    }
-    return `${formattedThousands}k`;
-  }
-  return String(Math.round(safe));
-}
-
 /** Formats a USD amount for usage summaries, keeping tiny costs visible. */
 export function formatUsd(value?: number): string | undefined {
   if (value === undefined || !Number.isFinite(value)) {
     return undefined;
-  }
-  if (value >= 1) {
-    return `$${value.toFixed(2)}`;
   }
   if (value >= 0.01) {
     return `$${value.toFixed(2)}`;

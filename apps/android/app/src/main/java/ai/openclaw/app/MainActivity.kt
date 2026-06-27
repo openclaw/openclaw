@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.ui.AndroidScreenshotModeScreen
 import ai.openclaw.app.ui.OpenClawTheme
 import ai.openclaw.app.ui.RootScreen
 import android.content.Intent
@@ -14,6 +15,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,6 +52,12 @@ class MainActivity : ComponentActivity() {
     pendingIntent = intent
     WindowCompat.setDecorFitsSystemWindows(window, false)
     permissionRequester = PermissionRequester(this)
+    if (BuildConfig.DEBUG) {
+      parseAndroidScreenshotModeIntent(intent)?.let { scene ->
+        enterScreenshotMode(scene)
+        return
+      }
+    }
 
     setContent {
       var activeViewModel by remember { mutableStateOf<MainViewModel?>(null) }
@@ -64,9 +72,23 @@ class MainActivity : ComponentActivity() {
         activeViewModel = readyViewModel
       }
 
-      OpenClawTheme {
-        activeViewModel?.let { RootScreen(viewModel = it) } ?: StartupSurface()
+      val currentViewModel = activeViewModel
+      if (currentViewModel == null) {
+        OpenClawTheme {
+          StartupSurface()
+        }
+      } else {
+        val appearanceThemeMode by currentViewModel.appearanceThemeMode.collectAsState()
+        OpenClawTheme(themeMode = appearanceThemeMode) {
+          RootScreen(viewModel = currentViewModel)
+        }
       }
+    }
+  }
+
+  private fun enterScreenshotMode(scene: AndroidScreenshotScene) {
+    setContent {
+      AndroidScreenshotModeScreen(scene = scene)
     }
   }
 

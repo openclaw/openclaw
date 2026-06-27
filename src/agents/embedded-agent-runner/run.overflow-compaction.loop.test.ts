@@ -14,6 +14,7 @@ import {
   mockedIsCompactionFailureError,
   mockedIsLikelyContextOverflowError,
   mockedLog,
+  mockedResolveModelAsync,
   mockedRunEmbeddedAttempt,
   mockedSessionLikelyHasOversizedToolResults,
   mockedTruncateOversizedToolResultsInSession,
@@ -109,6 +110,81 @@ describe("overflow compaction in run loop", () => {
     expectLogIncludes(mockedLog.info, "auto-compaction succeeded");
     // Should not be an error result
     expect(result.meta.error).toBeUndefined();
+  });
+
+  it("keeps fallback unsafe when an overflow retry follows a mutating attempt", async () => {
+    const overflowError = makeOverflowError();
+    mockedRunEmbeddedAttempt
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          promptError: overflowError,
+          toolMetas: [{ toolName: "exec" }],
+          replayMetadata: {
+            hadPotentialSideEffects: true,
+            replaySafe: false,
+          },
+        }),
+      )
+      .mockResolvedValueOnce(
+        makeAttemptResult({
+          assistantTexts: [],
+          toolMetas: [{ toolName: "web_fetch" }],
+          replayMetadata: {
+            hadPotentialSideEffects: false,
+            replaySafe: true,
+          },
+          lastAssistant: {
+            role: "assistant",
+            stopReason: "toolUse",
+            provider: "openai",
+            model: "gpt-5.4",
+            content: [],
+          } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        }),
+      );
+    mockedCompactDirect.mockResolvedValueOnce(
+      makeCompactionSuccess({
+        summary: "Compacted session",
+        tokensBefore: 150000,
+      }),
+    );
+
+    const result = await runEmbeddedAgent(baseParams);
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    expect(requireMockCallArg(mockedRunEmbeddedAttempt, 1).initialReplayState).toEqual({
+      replayInvalid: true,
+      hadPotentialSideEffects: true,
+    });
+    expect(result.meta.error?.fallbackSafe).toBe(false);
+  });
+
+  it("uses provider thinking policy for configless embedded MiniMax-M3 runs", async () => {
+    mockedResolveModelAsync.mockResolvedValueOnce({
+      model: {
+        id: "MiniMax-M3",
+        provider: "minimax",
+        contextWindow: 1_000_000,
+        api: "anthropic-messages",
+        reasoning: true,
+      },
+      error: null,
+      authStorage: {
+        setRuntimeApiKey: vi.fn(),
+      },
+      modelRegistry: {},
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
+
+    await runEmbeddedAgent({
+      ...baseParams,
+      config: undefined,
+      provider: "minimax",
+      model: "MiniMax-M3",
+      runId: "run-configless-minimax-m3-thinking-default",
+    });
+
+    expect(requireMockCallArg(mockedRunEmbeddedAttempt, 0).thinkLevel).toBe("adaptive");
   });
 
   it("continues from transcript after compaction when the current inbound message was persisted", async () => {

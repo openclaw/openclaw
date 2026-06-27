@@ -13,6 +13,7 @@ export type WebChannelHealthState =
   | "logged-out"
   | "stopped";
 
+/** @deprecated Use `WebInboundMessage`. */
 export type WebInboundMsg = WebInboundMessage;
 
 export type WebChannelStatus = {

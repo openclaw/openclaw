@@ -111,6 +111,7 @@ openclaw plugins install git:github.com/<owner>/<repo>  # git repo
 openclaw plugins install git:github.com/<owner>/<repo>@<ref>
 openclaw plugins install <package> --force              # overwrite existing install
 openclaw plugins install <package> --pin                # pin version
+openclaw plugins install clawhub:<package> --acknowledge-clawhub-risk
 openclaw plugins install <package> --dangerously-force-unsafe-install
 openclaw plugins install <path>                         # local path
 openclaw plugins install <plugin>@<marketplace>         # marketplace
@@ -159,9 +160,15 @@ is available, then fall back to `latest`.
   <Accordion title="--dangerously-force-unsafe-install">
     `--dangerously-force-unsafe-install` is deprecated and is now a no-op. OpenClaw no longer runs built-in install-time dangerous-code blocking for plugin installs.
 
-    Use the shared operator-owned `security.installPolicy` surface when host-specific install policy is required. Plugin `before_install` hooks and `security.installPolicy` can still block installs.
+    Use the shared operator-owned `security.installPolicy` surface when host-specific install policy is required. Plugin `before_install` hooks are plugin-runtime lifecycle hooks and are not the primary policy boundary for CLI installs.
 
     If a plugin you published on ClawHub is hidden or blocked by a registry scan, use the publisher steps in [ClawHub publishing](/clawhub/publishing). `--dangerously-force-unsafe-install` does not ask ClawHub to rescan the plugin or make a blocked release public.
+
+  </Accordion>
+  <Accordion title="--acknowledge-clawhub-risk">
+    Community ClawHub installs check the selected release trust record before downloading the package. If ClawHub disables download for the release, reports malicious scan findings, or puts the release in a blocking moderation state such as quarantine, OpenClaw refuses the release. For non-blocking risky scan statuses, risky moderation states, or registry reasons, OpenClaw shows the trust details and asks for confirmation before continuing.
+
+    Use `--acknowledge-clawhub-risk` only after reviewing the ClawHub warning and deciding to continue without an interactive prompt. Pending or stale clean trust records warn but do not require acknowledgement. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust prompt.
 
   </Accordion>
   <Accordion title="Hook packs and npm specs">
@@ -305,6 +312,16 @@ does not import plugin runtime code, run a package manager, or repair missing
 dependencies.
 </Note>
 
+If startup logs `plugins.allow is empty; discovered non-bundled plugins may auto-load: ...`,
+run `openclaw plugins list --enabled --verbose` or
+`openclaw plugins inspect <id>` with a listed plugin id to confirm the plugin
+ids and copy trusted ids into `plugins.allow` in `openclaw.json`. When the
+warning can list every discovered plugin, it prints a ready-to-paste
+`plugins.allow` snippet that already includes those ids. If a plugin loads
+without install/load-path provenance, inspect that plugin id, then either pin
+the trusted id in `plugins.allow` or reinstall the plugin from a trusted source
+so OpenClaw records install provenance.
+
 `plugins search` is a remote ClawHub catalog lookup. It does not inspect local
 state, mutate config, install packages, or load plugin runtime code. Search
 results include the ClawHub package name, family, channel, version, summary, and
@@ -380,6 +397,7 @@ openclaw plugins update <id-or-npm-spec>
 openclaw plugins update --all
 openclaw plugins update <id-or-npm-spec> --dry-run
 openclaw plugins update @openclaw/voice-call
+openclaw plugins update openclaw-codex-app-server --acknowledge-clawhub-risk
 openclaw plugins update openclaw-codex-app-server --dangerously-force-unsafe-install
 ```
 
@@ -389,13 +407,17 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
   <Accordion title="Resolving plugin id vs npm spec">
     When you pass a plugin id, OpenClaw reuses the recorded install spec for that plugin. That means previously stored dist-tags such as `@beta` and exact pinned versions continue to be used on later `update <id>` runs.
 
+    That targeted-update rule is different from the bulk `openclaw plugins update --all` maintenance path. Bulk updates still respect ordinary tracked install specs, but trusted official OpenClaw plugin records can sync to the current official catalog target instead of staying on a stale exact official package. Use targeted `update <id>` when you intentionally want to keep an exact or tagged official spec untouched.
+
     For npm installs, you can also pass an explicit npm package spec with a dist-tag or exact version. OpenClaw resolves that package name back to the tracked plugin record, updates that installed plugin, and records the new npm spec for future id-based updates.
 
     Passing the npm package name without a version or tag also resolves back to the tracked plugin record. Use this when a plugin was pinned to an exact version and you want to move it back to the registry's default release line.
 
   </Accordion>
   <Accordion title="Beta channel updates">
-    `openclaw plugins update` reuses the tracked plugin spec unless you pass a new spec. `openclaw update` additionally knows the active OpenClaw update channel: on the beta channel, default-line npm and ClawHub plugin records try `@beta` first. They fall back to the recorded default/latest spec if no plugin beta release exists; npm plugins also fall back when the beta package exists but fails install validation. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit tags stay pinned to that selector.
+    Targeted `openclaw plugins update <id-or-npm-spec>` reuses the tracked plugin spec unless you pass a new spec. Bulk `openclaw plugins update --all` uses the configured `update.channel` when it syncs trusted official plugin records to the official catalog target, so beta-channel installs can stay on the beta release line instead of being silently normalized to stable/latest.
+
+    `openclaw update` also knows the active OpenClaw update channel: on the beta channel, default-line npm and ClawHub plugin records try `@beta` first. They fall back to the recorded default/latest spec if no plugin beta release exists; npm plugins also fall back when the beta package exists but fails install validation. That fallback is reported as a warning and does not fail the core update. Exact versions and explicit tags stay pinned to that selector for targeted updates.
 
   </Accordion>
   <Accordion title="Version checks and integrity drift">
@@ -405,7 +427,10 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
 
   </Accordion>
   <Accordion title="--dangerously-force-unsafe-install on update">
-    `--dangerously-force-unsafe-install` is also accepted on `plugins update` for compatibility, but it is deprecated and no longer changes plugin update behavior. Operator `security.installPolicy` and plugin `before_install` hooks can still block updates.
+    `--dangerously-force-unsafe-install` is also accepted on `plugins update` for compatibility, but it is deprecated and no longer changes plugin update behavior. Operator `security.installPolicy` can still block updates; plugin `before_install` hooks only apply in processes where plugin hooks are loaded.
+  </Accordion>
+  <Accordion title="--acknowledge-clawhub-risk on update">
+    Community ClawHub-backed plugin updates run the same exact-release trust check as installs before downloading the replacement package. Use `--acknowledge-clawhub-risk` for reviewed automation that should continue when the selected ClawHub release has a risky trust warning. Official ClawHub packages and bundled OpenClaw plugin sources bypass this release-trust prompt.
   </Accordion>
 </AccordionGroup>
 
@@ -417,7 +442,7 @@ openclaw plugins inspect <id> --runtime
 openclaw plugins inspect <id> --json
 ```
 
-Inspect shows identity, load status, source, manifest capabilities, policy flags, diagnostics, install metadata, bundle capabilities, and any detected MCP or LSP server support without importing plugin runtime by default. Add `--runtime` to load the plugin module and include registered hooks, tools, commands, services, gateway methods, and HTTP routes. Runtime inspection reports missing plugin dependencies directly; installs and repairs stay in `openclaw plugins install`, `openclaw plugins update`, and `openclaw doctor --fix`.
+Inspect shows identity, load status, source, manifest capabilities, policy flags, diagnostics, install metadata, bundle capabilities, and any detected MCP or LSP server support without importing plugin runtime by default. JSON output includes the plugin manifest contracts, such as `contracts.agentToolResultMiddleware` and `contracts.trustedToolPolicies`, so operators can audit trusted-surface declarations before enabling or restarting a plugin. Add `--runtime` to load the plugin module and include registered hooks, tools, commands, services, gateway methods, and HTTP routes. Runtime inspection reports missing plugin dependencies directly; installs and repairs stay in `openclaw plugins install`, `openclaw plugins update`, and `openclaw doctor --fix`.
 
 Plugin-owned CLI commands are usually installed as root `openclaw` command groups, but plugins may also register nested commands under a core parent such as `openclaw nodes`. After `inspect --runtime` shows a command under `cliCommands`, run it at the listed path; for example a plugin that registers `demo-git` can be verified with `openclaw demo-git ping`.
 

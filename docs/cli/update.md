@@ -19,6 +19,7 @@ updates happen via the package-manager flow in [Updating](/install/updating).
 ```bash
 openclaw update
 openclaw update status
+openclaw update repair
 openclaw update wizard
 openclaw update --channel beta
 openclaw update --channel dev
@@ -27,6 +28,7 @@ openclaw update --tag main
 openclaw update --dry-run
 openclaw update --no-restart
 openclaw update --yes
+openclaw update --acknowledge-clawhub-risk
 openclaw update --json
 openclaw --update
 ```
@@ -44,6 +46,11 @@ openclaw --update
   when npm plugin artifact drift is detected during post-update plugin sync.
 - `--timeout <seconds>`: per-step timeout (default is 1800s).
 - `--yes`: skip confirmation prompts (for example downgrade confirmation).
+- `--acknowledge-clawhub-risk`: after reviewing community ClawHub trust
+  warnings, allow post-update plugin sync to continue without an interactive
+  prompt. Without this, risky community ClawHub plugin releases are skipped and
+  left unchanged when OpenClaw cannot prompt. Official ClawHub packages and
+  bundled OpenClaw plugin sources bypass this release-trust prompt.
 
 `openclaw update` does not have a `--verbose` flag. Use `--dry-run` to preview
 the planned channel/tag/install/restart actions, `--json` for machine-readable
@@ -76,6 +83,41 @@ Options:
 - `--json`: print machine-readable status JSON.
 - `--timeout <seconds>`: timeout for checks (default is 3s).
 
+## `update repair`
+
+Rerun update finalization after the core package already changed but later
+repair work did not finish cleanly. This is the supported recovery path when
+`openclaw update` installed the new core package but post-core plugin sync,
+managed npm plugin metadata, registry refresh, or doctor repair still needs to
+converge.
+
+```bash
+openclaw update repair
+openclaw update repair --channel beta
+openclaw update repair --acknowledge-clawhub-risk
+openclaw update repair --json
+```
+
+Options:
+
+- `--channel <stable|beta|dev>`: persist the update channel before repair and
+  run plugin convergence against that channel.
+- `--json`: print machine-readable finalization JSON.
+- `--timeout <seconds>`: timeout for repair steps (default `1800`).
+- `--yes`: skip confirmation prompts.
+- `--acknowledge-clawhub-risk`: after reviewing community ClawHub trust
+  warnings, allow repair-time plugin convergence to continue without an
+  interactive prompt. Official ClawHub packages and bundled OpenClaw plugin
+  sources bypass this release-trust prompt.
+- `--no-restart`: accepted for update command parity; repair never restarts the
+  Gateway.
+
+`openclaw update repair` runs `openclaw doctor --fix`, reloads the repaired
+config and install records, syncs tracked plugins for the active update channel,
+updates managed npm plugin installs, repairs missing configured plugin payloads,
+refreshes the plugin registry, and writes the converged install-record metadata.
+It does not install a new core package and does not restart the Gateway.
+
 ## `update wizard`
 
 Interactive flow to pick an update channel and confirm whether to restart the Gateway
@@ -99,12 +141,14 @@ install method aligned:
   missing or older than the current stable release.
 
 The Gateway core auto-updater (when enabled via config) launches the CLI update path
-outside the live Gateway request handler. Control-plane `update.run` package-manager
-updates also use a managed-service handoff instead of replacing the package tree
-inside the live Gateway process. The Gateway starts a detached helper, exits,
-and the helper runs the normal `openclaw update --yes --json` CLI path from
-outside the Gateway process tree. If that handoff is unavailable, `update.run`
-returns a structured response with the safe shell command to run manually.
+outside the live Gateway request handler. Control-plane `update.run`
+package-manager updates and supervised git-checkout updates also use a
+managed-service handoff instead of replacing the package tree or rebuilding
+`dist/` inside the live Gateway process. The Gateway starts a detached helper,
+exits, and the helper runs the normal `openclaw update --yes --json` CLI path
+from outside the Gateway process tree. If that handoff is unavailable,
+`update.run` returns a structured response with the safe shell command to run
+manually.
 
 For package-manager installs, `openclaw update` resolves the target package
 version before invoking the package manager. npm global installs use a staged
@@ -119,29 +163,33 @@ installed OpenClaw build while leaving full plugin-command completion rebuilds t
 explicit `openclaw completion --write-state` runs.
 
 When a local managed Gateway service is installed and restart is enabled,
-package-manager updates stop the running service before replacing the package
-tree, then refresh the service metadata from the updated install, restart the
-service, and verify the restarted Gateway reports the expected version before
-reporting `Gateway: restarted and verified.`. On macOS, the post-update check
-also verifies the LaunchAgent is loaded/running for the active profile and the
-configured loopback port is healthy. If the plist is installed but launchd is
-not supervising it, OpenClaw re-bootstraps the LaunchAgent automatically, then
-reruns the health/version/channel readiness checks. A fresh bootstrap loads the
-RunAtLoad job directly, so update recovery does not immediately `kickstart -k`
-the newly spawned Gateway. If the Gateway still does not become healthy, the
-command exits non-zero and prints the restart log path plus explicit restart,
-reinstall, and package rollback instructions. If restart cannot run, the command
-prints `Gateway: restart skipped (...)` or `Gateway: restart failed: ...` with a
-manual `openclaw gateway restart` hint. With `--no-restart`,
-package replacement still runs but the managed service is not stopped or
-restarted, so the running Gateway may keep old code until you restart it
-manually.
+package-manager and git-checkout updates stop the running service before
+replacing the package tree or mutating the checkout/build output. The updater
+then refreshes the service metadata from the updated install, restarts the
+service, and verifies the restarted Gateway before reporting
+`Gateway: restarted and verified.`. Package-manager updates additionally verify
+the restarted Gateway reports the expected package version; git-checkout updates
+verify gateway health and service readiness after the rebuild. On macOS, the
+post-update check also verifies the LaunchAgent is loaded/running for the active
+profile and the configured loopback port is healthy. If the plist is installed
+but launchd is not supervising it, OpenClaw re-bootstraps the LaunchAgent
+automatically, then reruns the health/version/channel readiness checks. A fresh
+bootstrap loads the RunAtLoad job directly, so update recovery does not
+immediately `kickstart -k` the newly spawned Gateway. If the Gateway still does
+not become healthy, the command exits non-zero and prints the restart log path
+plus explicit restart, reinstall, and package rollback instructions. If restart
+cannot run, the command prints `Gateway: restart skipped (...)` or
+`Gateway: restart failed: ...` with a manual `openclaw gateway restart` hint.
+With `--no-restart`, package replacement or git rebuild still runs but the
+managed service is not stopped or restarted, so the running Gateway may keep old
+code until you restart it manually.
 
 ### Control-plane response shape
 
 When `update.run` is invoked through the Gateway control plane on a
-package-manager install, the handler reports the handoff initiation separately
-from the CLI update that continues after the Gateway exits:
+package-manager install or supervised git checkout, the handler reports the
+handoff initiation separately from the CLI update that continues after the
+Gateway exits:
 
 - `ok: true`, `result.status: "skipped"`,
   `result.reason: "managed-service-handoff-started"`, and
@@ -150,8 +198,11 @@ from the CLI update that continues after the Gateway exits:
   `openclaw update --yes --json` outside the live service process.
 - `ok: false`, `result.reason: "managed-service-handoff-unavailable"`, and
   `handoff.status: "unavailable"` mean OpenClaw could not find a supervising
-  service boundary for a safe handoff. The response includes
-  `handoff.command`, the shell command to run from outside the Gateway.
+  service boundary and durable service identity for a safe handoff. For
+  example, systemd handoff requires the OpenClaw unit identity
+  (`OPENCLAW_SYSTEMD_UNIT`), not only ambient systemd process markers. The
+  response includes `handoff.command`, the shell command to run from outside the
+  Gateway.
 - `ok: false`, `result.reason: "managed-service-handoff-failed"` means the
   Gateway tried to create the handoff but could not spawn the detached helper.
 
@@ -162,8 +213,8 @@ health checks complete. During the handoff, the sentinel can carry
 restarted Gateway keeps polling it and only fires the continuation after the CLI
 has verified service health and rewritten the sentinel with the final `ok`
 result. `openclaw status` and `openclaw status --all` show an `Update restart`
-row while that sentinel is pending or failed, and `update.status` returns the
-latest cached sentinel.
+row while that sentinel is pending or failed, and `update.status` refreshes and
+returns the latest sentinel.
 
 ## Git checkout flow
 
@@ -218,9 +269,9 @@ If an exact pinned npm plugin update resolves to an artifact whose integrity dif
 </Warning>
 
 <Note>
-Post-update plugin sync failures that are scoped to a managed plugin and that the sync path can route around (e.g. an unreachable npm registry for a non-essential plugin) are reported as warnings after the core update succeeds. The JSON result keeps the top-level update `status: "ok"` and reports `postUpdate.plugins.status: "warning"` with `openclaw doctor --fix` and `openclaw plugins inspect <id> --runtime --json` guidance. Unexpected updater or sync exceptions still fail the update result. Fix the plugin install or update error, then rerun `openclaw doctor --fix` or `openclaw update`.
+Post-update plugin sync failures that are scoped to a managed plugin and that the sync path can route around (e.g. an unreachable npm registry for a non-essential plugin) are reported as warnings after the core update succeeds. The JSON result keeps the top-level update `status: "ok"` and reports `postUpdate.plugins.status: "warning"` with `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json` guidance. Unexpected updater or sync exceptions still fail the update result. Fix the plugin install or update error, then rerun `openclaw update repair`.
 
-After the per-plugin sync step, `openclaw update` runs a mandatory **post-core convergence** pass before the gateway is restarted: it repairs missing configured plugin payloads, validates each _active_ tracked install record on disk, and statically verifies its `package.json` is parseable (and any explicitly-declared `main` exists). Failures from this pass — and an invalid OpenClaw config snapshot — return `postUpdate.plugins.status: "error"` and flip the top-level update `status` to `"error"`, so `openclaw update` exits non-zero and the gateway is _not_ restarted with an unverified plugin set. The error includes structured `postUpdate.plugins.warnings[].guidance` lines pointing at `openclaw doctor --fix` and `openclaw plugins inspect <id> --runtime --json` for follow-up. Disabled plugin entries and records that are not trusted-source-linked official sync targets are skipped here, mirroring the `skipDisabledPlugins` policy used by the missing-payload check, so a stale disabled plugin record cannot block an otherwise valid update.
+After the per-plugin sync step, `openclaw update` runs a mandatory **post-core convergence** pass before the gateway is restarted: it repairs missing configured plugin payloads, validates each _active_ tracked install record on disk, and statically verifies its `package.json` is parseable (and any explicitly-declared `main` exists). Failures from this pass — and an invalid OpenClaw config snapshot — return `postUpdate.plugins.status: "error"` and flip the top-level update `status` to `"error"`, so `openclaw update` exits non-zero and the gateway is _not_ restarted with an unverified plugin set. The error includes structured `postUpdate.plugins.warnings[].guidance` lines pointing at `openclaw update repair` and `openclaw plugins inspect <id> --runtime --json` for follow-up. Disabled plugin entries and records that are not trusted-source-linked official sync targets are skipped here, mirroring the `skipDisabledPlugins` policy used by the missing-payload check, so a stale disabled plugin record cannot block an otherwise valid update.
 
 When the updated Gateway starts, plugin loading is verify-only: startup does not
 run package managers or mutate dependency trees. Package-manager `update.run`

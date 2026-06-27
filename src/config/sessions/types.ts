@@ -7,7 +7,10 @@ import type {
   SessionAcpIdentityState,
   SessionAcpMeta,
 } from "@openclaw/acp-core/types";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  type FastMode,
+} from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
@@ -51,6 +54,7 @@ export type CliSessionBinding = {
   authEpoch?: string;
   authEpochVersion?: number;
   extraSystemPromptHash?: string;
+  messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
   cwdHash?: string;
   mcpConfigHash?: string;
@@ -201,6 +205,11 @@ export type SessionGoal = {
   budgetLimitedAt?: number;
 };
 
+export type RestartRecoveryRun = {
+  runId: string;
+  lifecycleGeneration: string;
+};
+
 export type SessionEntry = {
   /**
    * Last delivered heartbeat payload (used to suppress duplicate heartbeat notifications).
@@ -250,6 +259,8 @@ export type SessionEntry = {
   pluginOwnerId?: string;
   systemSent?: boolean;
   abortedLastRun?: boolean;
+  /** Interrupted run generations whose late lifecycle events must be ignored. */
+  restartRecoveryRuns?: RestartRecoveryRun[];
   /** Durable guard state for automatic subagent orphan recovery. */
   subagentRecovery?: SubagentRecoveryState;
   /** Quota cascade protection and state-aware failover status. */
@@ -282,7 +293,7 @@ export type SessionEntry = {
   abortCutoffTimestamp?: number;
   chatType?: SessionChatType;
   thinkingLevel?: string;
-  fastMode?: boolean;
+  fastMode?: FastMode;
   verboseLevel?: string;
   traceLevel?: string;
   reasoningLevel?: string;
@@ -624,12 +635,6 @@ export function resolveFreshSessionTotalTokens(
   return total;
 }
 
-export function isSessionTotalTokensFresh(
-  entry?: Pick<SessionEntry, "totalTokens" | "totalTokensFresh"> | null,
-): boolean {
-  return resolveFreshSessionTotalTokens(entry) !== undefined;
-}
-
 export type GroupKeyResolution = {
   key: string;
   channel?: string;
@@ -724,6 +729,5 @@ export type SessionSystemPromptReport = {
   };
 };
 
-export const DEFAULT_RESET_TRIGGER = "/new";
 export const DEFAULT_RESET_TRIGGERS = ["/new", "/reset"];
 export const DEFAULT_IDLE_MINUTES = 0;

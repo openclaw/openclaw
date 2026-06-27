@@ -171,6 +171,16 @@ Agents must use `skill_workshop` for generated skill work. They must not create
 or change proposal files through `write`, `edit`, `exec`, shell commands, or
 direct filesystem operations.
 
+<Note>
+`skill_workshop` is a built-in agent tool and is included in
+`tools.profile: "coding"`. If a stricter policy hides it, add
+`skill_workshop` to the active `tools.allow` list, or use
+`tools.alsoAllow: ["skill_workshop"]` when the scope uses a profile without an
+explicit `tools.allow`. Sandboxed runs do not construct the host-side
+Skill Workshop tool, so run proposal review actions from a normal host-side
+agent session or the CLI.
+</Note>
+
 ## Approval and autonomy
 
 ```json5
@@ -180,6 +190,7 @@ direct filesystem operations.
       autonomous: {
         enabled: false,
       },
+      allowSymlinkTargetWrites: false,
       approvalPolicy: "pending",
       maxPending: 50,
       maxSkillBytes: 40000,
@@ -190,6 +201,9 @@ direct filesystem operations.
 
 - `autonomous.enabled`: allows OpenClaw to create pending proposals from durable
   conversation signals after successful turns. Default: `false`.
+- `allowSymlinkTargetWrites`: allows apply to write through workspace skill
+  symlinks whose real target is listed in `skills.load.allowSymlinkTargets`.
+  Default: `false`.
 - `approvalPolicy: "pending"`: requires an approval prompt before
   agent-initiated `apply`, `reject`, or `quarantine`.
 - `approvalPolicy: "auto"`: skips that approval prompt. The agent must still
@@ -249,14 +263,16 @@ Default state directory: `~/.openclaw`.
 
 ## Troubleshooting
 
-| Problem                                        | Resolution                                                                                   |
-| ---------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `Skill proposal description is too large`      | Shorten `description` to 160 bytes or less.                                                  |
-| `Skill proposal content is too large`          | Shorten the proposal body or raise `skills.workshop.maxSkillBytes`.                          |
-| `Target skill changed after proposal creation` | Revise the proposal against the current target, or create a new proposal.                    |
-| `Proposal scan failed`                         | Inspect scanner findings, then revise or quarantine the proposal.                            |
-| `Support file paths must be under one of...`   | Move support files under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`. |
-| Proposal does not show in list                 | Check the selected `--agent` workspace and `OPENCLAW_STATE_DIR`.                             |
+| Problem                                        | Resolution                                                                                                                                                                                                  |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Skill proposal description is too large`      | Shorten `description` to 160 bytes or less.                                                                                                                                                                 |
+| `Skill proposal content is too large`          | Shorten the proposal body or raise `skills.workshop.maxSkillBytes`.                                                                                                                                         |
+| `Target skill changed after proposal creation` | Revise the proposal against the current target, or create a new proposal.                                                                                                                                   |
+| `Proposal scan failed`                         | Inspect scanner findings, then revise or quarantine the proposal.                                                                                                                                           |
+| `untrusted symlink target`                     | Configure `skills.load.allowSymlinkTargets` and enable `skills.workshop.allowSymlinkTargetWrites` only for intentional shared skill roots.                                                                  |
+| `Support file paths must be under one of...`   | Move support files under `assets/`, `examples/`, `references/`, `scripts/`, or `templates/`.                                                                                                                |
+| Proposal does not show in list                 | Check the selected `--agent` workspace and `OPENCLAW_STATE_DIR`.                                                                                                                                            |
+| Agent cannot call `skill_workshop`             | Check the active tool policy and run mode. `coding` includes the tool; restrictive `tools.allow` policies must list it explicitly, and sandboxed runs must use a normal host-side agent session or the CLI. |
 
 ## Related
 

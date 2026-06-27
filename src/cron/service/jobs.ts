@@ -40,6 +40,9 @@ const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
 
+type CronAgentTurnPayload = Extract<CronPayload, { kind: "agentTurn" }>;
+type CronAgentTurnPayloadPatch = Extract<CronPayloadPatch, { kind: "agentTurn" }>;
+
 /** Default retry delays applied after consecutive cron execution errors. */
 export const DEFAULT_ERROR_BACKOFF_SCHEDULE_MS = [
   30_000,
@@ -286,9 +289,23 @@ export function assertSupportedJobSpec(job: Pick<CronJob, "sessionTarget" | "pay
   if (job.sessionTarget === "main" && job.payload.kind !== "systemEvent") {
     throw new Error('main cron jobs require payload.kind="systemEvent"');
   }
-  if (isIsolatedLike && job.payload.kind !== "agentTurn") {
-    throw new Error('isolated/current/session cron jobs require payload.kind="agentTurn"');
+  if (isIsolatedLike && job.payload.kind !== "agentTurn" && job.payload.kind !== "command") {
+    throw new Error(
+      'isolated/current/session cron jobs require payload.kind="agentTurn" or "command"',
+    );
   }
+}
+
+function assertCronExpressionSatisfiable(job: CronJob, nowMs: number) {
+  if (job.schedule.kind !== "cron") {
+    return;
+  }
+  if (computeJobNextRunAtMs({ ...job, enabled: true }, nowMs) !== undefined) {
+    return;
+  }
+  throw new Error(
+    `cron expression "${job.schedule.expr}" has no upcoming run time and would never fire`,
+  );
 }
 
 function assertMainSessionAgentId(
@@ -655,10 +672,16 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
  */
 export function recomputeNextRunsForMaintenance(
   state: CronServiceState,
-  opts?: { recomputeExpired?: boolean; nowMs?: number; repairFutureCronNextRunAtMs?: boolean },
+  opts?: {
+    recomputeExpired?: boolean;
+    nowMs?: number;
+    repairFutureCronNextRunAtMs?: boolean;
+    skipFutureRepairJobIds?: ReadonlySet<string>;
+  },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
   const repairFutureCronNextRunAtMs = opts?.repairFutureCronNextRunAtMs ?? true;
+  const skipFutureRepairJobIds = opts?.skipFutureRepairJobIds;
   return walkSchedulableJobs(
     state,
     ({ job, nowMs: now }) => {
@@ -669,6 +692,7 @@ export function recomputeNextRunsForMaintenance(
         }
       } else if (
         repairFutureCronNextRunAtMs &&
+        !skipFutureRepairJobIds?.has(job.id) &&
         shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
       ) {
         if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
@@ -779,6 +803,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
   assertMainSessionAgentId(job, state.deps.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
+  assertCronExpressionSatisfiable(job, now);
   job.state.nextRunAtMs = computeJobNextRunAtMs(job, now);
   return job;
 }
@@ -787,7 +812,7 @@ export function createJob(state: CronServiceState, input: CronJobCreate): CronJo
 export function applyJobPatch(
   job: CronJob,
   patch: CronJobPatch,
-  opts?: { defaultAgentId?: string },
+  opts?: { defaultAgentId?: string; scheduleValidationNowMs?: number },
 ) {
   if ("name" in patch) {
     job.name = normalizeRequiredName(patch.name);
@@ -867,6 +892,48 @@ export function applyJobPatch(
   assertMainSessionAgentId(job, opts?.defaultAgentId);
   assertDeliverySupport(job);
   assertFailureDestinationSupport(job);
+  if (
+    opts?.scheduleValidationNowMs !== undefined &&
+    (patch.schedule !== undefined || patch.enabled === true)
+  ) {
+    assertCronExpressionSatisfiable(job, opts.scheduleValidationNowMs);
+  }
+}
+
+function applyAgentTurnToolsAllowPatch(
+  payload: CronAgentTurnPayload,
+  patch: CronAgentTurnPayloadPatch,
+  existing?: CronAgentTurnPayload,
+): void {
+  if (Array.isArray(patch.toolsAllow)) {
+    payload.toolsAllow = patch.toolsAllow;
+    // Same-kind edits keep the marker only when the default list is unchanged;
+    // kind replacements carry the cron-tool-stamped marker into persistence.
+    if (
+      patch.toolsAllowIsDefault === true &&
+      (!existing || (existing.toolsAllowIsDefault === true && toolsAllowEqual(existing, patch)))
+    ) {
+      payload.toolsAllowIsDefault = true;
+    } else {
+      delete payload.toolsAllowIsDefault;
+    }
+  } else if (patch.toolsAllow === null) {
+    delete payload.toolsAllow;
+    delete payload.toolsAllowIsDefault;
+  }
+}
+
+function toolsAllowEqual(
+  left: Pick<CronAgentTurnPayload, "toolsAllow">,
+  right: Pick<CronAgentTurnPayloadPatch, "toolsAllow">,
+): boolean {
+  const rightToolsAllow = right.toolsAllow;
+  return (
+    Array.isArray(left.toolsAllow) &&
+    Array.isArray(rightToolsAllow) &&
+    left.toolsAllow.length === rightToolsAllow.length &&
+    left.toolsAllow.every((toolName, index) => toolName === rightToolsAllow[index])
+  );
 }
 
 function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {
@@ -882,25 +949,54 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     return { kind: "systemEvent", text };
   }
 
+  if (patch.kind === "command") {
+    if (existing.kind !== "command") {
+      return buildPayloadFromPatch(patch);
+    }
+    const next: Extract<CronPayload, { kind: "command" }> = { ...existing };
+    if (Array.isArray(patch.argv)) {
+      next.argv = patch.argv;
+    }
+    if (typeof patch.cwd === "string") {
+      next.cwd = patch.cwd;
+    }
+    if (patch.env && typeof patch.env === "object" && !Array.isArray(patch.env)) {
+      next.env = patch.env;
+    }
+    if (typeof patch.input === "string") {
+      next.input = patch.input;
+    }
+    if (typeof patch.timeoutSeconds === "number") {
+      next.timeoutSeconds = patch.timeoutSeconds;
+    }
+    if (typeof patch.noOutputTimeoutSeconds === "number") {
+      next.noOutputTimeoutSeconds = patch.noOutputTimeoutSeconds;
+    }
+    if (typeof patch.outputMaxBytes === "number") {
+      next.outputMaxBytes = patch.outputMaxBytes;
+    }
+    return next;
+  }
+
   if (existing.kind !== "agentTurn") {
     return buildPayloadFromPatch(patch);
   }
 
-  const next: Extract<CronPayload, { kind: "agentTurn" }> = { ...existing };
+  const next: CronAgentTurnPayload = { ...existing };
   if (typeof patch.message === "string") {
     next.message = patch.message;
   }
   if (typeof patch.model === "string") {
     next.model = patch.model;
+  } else if (patch.model === null) {
+    delete next.model;
   }
   if (Array.isArray(patch.fallbacks)) {
     next.fallbacks = patch.fallbacks;
+  } else if (patch.fallbacks === null) {
+    delete next.fallbacks;
   }
-  if (Array.isArray(patch.toolsAllow)) {
-    next.toolsAllow = patch.toolsAllow;
-  } else if (patch.toolsAllow === null) {
-    delete next.toolsAllow;
-  }
+  applyAgentTurnToolsAllowPatch(next, patch, existing);
   if (typeof patch.thinking === "string") {
     next.thinking = patch.thinking;
   }
@@ -924,27 +1020,44 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     return { kind: "systemEvent", text: patch.text };
   }
 
+  if (patch.kind === "command") {
+    if (!Array.isArray(patch.argv) || patch.argv.length === 0) {
+      throw new Error('cron.update payload.kind="command" requires argv');
+    }
+    return {
+      kind: "command",
+      argv: patch.argv,
+      cwd: patch.cwd,
+      env: patch.env,
+      input: patch.input,
+      timeoutSeconds: patch.timeoutSeconds,
+      noOutputTimeoutSeconds: patch.noOutputTimeoutSeconds,
+      outputMaxBytes: patch.outputMaxBytes,
+    };
+  }
+
   if (typeof patch.message !== "string" || patch.message.length === 0) {
     throw new Error('cron.update payload.kind="agentTurn" requires message');
   }
 
-  return {
+  const next: CronAgentTurnPayload = {
     kind: "agentTurn",
     message: patch.message,
-    model: patch.model,
-    fallbacks: patch.fallbacks,
-    toolsAllow: Array.isArray(patch.toolsAllow) ? patch.toolsAllow : undefined,
+    model: typeof patch.model === "string" ? patch.model : undefined,
+    fallbacks: Array.isArray(patch.fallbacks) ? patch.fallbacks : undefined,
     thinking: patch.thinking,
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
   };
+  applyAgentTurnToolsAllowPatch(next, patch);
+  return next;
 }
 
 function mergeCronDelivery(
   existing: CronDelivery | undefined,
   patch: CronDeliveryPatch,
-): CronDelivery {
+): CronDelivery | undefined {
   const hasCompletionDestinationPatch = "completionDestination" in patch;
   const next: CronDelivery = {
     mode: existing?.mode ?? "none",
@@ -1046,6 +1159,22 @@ function mergeCronDelivery(
         Object.hasOwn(nextFd, "mode");
       next.failureDestination = hasFailureDestination ? nextFd : undefined;
     }
+  }
+
+  if (
+    existing === undefined &&
+    !("mode" in patch) &&
+    next.mode === "none" &&
+    next.channel === undefined &&
+    next.to === undefined &&
+    next.threadId === undefined &&
+    next.accountId === undefined &&
+    next.bestEffort === undefined &&
+    next.completionDestination === undefined &&
+    next.failureDestination === undefined
+  ) {
+    // Clearing an absent override must preserve implicit detached-job delivery.
+    return undefined;
   }
 
   return next;

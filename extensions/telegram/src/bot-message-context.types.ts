@@ -25,6 +25,7 @@ export type TelegramMessageContextOptions = {
   receivedAtMs?: number;
   ingressBuffer?: "inbound-debounce" | "text-fragment";
   promptContextMinTimestampMs?: number;
+  spooledReplay?: boolean;
 };
 
 export type TelegramPromptContextEntry = NonNullable<

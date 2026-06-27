@@ -3,23 +3,24 @@ import crypto from "node:crypto";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import {
-  afterAll,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  type MockInstance,
-  vi,
-} from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveOAuthDir } from "../config/paths.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 
-vi.mock("../channels/plugins/pairing.js", () => ({
-  getPairingAdapter: () => null,
+const pairingMocks = vi.hoisted(() => ({
+  getPairingAdapter: vi.fn<
+    () => {
+      idLabel: string;
+      normalizeAllowEntry?: (entry: string) => string;
+    } | null
+  >(() => null),
 }));
 
+vi.mock("../channels/plugins/pairing.js", () => ({
+  getPairingAdapter: pairingMocks.getPairingAdapter,
+}));
+
+import { drainFileLockStateForTest, resetFileLockStateForTest } from "../infra/file-lock.js";
 import {
   addChannelAllowFromStoreEntry,
   clearPairingAllowFromReadCacheForTest,
@@ -41,9 +42,6 @@ type FileReadSpy = {
   mockRestore: () => void;
 };
 
-let randomIntSpy: MockInstance<RandomIntSync>;
-let nextRandomInt = 0;
-
 beforeAll(() => {
   fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-pairing-"));
 });
@@ -55,24 +53,19 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  resetFileLockStateForTest();
   clearPairingAllowFromReadCacheForTest();
-  nextRandomInt = 0;
-  randomIntSpy ??= vi.spyOn(crypto, "randomInt") as unknown as MockInstance<RandomIntSync>;
-  setDefaultRandomIntMock();
+  pairingMocks.getPairingAdapter.mockReset();
 });
 
-afterAll(() => {
-  randomIntSpy?.mockRestore();
+afterEach(async () => {
+  await drainFileLockStateForTest();
+  resetFileLockStateForTest();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
 });
-
-function setDefaultRandomIntMock() {
-  randomIntSpy.mockImplementation((minOrMax: number, max?: number) => {
-    const min = max === undefined ? 0 : minOrMax;
-    const upper = max === undefined ? minOrMax : max;
-    const span = Math.max(upper - min, 1);
-    return min + (nextRandomInt++ % span);
-  });
-}
 
 function requireFirstPairingRequest(
   requests: Awaited<ReturnType<typeof listChannelPairingRequests>>,
@@ -239,6 +232,11 @@ async function withMockRandomInt(params: {
   fallbackValue?: number;
   run: () => Promise<void>;
 }) {
+  const randomIntSpy = vi.spyOn(crypto, "randomInt") as unknown as {
+    mockImplementation: (impl: RandomIntSync) => void;
+    mockRestore: () => void;
+    mockReturnValue: (value: number) => void;
+  };
   try {
     if (params.initialValue !== undefined) {
       randomIntSpy.mockReturnValue(params.initialValue);
@@ -251,7 +249,7 @@ async function withMockRandomInt(params: {
 
     await params.run();
   } finally {
-    setDefaultRandomIntMock();
+    randomIntSpy.mockRestore();
   }
 }
 
@@ -309,6 +307,53 @@ async function expectPendingPairingRequestsIsolatedByAccount(params: {
 }
 
 describe("pairing store", () => {
+  it("normalizes allowlist entries through channel pairing adapters", async () => {
+    pairingMocks.getPairingAdapter.mockReturnValue({
+      idLabel: "Telegram user",
+      normalizeAllowEntry: (entry: string) => entry.replace(/^telegram:/i, ""),
+    });
+
+    await withTempStateDir(async (stateDir, env) => {
+      await expect(
+        addChannelAllowFromStoreEntry({
+          channel: "telegram",
+          entry: "telegram:1001",
+          accountId: "main",
+          env,
+        }),
+      ).resolves.toMatchObject({ changed: true, allowFrom: ["1001"] });
+      expect(await readChannelAllowFromStore("telegram", env, "main")).toEqual(["1001"]);
+      expect(readChannelAllowFromStoreSync("telegram", env, "main")).toEqual(["1001"]);
+
+      await writeAllowFromFixture({
+        stateDir,
+        channel: "telegram",
+        accountId: "main",
+        allowFrom: ["telegram:1002", "telegram:*"],
+      });
+      clearPairingAllowFromReadCacheForTest();
+      expect(await readChannelAllowFromStore("telegram", env, "main")).toEqual(["1002"]);
+
+      await expect(
+        addChannelAllowFromStoreEntry({
+          channel: "telegram",
+          entry: "telegram:*",
+          accountId: "main",
+          env,
+        }),
+      ).resolves.toMatchObject({ changed: false, allowFrom: ["1002"] });
+
+      await expect(
+        removeChannelAllowFromStoreEntry({
+          channel: "telegram",
+          entry: "telegram:1002",
+          accountId: "main",
+          env,
+        }),
+      ).resolves.toMatchObject({ changed: true, allowFrom: [] });
+    });
+  });
+
   it("skips malformed persisted pairing requests while approving valid codes", async () => {
     await withTempStateDir(async (stateDir, env) => {
       const now = new Date().toISOString();
@@ -439,7 +484,8 @@ describe("pairing store", () => {
   it("regenerates when a generated code collides", async () => {
     await withTempStateDir(async (_stateDir, env) => {
       await withMockRandomInt({
-        initialValue: 0,
+        sequence: Array(16).fill(0).concat(Array(8).fill(1)),
+        fallbackValue: 1,
         run: async () => {
           const first = await upsertChannelPairingRequest({
             channel: "telegram",
@@ -449,19 +495,13 @@ describe("pairing store", () => {
           });
           expect(first.code).toBe("AAAAAAAA");
 
-          await withMockRandomInt({
-            sequence: Array(8).fill(0).concat(Array(8).fill(1)),
-            fallbackValue: 1,
-            run: async () => {
-              const second = await upsertChannelPairingRequest({
-                channel: "telegram",
-                id: "456",
-                accountId: DEFAULT_ACCOUNT_ID,
-                env,
-              });
-              expect(second.code).toBe("BBBBBBBB");
-            },
+          const second = await upsertChannelPairingRequest({
+            channel: "telegram",
+            id: "456",
+            accountId: DEFAULT_ACCOUNT_ID,
+            env,
           });
+          expect(second.code).toBe("BBBBBBBB");
         },
       });
     });

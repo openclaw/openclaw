@@ -27,13 +27,17 @@ import { isInvalidCronSessionTargetIdError } from "../../cron/session-target.js"
 import type { CronDelivery, CronJob, CronJobCreate, CronJobPatch } from "../../cron/types.js";
 import { validateScheduleTimestamp } from "../../cron/validate-timestamp.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { listConfiguredMessageChannels } from "../../infra/outbound/channel-selection.js";
 import {
   resolveTargetPrefixedChannel,
   validateTargetProviderPrefix,
 } from "../../infra/outbound/channel-target-prefix.js";
-import { listConfiguredAnnounceChannelIdsForConfig } from "../../plugins/channel-plugin-ids.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 
 type CronJobIdParams = { id?: string; jobId?: string };
@@ -51,14 +55,38 @@ type CronRunsRequestParams = CronJobIdParams & {
   sortDir?: "asc" | "desc";
 };
 
-function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): string[] {
-  return listConfiguredAnnounceChannelIdsForConfig({
-    config: cfg,
-    env: process.env,
+function compactCronListJob(job: CronJob) {
+  return {
+    id: job.id,
+    name: job.name,
+    enabled: job.enabled,
+    nextRunAtMs: job.state.nextRunAtMs ?? null,
+    scheduleKind: job.schedule.kind,
+    lastRunStatus: job.state.lastRunStatus ?? job.state.lastStatus ?? null,
+  };
+}
+
+async function listConfiguredAnnounceChannelIds(cfg: OpenClawConfig): Promise<string[]> {
+  return await listConfiguredMessageChannels(cfg);
+}
+
+function hasExplicitChannelConfigEntry(cfg: OpenClawConfig): boolean {
+  const channels = cfg.channels;
+  if (!channels || typeof channels !== "object" || Array.isArray(channels)) {
+    return false;
+  }
+  return Object.entries(channels).some(([channelId, entry]) => {
+    if (channelId === "defaults" || channelId === "modelByChannel") {
+      return false;
+    }
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      return false;
+    }
+    return Object.keys(entry).length > 0;
   });
 }
 
-function assertConfiguredAnnounceChannel(params: {
+async function assertConfiguredAnnounceChannel(params: {
   cfg: OpenClawConfig;
   channel?: string;
   field: "delivery.channel" | "delivery.failureDestination.channel";
@@ -69,7 +97,7 @@ function assertConfiguredAnnounceChannel(params: {
     return;
   }
 
-  const configuredChannels = listConfiguredAnnounceChannelIds(params.cfg).toSorted();
+  const configuredChannels = (await listConfiguredAnnounceChannelIds(params.cfg)).toSorted();
   const normalizedChannel = normalizeMessageChannel(params.channel);
   if (!normalizedChannel) {
     if (configuredChannels.length <= 1) {
@@ -81,7 +109,13 @@ function assertConfiguredAnnounceChannel(params: {
   }
 
   if (configuredChannels.length === 0) {
-    return;
+    if (!hasExplicitChannelConfigEntry(params.cfg)) {
+      if (!isDeliverableMessageChannel(normalizedChannel)) {
+        throw new Error(`${params.field} is not a known channel: ${normalizedChannel}`);
+      }
+      return;
+    }
+    throw new Error(`${params.field} is not configured: ${normalizedChannel}`);
   }
 
   if (configuredChannels.includes(normalizedChannel)) {
@@ -120,14 +154,17 @@ function assertCompatibleAnnounceTarget(params: {
   }
 }
 
-function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery?: CronDelivery }) {
+async function assertValidCronAnnounceDelivery(params: {
+  cfg: OpenClawConfig;
+  delivery?: CronDelivery;
+}) {
   if (params.delivery && (params.delivery.mode ?? "announce") === "announce") {
     assertCompatibleAnnounceTarget({
       channel: params.delivery.channel,
       to: params.delivery.to,
       field: "delivery.channel",
     });
-    assertConfiguredAnnounceChannel({
+    await assertConfiguredAnnounceChannel({
       cfg: params.cfg,
       channel: resolveAnnounceValidationChannel({
         channel: params.delivery.channel,
@@ -152,7 +189,7 @@ function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery
       to: failureDestination.to,
       field: "delivery.failureDestination.channel",
     });
-    assertConfiguredAnnounceChannel({
+    await assertConfiguredAnnounceChannel({
       cfg: params.cfg,
       channel: resolveAnnounceValidationChannel({
         channel: failureDestination.channel,
@@ -163,14 +200,14 @@ function assertValidCronAnnounceDelivery(params: { cfg: OpenClawConfig; delivery
   }
 }
 
-function assertValidCronCreateDelivery(cfg: OpenClawConfig, jobCreate: CronJobCreate) {
-  assertValidCronAnnounceDelivery({
+async function assertValidCronCreateDelivery(cfg: OpenClawConfig, jobCreate: CronJobCreate) {
+  await assertValidCronAnnounceDelivery({
     cfg,
     delivery: jobCreate.delivery,
   });
 }
 
-function assertValidCronUpdatePatch(params: {
+async function assertValidCronUpdatePatch(params: {
   cfg: OpenClawConfig;
   defaultAgentId?: string;
   currentJob: CronJob;
@@ -184,9 +221,17 @@ function assertValidCronUpdatePatch(params: {
     defaultAgentId: params.defaultAgentId,
   });
   if ("delivery" in params.patch) {
-    assertValidCronAnnounceDelivery({
+    const delivery =
+      params.patch.delivery?.channel === null &&
+      nextJob.delivery &&
+      (nextJob.delivery.mode ?? "announce") === "announce" &&
+      nextJob.delivery.channel === undefined &&
+      resolveTargetPrefixedChannel(nextJob.delivery.to) === undefined
+        ? { ...nextJob.delivery, channel: "last" as const }
+        : nextJob.delivery;
+    await assertValidCronAnnounceDelivery({
       cfg: params.cfg,
-      delivery: nextJob.delivery,
+      delivery,
     });
   }
 }
@@ -229,6 +274,7 @@ function isCronInvalidRequestError(err: unknown): boolean {
     message.includes("invalid cron sessionTarget session id") ||
     message.includes('main cron jobs require payload.kind="systemEvent"') ||
     message.includes('isolated/current/session cron jobs require payload.kind="agentTurn"') ||
+    message.includes("has no upcoming run time and would never fire") ||
     message.includes('sessionTarget "main" is only valid for the default agent') ||
     message.includes('cron.update payload.kind="systemEvent" requires text') ||
     message.includes('cron.update payload.kind="agentTurn" requires message') ||
@@ -254,12 +300,19 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    // Caller-supplied sessionKey / agentId thread through to `cron.wake` so
+    // multi-session deployments wake the originating conversation lane
+    // instead of the heartbeat / main default. Empty strings are dropped
+    // (schema permits omission; presence with empty payload should not
+    // override the default).
     const p = params as {
       mode: "now" | "next-heartbeat";
       text: string;
       sessionKey?: string;
+      agentId?: string;
     };
     const sessionKey = p.sessionKey?.trim() || undefined;
+    const agentId = p.agentId?.trim() || undefined;
     if (sessionKey && isSubagentSessionKey(sessionKey)) {
       // Wake requests resume user-visible sessions only; subagent sessions are
       // internal task execution targets and should not receive operator wakes.
@@ -270,10 +323,30 @@ export const cronHandlers: GatewayRequestHandlers = {
       );
       return;
     }
+    // Mirror the cron tool's contradictory-pair guard for direct RPC callers
+    // and generated clients: the cron target resolver treats agentId as
+    // authoritative, so an agentId that disagrees with the agent owning an
+    // agent-prefixed sessionKey would silently wake a lane the caller never
+    // named. Reject instead of guessing a canonical owner.
+    const sessionKeyAgentId = sessionKey
+      ? parseAgentSessionKey(sessionKey)?.agentId?.trim().toLowerCase()
+      : undefined;
+    if (agentId && sessionKeyAgentId && agentId.toLowerCase() !== sessionKeyAgentId) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "wake agentId contradicts the agent that owns sessionKey; pass a single canonical wake target",
+        ),
+      );
+      return;
+    }
     const result = context.cron.wake({
       mode: p.mode,
       text: p.text,
       ...(sessionKey ? { sessionKey } : {}),
+      ...(agentId ? { agentId } : {}),
     });
     respond(true, result, undefined);
   },
@@ -300,6 +373,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortBy?: "nextRunAtMs" | "updatedAtMs" | "name";
       sortDir?: "asc" | "desc";
       agentId?: string;
+      compact?: boolean;
     };
     const page = await context.cron.listPage({
       includeDisabled: p.includeDisabled,
@@ -313,6 +387,10 @@ export const cronHandlers: GatewayRequestHandlers = {
       sortDir: p.sortDir,
       agentId: p.agentId,
     });
+    if (p.compact === true) {
+      respond(true, { ...page, jobs: page.jobs.map(compactCronListJob) }, undefined);
+      return;
+    }
     const deliveryPreviews = await resolveCronDeliveryPreviews({
       cfg: context.getRuntimeConfig(),
       defaultAgentId: context.cron.getDefaultAgentId(),
@@ -406,7 +484,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
-      assertValidCronCreateDelivery(cfg, jobCreate);
+      await assertValidCronCreateDelivery(cfg, jobCreate);
     } catch (err) {
       respond(
         false,
@@ -511,7 +589,7 @@ export const cronHandlers: GatewayRequestHandlers = {
       }
     }
     try {
-      assertValidCronUpdatePatch({
+      await assertValidCronUpdatePatch({
         cfg,
         defaultAgentId: context.cron.getDefaultAgentId(),
         currentJob,

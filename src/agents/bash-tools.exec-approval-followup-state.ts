@@ -16,7 +16,7 @@ const EXEC_APPROVAL_FOLLOWUP_IDEMPOTENCY_NONCE_MARKER = ":nonce:";
 const EXEC_APPROVAL_FOLLOWUP_RUNTIME_HANDOFF_TTL_MS = 5 * 60 * 1000;
 
 /** Single-use capability payload consumed by a follow-up agent turn. */
-export type ExecApprovalFollowupRuntimeHandoff = {
+type ExecApprovalFollowupRuntimeHandoff = {
   kind: "exec-approval-followup";
   approvalId: string;
   sessionKey: string;
@@ -25,7 +25,7 @@ export type ExecApprovalFollowupRuntimeHandoff = {
 };
 
 /** Registration handle returned to the gateway approval callback. */
-export type ExecApprovalFollowupRuntimeHandoffRegistration = {
+type ExecApprovalFollowupRuntimeHandoffRegistration = {
   handoffId: string;
   idempotencyKey: string;
 };
@@ -167,6 +167,21 @@ export function consumeExecApprovalFollowupRuntimeHandoff(params: {
   }
   execApprovalFollowupRuntimeHandoffs.delete(handoffId);
   return cloneExecApprovalFollowupRuntimeHandoff(entry);
+}
+
+/**
+ * A persisted exec-approval followup is stale when the session key it targeted
+ * has since been rebound to a different session id (via `/new` or `/reset`).
+ * Delivering it would leak the old approval result into the new session, so the
+ * gateway drops the followup instead of resuming the rebound session.
+ */
+export function isExecApprovalFollowupSessionRebound(params: {
+  expectedSessionId?: string;
+  resolvedSessionId?: string;
+}): boolean {
+  const expected = normalizeOptionalString(params.expectedSessionId);
+  const resolved = normalizeOptionalString(params.resolvedSessionId);
+  return Boolean(expected && resolved && expected !== resolved);
 }
 
 /** Clear exec approval follow-up handoffs between tests. */

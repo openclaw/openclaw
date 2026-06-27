@@ -2,7 +2,7 @@
 import type { ChannelRouteRef, ChannelRouteTargetInput } from "../plugin-sdk/channel-route.js";
 
 /** Deferred outbound delivery intent attached to a session or task. */
-export type DeliveryIntentRef = {
+type DeliveryIntentRef = {
   /** Stable queue/work item id. */
   id: string;
   /** Intent family; currently scoped to outbound queue delivery. */

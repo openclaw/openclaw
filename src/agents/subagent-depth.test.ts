@@ -6,7 +6,7 @@ import path from "node:path";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
 import { getSubagentDepthFromSessionStore } from "./subagent-depth.js";
-import { resolveAgentTimeoutMs, resolveAgentTimeoutSeconds } from "./timeout.js";
+import { resolveAgentTimeoutMs } from "./timeout.js";
 
 describe("getSubagentDepthFromSessionStore", () => {
   it("uses spawnDepth from the session store when available", () => {
@@ -143,7 +143,6 @@ describe("getSubagentDepthFromSessionStore", () => {
 
 describe("resolveAgentTimeoutMs", () => {
   it("defaults to 48 hours when config does not override the timeout", () => {
-    expect(resolveAgentTimeoutSeconds()).toBe(48 * 60 * 60);
     expect(resolveAgentTimeoutMs({})).toBe(48 * 60 * 60 * 1000);
   });
 

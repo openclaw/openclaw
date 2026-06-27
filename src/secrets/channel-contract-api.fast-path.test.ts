@@ -78,4 +78,19 @@ describe("channel contract api explicit fast path", () => {
     });
     expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
   });
+
+  it("does not fall back to the broad contract-api artifact when the secret artifact is missing", () => {
+    const api = loadBundledChannelSecretContractApi("missing");
+
+    expect(api).toBeUndefined();
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
+      dirName: "missing",
+      artifactBasename: "secret-contract-api.js",
+    });
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
+      dirName: "missing",
+      artifactBasename: "contract-api.js",
+    });
+    expect(loadPluginManifestRegistryMock).not.toHaveBeenCalled();
+  });
 });

@@ -56,7 +56,13 @@ const LEGACY_ROOT_RUNTIME_COMPAT_ALIASES = [
   // nested dist entries, but live gateways may still import them after update.
   ["manager-DzRWrKSA.js", "acp/control-plane/manager.js"],
   ["runtime-CeGN4XUC.js", "web-fetch/runtime.js"],
+  // v2026.5.22 and v2026.6.8 text-transform runtimes. The stable alias remains
+  // for old chunks, but new chunks keep hashed imports because the alias export
+  // set expanded in v2026.6.8 and may already be cached in a live gateway.
+  ["text-transforms.runtime-D9-SpAmI.js", "text-transforms.runtime.js"],
+  ["text-transforms.runtime-sEqsN4pN.js", "text-transforms.runtime.js"],
 ];
+const ROOT_RUNTIME_STABLE_IMPORT_SKIP_ALIASES = new Set(["text-transforms.runtime.js"]);
 const LEGACY_PLUGIN_INSTALL_RUNTIME_MARKERS = [
   "scanPackageInstallSource",
   "scanFileInstallSource",
@@ -354,6 +360,9 @@ export function rewriteRootRuntimeImportsToStableAliases(params = {}) {
       candidates,
     });
     if (candidate) {
+      if (ROOT_RUNTIME_STABLE_IMPORT_SKIP_ALIASES.has(aliasFileName)) {
+        continue;
+      }
       runtimeAliasFiles.set(candidate, aliasFileName);
     }
   }

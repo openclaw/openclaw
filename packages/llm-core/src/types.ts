@@ -296,6 +296,9 @@ export interface AssistantMessage {
   usage: Usage;
   stopReason: StopReason;
   errorMessage?: string;
+  errorCode?: string;
+  errorType?: string;
+  errorBody?: string;
   timestamp: number; // Unix timestamp in milliseconds
 }
 
@@ -366,7 +369,12 @@ export interface Context {
 export type AssistantMessageEvent =
   | { type: "start"; partial: AssistantMessage }
   | { type: "text_start"; contentIndex: number; partial: AssistantMessage }
-  | { type: "text_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
+  /**
+   * Plain text deltas may omit `partial` to avoid retaining one full assistant
+   * snapshot per token. Consumers that need current text should replay `delta`
+   * from the latest start/end partial checkpoint.
+   */
+  | { type: "text_delta"; contentIndex: number; delta: string; partial?: AssistantMessage }
   | { type: "text_end"; contentIndex: number; content: string; partial: AssistantMessage }
   | { type: "thinking_start"; contentIndex: number; partial: AssistantMessage }
   | { type: "thinking_delta"; contentIndex: number; delta: string; partial: AssistantMessage }
@@ -601,6 +609,8 @@ export interface Model<TApi extends Api = Api> {
   /** Provider-specific request/runtime parameters passed through to provider plugins. */
   params?: Record<string, unknown>;
   headers?: Record<string, string>;
+  /** Sends runtime credentials as Authorization: Bearer instead of provider-specific key headers. */
+  authHeader?: boolean;
   /** Compatibility overrides for OpenAI-compatible APIs. If not set, auto-detected from baseUrl. */
   compat?: TApi extends "openai-completions"
     ? OpenAICompletionsCompat

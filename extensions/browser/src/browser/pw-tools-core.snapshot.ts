@@ -104,7 +104,12 @@ function buildStoredAriaRefs(
     const key = `${role}:${name ?? ""}`;
     const nth = counts.get(key) ?? 0;
     counts.set(key, nth + 1);
-    refsByKey.set(key, [...(refsByKey.get(key) ?? []), node.ref]);
+    const refsForKey = refsByKey.get(key);
+    if (refsForKey) {
+      refsForKey.push(node.ref);
+    } else {
+      refsByKey.set(key, [node.ref]);
+    }
     refs[node.ref] = {
       role,
       ...(name ? { name } : {}),
@@ -435,6 +440,7 @@ export async function navigateViaPlaywright(opts: {
     await forceDisconnectPlaywrightForTarget({
       cdpUrl: opts.cdpUrl,
       targetId: opts.targetId,
+      ssrfPolicy: opts.ssrfPolicy,
       reason: "retry navigate after detached frame",
     }).catch(() => {});
     page = await getPageForTargetId(opts);

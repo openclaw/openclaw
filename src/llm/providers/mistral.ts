@@ -7,6 +7,7 @@ import type {
   ContentChunk,
   FunctionTool,
 } from "@mistralai/mistralai/models/components";
+import { stripSystemPromptCacheBoundary } from "../../agents/system-prompt-cache-boundary.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { calculateCost, clampThinkingLevel } from "../model-utils.js";
 import type {
@@ -275,9 +276,14 @@ function buildChatPayload(
     stream: true,
     messages: toChatMessages(messages, model.input.includes("image")),
   };
+  let convertedToolNames: Set<string> | undefined;
 
   if (context.tools?.length) {
-    payload.tools = toFunctionTools(context.tools);
+    const tools = toFunctionTools(context.tools);
+    convertedToolNames = new Set(tools.map((tool) => tool.function.name));
+    if (tools.length > 0) {
+      payload.tools = tools;
+    }
   }
   if (options?.temperature !== undefined) {
     payload.temperature = options.temperature;
@@ -289,7 +295,10 @@ function buildChatPayload(
     payload.stop = options.stop;
   }
   if (options?.toolChoice) {
-    payload.toolChoice = mapToolChoice(options.toolChoice);
+    const toolChoice = mapToolChoice(options.toolChoice, convertedToolNames);
+    if (toolChoice) {
+      payload.toolChoice = toolChoice;
+    }
   }
   if (options?.promptMode) {
     payload.promptMode = options.promptMode;
@@ -301,7 +310,7 @@ function buildChatPayload(
   if (context.systemPrompt) {
     payload.messages.unshift({
       role: "system",
-      content: sanitizeSurrogates(context.systemPrompt),
+      content: sanitizeSurrogates(stripSystemPromptCacheBoundary(context.systemPrompt)),
     });
   }
 
@@ -507,15 +516,21 @@ async function consumeChatStream(
 }
 
 function toFunctionTools(tools: Tool[]): Array<FunctionTool & { type: "function" }> {
-  return tools.map((tool) => ({
-    type: "function",
-    function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: stripSymbolKeys(tool.parameters) as Record<string, unknown>,
-      strict: false,
-    },
-  }));
+  return tools.flatMap((tool) => {
+    try {
+      return {
+        type: "function",
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: stripSymbolKeys(tool.parameters) as Record<string, unknown>,
+          strict: false,
+        },
+      };
+    } catch {
+      return [];
+    }
+  });
 }
 
 function stripSymbolKeys(value: unknown): unknown {
@@ -688,6 +703,7 @@ function mapReasoningEffort(
 
 function mapToolChoice(
   choice: MistralOptions["toolChoice"],
+  convertedToolNames?: ReadonlySet<string>,
 ):
   | "auto"
   | "none"
@@ -698,12 +714,24 @@ function mapToolChoice(
   if (!choice) {
     return undefined;
   }
+  if (convertedToolNames && convertedToolNames.size === 0) {
+    if (choice === "none" || choice === "auto") {
+      return choice === "none" ? "none" : undefined;
+    }
+    throw new Error("Mistral tool_choice requires a tool, but no tools survived schema conversion");
+  }
   if (choice === "auto" || choice === "none" || choice === "any" || choice === "required") {
     return choice;
   }
+  const toolName = choice.function.name;
+  if (convertedToolNames && !convertedToolNames.has(toolName)) {
+    throw new Error(
+      `Mistral tool_choice requested unavailable tool "${toolName}" after schema conversion`,
+    );
+  }
   return {
     type: "function",
-    function: { name: choice.function.name },
+    function: { name: toolName },
   };
 }
 

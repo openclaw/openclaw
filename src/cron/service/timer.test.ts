@@ -47,6 +47,22 @@ function createDueIsolatedAgentJob(params: { now: number }): CronJob {
   };
 }
 
+function createDueCommandJob(params: { now: number }): CronJob {
+  return {
+    id: "command-job",
+    agentId: "finn",
+    name: "command job",
+    enabled: true,
+    createdAtMs: params.now - 60_000,
+    updatedAtMs: params.now - 60_000,
+    schedule: { kind: "every", everyMs: 60_000, anchorMs: params.now - 60_000 },
+    sessionTarget: "isolated",
+    wakeMode: "now",
+    payload: { kind: "command", argv: ["sh", "-lc", "echo ok"] },
+    state: { nextRunAtMs: params.now - 1 },
+  };
+}
+
 afterEach(() => {
   resetTaskRegistryForTests();
 });
@@ -182,6 +198,36 @@ describe("cron service timer seam coverage", () => {
     expect(positiveDelays.length).toBeGreaterThan(0);
 
     timeoutSpy.mockRestore();
+  });
+
+  it("runs command cron jobs without isolated agent setup", async () => {
+    const { storePath } = await makeStorePath();
+    const now = Date.parse("2026-03-23T12:00:00.000Z");
+    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+    const runCommandJob = vi.fn(async () => ({
+      status: "ok" as const,
+      summary: "command ok",
+    }));
+    const state = createCronServiceState({
+      storePath,
+      cronEnabled: true,
+      log: logger,
+      nowMs: () => now,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob,
+      runCommandJob,
+    });
+    const job = createDueCommandJob({ now });
+
+    const result = await executeJobCore(state, job);
+
+    expect(result).toMatchObject({ status: "ok", summary: "command ok" });
+    expect(runCommandJob).toHaveBeenCalledWith({
+      job,
+      abortSignal: undefined,
+    });
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
   });
 
   it("records isolated cron task runs against the backing cron session", async () => {

@@ -9,6 +9,7 @@ import {
   resolveHeartbeatPromptForResponseTool,
   stripHeartbeatToken,
 } from "./heartbeat.js";
+import { MESSAGE_TOOL_DELIVERY_HINTS } from "./reply/delivery-hints.js";
 
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
@@ -27,11 +28,6 @@ const TOOL_RESULT_BLOCK_TYPES = new Set([
   "tool_result_error",
   "function_call_output",
 ]);
-const MESSAGE_TOOL_DELIVERY_PREFIXES = [
-  "Delivery: to send a message, use the `message` tool.",
-  "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-] as const;
-
 type HeartbeatTranscriptMessage = { role: string; content?: unknown };
 
 function readNestedString(record: Record<string, unknown>, key: string): string | undefined {
@@ -304,7 +300,7 @@ export function isHeartbeatUserMessage(
     return true;
   }
   if (
-    MESSAGE_TOOL_DELIVERY_PREFIXES.some((prefix) => trimmed.startsWith(prefix)) &&
+    MESSAGE_TOOL_DELIVERY_HINTS.some((prefix) => trimmed.startsWith(prefix)) &&
     trimmed.endsWith(HEARTBEAT_TRANSCRIPT_PROMPT)
   ) {
     return true;

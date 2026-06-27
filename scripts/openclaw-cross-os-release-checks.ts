@@ -3,6 +3,7 @@
 // Executed directly via Node.js + tsx in the release workflow.
 
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   appendFileSync,
   chmodSync,
@@ -25,10 +26,11 @@ import { createServer } from "node:http";
 import { createConnection as createNetConnection, createServer as createNetServer } from "node:net";
 import type { Socket } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
+import { basename, dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isLocalBuildMetadataDistPath } from "./lib/local-build-metadata-paths.mjs";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
 const PUBLISHED_INSTALLER_BASE_URL = "https://openclaw.ai";
@@ -82,6 +84,17 @@ for (const signal of Object.keys(CROSS_OS_SIGNAL_EXIT_CODES) as NodeJS.Signals[]
   });
 }
 
+function exitForwardedSignalWhenChildTreesDone() {
+  if (forwardedSignalExitCode === undefined || CROSS_OS_ACTIVE_CHILD_TREE_KILLERS.size > 0) {
+    return;
+  }
+  if (forwardedSignalForceKillTimer) {
+    clearTimeout(forwardedSignalForceKillTimer);
+    forwardedSignalForceKillTimer = undefined;
+  }
+  process.exit(forwardedSignalExitCode);
+}
+
 const providerConfig = {
   openai: {
     extensionId: "openai",
@@ -126,6 +139,10 @@ const RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE = [
 
 export function buildCrossOsReleaseSmokePluginAllowlist(providerMeta) {
   return [...new Set([providerMeta.extensionId, ...RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE])];
+}
+
+export function buildCrossOsReleaseSmokeMemorySlotConfigArgs() {
+  return ["config", "set", "plugins.slots.memory", JSON.stringify("none"), "--strict-json"];
 }
 
 function shouldSeedProviderConfigModels(providerMeta) {
@@ -175,6 +192,19 @@ export const CROSS_OS_COMMAND_HEARTBEAT_SECONDS = parsePositiveIntegerEnv(
   "OPENCLAW_CROSS_OS_COMMAND_HEARTBEAT_SECONDS",
   60,
 );
+
+export function resolveNpmPackTarballFileName(value, label = "npm pack") {
+  const filename = typeof value === "string" ? value.trim() : "";
+  if (
+    !filename.endsWith(".tgz") ||
+    filename.includes("\0") ||
+    filename !== basename(filename) ||
+    filename !== pathWin32.basename(filename)
+  ) {
+    throw new Error(`${label} did not report a safe .tgz filename.`);
+  }
+  return filename;
+}
 
 if (isMainModule()) {
   try {
@@ -664,16 +694,14 @@ async function prepareCandidate(params) {
   writeFileSync(packJsonPath, packResult.stdout, "utf8");
   const parsedPack = JSON.parse(packResult.stdout);
   const lastPack = Array.isArray(parsedPack) ? parsedPack.at(-1) : null;
-  if (!lastPack?.filename) {
-    throw new Error("npm pack did not report a filename.");
-  }
+  const packFilename = resolveNpmPackTarballFileName(lastPack?.filename);
 
   return {
     sourceDir: params.sourceDir,
     sourceSha,
     candidateVersion: String(lastPack.version ?? packageJson.version ?? "").trim(),
-    candidateTgz: join(packDir, lastPack.filename),
-    candidateFileName: String(lastPack.filename).trim(),
+    candidateTgz: join(packDir, packFilename),
+    candidateFileName: packFilename,
   };
 }
 
@@ -1752,13 +1780,12 @@ export function resolveCommandSpawnInvocation(
   args,
   options = {
     platform: process.platform,
-    comSpec: process.env.ComSpec,
   },
 ) {
   const platform = options.platform ?? process.platform;
   if (platform === "win32" && /\.(cmd|bat)$/iu.test(command)) {
     return {
-      command: options.comSpec ?? process.env.ComSpec ?? "cmd.exe",
+      command: options.comSpec ?? resolveWindowsCmdExePath(options.env ?? process.env),
       args: ["/d", "/s", "/c", buildCmdExeCommandLine(command, args)],
       shell: false,
       windowsVerbatimArguments: true,
@@ -1772,7 +1799,6 @@ export function resolveInstalledCliInvocation(
   args = [],
   options = {
     platform: process.platform,
-    comSpec: process.env.ComSpec,
   },
 ) {
   const platform = options.platform ?? process.platform;
@@ -1795,6 +1821,7 @@ export function resolveInstalledCliInvocation(
   }
   return resolveCommandSpawnInvocation(normalizedCliPath, args, {
     comSpec: options.comSpec,
+    env: options.env,
     platform,
   });
 }
@@ -2001,7 +2028,7 @@ async function verifyFreshShellCommand(params) {
 
 async function runInstalledCli(params) {
   const invocation = resolveInstalledCliInvocation(params.cliPath, params.args, {
-    comSpec: params.env?.ComSpec ?? params.env?.COMSPEC,
+    env: params.env,
     platform: process.platform,
   });
   return runCommandInvocation(invocation, {
@@ -2092,7 +2119,7 @@ async function startManualGatewayFromInstalledCli(params) {
     params.cliPath,
     ["gateway", "run", "--bind", "loopback", "--port", String(params.lane.gatewayPort), "--force"],
     {
-      comSpec: params.env?.ComSpec ?? params.env?.COMSPEC,
+      env: params.env,
       platform: process.platform,
     },
   );
@@ -2171,7 +2198,7 @@ function appendGatewayStatusHelpProbeFallback(logPath, error) {
 }
 
 export async function canConnectToLoopbackPort(port, timeoutMs = 1_000) {
-  if (!Number.isInteger(port) || port <= 0) {
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
     return false;
   }
   return await new Promise((resolvePromise) => {
@@ -2312,6 +2339,14 @@ async function runInstalledModelsSet(params) {
   });
   await runInstalledCli({
     cliPath: params.cliPath,
+    args: buildCrossOsReleaseSmokeMemorySlotConfigArgs(),
+    cwd: params.cwd,
+    env: params.env,
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
+  await runInstalledCli({
+    cliPath: params.cliPath,
     args: ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"],
     cwd: params.cwd,
     env: params.env,
@@ -2331,7 +2366,7 @@ async function runInstalledModelsSet(params) {
 async function runInstalledAgentTurn(params) {
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const sessionId = `cross-os-release-check-${params.label}-${Date.now()}-${attempt}`;
+    const sessionId = buildCrossOsReleaseAgentSessionId(params.label, attempt);
     try {
       const logOffset = readLogFileSize(params.logPath);
       const result = await runInstalledCli({
@@ -2530,6 +2565,7 @@ async function configureDiscordSmoke(params) {
 export async function readBoundedCrossOsResponseText(
   response: Response,
   maxChars = CROSS_OS_FETCH_BODY_MAX_CHARS,
+  options: { signal?: AbortSignal | null } = {},
 ): Promise<string> {
   if (!response.body) {
     return "";
@@ -2539,10 +2575,11 @@ export async function readBoundedCrossOsResponseText(
   const decoder = new TextDecoder();
   let text = "";
   let truncated = false;
+  let aborted = false;
 
   try {
     while (text.length <= maxChars) {
-      const { done, value } = await reader.read();
+      const { done, value } = await readCrossOsResponseChunk(reader, options.signal);
       if (done) {
         text += decoder.decode();
         break;
@@ -2555,8 +2592,11 @@ export async function readBoundedCrossOsResponseText(
         break;
       }
     }
+  } catch (error) {
+    aborted = options.signal?.aborted === true;
+    throw error;
   } finally {
-    if (truncated) {
+    if (truncated || aborted) {
       await reader.cancel().catch(() => undefined);
     } else {
       reader.releaseLock();
@@ -2566,17 +2606,99 @@ export async function readBoundedCrossOsResponseText(
   return truncated ? `${text}\n[truncated]` : text;
 }
 
+function readCrossOsResponseChunk(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  signal?: AbortSignal | null,
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+  if (!signal) {
+    return reader.read();
+  }
+  if (signal.aborted) {
+    throw crossOsAbortReason(signal);
+  }
+  return new Promise((resolveRead, rejectRead) => {
+    const onAbort = () => rejectRead(crossOsAbortReason(signal));
+    signal.addEventListener("abort", onAbort, { once: true });
+    reader
+      .read()
+      .then(resolveRead, rejectRead)
+      .finally(() => {
+        signal.removeEventListener("abort", onAbort);
+      });
+  });
+}
+
+function crossOsAbortReason(signal: AbortSignal): Error {
+  const reason = signal.reason;
+  if (reason instanceof Error) {
+    return reason;
+  }
+  return new Error(typeof reason === "string" ? reason : "The operation was aborted.");
+}
+
+export function dashboardHtmlMarkerStatus(html: string): {
+  app: boolean;
+  ready: boolean;
+  title: boolean;
+} {
+  const title = html.includes("<title>OpenClaw Control</title>");
+  const app = html.includes("<openclaw-app></openclaw-app>");
+  return { app, ready: title && app, title };
+}
+
+export function resolveDashboardAssetUrls(dashboardUrl: string, html: string): string[] {
+  const baseUrl = new URL(dashboardUrl);
+  const assetUrls = new Set<string>();
+  const assetAttributePattern = /<(?:script|link)\b[^>]*(?:src|href)\s*=\s*(["'])([^"']+)\1/giu;
+  for (const match of html.matchAll(assetAttributePattern)) {
+    const rawUrl = match[2]?.trim();
+    if (!rawUrl) {
+      continue;
+    }
+    const assetUrl = new URL(rawUrl, baseUrl);
+    if (assetUrl.origin === baseUrl.origin && assetUrl.pathname.includes("/assets/")) {
+      assetUrls.add(assetUrl.href);
+    }
+  }
+  return [...assetUrls].toSorted();
+}
+
+export async function verifyDashboardAssetUrls(
+  assetUrls: string[],
+  fetchAsset: typeof fetch = fetch,
+): Promise<{ failures: string[]; ok: boolean }> {
+  if (assetUrls.length === 0) {
+    return { failures: ["no dashboard asset URLs found"], ok: false };
+  }
+  const failures: string[] = [];
+  for (const assetUrl of assetUrls) {
+    try {
+      const response = await fetchAsset(assetUrl, {
+        signal: AbortSignal.timeout(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS),
+      });
+      await response.body?.cancel().catch(() => undefined);
+      if (!response.ok) {
+        failures.push(`${assetUrl} status=${response.status}`);
+      }
+    } catch (error) {
+      failures.push(`${assetUrl} ${formatError(error)}`);
+    }
+  }
+  return { failures, ok: failures.length === 0 };
+}
+
 async function waitForDiscordMessage(params) {
   const deadline = Date.now() + 3 * 60 * 1000;
   while (Date.now() < deadline) {
     let response;
     let text;
     try {
+      const init = buildDiscordFetchInit(params.token);
       response = await fetch(
         `https://discord.com/api/v10/channels/${params.channelId}/messages?limit=20`,
-        buildDiscordFetchInit(params.token),
+        init,
       );
-      text = await readBoundedCrossOsResponseText(response);
+      text = await readBoundedCrossOsResponseText(response, undefined, { signal: init.signal });
     } catch {
       await sleep(2_000);
       continue;
@@ -2605,20 +2727,21 @@ export function buildDiscordFetchInit(token, init = {}) {
 }
 
 async function postDiscordMessage(params) {
+  const init = buildDiscordFetchInit(params.token, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      content: params.content,
+      flags: 4096,
+    }),
+  });
   const response = await fetch(
     `https://discord.com/api/v10/channels/${params.channelId}/messages`,
-    buildDiscordFetchInit(params.token, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        content: params.content,
-        flags: 4096,
-      }),
-    }),
+    init,
   );
-  const text = await readBoundedCrossOsResponseText(response);
+  const text = await readBoundedCrossOsResponseText(response, undefined, { signal: init.signal });
   if (!response.ok) {
     throw new Error(`Failed to post Discord smoke message: ${text}`);
   }
@@ -2629,16 +2752,21 @@ async function postDiscordMessage(params) {
   }
 }
 
-async function deleteDiscordMessage(params) {
+export async function deleteDiscordMessage(params) {
   if (!params.messageId) {
     return;
   }
-  await fetch(
-    `https://discord.com/api/v10/channels/${params.channelId}/messages/${params.messageId}`,
-    buildDiscordFetchInit(params.token, {
-      method: "DELETE",
-    }),
-  ).catch(() => undefined);
+  try {
+    const response = await fetch(
+      `https://discord.com/api/v10/channels/${params.channelId}/messages/${params.messageId}`,
+      buildDiscordFetchInit(params.token, {
+        method: "DELETE",
+      }),
+    );
+    await response.body?.cancel?.().catch(() => undefined);
+  } catch {
+    // Cleanup is best-effort; the smoke result should not fail after readback succeeds.
+  }
 }
 
 async function waitForInstalledDiscordReadback(params) {
@@ -2682,8 +2810,7 @@ async function maybeRunDiscordRoundtrip(params) {
     return "skipped-missing-config";
   }
 
-  const outboundNonce = `native-cross-os-outbound-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
-  const inboundNonce = `native-cross-os-inbound-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`;
+  const { outboundNonce, inboundNonce } = buildCrossOsDiscordRoundtripNonces();
   let sentMessageId = null;
   let hostMessageId = null;
   try {
@@ -3185,6 +3312,13 @@ async function runModelsSet(params) {
   await runOpenClaw({
     lane: params.lane,
     env: params.env,
+    args: buildCrossOsReleaseSmokeMemorySlotConfigArgs(),
+    logPath: params.logPath,
+    timeoutMs: 2 * 60 * 1000,
+  });
+  await runOpenClaw({
+    lane: params.lane,
+    env: params.env,
     args: ["config", "set", "agents.defaults.skipBootstrap", "true", "--strict-json"],
     logPath: params.logPath,
     timeoutMs: 2 * 60 * 1000,
@@ -3201,7 +3335,7 @@ async function runModelsSet(params) {
 async function runAgentTurn(params) {
   let lastError;
   for (let attempt = 1; attempt <= 2; attempt += 1) {
-    const sessionId = `cross-os-release-check-${params.label}-${Date.now()}-${attempt}`;
+    const sessionId = buildCrossOsReleaseAgentSessionId(params.label, attempt);
     try {
       const logOffset = readLogFileSize(params.logPath);
       const result = await runOpenClaw({
@@ -3282,6 +3416,17 @@ export function shouldSkipOptionalCrossOsAgentTurnError(error, logPath) {
   }
   const log = readLogTextTail(logPath);
   return /"status"\s*:\s*"timeout"|Request timed out before a response was generated/u.test(log);
+}
+
+export function buildCrossOsReleaseAgentSessionId(label, attempt) {
+  return `cross-os-release-check-${label}-${randomUUID()}-${attempt}`;
+}
+
+export function buildCrossOsDiscordRoundtripNonces() {
+  return {
+    outboundNonce: `native-cross-os-outbound-${randomUUID()}`,
+    inboundNonce: `native-cross-os-inbound-${randomUUID()}`,
+  };
 }
 
 function buildReleaseAgentTurnArgs(sessionId) {
@@ -3433,22 +3578,27 @@ async function runDashboardSmoke(params) {
       attempt += 1;
       logStream.write(`${new Date().toISOString()} attempt=${attempt} url=${dashboardUrl}\n`);
       try {
+        const signal = AbortSignal.timeout(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS);
         const response = await fetch(dashboardUrl, {
-          signal: AbortSignal.timeout(CROSS_OS_DASHBOARD_FETCH_TIMEOUT_MS),
+          signal,
         });
-        const html = await readBoundedCrossOsResponseText(response);
-        if (
-          response.ok &&
-          html.includes("<title>OpenClaw Control</title>") &&
-          html.includes("<openclaw-app></openclaw-app>")
-        ) {
+        const html = await readBoundedCrossOsResponseText(response, undefined, { signal });
+        const markers = dashboardHtmlMarkerStatus(html);
+        const assetUrls = resolveDashboardAssetUrls(dashboardUrl, html);
+        if (response.ok && markers.ready) {
+          const assets = await verifyDashboardAssetUrls(assetUrls);
+          if (assets.ok) {
+            logStream.write(
+              `${new Date().toISOString()} dashboard-ready status=${response.status} assets=${assetUrls.length}\n`,
+            );
+            return;
+          }
           logStream.write(
-            `${new Date().toISOString()} dashboard-ready status=${response.status}\n`,
+            `${new Date().toISOString()} dashboard-assets-not-ready status=${response.status} assets=${assetUrls.length} failures=${assets.failures.join(" | ")}\n`,
           );
-          return;
         }
         logStream.write(
-          `${new Date().toISOString()} dashboard-not-ready status=${response.status} title=${html.includes("<title>OpenClaw Control</title>")} app=${html.includes("<openclaw-app></openclaw-app>")}\n`,
+          `${new Date().toISOString()} dashboard-not-ready status=${response.status} title=${markers.title} app=${markers.app} assets=${assetUrls.length}\n`,
         );
       } catch (error) {
         logStream.write(
@@ -3473,11 +3623,15 @@ async function stopGateway(gateway) {
       return;
     }
     if (process.platform === "win32") {
-      await runCommand("taskkill", ["/PID", String(gateway.child.pid), "/T", "/F"], {
-        logPath: gateway.logPath,
-        check: false,
-        timeoutMs: 30_000,
-      });
+      await runCommand(
+        resolveWindowsTaskkillPath(),
+        ["/PID", String(gateway.child.pid), "/T", "/F"],
+        {
+          logPath: gateway.logPath,
+          check: false,
+          timeoutMs: 30_000,
+        },
+      );
       const exited = await waitForChildExit(gateway.child, 10_000);
       if (!exited) {
         gateway.child.stdout?.destroy();
@@ -3742,7 +3896,7 @@ function appendBoundedCommandOutput(current, chunk, maxBytes) {
 
 export async function runCommand(command, args, options) {
   const invocation = resolveCommandSpawnInvocation(command, args, {
-    comSpec: options.env?.ComSpec ?? options.env?.COMSPEC,
+    env: options.env,
     platform: process.platform,
   });
   return runCommandInvocation(invocation, options);
@@ -3785,23 +3939,46 @@ async function runCommandInvocation(invocation, options) {
       }
     };
 
+    const finishLogStream = (callback) => {
+      let completed = false;
+      const finish = (error) => {
+        if (completed) {
+          return;
+        }
+        completed = true;
+        callback(error);
+      };
+      logStream.once("finish", finish);
+      logStream.once("error", finish);
+      logStream.end();
+    };
+
     const finalize = (callback) => {
       if (settled) {
         return;
       }
       settled = true;
       clearTimers();
-      logStream.end();
-      callback();
+      finishLogStream((logError) => {
+        if (logError) {
+          rejectPromise(new Error(`Command log write failed: ${formatError(logError)}`));
+          return;
+        }
+        callback();
+      });
     };
 
     const requestKill = () => {
       if (process.platform === "win32" && child.pid) {
         try {
-          const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
-            stdio: "ignore",
-            windowsHide: true,
-          });
+          const killer = spawn(
+            resolveWindowsTaskkillPath(),
+            ["/PID", String(child.pid), "/T", "/F"],
+            {
+              stdio: "ignore",
+              windowsHide: true,
+            },
+          );
           killer.on("error", () => {
             child.kill();
           });
@@ -3856,15 +4033,23 @@ async function runCommandInvocation(invocation, options) {
     });
 
     child.on("error", (error) => {
+      if (forwardedSignalExitCode !== undefined) {
+        activeChildTree.killChildTree("SIGKILL");
+      }
       activeChildTree.unregister();
       finalize(() => rejectPromise(error));
     });
 
     child.on("close", (exitCode) => {
-      activeChildTree.unregister();
       if (forwardedSignalExitCode !== undefined) {
+        // The leader can exit on SIGTERM while descendants remain in its group.
+        // Kill the group before unregistering so signal forwarding cannot leave them running.
+        activeChildTree.killChildTree("SIGKILL");
+        activeChildTree.unregister();
+        finalize(exitForwardedSignalWhenChildTreesDone);
         return;
       }
+      activeChildTree.unregister();
       finalize(() => {
         const result = {
           exitCode: exitCode ?? 1,
@@ -3894,11 +4079,16 @@ async function runCommandInvocation(invocation, options) {
 export async function startStaticFileServer(params) {
   mkdirSync(dirname(params.logPath), { recursive: true });
   const logStream = createWriteStream(params.logPath, { flags: "a" });
+  let logStreamError = null;
+  logStream.on("error", (error) => {
+    logStreamError ??= error;
+  });
   const fileName = String(params.filePath.split(/[/\\]/u).at(-1) ?? "artifact");
   const fileStat = statSync(params.filePath);
   const sockets = new Set<Socket>();
   const server = createServer((request, response) => {
     logStream.write(`${new Date().toISOString()} ${request.method} ${request.url}\n`);
+    response.setHeader("connection", "close");
     if (request.url !== `/${fileName}`) {
       response.statusCode = 404;
       response.end("not found");
@@ -3907,7 +4097,6 @@ export async function startStaticFileServer(params) {
     response.statusCode = 200;
     response.setHeader("content-type", resolveStaticFileContentType(params.filePath));
     response.setHeader("content-length", String(fileStat.size));
-    response.setHeader("connection", "close");
     const fileStream = createReadStream(params.filePath);
     fileStream.once("error", (error) => {
       logStream.write(`${new Date().toISOString()} static-file-read-error ${formatError(error)}\n`);
@@ -3936,23 +4125,75 @@ export async function startStaticFileServer(params) {
     throw new Error("Failed to bind static file server.");
   }
   const port = address.port;
+  let closePromise;
   return {
     url: `http://127.0.0.1:${port}/${fileName}`,
-    close: () =>
-      new Promise((resolvePromise, rejectPromise) => {
+    close: () => {
+      closePromise ??= new Promise((resolvePromise, rejectPromise) => {
+        closeStaticFileServerConnections(server, sockets);
         server.close((error) => {
-          logStream.end();
-          if (error) {
-            rejectPromise(error);
-            return;
-          }
-          resolvePromise();
+          void (async () => {
+            const closeLogError = await finishStaticFileServerLog(logStream, logStreamError).catch(
+              (logError: unknown): Error =>
+                logError instanceof Error ? logError : new Error(String(logError)),
+            );
+            if (error) {
+              rejectPromise(error);
+              return;
+            }
+            if (closeLogError) {
+              rejectPromise(
+                closeLogError instanceof Error
+                  ? closeLogError
+                  : new Error(formatError(closeLogError)),
+              );
+              return;
+            }
+            resolvePromise();
+          })();
         });
-        for (const socket of sockets) {
-          socket.destroy();
-        }
-      }),
+        closeStaticFileServerConnections(server, sockets);
+      });
+      return closePromise;
+    },
   };
+}
+
+function closeStaticFileServerConnections(server, sockets) {
+  for (const socket of sockets) {
+    socket.destroy();
+  }
+  if (typeof server.closeAllConnections === "function") {
+    server.closeAllConnections();
+  }
+}
+
+function finishStaticFileServerLog(logStream, pendingError) {
+  return new Promise((resolvePromise, rejectPromise) => {
+    if (pendingError) {
+      logStream.destroy();
+      rejectPromise(new Error(`Static file server log write failed: ${formatError(pendingError)}`));
+      return;
+    }
+    let completed = false;
+    const finish = () => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      resolvePromise();
+    };
+    const fail = (error) => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      rejectPromise(new Error(`Static file server log write failed: ${formatError(error)}`));
+    };
+    logStream.once("finish", finish);
+    logStream.once("error", fail);
+    logStream.end();
+  });
 }
 
 export function resolveStaticFileContentType(filePath) {

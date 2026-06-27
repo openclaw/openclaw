@@ -97,10 +97,20 @@ describe("lazy protocol validators", () => {
       validateChatSendParams({
         sessionKey: "global",
         agentId: "work",
+        sessionId: "session-work",
         message: "hello",
         idempotencyKey: "run-global-work",
       }),
     ).toBe(true);
+    expect(
+      validateChatSendParams({
+        sessionKey: "global",
+        sessionId: "session-work",
+        resumeSession: true,
+        message: "hello",
+        idempotencyKey: "run-global-work",
+      }),
+    ).toBe(false);
     expect(
       validateChatAbortParams({
         sessionKey: "global",
@@ -637,6 +647,35 @@ describe("validateWakeParams", () => {
       }),
     ).toBe(true);
   });
+
+  it("accepts optional sessionKey and agentId so per-session wakes can be routed", () => {
+    // Origin-capture fix for #46886 / #64556 — wakes that name an explicit
+    // session/agent must validate so the gateway handler can forward them
+    // through to the cron service.
+    expect(
+      validateWakeParams({
+        mode: "now",
+        text: "follow up on the report",
+        sessionKey: "agent:main:telegram:8661849123:topic:4052",
+        agentId: "main",
+      }),
+    ).toBe(true);
+    expect(
+      validateWakeParams({
+        mode: "next-heartbeat",
+        text: "tick",
+        sessionKey: "agent:main:discord:guild123:thread456",
+      }),
+    ).toBe(true);
+  });
+
+  it("rejects sessionKey or agentId when they are present but empty strings", () => {
+    // NonEmptyString — caller must omit the field entirely to fall back to
+    // the default routing. Explicit empties are an error rather than a
+    // silent no-op.
+    expect(validateWakeParams({ mode: "now", text: "x", sessionKey: "" })).toBe(false);
+    expect(validateWakeParams({ mode: "now", text: "x", agentId: "" })).toBe(false);
+  });
 });
 
 describe("validateChatEvent", () => {
@@ -696,6 +735,21 @@ describe("validateChatEvent", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("validateChatSendParams", () => {
+  it("accepts one-turn fast:auto cutoff seconds", () => {
+    const base = {
+      sessionKey: "agent:main:main",
+      message: "hello",
+      fastMode: "auto",
+      idempotencyKey: "run-1",
+    };
+
+    expect(validateChatSendParams(base)).toBe(true);
+    expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
+    expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
   });
 });
 

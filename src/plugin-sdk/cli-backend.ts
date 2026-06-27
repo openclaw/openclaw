@@ -4,6 +4,7 @@
 export type { CliBackendConfig } from "../config/types.js";
 export type {
   CliBackendAuthEpochMode,
+  CliBackendExecutionMode,
   CliBackendNormalizeConfigContext,
   CliBackendNativeToolMode,
   CliBackendPlugin,
@@ -11,6 +12,7 @@ export type {
   CliBackendPrepareExecutionContext,
   CliBackendResolveExecutionArgs,
   CliBackendResolveExecutionArgsContext,
+  CliBackendSideQuestionToolMode,
   CliBackendThinkingLevel,
 } from "../plugins/types.js";
 export {

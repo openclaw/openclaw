@@ -7,9 +7,11 @@ const WORKFLOW = ".github/workflows/openclaw-performance.yml";
 
 type WorkflowStep = {
   name?: string;
+  id?: string;
   if?: string;
   run?: string;
   env?: Record<string, string>;
+  with?: Record<string, string>;
 };
 
 type WorkflowJob = {
@@ -32,6 +34,40 @@ function findStep(name: string): WorkflowStep {
 }
 
 describe("OpenClaw performance workflow", () => {
+  it("uses an optional dispatch identifier to name parent-owned runs", () => {
+    const workflow = readFileSync(WORKFLOW, "utf8");
+
+    expect(workflow).toContain(
+      "run-name: ${{ inputs.dispatch_id != '' && format('OpenClaw Performance {0}', inputs.dispatch_id) || 'OpenClaw Performance' }}",
+    );
+    expect(workflow).toContain("dispatch_id:");
+    expect(workflow).toContain("Optional parent workflow dispatch identifier");
+  });
+
+  it("pins the Kova evaluator that reads agent payloads", () => {
+    const workflow = readFileSync(WORKFLOW, "utf8");
+    const kovaRef = "4f146016583018bad9e24f8e64a6af5f963bb7ee";
+
+    expect(workflow).toContain(`default: ${kovaRef}`);
+    expect(workflow).toContain(`inputs.kova_ref || '${kovaRef}'`);
+  });
+
+  it("resolves dispatch target refs before checkout", () => {
+    const resolveTarget = findStep("Resolve OpenClaw target ref");
+    const checkout = findStep("Checkout OpenClaw");
+
+    expect(resolveTarget.id).toBe("target");
+    expect(resolveTarget.if).toBe("steps.lane.outputs.run == 'true'");
+    expect(resolveTarget.env?.GH_TOKEN).toBe("${{ github.token }}");
+    expect(resolveTarget.env?.TARGET_REF_INPUT).toBe("${{ inputs.target_ref }}");
+    expect(resolveTarget.run).toContain("encodeURIComponent");
+    expect(resolveTarget.run).toContain(
+      'gh api "repos/${GITHUB_REPOSITORY}/commits/${encoded_ref}"',
+    );
+    expect(resolveTarget.run).toContain("checkout_ref=${resolved_sha}");
+    expect(checkout.with?.ref).toBe("${{ steps.target.outputs.checkout_ref }}");
+  });
+
   it("uses the clawgrit reports token for every report repo push path", () => {
     const prepare = findStep("Prepare clawgrit reports checkout");
     const publish = findStep("Publish to clawgrit reports");
@@ -57,5 +93,40 @@ describe("OpenClaw performance workflow", () => {
     expect(prepare.run).toContain('echo "ready=true" >> "$GITHUB_OUTPUT"');
     expect(publish.if).toContain("steps.clawgrit_reports.outputs.ready == 'true'");
     expect(publish.run).toContain("timeout 120s git");
+  });
+
+  it("requires the shared Kova report gate before tolerating partial verdicts", () => {
+    const runKova = findStep("Run Kova");
+
+    expect(runKova.run).toContain(
+      'node "$PERFORMANCE_HELPER_DIR/scripts/lib/kova-report-gate.mjs" "$report_json"',
+    );
+    expect(runKova.run).not.toContain("report.summary?.statuses ?? {}");
+  });
+
+  it("fails selected live Kova lanes when live auth is missing", () => {
+    const configureAuth = findStep("Configure live OpenAI auth");
+    const runKova = findStep("Run Kova");
+
+    expect(configureAuth.if).toContain("matrix.live == 'true'");
+    expect(configureAuth.env?.OPENAI_API_KEY).toBe("${{ secrets.OPENAI_API_KEY }}");
+    expect(configureAuth.run).toContain('if [[ -z "${OPENAI_API_KEY:-}" ]]; then');
+    expect(configureAuth.run).toContain("cannot run without live evidence");
+    expect(configureAuth.run).toContain("exit 1");
+    expect(configureAuth.run).not.toContain("will be skipped");
+    expect(runKova.run).not.toContain('echo "skipped=true" >> "$GITHUB_OUTPUT"');
+  });
+
+  it("requires Kova evidence before uploading selected lane artifacts", () => {
+    const validateEvidence = findStep("Validate Kova evidence");
+    const upload = findStep("Upload Kova artifacts");
+
+    expect(validateEvidence.if).toContain("always()");
+    expect(validateEvidence.if).toContain("steps.lane.outputs.run == 'true'");
+    expect(validateEvidence.run).toContain('"$REPORT_DIR" -maxdepth 1 -type f -name');
+    expect(validateEvidence.run).toContain('"$BUNDLE_DIR/bundle.json"');
+    expect(validateEvidence.run).toContain('"$SUMMARY_DIR/${LANE_ID}.md"');
+    expect(validateEvidence.run).toContain("exit 1");
+    expect(upload.with?.["if-no-files-found"]).toBe("error");
   });
 });

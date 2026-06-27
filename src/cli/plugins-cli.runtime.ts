@@ -20,6 +20,7 @@ import { formatMissingPluginMessage } from "./error-format.js";
 import type { PluginMarketplaceListOptions, PluginRegistryOptions } from "./plugins-cli.js";
 
 type PluginInstallActionOptions = {
+  acknowledgeClawHubRisk?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
   force?: boolean;
   link?: boolean;
@@ -183,7 +184,7 @@ export async function runPluginsEnableCommand(idInput: string): Promise<void> {
   let id = idInput;
   assertConfigWriteAllowedInCurrentMode();
 
-  const { enablePluginInConfig } = await import("../plugins/enable.js");
+  const { enableExplicitlySelectedPluginInConfig } = await import("../plugins/enable.js");
   const { normalizePluginId } = await loadPluginsConfigState();
   const { buildPluginRegistrySnapshotReport } = await loadPluginsStatus();
   const { applySlotSelectionForPlugin, logSlotWarnings } = await loadPluginsCommandHelpers();
@@ -195,7 +196,7 @@ export async function runPluginsEnableCommand(idInput: string): Promise<void> {
   if (!report.plugins.some((plugin) => matchesPluginId(plugin, id))) {
     return reportMissingPlugin(id);
   }
-  const enableResult = enablePluginInConfig(cfg, id, {
+  const enableResult = enableExplicitlySelectedPluginInConfig(cfg, id, {
     updateChannelConfig: false,
   });
   let next: OpenClawConfig = enableResult.config;

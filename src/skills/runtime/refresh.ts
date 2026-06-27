@@ -9,6 +9,10 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { CONFIG_DIR, resolveUserPath } from "../../utils.js";
 import { resolvePluginSkillDirs } from "../loading/plugin-skills.js";
 import {
+  resolveAllowedSkillSymlinkTargetRealPaths,
+  tryRealpath,
+} from "../loading/symlink-targets.js";
+import {
   bumpSkillsSnapshotVersion,
   clearSkillsSnapshotVersionForWorkspace,
   resetSkillsRefreshStateForTest,
@@ -42,12 +46,18 @@ type WatchTargetCacheEntry = {
   targets: WatchTarget[];
 };
 
+type FileStabilitySnapshot = {
+  size: number;
+  mtimeMs: number;
+};
+
 const log = createSubsystemLogger("gateway/skills");
 const GROUPED_SKILLS_WATCH_DEPTH = 6;
 const CONFIGURED_ROOT_WATCH_DEPTH = 2;
 const MAX_SYMLINK_WATCH_TARGETS_PER_ROOT = 100;
 const MAX_SYMLINK_WATCH_DIRECTORY_SCANS_PER_ROOT = 200;
 const MAX_SYMLINK_WATCH_RAW_ENTRIES_PER_ROOT = 2_000;
+const RAW_SKILL_FILE_POLL_INTERVAL_MS = 100;
 // One watcher per unique watched directory. Agent workspaces that include the
 // same shared skill root (the global skills dir, the home skills dir, or a
 // configured extra/plugin dir) subscribe to the same watcher instead of each
@@ -105,7 +115,7 @@ function resolveWatchTargets(workspaceDir: string, config?: OpenClawConfig): Wat
     .filter(Boolean)
     .map((dir) => resolveUserPath(dir));
   const pluginSkillDirs = resolvePluginSkillDirs({ workspaceDir, config });
-  const allowedSymlinkTargetRealPaths = resolveAllowedSymlinkTargetRealPaths(config);
+  const allowedSymlinkTargetRealPaths = resolveAllowedSkillSymlinkTargetRealPaths(config);
   const signature = JSON.stringify({
     basePaths: baseRoots.map((root) => toWatchRoot(root.path)),
     extraDirs: extraDirs.map(toWatchRoot),
@@ -359,23 +369,6 @@ function watchDepthForPath(raw: string, depth: number): number {
   return depth + missingSegments;
 }
 
-function resolveAllowedSymlinkTargetRealPaths(config?: OpenClawConfig): string[] {
-  const rawTargets = config?.skills?.load?.allowSymlinkTargets ?? [];
-  return rawTargets
-    .map((dir) => normalizeOptionalString(dir) ?? "")
-    .filter(Boolean)
-    .map((dir) => tryRealpath(resolveUserPath(dir)))
-    .filter((dir): dir is string => Boolean(dir));
-}
-
-function tryRealpath(filePath: string): string | null {
-  try {
-    return fs.realpathSync(filePath);
-  } catch {
-    return null;
-  }
-}
-
 function isPathInside(parent: string, child: string): boolean {
   const relative = path.relative(parent, child);
   return (
@@ -390,6 +383,7 @@ function isPathInsideAnyRoot(roots: readonly string[], child: string): boolean {
 export function shouldIgnoreSkillsWatchPath(
   watchPath: string,
   stats?: { isDirectory?: () => boolean; isSymbolicLink?: () => boolean },
+  options: { usePolling?: boolean } = {},
 ): boolean {
   if (DEFAULT_SKILLS_WATCH_IGNORED.some((re) => re.test(watchPath))) {
     return true;
@@ -400,13 +394,104 @@ export function shouldIgnoreSkillsWatchPath(
   if (!stats) {
     return false;
   }
+  if (options.usePolling && isSkillFileWatchPath(watchPath)) {
+    return false;
+  }
+  // Regular files are surfaced through raw directory events below. Letting
+  // chokidar include SKILL.md here registers per-file watchers and leaks FDs.
+  return true;
+}
+
+function isSkillFileWatchPath(watchPath: string): boolean {
+  if (DEFAULT_SKILLS_WATCH_IGNORED.some((re) => re.test(watchPath))) {
+    return false;
+  }
   const normalized = watchPath.replaceAll("\\", "/");
-  return path.posix.basename(normalized) !== "SKILL.md";
+  return path.posix.basename(normalized) === "SKILL.md";
+}
+
+function getRawWatchedPath(details: unknown): string | undefined {
+  return typeof details === "object" &&
+    details !== null &&
+    typeof (details as { watchedPath?: unknown }).watchedPath === "string"
+    ? (details as { watchedPath: string }).watchedPath
+    : undefined;
+}
+
+function rawPathToString(rawPath: unknown): string | undefined {
+  if (typeof rawPath === "string") {
+    return rawPath || undefined;
+  }
+  if (Buffer.isBuffer(rawPath)) {
+    const decoded = rawPath.toString();
+    return decoded || undefined;
+  }
+  return undefined;
+}
+
+function resolveRawSkillsWatchPath(rawPath: string, details: unknown): string | undefined {
+  if (path.isAbsolute(rawPath)) {
+    return rawPath;
+  }
+  const watchedPath = getRawWatchedPath(details);
+  return watchedPath ? path.join(watchedPath, rawPath) : undefined;
+}
+
+function readFileStabilitySnapshot(filePath: string): FileStabilitySnapshot | undefined {
+  try {
+    const stat = fs.statSync(filePath);
+    return stat.isFile() ? { size: stat.size, mtimeMs: stat.mtimeMs } : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+async function waitForStableSkillFile(filePath: string, stabilityMs: number): Promise<void> {
+  if (stabilityMs <= 0) {
+    return;
+  }
+  let previous = readFileStabilitySnapshot(filePath);
+  if (!previous) {
+    return;
+  }
+  let stableForMs = 0;
+  while (stableForMs < stabilityMs) {
+    const delayMs = Math.min(RAW_SKILL_FILE_POLL_INTERVAL_MS, stabilityMs - stableForMs);
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, delayMs);
+    });
+    const next = readFileStabilitySnapshot(filePath);
+    if (!next) {
+      return;
+    }
+    if (next.size === previous.size && next.mtimeMs === previous.mtimeMs) {
+      stableForMs += delayMs;
+      continue;
+    }
+    previous = next;
+    stableForMs = 0;
+  }
 }
 
 function resolveWatchDebounceMs(config?: OpenClawConfig): number {
   const raw = config?.skills?.load?.watchDebounceMs;
   return typeof raw === "number" && Number.isFinite(raw) ? Math.max(0, raw) : 250;
+}
+
+function resolveSkillsWatcherUsePolling(): boolean {
+  const envPolling = process.env.CHOKIDAR_USEPOLLING;
+  if (envPolling === undefined) {
+    const platform: string = process.platform;
+    return platform === "os400";
+  }
+  const normalized = envPolling.toLowerCase();
+  if (normalized === "false" || normalized === "0") {
+    return false;
+  }
+  if (normalized === "true" || normalized === "1") {
+    return true;
+  }
+  return Boolean(normalized);
 }
 
 // Requires resolveWatchTargets to produce a stable-order result (it returns a
@@ -424,9 +509,11 @@ function sameWatchTargets(a: WatchTarget[], b: WatchTarget[]): boolean {
 }
 
 function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): SkillsPathWatchState {
+  const usePolling = resolveSkillsWatcherUsePolling();
   const watcher = chokidar.watch(target.path, {
     ignoreInitial: true,
     followSymlinks: false,
+    usePolling,
     // Skill root precedence and grouped discovery use the same bounded depth,
     // so watcher invalidation must observe that whole decision surface.
     depth: target.depth,
@@ -434,7 +521,7 @@ function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): Skill
       stabilityThreshold: debounceMs,
       pollInterval: 100,
     },
-    ignored: shouldIgnoreSkillsWatchPath,
+    ignored: (watchPath, stats) => shouldIgnoreSkillsWatchPath(watchPath, stats, { usePolling }),
   });
 
   const state: SkillsPathWatchState = {
@@ -465,11 +552,36 @@ function createSkillsPathWatcher(target: WatchTarget, debounceMs: number): Skill
       }
     }, debounceMs);
   };
+  const scheduleRawSkillFile = (changedPath: string) => {
+    void waitForStableSkillFile(changedPath, debounceMs)
+      .catch((err: unknown) => {
+        log.warn(`skills watcher stability check failed (${changedPath}): ${String(err)}`);
+      })
+      .then(() => schedule(changedPath));
+  };
 
+  watcher.on("addDir", (p) => schedule(p));
   watcher.on("add", (p) => schedule(p));
   watcher.on("change", (p) => schedule(p));
   watcher.on("unlink", (p) => schedule(p));
   watcher.on("unlinkDir", (p) => schedule(p));
+  watcher.on("raw", (_eventName, rawPath, details) => {
+    const rawPathText = rawPathToString(rawPath);
+    if (!rawPathText) {
+      const watchedPath = getRawWatchedPath(details);
+      if (watchedPath) {
+        schedule(watchedPath);
+      }
+      return;
+    }
+    const changedPath = resolveRawSkillsWatchPath(rawPathText, details);
+    if (changedPath && isSkillFileWatchPath(changedPath)) {
+      if (usePolling) {
+        return;
+      }
+      scheduleRawSkillFile(changedPath);
+    }
+  });
   watcher.on("error", (err) => {
     log.warn(`skills watcher error (${target.path}): ${String(err)}`);
   });

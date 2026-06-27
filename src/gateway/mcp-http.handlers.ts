@@ -47,6 +47,13 @@ export async function handleMcpJsonRpc(params: {
   toolSchema: McpToolSchemaEntry[];
   hookContext?: HookContext;
   signal?: AbortSignal;
+  onToolCallResult?: (call: {
+    toolName: string;
+    args: Record<string, unknown>;
+    result?: unknown;
+    isError: boolean;
+  }) => void;
+  onToolCallPrepared?: (call: { toolName: string; args: Record<string, unknown> }) => void;
 }): Promise<object | null> {
   const { id, method, params: methodParams } = params.message;
 
@@ -97,6 +104,19 @@ export async function handleMcpJsonRpc(params: {
         });
       }
       const toolCallId = `mcp-${crypto.randomUUID()}`;
+      let executedToolArgs = toolArgs;
+      const reportToolCallResult = (result: unknown, isError: boolean) => {
+        try {
+          params.onToolCallResult?.({
+            toolName,
+            args: executedToolArgs,
+            result,
+            isError,
+          });
+        } catch {
+          // Observability callbacks must never alter the tool result returned to the MCP client.
+        }
+      };
       try {
         // Gateway before-tool hooks still run for loopback MCP calls so policy
         // and audit behavior matches native tool calls from normal chat runs.
@@ -113,12 +133,20 @@ export async function handleMcpJsonRpc(params: {
             isError: true,
           });
         }
+        executedToolArgs = hookResult.params as Record<string, unknown>;
+        try {
+          params.onToolCallPrepared?.({ toolName, args: executedToolArgs });
+        } catch {
+          // Observability callbacks must never alter the tool result returned to the MCP client.
+        }
         const result = await tool.execute(toolCallId, hookResult.params, params.signal);
+        reportToolCallResult(result, false);
         return jsonRpcResult(id, {
           content: normalizeToolCallContent(result),
           isError: false,
         });
       } catch (error) {
+        reportToolCallResult(error, true);
         const message = formatErrorMessage(error);
         return jsonRpcResult(id, {
           content: [{ type: "text", text: message || "tool execution failed" }],

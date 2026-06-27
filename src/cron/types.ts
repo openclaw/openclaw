@@ -221,11 +221,17 @@ export type CronFailureAlert = {
   accountId?: string;
 };
 
-/** Payload variants cron can execute in main-session or isolated-agent modes. */
-export type CronPayload = { kind: "systemEvent"; text: string } | CronAgentTurnPayload;
+/** Payload variants cron can execute in main-session or detached modes. */
+export type CronPayload =
+  | { kind: "systemEvent"; text: string }
+  | CronAgentTurnPayload
+  | CronCommandPayload;
 
 /** Partial payload update shape used by cron patch/edit flows. */
-export type CronPayloadPatch = { kind: "systemEvent"; text?: string } | CronAgentTurnPayloadPatch;
+export type CronPayloadPatch =
+  | { kind: "systemEvent"; text?: string }
+  | CronAgentTurnPayloadPatch
+  | CronCommandPayloadPatch;
 
 type CronAgentTurnPayloadFields = {
   message: string;
@@ -242,6 +248,8 @@ type CronAgentTurnPayloadFields = {
   lightContext?: boolean;
   /** Optional tool allow-list; when set, only these tools are sent to the model. */
   toolsAllow?: string[];
+  /** Server-managed marker for auto-stamped defaults; explicit restrictions omit it. */
+  toolsAllowIsDefault?: boolean;
 };
 
 type CronAgentTurnPayload = {
@@ -250,9 +258,30 @@ type CronAgentTurnPayload = {
 
 type CronAgentTurnPayloadPatch = {
   kind: "agentTurn";
-} & Partial<Omit<CronAgentTurnPayloadFields, "toolsAllow">> & {
+} & Partial<Omit<CronAgentTurnPayloadFields, "model" | "fallbacks" | "toolsAllow">> & {
+    model?: string | null;
+    fallbacks?: string[] | null;
     toolsAllow?: string[] | null;
   };
+
+type CronCommandPayloadFields = {
+  /** Explicit argv vector to execute. Use a shell wrapper argv for shell syntax. */
+  argv: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  input?: string;
+  timeoutSeconds?: number;
+  noOutputTimeoutSeconds?: number;
+  outputMaxBytes?: number;
+};
+
+type CronCommandPayload = {
+  kind: "command";
+} & CronCommandPayloadFields;
+
+type CronCommandPayloadPatch = {
+  kind: "command";
+} & Partial<CronCommandPayloadFields>;
 /** Mutable runtime state persisted beside the immutable cron job spec. */
 export type CronJobState = {
   nextRunAtMs?: number;

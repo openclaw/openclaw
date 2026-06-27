@@ -1,12 +1,14 @@
 // Tui Pty Test Watch script supports OpenClaw repository automation.
-import { spawn } from "node:child_process";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { spawn, spawnSync } from "node:child_process";
+import { mkdir, open, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { resolveWindowsTaskkillPath } from "../lib/windows-taskkill.mjs";
 
 type Options = {
   altScreen: boolean;
+  help: boolean;
   mirrorPath: string;
   mode: "fake" | "local" | "all";
   vitestArgs: string[];
@@ -24,6 +26,14 @@ const DEFAULT_PTY_COLS = 100;
 const DEFAULT_PTY_ROWS = 30;
 const CHILD_SIGTERM_GRACE_MS = 500;
 const CHILD_SIGKILL_GRACE_MS = 5_000;
+const MIRROR_READ_CHUNK_BYTES = 1024 * 1024;
+const CHILD_OUTPUT_TAIL_BYTES = 128 * 1024;
+const BOOLEAN_OPTIONS = new Set(["--help", "-h", "--no-alt-screen"]);
+const VALUE_OPTIONS = new Set(["--mode", "--mirror-path"]);
+
+class CliArgumentError extends Error {
+  override name = "CliArgumentError";
+}
 
 type KillableChild = {
   pid?: number;
@@ -37,6 +47,12 @@ type ChildStopper = {
 
 type SignalChild = (child: KillableChild, signal: NodeJS.Signals) => void;
 
+type RunTaskkill = (
+  command: string,
+  args: string[],
+  options: { stdio: "ignore" },
+) => { error?: unknown; status?: number | null } | undefined;
+
 function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
   (timer as { unref?: () => void }).unref?.();
 }
@@ -46,7 +62,11 @@ function readOption(args: string[], name: string): string | undefined {
   if (idx < 0) {
     return undefined;
   }
-  return args[idx + 1]?.trim() || undefined;
+  const value = args[idx + 1];
+  if (!value || value.startsWith("-")) {
+    throw new CliArgumentError(`${name} requires a value`);
+  }
+  return value.trim();
 }
 
 function readMode(args: string[]): Options["mode"] {
@@ -54,20 +74,46 @@ function readMode(args: string[]): Options["mode"] {
   if (mode === "fake" || mode === "local" || mode === "all") {
     return mode;
   }
-  throw new Error(`--mode must be fake, local, or all; got ${JSON.stringify(mode)}`);
+  throw new CliArgumentError(`--mode must be fake, local, or all; got ${JSON.stringify(mode)}`);
+}
+
+function usage(): string {
+  return [
+    "Usage: node --import tsx scripts/dev/tui-pty-test-watch.ts [options] [-- vitest args...]",
+    "",
+    "Options:",
+    "  --mode <fake|local|all>   Select TUI PTY test group (default: fake)",
+    "  --mirror-path <path>       Write/read mirrored ANSI output at this path",
+    "  --no-alt-screen            Print without switching to the terminal alt screen",
+    "  -h, --help                 Show this help",
+  ].join("\n");
+}
+
+function validateOwnArgs(args: string[]): void {
+  for (let idx = 0; idx < args.length; idx += 1) {
+    const arg = args[idx] ?? "";
+    if (BOOLEAN_OPTIONS.has(arg)) {
+      continue;
+    }
+    if (VALUE_OPTIONS.has(arg)) {
+      idx += 1;
+      continue;
+    }
+    throw new CliArgumentError(`Unknown argument: ${arg}`);
+  }
 }
 
 function parseOptions(args = process.argv.slice(2)): Options {
   const separator = args.indexOf("--");
   const ownArgs = separator >= 0 ? args.slice(0, separator) : args;
   const vitestArgs = separator >= 0 ? args.slice(separator + 1) : [];
-  const mirrorPath =
-    readOption(ownArgs, "--mirror-path") !== undefined
-      ? path.resolve(readOption(ownArgs, "--mirror-path") ?? "")
-      : DEFAULT_MIRROR_PATH;
+  validateOwnArgs(ownArgs);
+  const mirrorPathOption = readOption(ownArgs, "--mirror-path");
   return {
     altScreen: !ownArgs.includes("--no-alt-screen"),
-    mirrorPath,
+    help: ownArgs.includes("--help") || ownArgs.includes("-h"),
+    mirrorPath:
+      mirrorPathOption !== undefined ? path.resolve(mirrorPathOption) : DEFAULT_MIRROR_PATH,
     mode: readMode(ownArgs),
     vitestArgs,
   };
@@ -92,14 +138,55 @@ function currentTerminalDimension(value: number | undefined, fallback: number): 
   return String(value && value > 0 ? value : fallback);
 }
 
-function signalChildProcessTree(child: KillableChild, signal: NodeJS.Signals): void {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+function signalWindowsProcessTree(
+  pid: number,
+  signal: NodeJS.Signals,
+  runTaskkill: RunTaskkill = spawnSync,
+): boolean {
+  const args = ["/PID", String(pid), "/T"];
+  if (signal === "SIGKILL") {
+    args.push("/F");
+  }
+  const result = runTaskkill(resolveWindowsTaskkillPath(), args, { stdio: "ignore" });
+  return !result?.error && result?.status === 0;
+}
+
+function signalWindowsProcessTreeOrForce(
+  pid: number,
+  signal: NodeJS.Signals,
+  runTaskkill: RunTaskkill = spawnSync,
+): boolean {
+  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
+    return true;
+  }
+  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
+}
+
+function signalChildProcessTree(
+  child: KillableChild,
+  signal: NodeJS.Signals,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useProcessGroup = platform !== "win32",
+  }: {
+    platform?: NodeJS.Platform;
+    runTaskkill?: RunTaskkill;
+    useProcessGroup?: boolean;
+  } = {},
+): void {
+  if (useProcessGroup && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;
     } catch {
       // Non-detached fallback or already-exited group; direct child signaling is
       // still useful on platforms without process groups.
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
+      return;
     }
   }
   child.kill(signal);
@@ -155,20 +242,62 @@ async function createMirrorFile(mirrorPath: string): Promise<void> {
   await writeFile(mirrorPath, "", "utf8");
 }
 
-async function readNewMirrorData(mirrorPath: string, offset: number) {
-  const data = await readFile(mirrorPath);
-  const nextOffset = data.byteLength;
-  if (nextOffset < offset) {
-    return { chunk: data, offset: nextOffset };
+async function readNewMirrorData(
+  mirrorPath: string,
+  offset: number,
+  maxChunkBytes = MIRROR_READ_CHUNK_BYTES,
+) {
+  const file = await open(mirrorPath, "r");
+  try {
+    const stats = await file.stat();
+    const readOffset = stats.size < offset ? 0 : offset;
+    const availableBytes = stats.size - readOffset;
+    if (availableBytes <= 0) {
+      return { chunk: Buffer.alloc(0), offset: readOffset };
+    }
+    const bytesToRead = Math.min(availableBytes, maxChunkBytes);
+    const buffer = Buffer.alloc(bytesToRead);
+    const { bytesRead } = await file.read(buffer, 0, bytesToRead, readOffset);
+    return { chunk: buffer.subarray(0, bytesRead), offset: readOffset + bytesRead };
+  } finally {
+    await file.close();
   }
-  if (nextOffset === offset) {
-    return { chunk: Buffer.alloc(0), offset };
+}
+
+function appendBufferTail(current: Buffer, chunk: Buffer, maxBytes = CHILD_OUTPUT_TAIL_BYTES) {
+  if (chunk.byteLength >= maxBytes) {
+    return chunk.subarray(chunk.byteLength - maxBytes);
   }
-  return { chunk: data.subarray(offset), offset: nextOffset };
+  if (current.byteLength + chunk.byteLength <= maxBytes) {
+    return current.byteLength === 0 ? Buffer.from(chunk) : Buffer.concat([current, chunk]);
+  }
+  const keepBytes = maxBytes - chunk.byteLength;
+  return Buffer.concat([current.subarray(current.byteLength - keepBytes), chunk]);
+}
+
+async function drainNewMirrorData(
+  mirrorPath: string,
+  offset: number,
+  onChunk: (chunk: Buffer) => void,
+  maxChunkBytes = MIRROR_READ_CHUNK_BYTES,
+) {
+  let nextOffset = offset;
+  for (;;) {
+    const result = await readNewMirrorData(mirrorPath, nextOffset, maxChunkBytes);
+    nextOffset = result.offset;
+    if (result.chunk.byteLength === 0) {
+      return nextOffset;
+    }
+    onChunk(result.chunk);
+  }
 }
 
 async function main(): Promise<void> {
   const options = parseOptions();
+  if (options.help) {
+    process.stdout.write(`${usage()}\n`);
+    return;
+  }
   const useAltScreen = shouldUseAltScreen(options);
   await createMirrorFile(options.mirrorPath);
 
@@ -200,8 +329,8 @@ async function main(): Promise<void> {
     },
   );
 
-  let childStdout = "";
-  let childStderr = "";
+  let childStdout = Buffer.alloc(0);
+  let childStderr = Buffer.alloc(0);
   let restored = false;
   let mirrorOffset = 0;
   let mirrorFilterPending = "";
@@ -309,10 +438,10 @@ async function main(): Promise<void> {
   }
 
   child.stdout?.on("data", (chunk: Buffer) => {
-    childStdout += chunk.toString("utf8");
+    childStdout = appendBufferTail(childStdout, chunk);
   });
   child.stderr?.on("data", (chunk: Buffer) => {
-    childStderr += chunk.toString("utf8");
+    childStderr = appendBufferTail(childStderr, chunk);
   });
 
   type ChildExit = { code: number | null; signal: NodeJS.Signals | null };
@@ -345,10 +474,7 @@ async function main(): Promise<void> {
       await delay(sawMirrorOutput ? 25 : 250);
     }
 
-    const result = await readNewMirrorData(options.mirrorPath, mirrorOffset);
-    if (result.chunk.byteLength > 0) {
-      writeMirrorChunk(result.chunk);
-    }
+    mirrorOffset = await drainNewMirrorData(options.mirrorPath, mirrorOffset, writeMirrorChunk);
   } finally {
     if (!childExit) {
       stopChild();
@@ -368,10 +494,10 @@ async function main(): Promise<void> {
     childExit = await childFinished;
   }
 
-  if (childStdout) {
+  if (childStdout.byteLength > 0) {
     process.stdout.write(childStdout);
   }
-  if (childStderr) {
+  if (childStderr.byteLength > 0) {
     process.stderr.write(childStderr);
   }
 
@@ -385,6 +511,10 @@ async function main(): Promise<void> {
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   main().catch((error: unknown) => {
+    if (error instanceof CliArgumentError) {
+      process.stderr.write(`${error.message}\n`);
+      process.exit(1);
+    }
     process.stderr.write(
       `${error instanceof Error ? error.stack || error.message : String(error)}\n`,
     );
@@ -393,6 +523,11 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 }
 
 export const testing = {
+  appendBufferTail,
   createChildStopper,
+  drainNewMirrorData,
+  parseOptions,
+  readNewMirrorData,
   signalChildProcessTree,
+  usage,
 };

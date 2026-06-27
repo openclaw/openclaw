@@ -69,12 +69,18 @@ const MODELS: Record<string, ModelSpec> = {
   "twelvelabs.marengo-embed-3-0-v1:0": { maxTokens: 512, dims: 512, family: "twelvelabs" },
 };
 
+/** Strip AWS inference profile prefix (us., eu., ap., apac., au., jp., global.) from model ID. */
+function stripInferenceProfilePrefix(modelId: string): string {
+  return modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
+}
+
 /** Resolve spec, stripping throughput suffixes like `:2:8k` or `:0:512`. */
 function resolveSpec(modelId: string): ModelSpec | undefined {
-  if (MODELS[modelId]) {
-    return MODELS[modelId];
+  const bare = stripInferenceProfilePrefix(modelId);
+  if (MODELS[bare]) {
+    return MODELS[bare];
   }
-  const parts = modelId.split(":");
+  const parts = bare.split(":");
   for (let i = parts.length - 1; i >= 1; i--) {
     const spec = MODELS[parts.slice(0, i).join(":")];
     if (spec) {
@@ -86,7 +92,7 @@ function resolveSpec(modelId: string): ModelSpec | undefined {
 
 /** Infer family from model ID prefix when not in catalog. */
 function inferFamily(modelId: string): Family {
-  const id = normalizeLowercaseStringOrEmpty(modelId);
+  const id = normalizeLowercaseStringOrEmpty(stripInferenceProfilePrefix(modelId));
   if (id.startsWith("amazon.titan-embed-text-v2")) {
     return "titan-v2";
   }
@@ -312,6 +318,7 @@ function parseCohereBatch(family: Family, raw: string): number[][] {
 export const testing = {
   parseCohereBatch,
   parseSingle,
+  stripInferenceProfilePrefix,
 };
 
 // ---------------------------------------------------------------------------

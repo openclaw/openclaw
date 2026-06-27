@@ -82,6 +82,40 @@ describe("pw-tools-core browser SSRF guards", () => {
     });
   });
 
+  it("preserves SSRF policy when aborting a pending click", async () => {
+    const ctrl = new AbortController();
+    let clickStarted: () => void = () => {};
+    const clickStartedPromise = new Promise<void>((resolve) => {
+      clickStarted = resolve;
+    });
+    pageState.page = { url: vi.fn(() => "https://example.com") };
+    pageState.locator = {
+      click: vi.fn(() => {
+        clickStarted();
+        return new Promise(() => {});
+      }),
+    };
+
+    const task = interactions.clickViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      ref: "1",
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      signal: ctrl.signal,
+    });
+
+    await clickStartedPromise;
+    ctrl.abort(new Error("aborted by test"));
+
+    await expect(task).rejects.toThrow("aborted by test");
+    expect(sessionMocks.forceDisconnectPlaywrightForTarget).toHaveBeenCalledWith({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      ssrfPolicy: { dangerouslyAllowPrivateNetwork: false },
+      reason: "click aborted",
+    });
+  });
+
   it("re-checks select-triggered navigations with the session safety helper", async () => {
     let currentUrl = "https://example.com";
     pageState.page = { url: vi.fn(() => currentUrl) };

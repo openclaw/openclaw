@@ -34,7 +34,7 @@ type SkillSourceOrigin = {
   };
 };
 
-export type SkillSourceInstallResult =
+type SkillSourceInstallResult =
   | {
       ok: true;
       slug: string;

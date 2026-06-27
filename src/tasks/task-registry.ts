@@ -14,10 +14,11 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { parseAgentSessionKey } from "../routing/session-key.js";
+import { normalizeAgentId, parseAgentSessionKey } from "../routing/session-key.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.shared.js";
 import { isDeliverableMessageChannel } from "../utils/message-channel.js";
-import { isChildlessCodexNativeSubagentTask } from "./codex-native-subagent-task.js";
+import { cancelActiveCronTaskRun } from "./cron-task-cancel.js";
+import { isChildlessNativeSubagentTask } from "./native-subagent-task.js";
 import {
   formatTaskBlockedFollowupMessage,
   formatTaskStateChangeMessage,
@@ -42,7 +43,6 @@ import {
   resetTaskRegistryRuntimeForTests,
   type TaskRegistryObserverEvent,
 } from "./task-registry.store.js";
-import { summarizeTaskRecords } from "./task-registry.summary.js";
 import type {
   TaskDeliveryState,
   TaskDeliveryStatus,
@@ -50,8 +50,6 @@ import type {
   TaskEventRecord,
   TaskNotifyPolicy,
   TaskRecord,
-  TaskRegistrySummary,
-  TaskRegistrySnapshot,
   TaskRuntime,
   TaskScopeKind,
   TaskStatus,
@@ -856,6 +854,7 @@ function mergeExistingTaskForCreate(
     parentFlowId?: string;
     parentTaskId?: string;
     agentId?: string;
+    requesterAgentId?: string;
     label?: string;
     task: string;
     preferMetadata?: boolean;
@@ -896,6 +895,9 @@ function mergeExistingTaskForCreate(
   if (params.agentId?.trim() && !existing.agentId?.trim()) {
     patch.agentId = params.agentId.trim();
   }
+  if (params.requesterAgentId?.trim() && !existing.requesterAgentId?.trim()) {
+    patch.requesterAgentId = params.requesterAgentId.trim();
+  }
   const nextLabel = params.label?.trim();
   if (params.preferMetadata) {
     if (nextLabel && (normalizeOptionalString(existing.label) ?? "") !== nextLabel) {
@@ -928,11 +930,26 @@ function mergeExistingTaskForCreate(
 
 function resolveTaskAgentId(params: {
   explicitAgentId?: string;
+  childSessionKey?: string;
   ownerKey: string;
   requesterSessionKey: string;
 }): string | undefined {
   return (
     normalizeOptionalString(params.explicitAgentId) ??
+    parseAgentSessionKey(params.childSessionKey)?.agentId ??
+    parseAgentSessionKey(params.ownerKey)?.agentId ??
+    parseAgentSessionKey(params.requesterSessionKey)?.agentId
+  );
+}
+
+function resolveTaskRequesterAgentId(params: {
+  explicitRequesterAgentId?: string;
+  ownerKey: string;
+  requesterSessionKey: string;
+}): string | undefined {
+  const explicitRequesterAgentId = normalizeOptionalString(params.explicitRequesterAgentId);
+  return (
+    (explicitRequesterAgentId ? normalizeAgentId(explicitRequesterAgentId) : undefined) ??
     parseAgentSessionKey(params.ownerKey)?.agentId ??
     parseAgentSessionKey(params.requesterSessionKey)?.agentId
   );
@@ -1234,10 +1251,32 @@ function canDeliverTaskToRequesterOrigin(task: TaskRecord): boolean {
   if (shouldRouteCompletionThroughRequesterSession(owner.sessionKey)) {
     return false;
   }
-  const origin = owner.requesterOrigin;
+  return canDeliverToRequesterOrigin(owner.requesterOrigin);
+}
+
+function canDeliverToRequesterOrigin(origin: TaskDeliveryState["requesterOrigin"]): boolean {
   const channel = origin?.channel?.trim();
   const to = origin?.to?.trim();
   return Boolean(channel && to && isDeliverableMessageChannel(channel));
+}
+
+function canDeliverParentReviewTaskToBoundDiscordThread(task: TaskRecord): boolean {
+  if (!shouldUseParentReviewTaskTerminalMessage(task)) {
+    return false;
+  }
+  const owner = resolveTaskDeliveryOwner(task);
+  const origin = owner.requesterOrigin;
+  const channel = origin?.channel?.trim().toLowerCase();
+  const to = origin?.to?.trim().toLowerCase();
+  const threadId = String(origin?.threadId ?? "").trim();
+  // This is a narrow transport exception for explicitly bound Discord threads,
+  // not a general parent-review direct-delivery relaxation.
+  return Boolean(
+    channel === "discord" &&
+    to?.startsWith("channel:") &&
+    threadId &&
+    canDeliverToRequesterOrigin(origin),
+  );
 }
 
 function resolveMissingOwnerDeliveryStatus(task: TaskRecord): TaskDeliveryStatus {
@@ -1323,13 +1362,15 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
       });
     }
     const shouldRouteParentReview = shouldUseParentReviewTaskTerminalMessage(latest);
-    const canDeliverDirect = canDeliverTaskToRequesterOrigin(latest);
+    const shouldDeliverParentReviewDirect = canDeliverParentReviewTaskToBoundDiscordThread(latest);
+    const canDeliverDirect =
+      canDeliverTaskToRequesterOrigin(latest) || shouldDeliverParentReviewDirect;
     const directEventText = formatTaskTerminalMessage(latest);
     const sessionEventText = formatTaskTerminalMessage(
       latest,
       shouldRouteParentReview ? { surface: "parent_session" } : undefined,
     );
-    if (shouldRouteParentReview || !canDeliverDirect) {
+    if ((shouldRouteParentReview && !shouldDeliverParentReviewDirect) || !canDeliverDirect) {
       try {
         queueTaskSystemEvent(latest, sessionEventText);
         if (latest.terminalOutcome === "blocked") {
@@ -1361,7 +1402,7 @@ export async function maybeDeliverTaskTerminalUpdate(taskId: string): Promise<Ta
         to: owner.requesterOrigin?.to ?? "",
         accountId: owner.requesterOrigin?.accountId,
         threadId: owner.requesterOrigin?.threadId,
-        content: directEventText,
+        content: shouldDeliverParentReviewDirect ? sessionEventText : directEventText,
         agentId: requesterAgentId,
         idempotencyKey,
         mirror: {
@@ -1480,42 +1521,6 @@ export async function maybeDeliverTaskStateChangeUpdate(
     });
     return cloneTaskRecord(current);
   }
-}
-
-export function setTaskProgressById(params: {
-  taskId: string;
-  progressSummary?: string | null;
-  lastEventAt?: number;
-}): TaskRecord | null {
-  ensureTaskRegistryReady();
-  const patch: Partial<TaskRecord> = {};
-  if (params.progressSummary !== undefined) {
-    patch.progressSummary = normalizeTaskSummary(params.progressSummary);
-  }
-  if (params.lastEventAt != null) {
-    patch.lastEventAt = params.lastEventAt;
-  }
-  return updateTask(params.taskId, patch);
-}
-
-export function setTaskTimingById(params: {
-  taskId: string;
-  startedAt?: number;
-  endedAt?: number;
-  lastEventAt?: number;
-}): TaskRecord | null {
-  ensureTaskRegistryReady();
-  const patch: Partial<TaskRecord> = {};
-  if (params.startedAt != null) {
-    patch.startedAt = params.startedAt;
-  }
-  if (params.endedAt != null) {
-    patch.endedAt = params.endedAt;
-  }
-  if (params.lastEventAt != null) {
-    patch.lastEventAt = params.lastEventAt;
-  }
-  return updateTask(params.taskId, patch);
 }
 
 export function setTaskCleanupAfterById(params: {
@@ -1686,6 +1691,7 @@ export function createTaskRecord(params: {
   parentFlowId?: string;
   parentTaskId?: string;
   agentId?: string;
+  requesterAgentId?: string;
   runId?: string;
   label?: string;
   task: string;
@@ -1712,6 +1718,12 @@ export function createTaskRecord(params: {
   });
   const agentId = resolveTaskAgentId({
     explicitAgentId: params.agentId,
+    childSessionKey: params.childSessionKey,
+    ownerKey,
+    requesterSessionKey,
+  });
+  const requesterAgentId = resolveTaskRequesterAgentId({
+    explicitRequesterAgentId: params.requesterAgentId,
     ownerKey,
     requesterSessionKey,
   });
@@ -1765,6 +1777,7 @@ export function createTaskRecord(params: {
     parentFlowId: normalizeOptionalString(params.parentFlowId),
     parentTaskId: normalizeOptionalString(params.parentTaskId),
     agentId,
+    requesterAgentId,
     runId: normalizeOptionalString(params.runId),
     label: normalizeOptionalString(params.label),
     task: params.task,
@@ -1965,22 +1978,6 @@ export function recordTaskProgressByRunId(params: {
   });
 }
 
-export function markTaskTerminalByRunId(params: {
-  runId: string;
-  runtime?: TaskRuntime;
-  sessionKey?: string;
-  status: Extract<TaskStatus, "succeeded" | "failed" | "timed_out" | "cancelled">;
-  startedAt?: number;
-  endedAt: number;
-  lastEventAt?: number;
-  error?: string;
-  progressSummary?: string | null;
-  terminalSummary?: string | null;
-  terminalOutcome?: TaskTerminalOutcome | null;
-}) {
-  return finalizeTaskRunByRunId(params);
-}
-
 export function finalizeTaskRunByRunId(params: {
   runId: string;
   runtime?: TaskRuntime;
@@ -2080,8 +2077,22 @@ export async function cancelTaskById(params: {
   const childSessionKey = task.childSessionKey?.trim();
   try {
     if (task.runtime !== "cli") {
-      if (!childSessionKey) {
-        if (!isChildlessCodexNativeSubagentTask(task)) {
+      if (task.runtime === "cron") {
+        if (
+          !cancelActiveCronTaskRun({
+            runId: task.runId,
+            reason: params.reason?.trim() || "Cancelled by operator.",
+          })
+        ) {
+          return {
+            found: true,
+            cancelled: false,
+            reason: "Cron task has no active cancellation handle.",
+            task: cloneTaskRecord(task),
+          };
+        }
+      } else if (!childSessionKey) {
+        if (!isChildlessNativeSubagentTask(task)) {
           return {
             found: true,
             cancelled: false,
@@ -2090,7 +2101,10 @@ export async function cancelTaskById(params: {
           };
         }
       }
-      if (!childSessionKey) {
+      if (task.runtime === "cron") {
+        // The live cron service owns the abort signal; registry finalization below
+        // keeps CLI/Gateway callers aligned while the run unwinds.
+      } else if (!childSessionKey) {
         // Codex native subagents are mirrored from the Codex app server and do
         // not have OpenClaw child sessions to terminate. Cancellation clears
         // the stale task-registry record only.
@@ -2193,18 +2207,6 @@ export function hasActiveTaskForChildSessionKey(params: {
   return false;
 }
 
-export function getTaskRegistrySummary(): TaskRegistrySummary {
-  ensureTaskRegistryReady();
-  return summarizeTaskRecords(tasks.values());
-}
-
-export function getTaskRegistrySnapshot(): TaskRegistrySnapshot {
-  return {
-    tasks: listTaskRecords(),
-    deliveryStates: [...taskDeliveryStates.values()].map((state) => cloneTaskDeliveryState(state)),
-  };
-}
-
 export function getTaskById(taskId: string): TaskRecord | undefined {
   ensureTaskRegistryReady();
   const task = tasks.get(taskId.trim());
@@ -2238,11 +2240,6 @@ function listTasksFromIndex(index: Map<string, Set<string>>, key: string): TaskR
     .map(({ insertionIndex: _, ...task }) => task);
 }
 
-export function findLatestTaskForSessionKey(sessionKey: string): TaskRecord | undefined {
-  const task = listTasksForSessionKey(sessionKey)[0];
-  return task ? cloneTaskRecord(task) : undefined;
-}
-
 export function listTasksForSessionKey(sessionKey: string): TaskRecord[] {
   ensureTaskRegistryReady();
   const key = normalizeOptionalString(sessionKey);
@@ -2261,11 +2258,6 @@ export function listTasksForAgentId(agentId: string): TaskRecord[] {
   return snapshotTaskRecords(tasks)
     .filter((task) => task.agentId?.trim() === lookup)
     .toSorted(compareTasksNewestFirst);
-}
-
-export function findLatestTaskForOwnerKey(ownerKey: string): TaskRecord | undefined {
-  const task = listTasksForOwnerKey(ownerKey)[0];
-  return task ? cloneTaskRecord(task) : undefined;
 }
 
 export function findLatestTaskForFlowId(flowId: string): TaskRecord | undefined {

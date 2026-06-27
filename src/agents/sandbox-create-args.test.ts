@@ -254,6 +254,12 @@ describe("buildSandboxCreateArgs", () => {
       expected: /blocked path/,
     },
     {
+      name: "bind source covering Docker socket directory",
+      containerName: "openclaw-sbx-covers-docker-socket-dir",
+      cfg: createSandboxConfig({}, ["/var:/var"]),
+      expected: /covers blocked path/,
+    },
+    {
       name: "network host mode",
       containerName: "openclaw-sbx-host",
       cfg: createSandboxConfig({ network: "host" }),

@@ -15,7 +15,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { sendDurableMessageBatch } from "../../channels/message/runtime.js";
-import { normalizeChannelId } from "../../channels/plugins/index.js";
 import { dispatchChannelMessageAction } from "../../channels/plugins/message-action-dispatch.js";
 import { createOutboundSendDeps } from "../../cli/deps.js";
 import {
@@ -26,6 +25,10 @@ import {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveOutboundChannelPlugin } from "../../infra/outbound/channel-resolution.js";
 import { resolveMessageChannelSelection } from "../../infra/outbound/channel-selection.js";
+import {
+  hydrateAttachmentParamsForAction,
+  resolveAttachmentMediaPolicy,
+} from "../../infra/outbound/message-action-params.js";
 import {
   ensureOutboundSessionEntry,
   resolveOutboundSessionRoute,
@@ -38,13 +41,14 @@ import { buildOutboundSessionContext } from "../../infra/outbound/session-contex
 import { mirrorDeliveredSourceReplyToTranscript } from "../../infra/outbound/source-reply-mirror.js";
 import { maybeResolveIdLikeTarget } from "../../infra/outbound/target-resolver.js";
 import { resolveOutboundTarget } from "../../infra/outbound/targets.js";
-import { extractToolPayload } from "../../infra/outbound/tool-payload.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
+import { extractToolPayload } from "../../plugin-sdk/tool-payload.js";
 import { normalizePollInput } from "../../polls.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { resolveGatewayPluginConfig } from "../runtime-plugin-config.js";
 import { formatForLog } from "../ws-log.js";
@@ -173,17 +177,16 @@ async function resolveRequestedChannel(params: {
     }
 > {
   const channelInput = readStringValue(params.requestChannel);
-  const normalizedChannel = channelInput ? normalizeChannelId(channelInput) : null;
+  const normalizedChannel = channelInput ? normalizeMessageChannel(channelInput) : undefined;
+  if (params.rejectWebchatAsInternalOnly && normalizedChannel === INTERNAL_MESSAGE_CHANNEL) {
+    return {
+      error: errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
+      ),
+    };
+  }
   if (channelInput && !normalizedChannel) {
-    const normalizedInput = normalizeOptionalLowercaseString(channelInput) ?? "";
-    if (params.rejectWebchatAsInternalOnly && normalizedInput === "webchat") {
-      return {
-        error: errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "unsupported channel: webchat (internal-only). Use `chat.send` for WebChat UI messages or choose a deliverable channel.",
-        ),
-      };
-    }
     return {
       error: errorShape(ErrorCodes.INVALID_REQUEST, params.unsupportedMessage(channelInput)),
     };
@@ -458,6 +461,7 @@ export const sendHandlers: GatewayRequestHandlers = {
       action: string;
       params: Record<string, unknown>;
       accountId?: string;
+      requesterAccountId?: string;
       requesterSenderId?: string;
       senderIsOwner?: boolean;
       sessionKey?: string;
@@ -466,9 +470,15 @@ export const sendHandlers: GatewayRequestHandlers = {
       agentId?: string;
       toolContext?: {
         currentChannelId?: string;
+        currentMessagingTarget?: string;
+        currentGraphChannelId?: string;
         currentChannelProvider?: string;
         currentThreadTs?: string;
         currentMessageId?: string | number;
+        replyToMode?: "off" | "first" | "all" | "batched";
+        hasRepliedRef?: { value: boolean };
+        sameChannelThreadRequired?: boolean;
+        skipCrossContextDecoration?: boolean;
       };
       idempotencyKey: string;
     };
@@ -507,25 +517,40 @@ export const sendHandlers: GatewayRequestHandlers = {
       }
 
       try {
+        const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
+        const agentId =
+          normalizeOptionalString(request.agentId) ??
+          (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
+        const accountId = normalizeOptionalString(request.accountId) ?? undefined;
+        if (request.action === "send") {
+          await hydrateAttachmentParamsForAction({
+            cfg,
+            channel,
+            accountId,
+            args: request.params,
+            action: "send",
+            mediaPolicy: resolveAttachmentMediaPolicy({
+              mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
+            }),
+          });
+        }
         const gatewayClientScopes = client?.connect?.scopes ?? [];
         const handled = await dispatchChannelMessageAction({
           channel,
           action: request.action as never,
           cfg,
           params: request.params,
-          accountId: normalizeOptionalString(request.accountId) ?? undefined,
+          accountId,
+          requesterAccountId: normalizeOptionalString(request.requesterAccountId) ?? undefined,
           requesterSenderId: normalizeOptionalString(request.requesterSenderId) ?? undefined,
           senderIsOwner: gatewayClientScopes.includes(ADMIN_SCOPE)
             ? request.senderIsOwner === true
             : false,
-          sessionKey: normalizeOptionalString(request.sessionKey) ?? undefined,
+          sessionKey,
           sessionId: normalizeOptionalString(request.sessionId) ?? undefined,
           inboundEventKind: request.inboundTurnKind,
-          agentId: normalizeOptionalString(request.agentId) ?? undefined,
-          mediaLocalRoots: getAgentScopedMediaLocalRoots(
-            cfg,
-            normalizeOptionalString(request.agentId) ?? undefined,
-          ),
+          agentId,
+          mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, agentId),
           toolContext: request.toolContext,
           dryRun: false,
           gatewayClientScopes,
@@ -539,10 +564,6 @@ export const sendHandlers: GatewayRequestHandlers = {
           return { ok: false, error, meta: { channel } };
         }
         const payload = extractToolPayload(handled);
-        const sessionKey = normalizeOptionalString(request.sessionKey) ?? undefined;
-        const agentId =
-          normalizeOptionalString(request.agentId) ??
-          (sessionKey ? resolveSessionAgentId({ sessionKey, config: cfg }) : undefined);
         await scheduleDeliveredSourceReplyTranscriptMirror({
           context,
           mirror: {
@@ -583,6 +604,9 @@ export const sendHandlers: GatewayRequestHandlers = {
       message?: string;
       mediaUrl?: string;
       mediaUrls?: string[];
+      buffer?: string;
+      filename?: string;
+      contentType?: string;
       asVoice?: boolean;
       gifPlayback?: boolean;
       channel?: string;
@@ -615,7 +639,8 @@ export const sendHandlers: GatewayRequestHandlers = {
           .map((entry) => normalizeOptionalString(entry))
           .filter((entry): entry is string => Boolean(entry))
       : undefined;
-    if (!message && !mediaUrl && (mediaUrls?.length ?? 0) === 0) {
+    const buffer = readStringValue(request.buffer);
+    if (!message && !mediaUrl && (mediaUrls?.length ?? 0) === 0 && !buffer) {
       respond(
         false,
         undefined,
@@ -663,19 +688,6 @@ export const sendHandlers: GatewayRequestHandlers = {
           accountId,
         });
         const deliveryTarget = idLikeTarget?.to ?? resolvedTarget.to;
-        const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
-        const outboundPayloads = [
-          {
-            text: message,
-            mediaUrl,
-            mediaUrls,
-            ...(request.asVoice === true ? { audioAsVoice: true } : {}),
-          },
-        ];
-        const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
-        const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
-        const mirrorText = mirrorProjection.text;
-        const mirrorMediaUrls = mirrorProjection.mediaUrls;
         // Preserve opaque, case-sensitive peer IDs (e.g. Matrix room ids) on an
         // explicit session key instead of raw-lowercasing it (openclaw#75670).
         // Non-enrolled channels still canonicalize to lowercase via the registry.
@@ -687,6 +699,42 @@ export const sendHandlers: GatewayRequestHandlers = {
           : undefined;
         const defaultAgentId = resolveSessionAgentId({ config: cfg });
         const effectiveAgentId = explicitAgentId ?? sessionAgentId ?? defaultAgentId;
+        const sendArgs: Record<string, unknown> = {
+          mediaUrl,
+          mediaUrls,
+          buffer,
+          filename: normalizeOptionalString(request.filename) ?? undefined,
+          contentType: normalizeOptionalString(request.contentType) ?? undefined,
+        };
+        await hydrateAttachmentParamsForAction({
+          cfg,
+          channel,
+          accountId,
+          args: sendArgs,
+          action: "send",
+          mediaPolicy: resolveAttachmentMediaPolicy({
+            mediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, effectiveAgentId),
+          }),
+        });
+        const hydratedMediaUrl = normalizeOptionalString(sendArgs.mediaUrl);
+        const hydratedMediaUrls = Array.isArray(sendArgs.mediaUrls)
+          ? sendArgs.mediaUrls
+              .map((entry) => normalizeOptionalString(entry))
+              .filter((entry): entry is string => Boolean(entry))
+          : undefined;
+        const outboundDeps = context.deps ? createOutboundSendDeps(context.deps) : undefined;
+        const outboundPayloads = [
+          {
+            text: message,
+            mediaUrl: hydratedMediaUrl,
+            mediaUrls: hydratedMediaUrls,
+            ...(request.asVoice === true ? { audioAsVoice: true } : {}),
+          },
+        ];
+        const outboundPayloadPlan = createOutboundPayloadPlan(outboundPayloads);
+        const mirrorProjection = projectOutboundPayloadPlanForMirror(outboundPayloadPlan);
+        const mirrorText = mirrorProjection.text;
+        const mirrorMediaUrls = mirrorProjection.mediaUrls;
         const derivedRoute = await resolveOutboundSessionRoute({
           cfg,
           channel,

@@ -46,6 +46,7 @@ export type ResolveRuntimePluginDiscoveryProvidersParams = {
   includeUntrustedWorkspacePlugins?: boolean;
   requireCompleteDiscoveryEntryCoverage?: boolean;
   discoveryEntriesOnly?: boolean;
+  includeManifestModelCatalogProviders?: boolean;
   pluginMetadataSnapshot?: PluginMetadataRegistryView;
 };
 
@@ -101,6 +102,18 @@ export function groupPluginDiscoveryProvidersByOrder(
   }
 
   return grouped;
+}
+
+/** Matches a normalized provider filter against all provider-owned identifiers. */
+export function providerMatchesFilter(params: {
+  provider: Pick<ProviderPlugin, "id" | "aliases" | "hookAliases">;
+  providerFilter: string;
+}): boolean {
+  return [
+    params.provider.id,
+    ...(params.provider.aliases ?? []),
+    ...(params.provider.hookAliases ?? []),
+  ].some((providerId) => normalizeProviderId(providerId) === params.providerFilter);
 }
 
 /** Normalizes a plugin discovery response into safe provider-config keys. */

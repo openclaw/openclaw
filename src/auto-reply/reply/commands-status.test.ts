@@ -22,7 +22,7 @@ import {
 } from "../../tasks/task-executor.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { buildStatusReply, buildStatusText } from "./commands-status.js";
+import { buildStatusPluginsReply, buildStatusReply, buildStatusText } from "./commands-status.js";
 import {
   baseCommandTestConfig,
   buildCommandTestParams,
@@ -38,6 +38,29 @@ const providerUsageMock = vi.hoisted(() => ({
     providers: [],
   })),
 }));
+type StatusPluginHealthSnapshot =
+  import("../../status/status-plugin-health.js").StatusPluginHealthSnapshot;
+
+const pluginHealthRuntimeMock = vi.hoisted(() => ({
+  collectInstalledPluginHealthSnapshot: vi.fn(
+    async (): Promise<StatusPluginHealthSnapshot> => ({
+      plugins: [],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeToolQuarantines: [],
+      channelPluginFailures: [],
+    }),
+  ),
+  collectRuntimePluginHealthSnapshot: vi.fn(
+    (): StatusPluginHealthSnapshot => ({
+      plugins: [],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeToolQuarantines: [],
+      channelPluginFailures: [],
+    }),
+  ),
+}));
 
 vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../infra/provider-usage.js")>();
@@ -46,6 +69,8 @@ vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
     loadProviderUsageSummary: providerUsageMock.loadProviderUsageSummary,
   };
 });
+
+vi.mock("../../status/status-plugin-health.runtime.js", () => pluginHealthRuntimeMock);
 
 vi.mock("../../agents/harness/builtin-openclaw.js", () => ({
   createOpenClawAgentHarness: () => ({
@@ -59,6 +84,13 @@ vi.mock("../../agents/harness/builtin-openclaw.js", () => ({
 }));
 
 const baseCfg = baseCommandTestConfig;
+const expectedCodexRuntimeUsageAuth = [
+  {
+    provider: "openai",
+    token: "codex-app-server",
+    hookProvider: "codex",
+  },
+];
 const codexStatusModel: ModelDefinitionConfig = {
   id: "gpt-5.5",
   name: "GPT-5.5",
@@ -113,6 +145,50 @@ function registerStatusCodexHarness(): void {
   registerAgentHarness(harness, { ownerPluginId: "codex" });
 }
 
+function saveStatusTestAuthProfile(params: {
+  dir: string;
+  profileId: string;
+  provider: "openai" | "openai-codex" | "anthropic";
+}): void {
+  saveStatusTestAuthProfiles({
+    dir: params.dir,
+    profiles: [{ profileId: params.profileId, provider: params.provider }],
+  });
+}
+
+function saveStatusTestAuthProfiles(params: {
+  dir: string;
+  profiles: Array<{ profileId: string; provider: "openai" | "openai-codex" | "anthropic" }>;
+}): void {
+  const agentDir = path.join(params.dir, ".openclaw", "agents", "main", "agent");
+  fs.mkdirSync(agentDir, { recursive: true });
+  saveAuthProfileStore(
+    {
+      version: 1,
+      profiles: Object.fromEntries(
+        params.profiles.map((profile) => [
+          profile.profileId,
+          profile.provider === "openai" || profile.provider === "openai-codex"
+            ? {
+                type: "oauth",
+                provider: profile.provider,
+                access: "access-token",
+                refresh: "refresh-token",
+                expires: Date.now() + 60 * 60_000,
+              }
+            : {
+                type: "api_key",
+                provider: "anthropic",
+                key: "anthropic-api-key",
+              },
+        ]),
+      ),
+    },
+    agentDir,
+    { filterExternalAuthProfiles: false, syncExternalCli: false },
+  );
+}
+
 afterEach(() => {
   cliBackendsTesting.resetDepsForTest();
   clearAgentHarnesses();
@@ -120,6 +196,22 @@ afterEach(() => {
   providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
     updatedAt: Date.now(),
     providers: [],
+  });
+  pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockReset();
+  pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockResolvedValue({
+    plugins: [],
+    diagnostics: [],
+    contextEngineQuarantines: [],
+    runtimeToolQuarantines: [],
+    channelPluginFailures: [],
+  });
+  pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot.mockReset();
+  pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot.mockReturnValue({
+    plugins: [],
+    diagnostics: [],
+    contextEngineQuarantines: [],
+    runtimeToolQuarantines: [],
+    channelPluginFailures: [],
   });
 });
 
@@ -553,6 +645,71 @@ describe("buildStatusReply subagent summary", () => {
     });
   });
 
+  it("ignores stale live contextTokens when /status displays the current default model", async () => {
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        models: {
+          providers: {
+            "ollama-cloud": {
+              baseUrl: "https://ollama.com",
+              models: [
+                {
+                  id: "deepseek-v4-pro",
+                  name: "DeepSeek V4 Pro",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 1_000_000,
+                  maxTokens: 128_000,
+                },
+                {
+                  id: "kimi-k2.7-code",
+                  name: "Kimi K2.7 Code",
+                  reasoning: true,
+                  input: ["text", "image"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 262_144,
+                  maxTokens: 128_000,
+                },
+              ],
+            },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-stale-live-context",
+        updatedAt: 0,
+        modelProvider: "ollama-cloud",
+        model: "kimi-k2.7-code",
+        totalTokens: 0,
+        totalTokensFresh: true,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "ollama-cloud",
+      model: "deepseek-v4-pro",
+      contextTokens: 262_144,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: ollama-cloud/deepseek-v4-pro");
+    expect(normalized).toContain("Context: 0/1.0m");
+    expect(normalized).not.toContain("kimi-k2.7-code");
+    expect(normalized).not.toContain("Context: 0/262k");
+    expect(normalized).not.toContain("/262k");
+  });
+
   it("shows gateway and system uptime in /status output", async () => {
     vi.spyOn(process, "uptime").mockReturnValue(2 * 60 * 60 + 5 * 60);
     vi.spyOn(os, "uptime").mockReturnValue(4 * 24 * 60 * 60 + 3 * 60 * 60);
@@ -582,6 +739,70 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     expect(normalizeTestText(text)).toContain("Uptime: gateway 2h 5m · system 4d 3h");
+  });
+
+  it("renders compact plugin health from the runtime snapshot", async () => {
+    pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeToolQuarantines: [],
+      channelPluginFailures: [
+        {
+          channelId: "broken",
+          message: "failed to load setup entry: boom",
+          source: "diagnostic",
+        },
+      ],
+    });
+
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-plugin-health",
+        updatedAt: 0,
+        contextTokens: 32_000,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      workspaceDir: "/tmp/status-plugin-health-workspace",
+      provider: "anthropic",
+      model: "claude-opus-4-5",
+      contextTokens: 32_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    // Compact status reads only the runtime snapshot; no config-driven
+    // channel inspection happens on this path.
+    expect(pluginHealthRuntimeMock.collectRuntimePluginHealthSnapshot).toHaveBeenCalledWith();
+    expect(normalizeTestText(text)).toContain("Plugins: 1 channel plugin failure");
+  });
+
+  it("gates /status plugins behind the plugin command flag", async () => {
+    const commandParams = buildCommandTestParams("/status plugins", {
+      ...baseCfg,
+      commands: { text: true, plugins: false },
+    });
+
+    const reply = await buildStatusPluginsReply({
+      cfg: commandParams.cfg,
+      command: commandParams.command,
+      workspaceDir: commandParams.workspaceDir,
+    });
+
+    expect(reply?.text).toBe(
+      "⚠️ /status plugins is disabled. Set commands.plugins=true to enable.",
+    );
+    expect(pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot).not.toHaveBeenCalled();
   });
 
   it("shows the effective non-OpenClaw embedded harness in /status", async () => {
@@ -622,6 +843,11 @@ describe("buildStatusReply subagent summary", () => {
     expect(normalized).toContain("Runtime: OpenAI Codex");
     expect(normalized).toContain("Fast");
     expect(normalized).not.toContain("Fast · codex");
+    expect(
+      providerUsageMock.loadProviderUsageSummary.mock.calls.some(([params]) =>
+        params?.providers?.includes("openai"),
+      ),
+    ).toBe(false);
   });
 
   it("uses Codex OAuth auth labels for openai models running on the Codex harness", async () => {
@@ -724,12 +950,15 @@ describe("buildStatusReply subagent summary", () => {
           throw new Error("expected provider usage summary call for openai");
         }
         expect(providerUsageCall[0]?.providers).toEqual(["openai"]);
+        expect(providerUsageCall[0]?.auth).toEqual(expectedCodexRuntimeUsageAuth);
       },
       {
         env: {
           OPENAI_API_KEY: undefined,
           OPENAI_OAUTH_TOKEN: undefined,
         },
+        skipSessionCleanup: true,
+        skipHomeCleanup: true,
       },
     );
   });
@@ -808,14 +1037,428 @@ describe("buildStatusReply subagent summary", () => {
           throw new Error("expected provider usage summary call for openai");
         }
         expect(providerUsageCall[0]?.providers).toEqual(["openai"]);
+        expect(providerUsageCall[0]?.auth).toEqual(expectedCodexRuntimeUsageAuth);
       },
       {
         env: {
           OPENAI_API_KEY: undefined,
           OPENAI_OAUTH_TOKEN: undefined,
         },
+        skipSessionCleanup: true,
+        skipHomeCleanup: true,
       },
     );
+  });
+
+  it("forwards a selected OpenAI profile to Codex synthetic usage", async () => {
+    registerStatusCodexHarness();
+    const usageResetBase = Math.floor(Date.now() / 1000);
+    providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: Date.now(),
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [
+            {
+              label: "5h",
+              usedPercent: 9,
+              resetAt: (usageResetBase + 60 * 60) * 1000,
+            },
+          ],
+        },
+      ],
+    });
+
+    await withTempHome(
+      async (dir) => {
+        saveStatusTestAuthProfile({ dir, profileId: "work", provider: "openai" });
+
+        const text = await buildStatusText({
+          cfg: {
+            ...baseCfg,
+            agents: {
+              defaults: {
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+          sessionEntry: {
+            sessionId: "sess-status-codex-synthetic-usage",
+            updatedAt: 0,
+            authProfileOverride: "work",
+          },
+          sessionKey: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          statusChannel: "mobilechat",
+          provider: "openai",
+          model: "gpt-5.5",
+          contextTokens: 32_000,
+          resolvedFastMode: false,
+          resolvedVerboseLevel: "off",
+          resolvedReasoningLevel: "off",
+          resolveDefaultThinkingLevel: async () => undefined,
+          isGroup: false,
+          defaultGroupActivation: () => "mention",
+          modelAuthOverride: "oauth",
+          activeModelAuthOverride: "oauth",
+        });
+
+        const normalized = normalizeTestText(text);
+        expect(normalized).toContain("Model: openai/gpt-5.5");
+        expect(normalized).toContain("Runtime: OpenAI Codex");
+        expect(normalized).toContain("Usage: 5h 91% left");
+        const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
+          ([params]) => params?.providers?.includes("openai"),
+        );
+        if (!providerUsageCall) {
+          throw new Error("expected provider usage summary call for synthetic Codex auth");
+        }
+        expect(providerUsageCall[0]).toMatchObject({
+          timeoutMs: 8000,
+          providers: ["openai"],
+          auth: [
+            {
+              ...expectedCodexRuntimeUsageAuth[0],
+              authProfileId: "work",
+            },
+          ],
+          config: expect.objectContaining({
+            agents: expect.objectContaining({
+              defaults: expect.objectContaining({ agentRuntime: { id: "codex" } }),
+            }),
+          }),
+        });
+      },
+      { skipSessionCleanup: true, skipHomeCleanup: true },
+    );
+  });
+
+  it("forwards legacy Codex profile providers to Codex synthetic usage", async () => {
+    registerStatusCodexHarness();
+    providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: Date.now(),
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "5h", usedPercent: 9 }],
+        },
+      ],
+    });
+
+    await withTempHome(
+      async (dir) => {
+        saveStatusTestAuthProfile({
+          dir,
+          profileId: "openai-codex:legacy",
+          provider: "openai-codex",
+        });
+
+        await buildStatusText({
+          cfg: {
+            ...baseCfg,
+            agents: {
+              defaults: {
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+          sessionEntry: {
+            sessionId: "sess-status-codex-legacy-profile",
+            updatedAt: 0,
+            authProfileOverride: "openai-codex:legacy",
+          },
+          sessionKey: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          statusChannel: "mobilechat",
+          provider: "openai",
+          model: "gpt-5.5",
+          contextTokens: 32_000,
+          resolvedFastMode: false,
+          resolvedVerboseLevel: "off",
+          resolvedReasoningLevel: "off",
+          resolveDefaultThinkingLevel: async () => undefined,
+          isGroup: false,
+          defaultGroupActivation: () => "mention",
+          modelAuthOverride: "oauth",
+          activeModelAuthOverride: "oauth",
+        });
+
+        const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
+          ([params]) => params?.providers?.includes("openai"),
+        );
+        expect(providerUsageCall?.[0]?.auth).toEqual([
+          {
+            ...expectedCodexRuntimeUsageAuth[0],
+            authProfileId: "openai-codex:legacy",
+          },
+        ]);
+      },
+      { skipSessionCleanup: true, skipHomeCleanup: true },
+    );
+  });
+
+  it("loads Codex synthetic usage when no local OpenAI profile label exists", async () => {
+    registerStatusCodexHarness();
+    providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: Date.now(),
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "5h", usedPercent: 16 }],
+        },
+      ],
+    });
+
+    await withTempHome(async () => {
+      const text = await buildStatusText({
+        cfg: {
+          ...baseCfg,
+          agents: {
+            defaults: {
+              agentRuntime: { id: "codex" },
+            },
+          },
+        },
+        sessionEntry: {
+          sessionId: "sess-status-codex-no-profile",
+          updatedAt: 0,
+        },
+        sessionKey: "agent:main:main",
+        parentSessionKey: "agent:main:main",
+        sessionScope: "per-sender",
+        statusChannel: "mobilechat",
+        provider: "openai",
+        model: "gpt-5.5",
+        contextTokens: 32_000,
+        resolvedFastMode: false,
+        resolvedVerboseLevel: "off",
+        resolvedReasoningLevel: "off",
+        resolveDefaultThinkingLevel: async () => undefined,
+        isGroup: false,
+        defaultGroupActivation: () => "mention",
+      });
+
+      expect(normalizeTestText(text)).toContain("Usage: 5h 84% left");
+      const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
+        ([params]) => params?.providers?.includes("openai"),
+      );
+      expect(providerUsageCall?.[0]?.auth).toEqual(expectedCodexRuntimeUsageAuth);
+    });
+  });
+
+  it("does not forward stale non-OpenAI profile overrides to Codex usage", async () => {
+    registerStatusCodexHarness();
+    providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
+      updatedAt: Date.now(),
+      providers: [
+        {
+          provider: "openai",
+          displayName: "OpenAI",
+          windows: [{ label: "5h", usedPercent: 9 }],
+        },
+      ],
+    });
+
+    await withTempHome(
+      async (dir) => {
+        saveStatusTestAuthProfiles({
+          dir,
+          profiles: [
+            { profileId: "openai:status", provider: "openai" },
+            { profileId: "anthropic:work", provider: "anthropic" },
+          ],
+        });
+
+        await buildStatusText({
+          cfg: {
+            ...baseCfg,
+            agents: {
+              defaults: {
+                agentRuntime: { id: "codex" },
+              },
+            },
+          },
+          sessionEntry: {
+            sessionId: "sess-status-codex-stale-profile",
+            updatedAt: 0,
+            authProfileOverride: "anthropic:work",
+          },
+          sessionKey: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          statusChannel: "mobilechat",
+          provider: "openai",
+          model: "gpt-5.5",
+          contextTokens: 32_000,
+          resolvedFastMode: false,
+          resolvedVerboseLevel: "off",
+          resolvedReasoningLevel: "off",
+          resolveDefaultThinkingLevel: async () => undefined,
+          isGroup: false,
+          defaultGroupActivation: () => "mention",
+        });
+
+        const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
+          ([params]) => params?.providers?.includes("openai"),
+        );
+        expect(providerUsageCall?.[0]?.auth).toEqual(expectedCodexRuntimeUsageAuth);
+      },
+      { skipSessionCleanup: true, skipHomeCleanup: true },
+    );
+  });
+
+  it("uses active fallback provider usage for legacy fallback notices", async () => {
+    const fallbackModel: ModelDefinitionConfig = {
+      id: "MiniMax-M2.7",
+      name: "MiniMax M2.7",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 200_000,
+      maxTokens: 32_000,
+    };
+    const selectedModel: ModelDefinitionConfig = {
+      id: "mimo-v2-flash",
+      name: "MiMo V2 Flash",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 32_000,
+    };
+    providerUsageMock.loadProviderUsageSummary.mockImplementation(async (options) => ({
+      updatedAt: Date.now(),
+      providers:
+        options?.providers?.includes("minimax") === true
+          ? [
+              {
+                provider: "minimax",
+                displayName: "MiniMax",
+                windows: [{ label: "day", usedPercent: 20 }],
+              },
+            ]
+          : [],
+    }));
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        models: {
+          providers: {
+            "minimax-portal": {
+              baseUrl: "https://api.minimax.test/v1",
+              models: [fallbackModel],
+            },
+            xiaomi: {
+              baseUrl: "https://api.xiaomi.test/v1",
+              models: [selectedModel],
+            },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-legacy-fallback-usage",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        modelProvider: "minimax-portal",
+        model: "MiniMax-M2.7",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+        totalTokensFresh: true,
+        contextTokens: 1_048_576,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "xiaomi",
+      model: "mimo-v2-flash",
+      contextTokens: 1_048_576,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: minimax-portal/MiniMax-M2.7");
+    expect(normalized).toContain("Context: 49k/200k");
+    expect(normalized).toContain("Usage: day 80% left");
+    expect(providerUsageMock.loadProviderUsageSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ providers: ["minimax"] }),
+    );
+  });
+
+  it("uses live runtime context for unresolved active fallback notices", async () => {
+    const selectedModel: ModelDefinitionConfig = {
+      id: "mimo-v2-flash",
+      name: "MiMo V2 Flash",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 1_048_576,
+      maxTokens: 32_000,
+    };
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        models: {
+          providers: {
+            xiaomi: {
+              baseUrl: "https://api.xiaomi.test/v1",
+              models: [selectedModel],
+            },
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-unresolved-fallback-context",
+        updatedAt: 0,
+        providerOverride: "xiaomi",
+        modelOverride: "mimo-v2-flash",
+        modelProvider: "custom-runtime",
+        model: "unknown-fallback-model",
+        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
+        fallbackNoticeActiveModel: "custom-runtime/unknown-fallback-model",
+        fallbackNoticeReason: "model not allowed",
+        totalTokens: 49_000,
+        totalTokensFresh: true,
+        contextTokens: 1_048_576,
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "xiaomi",
+      model: "mimo-v2-flash",
+      contextTokens: 123_456,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Fallback: custom-runtime/unknown-fallback-model");
+    expect(normalized).toContain("Context: 49k/123k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
   });
 
   it("shows DeepSeek balance summaries in /status output", async () => {
@@ -864,6 +1507,241 @@ describe("buildStatusReply subagent summary", () => {
       throw new Error("expected provider usage summary call for deepseek");
     }
     expect(providerUsageCall[0]?.providers).toEqual(["deepseek"]);
+  });
+
+  it("uses the session-selected model provider for /status usage", async () => {
+    const usageResetBase = Math.floor(Date.now() / 1000);
+    providerUsageMock.loadProviderUsageSummary.mockImplementation(
+      async ({ providers = [] } = {}) => ({
+        updatedAt: Date.now(),
+        providers: providers.map((provider) =>
+          provider === "openai"
+            ? {
+                provider: "openai",
+                displayName: "OpenAI",
+                windows: [
+                  {
+                    label: "5h",
+                    usedPercent: 9,
+                    resetAt: (usageResetBase + 60 * 60) * 1000,
+                  },
+                ],
+              }
+            : {
+                provider,
+                displayName: "DeepSeek",
+                windows: [],
+                summary: "Balance ¥42.50",
+              },
+        ),
+      }),
+    );
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            model: "deepseek/deepseek-v4-flash",
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-session-selected-usage",
+        updatedAt: 0,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "telegram",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      contextTokens: 1_000_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "oauth (openai:status)",
+      activeModelAuthOverride: "oauth (openai:status)",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai/gpt-5.5");
+    expect(normalized).toContain("pinned session; config primary deepseek/deepseek-v4-flash");
+    expect(normalized).toContain("clear /model default");
+    expect(normalized).toContain("Usage: 5h 91% left");
+    expect(normalized).not.toContain("Usage: Balance ¥42.50");
+    expect(providerUsageMock.loadProviderUsageSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ providers: ["openai"] }),
+    );
+  });
+
+  it("uses the session-selected provider for /status usage when runtime state is stale", async () => {
+    const usageResetBase = Math.floor(Date.now() / 1000);
+    providerUsageMock.loadProviderUsageSummary.mockImplementation(
+      async ({ providers = [] } = {}) => ({
+        updatedAt: Date.now(),
+        providers: providers.map((provider) =>
+          provider === "openai"
+            ? {
+                provider: "openai",
+                displayName: "OpenAI",
+                windows: [
+                  {
+                    label: "5h",
+                    usedPercent: 9,
+                    resetAt: (usageResetBase + 60 * 60) * 1000,
+                  },
+                ],
+              }
+            : {
+                provider,
+                displayName: "DeepSeek",
+                windows: [],
+                summary: "Balance ¥42.50",
+              },
+        ),
+      }),
+    );
+
+    const text = await buildStatusText({
+      cfg: {
+        ...baseCfg,
+        agents: {
+          defaults: {
+            model: "deepseek/deepseek-v4-flash",
+          },
+        },
+      },
+      sessionEntry: {
+        sessionId: "sess-status-stale-runtime-selected-usage",
+        updatedAt: 0,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.5",
+        modelOverrideSource: "user",
+        modelProvider: "deepseek",
+        model: "deepseek-v4-flash",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "telegram",
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      contextTokens: 1_000_000,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "oauth (openai:status)",
+      activeModelAuthOverride: "api-key",
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Model: openai/gpt-5.5");
+    expect(normalized).toContain("pinned session; config primary deepseek/deepseek-v4-flash");
+    expect(normalized).toContain("clear /model default");
+    expect(normalized).toContain("Usage: 5h 91% left");
+    expect(normalized).not.toContain("Usage: Balance ¥42.50");
+    expect(providerUsageMock.loadProviderUsageSummary).toHaveBeenCalledWith(
+      expect.objectContaining({ providers: ["openai"] }),
+    );
+  });
+
+  it("uses provider-qualified model overrides for /status usage lookup", async () => {
+    await withTempHome(
+      async (dir) => {
+        saveStatusTestAuthProfile({ dir, profileId: "openai:status", provider: "openai" });
+
+        const usageResetBase = Math.floor(Date.now() / 1000);
+        providerUsageMock.loadProviderUsageSummary.mockImplementation(
+          async ({ providers = [] } = {}) => ({
+            updatedAt: Date.now(),
+            providers: providers.map((provider) =>
+              provider === "openai"
+                ? {
+                    provider: "openai",
+                    displayName: "OpenAI",
+                    windows: [
+                      {
+                        label: "5h",
+                        usedPercent: 9,
+                        resetAt: (usageResetBase + 60 * 60) * 1000,
+                      },
+                    ],
+                  }
+                : {
+                    provider,
+                    displayName: "DeepSeek",
+                    windows: [],
+                    summary: "Balance ¥42.50",
+                  },
+            ),
+          }),
+        );
+
+        const text = await buildStatusText({
+          cfg: {
+            ...baseCfg,
+            models: {
+              providers: {
+                openai: {
+                  baseUrl: "https://chatgpt.com/backend-api/codex",
+                  models: [{ ...codexStatusModel, contextWindow: 258_000, contextTokens: 258_000 }],
+                },
+              },
+            },
+            agents: {
+              defaults: {
+                model: "deepseek/deepseek-v4-flash",
+              },
+            },
+            auth: {
+              order: {
+                openai: ["openai:status"],
+              },
+            },
+          },
+          sessionEntry: {
+            sessionId: "sess-status-qualified-session-selected-usage",
+            updatedAt: 0,
+            modelOverride: "openai/gpt-5.5",
+          },
+          sessionKey: "agent:main:main",
+          parentSessionKey: "agent:main:main",
+          sessionScope: "per-sender",
+          statusChannel: "telegram",
+          provider: "deepseek",
+          model: "deepseek-v4-flash",
+          contextTokens: 1_000_000,
+          resolvedFastMode: false,
+          resolvedVerboseLevel: "off",
+          resolvedReasoningLevel: "off",
+          resolveDefaultThinkingLevel: async () => undefined,
+          isGroup: false,
+          defaultGroupActivation: () => "mention",
+        });
+
+        const normalized = normalizeTestText(text);
+        expect(normalized).toContain("Model: openai/gpt-5.5");
+        expect(normalized).toContain("pinned session; config primary deepseek/deepseek-v4-flash");
+        expect(normalized).toContain("clear /model default");
+        expect(normalized).toContain("oauth (openai:status)");
+        expect(normalized).toContain("Context: ?/258k");
+        expect(normalized).toContain("Usage: 5h 91% left");
+        expect(normalized).not.toContain("Usage: Balance ¥42.50");
+        expect(providerUsageMock.loadProviderUsageSummary).toHaveBeenCalledWith(
+          expect.objectContaining({ providers: ["openai"] }),
+        );
+      },
+      { env: { OPENAI_API_KEY: undefined } },
+    );
   });
 
   it("uses Codex OAuth auth labels for explicit OpenAI OpenClaw auth order", async () => {
@@ -936,7 +1814,7 @@ describe("buildStatusReply subagent summary", () => {
         expect(normalized).toContain("oauth (openai:status)");
         expect(normalized).not.toContain("api-key (openai:backup)");
       },
-      { env: { OPENAI_API_KEY: undefined } },
+      { env: { OPENAI_API_KEY: undefined }, skipSessionCleanup: true, skipHomeCleanup: true },
     );
   });
 
@@ -1039,7 +1917,7 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Session selected: anthropic/claude-opus-4-7");
+    expect(normalized).toContain("Model: anthropic/claude-opus-4-7");
     expect(normalized).toContain("oauth (claude-cli)");
     expect(normalized).not.toContain("api-key (env: ANTHROPIC_API_KEY)");
     expect(normalized).not.toContain("Usage:");

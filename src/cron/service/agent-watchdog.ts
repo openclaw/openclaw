@@ -13,7 +13,7 @@ import {
 import type { CronServiceState } from "./state.js";
 
 const CRON_TIMEOUT_CLEANUP_GUARD_MS = 20_000;
-const CRON_AGENT_SETUP_WATCHDOG_MS = 60_000;
+export const CRON_AGENT_SETUP_WATCHDOG_MS = 60_000;
 const CRON_AGENT_PRE_EXECUTION_WATCHDOG_MS = 60_000;
 const CRON_AGENT_PRE_EXECUTION_MIN_WATCHDOG_MS = 1_000;
 
@@ -48,9 +48,12 @@ const CRON_AGENT_PHASE_WATCHDOG_STAGE = {
 /** Handle for feeding isolated-agent progress into cron timeout watchdogs. */
 export type CronAgentWatchdog = {
   start: () => void;
+  noteLaneWait: () => void;
+  noteLaneAdmitted: () => void;
   noteRunnerStarted: (info?: CronAgentExecutionStarted) => void;
   notePhase: (info: CronAgentExecutionPhaseUpdate) => void;
   activeExecution: () => CronAgentExecutionStarted | undefined;
+  observedLaneWait: () => boolean;
   dispose: () => void;
 };
 
@@ -65,6 +68,7 @@ export function createCronAgentWatchdog(params: {
   let setupTimeoutId: NodeJS.Timeout | undefined;
   let preExecutionTimeoutId: NodeJS.Timeout | undefined;
   let activeExecution: CronAgentExecutionStarted | undefined;
+  let observedLaneWait = false;
 
   const setTimedOut = (reason: string) => {
     if (state === "timed_out" || state === "disposed") {
@@ -143,6 +147,16 @@ export function createCronAgentWatchdog(params: {
       }
       startTimeout();
     },
+    noteLaneWait: () => {
+      if (state === "waiting_for_runner") {
+        observedLaneWait = true;
+      }
+    },
+    noteLaneAdmitted: () => {
+      if (state === "waiting_for_runner") {
+        observedLaneWait = false;
+      }
+    },
     noteRunnerStarted: (info?: CronAgentExecutionStarted) => {
       if (state === "disposed" || state === "timed_out") {
         return;
@@ -162,6 +176,7 @@ export function createCronAgentWatchdog(params: {
       noteExecutionProgress(info);
     },
     activeExecution: () => activeExecution,
+    observedLaneWait: () => observedLaneWait,
     dispose: () => {
       state = "disposed";
       if (timeoutId) {

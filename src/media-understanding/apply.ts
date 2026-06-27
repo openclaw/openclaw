@@ -10,21 +10,21 @@ import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { renderFileContextBlock } from "../media/file-context.js";
-import {
-  extractFileContentFromSource,
-  normalizeMimeType,
-  resolveInputFileLimits,
-} from "../media/input-files.js";
+import { extractFileContentFromSource, normalizeMimeType } from "../media/input-files.js";
 import { wrapExternalContent } from "../security/external-content.js";
-import type { ActiveMediaModel } from "./active-model.types.js";
-import { resolveAttachmentKind } from "./attachments.js";
-import { runWithConcurrency } from "./concurrency.js";
-import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
+import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import {
   extractMediaUserText,
   formatAudioTranscripts,
   formatMediaUnderstandingBody,
-} from "./format.js";
+} from "../../packages/media-understanding-common/src/format.js";
+import { resolveAttachmentKind } from "./attachments.js";
+import { runWithConcurrency } from "./concurrency.js";
+import { DEFAULT_ECHO_TRANSCRIPT_FORMAT, sendTranscriptEcho } from "./echo-transcript.js";
+import {
+  type FileExtractionLimits,
+  resolveFileExtractionLimits,
+} from "./file-extraction-limits.js";
 import { resolveConcurrency } from "./resolve.js";
 import {
   buildProviderRegistry,
@@ -40,7 +40,7 @@ import type {
   MediaUnderstandingProvider,
 } from "./types.js";
 
-export type ApplyMediaUnderstandingResult = {
+type ApplyMediaUnderstandingResult = {
   outputs: MediaUnderstandingOutput[];
   decisions: MediaUnderstandingDecision[];
   appliedImage: boolean;
@@ -97,15 +97,6 @@ export function sanitizeMimeType(value?: string): string | undefined {
   }
   const match = trimmed.match(MIME_TYPE_WITH_OPTIONAL_PARAMS);
   return match?.[1]?.toLowerCase();
-}
-
-function resolveFileLimits(cfg: OpenClawConfig) {
-  const files = cfg.gateway?.http?.endpoints?.responses?.files;
-  const allowedMimesConfigured = Boolean(files?.allowedMimes?.length);
-  return {
-    ...resolveInputFileLimits(files),
-    allowedMimesConfigured,
-  };
 }
 
 function appendFileBlocks(body: string | undefined, blocks: string[]): string {
@@ -390,7 +381,7 @@ async function extractFileBlocks(params: {
   attachments: ReturnType<typeof normalizeMediaAttachments>;
   cache: ReturnType<typeof createMediaAttachmentCache>;
   cfg: OpenClawConfig;
-  limits: ReturnType<typeof resolveFileLimits>;
+  limits: FileExtractionLimits;
   skipAttachmentIndexes?: Set<number>;
 }): Promise<string[]> {
   const { attachments, cache, cfg, limits, skipAttachmentIndexes } = params;
@@ -683,7 +674,7 @@ export async function applyMediaUnderstanding(params: {
       attachments,
       cache,
       cfg,
-      limits: resolveFileLimits(cfg),
+      limits: resolveFileExtractionLimits(cfg),
       skipAttachmentIndexes: audioAttachmentIndexes.size > 0 ? audioAttachmentIndexes : undefined,
     });
     if (fileBlocks.length > 0) {

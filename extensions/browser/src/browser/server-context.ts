@@ -233,7 +233,7 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
         name,
         transport: capabilities.usesChromeMcp ? "chrome-mcp" : "cdp",
         cdpPort: capabilities.usesChromeMcp ? null : profile.cdpPort,
-        cdpUrl: capabilities.usesChromeMcp ? null : (redactCdpUrl(profile.cdpUrl) ?? null),
+        cdpUrl: profile.cdpUrl ? (redactCdpUrl(profile.cdpUrl) ?? null) : null,
         color: profile.color,
         driver: profile.driver,
         running,
@@ -265,7 +265,8 @@ export function createBrowserRouteContext(opts: ContextOptions): BrowserRouteCon
     listProfiles,
     // Legacy methods delegate to default profile
     ensureBrowserAvailable: () => getDefaultContext().ensureBrowserAvailable(),
-    ensureTabAvailable: (targetId) => getDefaultContext().ensureTabAvailable(targetId),
+    ensureTabAvailable: (targetId, options) =>
+      getDefaultContext().ensureTabAvailable(targetId, options),
     isHttpReachable: (timeoutMs) => getDefaultContext().isHttpReachable(timeoutMs),
     isTransportAvailable: (timeoutMs) => getDefaultContext().isTransportAvailable(timeoutMs),
     isReachable: (timeoutMs, options) => getDefaultContext().isReachable(timeoutMs, options),

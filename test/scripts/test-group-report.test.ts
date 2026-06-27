@@ -1,8 +1,10 @@
 // Test Group Report tests cover test group report script behavior.
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { describe, expect, it, vi } from "vitest";
 import {
   buildGroupedTestComparison,
   buildGroupedTestReport,
@@ -10,6 +12,7 @@ import {
   resolveGroupKey,
   resolveTestArea,
 } from "../../scripts/lib/test-group-report.mjs";
+import { resolveWindowsTaskkillPath } from "../../scripts/lib/windows-taskkill.mjs";
 import {
   parseTestGroupReportArgs,
   resolveFullSuiteVitestEnv,
@@ -17,9 +20,111 @@ import {
   resolveReportRunSpecs,
   resolveRunPlanConcurrency,
   resolveRunPlans,
+  signalTestGroupReportChild,
   spawnText,
 } from "../../scripts/test-group-report.mjs";
 import { withEnv } from "../../src/test-utils/env.js";
+
+function makeTempDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-"));
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function sleep(ms: number): Promise<void> {
+  await new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (fs.existsSync(filePath)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`timed out waiting for ${filePath}`);
+}
+
+async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (Date.now() < deadlineAt) {
+    if (!isProcessAlive(pid)) {
+      return;
+    }
+    await sleep(25);
+  }
+  throw new Error(`timed out waiting for pid ${pid} to exit`);
+}
+
+function expectedTaskkillPath(): string {
+  return resolveWindowsTaskkillPath();
+}
+
+function waitForChildClose(
+  child: ReturnType<typeof spawn>,
+  timeoutMs = 5_000,
+): Promise<{ code: number | null; signal: NodeJS.Signals | null }> {
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => {
+      reject(new Error("child did not close before timeout"));
+    }, timeoutMs);
+    child.once("close", (code, signal) => {
+      clearTimeout(timeout);
+      resolve({ code, signal });
+    });
+  });
+}
+
+function writeGroupedReport(filePath: string) {
+  fs.writeFileSync(
+    filePath,
+    `${JSON.stringify({
+      command: "test-group-report",
+      groupBy: "area",
+      totals: { durationMs: 100, fileCount: 1, testCount: 1 },
+      groups: [
+        {
+          configs: ["unit-fast"],
+          durationMs: 100,
+          fileCount: 1,
+          key: "test/scripts",
+          testCount: 1,
+        },
+      ],
+      configs: [
+        {
+          configs: ["unit-fast"],
+          durationMs: 100,
+          fileCount: 1,
+          key: "unit-fast",
+          testCount: 1,
+        },
+      ],
+      topFiles: [
+        {
+          config: "unit-fast",
+          durationMs: 100,
+          file: "test/scripts/test-group-report.test.ts",
+          group: "test/scripts",
+          testCount: 1,
+        },
+      ],
+      slowTests: [],
+      runs: [],
+    })}\n`,
+    "utf8",
+  );
+}
 
 describe("scripts/test-group-report grouping", () => {
   it("groups repo files by stable product area", () => {
@@ -93,6 +198,87 @@ describe("scripts/test-group-report aggregation", () => {
         status: "passed",
       },
     ]);
+  });
+
+  it("fails missing report inputs instead of writing an empty green report", () => {
+    const tempDir = makeTempDir();
+    const missingReport = path.join(tempDir, "missing.json");
+    const output = path.join(tempDir, "group-report.json");
+    try {
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/test-group-report.mjs", "--report", missingReport, "--output", output],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(`[test-group-report] missing JSON report for missing`);
+      expect(fs.existsSync(output)).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    ["missing testResults array", {}],
+    ["empty testResults array", { testResults: [] }],
+  ])("fails malformed report inputs with %s", (reason, payload) => {
+    const tempDir = makeTempDir();
+    const reportPath = path.join(tempDir, "malformed.json");
+    const output = path.join(tempDir, "group-report.json");
+    fs.writeFileSync(reportPath, `${JSON.stringify(payload)}\n`, "utf8");
+    try {
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/test-group-report.mjs", "--report", reportPath, "--output", output],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("[test-group-report] invalid JSON report for malformed");
+      expect(result.stderr).toContain(reason);
+      expect(fs.existsSync(output)).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails allow-failures runs that produce no JSON report", () => {
+    const tempDir = makeTempDir();
+    const missingConfig = path.join(tempDir, "missing-vitest.config.ts");
+    const output = path.join(tempDir, "group-report.json");
+    try {
+      const result = spawnSync(
+        process.execPath,
+        [
+          "scripts/test-group-report.mjs",
+          "--config",
+          missingConfig,
+          "--allow-failures",
+          "--no-rss",
+          "--timeout-ms",
+          "5000",
+          "--output",
+          output,
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("[test-group-report] missing JSON report for failed config");
+      expect(fs.existsSync(output)).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -236,6 +422,67 @@ describe("scripts/test-group-report comparison", () => {
       "gateway-server-2",
     ]);
   });
+
+  it("fails compare mode for malformed grouped reports", () => {
+    const tempDir = makeTempDir();
+    const beforePath = path.join(tempDir, "before.json");
+    const afterPath = path.join(tempDir, "after.json");
+    const output = path.join(tempDir, "compare.json");
+    fs.writeFileSync(beforePath, "{}\n", "utf8");
+    writeGroupedReport(afterPath);
+    try {
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/test-group-report.mjs", "--compare", beforePath, afterPath, "--output", output],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("[test-group-report] invalid grouped report");
+      expect(result.stderr).toContain("command must be test-group-report");
+      expect(fs.existsSync(output)).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("fails compare mode for empty grouped report evidence", () => {
+    const tempDir = makeTempDir();
+    const beforePath = path.join(tempDir, "before.json");
+    const afterPath = path.join(tempDir, "after.json");
+    const output = path.join(tempDir, "compare.json");
+    const emptyReport = {
+      command: "test-group-report",
+      groupBy: "area",
+      totals: { durationMs: 0, fileCount: 0, testCount: 0 },
+      groups: [],
+      configs: [],
+      topFiles: [],
+      slowTests: [],
+      runs: [],
+    };
+    fs.writeFileSync(beforePath, `${JSON.stringify(emptyReport)}\n`, "utf8");
+    writeGroupedReport(afterPath);
+    try {
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/test-group-report.mjs", "--compare", beforePath, afterPath, "--output", output],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("no evidence rows");
+      expect(fs.existsSync(output)).toBe(false);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe("scripts/test-group-report arg parsing", () => {
@@ -339,9 +586,133 @@ describe("scripts/test-group-report arg parsing", () => {
       );
     }
   });
+
+  it("rejects missing report path, config, and numeric option values", () => {
+    for (const flag of ["--config", "--report", "--group-by", "--output"]) {
+      expect(() => parseTestGroupReportArgs([flag, "--limit", "5"])).toThrow(
+        `${flag} requires a value`,
+      );
+      expect(() => parseTestGroupReportArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
+    }
+    for (const flag of [
+      "--limit",
+      "--top-files",
+      "--max-test-ms",
+      "--timeout-ms",
+      "--kill-grace-ms",
+      "--concurrency",
+    ]) {
+      expect(() => parseTestGroupReportArgs([flag])).toThrow(`${flag} requires a value`);
+      expect(() => parseTestGroupReportArgs([flag, "--output", "report.json"])).toThrow(
+        `${flag} requires a value`,
+      );
+    }
+    expect(() => parseTestGroupReportArgs(["--compare", "before.json", "--limit"])).toThrow(
+      "--compare requires a value",
+    );
+    expect(() => parseTestGroupReportArgs(["--compare", "--limit", "5"])).toThrow(
+      "--compare requires a value",
+    );
+  });
+
+  it("rejects duplicate single-value report controls", () => {
+    for (const [flag, values] of [
+      ["--compare", ["before-a.json", "after-a.json", "before-b.json", "after-b.json"]],
+      ["--group-by", ["area", "folder"]],
+      ["--output", ["first.json", "second.json"]],
+      ["--limit", ["5", "10"]],
+      ["--top-files", ["5", "10"]],
+      ["--max-test-ms", ["100", "200"]],
+      ["--timeout-ms", ["1000", "2000"]],
+      ["--kill-grace-ms", ["100", "200"]],
+      ["--concurrency", ["2", "3"]],
+    ]) {
+      const args = flag === "--compare"
+        ? [flag, values[0], values[1], flag, values[2], values[3]]
+        : [flag, values[0], flag, values[1]];
+      expect(() => parseTestGroupReportArgs(args)).toThrow(`${flag} was provided more than once`);
+    }
+    expect(parseTestGroupReportArgs(["--config", "a.ts", "--config", "b.ts"]).configs).toEqual([
+      "a.ts",
+      "b.ts",
+    ]);
+    expect(parseTestGroupReportArgs(["--report", "a.json", "--report", "b.json"]).reports).toEqual([
+      "a.json",
+      "b.json",
+    ]);
+  });
 });
 
 describe("scripts/test-group-report child process guard", () => {
+  it("signals Windows child process trees with taskkill", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi.fn(() => ({ error: undefined, status: 0 }));
+
+    signalTestGroupReportChild(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+
+    signalTestGroupReportChild(child, "SIGKILL", {
+      platform: "win32",
+      runTaskkill,
+    });
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
+  it("force-kills Windows child process trees when graceful taskkill fails", () => {
+    const child = {
+      kill: vi.fn(),
+      pid: 12345,
+    };
+    const runTaskkill = vi
+      .fn()
+      .mockReturnValueOnce({ error: undefined, status: 1 })
+      .mockReturnValueOnce({ error: undefined, status: 0 });
+
+    signalTestGroupReportChild(child, "SIGTERM", {
+      platform: "win32",
+      runTaskkill,
+    });
+
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      1,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(runTaskkill).toHaveBeenNthCalledWith(
+      2,
+      expectedTaskkillPath(),
+      ["/PID", "12345", "/T", "/F"],
+      {
+        stdio: "ignore",
+      },
+    );
+    expect(child.kill).not.toHaveBeenCalled();
+  });
+
   it("times out a child that ignores SIGTERM", async () => {
     if (process.platform === "win32") {
       return;
@@ -414,6 +785,271 @@ describe("scripts/test-group-report child process guard", () => {
       });
       const sizeAfterWait = fs.existsSync(markerPath) ? fs.statSync(markerPath).size : 0;
       expect(sizeAfterWait).toBe(sizeAfterReturn);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps the wrapper alive while timed process-group descendants await SIGKILL", () => {
+    if (process.platform === "win32" || !fs.existsSync("/usr/bin/time")) {
+      return;
+    }
+
+    const tempDir = makeTempDir();
+    const childPidPath = path.join(tempDir, "child.pid");
+    const reportModuleUrl = pathToFileURL(path.resolve("scripts/test-group-report.mjs")).href;
+    let childPid: number | undefined;
+    try {
+      const childScript = [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {});",
+        "process.on('SIGHUP', () => {});",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const runnerScript = [
+        `import { spawnText } from ${JSON.stringify(reportModuleUrl)};`,
+        "const result = await spawnText(",
+        '  "/usr/bin/time",',
+        `  [process.execPath, "--eval", ${JSON.stringify(childScript)}],`,
+        "  { cwd: process.cwd(), env: process.env, killGraceMs: 50, timeoutMs: 500 },",
+        ");",
+        "process.stdout.write(JSON.stringify(result));",
+      ].join("\n");
+      const result = spawnSync(process.execPath, ["--input-type=module", "--eval", runnerScript], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        timeout: 5_000,
+      });
+      if (fs.existsSync(childPidPath)) {
+        childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+      }
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).not.toBe("");
+      const parsed = JSON.parse(result.stdout) as Awaited<ReturnType<typeof spawnText>>;
+      expect(parsed).toMatchObject({
+        status: 1,
+        timedOut: true,
+      });
+      expect(parsed.output).toContain("sending SIGKILL");
+    } finally {
+      if (childPid !== undefined && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("cleans process-group descendants before forwarding parent SIGTERM", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = makeTempDir();
+    const childPidPath = path.join(tempDir, "child.pid");
+    const readyPath = path.join(tempDir, "child.ready");
+    const reportModuleUrl = pathToFileURL(path.resolve("scripts/test-group-report.mjs")).href;
+    let childPid: number | undefined;
+    let runner: ReturnType<typeof spawn> | undefined;
+    try {
+      const childScript = [
+        "const fs = require('node:fs');",
+        "process.on('SIGTERM', () => {});",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        `spawn(process.execPath, ["--eval", ${JSON.stringify(childScript)}], { stdio: "ignore" });`,
+        `require("node:fs").writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const runnerScript = [
+        `import { spawnText } from ${JSON.stringify(reportModuleUrl)};`,
+        "await spawnText(",
+        "  process.execPath,",
+        `  ["--eval", ${JSON.stringify(parentScript)}],`,
+        "  { cwd: process.cwd(), env: process.env, killGraceMs: 5_000, timeoutMs: 60_000 },",
+        ");",
+      ].join("\n");
+
+      runner = spawn(process.execPath, ["--input-type=module", "--eval", runnerScript], {
+        cwd: process.cwd(),
+        stdio: ["ignore", "ignore", "pipe"],
+      });
+      await waitForFile(readyPath, 2_000);
+      await waitForFile(childPidPath, 2_000);
+      childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+      expect(isProcessAlive(childPid)).toBe(true);
+
+      runner.kill("SIGTERM");
+
+      await expect(waitForChildClose(runner)).resolves.toEqual({
+        code: null,
+        signal: "SIGTERM",
+      });
+      await waitForDead(childPid, 2_000);
+    } finally {
+      if (runner?.pid && isProcessAlive(runner.pid)) {
+        runner.kill("SIGKILL");
+      }
+      if (childPid !== undefined && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("finishes promptly when timed process-group descendants exit cleanly", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+
+    const tempDir = makeTempDir();
+    const childPidPath = path.join(tempDir, "child.pid");
+    const readyPath = path.join(tempDir, "child.ready");
+    const cleanupPath = path.join(tempDir, "child.cleanup");
+    let childPid: number | undefined;
+    try {
+      const childScript = [
+        "const fs = require('node:fs');",
+        `fs.writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
+        "process.on('SIGTERM', () => {",
+        "  setTimeout(() => {",
+        `    fs.writeFileSync(${JSON.stringify(cleanupPath)}, "clean");`,
+        "    process.exit(0);",
+        "  }, 75);",
+        "});",
+        `fs.writeFileSync(${JSON.stringify(readyPath)}, "ready");`,
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+      const parentScript = [
+        "const { spawn } = require('node:child_process');",
+        `spawn(process.execPath, ["--eval", ${JSON.stringify(childScript)}], { stdio: "ignore" });`,
+        "process.on('SIGTERM', () => process.exit(0));",
+        "setInterval(() => {}, 1000);",
+      ].join("\n");
+
+      const startedAt = Date.now();
+      const runPromise = spawnText(process.execPath, ["--eval", parentScript], {
+        cwd: process.cwd(),
+        env: process.env,
+        killGraceMs: 1_000,
+        timeoutMs: 1_000,
+      });
+
+      await waitForFile(readyPath, 2_000);
+      childPid = Number.parseInt(fs.readFileSync(childPidPath, "utf8"), 10);
+      const result = await runPromise;
+
+      expect(result).toMatchObject({
+        status: 1,
+        signal: null,
+        timedOut: true,
+      });
+      expect(fs.readFileSync(cleanupPath, "utf8")).toBe("clean");
+      expect(Date.now() - startedAt).toBeLessThan(1_700);
+      await waitForDead(childPid, 2_000);
+    } finally {
+      if (childPid !== undefined && isProcessAlive(childPid)) {
+        process.kill(childPid, "SIGKILL");
+      }
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("streams large child output to a log path without retaining it", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-log-"));
+    const logPath = path.join(tempDir, "child.log");
+    try {
+      const result = await spawnText(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          [
+            "const chunk = Buffer.alloc(1024 * 1024, 120);",
+            "for (let index = 0; index < 65; index += 1) process.stdout.write(chunk);",
+            'process.stderr.write("Maximum resident set size (kbytes): 12345\\n");',
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          env: process.env,
+          killGraceMs: 50,
+          logPath,
+          outputTailBytes: 4096,
+          timeoutMs: 10_000,
+        },
+      );
+
+      expect(result.status).toBe(0);
+      expect(result.output.length).toBeLessThan(8 * 1024);
+      expect(result.output).toContain("Maximum resident set size (kbytes): 12345");
+      expect(fs.statSync(logPath).size).toBeGreaterThan(64 * 1024 * 1024);
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps no-log child output bounded to a tail", async () => {
+    const result = await spawnText(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        [
+          "const chunk = Buffer.alloc(1024 * 1024, 120);",
+          "for (let index = 0; index < 3; index += 1) process.stdout.write(chunk);",
+        ].join("\n"),
+      ],
+      {
+        cwd: process.cwd(),
+        env: process.env,
+        killGraceMs: 50,
+        maxBufferBytes: 1024 * 1024,
+        outputTailBytes: 4096,
+        timeoutMs: 10_000,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.output.length).toBeLessThan(8 * 1024);
+    expect(result.output).toContain("output exceeded 1048576 bytes");
+  });
+
+  it("stops streamed child output after the configured log cap", async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-group-report-log-cap-"));
+    const logPath = path.join(tempDir, "child.log");
+    try {
+      const result = await spawnText(
+        process.execPath,
+        [
+          "--input-type=module",
+          "--eval",
+          [
+            "process.on('SIGTERM', () => {});",
+            "const chunk = Buffer.alloc(1024 * 1024, 120);",
+            "setInterval(() => process.stdout.write(chunk), 1);",
+          ].join("\n"),
+        ],
+        {
+          cwd: process.cwd(),
+          env: process.env,
+          killGraceMs: 50,
+          logPath,
+          maxLogBytes: 1024 * 1024,
+          outputTailBytes: 4096,
+          timeoutMs: 10_000,
+        },
+      );
+
+      expect(result.status).toBe(1);
+      expect(result.signal).toBe("SIGKILL");
+      expect(result.output).toContain("output log exceeded 1048576 bytes");
+      expect(fs.statSync(logPath).size).toBeLessThan(2 * 1024 * 1024);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }

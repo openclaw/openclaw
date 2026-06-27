@@ -10,14 +10,6 @@ import {
 } from "./format.ts";
 import type { CronJob, GatewaySessionRow, PresenceEntry } from "./types.ts";
 
-export function formatPresenceSummary(entry: PresenceEntry): string {
-  const host = entry.host ?? "unknown";
-  const ip = entry.ip ? `(${entry.ip})` : "";
-  const mode = entry.mode ?? "";
-  const version = entry.version ?? "";
-  return `${host} ${ip} ${mode} ${version}`.trim();
-}
-
 export function formatPresenceAge(entry: PresenceEntry): string {
   const ts = entry.ts ?? null;
   return ts ? formatRelativeTimestamp(ts) : t("common.na");
@@ -78,6 +70,9 @@ export function formatCronPayload(job: CronJob) {
   const p = job.payload;
   if (p.kind === "systemEvent") {
     return `System: ${p.text}`;
+  }
+  if (p.kind === "command") {
+    return `Command: ${p.argv.join(" ")}`;
   }
   const base = `Agent: ${p.message}`;
   const delivery = job.delivery;

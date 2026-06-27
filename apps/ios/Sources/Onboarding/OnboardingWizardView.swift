@@ -17,10 +17,6 @@ private enum OnboardingStep: Int, CaseIterable {
         Self(rawValue: self.rawValue - 1)
     }
 
-    var next: Self? {
-        Self(rawValue: self.rawValue + 1)
-    }
-
     /// Progress label for the manual setup flow (mode → connect → auth → success).
     var manualProgressTitle: String {
         let manualSteps: [OnboardingStep] = [.mode, .connect, .auth, .success]
@@ -72,13 +68,21 @@ struct OnboardingWizardView: View {
     @State private var showGatewayProblemDetails: Bool = false
     @State private var lastPairingAutoResumeAttemptAt: Date?
     @State private var pendingManualAuthOverride: GatewayConnectionController.ManualAuthOverride?
+    @State private var setupCode: String = ""
+    @State private var setupCodeStatus: String?
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
     let allowSkip: Bool
+    let onRequestLocalNetworkAccess: (String) -> Void
     let onClose: () -> Void
 
-    init(allowSkip: Bool, onClose: @escaping () -> Void) {
+    init(
+        allowSkip: Bool,
+        onRequestLocalNetworkAccess: @escaping (String) -> Void,
+        onClose: @escaping () -> Void)
+    {
         self.allowSkip = allowSkip
+        self.onRequestLocalNetworkAccess = onRequestLocalNetworkAccess
         self.onClose = onClose
         _step = State(
             initialValue: OnboardingStateStore.shouldPresentFirstRunIntro() ? .intro : .welcome)
@@ -172,6 +176,9 @@ struct OnboardingWizardView: View {
                         onGatewayLink: { link in
                             self.handleScannedLink(link)
                         },
+                        onSetupCode: { code in
+                            self.handleScannedSetupCode(code)
+                        },
                         onError: { error in
                             self.showQRScanner = false
                             self.statusLine = "Scanner error: \(error)"
@@ -208,6 +215,10 @@ struct OnboardingWizardView: View {
                                 self.handleScannedLink(link)
                                 return
                             }
+                            if AppleReviewDemoMode.isSetupCode(message) {
+                                self.handleScannedSetupCode(message)
+                                return
+                            }
                         }
                         self.showQRScanner = false
                         self.scannerError = "No valid QR code found in the selected image."
@@ -226,6 +237,7 @@ struct OnboardingWizardView: View {
             }
             .onAppear {
                 self.initializeState()
+                self.requestLocalNetworkAccessIfPastIntro(reason: "onboarding_appear")
             }
             .onDisappear {
                 self.discoveryRestartTask?.cancel()
@@ -301,6 +313,8 @@ struct OnboardingWizardView: View {
 
     @ViewBuilder
     private var modeStep: some View {
+        self.setupCodeSection
+
         Section("Connection Mode") {
             OnboardingModeRow(
                 title: OnboardingConnectionMode.homeNetwork.title,
@@ -371,7 +385,7 @@ struct OnboardingWizardView: View {
 
     private func onboardingSwitchIndicator(isOn: Bool) -> some View {
         Capsule()
-            .fill(isOn ? Color.accentColor : Color.secondary.opacity(0.35))
+            .fill(isOn ? OpenClawBrand.accent : Color.secondary.opacity(0.35))
             .frame(width: 52, height: 32)
             .overlay(alignment: isOn ? .trailing : .leading) {
                 Circle()
@@ -568,7 +582,7 @@ struct OnboardingWizardView: View {
 
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 64))
-                .foregroundStyle(.green)
+                .foregroundStyle(OpenClawBrand.ok)
                 .padding(.bottom, 20)
 
             Text("Connected")
@@ -604,6 +618,44 @@ struct OnboardingWizardView: View {
 }
 
 extension OnboardingWizardView {
+    private var setupCodeSection: some View {
+        Section {
+            TextField("Paste setup code", text: self.$setupCode)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+                .onSubmit {
+                    Task { await self.applySetupCodeAndConnect() }
+                }
+
+            Button {
+                Task { await self.applySetupCodeAndConnect() }
+            } label: {
+                if self.connectingGatewayID == "setup-code" {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .progressViewStyle(.circular)
+                        Text("Applying...")
+                    }
+                } else {
+                    Text("Apply Setup Code")
+                }
+            }
+            .disabled(
+                self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                    || self.connectingGatewayID != nil)
+
+            if let setupCodeStatus, !setupCodeStatus.isEmpty {
+                Text(setupCodeStatus)
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Setup Code")
+        } footer: {
+            Text("Use this if you received a setup code instead of a QR code.")
+        }
+    }
+
     private func manualConnectionFieldsSection(title: String) -> some View {
         Section(title) {
             TextField("Host", text: self.$manualHost)
@@ -642,9 +694,49 @@ extension OnboardingWizardView {
         .disabled(!self.canConnectManual || self.connectingGatewayID != nil)
     }
 
+    private func applySetupCodeAndConnect() async {
+        self.setupCodeStatus = nil
+        let raw = self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else {
+            self.setupCodeStatus = "Paste a setup code to continue."
+            return
+        }
+
+        if AppleReviewDemoMode.isSetupCode(raw) {
+            self.setupCode = ""
+            self.setupCodeStatus = "Apple Review demo mode enabled."
+            self.handleScannedSetupCode(raw)
+            return
+        }
+
+        guard let link = GatewayConnectDeepLink.fromSetupInput(raw) else {
+            self.setupCodeStatus = "Setup code not recognized or uses an insecure ws:// gateway URL."
+            return
+        }
+
+        self.connectingGatewayID = "setup-code"
+        self.applyGatewayLink(link)
+        self.setupCode = ""
+        self.setupCodeStatus = "Setup code applied. Connecting..."
+        self.connectMessage = "Connecting via setup code..."
+        self.statusLine = "Setup code loaded. Connecting to \(link.host):\(link.port)..."
+        self.step = .connect
+        await self.connectManual()
+    }
+
     private func handleScannedLink(_ link: GatewayConnectDeepLink) {
+        self.applyGatewayLink(link)
+        self.setupCodeStatus = nil
+        self.showQRScanner = false
+        self.connectMessage = "Connecting via QR code..."
+        self.statusLine = "QR loaded. Connecting to \(link.host):\(link.port)..."
+        Task { await self.connectManual() }
+    }
+
+    private func applyGatewayLink(_ link: GatewayConnectDeepLink) {
         self.manualHost = link.host
         self.manualPort = link.port
+        self.manualPortText = String(link.port)
         self.manualTLS = link.tls
         let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
         if setupAuth.hasBootstrapToken {
@@ -661,13 +753,19 @@ extension OnboardingWizardView {
         }
         self.pendingManualAuthOverride = setupAuth.manualAuthOverride
         self.saveGatewayCredentials(token: self.gatewayToken, password: self.gatewayPassword)
-        self.showQRScanner = false
-        self.connectMessage = "Connecting via QR code…"
-        self.statusLine = "QR loaded. Connecting to \(link.host):\(link.port)…"
         if self.selectedMode == nil {
             self.selectedMode = link.tls ? .remoteDomain : .homeNetwork
         }
-        Task { await self.connectManual() }
+    }
+
+    private func handleScannedSetupCode(_ code: String) {
+        guard AppleReviewDemoMode.isSetupCode(code) else { return }
+        self.showQRScanner = false
+        self.connectingGatewayID = nil
+        self.connectMessage = "Apple Review demo mode enabled."
+        self.statusLine = "Apple Review demo mode enabled."
+        self.selectedMode = .homeNetwork
+        self.appModel.enterAppleReviewDemoMode()
     }
 
     private func openQRScannerFromOnboarding() {
@@ -773,8 +871,18 @@ extension OnboardingWizardView {
 
     private func advanceFromIntro() {
         OnboardingStateStore.markFirstRunIntroSeen()
+        self.requestLocalNetworkAccess(reason: "onboarding_continue")
         self.statusLine = "In your OpenClaw chat, run /pair qr, then scan the code here."
         self.step = .welcome
+    }
+
+    private func requestLocalNetworkAccessIfPastIntro(reason: String) {
+        guard self.step != .intro else { return }
+        self.requestLocalNetworkAccess(reason: reason)
+    }
+
+    private func requestLocalNetworkAccess(reason: String) {
+        self.onRequestLocalNetworkAccess(reason)
     }
 
     private func navigateBack() {

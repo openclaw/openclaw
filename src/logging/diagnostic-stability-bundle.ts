@@ -71,7 +71,7 @@ type DiagnosticSessionFileSummary = {
   mtimeMs: number;
 };
 
-export type DiagnosticMemoryPressureBundleEvidence = {
+type DiagnosticMemoryPressureBundleEvidence = {
   level: DiagnosticMemoryPressureEvent["level"];
   reason: DiagnosticMemoryPressureEvent["reason"];
   memory: DiagnosticMemoryUsage;
@@ -85,7 +85,7 @@ export type DiagnosticMemoryPressureBundleEvidence = {
   topSessionFiles?: DiagnosticSessionFileSummary[];
 };
 
-export type DiagnosticStabilityBundleEvidence = {
+type DiagnosticStabilityBundleEvidence = {
   memoryPressure?: DiagnosticMemoryPressureBundleEvidence;
 };
 
@@ -112,12 +112,12 @@ export type DiagnosticStabilityBundle = {
   snapshot: DiagnosticStabilitySnapshot;
 };
 
-export type WriteDiagnosticStabilityBundleResult =
+type WriteDiagnosticStabilityBundleResult =
   | { status: "written"; path: string; bundle: DiagnosticStabilityBundle }
   | { status: "skipped"; reason: "empty" }
   | { status: "failed"; error: unknown };
 
-export type WriteDiagnosticStabilityBundleOptions = {
+type WriteDiagnosticStabilityBundleOptions = {
   reason: string;
   error?: unknown;
   includeEmpty?: boolean;
@@ -129,12 +129,12 @@ export type WriteDiagnosticStabilityBundleOptions = {
   evidence?: DiagnosticStabilityBundleEvidence;
 };
 
-export type DiagnosticStabilityBundleLocationOptions = {
+type DiagnosticStabilityBundleLocationOptions = {
   env?: NodeJS.ProcessEnv;
   stateDir?: string;
 };
 
-export type DiagnosticStabilityBundleFile = {
+type DiagnosticStabilityBundleFile = {
   path: string;
   mtimeMs: number;
 };
@@ -144,17 +144,17 @@ export type ReadDiagnosticStabilityBundleResult =
   | { status: "missing"; dir: string }
   | { status: "failed"; path?: string; error: unknown };
 
-export type DiagnosticStabilityBundleFailureWriteOutcome =
+type DiagnosticStabilityBundleFailureWriteOutcome =
   | { status: "written"; message: string; path: string }
   | { status: "failed"; message: string; error: unknown }
   | { status: "skipped"; reason: "empty" };
 
-export type WriteDiagnosticStabilityBundleForFailureOptions = Omit<
+type WriteDiagnosticStabilityBundleForFailureOptions = Omit<
   WriteDiagnosticStabilityBundleOptions,
   "error" | "includeEmpty" | "reason"
 >;
 
-export type WriteDiagnosticMemoryPressureBundleOptions = Omit<
+type WriteDiagnosticMemoryPressureBundleOptions = Omit<
   WriteDiagnosticStabilityBundleOptions,
   "reason" | "error" | "evidence" | "includeEmpty"
 > & {

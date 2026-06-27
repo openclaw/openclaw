@@ -2,7 +2,10 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { captureEnv } from "../../test-utils/env.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import {
   applySkillProposal,
@@ -12,15 +15,17 @@ import {
 import { runSkillResearchAutoCapture } from "./autocapture.js";
 
 const tempDirs = createTrackedTempDirs();
-let envSnapshot: ReturnType<typeof captureEnv>;
+let testState: OpenClawTestState;
 
 beforeEach(async () => {
-  envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
-  process.env.OPENCLAW_STATE_DIR = await tempDirs.make("openclaw-skill-workshop-state-");
+  testState = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-skill-workshop-state-",
+  });
 });
 
 afterEach(async () => {
-  envSnapshot.restore();
+  await testState.cleanup();
   await tempDirs.cleanup();
 });
 
@@ -87,6 +92,68 @@ describe("skill research auto-capture", () => {
           workshop: {
             autonomous: {
               enabled: false,
+            },
+          },
+        },
+      },
+    });
+
+    expect((await listSkillProposals({ workspaceDir })).proposals).toHaveLength(0);
+  });
+
+  it.each([
+    {
+      name: "subagent helper session",
+      ctx: { sessionKey: "agent:main:subagent:worker" },
+    },
+    {
+      name: "cron automation session",
+      ctx: { trigger: "cron", sessionKey: "agent:main:cron:daily:run:run-1" },
+    },
+    {
+      name: "heartbeat automation session",
+      ctx: { trigger: "heartbeat", sessionKey: "agent:main:main" },
+    },
+    {
+      name: "hook-scoped session",
+      ctx: { sessionKey: "hook:gmail:message-1" },
+    },
+    {
+      name: "Active Memory trigger",
+      ctx: { trigger: "memory", sessionKey: "explicit:user-session:active-memory:abc123" },
+    },
+    {
+      name: "Active Memory helper session with main suffix",
+      ctx: { trigger: "manual", sessionKey: "agent:main:main:active-memory:abc123" },
+    },
+    {
+      name: "Active Memory helper session without main suffix",
+      ctx: { trigger: "manual", sessionKey: "agent:main:active-memory:abc123" },
+    },
+    {
+      name: "Active Memory recall helper session",
+      ctx: { trigger: "manual", sessionKey: "active-memory-recall-87504" },
+    },
+  ])("skips $name before queuing proposals", async ({ ctx }) => {
+    const workspaceDir = await makeWorkspace();
+
+    await runSkillResearchAutoCapture({
+      event: {
+        success: true,
+        messages: [
+          {
+            role: "user",
+            content:
+              "From now on, when working on GitHub PRs, always check CI before final response.",
+          },
+        ],
+      },
+      ctx: { workspaceDir, agentId: "main", ...ctx },
+      config: {
+        skills: {
+          workshop: {
+            autonomous: {
+              enabled: true,
             },
           },
         },

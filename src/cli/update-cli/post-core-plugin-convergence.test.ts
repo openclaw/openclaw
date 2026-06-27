@@ -276,6 +276,29 @@ describe("runPostCorePluginConvergence", () => {
     expect(result.installRecords).toEqual({ brave: baseline.brave });
   });
 
+  it("forwards ClawHub risk acknowledgement options to repair", async () => {
+    const cfg = {
+      plugins: { entries: { matrix: { enabled: true } } },
+    } as unknown as OpenClawConfig;
+    const onClawHubRisk = vi.fn(async () => true);
+    await runPostCorePluginConvergence({
+      cfg,
+      env: {},
+      acknowledgeClawHubRisk: true,
+      onClawHubRisk,
+    });
+    expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledTimes(1);
+    expect(mocks.repairMissingConfiguredPluginInstalls).toHaveBeenCalledWith({
+      cfg,
+      env: {
+        OPENCLAW_COMPATIBILITY_HOST_VERSION: VERSION,
+        OPENCLAW_UPDATE_POST_CORE_CONVERGENCE: "1",
+      },
+      acknowledgeClawHubRisk: true,
+      onClawHubRisk,
+    });
+  });
+
   it("keeps repair warnings nonblocking with actionable guidance", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
@@ -297,7 +320,7 @@ describe("runPostCorePluginConvergence", () => {
           'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
         message:
           'Failed to install missing configured plugin "discord" from @openclaw/discord: ENETUNREACH.',
-        guidance: ["Run `openclaw doctor --fix` to retry plugin repair."],
+        guidance: ["Run `openclaw update repair` to retry plugin repair."],
       },
     ]);
   });
@@ -324,7 +347,7 @@ describe("runPostCorePluginConvergence", () => {
           'Failed to install missing configured plugin "matrix" from clawhub:@openclaw/matrix@beta: ClawHub ClawPack download for @openclaw/matrix@2026.6.1-beta.1 body stalled after 30000ms.',
         message:
           'Failed to install missing configured plugin "matrix" from clawhub:@openclaw/matrix@beta: ClawHub ClawPack download for @openclaw/matrix@2026.6.1-beta.1 body stalled after 30000ms.',
-        guidance: ["Run `openclaw doctor --fix` to retry plugin repair."],
+        guidance: ["Run `openclaw update repair` to retry plugin repair."],
       },
     ]);
     expect(mocks.runPluginPayloadSmokeCheck).toHaveBeenCalledWith({
@@ -364,6 +387,39 @@ describe("runPostCorePluginConvergence", () => {
     });
   });
 
+  it("surfaces repair notices without marking convergence errored", async () => {
+    mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
+      changes: ['Installed missing configured plugin "discord".'],
+      notices: [
+        'ClawHub trust warning for "@openclaw/discord@1.2.3": ClawHub has not completed a fresh clean security check for this release. Status: security scan is pending. Review the package before enabling it.',
+      ],
+      warnings: [],
+      records: { discord: { source: "clawhub", installPath: "/p/discord" } },
+    });
+    const result = await runPostCorePluginConvergence({
+      cfg: {
+        plugins: { entries: { discord: { enabled: true } } },
+      } as unknown as OpenClawConfig,
+      env: {},
+    });
+    expect(result.errored).toBe(false);
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.notices).toStrictEqual([
+      {
+        reason:
+          'ClawHub trust warning for "@openclaw/discord@1.2.3": ClawHub has not completed a fresh clean security check for this release. Status: security scan is pending. Review the package before enabling it.',
+        message:
+          'ClawHub trust warning for "@openclaw/discord@1.2.3": ClawHub has not completed a fresh clean security check for this release. Status: security scan is pending. Review the package before enabling it.',
+        guidance: [],
+      },
+    ]);
+    expect(convergenceWarningsToOutcomes(result)).toStrictEqual({
+      warnings: result.notices,
+      outcomes: [],
+      errored: false,
+    });
+  });
+
   it("flags errored=true when smoke check finds a missing main entry", async () => {
     mocks.repairMissingConfiguredPluginInstalls.mockResolvedValue({
       changes: [],
@@ -396,7 +452,7 @@ describe("runPostCorePluginConvergence", () => {
         message:
           'Plugin "brave" failed post-core payload smoke check (missing-main-entry): Plugin main entry "dist/index.js" not found at /p/brave/dist/index.js',
         guidance: [
-          "Run `openclaw doctor --fix` to retry plugin repair.",
+          "Run `openclaw update repair` to retry plugin repair.",
           "Run `openclaw plugins inspect brave --runtime --json` for details.",
         ],
       },
@@ -433,7 +489,7 @@ describe("runPostCorePluginConvergence", () => {
         message:
           'Plugin "brave" failed post-core payload smoke check (missing-install-path): Install path is missing from the plugin install record.',
         guidance: [
-          "Run `openclaw doctor --fix` to retry plugin repair.",
+          "Run `openclaw update repair` to retry plugin repair.",
           "Run `openclaw plugins inspect brave --runtime --json` for details.",
         ],
       },
@@ -473,12 +529,12 @@ describe("convergenceWarningsToOutcomes", () => {
           pluginId: "brave",
           reason: "missing-main-entry: …",
           message: 'Plugin "brave" failed payload smoke check.',
-          guidance: ["Run `openclaw doctor --fix`."],
+          guidance: ["Run `openclaw update repair`."],
         },
         {
           reason: "Failed install",
           message: "Failed install for some plugin.",
-          guidance: ["Run `openclaw doctor --fix`."],
+          guidance: ["Run `openclaw update repair`."],
         },
       ],
       errored: true,

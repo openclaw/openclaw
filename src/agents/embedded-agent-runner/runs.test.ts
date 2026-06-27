@@ -1,5 +1,5 @@
 // Embedded run registry tests cover active run handles, queueing, abort/drain,
-// abandonment tracking, diagnostics, snapshots, and live model-switch state.
+// abandonment tracking, diagnostics, and snapshots.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -22,8 +22,8 @@ import {
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
   clearEmbeddedRunAbandonment,
-  consumeEmbeddedRunModelSwitch,
   getActiveEmbeddedRunSnapshot,
+  isEmbeddedAgentRunAbortableForCompaction,
   isEmbeddedAgentRunHandleActive,
   isEmbeddedRunAbandoned,
   formatEmbeddedAgentQueueFailureSummary,
@@ -31,7 +31,6 @@ import {
   markEmbeddedRunAbandoned,
   queueEmbeddedAgentMessageWithOutcome,
   queueEmbeddedAgentMessageWithOutcomeAsync,
-  requestEmbeddedRunModelSwitch,
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
   setActiveEmbeddedRun,
@@ -91,6 +90,20 @@ describe("embedded-agent runner run registry", () => {
     expect(abortNormal).not.toHaveBeenCalled();
   });
 
+  it("keeps queued reply operations out of compact abort checks", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-reply-run",
+      resetTriggered: false,
+    });
+
+    expect(isEmbeddedAgentRunAbortableForCompaction("session-reply-run")).toBe(false);
+
+    operation.setPhase("running");
+
+    expect(isEmbeddedAgentRunAbortableForCompaction("session-reply-run")).toBe(true);
+  });
+
   it("aborts every active run in all mode", () => {
     const abortA = vi.fn();
     const abortB = vi.fn();
@@ -103,6 +116,14 @@ describe("embedded-agent runner run registry", () => {
     expect(aborted).toBe(true);
     expect(abortA).toHaveBeenCalledTimes(1);
     expect(abortB).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes restart ownership to every aborted run", () => {
+    const abort = vi.fn();
+    setActiveEmbeddedRun("session-restart", createRunHandle({ abort }));
+
+    expect(abortEmbeddedAgentRun(undefined, { mode: "all", reason: "restart" })).toBe(true);
+    expect(abort).toHaveBeenCalledWith("restart");
   });
 
   it("resolves active embedded runs by canonical session file", async () => {
@@ -568,33 +589,4 @@ describe("embedded-agent runner run registry", () => {
     expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toBeUndefined();
   });
 
-  it("stores and consumes pending live model switch requests", () => {
-    expect(
-      requestEmbeddedRunModelSwitch("session-switch", {
-        provider: "openai",
-        model: "gpt-5.4",
-      }),
-    ).toBe(true);
-
-    expect(consumeEmbeddedRunModelSwitch("session-switch")).toEqual({
-      provider: "openai",
-      model: "gpt-5.4",
-      authProfileId: undefined,
-      authProfileIdSource: undefined,
-    });
-    expect(consumeEmbeddedRunModelSwitch("session-switch")).toBeUndefined();
-  });
-
-  it("drops pending live model switch requests when the run clears", () => {
-    const handle = createRunHandle();
-    setActiveEmbeddedRun("session-clear-switch", handle);
-    requestEmbeddedRunModelSwitch("session-clear-switch", {
-      provider: "openai",
-      model: "gpt-5.4",
-    });
-
-    clearActiveEmbeddedRun("session-clear-switch", handle);
-
-    expect(consumeEmbeddedRunModelSwitch("session-clear-switch")).toBeUndefined();
-  });
 });

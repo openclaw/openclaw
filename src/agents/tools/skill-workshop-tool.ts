@@ -170,6 +170,7 @@ export function createSkillWorkshopTool(options: SkillWorkshopToolOptions): AnyA
       if (action === "apply") {
         const applied = await applySkillProposal({
           workspaceDir: options.workspaceDir,
+          config: options.config,
           proposalId: readLifecycleProposalIdParam(params),
           reason: readStringParam(params, "reason"),
         });

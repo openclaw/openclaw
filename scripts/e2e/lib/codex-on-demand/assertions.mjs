@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { assertOpenAiEnvAuthProfileStore } from "../auth-profile-store-assertions.mjs";
 import {
   assertPathInside,
   configPath,
@@ -53,6 +54,21 @@ if (!openAiCodexPackageJson) {
   throw new Error("missing @openai/codex dependency under managed npm root");
 }
 assertPathInside(npmRoot, openAiCodexPackageJson, "@openai/codex dependency");
+const openAiCodexPackage = readJson(openAiCodexPackageJson);
+const codexBinPath =
+  typeof openAiCodexPackage.bin === "string"
+    ? openAiCodexPackage.bin
+    : openAiCodexPackage.bin && typeof openAiCodexPackage.bin.codex === "string"
+      ? openAiCodexPackage.bin.codex
+      : undefined;
+if (!codexBinPath) {
+  throw new Error(`@openai/codex package has no codex bin: ${openAiCodexPackageJson}`);
+}
+const codexBin = path.resolve(path.dirname(openAiCodexPackageJson), codexBinPath);
+if (!fs.existsSync(codexBin)) {
+  throw new Error(`missing managed Codex binary: ${codexBin}`);
+}
+assertPathInside(npmRoot, codexBin, "managed Codex binary");
 
 const list = readJson("/tmp/openclaw-plugins-list.json");
 const plugin = (list.plugins || []).find((entry) => entry.id === "codex");
@@ -104,9 +120,8 @@ const authRaw = readAuthProfileStoreText(path.join(stateDir(), "agents", "main",
 if (!authRaw) {
   throw new Error("auth profile SQLite store row was not persisted");
 }
-if (!authRaw.includes("OPENAI_API_KEY")) {
-  throw new Error("auth profile did not persist OPENAI_API_KEY env ref");
-}
-if (authRaw.includes("sk-openclaw-codex-on-demand-e2e")) {
-  throw new Error("auth profile persisted the raw OpenAI test key");
-}
+assertOpenAiEnvAuthProfileStore(authRaw, {
+  envRefMessage: "auth profile did not persist OPENAI_API_KEY env ref",
+  rawKeyMessage: "auth profile persisted the raw OpenAI test key",
+  rawKeyNeedle: "sk-openclaw-codex-on-demand-e2e",
+});

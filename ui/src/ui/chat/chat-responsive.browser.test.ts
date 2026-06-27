@@ -1,8 +1,11 @@
 // Control UI tests cover chat responsive behavior.
-import { existsSync } from "node:fs";
 import { chromium, type Browser, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
+import {
+  canRunPlaywrightChromium,
+  resolvePlaywrightChromiumExecutablePath,
+} from "../../test-helpers/control-ui-e2e.ts";
 
 const VIEWPORTS = [
   [320, 568],
@@ -14,9 +17,12 @@ const VIEWPORTS = [
   [1440, 900],
 ] as const;
 const TOUCH_TARGET_MIN_PX = 43.5;
-const describeBrowserLayout = existsSync(chromium.executablePath()) ? describe : describe.skip;
+const chromiumExecutablePath = resolvePlaywrightChromiumExecutablePath(chromium.executablePath());
+const describeBrowserLayout = canRunPlaywrightChromium(chromiumExecutablePath)
+  ? describe
+  : describe.skip;
 
-let browser: Browser;
+const pageBrowsers = new WeakMap<Page, Browser>();
 
 type ControlRect = {
   x: number;
@@ -116,6 +122,35 @@ function chatControlsHtml(opts: { agent?: boolean } = {}) {
   `;
 }
 
+function composerControlsHtml() {
+  return `
+    <div class="agent-chat__composer-controls">
+      <div class="chat-composer-model-control">
+        <details class="chat-controls__session chat-controls__inline-select chat-controls__model">
+          <summary class="chat-controls__inline-select-trigger" data-chat-composer-model="true" aria-label="Chat model">
+            <span class="chat-controls__inline-select-label">Default model · Off</span>
+            <span class="chat-controls__inline-select-icon">${iconSvg()}</span>
+          </summary>
+          <div class="chat-controls__inline-select-menu chat-controls__inline-select-menu--combined">
+            <div class="chat-controls__combined-model-list">
+              <button class="chat-controls__inline-select-option chat-controls__combined-model-option chat-controls__inline-select-option--selected">Default model</button>
+              <button class="chat-controls__inline-select-option chat-controls__combined-model-option">gpt-5.5</button>
+              <button class="chat-controls__inline-select-option chat-controls__combined-model-option">claude-sonnet-4-6</button>
+            </div>
+          </div>
+        </details>
+      </div>
+      <div class="chat-settings-popover-wrapper">
+        <button class="chat-settings-chip" type="button" aria-label="Chat settings">
+          <span class="chat-settings-chip__icon">${iconSvg()}</span>
+          <span class="chat-settings-chip__text">Chat settings</span>
+          <span class="chat-settings-chip__chevron">${iconSvg()}</span>
+        </button>
+      </div>
+    </div>
+  `;
+}
+
 function chatHeaderControlsHtml(hidden = false) {
   return `
     <main class="content content--chat" data-chat-header-responsive-fixture>
@@ -207,11 +242,11 @@ function chatHtml(opts: { sideResult?: boolean; singleAgent?: boolean } = {}) {
               <div class="agent-chat__toolbar-left">
                 <button class="agent-chat__input-btn">${iconSvg()}</button>
                 <button class="agent-chat__input-btn">${iconSvg()}</button>
+                <button class="agent-chat__input-btn">${iconSvg()}</button>
                 <span class="agent-chat__token-count">8</span>
               </div>
+              ${composerControlsHtml()}
               <div class="agent-chat__toolbar-right">
-                <button class="btn btn--ghost">${iconSvg()}</button>
-                <button class="btn btn--ghost">${iconSvg()}</button>
                 <button class="chat-send-btn">${iconSvg()}</button>
               </div>
             </div>
@@ -227,11 +262,37 @@ async function openFixture(
   height: number,
   opts: { sideResult?: boolean; singleAgent?: boolean } = {},
 ) {
-  const page = await browser.newPage({ viewport: { width, height } });
-  await page.setContent(
-    `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts)}</body></html>`,
-  );
-  return page;
+  const page = await openBrowserPage(width, height);
+  try {
+    await page.setContent(
+      `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHtml(opts)}</body></html>`,
+    );
+    return page;
+  } catch (error) {
+    await closeBrowserPage(page);
+    throw error;
+  }
+}
+
+async function openBrowserPage(width: number, height: number): Promise<Page> {
+  const browser = await chromium.launch({ executablePath: chromiumExecutablePath, headless: true });
+  let page: Page | undefined;
+  try {
+    page = await browser.newPage({ viewport: { width, height } });
+    pageBrowsers.set(page, browser);
+    return page;
+  } catch (error) {
+    await page?.close().catch(() => {});
+    await browser.close().catch(() => {});
+    throw error;
+  }
+}
+
+async function closeBrowserPage(page: Page): Promise<void> {
+  const browser = pageBrowsers.get(page);
+  pageBrowsers.delete(page);
+  await page.close().catch(() => {});
+  await browser?.close().catch(() => {});
 }
 
 async function getRect(page: Page, selector: string) {
@@ -269,12 +330,29 @@ async function getTextContentRect(page: Page, selector: string) {
   return rect;
 }
 
-async function openHeaderFixture(width: number, height: number, opts: { hidden?: boolean } = {}) {
-  const page = await browser.newPage({ viewport: { width, height } });
-  await page.setContent(
-    `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHeaderControlsHtml(Boolean(opts.hidden))}</body></html>`,
+function rectsOverlap(
+  first: Pick<ControlRect, "x" | "y" | "width" | "height">,
+  second: Pick<ControlRect, "x" | "y" | "width" | "height">,
+) {
+  return (
+    first.x < second.x + second.width &&
+    first.x + first.width > second.x &&
+    first.y < second.y + second.height &&
+    first.y + first.height > second.y
   );
-  return page;
+}
+
+async function openHeaderFixture(width: number, height: number, opts: { hidden?: boolean } = {}) {
+  const page = await openBrowserPage(width, height);
+  try {
+    await page.setContent(
+      `<!doctype html><html><head><style>${readUiCss()}</style></head><body>${chatHeaderControlsHtml(Boolean(opts.hidden))}</body></html>`,
+    );
+    return page;
+  } catch (error) {
+    await closeBrowserPage(page);
+    throw error;
+  }
 }
 
 async function expectNoHorizontalOverflow(page: Page) {
@@ -286,14 +364,6 @@ async function expectNoHorizontalOverflow(page: Page) {
   expect(metrics.html).toBeLessThanOrEqual(metrics.viewport + 1);
   expect(metrics.body).toBeLessThanOrEqual(metrics.viewport + 1);
 }
-
-beforeAll(async () => {
-  browser = await chromium.launch({ headless: true });
-});
-
-afterAll(async () => {
-  await browser.close();
-});
 
 describeBrowserLayout("chat responsive browser layout", () => {
   it.each([
@@ -331,7 +401,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
       expect(session.width / agent.width).toBeGreaterThan(1.25);
       expect(session.width / agent.width).toBeLessThan(1.55);
     } finally {
-      await page.close();
+      await closeBrowserPage(page);
     }
   });
 
@@ -352,7 +422,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
       expect(hiddenState.opacity).toBe("0");
       expect(hiddenState.pointerEvents).toBe("none");
     } finally {
-      await page.close();
+      await closeBrowserPage(page);
     }
   });
 
@@ -363,7 +433,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
       const code = await getBoundingBox(page, ".chat-text pre");
       expect(code.x + code.width).toBeLessThanOrEqual(width + 1);
     } finally {
-      await page.close();
+      await closeBrowserPage(page);
     }
   });
 
@@ -373,7 +443,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
   ] as const)(
     "keeps short assistant text clear of bubble actions at %sx%s",
     async (width, height) => {
-      const page = await browser.newPage({ viewport: { width, height } });
+      const page = await openBrowserPage(width, height);
       try {
         await page.setContent(
           `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
@@ -398,7 +468,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
         const actions = await getRect(page, ".chat-bubble-actions");
         expect(text.right).toBeLessThanOrEqual(actions.left - 1);
       } finally {
-        await page.close();
+        await closeBrowserPage(page);
       }
     },
   );
@@ -407,7 +477,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
     [320, 568],
     [1366, 900],
   ] as const)("wraps long inline code without clipping at %sx%s", async (width, height) => {
-    const page = await browser.newPage({ viewport: { width, height } });
+    const page = await openBrowserPage(width, height);
     try {
       await page.setContent(
         `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
@@ -433,7 +503,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
       const inlineCode = await getRect(page, ".chat-text p code");
       expect(inlineCode.right).toBeLessThanOrEqual(bubble.right + 1);
     } finally {
-      await page.close();
+      await closeBrowserPage(page);
     }
   });
 
@@ -499,7 +569,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
           expect(size.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
         }
       } finally {
-        await page.close();
+        await closeBrowserPage(page);
       }
     },
   );
@@ -521,9 +591,67 @@ describeBrowserLayout("chat responsive browser layout", () => {
         expect(size.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
       }
     } finally {
-      await page.close();
+      await closeBrowserPage(page);
     }
   });
+
+  it.each([
+    [320, 568],
+    [393, 852],
+    [568, 320],
+  ] as const)(
+    "keeps current composer model, settings, and send controls from overlapping at %sx%s",
+    async (width, height) => {
+      const page = await openFixture(width, height);
+      try {
+        await expectNoHorizontalOverflow(page);
+        const controls = await page.evaluate(() => {
+          const rectFor = (selector: string) => {
+            const node = document.querySelector(selector) as HTMLElement | null;
+            if (!node) {
+              return null;
+            }
+            const rect = node.getBoundingClientRect();
+            return {
+              x: rect.x,
+              y: rect.y,
+              width: rect.width,
+              height: rect.height,
+              display: getComputedStyle(node).display,
+            };
+          };
+          return {
+            input: rectFor(".agent-chat__input"),
+            left: rectFor(".agent-chat__toolbar-left"),
+            model: rectFor(".chat-composer-model-control"),
+            settings: rectFor(".chat-settings-chip"),
+            settingsLabel: rectFor(".chat-settings-chip__text"),
+            send: rectFor(".chat-send-btn"),
+          };
+        });
+
+        const input = expectControlRect(controls.input, "composer");
+        const left = expectControlRect(controls.left, "composer left controls");
+        const model = expectControlRect(controls.model, "composer model control");
+        const settings = expectControlRect(controls.settings, "composer settings control");
+        const send = expectControlRect(controls.send, "composer send control");
+        const settingsLabel = expectControlRect(controls.settingsLabel, "settings label");
+
+        for (const control of [left, model, settings, send]) {
+          expect(control.x).toBeGreaterThanOrEqual(input.x - 1);
+          expect(control.x + control.width).toBeLessThanOrEqual(input.x + input.width + 1);
+        }
+        expect(rectsOverlap(model, settings)).toBe(false);
+        expect(rectsOverlap(model, send)).toBe(false);
+        expect(rectsOverlap(settings, send)).toBe(false);
+        expect(settings.width).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+        expect(settings.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+        expect(settingsLabel.display).toBe("none");
+      } finally {
+        await closeBrowserPage(page);
+      }
+    },
+  );
 
   it("uses the compact mobile grid when the agent filter is not rendered", async () => {
     const page = await openFixture(320, 568, { singleAgent: true });
@@ -535,7 +663,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
       expect(model.y).toBeGreaterThan(session.y);
       expect(model.width).toBe(session.width);
     } finally {
-      await page.close();
+      await closeBrowserPage(page);
     }
   });
 
@@ -548,7 +676,7 @@ describeBrowserLayout("chat responsive browser layout", () => {
         .evaluate((node) => getComputedStyle(node).position);
       expect(position).toBe("fixed");
     } finally {
-      await page.close();
+      await closeBrowserPage(page);
     }
   });
 });

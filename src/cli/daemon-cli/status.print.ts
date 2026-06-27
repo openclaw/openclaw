@@ -18,6 +18,7 @@ import { classifySystemdUnavailableDetail } from "../../daemon/systemd-unavailab
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
 import { formatGatewayRestartHandoffDiagnostic } from "../../infra/restart-handoff.js";
 import { isWSLEnv } from "../../infra/wsl.js";
+import { resolvePluginVersionDriftUpdateCommand } from "../../plugins/plugin-version-drift.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomePath } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
@@ -326,12 +327,11 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
     rpc?.ok !== true &&
     isSystemdUnavailableDetail(service.runtime?.detail);
   if (systemdUnavailable) {
-    const container = Boolean(
-      resolveDaemonContainerContext(service.command?.environment ?? process.env),
-    );
+    const serviceEnv = service.command?.environment ?? process.env;
+    const container = Boolean(resolveDaemonContainerContext(serviceEnv));
     defaultRuntime.error(errorText("systemd user services unavailable."));
     for (const hint of renderSystemdUnavailableHints({
-      wsl: isWSLEnv(),
+      wsl: isWSLEnv(serviceEnv),
       kind: classifySystemdUnavailableDetail(service.runtime?.detail),
       container,
     })) {
@@ -343,6 +343,17 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   if (service.runtime?.missingUnit) {
     defaultRuntime.error(errorText("Service unit not found."));
     for (const hint of renderRuntimeHints(service.runtime, process.env, status.logFile)) {
+      defaultRuntime.error(errorText(hint));
+    }
+  } else if (service.runtime?.missingGuiSession) {
+    defaultRuntime.error(
+      errorText("LaunchAgent plist exists, but macOS has no usable GUI session for this user."),
+    );
+    for (const hint of renderRuntimeHints(
+      service.runtime,
+      service.command?.environment ?? process.env,
+      status.logFile,
+    )) {
       defaultRuntime.error(errorText(hint));
     }
   } else if (service.runtime?.missingSupervision) {
@@ -471,9 +482,20 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
           `- ${warnText(entry.pluginId)}: ${entry.installedVersion} (${sourceLabel}) → expected ${drift.gatewayVersion}`,
         );
       }
-      defaultRuntime.log(
-        `${label("Fix:")} ${formatCliCommand("openclaw plugins update <plugin-id>")} for each drifted plugin, then ${formatCliCommand("openclaw gateway restart")}.`,
+      const updateCommands = drift.drifts.map((entry) =>
+        formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry)),
       );
+      if (updateCommands.length === 1) {
+        defaultRuntime.log(
+          `${label("Fix:")} ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`,
+        );
+      } else {
+        defaultRuntime.log(`${label("Fix:")} update each drifted plugin:`);
+        for (const command of updateCommands) {
+          defaultRuntime.log(`- ${command}`);
+        }
+        defaultRuntime.log(`Then run ${formatCliCommand("openclaw gateway restart")}.`);
+      }
     } else {
       defaultRuntime.log(
         infoText(

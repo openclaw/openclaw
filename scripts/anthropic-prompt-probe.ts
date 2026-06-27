@@ -61,6 +61,18 @@ const GATEWAY_TIMEOUT_MS = parseStrictIntegerOption({
   min: 1,
   raw: process.env.OPENCLAW_PROMPT_GATEWAY_TIMEOUT_MS,
 });
+const GATEWAY_PARENT_SIGNAL_EXIT_CODES = new Map<NodeJS.Signals, number>([
+  ["SIGHUP", 129],
+  ["SIGINT", 130],
+  ["SIGTERM", 143],
+]);
+const CAPTURE_PROXY_MAX_BODY_BYTES = parseStrictIntegerOption({
+  fallback: 2 * 1024 * 1024,
+  label: "OPENCLAW_PROMPT_CAPTURE_MAX_BODY_BYTES",
+  min: 1,
+  raw: process.env.OPENCLAW_PROMPT_CAPTURE_MAX_BODY_BYTES,
+});
+const GATEWAY_LOG_TAIL_BYTES = 256 * 1024;
 const SETUP_TOKEN_RAW = process.env.OPENCLAW_LIVE_SETUP_TOKEN?.trim() ?? "";
 const SETUP_TOKEN_VALUE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_VALUE?.trim() ?? "";
 const SETUP_TOKEN_PROFILE = process.env.OPENCLAW_LIVE_SETUP_TOKEN_PROFILE?.trim() ?? "";
@@ -114,12 +126,14 @@ type TokenSource = {
 
 type StoppableGatewayChild = {
   exitCode: number | null;
+  pid?: number;
   signalCode: NodeJS.Signals | null;
   kill(signal: NodeJS.Signals): boolean;
   once(event: "exit", listener: () => void): unknown;
 };
 
 type ClosableLogFile = {
+  appendFile?(data: string | Uint8Array): Promise<void>;
   close(): Promise<void>;
 };
 
@@ -283,12 +297,22 @@ async function withTimeout<T>(
   return await Promise.race([promise, sleep(timeoutMs).then(() => fallback())]);
 }
 
-async function readRequestBody(req: http.IncomingMessage): Promise<Buffer> {
+async function readRequestBody(
+  req: http.IncomingMessage,
+  maxBytes = CAPTURE_PROXY_MAX_BODY_BYTES,
+): Promise<Buffer> {
   const chunks: Buffer[] = [];
+  let totalBytes = 0;
   for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buffer.length;
+    if (totalBytes > maxBytes) {
+      req.destroy();
+      throw new Error(`Anthropic capture proxy request body exceeded ${maxBytes} bytes`);
+    }
+    chunks.push(buffer);
   }
-  return Buffer.concat(chunks);
+  return Buffer.concat(chunks, totalBytes);
 }
 
 function extractProxyCapture(rawBody: string, req: http.IncomingMessage): ProxyCapture {
@@ -450,21 +474,45 @@ async function runDirectPrompt(prompt: string): Promise<PromptResult> {
         ANTHROPIC_API_KEY: "",
         ANTHROPIC_API_KEY_OLD: "",
       },
+      detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     });
     child.stdout.on("data", (chunk) => stdout.push(String(chunk)));
     child.stderr.on("data", (chunk) => stderr.push(String(chunk)));
-    const exit = await withTimeout(
-      new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
+    const exitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve, reject) => {
         child.once("error", reject);
         child.once("exit", (code, signal) => resolve({ code, signal }));
-      }),
-      TIMEOUT_MS,
-      () => {
-        child.kill("SIGKILL");
-        return { code: null, signal: "SIGKILL" as NodeJS.Signals };
       },
     );
+    const stopDirectChild = async (signal: NodeJS.Signals = "SIGKILL") => {
+      signalGatewayPromptChildTree(child, signal);
+      await waitForGatewayPromptChildTreeExit(
+        child,
+        exitPromise.then(() => undefined),
+        1_500,
+      );
+    };
+    const removeParentSignalHandlers = installGatewayPromptParentSignalHandlers(
+      child,
+      stopDirectChild,
+    );
+    let timeoutTimer: ReturnType<typeof setTimeout> | undefined;
+    const exit = await Promise.race([
+      exitPromise,
+      new Promise<{ code: null; signal: NodeJS.Signals }>((resolve) => {
+        timeoutTimer = setTimeout(() => {
+          void stopDirectChild("SIGKILL").finally(() => {
+            resolve({ code: null, signal: "SIGKILL" });
+          });
+        }, TIMEOUT_MS);
+      }),
+    ]).finally(() => {
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+      }
+      removeParentSignalHandlers();
+    });
     const joinedStdout = stdout.join("");
     const joinedStderr = stderr.join("");
     return {
@@ -517,14 +565,45 @@ async function startGatewayProcess(params: {
         ANTHROPIC_API_KEY: "",
         ANTHROPIC_API_KEY_OLD: "",
       },
+      detached: process.platform !== "win32",
       stdio: ["ignore", "pipe", "pipe"],
     },
   );
-  child.stdout.on("data", (chunk) => void logFile.appendFile(chunk));
-  child.stderr.on("data", (chunk) => void logFile.appendFile(chunk));
+  const pendingLogWrites = new Set<Promise<void>>();
+  const logWriteErrors: unknown[] = [];
+  const trackLogWrite = (chunk: Buffer) => {
+    const write = logFile.appendFile(chunk).catch((error: unknown) => {
+      logWriteErrors.push(error);
+      throw error;
+    });
+    pendingLogWrites.add(write);
+    void write
+      .finally(() => {
+        pendingLogWrites.delete(write);
+      })
+      .catch(() => undefined);
+  };
+  child.stdout.on("data", trackLogWrite);
+  child.stderr.on("data", trackLogWrite);
+  let stopPromise: Promise<boolean> | undefined;
+  let removeParentSignalHandlers = () => {};
+  const stopOnce = async (): Promise<boolean> => {
+    stopPromise ??= stopGatewayPromptChild(
+      child,
+      logFile,
+      1_500,
+      1_500,
+      pendingLogWrites,
+      logWriteErrors,
+    ).finally(() => {
+      removeParentSignalHandlers();
+    });
+    return await stopPromise;
+  };
+  removeParentSignalHandlers = installGatewayPromptParentSignalHandlers(child, stopOnce);
   return {
     async stop(): Promise<boolean> {
-      return await stopGatewayPromptChild(child, logFile);
+      return await stopOnce();
     },
   };
 }
@@ -534,6 +613,8 @@ async function stopGatewayPromptChild(
   logFile: ClosableLogFile,
   sigintTimeoutMs = 1_500,
   sigkillTimeoutMs = 1_500,
+  pendingLogWrites: Iterable<Promise<void>> = [],
+  logWriteErrors: readonly unknown[] = [],
 ): Promise<boolean> {
   let exited = child.exitCode !== null || child.signalCode !== null;
   const exitPromise = exited
@@ -545,23 +626,113 @@ async function stopGatewayPromptChild(
         });
       });
   if (!exited) {
-    child.kill("SIGINT");
+    signalGatewayPromptChildTree(child, "SIGINT");
   }
-  const exitedAfterSigint = await withTimeout(
-    exitPromise.then(() => true),
+  const exitedAfterSigint = await waitForGatewayPromptChildTreeExit(
+    child,
+    exitPromise,
     sigintTimeoutMs,
-    () => false,
   );
-  if (!exitedAfterSigint && !exited) {
-    child.kill("SIGKILL");
-    await withTimeout(
-      exitPromise.then(() => true),
-      sigkillTimeoutMs,
-      () => false,
-    );
+  if (!exitedAfterSigint) {
+    signalGatewayPromptChildTree(child, "SIGKILL");
+    await waitForGatewayPromptChildTreeExit(child, exitPromise, sigkillTimeoutMs);
   }
+  const failedLogWrite = (await Promise.allSettled(pendingLogWrites)).find(
+    (result): result is PromiseRejectedResult => result.status === "rejected",
+  );
   await logFile.close();
+  const logWriteError = failedLogWrite?.reason ?? logWriteErrors[0];
+  if (logWriteError) {
+    throw new Error(`Anthropic prompt gateway log write failed: ${String(logWriteError)}`);
+  }
   return exited;
+}
+
+function installGatewayPromptParentSignalHandlers(
+  child: StoppableGatewayChild,
+  stopGateway: () => Promise<unknown>,
+): () => void {
+  let parentSignalShutdownStarted = false;
+  const handlers = new Map<NodeJS.Signals, () => void>();
+  const removeHandlers = () => {
+    for (const [signal, handler] of handlers) {
+      process.off(signal, handler);
+    }
+    handlers.clear();
+  };
+  for (const signal of GATEWAY_PARENT_SIGNAL_EXIT_CODES.keys()) {
+    const handler = () => {
+      if (parentSignalShutdownStarted) {
+        signalGatewayPromptChildTree(child, "SIGKILL");
+        return;
+      }
+      parentSignalShutdownStarted = true;
+      void stopGateway()
+        .catch(() => undefined)
+        .finally(() => {
+          removeHandlers();
+          process.exit(GATEWAY_PARENT_SIGNAL_EXIT_CODES.get(signal) ?? 1);
+        });
+    };
+    handlers.set(signal, handler);
+    process.on(signal, handler);
+  }
+  return removeHandlers;
+}
+
+async function waitForGatewayPromptChildTreeExit(
+  child: StoppableGatewayChild,
+  exitPromise: Promise<void>,
+  timeoutMs: number,
+): Promise<boolean> {
+  let leaderExited = child.exitCode !== null || child.signalCode !== null;
+  const trackedExit = exitPromise.then(() => {
+    leaderExited = true;
+  });
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (leaderExited && !gatewayPromptChildTreeIsAlive(child)) {
+      return true;
+    }
+    const waitMs = Math.min(50, Math.max(0, deadline - Date.now()));
+    if (leaderExited) {
+      await sleep(waitMs);
+    } else {
+      await Promise.race([trackedExit, sleep(waitMs)]);
+    }
+  }
+  return leaderExited && !gatewayPromptChildTreeIsAlive(child);
+}
+
+function signalGatewayPromptChildTree(
+  child: StoppableGatewayChild,
+  signal: NodeJS.Signals,
+): boolean {
+  if (process.platform !== "win32" && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return true;
+    } catch {
+      return child.kill(signal);
+    }
+  }
+  return child.kill(signal);
+}
+
+function gatewayPromptChildTreeIsAlive(child: StoppableGatewayChild): boolean {
+  if (process.platform === "win32" || typeof child.pid !== "number") {
+    return false;
+  }
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return !isMissingProcessError(error);
+  }
+}
+
+function isMissingProcessError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH";
 }
 
 async function waitForGatewayReady(url: string, token: string): Promise<void> {
@@ -579,9 +750,29 @@ async function waitForGatewayReady(url: string, token: string): Promise<void> {
   throw new Error(lastError);
 }
 
-async function readLogTail(logPath: string): Promise<string> {
-  const raw = await fs.readFile(logPath, "utf8").catch(() => "");
-  return redactForDevToolLog(raw.split(/\r?\n/).slice(-40).join("\n").trim());
+async function readLogTail(logPath: string, maxBytes = GATEWAY_LOG_TAIL_BYTES): Promise<string> {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
+    throw new Error("maxBytes must be a positive integer");
+  }
+  const logFile = await fs.open(logPath, "r").catch(() => undefined);
+  if (!logFile) {
+    return "";
+  }
+  try {
+    const stat = await logFile.stat();
+    if (stat.size <= 0) {
+      return "";
+    }
+    const length = Math.min(stat.size, maxBytes);
+    const position = Math.max(0, stat.size - length);
+    const buffer = Buffer.allocUnsafe(length);
+    const { bytesRead } = await logFile.read(buffer, 0, length, position);
+    const raw = buffer.subarray(0, bytesRead).toString("utf8");
+    const lineAlignedRaw = position > 0 ? raw.replace(/^[^\n]*(?:\r?\n|$)/u, "") : raw;
+    return redactForDevToolLog(lineAlignedRaw.split(/\r?\n/).slice(-40).join("\n").trim());
+  } finally {
+    await logFile.close();
+  }
 }
 
 async function runGatewayPrompt(prompt: string): Promise<PromptResult> {
@@ -766,8 +957,11 @@ async function main() {
 
 export const testing = {
   cleanupPromptProbeTmpDir,
+  installGatewayPromptParentSignalHandlers,
   matchesExtraUsage400,
   promptProbeTmpResult,
+  readLogTail,
+  readRequestBody,
   resolveAnthropicUpstreamUrl,
   stopGatewayPromptChild,
   summarizeCapture,

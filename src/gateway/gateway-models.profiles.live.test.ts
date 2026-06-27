@@ -58,7 +58,8 @@ import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
 import type { ProviderThinkingModelCompat } from "../plugins/provider-thinking.types.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
-import { containsFinalTag, stripFinalTags } from "../shared/text/final-tags.js";
+import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import {
@@ -67,9 +68,10 @@ import {
   isLikelyToolNonceRefusal,
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
-} from "./live-tool-probe-utils.js";
+} from "./live-tool-probe.test-helpers.js";
 import { startGatewayServer } from "./server.impl.js";
-import { loadSessionEntry, readSessionMessagesAsync } from "./session-utils.js";
+import { readSessionMessagesAsync } from "./session-transcript-readers.js";
+import { loadSessionEntry } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
@@ -343,7 +345,11 @@ function isGatewayLiveProbeTimeout(error: string): boolean {
 }
 
 function isGatewayLiveModelTimeout(error: string): boolean {
-  return /model timeout after \d+ms/i.test(error);
+  return (
+    /model timeout after \d+ms/i.test(error) ||
+    (/\bagent\.wait timeout for runId=/i.test(error) &&
+      /\btimeoutPhase=(?:preflight|provider|post_turn)\b/i.test(error))
+  );
 }
 
 function assertGatewayLiveDidNotSkipAllDueToTimeout(params: {
@@ -361,6 +367,27 @@ function assertGatewayLiveDidNotSkipAllDueToTimeout(params: {
   }
   throw new Error(
     `[${params.label}] skipped all ${params.total} live model(s) after ${params.timeoutSkippedCount} timeout skip(s); increase the live gateway timeout or fix the timeout source instead of treating this as missing profile coverage.`,
+  );
+}
+
+function assertGatewayLiveCompletedSomeModels(params: {
+  label: string;
+  passedCount: number;
+  skippedCount: number;
+  timeoutSkippedCount: number;
+  total: number;
+}): void {
+  if (params.total === 0 || params.passedCount > 0) {
+    return;
+  }
+  assertGatewayLiveDidNotSkipAllDueToTimeout({
+    label: params.label,
+    skippedCount: params.skippedCount,
+    timeoutSkippedCount: params.timeoutSkippedCount,
+    total: params.total,
+  });
+  throw new Error(
+    `[${params.label}] completed zero successful live model run(s) across ${params.total} selected model(s); skipped=${params.skippedCount}. Live proof must exercise at least one model.`,
   );
 }
 
@@ -396,6 +423,26 @@ function assertGatewayLiveSelectedSomeModels(params: {
   const mode = params.useExplicit ? "explicit" : params.useSmall ? "small" : "high-signal";
   throw new Error(
     `[${params.label}] selected no ${mode} live models for providers=${formatGatewayLiveFilterSet(params.providerFilter)} models=${formatGatewayLiveFilterSet(params.modelFilter)} from ${params.total} registry model(s); update the live model selection or pass explicit live model refs.`,
+  );
+}
+
+function assertGatewayLiveHasRunnableCandidates(params: {
+  candidatesCount: number;
+  label: string;
+  skipped: Array<{ model: string; error: string }>;
+}): void {
+  if (params.candidatesCount > 0) {
+    return;
+  }
+  const preview = params.skipped.length > 0 ? `:\n${formatFailurePreview(params.skipped, 8)}` : ".";
+  throw new Error(
+    `[${params.label}] selected no runnable live model candidates with usable credentials; skipped ${params.skipped.length} candidate(s)${preview}`,
+  );
+}
+
+function failGatewayLiveStartupCoverage(params: { label: string; reason: string }): never {
+  throw new Error(
+    `[${params.label}] gateway startup failed before live model coverage: ${params.reason}`,
   );
 }
 
@@ -524,9 +571,9 @@ function restoreProductionEnvForLiveRun(previous: {
 
 function restoreOptionalEnv(key: string, value: string | undefined): void {
   if (value === undefined) {
-    delete process.env[key];
+    deleteTestEnvValue(key);
   } else {
-    process.env[key] = value;
+    setTestEnvValue(key, value);
   }
 }
 
@@ -556,7 +603,7 @@ function assertNoReasoningTags(params: {
   if (!params.text) {
     return;
   }
-  if (THINKING_TAG_RE.test(params.text) || containsFinalTag(params.text)) {
+  if (THINKING_TAG_RE.test(params.text) || findFinalTagMatches(params.text).length > 0) {
     const snippet = params.text.length > 200 ? `${params.text.slice(0, 200)}…` : params.text;
     throw new Error(
       `[${params.label}] reasoning tag leak (${params.model} / ${params.phase}): ${snippet}`,
@@ -850,6 +897,24 @@ describe("resolveGatewayLiveProviderTimeoutSeconds", () => {
   });
 });
 
+describe("isGatewayLiveModelTimeout", () => {
+  it("matches provider-attributed agent wait timeouts", () => {
+    expect(
+      isGatewayLiveModelTimeout(
+        "minimax/MiniMax-M3: prompt: agent.wait timeout for runId=idem-1 (timeoutPhase=provider, providerStarted=true, stopReason=rpc, error=aborted)",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match wait-layer agent wait timeouts", () => {
+    expect(
+      isGatewayLiveModelTimeout(
+        "minimax/MiniMax-M3: prompt: agent.wait timeout for runId=idem-1 (timeoutPhase=queue, providerStarted=false, stopReason=rpc, error=aborted)",
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("formatGatewayLiveAgentWaitFailure", () => {
   it("includes terminal attribution fields without requiring transcript text", () => {
     expect(
@@ -890,6 +955,32 @@ describe("assertGatewayLiveDidNotSkipAllDueToTimeout", () => {
         total: 1,
       }),
     ).toThrow(/skipped all 1 live model/);
+  });
+});
+
+describe("assertGatewayLiveCompletedSomeModels", () => {
+  it("allows live sweeps with at least one successful model run", () => {
+    expect(() =>
+      assertGatewayLiveCompletedSomeModels({
+        label: "all-models",
+        passedCount: 1,
+        skippedCount: 4,
+        timeoutSkippedCount: 0,
+        total: 5,
+      }),
+    ).not.toThrow();
+  });
+
+  it("fails live sweeps with no successful model runs", () => {
+    expect(() =>
+      assertGatewayLiveCompletedSomeModels({
+        label: "all-models",
+        passedCount: 0,
+        skippedCount: 2,
+        timeoutSkippedCount: 0,
+        total: 2,
+      }),
+    ).toThrow(/completed zero successful live model run/);
   });
 });
 
@@ -940,6 +1031,39 @@ describe("assertGatewayLiveSelectedSomeModels", () => {
   });
 });
 
+describe("assertGatewayLiveHasRunnableCandidates", () => {
+  it("fails selected sweeps when auth lookup leaves no runnable candidates", () => {
+    expect(() =>
+      assertGatewayLiveHasRunnableCandidates({
+        candidatesCount: 0,
+        label: "all-models",
+        skipped: [{ model: "openai/gpt-5.5", error: "missing auth profile" }],
+      }),
+    ).toThrow(/selected no runnable live model candidates/);
+  });
+
+  it("allows selected sweeps with runnable candidates", () => {
+    expect(() =>
+      assertGatewayLiveHasRunnableCandidates({
+        candidatesCount: 1,
+        label: "all-models",
+        skipped: [],
+      }),
+    ).not.toThrow();
+  });
+});
+
+describe("failGatewayLiveStartupCoverage", () => {
+  it("fails startup timeouts instead of treating them as skipped live coverage", () => {
+    expect(() =>
+      failGatewayLiveStartupCoverage({
+        label: "all-models",
+        reason: "probe timeout after 90000ms (all-models: gateway-start)",
+      }),
+    ).toThrow(/gateway startup failed before live model coverage/);
+  });
+});
+
 describe("resolveGatewayLiveSuiteTimeoutMs", () => {
   it("leaves uncapped explicit sweeps bounded by the unbounded live timeout", () => {
     expect(resolveGatewayLiveSuiteTimeoutMs(0)).toBe(GATEWAY_LIVE_UNBOUNDED_TIMEOUT_MS);
@@ -960,9 +1084,9 @@ describe("resolveGatewayLiveMaxModels", () => {
   const originalSharedMax = process.env.OPENCLAW_LIVE_MAX_MODELS;
   function restoreEnvValue(name: string, value: string | undefined): void {
     if (value === undefined) {
-      delete process.env[name];
+      deleteTestEnvValue(name);
     } else {
-      process.env[name] = value;
+      setTestEnvValue(name, value);
     }
   }
 
@@ -2024,10 +2148,18 @@ async function readSessionAssistantTexts(sessionKey: string, modelKey?: string):
   if (!entry?.sessionId) {
     return [];
   }
-  const messages = await readSessionMessagesAsync(entry.sessionId, storePath, entry.sessionFile, {
-    mode: "full",
-    reason: "live model assistant text verification",
-  });
+  const messages = await readSessionMessagesAsync(
+    {
+      sessionEntry: entry,
+      sessionId: entry.sessionId,
+      sessionKey,
+      storePath,
+    },
+    {
+      mode: "full",
+      reason: "live model assistant text verification",
+    },
+  );
   const assistantTexts: string[] = [];
   for (const message of messages) {
     if (!message || typeof message !== "object") {
@@ -2747,10 +2879,8 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     lastGood: hostStore.lastGood ? { ...hostStore.lastGood } : undefined,
     usageStats: hostStore.usageStats ? { ...hostStore.usageStats } : undefined,
   });
-  const tempStateDir: string | undefined = await fs.mkdtemp(
-    path.join(os.tmpdir(), "openclaw-live-state-"),
-  );
-  process.env.OPENCLAW_STATE_DIR = tempStateDir;
+  const tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-state-"));
+  setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
   const tempAgentDir: string | undefined = path.join(
     tempStateDir,
     "agents",
@@ -2762,7 +2892,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   if (tempSessionAgentDir !== tempAgentDir) {
     saveAuthProfileStore(sanitizedStore, tempSessionAgentDir);
   }
-  process.env.OPENCLAW_AGENT_DIR = tempAgentDir;
+  setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
   await fs.mkdir(workspaceDir, { recursive: true });
@@ -2797,7 +2927,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-"));
   const tempConfigPath = path.join(tempDir, "openclaw.json");
   await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
-  process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
+  setTestEnvValue("OPENCLAW_CONFIG_PATH", tempConfigPath);
 
   const liveProviders = nextCfg.models?.providers;
   if (liveProviders && Object.keys(liveProviders).length > 0) {
@@ -2812,41 +2942,41 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   let client: GatewayClient | undefined;
   try {
-    const port = await withGatewayLiveProbeTimeout(
-      getFreeGatewayPort(),
-      `${params.label}: gateway-port`,
-    );
-    server = await withGatewayLiveProbeTimeout(
-      startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      }),
-      `${params.label}: gateway-start`,
-    );
+    try {
+      const port = await withGatewayLiveProbeTimeout(
+        getFreeGatewayPort(),
+        `${params.label}: gateway-port`,
+      );
+      server = await withGatewayLiveProbeTimeout(
+        startGatewayServer(port, {
+          bind: "loopback",
+          auth: { mode: "token", token },
+          controlUiEnabled: false,
+        }),
+        `${params.label}: gateway-start`,
+      );
 
-    client = await withGatewayLiveProbeTimeout(
-      connectClient({
-        url: `ws://127.0.0.1:${port}`,
-        token,
-      }),
-      `${params.label}: gateway-connect`,
-    );
-  } catch (error) {
-    const message = String(error);
-    if (isGatewayLiveProbeTimeout(message)) {
-      logProgress(`[${params.label}] skip (gateway startup timeout)`);
-      return;
+      client = await withGatewayLiveProbeTimeout(
+        connectClient({
+          url: `ws://127.0.0.1:${port}`,
+          token,
+        }),
+        `${params.label}: gateway-connect`,
+      );
+    } catch (error) {
+      const message = String(error);
+      if (isGatewayLiveProbeTimeout(message)) {
+        failGatewayLiveStartupCoverage({ label: params.label, reason: message });
+      }
+      throw error;
     }
-    throw error;
-  }
 
-  if (!server || !client) {
-    logProgress(`[${params.label}] skip (gateway startup incomplete)`);
-    return;
-  }
-
-  try {
+    if (!server || !client) {
+      failGatewayLiveStartupCoverage({
+        label: params.label,
+        reason: "gateway server/client did not initialize",
+      });
+    }
     logProgress(
       `[${params.label}] running ${params.candidates.length} models (thinking=${params.thinkingLevel})`,
     );
@@ -2859,6 +2989,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       logProgress(`[${params.label}] anthropic keys loaded: ${anthropicKeys.length}`);
     }
     const failures: Array<{ model: string; error: string }> = [];
+    let passedCount = 0;
     let skippedCount = 0;
     let timeoutSkippedCount = 0;
     const total = params.candidates.length;
@@ -3276,6 +3407,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
             skippedCount += 1;
             break;
           }
+          passedCount += 1;
           logProgress(`${progressLabel}: done`);
           break;
         } catch (err) {
@@ -3474,20 +3606,20 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         `gateway live model failures (${failures.length}, showing ${Math.min(failures.length, 20)}):\n${preview}`,
       );
     }
-    if (skippedCount === total) {
-      assertGatewayLiveDidNotSkipAllDueToTimeout({
-        label: params.label,
-        skippedCount,
-        timeoutSkippedCount,
-        total,
-      });
-      logProgress(`[${params.label}] skipped all models (no runnable profiles or provider drift)`);
-    }
+    assertGatewayLiveCompletedSomeModels({
+      label: params.label,
+      passedCount,
+      skippedCount,
+      timeoutSkippedCount,
+      total,
+    });
   } finally {
     clearRuntimeConfigSnapshot();
     restoreProductionEnvForLiveRun(runtimeEnv);
-    client.stop();
-    await server.close({ reason: "live test complete" });
+    client?.stop();
+    if (server) {
+      await server.close({ reason: "live test complete" });
+    }
     await fs.rm(toolProbePath, { force: true });
     // Give the filesystem a short retry window while agent/runtime teardown
     // releases handles inside these temporary live-test directories.
@@ -3499,16 +3631,16 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
     }
 
-    process.env.OPENCLAW_CONFIG_PATH = previous.configPath;
-    process.env.OPENCLAW_GATEWAY_TOKEN = previous.token;
-    process.env.OPENCLAW_SKIP_CHANNELS = previous.skipChannels;
-    process.env.OPENCLAW_SKIP_GMAIL_WATCHER = previous.skipGmail;
-    process.env.OPENCLAW_SKIP_CRON = previous.skipCron;
-    process.env.OPENCLAW_SKIP_CANVAS_HOST = previous.skipCanvas;
-    process.env.OPENCLAW_DISABLE_BONJOUR = previous.disableBonjour;
-    process.env.OPENCLAW_LOG_LEVEL = previous.logLevel;
-    process.env.OPENCLAW_AGENT_DIR = previous.agentDir;
-    process.env.OPENCLAW_STATE_DIR = previous.stateDir;
+    restoreOptionalEnv("OPENCLAW_CONFIG_PATH", previous.configPath);
+    restoreOptionalEnv("OPENCLAW_GATEWAY_TOKEN", previous.token);
+    restoreOptionalEnv("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
+    restoreOptionalEnv("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
+    restoreOptionalEnv("OPENCLAW_SKIP_CRON", previous.skipCron);
+    restoreOptionalEnv("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
+    restoreOptionalEnv("OPENCLAW_DISABLE_BONJOUR", previous.disableBonjour);
+    restoreOptionalEnv("OPENCLAW_LOG_LEVEL", previous.logLevel);
+    restoreOptionalEnv("OPENCLAW_AGENT_DIR", previous.agentDir);
+    restoreOptionalEnv("OPENCLAW_STATE_DIR", previous.stateDir);
   }
 }
 
@@ -3688,9 +3820,12 @@ describeLive("gateway live (dev agent, profile keys)", () => {
               `[all-models] auth lookup skipped candidates:\n${formatFailurePreview(skipped, 8)}`,
             );
           }
-          logProgress("[all-models] no API keys found; skipping");
-          return;
         }
+        assertGatewayLiveHasRunnableCandidates({
+          candidatesCount: candidates.length,
+          label: "all-models",
+          skipped,
+        });
         const selectCandidates = useSmall ? selectSmallLiveItems : selectHighSignalLiveItems;
         const selectedCandidates = selectCandidates(
           candidates,
@@ -3775,79 +3910,81 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const token = `test-${randomUUID()}`;
     process.env.OPENCLAW_GATEWAY_TOKEN = token;
 
-    const cfg = getRuntimeConfig();
-    await ensureOpenClawModelsJson(cfg);
-
-    const agentDir = resolveDefaultAgentDir(cfg);
-    const authStorage = discoverAuthStorage(agentDir);
-    const modelRegistry = discoverModels(authStorage, agentDir);
-    const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model | null;
-    const zai = modelRegistry.find("zai", "glm-5.1") as Model | null;
-
-    if (!anthropic || !zai) {
-      return;
-    }
-    try {
-      await getApiKeyForModel({
-        model: anthropic,
-        cfg,
-        credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
-      });
-      await getApiKeyForModel({
-        model: zai,
-        cfg,
-        credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
-      });
-    } catch {
-      return;
-    }
-
-    const agentId = "dev";
-    const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-    await fs.mkdir(workspaceDir, { recursive: true });
-    const nonceA = randomUUID();
-    const nonceB = randomUUID();
-    const toolProbePath = path.join(workspaceDir, `.openclaw-live-zai-fallback.${nonceA}.txt`);
-    await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
-
     let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
     let client: GatewayClient | undefined;
+    let toolProbePath: string | undefined;
     try {
-      const port = await withGatewayLiveProbeTimeout(
-        getFreeGatewayPort(),
-        "zai-fallback: gateway-port",
-      );
-      server = await withGatewayLiveProbeTimeout(
-        startGatewayServer(port, {
-          bind: "loopback",
-          auth: { mode: "token", token },
-          controlUiEnabled: false,
-        }),
-        "zai-fallback: gateway-start",
-      );
+      const cfg = getRuntimeConfig();
+      await ensureOpenClawModelsJson(cfg);
 
-      client = await withGatewayLiveProbeTimeout(
-        connectClient({
-          url: `ws://127.0.0.1:${port}`,
-          token,
-        }),
-        "zai-fallback: gateway-connect",
-      );
-    } catch (error) {
-      const message = String(error);
-      if (isGatewayLiveProbeTimeout(message)) {
-        logProgress("[zai-fallback] skip (gateway startup timeout)");
+      const agentDir = resolveDefaultAgentDir(cfg);
+      const authStorage = discoverAuthStorage(agentDir);
+      const modelRegistry = discoverModels(authStorage, agentDir);
+      const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model | null;
+      const zai = modelRegistry.find("zai", "glm-5.1") as Model | null;
+
+      if (!anthropic || !zai) {
         return;
       }
-      throw error;
-    }
+      try {
+        await getApiKeyForModel({
+          model: anthropic,
+          cfg,
+          credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+        });
+        await getApiKeyForModel({
+          model: zai,
+          cfg,
+          credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+        });
+      } catch {
+        return;
+      }
 
-    if (!server || !client) {
-      logProgress("[zai-fallback] skip (gateway startup incomplete)");
-      return;
-    }
+      const agentId = "dev";
+      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
+      await fs.mkdir(workspaceDir, { recursive: true });
+      const nonceA = randomUUID();
+      const nonceB = randomUUID();
+      toolProbePath = path.join(workspaceDir, `.openclaw-live-zai-fallback.${nonceA}.txt`);
+      await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
-    try {
+      try {
+        const port = await withGatewayLiveProbeTimeout(
+          getFreeGatewayPort(),
+          "zai-fallback: gateway-port",
+        );
+        server = await withGatewayLiveProbeTimeout(
+          startGatewayServer(port, {
+            bind: "loopback",
+            auth: { mode: "token", token },
+            controlUiEnabled: false,
+          }),
+          "zai-fallback: gateway-start",
+        );
+
+        client = await withGatewayLiveProbeTimeout(
+          connectClient({
+            url: `ws://127.0.0.1:${port}`,
+            token,
+          }),
+          "zai-fallback: gateway-connect",
+        );
+      } catch (error) {
+        const message = String(error);
+        if (isGatewayLiveProbeTimeout(message)) {
+          failGatewayLiveStartupCoverage({ label: "zai-fallback", reason: message });
+        }
+        throw error;
+      }
+
+      if (!server || !client) {
+        failGatewayLiveStartupCoverage({
+          label: "zai-fallback",
+          reason: "gateway server/client did not initialize",
+        });
+      }
+
       const sessionKey = `agent:${agentId}:live-zai-fallback`;
 
       await withGatewayLiveSessionControlTimeout(
@@ -3916,16 +4053,20 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     } finally {
       clearRuntimeConfigSnapshot();
       restoreProductionEnvForLiveRun(runtimeEnv);
-      client.stop();
-      await server.close({ reason: "live test complete" });
-      await fs.rm(toolProbePath, { force: true });
+      client?.stop();
+      if (server) {
+        await server.close({ reason: "live test complete" });
+      }
+      if (toolProbePath) {
+        await fs.rm(toolProbePath, { force: true });
+      }
 
-      process.env.OPENCLAW_CONFIG_PATH = previous.configPath;
-      process.env.OPENCLAW_GATEWAY_TOKEN = previous.token;
-      process.env.OPENCLAW_SKIP_CHANNELS = previous.skipChannels;
-      process.env.OPENCLAW_SKIP_GMAIL_WATCHER = previous.skipGmail;
-      process.env.OPENCLAW_SKIP_CRON = previous.skipCron;
-      process.env.OPENCLAW_SKIP_CANVAS_HOST = previous.skipCanvas;
+      restoreOptionalEnv("OPENCLAW_CONFIG_PATH", previous.configPath);
+      restoreOptionalEnv("OPENCLAW_GATEWAY_TOKEN", previous.token);
+      restoreOptionalEnv("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
+      restoreOptionalEnv("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
+      restoreOptionalEnv("OPENCLAW_SKIP_CRON", previous.skipCron);
+      restoreOptionalEnv("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
     }
   }, 180_000);
 });

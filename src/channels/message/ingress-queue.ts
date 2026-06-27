@@ -142,6 +142,10 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
     id: string,
     options?: { ownerId?: string },
   ): Promise<ChannelIngressQueueClaim<TPayload, TMetadata> | null>;
+  refreshClaim?(
+    claim: ChannelIngressQueueClaimRef,
+    options?: { refreshedAt?: number },
+  ): Promise<boolean>;
   complete(
     idOrClaim: string | ChannelIngressQueueClaimRef,
     options?: { metadata?: TCompletedMetadata; completedAt?: number },
@@ -186,9 +190,19 @@ function normalizePart(value: string | undefined, fallback: string): string {
   return normalized ? normalized : fallback;
 }
 
+// Keep inherited lookups for HOME/etc. without enumerating large Kubernetes service envs.
+export function createStateDirEnv(
+  stateDir: string,
+  baseEnv: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+  const env = Object.create(baseEnv) as NodeJS.ProcessEnv;
+  env.OPENCLAW_STATE_DIR = stateDir;
+  return env;
+}
+
 function openStateDatabase(stateDir?: string) {
   return openOpenClawStateDatabase({
-    env: stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env,
+    env: stateDir ? createStateDirEnv(stateDir) : process.env,
   });
 }
 
@@ -201,7 +215,7 @@ function affectedRows(result: { numAffectedRows?: bigint }): number {
 }
 
 function parseJson(value: string): unknown {
-  return JSON.parse(value) as unknown;
+  return JSON.parse(value);
 }
 
 function baseRecord<TPayload, TMetadata>(
@@ -430,26 +444,6 @@ export function createChannelIngressQueue<
     return rows.map((row) => claimedRecord<TPayload, TMetadata>(row));
   };
 
-  const recoverStaleClaims: ChannelIngressQueue<
-    TPayload,
-    TMetadata,
-    TCompletedMetadata
-  >["recoverStaleClaims"] = async (recoverOptions) => {
-    const staleMs = Math.max(0, Math.floor(recoverOptions?.staleMs ?? 0));
-    const cutoff = (recoverOptions?.now ?? now()) - staleMs;
-    const claims = (await listClaims()).filter((claim) => claim.claim.claimedAt <= cutoff);
-    let recovered = 0;
-    for (const claim of claims) {
-      if (recoverOptions?.shouldRecover && !(await recoverOptions.shouldRecover(claim))) {
-        continue;
-      }
-      if (await release(claim, { releasedAt: recoverOptions?.now ?? now() })) {
-        recovered += 1;
-      }
-    }
-    return recovered;
-  };
-
   const claimNext: ChannelIngressQueue<
     TPayload,
     TMetadata,
@@ -549,6 +543,89 @@ export function createChannelIngressQueue<
       },
       { path: database.path },
     );
+  };
+
+  const refreshClaim: NonNullable<
+    ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["refreshClaim"]
+  > = async (claimRef, refreshOptions) => {
+    const eventId = idFrom(claimRef);
+    const refreshedAt = refreshOptions?.refreshedAt ?? now();
+    const database = openStateDatabase(options.stateDir);
+    return runOpenClawStateWriteTransaction(
+      (tx) => {
+        const kysely = getChannelIngressKysely(tx.db);
+        const result = executeSqliteQuerySync(
+          tx.db,
+          kysely
+            .updateTable("channel_ingress_events")
+            .set({
+              claimed_at: refreshedAt,
+              updated_at: refreshedAt,
+            })
+            .where("queue_name", "=", queueName)
+            .where("event_id", "=", eventId)
+            .where("status", "=", "claimed")
+            .where("claim_token", "=", claimRef.claim.token),
+        );
+        return affectedRows(result) > 0;
+      },
+      { path: database.path },
+    );
+  };
+
+  const releaseClaimIfStillStale = async (
+    claimRef: ChannelIngressQueueClaimRef,
+    releaseOptions: { cutoff: number; releasedAt: number },
+  ): Promise<boolean> => {
+    const eventId = idFrom(claimRef);
+    const database = openStateDatabase(options.stateDir);
+    return runOpenClawStateWriteTransaction(
+      (tx) => {
+        const kysely = getChannelIngressKysely(tx.db);
+        const result = executeSqliteQuerySync(
+          tx.db,
+          kysely
+            .updateTable("channel_ingress_events")
+            .set((eb) => ({
+              status: "pending",
+              claim_token: null,
+              claim_owner: null,
+              claimed_at: null,
+              attempts: eb("attempts", "+", 1),
+              last_attempt_at: releaseOptions.releasedAt,
+              updated_at: releaseOptions.releasedAt,
+            }))
+            .where("queue_name", "=", queueName)
+            .where("event_id", "=", eventId)
+            .where("status", "=", "claimed")
+            .where("claim_token", "=", claimRef.claim.token)
+            .where("claimed_at", "<=", releaseOptions.cutoff),
+        );
+        return affectedRows(result) > 0;
+      },
+      { path: database.path },
+    );
+  };
+
+  const recoverStaleClaims: ChannelIngressQueue<
+    TPayload,
+    TMetadata,
+    TCompletedMetadata
+  >["recoverStaleClaims"] = async (recoverOptions) => {
+    const current = recoverOptions?.now ?? now();
+    const staleMs = Math.max(0, Math.floor(recoverOptions?.staleMs ?? 0));
+    const cutoff = current - staleMs;
+    const staleClaims = (await listClaims()).filter((claimed) => claimed.claim.claimedAt <= cutoff);
+    let recovered = 0;
+    for (const staleClaim of staleClaims) {
+      if (recoverOptions?.shouldRecover && !(await recoverOptions.shouldRecover(staleClaim))) {
+        continue;
+      }
+      if (await releaseClaimIfStillStale(staleClaim, { cutoff, releasedAt: current })) {
+        recovered += 1;
+      }
+    }
+    return recovered;
   };
 
   const complete: ChannelIngressQueue<TPayload, TMetadata, TCompletedMetadata>["complete"] = async (
@@ -835,6 +912,7 @@ export function createChannelIngressQueue<
     listClaims,
     claimNext,
     claim,
+    refreshClaim,
     complete,
     release,
     fail,

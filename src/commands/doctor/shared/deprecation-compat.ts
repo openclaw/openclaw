@@ -231,10 +231,10 @@ const DOCTOR_DEPRECATION_COMPAT_RECORDS = [
     owner: "tts",
     introduced: "2026-04-29",
     source:
-      "messages.tts.enabled, agents.*.tts.enabled, channels.*.tts.enabled, and voice-call plugin tts.enabled",
+      "messages.tts.enabled, agents.list[].tts.enabled, supported channel TTS enabled fields, and voice-call plugin tts.enabled",
     migration: "src/commands/doctor/shared/legacy-config-migrations.runtime.tts.ts",
     replacement:
-      'messages/agents/channels/plugins TTS auto mode, for example auto: "always" or auto: "off"',
+      'supported messages/agents/channels/plugins TTS auto mode, for example auto: "always" or auto: "off"',
     docsPath: "/tools/tts",
     tests: ["src/commands/doctor/shared/legacy-config-migrate.provider-shapes.test.ts"],
   }),

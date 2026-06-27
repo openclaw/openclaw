@@ -115,6 +115,15 @@ export function isRawReasoningCompletionNotification(
   return item ? readString(item, "type") === "reasoning" : false;
 }
 
+/** Returns true for streamed app-server reasoning progress. */
+export function isReasoningProgressNotification(notification: CodexServerNotification): boolean {
+  return (
+    notification.method === "item/reasoning/textDelta" ||
+    notification.method === "item/reasoning/summaryTextDelta" ||
+    notification.method === "item/reasoning/summaryPartAdded"
+  );
+}
+
 /** Returns true when assistant completion can release the short idle watch. */
 export function isAssistantCompletionReleaseNotification(
   notification: CodexServerNotification,
@@ -180,7 +189,23 @@ export function isRawToolOutputCompletionNotification(
     return false;
   }
   const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
-  return item ? readString(item, "type") === "custom_tool_call_output" : false;
+  switch (item ? readString(item, "type") : undefined) {
+    case "custom_tool_call_output":
+    case "function_call_output":
+      return true;
+    default:
+      return false;
+  }
+}
+
+export function isRawFunctionToolOutputCompletionNotification(
+  notification: CodexServerNotification,
+): boolean {
+  if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
+    return false;
+  }
+  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  return item ? readString(item, "type") === "function_call_output" : false;
 }
 
 /** Returns true for progress on Codex-native tool item types. */
@@ -425,6 +450,31 @@ export function readCodexNotificationItem(
   return typeof item.id === "string" && typeof item.type === "string"
     ? (item as CodexThreadItem)
     : undefined;
+}
+
+/** Reads the stable call id from a model-emitted raw tool item. */
+export function readRawResponseToolCallId(
+  notification: CodexServerNotification,
+): string | undefined {
+  if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
+    return undefined;
+  }
+  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  if (!item) {
+    return undefined;
+  }
+  switch (readString(item, "type")) {
+    case "custom_tool_call":
+    case "function_call":
+    case "local_shell_call":
+    case "tool_search_call":
+      return readString(item, "call_id");
+    case "image_generation_call":
+    case "web_search_call":
+      return readString(item, "id");
+    default:
+      return undefined;
+  }
 }
 
 /** Maps Codex item types to the tool name shown in execution progress. */

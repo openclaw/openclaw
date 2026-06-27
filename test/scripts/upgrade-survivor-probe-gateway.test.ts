@@ -6,8 +6,10 @@ import { createServer as createTcpServer, type Server, type Socket } from "node:
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const probePath = path.resolve("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs");
+const dockerSurvivorPath = path.resolve("scripts/e2e/upgrade-survivor-docker.sh");
 const tempDirs: string[] = [];
 
 function makeTempDir(): string {
@@ -34,16 +36,16 @@ function runProbe(
       env: { ...process.env, ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let stdout = "";
-    let stderr = "";
+    const stdout = createBoundedChildOutput();
+    const stderr = createBoundedChildOutput();
     let timedOut = false;
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += chunk;
+      stdout.append(chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk;
+      stderr.append(chunk);
     });
     const timer = setTimeout(() => {
       timedOut = true;
@@ -51,7 +53,7 @@ function runProbe(
     }, timeout);
     child.on("error", (error) => {
       clearTimeout(timer);
-      resolve({ error, signal: null, status: null, stderr, stdout });
+      resolve({ error, signal: null, status: null, stderr: stderr.text(), stdout: stdout.text() });
     });
     child.on("exit", (status, signal) => {
       clearTimeout(timer);
@@ -59,8 +61,8 @@ function runProbe(
         error: timedOut ? new Error(`probe timed out after ${timeout}ms`) : undefined,
         signal,
         status,
-        stderr,
-        stdout,
+        stderr: stderr.text(),
+        stdout: stdout.text(),
       });
     });
   });
@@ -88,6 +90,12 @@ afterEach(() => {
 });
 
 describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
+  it("does not hard-code degraded ready allowlists into Docker survivor probes", () => {
+    const script = fs.readFileSync(dockerSurvivorPath, "utf8");
+
+    expect(script).not.toContain("--allow-failing discord,telegram,whatsapp,feishu,matrix");
+  });
+
   it("rejects loose numeric probe limits instead of parsing prefixes", async () => {
     const out = path.join(makeTempDir(), "invalid.json");
     const timeoutResult = await runProbe([
@@ -153,6 +161,176 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
     }
   });
 
+  it("rejects degraded ready responses by default even when failing components are allowlisted", async () => {
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ready: false, failing: ["telegram"] }));
+    });
+    const baseUrl = await listen(server);
+    const out = path.join(makeTempDir(), "ready-degraded.json");
+    try {
+      const result = await runProbe([
+        "--base-url",
+        baseUrl,
+        "--path",
+        "/readyz",
+        "--expect",
+        "ready",
+        "--allow-failing",
+        "telegram",
+        "--out",
+        out,
+        "--timeout-ms",
+        "300",
+      ]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("probe failed with HTTP 503");
+      expect(fs.existsSync(out)).toBe(false);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("keeps failed probe retries inside the total timeout", async () => {
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ready: false, failing: ["gateway"] }));
+    });
+    const baseUrl = await listen(server);
+    const out = path.join(makeTempDir(), "ready-timeout.json");
+    const startedAt = Date.now();
+    try {
+      const result = await runProbe([
+        "--base-url",
+        baseUrl,
+        "--path",
+        "/readyz",
+        "--expect",
+        "ready",
+        "--out",
+        out,
+        "--timeout-ms",
+        "50",
+        "--attempt-timeout-ms",
+        "25",
+      ]);
+
+      expect(result.status).not.toBe(0);
+      expect(Date.now() - startedAt).toBeLessThan(300);
+      expect(result.stderr).toContain("probe did not satisfy ready within 50ms");
+      expect(fs.existsSync(out)).toBe(false);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("allows degraded ready responses only when degraded readiness is explicit", async () => {
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(503, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ready: false, failing: ["telegram"] }));
+    });
+    const baseUrl = await listen(server);
+    const out = path.join(makeTempDir(), "ready-degraded.json");
+    try {
+      const result = await runProbe([
+        "--base-url",
+        baseUrl,
+        "--path",
+        "/readyz",
+        "--expect",
+        "ready",
+        "--allow-failing",
+        "telegram",
+        "--allow-degraded-ready",
+        "--out",
+        out,
+        "--timeout-ms",
+        "300",
+      ]);
+
+      expect(result.status).toBe(0);
+      expect(JSON.parse(fs.readFileSync(out, "utf8"))).toMatchObject({
+        body: { failing: ["telegram"], ready: false },
+        path: "/readyz",
+        status: 503,
+      });
+    } finally {
+      server.close();
+    }
+  });
+
+  it("does not let degraded ready mode convert generic server errors into success", async () => {
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(500, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ready: true }));
+    });
+    const baseUrl = await listen(server);
+    const out = path.join(makeTempDir(), "ready-server-error.json");
+    try {
+      const result = await runProbe([
+        "--base-url",
+        baseUrl,
+        "--path",
+        "/readyz",
+        "--expect",
+        "ready",
+        "--allow-failing",
+        "telegram",
+        "--allow-degraded-ready",
+        "--out",
+        out,
+        "--timeout-ms",
+        "300",
+      ]);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("probe failed with HTTP 500");
+      expect(fs.existsSync(out)).toBe(false);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("rejects declared oversized probe bodies before waiting on the stream", async () => {
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(200, {
+        "content-length": "65",
+        "content-type": "application/json",
+      });
+      response.flushHeaders();
+    });
+    const baseUrl = await listen(server);
+    const out = path.join(makeTempDir(), "oversized.json");
+    const startedAt = Date.now();
+    try {
+      const result = await runProbe(
+        [
+          "--base-url",
+          baseUrl,
+          "--path",
+          "/healthz",
+          "--expect",
+          "live",
+          "--out",
+          out,
+          "--timeout-ms",
+          "1000",
+        ],
+        5_000,
+        { OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES: "64" },
+      );
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(`${baseUrl}/healthz probe body exceeded 64 bytes`);
+      expect(fs.existsSync(out)).toBe(false);
+      expect(Date.now() - startedAt).toBeLessThan(3_500);
+    } finally {
+      server.close();
+    }
+  });
+
   it("bounds probes when a server accepts the connection but never responds", async () => {
     const sockets = new Set<Socket>();
     const server = createTcpServer((socket) => {
@@ -183,6 +361,49 @@ describe("scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs", () => {
       expect(result.error).toBeUndefined();
       expect(result.status).not.toBe(0);
       expect(result.stderr).toContain("probe did not satisfy live within 300ms");
+      expect(elapsedMs).toBeLessThan(2_500);
+      expect(fs.existsSync(out)).toBe(false);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      server.close();
+    }
+  });
+
+  it("keeps the attempt timeout active while reading probe bodies", async () => {
+    const sockets = new Set<Socket>();
+    const server = createHttpServer((_request, response) => {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.write('{"ok":');
+    });
+    server.on("connection", (socket) => {
+      sockets.add(socket);
+      socket.on("close", () => sockets.delete(socket));
+    });
+    const baseUrl = await listen(server);
+    const out = path.join(makeTempDir(), "body-stall.json");
+    const startedAt = Date.now();
+    try {
+      const result = await runProbe([
+        "--base-url",
+        baseUrl,
+        "--path",
+        "/healthz",
+        "--expect",
+        "live",
+        "--out",
+        out,
+        "--timeout-ms",
+        "300",
+        "--attempt-timeout-ms",
+        "100",
+      ]);
+      const elapsedMs = Date.now() - startedAt;
+
+      expect(result.error).toBeUndefined();
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("probe attempt timed out after 100ms");
       expect(elapsedMs).toBeLessThan(2_500);
       expect(fs.existsSync(out)).toBe(false);
     } finally {

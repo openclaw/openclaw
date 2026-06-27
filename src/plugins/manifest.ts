@@ -3,18 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeModelCatalog } from "@openclaw/model-catalog-core/model-catalog-normalize";
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
-import type {
-  ModelCatalog,
-  ModelCatalogAlias,
-  ModelCatalogCost,
-  ModelCatalogDiscovery,
-  ModelCatalogInput,
-  ModelCatalogModel,
-  ModelCatalogProvider,
-  ModelCatalogStatus,
-  ModelCatalogSuppression,
-  ModelCatalogTieredCost,
-} from "@openclaw/model-catalog-core/model-catalog-types";
+import type { ModelCatalog } from "@openclaw/model-catalog-core/model-catalog-types";
 import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeTrimmedStringList } from "../../packages/normalization-core/src/string-normalization.js";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.config.js";
@@ -89,15 +78,6 @@ export type PluginManifestModelSupport = {
   modelPatterns?: string[];
 };
 
-export type PluginManifestModelCatalogInput = ModelCatalogInput;
-export type PluginManifestModelCatalogDiscovery = ModelCatalogDiscovery;
-export type PluginManifestModelCatalogStatus = ModelCatalogStatus;
-export type PluginManifestModelCatalogTieredCost = ModelCatalogTieredCost;
-export type PluginManifestModelCatalogCost = ModelCatalogCost;
-export type PluginManifestModelCatalogModel = ModelCatalogModel;
-export type PluginManifestModelCatalogProvider = ModelCatalogProvider;
-export type PluginManifestModelCatalogAlias = ModelCatalogAlias;
-export type PluginManifestModelCatalogSuppression = ModelCatalogSuppression;
 export type PluginManifestModelCatalog = ModelCatalog;
 
 export type PluginManifestModelPricingModelIdTransform = "version-dots";
@@ -396,6 +376,8 @@ export type PluginManifest = {
   skills?: string[];
   name?: string;
   description?: string;
+  /** Optional HTTPS URL for marketplace/catalog card artwork. */
+  icon?: string;
   version?: string;
   uiHints?: Record<string, PluginConfigUiHint>;
   /**
@@ -424,6 +406,7 @@ export type PluginManifest = {
 export type PluginManifestContracts = {
   embeddedExtensionFactories?: string[];
   agentToolResultMiddleware?: string[];
+  trustedToolPolicies?: string[];
   /**
    * Provider ids whose external auth profile hook can contribute runtime-only
    * credentials. Declaring this lets auth-store overlays load only the owning
@@ -504,6 +487,8 @@ export type PluginManifestCapabilityProviderMetadata = {
 
 export type PluginManifestToolMetadata = PluginManifestCapabilityProviderMetadata & {
   optional?: boolean;
+  /** Tool execution is safe to repeat after an incomplete model turn. */
+  replaySafe?: boolean;
 };
 
 export type PluginManifestProviderAuthChoice = {
@@ -847,6 +832,7 @@ function normalizePluginToolMetadata(
     const metadata = {
       ...providerMetadata,
       ...(rawMetadata.optional === true ? { optional: true } : {}),
+      ...(rawMetadata.replaySafe === true ? { replaySafe: true } : {}),
     } satisfies PluginManifestToolMetadata;
     if (Object.keys(metadata).length > 0) {
       normalized[toolName] = metadata;
@@ -862,6 +848,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
 
   const embeddedExtensionFactories = normalizeTrimmedStringList(value.embeddedExtensionFactories);
   const agentToolResultMiddleware = normalizeTrimmedStringList(value.agentToolResultMiddleware);
+  const trustedToolPolicies = normalizeTrimmedStringList(value.trustedToolPolicies);
   const externalAuthProviders = normalizeTrimmedStringList(value.externalAuthProviders);
   const embeddingProviders = normalizeTrimmedStringList(value.embeddingProviders);
   const memoryEmbeddingProviders = normalizeTrimmedStringList(value.memoryEmbeddingProviders);
@@ -885,6 +872,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const contracts = {
     ...(embeddedExtensionFactories.length > 0 ? { embeddedExtensionFactories } : {}),
     ...(agentToolResultMiddleware.length > 0 ? { agentToolResultMiddleware } : {}),
+    ...(trustedToolPolicies.length > 0 ? { trustedToolPolicies } : {}),
     ...(externalAuthProviders.length > 0 ? { externalAuthProviders } : {}),
     ...(embeddingProviders.length > 0 ? { embeddingProviders } : {}),
     ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
@@ -1609,7 +1597,7 @@ function normalizeChannelConfigs(
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
-function normalizeManifestChannelCommandDefaults(
+export function normalizeManifestChannelCommandDefaults(
   value: unknown,
 ): PluginManifestChannelCommandDefaults | undefined {
   if (!isRecord(value)) {
@@ -1778,6 +1766,7 @@ export function loadPluginManifest(
   );
   const name = normalizeOptionalString(raw.name);
   const description = normalizeOptionalString(raw.description);
+  const icon = normalizeOptionalString(raw.icon);
   const version = normalizeOptionalString(raw.version);
   const channels = normalizeTrimmedStringList(raw.channels);
   const providers = normalizeTrimmedStringList(raw.providers);
@@ -1870,6 +1859,7 @@ export function loadPluginManifest(
       skills,
       name,
       description,
+      icon,
       version,
       uiHints,
       contracts,
@@ -1950,6 +1940,7 @@ export type PluginPackageInstall = {
   minHostVersion?: string;
   expectedIntegrity?: string;
   allowInvalidConfigRecovery?: boolean;
+  requiredPlatformPackages?: string[];
 };
 
 export type OpenClawPackageStartup = {

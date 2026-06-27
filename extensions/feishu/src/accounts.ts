@@ -53,12 +53,6 @@ export class FeishuSecretRefUnavailableError extends Error {
   }
 }
 
-export function isFeishuSecretRefUnavailableError(
-  error: unknown,
-): error is FeishuSecretRefUnavailableError {
-  return error instanceof FeishuSecretRefUnavailableError;
-}
-
 function resolveFeishuSecretLike(params: {
   value: unknown;
   path: string;

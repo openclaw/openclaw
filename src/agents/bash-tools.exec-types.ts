@@ -15,6 +15,7 @@ import type {
 } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
+import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
@@ -50,6 +51,14 @@ export type ExecToolDefaults = {
   allowBackground?: boolean;
   scopeKey?: string;
   sessionKey?: string;
+  /** Ephemeral session UUID active when this exec tool was built. Regenerated
+   *  on `/new` and `/reset`, so it pins exec-approval followups to the original
+   *  session instance and lets stale followups drop after a session rebind. */
+  sessionId?: string;
+  /** `session.store` template from the runtime config. Lets the direct/denied
+   *  exec approval followup path resolve the session key's current sessionId and
+   *  drop the followup when the key was rebound by `/new` or `/reset`. */
+  sessionStore?: string;
   /** `session.mainKey` from the runtime config; passed through into
    *  runExecProcess so background-exit notifications can remap cron-run
    *  session keys to the agent's main queue without an ambient config load. */
@@ -63,7 +72,10 @@ export type ExecToolDefaults = {
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
+  /** Channel-owned sender/chat metadata. Exec subprocesses receive only sender/chat IDs. */
+  channelContext?: PluginHookChannelContext;
   accountId?: string;
+  approvalReviewerDeviceId?: string;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;

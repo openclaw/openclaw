@@ -2,10 +2,14 @@
 // outbound message execution context.
 import { Type } from "typebox";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { MESSAGE_TOOL_ONLY_DELIVERY_HINT } from "../../auto-reply/reply/delivery-hints.js";
 import type { ChannelMessageAdapterShape } from "../../channels/message/types.js";
 import type { ChannelMessageCapability } from "../../channels/plugins/message-capabilities.js";
 import type { ChannelMessageActionName, ChannelPlugin } from "../../channels/plugins/types.js";
 import type { MessageActionRunResult } from "../../infra/outbound/message-action-runner.js";
+import { resetDiagnosticSessionStateForTest } from "../../logging/diagnostic-session-state.js";
+import { wrapToolWithBeforeToolCallHook } from "../agent-tools.before-tool-call.js";
+import { CRITICAL_THRESHOLD } from "../tool-loop-detection.js";
 type CreateMessageTool = typeof import("./message-tool.js").createMessageTool;
 type CreateOpenClawTools = typeof import("../openclaw-tools.js").createOpenClawTools;
 type ResetPluginRuntimeStateForTest =
@@ -122,6 +126,7 @@ type RunMessageActionInput = {
   inboundAudio?: boolean;
   toolContext?: {
     currentChannelId?: string;
+    currentMessagingTarget?: string;
     currentChannelProvider?: string;
     currentThreadTs?: string;
     replyToMode?: string;
@@ -315,6 +320,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   resetPluginRuntimeStateForTest();
+  resetDiagnosticSessionStateForTest();
   mocks.runMessageAction.mockReset();
   mocks.getRuntimeConfig.mockReset().mockReturnValue({});
   mocks.resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
@@ -1190,6 +1196,47 @@ describe("message tool agent routing", () => {
     expect(call?.toolContext?.currentThreadTs).toBe("111.222");
     expect(call?.toolContext?.replyToMode).toBe("all");
   });
+
+  it("forwards the routable target through createOpenClawTools to the message tool", async () => {
+    mockSendResult({ channel: "slack", to: "user:U123" });
+    const plugin = createChannelPlugin({
+      id: "slack",
+      label: "Slack",
+      docsPath: "/channels/slack",
+      blurb: "test",
+      actions: ["send"],
+    });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "slack", source: "test", plugin }]));
+
+    const tool = createOpenClawTools({
+      config: {} as never,
+      agentChannel: "slack",
+      currentChannelId: "D123",
+      currentMessagingTarget: "user:U123",
+      currentThreadTs: "111.222",
+      replyToMode: "all",
+    }).find((candidate) => candidate.name === "message");
+
+    if (!tool) {
+      throw new Error("message tool not found");
+    }
+
+    await tool.execute("1", {
+      action: "send",
+      channel: "slack",
+      target: "user:U123",
+      message: "stay in DM thread",
+    });
+
+    const call = firstRunMessageActionInput();
+    expect(call?.toolContext).toMatchObject({
+      currentChannelId: "D123",
+      currentMessagingTarget: "user:U123",
+      currentChannelProvider: "slack",
+      currentThreadTs: "111.222",
+      replyToMode: "all",
+    });
+  });
 });
 
 describe("message tool explicit target guard", () => {
@@ -1207,6 +1254,35 @@ describe("message tool explicit target guard", () => {
         filePath: "/tmp/report.png",
       }),
     ).rejects.toThrow(/Explicit message target required/i);
+
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      action: "poll",
+      params: {
+        action: "poll",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+    },
+    {
+      action: "sticker",
+      params: {
+        action: "sticker",
+        stickerId: "sticker-1",
+      },
+    },
+  ] as const)("requires an explicit target for $action when configured", async ({ params }) => {
+    const tool = createMessageTool({
+      runMessageAction: mocks.runMessageAction as never,
+      requireExplicitTarget: true,
+      currentChannelProvider: "slack",
+      currentChannelId: "channel:C123",
+    });
+
+    await expect(tool.execute("1", params)).rejects.toThrow(/Explicit message target required/i);
 
     expect(mocks.runMessageAction).not.toHaveBeenCalled();
   });
@@ -1236,6 +1312,86 @@ describe("message tool explicit target guard", () => {
 
     const call = firstRunMessageActionInput();
     expect(call?.params?.target).toBe("channel:C999");
+  });
+});
+
+describe("message tool loop detection action runner proof", () => {
+  function mockQaChannelGatewayActionRunner() {
+    mocks.runMessageAction.mockImplementation(async ({ params }) => {
+      const callIndex = mocks.runMessageAction.mock.calls.length;
+      return {
+        kind: "send",
+        action: "send",
+        channel: "qa-channel",
+        to: typeof params?.target === "string" ? params.target : "channel:loop-room",
+        handledBy: "plugin",
+        payload: {
+          message: {
+            id: `qa-message-${callIndex}`,
+            accountId: "default",
+            direction: "outbound",
+            conversation: {
+              id: "loop-room",
+              chatType: "channel",
+            },
+            senderId: "openclaw",
+            text: "same visible reply",
+            timestamp: 1_800_000_000_000 + callIndex,
+          },
+        },
+        dryRun: false,
+      } satisfies MessageActionRunResult;
+    });
+  }
+
+  it("blocks repeated qa-channel sends returned by the wrapped message tool", async () => {
+    mockQaChannelGatewayActionRunner();
+    const messageTool = createMessageTool({
+      runMessageAction: mocks.runMessageAction as never,
+    });
+    const wrappedTool = wrapToolWithBeforeToolCallHook(messageTool, {
+      agentId: "main",
+      sessionKey: "message-tool-action-runner-loop",
+      sessionId: "message-tool-action-runner-loop-session",
+      runId: "message-tool-action-runner-loop-run",
+      loopDetection: { enabled: true },
+    });
+    const params = {
+      action: "send",
+      target: "channel:loop-room",
+      message: "same visible reply",
+    };
+
+    for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+      const result = await wrappedTool.execute(`message-tool-send-${i}`, params);
+      expect(result.details).toMatchObject({
+        message: {
+          conversation: {
+            id: "loop-room",
+          },
+          text: "same visible reply",
+        },
+      });
+    }
+
+    const blocked = await wrappedTool.execute(`message-tool-send-${CRITICAL_THRESHOLD}`, params);
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
+    expect(blocked.details).toMatchObject({
+      status: "blocked",
+      deniedReason: "tool-loop",
+    });
+    const blockedDetails = blocked.details as { reason?: unknown } | undefined;
+    expect(String(blockedDetails?.reason)).toContain("CRITICAL");
+
+    const blockedAgain = await wrappedTool.execute(
+      `message-tool-send-${CRITICAL_THRESHOLD + 1}`,
+      params,
+    );
+    expect(mocks.runMessageAction).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
+    expect(blockedAgain.details).toMatchObject({
+      status: "blocked",
+      deniedReason: "tool-loop",
+    });
   });
 });
 
@@ -2536,6 +2692,10 @@ describe("message tool internal-runtime-context sanitization", () => {
       name: "delivery hint only",
       message:
         "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
+    },
+    {
+      name: "narration-aware delivery hint only",
+      message: MESSAGE_TOOL_ONLY_DELIVERY_HINT,
     },
     {
       name: "inbound metadata only",

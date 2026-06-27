@@ -1,8 +1,10 @@
 // Runs a command with inline KEY=value assignments while preserving signal behavior.
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const ENV_ASSIGNMENT_RE = /^[A-Za-z_][A-Za-z0-9_]*=/u;
 const USAGE = "Usage: node scripts/run-with-env.mjs KEY=value [KEY=value ...] -- command [args...]";
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 
 /**
  * Detects help requests before the command separator.
@@ -61,6 +63,68 @@ export function resolveSpawnCommand(command, args, execPath = process.execPath) 
   };
 }
 
+/**
+ * Reads the signal-forwarding force-kill grace period.
+ */
+export function resolveForceKillDelayMs(env = process.env) {
+  const raw = env.OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS;
+  if (raw === undefined || raw === "") {
+    return 5_000;
+  }
+  const text = raw.trim();
+  if (!/^\d+$/u.test(text)) {
+    throw new Error("OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS must be a positive integer");
+  }
+  const parsed = Number(text);
+  if (!Number.isSafeInteger(parsed) || parsed < 1) {
+    throw new Error("OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS must be a positive integer");
+  }
+  return Math.min(parsed, MAX_TIMER_TIMEOUT_MS);
+}
+
+/**
+ * Signals the wrapped command tree when this small parent wrapper is stopped.
+ */
+export function signalRunWithEnvChild(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = spawnSync,
+    useChildProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useChildProcessGroup && typeof child.pid === "number") {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch (error) {
+      if (error?.code !== "ESRCH") {
+        child.kill(signal);
+        return;
+      }
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
+    }
+  }
+  child.kill(signal);
+}
+
 function main(argv = process.argv.slice(2)) {
   if (isRunWithEnvHelpRequest(argv)) {
     console.log(USAGE);
@@ -70,6 +134,14 @@ function main(argv = process.argv.slice(2)) {
   let parsed;
   try {
     parsed = parseRunWithEnvArgs(argv);
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    process.exit(2);
+  }
+
+  let forceKillDelayMs;
+  try {
+    forceKillDelayMs = resolveForceKillDelayMs();
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(2);
@@ -85,10 +157,6 @@ function main(argv = process.argv.slice(2)) {
     },
     stdio: "inherit",
   });
-  const forceKillDelayMs = Math.max(
-    1,
-    Number.parseInt(process.env.OPENCLAW_RUN_WITH_ENV_FORCE_KILL_MS ?? "5000", 10) || 5_000,
-  );
   let forwardedSignal = null;
   let forceKillTimer = null;
   // Keep the child in the foreground process group so TTY signals such as
@@ -97,20 +165,7 @@ function main(argv = process.argv.slice(2)) {
   const forwardedSignals = useChildProcessGroup
     ? ["SIGTERM", "SIGHUP", "SIGINT"]
     : ["SIGTERM", "SIGHUP"];
-  const signalChild = (signal) => {
-    if (useChildProcessGroup && typeof child.pid === "number") {
-      try {
-        process.kill(-child.pid, signal);
-        return;
-      } catch (error) {
-        if (error?.code !== "ESRCH") {
-          child.kill(signal);
-          return;
-        }
-      }
-    }
-    child.kill(signal);
-  };
+  const signalChild = (signal) => signalRunWithEnvChild(child, signal, { useChildProcessGroup });
   const childProcessGroupAlive = () => {
     if (!useChildProcessGroup || typeof child.pid !== "number") {
       return false;

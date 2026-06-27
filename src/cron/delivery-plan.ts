@@ -36,6 +36,11 @@ function normalizeChannel(value: unknown): CronMessageChannel | undefined {
   return trimmed as CronMessageChannel;
 }
 
+function normalizeThreadIdentity(value: unknown): string | undefined {
+  const normalized = normalizeOptionalThreadValue(value);
+  return normalized == null ? undefined : String(normalized);
+}
+
 function resolveAnnounceChannel(params: {
   channel?: CronMessageChannel;
   to?: string;
@@ -98,15 +103,15 @@ export function resolveCronDeliveryPlan(job: CronJob): CronDeliveryPlan {
     };
   }
 
-  const isIsolatedAgentTurn =
-    job.payload.kind === "agentTurn" &&
+  const isDetachedOutputJob =
+    (job.payload.kind === "agentTurn" || job.payload.kind === "command") &&
     typeof job.sessionTarget === "string" &&
     (job.sessionTarget === "isolated" ||
       job.sessionTarget === "current" ||
       job.sessionTarget.startsWith("session:"));
-  // Isolated/current/session cron jobs default to announce delivery so their
-  // output reaches the initiating session unless the job opts out.
-  const resolvedMode = isIsolatedAgentTurn ? "announce" : "none";
+  // Isolated/current/session output jobs default to announce delivery so their
+  // result reaches the initiating session unless the job opts out.
+  const resolvedMode = isDetachedOutputJob ? "announce" : "none";
 
   return {
     mode: resolvedMode,
@@ -231,6 +236,7 @@ function isSameDeliveryTarget(
 
   const primaryTo = normalizeOptionalString(delivery.to);
   const primaryAccountId = normalizeOptionalString(delivery.accountId);
+  const primaryThreadId = normalizeThreadIdentity(delivery.threadId);
 
   if (failurePlan.mode === "webhook") {
     return primaryMode === "webhook" && primaryTo === failurePlan.to;
@@ -245,6 +251,7 @@ function isSameDeliveryTarget(
   return (
     failureChannelNormalized === primaryChannelNormalized &&
     failurePlan.to === primaryTo &&
-    failurePlan.accountId === primaryAccountId
+    failurePlan.accountId === primaryAccountId &&
+    primaryThreadId === undefined
   );
 }

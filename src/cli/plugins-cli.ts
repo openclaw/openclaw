@@ -9,9 +9,18 @@ import { applyParentDefaultHelpAction } from "./program/parent-default-help.js";
 
 export type PluginUpdateOptions = {
   all?: boolean;
+  acknowledgeClawhubRisk?: boolean;
   dryRun?: boolean;
   dangerouslyForceUnsafeInstall?: boolean;
 };
+
+type CommanderClawHubRiskOptions = Record<string, unknown> & {
+  acknowledgeClawhubRisk?: boolean;
+};
+
+function normalizeCommanderClawHubRiskOption(opts: CommanderClawHubRiskOptions): boolean {
+  return opts.acknowledgeClawhubRisk === true || opts.acknowledgeClawHubRisk === true;
+}
 
 export type PluginMarketplaceListOptions = {
   json?: boolean;
@@ -153,7 +162,12 @@ export function registerPluginsCli(program: Command) {
     .option("--pin", "Record npm installs as exact resolved <name>@<version>", false)
     .option(
       "--dangerously-force-unsafe-install",
-      "Deprecated no-op; install policy and plugin hooks may still block",
+      "Deprecated no-op; security.installPolicy may still block",
+      false,
+    )
+    .option(
+      "--acknowledge-clawhub-risk",
+      "Acknowledge ClawHub release trust warnings without prompting",
       false,
     )
     .option(
@@ -163,7 +177,7 @@ export function registerPluginsCli(program: Command) {
     .action(
       async (
         raw: string,
-        opts: {
+        opts: CommanderClawHubRiskOptions & {
           dangerouslyForceUnsafeInstall?: boolean;
           force?: boolean;
           link?: boolean;
@@ -172,7 +186,10 @@ export function registerPluginsCli(program: Command) {
         },
       ) => {
         const { runPluginsInstallAction } = await loadPluginsRuntime();
-        await runPluginsInstallAction(raw, opts);
+        await runPluginsInstallAction(raw, {
+          ...opts,
+          acknowledgeClawHubRisk: normalizeCommanderClawHubRiskOption(opts),
+        });
       },
     );
 
@@ -184,12 +201,23 @@ export function registerPluginsCli(program: Command) {
     .option("--dry-run", "Show what would change without writing", false)
     .option(
       "--dangerously-force-unsafe-install",
-      "Deprecated no-op; install policy and plugin hooks may still block",
+      "Deprecated no-op; security.installPolicy may still block",
+      false,
+    )
+    .option(
+      "--acknowledge-clawhub-risk",
+      "Acknowledge ClawHub release trust warnings without prompting",
       false,
     )
     .action(async (id: string | undefined, opts: PluginUpdateOptions) => {
       const { runPluginUpdateCommand } = await import("./plugins-update-command.js");
-      await runPluginUpdateCommand({ id, opts });
+      await runPluginUpdateCommand({
+        id,
+        opts: {
+          ...opts,
+          acknowledgeClawHubRisk: normalizeCommanderClawHubRiskOption(opts),
+        },
+      });
     });
 
   plugins

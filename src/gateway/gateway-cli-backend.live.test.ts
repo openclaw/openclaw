@@ -10,6 +10,7 @@ import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.
 import { parseModelRef } from "../agents/model-selection.js";
 import { clearRuntimeConfigSnapshot, type OpenClawConfig } from "../config/config.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { setTestEnvValue } from "../test-utils/env.js";
 import {
   applyCliBackendLiveEnv,
   createBootstrapWorkspace,
@@ -18,12 +19,14 @@ import {
   matchesCliBackendReply,
   parseImageMode,
   parseJsonStringArray,
+  isCliBackendLiveTimeoutPayload,
   resolveCliBackendLiveArgs,
   resolveCliBackendLiveModelSelection,
   resolveCliBackendLiveProviderSkipDecision,
   resolveCliModelSwitchProbeTarget,
   restoreCliBackendLiveEnv,
   shouldAllowCliBackendLiveProviderSkip,
+  shouldRetryCliBackendLiveTimeout,
   shouldRunCliImageProbe,
   shouldRunCliModelSwitchProbe,
   shouldRunCliMcpProbe,
@@ -59,16 +62,22 @@ const MCP_SCHEMA_PROBE_TOOL_NAME = "mcp_schema_probe_no_args";
 const DEFAULT_PROVIDER = "claude-cli";
 const DEFAULT_MODEL =
   resolveCliBackendLiveTest(DEFAULT_PROVIDER)?.defaultModelRef ?? "claude-cli/claude-sonnet-4-6";
-// The cron/MCP live probe now tolerates more cancelled tool-call retries in CI,
-// so the outer test budget needs enough headroom to finish those retries.
-const CLI_BACKEND_LIVE_TIMEOUT_MS = 20 * 60_000;
 const CLI_BACKEND_REQUEST_TIMEOUT_MS = parsePositiveIntegerEnv(
   "OPENCLAW_LIVE_CLI_BACKEND_REQUEST_TIMEOUT_MS",
   15 * 60_000,
 );
-const CLI_BACKEND_AGENT_TIMEOUT_SECONDS = Math.max(
-  1,
-  Math.ceil(CLI_BACKEND_REQUEST_TIMEOUT_MS / 1000) - 10,
+const CLI_BACKEND_CODEX_TIMEOUT_RETRY_ATTEMPTS = 2;
+const CLI_BACKEND_CODEX_TIMEOUT_RETRY_SLEEP_MS = 5_000;
+const CLI_BACKEND_RETRY_WRAPPED_AGENT_REQUESTS = 2;
+const CLI_BACKEND_CODEX_TIMEOUT_RETRY_SEQUENCE_MS =
+  CLI_BACKEND_REQUEST_TIMEOUT_MS * CLI_BACKEND_CODEX_TIMEOUT_RETRY_ATTEMPTS +
+  CLI_BACKEND_CODEX_TIMEOUT_RETRY_SLEEP_MS * (CLI_BACKEND_CODEX_TIMEOUT_RETRY_ATTEMPTS - 1);
+// The cron/MCP live probe and Codex timeout retry need enough outer-test headroom
+// to finish both the initial agent request and one follow-up probe.
+const CLI_BACKEND_LIVE_TIMEOUT_MS = Math.max(
+  20 * 60_000,
+  CLI_BACKEND_CODEX_TIMEOUT_RETRY_SEQUENCE_MS * CLI_BACKEND_RETRY_WRAPPED_AGENT_REQUESTS +
+    2 * 60_000,
 );
 
 function parsePositiveIntegerEnv(name: string, fallback: number): number {
@@ -95,6 +104,19 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, ms);
   });
+}
+
+type CliBackendAgentAttemptTimeouts = {
+  agentTimeoutSeconds: number;
+  requestTimeoutMs: number;
+};
+
+function resolveCliBackendAgentAttemptTimeouts(): CliBackendAgentAttemptTimeouts {
+  const requestTimeoutMs = CLI_BACKEND_REQUEST_TIMEOUT_MS;
+  return {
+    requestTimeoutMs,
+    agentTimeoutSeconds: Math.max(1, Math.ceil(requestTimeoutMs / 1000) - 10),
+  };
 }
 
 function openAiProviderConfigForCodexCli(
@@ -180,6 +202,36 @@ async function requestWithProviderCapacityRetry<T>(
   return undefined;
 }
 
+async function requestWithCodexTimeoutRetry<T>(
+  providerId: string,
+  label: string,
+  request: (timeouts: CliBackendAgentAttemptTimeouts) => Promise<T>,
+): Promise<T | undefined> {
+  const maxAttempts = providerId === "codex-cli" ? CLI_BACKEND_CODEX_TIMEOUT_RETRY_ATTEMPTS : 1;
+  const retrySleepMs = providerId === "codex-cli" ? CLI_BACKEND_CODEX_TIMEOUT_RETRY_SLEEP_MS : 0;
+  const attemptTimeouts = resolveCliBackendAgentAttemptTimeouts();
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const payload = await requestWithProviderCapacityRetry(providerId, label, () =>
+      request(attemptTimeouts),
+    );
+    if (!payload) {
+      return undefined;
+    }
+    if (!isCliBackendLiveTimeoutPayload(payload)) {
+      return payload;
+    }
+    if (shouldRetryCliBackendLiveTimeout({ providerId, payload, attempt, maxAttempts })) {
+      logCliBackendLiveStep("agent-timeout-retry", { providerId, label, attempt, maxAttempts });
+      await sleep(retrySleepMs);
+      continue;
+    }
+    throw new Error(
+      `${label} for provider "${providerId}" timed out waiting for a model response.`,
+    );
+  }
+  return undefined;
+}
+
 async function createMcpSchemaProbePlugin(tempDir: string): Promise<string> {
   const pluginDir = path.join(tempDir, MCP_SCHEMA_PROBE_PLUGIN_ID);
   await fs.mkdir(pluginDir, { recursive: true });
@@ -234,7 +286,7 @@ describeLive("gateway live (cli backend)", () => {
       applyCliBackendLiveEnv(preservedEnv);
 
       const token = `test-${randomUUID()}`;
-      process.env.OPENCLAW_GATEWAY_TOKEN = token;
+      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
       const port = await getFreeGatewayPort();
       logCliBackendLiveStep("env-ready", { port });
 
@@ -318,7 +370,7 @@ describeLive("gateway live (cli backend)", () => {
         ? await createMcpSchemaProbePlugin(tempDir)
         : undefined;
       const useMinimalToolsProfile = providerId === "codex-cli" && !schemaProbePluginPath;
-      process.env.OPENCLAW_STATE_DIR = stateDir;
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
       const bundleMcp = backendResolved?.bundleMcp === true;
       const bootstrapWorkspace = await createBootstrapWorkspace(tempDir);
       const disableMcpConfig = process.env.OPENCLAW_LIVE_CLI_BACKEND_DISABLE_MCP_CONFIG !== "0";
@@ -422,8 +474,10 @@ describeLive("gateway live (cli backend)", () => {
       };
       const tempConfigPath = path.join(tempDir, "openclaw.json");
       await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
-      process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", tempConfigPath);
       const deviceIdentity = await ensurePairedTestGatewayClientIdentity();
+      let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+      let client: Awaited<ReturnType<typeof connectTestGatewayClient>> | undefined;
       logCliBackendLiveStep("config-written", {
         tempConfigPath,
         stateDir,
@@ -431,52 +485,50 @@ describeLive("gateway live (cli backend)", () => {
         cliArgs,
       });
 
-      const server = await startGatewayServer(port, {
-        bind: "loopback",
-        auth: { mode: "token", token },
-        controlUiEnabled: false,
-      });
-      logCliBackendLiveStep("server-started");
-      const client = await connectTestGatewayClient({
-        url: `ws://127.0.0.1:${port}`,
-        token,
-        deviceIdentity,
-      });
-      logCliBackendLiveStep("client-connected");
-
       try {
+        server = await startGatewayServer(port, {
+          bind: "loopback",
+          auth: { mode: "token", token },
+          controlUiEnabled: false,
+        });
+        logCliBackendLiveStep("server-started");
+        client = await connectTestGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token,
+          deviceIdentity,
+        });
+        logCliBackendLiveStep("client-connected");
+        const activeClient = client;
+
         const sessionKey = "agent:dev:live-cli-backend";
         const nonce = randomBytes(3).toString("hex").toUpperCase();
         const memoryNonce = randomBytes(3).toString("hex").toUpperCase();
         const memoryToken = `CLI-MEM-${memoryNonce}`;
         logCliBackendLiveStep("agent-request:start", { sessionKey, nonce });
-        const payload = await requestWithProviderCapacityRetry(providerId, "agent request", () =>
-          client.request(
-            "agent",
-            {
-              sessionKey,
-              idempotencyKey: `idem-${randomUUID()}`,
-              message:
-                providerId === "codex-cli"
-                  ? `Do not inspect files or run tools. Reply with exactly: CLI-BACKEND-${nonce}.`
-                  : enableCliModelSwitchProbe
-                    ? `Please include the token CLI-BACKEND-${nonce} in your reply.` +
-                      ` Also remember this session note for later: ${memoryToken}.` +
-                      " Do not include the note in your reply."
-                    : `Please include the token CLI-BACKEND-${nonce} in your reply.`,
-              deliver: false,
-              timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
-            },
-            { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
-          ),
+        const payload = await requestWithCodexTimeoutRetry(
+          providerId,
+          "agent request",
+          (timeouts) =>
+            activeClient.request(
+              "agent",
+              {
+                sessionKey,
+                idempotencyKey: `idem-${randomUUID()}`,
+                message:
+                  providerId === "codex-cli"
+                    ? `Do not inspect files or run tools. Reply with exactly: CLI-BACKEND-${nonce}.`
+                    : enableCliModelSwitchProbe
+                      ? `Please include the token CLI-BACKEND-${nonce} in your reply.` +
+                        ` Also remember this session note for later: ${memoryToken}.` +
+                        " Do not include the note in your reply."
+                      : `Please include the token CLI-BACKEND-${nonce} in your reply.`,
+                deliver: false,
+                timeout: timeouts.agentTimeoutSeconds,
+              },
+              { expectFinal: true, timeoutMs: timeouts.requestTimeoutMs },
+            ),
         );
         if (!payload) {
-          return;
-        }
-        if (providerId === "codex-cli" && payload?.status === "timeout") {
-          console.warn(
-            "SKIP: Codex CLI backend live smoke timed out waiting for a model response.",
-          );
           return;
         }
         if (payload?.status !== "ok") {
@@ -514,7 +566,7 @@ describeLive("gateway live (cli backend)", () => {
             switchNonce,
             memoryToken,
           });
-          const patchPayload = await client.request("sessions.patch", {
+          const patchPayload = await activeClient.request("sessions.patch", {
             key: sessionKey,
             model: modelSwitchTarget,
           });
@@ -523,11 +575,11 @@ describeLive("gateway live (cli backend)", () => {
               `sessions.patch failed for model switch: ${JSON.stringify(patchPayload)}`,
             );
           }
-          const switchPayload = await requestWithProviderCapacityRetry(
+          const switchPayload = await requestWithCodexTimeoutRetry(
             providerId,
             "agent model-switch request",
-            () =>
-              client.request(
+            (timeouts) =>
+              activeClient.request(
                 "agent",
                 {
                   sessionKey,
@@ -537,9 +589,9 @@ describeLive("gateway live (cli backend)", () => {
                     `What session note did I ask you to remember earlier? ` +
                     `Reply with exactly: CLI backend SWITCH OK ${switchNonce} <remembered-note>.`,
                   deliver: false,
-                  timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
+                  timeout: timeouts.agentTimeoutSeconds,
                 },
-                { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
+                { expectFinal: true, timeoutMs: timeouts.requestTimeoutMs },
               ),
           );
           if (!switchPayload) {
@@ -559,11 +611,11 @@ describeLive("gateway live (cli backend)", () => {
         } else if (CLI_RESUME) {
           const resumeNonce = randomBytes(3).toString("hex").toUpperCase();
           logCliBackendLiveStep("agent-resume:start", { sessionKey, resumeNonce });
-          const resumePayload = await requestWithProviderCapacityRetry(
+          const resumePayload = await requestWithCodexTimeoutRetry(
             providerId,
             "agent resume request",
-            () =>
-              client.request(
+            (timeouts) =>
+              activeClient.request(
                 "agent",
                 {
                   sessionKey,
@@ -573,9 +625,9 @@ describeLive("gateway live (cli backend)", () => {
                       ? `Do not inspect files or run tools. Reply with exactly: CLI-RESUME-${resumeNonce}.`
                       : `Reply with exactly: CLI backend RESUME OK ${resumeNonce}.`,
                   deliver: false,
-                  timeout: CLI_BACKEND_AGENT_TIMEOUT_SECONDS,
+                  timeout: timeouts.agentTimeoutSeconds,
                 },
-                { expectFinal: true, timeoutMs: CLI_BACKEND_REQUEST_TIMEOUT_MS },
+                { expectFinal: true, timeoutMs: timeouts.requestTimeoutMs },
               ),
           );
           if (!resumePayload) {
@@ -602,7 +654,7 @@ describeLive("gateway live (cli backend)", () => {
               : sessionKey;
           logCliBackendLiveStep("image-probe:start", { sessionKey: imageSessionKey });
           await verifyCliBackendImageProbe({
-            client,
+            client: activeClient,
             providerId,
             sessionKey: imageSessionKey,
             tempDir,
@@ -633,7 +685,7 @@ describeLive("gateway live (cli backend)", () => {
           } else {
             logCliBackendLiveStep("cron-mcp-probe:start", { sessionKey });
             await verifyCliCronMcpProbe({
-              client,
+              client: activeClient,
               providerId,
               sessionKey,
               port,
@@ -644,13 +696,19 @@ describeLive("gateway live (cli backend)", () => {
           }
         }
       } finally {
-        logCliBackendLiveStep("cleanup:start");
-        clearRuntimeConfigSnapshot();
-        await client.stopAndWait();
-        await server.close();
-        await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-        restoreCliBackendLiveEnv(previousEnv);
-        logCliBackendLiveStep("cleanup:done");
+        try {
+          logCliBackendLiveStep("cleanup:start");
+          clearRuntimeConfigSnapshot();
+          try {
+            await client?.stopAndWait();
+          } finally {
+            await server?.close();
+          }
+        } finally {
+          await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
+          restoreCliBackendLiveEnv(previousEnv);
+          logCliBackendLiveStep("cleanup:done");
+        }
       }
     },
     CLI_BACKEND_LIVE_TIMEOUT_MS,

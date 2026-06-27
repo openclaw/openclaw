@@ -1,10 +1,6 @@
 // Xai plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import {
-  streamSimple,
-  type AssistantMessage,
-  type AssistantMessageEvent,
-} from "openclaw/plugin-sdk/llm";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   composeProviderStreamWrappers,
@@ -18,10 +14,7 @@ const XAI_FAST_MODEL_IDS = new Map<string, string>([
   ["grok-4", "grok-4-fast"],
   ["grok-4-0709", "grok-4-fast"],
 ]);
-
-interface MutableAssistantMessageEventStream extends AsyncIterable<AssistantMessageEvent> {
-  result: () => Promise<AssistantMessage>;
-}
+type DynamicFastMode = boolean | (() => boolean | undefined);
 
 function resolveXaiFastModelId(modelId: unknown): string | undefined {
   if (typeof modelId !== "string") {
@@ -60,82 +53,27 @@ function supportsReasoningControls(model: { compat?: unknown; reasoning?: unknow
   return model.reasoning === true && compat?.supportsReasoningEffort !== false;
 }
 
-const TOOL_RESULT_IMAGE_REPLAY_TEXT = "Attached image(s) from tool result:";
-const HTML_ENTITY_RE = /&(?:amp|lt|gt|quot|apos|#39|#x[0-9a-f]+|#\d+);/i;
-const NAMED_HTML_ENTITIES = new Map<string, string>([
-  ["amp", "&"],
-  ["apos", "'"],
-  ["gt", ">"],
-  ["lt", "<"],
-  ["quot", '"'],
-]);
+const XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE = "reasoning.encrypted_content";
 
-function decodeHtmlEntities(value: string): string {
-  return value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos|#39);/gi, (match, entity) => {
-    const normalized = String(entity).toLowerCase();
-    if (normalized === "#39") {
-      return "'";
-    }
-    if (normalized.startsWith("#x")) {
-      return String.fromCodePoint(Number.parseInt(normalized.slice(2), 16));
-    }
-    if (normalized.startsWith("#")) {
-      return String.fromCodePoint(Number.parseInt(normalized.slice(1), 10));
-    }
-    return NAMED_HTML_ENTITIES.get(normalized) ?? match;
-  });
-}
-
-function decodeHtmlEntitiesInObject(value: unknown): unknown {
-  switch (typeof value) {
-    case "string":
-      return HTML_ENTITY_RE.test(value) ? decodeHtmlEntities(value) : value;
-    case "object":
-      if (!value) {
-        return value;
-      }
-      if (Array.isArray(value)) {
-        return value.map((entry) => decodeHtmlEntitiesInObject(entry));
-      }
-      return Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([key, entry]) => [
-          key,
-          decodeHtmlEntitiesInObject(entry),
-        ]),
-      );
-    default:
-      return value;
-  }
-}
-
-function visitContentBlocks(
-  value: unknown,
-  visitor: (block: Record<string, unknown>) => void,
+/** xAI-only: request encrypted reasoning for every reasoning-capable model, even when effort is unsupported. */
+function ensureXaiResponsesEncryptedReasoningInclude(
+  payloadObj: Record<string, unknown>,
+  model: { api?: unknown; provider?: unknown; reasoning?: unknown },
 ): void {
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      visitContentBlocks(entry, visitor);
-    }
+  if (model.provider !== "xai" || model.api !== "openai-responses" || model.reasoning !== true) {
     return;
   }
-  if (!value || typeof value !== "object") {
-    return;
+  const existing = payloadObj.include;
+  const include = Array.isArray(existing)
+    ? existing.filter((entry): entry is string => typeof entry === "string")
+    : [];
+  if (!include.includes(XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE)) {
+    include.push(XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE);
   }
-  const block = value as Record<string, unknown>;
-  visitor(block);
-  if ("content" in block) {
-    visitContentBlocks(block.content, visitor);
-  }
+  payloadObj.include = include;
 }
 
-function decodeToolCallArgumentsHtmlEntitiesInMessage(message: unknown): void {
-  visitContentBlocks(message, (block) => {
-    if (block.type !== "toolCall" || !block.arguments || typeof block.arguments !== "object") {
-      return;
-    }
-    block.arguments = decodeHtmlEntitiesInObject(block.arguments);
-  });
-}
+const TOOL_RESULT_IMAGE_REPLAY_TEXT = "Attached image(s) from tool result:";
 
 type ReplayableInputImagePart =
   | {
@@ -263,10 +201,13 @@ export function createXaiToolPayloadCompatibilityWrapper(
           }
           normalizeXaiResponsesToolResultPayload(payloadObj, model);
           if (!supportsReasoningControls(model)) {
+            // Only grok-4.3* advertises configurable effort; drop effort fields elsewhere.
             delete payloadObj.reasoning;
             delete payloadObj.reasoningEffort;
             delete payloadObj.reasoning_effort;
           }
+          // All reasoning xAI models should still request + later replay encrypted_content.
+          ensureXaiResponsesEncryptedReasoningInclude(payloadObj, model);
         }
         return originalOnPayload?.(payload, model);
       },
@@ -276,13 +217,17 @@ export function createXaiToolPayloadCompatibilityWrapper(
 
 export function createXaiFastModeWrapper(
   baseStreamFn: StreamFn | undefined,
-  fastMode: boolean,
+  fastMode: DynamicFastMode,
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     const supportsFastAliasTransport =
       model.api === "openai-completions" || model.api === "openai-responses";
-    if (!fastMode || !supportsFastAliasTransport || model.provider !== "xai") {
+    if (
+      (typeof fastMode === "function" ? fastMode() : fastMode) !== true ||
+      !supportsFastAliasTransport ||
+      model.provider !== "xai"
+    ) {
       return underlying(model, context, options);
     }
 
@@ -295,75 +240,32 @@ export function createXaiFastModeWrapper(
   };
 }
 
-function transformXaiStreamEvent(
-  value: unknown,
-  transformMessage: (message: unknown) => void,
-): void {
-  if (!value || typeof value !== "object") {
-    return;
+function resolveXaiFastMode(extraParams: Record<string, unknown> | undefined): boolean | undefined {
+  const raw = extraParams?.fastMode ?? extraParams?.fast_mode;
+  if (typeof raw === "function") {
+    const resolved = (raw as () => unknown)();
+    return typeof resolved === "boolean" ? resolved : undefined;
   }
-  const event = value as { partial?: unknown; message?: unknown };
-  transformMessage(event.partial);
-  transformMessage(event.message);
+  return typeof raw === "boolean" ? raw : undefined;
 }
 
-function wrapStreamMessageObjects(
-  stream: MutableAssistantMessageEventStream,
-  transformMessage: (message: unknown) => void,
-): MutableAssistantMessageEventStream {
-  const originalResult = stream.result.bind(stream);
-  stream.result = async () => {
-    const message = await originalResult();
-    transformMessage(message);
-    return message;
-  };
-
-  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
-          if (!result.done) {
-            transformXaiStreamEvent(result.value, transformMessage);
-          }
-          return result;
-        },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-      };
-    };
-  return stream;
-}
-
-function createXaiToolCallArgumentDecodingWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
-  const underlying = baseStreamFn ?? streamSimple;
-  return (model, context, options) => {
-    const maybeStream = underlying(model, context, options);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamMessageObjects(stream, decodeToolCallArgumentsHtmlEntitiesInMessage),
-      );
-    }
-    return wrapStreamMessageObjects(maybeStream, decodeToolCallArgumentsHtmlEntitiesInMessage);
-  };
+function hasXaiFastModeParam(extraParams: Record<string, unknown> | undefined): boolean {
+  return Boolean(
+    extraParams &&
+    (Object.hasOwn(extraParams, "fastMode") || Object.hasOwn(extraParams, "fast_mode")),
+  );
 }
 
 export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   const extraParams = ctx.extraParams;
-  const fastMode = extraParams?.fastMode;
   const toolStreamEnabled = extraParams?.tool_stream !== false;
   return composeProviderStreamWrappers(ctx.streamFn, (streamFn) => {
     let wrappedStreamFn = createXaiToolPayloadCompatibilityWrapper(streamFn);
-    if (typeof fastMode === "boolean") {
-      wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, fastMode);
+    if (hasXaiFastModeParam(extraParams)) {
+      wrappedStreamFn = createXaiFastModeWrapper(wrappedStreamFn, () =>
+        resolveXaiFastMode(extraParams),
+      );
     }
-    wrappedStreamFn = createXaiToolCallArgumentDecodingWrapper(wrappedStreamFn);
     wrappedStreamFn = createPlainTextToolCallCompatWrapper(wrappedStreamFn);
     return createToolStreamWrapper(wrappedStreamFn, toolStreamEnabled);
   });

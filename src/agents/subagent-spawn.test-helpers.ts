@@ -128,10 +128,13 @@ export function expectPersistedRuntimeModel(params: {
 /** Load subagent-spawn with runtime dependencies replaced by test doubles. */
 export async function loadSubagentSpawnModuleForTest(params: {
   callGatewayMock: MockFn;
+  dispatchGatewayMethodInProcessMock?: MockFn;
+  hasInProcessGatewayContextMock?: MockFn;
   getRuntimeConfig?: () => Record<string, unknown>;
   loadSessionStoreMock?: MockFn;
   ensureContextEnginesInitializedMock?: MockFn;
   updateSessionStoreMock?: MockFn;
+  forkSessionEntryFromParentMock?: MockFn;
   forkSessionFromParentMock?: MockFn;
   resolveContextEngineMock?: MockFn;
   resolveParentForkDecisionMock?: MockFn;
@@ -209,7 +212,40 @@ export async function loadSubagentSpawnModuleForTest(params: {
 
   vi.doMock("./subagent-spawn.runtime.js", () => ({
     callGateway: (opts: unknown) => params.callGatewayMock(opts),
+    dispatchGatewayMethodInProcess: (...args: unknown[]) =>
+      params.dispatchGatewayMethodInProcessMock?.(...args),
+    hasInProcessGatewayContext: () => Boolean(params.hasInProcessGatewayContextMock?.()),
     buildSubagentSystemPrompt: () => "system-prompt",
+    forkSessionEntryFromParent:
+      params.forkSessionEntryFromParentMock ??
+      (async () => {
+        const fork = (
+          params.forkSessionFromParentMock
+            ? await params.forkSessionFromParentMock()
+            : { sessionId: "forked-session-id", sessionFile: "/tmp/forked-session.jsonl" }
+        ) as { sessionId: string; sessionFile: string } | null;
+        if (!fork) {
+          return { status: "failed" };
+        }
+        return {
+          status: "forked",
+          fork,
+          parentEntry: {
+            sessionId: "parent-session-id",
+            sessionFile: "/tmp/parent-session.jsonl",
+            updatedAt: Date.now(),
+          },
+          sessionEntry: {
+            sessionId: fork.sessionId,
+            sessionFile: fork.sessionFile,
+            forkedFromParent: true,
+          },
+          decision: {
+            status: "fork",
+            maxTokens: 100_000,
+          },
+        };
+      }),
     forkSessionFromParent:
       params.forkSessionFromParentMock ??
       (async () => ({ sessionId: "forked-session-id", sessionFile: "/tmp/forked-session.jsonl" })),

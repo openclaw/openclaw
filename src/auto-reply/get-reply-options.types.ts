@@ -1,7 +1,8 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { ImageContent } from "../llm/types.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
-import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.types.js";
 import type { ReplyPayload } from "./reply-payload.js";
 import type { TypingController } from "./reply/typing.js";
 
@@ -72,6 +73,8 @@ export type GetReplyOptions = {
   /** Called when the typing controller cleans up (e.g., run ended with NO_REPLY). */
   onTypingCleanup?: () => void;
   onTypingController?: (typing: TypingController) => void;
+  /** If false, send only the initial typing signal without periodic keepalive refreshes. */
+  typingKeepalive?: boolean;
   isHeartbeat?: boolean;
   /** Policy-level typing control for run classes (user/system/internal/heartbeat). */
   typingPolicy?: TypingPolicy;
@@ -82,7 +85,9 @@ export type GetReplyOptions = {
   /** One-shot thinking level override for this run; does not persist to the session. */
   thinkingLevelOverride?: string;
   /** One-shot fast-mode override for this run; does not persist to the session. */
-  fastModeOverride?: boolean;
+  fastModeOverride?: FastMode;
+  /** One-shot auto fast-mode cutoff override in seconds; does not persist to the session. */
+  fastModeAutoOnSecondsOverride?: number;
   /** Controls bootstrap workspace context injection (default: full). */
   bootstrapContextMode?: "full" | "lightweight";
   /** If true, suppress tool error warning payloads for this run. */
@@ -102,6 +107,16 @@ export type GetReplyOptions = {
    * channel to surface progress via its own streaming/edit UX.
    */
   suppressDefaultToolProgressMessages?: boolean;
+  /** Allow channel-owned tool lifecycle feedback while text progress remains hidden. */
+  allowToolLifecycleWhenProgressHidden?: boolean;
+  /**
+   * Called before dispatch with a live getter for whether verbose standalone
+   * progress messages are active for this run. Channels that render tool or
+   * commentary progress inside an ephemeral streaming draft should yield those
+   * draft lines while the getter returns true, so progress is not rendered in
+   * both lanes at once.
+   */
+  onVerboseProgressVisibility?: (isActive: () => boolean) => void;
   onPartialReply?: (payload: PartialReplyPayload) => Promise<void> | void;
   onReasoningStream?: (payload: ReplyPayload) => Promise<void> | void;
   /** Called when a thinking/reasoning block ends. */
@@ -126,6 +141,7 @@ export type GetReplyOptions = {
   /** Called when a concrete work item starts, updates, or completes. */
   onItemEvent?: (payload: {
     itemId?: string;
+    toolCallId?: string;
     kind?: string;
     title?: string;
     name?: string;
@@ -137,6 +153,8 @@ export type GetReplyOptions = {
     approvalId?: string;
     approvalSlug?: string;
   }) => Promise<void> | void;
+  /** In progress mode, classify Claude pre-tool text; true also renders it as commentary. */
+  commentaryProgressEnabled?: boolean;
   /** Called when the agent emits a structured plan update. */
   onPlanUpdate?: (payload: {
     phase?: string;
@@ -208,6 +226,8 @@ export type GetReplyOptions = {
   allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
   /** Called when a suppressed source reply mode observes visible delivery through another path. */
   onObservedReplyDelivery?: () => Promise<void> | void;
+  /** Emit tool result summaries for channel-owned progress UI even when verbose is off. */
+  forceToolResultProgress?: boolean;
   disableBlockStreaming?: boolean;
   /** Timeout for block reply delivery (ms). */
   blockReplyTimeoutMs?: number;

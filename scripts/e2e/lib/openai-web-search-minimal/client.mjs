@@ -1,6 +1,7 @@
 // Client script for minimal OpenAI web-search E2E scenarios.
 import { readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { readTcpPortEnv } from "../env-limits.mjs";
 
 async function loadCallGateway() {
   const candidates = readdirSync("/app/dist")
@@ -18,17 +19,26 @@ async function loadCallGateway() {
 const DEFAULT_RAW_SCHEMA_ERROR =
   "400 The following tools cannot be used with reasoning.effort 'minimal': web_search.";
 const DEFAULT_GATEWAY_SCHEMA_ERROR = "provider rejected the request schema or tool payload";
+const SUCCESS_MARKER = "OPENCLAW_SCHEMA_E2E_OK";
 
 function readExpectedRawSchemaError() {
   return process.env.RAW_SCHEMA_ERROR?.trim() || DEFAULT_RAW_SCHEMA_ERROR;
 }
 
+function resolveGatewayPort(env = process.env) {
+  const portText = env.PORT;
+  if (!portText) {
+    throw new Error("missing PORT");
+  }
+  return readTcpPortEnv("PORT", portText, env);
+}
+
 async function gatewayAgent(params) {
-  const port = process.env.PORT;
   const token = process.env.OPENCLAW_GATEWAY_TOKEN;
-  if (!port || !token) {
+  if (!token) {
     throw new Error("missing PORT/OPENCLAW_GATEWAY_TOKEN");
   }
+  const port = resolveGatewayPort();
 
   try {
     const callGateway = await loadCallGateway();
@@ -75,11 +85,67 @@ function validateRejectResult(result, expectedRawSchemaError = readExpectedRawSc
   return errorText;
 }
 
+function pushStringText(texts, value) {
+  if (typeof value === "string" && value.trim().length > 0) {
+    texts.push(value);
+  }
+}
+
+function pushContentText(texts, content) {
+  if (typeof content === "string") {
+    pushStringText(texts, content);
+    return;
+  }
+  if (!Array.isArray(content)) {
+    return;
+  }
+  for (const item of content) {
+    if (typeof item === "string") {
+      pushStringText(texts, item);
+    } else if (item && typeof item === "object") {
+      pushStringText(texts, item.text);
+    }
+  }
+}
+
+function extractSuccessReplyTexts(value) {
+  const texts = [];
+  pushSuccessReplyTexts(texts, value);
+  pushSuccessReplyTexts(texts, value?.result);
+  return texts;
+}
+
+function pushSuccessReplyTexts(texts, value) {
+  pushStringText(texts, value?.finalAssistantVisibleText);
+  pushStringText(texts, value?.meta?.finalAssistantVisibleText);
+  pushContentText(texts, value?.message?.content);
+  for (const payload of Array.isArray(value?.payloads) ? value.payloads : []) {
+    if (payload?.isError === true) {
+      continue;
+    }
+    pushStringText(texts, payload?.text);
+    pushContentText(texts, payload?.content);
+  }
+}
+
+function validateSuccessResult(result, marker = SUCCESS_MARKER) {
+  if (result.value?.status !== "ok") {
+    throw new Error(`agent run did not complete successfully: ${JSON.stringify(result.value)}`);
+  }
+  const replyTexts = extractSuccessReplyTexts(result.value);
+  if (!replyTexts.some((text) => text.includes(marker))) {
+    throw new Error(
+      `agent run completed without success marker ${JSON.stringify(marker)} in final reply: ${JSON.stringify(
+        result.value,
+      )}`,
+    );
+  }
+}
+
 async function main() {
   const mode = process.argv[2];
   const sessionKey = `agent:main:openai-web-search-minimal:${mode}`;
-  const message =
-    mode === "reject" ? "FORCE_SCHEMA_REJECT" : "Return exactly OPENCLAW_SCHEMA_E2E_OK.";
+  const message = mode === "reject" ? "FORCE_SCHEMA_REJECT" : `Return exactly ${SUCCESS_MARKER}.`;
   const id = mode === "reject" ? "schema-reject" : "schema-success";
 
   const result = await gatewayAgent({
@@ -98,9 +164,7 @@ async function main() {
   if (!result.ok) {
     throw toLintErrorObject(result.error, "Non-Error thrown");
   }
-  if (result.value?.status !== "ok") {
-    throw new Error(`agent run did not complete successfully: ${JSON.stringify(result.value)}`);
-  }
+  validateSuccessResult(result);
 }
 
 function toLintErrorObject(value, fallbackMessage) {
@@ -129,5 +193,9 @@ if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
 export const testing = {
   DEFAULT_GATEWAY_SCHEMA_ERROR,
   DEFAULT_RAW_SCHEMA_ERROR,
+  SUCCESS_MARKER,
+  extractSuccessReplyTexts,
+  resolveGatewayPort,
+  validateSuccessResult,
   validateRejectResult,
 };

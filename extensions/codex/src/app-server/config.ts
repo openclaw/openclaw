@@ -1,26 +1,40 @@
 // Codex helper module supports config behavior.
-import { createHmac, randomBytes } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { hostname as readHostName } from "node:os";
+import path from "node:path";
+import {
+  resolveProviderIdForAuth,
+  type ProviderAuthAliasLookupParams,
+} from "openclaw/plugin-sdk/agent-runtime";
 import {
   resolveExecApprovalsFromFile,
   type ExecApprovalsFile,
 } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
+import {
+  buildSecretInputSchema,
+  normalizeResolvedSecretInputString,
+  type SecretInput,
+} from "openclaw/plugin-sdk/secret-input";
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
 import { z } from "zod";
-import type { CodexSandboxPolicy, CodexServiceTier } from "./protocol.js";
+import type { CodexSandboxPolicy, CodexServiceTier, JsonObject, JsonValue } from "./protocol.js";
 
 const START_OPTIONS_KEY_SECRET_SYMBOL = Symbol.for("openclaw.codexAppServerStartOptionsKeySecret");
 const START_OPTIONS_KEY_SECRET = getStartOptionsKeySecret();
 const UNIX_CODEX_REQUIREMENTS_PATH = "/etc/codex/requirements.toml";
 const WINDOWS_CODEX_REQUIREMENTS_SUFFIX = "\\OpenAI\\Codex\\requirements.toml";
+const CODEX_APP_SERVER_HOME_DIRNAME = "codex-home";
+const CODEX_CONFIG_TOML_FILENAME = "config.toml";
 const PLAIN_DECIMAL_NUMBER_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))$/;
 
 type CodexAppServerTransportMode = "stdio" | "websocket";
 type CodexAppServerPolicyMode = "yolo" | "guardian";
+export type CodexAppServerConnectionClass = "local-loopback" | "remote";
+export type CodexAppServerRemoteAppsSubstrate = "preconfigured";
 type OpenClawExecMode = "deny" | "allowlist" | "ask" | "auto" | "full";
 type OpenClawExecSecurity = "deny" | "allowlist" | "full";
 type OpenClawExecAsk = "off" | "on-miss" | "always";
@@ -35,6 +49,7 @@ export type OpenClawExecPolicyForCodexAppServer = {
   touched: boolean;
 };
 type OpenClawExecPolicy = OpenClawExecPolicyForCodexAppServer;
+type ProviderAuthAliasConfig = NonNullable<ProviderAuthAliasLookupParams>["config"];
 type CodexAppServerDefaultPolicy = {
   mode: CodexAppServerPolicyMode;
   approvalPolicy?: CodexAppServerApprovalPolicy;
@@ -59,7 +74,8 @@ export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "dange
 type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
-export type CodexPluginDestructivePolicy = boolean;
+export type CodexPluginDestructivePolicy = boolean | "auto";
+export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto";
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
 
@@ -102,18 +118,48 @@ export type CodexAppServerExperimentalConfig = {
   sandboxExecServer?: boolean;
 };
 
+export type CodexAppServerNetworkProxyDomainPermission = "allow" | "deny";
+export type CodexAppServerNetworkProxyUnixSocketPermission = "allow" | "none";
+export type CodexAppServerNetworkProxyBaseProfile = "read-only" | "workspace";
+export type CodexAppServerNetworkProxyMode = "limited" | "full";
+
+export type CodexAppServerNetworkProxyConfig = {
+  enabled?: boolean;
+  profileName?: string;
+  baseProfile?: CodexAppServerNetworkProxyBaseProfile;
+  mode?: CodexAppServerNetworkProxyMode;
+  domains?: Record<string, CodexAppServerNetworkProxyDomainPermission>;
+  unixSockets?: Record<string, CodexAppServerNetworkProxyUnixSocketPermission>;
+  proxyUrl?: string;
+  socksUrl?: string;
+  enableSocks5?: boolean;
+  enableSocks5Udp?: boolean;
+  allowUpstreamProxy?: boolean;
+  allowLocalBinding?: boolean;
+  dangerouslyAllowNonLoopbackProxy?: boolean;
+  dangerouslyAllowAllUnixSockets?: boolean;
+};
+
+export type ResolvedCodexAppServerNetworkProxyConfig = {
+  profileName: string;
+  configFingerprint: string;
+  configPatch: JsonObject;
+};
+
 export type ResolvedCodexPluginPolicy = {
   configKey: string;
   marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME;
   pluginName: string;
   enabled: boolean;
-  allowDestructiveActions: CodexPluginDestructivePolicy;
+  allowDestructiveActions: boolean;
+  destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
 };
 
 export type ResolvedCodexPluginsPolicy = {
   configured: boolean;
   enabled: boolean;
-  allowDestructiveActions: CodexPluginDestructivePolicy;
+  allowDestructiveActions: boolean;
+  destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
   pluginPolicies: ResolvedCodexPluginPolicy[];
 };
 
@@ -121,6 +167,7 @@ export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
   command: string;
   commandSource?: CodexAppServerCommandSource;
+  managedFallbackCommandPaths?: string[];
   args: string[];
   url?: string;
   authToken?: string;
@@ -131,6 +178,9 @@ export type CodexAppServerStartOptions = {
 
 export type CodexAppServerRuntimeOptions = {
   start: CodexAppServerStartOptions;
+  connectionClass: CodexAppServerConnectionClass;
+  remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate;
+  remoteWorkspaceRoot?: string;
   codeModeOnly: boolean;
   requestTimeoutMs: number;
   turnCompletionIdleTimeoutMs: number;
@@ -139,7 +189,17 @@ export type CodexAppServerRuntimeOptions = {
   approvalPolicySource?: CodexAppServerApprovalPolicySource;
   sandbox: CodexAppServerSandboxMode;
   approvalsReviewer: CodexAppServerApprovalsReviewer;
-  serviceTier?: CodexServiceTier;
+  serviceTier?: CodexServiceTier | null;
+  networkProxy?: ResolvedCodexAppServerNetworkProxyConfig;
+};
+
+export type CodexModelBackedReviewerContext = {
+  modelProvider?: string;
+  model?: string;
+  config?: ProviderAuthAliasConfig;
+  env?: NodeJS.ProcessEnv;
+  agentDir?: string;
+  codexConfigToml?: string | null;
 };
 
 export type CodexPluginConfig = {
@@ -157,9 +217,10 @@ export type CodexPluginConfig = {
     command?: string;
     args?: string[] | string;
     url?: string;
-    authToken?: string;
-    headers?: Record<string, string>;
+    authToken?: SecretInput;
+    headers?: Record<string, SecretInput>;
     clearEnv?: string[];
+    remoteWorkspaceRoot?: string;
     codeModeOnly?: boolean;
     requestTimeoutMs?: number;
     turnCompletionIdleTimeoutMs?: number;
@@ -168,15 +229,20 @@ export type CodexPluginConfig = {
     sandbox?: CodexAppServerSandboxMode;
     approvalsReviewer?: CodexAppServerApprovalsReviewer;
     serviceTier?: CodexServiceTier | null;
+    networkProxy?: CodexAppServerNetworkProxyConfig;
     defaultWorkspaceDir?: string;
     experimental?: CodexAppServerExperimentalConfig;
   };
 };
 
 export function shouldAutoApproveCodexAppServerApprovals(
-  appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy" | "sandbox">,
+  appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy" | "networkProxy" | "sandbox">,
 ): boolean {
-  return appServer.approvalPolicy === "never" && appServer.sandbox === "danger-full-access";
+  return (
+    appServer.networkProxy === undefined &&
+    appServer.approvalPolicy === "never" &&
+    appServer.sandbox === "danger-full-access"
+  );
 }
 
 export const CODEX_APP_SERVER_CONFIG_KEYS = [
@@ -188,6 +254,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "authToken",
   "headers",
   "clearEnv",
+  "remoteWorkspaceRoot",
   "codeModeOnly",
   "requestTimeoutMs",
   "turnCompletionIdleTimeoutMs",
@@ -196,6 +263,7 @@ export const CODEX_APP_SERVER_CONFIG_KEYS = [
   "sandbox",
   "approvalsReviewer",
   "serviceTier",
+  "networkProxy",
   "defaultWorkspaceDir",
   "experimental",
 ] as const;
@@ -229,8 +297,10 @@ export const CODEX_PLUGIN_ENTRY_CONFIG_KEYS = [
 const DEFAULT_CODEX_COMPUTER_USE_PLUGIN_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MCP_SERVER_NAME = "computer-use";
 const DEFAULT_CODEX_COMPUTER_USE_MARKETPLACE_DISCOVERY_TIMEOUT_MS = 60_000;
+const DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX = "openclaw-network";
 
 const codexAppServerTransportSchema = z.enum(["stdio", "websocket"]);
+const SecretInputSchema = buildSecretInputSchema();
 const codexAppServerPolicyModeSchema = z.enum(["yolo", "guardian"]);
 const codexAppServerApprovalPolicySchema = z.enum([
   "never",
@@ -241,6 +311,7 @@ const codexAppServerApprovalPolicySchema = z.enum([
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
 const codexDynamicToolsLoadingSchema = z.enum(["searchable", "direct"]);
+const codexPluginDestructivePolicySchema = z.union([z.boolean(), z.literal("auto")]);
 const codexAppServerServiceTierSchema = z
   .preprocess(
     (value) => (value === null ? null : normalizeCodexServiceTier(value)),
@@ -252,20 +323,43 @@ const codexAppServerExperimentalSchema = z
     sandboxExecServer: z.boolean().optional(),
   })
   .strict();
+const codexAppServerRemoteWorkspaceRootSchema = z.string().trim().min(1);
+const codexAppServerNetworkProxyDomainPermissionSchema = z.enum(["allow", "deny"]);
+const codexAppServerNetworkProxyUnixSocketPermissionSchema = z.enum(["allow", "none"]);
+const codexAppServerNetworkProxySchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    profileName: z.string().trim().min(1).optional(),
+    baseProfile: z.enum(["read-only", "workspace"]).optional(),
+    mode: z.enum(["limited", "full"]).optional(),
+    domains: z.record(z.string(), codexAppServerNetworkProxyDomainPermissionSchema).optional(),
+    unixSockets: z
+      .record(z.string(), codexAppServerNetworkProxyUnixSocketPermissionSchema)
+      .optional(),
+    proxyUrl: z.string().trim().min(1).optional(),
+    socksUrl: z.string().trim().min(1).optional(),
+    enableSocks5: z.boolean().optional(),
+    enableSocks5Udp: z.boolean().optional(),
+    allowUpstreamProxy: z.boolean().optional(),
+    allowLocalBinding: z.boolean().optional(),
+    dangerouslyAllowNonLoopbackProxy: z.boolean().optional(),
+    dangerouslyAllowAllUnixSockets: z.boolean().optional(),
+  })
+  .strict();
 
 const codexPluginEntryConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
     marketplaceName: z.literal(CODEX_PLUGINS_MARKETPLACE_NAME).optional(),
     pluginName: z.string().trim().min(1).optional(),
-    allow_destructive_actions: z.boolean().optional(),
+    allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
   })
   .strict();
 
 const codexPluginsConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
-    allow_destructive_actions: z.boolean().optional(),
+    allow_destructive_actions: codexPluginDestructivePolicySchema.optional(),
     plugins: z.record(z.string(), codexPluginEntryConfigSchema).optional(),
   })
   .strict();
@@ -302,9 +396,10 @@ const codexPluginConfigSchema = z
         command: z.string().optional(),
         args: z.union([z.array(z.string()), z.string()]).optional(),
         url: z.string().optional(),
-        authToken: z.string().optional(),
-        headers: z.record(z.string(), z.string()).optional(),
+        authToken: SecretInputSchema.optional(),
+        headers: z.record(z.string(), SecretInputSchema).optional(),
         clearEnv: z.array(z.string()).optional(),
+        remoteWorkspaceRoot: codexAppServerRemoteWorkspaceRootSchema.optional(),
         codeModeOnly: z.boolean().optional(),
         requestTimeoutMs: z.number().positive().optional(),
         turnCompletionIdleTimeoutMs: z.number().positive().optional(),
@@ -313,6 +408,7 @@ const codexPluginConfigSchema = z
         sandbox: codexAppServerSandboxSchema.optional(),
         approvalsReviewer: codexAppServerApprovalsReviewerSchema.optional(),
         serviceTier: codexAppServerServiceTierSchema,
+        networkProxy: codexAppServerNetworkProxySchema.optional(),
         defaultWorkspaceDir: z.string().optional(),
         experimental: codexAppServerExperimentalSchema.optional(),
       })
@@ -363,19 +459,25 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
   const config = readCodexPluginConfig(pluginConfig).codexPlugins;
   const configured = config !== undefined;
   const enabled = config?.enabled === true;
-  const allowDestructiveActions = config?.allow_destructive_actions ?? true;
+  const destructivePolicy = resolveCodexPluginDestructivePolicy(
+    config?.allow_destructive_actions ?? true,
+  );
   const pluginPolicies = Object.entries(config?.plugins ?? {})
     .flatMap(([configKey, entry]): ResolvedCodexPluginPolicy[] => {
       if (entry.marketplaceName !== CODEX_PLUGINS_MARKETPLACE_NAME || !entry.pluginName) {
         return [];
       }
+      const entryDestructivePolicy = resolveCodexPluginDestructivePolicy(
+        entry.allow_destructive_actions ?? config?.allow_destructive_actions ?? true,
+      );
       return [
         {
           configKey,
           marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
           pluginName: entry.pluginName,
           enabled: enabled && entry.enabled !== false,
-          allowDestructiveActions: entry.allow_destructive_actions ?? allowDestructiveActions,
+          allowDestructiveActions: entryDestructivePolicy.allowDestructiveActions,
+          destructiveApprovalMode: entryDestructivePolicy.destructiveApprovalMode,
         },
       ];
     })
@@ -383,8 +485,22 @@ export function resolveCodexPluginsPolicy(pluginConfig?: unknown): ResolvedCodex
   return {
     configured,
     enabled,
-    allowDestructiveActions,
+    allowDestructiveActions: destructivePolicy.allowDestructiveActions,
+    destructiveApprovalMode: destructivePolicy.destructiveApprovalMode,
     pluginPolicies,
+  };
+}
+
+function resolveCodexPluginDestructivePolicy(policy: CodexPluginDestructivePolicy): {
+  allowDestructiveActions: boolean;
+  destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
+} {
+  if (policy === "auto") {
+    return { allowDestructiveActions: true, destructiveApprovalMode: "auto" };
+  }
+  return {
+    allowDestructiveActions: policy,
+    destructiveApprovalMode: policy ? "allow" : "deny",
   };
 }
 
@@ -393,7 +509,12 @@ export function resolveCodexAppServerRuntimeOptions(
     pluginConfig?: unknown;
     execMode?: OpenClawExecMode;
     execPolicy?: OpenClawExecPolicyForCodexAppServer;
+    modelProvider?: string;
+    model?: string;
+    config?: ProviderAuthAliasConfig;
     env?: NodeJS.ProcessEnv;
+    agentDir?: string;
+    codexConfigToml?: string | null;
     requirementsToml?: string | null;
     requirementsPath?: string;
     readRequirementsFile?: (path: string) => string | undefined;
@@ -419,8 +540,14 @@ export function resolveCodexAppServerRuntimeOptions(
   const args = resolveArgs(config.args, env.OPENCLAW_CODEX_APP_SERVER_ARGS);
   const headers = normalizeHeaders(config.headers);
   const clearEnv = normalizeStringList(config.clearEnv);
-  const authToken = readNonEmptyString(config.authToken);
+  const authToken = normalizeCodexAppServerSecretInput({
+    value: config.authToken,
+    path: "plugins.entries.codex.config.appServer.authToken",
+  });
   const url = readNonEmptyString(config.url);
+  const connectionClass = inferCodexAppServerConnectionClass({ transport, url });
+  const remoteAppsSubstrate: CodexAppServerRemoteAppsSubstrate = "preconfigured";
+  const remoteWorkspaceRoot = normalizeRemoteWorkspaceRoot(config.remoteWorkspaceRoot);
   const execMode = resolveEffectiveOpenClawExecModeForCodexAppServer({
     execMode: params.execMode,
     execPolicy: params.execPolicy,
@@ -434,8 +561,29 @@ export function resolveCodexAppServerRuntimeOptions(
   const normalizedPolicyMode = resolveCodexPolicyModeForOpenClawExecMode(execMode);
   const ignoreLegacyYoloPolicyMode =
     normalizedPolicyMode === "guardian" && explicitPolicyMode === "yolo";
-  const forceUserReviewer = execMode !== undefined && execMode !== "auto" && execMode !== "full";
-  const forceGuardianReviewer = execMode === "auto";
+  const canUseModelBackedReviewer = canUseCodexModelBackedApprovalsReviewerForModel({
+    modelProvider: params.modelProvider,
+    model: params.model,
+    config: params.config,
+    env,
+    agentDir: params.agentDir,
+    codexConfigToml: params.codexConfigToml,
+  });
+  const explicitModelBackedReviewer =
+    explicitApprovalsReviewer === "auto_review" ||
+    explicitApprovalsReviewer === "guardian_subagent";
+  const forceUserReviewerForUnknownModel =
+    !canUseModelBackedReviewer &&
+    (explicitModelBackedReviewer ||
+      (explicitPolicyMode === "guardian" && explicitApprovalsReviewer !== "user"));
+  const forceUserReviewerForExecMode =
+    execMode !== undefined &&
+    execMode !== "full" &&
+    (execMode !== "auto" || !canUseModelBackedReviewer);
+  const forceUserReviewer = forceUserReviewerForUnknownModel || forceUserReviewerForExecMode;
+  const forceGuardianReviewer = execMode === "auto" && canUseModelBackedReviewer;
+  const execModeRequiringPromptingApprovals: Extract<OpenClawExecMode, "auto" | "ask"> | undefined =
+    execMode === "auto" || execMode === "ask" ? execMode : forceUserReviewer ? "ask" : undefined;
   const forceDangerFullAccessSandbox =
     params.execPolicy?.touched === true &&
     params.execPolicy.security === "full" &&
@@ -449,14 +597,14 @@ export function resolveCodexAppServerRuntimeOptions(
           transport,
           env,
           forceGuardian: normalizedPolicyMode === "guardian",
-          forceUserReviewer,
-          execModeRequiringPromptingApprovals:
-            execMode === "auto" || execMode === "ask" ? execMode : undefined,
+          forceUserReviewer: forceUserReviewer || !canUseModelBackedReviewer,
+          execModeRequiringPromptingApprovals,
           requirementsToml: params.requirementsToml,
           requirementsPath: params.requirementsPath,
           readRequirementsFile: params.readRequirementsFile,
           platform: params.platform,
           hostName: params.hostName,
+          execModeRequiringUserReviewer: forceUserReviewer ? execMode : undefined,
         });
   const preserveExplicitAutoSandbox = forceGuardianReviewer && configuredSandbox === "read-only";
   const forcedPolicy = forceRuntimePolicy
@@ -482,11 +630,21 @@ export function resolveCodexAppServerRuntimeOptions(
     ? normalizedPolicyMode
     : (explicitPolicyMode ?? normalizedPolicyMode ?? defaultPolicy?.mode ?? "yolo");
   const serviceTier = normalizeCodexServiceTier(config.serviceTier);
+  const resolvedSandbox =
+    forcedPolicy?.sandbox ??
+    configuredSandbox ??
+    defaultPolicy?.sandbox ??
+    (policyMode === "guardian" ? "workspace-write" : "danger-full-access");
   if (transport === "websocket" && !url) {
     throw new Error(
       "plugins.entries.codex.config.appServer.url is required when appServer.transport is websocket",
     );
   }
+  assertCodexAppServerConnectionClassConfig({
+    connectionClass,
+    authToken,
+    headers,
+  });
 
   const configApprovalPolicy = resolveApprovalPolicy(config.approvalPolicy);
   const envApprovalPolicy = resolveApprovalPolicy(env.OPENCLAW_CODEX_APP_SERVER_APPROVAL_POLICY);
@@ -514,6 +672,9 @@ export function resolveCodexAppServerRuntimeOptions(
       headers,
       ...(transport === "stdio" && clearEnv.length > 0 ? { clearEnv } : {}),
     },
+    connectionClass,
+    remoteAppsSubstrate,
+    ...(remoteWorkspaceRoot ? { remoteWorkspaceRoot } : {}),
     codeModeOnly: config.codeModeOnly === true,
     requestTimeoutMs: normalizePositiveNumber(config.requestTimeoutMs, 60_000),
     turnCompletionIdleTimeoutMs: normalizePositiveNumber(
@@ -530,17 +691,14 @@ export function resolveCodexAppServerRuntimeOptions(
       : {}),
     approvalPolicy: forcedPolicy?.approvalPolicy ?? approvalPolicy,
     approvalPolicySource,
-    sandbox:
-      forcedPolicy?.sandbox ??
-      configuredSandbox ??
-      defaultPolicy?.sandbox ??
-      (policyMode === "guardian" ? "workspace-write" : "danger-full-access"),
+    sandbox: resolvedSandbox,
     approvalsReviewer:
       forcedPolicy?.approvalsReviewer ??
       explicitApprovalsReviewer ??
       defaultPolicy?.approvalsReviewer ??
       (policyMode === "guardian" ? "auto_review" : "user"),
     ...(serviceTier ? { serviceTier } : {}),
+    ...resolveCodexAppServerNetworkProxy(config.networkProxy, resolvedSandbox),
   };
 }
 
@@ -560,6 +718,93 @@ export function isCodexAppServerApprovalPolicyAllowedByRequirements(
   }
   const allowedApprovalPolicies = parseAllowedApprovalPoliciesFromCodexRequirements(content);
   return allowedApprovalPolicies === undefined || allowedApprovalPolicies.has(policy);
+}
+
+export function canUseCodexModelBackedApprovalsReviewerForModel(
+  params: CodexModelBackedReviewerContext,
+): boolean {
+  const explicitProvider = params.modelProvider?.trim().toLowerCase();
+  const inferredProvider = inferProviderFromModelRef(params.model);
+  if (explicitProvider && explicitProvider !== "codex") {
+    return (
+      isTrustedCodexModelBackedApprovalsReviewerProvider(explicitProvider, params) &&
+      (inferredProvider === undefined ||
+        isTrustedCodexModelBackedApprovalsReviewerProvider(inferredProvider, params))
+    );
+  }
+  if (inferredProvider !== undefined) {
+    return isTrustedCodexModelBackedApprovalsReviewerProvider(inferredProvider, params);
+  }
+  return isTrustedCodexModelBackedApprovalsReviewerProvider(explicitProvider, params);
+}
+
+export function isTrustedCodexModelBackedOpenAIProvider(params: {
+  config?: ProviderAuthAliasConfig;
+  env?: NodeJS.ProcessEnv;
+  model?: string;
+  agentDir?: string;
+  codexConfigToml?: string | null;
+}): boolean {
+  if (!openAIBaseUrlEnvOverridesAreTrustedForModelBackedReview(params.env)) {
+    return false;
+  }
+  const codexBaseUrlOverrides = readCodexBaseUrlOverridesForModelBackedReview(params);
+  if (
+    codexBaseUrlOverrides === false ||
+    !codexBaseUrlOverrides.openAI.every(isNativeOpenAIBaseUrl) ||
+    !codexBaseUrlOverrides.chatGPT.every(isNativeChatGPTBaseUrl)
+  ) {
+    return false;
+  }
+  const openAIProviders = readConfiguredOpenAIProvidersForModelBackedReview(params.config);
+  if (openAIProviders.length === 0) {
+    return true;
+  }
+  return openAIProviders.every((openAIProvider) =>
+    configuredOpenAIProviderIsTrustedForModelBackedReview(openAIProvider, params.model),
+  );
+}
+
+export function resolveCodexModelBackedReviewerPolicyContext(params: {
+  provider?: string;
+  model?: string;
+  bindingModelProvider?: string;
+  bindingModel?: string;
+  nativeAuthProfile?: boolean;
+}): CodexModelBackedReviewerContext {
+  const provider = params.provider?.trim();
+  if (provider && provider.toLowerCase() !== "codex") {
+    return {
+      modelProvider: normalizeCodexModelBackedReviewerPolicyProvider(provider),
+      model: params.model,
+    };
+  }
+  const bindingModelProvider = params.bindingModelProvider?.trim();
+  const currentModel = params.model?.trim();
+  const bindingModel = params.bindingModel?.trim();
+  if (bindingModelProvider && currentModel && bindingModel && currentModel === bindingModel) {
+    return {
+      modelProvider: normalizeCodexModelBackedReviewerPolicyProvider(bindingModelProvider),
+      model: params.model ?? params.bindingModel,
+    };
+  }
+  const currentModelProvider = inferProviderFromModelRef(params.model);
+  if (currentModelProvider) {
+    return {
+      modelProvider: normalizeCodexModelBackedReviewerPolicyProvider(currentModelProvider),
+      model: params.model,
+    };
+  }
+  if (bindingModelProvider) {
+    return {
+      modelProvider: normalizeCodexModelBackedReviewerPolicyProvider(bindingModelProvider),
+      model: params.model ?? params.bindingModel,
+    };
+  }
+  return {
+    modelProvider: params.nativeAuthProfile === true ? "openai" : undefined,
+    model: params.model ?? params.bindingModel,
+  };
 }
 
 export function resolveCodexComputerUseConfig(
@@ -632,12 +877,13 @@ export function codexAppServerStartOptionsKey(
     transport: options.transport,
     command: options.command,
     commandSource: options.commandSource ?? null,
+    managedFallbackCommandPaths: [...(options.managedFallbackCommandPaths ?? [])],
     args: options.args,
     url: options.url ?? null,
     authToken: hashSecretForKey(options.authToken, "authToken"),
-    headers: Object.entries(options.headers).toSorted(([left], [right]) =>
-      left.localeCompare(right),
-    ),
+    headers: Object.entries(options.headers)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, value]) => [key, hashSecretForKey(value, `header:${key}`)]),
     env: Object.entries(options.env ?? {})
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
@@ -665,6 +911,104 @@ export function codexSandboxPolicyForTurn(
     excludeTmpdirEnvVar: false,
     excludeSlashTmp: false,
   };
+}
+
+function resolveCodexAppServerNetworkProxy(
+  config: CodexAppServerNetworkProxyConfig | undefined,
+  sandbox: CodexAppServerSandboxMode,
+): { networkProxy?: ResolvedCodexAppServerNetworkProxyConfig } {
+  if (config?.enabled !== true) {
+    return {};
+  }
+  const fileSystemMode =
+    config.baseProfile === "read-only" || (!config.baseProfile && sandbox === "read-only")
+      ? "read"
+      : "write";
+  const networkConfig = removeUndefinedJsonFields({
+    enabled: true,
+    mode: config.mode,
+    domains: normalizeNetworkProxyPermissionMap(config.domains),
+    unix_sockets: normalizeNetworkProxyPermissionMap(config.unixSockets),
+    proxy_url: readNonEmptyString(config.proxyUrl),
+    socks_url: readNonEmptyString(config.socksUrl),
+    enable_socks5: config.enableSocks5,
+    enable_socks5_udp: config.enableSocks5Udp,
+    allow_upstream_proxy: config.allowUpstreamProxy,
+    allow_local_binding: config.allowLocalBinding,
+    dangerously_allow_non_loopback_proxy: config.dangerouslyAllowNonLoopbackProxy,
+    dangerously_allow_all_unix_sockets: config.dangerouslyAllowAllUnixSockets,
+  });
+  const profile = {
+    filesystem: {
+      ":minimal": "read",
+      ":project_roots": {
+        ".": fileSystemMode,
+      },
+    },
+    network: networkConfig,
+  };
+  const profileName = resolveNetworkProxyPermissionProfileName(config, profile);
+  const configPatch: JsonObject = {
+    "features.network_proxy.enabled": true,
+    default_permissions: profileName,
+    permissions: {
+      [profileName]: profile,
+    },
+  };
+  return {
+    networkProxy: {
+      profileName,
+      configFingerprint: fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch),
+      configPatch,
+    },
+  };
+}
+
+function resolveNetworkProxyPermissionProfileName(
+  config: CodexAppServerNetworkProxyConfig,
+  profile: JsonObject,
+): string {
+  const explicitProfileName = readNonEmptyString(config.profileName);
+  if (explicitProfileName) {
+    return explicitProfileName;
+  }
+  const suffix = createHash("sha256")
+    .update(stableStringifyJson({ version: 1, profile }))
+    .digest("hex")
+    .slice(0, 16);
+  return `${DEFAULT_CODEX_APP_SERVER_NETWORK_PROXY_PROFILE_PREFIX}-${suffix}`;
+}
+
+export function fingerprintCodexAppServerNetworkProxyConfigPatch(configPatch: JsonObject): string {
+  return createHash("sha256").update(stableStringifyJson(configPatch)).digest("hex");
+}
+
+function normalizeNetworkProxyPermissionMap<TPermission extends string>(
+  value: Record<string, TPermission> | undefined,
+): Record<string, TPermission> | undefined {
+  const entries = Object.entries(value ?? {})
+    .map(([key, permission]) => [key.trim(), permission] as const)
+    .filter(([key]) => key.length > 0);
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function removeUndefinedJsonFields(value: Record<string, JsonValue | undefined>): JsonObject {
+  return Object.fromEntries(
+    Object.entries(value).filter((entry): entry is [string, JsonValue] => entry[1] !== undefined),
+  );
+}
+
+function stableStringifyJson(value: JsonValue): string {
+  if (Array.isArray(value)) {
+    return `[${value.map((item) => stableStringifyJson(item)).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    return `{${Object.entries(value)
+      .toSorted(([left], [right]) => left.localeCompare(right))
+      .map(([key, item]) => `${JSON.stringify(key)}:${stableStringifyJson(item)}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
 }
 
 export function withMcpElicitationsApprovalPolicy(
@@ -700,6 +1044,71 @@ function resolveTransport(value: unknown): CodexAppServerTransportMode {
   return value === "websocket" ? "websocket" : "stdio";
 }
 
+function normalizeRemoteWorkspaceRoot(value: string | undefined): string | undefined {
+  return readNonEmptyString(value);
+}
+
+function inferCodexAppServerConnectionClass(params: {
+  transport: CodexAppServerTransportMode;
+  url?: string;
+}): CodexAppServerConnectionClass {
+  if (params.transport !== "websocket") {
+    return "local-loopback";
+  }
+  return params.url && isLoopbackWebSocketUrl(params.url) ? "local-loopback" : "remote";
+}
+
+function assertCodexAppServerConnectionClassConfig(params: {
+  connectionClass: CodexAppServerConnectionClass;
+  authToken?: string;
+  headers: Record<string, string>;
+}): void {
+  if (
+    params.connectionClass === "remote" &&
+    !hasIdentityBearingWebSocketAuth({
+      authToken: params.authToken,
+      headers: params.headers,
+    })
+  ) {
+    throw new Error(
+      "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
+    );
+  }
+}
+
+function isLoopbackWebSocketUrl(value: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== "ws:" && parsed.protocol !== "wss:") {
+    return false;
+  }
+  const host = parsed.hostname.toLowerCase();
+  return (
+    host === "localhost" ||
+    host === "127.0.0.1" ||
+    host === "::1" ||
+    host === "[::1]" ||
+    host.startsWith("127.")
+  );
+}
+
+function hasIdentityBearingWebSocketAuth(params: {
+  authToken?: string;
+  headers: Record<string, string>;
+}): boolean {
+  if (readNonEmptyString(params.authToken)) {
+    return true;
+  }
+  return Object.entries(params.headers).some(
+    ([key, value]) =>
+      key.trim().toLowerCase() === "authorization" && Boolean(readNonEmptyString(value)),
+  );
+}
+
 function resolvePolicyMode(value: unknown): CodexAppServerPolicyMode | undefined {
   return value === "guardian" || value === "yolo" ? value : undefined;
 }
@@ -709,6 +1118,7 @@ function resolveDefaultCodexAppServerPolicy(params: {
   forceGuardian?: boolean;
   forceUserReviewer?: boolean;
   execModeRequiringPromptingApprovals?: Extract<OpenClawExecMode, "auto" | "ask">;
+  execModeRequiringUserReviewer?: OpenClawExecMode;
   env?: NodeJS.ProcessEnv;
   requirementsToml?: string | null;
   requirementsPath?: string;
@@ -732,7 +1142,7 @@ function resolveDefaultCodexAppServerPolicy(params: {
         params.execModeRequiringPromptingApprovals,
       ),
       approvalsReviewer: params.forceUserReviewer
-        ? selectUserApprovalsReviewer(undefined)
+        ? selectUserApprovalsReviewer(undefined, params.execModeRequiringUserReviewer)
         : selectGuardianApprovalsReviewer(
             undefined,
             params.execModeRequiringPromptingApprovals === "auto" ? "auto" : undefined,
@@ -763,7 +1173,7 @@ function resolveDefaultCodexAppServerPolicy(params: {
       params.execModeRequiringPromptingApprovals,
     ),
     approvalsReviewer: params.forceUserReviewer
-      ? selectUserApprovalsReviewer(allowedApprovalsReviewers)
+      ? selectUserApprovalsReviewer(allowedApprovalsReviewers, params.execModeRequiringUserReviewer)
       : selectGuardianApprovalsReviewer(
           allowedApprovalsReviewers,
           params.execModeRequiringPromptingApprovals === "auto" ? "auto" : undefined,
@@ -782,14 +1192,14 @@ function readCodexRequirementsToml(params: {
   if (params.requirementsToml !== undefined) {
     return params.requirementsToml ?? undefined;
   }
-  const path =
+  const requirementsPath =
     readNonEmptyString(params.requirementsPath) ??
     resolveCodexRequirementsPath(params.env ?? process.env, params.platform ?? process.platform);
   try {
     if (params.readRequirementsFile) {
-      return params.readRequirementsFile(path);
+      return params.readRequirementsFile(requirementsPath);
     }
-    return readFileSync(path, "utf8");
+    return readFileSync(requirementsPath, "utf8");
   } catch {
     return undefined;
   }
@@ -881,6 +1291,34 @@ function parseTopLevelRequirementsStringArray(content: string, key: string): str
   return parseRequirementsStringArray(topLevelContent, key);
 }
 
+function parseTomlStringValue(content: string, key: string): string | undefined {
+  const match = parseTomlStringAssignment(content, tomlDottedKeyPattern(key));
+  return match ? (match[1] ?? match[2] ?? "") : undefined;
+}
+
+function parseInlineOpenAIModelProviderBaseUrl(content: string): string | undefined {
+  const match = parseTomlStringAssignment(
+    content,
+    `${tomlKeyPattern("model_providers")}\\s*=\\s*\\{[\\s\\S]*?${tomlKeyPattern("openai")}\\s*=\\s*\\{[\\s\\S]*?${tomlKeyPattern("base_url")}`,
+  );
+  return match ? (match[1] ?? match[2] ?? "") : undefined;
+}
+
+function parseTomlStringAssignment(content: string, keyPattern: string): RegExpMatchArray | null {
+  return content.match(
+    new RegExp(`(?:^|\\n)\\s*${keyPattern}\\s*=\\s*(?:"([^"\\\\]*(?:\\\\.[^"\\\\]*)*)"|'([^']*)')`),
+  );
+}
+
+function tomlDottedKeyPattern(key: string): string {
+  return key.split(".").map(tomlKeyPattern).join("\\s*\\.\\s*");
+}
+
+function tomlKeyPattern(key: string): string {
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return `(?:"${escaped}"|'${escaped}'|${escaped})`;
+}
+
 function parseRequirementsStringArray(content: string, key: string): string[] | undefined {
   const match = content.match(new RegExp(`(?:^|\\n)\\s*${key}\\s*=\\s*\\[([\\s\\S]*?)\\]`));
   if (!match) {
@@ -892,6 +1330,20 @@ function parseRequirementsStringArray(content: string, key: string): string[] | 
     return undefined;
   }
   return stringMatches.map((entry) => entry[1] ?? entry[2] ?? "");
+}
+
+function parseTomlTableSection(content: string, table: string): string | undefined {
+  const strippedContent = stripTomlLineComments(content);
+  const tablePattern = tomlDottedKeyPattern(table);
+  const headerPattern = new RegExp(`^\\s*\\[\\s*${tablePattern}\\s*\\]\\s*$`, "m");
+  const match = headerPattern.exec(strippedContent);
+  if (!match) {
+    return undefined;
+  }
+  const sectionStart = match.index + match[0].length;
+  const rest = strippedContent.slice(sectionStart);
+  const nextTableOffset = rest.search(/^\s*\[/m);
+  return nextTableOffset === -1 ? rest : rest.slice(0, nextTableOffset);
 }
 
 function parseTomlArrayTableSections(content: string, table: string): string[] {
@@ -1059,11 +1511,214 @@ function selectGuardianApprovalsReviewer(
 
 function selectUserApprovalsReviewer(
   allowedApprovalsReviewers: Set<CodexAppServerApprovalsReviewer> | undefined,
+  execModeRequiringUserReviewer?: OpenClawExecMode,
 ): CodexAppServerApprovalsReviewer {
   if (allowedApprovalsReviewers === undefined || allowedApprovalsReviewers.has("user")) {
     return "user";
   }
-  throw new Error("tools.exec.mode=ask requires Codex app-server user approvals");
+  throw new Error(
+    `tools.exec.mode=${execModeRequiringUserReviewer ?? "ask"} requires Codex app-server user approvals`,
+  );
+}
+
+function isCodexModelBackedApprovalsReviewerProvider(provider: string | undefined): boolean {
+  const normalized = provider?.trim().toLowerCase();
+  return normalized === "openai";
+}
+
+function isTrustedCodexModelBackedApprovalsReviewerProvider(
+  provider: string | undefined,
+  params: CodexModelBackedReviewerContext,
+): boolean {
+  return (
+    isCodexModelBackedApprovalsReviewerProvider(provider) &&
+    isTrustedCodexModelBackedOpenAIProvider({
+      config: params.config,
+      env: params.env,
+      model: params.model,
+      agentDir: params.agentDir,
+      codexConfigToml: params.codexConfigToml,
+    })
+  );
+}
+
+function readCodexBaseUrlOverridesForModelBackedReview(
+  params: Pick<CodexModelBackedReviewerContext, "agentDir" | "codexConfigToml">,
+): { openAI: string[]; chatGPT: string[] } | false {
+  const configToml = readCodexAppServerConfigToml(params);
+  if (configToml === false) {
+    return false;
+  }
+  if (configToml === undefined) {
+    return { openAI: [], chatGPT: [] };
+  }
+  const topLevelContent = stripTomlLineComments(configToml).slice(
+    0,
+    firstTomlTableOffset(configToml),
+  );
+  const modelProviderOpenAISection = parseTomlTableSection(configToml, "model_providers.openai");
+  return {
+    openAI: [
+      parseTomlStringValue(topLevelContent, "openai_base_url"),
+      parseTomlStringValue(topLevelContent, "model_providers.openai.base_url"),
+      parseInlineOpenAIModelProviderBaseUrl(topLevelContent),
+      modelProviderOpenAISection
+        ? parseTomlStringValue(modelProviderOpenAISection, "base_url")
+        : undefined,
+    ].filter((entry): entry is string => entry !== undefined),
+    chatGPT: [parseTomlStringValue(topLevelContent, "chatgpt_base_url")].filter(
+      (entry): entry is string => entry !== undefined,
+    ),
+  };
+}
+
+function readCodexAppServerConfigToml(
+  params: Pick<CodexModelBackedReviewerContext, "agentDir" | "codexConfigToml">,
+): string | undefined | false {
+  if (params.codexConfigToml !== undefined) {
+    return params.codexConfigToml ?? undefined;
+  }
+  const configPath = resolveCodexAppServerConfigPath(params);
+  if (!configPath) {
+    return undefined;
+  }
+  try {
+    return readFileSync(configPath, "utf8");
+  } catch (error) {
+    return readErrorCode(error) === "ENOENT" ? undefined : false;
+  }
+}
+
+function resolveCodexAppServerConfigPath(
+  params: Pick<CodexModelBackedReviewerContext, "agentDir">,
+): string | undefined {
+  const agentDir = readNonEmptyString(params.agentDir);
+  const codexHome = agentDir
+    ? path.join(path.resolve(agentDir), CODEX_APP_SERVER_HOME_DIRNAME)
+    : undefined;
+  return codexHome ? path.join(codexHome, CODEX_CONFIG_TOML_FILENAME) : undefined;
+}
+
+function readErrorCode(error: unknown): string | undefined {
+  return error && typeof error === "object" && "code" in error
+    ? String((error as { code?: unknown }).code)
+    : undefined;
+}
+
+function readConfiguredOpenAIProvidersForModelBackedReview(
+  config: ProviderAuthAliasConfig | undefined,
+): Array<Record<string, unknown>> {
+  const providerRecords = readRecord(readRecord(readRecord(config)?.models)?.providers);
+  if (!providerRecords) {
+    return [];
+  }
+  const openAIProviders: Array<Record<string, unknown>> = [];
+  for (const [providerId, providerConfig] of Object.entries(providerRecords)) {
+    if (resolveProviderIdForAuth(providerId, { config }) !== "openai") {
+      continue;
+    }
+    const record = readRecord(providerConfig);
+    if (record) {
+      openAIProviders.push(record);
+    }
+  }
+  return openAIProviders;
+}
+
+function configuredOpenAIProviderIsTrustedForModelBackedReview(
+  openAIProvider: Record<string, unknown>,
+  modelInput: string | undefined,
+): boolean {
+  if (
+    readRecord(openAIProvider.localService) ||
+    hasNonEmptyRecord(openAIProvider.headers) ||
+    hasNonEmptyRecord(openAIProvider.request) ||
+    typeof openAIProvider.authHeader === "boolean" ||
+    !isNativeOpenAIBaseUrl(openAIProvider.baseUrl)
+  ) {
+    return false;
+  }
+  const models = openAIProvider.models;
+  if (!Array.isArray(models)) {
+    return true;
+  }
+  const modelId = normalizeOpenAIModelBackedReviewerModelId(modelInput);
+  if (!modelId) {
+    return false;
+  }
+  for (const entry of models) {
+    const model = readRecord(entry);
+    if (typeof model?.id !== "string" || !matchesConfiguredOpenAIModelId(modelId, model.id)) {
+      continue;
+    }
+    if (
+      hasNonEmptyRecord(model.headers) ||
+      hasNonEmptyRecord(model.request) ||
+      !isNativeOpenAIBaseUrl(model.baseUrl)
+    ) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function normalizeOpenAIModelBackedReviewerModelId(modelInput: string | undefined): string {
+  const normalized = modelInput?.trim() ?? "";
+  const authProfileIndex = normalized.indexOf("@");
+  const withoutAuthProfile =
+    authProfileIndex > 0 ? normalized.slice(0, authProfileIndex) : normalized;
+  const slashIndex = withoutAuthProfile.indexOf("/");
+  return slashIndex > 0 ? withoutAuthProfile.slice(slashIndex + 1).trim() : withoutAuthProfile;
+}
+
+function matchesConfiguredOpenAIModelId(modelId: string, configuredModelId: string): boolean {
+  const configured = normalizeOpenAIModelBackedReviewerModelId(configuredModelId);
+  return Boolean(configured) && (modelId === configured || modelId.startsWith(`${configured}@`));
+}
+
+function hasNonEmptyRecord(value: unknown): boolean {
+  const record = readRecord(value);
+  return record !== undefined && Object.keys(record).length > 0;
+}
+
+function isNativeOpenAIBaseUrl(value: unknown): boolean {
+  if (typeof value !== "string" || !value.trim()) {
+    return true;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname.toLowerCase() === "api.openai.com";
+  } catch {
+    return false;
+  }
+}
+
+function openAIBaseUrlEnvOverridesAreTrustedForModelBackedReview(
+  env: NodeJS.ProcessEnv | undefined,
+): boolean {
+  return [env?.OPENAI_BASE_URL, env?.OPENAI_API_BASE].every(isNativeOpenAIBaseUrl);
+}
+
+function isNativeChatGPTBaseUrl(value: unknown): boolean {
+  if (typeof value !== "string" || !value.trim()) {
+    return true;
+  }
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname.toLowerCase() === "chatgpt.com";
+  } catch {
+    return false;
+  }
+}
+
+function normalizeCodexModelBackedReviewerPolicyProvider(provider: string): string {
+  return provider.toLowerCase() === "openai" ? "openai" : provider;
+}
+
+function inferProviderFromModelRef(model: string | undefined): string | undefined {
+  const normalized = model?.trim().toLowerCase();
+  const slashIndex = normalized?.indexOf("/") ?? -1;
+  return slashIndex > 0 ? normalized?.slice(0, slashIndex) : undefined;
 }
 
 function selectForcedPromptingSandbox(params: {
@@ -1395,9 +2050,25 @@ function normalizeHeaders(value: unknown): Record<string, string> {
   }
   return Object.fromEntries(
     Object.entries(value)
-      .map(([key, child]) => [key.trim(), readNonEmptyString(child)] as const)
+      .map(
+        ([key, child]) =>
+          [
+            key.trim(),
+            normalizeCodexAppServerSecretInput({
+              value: child,
+              path: `plugins.entries.codex.config.appServer.headers.${key}`,
+            }),
+          ] as const,
+      )
       .filter((entry): entry is readonly [string, string] => Boolean(entry[0] && entry[1])),
   );
+}
+
+function normalizeCodexAppServerSecretInput(params: {
+  value: unknown;
+  path: string;
+}): string | undefined {
+  return normalizeResolvedSecretInputString(params);
 }
 
 function normalizeStringList(value: unknown): string[] {

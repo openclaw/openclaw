@@ -109,4 +109,20 @@ describe("external CLI auth scope", () => {
 
     expect(scope?.providerIds).toContain("claude-cli");
   });
+
+  it("includes Gemini CLI when it is the configured Google model runtime", () => {
+    const scope = resolveExternalCliAuthScopeFromConfig({
+      agents: {
+        defaults: {
+          models: {
+            "google/gemini-3.1-pro-preview": {
+              agentRuntime: { id: "google-gemini-cli" },
+            },
+          },
+        },
+      },
+    });
+
+    expect(scope?.providerIds).toContain("google-gemini-cli");
+  });
 });

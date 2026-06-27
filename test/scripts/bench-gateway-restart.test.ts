@@ -7,7 +7,30 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { beforeAll, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-gateway-restart.ts";
+import {
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../../src/infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../../src/state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../src/state/openclaw-state-db.js";
 import { registerStopChildBehaviorTests } from "./bench-gateway-child-test-support.js";
+
+type GatewayRestartIntentDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_intent">;
+
+function readRestartIntentRow(env: NodeJS.ProcessEnv) {
+  const { db } = openOpenClawStateDatabase({ env });
+  const stateDb = getNodeSqliteKysely<GatewayRestartIntentDatabase>(db);
+  return executeSqliteQueryTakeFirstSync(
+    db,
+    stateDb
+      .selectFrom("gateway_restart_intent")
+      .select(["intent_key", "kind", "pid", "reason"])
+      .where("intent_key", "=", "gateway-restart"),
+  );
+}
 
 describe("gateway restart benchmark script", () => {
   let helpResult: ReturnType<typeof spawnSync>;
@@ -42,12 +65,90 @@ describe("gateway restart benchmark script", () => {
   });
 
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
+    expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
     expect(testing.parsePositiveInt("5", 1, "--restarts")).toBe(5);
     expect(testing.parseNonNegativeInt("0", 1, "--warmup")).toBe(0);
+    expect(
+      testing.parseOptions([
+        "--case",
+        "skipChannelsNoAcpxProbe",
+        "--output",
+        "restart.json",
+        "--allow-failures",
+        "--restarts",
+        "2",
+      ]),
+    ).toMatchObject({
+      allowFailures: true,
+      cases: [{ id: "skipChannelsNoAcpxProbe" }],
+      output: "restart.json",
+      restarts: 2,
+    });
     expect(() => testing.parsePositiveInt("2abc", 1, "--restarts")).toThrow(
       /--restarts must be an integer/u,
     );
+    expect(() => testing.parseOptions(["--output", "--case", "skipChannels"])).toThrow(
+      "--output requires a value",
+    );
+    expect(() =>
+      testing.parseOptions(["--output", "first.json", "--output", "second.json"]),
+    ).toThrow("--output was provided more than once");
+    expect(() => testing.parseOptions(["--case"])).toThrow("--case requires a value");
+    expect(() =>
+      testing.parseOptions(["--case", "skipChannels", "--case", "skipChannels"]),
+    ).toThrow('Duplicate --case "skipChannels"');
+    expect(() => testing.parseOptions(["--restarts", "--runs", "1"])).toThrow(
+      "--restarts requires a value",
+    );
     expect(() => testing.resolveEntry("--inspect")).toThrow(/must be a file path/u);
+  });
+
+  it("rejects unknown benchmark CLI args before checking platform or running cases", () => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/bench-gateway-restart.ts", "--wat"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_NO_WARNINGS: "1",
+        },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe("Unknown argument: --wat");
+    expect(result.stderr).not.toContain("\n    at ");
+  });
+
+  it("reports duplicate benchmark cases without a stack trace", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "scripts/bench-gateway-restart.ts",
+        "--case",
+        "skipChannels",
+        "--case",
+        "skipChannels",
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_NO_WARNINGS: "1",
+        },
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stdout).toBe("");
+    expect(result.stderr.trim()).toBe('Duplicate --case "skipChannels"');
+    expect(result.stderr).not.toContain("\n    at ");
   });
 
   it("guards the SIGUSR1 restart benchmark on Windows", () => {
@@ -148,6 +249,14 @@ node    1234 user    1w   REG    1,2      123    6 /tmp/stdout
 node    1234 user   12u  IPv4    0t0      TCP localhost:1234
 `),
     ).toBe(3);
+  });
+
+  it("rejects malformed ps RSS samples", () => {
+    expect(testing.parseProcessRssKb("4096\n")).toBe(4096);
+    expect(testing.parseProcessRssKb("4096kb\n")).toBeNull();
+    expect(testing.parseProcessRssKb("4096 8192\n")).toBeNull();
+    expect(testing.parseProcessRssKb("0\n")).toBeNull();
+    expect(testing.parseProcessRssKb("")).toBeNull();
   });
 
   it("enables both startup and restart trace in the child gateway environment", () => {
@@ -468,6 +577,97 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
   });
 
   it("does not mark failure-free benchmark summaries as failed", () => {
+    const iteration = testing.createRestartIteration(1);
+    iteration.gatewayReadyLogLine = "[gateway] ready";
+    iteration.gatewayReadyLogMs = 40;
+    iteration.healthz = {
+      downtimeMs: null,
+      firstErrorKind: null,
+      firstRecoveryMs: null,
+      ms: 30,
+      status: 200,
+      transitions: [],
+      unavailableMs: null,
+    };
+    iteration.httpListenLogLine = "[gateway] http server listening (0 plugins)";
+    iteration.httpListenLogMs = 20;
+    iteration.readyz = {
+      downtimeMs: null,
+      firstErrorKind: null,
+      firstRecoveryMs: null,
+      ms: 42,
+      status: 200,
+      transitions: [],
+      unavailableMs: null,
+    };
+    iteration.resourceSnapshots = [
+      {
+        activeHandlesCount: 8,
+        activeRequestsCount: 0,
+        activeTimersCount: 2,
+        fdCount: 31,
+        ms: 45,
+        phase: "restart.ready",
+        rssMb: 220,
+      },
+    ];
+    iteration.restartTrace = {
+      "restart.ready": 12,
+      "restart.ready.total": 50,
+      "restart.ready.rssMb": 220,
+    };
+
+    const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
+      {
+        childExitCode: 0,
+        childSignal: null,
+        events: [],
+        exitedBeforeTeardown: false,
+        failureCode: null,
+        firstOutputMs: 1,
+        initialGatewayReadyLogLine: "[gateway] ready",
+        initialGatewayReadyLogMs: 20,
+        initialHealthz: {
+          downtimeMs: null,
+          firstErrorKind: null,
+          firstRecoveryMs: null,
+          ms: 10,
+          status: 200,
+          transitions: [],
+          unavailableMs: null,
+        },
+        initialHttpListenLogLine: "[gateway] http server listening (0 plugins)",
+        initialHttpListenLogMs: 9,
+        initialReadyz: {
+          downtimeMs: null,
+          firstErrorKind: null,
+          firstRecoveryMs: null,
+          ms: 12,
+          status: 200,
+          transitions: [],
+          unavailableMs: null,
+        },
+        initialStartupTrace: {},
+        iterations: [iteration],
+        maxRssMb: 220,
+        outputTail: "",
+        resourceSlope: {
+          activeHandlesCountPerRestart: null,
+          activeRequestsCountPerRestart: null,
+          activeTimersCountPerRestart: null,
+          fdCountPerRestart: null,
+          heapUsedMbPerRestart: null,
+          rssMbPerRestart: null,
+        },
+      },
+    ]);
+
+    expect(testing.hasBenchmarkFailures([result])).toBe(false);
+    expect(testing.hasInvalidBenchmarkEvidence([result])).toBe(false);
+    expect(testing.shouldFailBenchmark([result], { allowFailures: false })).toBe(false);
+  });
+
+  it("fails successful benchmark summaries without measured restart resource evidence", () => {
     const result = testing.summarizeCase({ config: {}, id: "demo", name: "demo" }, [
       {
         childExitCode: 0,
@@ -500,7 +700,7 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
         },
         initialStartupTrace: {},
         iterations: [],
-        maxRssMb: 220,
+        maxRssMb: null,
         outputTail: "",
         resourceSlope: {
           activeHandlesCountPerRestart: null,
@@ -514,6 +714,14 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
     ]);
 
     expect(testing.hasBenchmarkFailures([result])).toBe(false);
+    expect(testing.collectBenchmarkEvidenceFailures([result])).toEqual([
+      {
+        id: "demo",
+        reason: "missing restart iterations",
+        sampleIndex: 1,
+      },
+    ]);
+    expect(testing.shouldFailBenchmark([result], { allowFailures: true })).toBe(true);
   });
 
   it("writes restart intent files for the target gateway pid", () => {
@@ -522,17 +730,16 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
 
       expect(testing.writeRestartIntent(env, 12345, "gateway-restart-bench")).toBe(true);
-      const raw = fs.readFileSync(path.join(root, "state", "gateway-restart-intent.json"), "utf8");
-      const parsed = JSON.parse(raw) as {
-        kind?: unknown;
-        pid?: unknown;
-        reason?: unknown;
-      };
+      const row = readRestartIntentRow(env);
 
-      expect(parsed.kind).toBe("gateway-restart");
-      expect(parsed.pid).toBe(12345);
-      expect(parsed.reason).toBe("gateway-restart-bench");
+      expect(row).toMatchObject({
+        intent_key: "gateway-restart",
+        kind: "gateway-restart",
+        pid: 12345,
+        reason: "gateway-restart-bench",
+      });
     } finally {
+      closeOpenClawStateDatabaseForTest();
       fs.rmSync(root, { force: true, recursive: true });
     }
   });

@@ -41,12 +41,6 @@
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
-"plugin: meeting-notes":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "extensions/meeting-notes/**"
-          - "docs/plugins/meeting-notes.md"
-          - "src/meeting-notes/**"
 "plugin: workboard":
   - changed-files:
       - any-glob-to-any-file:
@@ -109,6 +103,11 @@
       - any-glob-to-any-file:
           - "extensions/qqbot/**"
           - "docs/channels/qqbot.md"
+"channel: raft":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/raft/**"
+          - "docs/channels/raft.md"
 "channel: qa-channel":
   - changed-files:
       - any-glob-to-any-file:
@@ -119,6 +118,7 @@
       - any-glob-to-any-file:
           - "extensions/qa-lab/**"
           - "qa/scenarios/**"
+          - "docs/maturity/**"
           - "docs/concepts/qa-e2e-automation.md"
           - "docs/concepts/personal-agent-benchmark-pack.md"
           - "docs/channels/qa-channel.md"
@@ -171,6 +171,10 @@
       - any-glob-to-any-file:
           - "extensions/zalo/**"
           - "docs/channels/zalo.md"
+"channel: zaloclawbot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/channels/zaloclawbot.md"
 "channel: zalouser":
   - changed-files:
       - any-glob-to-any-file:
@@ -248,12 +252,12 @@
           - "src/agents/sandbox*.ts"
           - "src/commands/sandbox*.ts"
           - "src/cli/sandbox-cli.ts"
-          - "src/docker-setup.test.ts"
+          - "src/docker-setup.e2e.test.ts"
           - "src/config/**/*sandbox*"
           - "docs/cli/sandbox.md"
           - "docs/gateway/sandbox*.md"
           - "docs/install/docker.md"
-          - "docs/multi-agent-sandbox-tools.md"
+          - "docs/tools/multi-agent-sandbox-tools.md"
 
 "agents":
   - changed-files:
@@ -266,7 +270,7 @@
           - ".github/workflows/opengrep-*.yml"
           - ".semgrepignore"
           - "docs/cli/security.md"
-          - "docs/gateway/security.md"
+          - "docs/gateway/security/**"
           - "security/**"
 
 "extensions: admin-http-rpc":
@@ -293,6 +297,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/lobster/**"
+"extensions: llama-cpp":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/llama-cpp/**"
 "extensions: memory-core":
   - changed-files:
       - any-glob-to-any-file:

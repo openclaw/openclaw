@@ -6,9 +6,17 @@ import {
   NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
   collectBundledPluginBuildEntries,
 } from "./bundled-plugin-build-entries.mjs";
+import { parsePositiveInt } from "./numeric-options.mjs";
 
 const MANIFEST_NAMES = ["openclaw.plugin.json", "openclaw.plugin.json5"];
 const ANSI_PATTERN = new RegExp(String.raw`\u001B\[[0-9;]*m`, "gu");
+const QA_SUMMARY_MAX_BYTES_ENV = "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES";
+const DEFAULT_QA_SUMMARY_MAX_BYTES = 2 * 1024 * 1024;
+
+function readPositiveIntEnv(name, fallback) {
+  const raw = process.env[name];
+  return raw === undefined || raw === "" ? fallback : parsePositiveInt(raw, name);
+}
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -140,6 +148,7 @@ function buildPluginMatrixEntry(params) {
     skills: normalizeStringArray(manifest.skills),
     authMethods: collectAuthMethods(manifest),
     onboardingScopes: collectOnboardingScopes(manifest),
+    requiredPlugins: normalizeStringArray(manifest.requiresPlugins),
     hasConfigSchema: isPlainObject(manifest.configSchema),
     hasRequiredConfigFields: schemaHasRequiredFields(manifest.configSchema),
     commandAliases,
@@ -196,6 +205,52 @@ function selectPluginEntries(entries, options = {}) {
     selected = selected.slice(0, options.limit);
   }
   return selected;
+}
+
+function collectRequiredPluginEntries(entries, plugins) {
+  const byId = new Map(entries.map((entry) => [entry.id, entry]));
+  const selectedIds = new Set(plugins.map((entry) => entry.id));
+  const required = new Map();
+  const visit = (requiredId, ownerId, trail) => {
+    const entry = byId.get(requiredId);
+    if (!entry) {
+      throw new Error(
+        `Bundled plugin "${ownerId}" requires unknown bundled plugin "${requiredId}"`,
+      );
+    }
+    const cycleIndex = trail.indexOf(requiredId);
+    if (cycleIndex !== -1) {
+      const cycle = [...trail.slice(cycleIndex), requiredId].join(" -> ");
+      throw new Error(`Bundled plugin dependency cycle detected: ${cycle}`);
+    }
+    if (required.has(requiredId)) {
+      return;
+    }
+    const nextTrail = [...trail, requiredId];
+    for (const transitiveRequiredId of entry.requiredPlugins ?? []) {
+      visit(transitiveRequiredId, ownerId, nextTrail);
+    }
+    if (!selectedIds.has(requiredId)) {
+      required.set(requiredId, entry);
+    }
+  };
+  for (const plugin of plugins) {
+    for (const requiredId of plugin.requiredPlugins ?? []) {
+      visit(requiredId, plugin.id, [plugin.id]);
+    }
+  }
+  return [...required.values()];
+}
+
+function collectPluginsWithRequiredEntries(entries, plugins) {
+  const combined = new Map();
+  for (const plugin of collectRequiredPluginEntries(entries, plugins)) {
+    combined.set(plugin.id, plugin);
+  }
+  for (const plugin of plugins) {
+    combined.set(plugin.id, plugin);
+  }
+  return [...combined.values()];
 }
 
 function median(values) {
@@ -443,13 +498,141 @@ function collectGatewayCpuObservations(params) {
   return observations;
 }
 
+function readQaSuiteSummary(summaryPath) {
+  if (!fs.existsSync(summaryPath)) {
+    return {
+      diagnosticFailure: "qa-summary-missing",
+      diagnosticDetail: `expected QA suite summary at ${summaryPath}`,
+      summary: null,
+    };
+  }
+  try {
+    const summary = JSON.parse(readQaSuiteSummaryText(summaryPath));
+    const invalidReason = validateQaSuiteSummary(summary);
+    if (invalidReason) {
+      return {
+        diagnosticFailure: "qa-summary-invalid",
+        diagnosticDetail: invalidReason,
+        summary: null,
+      };
+    }
+    if (summary.counts.failed > 0) {
+      return {
+        diagnosticFailure: "qa-summary-failed-scenarios",
+        diagnosticDetail: `QA suite reported ${summary.counts.failed} failed scenario(s)`,
+        summary,
+      };
+    }
+    return {
+      diagnosticFailure: null,
+      diagnosticDetail: null,
+      summary,
+    };
+  } catch (error) {
+    return {
+      diagnosticFailure: "qa-summary-invalid",
+      diagnosticDetail: error instanceof Error ? error.message : String(error),
+      summary: null,
+    };
+  }
+}
+
+function readQaSuiteSummaryText(summaryPath) {
+  const maxBytes = readPositiveIntEnv(QA_SUMMARY_MAX_BYTES_ENV, DEFAULT_QA_SUMMARY_MAX_BYTES);
+  const stat = fs.statSync(summaryPath);
+  if (!stat.isFile()) {
+    throw new Error(`QA suite summary is not a file: ${summaryPath}`);
+  }
+  if (stat.size > maxBytes) {
+    throw new Error(
+      `QA suite summary exceeded ${maxBytes} bytes: ${summaryPath} (${stat.size} bytes)`,
+    );
+  }
+  const text = fs.readFileSync(summaryPath, "utf8");
+  const bytes = Buffer.byteLength(text, "utf8");
+  if (bytes > maxBytes) {
+    throw new Error(`QA suite summary exceeded ${maxBytes} bytes: ${summaryPath} (${bytes} bytes)`);
+  }
+  return text;
+}
+
+function validateQaSuiteSummary(summary) {
+  if (!summary || typeof summary !== "object" || Array.isArray(summary)) {
+    return "QA suite summary must be a JSON object";
+  }
+  if (!Array.isArray(summary.scenarios)) {
+    return "QA suite summary missing scenarios array";
+  }
+  if (
+    !summary.counts ||
+    typeof summary.counts !== "object" ||
+    !isNonNegativeInteger(summary.counts.total) ||
+    !isNonNegativeInteger(summary.counts.passed) ||
+    !isNonNegativeInteger(summary.counts.failed)
+  ) {
+    return "QA suite summary missing numeric counts";
+  }
+  if (!summary.run || typeof summary.run !== "object" || Array.isArray(summary.run)) {
+    return "QA suite summary missing run metadata";
+  }
+  const statusCounts = { failed: 0, passed: 0, skipped: 0 };
+  for (const scenario of summary.scenarios) {
+    if (!scenario || typeof scenario !== "object" || Array.isArray(scenario)) {
+      return "QA suite summary scenario entries must be objects";
+    }
+    if (scenario.status === "pass") {
+      statusCounts.passed += 1;
+    } else if (scenario.status === "fail") {
+      statusCounts.failed += 1;
+    } else if (scenario.status === "skip") {
+      statusCounts.skipped += 1;
+    } else {
+      return `QA suite summary scenario has invalid status: ${String(scenario.status)}`;
+    }
+  }
+  if (summary.counts.total !== summary.scenarios.length) {
+    return `QA suite summary total count mismatch: counts.total=${summary.counts.total}, scenarios=${summary.scenarios.length}`;
+  }
+  if (summary.counts.passed !== statusCounts.passed) {
+    return `QA suite summary passed count mismatch: counts.passed=${summary.counts.passed}, passed scenarios=${statusCounts.passed}`;
+  }
+  if (summary.counts.failed !== statusCounts.failed) {
+    return `QA suite summary failed count mismatch: counts.failed=${summary.counts.failed}, failed scenarios=${statusCounts.failed}`;
+  }
+  if (
+    summary.counts.skipped !== undefined &&
+    (!isNonNegativeInteger(summary.counts.skipped) ||
+      summary.counts.skipped !== statusCounts.skipped)
+  ) {
+    return `QA suite summary skipped count mismatch: counts.skipped=${String(summary.counts.skipped)}, skipped scenarios=${statusCounts.skipped}`;
+  }
+  if (summary.counts.failed === 0) {
+    const emptyPassedScenario = summary.scenarios.find(
+      (scenario) =>
+        scenario.status === "pass" &&
+        (!Array.isArray(scenario.steps) || scenario.steps.length === 0),
+    );
+    if (emptyPassedScenario) {
+      return `QA suite summary passed scenario has no step evidence: ${String(emptyPassedScenario.name ?? "<unknown>")}`;
+    }
+  }
+  return null;
+}
+
+function isNonNegativeInteger(value) {
+  return Number.isInteger(value) && value >= 0;
+}
+
 export {
   collectQaBaselineRegressionObservations,
+  collectPluginsWithRequiredEntries,
+  collectRequiredPluginEntries,
   collectGatewayCpuObservations,
   collectMetricObservations,
   buildGauntletPrebuildEnv,
   detectCommandDiagnosticFailure,
   discoverBundledPluginManifests,
+  readQaSuiteSummary,
   schemaHasRequiredFields,
   selectPluginEntries,
 };

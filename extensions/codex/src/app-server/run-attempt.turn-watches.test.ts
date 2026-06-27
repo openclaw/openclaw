@@ -16,7 +16,7 @@ import * as authBridge from "./auth-bridge.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import * as elicitationBridge from "./elicitation-bridge.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
-import type { CodexServerNotification } from "./protocol.js";
+import type { CodexServerNotification, JsonObject } from "./protocol.js";
 import { readRecentCodexRateLimits } from "./rate-limit-cache.js";
 import {
   createParams,
@@ -25,6 +25,7 @@ import {
   createRuntimeDynamicTool,
   createStartedThreadHarness,
   fastWait,
+  mockClientRuntimeMethods,
   queueActiveRunMessageForTest,
   rateLimitsUpdated,
   runCodexAppServerAttempt,
@@ -38,10 +39,29 @@ import { testing } from "./run-attempt.js";
 import {
   readCodexAppServerBinding,
   resolveCodexAppServerBindingPath,
-  writeCodexAppServerBinding,
+  writeCodexAppServerBinding as writeRawCodexAppServerBinding,
 } from "./session-binding.js";
 
 setupRunAttemptTestHooks();
+
+const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
+  "features.standalone_web_search": false,
+  web_search: "disabled",
+});
+
+function writeCodexAppServerBinding(
+  ...args: Parameters<typeof writeRawCodexAppServerBinding>
+) {
+  const [sessionFile, binding, lookup] = args;
+  return writeRawCodexAppServerBinding(
+    sessionFile,
+    {
+      webSearchThreadConfigFingerprint: DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT,
+      ...binding,
+    },
+    lookup,
+  );
+}
 
 const tinyPngBase64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
@@ -119,6 +139,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: () => () => undefined,
           addRequestHandler: (
@@ -420,6 +441,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           close,
           addNotificationHandler: () => () => undefined,
@@ -940,6 +962,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1021,6 +1044,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1128,6 +1152,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1234,6 +1259,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1328,6 +1354,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1495,6 +1522,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1562,6 +1590,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1658,6 +1687,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1778,6 +1808,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1872,6 +1903,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -1985,6 +2017,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -2094,6 +2127,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -2190,6 +2224,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           getActiveSharedLeaseCountForUnscopedNotifications: () => 2,
           addNotificationHandler: (handler: typeof notify) => {
@@ -2297,6 +2332,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -2390,6 +2426,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -2485,7 +2522,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     ).toBe(false);
   });
 
-  it("arms completion idle watch after non-assistant rawResponseItem/completed with no active items", async () => {
+  it("uses the post-tool timeout after raw reasoning completes", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     let handleRequest:
       | ((request: { id: string; method: string; params?: unknown }) => Promise<unknown>)
@@ -2503,6 +2540,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -2529,6 +2567,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const run = runCodexAppServerAttempt(params, {
       turnCompletionIdleTimeoutMs: 5,
       turnAssistantCompletionIdleTimeoutMs: 500,
+      postToolRawAssistantCompletionIdleTimeoutMs: 80,
       turnTerminalIdleTimeoutMs: 500,
     });
     await vi.waitFor(() => expect(handleRequest).toBeTypeOf("function"), fastWait);
@@ -2546,13 +2585,9 @@ describe("runCodexAppServerAttempt turn watches", () => {
       },
     })) as { success?: boolean };
     expect(toolResult.success).toBe(false);
-    // Send a rawResponseItem/completed with type "reasoning" — this does NOT
-    // qualify as postToolRawAssistantCompletionNeedsTerminalGuard (which
-    // requires type=message + role=assistant + text preview).  Before the fix,
-    // this would disarm the completion idle watch via the catch-all disarm
-    // block, leaving only the 30-minute terminal timeout.  After the fix,
-    // rawResponseItemCompletedWithNoActiveItems keeps the 60s (here 5ms)
-    // completion idle watch armed.
+    // Post-tool reasoning can precede the final reply; keep the longer
+    // post-tool guard armed instead of falling back to the generic completion
+    // idle timeout.
     await notify({
       method: "rawResponseItem/completed",
       params: {
@@ -2560,7 +2595,8 @@ describe("runCodexAppServerAttempt turn watches", () => {
         turnId: "turn-1",
         item: {
           type: "reasoning",
-          id: "raw-reasoning-1",
+          summary: [],
+          encrypted_content: null,
         },
       },
     });
@@ -2578,10 +2614,10 @@ describe("runCodexAppServerAttempt turn watches", () => {
     const completionWarnData = completionWarnCall?.[1] as
       | { lastActivityReason?: string; timeoutMs?: number }
       | undefined;
-    expect(completionWarnData?.timeoutMs).toBe(5);
+    expect(completionWarnData?.timeoutMs).toBe(80);
     expect(completionWarnData?.lastActivityReason).toBe("notification:rawResponseItem/completed");
-    // The terminal idle watch (500ms) should NOT have fired — the shorter
-    // completion idle watch (5ms) should catch the stall first.
+    // The terminal idle watch (500ms) should NOT have fired; the post-tool
+    // completion idle watch should catch the stall first.
     expect(
       warn.mock.calls.some(
         ([message]) =>
@@ -2589,6 +2625,98 @@ describe("runCodexAppServerAttempt turn watches", () => {
       ),
     ).toBe(false);
   });
+
+  const reasoningProgressNotifications: {
+    method: string;
+    progressParams: JsonObject;
+  }[] = [
+    {
+      method: "item/reasoning/textDelta",
+      progressParams: { delta: "thinking after tool", contentIndex: 0 },
+    },
+    {
+      method: "item/reasoning/summaryTextDelta",
+      progressParams: { delta: "thinking after tool", summaryIndex: 0 },
+    },
+    {
+      method: "item/reasoning/summaryPartAdded",
+      progressParams: { summaryIndex: 0 },
+    },
+  ];
+
+  it.each(reasoningProgressNotifications)(
+    "uses the post-tool timeout after streamed reasoning progress from $method",
+    async ({ method, progressParams }) => {
+      const harness = createStartedThreadHarness();
+      const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
+      const params = createParams(
+        path.join(tempDir, "session.jsonl"),
+        path.join(tempDir, "workspace"),
+      );
+      params.timeoutMs = 60_000;
+
+      const run = runCodexAppServerAttempt(params, {
+        turnCompletionIdleTimeoutMs: 20,
+        turnAssistantCompletionIdleTimeoutMs: 500,
+        postToolRawAssistantCompletionIdleTimeoutMs: 80,
+        turnTerminalIdleTimeoutMs: 500,
+      });
+      await harness.waitForMethod("turn/start");
+
+      const toolResult = (await harness.handleServerRequest({
+        id: "request-tool-1",
+        method: "item/tool/call",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          callId: "call-1",
+          namespace: null,
+          tool: "message",
+          arguments: { action: "send", text: "already sent" },
+        },
+      })) as { success?: boolean };
+      expect(toolResult.success).toBe(false);
+      await harness.notify({
+        method: "item/started",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          item: { id: "reasoning-1", type: "reasoning" },
+        },
+      });
+      await harness.notify({
+        method,
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          itemId: "reasoning-1",
+          ...progressParams,
+        },
+      });
+
+      const result = await run;
+      expect(result.aborted).toBe(true);
+      expect(result.timedOut).toBe(true);
+      expect(result.promptError).toBe(
+        "codex app-server turn idle timed out waiting for turn/completed",
+      );
+      const completionWarnCall = warn.mock.calls.find(
+        ([message]) => message === "codex app-server turn idle timed out waiting for completion",
+      );
+      expect(completionWarnCall).toBeDefined();
+      const completionWarnData = completionWarnCall?.[1] as
+        | { lastActivityReason?: string; timeoutMs?: number }
+        | undefined;
+      expect(completionWarnData?.timeoutMs).toBe(80);
+      expect(completionWarnData?.lastActivityReason).toBe(`notification:${method}`);
+      expect(
+        warn.mock.calls.some(
+          ([message]) =>
+            message === "codex app-server turn idle timed out waiting for terminal event",
+        ),
+      ).toBe(false);
+    },
+  );
 
   it("releases the session when Codex accepts a turn but never sends progress", async () => {
     const harness = createStartedThreadHarness();
@@ -3041,6 +3169,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -3116,6 +3245,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -3199,6 +3329,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -3290,6 +3421,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -3372,6 +3504,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -3450,6 +3583,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -3528,6 +3662,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -3613,6 +3748,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;
@@ -4082,6 +4218,7 @@ describe("runCodexAppServerAttempt turn watches", () => {
     setCodexAppServerClientFactoryForTest(
       async () =>
         ({
+          ...mockClientRuntimeMethods(),
           request,
           addNotificationHandler: (handler: typeof notify) => {
             notify = handler;

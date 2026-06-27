@@ -51,6 +51,14 @@ export type Logger = {
   error: (obj: unknown, msg?: string) => void;
 };
 
+export type CronSystemEventEnqueueResult =
+  | boolean
+  | void
+  | {
+      accepted?: boolean;
+      remove?: () => boolean | void;
+    };
+
 /** Dependency injection surface for the cron service runtime. */
 export type CronServiceDeps = {
   nowMs?: () => number;
@@ -90,7 +98,18 @@ export type CronServiceDeps = {
       contextKey?: string;
       deliveryContext?: DeliveryContext;
     },
-  ) => void;
+  ) => CronSystemEventEnqueueResult;
+  /**
+   * Resolve the channel-correct origin delivery context for a session key (the
+   * value the channel's send expects, e.g. Telegram message_thread_id), sourced
+   * from the session store entry the wake targets. Used to carry the bound
+   * thread/topic onto manual wake system events. Optional: when unset, wakes
+   * route as before. Returning `undefined` is also a no-op (default routing).
+   */
+  resolveOriginDeliveryContext?: (params: {
+    sessionKey?: string;
+    agentId?: string;
+  }) => DeliveryContext | undefined;
   requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
   runHeartbeatOnce?: (opts?: {
     source?: HeartbeatWakeRequest["source"];
@@ -115,6 +134,7 @@ export type CronServiceDeps = {
     abortSignal?: AbortSignal;
     onExecutionStarted?: (info?: CronAgentExecutionStarted) => void;
     onExecutionPhase?: (info: CronAgentExecutionPhaseUpdate) => void;
+    onLaneWait?: (info?: { waiting?: boolean }) => void;
   }) => Promise<
     {
       summary?: string;
@@ -135,11 +155,23 @@ export type CronServiceDeps = {
     } & CronRunOutcome &
       CronRunTelemetry
   >;
+  runCommandJob?: (params: { job: CronJob; abortSignal?: AbortSignal }) => Promise<
+    {
+      delivered?: boolean;
+      deliveryAttempted?: boolean;
+      delivery?: CronDeliveryTrace;
+    } & CronRunOutcome
+  >;
   cleanupTimedOutAgentRun?: (params: {
     job: CronJob;
     timeoutMs: number;
     execution?: CronAgentExecutionStarted;
   }) => Promise<void>;
+  onIsolatedAgentSetupTimeout?: (params: {
+    job: CronJob;
+    error: string;
+    timeoutMs: number;
+  }) => void | Promise<void>;
   sendCronFailureAlert?: (params: {
     job: CronJob;
     text: string;
@@ -162,6 +194,10 @@ export type CronServiceState = {
   store: CronStoreFile | null;
   timer: NodeJS.Timeout | null;
   running: boolean;
+  stopped: boolean;
+  restartRecoveryPending: boolean;
+  activeManualRunJobIds: Set<string>;
+  manualSetupTimeoutNotified: boolean;
   /** Serializes mutating service operations so store writes and timers stay ordered. */
   op: Promise<unknown>;
   warnedDisabled: boolean;
@@ -182,6 +218,10 @@ export function createCronServiceState(deps: CronServiceDeps): CronServiceState 
     store: null,
     timer: null,
     running: false,
+    stopped: false,
+    restartRecoveryPending: false,
+    activeManualRunJobIds: new Set<string>(),
+    manualSetupTimeoutNotified: false,
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedInvalidPersistedJobKeys: new Set<string>(),
@@ -200,7 +240,12 @@ export type CronWakeMode = "now" | "next-heartbeat";
 /** Lightweight service status returned to gateway/control surfaces. */
 export type CronStatusSummary = {
   enabled: boolean;
+  /** @deprecated Legacy partition key; actual storage is SQLite. Use `sqlitePath`. */
   storePath: string;
+  /** Storage backend identifier. */
+  storage: "sqlite";
+  /** Resolved path to the shared state SQLite database. */
+  sqlitePath: string;
   jobs: number;
   nextWakeAtMs: number | null;
 };
@@ -211,6 +256,9 @@ export type CronRunResult =
   | { ok: true; enqueued: true; runId: string }
   | { ok: true; ran: false; reason: "not-due" }
   | { ok: true; ran: false; reason: "already-running" }
+  | { ok: true; ran: false; reason: "restart-recovery-pending" }
+  | { ok: true; ran: false; reason: "invalid-spec" }
+  | { ok: true; ran: false; reason: "stopped" }
   | { ok: false };
 
 /** Remove result that distinguishes missing jobs from failed removal. */

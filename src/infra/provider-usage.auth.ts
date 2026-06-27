@@ -31,6 +31,8 @@ export type ProviderAuth = {
   provider: UsageProviderId;
   token: string;
   accountId?: string;
+  authProfileId?: string;
+  hookProvider?: string;
 };
 
 type AuthStore = ReturnType<typeof ensureAuthProfileStore>;

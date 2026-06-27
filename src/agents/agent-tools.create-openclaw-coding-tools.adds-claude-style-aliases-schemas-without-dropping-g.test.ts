@@ -9,6 +9,7 @@ import path from "node:path";
 import type { AgentTool, AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import * as windowsEncoding from "../infra/windows-encoding.js";
 import { createOpenClawReadTool, createSandboxedReadTool } from "./agent-tools.read.js";
 import { createHostSandboxFsBridge } from "./test-helpers/host-sandbox-fs-bridge.js";
 
@@ -32,6 +33,34 @@ function extractToolText(result: unknown): string {
 }
 
 describe("createOpenClawCodingTools read behavior", () => {
+  it("uses host decoding only for host-backed sandbox paths", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sbx-encoding-"));
+    await fs.writeFile(path.join(tmpDir, "notes.txt"), "hello", "utf8");
+    const hostBridge = createHostSandboxFsBridge(tmpDir);
+    const remoteBridge = {
+      ...hostBridge,
+      resolvePath: (params: Parameters<typeof hostBridge.resolvePath>[0]) => {
+        const { relativePath, containerPath } = hostBridge.resolvePath(params);
+        return { relativePath, containerPath };
+      },
+    };
+    const decodeSpy = vi.spyOn(windowsEncoding, "decodeWindowsTextFileBuffer");
+
+    try {
+      const hostTool = createSandboxedReadTool({ root: tmpDir, bridge: hostBridge });
+      await hostTool.execute("host-read", { path: "notes.txt" });
+      expect(decodeSpy).toHaveBeenCalledTimes(1);
+
+      decodeSpy.mockClear();
+      const remoteTool = createSandboxedReadTool({ root: tmpDir, bridge: remoteBridge });
+      await remoteTool.execute("remote-read", { path: "notes.txt" });
+      expect(decodeSpy).not.toHaveBeenCalled();
+    } finally {
+      decodeSpy.mockRestore();
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it("applies sandbox path guards to canonical path", async () => {
     const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sbx-"));
     const outsidePath = path.join(os.tmpdir(), "openclaw-outside.txt");
@@ -70,6 +99,26 @@ describe("createOpenClawCodingTools read behavior", () => {
       expect(text).toContain("line-5000");
       expect(text).not.toContain("Read output capped at");
       expect(text).not.toMatch(/Use offset=\d+ to continue\.\]$/);
+    } finally {
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("maps inbound media refs to sandbox-staged media for reads", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-read-media-sbx-"));
+    const mediaId = "webchat-upload.txt";
+    const mediaPath = path.join(tmpDir, "media", "inbound", mediaId);
+    await fs.mkdir(path.dirname(mediaPath), { recursive: true });
+    await fs.writeFile(mediaPath, "sandbox media", "utf8");
+    try {
+      const readTool = createSandboxedReadTool({
+        root: tmpDir,
+        bridge: createHostSandboxFsBridge(tmpDir),
+      });
+      const result = await readTool.execute("read-media-sbx", {
+        path: `media://inbound/${mediaId}`,
+      });
+      expect(extractToolText(result)).toContain("sandbox media");
     } finally {
       await fs.rm(tmpDir, { recursive: true, force: true });
     }

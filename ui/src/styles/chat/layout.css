@@ -19,6 +19,17 @@
   box-shadow: none !important;
 }
 
+.chat-workbench__main {
+  grid-column: 1;
+  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
 /* Chat header - fixed at top, transparent */
 .chat-header {
   display: flex;
@@ -686,8 +697,9 @@
 
 .chat-composer-model-control {
   display: inline-flex;
-  flex: 0 1 220px;
+  flex: 0 0 auto;
   min-width: 0;
+  max-width: 70vw;
 }
 
 .chat-composer-model-control .chat-controls__model {
@@ -779,7 +791,7 @@
 
 .chat-settings-popover__label {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-weight: 650;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -922,7 +934,15 @@
 }
 
 .agent-chat__talk-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   color: var(--text);
+}
+
+.agent-chat__talk-status-text {
+  min-width: 0;
+  flex: 1;
 }
 
 .agent-chat__voice-turns {
@@ -1038,8 +1058,8 @@
   background-repeat: no-repeat;
 }
 
-.agent-chat__talk-options input:focus,
-.agent-chat__talk-options select:focus {
+.agent-chat__talk-options input:focus-visible,
+.agent-chat__talk-options select:focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
 }
@@ -1374,6 +1394,65 @@
 
 .chat-send-btn--stop:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 85%, #fff);
+}
+
+@media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  .agent-chat__toolbar {
+    flex-wrap: wrap;
+    align-items: center;
+  }
+
+  .agent-chat__toolbar-left {
+    order: 1;
+    flex: 1 1 auto;
+  }
+
+  .agent-chat__toolbar-right {
+    order: 2;
+    flex: 0 0 auto;
+    margin-left: auto;
+  }
+
+  .agent-chat__composer-controls {
+    order: 3;
+    display: grid;
+    flex: 1 0 100%;
+    grid-template-columns: minmax(0, 1fr) 44px;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .agent-chat__composer-controls .chat-controls__model,
+  .chat-composer-model-control {
+    min-width: 0;
+  }
+
+  /* Desktop restores the quota pill in the composer flex row (#93041); the mobile composer is a
+     fixed 2-col grid (model | settings), so the pill would push the settings chip to a new row. */
+  .agent-chat__composer-controls .chat-controls__quota {
+    display: none;
+  }
+
+  .chat-settings-popover-wrapper {
+    width: 44px;
+    margin-left: 0;
+    justify-self: end;
+  }
+
+  .chat-settings-chip {
+    width: 44px;
+    min-width: 44px;
+    max-width: 44px;
+    height: 44px;
+    min-height: 44px;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .chat-settings-chip__text,
+  .chat-settings-chip__chevron {
+    display: none;
+  }
 }
 
 .chat-queue__item--steered {
@@ -1738,6 +1817,21 @@
   grid-template-areas: "session";
 }
 
+.chat-controls__session-row--session-switcher.chat-controls__session-row--has-quota {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "agent"
+    "session"
+    "quota";
+}
+
+.chat-controls__session-row--session-switcher.chat-controls__session-row--single-agent.chat-controls__session-row--has-quota {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-areas:
+    "session"
+    "quota";
+}
+
 .chat-controls__session-row--compact {
   width: 44px;
 }
@@ -1927,7 +2021,7 @@
 
 .chat-session-picker__option-meta {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
 }
 
 .chat-session-picker__option-check {
@@ -2095,7 +2189,7 @@
   z-index: 80;
   display: grid;
   gap: 2px;
-  width: max(100%, min(260px, calc(100vw - 32px)));
+  width: max(300%, min(300px, calc(100vw - 32px)));
   max-height: min(280px, calc(100vh - 120px));
   padding: 6px;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
@@ -2152,7 +2246,7 @@
 .chat-controls__inline-select-section-label {
   padding: 4px 8px 3px;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 12px; /* was 10px */
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -2175,13 +2269,14 @@
   display: grid;
   gap: 6px;
   width: 180px;
-  max-height: min(430px, calc(100vh - 148px));
+  max-height: min(520px, calc(100vh - 96px));
   padding: 8px;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
   border-radius: var(--radius-md);
   background: color-mix(in srgb, var(--bg-elevated) 96%, var(--card));
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
   opacity: 0;
   pointer-events: none;
   transform: translateX(-4px);
@@ -2489,6 +2584,10 @@
     padding-top: 34px;
     padding-right: 12px;
   }
+
+  .chat-bubble.has-copy.chat-bubble--has-actions {
+    padding-top: 8px;
+  }
 }
 
 /* Chat loading skeleton */
@@ -2601,7 +2700,7 @@
 .agent-chat__hint kbd {
   display: inline-block;
   padding: 1px 6px;
-  font-size: 11px;
+  font-size: 12px; /* was 11px */
   font-family: var(--font-mono);
   background: var(--panel-strong);
   border: 1px solid var(--border);

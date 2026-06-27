@@ -6,7 +6,7 @@ import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { StatusSummary } from "./status.types.js";
 
-export type LocalTuiProcess = {
+type LocalTuiProcess = {
   pid: number;
   command: string;
 };

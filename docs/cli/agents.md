@@ -212,6 +212,7 @@ Notes:
 
 - `--agent` or `--workspace` can be used to select the target agent.
 - If you rely on `--workspace` and multiple agents share that workspace, the command fails and asks you to pass `--agent`.
+- Local workspace-relative avatar image files are limited to 2 MB. HTTP(S) URLs and `data:` URIs are not checked with the local file-size limit.
 - When no explicit identity fields are provided, the command reads identity data from `IDENTITY.md`.
 
 Load from `IDENTITY.md`:

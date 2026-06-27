@@ -1,12 +1,13 @@
 // Plugin npm release tests validate plugin npm release artifacts.
-import { mkdirSync, readFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { bundledPluginFile, bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { collectClawHubPublishablePluginPackages } from "../scripts/lib/plugin-clawhub-release.ts";
 import {
-  collectPublishablePluginPackages,
   collectChangedExtensionIdsFromPaths,
+  collectPluginReleaseVersionFloorErrors,
+  collectPublishablePluginPackages,
   collectPublishablePluginPackageErrors,
   OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
   parsePluginReleaseArgs,
@@ -58,6 +59,26 @@ describe("parsePluginReleaseArgs", () => {
     );
   });
 
+  it("rejects flags where option values are required", () => {
+    for (const { args, message } of [
+      { args: ["--plugins", "--base-ref"], message: "--plugins requires a value." },
+      {
+        args: ["--selection-mode", "--plugins"],
+        message: "--selection-mode requires a value.",
+      },
+      {
+        args: ["--base-ref", "--head-ref", "main"],
+        message: "--base-ref requires a value.",
+      },
+      {
+        args: ["--head-ref", "--base-ref", "main"],
+        message: "--head-ref requires a value.",
+      },
+    ]) {
+      expect(() => parsePluginReleaseArgs(args)).toThrowError(message);
+    }
+  });
+
   it("requires plugin names for selected explicit publish mode", () => {
     expect(() => parsePluginReleaseArgs(["--selection-mode", "selected"])).toThrowError(
       "`--selection-mode selected` requires `--plugins`.",
@@ -97,15 +118,23 @@ function externalPluginContract(version: string) {
   };
 }
 
+function writePluginReadme(repoDir: string, extensionId: string): void {
+  const packageDir = join(repoDir, "extensions", extensionId);
+  mkdirSync(packageDir, { recursive: true });
+  writeFileSync(join(packageDir, "README.md"), `# ${extensionId}\n`);
+}
+
 describe("collectPublishablePluginPackageErrors", () => {
   it("accepts a valid publishable plugin package candidate", () => {
     expect(
       collectPublishablePluginPackageErrors({
         extensionId: "zalo",
         packageDir: bundledPluginRoot("zalo"),
+        readmeText: "# Zalo\n",
         packageJson: {
           name: "@openclaw/zalo",
           version: "2026.3.15",
+          type: "module",
           repository: {
             type: "git",
             url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -130,6 +159,7 @@ describe("collectPublishablePluginPackageErrors", () => {
       collectPublishablePluginPackageErrors({
         extensionId: "broken",
         packageDir: bundledPluginRoot("broken"),
+        readmeText: "# Broken\n",
         packageJson: {
           name: "broken",
           version: "latest",
@@ -149,8 +179,9 @@ describe("collectPublishablePluginPackageErrors", () => {
     ).toEqual([
       'package name must start with "@openclaw/"; found "broken".',
       "package.json private must not be true.",
+      'package.json type must be "module" so built .js runtime entries load as ESM.',
       `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "<missing>".`,
-      'package.json version must match YYYY.M.D, YYYY.M.D-N, YYYY.M.D-alpha.N, or YYYY.M.D-beta.N; found "latest".',
+      'package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "latest".',
       "openclaw.extensions must contain only non-empty strings.",
       "openclaw.install.npmSpec must be a non-empty string for publishable plugins.",
     ]);
@@ -161,9 +192,11 @@ describe("collectPublishablePluginPackageErrors", () => {
       collectPublishablePluginPackageErrors({
         extensionId: "twitch",
         packageDir: bundledPluginRoot("twitch"),
+        readmeText: "# Twitch\n",
         packageJson: {
           name: "@openclaw/twitch",
           version: "2026.5.1-beta.1",
+          type: "module",
           openclaw: {
             extensions: ["./index.ts"],
             ...externalPluginContract("2026.5.1-beta.1"),
@@ -186,9 +219,11 @@ describe("collectPublishablePluginPackageErrors", () => {
       collectPublishablePluginPackageErrors({
         extensionId: "voice-call",
         packageDir: bundledPluginRoot("voice-call"),
+        readmeText: "# Voice call\n",
         packageJson: {
           name: "@openclaw/voice-call",
           version: "2026.5.1-beta.1",
+          type: "module",
           repository: {
             type: "git",
             url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -210,9 +245,11 @@ describe("collectPublishablePluginPackageErrors", () => {
       collectPublishablePluginPackageErrors({
         extensionId: "voice-call",
         packageDir: bundledPluginRoot("voice-call"),
+        readmeText: "# Voice call\n",
         packageJson: {
           name: "@openclaw/voice-call",
           version: "2026.5.1-beta.1",
+          type: "module",
           repository: {
             type: "git",
             url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -233,10 +270,69 @@ describe("collectPublishablePluginPackageErrors", () => {
       "openclaw.build.openclawVersion is required for external code plugin packages.",
     ]);
   });
+
+  it("requires package documentation before publishing", () => {
+    expect(
+      collectPublishablePluginPackageErrors({
+        extensionId: "zalo",
+        packageDir: bundledPluginRoot("zalo"),
+        readmeText: " \n",
+        packageJson: {
+          name: "@openclaw/zalo",
+          version: "2026.3.15",
+          type: "module",
+          repository: {
+            type: "git",
+            url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
+          },
+          openclaw: {
+            extensions: ["./index.ts"],
+            ...externalPluginContract("2026.3.15"),
+            install: {
+              npmSpec: "@openclaw/zalo",
+            },
+            release: {
+              publishToNpm: true,
+            },
+          },
+        },
+      }),
+    ).toEqual(["README.md must exist and contain package documentation."]);
+  });
+});
+
+describe("collectPluginReleaseVersionFloorErrors", () => {
+  it("blocks selected plugin stable and beta releases below the June 2026 floor", () => {
+    expect(
+      collectPluginReleaseVersionFloorErrors([
+        {
+          packageName: "@openclaw/demo",
+          version: "2026.6.4-beta.1",
+        },
+      ]),
+    ).toEqual([
+      '@openclaw/demo@2026.6.4-beta.1: June 2026 stable and beta release trains must use patch 5 or higher because 2026.6.5-beta.1 is already published; found "2026.6.4-beta.1".',
+    ]);
+  });
+
+  it("allows alpha compatibility and patch-floor plugin releases", () => {
+    expect(
+      collectPluginReleaseVersionFloorErrors([
+        {
+          packageName: "@openclaw/demo",
+          version: "2026.6.4-alpha.1",
+        },
+        {
+          packageName: "@openclaw/demo",
+          version: "2026.6.5-beta.2",
+        },
+      ]),
+    ).toEqual([]);
+  });
 });
 
 describe("collectPublishablePluginPackages", () => {
-  it("keeps publishable plugin dist trees out of the core npm package files list", () => {
+  it("keeps publishable plugin dist trees out of the core npm package unless bundled", () => {
     const corePackageRuntimePluginIds = new Set(["discord"]);
     const rootPackage = JSON.parse(readFileSync("package.json", "utf8")) as {
       files?: unknown;
@@ -246,6 +342,20 @@ describe("collectPublishablePluginPackages", () => {
       ...collectPublishablePluginPackages(),
       ...collectClawHubPublishablePluginPackages(),
     ];
+    for (const plugin of publishablePlugins) {
+      const packageJson = JSON.parse(
+        readFileSync(join(plugin.packageDir, "package.json"), "utf8"),
+      ) as {
+        openclaw?: {
+          build?: {
+            bundledDist?: unknown;
+          };
+        };
+      };
+      if (packageJson.openclaw?.build?.bundledDist === true) {
+        corePackageRuntimePluginIds.add(plugin.extensionId);
+      }
+    }
     const missingExclusions = Array.from(
       new Set(
         publishablePlugins
@@ -260,9 +370,11 @@ describe("collectPublishablePluginPackages", () => {
   it("collects publishable npm plugins from extension package manifests", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
     mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writePluginReadme(repoDir, "demo-plugin");
     writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
       name: "@openclaw/demo-plugin",
       version: "2026.4.10",
+      type: "module",
       repository: {
         type: "git",
         url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -295,9 +407,11 @@ describe("collectPublishablePluginPackages", () => {
   it("does not validate unselected publishable plugin manifests", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
     mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writePluginReadme(repoDir, "demo-plugin");
     writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
       name: "@openclaw/demo-plugin",
       version: "2026.4.10-beta.1",
+      type: "module",
       repository: {
         type: "git",
         url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,
@@ -373,9 +487,11 @@ describe("collectPublishablePluginPackages", () => {
   it("publishes alpha plugin packages to the alpha dist-tag", () => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-release-");
     mkdirSync(join(repoDir, "extensions", "demo-plugin"), { recursive: true });
+    writePluginReadme(repoDir, "demo-plugin");
     writeJsonFile(join(repoDir, "extensions", "demo-plugin", "package.json"), {
       name: "@openclaw/demo-plugin",
       version: "2026.4.10-alpha.1",
+      type: "module",
       repository: {
         type: "git",
         url: OPENCLAW_PLUGIN_NPM_REPOSITORY_URL,

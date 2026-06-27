@@ -68,14 +68,21 @@ function hasOnlyModelDirective(directives: InlineDirectives): boolean {
 export function formatModelOverrideResetEvent(params: {
   rejectedRef?: string;
   initialModelLabel: string;
+  reason?: "disallowed" | "stale";
 }): string {
+  if (params.reason === "stale") {
+    if (params.rejectedRef) {
+      return `Stored model override ${params.rejectedRef} is stale for this session; reverted to ${params.initialModelLabel}. Pick a model again with /model if you still want to override the default.`;
+    }
+    return `Stored model override is stale for this session; reverted to ${params.initialModelLabel}.`;
+  }
   if (params.rejectedRef) {
     return `Model override ${params.rejectedRef} is not allowed for this agent; reverted to ${params.initialModelLabel}. Add ${params.rejectedRef} to agents.defaults.models or pick an allowed model with /model list.`;
   }
   return `Model override not allowed for this agent; reverted to ${params.initialModelLabel}.`;
 }
 
-export type ApplyDirectiveResult =
+type ApplyDirectiveResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | {
       kind: "continue";
@@ -194,6 +201,7 @@ export async function applyInlineDirectiveOverrides(params: {
       formatModelOverrideResetEvent({
         rejectedRef: modelState.resetModelOverrideRef,
         initialModelLabel,
+        reason: modelState.resetModelOverrideReason,
       }),
       {
         sessionKey,
@@ -243,6 +251,7 @@ export async function applyInlineDirectiveOverrides(params: {
     defaultModel,
     aliasIndex,
     allowedModelKeys: modelState.allowedModelKeys,
+    modelCatalog: modelState.allowedModelCatalog,
     thinkingCatalog: modelState.allowedModelCatalog,
     initialModelLabel,
     formatModelSwitchEvent,

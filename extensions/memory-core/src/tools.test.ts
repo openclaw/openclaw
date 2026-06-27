@@ -1,6 +1,7 @@
 // Memory Core tests cover tools plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  getMemoryCloseMockCalls,
   getMemorySearchManagerMockCalls,
   getMemorySearchManagerMockConfigs,
   getMemorySearchManagerMockParams,
@@ -10,9 +11,13 @@ import {
   setMemoryCustomStatus,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
-} from "./memory-tool-manager-mock.js";
+} from "./memory-tool-manager.test-mocks.js";
 import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
-import { MemoryGetSchema, MemorySearchSchema } from "./tools.shared.js";
+import {
+  buildMemorySearchUnavailableResult,
+  MemoryGetSchema,
+  MemorySearchSchema,
+} from "./tools.shared.js";
 import {
   asOpenClawConfig,
   createMemorySearchToolOrThrow,
@@ -119,6 +124,37 @@ describe("memory_search unavailable payloads", () => {
     });
   });
 
+  it("returns explicit unavailable metadata for missing node:sqlite failures", async () => {
+    const error =
+      "SQLite support is unavailable in this Node runtime (missing node:sqlite). No such built-in module: node:sqlite";
+    setMemorySearchImpl(async () => {
+      throw new Error(error);
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("missing-node-sqlite", { query: "hello" });
+    expectUnavailableMemorySearchDetails(result.details, {
+      error,
+      warning:
+        "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support.",
+      action:
+        "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search.",
+    });
+  });
+
+  it("keeps explicit unavailable metadata overrides for missing node:sqlite reasons", () => {
+    const result = buildMemorySearchUnavailableResult("missing node:sqlite", {
+      warning: "custom warning",
+      action: "custom action",
+    });
+
+    expectUnavailableMemorySearchDetails(result, {
+      error: "missing node:sqlite",
+      warning: "custom warning",
+      action: "custom action",
+    });
+  });
+
   it("returns explicit unavailable metadata for non-quota failures", async () => {
     setMemorySearchImpl(async () => {
       throw new Error("embedding provider timeout");
@@ -157,8 +193,10 @@ describe("memory_search unavailable payloads", () => {
     vi.useFakeTimers();
     try {
       let searchCalls = 0;
-      setMemorySearchImpl(async () => {
+      let searchSignal: AbortSignal | undefined;
+      setMemorySearchImpl(async (opts) => {
         searchCalls += 1;
+        searchSignal = opts?.signal;
         return await new Promise(() => {});
       });
       const tool = createMemorySearchToolOrThrow();
@@ -172,6 +210,8 @@ describe("memory_search unavailable payloads", () => {
         warning: "Memory search is unavailable due to an embedding/provider error.",
         action: "Check embedding provider configuration and retry memory_search.",
       });
+      // The deadline must abort the orphaned search, not just race past it.
+      expect(searchSignal?.aborted).toBe(true);
       const cooldownResult = await tool.execute("search-cooldown", { query: "hello again" });
       expectUnavailableMemorySearchDetails(cooldownResult.details, {
         error: "memory_search timed out after 15s",
@@ -179,6 +219,35 @@ describe("memory_search unavailable payloads", () => {
         action: "Check embedding provider configuration and retry memory_search.",
       });
       expect(searchCalls).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the timeout result when an abort-aware search rejects on abort", async () => {
+    vi.useFakeTimers();
+    try {
+      setMemorySearchImpl(
+        async (opts) =>
+          await new Promise((_resolve, reject) => {
+            opts?.signal?.addEventListener(
+              "abort",
+              () => reject(new Error("openai-compatible embeddings query failed: aborted")),
+              { once: true },
+            );
+          }),
+      );
+      const tool = createMemorySearchToolOrThrow();
+
+      const resultPromise = tool.execute("abort-aware-timeout", { query: "hello" });
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      const result = await resultPromise;
+      expectUnavailableMemorySearchDetails(result.details, {
+        error: "memory_search timed out after 15s",
+        warning: "Memory search is unavailable due to an embedding/provider error.",
+        action: "Check embedding provider configuration and retry memory_search.",
+      });
     } finally {
       vi.useRealTimers();
     }
@@ -224,6 +293,59 @@ describe("memory_search unavailable payloads", () => {
     ]);
     expect(searchCalls).toBe(2);
     expect(getMemorySearchManagerMockCalls()).toBe(2);
+    expect(getMemorySearchManagerMockParams()).toEqual([
+      expect.objectContaining({ purpose: undefined }),
+      expect.objectContaining({ purpose: undefined }),
+    ]);
+    expect(getMemoryCloseMockCalls()).toBe(0);
+  });
+
+  it("re-resolves and closes one-shot CLI managers when a cached sqlite handle was closed", async () => {
+    let searchCalls = 0;
+    setMemorySearchImpl(async () => {
+      searchCalls += 1;
+      if (searchCalls === 1) {
+        throw new Error("database is not open");
+      }
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Thread-hidden codename: ORBIT-22.",
+          source: "memory" as const,
+        },
+      ];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { citations: "off" },
+      },
+      oneShotCliRun: true,
+    });
+    const result = await tool.execute("closed-db-cli", { query: "hidden thread codename" });
+
+    expect((result.details as { results?: Array<{ path: string }> }).results).toEqual([
+      {
+        corpus: "memory",
+        path: "MEMORY.md",
+        startLine: 1,
+        endLine: 1,
+        score: 0.9,
+        snippet: "Thread-hidden codename: ORBIT-22.",
+        source: "memory",
+      },
+    ]);
+    expect(searchCalls).toBe(2);
+    expect(getMemorySearchManagerMockCalls()).toBe(2);
+    expect(getMemorySearchManagerMockParams()).toEqual([
+      expect.objectContaining({ purpose: "cli" }),
+      expect.objectContaining({ purpose: "cli" }),
+    ]);
+    expect(getMemoryCloseMockCalls()).toBe(1);
   });
 
   it("forces a sync and retries once when the first search has zero hits", async () => {

@@ -1,10 +1,23 @@
 // Covers startup update check and auto-update behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatCliCommand } from "../cli/command-format.js";
-import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { captureEnv } from "../test-utils/env.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 import type { UpdateCheckResult } from "./update-check.js";
 
 const {
@@ -77,10 +90,32 @@ vi.mock("./update-managed-service-handoff.js", () => ({
   startManagedServiceUpdateHandoff: startManagedServiceUpdateHandoffMock,
 }));
 
+const UPDATE_CHECK_STATE_KEY = "default";
+
+type UpdateCheckStateDatabase = Pick<OpenClawStateKyselyDatabase, "update_check_state">;
+type PersistedUpdateCheckState = {
+  lastCheckedAt?: string;
+  lastNotifiedVersion?: string;
+  lastNotifiedTag?: string;
+  lastAvailableVersion?: string;
+  lastAvailableTag?: string;
+  autoInstallId?: string;
+  autoFirstSeenVersion?: string;
+  autoFirstSeenTag?: string;
+  autoFirstSeenAt?: string;
+  autoLastAttemptVersion?: string;
+  autoLastAttemptAt?: string;
+  autoLastSuccessVersion?: string;
+  autoLastSuccessAt?: string;
+};
+
+function presentString(value: string | null): string | undefined {
+  return value ?? undefined;
+}
+
 describe("update-startup", () => {
-  const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-update-check-suite-" });
   let tempDir: string;
-  let envSnapshot: ReturnType<typeof captureEnv>;
+  let testState: OpenClawTestState;
 
   let resolveOpenClawPackageRoot: (typeof import("./openclaw-root.js"))["resolveOpenClawPackageRoot"];
   let checkUpdateStatus: (typeof import("./update-check.js"))["checkUpdateStatus"];
@@ -100,33 +135,86 @@ describe("update-startup", () => {
     return call;
   }
 
-  beforeAll(async () => {
-    await suiteRootTracker.setup();
-  });
+  function readPersistedUpdateCheckState(): PersistedUpdateCheckState | null {
+    const { db } = openOpenClawStateDatabase();
+    const stateDb = getNodeSqliteKysely<UpdateCheckStateDatabase>(db);
+    const row = executeSqliteQueryTakeFirstSync(
+      db,
+      stateDb
+        .selectFrom("update_check_state")
+        .selectAll()
+        .where("state_key", "=", UPDATE_CHECK_STATE_KEY),
+    );
+    if (!row) {
+      return null;
+    }
+    return {
+      lastCheckedAt: presentString(row.last_checked_at),
+      lastNotifiedVersion: presentString(row.last_notified_version),
+      lastNotifiedTag: presentString(row.last_notified_tag),
+      lastAvailableVersion: presentString(row.last_available_version),
+      lastAvailableTag: presentString(row.last_available_tag),
+      autoInstallId: presentString(row.auto_install_id),
+      autoFirstSeenVersion: presentString(row.auto_first_seen_version),
+      autoFirstSeenTag: presentString(row.auto_first_seen_tag),
+      autoFirstSeenAt: presentString(row.auto_first_seen_at),
+      autoLastAttemptVersion: presentString(row.auto_last_attempt_version),
+      autoLastAttemptAt: presentString(row.auto_last_attempt_at),
+      autoLastSuccessVersion: presentString(row.auto_last_success_version),
+      autoLastSuccessAt: presentString(row.auto_last_success_at),
+    };
+  }
+
+  function writePersistedUpdateCheckState(state: PersistedUpdateCheckState): void {
+    runOpenClawStateWriteTransaction(({ db }) => {
+      const stateDb = getNodeSqliteKysely<UpdateCheckStateDatabase>(db);
+      executeSqliteQuerySync(
+        db,
+        stateDb.deleteFrom("update_check_state").where("state_key", "=", UPDATE_CHECK_STATE_KEY),
+      );
+      executeSqliteQuerySync(
+        db,
+        stateDb.insertInto("update_check_state").values({
+          state_key: UPDATE_CHECK_STATE_KEY,
+          last_checked_at: state.lastCheckedAt ?? null,
+          last_notified_version: state.lastNotifiedVersion ?? null,
+          last_notified_tag: state.lastNotifiedTag ?? null,
+          last_available_version: state.lastAvailableVersion ?? null,
+          last_available_tag: state.lastAvailableTag ?? null,
+          auto_install_id: state.autoInstallId ?? null,
+          auto_first_seen_version: state.autoFirstSeenVersion ?? null,
+          auto_first_seen_tag: state.autoFirstSeenTag ?? null,
+          auto_first_seen_at: state.autoFirstSeenAt ?? null,
+          auto_last_attempt_version: state.autoLastAttemptVersion ?? null,
+          auto_last_attempt_at: state.autoLastAttemptAt ?? null,
+          auto_last_success_version: state.autoLastSuccessVersion ?? null,
+          auto_last_success_at: state.autoLastSuccessAt ?? null,
+          updated_at_ms: Date.now(),
+        }),
+      );
+    });
+  }
 
   beforeEach(async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-17T10:00:00Z"));
-    tempDir = await suiteRootTracker.make("case");
-    envSnapshot = captureEnv([
-      "OPENCLAW_NO_AUTO_UPDATE",
-      "OPENCLAW_STATE_DIR",
-      "OPENCLAW_SERVICE_KIND",
-      "OPENCLAW_SERVICE_MARKER",
-      "OPENCLAW_GATEWAY_SERVICE_PID",
-      "OPENCLAW_LAUNCHD_LABEL",
-      "OPENCLAW_SYSTEMD_UNIT",
-      "OPENCLAW_WINDOWS_TASK_NAME",
-      "INVOCATION_ID",
-      "NODE_ENV",
-      "VITEST",
-    ]);
-    process.env.OPENCLAW_STATE_DIR = tempDir;
-
-    process.env.NODE_ENV = "test";
-
-    // Ensure update checks don't short-circuit in test mode.
-    delete process.env.VITEST;
+    testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-update-check-suite-",
+      env: {
+        OPENCLAW_NO_AUTO_UPDATE: undefined,
+        OPENCLAW_SERVICE_KIND: undefined,
+        OPENCLAW_SERVICE_MARKER: undefined,
+        OPENCLAW_GATEWAY_SERVICE_PID: undefined,
+        OPENCLAW_LAUNCHD_LABEL: undefined,
+        OPENCLAW_SYSTEMD_UNIT: undefined,
+        OPENCLAW_WINDOWS_TASK_NAME: undefined,
+        INVOCATION_ID: undefined,
+        NODE_ENV: "test",
+        VITEST: undefined,
+      },
+    });
+    tempDir = testState.stateDir;
 
     // Perf: load mocked modules once (after timers/env are set up).
     if (!loaded) {
@@ -160,12 +248,9 @@ describe("update-startup", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
-    envSnapshot.restore();
+    closeOpenClawStateDatabaseForTest();
+    await testState.cleanup();
     resetUpdateAvailableStateForTest();
-  });
-
-  afterAll(async () => {
-    await suiteRootTracker.cleanup();
   });
 
   function mockPackageUpdateStatus(tag = "latest", version = "2.0.0") {
@@ -200,13 +285,8 @@ describe("update-startup", () => {
       allowInTests: true,
     });
 
-    const statePath = path.join(tempDir, "update-check.json");
-    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
-      lastNotifiedVersion?: string;
-      lastNotifiedTag?: string;
-      lastAvailableVersion?: string;
-      lastAvailableTag?: string;
-    };
+    const parsed = readPersistedUpdateCheckState();
+    expect(parsed).not.toBeNull();
     return { log, parsed };
   }
 
@@ -287,9 +367,9 @@ describe("update-startup", () => {
     expect(log.info).toHaveBeenCalledWith(
       `update available (latest): v2.0.0 (current v1.0.0). Run: ${formatCliCommand("openclaw update")}`,
     );
-    expect(parsed.lastNotifiedVersion).toBe("2.0.0");
-    expect(parsed.lastAvailableVersion).toBe("2.0.0");
-    expect(parsed.lastNotifiedTag).toBe("latest");
+    expect(parsed?.lastNotifiedVersion).toBe("2.0.0");
+    expect(parsed?.lastAvailableVersion).toBe("2.0.0");
+    expect(parsed?.lastNotifiedTag).toBe("latest");
   });
 
   it("falls back when the update-check clock is outside Date range", async () => {
@@ -303,28 +383,15 @@ describe("update-startup", () => {
       allowInTests: true,
     });
 
-    const statePath = path.join(tempDir, "update-check.json");
-    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
-      lastCheckedAt?: string;
-      lastAvailableVersion?: string;
-    };
-    expect(parsed.lastCheckedAt).toBe("1970-01-01T00:00:00.000Z");
-    expect(parsed.lastAvailableVersion).toBe("2.0.0");
+    const parsed = readPersistedUpdateCheckState();
+    expect(parsed?.lastCheckedAt).toBe("1970-01-01T00:00:00.000Z");
+    expect(parsed?.lastAvailableVersion).toBe("2.0.0");
   });
 
   it("does not throttle invalid update-check clocks against persisted state", async () => {
-    const statePath = path.join(tempDir, "update-check.json");
-    await fs.writeFile(
-      statePath,
-      JSON.stringify(
-        {
-          lastCheckedAt: "2026-01-17T09:30:00.000Z",
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writePersistedUpdateCheckState({
+      lastCheckedAt: "2026-01-17T09:30:00.000Z",
+    });
     mockPackageUpdateStatus("latest", "2.0.0");
     vi.spyOn(Date, "now").mockReturnValue(8_640_000_000_000_001);
 
@@ -336,29 +403,17 @@ describe("update-startup", () => {
     });
 
     expect(checkUpdateStatus).toHaveBeenCalledTimes(1);
-    const parsed = JSON.parse(await fs.readFile(statePath, "utf-8")) as {
-      lastCheckedAt?: string;
-      lastAvailableVersion?: string;
-    };
-    expect(parsed.lastCheckedAt).toBe("1970-01-01T00:00:00.000Z");
-    expect(parsed.lastAvailableVersion).toBe("2.0.0");
+    const parsed = readPersistedUpdateCheckState();
+    expect(parsed?.lastCheckedAt).toBe("1970-01-01T00:00:00.000Z");
+    expect(parsed?.lastAvailableVersion).toBe("2.0.0");
   });
 
   it("hydrates cached update from persisted state during throttle window", async () => {
-    const statePath = path.join(tempDir, "update-check.json");
-    await fs.writeFile(
-      statePath,
-      JSON.stringify(
-        {
-          lastCheckedAt: new Date(Date.now()).toISOString(),
-          lastAvailableVersion: "2.0.0",
-          lastAvailableTag: "latest",
-        },
-        null,
-        2,
-      ),
-      "utf-8",
-    );
+    writePersistedUpdateCheckState({
+      lastCheckedAt: new Date(Date.now()).toISOString(),
+      lastAvailableVersion: "2.0.0",
+      lastAvailableTag: "latest",
+    });
 
     const onUpdateAvailableChange = vi.fn();
     await runGatewayUpdateCheck({
@@ -419,6 +474,7 @@ describe("update-startup", () => {
     });
 
     expect(log.info).not.toHaveBeenCalled();
+    expect(readPersistedUpdateCheckState()).toBeNull();
     await expectPathMissing(path.join(tempDir, "update-check.json"));
   });
 
@@ -547,6 +603,9 @@ describe("update-startup", () => {
     expect(runCommandWithTimeout).toHaveBeenCalledTimes(1);
     expect(startManagedServiceUpdateHandoffMock).not.toHaveBeenCalled();
     expect(scheduleGatewaySigusr1RestartMock).not.toHaveBeenCalled();
+    expect(detectRespawnSupervisorMock).toHaveBeenCalledWith(process.env, process.platform, {
+      includeLinuxOpenClawGatewayServiceMarker: true,
+    });
     const [argv, options] = requireFirstRunCommandCall();
     expect(argv).toEqual([
       process.execPath,
@@ -615,6 +674,36 @@ describe("update-startup", () => {
       tag: "beta",
       command: "openclaw update --yes --channel beta --timeout 2700",
       logPath: "/tmp/openclaw-handoff.log",
+    });
+  });
+
+  it("uses managed systemd handoff for Linux gateway service auto-updates", async () => {
+    mockPackageInstallStatus();
+    mockNpmChannelTag("beta", "2.0.0-beta.1");
+    detectRespawnSupervisorMock.mockReturnValue("systemd");
+
+    await runAutoUpdateCheckWithDefaults({
+      cfg: createBetaAutoUpdateConfig(),
+    });
+
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    expect(detectRespawnSupervisorMock).toHaveBeenCalledWith(process.env, process.platform, {
+      includeLinuxOpenClawGatewayServiceMarker: true,
+    });
+    expect(startManagedServiceUpdateHandoffMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        root: "/opt/openclaw",
+        timeoutMs: 45 * 60 * 1000,
+        channel: "beta",
+        restartDelayMs: 2000,
+        supervisor: "systemd",
+      }),
+    );
+    expect(scheduleGatewaySigusr1RestartMock).toHaveBeenCalledWith({
+      delayMs: 2000,
+      reason: "update.auto",
+      skipCooldown: true,
+      skipDeferral: true,
     });
   });
 

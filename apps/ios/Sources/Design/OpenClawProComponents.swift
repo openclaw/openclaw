@@ -1,33 +1,22 @@
 import SwiftUI
 
 enum OpenClawProMetric {
-    static let pagePadding: CGFloat = 20
-    static let cardRadius: CGFloat = 14
-    static let controlRadius: CGFloat = 12
+    static let pagePadding: CGFloat = 18
+    static let cardRadius: CGFloat = 10
+    static let controlRadius: CGFloat = 8
     static let bottomScrollInset: CGFloat = 96
-    static let heroRadius: CGFloat = 22
 }
 
 struct OpenClawProBackground: View {
     @Environment(\.colorScheme) private var colorScheme
 
     var body: some View {
-        LinearGradient(
-            colors: OpenClawBrand.canvasColors(for: self.colorScheme),
-            startPoint: .top,
-            endPoint: .bottom)
+        Color(uiColor: self.colorScheme == .dark ? .systemBackground : .systemGroupedBackground)
             .ignoresSafeArea()
             .overlay(alignment: .top) {
                 if self.colorScheme == .light {
-                    LinearGradient(
-                        colors: [
-                            OpenClawBrand.accent.opacity(0.05),
-                            OpenClawBrand.accent.opacity(0.02),
-                            .clear,
-                        ],
-                        startPoint: .topTrailing,
-                        endPoint: .bottomLeading)
-                        .frame(height: 620)
+                    Color.white.opacity(0.22)
+                        .frame(height: 140)
                         .ignoresSafeArea()
                 }
             }
@@ -66,7 +55,7 @@ struct ProSectionHeader: View {
 struct ProCard<Content: View>: View {
     var tint: Color?
     var isProminent: Bool = false
-    var padding: CGFloat = 14
+    var padding: CGFloat = 12
     var radius: CGFloat = OpenClawProMetric.cardRadius
     @ViewBuilder var content: Content
 
@@ -92,77 +81,38 @@ private struct ProPanelBackground: View {
         shape
             .fill(self.fill)
             .overlay {
-                ProPanelTexture()
-                    .opacity(self.colorScheme == .dark ? 0.22 : 0.08)
-                    .clipShape(shape)
-            }
-            .overlay {
                 shape.strokeBorder(self.borderStyle, lineWidth: 1)
             }
             .overlay {
-                shape
-                    .strokeBorder(Color.black.opacity(self.colorScheme == .dark ? 0.40 : 0.055), lineWidth: 0.7)
-                    .padding(1)
-            }
-            .overlay(alignment: .top) {
-                shape
-                    .strokeBorder(Color.white.opacity(self.colorScheme == .dark ? 0.07 : 0.36), lineWidth: 0.7)
-                    .mask(alignment: .top) {
-                        Rectangle().frame(height: 28)
-                    }
+                if self.isProminent {
+                    shape.strokeBorder(
+                        OpenClawBrand.accent.opacity(self.colorScheme == .dark ? 0.12 : 0.07),
+                        lineWidth: 1)
+                        .padding(1)
+                }
             }
     }
 
     private var fill: AnyShapeStyle {
-        if self.colorScheme == .dark {
-            let base = self.isProminent
-                ? Color(red: 15 / 255, green: 17 / 255, blue: 19 / 255)
-                : Color(red: 10 / 255, green: 12 / 255, blue: 14 / 255)
-            return AnyShapeStyle(base)
+        let base = self.isProminent
+            ? Color(uiColor: .systemBackground)
+            : Color(uiColor: .secondarySystemGroupedBackground)
+        if let tint {
+            let gradient = LinearGradient(
+                colors: [
+                    base,
+                    tint.opacity(self.colorScheme == .dark ? 0.08 : 0.045),
+                    base,
+                ],
+                startPoint: .topLeading,
+                endPoint: .bottomTrailing)
+            return AnyShapeStyle(gradient)
         }
-
-        let gradient = LinearGradient(
-            colors: [
-                Color.white.opacity(0.98),
-                (self.tint ?? Color.white).opacity(self.tint == nil ? 0.92 : 0.12),
-                Color(red: 246 / 255, green: 247 / 255, blue: 249 / 255),
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing)
-        return AnyShapeStyle(gradient)
+        return AnyShapeStyle(base)
     }
 
     private var borderStyle: AnyShapeStyle {
-        if self.colorScheme == .dark {
-            return AnyShapeStyle(Color.white.opacity(self.isProminent ? 0.15 : 0.11))
-        }
-
-        let gradient = LinearGradient(
-            colors: [
-                Color.white.opacity(0.72),
-                (self.tint ?? OpenClawBrand.accent).opacity(0.10),
-                Color.black.opacity(0.08),
-            ],
-            startPoint: .topLeading,
-            endPoint: .bottomTrailing)
-        return AnyShapeStyle(gradient)
-    }
-}
-
-private struct ProPanelTexture: View {
-    @Environment(\.colorScheme) private var colorScheme
-
-    var body: some View {
-        Canvas { context, size in
-            let color = self.colorScheme == .dark ? Color.white.opacity(0.11) : Color.black.opacity(0.08)
-            for y in stride(from: 2.0, through: size.height, by: 6.5) {
-                let offset = Int(y / 6.5).isMultiple(of: 2) ? 0.0 : 3.25
-                for x in stride(from: 2.0 + offset, through: size.width, by: 6.5) {
-                    let dot = CGRect(x: x, y: y, width: 0.7, height: 0.7)
-                    context.fill(Path(ellipseIn: dot), with: .color(color))
-                }
-            }
-        }
+        AnyShapeStyle(Color(uiColor: .separator).opacity(self.colorScheme == .dark ? 0.26 : 0.30))
     }
 }
 
@@ -251,9 +201,9 @@ private struct ProPanelSurfaceModifier: ViewModifier {
             }
             .modifier(ProLightGlassModifier(radius: self.radius))
             .shadow(
-                color: self.colorScheme == .dark ? .black.opacity(0.60) : .black.opacity(0.045),
-                radius: self.isProminent ? 20 : 12,
-                y: self.isProminent ? 10 : 6)
+                color: self.colorScheme == .dark ? .black.opacity(0.22) : .black.opacity(0.028),
+                radius: self.isProminent ? 9 : 4,
+                y: self.isProminent ? 4 : 1)
     }
 }
 
@@ -263,13 +213,150 @@ struct ProIconBadge: View {
 
     var body: some View {
         Image(systemName: self.systemName)
-            .font(.subheadline.weight(.semibold))
+            .font(.caption.weight(.semibold))
             .foregroundStyle(self.color)
-            .frame(width: 34, height: 34)
+            .frame(width: 30, height: 30)
             .background {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(self.color.opacity(0.12))
             }
+    }
+}
+
+struct OpenClawSidebarHeaderAction {
+    let systemName: String
+    let accessibilityLabel: String
+    let accessibilityIdentifier: String?
+    let action: () -> Void
+
+    init(
+        systemName: String,
+        accessibilityLabel: String,
+        accessibilityIdentifier: String? = nil,
+        action: @escaping () -> Void)
+    {
+        self.systemName = systemName
+        self.accessibilityLabel = accessibilityLabel
+        self.accessibilityIdentifier = accessibilityIdentifier
+        self.action = action
+    }
+}
+
+struct OpenClawSidebarRevealButton: View {
+    let headerAction: OpenClawSidebarHeaderAction
+
+    init(action: OpenClawSidebarHeaderAction) {
+        self.headerAction = action
+    }
+
+    var body: some View {
+        let button = Button(action: self.headerAction.action) {
+            Image(systemName: self.headerAction.systemName)
+                .font(.system(size: 16, weight: .semibold))
+                .frame(width: 38, height: 38)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(OpenClawBrand.accent)
+        .accessibilityLabel(self.headerAction.accessibilityLabel)
+
+        if let accessibilityIdentifier = self.headerAction.accessibilityIdentifier {
+            button.accessibilityIdentifier(accessibilityIdentifier)
+        } else {
+            button
+        }
+    }
+}
+
+struct OpenClawSidebarHeaderLeadingSlot: View {
+    let action: OpenClawSidebarHeaderAction
+
+    var body: some View {
+        OpenClawSidebarRevealButton(action: self.action)
+            .frame(width: 44, height: 44, alignment: .center)
+    }
+}
+
+struct OpenClawAdaptiveHeaderRow<Leading: View, Accessory: View>: View {
+    let title: String
+    let subtitle: String
+    var titleFont: Font = .title3.weight(.semibold)
+    var subtitleFont: Font = .subheadline
+    var subtitleLineLimit: Int? = 2
+    @ViewBuilder let leading: Leading
+    @ViewBuilder let accessory: Accessory
+
+    init(
+        title: String,
+        subtitle: String,
+        titleFont: Font = .title3.weight(.semibold),
+        subtitleFont: Font = .subheadline,
+        subtitleLineLimit: Int? = 2,
+        @ViewBuilder leading: () -> Leading,
+        @ViewBuilder accessory: () -> Accessory)
+    {
+        self.title = title
+        self.subtitle = subtitle
+        self.titleFont = titleFont
+        self.subtitleFont = subtitleFont
+        self.subtitleLineLimit = subtitleLineLimit
+        self.leading = leading()
+        self.accessory = accessory()
+    }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            self.horizontalLayout
+            self.stackedLayout
+        }
+    }
+
+    private var horizontalLayout: some View {
+        HStack(alignment: .top, spacing: 12) {
+            self.leading
+
+            self.titleBlock
+                .layoutPriority(1)
+
+            Spacer(minLength: 8)
+
+            self.accessory
+                .fixedSize(horizontal: true, vertical: false)
+        }
+    }
+
+    private var stackedLayout: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                self.leading
+
+                self.titleBlock
+                    .layoutPriority(1)
+
+                Spacer(minLength: 8)
+            }
+
+            HStack {
+                Spacer(minLength: 0)
+                self.accessory
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+        }
+    }
+
+    private var titleBlock: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(self.title)
+                .font(self.titleFont)
+                .lineLimit(2)
+                .minimumScaleFactor(0.86)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(self.subtitle)
+                .font(self.subtitleFont)
+                .foregroundStyle(.secondary)
+                .lineLimit(self.subtitleLineLimit)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
@@ -280,7 +367,6 @@ struct ProStatusDot: View {
         Circle()
             .fill(self.color)
             .frame(width: 8, height: 8)
-            .shadow(color: self.color.opacity(0.35), radius: 4)
     }
 }
 
@@ -312,7 +398,7 @@ struct OpenClawProMark: View {
             .resizable()
             .scaledToFit()
             .frame(width: self.size, height: self.size)
-            .shadow(color: OpenClawBrand.accent.opacity(0.28), radius: self.shadowRadius, y: self.shadowRadius / 2)
+            .shadow(color: OpenClawBrand.accent.opacity(0.18), radius: self.shadowRadius, y: self.shadowRadius / 3)
             .accessibilityLabel("OpenClaw")
     }
 }
@@ -336,46 +422,6 @@ struct ProProgressBar: View {
     }
 }
 
-struct ProWorkRow: View {
-    let icon: String
-    let title: String
-    let detail: String
-    let state: String
-    let trailing: String
-    let color: Color
-    var progress: Double?
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 12) {
-            ProIconBadge(systemName: self.icon, color: self.color)
-            VStack(alignment: .leading, spacing: 5) {
-                HStack(alignment: .firstTextBaseline) {
-                    Text(self.title)
-                        .font(.subheadline.weight(.semibold))
-                    Spacer(minLength: 8)
-                    Text(self.trailing)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-                Text(self.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                HStack(spacing: 8) {
-                    if let progress {
-                        ProProgressBar(progress: progress, color: self.color)
-                            .frame(maxWidth: 120)
-                    }
-                    Text(self.state)
-                        .font(.caption2.weight(.semibold))
-                        .foregroundStyle(self.color)
-                }
-            }
-        }
-        .padding(.vertical, 9)
-    }
-}
-
 struct ProCapsule: View {
     @Environment(\.colorScheme) private var colorScheme
     let title: String
@@ -390,7 +436,10 @@ struct ProCapsule: View {
             }
             Text(self.title)
                 .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .minimumScaleFactor(0.78)
         }
+        .fixedSize(horizontal: true, vertical: false)
         .foregroundStyle(self.color)
         .padding(.horizontal, 10)
         .padding(.vertical, 7)
@@ -405,91 +454,54 @@ struct ProCapsule: View {
     }
 }
 
-struct ProSegmentedControl: View {
-    @Environment(\.colorScheme) private var colorScheme
-    let labels: [String]
-    @Binding var selection: Int
+struct OpenClawGatewayCompactPill: View {
+    @Environment(NodeAppModel.self) private var appModel
 
     var body: some View {
-        HStack(spacing: 4) {
-            ForEach(Array(self.labels.enumerated()), id: \.offset) { index, label in
-                Button {
-                    self.selection = index
-                } label: {
-                    Text(label)
-                        .font(.subheadline.weight(self.selection == index ? .semibold : .regular))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 9)
-                        .background(self.segmentFill(isSelected: self.selection == index), in: Capsule())
-                }
-                .buttonStyle(.plain)
-            }
-        }
-        .padding(4)
-        .background {
-            Capsule()
-                .fill(self.trackFill)
-                .overlay {
-                    Capsule().strokeBorder(self.trackStroke, lineWidth: 1)
-                }
+        ProCapsule(
+            title: self.title,
+            color: self.color,
+            icon: self.icon)
+            .accessibilityLabel("Gateway \(self.title)")
+    }
+
+    private var title: String {
+        switch GatewayStatusBuilder.build(appModel: self.appModel) {
+        case .connected:
+            "Online"
+        case .connecting:
+            "Connecting"
+        case .error:
+            "Attention"
+        case .disconnected:
+            "Offline"
         }
     }
 
-    private func segmentFill(isSelected: Bool) -> Color {
-        guard isSelected else { return .clear }
-        return self.colorScheme == .dark ? Color.white.opacity(0.12) : Color.primary.opacity(0.08)
-    }
-
-    private var trackFill: Color {
-        self.colorScheme == .dark ? Color.white.opacity(0.045) : Color.white.opacity(0.72)
-    }
-
-    private var trackStroke: Color {
-        self.colorScheme == .dark ? Color.white.opacity(0.10) : Color.black.opacity(0.06)
-    }
-}
-
-struct ProHeroActionButton: View {
-    @Environment(\.colorScheme) private var colorScheme
-    let title: String
-    let detail: String
-    let systemImage: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: self.action) {
-            HStack(spacing: 12) {
-                Image(systemName: self.systemImage)
-                    .font(.headline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .frame(width: 42, height: 42)
-                    .background(OpenClawBrand.accentHot, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(self.title)
-                        .font(.subheadline.weight(.semibold))
-                        .foregroundStyle(.primary)
-                    Text(self.detail)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 8)
-
-                Image(systemName: "arrow.right")
-                    .font(.subheadline.weight(.bold))
-                    .foregroundStyle(OpenClawBrand.accentHot)
-            }
-            .padding(12)
-            .proGlassSurface(
-                fill: self.colorScheme == .dark ? Color.white.opacity(0.045) : Color.white.opacity(0.68),
-                stroke: OpenClawBrand.accent.opacity(self.colorScheme == .dark ? 0.22 : 0.14),
-                radius: 18,
-                isProminent: true,
-                interactive: true)
+    private var color: Color {
+        switch GatewayStatusBuilder.build(appModel: self.appModel) {
+        case .connected:
+            OpenClawBrand.ok
+        case .connecting:
+            OpenClawBrand.accent
+        case .error:
+            OpenClawBrand.warn
+        case .disconnected:
+            .secondary
         }
-        .buttonStyle(.plain)
+    }
+
+    private var icon: String {
+        switch GatewayStatusBuilder.build(appModel: self.appModel) {
+        case .connected:
+            "checkmark.circle.fill"
+        case .connecting:
+            "arrow.triangle.2.circlepath"
+        case .error:
+            "exclamationmark.triangle.fill"
+        case .disconnected:
+            "wifi.slash"
+        }
     }
 }
 
@@ -531,48 +543,119 @@ struct ProMetricTile: View {
     }
 }
 
+struct ProMetric: Identifiable {
+    let id = UUID()
+    let icon: String
+    let title: String
+    let value: String
+    let color: Color
+}
+
+struct ProMetricGrid: View {
+    @Environment(\.horizontalSizeClass) private var horizontalSizeClass
+    let metrics: [ProMetric]
+
+    var body: some View {
+        LazyVGrid(
+            columns: Array(repeating: GridItem(.flexible()), count: self.columnCount),
+            spacing: 10)
+        {
+            ForEach(self.metrics) { metric in
+                ProMetricTile(
+                    title: metric.title,
+                    value: metric.value,
+                    icon: metric.icon,
+                    color: metric.color)
+            }
+        }
+        .padding(.horizontal, OpenClawProMetric.pagePadding)
+    }
+
+    private var columnCount: Int {
+        guard self.horizontalSizeClass != .compact else { return 1 }
+        return min(max(self.metrics.count, 1), 3)
+    }
+}
+
+struct ProPanelHeader: View {
+    let title: String
+    var value: String?
+    var actionTitle: String?
+    var actionIcon: String?
+    var actionAccessibilityLabel: String?
+    var isActionDisabled = false
+    var action: (() -> Void)?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Text(self.title)
+                .font(.subheadline.weight(.semibold))
+            if let value {
+                Text(value)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 8)
+            self.actionControl
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 12)
+        .padding(.bottom, 8)
+    }
+
+    @ViewBuilder
+    private var actionControl: some View {
+        if let action {
+            if let actionIcon {
+                Button(action: action) {
+                    Image(systemName: actionIcon)
+                }
+                .accessibilityLabel(self.actionAccessibilityLabel ?? self.actionTitle ?? self.title)
+                .disabled(self.isActionDisabled)
+            } else if let actionTitle {
+                Button(actionTitle, action: action)
+                    .font(.caption.weight(.semibold))
+                    .disabled(self.isActionDisabled)
+            }
+        }
+    }
+}
+
 struct ProStatusRow: View {
     let icon: String
     let title: String
     let detail: String
-    let value: String
+    let value: String?
     let color: Color
+    var actionTitle: String?
+    var action: (() -> Void)?
 
     var body: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .top, spacing: 12) {
             ProIconBadge(systemName: self.icon, color: self.color)
             VStack(alignment: .leading, spacing: 4) {
                 Text(self.title)
                     .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
                 Text(self.detail)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                    .lineLimit(2)
             }
             Spacer(minLength: 8)
-            ProValuePill(value: self.value, color: self.color)
-        }
-        .padding(.vertical, 11)
-    }
-}
-
-struct ProTimelineRow: View {
-    let done: Bool
-    let title: String
-    let detail: String
-
-    var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            ProIconBadge(
-                systemName: self.done ? "checkmark.circle.fill" : "clock.fill",
-                color: self.done ? OpenClawBrand.ok : OpenClawBrand.warn)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(self.title)
-                    .font(.subheadline.weight(.medium))
-                Text(self.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            VStack(alignment: .trailing, spacing: 6) {
+                if let value {
+                    ProValuePill(value: value, color: self.color)
+                }
+                if let actionTitle, let action {
+                    Button(actionTitle, action: action)
+                        .font(.caption.weight(.semibold))
+                        .buttonStyle(.bordered)
+                        .controlSize(.mini)
+                }
             }
         }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
     }
 }

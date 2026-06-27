@@ -2,6 +2,7 @@
 
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { setUiTimeFormatPreference } from "../format.ts";
 import type { MessageGroup } from "../types/chat-types.ts";
 import {
   formatChatTimestampForDisplay,
@@ -2224,6 +2225,20 @@ describe("grouped chat rendering", () => {
     );
   });
 
+  it("reserves layout space for assistant message actions", () => {
+    const container = document.createElement("div");
+    renderAssistantMessage(container, {
+      id: "assistant-action-space",
+      role: "assistant",
+      content: "Copyable assistant text.",
+      timestamp: Date.now(),
+    });
+
+    const bubble = container.querySelector(".chat-group.assistant .chat-bubble");
+    expect(bubble?.classList.contains("chat-bubble--has-actions")).toBe(true);
+    expect(bubble?.querySelector(".chat-bubble-actions")).not.toBeNull();
+  });
+
   it("renders hidden assistant_message canvas results with the configured sandbox", () => {
     const container = document.createElement("div");
     const renderCanvas = (params: { embedSandboxMode?: "trusted"; suffix: string }) =>
@@ -2512,5 +2527,25 @@ describe("grouped chat rendering", () => {
     const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
     expect(sidebar.kind).toBe("markdown");
     expect(sidebar.fullMessageRequest).toBeUndefined();
+  });
+});
+
+describe("formatChatTimestampForDisplay time format", () => {
+  const timestamp = Date.UTC(2026, 0, 15, 19, 30);
+
+  afterEach(() => {
+    setUiTimeFormatPreference("auto");
+  });
+
+  it("renders an AM/PM clock when preference is 12", () => {
+    setUiTimeFormatPreference("12");
+    const display = formatChatTimestampForDisplay(timestamp);
+    expect(display.label).toMatch(/AM|PM/i);
+  });
+
+  it("renders a 24-hour clock with no AM/PM when preference is 24", () => {
+    setUiTimeFormatPreference("24");
+    const display = formatChatTimestampForDisplay(timestamp);
+    expect(display.label).not.toMatch(/AM|PM/i);
   });
 });

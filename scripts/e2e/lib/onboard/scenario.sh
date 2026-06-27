@@ -77,18 +77,23 @@ start_gateway() {
 }
 
 wait_for_gateway() {
-  for _ in $(seq 1 20); do
+  local wait_attempts
+  wait_attempts="$(openclaw_e2e_read_positive_int_env OPENCLAW_ONBOARD_GATEWAY_WAIT_ATTEMPTS 20)" || return $?
+  local wait_interval_s="${OPENCLAW_ONBOARD_GATEWAY_WAIT_INTERVAL_S:-1}"
+  local saw_listening_log="false"
+  for _ in $(seq 1 "$wait_attempts"); do
     if openclaw_e2e_probe_tcp 127.0.0.1 18789 500 >/dev/null 2>&1; then
       return 0
     fi
     if [ -f "$GATEWAY_LOG_PATH" ] && grep -E -q "listening on ws://[^ ]+:18789" "$GATEWAY_LOG_PATH"; then
-      if [ -n "${GATEWAY_PID:-}" ] && kill -0 "$GATEWAY_PID" 2>/dev/null; then
-        return 0
-      fi
+      saw_listening_log="true"
     fi
-    sleep 1
+    sleep "$wait_interval_s"
   done
   echo "Gateway failed to start"
+  if [ "$saw_listening_log" = "true" ]; then
+    echo "Gateway log reported listening, but TCP probe never succeeded"
+  fi
   cat "$GATEWAY_LOG_PATH" || true
   return 1
 }
@@ -172,16 +177,6 @@ run_wizard_cmd() {
   fi
 }
 
-run_wizard() {
-  local case_name="$1"
-  local state_ref="$2"
-  local send_fn="$3"
-  local validate_fn="${4:-}"
-
-  # Default onboarding command wrapper.
-  run_wizard_cmd "$case_name" "$state_ref" "node \"$OPENCLAW_ENTRY\" onboard $ONBOARD_FLAGS" "$send_fn" true "$validate_fn"
-}
-
 assert_onboard_config() {
   local scenario="$1"
   shift
@@ -192,35 +187,6 @@ assert_onboard_config() {
 set_isolated_openclaw_env() {
   local state_ref="$1"
   openclaw_test_state_create "$state_ref" empty
-}
-
-select_skip_hooks() {
-  # Hooks multiselect: pick "Skip for now".
-  wait_for_log "Enable hooks?" 60
-  send $' \r' 0.6
-}
-
-send_local_basic() {
-  # Risk acknowledgement (default is "No").
-  wait_for_log "Continue?" 60
-  send $'y\r' 0.6
-  # Non-interactive flow; no gateway-location prompt.
-  select_skip_hooks
-}
-
-send_reset_config_only() {
-  # Risk acknowledgement (default is "No").
-  wait_for_log "Continue?" 40
-  send $'y\r' 0.8
-  # Select reset flow for existing config.
-  wait_for_log "Config handling" 40
-  send $'\e[B' 0.3
-  send $'\e[B' 0.3
-  send $'\r' 0.4
-  # Reset scope -> Config only (default).
-  wait_for_log "Reset scope" 40
-  send $'\r' 0.4
-  select_skip_hooks
 }
 
 send_channels_flow() {
