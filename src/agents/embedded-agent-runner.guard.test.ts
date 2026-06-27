@@ -1,5 +1,8 @@
 // Covers session-manager guard behavior for tool-result pairing and transcript
 // redaction.
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
@@ -9,6 +12,10 @@ import {
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  attachRuntimeUserTurnTranscriptContext,
+  createUserTurnTranscriptRecorder,
+} from "../sessions/user-turn-transcript.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 
@@ -20,7 +27,14 @@ function assistantToolCall(id: string): AgentMessage {
 }
 
 describe("guardSessionManager integration", () => {
-  afterEach(() => resetGlobalHookRunner());
+  const tempDirs: string[] = [];
+
+  afterEach(() => {
+    resetGlobalHookRunner();
+    for (const dir of tempDirs.splice(0)) {
+      rmSync(dir, { force: true, recursive: true });
+    }
+  });
 
   it("persists synthetic toolResult before subsequent assistant message", () => {
     // Providers require every assistant tool call to be followed by a result
@@ -162,12 +176,19 @@ describe("guardSessionManager integration", () => {
         },
       ]),
     );
+    const config = {
+      logging: {
+        redactSensitive: "tools",
+        redactPatterns: [String.raw`secret-[a-z]+`],
+      },
+    } satisfies OpenClawConfig;
     const sm = guardSessionManager(SessionManager.inMemory(), {
+      config,
       preparedUserTurnMessage: {
         role: "user",
         content: "private group prompt",
         timestamp: 123,
-        __openclaw: { senderId: "user-42", senderName: "Ada" },
+        __openclaw: { senderId: "secret-user", senderName: "secret-name" },
       } as Extract<AgentMessage, { role: "user" }>,
     });
 
@@ -181,10 +202,63 @@ describe("guardSessionManager integration", () => {
       content: "[redacted by hook]",
       __openclaw: {
         hookOwned: true,
-        senderId: "user-42",
-        senderName: "Ada",
+        senderId: expect.any(String),
+        senderName: expect.any(String),
       },
     });
+    expect(JSON.stringify(message?.message)).not.toContain("secret-user");
+    expect(JSON.stringify(message?.message)).not.toContain("secret-name");
+  });
+
+  it("commits queued group sender metadata to JSONL and completes its recorder", () => {
+    const dir = mkdtempSync(join(tmpdir(), "openclaw-queued-group-turn-"));
+    tempDirs.push(dir);
+    const sessionManager = SessionManager.create(dir, dir);
+    const sessionFile = sessionManager.getSessionFile();
+    if (!sessionFile) {
+      throw new Error("expected file-backed session manager");
+    }
+    const recorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "visible group prompt",
+        sender: { id: "user-42", name: "Ada", username: "ada42" },
+      },
+      target: { transcriptPath: sessionFile },
+    });
+    const preparedMessage = recorder.message;
+    if (!preparedMessage) {
+      throw new Error("expected prepared group turn");
+    }
+    const sm = guardSessionManager(sessionManager);
+    const runtimeMessage = attachRuntimeUserTurnTranscriptContext(
+      {
+        role: "user",
+        content: [{ type: "text", text: "runtime group prompt" }],
+        timestamp: 456,
+      },
+      { message: preparedMessage, recorder },
+    );
+
+    sm.appendMessage(runtimeMessage);
+    sm.appendMessage({
+      role: "assistant",
+      content: [{ type: "text", text: "acknowledged" }],
+    } as AgentMessage);
+
+    const entries = readFileSync(sessionFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; message?: AgentMessage });
+    expect(entries.find((entry) => entry.message?.role === "user")?.message).toMatchObject({
+      role: "user",
+      content: "visible group prompt",
+      __openclaw: {
+        senderId: "user-42",
+        senderName: "Ada",
+        senderUsername: "ada42",
+      },
+    });
+    expect(recorder.hasPersisted()).toBe(true);
   });
 
   it("does not consume prepared user persistence for before-agent-run blocked messages", () => {
