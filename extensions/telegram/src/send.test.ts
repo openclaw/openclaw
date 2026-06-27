@@ -1650,6 +1650,49 @@ describe("sendMessageTelegram", () => {
     expect(res.messageId).toBe("71");
   });
 
+  it("does not reuse first-mode reply-to on media caption follow-up text", async () => {
+    const chatId = "123";
+    const longText = "A".repeat(1100);
+
+    const sendPhoto = vi.fn().mockResolvedValue({
+      message_id: 70,
+      chat: { id: chatId },
+    });
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 71,
+      chat: { id: chatId },
+    });
+    const api = { sendPhoto, sendMessage } as unknown as {
+      sendPhoto: typeof sendPhoto;
+      sendMessage: typeof sendMessage;
+    };
+
+    mockLoadedMedia({
+      buffer: Buffer.from("fake-image"),
+      contentType: "image/jpeg",
+      fileName: "photo.jpg",
+    });
+
+    await sendMessageTelegram(chatId, longText, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      mediaUrl: "https://example.com/photo.jpg",
+      replyToMessageId: 500,
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+    });
+
+    expectMediaSendCall(firstMockCall(sendPhoto, "send photo call"), "send photo call", chatId, {
+      caption: undefined,
+      reply_to_message_id: 500,
+      allow_sending_without_reply: true,
+    });
+    expect(sendMessage).toHaveBeenCalledWith(chatId, longText, {
+      parse_mode: "HTML",
+    });
+  });
+
   it("chunks long default markdown media follow-up text", async () => {
     const chatId = "123";
     const longText = `**${"A".repeat(5000)}**`;
@@ -1658,7 +1701,10 @@ describe("sendMessageTelegram", () => {
       message_id: 72,
       chat: { id: chatId },
     });
-    const sendMessage = vi.fn().mockResolvedValue({ message_id: 74, chat: { id: chatId } });
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 73, chat: { id: chatId } })
+      .mockResolvedValueOnce({ message_id: 74, chat: { id: chatId } });
     const api = { sendPhoto, sendMessage } as unknown as {
       sendPhoto: typeof sendPhoto;
       sendMessage: typeof sendMessage;
@@ -1684,6 +1730,9 @@ describe("sendMessageTelegram", () => {
     expect(sendMessage.mock.calls.every((call) => call[2]?.parse_mode === "HTML")).toBe(true);
     expect(sendMessage.mock.calls.map((call) => String(call[1] ?? "")).join("")).toContain("A");
     expect(res.messageId).toBe("74");
+    expect(res.receipt?.primaryPlatformMessageId).toBe("73");
+    expect(res.receipt?.platformMessageIds).toEqual(["73", "74"]);
+    expect(res.receipt?.parts.map((part) => part.kind)).toEqual(["text", "text"]);
   });
 
   it("uses caption when text is within 1024 char limit", async () => {
@@ -2497,6 +2546,93 @@ describe("sendMessageTelegram", () => {
         message_thread_id: 271,
       });
     }
+  });
+
+  it("returns a multipart receipt and avoids native replies for chunked first-mode text", async () => {
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 101, chat: { id: "-1001234567890" } })
+      .mockResolvedValueOnce({ message_id: 102, chat: { id: "-1001234567890" } });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    const result = await sendMessageTelegram("-1001234567890", `BEGIN ${"A".repeat(4100)} END`, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      messageThreadId: 271,
+      replyToMessageId: 500,
+      replyToIdSource: "implicit",
+      replyToMode: "first",
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    expect(sendMessage.mock.calls[0]?.[2]).toEqual({
+      parse_mode: "HTML",
+      message_thread_id: 271,
+    });
+    expect(sendMessage.mock.calls[1]?.[2]).toEqual({
+      parse_mode: "HTML",
+      message_thread_id: 271,
+    });
+    expect(result.messageId).toBe("102");
+    expect(result.receipt?.primaryPlatformMessageId).toBe("101");
+    expect(result.receipt?.platformMessageIds).toEqual(["101", "102"]);
+    expect(result.receipt?.threadId).toBe("271");
+    expect(result.receipt?.replyToId).toBeUndefined();
+    expect(
+      result.receipt?.parts.map(({ platformMessageId, kind, index, threadId, replyToId }) => ({
+        platformMessageId,
+        kind,
+        index,
+        threadId,
+        replyToId,
+      })),
+    ).toEqual([
+      {
+        platformMessageId: "101",
+        kind: "text",
+        index: 0,
+        threadId: "271",
+        replyToId: undefined,
+      },
+      {
+        platformMessageId: "102",
+        kind: "text",
+        index: 1,
+        threadId: "271",
+        replyToId: undefined,
+      },
+    ]);
+  });
+
+  it("keeps explicit native replies for chunked first-mode text", async () => {
+    const sendMessage = vi
+      .fn()
+      .mockResolvedValueOnce({ message_id: 101, chat: { id: "-1001234567890" } })
+      .mockResolvedValueOnce({ message_id: 102, chat: { id: "-1001234567890" } });
+    const api = { sendMessage } as unknown as {
+      sendMessage: typeof sendMessage;
+    };
+
+    await sendMessageTelegram("-1001234567890", `BEGIN ${"A".repeat(4100)} END`, {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+      api,
+      replyToMessageId: 500,
+      replyToIdSource: "explicit",
+      replyToMode: "first",
+    });
+
+    expect(sendMessage.mock.calls[0]?.[2]).toMatchObject({
+      reply_to_message_id: 500,
+      allow_sending_without_reply: true,
+    });
+    expect(sendMessage.mock.calls[1]?.[2]).toMatchObject({
+      reply_to_message_id: 500,
+      allow_sending_without_reply: true,
+    });
   });
 
   it("fails topic sends instead of retrying without message_thread_id", async () => {

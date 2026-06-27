@@ -4445,7 +4445,7 @@ describe("createTelegramBot", () => {
       });
 
       expect(sendMessageSpy.mock.calls.length).toBeGreaterThan(1);
-      for (const [index, call] of sendMessageSpy.mock.calls.entries()) {
+      for (const call of sendMessageSpy.mock.calls) {
         const params = call[2] as
           | { reply_to_message_id?: number; reply_parameters?: { message_id?: number } }
           | undefined;
