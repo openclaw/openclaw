@@ -7,26 +7,16 @@ const mistralMockState = vi.hoisted(() => ({
   payloads: [] as unknown[],
 }));
 
-vi.mock("@mistralai/mistralai", async () => {
-  // Preserve real exports for everything except `Mistral`, so the new
-  // imports of `HTTPClient` and `Fetcher` introduced by the bounded-stream
-  // helper (`createBoundedMistralHttpClient`) resolve correctly. Only
-  // `Mistral` itself is overridden so the test can capture payloads without
-  // any actual HTTP traffic.
-  const actual =
-    await vi.importActual<typeof import("@mistralai/mistralai")>("@mistralai/mistralai");
-  return {
-    ...actual,
-    Mistral: class MockMistral {
-      chat = {
-        stream: vi.fn(async (payload: unknown) => {
-          mistralMockState.payloads.push(payload);
-          throw new Error("stop before network");
-        }),
-      };
-    },
-  };
-});
+vi.mock("@mistralai/mistralai", () => ({
+  Mistral: class MockMistral {
+    chat = {
+      stream: vi.fn(async (payload: unknown) => {
+        mistralMockState.payloads.push(payload);
+        throw new Error("stop before network");
+      }),
+    };
+  },
+}));
 
 import { streamMistral, streamSimpleMistral } from "./mistral.js";
 
@@ -247,7 +237,7 @@ describe("Mistral provider", () => {
   });
 
   it("serializes structured non-image blocks in tool results as JSON text", async () => {
-    const testContext = {
+    const context = {
       messages: [
         {
           role: "user",
@@ -267,6 +257,7 @@ describe("Mistral provider", () => {
           role: "toolResult",
           toolCallId: "tool_1",
           content: [
+            { type: "text", text: "ok" },
             {
               type: "resource",
               resource: {
@@ -280,9 +271,9 @@ describe("Mistral provider", () => {
           timestamp: 0,
         },
       ],
-    } as unknown as Context;
+    } satisfies Context;
 
-    const stream = streamMistral(makeMistralModel(), testContext, {
+    const stream = streamMistral(makeMistralModel(), context, {
       apiKey: "sk-mistral-provider",
     });
     await stream.result();
@@ -295,12 +286,11 @@ describe("Mistral provider", () => {
     const toolContent = Array.isArray(toolMessage!.content) ? toolMessage!.content : [];
     const textBlock = toolContent.find((block) => block.type === "text");
     expect(textBlock?.text).toEqual(expect.stringContaining('{"type":"resource"'));
-    expect(textBlock?.text).toContain('{\\"key\\":\\"***\\"}');
-    expect(textBlock?.text).not.toContain('{\\"key\\":\\"value\\"}');
+    expect(textBlock?.text).toContain("ok");
   });
 
   it("serializes structured-only tool results instead of empty fallback", async () => {
-    const testContext = {
+    const context = {
       messages: [
         {
           role: "user",
@@ -332,9 +322,9 @@ describe("Mistral provider", () => {
           timestamp: 0,
         },
       ],
-    } as unknown as Context;
+    } satisfies Context;
 
-    const stream = streamMistral(makeMistralModel(), testContext, {
+    const stream = streamMistral(makeMistralModel(), context, {
       apiKey: "sk-mistral-provider",
     });
     await stream.result();

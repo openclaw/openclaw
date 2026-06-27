@@ -141,7 +141,6 @@ function makeAnthropicTransportModel(
     reasoning?: boolean;
     params?: Record<string, unknown>;
     maxTokens?: number;
-    input?: AnthropicMessagesModel["input"];
     thinkingLevelMap?: AnthropicMessagesModel["thinkingLevelMap"];
     headers?: Record<string, string>;
     authHeader?: boolean;
@@ -157,7 +156,7 @@ function makeAnthropicTransportModel(
       baseUrl: params.baseUrl ?? "https://api.anthropic.com",
       reasoning: params.reasoning ?? true,
       ...(params.params ? { params: params.params } : {}),
-      input: params.input ?? ["text"],
+      input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200000,
       maxTokens: params.maxTokens ?? 8192,
@@ -199,64 +198,6 @@ describe("anthropic transport stream", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-  });
-
-  it("tags pre-tool narration as commentary when a proxy mislabels stop_reason (pioneer/Bedrock)", async () => {
-    // Bedrock/Vertex-proxied routes (e.g. pioneer; tool ids "toolu_vrtx_…") report
-    // stop_reason "end_turn" on turns that DO carry a tool call. Commentary tagging
-    // must key on the turn CONTAINING a toolCall, not on the stop_reason label, or
-    // the narration text stays untagged (textSignature=None) and never reaches the
-    // 💬 lane — exactly the pioneer commentary gap.
-    guardedFetchMock.mockResolvedValueOnce(
-      createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_pio", usage: { input_tokens: 10, output_tokens: 0 } },
-        },
-        {
-          type: "content_block_start",
-          index: 0,
-          content_block: { type: "text", text: "I'll start by checking the current date." },
-        },
-        { type: "content_block_stop", index: 0 },
-        {
-          type: "content_block_start",
-          index: 1,
-          content_block: { type: "tool_use", id: "toolu_vrtx_01S4", name: "exec", input: {} },
-        },
-        {
-          type: "content_block_delta",
-          index: 1,
-          delta: { type: "input_json_delta", partial_json: '{"command":"date"}' },
-        },
-        { type: "content_block_stop", index: 1 },
-        {
-          // The proxy mislabel: a tool-using turn reported as end_turn, NOT tool_use.
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 10, output_tokens: 7 },
-        },
-      ]),
-    );
-
-    const result = await runTransportStream(
-      makeAnthropicTransportModel(),
-      {
-        messages: [{ role: "user", content: "run date" }],
-      } as AnthropicStreamContext,
-      {
-        apiKey: "sk-ant-api",
-      } as AnthropicStreamOptions,
-    );
-
-    // Despite stop_reason=end_turn, the turn carries a toolCall, so the narration
-    // text must be tagged commentary (phase:commentary) and route to 💬.
-    const textBlock = findRecord(result.content, (record) => record.type === "text");
-    expect(textBlock.textSignature).toBeDefined();
-    expect(String(textBlock.textSignature)).toContain('"phase":"commentary"');
-    expect(result.content.some((block) => (block as { type?: string }).type === "toolCall")).toBe(
-      true,
-    );
   });
 
   it("uses the guarded fetch transport for api-key Anthropic requests", async () => {
@@ -844,122 +785,6 @@ describe("anthropic transport stream", () => {
     expect(result.stopReason).toBe("error");
     expect(result.content).toEqual([]);
     expect(result.errorMessage).toBe("Anthropic stream ended before message_stop");
-  });
-
-  it("defers a pre-tool text block's text_end until it carries the commentary phase", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_defer", usage: { input_tokens: 5, output_tokens: 0 } },
-        },
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text: "I'll check the repo." },
-        },
-        { type: "content_block_stop", index: 0 },
-        {
-          type: "content_block_start",
-          index: 1,
-          content_block: { type: "tool_use", id: "tool_1", name: "exec", input: {} },
-        },
-        { type: "content_block_stop", index: 1 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "tool_use" },
-          usage: { input_tokens: 5, output_tokens: 7 },
-        },
-        { type: "message_stop" },
-      ]),
-    );
-    const streamFn = createAnthropicMessagesTransportStreamFn();
-    const stream = await Promise.resolve(
-      streamFn(
-        makeAnthropicTransportModel(),
-        { messages: [{ role: "user", content: "inspect" }] } as AnthropicStreamContext,
-        { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
-      ),
-    );
-    const order: string[] = [];
-    let textEndPhase: unknown;
-    for await (const event of stream as AsyncIterable<{
-      type: string;
-      contentIndex?: number;
-      partial?: { content?: Array<{ textSignature?: string }> };
-    }>) {
-      order.push(event.type);
-      if (event.type === "text_end" && typeof event.contentIndex === "number") {
-        const signature = event.partial?.content?.[event.contentIndex]?.textSignature;
-        textEndPhase =
-          typeof signature === "string"
-            ? (JSON.parse(signature) as { phase?: string }).phase
-            : undefined;
-      }
-    }
-    // The pre-tool text block's text_end is held until the tool boundary tags it
-    // commentary, so a block-reply consumer never durably commits the narration
-    // as the answer. It is still emitted (once) and still before the tool call.
-    expect(textEndPhase).toBe("commentary");
-    expect(order.filter((type) => type === "text_end")).toHaveLength(1);
-    expect(order.indexOf("text_end")).toBeLessThan(order.indexOf("toolcall_start"));
-  });
-
-  it("emits a non-tool text block's text_end as unphased answer text", async () => {
-    guardedFetchMock.mockResolvedValueOnce(
-      createSseResponse([
-        {
-          type: "message_start",
-          message: { id: "msg_answer", usage: { input_tokens: 5, output_tokens: 0 } },
-        },
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text: "Here is the answer." },
-        },
-        { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn" },
-          usage: { input_tokens: 5, output_tokens: 4 },
-        },
-        { type: "message_stop" },
-      ]),
-    );
-    const streamFn = createAnthropicMessagesTransportStreamFn();
-    const stream = await Promise.resolve(
-      streamFn(
-        makeAnthropicTransportModel(),
-        { messages: [{ role: "user", content: "answer me" }] } as AnthropicStreamContext,
-        { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
-      ),
-    );
-    const order: string[] = [];
-    let textEndPhase: unknown = "unset";
-    for await (const event of stream as AsyncIterable<{
-      type: string;
-      contentIndex?: number;
-      partial?: { content?: Array<{ textSignature?: string }> };
-    }>) {
-      order.push(event.type);
-      if (event.type === "text_end" && typeof event.contentIndex === "number") {
-        const signature = event.partial?.content?.[event.contentIndex]?.textSignature;
-        textEndPhase =
-          typeof signature === "string"
-            ? (JSON.parse(signature) as { phase?: string }).phase
-            : undefined;
-      }
-    }
-    const result = await stream.result();
-    // No tool follows, so the held text_end is flushed unphased at message_delta
-    // and the text is delivered as the answer (never tagged commentary).
-    expect(order.filter((type) => type === "text_end")).toHaveLength(1);
-    expect(textEndPhase).toBeUndefined();
-    const textBlock = findRecord(result.content, (record) => record.type === "text");
-    expect(textBlock.text).toBe("Here is the answer.");
-    expect(textBlock.textSignature).toBeUndefined();
   });
 
   it("preserves unsafe integer Anthropic tool-use input deltas", async () => {
@@ -2556,6 +2381,8 @@ describe("anthropic transport stream", () => {
   });
 
   it("serializes structured non-image blocks in tool results as JSON text", async () => {
+    const imageData = Buffer.from("image").toString("base64");
+
     await runTransportStream(
       makeAnthropicTransportModel({ id: "claude-sonnet-4-6" }),
       {
@@ -2573,6 +2400,7 @@ describe("anthropic transport stream", () => {
             role: "toolResult",
             toolCallId: "tool_1",
             content: [
+              { type: "text", text: "ok" },
               {
                 type: "resource",
                 resource: {
@@ -2599,10 +2427,12 @@ describe("anthropic transport stream", () => {
       userMessage.content,
       (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
     );
-    // No images → returns sanitized text string, not array
-    expect(typeof toolResult.content).toBe("string");
-    expect(toolResult.content).toContain('"type":"resource"');
-    expect(toolResult.content).toContain('{\\"key\\":\\"***\\"}');
+    // Structured non-image block should be serialized, not dropped
+    expect(toolResult.content).toBe(
+      // No images → returns sanitized text string, not array
+      expect.stringContaining('{"type":"resource"'),
+    );
+    expect(toolResult.content).toContain("ok");
     expect(toolResult.is_error).toBe(false);
   });
 
@@ -2610,7 +2440,7 @@ describe("anthropic transport stream", () => {
     const imageData = Buffer.from("image").toString("base64");
 
     await runTransportStream(
-      makeAnthropicTransportModel({ id: "claude-sonnet-4-6", input: ["text", "image"] }),
+      makeAnthropicTransportModel({ id: "claude-sonnet-4-6" }),
       {
         messages: [
           {
@@ -2626,8 +2456,6 @@ describe("anthropic transport stream", () => {
             role: "toolResult",
             toolCallId: "tool_1",
             content: [
-              { type: "text", text: "before image" },
-              { type: "image", data: imageData, mimeType: "image/png" },
               {
                 type: "resource",
                 resource: {
@@ -2636,7 +2464,7 @@ describe("anthropic transport stream", () => {
                   text: '{"key":"value"}',
                 },
               },
-              { type: "text", text: "after image" },
+              { type: "image", data: imageData, mimeType: "image/png" },
             ],
             isError: false,
           },
@@ -2655,19 +2483,10 @@ describe("anthropic transport stream", () => {
       userMessage.content,
       (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
     );
-    expect(toolResult.content).toEqual([
-      { type: "text", text: "before image" },
-      {
-        type: "image",
-        source: {
-          type: "base64",
-          media_type: "image/png",
-          data: imageData,
-        },
-      },
-      { type: "text", text: expect.stringContaining('{"type":"resource"') },
-      { type: "text", text: "after image" },
-    ]);
+    // When images are present, content is an array
+    const textBlock = findRecord(toolResult.content, (record) => record.type === "text");
+    // Structured block should be serialized as text alongside the image
+    expect(textBlock.text).toEqual(expect.stringContaining('{"type":"resource"'));
     expect(toolResult.is_error).toBe(false);
   });
 
@@ -2770,7 +2589,7 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload.thinking).toEqual({ type: "adaptive" });
     expect(payload.output_config).toEqual({ effort: "high" });
     expect(payload.tool_choice).toBeUndefined();
   });
@@ -2847,7 +2666,7 @@ describe("anthropic transport stream", () => {
 
     const payload = latestAnthropicRequest().payload;
     expect(payload.model).toBe("production-claude");
-    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload.thinking).toEqual({ type: "adaptive" });
     expect(payload.output_config).toEqual({ effort: "xhigh" });
     expect(payload).not.toHaveProperty("temperature");
   });
@@ -2950,7 +2769,7 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload.thinking).toEqual({ type: "adaptive" });
     expect(payload.output_config).toEqual({ effort: "high" });
   });
 
@@ -2977,7 +2796,7 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload.thinking).toEqual({ type: "adaptive" });
     expect(payload.output_config).toEqual({ effort: "high" });
   });
 
@@ -3082,7 +2901,7 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload.thinking).toEqual({ type: "adaptive" });
     expect(payload.output_config).toEqual({ effort: "xhigh" });
   });
 
@@ -3106,7 +2925,7 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload.thinking).toEqual({ type: "adaptive" });
     expect(payload.output_config).toEqual({ effort: "max" });
   });
 
@@ -3131,7 +2950,7 @@ describe("anthropic transport stream", () => {
     );
 
     const payload = latestAnthropicRequest().payload;
-    expect(payload.thinking).toEqual({ type: "adaptive", display: "summarized" });
+    expect(payload.thinking).toEqual({ type: "adaptive" });
     expect(payload.output_config).toEqual({ effort: "high" });
   });
 

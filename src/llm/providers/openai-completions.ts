@@ -1129,7 +1129,7 @@ export function convertMessages(
         const toolMsg = transformedMessages[j] as ToolResultMessage;
 
         // Extract text and image content
-        const textResult = extractToolResultText(toolMsg.content as Array<Record<string, unknown>>);
+        const textResult = extractToolResultText(toolMsg.content);
         const hasImages = toolMsg.content.some((c) => c.type === "image");
 
         // Always send tool result with text (or placeholder if only images)
