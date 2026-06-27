@@ -254,6 +254,32 @@ describe("Bedrock thinking effort mapping", () => {
       ),
     ).toBe("xhigh");
   });
+
+  it("derives maxTokens from model.maxTokens for adaptive-thinking Claude (#97176)", () => {
+    const options = testing.resolveSimpleBedrockOptions(
+      bedrockModel({
+        id: "us.anthropic.claude-opus-4-8",
+        name: "Claude Opus 4.8",
+        maxTokens: 200_000,
+        contextWindow: 1_000_000,
+      }),
+      { reasoning: "high" },
+    );
+    expect(options.maxTokens).toBe(200_000);
+    expect(options.maxTokens).toBeGreaterThan(4096);
+  });
+
+  it("honors explicit caller maxTokens for adaptive-thinking models (#97176)", () => {
+    const options = testing.resolveSimpleBedrockOptions(
+      bedrockModel({
+        id: "us.anthropic.claude-opus-4-8",
+        name: "Claude Opus 4.8",
+        maxTokens: 200_000,
+      }),
+      { reasoning: "high", maxTokens: 8000 },
+    );
+    expect(options.maxTokens).toBe(8000);
+  });
 });
 
 describe("Bedrock Fable contract", () => {
@@ -297,7 +323,9 @@ describe("Bedrock Fable contract", () => {
     });
     await stream.result();
 
-    const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
+    const command = send.mock.calls[0]?.[0] as {
+      input?: Record<string, unknown>;
+    };
     expect(command.input).toMatchObject({
       modelId: "production-fable",
       inferenceConfig: {},
@@ -331,7 +359,9 @@ describe("Bedrock Fable contract", () => {
     });
     await stream.result();
 
-    const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
+    const command = send.mock.calls[0]?.[0] as {
+      input?: Record<string, unknown>;
+    };
     expect(command.input?.toolConfig).toBeUndefined();
   });
 
@@ -482,14 +512,18 @@ describe("Bedrock canonical Claude aliases", () => {
 
       await streamSimpleBedrock(
         model,
-        { messages: [{ role: "user", content: "Reply briefly.", timestamp: 0 }] } as never,
+        {
+          messages: [{ role: "user", content: "Reply briefly.", timestamp: 0 }],
+        } as never,
         {
           reasoning,
           temperature: 0.2,
         },
       ).result();
 
-      const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
+      const command = send.mock.calls[0]?.[0] as {
+        input?: Record<string, unknown>;
+      };
       expect(command.input).toMatchObject({
         modelId: "production-claude",
         inferenceConfig: {},
