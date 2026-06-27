@@ -259,6 +259,14 @@ async function updateSubagentSessionStore(
   return await subagentSpawnDeps.updateSessionStore(storePath, mutator);
 }
 
+function hasRequestModelOverride(params: unknown): boolean {
+  if (!params || typeof params !== "object" || Array.isArray(params)) {
+    return false;
+  }
+  const record = params as Record<string, unknown>;
+  return typeof record.provider === "string" || typeof record.model === "string";
+}
+
 async function callSubagentGateway(
   params: Parameters<typeof callGateway>[0],
 ): Promise<Awaited<ReturnType<typeof callGateway>>> {
@@ -283,6 +291,8 @@ async function callSubagentGateway(
     typeof request.params === "object" &&
     !Array.isArray(request.params)
   ) {
+    const agentModelOverride =
+      request.method === "agent" && hasRequestModelOverride(request.params);
     // Spawn is already running in the gateway process for channel/tool calls.
     // Direct dispatch avoids self-connecting over WS while the same event loop is busy.
     return await subagentSpawnDeps.dispatchGatewayMethodInProcess(
@@ -290,7 +300,8 @@ async function callSubagentGateway(
       request.params as Record<string, unknown>,
       {
         expectFinal: request.expectFinal,
-        ...(scopes != null ? { forceSyntheticClient: true } : {}),
+        ...(scopes != null || agentModelOverride ? { forceSyntheticClient: true } : {}),
+        ...(agentModelOverride ? { allowSyntheticModelOverride: true } : {}),
         timeoutMs: request.timeoutMs,
         ...(scopes != null ? { syntheticScopes: scopes } : {}),
       },
@@ -1623,6 +1634,9 @@ export async function spawnSubagentDirect(
       sessionKey: childSessionKey,
       traceparent: params.traceparent,
     });
+    const childRunModelRef = subagentSpawnDeps.hasInProcessGatewayContext()
+      ? splitModelRef(resolvedModel)
+      : undefined;
     const response = await callSubagentGateway({
       method: "agent",
       params: {
@@ -1641,6 +1655,8 @@ export async function spawnSubagentDirect(
         disableMessageTool: true,
         cleanupBundleMcpOnRunEnd: spawnMode !== "session",
         extraSystemPrompt: childSystemPrompt,
+        ...(childRunModelRef?.provider ? { provider: childRunModelRef.provider } : {}),
+        ...(childRunModelRef?.model ? { model: childRunModelRef.model } : {}),
         thinking: thinkingOverride,
         timeout: runTimeoutSeconds,
         label: label || undefined,
