@@ -5,7 +5,7 @@ export const page = definePage({
   id: "sessions",
   path: "/sessions",
   component: () =>
-    import("./page.ts").then(() => ({
+    import("./sessions-page.ts").then(() => ({
       header: true,
       render: () => html`<openclaw-sessions-page></openclaw-sessions-page>`,
     })),

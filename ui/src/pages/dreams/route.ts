@@ -3,6 +3,7 @@ import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { t } from "../../i18n/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
+import { normalizeAgentId, parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { definePage } from "../../router/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import {
@@ -12,7 +13,6 @@ import {
 } from "../../ui/chat/session-controls.ts";
 import { switchChatSession } from "../chat/session-switch.ts";
 import { loadConfig, openConfigFile } from "../config/data.ts";
-import { loadDreamsPage } from "../loaders.ts";
 import {
   backfillDreamDiary,
   copyDreamingArchivePath,
@@ -32,6 +32,19 @@ import { renderDreaming } from "./view.ts";
 
 type DreamsLoadContext = { host: SettingsHost; app: SettingsAppHost };
 type DreamsRenderContext = { state: AppViewState };
+
+async function loadDreamsRoute(host: SettingsHost, app: SettingsAppHost) {
+  host.selectedAgentId = normalizeAgentId(
+    parseAgentSessionKey(host.sessionKey)?.agentId ?? host.agentsList?.defaultId ?? "main",
+  );
+  await loadConfig(app);
+  await Promise.all([
+    loadDreamingStatus(app),
+    loadDreamDiary(app),
+    loadWikiImportInsights(app),
+    loadWikiMemoryPalace(app),
+  ]);
+}
 
 export function formatDreamNextCycle(nextRunAtMs: number | undefined): string | null {
   return formatTimeMs(nextRunAtMs, { hour: "numeric", minute: "2-digit" }, "") || null;
@@ -277,7 +290,7 @@ export const page = definePage({
   id: "dreams",
   path: "/dreaming",
   aliases: ["/dreams"],
-  loader: ({ host, app }: DreamsLoadContext) => loadDreamsPage(host, app),
+  loader: ({ host, app }: DreamsLoadContext) => loadDreamsRoute(host, app),
   component: () => ({
     header: true,
     render: ({ state }: DreamsRenderContext) => renderDreamsPage(state),
