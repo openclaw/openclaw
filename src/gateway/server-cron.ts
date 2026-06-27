@@ -619,6 +619,9 @@ export function buildGatewayCronService(params: {
           "provider",
         ]),
       };
+      if (typeof evt.deliverySummary === "string") {
+        hookEvt.summary = evt.deliverySummary;
+      }
       runCronChangedHook(hookEvt);
       if (evt.action === "finished") {
         const job = evt.job ?? cron.getJob(evt.jobId);

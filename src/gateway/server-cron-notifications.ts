@@ -105,6 +105,35 @@ function buildCronFailureWebhookPayload(params: { evt: CronEvent; job: CronJob }
   };
 }
 
+function buildDeliverySafeDiagnostics(evt: CronEvent, webhookSummary: string) {
+  if (!evt.diagnostics) {
+    return undefined;
+  }
+  return {
+    ...evt.diagnostics,
+    summary: webhookSummary,
+    entries: evt.diagnostics.entries.map((entry) => ({
+      ...entry,
+      message:
+        entry.source === "exec"
+          ? "command result details summarized for external delivery"
+          : typeof evt.summary === "string" && entry.message.includes(evt.summary)
+            ? entry.message.replaceAll(evt.summary, webhookSummary)
+            : entry.message,
+    })),
+  };
+}
+
+function buildDeliverySafeJob(job: CronJob): CronJob {
+  const state = { ...job.state };
+  delete state.lastDiagnostics;
+  delete state.lastDiagnosticSummary;
+  return {
+    ...job,
+    state,
+  };
+}
+
 function buildCronFinishedWebhookPayload(evt: CronEvent) {
   const webhookSummary = typeof evt.deliverySummary === "string" ? evt.deliverySummary : undefined;
   const {
@@ -113,27 +142,26 @@ function buildCronFinishedWebhookPayload(evt: CronEvent) {
     diagnostics: _diagnostics,
     ...payload
   } = evt;
+  if (evt.status === "error") {
+    return evt.job
+      ? {
+          ...payload,
+          job: buildDeliverySafeJob(evt.job),
+        }
+      : payload;
+  }
   const sanitizedPayload =
     webhookSummary === undefined
       ? evt
       : {
           ...payload,
           summary: webhookSummary,
-          diagnostics: evt.diagnostics ? { summary: webhookSummary, entries: [] } : undefined,
+          diagnostics: buildDeliverySafeDiagnostics(evt, webhookSummary),
         };
-  if (evt.status !== "error") {
-    return sanitizedPayload;
-  }
-  if (evt.job) {
-    const state = { ...evt.job.state };
-    delete state.lastDiagnostics;
-    delete state.lastDiagnosticSummary;
+  if (evt.job && webhookSummary !== undefined) {
     return {
       ...sanitizedPayload,
-      job: {
-        ...evt.job,
-        state,
-      },
+      job: buildDeliverySafeJob(evt.job),
     };
   }
   return sanitizedPayload;

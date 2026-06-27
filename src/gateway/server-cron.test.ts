@@ -631,17 +631,150 @@ describe("buildGatewayCronService", () => {
       );
       const init = requireRecord(request.init, "fetch init");
       const body = JSON.parse(String(init.body)) as {
-        diagnostics?: { summary?: string };
+        diagnostics?: {
+          entries?: Array<{ exitCode?: number | null; message?: string; truncated?: boolean }>;
+          summary?: string;
+        };
+        job?: { state?: { lastDiagnostics?: unknown; lastDiagnosticSummary?: unknown } };
         summary?: string;
       };
       expect(body.summary).toContain("tail marker");
       expect(body.summary).not.toContain(promptUrl);
       expect(body.diagnostics?.summary).toContain("tail marker");
       expect(body.diagnostics?.summary).not.toContain(promptUrl);
+      expect(body.diagnostics?.entries?.length).toBeGreaterThan(0);
+      expect(body.diagnostics?.entries?.[0]?.message).toBe(
+        "command result details summarized for external delivery",
+      );
+      expect(body.diagnostics?.entries?.[0]?.message).not.toContain(promptUrl);
+      expect(body.diagnostics?.entries?.[0]?.exitCode).toBe(0);
+      expect(body.diagnostics?.entries?.[0]?.truncated).toBe(true);
+      expect(body.job?.state?.lastDiagnostics).toBeUndefined();
+      expect(body.job?.state?.lastDiagnosticSummary).toBeUndefined();
 
       const storedJob = state.cron.getJob(job.id);
       expect(storedJob?.state.lastDiagnosticSummary).toContain(promptUrl);
       expect(storedJob?.state.lastDiagnosticSummary).toContain(promptCode);
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("omits failed command summaries from completion webhooks", async () => {
+    const cfg = createCronConfig("server-cron-command-webhook-error");
+    loadConfigMock.mockReturnValue(cfg);
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      release: vi.fn(async () => {}),
+    });
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const promptUrl = "https://login.microsoft.com/device";
+      const script = [
+        `process.stdout.write('Open ${promptUrl} and enter the code ERROR-CODE-270.\\n');`,
+        "for (let i = 0; i < 80; i += 1) process.stdout.write(`noise-${i}-xxxxxxxxxxxxxxxxxxxxxxxx\\n`);",
+        "process.stdout.write('failed tail marker\\n');",
+        "process.exit(2);",
+      ].join("");
+      const job = await state.cron.add({
+        name: "webhook-error-command",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [process.execPath, "-e", script],
+          outputMaxBytes: 80,
+        },
+        delivery: {
+          mode: "webhook",
+          to: "https://example.invalid/cron-finished",
+        },
+      });
+
+      await state.cron.run(job.id, "force");
+
+      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+      const request = requireRecord(
+        callArg(fetchWithSsrFGuardMock, 0, 0, "fetch request"),
+        "fetch request",
+      );
+      const init = requireRecord(request.init, "fetch init");
+      const body = JSON.parse(String(init.body)) as {
+        diagnostics?: unknown;
+        job?: { state?: { lastDiagnostics?: unknown; lastDiagnosticSummary?: unknown } };
+        summary?: unknown;
+      };
+      expect(body.summary).toBeUndefined();
+      expect(body.diagnostics).toBeUndefined();
+      expect(body.job?.state?.lastDiagnostics).toBeUndefined();
+      expect(body.job?.state?.lastDiagnosticSummary).toBeUndefined();
+
+      const storedJob = state.cron.getJob(job.id);
+      expect(storedJob?.state.lastRunStatus).toBe("error");
+      expect(storedJob?.state.lastDiagnosticSummary).toContain(promptUrl);
+      expect(storedJob?.state.lastDiagnosticSummary).toContain("ERROR-CODE-270");
+    } finally {
+      state.cron.stop();
+    }
+  });
+
+  it("uses delivery summary for cron_changed command hooks", async () => {
+    const cfg = createCronConfig("server-cron-command-hook-tail");
+    loadConfigMock.mockReturnValue(cfg);
+
+    const state = buildGatewayCronService({
+      cfg,
+      deps: {} as CliDeps,
+      broadcast: () => {},
+    });
+    try {
+      const promptUrl = "https://login.microsoft.com/device";
+      const script = [
+        `process.stdout.write('Open ${promptUrl} and enter the code HOOK-CODE-270.\\n');`,
+        "for (let i = 0; i < 80; i += 1) process.stdout.write(`noise-${i}-xxxxxxxxxxxxxxxxxxxxxxxx\\n`);",
+        "process.stdout.write('hook tail marker\\n');",
+      ].join("");
+      const job = await state.cron.add({
+        name: "hook-tail-only-command",
+        enabled: true,
+        deleteAfterRun: false,
+        schedule: { kind: "at", at: new Date(1).toISOString() },
+        sessionTarget: "isolated",
+        wakeMode: "next-heartbeat",
+        payload: {
+          kind: "command",
+          argv: [process.execPath, "-e", script],
+          outputMaxBytes: 80,
+        },
+        delivery: {
+          mode: "none",
+        },
+      });
+
+      runCronChangedMock.mockClear();
+      await state.cron.run(job.id, "force");
+
+      const cronChangedCalls = runCronChangedMock.mock.calls as unknown[][];
+      const finishedCall = cronChangedCalls.find(([evt]) => {
+        const event = requireRecord(evt, "cron_changed event");
+        return event.action === "finished";
+      });
+      if (!finishedCall) {
+        throw new Error("expected finished cron_changed event");
+      }
+      const event = requireRecord(finishedCall[0], "cron_changed event");
+      expect(event.summary).toContain("hook tail marker");
+      expect(event.summary).not.toContain(promptUrl);
+
+      const storedJob = state.cron.getJob(job.id);
+      expect(storedJob?.state.lastDiagnosticSummary).toContain(promptUrl);
     } finally {
       state.cron.stop();
     }
