@@ -1261,6 +1261,44 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:release-configured-plugin-installs",
       label: "Configured plugin repair",
+      healthChecks: {
+        id: "core/doctor/configured-plugin-installs",
+        description: "Configured plugin install records and package payloads are repairable.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const {
+            detectConfiguredPluginInstallHealthIssues,
+            configuredPluginInstallIssueToHealthFinding,
+          } = await import("../commands/doctor/shared/missing-configured-plugin-install.js");
+          return (
+            await detectConfiguredPluginInstallHealthIssues({
+              cfg: ctx.cfg,
+              env: process.env,
+            })
+          ).map(configuredPluginInstallIssueToHealthFinding);
+        },
+        async repair(ctx) {
+          const {
+            detectConfiguredPluginInstallHealthIssues,
+            configuredPluginInstallIssueToRepairEffect,
+          } = await import("../commands/doctor/shared/missing-configured-plugin-install.js");
+          const effects = (
+            await detectConfiguredPluginInstallHealthIssues({
+              cfg: ctx.cfg,
+              env: process.env,
+            })
+          ).map(configuredPluginInstallIssueToRepairEffect);
+          if (ctx.dryRun === true) {
+            return { status: "repaired", changes: [], effects };
+          }
+          return {
+            status: "skipped",
+            reason: "legacy doctor configured plugin install repair owns package mutation",
+            changes: [],
+            effects,
+          };
+        },
+      },
       run: runReleaseConfiguredPluginInstallsHealth,
     }),
     createDoctorHealthContribution({
