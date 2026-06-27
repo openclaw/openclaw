@@ -25,6 +25,17 @@ export type ClaudeProgressWatch = {
   noteItemStarted(): void;
   /** A turn item completed. */
   noteItemCompleted(): void;
+  /**
+   * A native subagent (`Agent`/`Task`) was just dispatched. On the installed SDK
+   * version the subagent's item/started + item/completed bracket only the LLM
+   * *describing* the call; the actual run then happens silently in an SDK child,
+   * so openItems is already back to 0 by the time the slow part begins. This
+   * latch widens the stall window to `subagentTimeoutMs` until the next real
+   * progress note arrives — covering exactly that silent gap when running
+   * against an older bridge that doesn't emit `subagentActivity`. No-op when no
+   * subagent budget was configured (subagentTimeoutMs <= timeoutMs).
+   */
+  noteSubagentDispatched(): void;
   /** (Re)arm the watch from the current time; safe to call repeatedly. */
   arm(): void;
   /** Stop the watch and clear its timer. */
@@ -35,10 +46,26 @@ export function createClaudeProgressWatch(params: {
   timeoutMs: number;
   isSettled: () => boolean;
   onStall: (info: { idleMs: number; openItems: number }) => void;
+  /**
+   * Extended idle budget that applies while the subagent latch is engaged (see
+   * noteSubagentDispatched). Defaults to `timeoutMs` (no widening). Ignored when
+   * not greater than `timeoutMs`.
+   */
+  subagentTimeoutMs?: number;
 }): ClaudeProgressWatch {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let lastProgressAt = Date.now();
   let openItems = 0;
+  // When true, the silent post-dispatch window of a native subagent is in
+  // effect: use the wider budget. Cleared by any genuine progress/item signal,
+  // which means real activity has resumed and the normal window applies again.
+  let subagentLatched = false;
+  const subagentTimeoutMs =
+    params.subagentTimeoutMs && params.subagentTimeoutMs > params.timeoutMs
+      ? params.subagentTimeoutMs
+      : params.timeoutMs;
+
+  const effectiveTimeoutMs = () => (subagentLatched ? subagentTimeoutMs : params.timeoutMs);
 
   const clear = () => {
     if (timer) {
@@ -52,7 +79,7 @@ export function createClaudeProgressWatch(params: {
     if (params.isSettled()) {
       return;
     }
-    const delay = Math.max(1, params.timeoutMs - (Date.now() - lastProgressAt));
+    const delay = Math.max(1, effectiveTimeoutMs() - (Date.now() - lastProgressAt));
     timer = setTimeout(fire, delay);
     timer.unref?.();
   };
@@ -70,8 +97,9 @@ export function createClaudeProgressWatch(params: {
       return;
     }
     const idleMs = Date.now() - lastProgressAt;
-    if (idleMs < params.timeoutMs) {
-      // A late progress note pushed the deadline out; re-arm for the remainder.
+    if (idleMs < effectiveTimeoutMs()) {
+      // A late progress note (or the subagent latch widening the window) pushed
+      // the deadline out; re-arm for the remainder.
       schedule();
       return;
     }
@@ -79,19 +107,28 @@ export function createClaudeProgressWatch(params: {
     params.onStall({ idleMs, openItems });
   }
 
-  const bump = () => {
+  const bump = (opts?: { clearLatch?: boolean }) => {
+    if (opts?.clearLatch) {
+      subagentLatched = false;
+    }
     lastProgressAt = Date.now();
     schedule();
   };
 
   return {
-    noteProgress: bump,
+    // Real activity resumed → drop the subagent latch and return to the normal
+    // (tighter) window so a subsequent genuine hang is still caught promptly.
+    noteProgress: () => bump({ clearLatch: true }),
     noteItemStarted: () => {
       openItems += 1;
-      bump();
+      bump({ clearLatch: true });
     },
     noteItemCompleted: () => {
       openItems = Math.max(0, openItems - 1);
+      bump();
+    },
+    noteSubagentDispatched: () => {
+      subagentLatched = true;
       bump();
     },
     arm: schedule,

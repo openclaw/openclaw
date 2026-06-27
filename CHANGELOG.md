@@ -8,6 +8,10 @@ Docs: https://docs.openclaw.ai
 
 - **Constrainable bundled Claude harness:** the Claude app-server harness now derives its default `approvalPolicy` / `sandbox` from your core `tools.exec` policy and an enterprise `/etc/openclaw-claude/requirements.toml` floor (`allowed_approval_policies` / `allowed_sandbox_modes`), instead of only a static permissive default — so operators and enterprises can constrain the bundled Claude harness via the same mechanism Codex already uses (`/etc/codex/requirements.toml`). Explicit `appServer.approvalPolicy` / `appServer.sandbox` plugin config and the env overrides still win; with no exec policy and no requirements file the prior `never` / `danger-full-access` default is preserved. (#86655)
 
+### Fixes
+
+- **Native Claude subagents no longer get killed mid-run:** a Claude turn that dispatched a native `Agent` / `Task` subagent could be torn down with a "made no progress" idle timeout while the subagent was still working, losing its result. The subagent runs in an SDK child process that emits no progress to the parent turn, so only the bridge's keepalive heartbeat flowed — which the idle watchdog deliberately ignores so true hangs still die — and the turn stalled out after a few minutes. The bundled bridge (now `0.2.16`) now emits real `subagentActivity` progress for the duration of a native subagent run, which the watchdog counts as activity; and the consumer adds a wider `appServer.subagentProgressIdleTimeoutMs` budget (default 10 min, below the hard 30 min turn ceiling) that engages while a native subagent is in flight, so even an older bridge degrades gracefully instead of killing the turn. (#86655)
+
 ## 2026.6.10
 
 ### Highlights

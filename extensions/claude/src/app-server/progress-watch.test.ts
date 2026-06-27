@@ -117,4 +117,65 @@ describe("createClaudeProgressWatch", () => {
     expect(h.stalls).toHaveLength(0);
     setSpy.mockRestore();
   });
+
+  describe("native-subagent latch (noteSubagentDispatched)", () => {
+    it("widens the stall window to subagentTimeoutMs after a subagent dispatch", () => {
+      const h = make({ subagentTimeoutMs: 5000 });
+      h.watch.arm();
+      // Subagent dispatched (item already completed → openItems 0). Without the
+      // latch this would stall at 1000ms; with it, the budget is 5000ms.
+      h.watch.noteSubagentDispatched();
+      vi.advanceTimersByTime(4999);
+      expect(h.stalls).toHaveLength(0);
+      vi.advanceTimersByTime(1);
+      expect(h.stalls).toHaveLength(1);
+      expect(h.stalls[0].idleMs).toBeGreaterThanOrEqual(5000);
+    });
+
+    it("real progress during the silent window clears the latch and restores the tight window", () => {
+      const h = make({ subagentTimeoutMs: 5000 });
+      h.watch.arm();
+      h.watch.noteSubagentDispatched();
+      vi.advanceTimersByTime(3000); // inside the wide window
+      h.watch.noteProgress(); // subagent produced real output → latch cleared
+      // Now back to the normal 1000ms window.
+      vi.advanceTimersByTime(999);
+      expect(h.stalls).toHaveLength(0);
+      vi.advanceTimersByTime(1);
+      expect(h.stalls).toHaveLength(1);
+    });
+
+    it("noteItemStarted during the silent window also clears the latch", () => {
+      const h = make({ subagentTimeoutMs: 5000 });
+      h.watch.arm();
+      h.watch.noteSubagentDispatched();
+      vi.advanceTimersByTime(2000);
+      h.watch.noteItemStarted(); // subagent's first downstream tool
+      vi.advanceTimersByTime(10_000); // item open → suppressed regardless
+      expect(h.stalls).toHaveLength(0);
+      h.watch.noteItemCompleted();
+      // Latch was cleared by noteItemStarted, so the normal window applies.
+      vi.advanceTimersByTime(1000);
+      expect(h.stalls).toHaveLength(1);
+    });
+
+    it("is a no-op widening when no subagent budget is configured", () => {
+      // subagentTimeoutMs defaults to timeoutMs → latch must not extend anything.
+      const h = make();
+      h.watch.arm();
+      h.watch.noteSubagentDispatched();
+      vi.advanceTimersByTime(1000);
+      expect(h.stalls).toHaveLength(1);
+    });
+
+    it("ignores a subagent budget that is not larger than the base timeout", () => {
+      const h = make({ subagentTimeoutMs: 500 }); // < timeoutMs 1000 → ignored
+      h.watch.arm();
+      h.watch.noteSubagentDispatched();
+      vi.advanceTimersByTime(999);
+      expect(h.stalls).toHaveLength(0);
+      vi.advanceTimersByTime(1);
+      expect(h.stalls).toHaveLength(1);
+    });
+  });
 });

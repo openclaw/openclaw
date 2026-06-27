@@ -66,7 +66,7 @@ import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { getSharedClaudeAppServerClient, type ClaudeAppServerClient } from "./client.js";
 import { resolveClaudeAppServerConfig, type ResolvedClaudeAppServerConfig } from "./config.js";
 import { createClaudeDynamicToolBridge, type ClaudeDynamicToolBridge } from "./dynamic-tools.js";
-import { ClaudeAppServerEventProjector } from "./event-projector.js";
+import { ClaudeAppServerEventProjector, extractItemName } from "./event-projector.js";
 import { resolveManagedClaudeBridgeStartOptions } from "./managed-binary.js";
 import { resolveOpenClawExecPolicyForClaudeAppServer } from "./policy.js";
 import { createClaudeProgressWatch, type ClaudeProgressWatch } from "./progress-watch.js";
@@ -864,6 +864,15 @@ class IdleTimeoutError extends Error {
   }
 }
 
+// Native claude_code subagent tools. When one of these COMPLETES (the LLM
+// finished describing the call), the SDK runs the subagent silently in a child
+// process — so we engage the progress watch's wider subagent budget for the
+// otherwise-uncovered silent gap. Mirrors NATIVE_SUBAGENT_TOOL_NAMES in the
+// bridge's turn-runner. `TaskOutput`/`TaskStop` resolve promptly and are
+// excluded. Only relevant as a fallback for OLD bridges; bridge >= 0.2.16 emits
+// real `subagentActivity` progress that resets the watch directly.
+const NATIVE_SUBAGENT_TOOL_NAMES = new Set(["Agent", "Task"]);
+
 // Codex-consistent "no real progress" watchdog (mirrors the progress/attempt-idle
 // watch in extensions/codex/src/app-server/attempt-turn-watches.ts). The
 // turnIdleTimeoutMs watch resets on ANY turn notification — including the bridge's
@@ -1031,6 +1040,7 @@ async function runTurn(
 
     progressWatch = createClaudeProgressWatch({
       timeoutMs: cfg.appServer.progressIdleTimeoutMs,
+      subagentTimeoutMs: cfg.appServer.subagentProgressIdleTimeoutMs,
       isSettled: () => settled,
       onStall: ({ idleMs, openItems }) => {
         if (settled) {
@@ -1088,6 +1098,20 @@ async function runTurn(
           progressWatch?.noteItemStarted();
         } else if (notif.method === "item/completed") {
           progressWatch?.noteItemCompleted();
+          // If the completed item is a native subagent (Agent/Task), its real
+          // execution begins NOW and runs silently on this SDK version — engage
+          // the wider subagent budget until the next genuine progress note. This
+          // is the consumer-side belt-and-suspenders; bridge >= 0.2.16 also
+          // emits `subagentActivity` progress that keeps the watch alive
+          // directly, making this a no-op widening in the common case.
+          const completedItem = (notif.params as { item?: Record<string, unknown> } | undefined)
+            ?.item;
+          if (completedItem) {
+            const itemName = extractItemName(completedItem);
+            if (itemName && NATIVE_SUBAGENT_TOOL_NAMES.has(itemName)) {
+              progressWatch?.noteSubagentDispatched();
+            }
+          }
         } else {
           progressWatch?.noteProgress();
         }

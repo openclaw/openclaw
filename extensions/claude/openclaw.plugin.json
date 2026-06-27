@@ -54,6 +54,11 @@
             "type": "number",
             "minimum": 1,
             "description": "Progress watchdog: fail the turn if no REAL activity (excluding keepalive heartbeats) arrives for this many ms while no turn items are in flight. Default lives in code (DEFAULT_CLAUDE_APP_SERVER_PROGRESS_IDLE_TIMEOUT_MS); omit here to avoid the manifest default shadowing it."
+          },
+          "subagentProgressIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "description": "Extended progress watchdog applied only while a native subagent (Agent/Task) is in flight. Belt-and-suspenders for older bridges (< 0.2.16) that don't emit subagentActivity progress during the silent subagent run; the wider budget prevents the progress watch from tearing the turn down mid-subagent. Default lives in code (DEFAULT_CLAUDE_APP_SERVER_SUBAGENT_PROGRESS_IDLE_TIMEOUT_MS); kept below turnTimeoutMs, which remains the hard ceiling."
           }
         }
       },

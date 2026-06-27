@@ -51,6 +51,21 @@ export const DEFAULT_CLAUDE_APP_SERVER_TURN_IDLE_TIMEOUT_MS = 90_000;
 // between streamed tokens, short of the hard turnTimeoutMs ceiling.
 export const DEFAULT_CLAUDE_APP_SERVER_PROGRESS_IDLE_TIMEOUT_MS = 5 * 60_000;
 
+// Extended progress-idle budget that applies ONLY while a native subagent
+// (claude_code `Agent` / `Task`) is believed in-flight. Belt-and-suspenders for
+// the server-side fix (bridge >= 0.2.16 emits turn/progress
+// {kind:"subagentActivity"} during the otherwise-silent subagent run, which
+// already counts as real progress here). When running against an OLDER bridge
+// that only heartbeats, a native subagent emits item/started + item/completed
+// for the LLM *describing* the call, then runs silently in an SDK child with no
+// further notifications — so openItems returns to 0 BEFORE the slow part starts
+// and the 5-min progress-idle watch can tear the turn down mid-subagent. While
+// the latch is engaged the watch uses this longer budget instead, so even an old
+// bridge degrades gracefully. Kept below the hard turnTimeoutMs (30 min) ceiling,
+// which remains the absolute backstop for a genuinely hung subagent. Operators
+// can tune via appServer.subagentProgressIdleTimeoutMs.
+export const DEFAULT_CLAUDE_APP_SERVER_SUBAGENT_PROGRESS_IDLE_TIMEOUT_MS = 10 * 60_000;
+
 // Bare bin name of the bridge. Used only as the placeholder command when no
 // explicit override is set (commandSource "managed"); resolveManagedClaudeBridgeStartOptions
 // replaces it with the absolute path of the bundled binary before spawn.
@@ -79,6 +94,7 @@ export const CLAUDE_APP_SERVER_CONFIG_KEYS = [
   "turnTimeoutMs",
   "turnIdleTimeoutMs",
   "progressIdleTimeoutMs",
+  "subagentProgressIdleTimeoutMs",
 ] as const;
 
 export const CLAUDE_DYNAMIC_TOOLS_CONFIG_KEYS = ["exclude"] as const;
@@ -110,6 +126,7 @@ const appServerConfigSchema = z
     turnTimeoutMs: positiveIntegerSchema.optional(),
     turnIdleTimeoutMs: positiveIntegerSchema.optional(),
     progressIdleTimeoutMs: positiveIntegerSchema.optional(),
+    subagentProgressIdleTimeoutMs: positiveIntegerSchema.optional(),
   })
   .strict();
 
@@ -137,6 +154,7 @@ export type ClaudeAppServerRuntimeConfig = {
   turnTimeoutMs: number;
   turnIdleTimeoutMs: number;
   progressIdleTimeoutMs: number;
+  subagentProgressIdleTimeoutMs: number;
 };
 
 export type ClaudeDynamicToolsRuntimeConfig = {
@@ -232,6 +250,7 @@ export function resolveClaudeAppServerConfig(
     turnTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_TURN_TIMEOUT_MS,
     turnIdleTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_TURN_IDLE_TIMEOUT_MS,
     progressIdleTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_PROGRESS_IDLE_TIMEOUT_MS,
+    subagentProgressIdleTimeoutMs: DEFAULT_CLAUDE_APP_SERVER_SUBAGENT_PROGRESS_IDLE_TIMEOUT_MS,
   };
   if (parsed) {
     if (parsed.args !== undefined) {
@@ -248,6 +267,9 @@ export function resolveClaudeAppServerConfig(
     }
     if (parsed.progressIdleTimeoutMs !== undefined) {
       appServer.progressIdleTimeoutMs = parsed.progressIdleTimeoutMs;
+    }
+    if (parsed.subagentProgressIdleTimeoutMs !== undefined) {
+      appServer.subagentProgressIdleTimeoutMs = parsed.subagentProgressIdleTimeoutMs;
     }
   }
 
