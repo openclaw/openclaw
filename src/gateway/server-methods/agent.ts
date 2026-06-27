@@ -221,6 +221,36 @@ function clientHasAdminScope(client: GatewayRequestHandlerOptions["client"]): bo
   return scopes.includes(ADMIN_SCOPE);
 }
 
+function respondDeletedAgentSessionForKey(params: {
+  sessionKey: string;
+  agentId?: string;
+  respond: GatewayRequestHandlerOptions["respond"];
+}): boolean {
+  const sessionLoadOptions = {
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    clone: false,
+  };
+  const { cfg, entry, canonicalKey, legacyKey } = loadSessionEntry(
+    params.sessionKey,
+    sessionLoadOptions,
+  );
+  const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfg, canonicalKey, entry, {
+    acpMetadataSessionKey: legacyKey ?? canonicalKey,
+  });
+  if (deletedAgentId === null) {
+    return false;
+  }
+  params.respond(
+    false,
+    undefined,
+    errorShape(
+      ErrorCodes.INVALID_REQUEST,
+      `Agent "${deletedAgentId}" no longer exists in configuration`,
+    ),
+  );
+  return true;
+}
+
 function resolveAllowModelOverrideFromClient(
   client: GatewayRequestHandlerOptions["client"],
 ): boolean {
@@ -1660,6 +1690,13 @@ export const agentHandlers: GatewayRequestHandlers = {
       let isNewSession = false;
       let skipAgentInitialSessionTouch = false;
       let pendingChatRun: { sessionKey: string; agentId?: string } | undefined;
+
+      if (
+        requestedSessionKey &&
+        respondDeletedAgentSessionForKey({ sessionKey: requestedSessionKey, agentId, respond })
+      ) {
+        return;
+      }
 
       const resetCommandMatch = message.match(RESET_COMMAND_RE);
       if (resetCommandMatch && requestedSessionKey) {
