@@ -467,8 +467,15 @@ function toConversationRecord(
       ? conversation.title.trim()
       : "Untitled conversation";
   const transcript = activeBranchMessages(conversation);
-  const userTexts = transcript.filter((entry) => entry.role === "user").map((entry) => entry.text);
-  const assistantTexts = transcript.filter((entry) => entry.role === "assistant");
+  const userTexts: string[] = [];
+  let assistantMessageCount = 0;
+  for (const entry of transcript) {
+    if (entry.role === "user") {
+      userTexts.push(entry.text);
+    } else if (entry.role === "assistant") {
+      assistantMessageCount += 1;
+    }
+  }
   const sampleText = userTexts.slice(0, 6).join("\n");
   const risk = inferRisk(title, sampleText);
   const labels = inferLabels(title, sampleText);
@@ -487,7 +494,7 @@ function toConversationRecord(
     labels,
     risk,
     userMessageCount: userTexts.length,
-    assistantMessageCount: assistantTexts.length,
+    assistantMessageCount,
     preferenceSignals: risk.level === "low" ? collectPreferenceSignals(userTexts) : [],
     firstUserLine: userTexts[0]?.split(/\r?\n/)[0]?.trim(),
     lastUserLine: userTexts.at(-1)?.split(/\r?\n/)[0]?.trim(),
