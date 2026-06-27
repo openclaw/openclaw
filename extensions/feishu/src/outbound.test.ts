@@ -27,6 +27,20 @@ vi.mock("./media.js", () => ({
 vi.mock("./send.js", () => ({
   editMessageFeishu: vi.fn(),
   getMessageFeishu: vi.fn(),
+  normalizeFeishuPostMarkdownLineBreaks: (text: string) => {
+    const lines = text.replace(/\r\n?/g, "\n").split("\n");
+    const parts: string[] = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index] ?? "";
+      parts.push(line);
+      if (index === lines.length - 1) {
+        continue;
+      }
+      const nextLine = lines[index + 1] ?? "";
+      parts.push(line.length === 0 || nextLine.length === 0 ? "\n" : "\n\n");
+    }
+    return parts.join("");
+  },
   sendCardFeishu: sendCardFeishuMock,
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
@@ -281,6 +295,24 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
     expect(chunker("hello world", 5)).toEqual(["hello", "world"]);
   });
 
+  it("expands Feishu post markdown line breaks before applying the chunk limit", () => {
+    const chunker = feishuOutbound.chunker;
+    if (!chunker) {
+      throw new Error("feishuOutbound.chunker missing");
+    }
+
+    const rawNearLimit = Array.from({ length: 2000 }, () => "x").join("\n");
+    expect(rawNearLimit).toHaveLength(3999);
+
+    const chunks = chunker(rawNearLimit, 4000);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 4000)).toBe(true);
+    for (const chunk of chunks) {
+      expect(chunk).not.toMatch(/[^\n]\n[^\n]/u);
+    }
+  });
+
   async function createTmpImage(ext = ".png"): Promise<{ dir: string; file: string }> {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-feishu-outbound-"));
     const file = path.join(dir, `sample${ext}`);
@@ -395,6 +427,28 @@ describe("feishuOutbound.sendText local-image auto-convert", () => {
 describe("feishuOutbound.sendPayload native cards", () => {
   beforeEach(() => {
     resetOutboundMocks();
+  });
+
+  it("sends newline-expanded post chunks within the Feishu text limit", async () => {
+    const rawNearLimit = Array.from({ length: 2000 }, () => "x").join("\n");
+
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "chat_1",
+      text: rawNearLimit,
+      accountId: "main",
+      payload: { text: rawNearLimit },
+    });
+
+    const calls = sendMessageFeishuMock.mock.calls as unknown as Array<[Record<string, any>]>;
+    expect(calls.length).toBeGreaterThan(1);
+    for (const [call] of calls) {
+      expect(call.to).toBe("chat_1");
+      expect(call.accountId).toBe("main");
+      expect(call.postMarkdownLineBreaksNormalized).toBe(true);
+      expect(call.text.length).toBeLessThanOrEqual(4000);
+      expect(call.text).not.toMatch(/[^\n]\n[^\n]/u);
+    }
   });
 
   async function createTmpImage(ext = ".png"): Promise<{ dir: string; file: string }> {
@@ -824,6 +878,19 @@ describe("feishuOutbound.sendPayload native cards", () => {
     expect(sendCardFeishuMock).not.toHaveBeenCalled();
     expect(commentThreadParams()?.content).toBe("Review this\n\n- Approve");
     expectFeishuResult(result, "reply_msg");
+  });
+
+  it("does not apply post markdown newline expansion to document comments", async () => {
+    await feishuOutbound.sendPayload?.({
+      cfg: emptyConfig,
+      to: "comment:docx:doxcn123:7623358762119646411",
+      text: "First line\nSecond line",
+      accountId: "main",
+      payload: { text: "First line\nSecond line" },
+    });
+
+    expect(commentThreadParams()?.content).toBe("First line\nSecond line");
+    expect(sendMessageFeishuMock).not.toHaveBeenCalled();
   });
 });
 

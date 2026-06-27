@@ -544,6 +544,8 @@ export type SendFeishuMessageParams = {
   mentions?: MentionTarget[];
   /** Account ID (optional, uses default if not specified) */
   accountId?: string;
+  /** Internal: text already expanded before outbound chunking. */
+  postMarkdownLineBreaksNormalized?: boolean;
 };
 
 type FeishuPostMessageElement =
@@ -571,7 +573,7 @@ function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostM
   return elements;
 }
 
-function normalizeFeishuPostMarkdownLineBreaks(text: string): string {
+export function normalizeFeishuPostMarkdownLineBreaks(text: string): string {
   const lines = text.replace(/\r\n?/g, "\n").split("\n");
   const parts: string[] = [];
   let inFence = false;
@@ -611,7 +613,7 @@ export function buildFeishuPostMessagePayload(params: {
     ...buildFeishuPostMentionElements(mentions),
     {
       tag: "md",
-      text: normalizeFeishuPostMarkdownLineBreaks(messageText),
+      text: messageText,
     },
   ];
   return {
@@ -636,6 +638,7 @@ export async function sendMessageFeishu(
     allowTopLevelReplyFallback,
     mentions,
     accountId,
+    postMarkdownLineBreaksNormalized,
   } = params;
   const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
   const tableMode = resolveMarkdownTableMode({
@@ -643,7 +646,10 @@ export async function sendMessageFeishu(
     channel: "feishu",
   });
 
-  const messageText = convertMarkdownTables(text ?? "", tableMode);
+  const convertedText = convertMarkdownTables(text ?? "", tableMode);
+  const messageText = postMarkdownLineBreaksNormalized
+    ? convertedText
+    : normalizeFeishuPostMarkdownLineBreaks(convertedText);
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText, mentions });
 
@@ -729,7 +735,9 @@ export async function editMessageFeishu(params: {
     cfg,
     channel: "feishu",
   });
-  const messageText = convertMarkdownTables(text!, tableMode);
+  const messageText = normalizeFeishuPostMarkdownLineBreaks(
+    convertMarkdownTables(text!, tableMode),
+  );
   const payload = buildFeishuPostMessagePayload({ messageText });
   const response = await client.im.message.patch({
     path: { message_id: messageId },

@@ -1,7 +1,11 @@
 // Feishu tests cover send plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
-import { buildFeishuPostMessagePayload, buildMarkdownCard } from "./send.js";
+import {
+  buildFeishuPostMessagePayload,
+  buildMarkdownCard,
+  normalizeFeishuPostMarkdownLineBreaks,
+} from "./send.js";
 
 const {
   mockConvertMarkdownTables,
@@ -105,47 +109,40 @@ describe("buildFeishuPostMessagePayload", () => {
       },
     });
   });
+});
 
+describe("normalizeFeishuPostMarkdownLineBreaks", () => {
   it("expands single markdown newlines outside fenced code blocks", () => {
-    const payload = buildFeishuPostMessagePayload({
-      messageText: [
+    expect(
+      normalizeFeishuPostMarkdownLineBreaks(
+        [
+          "First line",
+          "Second line",
+          "",
+          "Already separated",
+          "```ts",
+          "const a = 1;",
+          "const b = 2;",
+          "```",
+          "After",
+        ].join("\n"),
+      ),
+    ).toBe(
+      [
         "First line",
+        "",
         "Second line",
         "",
         "Already separated",
+        "",
         "```ts",
         "const a = 1;",
         "const b = 2;",
         "```",
+        "",
         "After",
       ].join("\n"),
-    });
-
-    expect(JSON.parse(payload.content)).toEqual({
-      zh_cn: {
-        content: [
-          [
-            {
-              tag: "md",
-              text: [
-                "First line",
-                "",
-                "Second line",
-                "",
-                "Already separated",
-                "",
-                "```ts",
-                "const a = 1;",
-                "const b = 2;",
-                "```",
-                "",
-                "After",
-              ].join("\n"),
-            },
-          ],
-        ],
-      },
-    });
+    );
   });
 });
 
@@ -331,6 +328,40 @@ describe("getMessageFeishu", () => {
             conversationId: "oc_send",
           },
         ],
+      },
+    });
+  });
+
+  it("normalizes post markdown line breaks before sending text", async () => {
+    const create = vi.fn().mockResolvedValue({ code: 0, data: { message_id: "om_lines" } });
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+
+    await sendMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      to: "oc_send",
+      text: "First line\nSecond line",
+    });
+
+    expect(create).toHaveBeenCalledWith({
+      params: { receive_id_type: "chat_id" },
+      data: {
+        receive_id: "oc_send",
+        msg_type: "post",
+        content: JSON.stringify({
+          zh_cn: {
+            content: [[{ tag: "md", text: "First line\n\nSecond line" }]],
+          },
+        }),
       },
     });
   });
@@ -733,7 +764,7 @@ describe("editMessageFeishu", () => {
     const result = await editMessageFeishu({
       cfg: {} as ClawdbotConfig,
       messageId: "om_edit",
-      text: "updated body",
+      text: "updated\nbody",
     });
 
     expect(mockClientPatch).toHaveBeenCalledWith({
@@ -745,7 +776,7 @@ describe("editMessageFeishu", () => {
               [
                 {
                   tag: "md",
-                  text: "updated body",
+                  text: "updated\n\nbody",
                 },
               ],
             ],

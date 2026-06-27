@@ -60,6 +60,20 @@ vi.mock("./accounts.js", () => ({
 }));
 vi.mock("./runtime.js", () => ({ getFeishuRuntime: getFeishuRuntimeMock }));
 vi.mock("./send.js", () => ({
+  normalizeFeishuPostMarkdownLineBreaks: (text: string) => {
+    const lines = text.replace(/\r\n?/g, "\n").split("\n");
+    const parts: string[] = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index] ?? "";
+      parts.push(line);
+      if (index === lines.length - 1) {
+        continue;
+      }
+      const nextLine = lines[index + 1] ?? "";
+      parts.push(line.length === 0 || nextLine.length === 0 ? "\n" : "\n\n");
+    }
+    return parts.join("");
+  },
   sendMessageFeishu: sendMessageFeishuMock,
   sendMarkdownCardFeishu: sendMarkdownCardFeishuMock,
   sendStructuredCardFeishu: sendStructuredCardFeishuMock,
@@ -454,6 +468,35 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
       },
       1,
     );
+    expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
+  });
+
+  it("chunks non-streaming Feishu post replies after newline expansion", async () => {
+    useNonStreamingAutoAccount();
+    const runtime = getFeishuRuntimeMock();
+    runtime.channel.text.resolveTextChunkLimit.mockReturnValue(4000);
+    runtime.channel.text.chunkTextWithMode.mockImplementation((text: string, limit: number) => {
+      const splitAt = text.lastIndexOf("\n", limit);
+      return [text.slice(0, splitAt).trimEnd(), text.slice(splitAt + 1).trimStart()].filter(
+        Boolean,
+      );
+    });
+    const rawNearLimit = Array.from({ length: 2000 }, () => "x").join("\n");
+
+    const { options } = createDispatcherHarness();
+    await options.deliver({ text: rawNearLimit }, { kind: "final" });
+    await options.onIdle?.();
+
+    const chunkSource = runtime.channel.text.chunkTextWithMode.mock.calls[0]?.[0];
+    expect(chunkSource).toHaveLength(5998);
+    expect(chunkSource).not.toMatch(/[^\n]\n[^\n]/u);
+    const calls = sendMessageFeishuMock.mock.calls as unknown as Array<[Record<string, any>]>;
+    expect(calls.length).toBeGreaterThan(1);
+    for (const [call] of calls) {
+      expect(call.postMarkdownLineBreaksNormalized).toBe(true);
+      expect(call.text.length).toBeLessThanOrEqual(4000);
+      expect(call.text).not.toMatch(/[^\n]\n[^\n]/u);
+    }
     expect(sendStructuredCardFeishuMock).not.toHaveBeenCalled();
   });
 
