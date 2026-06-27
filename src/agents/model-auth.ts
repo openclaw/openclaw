@@ -124,7 +124,12 @@ export type RuntimeProviderAuthLookup = {
 
 const log = createSubsystemLogger("model-auth");
 const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_AUDIO_TRANSCRIPTIONS_API = "openai-audio-transcriptions";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
+
+function openAIModelApiAllowsBearerAuth(modelApi: string): boolean {
+  return modelApi === OPENAI_CODEX_RESPONSES_API || modelApi === OPENAI_AUDIO_TRANSCRIPTIONS_API;
+}
 
 function directOpenAIPlatformModelRequiresApiKey(params: {
   provider: string;
@@ -133,7 +138,7 @@ function directOpenAIPlatformModelRequiresApiKey(params: {
   return (
     normalizeProviderId(params.provider) === OPENAI_PROVIDER_ID &&
     params.modelApi !== undefined &&
-    normalizeLowercaseStringOrEmpty(params.modelApi) !== OPENAI_CODEX_RESPONSES_API
+    !openAIModelApiAllowsBearerAuth(normalizeLowercaseStringOrEmpty(params.modelApi))
   );
 }
 
