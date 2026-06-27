@@ -8,8 +8,8 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
 import { applyMergePatch } from "../../config/merge-patch.js";
 import { resolveSessionTranscriptPath, resolveStorePath } from "../../config/sessions/paths.js";
+import { loadSessionEntry, listSessionEntries } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { loadSessionStore } from "../../config/sessions/store.js";
 import type { SessionEntry, SessionScope } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
@@ -217,11 +217,10 @@ export function initFastReplySessionState(params: {
     mainKey: cfg.session?.mainKey,
   });
   const storePath = resolveStorePath(cfg.session?.store, { agentId });
-  const sessionStore: Record<string, SessionEntry> = loadSessionStore(storePath, {
-    skipCache: true,
-    clone: false,
-  });
-  const existingEntry = sessionStore[sessionKey];
+  const sessionStore: Record<string, SessionEntry> = Object.fromEntries(
+    listSessionEntries({ storePath }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+  );
+  const existingEntry = loadSessionEntry({ storePath, sessionKey });
   const commandSource = ctx.BodyForCommands ?? ctx.CommandBody ?? ctx.RawBody ?? ctx.Body ?? "";
   const triggerBodyNormalized = isFormattedGoalContinuationPrompt(commandSource)
     ? commandSource.trim()
