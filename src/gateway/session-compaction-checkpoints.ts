@@ -703,13 +703,7 @@ function shouldRouteCheckpointSessionMutationToSqlite(params: {
   if (!entry) {
     return false;
   }
-  const checkpoint = entry.compactionCheckpoints?.find(
-    (candidate) => candidate.checkpointId === params.checkpointId,
-  );
-  return Boolean(
-    parseSqliteSessionFileMarker(checkpoint?.preCompaction.sessionFile) ||
-    parseSqliteSessionFileMarker(checkpoint?.postCompaction.sessionFile),
-  );
+  return Boolean(parseSqliteSessionFileMarker(entry.sessionFile));
 }
 
 /**
@@ -845,8 +839,12 @@ export async function persistSessionCompactionCheckpoint(
 ): Promise<SessionCompactionCheckpoint | null> {
   const snapshotSessionFile = params.snapshot.sessionFile?.trim();
   const postSessionFile = params.postSessionFile?.trim();
+  const snapshotSqliteMarker = parseSqliteSessionFileMarker(snapshotSessionFile);
+  const postSqliteMarker = parseSqliteSessionFileMarker(postSessionFile);
+  const snapshotArtifactFile = snapshotSqliteMarker ? undefined : snapshotSessionFile;
+  const postArtifactFile = postSqliteMarker ? undefined : postSessionFile;
   const postSourceLeafId = params.postEntryId?.trim() || params.postLeafId?.trim();
-  if (!snapshotSessionFile && (!postSessionFile || !postSourceLeafId)) {
+  if (!snapshotArtifactFile && !postSourceLeafId) {
     log.warn("skipping compaction checkpoint persist: missing stable fork source", {
       sessionKey: params.sessionKey,
     });
@@ -872,15 +870,13 @@ export async function persistSessionCompactionCheckpoint(
       : {}),
     preCompaction: {
       sessionId: params.snapshot.sessionId,
-      ...(params.snapshot.sessionFile?.trim()
-        ? { sessionFile: params.snapshot.sessionFile.trim() }
-        : {}),
+      ...(snapshotArtifactFile ? { sessionFile: snapshotArtifactFile } : {}),
       leafId: params.snapshot.leafId,
       ...(params.snapshot.entryId?.trim() ? { entryId: params.snapshot.entryId.trim() } : {}),
     },
     postCompaction: {
       sessionId: params.sessionId,
-      ...(postSessionFile ? { sessionFile: postSessionFile } : {}),
+      ...(postArtifactFile ? { sessionFile: postArtifactFile } : {}),
       ...(params.postLeafId?.trim() ? { leafId: params.postLeafId.trim() } : {}),
       ...(params.postEntryId?.trim() ? { entryId: params.postEntryId.trim() } : {}),
     },
@@ -920,7 +916,7 @@ export async function persistSessionCompactionCheckpoint(
     });
     return null;
   }
-  const checkpointArtifactFile = snapshotSessionFile || postSessionFile || "";
+  const checkpointArtifactFile = snapshotArtifactFile || postArtifactFile || "";
   await cleanupTrimmedCompactionCheckpointFiles({
     removed: trimmedCheckpoints?.removed ?? [],
     retained: trimmedCheckpoints?.kept,
