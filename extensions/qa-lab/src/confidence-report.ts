@@ -389,8 +389,7 @@ function evaluateQaSuiteSummary(payload: unknown): QaConfidenceLaneEvaluation {
   const failedCount = readCount(counts?.failed);
   const explicitSkippedCount = readCount(counts?.skipped);
   if (totalCount !== undefined) {
-    const providedCountSum =
-      (passedCount ?? 0) + (failedCount ?? 0) + (explicitSkippedCount ?? 0);
+    const providedCountSum = (passedCount ?? 0) + (failedCount ?? 0) + (explicitSkippedCount ?? 0);
     if (totalCount < providedCountSum) {
       return {
         passed: false,
@@ -878,14 +877,29 @@ function applySkipBackfillState(
 }
 
 function countLaneResults(lanes: readonly QaConfidenceLaneResult[]): QaConfidenceReport["counts"] {
-  return {
+  const counts: QaConfidenceReport["counts"] = {
     total: lanes.length,
-    passed: lanes.filter((lane) => lane.status === "pass").length,
-    failed: lanes.filter((lane) => lane.status === "fail").length,
-    blocked: lanes.filter((lane) => lane.status === "blocked").length,
-    missing: lanes.filter((lane) => lane.status === "missing").length,
-    unknown: lanes.filter((lane) => lane.status === "unknown" || lane.status === "missing").length,
+    passed: 0,
+    failed: 0,
+    blocked: 0,
+    missing: 0,
+    unknown: 0,
   };
+  for (const lane of lanes) {
+    if (lane.status === "pass") {
+      counts.passed += 1;
+    } else if (lane.status === "fail") {
+      counts.failed += 1;
+    } else if (lane.status === "blocked") {
+      counts.blocked += 1;
+    } else if (lane.status === "missing") {
+      counts.missing += 1;
+      counts.unknown += 1;
+    } else if (lane.status === "unknown") {
+      counts.unknown += 1;
+    }
+  }
+  return counts;
 }
 
 function failuresForLaneResults(lanes: readonly QaConfidenceLaneResult[]): string[] {
