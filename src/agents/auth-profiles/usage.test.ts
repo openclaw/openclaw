@@ -1050,7 +1050,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(headers.Authorization).toBe("Bearer codex-access-token");
     expect(headers["ChatGPT-Account-Id"]).toBe("acct_test_123");
     expect(headers.originator).toBe("openclaw");
-    expect(headers["User-Agent"]).toContain("Mozilla/5.0");
+    expect(headers["User-Agent"]).toMatch(/^openclaw\//);
     const stats = store.usageStats?.["openai:default"];
     if (exactBlocked) {
       expect(stats?.blockedUntil).toBe(now + expectedMs);
