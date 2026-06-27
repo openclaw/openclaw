@@ -147,10 +147,26 @@ function buildRow(params: {
 }
 
 function buildAggregate(rows: readonly TokenEfficiencyRow[]): TokenEfficiencyReport["aggregate"] {
-  const openclawTotals = rows.map((row) => row.openclaw.totalTokens);
-  const codexTotals = rows.map((row) => row.codex.totalTokens);
-  const openclawTotalTokens = openclawTotals.reduce((sum, value) => sum + value, 0);
-  const codexTotalTokens = codexTotals.reduce((sum, value) => sum + value, 0);
+  const openclawTotals: number[] = [];
+  const codexTotals: number[] = [];
+  const flaggedScenarios: string[] = [];
+  const savingsScenarios: string[] = [];
+  let openclawTotalTokens = 0;
+  let codexTotalTokens = 0;
+  for (const row of rows) {
+    const openclawTokens = row.openclaw.totalTokens;
+    const codexTokens = row.codex.totalTokens;
+    openclawTotals.push(openclawTokens);
+    codexTotals.push(codexTokens);
+    openclawTotalTokens += openclawTokens;
+    codexTotalTokens += codexTokens;
+    if (row.flagged) {
+      flaggedScenarios.push(row.scenarioId);
+    }
+    if (row.classification === "savings") {
+      savingsScenarios.push(row.scenarioId);
+    }
+  }
   return {
     openclaw: {
       totalTokens: openclawTotalTokens,
@@ -163,10 +179,8 @@ function buildAggregate(rows: readonly TokenEfficiencyRow[]): TokenEfficiencyRep
       p90PerScenario: percentile(codexTotals, 90),
     },
     deltaPercent: deltaPercent(openclawTotalTokens, codexTotalTokens),
-    flaggedScenarios: rows.filter((row) => row.flagged).map((row) => row.scenarioId),
-    savingsScenarios: rows
-      .filter((row) => row.classification === "savings")
-      .map((row) => row.scenarioId),
+    flaggedScenarios,
+    savingsScenarios,
   };
 }
 
