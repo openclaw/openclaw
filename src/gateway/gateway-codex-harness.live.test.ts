@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import type { ContextEngine } from "../context-engine/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
+import { setTestEnvValue } from "../test-utils/env.js";
 import type { CallGatewayOptions } from "./call.js";
 import type { GatewayClient } from "./client.js";
 import {
@@ -1056,14 +1057,14 @@ describeLive("gateway live (Codex harness)", () => {
       } else if (!process.env.OPENAI_BASE_URL?.trim()) {
         delete process.env.OPENAI_BASE_URL;
       }
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       process.env.OPENCLAW_GATEWAY_TOKEN = token;
       process.env.OPENCLAW_SKIP_BROWSER_CONTROL_SERVER = "1";
       process.env.OPENCLAW_SKIP_CANVAS_HOST = "1";
       process.env.OPENCLAW_SKIP_CHANNELS = "1";
       process.env.OPENCLAW_SKIP_CRON = "1";
       process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
-      process.env.OPENCLAW_STATE_DIR = stateDir;
+      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
 
       await fs.mkdir(stateDir, { recursive: true });
       await writeLiveGatewayConfig({

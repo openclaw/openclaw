@@ -372,10 +372,7 @@ describe("noteWorkspaceStatus", () => {
     }
   });
 
-  const makeSkill = (
-    skillKey: string,
-    fields: { eligible: boolean; platformIncompatible: boolean },
-  ) =>
+  const makeSkill = (skillKey: string, fields: { eligible: boolean; platformIncompatible: boolean }) =>
     ({
       skillKey,
       disabled: false,

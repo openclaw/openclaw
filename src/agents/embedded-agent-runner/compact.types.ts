@@ -6,6 +6,7 @@ import type { ReasoningLevel, ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngine, ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import type { CommandQueueEnqueueFn } from "../../process/command-queue.types.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import type { ExecElevatedDefaults, ExecToolDefaults } from "../bash-tools.exec-types.js";
@@ -57,6 +58,8 @@ export type CompactEmbeddedAgentSessionParams = {
   senderIsOwner?: boolean;
   provider?: string;
   model?: string;
+  /** Caller-resolved model/provider shape used by native harness compactors. */
+  runtimeModel?: Model;
   /** Effective model fallback chain for this session attempt. Undefined uses config defaults. */
   modelFallbacksOverride?: string[];
   /** Optional caller-resolved context engine for harness-owned compaction. */

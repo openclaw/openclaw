@@ -240,7 +240,7 @@ plugins.
     | `/tasks` | List active/recent background tasks for the current session |
     | `/context [list\|detail\|map\|json]` | Explain how context is assembled |
     | `/whoami` | Show your sender id. Alias: `/id` |
-    | `/usage off\|tokens\|full\|cost` | Control the per-response usage footer or print a local cost summary |
+    | `/usage off\|tokens\|full\|reset\|cost` | Control the per-response usage footer (`reset`/`inherit`/`clear`/`default` clears the session override to re-inherit the configured default) or print a local cost summary |
   </Accordion>
 
   <Accordion title="Skills, allowlists, approvals">

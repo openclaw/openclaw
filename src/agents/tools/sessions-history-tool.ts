@@ -19,7 +19,13 @@ import {
 } from "../tool-description-presets.js";
 import { stripToolMessages } from "./chat-history-text.js";
 import type { AnyAgentTool } from "./common.js";
-import { jsonResult, readPositiveIntegerParam, readStringParam } from "./common.js";
+import {
+  jsonResult,
+  readNumberParam,
+  readPositiveIntegerParam,
+  readStringParam,
+  ToolInputError,
+} from "./common.js";
 import {
   createSessionVisibilityGuard,
   createAgentToAgentPolicy,
@@ -32,6 +38,7 @@ import {
 const SessionsHistoryToolSchema = Type.Object({
   sessionKey: Type.String(),
   limit: optionalPositiveIntegerSchema(),
+  offset: Type.Optional(Type.Integer({ minimum: 0 })),
   includeTools: Type.Optional(Type.Boolean()),
   includeFamily: Type.Optional(Type.Boolean()),
 });
@@ -39,6 +46,23 @@ const SessionsHistoryToolSchema = Type.Object({
 const SESSIONS_HISTORY_MAX_BYTES = 80 * 1024;
 const SESSIONS_HISTORY_TEXT_MAX_CHARS = 4000;
 type GatewayCaller = typeof callGateway;
+type ChatHistoryPaginationMetadata = {
+  offset?: number;
+  nextOffset?: number;
+  hasMore?: boolean;
+  totalMessages?: number;
+};
+
+function readOffsetParam(params: Record<string, unknown>): number | undefined {
+  const offset = readNumberParam(params, "offset", {
+    integer: true,
+    nonNegativeInteger: true,
+  });
+  if (params.offset !== undefined && offset === undefined) {
+    throw new ToolInputError("offset must be a non-negative integer");
+  }
+  return offset;
+}
 
 // sandbox policy handling is shared with sessions-list-tool via sessions-helpers.ts
 
@@ -175,13 +199,80 @@ function enforceSessionsHistoryHardCap(params: {
     return { items: lastOnly, bytes: lastBytes, hardCapped: true };
   }
 
-  const placeholder = [
-    {
-      role: "assistant",
-      content: "[sessions_history omitted: message too large]",
-    },
-  ];
+  const placeholder = [buildSessionsHistoryOmittedPlaceholder(last)];
   return { items: placeholder, bytes: jsonUtf8Bytes(placeholder), hardCapped: true };
+}
+
+function readHistoryMessageSeq(message: unknown): number | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const meta = (message as Record<string, unknown>)["__openclaw"];
+  if (!meta || typeof meta !== "object" || Array.isArray(meta)) {
+    return undefined;
+  }
+  const seq = (meta as Record<string, unknown>).seq;
+  return typeof seq === "number" && Number.isSafeInteger(seq) && seq > 0 ? seq : undefined;
+}
+
+function buildSessionsHistoryOmittedPlaceholder(source: unknown): Record<string, unknown> {
+  const seq = readHistoryMessageSeq(source);
+  return {
+    role: "assistant",
+    content: "[sessions_history omitted: message too large]",
+    ...(seq !== undefined ? { __openclaw: { seq } } : {}),
+  };
+}
+
+function resolveSessionsHistoryPaginationMetadata(params: {
+  messages: unknown[];
+  result: ChatHistoryPaginationMetadata | undefined;
+  requestedOffset: number | undefined;
+}): ChatHistoryPaginationMetadata {
+  const result = params.result;
+  const offset =
+    typeof result?.offset === "number"
+      ? result.offset
+      : params.requestedOffset !== undefined
+        ? params.requestedOffset
+        : undefined;
+  if (offset === undefined) {
+    return {};
+  }
+
+  const totalMessages =
+    typeof result?.totalMessages === "number" ? result.totalMessages : undefined;
+  if (totalMessages === undefined) {
+    return {
+      offset,
+      ...(typeof result?.nextOffset === "number" ? { nextOffset: result.nextOffset } : {}),
+      ...(typeof result?.hasMore === "boolean" ? { hasMore: result.hasMore } : {}),
+    };
+  }
+
+  // Gateway offsets count newest transcript rows already returned. Recompute
+  // from the oldest surviving seq after this tool's own filter/cap passes.
+  const oldestSeq = params.messages
+    .map((message) => readHistoryMessageSeq(message))
+    .find((seq): seq is number => typeof seq === "number");
+  const nextOffset =
+    oldestSeq !== undefined
+      ? Math.max(offset, totalMessages - oldestSeq + 1)
+      : typeof result?.nextOffset === "number"
+        ? result.nextOffset
+        : undefined;
+  const hasMore =
+    nextOffset !== undefined
+      ? nextOffset < totalMessages
+      : typeof result?.hasMore === "boolean"
+        ? result.hasMore
+        : undefined;
+  return {
+    offset,
+    ...(hasMore === true && nextOffset !== undefined ? { nextOffset } : {}),
+    ...(hasMore !== undefined ? { hasMore } : {}),
+    totalMessages,
+  };
 }
 
 export function createSessionsHistoryTool(opts?: {
@@ -255,11 +346,23 @@ export function createSessionsHistoryTool(opts?: {
       }
 
       const limit = readPositiveIntegerParam(params, "limit");
+      const offset = readOffsetParam(params);
       const includeTools = Boolean(params.includeTools);
-      const includeFamily = params.includeFamily === true;
-      const result = await gatewayCall<{ messages: Array<unknown> }>({
+      const includeFamily = Boolean(params.includeFamily ?? params.resetAncestors);
+      const result = await gatewayCall<{
+        messages: Array<unknown>;
+        offset?: number;
+        nextOffset?: number;
+        hasMore?: boolean;
+        totalMessages?: number;
+      }>({
         method: "chat.history",
-        params: { sessionKey: resolvedKey, limit, includeFamily },
+        params: {
+          sessionKey: resolvedKey,
+          limit,
+          ...(offset !== undefined ? { offset } : {}),
+          includeFamily,
+        },
       });
       const rawMessages = Array.isArray(result?.messages) ? result.messages : [];
       const selectedMessages = includeTools ? rawMessages : stripToolMessages(rawMessages);
@@ -276,6 +379,11 @@ export function createSessionsHistoryTool(opts?: {
         bytes: cappedMessages.bytes,
         maxBytes: SESSIONS_HISTORY_MAX_BYTES,
       });
+      const pagination = resolveSessionsHistoryPaginationMetadata({
+        messages: hardened.items,
+        result,
+        requestedOffset: offset,
+      });
       return jsonResult({
         sessionKey: displayKey,
         messages: hardened.items,
@@ -284,6 +392,7 @@ export function createSessionsHistoryTool(opts?: {
         contentTruncated,
         contentRedacted,
         bytes: hardened.bytes,
+        ...pagination,
       });
     },
   };

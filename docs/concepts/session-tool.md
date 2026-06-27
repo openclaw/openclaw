@@ -61,8 +61,14 @@ By default, it reads only the active transcript for that session and excludes
 tool results. Pass `includeTools: true` to see tool calls/results. Pass
 `includeFamily: true` to opt in to reset-family history: OpenClaw will include
 reset-ancestor transcripts linked through the session family before the active
-session transcript. The underlying Gateway `chat.history` method uses the same
-`includeFamily` flag; omitted or `false` keeps the active-history default.
+session transcript. `resetAncestors: true` is an alias for `includeFamily: true`
+on this tool. The underlying Gateway `chat.history` method uses the same
+`includeFamily` flag; omitted or `false` keeps the active-history default. Use
+`limit` for the newest bounded tail. Pass `offset: 0` when you need
+pagination metadata, then pass returned `nextOffset` values to page backward
+through older OpenClaw transcript windows without reading raw transcript files.
+Explicit offset pages do not merge external CLI fallback imports; use the
+default newest-tail view when you need that merged display history.
 The returned view is intentionally bounded and safety-filtered:
 
 - assistant text is normalized before recall:
@@ -83,7 +89,7 @@ The returned view is intentionally bounded and safety-filtered:
 - very large histories can drop older rows or replace an oversized row with
   `[sessions_history omitted: message too large]`
 - the tool reports summary flags such as `truncated`, `droppedMessages`,
-  `contentTruncated`, `contentRedacted`, and `bytes`
+  `contentTruncated`, `contentRedacted`, `bytes`, and pagination metadata
 
 Both tools accept either a **session key** (like `"main"`) or a **session ID**
 from a previous list call.

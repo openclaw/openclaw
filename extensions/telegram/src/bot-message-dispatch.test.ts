@@ -83,6 +83,7 @@ const appendAssistantMirrorMessageByIdentity = vi.hoisted(() =>
     messageId: "m1",
   })),
 );
+const getSessionEntry = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
 const readLatestAssistantTextByIdentity = vi.hoisted(() =>
   vi.fn<() => Promise<{ text: string; timestamp?: number } | undefined>>(async () => undefined),
@@ -102,11 +103,6 @@ const getAgentScopedMediaLocalRoots = vi.hoisted(() =>
 );
 const resolveChunkMode = vi.hoisted(() => vi.fn(() => undefined));
 const resolveMarkdownTableMode = vi.hoisted(() => vi.fn(() => "preserve"));
-const resolveSessionStoreEntry = vi.hoisted(() =>
-  vi.fn(({ store, sessionKey }: { store: Record<string, unknown>; sessionKey: string }) => ({
-    existing: store[sessionKey],
-  })),
-);
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
@@ -153,12 +149,11 @@ vi.mock("./send.js", () => ({
 
 vi.mock("./bot-message-dispatch.runtime.js", () => ({
   generateTopicLabel,
+  getSessionEntry,
   getAgentScopedMediaLocalRoots,
-  loadSessionStore,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode,
   resolveMarkdownTableMode,
-  resolveSessionStoreEntry,
   resolveStorePath,
 }));
 
@@ -203,6 +198,7 @@ function installTelegramStateRuntimeForTest(): void {
 const telegramDepsForTest: TelegramBotDeps = {
   getRuntimeConfig: loadConfig as TelegramBotDeps["getRuntimeConfig"],
   resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
+  getSessionEntry: getSessionEntry as TelegramBotDeps["getSessionEntry"],
   loadSessionStore: loadSessionStore as TelegramBotDeps["loadSessionStore"],
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
@@ -266,13 +262,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
     wasSentByBot.mockReset();
     appendAssistantMirrorMessageByIdentity.mockReset();
     readLatestAssistantTextByIdentity.mockReset();
+    getSessionEntry.mockReset();
     loadSessionStore.mockReset();
     resolveStorePath.mockReset();
     generateTopicLabel.mockReset();
     getAgentScopedMediaLocalRoots.mockClear();
     resolveChunkMode.mockClear();
     resolveMarkdownTableMode.mockClear();
-    resolveSessionStoreEntry.mockClear();
     describeStickerImage.mockReset();
     loadModelCatalog.mockReset();
     findModelInCatalog.mockReset();
@@ -325,6 +321,10 @@ describe("dispatchTelegramMessage draft streaming", () => {
       messageId: "m1",
     });
     loadSessionStore.mockReturnValue({});
+    getSessionEntry.mockImplementation(
+      ({ sessionKey }: { sessionKey: string }) =>
+        (loadSessionStore() as Record<string, unknown>)[sessionKey],
+    );
     generateTopicLabel.mockResolvedValue("Topic label");
     describeStickerImage.mockResolvedValue(null);
     loadModelCatalog.mockResolvedValue({});
@@ -712,7 +712,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const preview = renderText?.("| A | B |\n| --- | --- |\n| 1 | 2 |");
     expect(preview?.richMessage).toEqual(
       expect.objectContaining({
-        html: expect.stringContaining("<table>"),
+        html: expect.stringContaining("<table bordered striped>"),
       }),
     );
   });

@@ -12,6 +12,9 @@ type AnyMock = ReturnType<typeof vi.fn>;
 type AnyAsyncMock = ReturnType<typeof vi.fn<(...args: unknown[]) => Promise<unknown>>>;
 type GetRuntimeConfigFn =
   typeof import("openclaw/plugin-sdk/runtime-config-snapshot").getRuntimeConfig;
+type GetSessionEntryFn = typeof import("openclaw/plugin-sdk/session-store-runtime").getSessionEntry;
+type ListSessionEntriesFn =
+  typeof import("openclaw/plugin-sdk/session-store-runtime").listSessionEntries;
 type LoadSessionStoreFn =
   typeof import("openclaw/plugin-sdk/session-store-runtime").loadSessionStore;
 type ResolveStorePathFn =
@@ -61,7 +64,9 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
 }));
 
 const {
+  getSessionEntryMock,
   getRuntimeConfig,
+  listSessionEntriesMock,
   loadSessionStoreMock,
   readSessionUpdatedAtMock,
   recordInboundSessionMock,
@@ -69,7 +74,9 @@ const {
   sessionStoreEntries,
 } = vi.hoisted(
   (): {
+    getSessionEntryMock: MockFn<GetSessionEntryFn>;
     getRuntimeConfig: MockFn<GetRuntimeConfigFn>;
+    listSessionEntriesMock: MockFn<ListSessionEntriesFn>;
     loadSessionStoreMock: MockFn<LoadSessionStoreFn>;
     readSessionUpdatedAtMock: MockFn<ReadSessionUpdatedAtFn>;
     recordInboundSessionMock: MockFn<NonNullable<TelegramBotDeps["recordInboundSession"]>>;
@@ -77,12 +84,23 @@ const {
     sessionStoreEntries: { value: SessionStore };
   } => ({
     getRuntimeConfig: vi.fn<GetRuntimeConfigFn>(() => ({})),
-    loadSessionStoreMock: vi.fn<LoadSessionStoreFn>(
-      (_storePath, _opts) => sessionStoreEntries.value,
-    ),
     resolveStorePathMock: vi.fn<ResolveStorePathFn>(
       (storePath?: string) => storePath ?? sessionStorePath,
     ),
+    loadSessionStoreMock: vi.fn<LoadSessionStoreFn>(
+      (_storePath, _opts) => sessionStoreEntries.value,
+    ),
+    getSessionEntryMock: vi.fn<GetSessionEntryFn>(({ storePath, sessionKey, agentId }) => {
+      const resolvedStorePath = storePath ?? resolveStorePathMock(undefined, { agentId });
+      return loadSessionStoreMock(resolvedStorePath)[sessionKey];
+    }),
+    listSessionEntriesMock: vi.fn<ListSessionEntriesFn>(({ storePath, agentId } = {}) => {
+      const resolvedStorePath = storePath ?? resolveStorePathMock(undefined, { agentId });
+      return Object.entries(loadSessionStoreMock(resolvedStorePath)).map(([sessionKey, entry]) => ({
+        sessionKey,
+        entry,
+      }));
+    }),
     readSessionUpdatedAtMock: vi.fn<ReadSessionUpdatedAtFn>(() => undefined),
     recordInboundSessionMock: vi.fn(async () => undefined),
     sessionStoreEntries: { value: {} as SessionStore },
@@ -444,6 +462,8 @@ export const telegramBotRuntimeForTest: TelegramBotRuntimeForTest = {
 };
 export const telegramBotDepsForTest: TelegramBotDeps = {
   getRuntimeConfig,
+  getSessionEntry: getSessionEntryMock,
+  listSessionEntries: listSessionEntriesMock,
   loadSessionStore: loadSessionStoreMock as TelegramBotDeps["loadSessionStore"],
   resolveStorePath: resolveStorePathMock,
   readSessionUpdatedAt: readSessionUpdatedAtMock,
@@ -564,6 +584,19 @@ beforeEach(() => {
   loadSessionStoreMock.mockImplementation(() => sessionStoreEntries.value);
   resolveStorePathMock.mockReset();
   resolveStorePathMock.mockImplementation((storePath?: string) => storePath ?? sessionStorePath);
+  getSessionEntryMock.mockReset();
+  getSessionEntryMock.mockImplementation(({ storePath, sessionKey, agentId }) => {
+    const resolvedStorePath = storePath ?? resolveStorePathMock(undefined, { agentId });
+    return loadSessionStoreMock(resolvedStorePath)[sessionKey];
+  });
+  listSessionEntriesMock.mockReset();
+  listSessionEntriesMock.mockImplementation(({ storePath, agentId } = {}) => {
+    const resolvedStorePath = storePath ?? resolveStorePathMock(undefined, { agentId });
+    return Object.entries(loadSessionStoreMock(resolvedStorePath)).map(([sessionKey, entry]) => ({
+      sessionKey,
+      entry,
+    }));
+  });
   readSessionUpdatedAtMock.mockReset();
   readSessionUpdatedAtMock.mockReturnValue(undefined);
   recordInboundSessionMock.mockReset();
