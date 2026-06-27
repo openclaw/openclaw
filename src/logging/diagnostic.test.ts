@@ -1950,6 +1950,52 @@ describe("stuck session diagnostics threshold", () => {
     expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
+  it("throttles repeated stalled active-work warnings with backoff", () => {
+    const events: DiagnosticEventPayload[] = [];
+    const recoverStuckSession = vi.fn();
+    const unsubscribe = onDiagnosticEvent((event) => {
+      events.push(event);
+    });
+    try {
+      startDiagnosticHeartbeat(
+        {
+          diagnostics: {
+            enabled: true,
+            stuckSessionWarnMs: 30_000,
+          },
+        },
+        { recoverStuckSession },
+      );
+      logSessionStateChange({ sessionId: "s1", sessionKey: "main", state: "processing" });
+      markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+
+      // First qualifying tick (60s > 30s threshold) emits immediately.
+      vi.advanceTimersByTime(61_000);
+      expect(countMatching(events, (event) => event.type === "session.stalled")).toBe(1);
+
+      // 90s tick is inside the backoff window (next warn at max(60+30, 60*2)=120s)
+      // and stays below the abort threshold, so the repeat is suppressed.
+      vi.advanceTimersByTime(30_000);
+      expect(countMatching(events, (event) => event.type === "session.stalled")).toBe(1);
+
+      // 120s tick reaches the backoff window, so a fresh warning is emitted.
+      vi.advanceTimersByTime(30_000);
+      expect(countMatching(events, (event) => event.type === "session.stalled")).toBe(2);
+    } finally {
+      unsubscribe();
+    }
+
+    const stalledEvents = events.filter((event) => event.type === "session.stalled");
+    expect(stalledEvents).toHaveLength(2);
+    expectRecordFields(requireRecord(stalledEvents[0], "stalled event"), {
+      classification: "stalled_agent_run",
+      reason: "active_work_without_progress",
+      activeWorkKind: "embedded_run",
+    });
+    // Backoff throttles repeat warnings; it must not trigger recovery before the abort threshold.
+    expect(recoverStuckSession).not.toHaveBeenCalled();
+  });
+
   it("keeps queued sessions non-recoverable while active work is making progress", () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();

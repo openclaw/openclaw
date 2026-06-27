@@ -162,6 +162,7 @@ export const AgentDefaultsSchema = z
         postCompactionSections: z.array(z.string()).optional(),
         model: z.string().optional(),
         timeoutSeconds: z.number().int().positive().optional(),
+        turnMaintenanceTaskTimeoutMs: z.number().int().positive().optional(),
         memoryFlush: z
           .object({
             enabled: z.boolean().optional(),

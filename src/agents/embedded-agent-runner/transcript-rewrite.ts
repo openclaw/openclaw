@@ -533,6 +533,19 @@ export function rewriteTranscriptEntriesInState(params: {
 }
 
 /**
+ * No-op result returned when the maintenance fence trips mid-flight, after the
+ * write lock is held but before the rewrite is persisted.
+ */
+function fencedRuntimeTranscriptRewriteResult(): TranscriptRewriteResult {
+  return {
+    changed: false,
+    bytesFreed: 0,
+    rewrittenEntries: 0,
+    reason: "rewrite fenced before persist",
+  };
+}
+
+/**
  * Rewrites message entries for a runtime transcript without using the
  * file-backed path as caller identity.
  */
@@ -540,6 +553,7 @@ export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
   scope: RuntimeTranscriptScope;
   request: TranscriptRewriteRequest;
   config?: SessionWriteLockAcquireTimeoutConfig;
+  shouldAbort?: () => boolean;
 }): Promise<TranscriptRewriteResult> {
   let sessionLock: Awaited<ReturnType<typeof acquireSessionWriteLock>> | undefined;
   try {
@@ -554,6 +568,12 @@ export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
       sessionFile: target.sessionFile,
       ...resolveSessionWriteLockOptions(params.config),
     });
+    // The deferred-maintenance timeout fence can trip while we are blocked
+    // acquiring the write lock; re-check before reading/persisting so a
+    // late run does not mutate the transcript the foreground turn now owns.
+    if (params.shouldAbort?.()) {
+      return fencedRuntimeTranscriptRewriteResult();
+    }
     const state = await readTranscriptFileState(target.sessionFile);
     const result = rewriteTranscriptEntriesInState({
       state,
@@ -562,6 +582,11 @@ export async function rewriteTranscriptEntriesInRuntimeTranscript(params: {
         ? { allowedRewriteSuffixEntryIds: params.request.allowedRewriteSuffixEntryIds }
         : {}),
     });
+    // Fence can also trip between the read and persist; bail before writing,
+    // emitting the transcript update, or logging the rewrite.
+    if (params.shouldAbort?.()) {
+      return fencedRuntimeTranscriptRewriteResult();
+    }
     if (result.changed) {
       await persistRuntimeTranscriptStateMutation({
         target,

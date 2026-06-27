@@ -440,4 +440,87 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
       cleanup();
     }
   });
+
+  it("fences the persist when the timeout fires while blocked on the write lock", async () => {
+    // Regression: the deferred-maintenance timeout can trip while we await the
+    // write lock. shouldAbort must re-check after acquisition so a late run does
+    // not persist over the transcript the resumed foreground turn now owns.
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcript-rewrite-runtime-"));
+    const storePath = path.join(dir, "sessions.json");
+    const sessionManager = SessionManager.create(dir, dir);
+    const entryIds = appendSessionMessages(sessionManager, [
+      asAppendMessage({
+        role: "user",
+        content: "run tool",
+        timestamp: 1,
+      }),
+      asAppendMessage({
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "exec",
+        content: createTextContent("before rewrite"),
+        isError: false,
+        timestamp: 2,
+      }),
+      asAppendMessage({
+        role: "assistant",
+        content: createTextContent("summarized"),
+        timestamp: 3,
+      }),
+    ]);
+    const sessionFile = requireString(sessionManager.getSessionFile(), "persisted session file");
+    const sessionId = path.basename(sessionFile, ".jsonl");
+    await fs.writeFile(
+      storePath,
+      JSON.stringify({
+        "agent:main:test": {
+          sessionFile,
+          sessionId,
+          updatedAt: 10,
+        },
+      }),
+      "utf8",
+    );
+    const originalSessionBytes = await fs.readFile(sessionFile, "utf8");
+    const toolResultEntryId = entryIds[1];
+    const listener = vi.fn();
+    const cleanup = onSessionTranscriptUpdate(listener);
+
+    // Flip the fence as the lock is handed out, mirroring a timeout that fires
+    // while the worker is blocked acquiring it.
+    let fenced = false;
+    acquireSessionWriteLockMock.mockImplementationOnce(async () => {
+      fenced = true;
+      return { release: acquireSessionWriteLockReleaseMock };
+    });
+
+    try {
+      const result = await rewriteTranscriptEntriesInRuntimeTranscript({
+        scope: {
+          agentId: "main",
+          sessionId,
+          sessionKey: "agent:main:test",
+          storePath,
+        },
+        request: {
+          replacements: [
+            {
+              entryId: toolResultEntryId,
+              message: createToolResultReplacement("exec", "[runtime rewrite]", 2),
+            },
+          ],
+        },
+        shouldAbort: () => fenced,
+      });
+
+      expect(result.changed).toBe(false);
+      expect(result.reason).toBe("rewrite fenced before persist");
+      // Persist never ran: the on-disk transcript still holds the original text.
+      expect(await fs.readFile(sessionFile, "utf8")).toBe(originalSessionBytes);
+      expect(listener).not.toHaveBeenCalled();
+      expect(acquireSessionWriteLockReleaseMock).toHaveBeenCalledTimes(1);
+    } finally {
+      cleanup();
+    }
+  });
 });

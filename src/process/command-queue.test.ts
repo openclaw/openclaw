@@ -525,6 +525,46 @@ describe("command queue", () => {
     }
   });
 
+  it("fires onTaskTimeout once before rejecting and tolerates a throwing callback", async () => {
+    const lane = `timeout-hook-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    setCommandLaneConcurrency(lane, 1);
+
+    vi.useFakeTimers();
+    try {
+      const calls: string[] = [];
+      const first = enqueueCommandInLane(lane, async () => new Promise<never>(() => {}), {
+        taskTimeoutMs: 25,
+        onTaskTimeout: () => {
+          // Throws to prove a misbehaving callback cannot wedge the lane.
+          calls.push("timeout");
+          throw new Error("hook exploded");
+        },
+      });
+      const firstRejected = expect(first).rejects.toBeInstanceOf(CommandLaneTaskTimeoutError);
+      let secondRan = false;
+      const second = enqueueCommandInLane(lane, async () => {
+        secondRan = true;
+        return "second";
+      });
+
+      // The hook fires synchronously at the timeout, before the rejection settles.
+      await vi.advanceTimersByTimeAsync(25);
+      expect(calls).toEqual(["timeout"]);
+
+      await firstRejected;
+      await expect(second).resolves.toBe("second");
+      expect(secondRan).toBe(true);
+      // Still fired exactly once even though a queued task drained afterward.
+      expect(calls).toEqual(["timeout"]);
+      expectLaneSnapshotFields(lane, {
+        activeCount: 0,
+        queuedCount: 0,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("clamps oversized task timeouts before arming lane timers", async () => {
     const lane = `timeout-clamp-lane-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setCommandLaneConcurrency(lane, 1);
