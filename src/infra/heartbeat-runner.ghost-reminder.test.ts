@@ -1,5 +1,6 @@
 // Covers heartbeat handling of queued reminder system events.
 import fs from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
@@ -511,6 +512,74 @@ describe("Ghost reminder bug (issue #13317)", () => {
         to: "-100155462274",
         text: "Restart complete",
         messageThreadId: 42,
+      });
+    });
+  });
+
+  it("delivers background-task wake events from the owning session when heartbeat isolation is enabled", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      await fs.writeFile(path.join(tmpDir, "HEARTBEAT.md"), "", "utf-8");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              isolatedSession: true,
+            },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const sessionKey = "agent:main:telegram:group:-1003774691294:topic:47";
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [sessionKey]: {
+            sessionId: "sid",
+            updatedAt: Date.now(),
+            lastChannel: "telegram",
+            lastTo: "telegram:-1003774691294:topic:2175",
+            lastThreadId: 2175,
+          },
+        }),
+      );
+
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m1",
+        chatId: "-1003774691294",
+      });
+      replySpy.mockResolvedValue({ text: "The background task is done." });
+      enqueueSystemEvent("Background task done: health-text-only.", {
+        sessionKey,
+        deliveryContext: {
+          channel: "telegram",
+          to: "telegram:-1003774691294:topic:47",
+          threadId: 47,
+        },
+      });
+
+      const result = await runHeartbeatOnce({
+        cfg,
+        agentId: "main",
+        sessionKey,
+        source: "background-task",
+        intent: "immediate",
+        reason: "background-task",
+        deps: {
+          getReplyFromConfig: replySpy,
+          telegram: sendTelegram,
+        },
+      });
+
+      expect(result.status).toBe("ran");
+      expect(getFirstReplyContext(replySpy).SessionKey).toBe(sessionKey);
+      expect(peekSystemEvents(sessionKey)).toStrictEqual([]);
+      expectTelegramSend(sendTelegram, {
+        to: "telegram:-1003774691294:topic:47",
+        text: "The background task is done.",
+        messageThreadId: 47,
       });
     });
   });

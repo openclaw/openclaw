@@ -907,6 +907,7 @@ type HeartbeatWakePayloadFlags = {
   isExecEventWake: boolean;
   isCronWake: boolean;
   isWakePayload: boolean;
+  isBackgroundTaskWake: boolean;
 };
 
 type HeartbeatSkipReason = "empty-heartbeat-file";
@@ -1004,10 +1005,17 @@ function resolveHeartbeatWakePayloadFlags(params: {
 }): HeartbeatWakePayloadFlags {
   const source = params.source ?? inferHeartbeatWakeSourceFromReason(params.reason);
   const reason = (params.reason ?? "").trim();
+  const isBackgroundTaskWake =
+    source === "background-task" ||
+    source === "background-task-blocked" ||
+    reason === "background-task" ||
+    reason === "background-task-blocked";
   return {
     isExecEventWake: source === "exec-event",
     isCronWake: source === "cron",
-    isWakePayload: source === "hook" || source === "acp-spawn" || reason === "wake",
+    isWakePayload:
+      source === "hook" || source === "acp-spawn" || isBackgroundTaskWake || reason === "wake",
+    isBackgroundTaskWake,
   };
 }
 
@@ -1050,6 +1058,9 @@ async function resolveHeartbeatPreflight(params: {
   const shouldInspectWakePendingEvents = (() => {
     if (!wakeFlags.isWakePayload) {
       return false;
+    }
+    if (wakeFlags.isBackgroundTaskWake) {
+      return true;
     }
     if (params.heartbeat?.isolatedSession !== true) {
       return true;
@@ -1530,7 +1541,7 @@ export async function runHeartbeatOnce(opts: {
   // a new session ID (empty transcript) each run, avoiding the cost of
   // sending the full conversation history (~100K tokens) to the LLM.
   // Delivery routing still uses the main session entry (lastChannel, lastTo).
-  const useIsolatedSession = heartbeat?.isolatedSession === true;
+  const useIsolatedSession = heartbeat?.isolatedSession === true && !preflight.isBackgroundTaskWake;
   const firstDueCommitment =
     canHeartbeatDeliverCommitments(heartbeat) && dueHeartbeatTasks.length === 0
       ? preflight.dueCommitments[0]
