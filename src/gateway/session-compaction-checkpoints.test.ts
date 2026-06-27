@@ -483,9 +483,21 @@ describe("session-compaction-checkpoints", () => {
       message: { role: "user", content: "stale entry row-backed checkpoint", timestamp: 1 },
       now: Date.parse("2026-06-26T12:00:01.000Z"),
     });
-    const sourceLeafId = requireNonEmptyString(
+    const leafBeforeEntryId = requireNonEmptyString(
       SessionManager.open(marker).getLeafId(),
-      "SQLite stale-entry leaf id missing",
+      "SQLite stale-entry pre-entry leaf id missing",
+    );
+    await appendTranscriptMessage(scope, {
+      message: {
+        role: "assistant",
+        content: "entry id boundary message",
+        timestamp: 2,
+      } as AssistantMessage,
+      now: Date.parse("2026-06-26T12:00:02.000Z"),
+    });
+    const sourceEntryId = requireNonEmptyString(
+      SessionManager.open(marker).getLeafId(),
+      "SQLite stale-entry entry id missing",
     );
     const checkpoint: SessionCompactionCheckpoint = {
       checkpointId: "sqlite-checkpoint-stale",
@@ -495,13 +507,13 @@ describe("session-compaction-checkpoints", () => {
       reason: "manual",
       preCompaction: {
         sessionId,
-        leafId: sourceLeafId,
-        entryId: sourceLeafId,
+        leafId: leafBeforeEntryId,
+        entryId: sourceEntryId,
       },
       postCompaction: {
         sessionId,
-        leafId: sourceLeafId,
-        entryId: sourceLeafId,
+        leafId: leafBeforeEntryId,
+        entryId: sourceEntryId,
       },
     };
     const markerCheckpoint: SessionCompactionCheckpoint = {
@@ -512,12 +524,12 @@ describe("session-compaction-checkpoints", () => {
       reason: "manual",
       preCompaction: {
         sessionId,
-        leafId: sourceLeafId,
+        leafId: leafBeforeEntryId,
       },
       postCompaction: {
         sessionId,
         sessionFile: marker,
-        leafId: sourceLeafId,
+        leafId: sourceEntryId,
       },
     };
     await upsertSessionEntry(scope, {
@@ -541,6 +553,15 @@ describe("session-compaction-checkpoints", () => {
     expect(branched.entry.sessionFile).toContain("sqlite:main:");
     expect(fsSync.existsSync(staleSessionFile)).toBe(false);
     expect(fsSync.readdirSync(dir).some((file) => file.endsWith(".jsonl"))).toBe(false);
+    const branchEvents = await loadTranscriptEvents({
+      agentId: MAIN_AGENT_ID,
+      sessionId: branched.entry.sessionId,
+      sessionKey: branchKey,
+      storePath,
+    });
+    expect(
+      branchEvents.some((event) => isAssistantTextEvent(event, "entry id boundary message")),
+    ).toBe(true);
 
     const markerBranched =
       await createFileBackedCompactionCheckpointStore().branchCheckpointSession({
