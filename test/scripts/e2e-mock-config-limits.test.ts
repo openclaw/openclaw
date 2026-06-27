@@ -245,6 +245,70 @@ describe("e2e mock and config helper numeric limits", () => {
     }
   });
 
+  it("drives generated-media wake-false proof through image_generate then text completion", async () => {
+    const marker = "OPENCLAW_E2E_GENERATED_MEDIA_WAKE_FALSE_PROOF";
+    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+      const firstResponse = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: `Please generate an image for ${marker}.`,
+          stream: false,
+          tools: [{ type: "function", name: "image_generate" }],
+        }),
+      });
+      const firstBody = await firstResponse.json();
+      const functionCall = firstBody.output?.[0];
+
+      expect(firstResponse.status).toBe(200);
+      expect(functionCall).toMatchObject({
+        type: "function_call",
+        name: "image_generate",
+      });
+      const args = JSON.parse(functionCall.arguments);
+      expect(args).toMatchObject({
+        action: "generate",
+        model: "openai/gpt-image-1",
+        outputFormat: "png",
+        size: "1024x1024",
+      });
+      expect(args.prompt).toContain(marker);
+
+      const secondResponse = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: [
+            { type: "message", role: "user", content: `Generate ${marker}` },
+            functionCall,
+            {
+              type: "function_call_output",
+              call_id: functionCall.call_id,
+              output: {
+                text: `Generated 1 image for ${marker}.`,
+                media: [{ mimeType: "image/png", path: "/tmp/openclaw-proof.png" }],
+              },
+            },
+          ],
+          stream: false,
+          tools: [{ type: "function", name: "image_generate" }],
+        }),
+      });
+      const secondBody = await secondResponse.json();
+
+      expect(secondResponse.status).toBe(200);
+      expect(secondBody.output?.[0]).toMatchObject({
+        type: "message",
+        content: [
+          expect.objectContaining({
+            text: expect.stringContaining(marker),
+          }),
+        ],
+      });
+      expect(JSON.stringify(secondBody.output)).not.toContain('"type":"function_call"');
+    });
+  });
+
   it("returns a clear error when web-search mock cannot append request logs", async () => {
     const requestLogDirectory = await mkdtemp(join(tmpdir(), "openclaw-web-search-log-"));
     try {
