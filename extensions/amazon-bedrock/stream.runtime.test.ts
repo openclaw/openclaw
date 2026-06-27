@@ -307,6 +307,22 @@ describe("Bedrock Fable contract", () => {
     } as never;
   }
 
+  it("derives maxTokens from model.maxTokens for Fable 5 (#97176)", () => {
+    const opts = testing.resolveSimpleBedrockOptions(fableModel(), {
+      reasoning: "high",
+    });
+    expect(opts.maxTokens).toBe(128_000);
+    expect(opts.maxTokens).toBeGreaterThan(4096);
+  });
+
+  it("honors explicit caller maxTokens for Fable 5 (#97176)", () => {
+    const opts = testing.resolveSimpleBedrockOptions(fableModel(), {
+      reasoning: "high",
+      maxTokens: 16000,
+    });
+    expect(opts.maxTokens).toBe(16000);
+  });
+
   it("sends always-adaptive high effort without unsupported request controls", async () => {
     const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
       $metadata: { httpStatusCode: 200 },
