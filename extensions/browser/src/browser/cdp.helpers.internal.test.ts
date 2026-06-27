@@ -18,7 +18,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
+vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
+  ...vi.importActual("openclaw/plugin-sdk/ssrf-runtime"),
   registerManagedProxyBrowserCdpBypass: registerManagedProxyBrowserCdpBypassMock,
 }));
 

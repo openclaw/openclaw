@@ -16,11 +16,11 @@ import {
   normalizeResolvedSecretInputString,
 } from "openclaw/plugin-sdk/secret-input";
 import {
+  fetchConfiguredLocalOriginWithSsrFGuard,
   formatErrorMessage,
   ssrfPolicyFromHttpBaseUrlAllowedOrigin,
   type SsrFPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { fetchConfiguredLocalOriginWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime-internal";
 import { OLLAMA_CLOUD_BASE_URL } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { readProviderBaseUrl } from "./provider-base-url.js";
