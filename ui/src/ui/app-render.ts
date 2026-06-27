@@ -35,9 +35,9 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { resolveAgentIdForSession } from "../pages/chat/chat-avatar.ts";
-import { resetChatStateForSessionSwitch } from "../pages/chat/session-switch.ts";
+import { resetChatStateForSessionSwitch, switchChatSession } from "../pages/chat/session-switch.ts";
 import { runUpdate } from "../pages/config/data.ts";
-import { resolveDashboardHeaderContext, switchChatSession } from "./app-render.helpers.ts";
+import { resolveDashboardHeaderContext } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import { renderChatSessionSelect } from "./chat/session-controls.ts";
 import { refreshSlashCommands } from "./chat/slash-commands.ts";

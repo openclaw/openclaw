@@ -67,6 +67,20 @@ vi.mock("./chat/slash-commands.ts", () => ({
 
 vi.mock("../pages/chat/gateway.ts", () => ({
   loadChatHistory: loadChatHistoryMock,
+  syncSelectedSessionMessageSubscription: async (state: {
+    sessionKey: string;
+    sessions: {
+      subscribeMessages: (key: string) => Promise<{ key: string; agentId: string | null }>;
+    };
+    chatSessionMessageSubscriptionRequestedKey?: string | null;
+    chatSessionMessageSubscriptionKey?: string | null;
+    chatSessionMessageSubscriptionAgentId?: string | null;
+  }) => {
+    const subscription = await state.sessions.subscribeMessages(state.sessionKey);
+    state.chatSessionMessageSubscriptionRequestedKey = state.sessionKey;
+    state.chatSessionMessageSubscriptionKey = subscription.key;
+    state.chatSessionMessageSubscriptionAgentId = subscription.agentId;
+  },
 }));
 
 vi.mock("../pages/chat/scroll.ts", () => ({

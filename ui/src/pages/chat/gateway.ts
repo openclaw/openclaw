@@ -13,13 +13,18 @@ import type {
   GatewaySessionRow,
   GatewaySessionsDefaults,
   ModelCatalogEntry,
+  SessionsListResult,
 } from "../../api/types.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { unsubscribeSessionMessages, type SessionCapability } from "../../lib/sessions/index.ts";
 import {
   areUiSessionKeysEquivalent,
   DEFAULT_AGENT_ID,
+  isUiGlobalSessionKey,
   normalizeAgentId,
   parseAgentSessionKey,
+  resolveUiGlobalAliasAgentId,
+  resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -69,6 +74,7 @@ const STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS = 60_000;
 const STARTUP_CHAT_HISTORY_DEFAULT_RETRY_MS = 500;
 const STARTUP_CHAT_HISTORY_MAX_RETRY_MS = 5_000;
 const chatHistoryRequestVersions = new WeakMap<object, number>();
+const selectedSessionMessageSubscriptionGenerations = new WeakMap<object, number>();
 
 function beginChatHistoryRequest(state: ChatState): number {
   const key = state as object;
@@ -421,6 +427,15 @@ type ChatAgentsListSnapshot = Partial<Omit<AgentsListResult, "agents">> & {
   agents?: Array<{ id: string }>;
 };
 
+type ChatSessionMessageSubscriptionState = ChatState & {
+  sessions: Pick<SessionCapability, "subscribeMessages">;
+  sessionsResult?: SessionsListResult | null;
+  sessionsError?: string | null;
+  chatSessionMessageSubscriptionRequestedKey?: string | null;
+  chatSessionMessageSubscriptionKey?: string | null;
+  chatSessionMessageSubscriptionAgentId?: string | null;
+};
+
 export type ChatHistoryResult = {
   messages?: Array<unknown>;
   sessionId?: string;
@@ -530,6 +545,171 @@ function chatEventSessionMatches(state: ChatState, payload: ChatEventPayload): b
     isSelectedGlobalEventSessionKey(state.sessionKey) &&
     chatEventAgentScopeMatches(state, payload)
   );
+}
+
+function normalizeSubscriptionKey(value: string | null | undefined): string | null {
+  const normalized = typeof value === "string" ? value.trim() : "";
+  return normalized ? normalized : null;
+}
+
+function resolveSelectedGlobalAliasAgentId(
+  state: ChatSessionMessageSubscriptionState,
+  key: string | null | undefined,
+): string | null {
+  const row = state.sessionsResult?.sessions.find((session) => session.key === key);
+  return resolveUiGlobalAliasAgentId(state, key, {
+    rowKind: row?.kind,
+    requireGlobalRowForMainAlias: true,
+  });
+}
+
+function resolveSelectedGlobalAgentId(state: ChatSessionMessageSubscriptionState): string {
+  const parsed = parseAgentSessionKey(state.sessionKey);
+  if (parsed?.agentId) {
+    return normalizeAgentId(parsed.agentId);
+  }
+  return resolveUiSelectedGlobalAgentId(state);
+}
+
+function resolveSelectedSessionMessageSubscriptionAgentId(
+  state: ChatSessionMessageSubscriptionState,
+  key: string,
+): string | null {
+  if (isUiGlobalSessionKey(key)) {
+    return resolveSelectedGlobalAgentId(state);
+  }
+  return resolveSelectedGlobalAliasAgentId(state, key);
+}
+
+function beginSelectedSessionMessageSubscriptionSync(
+  state: ChatSessionMessageSubscriptionState,
+): number {
+  const key = state as object;
+  const next = (selectedSessionMessageSubscriptionGenerations.get(key) ?? 0) + 1;
+  selectedSessionMessageSubscriptionGenerations.set(key, next);
+  return next;
+}
+
+function isCurrentSelectedSessionMessageSubscriptionSync(
+  state: ChatSessionMessageSubscriptionState,
+  params: {
+    generation: number;
+    client: GatewayBrowserClient;
+    requestedKey: string;
+    requestedAgentId?: string | null;
+  },
+): boolean {
+  return (
+    selectedSessionMessageSubscriptionGenerations.get(state as object) === params.generation &&
+    state.client === params.client &&
+    state.connected &&
+    state.sessionKey.trim() === params.requestedKey &&
+    resolveSelectedSessionMessageSubscriptionAgentId(state, params.requestedKey) ===
+      (params.requestedAgentId ?? null)
+  );
+}
+
+async function unsubscribeSelectedSessionMessageBestEffort(
+  client: GatewayBrowserClient,
+  key: string,
+  agentId?: string | null,
+): Promise<void> {
+  try {
+    await unsubscribeSessionMessages(client, {
+      key,
+      agentId: isUiGlobalSessionKey(key) ? agentId : null,
+    });
+  } catch {
+    // Cleanup is best effort when a stale subscription completion loses ownership.
+  }
+}
+
+export async function syncSelectedSessionMessageSubscription(
+  state: ChatSessionMessageSubscriptionState,
+  opts?: { force?: boolean },
+) {
+  if (!state.client || !state.connected) {
+    return;
+  }
+  const client = state.client;
+  const nextKey = state.sessionKey.trim();
+  if (!nextKey) {
+    return;
+  }
+  const generation = beginSelectedSessionMessageSubscriptionSync(state);
+  const previousRequestedKey = normalizeSubscriptionKey(
+    state.chatSessionMessageSubscriptionRequestedKey,
+  );
+  const previousCanonicalKey = normalizeSubscriptionKey(state.chatSessionMessageSubscriptionKey);
+  const previousSelectedKey = previousRequestedKey ?? previousCanonicalKey;
+  const nextSubscriptionAgentId = resolveSelectedSessionMessageSubscriptionAgentId(state, nextKey);
+  const selectedAgentChanged =
+    nextSubscriptionAgentId !== null &&
+    previousSelectedKey === nextKey &&
+    (state.chatSessionMessageSubscriptionAgentId ?? null) !== nextSubscriptionAgentId;
+  const selectedKeyChanged = previousSelectedKey !== null && previousSelectedKey !== nextKey;
+  const shouldUnsubscribePrevious =
+    previousCanonicalKey !== null && (selectedKeyChanged || selectedAgentChanged);
+  const shouldSubscribe =
+    opts?.force === true ||
+    selectedKeyChanged ||
+    selectedAgentChanged ||
+    previousCanonicalKey === null ||
+    previousRequestedKey === null;
+  if (!shouldUnsubscribePrevious && !shouldSubscribe) {
+    return;
+  }
+  const isCurrent = () =>
+    isCurrentSelectedSessionMessageSubscriptionSync(state, {
+      generation,
+      client,
+      requestedKey: nextKey,
+      requestedAgentId: nextSubscriptionAgentId,
+    });
+  try {
+    if (shouldUnsubscribePrevious && previousCanonicalKey) {
+      await unsubscribeSessionMessages(client, {
+        key: previousCanonicalKey,
+        agentId:
+          isUiGlobalSessionKey(previousCanonicalKey) && state.chatSessionMessageSubscriptionAgentId
+            ? state.chatSessionMessageSubscriptionAgentId
+            : null,
+      });
+      if (isCurrent()) {
+        state.chatSessionMessageSubscriptionKey = null;
+        state.chatSessionMessageSubscriptionRequestedKey = null;
+        state.chatSessionMessageSubscriptionAgentId = null;
+      }
+    }
+    if (!shouldSubscribe || !isCurrent()) {
+      return;
+    }
+    const subscribed = await state.sessions.subscribeMessages(nextKey, {
+      agentId: nextSubscriptionAgentId ?? undefined,
+    });
+    if (!isCurrent()) {
+      const staleKeyChanged =
+        normalizeSubscriptionKey(state.chatSessionMessageSubscriptionKey) !== subscribed.key;
+      const staleAgentChanged =
+        isUiGlobalSessionKey(subscribed.key) &&
+        (state.chatSessionMessageSubscriptionAgentId ?? null) !== subscribed.agentId;
+      if (staleKeyChanged || staleAgentChanged) {
+        await unsubscribeSelectedSessionMessageBestEffort(
+          client,
+          subscribed.key,
+          subscribed.agentId,
+        );
+      }
+      return;
+    }
+    state.chatSessionMessageSubscriptionRequestedKey = nextKey;
+    state.chatSessionMessageSubscriptionKey = subscribed.key;
+    state.chatSessionMessageSubscriptionAgentId = subscribed.agentId;
+  } catch (err) {
+    if (isCurrent()) {
+      state.sessionsError = String(err);
+    }
+  }
 }
 
 function resolveDeltaChatStreamText(

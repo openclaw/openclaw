@@ -5,7 +5,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow, ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
-import { switchChatSession } from "../../ui/app-render.helpers.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import {
   createModelCatalog,
@@ -26,6 +25,7 @@ import {
 import { renderChatQueue } from "./chat-queue.ts";
 import { buildRawSidebarContent } from "./chat-sidebar-raw.ts";
 import { renderWelcomeState } from "./chat-welcome.ts";
+import { switchChatSession } from "./session-switch.ts";
 import type { ChatAttachment, ChatQueueItem } from "./types.ts";
 import { renderChat, resetChatViewState } from "./view.ts";
 

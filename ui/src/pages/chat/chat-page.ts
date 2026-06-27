@@ -26,8 +26,10 @@ import {
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import {
   resolveSessionKey,
+  scopedAgentListParamsForSession,
   scopedAgentParamsForSession,
   type SessionCapability,
 } from "../../lib/sessions/index.ts";
@@ -52,6 +54,7 @@ import {
   type FallbackStatus,
   type ToolStreamEntry,
 } from "../../ui/app-tool-stream.ts";
+import { resetChatSessionPickerState } from "../../ui/chat/session-controls.ts";
 import {
   applyRemoteSlashCommandsResult,
   refreshSlashCommands,
@@ -67,6 +70,7 @@ import {
 } from "./composer-persistence.ts";
 import {
   clearChatHistory,
+  flushChatQueueAfterIdleSessionReconciliation,
   handleAbortChat,
   handleSendChat,
   hasAbortableSessionRun,
@@ -81,6 +85,8 @@ import {
 } from "./data.ts";
 import {
   handleChatEvent,
+  loadChatHistory,
+  syncSelectedSessionMessageSubscription,
   type ChatEventPayload,
   type ChatMetadataResult,
   type ChatState,
@@ -103,9 +109,14 @@ import {
   type RealtimeTalkLaunchOptions,
   type RealtimeTalkStatus,
 } from "./realtime-talk.ts";
+import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 import { scheduleChatScroll, handleChatScroll, resetChatScroll } from "./scroll.ts";
-import { clearChatMessagesFromCache } from "./session-message-cache.ts";
-import { switchChatSession } from "./session-switch.ts";
+import {
+  cacheChatMessages,
+  clearChatMessagesFromCache,
+  readChatMessagesFromCache,
+} from "./session-message-cache.ts";
+import { createChatSessionsLoadOverrides } from "./session-scope.ts";
 import { createSessionWorkspaceProps, type SessionWorkspaceHost } from "./session-workspace.ts";
 import type { ChatAttachment, ChatQueueItem } from "./types.ts";
 import { renderChat, resetChatViewState, type ChatProps } from "./view.ts";
@@ -202,6 +213,11 @@ type ChatPageHost = ChatHost &
     updateComplete: Promise<unknown>;
     chatSessionPickerOpen: boolean;
     chatSessionPickerSurface: "desktop" | "mobile" | "sidebar" | null;
+    chatSessionPickerQuery: string;
+    chatSessionPickerAppliedQuery: string;
+    chatSessionPickerLoading: boolean;
+    chatSessionPickerError: string | null;
+    chatSessionPickerResult: SessionsListResult | null;
     realtimeTalkActive: boolean;
     realtimeTalkStatus: RealtimeTalkStatus;
     realtimeTalkDetail: string | null;
@@ -255,6 +271,102 @@ function canCreateChatSession(
     state.chatStream === null &&
     state.chatQueue.length === 0
   );
+}
+
+function saveChatQueueForSession(state: ChatPageHost, sessionKey: string) {
+  const queueBySession = state.chatQueueBySession;
+  if (state.chatQueue.length > 0) {
+    state.chatQueueBySession = {
+      ...queueBySession,
+      [sessionKey]: [...state.chatQueue],
+    };
+    return;
+  }
+  if (!Object.hasOwn(queueBySession, sessionKey)) {
+    return;
+  }
+  const nextQueueBySession = { ...queueBySession };
+  delete nextQueueBySession[sessionKey];
+  state.chatQueueBySession = nextQueueBySession;
+}
+
+function restoreChatQueueForSession(state: ChatPageHost, sessionKey: string): ChatQueueItem[] {
+  return [...(state.chatQueueBySession[sessionKey] ?? [])];
+}
+
+function saveChatMessagesForSession(state: ChatPageHost, sessionKey: string) {
+  cacheChatMessages(state.chatMessagesBySession, state, { sessionKey }, state.chatMessages);
+}
+
+function restoreChatMessagesForSession(state: ChatPageHost, sessionKey: string): unknown[] {
+  return readChatMessagesFromCache(state.chatMessagesBySession, state, { sessionKey });
+}
+
+function saveRouteSessionSettings(state: ChatPageHost, sessionKey: string) {
+  if (
+    state.settings.sessionKey === sessionKey &&
+    state.settings.lastActiveSessionKey === sessionKey
+  ) {
+    return;
+  }
+  state.settings = {
+    ...state.settings,
+    sessionKey,
+    lastActiveSessionKey: sessionKey,
+  };
+  saveSettings(state.settings);
+}
+
+function resetChatStateForRouteSession(state: ChatPageHost, sessionKey: string) {
+  const previousSessionKey = state.sessionKey;
+  persistChatComposerState(state, previousSessionKey);
+  saveChatQueueForSession(state, previousSessionKey);
+  saveChatMessagesForSession(state, previousSessionKey);
+  state.sessionKey = sessionKey;
+  if (previousSessionKey !== sessionKey) {
+    resetChatSessionPickerState(state as never);
+  }
+  state.currentSessionId = null;
+  state.chatMessage = "";
+  state.chatAttachments = [];
+  state.chatMessages = restoreChatMessagesForSession(state, sessionKey);
+  state.chatToolMessages = [];
+  state.activityEntries = [];
+  state.activityExpandedIds = new Set();
+  state.activityAtBottom = true;
+  state.chatStreamSegments = [];
+  state.chatThinkingLevel = null;
+  state.chatStream = null;
+  state.chatSideResult = null;
+  state.lastError = null;
+  state.chatError = null;
+  state.chatAvatarUrl = null;
+  state.chatAvatarSource = null;
+  state.chatAvatarStatus = null;
+  state.chatAvatarReason = null;
+  state.realtimeTalkTranscript = null;
+  state.resetRealtimeTalkConversation();
+  state.chatQueue = restoreChatQueueForSession(state, sessionKey);
+  restoreChatComposerState(state);
+  state.resetChatInputHistoryNavigation();
+  state.chatStreamStartedAt = null;
+  reconcileChatRunLifecycle(state, {
+    clearLocalRun: true,
+    clearChatStream: true,
+    clearToolStream: true,
+    clearSideResultTerminalRuns: true,
+    clearRunStatus: true,
+  });
+  state.resetChatScroll();
+  saveRouteSessionSettings(state, sessionKey);
+}
+
+async function refreshRouteSessionOptions(state: ChatPageHost) {
+  await state.sessions.refresh({
+    ...createChatSessionsLoadOverrides(state),
+    ...scopedAgentListParamsForSession(state, state.sessionKey),
+    force: true,
+  });
 }
 
 function resolveChatAgentId(
@@ -573,6 +685,11 @@ function createPageState(
     chatProgrammaticScrollTarget: 0,
     chatSessionPickerOpen: false,
     chatSessionPickerSurface: null,
+    chatSessionPickerQuery: "",
+    chatSessionPickerAppliedQuery: "",
+    chatSessionPickerLoading: false,
+    chatSessionPickerError: null,
+    chatSessionPickerResult: null,
     sidebarOpen: false,
     sidebarContent: null,
     sidebarError: null,
@@ -836,21 +953,56 @@ export class ChatPage extends LitElement {
       return;
     }
     state.sessionKey = nextSessionKey;
-    if (
-      state.settings.sessionKey !== nextSessionKey ||
-      state.settings.lastActiveSessionKey !== nextSessionKey
-    ) {
-      state.settings = {
-        ...state.settings,
-        sessionKey: nextSessionKey,
-        lastActiveSessionKey: nextSessionKey,
-      };
-      saveSettings(state.settings);
-    }
+    saveRouteSessionSettings(state, nextSessionKey);
     const agentId = parseAgentSessionKey(nextSessionKey)?.agentId;
     if (agentId) {
       this.context.agentSelection.set(agentId);
     }
+  }
+
+  private switchRouteSession(nextSessionKey: string) {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const previousSessionKey = state.sessionKey;
+    const previousSessionsResult = state.sessionsResult;
+    const nextSessionRow =
+      state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey) ??
+      state.chatSessionPickerResult?.sessions.find((row) => row.key === nextSessionKey);
+    const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
+    resetChatStateForRouteSession(state, nextSessionKey);
+    if (previousSessionKey !== nextSessionKey) {
+      state.announceSessionSwitch?.(nextSessionKey, nextSessionLabel);
+    }
+    void state.loadAssistantIdentity();
+    void refreshChatAvatar(state);
+    void refreshSlashCommands({
+      client: state.client,
+      agentId: parseAgentSessionKey(nextSessionKey)?.agentId,
+    });
+    const subscriptionSync = syncSelectedSessionMessageSubscription(state);
+    const historyLoad = loadChatHistory(state);
+    state.requestUpdate();
+    const scheduleHistoryScroll = () => {
+      if (state.sessionKey !== nextSessionKey) {
+        return;
+      }
+      state.requestUpdate();
+      scheduleChatScroll(state, true);
+    };
+    void historyLoad.then(scheduleHistoryScroll, scheduleHistoryScroll);
+    const sessionsRefresh = refreshRouteSessionOptions(state);
+    flushChatQueueAfterIdleSessionReconciliation(
+      state,
+      nextSessionKey,
+      historyLoad,
+      sessionsRefresh,
+      previousSessionsResult,
+    );
+    void subscriptionSync;
+    void historyLoad;
+    void sessionsRefresh;
   }
 
   private persistComposer(immediate = false) {
@@ -1110,10 +1262,7 @@ export class ChatPage extends LitElement {
         this.context.gateway.snapshot.hello,
       );
       if (nextSessionKey && nextSessionKey !== this.state.sessionKey) {
-        switchChatSession(this.state as never, nextSessionKey, {
-          syncUrl: false,
-          requestUpdate: false,
-        });
+        this.switchRouteSession(nextSessionKey);
       } else if (nextSessionKey) {
         this.applyRouteSessionKey(nextSessionKey);
       }
