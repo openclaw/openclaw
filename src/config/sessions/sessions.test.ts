@@ -17,6 +17,7 @@ import {
   validateSessionId,
 } from "./paths.js";
 import { evaluateSessionFreshness, resolveSessionResetPolicy } from "./reset.js";
+import { loadSessionEntry } from "./session-accessor.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
 import { formatSqliteSessionFileMarker } from "./sqlite-marker.js";
 import { readSessionStoreCache, writeSessionStoreCache } from "./store-cache.js";
@@ -1076,8 +1077,7 @@ describe("session store writer queue", () => {
     });
 
     expect(result?.acp).toBeUndefined();
-    const store = loadSessionStore(storePath);
-    expect(store[key]?.acp).toBeUndefined();
+    expect(loadSessionEntry({ storePath, sessionKey: key })?.acp).toBeUndefined();
   });
 });
 

@@ -67,7 +67,9 @@ import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-prese
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
+  pruneStaleModelRunEntries,
   pruneStaleEntries,
+  shouldRunModelRunPrune,
   shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
@@ -495,6 +497,7 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
   removals?: Iterable<SessionEntryLifecycleRemoval>;
   upserts?: Iterable<SessionEntryLifecycleUpsert>;
   activeSessionKey?: string;
+  maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
   skipMaintenance?: boolean;
 }): Promise<SessionEntryLifecycleMutationResult> {
   const resolved = resolveSqliteStoreScope(params.storePath);
@@ -546,6 +549,10 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
       applySqliteSessionEntryMaintenance(database, {
         activeSessionKey: params.activeSessionKey ?? "",
         archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+        forceMaintenance: params.maintenanceOverride !== undefined,
+        maintenanceConfig: params.maintenanceOverride
+          ? { ...resolveMaintenanceConfig(), ...params.maintenanceOverride }
+          : undefined,
         skipMaintenance: params.skipMaintenance,
       });
       afterCount = Object.keys(readSqliteSessionEntryStore(database)).length;
@@ -1563,6 +1570,12 @@ function shouldRemoveSqliteSessionEntry(
   if (!entry) {
     return false;
   }
+  if (
+    removal.expectedEntry !== undefined &&
+    JSON.stringify(entry) !== JSON.stringify(removal.expectedEntry)
+  ) {
+    return false;
+  }
   if (removal.expectedSessionId !== undefined && entry.sessionId !== removal.expectedSessionId) {
     return false;
   }
@@ -1601,6 +1614,7 @@ function applySqliteSessionEntryMaintenance(
   params: {
     activeSessionKey: string;
     archiveDirectory: string;
+    forceMaintenance?: boolean;
     maintenanceConfig?: ResolvedSessionMaintenanceConfig;
     skipMaintenance?: boolean;
   },
@@ -1635,6 +1649,19 @@ function applySqliteSessionEntryMaintenance(
     }
   };
   const preserveKeys = collectSessionMaintenancePreserveKeys([params.activeSessionKey]);
+  if (
+    shouldRunModelRunPrune({
+      maintenance,
+      entryCount: Object.keys(store).length,
+      force: params.forceMaintenance,
+    })
+  ) {
+    pruneStaleModelRunEntries(store, maintenance.modelRunPruneAfterMs, {
+      log: false,
+      onPruned: rememberRemovedEntry,
+      preserveKeys,
+    });
+  }
   pruneStaleEntries(store, maintenance.pruneAfterMs, {
     log: false,
     onPruned: rememberRemovedEntry,
@@ -1644,6 +1671,7 @@ function applySqliteSessionEntryMaintenance(
     shouldRunSessionEntryMaintenance({
       entryCount: Object.keys(store).length,
       maxEntries: maintenance.maxEntries,
+      force: params.forceMaintenance,
     })
   ) {
     capEntryCount(store, maintenance.maxEntries, {
