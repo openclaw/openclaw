@@ -6,6 +6,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { saveSessionStore, type SessionEntry } from "../../config/sessions.js";
 import { readSessionStoreForTest } from "../../config/sessions/test-helpers.js";
 import type { TypingMode } from "../../config/types.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -120,8 +121,27 @@ vi.mock("../../agents/embedded-agent.js", () => ({
 }));
 
 vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
-  queueEmbeddedAgentMessage: (sessionId: string, prompt: string, options: unknown) =>
-    state.queueEmbeddedAgentMessageMock(sessionId, prompt, options),
+  formatEmbeddedAgentQueueFailureSummary: () => "test queue rejection",
+  queueEmbeddedAgentMessageWithOutcomeAsync: async (
+    sessionId: string,
+    prompt: string,
+    options: unknown,
+  ) =>
+    state.queueEmbeddedAgentMessageMock(sessionId, prompt, options)
+      ? {
+          queued: true,
+          sessionId,
+          target: "embedded_run",
+          gatewayHealth: "live",
+          enqueuedAtMs: Date.now(),
+        }
+      : {
+          queued: false,
+          sessionId,
+          reason: "no_active_run",
+          target: "none",
+          gatewayHealth: "live",
+        },
 }));
 
 vi.mock("./queue.js", () => ({
@@ -217,6 +237,7 @@ function createMinimalRun(params?: {
   } as unknown as FollowupRun;
 
   return {
+    followupRun,
     typing,
     opts,
     run: async () => {
@@ -249,6 +270,37 @@ function createMinimalRun(params?: {
     },
   };
 }
+
+describe("runReplyAgent active steering", () => {
+  it("carries the prepared user-turn recorder into the embedded queue", async () => {
+    state.queueEmbeddedAgentMessageMock.mockReturnValueOnce(true);
+    const recorder = createUserTurnTranscriptRecorder({
+      input: {
+        text: "visible group prompt",
+        sender: { id: "user-42", name: "Ada" },
+      },
+      target: { transcriptPath: "/tmp/unused-session.jsonl" },
+    });
+    const { followupRun, run } = createMinimalRun({
+      isActive: true,
+      isStreaming: true,
+      shouldSteer: true,
+      resolvedQueueMode: "steer",
+    });
+    followupRun.userTurnTranscriptRecorder = recorder;
+
+    await expect(run()).resolves.toBeUndefined();
+
+    expect(state.queueEmbeddedAgentMessageMock).toHaveBeenCalledWith(
+      "session",
+      "hello",
+      expect.objectContaining({
+        steeringMode: "all",
+        userTurnTranscriptRecorder: recorder,
+      }),
+    );
+  });
+});
 
 describe("runReplyAgent heartbeat followup guard", () => {
   it("drops heartbeat runs when reply-lane admission finds an active owner", async () => {

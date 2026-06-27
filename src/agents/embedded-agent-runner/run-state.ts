@@ -7,6 +7,7 @@ import {
   listActiveReplyRunSessionKeys,
   listActiveReplyRunSessionIds,
   resolveActiveReplyRunSessionId,
+  type ReplyBackendQueueMessageOptions,
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 
@@ -27,13 +28,7 @@ export type EmbeddedAgentQueueHandle = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
 
-export type EmbeddedAgentQueueMessageOptions = {
-  steeringMode?: "all";
-  debounceMs?: number;
-  deliveryTimeoutMs?: number;
-  waitForTranscriptCommit?: boolean;
-  sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-};
+export type EmbeddedAgentQueueMessageOptions = ReplyBackendQueueMessageOptions;
 
 export type ActiveEmbeddedRunSnapshot = {
   transcriptLeafId: string | null;

@@ -15,6 +15,7 @@ import {
   resetDiagnosticSessionStateForTest,
 } from "../../logging/diagnostic-session-state.js";
 import { diagnosticLogger } from "../../logging/diagnostic.js";
+import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import {
   testing,
@@ -323,11 +324,15 @@ describe("embedded-agent runner run registry", () => {
       queueMessage,
     });
     operation.setPhase("running");
+    const recorder = createUserTurnTranscriptRecorder({
+      input: { text: "visible group prompt", sender: { id: "user-42" } },
+      target: { transcriptPath: "/tmp/unused-session.jsonl" },
+    });
 
     const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
       "session-reply-run",
       "completion from child",
-      { waitForTranscriptCommit: true },
+      { waitForTranscriptCommit: true, userTurnTranscriptRecorder: recorder },
     );
 
     expect(outcome.queued).toBe(true);
@@ -342,7 +347,10 @@ describe("embedded-agent runner run registry", () => {
     });
     expect(outcome.enqueuedAtMs).toEqual(expect.any(Number));
     expect(outcome.deliveredAtMs).toBeUndefined();
-    expect(queueMessage).toHaveBeenCalledWith("completion from child");
+    expect(queueMessage).toHaveBeenCalledWith("completion from child", {
+      waitForTranscriptCommit: true,
+      userTurnTranscriptRecorder: recorder,
+    });
   });
 
   it("force-clears an aborted run that does not drain", async () => {
@@ -588,5 +596,4 @@ describe("embedded-agent runner run registry", () => {
     clearActiveEmbeddedRun("session-snapshot", handle);
     expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toBeUndefined();
   });
-
 });
