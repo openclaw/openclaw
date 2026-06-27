@@ -117,6 +117,36 @@ describe("readLatestAssistantReply", () => {
     expect(result).toBe("older output");
   });
 
+  it("does not fall back past trailing transcript-only OpenClaw assistant mirrors", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "real worker reply" }],
+          timestamp: 10,
+        },
+        {
+          role: "assistant",
+          provider: "openclaw",
+          model: "delivery-mirror",
+          content: [{ type: "text", text: "already delivered through message tool" }],
+          timestamp: 11,
+        },
+        {
+          role: "assistant",
+          provider: "openclaw",
+          model: "gateway-injected",
+          content: [{ type: "text", text: "gateway notice" }],
+          timestamp: 12,
+        },
+      ],
+    });
+
+    const result = await readLatestAssistantReply({ sessionKey: "agent:main:child" });
+
+    expect(result).toBeUndefined();
+  });
+
   it("returns assistant fingerprints for delta comparisons", async () => {
     callGatewayMock.mockResolvedValue({
       messages: [
@@ -408,6 +438,79 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
         text: "same reply",
         fingerprint: JSON.stringify(assistantMessage),
       },
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      replyText: undefined,
+    });
+  });
+
+  it("does not treat a message-tool delivery mirror as a new waited reply", async () => {
+    const baselineMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "previous real reply" }],
+      timestamp: 41,
+    };
+    callGatewayMock
+      .mockResolvedValueOnce({
+        status: "ok",
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          baselineMessage,
+          {
+            role: "assistant",
+            provider: "openclaw",
+            model: "delivery-mirror",
+            content: [{ type: "text", text: "already delivered source reply" }],
+            timestamp: 42,
+          },
+        ],
+      });
+
+    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+      runId: "run-source-reply",
+      sessionKey: "agent:main:child",
+      timeoutMs: 1_000,
+      baseline: {
+        text: "previous real reply",
+        fingerprint: JSON.stringify(baselineMessage),
+      },
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      replyText: undefined,
+    });
+  });
+
+  it("does not resurrect an older reply when only a delivery mirror is newer", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        status: "ok",
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "stale previous reply" }],
+            timestamp: 41,
+          },
+          {
+            role: "assistant",
+            provider: "openclaw",
+            model: "delivery-mirror",
+            content: [{ type: "text", text: "already delivered source reply" }],
+            timestamp: 42,
+          },
+        ],
+      });
+
+    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+      runId: "run-source-reply-without-baseline",
+      sessionKey: "agent:main:child",
+      timeoutMs: 1_000,
     });
 
     expect(result).toEqual({

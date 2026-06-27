@@ -160,6 +160,20 @@ function normalizePendingRunIds(runIds: Iterable<string>): string[] {
   return [...seen];
 }
 
+function isTranscriptOnlyOpenClawAssistantMessage(message: {
+  role?: unknown;
+  provider?: unknown;
+  model?: unknown;
+}): boolean {
+  if (message.role !== "assistant") {
+    return false;
+  }
+  return (
+    message.provider === "openclaw" &&
+    (message.model === "delivery-mirror" || message.model === "gateway-injected")
+  );
+}
+
 function resolveLatestAssistantReplySnapshot(messages: unknown[]): AssistantReplySnapshot {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const candidate = messages[i];
@@ -168,6 +182,9 @@ function resolveLatestAssistantReplySnapshot(messages: unknown[]): AssistantRepl
     }
     if ((candidate as { role?: unknown }).role !== "assistant") {
       continue;
+    }
+    if (isTranscriptOnlyOpenClawAssistantMessage(candidate)) {
+      return {};
     }
     const text = extractAssistantText(candidate);
     if (!text?.trim()) {
