@@ -741,9 +741,21 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     }> = [];
     for (const event of normalizedEvents) {
       const wrappedHandler: typeof handler = async (evt) => {
-        // Shallow-copy to avoid mutating the shared event object
-        // passed to all handlers sequentially by triggerInternalHook
-        return handler({ ...evt, context: { ...evt.context, pluginConfig } });
+        const context = evt.context;
+        const hadPluginConfig = Object.prototype.hasOwnProperty.call(context, "pluginConfig");
+        const previousPluginConfig = context.pluginConfig;
+        // Internal hooks intentionally share one mutable context object across
+        // handlers; only pluginConfig stays per-handler and is restored after.
+        context.pluginConfig = pluginConfig;
+        try {
+          return await handler({ ...evt, context });
+        } finally {
+          if (hadPluginConfig) {
+            context.pluginConfig = previousPluginConfig;
+          } else {
+            delete context.pluginConfig;
+          }
+        }
       };
       registerInternalHook(event, wrappedHandler);
       nextRegistrations.push({ event, handler: wrappedHandler });
