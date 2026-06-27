@@ -441,4 +441,14 @@ describe("extractToolResultText", () => {
     expect(withoutText).toBeDefined();
     expect(withoutText).toContain("resource");
   });
+
+  it("truncates large structured fallback output to TOOL_RESULT_MAX_CHARS (#97267)", () => {
+    const bigData = "x".repeat(10_000);
+    const text = extractToolResultText({
+      content: [{ type: "resource", resource: { data: bigData } }],
+    });
+    expect(text).toBeDefined();
+    expect(text!.length).toBeLessThanOrEqual(8100);
+    expect(text).toContain("(truncated)");
+  });
 });

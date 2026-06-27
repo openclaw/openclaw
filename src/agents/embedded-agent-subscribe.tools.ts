@@ -303,7 +303,8 @@ export function extractToolResultText(result: unknown): string | undefined {
       }
     }
     if (fallbackParts.length > 0) {
-      return fallbackParts.join("\n");
+      const joined = fallbackParts.join("\n");
+      return truncateToolText(joined);
     }
   }
 
