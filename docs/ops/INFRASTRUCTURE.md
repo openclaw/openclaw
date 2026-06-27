@@ -223,7 +223,7 @@ host port. Config lives at `/root/.openclaw/agents/<agent>/openclaw.json` with s
 
 `braveisrael, cashtronics, my-pa, mystory, onlyclaw, researcher, specy, stillasystems, testingbot, thebook, tzahi1, wellwell` (mikyhelper + kycbot deleted; a `main` agent dir exists with no running container)
 
-### US (`5.161.84.219`) — 12 agents, all on `gateway:v2026.06.10.1` (drift resolved 2026-06-10); `life` pinned ahead on `gateway:v2026.06.18.1` (full per-user stack: `app_profile` injection #68 + first-turn #71 + `load_skill` #74, 2026-06-18; rollback `v2026.06.17.2`)
+### US (`5.161.84.219`) — 12 agents, all on `gateway:v2026.06.10.1` (drift resolved 2026-06-10); `life` pinned ahead on `gateway:v2026.06.27.1` (full per-user stack + deterministic memory recall: `app_profile` injection #68 + first-turn #71 + `load_skill` #74 + app-prompt slim v2026.06.20.3 + **memory-recall injection #90**, 2026-06-27; rollback `v2026.06.20.3` via `docker.env.bak.pre-v2026.06.27.1`)
 
 `agentav, bob-the-project-manager, designer, familyorganizer, gems, jim-the-ceo, life, projectmanager, raingame, social-bob, thebook, vcode1bot` (productguy deleted 2026-06-10 — invalid bot token)
 

@@ -7,6 +7,19 @@
 
 ## Last Session
 
+- **Date**: 2026-06-27 (deterministic durable-memory recall shipped to prod: `life` v2026.06.27.1)
+- **What changed**:
+  - **Gateway PR #90** (`feat/app-memory-recall-injection`): fixes QA 4A — a goal saved in one app chat wasn't recalled in a new chat. Root cause (verified): saving works (Graphiti `add_episode` succeeds; a live `search_memory_facts` returns the fact), but recall was **discretionary** — the slim app prompt often skipped `search_memory_facts` at the start of a new chat. New `src/agents/graphiti-recall-client.ts` (read-only `search_memory_facts` over streamable-HTTP MCP, mirrors the graphiti-proxy scope boundary: server-derived `groupId` only, unsafe-id fail-closed, `group_ids:[groupId]`, no caller `group_id`/`group_ids`/`center_node_uuid`) + `src/agents/memory-recall-context.ts` (`appendMemoryRecallBootstrapFile` — group id byte-identical to the `life-memory-scope` hook, ~2.5s timebox + fail-open, **no cross-turn cache** per codex P2) chained after `appendAppProfileBootstrapFile` in `bootstrap-files.ts`. Injects the top facts as a synthetic `MEMORY_RECALL.md` every app turn. Folded a codex review round (P1 scope boundary + P2 stale-cache). 27 vitest; `pnpm check` green.
+  - **Gateway image `v2026.06.27.1`** (sourceSha `ed9f2a5c8`): built from `main`, pinned to **`life` only** on 2ndClaw via single-agent recreate (fleet untouched per the staged-boot rule). Rollback ref `v2026.06.20.3` (`docker.env.bak.pre-v2026.06.27.1`).
+  - **`life` `workspace/AGENTS.app.md`**: one-line note in §3 that the top durable facts are pre-injected as `MEMORY_RECALL.md` (lean on it first, `search_memory_facts` only for more). Host-only, effective next turn (`AGENTS.app.md.bak.pre-memory-recall`); source mirrored in `ops/graphiti-life/agents-md-memory-section.md`.
+  - **Companion app fix**: `app.havaya` #28 (summary-method parser keeps custom output — QA 4C — + QA-guide doc fixes) merged/auto-deploys via Coolify.
+- **Validation**:
+  - `pnpm check` green on #90 (tsgo + lint + oxfmt); 27 vitest incl. wire/scope/timebox + hook group-id parity + fail-open + no-stale-cache.
+  - Prod smoke: `life` recreated on `v2026.06.27.1`, boots healthy (gateway `:18789`, graphiti mcp ready: 4 tools, restarts=0). Public-chat coherence reply OK. **Memory-recall E2E confirmed**: a brand-new app session for the QA test user asking "מה המטרה שלי החודש?" now replies "המטרה שלך החודש היא לבנות שגרת כתיבה יומית" on the FIRST message (was: asked to be reminded).
+- **Follow-ups**: register release `v2026.06.27.1` (owner/dashboard `POST /api/platform/releases`); the daily `bug_list` autoscan cron re-drifts `scripts/ops/bug_list.md` under oxfmt 0.33 — make the cron format or ignore it (the `check` gate fails on every PR until then; #90 folded a one-off fix); periodic US-host image prune.
+
+## Last Session (prev)
+
 - **Date**: 2026-06-18 (load_skill app-session tool shipped to prod: v2026.06.18.1; US disk cleanup)
 - **What changed**:
   - **Gateway PR #74** (`feat/load-skill-app-sessions`): read-only, name-scoped `load_skill` tool so Havaya app-user sessions (jailed by `tools.fs.workspaceOnly`) can load + apply the live dashboard skills they could previously see but not read. Allowlist = the prompt-limited filtered `resolvedSkills` (no side channel, no drift with the prompt); confined to each matched entry's own `baseDir`; gated on a resolved app user (turn-1-safe via the #71 fallback); 24 KB cap. The app skills prompt is path-free (`load_skill(name)`, no `<location>` leak) and mirrored into compaction. Folded two codex rounds (4519976882 tool-filter/compaction/limits + 4520156223 doc nit). Merged clean (no `--admin`).
