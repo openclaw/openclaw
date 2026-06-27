@@ -18,6 +18,7 @@ import { xaiUserAgent } from "./src/xai-user-agent.js";
 const PROVIDER_ID = "xai";
 export const XAI_OAUTH_METHOD_ID = "oauth";
 export const XAI_OAUTH_CHOICE_ID = "xai-oauth";
+export const XAI_DEVICE_CODE_METHOD_ID = "device-code";
 export const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 export const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 export const XAI_OAUTH_ISSUER = "https://auth.x.ai";
@@ -679,6 +680,16 @@ export function createXaiOAuthAuthMethod(): ProviderAuthMethod {
       groupHint: "API key or OAuth",
       methodId: XAI_OAUTH_METHOD_ID,
     },
+    run: async (ctx) => loginXaiDeviceCode(ctx),
+  };
+}
+
+export function createXaiDeviceCodeAuthMethod(): ProviderAuthMethod {
+  return {
+    id: XAI_DEVICE_CODE_METHOD_ID,
+    label: "xAI device code",
+    hint: "Deprecated alias for xAI OAuth device-code login",
+    kind: "device_code",
     run: async (ctx) => loginXaiDeviceCode(ctx),
   };
 }

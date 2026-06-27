@@ -7,6 +7,7 @@ import {
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  createXaiDeviceCodeAuthMethod,
   createXaiOAuthAuthMethod,
   fetchXaiOAuthDiscovery,
   isTrustedXaiOAuthEndpoint,
@@ -70,6 +71,14 @@ describe("xAI OAuth", () => {
     expect(method.kind).toBe("oauth");
     expect(method.wizard?.choiceId).toBe("xai-oauth");
     expect(method.wizard?.methodId).toBe("oauth");
+  });
+
+  it("preserves device-code as an explicit auth method alias", () => {
+    const method = createXaiDeviceCodeAuthMethod();
+
+    expect(method.id).toBe("device-code");
+    expect(method.kind).toBe("device_code");
+    expect(method.wizard).toBeUndefined();
   });
 
   it("validates discovered endpoints before using them", async () => {

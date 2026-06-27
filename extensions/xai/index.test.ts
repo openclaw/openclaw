@@ -18,6 +18,7 @@ const providerAuthRuntimeMocks = vi.hoisted(() => ({
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => providerAuthRuntimeMocks);
 
 import plugin from "./index.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildLiveXaiProvider } from "./provider-catalog.js";
 import setupPlugin from "./setup-api.js";
 import {
@@ -82,13 +83,23 @@ describe("xai provider plugin", () => {
     vi.unstubAllGlobals();
   });
 
-  it("exposes xAI OAuth as the browser auth choice", async () => {
+  it("exposes xAI OAuth and preserves the explicit device-code alias", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 
-    expect(provider.auth?.map((method) => method.id)).toEqual(["api-key", "oauth"]);
+    expect(provider.auth?.map((method) => method.id)).toEqual(["api-key", "oauth", "device-code"]);
     const oauth = provider.auth?.find((method) => method.id === "oauth");
     expect(oauth?.kind).toBe("oauth");
     expect(oauth?.wizard?.choiceId).toBe("xai-oauth");
+    const deviceCode = provider.auth?.find((method) => method.id === "device-code");
+    expect(deviceCode?.kind).toBe("device_code");
+    expect(deviceCode?.wizard).toBeUndefined();
+    expect(manifest.providerAuthChoices).toContainEqual(
+      expect.objectContaining({
+        choiceId: "xai-oauth",
+        method: "oauth",
+        deprecatedChoiceIds: ["xai-device-code"],
+      }),
+    );
   });
 
   it("filters the xAI API-key catalog against live model ids", async () => {
