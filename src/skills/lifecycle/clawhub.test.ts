@@ -2784,6 +2784,7 @@ describe("skill uninstall lifecycle", () => {
     workspaceDir: string;
     slug: string;
     ownerHandle?: string;
+    originSlug?: string;
   }): Promise<string> {
     const skillDir = path.join(params.workspaceDir, "skills", params.slug);
     await fs.mkdir(path.join(skillDir, ".clawhub"), { recursive: true });
@@ -2793,7 +2794,7 @@ describe("skill uninstall lifecycle", () => {
         {
           version: 1,
           registry: "https://clawhub.ai",
-          slug: params.slug,
+          slug: params.originSlug ?? params.slug,
           ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
           installedVersion: "1.0.0",
           installedAt: Date.now(),
@@ -3063,7 +3064,6 @@ describe("skill uninstall lifecycle", () => {
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
     }
-  
   });
   it("refuses to remove skill dir when origin.json slug doesn't match requested slug", async () => {
     const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-uninstall-"));
