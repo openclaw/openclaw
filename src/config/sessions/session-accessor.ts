@@ -45,6 +45,7 @@ import {
   loadSqliteTranscriptEvents,
   loadSqliteTranscriptEventsSync,
   patchSqliteSessionEntry,
+  patchSqliteSessionEntryTarget,
   publishSqliteTranscriptUpdate,
   purgeSqliteDeletedAgentSessionEntries,
   readSqliteSessionUpdatedAt,
@@ -498,6 +499,12 @@ export type SessionEntryPatchResult = {
   sessionKey: string;
   /** Persisted entry returned by the backing store. */
   entry: SessionEntry;
+};
+
+export type SessionEntryTargetPatchScope = {
+  storePath: string;
+  /** Canonical key plus aliases that identify the logical entry. */
+  target: SessionLifecycleStoreTarget;
 };
 
 export type RestartRecoveryLifecycleEntry = {
@@ -988,6 +995,21 @@ export async function patchSessionEntry(
   options: SessionEntryPatchOptions = {},
 ): Promise<SessionEntry | null> {
   return await patchSqliteSessionEntry(scope, update, options);
+}
+
+/**
+ * Applies an atomic patch to the freshest entry selected from a canonical key
+ * plus its known aliases, then persists the result under the canonical key.
+ */
+export async function patchSessionEntryTarget(
+  scope: SessionEntryTargetPatchScope,
+  update: (
+    entry: SessionEntry,
+    context: SessionEntryPatchContext,
+  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
+  options: SessionEntryPatchOptions = {},
+): Promise<SessionEntry | null> {
+  return await patchSqliteSessionEntryTarget(scope, update, options);
 }
 
 /**

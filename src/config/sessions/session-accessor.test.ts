@@ -15,6 +15,7 @@ import {
   loadTranscriptEvents,
   markSessionAbortTarget,
   patchSessionEntry,
+  patchSessionEntryTarget,
   persistSessionResetLifecycle,
   persistSessionRolloverLifecycle,
   persistSessionTranscriptTurn,
@@ -103,6 +104,60 @@ describe("session accessor seam", () => {
     expect(listSessionEntries({ storePath }).map((entry) => entry.sessionKey)).toEqual([
       mixedKey,
       lowerKey,
+    ]);
+  });
+
+  it("patches the freshest target alias and rewrites it to the canonical key", async () => {
+    await replaceSessionEntry(
+      {
+        sessionKey: "agent:main:work",
+        storePath,
+      },
+      {
+        sessionId: "canonical-session",
+        updatedAt: 10,
+      },
+    );
+    await replaceSessionEntry(
+      {
+        sessionKey: "agent:main:main",
+        storePath,
+      },
+      {
+        sessionId: "legacy-session",
+        updatedAt: 20,
+      },
+    );
+
+    const patched = await patchSessionEntryTarget(
+      {
+        storePath,
+        target: {
+          canonicalKey: "agent:main:work",
+          storeKeys: ["agent:main:work", "agent:main:main"],
+        },
+      },
+      (entry, context) => {
+        expect(entry.sessionId).toBe("legacy-session");
+        expect(context.existingEntry?.sessionId).toBe("legacy-session");
+        return {
+          label: "patched",
+        };
+      },
+    );
+
+    expect(patched).toMatchObject({
+      label: "patched",
+      sessionId: "legacy-session",
+    });
+    expect(listSessionEntries({ storePath })).toEqual([
+      {
+        sessionKey: "agent:main:work",
+        entry: expect.objectContaining({
+          label: "patched",
+          sessionId: "legacy-session",
+        }),
+      },
     ]);
   });
 
