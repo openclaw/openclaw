@@ -38,6 +38,8 @@ vi.mock("../../config/sessions/store.js", () => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
+  loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
+    (hoisted.loadSessionStoreMock(scope.storePath) as Record<string, unknown>)[scope.sessionKey],
   loadTranscriptEvents: hoisted.loadTranscriptEventsMock,
 }));
 
@@ -219,9 +221,7 @@ describe("buildExportSessionReply", () => {
     });
 
     expect(hoisted.resolveDefaultSessionStorePathMock).not.toHaveBeenCalled();
-    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/tmp/custom-store/sessions.json", {
-      skipCache: true,
-    });
+    expect(hoisted.loadSessionStoreMock).toHaveBeenCalledWith("/tmp/custom-store/sessions.json");
     expect(hoisted.resolveSessionFilePathOptionsMock).toHaveBeenCalledWith({
       agentId: "target",
       storePath: "/tmp/custom-store/sessions.json",
