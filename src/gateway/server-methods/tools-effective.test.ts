@@ -593,22 +593,23 @@ describe("tools.effective handler", () => {
 
   it("loads global sessions with the requested agent id before matching session agent", async () => {
     runtimeMocks.listAgentIds.mockReturnValueOnce(["main", "work"]);
-    runtimeMocks.loadSessionEntry.mockImplementationOnce(() => ({
-      cfg: {},
-      canonicalKey: "global",
-      entry: {
-        sessionId: "session-work-global",
-        updatedAt: 1,
-        modelProvider: "openai",
-        model: "gpt-4.1",
-      },
-      storePath: "/tmp/work/sessions.json",
-      store: {},
-      storeKeys: ["global"],
-    }));
-    runtimeMocks.resolveSessionAgentId.mockImplementationOnce(
-      (params: { agentId?: string }) => params.agentId ?? "main",
+    runtimeMocks.loadSessionEntry.mockImplementationOnce(
+      () =>
+        ({
+          cfg: {},
+          canonicalKey: "global",
+          entry: {
+            sessionId: "session-work-global",
+            updatedAt: 1,
+            modelProvider: "openai",
+            model: "gpt-4.1",
+          },
+          storePath: "/tmp/work/sessions.json",
+          store: {},
+          storeKeys: ["global"],
+        }) as never,
     );
+    runtimeMocks.resolveSessionAgentId.mockReturnValueOnce("work");
     runtimeMocks.resolveAgentDir.mockReturnValueOnce("/tmp/agents/work/agent");
     runtimeMocks.resolveAgentWorkspaceDir.mockReturnValueOnce("/tmp/workspace-work");
     runtimeMocks.resolveEffectiveToolInventory.mockReturnValueOnce(makeCoreInventory());
