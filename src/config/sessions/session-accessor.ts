@@ -58,6 +58,7 @@ import {
 } from "./session-accessor.sqlite.js";
 import {
   formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
   sqliteSessionFileMarkerMatchesSession,
 } from "./sqlite-marker.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
@@ -2599,12 +2600,16 @@ async function resolveTranscriptTurnTarget(
   }
 > {
   if (shouldUseExplicitTranscriptFile(scope)) {
+    const marker = parseSqliteSessionFileMarker(scope.sessionFile);
+    const agentId = scope.agentId ?? marker?.agentId;
+    const sessionId = scope.sessionId ?? marker?.sessionId;
+    const storePath = scope.storePath ?? marker?.storePath;
     return {
-      ...(scope.agentId ? { agentId: scope.agentId } : {}),
+      ...(agentId ? { agentId } : {}),
       sessionFile: scope.sessionFile.trim(),
-      ...(scope.sessionId ? { sessionId: scope.sessionId } : {}),
+      ...(sessionId ? { sessionId } : {}),
       ...(scope.sessionKey ? { sessionKey: scope.sessionKey } : {}),
-      ...(scope.storePath ? { storePath: scope.storePath } : {}),
+      ...(storePath ? { storePath } : {}),
       sessionEntry: scope.sessionEntry,
     };
   }
