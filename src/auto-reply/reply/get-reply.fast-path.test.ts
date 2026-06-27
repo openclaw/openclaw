@@ -68,11 +68,14 @@ registerGetReplyRuntimeOverrides(mocks);
 let getReplyFromConfig: typeof import("./get-reply.js").getReplyFromConfig;
 let resolveDefaultModelMock: typeof import("./directive-handling.defaults.js").resolveDefaultModel;
 let resolveModelRefFromStringMock: typeof import("../../agents/model-selection.js").resolveModelRefFromString;
+let resolveAgentSkillsFilterMock: typeof import("../../agents/agent-scope.js").resolveAgentSkillsFilter;
 let loadConfigMock: typeof import("../../config/config.js").getRuntimeConfig;
 let runPreparedReplyMock: typeof import("./get-reply-run.js").runPreparedReply;
 
 async function loadGetReplyRuntimeForTest() {
   ({ getReplyFromConfig } = await loadGetReplyModuleForTest({ cacheKey: import.meta.url }));
+  ({ resolveAgentSkillsFilter: resolveAgentSkillsFilterMock } =
+    await import("../../agents/agent-scope.js"));
   ({ resolveDefaultModel: resolveDefaultModelMock } =
     await import("./directive-handling.defaults.js"));
   ({ resolveModelRefFromString: resolveModelRefFromStringMock } =
@@ -154,6 +157,8 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     });
     vi.mocked(resolveModelRefFromStringMock).mockReset();
     vi.mocked(resolveModelRefFromStringMock).mockReturnValue(null);
+    vi.mocked(resolveAgentSkillsFilterMock).mockReset();
+    vi.mocked(resolveAgentSkillsFilterMock).mockReturnValue(undefined);
     vi.mocked(loadConfigMock).mockReset();
     vi.mocked(runPreparedReplyMock).mockReset();
     vi.mocked(loadConfigMock).mockReturnValue({});
@@ -259,6 +264,39 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     expect(vi.mocked(loadConfigMock)).not.toHaveBeenCalled();
     expect(mocks.resolveReplyDirectives).not.toHaveBeenCalled();
     expect(vi.mocked(runPreparedReplyMock)).toHaveBeenCalledOnce();
+  });
+
+  it("uses merged agent skill policy before admitting the lightweight lane", async () => {
+    const home = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-lightweight-skill-policy-"));
+    const cfg = withFastReplyConfig({
+      agents: {
+        defaults: {
+          skills: ["github"],
+          workspace: home,
+        },
+      },
+      session: { store: path.join(home, "sessions.json") },
+    } as OpenClawConfig);
+    vi.mocked(resolveAgentSkillsFilterMock).mockReturnValueOnce(["github"]);
+
+    await expect(
+      getReplyFromConfig(
+        buildGetReplyCtx({
+          Body: "thanks, that really helped",
+          BodyForAgent: "thanks, that really helped",
+          RawBody: "thanks, that really helped",
+          CommandBody: "thanks, that really helped",
+          BodyForCommands: "thanks, that really helped",
+        }),
+        undefined,
+        cfg,
+      ),
+    ).resolves.toEqual({ text: "ok" });
+
+    const preparedReplyParams = requirePreparedReplyParams();
+    expect(preparedReplyParams.opts).toMatchObject({ skillFilter: ["github"] });
+    expect(preparedReplyParams.opts?.bootstrapContextMode).toBeUndefined();
+    expect(preparedReplyParams.opts?.disableTools).toBeUndefined();
   });
 
   it("clears stale ack-only heartbeat pending delivery before running heartbeat", async () => {

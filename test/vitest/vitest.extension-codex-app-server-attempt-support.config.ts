@@ -7,6 +7,7 @@ export function createExtensionCodexAppServerAttemptSupportVitestConfig(
   return createScopedVitestConfig(
     [
       "extensions/codex/src/app-server/attempt-context.test.ts",
+      "extensions/codex/src/app-server/attempt-notification-state.test.ts",
       "extensions/codex/src/app-server/attempt-results.test.ts",
       "extensions/codex/src/app-server/attempt-startup.test.ts",
       "extensions/codex/src/app-server/attempt-timeouts.test.ts",

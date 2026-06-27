@@ -343,8 +343,10 @@ export async function getReplyFromConfig(
   const mergedSkillFilter = resolverTiming.measureSync("reply.resolve_skill_filter", () =>
     mergeSkillFilters(opts?.skillFilter, resolveAgentSkillsFilter(cfg, agentId)),
   );
+  const baseResolvedOpts =
+    mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
   const lightweightOpts = resolverTiming.measureSync("reply.resolve_lightweight_lane", () =>
-    applyLightweightReplyLane(opts, {
+    applyLightweightReplyLane(baseResolvedOpts, {
       text:
         finalized.BodyForCommands ?? finalized.CommandBody ?? finalized.RawBody ?? finalized.Body,
       hasMedia: hasInboundMedia(finalized),
@@ -353,9 +355,7 @@ export async function getReplyFromConfig(
       hasUnresolvedReplyTarget: hasUnresolvedReplyTarget(finalized),
     }),
   );
-  const baseOpts = lightweightOpts ?? opts;
-  const resolvedOpts =
-    mergedSkillFilter !== undefined ? { ...baseOpts, skillFilter: mergedSkillFilter } : baseOpts;
+  const resolvedOpts = lightweightOpts ?? baseResolvedOpts;
   const internalResolvedOpts = resolvedOpts as RuntimeInternalGetReplyOptions | undefined;
   const agentCfg = cfg.agents?.defaults;
   const sessionCfg = cfg.session;
