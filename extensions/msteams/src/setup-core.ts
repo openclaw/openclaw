@@ -104,13 +104,13 @@ export function patchMSTeamsAccountConfig(params: {
           ...baseAccounts,
           default: {
             ...defaultAccount,
-            ...(baseAccounts.default ?? {}),
+            ...baseAccounts.default,
           },
         }
       : baseAccounts;
   const existing =
     accountId === DEFAULT_ACCOUNT_ID
-      ? ({ ...defaultAccount, ...(accounts[accountId] ?? {}) } as MSTeamsSetupAccountConfig)
+      ? ({ ...defaultAccount, ...accounts[accountId] } as MSTeamsSetupAccountConfig)
       : ((accounts[accountId] ?? {}) as MSTeamsSetupAccountConfig);
   return {
     ...params.cfg,
