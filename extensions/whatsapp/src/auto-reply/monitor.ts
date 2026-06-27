@@ -238,6 +238,7 @@ export async function monitorWebChannel(
     socketTiming,
     abortSignal,
     sleep,
+    ...(tuning.createSocket ? { createSocket: tuning.createSocket } : {}),
     isNonRetryableStatus: isNonRetryableWebCloseStatus,
   });
   const statusController = createWebChannelStatusController(tuning.statusSink);

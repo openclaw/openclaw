@@ -85,6 +85,9 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "@openclaw/discord/api.js": ["../dist/plugin-sdk/extensions/discord/api.d.ts"],
   "@openclaw/slack/api.js": ["../dist/plugin-sdk/extensions/slack/api.d.ts"],
   "@openclaw/whatsapp/api.js": ["../dist/plugin-sdk/extensions/whatsapp/api.d.ts"],
+  "@openclaw/whatsapp/runtime-setter-api.js": [
+    "../dist/plugin-sdk/extensions/whatsapp/runtime-setter-api.d.ts",
+  ],
   "@openclaw/llm-core": ["../dist/plugin-sdk/packages/llm-core/src/index.d.ts"],
   "@openclaw/llm-core/diagnostics": [
     "../dist/plugin-sdk/packages/llm-core/src/utils/diagnostics.d.ts",
@@ -257,6 +260,7 @@ export const EXTENSION_PACKAGE_BOUNDARY_XAI_PATHS = {
       "@openclaw/discord/api.js": _omitDiscord,
       "@openclaw/slack/api.js": _omitSlack,
       "@openclaw/whatsapp/api.js": _omitWhatsApp,
+      "@openclaw/whatsapp/runtime-setter-api.js": _omitWhatsAppRuntimeSetter,
       ...rest
     }) => rest)(EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS),
     "../",

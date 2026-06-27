@@ -233,11 +233,16 @@ const SLACK_DTS_STAMP = "dist/plugin-sdk/extensions/slack/.boundary-dts.stamp";
 const SLACK_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/slack/api.d.ts"];
 const WHATSAPP_DTS_INPUTS = [
   "extensions/whatsapp/api.ts",
+  "extensions/whatsapp/runtime-setter-api.ts",
+  "extensions/whatsapp/src/monitor-runtime-options.ts",
   "extensions/whatsapp/src/qa-driver.runtime.ts",
   "extensions/whatsapp/tsconfig.json",
 ];
 const WHATSAPP_DTS_STAMP = "dist/plugin-sdk/extensions/whatsapp/.boundary-dts.stamp";
-const WHATSAPP_DTS_REQUIRED_OUTPUTS = ["dist/plugin-sdk/extensions/whatsapp/api.d.ts"];
+const WHATSAPP_DTS_REQUIRED_OUTPUTS = [
+  "dist/plugin-sdk/extensions/whatsapp/api.d.ts",
+  "dist/plugin-sdk/extensions/whatsapp/runtime-setter-api.d.ts",
+];
 const ENTRY_SHIMS_INPUTS = [
   "scripts/lib/plugin-sdk-private-local-only-subpaths.json",
   "scripts/write-plugin-sdk-entry-dts.ts",

@@ -27,6 +27,7 @@ import {
   resolveWhatsAppGroupToolPolicy,
 } from "./group-policy.js";
 import { checkWhatsAppHeartbeatReady } from "./heartbeat.js";
+import { getWhatsAppMonitorRuntimeOptions } from "./monitor-runtime-options.js";
 import {
   isWhatsAppGroupJid,
   isWhatsAppNewsletterJid,
@@ -324,6 +325,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
       gateway: {
         startAccount: async (ctx) => {
           const account = ctx.account;
+          const monitorOptions = getWhatsAppMonitorRuntimeOptions();
           const { e164, jid } = (await loadWhatsAppChannelRuntime()).readWebSelfId(account.authDir);
           const identity = e164 ? e164 : jid ? `jid ${jid}` : "unknown";
           ctx.log?.info(`[${account.accountId}] starting provider (${identity})`);
@@ -339,6 +341,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
                 ctx.setStatus({ accountId: ctx.accountId, ...next }),
               accountId: account.accountId,
               channelRuntime: ctx.channelRuntime,
+              ...(monitorOptions.createSocket ? { createSocket: monitorOptions.createSocket } : {}),
             },
           );
         },

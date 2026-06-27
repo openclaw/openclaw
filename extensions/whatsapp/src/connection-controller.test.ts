@@ -211,6 +211,52 @@ describe("WhatsAppConnectionController", () => {
     });
   });
 
+  it("uses an injected socket factory when opening a connection", async () => {
+    const customSock = { ws: { close: vi.fn() } };
+    const createSocket = vi.fn(async () => customSock);
+    const waitForConnection = vi.fn(async () => {});
+    const customController = new WhatsAppConnectionController({
+      accountId: "work",
+      authDir: "/tmp/wa-auth",
+      verbose: false,
+      keepAlive: false,
+      heartbeatSeconds: 30,
+      transportTimeoutMs: 60_000,
+      messageTimeoutMs: 60_000,
+      watchdogCheckMs: 5_000,
+      reconnectPolicy: {
+        initialMs: 250,
+        maxMs: 1_000,
+        factor: 2,
+        jitter: 0,
+        maxAttempts: 5,
+      },
+      createSocket: createSocket as never,
+      waitForConnection: waitForConnection as never,
+    });
+
+    try {
+      await customController.openConnection({
+        connectionId: "conn-custom",
+        createListener: async () => createListenerStub() as never,
+      });
+    } finally {
+      await customController.shutdown();
+    }
+
+    expect(createWaSocketMock).not.toHaveBeenCalled();
+    expect(waitForWaConnectionMock).not.toHaveBeenCalled();
+    expect(createSocket).toHaveBeenCalledWith(false, false, {
+      authDir: "/tmp/wa-auth",
+      connectTimeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.connectTimeoutMs,
+      defaultQueryTimeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.defaultQueryTimeoutMs,
+      keepAliveIntervalMs: DEFAULT_WHATSAPP_SOCKET_TIMING.keepAliveIntervalMs,
+    });
+    expect(waitForConnection).toHaveBeenCalledWith(customSock, {
+      timeoutMs: DEFAULT_WHATSAPP_SOCKET_TIMING.connectTimeoutMs,
+    });
+  });
+
   it("restarts login once on status 408 and preserves replacement socket options", async () => {
     const harness = createLoginResultHarness();
     const waitForConnection = vi
