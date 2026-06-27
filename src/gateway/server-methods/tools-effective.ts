@@ -475,6 +475,7 @@ function resolveTrustedToolsEffectiveContext(params: {
   const sessionAgentId = resolveSessionAgentId({
     sessionKey: loaded.canonicalKey ?? params.sessionKey,
     config: loaded.cfg,
+    agentId: params.requestedAgentId,
   });
   if (params.requestedAgentId && params.requestedAgentId !== sessionAgentId) {
     params.respond(
