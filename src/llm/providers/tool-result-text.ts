@@ -22,9 +22,8 @@ function stringifyStructuredBlock(block: Record<string, unknown>): string | unde
     if (!serialized || serialized === "{}") {
       return undefined;
     }
-    return serialized.length > 1_000
-      ? `${serialized.slice(0, 1_000)}... (${serialized.length} chars)`
-      : serialized;
+    // Keep provider conversion lossless; context/tool-result guards own payload budgeting.
+    return serialized;
   } catch {
     return undefined;
   }
