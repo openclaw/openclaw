@@ -23,7 +23,7 @@ import {
   stateIntegrityIssueToRepairEffect,
 } from "./doctor-state-integrity.js";
 
-const canCreateDirectorySymlinks = (() => {
+function canCreateDirectorySymlinks(): boolean {
   const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-doctor-symlink-probe-"));
   const targetDir = path.join(probeDir, "target");
   const linkDir = path.join(probeDir, "link");
@@ -36,7 +36,7 @@ const canCreateDirectorySymlinks = (() => {
   } finally {
     fs.rmSync(probeDir, { recursive: true, force: true });
   }
-})();
+}
 
 vi.mock("../channels/plugins/bundled-ids.js", () => ({
   listBundledChannelIds: () => ["matrix", "whatsapp"],
@@ -572,52 +572,52 @@ describe("doctor state integrity oauth dir checks", () => {
     expect(archivedOrphanTranscripts).toStrictEqual([]);
   });
 
-  it.skipIf(!canCreateDirectorySymlinks)(
-    "does not archive referenced transcripts when the state dir path resolves through a symlink",
-    async () => {
-      const cfg: OpenClawConfig = {};
-      const originalHome = tempHome;
-      const symlinkHome = path.join(
-        path.dirname(originalHome),
-        `${path.basename(originalHome)}-link`,
+  it("does not archive referenced transcripts when the state dir path resolves through a symlink", async ({
+    skip,
+  }) => {
+    if (!canCreateDirectorySymlinks()) {
+      skip("directory symlinks or junctions are not available on this host");
+    }
+    const cfg: OpenClawConfig = {};
+    const originalHome = tempHome;
+    const symlinkHome = path.join(
+      path.dirname(originalHome),
+      `${path.basename(originalHome)}-link`,
+    );
+    fs.symlinkSync(originalHome, symlinkHome, process.platform === "win32" ? "junction" : "dir");
+    try {
+      const symlinkStateDir = path.join(symlinkHome, ".openclaw");
+      setTestEnvValue("HOME", symlinkHome);
+      setTestEnvValue("OPENCLAW_HOME", symlinkHome);
+      setTestEnvValue("OPENCLAW_STATE_DIR", symlinkStateDir);
+
+      setupSessionState(cfg, process.env, symlinkHome);
+      const sessionsDir = resolveSessionTranscriptsDirForAgent(
+        "main",
+        process.env,
+        () => symlinkHome,
       );
-      fs.symlinkSync(originalHome, symlinkHome, process.platform === "win32" ? "junction" : "dir");
-      try {
-        const symlinkStateDir = path.join(symlinkHome, ".openclaw");
-        setTestEnvValue("HOME", symlinkHome);
-        setTestEnvValue("OPENCLAW_HOME", symlinkHome);
-        setTestEnvValue("OPENCLAW_STATE_DIR", symlinkStateDir);
+      const transcriptPath = path.join(sessionsDir, "linked-session.jsonl");
+      fs.writeFileSync(transcriptPath, '{"type":"session"}\n');
+      writeSessionStore(cfg, {
+        "agent:main:main": {
+          sessionId: "linked-session",
+          updatedAt: Date.now(),
+        },
+      });
 
-        setupSessionState(cfg, process.env, symlinkHome);
-        const sessionsDir = resolveSessionTranscriptsDirForAgent(
-          "main",
-          process.env,
-          () => symlinkHome,
-        );
-        const transcriptPath = path.join(sessionsDir, "linked-session.jsonl");
-        fs.writeFileSync(transcriptPath, '{"type":"session"}\n');
-        writeSessionStore(cfg, {
-          "agent:main:main": {
-            sessionId: "linked-session",
-            updatedAt: Date.now(),
-          },
-        });
+      const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
+        params.message.includes("This only renames them to *.deleted.<timestamp>."),
+      );
+      await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
 
-        const confirmRuntimeRepair = vi.fn(async (params: { message: string }) =>
-          params.message.includes("This only renames them to *.deleted.<timestamp>."),
-        );
-        await noteStateIntegrity(cfg, { confirmRuntimeRepair, note: noteMock });
-
-        expect(fs.existsSync(transcriptPath)).toBe(true);
-        expect(fs.readdirSync(sessionsDir).filter((name) => name.includes(".deleted."))).toEqual(
-          [],
-        );
-        expect(stateIntegrityText()).not.toContain("These .jsonl files are no longer referenced");
-      } finally {
-        fs.rmSync(symlinkHome, { force: true, recursive: true });
-      }
-    },
-  );
+      expect(fs.existsSync(transcriptPath)).toBe(true);
+      expect(fs.readdirSync(sessionsDir).filter((name) => name.includes(".deleted."))).toEqual([]);
+      expect(stateIntegrityText()).not.toContain("These .jsonl files are no longer referenced");
+    } finally {
+      fs.rmSync(symlinkHome, { force: true, recursive: true });
+    }
+  });
 
   it("suppresses orphan transcript warnings when QMD sessions are enabled", async () => {
     const confirmRuntimeRepair = await runOrphanTranscriptCheckWithQmdSessions(true, tempHome);
