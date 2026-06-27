@@ -1266,6 +1266,42 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:plugin-registry",
       label: "Plugin registry",
+      healthChecks: {
+        id: "core/doctor/plugin-registry",
+        description: "Plugin registry migration, stale shadow, and peer-link issues are findings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { detectPluginRegistryHealthIssues, pluginRegistryIssueToHealthFinding } =
+            await import("../commands/doctor-plugin-registry.js");
+          return (
+            await detectPluginRegistryHealthIssues({
+              config: ctx.cfg,
+              env: process.env,
+              prompter: { shouldRepair: false },
+            })
+          ).map(pluginRegistryIssueToHealthFinding);
+        },
+        async repair(ctx) {
+          const { detectPluginRegistryHealthIssues, pluginRegistryIssueToRepairEffect } =
+            await import("../commands/doctor-plugin-registry.js");
+          const effects = (
+            await detectPluginRegistryHealthIssues({
+              config: ctx.cfg,
+              env: process.env,
+              prompter: { shouldRepair: false },
+            })
+          ).map(pluginRegistryIssueToRepairEffect);
+          if (ctx.dryRun === true) {
+            return { status: "repaired", changes: [], effects };
+          }
+          return {
+            status: "skipped",
+            reason: "legacy doctor plugin registry contribution owns registry repairs",
+            changes: [],
+            effects,
+          };
+        },
+      },
       run: runPluginRegistryHealth,
     }),
     createDoctorHealthContribution({
