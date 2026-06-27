@@ -36,13 +36,15 @@ function inboundTypeHasManagedConsumer(type: string | undefined): boolean {
  * `media://inbound/<basename>` URI so prompts do not leak host-specific temp
  * paths and the downstream claim-check resolvers keep working.
  *
- * Binary documents with no inliner and no claim-check tool (PDF aside) -- e.g.
- * application/zip, application/octet-stream, arbitrary file types -- previously
- * received only the opaque `media://inbound/<id>` URI plus a bare
- * `<media:document>` placeholder, with no readable path. A shell-capable agent
- * could not open the file. Restoring prior behavior, those types render the
- * guarded absolute path (already proven to live inside the inbound dir) so the
- * agent can read the file directly. See issue: inbound documents unreadable.
+ * Binary documents (application/pdf aside) have no binary-aware inliner or tool
+ * consumer -- e.g. application/zip, application/octet-stream, arbitrary file
+ * types. The generic `media://` resolver decodes bytes as text/image, so it
+ * cannot make these usable. They previously received only the opaque
+ * `media://inbound/<id>` URI plus a bare `<media:document>` placeholder, leaving
+ * a shell-capable agent unable to pass the file to OS tools. Restoring prior
+ * behavior, those types render the guarded absolute path (already proven to live
+ * inside the inbound dir) so the agent can read the file directly. Restores
+ * direct access for zips and other non-PDF documents.
  */
 function normalizeManagedInboundMediaRef(value: string, type?: string): string {
   if (!path.isAbsolute(value)) {
@@ -61,8 +63,8 @@ function normalizeManagedInboundMediaRef(value: string, type?: string): string {
   ) {
     return value;
   }
-  // Binary documents have no inliner/claim-check consumer: hand the agent the
-  // real, readable absolute path (guarded to be inside the inbound dir above).
+  // Binary documents have no binary-aware inliner/tool consumer: hand the agent
+  // the real, readable absolute path (guarded to be inside the inbound dir above).
   if (!inboundTypeHasManagedConsumer(type)) {
     return candidate;
   }
