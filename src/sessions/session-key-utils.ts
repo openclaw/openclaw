@@ -15,6 +15,14 @@ export type ParsedThreadSessionSuffix = {
   threadId: string | undefined;
 };
 
+export type ParsedSessionDeliveryRoute = {
+  accountId?: string;
+  channel: string;
+  peerId: string;
+  peerKind: "channel" | "direct" | "dm" | "group";
+  threadId?: string;
+};
+
 export type RawSessionConversationRef = {
   channel: string;
   kind: "group" | "channel";
@@ -77,11 +85,18 @@ export function requiresFoldedSessionKeyAliasProof(sessionKey: string | undefine
   }
   const parts = raw.split(":");
   let bodyStartIndex = 0;
+  let hasAgentWrapper = false;
   while (
     parts.length - bodyStartIndex >= 3 &&
     normalizeOptionalLowercaseString(parts[bodyStartIndex]) === "agent"
   ) {
+    hasAgentWrapper = true;
     bodyStartIndex += 2;
+  }
+  if (hasAgentWrapper) {
+    while (bodyStartIndex < parts.length && !normalizeOptionalString(parts[bodyStartIndex])) {
+      bodyStartIndex += 1;
+    }
   }
   const descriptor = findCasePreservingPeerDescriptor(
     parts[bodyStartIndex],
@@ -183,7 +198,7 @@ function collectCasePreservedSpans(raw: string): PreservedSpan[] {
         };
         // Preserve tails behind nested or malformed ownership wrappers without
         // treating an inner channel-shaped identity as a runtime route.
-        const scopedRe = new RegExp(`^(?:agent:[^:]*:)+${channel}:${kind}:`, "i");
+        const scopedRe = new RegExp(`^(?:agent:[^:]*:)+:*${channel}:${kind}:`, "i");
         const scopedMatch = scopedRe.exec(raw);
         if (scopedMatch) {
           collectTailSpan(scopedMatch[0].length);
@@ -334,6 +349,56 @@ export function parseThreadSessionSuffix(
   const threadId = normalizeOptionalString(threadIdRaw);
 
   return { baseSessionKey, threadId };
+}
+
+const SESSION_DELIVERY_PEER_KINDS = new Set<ParsedSessionDeliveryRoute["peerKind"]>([
+  "channel",
+  "direct",
+  "dm",
+  "group",
+]);
+
+/** Parse only complete external delivery shapes; nested ownership stays opaque. */
+export function parseSessionDeliveryRoute(
+  sessionKey: string | undefined | null,
+): ParsedSessionDeliveryRoute | null {
+  const parsedThread = parseThreadSessionSuffix(sessionKey);
+  const parsed = parseAgentSessionKey(parsedThread.baseSessionKey ?? sessionKey);
+  if (!parsed) {
+    return null;
+  }
+  const parts = parsed.rest.split(":");
+  if (parts[0] === "agent" || parts.length < 3) {
+    return null;
+  }
+  const channel = normalizeOptionalLowercaseString(parts[0]);
+  if (!channel) {
+    return null;
+  }
+
+  if (parts.length >= 4 && (parts[2] === "direct" || parts[2] === "dm")) {
+    const accountId = normalizeOptionalString(parts[1]);
+    const firstPeerIdSegment = normalizeOptionalString(parts[3]);
+    const peerId = normalizeOptionalString(parts.slice(3).join(":"));
+    if (!accountId || !firstPeerIdSegment || !peerId) {
+      return null;
+    }
+    return {
+      accountId,
+      channel,
+      peerId,
+      peerKind: parts[2],
+      threadId: parsedThread.threadId,
+    };
+  }
+
+  const peerKind = parts[1] as ParsedSessionDeliveryRoute["peerKind"] | undefined;
+  const firstPeerIdSegment = normalizeOptionalString(parts[2]);
+  const peerId = normalizeOptionalString(parts.slice(2).join(":"));
+  if (!peerKind || !SESSION_DELIVERY_PEER_KINDS.has(peerKind) || !firstPeerIdSegment || !peerId) {
+    return null;
+  }
+  return { channel, peerId, peerKind, threadId: parsedThread.threadId };
 }
 
 export function parseRawSessionConversationRef(

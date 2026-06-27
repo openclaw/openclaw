@@ -187,6 +187,19 @@ describe("normalizeSessionKeyPreservingOpaquePeerIds (store canonicalization)", 
     expect(parseRawSessionConversationRef(normalized)).toBeNull();
   });
 
+  it("preserves Matrix tails after an extra empty nested-wrapper segment", () => {
+    const mixed = `Agent:Voice:Agent:Voice::Matrix:Channel:${ROOM_A}`;
+    const lower = `agent:voice:agent:voice::matrix:channel:${ROOM_A.toLowerCase()}`;
+    const normalized = `agent:voice:agent:voice::matrix:channel:${ROOM_A}`;
+
+    expect(normalizeSessionKeyPreservingOpaquePeerIds(mixed)).toBe(normalized);
+    expect(normalizeSessionKeyPreservingOpaquePeerIds(mixed)).not.toBe(
+      normalizeSessionKeyPreservingOpaquePeerIds(lower),
+    );
+    expect(requiresFoldedSessionKeyAliasProof(normalized)).toBe(true);
+    expect(parseRawSessionConversationRef(normalized)).toBeNull();
+  });
+
   it("preserves unscoped Matrix room and thread ids before agent scoping", () => {
     expect(normalizeSessionKeyPreservingOpaquePeerIds(`Matrix:Channel:${ROOM_A}`)).toBe(
       `matrix:channel:${ROOM_A}`,
