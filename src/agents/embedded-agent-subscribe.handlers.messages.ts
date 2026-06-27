@@ -41,7 +41,14 @@ import {
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
-import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
+import {
+  hasNonzeroUsage,
+  makeZeroUsageSnapshot,
+  normalizeUsage,
+  type AssistantUsageSnapshot,
+  type NormalizedUsage,
+  type UsageLike,
+} from "./usage.js";
 
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
   return resolveAssistantMessagePhase(message) === "commentary";
@@ -83,7 +90,25 @@ function preservePendingAssistantUsage(
   if (hasNonzeroUsage(messageUsage)) {
     return message;
   }
-  return { ...message, usage: state.pendingAssistantUsage };
+  (message as AgentMessage & { usage?: AssistantUsageSnapshot }).usage = toAssistantUsageSnapshot(
+    state.pendingAssistantUsage,
+  );
+  return message;
+}
+
+function toAssistantUsageSnapshot(usage: NormalizedUsage): AssistantUsageSnapshot {
+  const input = usage.input ?? 0;
+  const output = usage.output ?? 0;
+  const cacheRead = usage.cacheRead ?? 0;
+  const cacheWrite = usage.cacheWrite ?? 0;
+  return {
+    input,
+    output,
+    cacheRead,
+    cacheWrite,
+    totalTokens: usage.total ?? input + output + cacheRead + cacheWrite,
+    cost: makeZeroUsageSnapshot().cost,
+  };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
