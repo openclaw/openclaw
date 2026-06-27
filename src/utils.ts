@@ -69,7 +69,10 @@ export function sleep(ms: number) {
   });
 }
 
-export { sliceUtf16Safe, truncateUtf16Safe } from "./shared/text/surrogate-safe-slice.js";
+// Surrogate-safe slicing helpers live in a node-free leaf module so browser/UI
+// bundles can import them without pulling in filesystem code. Re-exported here
+// to preserve the historical `utils.ts` import surface.
+export { sliceUtf16Safe, truncateUtf16Safe } from "./shared/utf16-slice.js";
 
 /** Resolves `~` and OpenClaw home-relative paths with injectable env/home sources. */
 export function resolveUserPath(

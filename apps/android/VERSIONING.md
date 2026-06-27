@@ -56,6 +56,38 @@ Recommended workflow:
 
 The third-party flavor is archived as a signed APK for non-Play distribution. It is not uploaded by the Play release lane.
 
+## Release SHA tracking
+
+Successful Play build uploads create a non-tag Git ref that records the source
+commit for the uploaded store build:
+
+```text
+refs/openclaw/mobile-releases/android/<versionName>-<versionCode>
+```
+
+Example:
+
+```text
+refs/openclaw/mobile-releases/android/2026.6.10-2026061008
+```
+
+These refs are intentionally outside `refs/tags/*` and `refs/heads/*`. They do
+not appear on GitHub release or tag pages, and they do not participate in the
+core OpenClaw release machinery.
+
+`pnpm android:release:upload` checks the ref before uploading the Play build and
+records it only after `upload_to_play_store` succeeds. Existing refs are
+immutable: the same ref at the same SHA is accepted, while the same ref at a
+different SHA fails. `GOOGLE_PLAY_VALIDATE_ONLY=1` still checks the ref but does
+not record it because no Play build is published.
+
+Useful direct commands:
+
+```bash
+pnpm mobile:release:preflight -- --platform android --version 2026.6.10 --version-code 2026061008
+pnpm mobile:release:resolve -- --platform android --version 2026.6.10 --version-code 2026061008
+```
+
 ## Signing model
 
 `apps/android/Config/ReleaseSigning.json` pins the Android signing assets in the shared private `apps-signing` repo. The Android pipeline uses the same `MATCH_PASSWORD` release-owner secret as iOS, but the Android files are managed by `scripts/android-release-signing.mjs` instead of Fastlane `match`.

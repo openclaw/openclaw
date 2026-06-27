@@ -5,7 +5,7 @@
  */
 import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { redactToolPayloadText } from "../logging/redact.js";
-import { sliceUtf16Safe } from "../shared/text/surrogate-safe-slice.js";
+import { sliceUtf16Safe } from "../shared/utf16-slice.js";
 import {
   binaryName,
   firstPositional,

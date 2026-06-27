@@ -1,11 +1,8 @@
-/**
- * Browser-safe UTF-16 surrogate-aware slice/truncate helpers.
- *
- * These have no Node-only dependencies so they can be imported from
- * browser-shared Control UI code paths (e.g. the tool-display modules) without
- * pulling `node:fs`/`node:os`/`node:path` into the Vite bundle. `src/utils.ts`
- * re-exports these for the Node-side callers that already import from there.
- */
+// Surrogate-safe UTF-16 string slicing helpers.
+//
+// Kept dependency-free (no node: imports) so browser/UI bundles can import them
+// without dragging in filesystem/runtime code. See utils.ts, which re-exports
+// these for the broad runtime surface.
 
 function isHighSurrogate(codeUnit: number): boolean {
   return codeUnit >= 0xd800 && codeUnit <= 0xdbff;
