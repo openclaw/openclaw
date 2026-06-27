@@ -464,8 +464,13 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   const { botOpenId } = applyBotIdentityState(accountId, botIdentity);
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 
-  if (!botOpenId && !abortSignal?.aborted) {
-    startBotIdentityRecovery({ account, accountId, runtime, abortSignal });
+  if (!botOpenId) {
+    startBotIdentityRecovery({
+      account,
+      accountId,
+      runtime,
+      abortSignal: abortSignal?.aborted ? undefined : abortSignal,
+    });
   }
 
   const connectionMode = account.config.connectionMode ?? "websocket";
