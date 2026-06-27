@@ -2353,6 +2353,42 @@ describe("createFollowupRunner progress forwarding", () => {
     );
   });
 
+  it("keeps queued regular-verbose failed tool result payloads hidden", async () => {
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onToolResult?: (payload: { text: string; isError?: boolean }) => Promise<void>;
+      }) => {
+        await args.onToolResult?.({
+          text: "🛠️ Exec: failing queued helper",
+          isError: true,
+        });
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(queued);
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
   it("drains fire-and-forget queued tool progress before final delivery", async () => {
     const queued = createQueuedRun({
       originatingChannel: "discord",
@@ -2568,7 +2604,7 @@ describe("createFollowupRunner progress forwarding", () => {
     });
   });
 
-  it("marks queued Codex command tool result errors as failed command output", async () => {
+  it("marks queued Codex command tool result errors as failed command output in full verbose", async () => {
     const onCommandOutput = vi.fn(async () => {});
     const queued = createQueuedRun({
       originatingChannel: "discord",
@@ -2577,7 +2613,7 @@ describe("createFollowupRunner progress forwarding", () => {
       originatingThreadId: "thread-1",
       run: {
         messageProvider: "discord",
-        verboseLevel: "on",
+        verboseLevel: "full",
       },
     });
 
@@ -2862,7 +2898,7 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
-  it("does not reuse dispatch-scoped tool-error suppression across queued follow-ups", async () => {
+  it("keeps queued regular-verbose failed progress hidden across follow-ups", async () => {
     const onCommandOutput = vi.fn(async () => {});
 
     runEmbeddedAgentMock
@@ -2882,7 +2918,7 @@ describe("createFollowupRunner progress forwarding", () => {
               exitCode: 1,
             },
           });
-          expect(shouldSuppress()).toBe(true);
+          expect(shouldSuppress()).toBeUndefined();
           return { payloads: [], meta: { agentMeta: {} } };
         },
       )
@@ -2920,7 +2956,7 @@ describe("createFollowupRunner progress forwarding", () => {
       }),
     );
 
-    expect(onCommandOutput).toHaveBeenCalledTimes(1);
+    expect(onCommandOutput).not.toHaveBeenCalled();
   });
 
   it("keeps queued full-verbose tool-error fallbacks available after failed progress", async () => {

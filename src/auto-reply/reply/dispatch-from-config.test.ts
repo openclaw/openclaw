@@ -3866,13 +3866,7 @@ describe("dispatchReplyFromConfig", () => {
     });
 
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(onCommandOutput).toHaveBeenCalledWith({
-      phase: "end",
-      title: "Exec",
-      name: "exec",
-      status: "failed",
-      exitCode: 1,
-    });
+    expect(onCommandOutput).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
@@ -3886,6 +3880,7 @@ describe("dispatchReplyFromConfig", () => {
       verboseLevel: "on",
     };
     const onCommandOutput = vi.fn();
+    const onToolResult = vi.fn();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
@@ -3922,17 +3917,13 @@ describe("dispatchReplyFromConfig", () => {
         sourceReplyDeliveryMode: "message_tool_only",
         allowProgressCallbacksWhenSourceDeliverySuppressed: true,
         onCommandOutput,
+        onToolResult,
       },
     });
 
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(onCommandOutput).toHaveBeenCalledWith({
-      phase: "end",
-      title: "Exec",
-      name: "exec",
-      status: "failed",
-      exitCode: 2,
-    });
+    expect(onCommandOutput).not.toHaveBeenCalled();
+    expect(onToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
@@ -4024,7 +4015,7 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
-  it("suppresses terminal tool-error fallbacks when regular verbose progress is visible", async () => {
+  it("keeps terminal tool-error fallbacks available when regular verbose failed command progress is hidden", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
@@ -4060,18 +4051,13 @@ describe("dispatchReplyFromConfig", () => {
       replyOptions: { onCommandOutput },
     });
 
-    expect(onCommandOutput).toHaveBeenCalledWith({
-      phase: "end",
-      name: "exec",
-      status: "failed",
-      exitCode: 1,
-    });
+    expect(onCommandOutput).not.toHaveBeenCalled();
     expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
-    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBe(true);
+    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
-  it("suppresses terminal tool-error fallbacks in group sessions when verbose progress is visible", async () => {
+  it("keeps terminal tool-error fallbacks available when regular verbose failed item progress is hidden", async () => {
     setNoAbort();
     sessionStoreMocks.currentEntry = {
       sessionId: "s1",
@@ -4109,14 +4095,56 @@ describe("dispatchReplyFromConfig", () => {
       replyOptions: { onItemEvent },
     });
 
-    expect(onItemEvent).toHaveBeenCalledWith({
-      itemId: "item-1",
-      kind: "tool",
+    expect(onItemEvent).not.toHaveBeenCalled();
+    expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
+    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
+  });
+
+  it("keeps full verbose failed command progress visible", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+      verboseLevel: "full",
+    };
+    const dispatcher = createDispatcher();
+    const onCommandOutput = vi.fn();
+    const ctx = buildTestCtx({
+      Provider: "telegram",
+      ChatType: "direct",
+      SessionKey: "agent:main:telegram:direct:U1",
+    });
+    let receivedOptions: GetReplyOptions | undefined;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      receivedOptions = opts;
+      expect(opts?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
+      await opts?.onCommandOutput?.({
+        phase: "end",
+        name: "exec",
+        status: "failed",
+        exitCode: 1,
+      });
+      return { text: "done" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: { onCommandOutput },
+    });
+
+    expect(onCommandOutput).toHaveBeenCalledWith({
+      phase: "end",
       name: "exec",
       status: "failed",
+      exitCode: 1,
     });
     expect(receivedOptions?.suppressToolErrorWarnings).toBeUndefined();
-    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBe(true);
+    expect(receivedOptions?.shouldSuppressToolErrorWarnings?.()).toBeUndefined();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "done" });
   });
 
