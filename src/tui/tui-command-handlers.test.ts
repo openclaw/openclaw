@@ -198,7 +198,9 @@ function createHarness(params?: {
     forgetLocalBtwRunId,
     consumeCompletedRunForPendingSend: params?.consumeCompletedRunForPendingSend,
     isRunObserved: params?.isRunObserved,
-    getPluginApprovalSnapshot: params?.getPluginApprovalSnapshot,
+    getPluginApprovalSnapshot: params?.getPluginApprovalSnapshot as
+      | Parameters<typeof createCommandHandlers>[0]["getPluginApprovalSnapshot"]
+      | undefined,
     flushPendingHistoryRefreshIfIdle: params?.flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
     requestExit,
@@ -1574,9 +1576,7 @@ describe("tui command handlers", () => {
 
     await handleCommand("/usage reset");
 
-    expect(patchSession).toHaveBeenCalledWith(
-      expect.objectContaining({ responseUsage: null }),
-    );
+    expect(patchSession).toHaveBeenCalledWith(expect.objectContaining({ responseUsage: null }));
     expect(addSystem).toHaveBeenCalledWith("usage footer: reset to default");
     // Both stale local values must be cleared so the toggle/display is not stale
     // until refreshSessionInfo() repopulates the inherited default.
@@ -1601,9 +1601,7 @@ describe("tui command handlers", () => {
 
     await handleCommand("/usage");
 
-    expect(patchSession).toHaveBeenCalledWith(
-      expect.objectContaining({ responseUsage: "full" }),
-    );
+    expect(patchSession).toHaveBeenCalledWith(expect.objectContaining({ responseUsage: "full" }));
     expect(addSystem).toHaveBeenCalledWith("usage footer: full");
   });
 });

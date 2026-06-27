@@ -158,7 +158,9 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       refreshSessionInfo: params?.refreshSessionInfo,
       loadHistory: context.loadHistory,
       noteLocalRunId: context.noteLocalRunId,
-      openPluginApprovalSelector: params?.openPluginApprovalSelector,
+      openPluginApprovalSelector: params?.openPluginApprovalSelector as
+        | Parameters<typeof createEventHandlers>[0]["openPluginApprovalSelector"]
+        | undefined,
       isLocalRunId: context.isLocalRunId,
       forgetLocalRunId: context.forgetLocalRunId,
       clearLocalRunIds: context.clearLocalRunIds,

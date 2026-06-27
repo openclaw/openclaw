@@ -14,7 +14,7 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
-import { getActivePluginRegistry } from "../../plugins/runtime.js";
+import { getActivePluginHttpRouteRegistry } from "../../plugins/runtime.js";
 import {
   validateJsonSchemaValue,
   type JsonSchemaValidationError,
@@ -55,28 +55,30 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const descriptors = (getActivePluginRegistry()?.controlUiDescriptors ?? []).map((entry) => {
-      const descriptor: Record<string, unknown> = {
-        id: entry.descriptor.id,
-        pluginId: entry.pluginId,
-        pluginName: entry.pluginName,
-        surface: entry.descriptor.surface,
-        label: entry.descriptor.label,
-      };
-      if (entry.descriptor.description !== undefined) {
-        descriptor.description = entry.descriptor.description;
-      }
-      if (entry.descriptor.placement !== undefined) {
-        descriptor.placement = entry.descriptor.placement;
-      }
-      if (entry.descriptor.schema !== undefined) {
-        descriptor.schema = entry.descriptor.schema;
-      }
-      if (entry.descriptor.requiredScopes !== undefined) {
-        descriptor.requiredScopes = entry.descriptor.requiredScopes;
-      }
-      return descriptor;
-    });
+    const descriptors = (getActivePluginHttpRouteRegistry()?.controlUiDescriptors ?? []).map(
+      (entry) => {
+        const descriptor: Record<string, unknown> = {
+          id: entry.descriptor.id,
+          pluginId: entry.pluginId,
+          pluginName: entry.pluginName,
+          surface: entry.descriptor.surface,
+          label: entry.descriptor.label,
+        };
+        if (entry.descriptor.description !== undefined) {
+          descriptor.description = entry.descriptor.description;
+        }
+        if (entry.descriptor.placement !== undefined) {
+          descriptor.placement = entry.descriptor.placement;
+        }
+        if (entry.descriptor.schema !== undefined) {
+          descriptor.schema = entry.descriptor.schema;
+        }
+        if (entry.descriptor.requiredScopes !== undefined) {
+          descriptor.requiredScopes = entry.descriptor.requiredScopes;
+        }
+        return descriptor;
+      },
+    );
     const result = { ok: true, descriptors };
     if (!validatePluginsUiDescriptorsResult(result)) {
       log.warn("invalid plugins.uiDescriptors result", {
@@ -120,7 +122,7 @@ export const pluginHostHookHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    const registry = getActivePluginRegistry();
+    const registry = getActivePluginHttpRouteRegistry();
     const pluginLoaded = Boolean(
       registry?.plugins.some((plugin) => plugin.id === pluginId && plugin.status === "loaded"),
     );
