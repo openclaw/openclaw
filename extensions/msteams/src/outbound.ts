@@ -17,7 +17,7 @@ import {
   normalizeStringEntries,
   type ChannelOutboundAdapter,
 } from "../runtime-api.js";
-import { createMSTeamsPollStoreState } from "./polls.js";
+import { createAccountScopedMSTeamsPollStore, createMSTeamsPollStoreState } from "./polls.js";
 import { buildMSTeamsPresentationCard, MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
 import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 
@@ -45,16 +45,24 @@ type MSTeamsMediaSendFn = (
 
 function resolveMSTeamsTextSend(params: {
   cfg: MSTeamsSendConfig;
+  accountId?: string | null;
   deps?: OutboundSendDeps;
 }): MSTeamsTextSendFn {
   return (
     resolveOutboundSendDep<MSTeamsTextSendFn>(params.deps, "msteams") ??
-    ((to, text) => sendMessageMSTeams({ cfg: params.cfg, to, text }))
+    ((to, text) =>
+      sendMessageMSTeams({
+        cfg: params.cfg,
+        ...(params.accountId ? { accountId: params.accountId } : {}),
+        to,
+        text,
+      }))
   );
 }
 
 function resolveMSTeamsMediaSend(params: {
   cfg: MSTeamsSendConfig;
+  accountId?: string | null;
   deps?: OutboundSendDeps;
 }): MSTeamsMediaSendFn {
   return (
@@ -62,6 +70,7 @@ function resolveMSTeamsMediaSend(params: {
     ((to, text, opts) =>
       sendMessageMSTeams({
         cfg: params.cfg,
+        ...(params.accountId ? { accountId: params.accountId } : {}),
         to,
         text,
         mediaUrl: opts?.mediaUrl,
@@ -114,6 +123,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     mediaLocalRoots,
     mediaReadFile,
     payload,
+    accountId,
     deps,
   }) => {
     const msteamsData = asObjectRecord(payload.channelData?.msteams);
@@ -125,6 +135,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     ) {
       const result = await sendAdaptiveCardMSTeams({
         cfg,
+        ...(accountId ? { accountId } : {}),
         to,
         card: presentationCard as Record<string, unknown>,
       });
@@ -137,7 +148,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       }),
     );
     if (mediaUrls.length > 0) {
-      const send = resolveMSTeamsMediaSend({ cfg, deps });
+      const send = resolveMSTeamsMediaSend({ cfg, accountId, deps });
       const result = await sendPayloadMediaSequence({
         text,
         mediaUrls,
@@ -149,7 +160,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       }
     }
     if (text.trim()) {
-      const send = resolveMSTeamsTextSend({ cfg, deps });
+      const send = resolveMSTeamsTextSend({ cfg, accountId, deps });
       const chunks = resolveTextChunksWithFallback(
         text,
         chunkTextForOutbound(text, MSTEAMS_TEXT_CHUNK_LIMIT),
@@ -164,24 +175,37 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
   },
   ...createAttachedChannelResultAdapter({
     channel: "msteams",
-    sendText: async ({ cfg, to, text, deps }) => {
-      const send = resolveMSTeamsTextSend({ cfg, deps });
+    sendText: async ({ cfg, to, text, accountId, deps }) => {
+      const send = resolveMSTeamsTextSend({ cfg, accountId, deps });
       return await send(to, text);
     },
-    sendMedia: async ({ cfg, to, text, mediaUrl, mediaLocalRoots, mediaReadFile, deps }) => {
-      const send = resolveMSTeamsMediaSend({ cfg, deps });
+    sendMedia: async ({
+      cfg,
+      to,
+      text,
+      mediaUrl,
+      mediaLocalRoots,
+      mediaReadFile,
+      accountId,
+      deps,
+    }) => {
+      const send = resolveMSTeamsMediaSend({ cfg, accountId, deps });
       return await send(to, text, { mediaUrl, mediaLocalRoots, mediaReadFile });
     },
-    sendPoll: async ({ cfg, to, poll }) => {
+    sendPoll: async ({ cfg, to, poll, accountId }) => {
       const maxSelections = poll.maxSelections ?? 1;
       const result = await sendPollMSTeams({
         cfg,
+        ...(accountId ? { accountId } : {}),
         to,
         question: poll.question,
         options: poll.options,
         maxSelections,
       });
-      const pollStore = createMSTeamsPollStoreState();
+      const pollStore = createAccountScopedMSTeamsPollStore(
+        createMSTeamsPollStoreState(),
+        accountId ?? "default",
+      );
       await pollStore.createPoll({
         id: result.pollId,
         question: poll.question,

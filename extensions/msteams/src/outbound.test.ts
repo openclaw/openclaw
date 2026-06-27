@@ -19,6 +19,8 @@ vi.mock("./polls.js", () => ({
   createMSTeamsPollStoreState: () => ({
     createPoll: mocks.createPoll,
   }),
+  createAccountScopedMSTeamsPollStore: (store: { createPoll: (poll: unknown) => Promise<void> }) =>
+    store,
 }));
 
 import { msteamsOutbound } from "./outbound.js";
@@ -147,6 +149,22 @@ describe("msteamsOutbound cfg threading", () => {
     });
   });
 
+  it("passes accountId to sendMessageMSTeams for named account text sends", async () => {
+    await requireSendText()({
+      cfg,
+      accountId: "legal",
+      to: "user:legal-user",
+      text: "hello legal",
+    });
+
+    expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
+      cfg,
+      accountId: "legal",
+      to: "user:legal-user",
+      text: "hello legal",
+    });
+  });
+
   it("passes resolved cfg and media roots for media sends", async () => {
     const cfgValue = {
       channels: {
@@ -158,6 +176,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     await requireSendMedia()({
       cfg: cfgValue,
+      accountId: "legal",
       to: "conversation:abc",
       text: "photo",
       mediaUrl: "file:///tmp/photo.png",
@@ -166,6 +185,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
       cfg: cfgValue,
+      accountId: "legal",
       to: "conversation:abc",
       text: "photo",
       mediaUrl: "file:///tmp/photo.png",
@@ -215,6 +235,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     const result = await requireSendPayload()({
       cfg,
+      accountId: "legal",
       to: "conversation:abc",
       text: "Deploy finished",
       payload: rendered!,
@@ -222,6 +243,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     expect(mocks.sendAdaptiveCardMSTeams).toHaveBeenCalledWith({
       cfg,
+      accountId: "legal",
       to: "conversation:abc",
       card: (rendered!.channelData!.msteams as { presentationCard: unknown }).presentationCard,
     });
@@ -362,6 +384,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     await requireSendPoll()({
       cfg: cfgLocal,
+      accountId: "legal",
       to: "conversation:abc",
       poll: {
         question: "Snack?",
@@ -371,6 +394,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     expect(mocks.sendPollMSTeams).toHaveBeenCalledWith({
       cfg: cfgLocal,
+      accountId: "legal",
       to: "conversation:abc",
       question: "Snack?",
       options: ["Pizza", "Sushi"],

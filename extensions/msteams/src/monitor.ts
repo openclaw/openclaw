@@ -29,6 +29,7 @@ import {
 } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import {
+  createAccountScopedMSTeamsPollStore,
   createMSTeamsPollStoreState,
   extractMSTeamsPollVote,
   type MSTeamsPollStore,
@@ -65,23 +66,6 @@ type MonitorMSTeamsResult = {
   app: unknown;
   shutdown: () => Promise<void>;
 };
-
-function createAccountScopedPollStore(
-  store: MSTeamsPollStore,
-  accountId: string,
-): MSTeamsPollStore {
-  if (accountId === DEFAULT_ACCOUNT_ID) {
-    return store;
-  }
-  const prefix = `${accountId}:`;
-  const scopedId = (pollId: string) => `${prefix}${pollId}`;
-  return {
-    createPoll: async (poll) => await store.createPoll({ ...poll, id: scopedId(poll.id) }),
-    getPoll: async (pollId) => await store.getPoll(scopedId(pollId)),
-    recordVote: async (params) =>
-      await store.recordVote({ ...params, pollId: scopedId(params.pollId) }),
-  };
-}
 
 export async function monitorMSTeamsProvider(
   opts: MonitorMSTeamsOpts,
@@ -288,7 +272,7 @@ export async function monitorMSTeamsProvider(
     opts.conversationStore ?? createMSTeamsConversationStoreState(),
     accountId,
   );
-  const pollStore = createAccountScopedPollStore(
+  const pollStore = createAccountScopedMSTeamsPollStore(
     opts.pollStore ?? createMSTeamsPollStoreState(),
     accountId,
   );

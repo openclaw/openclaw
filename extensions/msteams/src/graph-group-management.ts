@@ -1,6 +1,10 @@
 // Msteams plugin module implements graph group management behavior.
 import type { OpenClawConfig } from "../runtime-api.js";
-import { resolveConversationPath, resolveGraphConversationId } from "./graph-messages.js";
+import {
+  resolveConversationPath,
+  resolveGraphConversationId,
+  resolveMSTeamsGraphConfig,
+} from "./graph-messages.js";
 import {
   deleteGraphRequest,
   escapeOData,
@@ -16,6 +20,7 @@ import {
 
 type AddParticipantMSTeamsParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   to: string;
   userId: string;
   role?: string;
@@ -44,8 +49,12 @@ function normalizeConversationMemberRole(role: string | undefined): Conversation
 export async function addParticipantMSTeams(
   params: AddParticipantMSTeamsParams,
 ): Promise<AddParticipantMSTeamsResult> {
-  const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
+  const cfg = resolveMSTeamsGraphConfig(params.cfg, params.accountId);
+  const token = await resolveGraphToken(cfg);
+  const conversationId = await resolveGraphConversationId(params.to, {
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const conv = resolveConversationPath(conversationId);
 
   const body = {
@@ -69,6 +78,7 @@ export async function addParticipantMSTeams(
 
 type RemoveParticipantMSTeamsParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   to: string;
   userId: string;
 };
@@ -94,8 +104,12 @@ type GraphConversationMemberResponse = {
 export async function removeParticipantMSTeams(
   params: RemoveParticipantMSTeamsParams,
 ): Promise<RemoveParticipantMSTeamsResult> {
-  const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
+  const cfg = resolveMSTeamsGraphConfig(params.cfg, params.accountId);
+  const token = await resolveGraphToken(cfg);
+  const conversationId = await resolveGraphConversationId(params.to, {
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const conv = resolveConversationPath(conversationId);
 
   // List members to find the membership ID for the target user. Graph can
@@ -139,6 +153,7 @@ export async function removeParticipantMSTeams(
 
 type RenameGroupMSTeamsParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   to: string;
   name: string;
 };
@@ -153,8 +168,12 @@ type RenameGroupMSTeamsResult = {
 export async function renameGroupMSTeams(
   params: RenameGroupMSTeamsParams,
 ): Promise<RenameGroupMSTeamsResult> {
-  const token = await resolveGraphToken(params.cfg);
-  const conversationId = await resolveGraphConversationId(params.to);
+  const cfg = resolveMSTeamsGraphConfig(params.cfg, params.accountId);
+  const token = await resolveGraphToken(cfg);
+  const conversationId = await resolveGraphConversationId(params.to, {
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
   const conv = resolveConversationPath(conversationId);
 
   const body = conv.kind === "chat" ? { topic: params.name } : { displayName: params.name };

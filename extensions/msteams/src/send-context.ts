@@ -1,3 +1,4 @@
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 // Msteams plugin module implements send context behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
@@ -7,6 +8,7 @@ import {
   type OpenClawConfig,
   type PluginRuntime,
 } from "../runtime-api.js";
+import { resolveDefaultMSTeamsAccountId, resolveMSTeamsAccountConfig } from "./accounts.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import {
   describeBotFrameworkServiceUrlHost,
@@ -18,7 +20,10 @@ import {
   validateMSTeamsProactiveServiceUrlBoundary,
   type MSTeamsSdkCloudOptions,
 } from "./cloud.js";
-import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
+import {
+  createAccountScopedMSTeamsConversationStore,
+  createMSTeamsConversationStoreState,
+} from "./conversation-store-state.js";
 import type {
   MSTeamsConversationStore,
   StoredConversationReference,
@@ -147,20 +152,33 @@ async function findConversationReference(recipient: {
 
 export async function resolveMSTeamsSendContext(params: {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   to: string;
 }): Promise<MSTeamsProactiveContext> {
-  const msteamsCfg = params.cfg.channels?.msteams;
+  const accountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultMSTeamsAccountId(params.cfg),
+  );
+  const msteamsCfg = resolveMSTeamsAccountConfig(params.cfg, accountId);
 
   if (!msteamsCfg?.enabled) {
     throw new Error("msteams provider is not enabled");
   }
 
-  const creds = resolveMSTeamsCredentials(msteamsCfg);
+  const creds = resolveMSTeamsCredentials(msteamsCfg, {
+    allowEnvFallback: accountId === DEFAULT_ACCOUNT_ID,
+    pathPrefix:
+      accountId === DEFAULT_ACCOUNT_ID
+        ? "channels.msteams"
+        : `channels.msteams.accounts.${accountId}`,
+  });
   if (!creds) {
     throw new Error("msteams credentials not configured");
   }
 
-  const store = createMSTeamsConversationStoreState();
+  const store = createAccountScopedMSTeamsConversationStore(
+    createMSTeamsConversationStoreState(),
+    accountId,
+  );
 
   // Parse recipient and find conversation reference
   const recipient = parseRecipient(params.to);
@@ -248,7 +266,13 @@ export async function resolveMSTeamsSendContext(params: {
 
   // Resolve media max bytes from config
   const mediaMaxBytes = resolveChannelMediaMaxBytes({
-    cfg: params.cfg,
+    cfg: {
+      ...params.cfg,
+      channels: {
+        ...params.cfg.channels,
+        msteams: msteamsCfg,
+      },
+    },
     resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
   });
 

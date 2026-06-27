@@ -23,6 +23,25 @@ const sendContextMockState = vi.hoisted(() => {
 
 vi.mock("./conversation-store-state.js", () => ({
   createMSTeamsConversationStoreState: () => sendContextMockState.store,
+  createAccountScopedMSTeamsConversationStore: (
+    store: typeof sendContextMockState.store,
+    accountId: string,
+  ) => {
+    if (accountId === "default") {
+      return store;
+    }
+    const prefix = `${accountId}:`;
+    return {
+      ...store,
+      get: (conversationId: string) => store.get(`${prefix}${conversationId}`),
+      remove: (conversationId: string) => store.remove(`${prefix}${conversationId}`),
+      upsert: (conversationId: string, reference: StoredConversationReference) =>
+        store.upsert(`${prefix}${conversationId}`, reference),
+      findPreferredDmByUserId: store.findPreferredDmByUserId,
+      findByUserId: store.findByUserId,
+      list: store.list,
+    };
+  },
 }));
 
 vi.mock("./runtime.js", () => ({
@@ -122,6 +141,58 @@ describe("resolveMSTeamsSendContext", () => {
     );
 
     expect(sendContextMockState.store.remove).toHaveBeenCalledWith("19:channel@thread.tacv2");
+  });
+
+  it("uses named account credentials and scoped conversation references", async () => {
+    sendContextMockState.store.get.mockResolvedValue(
+      channelRef({
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+      }),
+    );
+
+    const cfg = {
+      channels: {
+        msteams: {
+          enabled: true,
+          tenantId: "tenant-id",
+          accounts: {
+            default: {
+              enabled: true,
+              appId: "default-app-id",
+              appPassword: "default-app-password",
+            },
+            legal: {
+              enabled: true,
+              appId: "legal-app-id",
+              appPassword: "legal-app-password",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      resolveMSTeamsSendContext({
+        cfg,
+        accountId: "legal",
+        to: "conversation:19:channel@thread.tacv2",
+      }),
+    ).resolves.toMatchObject({
+      appId: "legal-app-id",
+      conversationId: "19:channel@thread.tacv2",
+    });
+
+    expect(sendContextMockState.store.get).toHaveBeenCalledWith("legal:19:channel@thread.tacv2");
+    expect(sendContextMockState.loadMSTeamsSdkWithAuth).toHaveBeenCalledWith(
+      {
+        appId: "legal-app-id",
+        appPassword: "legal-app-password",
+        tenantId: "tenant-id",
+        type: "secret",
+      },
+      { cloud: "Public" },
+    );
   });
 });
 

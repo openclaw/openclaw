@@ -34,6 +34,8 @@ import { resolveMSTeamsSendContext, type MSTeamsProactiveContext } from "./send-
 type SendMSTeamsMessageParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
+  /** Optional account ID for multi-account Teams configs */
+  accountId?: string | null;
   /** Conversation ID or user ID to send to */
   to: string;
   /** Message text */
@@ -105,6 +107,8 @@ function createMSTeamsSendResult(params: {
 type SendMSTeamsPollParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
+  /** Optional account ID for multi-account Teams configs */
+  accountId?: string | null;
   /** Conversation ID or user ID to send to */
   to: string;
   /** Poll question */
@@ -124,6 +128,8 @@ type SendMSTeamsPollResult = {
 type SendMSTeamsCardParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
+  /** Optional account ID for multi-account Teams configs */
+  accountId?: string | null;
   /** Conversation ID or user ID to send to */
   to: string;
   /** Adaptive Card JSON object */
@@ -149,13 +155,17 @@ type SendMSTeamsCardResult = {
 export async function sendMessageMSTeams(
   params: SendMSTeamsMessageParams,
 ): Promise<SendMSTeamsMessageResult> {
-  const { cfg, to, text, mediaUrl, filename, mediaLocalRoots, mediaReadFile } = params;
+  const { cfg, accountId, to, text, mediaUrl, filename, mediaLocalRoots, mediaReadFile } = params;
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "msteams",
   });
   const messageText = convertMarkdownTables(text ?? "", tableMode);
-  const ctx = await resolveMSTeamsSendContext({ cfg, to });
+  const ctx = await resolveMSTeamsSendContext({
+    cfg,
+    ...(accountId ? { accountId } : {}),
+    to,
+  });
   const {
     app,
     conversationId,
@@ -490,9 +500,10 @@ async function sendProactiveActivity({
 export async function sendPollMSTeams(
   params: SendMSTeamsPollParams,
 ): Promise<SendMSTeamsPollResult> {
-  const { cfg, to, question, options, maxSelections } = params;
+  const { cfg, accountId, to, question, options, maxSelections } = params;
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
+    ...(accountId ? { accountId } : {}),
     to,
   });
 
@@ -542,9 +553,10 @@ export async function sendPollMSTeams(
 export async function sendAdaptiveCardMSTeams(
   params: SendMSTeamsCardParams,
 ): Promise<SendMSTeamsCardResult> {
-  const { cfg, to, card } = params;
+  const { cfg, accountId, to, card } = params;
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
+    ...(accountId ? { accountId } : {}),
     to,
   });
 
@@ -584,6 +596,8 @@ export async function sendAdaptiveCardMSTeams(
 type EditMSTeamsMessageParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
+  /** Optional account ID for multi-account Teams configs */
+  accountId?: string | null;
   /** Conversation ID or user ID */
   to: string;
   /** Activity ID of the message to edit */
@@ -599,6 +613,8 @@ type EditMSTeamsMessageResult = {
 type DeleteMSTeamsMessageParams = {
   /** Full config (for credentials) */
   cfg: OpenClawConfig;
+  /** Optional account ID for multi-account Teams configs */
+  accountId?: string | null;
   /** Conversation ID or user ID */
   to: string;
   /** Activity ID of the message to delete */
@@ -618,9 +634,10 @@ type DeleteMSTeamsMessageResult = {
 export async function editMessageMSTeams(
   params: EditMSTeamsMessageParams,
 ): Promise<EditMSTeamsMessageResult> {
-  const { cfg, to, activityId, text } = params;
+  const { cfg, accountId, to, activityId, text } = params;
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
+    ...(accountId ? { accountId } : {}),
     to,
   });
 
@@ -663,9 +680,10 @@ export async function editMessageMSTeams(
 export async function deleteMessageMSTeams(
   params: DeleteMSTeamsMessageParams,
 ): Promise<DeleteMSTeamsMessageResult> {
-  const { cfg, to, activityId } = params;
+  const { cfg, accountId, to, activityId } = params;
   const { app, conversationId, ref, log, sdkCloudOptions } = await resolveMSTeamsSendContext({
     cfg,
+    ...(accountId ? { accountId } : {}),
     to,
   });
 
