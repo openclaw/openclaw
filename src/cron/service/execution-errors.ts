@@ -54,6 +54,54 @@ export function abortErrorMessage(signal?: AbortSignal): string {
   return resolveCronAbortReasonText(signal?.reason) ?? timeoutErrorMessage();
 }
 
+/** True when the cron wall-clock watchdog aborted the shared isolated run signal. */
+export function isCronWallClockTimeoutAbort(signal?: AbortSignal): boolean {
+  if (!signal?.aborted) {
+    return false;
+  }
+  const reason = signal.reason;
+  return reason instanceof Error && reason.name === "TimeoutError";
+}
+
+/**
+ * Cron timeout aborts the active attempt, but configured fallback models should
+ * still run instead of inheriting the already-aborted shared signal.
+ */
+export function resolveCronFallbackRunAbortSignal(params: {
+  abortSignal?: AbortSignal;
+}): AbortSignal | undefined {
+  if (!params.abortSignal?.aborted) {
+    return params.abortSignal;
+  }
+  if (isCronWallClockTimeoutAbort(params.abortSignal)) {
+    return undefined;
+  }
+  return params.abortSignal;
+}
+
+/** True when a timed-out cron run still produced a visible assistant answer to keep. */
+export function isCronRecoverableTimeoutAbort(params: {
+  abortSignal?: AbortSignal;
+  hasVisibleAssistantReply: boolean;
+}): boolean {
+  return isCronWallClockTimeoutAbort(params.abortSignal) && params.hasVisibleAssistantReply;
+}
+
+/** True when finalize should return the cron abort error instead of the recovered answer. */
+export function shouldHonorCronRunAbortOutcome(params: {
+  isAborted: () => boolean;
+  abortSignal?: AbortSignal;
+  hasVisibleAssistantReply: boolean;
+}): boolean {
+  if (!params.isAborted()) {
+    return false;
+  }
+  return !isCronRecoverableTimeoutAbort({
+    abortSignal: params.abortSignal,
+    hasVisibleAssistantReply: params.hasVisibleAssistantReply,
+  });
+}
+
 function isAbortError(err: unknown): boolean {
   if (!(err instanceof Error)) {
     return false;

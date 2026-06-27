@@ -52,7 +52,10 @@ import {
   createCronRunDiagnosticsFromError,
   mergeCronRunDiagnostics,
 } from "../run-diagnostics.js";
-import { resolveCronAbortReasonText } from "../service/execution-errors.js";
+import {
+  resolveCronAbortReasonText,
+  shouldHonorCronRunAbortOutcome,
+} from "../service/execution-errors.js";
 import { resolveCronDeliverySessionKey } from "../session-target.js";
 import type {
   CronAgentExecutionPhaseUpdate,
@@ -961,16 +964,32 @@ async function finalizeCronRun(params: {
   execution: CronExecutionResult;
   abortReason: () => string;
   isAborted: () => boolean;
+  abortSignal?: AbortSignal;
   markCronRunSessionCleanupAttempted: () => void;
 }): Promise<RunCronAgentTurnResult> {
   const { prepared, execution } = params;
   const finalRunResult = execution.runResult;
   const payloads = finalRunResult.payloads ?? [];
+  const hasVisibleAssistantReply = Boolean(
+    finalRunResult.meta?.finalAssistantVisibleText?.trim() ||
+    payloads.some(
+      (payload) =>
+        payload?.isError !== true &&
+        typeof payload?.text === "string" &&
+        payload.text.trim().length > 0,
+    ),
+  );
+  const honorCronAbortOutcome = () =>
+    shouldHonorCronRunAbortOutcome({
+      isAborted: params.isAborted,
+      abortSignal: params.abortSignal,
+      hasVisibleAssistantReply,
+    });
   let telemetry: CronRunTelemetry | undefined;
 
   // Late aborted results may still contain billable usage. Recheck before each
   // metadata mutation because lazy runtime loads below can yield to the timeout.
-  if (!params.isAborted()) {
+  if (!honorCronAbortOutcome()) {
     if (finalRunResult.meta?.systemPromptReport) {
       prepared.cronSession.sessionEntry.systemPromptReport = finalRunResult.meta.systemPromptReport;
     }
@@ -999,7 +1018,7 @@ async function finalizeCronRun(params: {
     resolvePositiveContextTokens(prepared.cronSession.sessionEntry.contextTokens) ??
     DEFAULT_CONTEXT_TOKENS;
 
-  if (!params.isAborted()) {
+  if (!honorCronAbortOutcome()) {
     setSessionRuntimeModel(prepared.cronSession.sessionEntry, {
       provider: providerUsed,
       model: modelUsed,
@@ -1128,7 +1147,7 @@ async function finalizeCronRun(params: {
   }
   await prepared.persistSessionEntry();
 
-  if (params.isAborted()) {
+  if (honorCronAbortOutcome()) {
     return prepared.withRunSession({
       status: "error",
       error: params.abortReason(),
@@ -1511,6 +1530,7 @@ export async function runCronIsolatedAgentTurn(params: {
       execution,
       abortReason,
       isAborted,
+      abortSignal,
       markCronRunSessionCleanupAttempted: () => {
         cronRunSessionCleanupAttempted = true;
       },
