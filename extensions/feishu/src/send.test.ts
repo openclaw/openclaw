@@ -366,6 +366,34 @@ describe("getMessageFeishu", () => {
     });
   });
 
+  it("rejects direct post sends that exceed the normalized Feishu text limit", async () => {
+    const create = vi.fn();
+    mockCreateFeishuClient.mockReturnValue({
+      im: {
+        message: {
+          create,
+          reply: vi.fn(),
+          get: mockClientGet,
+          list: mockClientList,
+          patch: mockClientPatch,
+        },
+      },
+    });
+    const overLimitText = Array.from({ length: 1335 }, () => "x").join("\n");
+
+    await expect(
+      sendMessageFeishu({
+        cfg: {} as ClawdbotConfig,
+        to: "oc_send",
+        text: overLimitText,
+      }),
+    ).rejects.toThrow(
+      "Feishu send text exceeds 4000 characters after post markdown line break normalization.",
+    );
+
+    expect(create).not.toHaveBeenCalled();
+  });
+
   it("extracts text content from interactive card elements", async () => {
     mockClientGet.mockResolvedValueOnce({
       code: 0,
@@ -785,6 +813,47 @@ describe("editMessageFeishu", () => {
       },
     });
     expect(result).toEqual({ messageId: "om_edit", contentType: "post" });
+  });
+
+  it("allows post text edits at the normalized Feishu text limit", async () => {
+    mockClientPatch.mockResolvedValueOnce({ code: 0 });
+    const nearLimitText = Array.from({ length: 1334 }, () => "x").join("\n");
+    const normalizedText = normalizeFeishuPostMarkdownLineBreaks(nearLimitText);
+    expect(normalizedText).toHaveLength(4000);
+
+    const result = await editMessageFeishu({
+      cfg: {} as ClawdbotConfig,
+      messageId: "om_edit_limit",
+      text: nearLimitText,
+    });
+
+    expect(mockClientPatch).toHaveBeenCalledWith({
+      path: { message_id: "om_edit_limit" },
+      data: {
+        content: JSON.stringify({
+          zh_cn: {
+            content: [[{ tag: "md", text: normalizedText }]],
+          },
+        }),
+      },
+    });
+    expect(result).toEqual({ messageId: "om_edit_limit", contentType: "post" });
+  });
+
+  it("rejects post text edits that exceed the normalized Feishu text limit", async () => {
+    const overLimitText = Array.from({ length: 1335 }, () => "x").join("\n");
+
+    await expect(
+      editMessageFeishu({
+        cfg: {} as ClawdbotConfig,
+        messageId: "om_edit_over_limit",
+        text: overLimitText,
+      }),
+    ).rejects.toThrow(
+      "Feishu edit text exceeds 4000 characters after post markdown line break normalization.",
+    );
+
+    expect(mockClientPatch).not.toHaveBeenCalled();
   });
 
   it("patches interactive content for card edits", async () => {

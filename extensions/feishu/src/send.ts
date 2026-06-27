@@ -25,6 +25,7 @@ import type { FeishuChatType, FeishuMessageInfo, FeishuSendResult } from "./type
 const WITHDRAWN_REPLY_ERROR_CODES = new Set([230011, 231003]);
 const INTERACTIVE_CARD_FALLBACK_TEXT = "[Interactive Card]";
 const POST_FALLBACK_TEXT = "[Rich text message]";
+const FEISHU_POST_TEXT_LIMIT = 4000;
 const FEISHU_CARD_TEMPLATES = new Set([
   "blue",
   "green",
@@ -601,6 +602,18 @@ export function normalizeFeishuPostMarkdownLineBreaks(text: string): string {
   return parts.join("");
 }
 
+function assertFeishuPostMessageTextWithinLimit(
+  messageText: string,
+  action: "send" | "edit",
+): void {
+  if (messageText.length <= FEISHU_POST_TEXT_LIMIT) {
+    return;
+  }
+  throw new Error(
+    `Feishu ${action} text exceeds ${FEISHU_POST_TEXT_LIMIT} characters after post markdown line break normalization.`,
+  );
+}
+
 export function buildFeishuPostMessagePayload(params: {
   messageText: string;
   mentions?: MentionTarget[];
@@ -650,6 +663,7 @@ export async function sendMessageFeishu(
   const messageText = postMarkdownLineBreaksNormalized
     ? convertedText
     : normalizeFeishuPostMarkdownLineBreaks(convertedText);
+  assertFeishuPostMessageTextWithinLimit(messageText, "send");
 
   const { content, msgType } = buildFeishuPostMessagePayload({ messageText, mentions });
 
@@ -738,6 +752,7 @@ export async function editMessageFeishu(params: {
   const messageText = normalizeFeishuPostMarkdownLineBreaks(
     convertMarkdownTables(text!, tableMode),
   );
+  assertFeishuPostMessageTextWithinLimit(messageText, "edit");
   const payload = buildFeishuPostMessagePayload({ messageText });
   const response = await client.im.message.patch({
     path: { message_id: messageId },
