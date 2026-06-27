@@ -6,6 +6,7 @@ Docs: https://docs.openclaw.ai
 
 ### Fixes
 
+- **DeepSeek spend accounting:** DeepSeek V4 models with token usage and a recorded zero provider cost now use catalog pricing for session spend totals instead of showing zero spend. Fixes #97047.
 - **WeChat account routing:** `startAccount` preserves session routing by resolving manifest channel account config from raw account keys with opaque provider ids, while still ignoring manifest account keys that normalize to blocked object keys. (#93686) Thanks @zhangguiping-xydt.
 
 ## 2026.6.10

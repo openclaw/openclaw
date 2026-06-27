@@ -300,6 +300,158 @@ describe("session cost usage", () => {
     });
   });
 
+  it("estimates known-priced usage when the provider recorded a zero cost total", async () => {
+    const root = await makeSessionCostRoot("cost-known-pricing-zero-total");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const entry = {
+      type: "message",
+      timestamp: new Date().toISOString(),
+      message: {
+        role: "assistant",
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        usage: {
+          input: 10_000,
+          output: 10_000,
+          cacheRead: 10_000,
+          cacheWrite: 0,
+          totalTokens: 30_000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    };
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-1.jsonl"),
+      transcriptText("sess-1", entry),
+      "utf-8",
+    );
+
+    const config = {
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-flash",
+                cost: { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    clearGatewayModelPricingCacheState();
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ days: 30, config });
+      expect(summary.totals.totalTokens).toBe(30_000);
+      expect(summary.totals.totalCost).toBeCloseTo(0.00448, 8);
+      expect(summary.totals.missingCostEntries).toBe(0);
+
+      const logs = await loadSessionLogs({ sessionId: "sess-1", config });
+      expect(logs?.[0]?.tokens).toBe(30_000);
+      expect(logs?.[0]?.cost).toBeCloseTo(0.00448, 8);
+    });
+  });
+
+  it("invalidates version-4 cache entries that preserved known-priced zero costs", async () => {
+    const root = await makeSessionCostRoot("cost-known-pricing-zero-cache-upgrade");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const timestamp = new Date().toISOString();
+    const entry = {
+      type: "message",
+      timestamp,
+      message: {
+        role: "assistant",
+        provider: "deepseek",
+        model: "deepseek-v4-flash",
+        usage: {
+          input: 10_000,
+          output: 10_000,
+          cacheRead: 10_000,
+          cacheWrite: 0,
+          totalTokens: 30_000,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+      },
+    };
+    const sessionFile = path.join(sessionsDir, "sess-cache.jsonl");
+    await fs.writeFile(sessionFile, transcriptText("sess-cache", entry), "utf-8");
+
+    const config = {
+      models: {
+        providers: {
+          deepseek: {
+            models: [
+              {
+                id: "deepseek-v4-flash",
+                cost: { input: 0.14, output: 0.28, cacheRead: 0.028, cacheWrite: 0 },
+              },
+            ],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const staleTotals = {
+      input: 10_000,
+      output: 10_000,
+      cacheRead: 10_000,
+      cacheWrite: 0,
+      totalTokens: 30_000,
+      totalCost: 0,
+      inputCost: 0,
+      outputCost: 0,
+      cacheReadCost: 0,
+      cacheWriteCost: 0,
+      missingCostEntries: 0,
+    };
+    const stats = await fs.stat(sessionFile);
+    const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
+    await fs.writeFile(
+      cachePath,
+      JSON.stringify({
+        version: 4,
+        updatedAt: Date.now(),
+        files: {
+          [sessionFile]: {
+            filePath: sessionFile,
+            size: stats.size,
+            mtimeMs: stats.mtimeMs,
+            pricingFingerprint: usageFormat.resolveModelCostConfigFingerprint(config),
+            scannedAt: Date.now(),
+            parsedRecords: 1,
+            countedRecords: 1,
+            usageEntries: [
+              {
+                timestamp: new Date(timestamp).getTime(),
+                provider: "deepseek",
+                model: "deepseek-v4-flash",
+                ...staleTotals,
+              },
+            ],
+            totals: staleTotals,
+            sessionId: "sess-cache",
+          },
+        },
+      }),
+      "utf-8",
+    );
+
+    clearGatewayModelPricingCacheState();
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummaryFromCache({ days: 30, config, agentId: "main" });
+      expect(summary.totals.totalTokens).toBe(30_000);
+      expect(summary.totals.totalCost).toBeCloseTo(0.00448, 8);
+      expect(summary.totals.missingCostEntries).toBe(0);
+    });
+  });
+
   it("treats a pre-upgrade (older-version) durable cache as stale so unpriced usage is rebuilt", async () => {
     const root = await makeSessionCostRoot("cost-cache-upgrade");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
@@ -331,7 +483,7 @@ describe("session cost usage", () => {
       await refreshCostUsageCache({ sessionFiles: [sessionFile] });
       const cachePath = path.join(sessionsDir, ".usage-cost-cache.json");
       const cache = JSON.parse(await fs.readFile(cachePath, "utf-8")) as { version: number };
-      cache.version = 3;
+      cache.version = 4;
       await fs.writeFile(cachePath, `${JSON.stringify(cache)}\n`, "utf-8");
 
       // The pre-upgrade cache must be treated as stale (not served), forcing a rebuild

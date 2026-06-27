@@ -156,6 +156,31 @@ describe("deepseek provider-policy-api", () => {
     expect(model.contextWindow).toBe(1_000_000);
   });
 
+  it("hydrates all-zero DeepSeek V4 cost from catalog pricing", () => {
+    const providerConfig: ModelProviderConfig = {
+      baseUrl: "https://api.deepseek.com",
+      api: "openai-completions",
+      models: [
+        {
+          id: "deepseek-v4-flash",
+          name: "DeepSeek V4 Flash",
+          reasoning: true,
+          input: ["text"],
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        } as never,
+      ],
+    };
+
+    const result = normalizeConfig({ provider: "deepseek", providerConfig });
+    const model = result.models[0];
+    expect(model.cost).toEqual({
+      input: 0.14,
+      output: 0.28,
+      cacheRead: 0.028,
+      cacheWrite: 0,
+    });
+  });
+
   it("preserves explicit user maxTokens override", () => {
     const providerConfig: ModelProviderConfig = {
       baseUrl: "https://api.deepseek.com",

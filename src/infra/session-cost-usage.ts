@@ -75,10 +75,10 @@ export type {
 } from "./session-cost-usage.types.js";
 
 // Bump when the *meaning* of cached totals changes (not just their inputs), so durable
-// caches written by older builds are rebuilt instead of served stale. Bumped to 4:
-// unpriced (unknown) zero-cost usage now counts toward missingCostEntries, so a warm
-// cache from a pre-change build would otherwise keep reporting the old complete-$0 totals.
-const USAGE_COST_CACHE_VERSION = 4;
+// caches written by older builds are rebuilt instead of served stale. Bumped to 5:
+// recorded zero-cost usage for known positive pricing is now estimated from tokens,
+// so a warm cache from a pre-change build would otherwise keep reporting $0 totals.
+const USAGE_COST_CACHE_VERSION = 5;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
 const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
@@ -1046,6 +1046,15 @@ const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): b
   return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
 };
 
+const shouldRecomputeRecordedZeroCost = (params: {
+  cost: ReturnType<typeof resolveModelCostConfig>;
+  costTotal: number | undefined;
+  usage: NormalizedUsage;
+}): boolean =>
+  params.costTotal === 0 &&
+  isModelPricingKnown(params.cost) &&
+  computeUsageTokenTotals(params.usage).totalTokens > 0;
+
 type UsageCostResolver = (params: {
   provider?: string;
   model?: string;
@@ -1149,6 +1158,14 @@ async function scanTranscriptFile(params: {
         // the flat-rate cost that the transport layer wrote into the transcript.
         // Clear costBreakdown so downstream aggregation uses the recomputed total
         // instead of the stale flat-rate breakdown from the transport layer.
+        entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+        entry.costBreakdown = undefined;
+      } else if (
+        shouldRecomputeRecordedZeroCost({ usage: entry.usage, cost, costTotal: entry.costTotal })
+      ) {
+        // Some provider transports report a literal zero cost even when the model has
+        // positive catalog pricing. Treat that zero as missing provider cost and use
+        // the configured pricing estimate instead of preserving a fabricated $0.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
         entry.costBreakdown = undefined;
       } else if (
@@ -2639,13 +2656,20 @@ export async function loadSessionLogs(params: {
               (usage.cacheRead ?? 0) +
               (usage.cacheWrite ?? 0);
           const breakdown = extractCostBreakdown(usageRaw);
-          if (breakdown?.total !== undefined) {
+          const costConfig = resolveCost({
+            provider: message.provider as string | undefined,
+            model: message.model as string | undefined,
+          });
+          if (
+            breakdown?.total !== undefined &&
+            !shouldRecomputeRecordedZeroCost({
+              usage,
+              cost: costConfig,
+              costTotal: breakdown.total,
+            })
+          ) {
             cost = breakdown.total;
           } else {
-            const costConfig = resolveCost({
-              provider: message.provider as string | undefined,
-              model: message.model as string | undefined,
-            });
             cost = estimateUsageCost({ usage, cost: costConfig });
           }
         }
