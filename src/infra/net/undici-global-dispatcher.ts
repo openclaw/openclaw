@@ -184,11 +184,14 @@ function createNoProxyAwareEnvDispatcher(
       if (UNDICI_DISPATCHER_LIFECYCLE_METHODS.has(property)) {
         return (...args: unknown[]) => {
           // Close/destroy both the proxy agent and the bypass agent.
-          Reflect.apply(value, target, args);
+          const proxyResult = Reflect.apply(value, target, args);
           const bypassValue = Reflect.get(bypassAgent, property, bypassAgent);
           if (typeof bypassValue === "function") {
             Reflect.apply(bypassValue, bypassAgent, args);
           }
+          // Return the proxy agent's result (typically a Promise) so callers
+          // can await cleanup completion without callback-doubling issues.
+          return proxyResult;
         };
       }
       if (UNDICI_DISPATCH_HELPER_METHODS.has(property)) {
