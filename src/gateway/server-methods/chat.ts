@@ -2974,6 +2974,14 @@ async function handleChatHistoryRequest({
   const max = Math.min(hardMax, requested);
   const maxHistoryBytes = getMaxChatHistoryMessagesBytes();
   const effectiveMaxChars = resolveEffectiveChatHistoryMaxChars(cfg, maxChars);
+  if (includeFamily === true && offset !== undefined) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "includeFamily cannot be combined with offset"),
+    );
+    return;
+  }
   const includeFamilyHistory =
     includeFamily === true && method === "chat.history" && offset === undefined;
   const historyPage = await readChatHistoryPage({

@@ -255,6 +255,9 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
           ...(typeof entry.sessionFile === "string" ? { sessionFile: entry.sessionFile } : {}),
         }
       : undefined;
+  if (params.includeFamily === true && params.offset !== undefined) {
+    throw new Error("includeFamily cannot be combined with offset");
+  }
   const includeFamilyHistory = params.includeFamily === true && params.offset === undefined;
   const transcriptTargets = await resolveSessionFamilyTranscriptReadTargets({
     entry,

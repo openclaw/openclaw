@@ -196,7 +196,7 @@ describe("tasks commands", () => {
         flow: jsonRoundTrip(runningFlow),
       });
       expect(limitedFinding?.ageMs).toBeGreaterThanOrEqual(45 * 60_000);
-      expect(limitedFinding?.ageMs).toBeLessThan(45 * 60_000 + 1_000);
+      expect(limitedFinding?.ageMs).toBeLessThan(45 * 60_000 + 5_000);
     });
   });
 

@@ -3163,6 +3163,23 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history rejects includeFamily with offset", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await prepareMainHistoryHarness({ ws, createSessionDir });
+
+      const res = await rpcReq(ws, "chat.history", {
+        sessionKey: "main",
+        includeFamily: true,
+        offset: 0,
+      });
+
+      expect(res.ok).toBe(false);
+      expect((res.error as { message?: string } | undefined)?.message ?? "").toContain(
+        "includeFamily cannot be combined with offset",
+      );
+    });
+  });
+
   test("chat.message.get returns the full projected message for a truncated history row", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
