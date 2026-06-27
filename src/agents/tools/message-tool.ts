@@ -59,7 +59,7 @@ import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { POLL_CREATION_PARAM_DEFS, SHARED_POLL_CREATION_PARAM_NAMES } from "../../poll-params.js";
 import { normalizeAccountId, parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reasoning-message.js";
-import { normalizeMessageChannel } from "../../utils/message-channel.js";
+import { INTERNAL_MESSAGE_CHANNEL, normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
 import { listAllChannelSupportedActions, listChannelSupportedActions } from "../channel-tools.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
@@ -1147,6 +1147,12 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
   const replyToMode = options?.replyToMode ?? (currentThreadTs ? "all" : undefined);
   const agentAccountId =
     resolveAgentAccountId(options?.agentAccountId) ?? effectiveCurrentChannel.accountId;
+  const currentChannelIsInternal =
+    normalizeMessageChannel(effectiveCurrentChannel.currentChannelProvider) ===
+    INTERNAL_MESSAGE_CHANNEL;
+  const sourceReplyDeliveryMode =
+    options?.sourceReplyDeliveryMode ??
+    (currentChannelIsInternal ? "message_tool_only" : undefined);
   const resolvedAgentId =
     options?.agentId ??
     (options?.agentSessionKey
@@ -1181,7 +1187,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
     sessionId: options?.sessionId,
     agentId: resolvedAgentId,
     requireExplicitTarget: options?.requireExplicitTarget,
-    sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+    sourceReplyDeliveryMode,
     requesterSenderId: options?.requesterSenderId,
     senderIsOwner: options?.senderIsOwner,
   });
@@ -1387,7 +1393,7 @@ export function createMessageTool(options?: MessageToolOptions): AnyAgentTool {
           sessionId: options?.sessionId,
           agentId: resolvedAgentId,
           sandboxRoot: options?.sandboxRoot,
-          sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+          sourceReplyDeliveryMode,
           inboundEventKind: options?.inboundEventKind,
           inboundAudio: options?.currentInboundAudio,
           abortSignal: signal,
