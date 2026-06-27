@@ -318,6 +318,24 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
   } as unknown as AgentMessage;
 }
 
+/** Restores runtime-owned OpenClaw metadata after a write hook replaces the user message. */
+export function mergePreparedUserTurnOpenClawMetaForRuntime(params: {
+  runtimeMessage: AgentMessage;
+  preparedMessage?: PersistedUserTurnMessage;
+}): AgentMessage {
+  if (!params.preparedMessage || !isUserMessage(params.runtimeMessage)) {
+    return params.runtimeMessage;
+  }
+  const preparedMeta = readOpenClawMessageMeta(params.preparedMessage);
+  if (!preparedMeta) {
+    return params.runtimeMessage;
+  }
+  return {
+    ...(params.runtimeMessage as unknown as Record<string, unknown>),
+    __openclaw: { ...readOpenClawMessageMeta(params.runtimeMessage), ...preparedMeta },
+  } as unknown as AgentMessage;
+}
+
 /** Applies before-message hooks while preserving user-turn transcript metadata. */
 export function preparePersistedUserTurnMessageForTranscriptWrite(
   message: PersistedUserTurnMessage,

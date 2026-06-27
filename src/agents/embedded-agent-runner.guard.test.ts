@@ -2,7 +2,12 @@
 // redaction.
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import { describe, expect, it } from "vitest";
+import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "openclaw/plugin-sdk/hook-runtime";
+import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { afterEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
@@ -15,6 +20,8 @@ function assistantToolCall(id: string): AgentMessage {
 }
 
 describe("guardSessionManager integration", () => {
+  afterEach(() => resetGlobalHookRunner());
+
   it("persists synthetic toolResult before subsequent assistant message", () => {
     // Providers require every assistant tool call to be followed by a result
     // before the next assistant turn.
@@ -138,6 +145,46 @@ describe("guardSessionManager integration", () => {
       MediaTypes: ["image/png"],
     });
     expect(messages[1]).toEqual({ role: "user", content: "follow-up" });
+  });
+
+  it("preserves prepared sender metadata after a write hook replaces the user message", () => {
+    initializeGlobalHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_message_write",
+          handler: () => ({
+            message: {
+              role: "user",
+              content: "[redacted by hook]",
+              __openclaw: { hookOwned: true },
+            } as AgentMessage,
+          }),
+        },
+      ]),
+    );
+    const sm = guardSessionManager(SessionManager.inMemory(), {
+      preparedUserTurnMessage: {
+        role: "user",
+        content: "private group prompt",
+        timestamp: 123,
+        __openclaw: { senderId: "user-42", senderName: "Ada" },
+      } as Extract<AgentMessage, { role: "user" }>,
+    });
+
+    sm.appendMessage({ role: "user", content: "runtime prompt" } as AgentMessage);
+
+    const message = sm.getEntries().find((entry) => entry.type === "message") as
+      | { message?: AgentMessage }
+      | undefined;
+    expect(message?.message).toMatchObject({
+      role: "user",
+      content: "[redacted by hook]",
+      __openclaw: {
+        hookOwned: true,
+        senderId: "user-42",
+        senderName: "Ada",
+      },
+    });
   });
 
   it("does not consume prepared user persistence for before-agent-run blocked messages", () => {
