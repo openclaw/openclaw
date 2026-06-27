@@ -10,7 +10,12 @@ import type { SessionEntry } from "../../config/sessions.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
-import { CommandLaneClearedError, GatewayDrainingError } from "../../process/command-queue.js";
+import {
+  CommandLaneClearedError,
+  GatewayDrainingError,
+  markGatewayDraining,
+  resetCommandQueueStateForTest,
+} from "../../process/command-queue.js";
 import {
   createUserTurnTranscriptRecorder,
   type PersistedUserTurnMessage,
@@ -6089,6 +6094,132 @@ describe("runAgentTurnWithFallback", () => {
     const failCall = requireMockCall(failMock, 0, "reply operation fail");
     expect(failCall[0]).toBe("command_lane_cleared");
     expect(failCall[1]).toBeInstanceOf(CommandLaneClearedError);
+  });
+
+  it.each([
+    {
+      label: "drain wrapped by fallback while recovery is armed",
+      makeError: () => new GatewayDrainingError(),
+      code: "gateway_draining",
+      errorClass: GatewayDrainingError,
+      drainGateway: false,
+      isRestartRecoveryArmed: () => true,
+    },
+    {
+      label: "cleared lane wrapped by fallback while recovery is armed",
+      makeError: () => new CommandLaneClearedError("session:main"),
+      code: "command_lane_cleared",
+      errorClass: CommandLaneClearedError,
+      drainGateway: false,
+      isRestartRecoveryArmed: () => true,
+    },
+  ])(
+    "keeps fallback-wrapped restart terminal silent when $label",
+    async ({ makeError, code, errorClass, drainGateway, isRestartRecoveryArmed }) => {
+      const restartError = makeError();
+      const { replyOperation, failMock } = createMockReplyOperation();
+      state.runWithModelFallbackMock.mockRejectedValueOnce(
+        Object.assign(new Error("fallback exhausted"), {
+          name: "FallbackSummaryError",
+          attempts: [{ provider: "anthropic", model: "claude", error: restartError }],
+          soonestCooldownExpiry: null,
+          cause: restartError,
+        }),
+      );
+      if (drainGateway) {
+        markGatewayDraining();
+      }
+      try {
+        const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+        const result = await runAgentTurnWithFallback({
+          commandBody: "hello",
+          followupRun: createFollowupRun(),
+          sessionCtx: {
+            Provider: "whatsapp",
+            MessageSid: "msg",
+          } as unknown as TemplateContext,
+          replyOperation,
+          opts: {},
+          typingSignals: createMockTypingSignaler(),
+          blockReplyPipeline: null,
+          blockStreamingEnabled: false,
+          resolvedBlockStreamingBreak: "message_end",
+          applyReplyToMode: (payload) => payload,
+          shouldEmitToolResult: () => true,
+          shouldEmitToolOutput: () => false,
+          pendingToolTasks: new Set(),
+          resetSessionAfterRoleOrderingConflict: async () => false,
+          isHeartbeat: false,
+          sessionKey: "main",
+          getActiveSessionEntry: () => undefined,
+          resolvedVerboseLevel: "off",
+          isRestartRecoveryArmed,
+        });
+
+        expect(result.kind).toBe("final");
+        if (result.kind === "final") {
+          expect(result.payload.text).toBe(SILENT_REPLY_TOKEN);
+        }
+        const failCall = requireMockCall(failMock, 0, "reply operation fail");
+        expect(failCall[0]).toBe(code);
+        expect(failCall[1]).toBeInstanceOf(errorClass);
+      } finally {
+        resetCommandQueueStateForTest();
+      }
+    },
+  );
+
+  it("keeps fallback-wrapped drain visible when global drain has not durably owned recovery", async () => {
+    const restartError = new GatewayDrainingError();
+    const { replyOperation, failMock } = createMockReplyOperation();
+    state.runWithModelFallbackMock.mockRejectedValueOnce(
+      Object.assign(new Error("fallback exhausted"), {
+        name: "FallbackSummaryError",
+        attempts: [{ provider: "anthropic", model: "claude", error: restartError }],
+        soonestCooldownExpiry: null,
+        cause: restartError,
+      }),
+    );
+    markGatewayDraining();
+    try {
+      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+      const result = await runAgentTurnWithFallback({
+        commandBody: "hello",
+        followupRun: createFollowupRun(),
+        sessionCtx: {
+          Provider: "whatsapp",
+          MessageSid: "msg",
+        } as unknown as TemplateContext,
+        replyOperation,
+        opts: {},
+        typingSignals: createMockTypingSignaler(),
+        blockReplyPipeline: null,
+        blockStreamingEnabled: false,
+        resolvedBlockStreamingBreak: "message_end",
+        applyReplyToMode: (payload) => payload,
+        shouldEmitToolResult: () => true,
+        shouldEmitToolOutput: () => false,
+        pendingToolTasks: new Set(),
+        resetSessionAfterRoleOrderingConflict: async () => false,
+        isHeartbeat: false,
+        sessionKey: "main",
+        getActiveSessionEntry: () => undefined,
+        resolvedVerboseLevel: "off",
+        isRestartRecoveryArmed: () => false,
+      });
+
+      expect(result.kind).toBe("final");
+      if (result.kind === "final") {
+        expect(result.payload.text).toBe(
+          "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+        );
+      }
+      const failCall = requireMockCall(failMock, 0, "reply operation fail");
+      expect(failCall[0]).toBe("gateway_draining");
+      expect(failCall[1]).toBeInstanceOf(GatewayDrainingError);
+    } finally {
+      resetCommandQueueStateForTest();
+    }
   });
 
   it("stays silent (NO_REPLY) when the reply operation was aborted for restart", async () => {

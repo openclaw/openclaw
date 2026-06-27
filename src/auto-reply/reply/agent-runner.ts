@@ -1563,8 +1563,17 @@ export async function runReplyAgent(params: {
       }
     }
   };
+  const hasRestartRecoveryDeliveryContext = (entry: SessionEntry | undefined): boolean => {
+    if (!entry) {
+      return false;
+    }
+    const deliveryContext = normalizeDeliveryContext(
+      entry.restartRecoveryDeliveryContext ?? entry.pendingFinalDeliveryContext,
+    );
+    return Boolean(deliveryContext);
+  };
   const isRestartRecoveryArmed = (): boolean => {
-    if (!trackedRestartRecoveryDeliveryContext || !sessionKey || !storePath) {
+    if (!sessionKey || !storePath) {
       return false;
     }
     const persisted = loadSessionEntry({
@@ -1573,7 +1582,29 @@ export async function runReplyAgent(params: {
       clone: false,
       hydrateSkillPromptRefs: false,
     });
-    return persisted?.abortedLastRun === true || activeSessionEntry?.abortedLastRun === true;
+    const abortedForRestart =
+      persisted?.abortedLastRun === true || activeSessionEntry?.abortedLastRun === true;
+    if (!abortedForRestart) {
+      return false;
+    }
+    if (trackedRestartRecoveryDeliveryContext) {
+      return true;
+    }
+    return (
+      hasRestartRecoveryDeliveryContext(persisted) ||
+      hasRestartRecoveryDeliveryContext(activeSessionEntry)
+    );
+  };
+  // Stay silent for drain/restart terminals only once restart recovery owns a
+  // durable delivery route. The global drain flag can explain why a
+  // GatewayDrainingError surfaced, but it is not itself delivery ownership.
+  const buildRestartLifecycleReplyPayload = (): ReplyPayload => {
+    if (isRestartRecoveryArmed()) {
+      return { text: SILENT_REPLY_TOKEN };
+    }
+    return markReplyPayloadForSourceSuppressionDelivery({
+      text: RESTART_LIFECYCLE_REPLY_TEXT,
+    });
   };
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
   let preflightCompactionApplied;
@@ -2565,30 +2596,15 @@ export async function runReplyAgent(params: {
       replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart"
     ) {
-      if (isRestartRecoveryArmed()) {
-        return returnWithQueuedFollowupDrain({ text: SILENT_REPLY_TOKEN });
-      }
-      return returnWithQueuedFollowupDrain(
-        markReplyPayloadForSourceSuppressionDelivery({
-          text: RESTART_LIFECYCLE_REPLY_TEXT,
-        }),
-      );
+      return returnWithQueuedFollowupDrain(buildRestartLifecycleReplyPayload());
     }
     if (error instanceof GatewayDrainingError) {
       replyOperation.fail("gateway_draining", error);
-      return returnWithQueuedFollowupDrain(
-        markReplyPayloadForSourceSuppressionDelivery({
-          text: RESTART_LIFECYCLE_REPLY_TEXT,
-        }),
-      );
+      return returnWithQueuedFollowupDrain(buildRestartLifecycleReplyPayload());
     }
     if (error instanceof CommandLaneClearedError) {
       replyOperation.fail("command_lane_cleared", error);
-      return returnWithQueuedFollowupDrain(
-        markReplyPayloadForSourceSuppressionDelivery({
-          text: RESTART_LIFECYCLE_REPLY_TEXT,
-        }),
-      );
+      return returnWithQueuedFollowupDrain(buildRestartLifecycleReplyPayload());
     }
     const knownFailurePayload = buildKnownAgentRunFailureReplyPayload({
       err: error,

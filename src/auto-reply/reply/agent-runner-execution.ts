@@ -1410,6 +1410,21 @@ function buildRestartLifecycleReplyText(): string {
   return "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
 }
 
+// Drain/restart terminals stay silent only after restart recovery owns delivery
+// for this turn. A process-global drain alone is not enough: if no durable
+// recovery context exists, the visible restart notice is still the only outcome
+// the user can rely on.
+function buildRestartLifecycleReplyPayload(params: {
+  isRestartRecoveryArmed?: () => boolean;
+}): ReplyPayload {
+  if (params.isRestartRecoveryArmed?.() === true) {
+    return { text: SILENT_REPLY_TOKEN };
+  }
+  return markAgentRunFailureReplyPayload({
+    text: buildRestartLifecycleReplyText(),
+  });
+}
+
 function resolveRestartLifecycleError(
   err: unknown,
 ): GatewayDrainingError | CommandLaneClearedError | undefined {
@@ -3142,19 +3157,11 @@ export async function runAgentTurnWithFallback(params: {
       // bookkeeping for drain/lane-cleared is still recorded.
       if (isReplyOperationRestartAbort(params.replyOperation)) {
         takePendingLifecycleTerminal()?.emit("end", err);
-        if (params.isRestartRecoveryArmed?.() !== true) {
-          return {
-            kind: "final",
-            payload: markAgentRunFailureReplyPayload({
-              text: buildRestartLifecycleReplyText(),
-            }),
-          };
-        }
         return {
           kind: "final",
-          payload: {
-            text: SILENT_REPLY_TOKEN,
-          },
+          payload: buildRestartLifecycleReplyPayload({
+            isRestartRecoveryArmed: params.isRestartRecoveryArmed,
+          }),
         };
       }
 
@@ -3174,8 +3181,8 @@ export async function runAgentTurnWithFallback(params: {
         params.replyOperation?.fail("gateway_draining", restartLifecycleError);
         return {
           kind: "final",
-          payload: markAgentRunFailureReplyPayload({
-            text: buildRestartLifecycleReplyText(),
+          payload: buildRestartLifecycleReplyPayload({
+            isRestartRecoveryArmed: params.isRestartRecoveryArmed,
           }),
         };
       }
@@ -3185,8 +3192,8 @@ export async function runAgentTurnWithFallback(params: {
         params.replyOperation?.fail("command_lane_cleared", restartLifecycleError);
         return {
           kind: "final",
-          payload: markAgentRunFailureReplyPayload({
-            text: buildRestartLifecycleReplyText(),
+          payload: buildRestartLifecycleReplyPayload({
+            isRestartRecoveryArmed: params.isRestartRecoveryArmed,
           }),
         };
       }
