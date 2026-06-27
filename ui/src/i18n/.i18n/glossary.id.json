@@ -38,5 +38,25 @@
   {
     "source": "iMessage",
     "target": "iMessage"
+  },
+  {
+    "source": "Workspace",
+    "target": "Ruang kerja"
+  },
+  {
+    "source": "Agent",
+    "target": "Agen"
+  },
+  {
+    "source": "Scheduler",
+    "target": "Penjadwal"
+  },
+  {
+    "source": "Snapshot",
+    "target": "Snapshot"
+  },
+  {
+    "source": "Runtime",
+    "target": "Runtime"
   }
 ]
