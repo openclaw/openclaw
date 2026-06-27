@@ -616,7 +616,8 @@ Checks bot registration, AAD app, manifest, and SSO configuration in one pass.
 
 ## Environment variables
 
-All config keys can be set via environment variables instead:
+The default Microsoft Teams account can read bot credentials from environment
+variables:
 
 - `MSTEAMS_APP_ID`
 - `MSTEAMS_APP_PASSWORD`
@@ -626,6 +627,10 @@ All config keys can be set via environment variables instead:
 - `MSTEAMS_CERTIFICATE_THUMBPRINT` (optional, not required for auth)
 - `MSTEAMS_USE_MANAGED_IDENTITY` (federated + managed identity)
 - `MSTEAMS_MANAGED_IDENTITY_CLIENT_ID` (user-assigned MI only)
+
+Environment variables do not create named Teams accounts. Configure additional
+bot identities under `channels.msteams.accounts.<id>` so each account has an
+explicit `appId`, credential, and webhook port.
 
 ## Member info action
 

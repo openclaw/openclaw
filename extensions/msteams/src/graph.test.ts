@@ -346,6 +346,47 @@ describe("msteams graph helpers", () => {
     expect(getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
   });
 
+  it("resolves Graph credentials from the named Teams account", async () => {
+    const { getAccessToken } = mockGraphTokenResolution();
+
+    await expect(
+      resolveGraphToken(
+        {
+          channels: {
+            msteams: {
+              appId: "root-app",
+              appPassword: "root-password",
+              tenantId: "root-tenant",
+              accounts: {
+                secondary: {
+                  appId: "secondary-app",
+                  appPassword: "secondary-password",
+                  tenantId: "secondary-tenant",
+                  webhook: { port: 3979 },
+                },
+              },
+            },
+          },
+        },
+        { accountId: "secondary" },
+      ),
+    ).resolves.toBe("resolved-token");
+
+    expect(resolveMSTeamsCredentialsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        appId: "secondary-app",
+        appPassword: "secondary-password",
+        tenantId: "secondary-tenant",
+      }),
+      expect.objectContaining({
+        allowEnvFallback: false,
+        pathPrefix: "channels.msteams.accounts.secondary",
+      }),
+    );
+    expect(createMSTeamsTokenProviderMock).toHaveBeenCalledWith(mockApp);
+    expect(getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
+  });
+
   it("scopes delegated Graph token lookup by account", async () => {
     resolveMSTeamsCredentialsMock.mockReturnValue(mockCredentials);
     resolveDelegatedAccessTokenMock.mockResolvedValue("delegated-token");

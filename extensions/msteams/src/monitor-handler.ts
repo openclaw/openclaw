@@ -4,6 +4,7 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { formatUnknownError } from "./errors.js";
 import { resolveMSTeamsSenderAccess } from "./monitor-handler/access.js";
 import { createMSTeamsMessageHandler } from "./monitor-handler/message-handler.js";
@@ -227,7 +228,9 @@ export function registerMSTeamsHandlers<T extends MSTeamsActivityHandler>(
     const ctx = context as MSTeamsTurnContext;
     const membersAdded = ctx.activity?.membersAdded ?? [];
     const botId = ctx.activity?.recipient?.id;
-    const msteamsCfg = deps.cfg.channels?.msteams;
+    const msteamsCfg = deps.cfg.channels?.msteams
+      ? resolveMSTeamsAccountConfig(deps.cfg, deps.accountId)
+      : undefined;
 
     for (const member of membersAdded) {
       if (member.id === botId) {

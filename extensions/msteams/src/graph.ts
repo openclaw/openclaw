@@ -1,6 +1,8 @@
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 // Msteams plugin module implements graph behavior.
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
-import { fetchWithSsrFGuard, type MSTeamsConfig } from "../runtime-api.js";
+import { fetchWithSsrFGuard, type OpenClawConfig } from "../runtime-api.js";
+import { resolveDefaultMSTeamsAccountId, resolveMSTeamsAccountConfig } from "./accounts.js";
 import { GRAPH_ROOT } from "./attachments/shared.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import { createMSTeamsHttpError } from "./http-error.js";
@@ -208,8 +210,20 @@ export async function resolveGraphToken(
   cfg: unknown,
   options?: { accountId?: string | null; preferDelegated?: boolean },
 ): Promise<string> {
-  const msteamsCfg = (cfg as { channels?: { msteams?: MSTeamsConfig } })?.channels?.msteams;
-  const creds = resolveMSTeamsCredentials(msteamsCfg);
+  const openClawCfg = cfg as OpenClawConfig;
+  const accountId = normalizeAccountId(
+    options?.accountId ?? resolveDefaultMSTeamsAccountId(openClawCfg),
+  );
+  const msteamsCfg = openClawCfg.channels?.msteams
+    ? resolveMSTeamsAccountConfig(openClawCfg, accountId)
+    : undefined;
+  const creds = resolveMSTeamsCredentials(msteamsCfg, {
+    allowEnvFallback: accountId === DEFAULT_ACCOUNT_ID,
+    pathPrefix:
+      accountId === DEFAULT_ACCOUNT_ID
+        ? "channels.msteams"
+        : `channels.msteams.accounts.${accountId}`,
+  });
   if (!creds) {
     throw new Error("MS Teams credentials missing");
   }
@@ -225,7 +239,7 @@ export async function resolveGraphToken(
       tenantId: creds.tenantId,
       clientId: creds.appId,
       clientSecret: creds.appPassword,
-      accountId: options.accountId,
+      accountId,
     });
     if (delegated) {
       return delegated;
