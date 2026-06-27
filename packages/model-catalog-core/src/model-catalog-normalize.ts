@@ -29,7 +29,7 @@ import {
 
 // Normalizes raw provider model catalogs into stable rows for lookup and merging.
 
-const MODEL_CATALOG_INPUTS = new Set(["text", "image", "document"]);
+const MODEL_CATALOG_INPUTS = new Set(["text", "image", "document", "audio", "video"]);
 const MODEL_CATALOG_DISCOVERY_MODES = new Set(["static", "refreshable", "runtime"]);
 const MODEL_CATALOG_STATUSES = new Set(["available", "preview", "deprecated", "disabled"]);
 const MODEL_CATALOG_API_SET = new Set<string>(MODEL_CATALOG_APIS);

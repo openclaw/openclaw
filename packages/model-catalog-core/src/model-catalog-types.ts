@@ -134,7 +134,7 @@ export type ModelCatalogMediaInputConfig = {
 };
 
 /** Supported input modality for a model. */
-export type ModelCatalogInput = "text" | "image" | "document";
+export type ModelCatalogInput = "text" | "image" | "document" | "audio" | "video";
 /** Discovery lifecycle for a provider catalog. */
 export type ModelCatalogDiscovery = "static" | "refreshable" | "runtime";
 /** Availability state for a model. */
