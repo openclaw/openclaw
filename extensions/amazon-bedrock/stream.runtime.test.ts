@@ -316,6 +316,46 @@ describe("Bedrock Fable contract", () => {
     });
   });
 
+  it("uses model maxTokens for Fable requests through simple options", async () => {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        { messageStop: { stopReason: "end_turn" } },
+      ]),
+    } as never);
+
+    const stream = streamSimpleBedrock(fableModel(), context());
+    await stream.result();
+
+    const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
+    expect(command.input).toMatchObject({
+      inferenceConfig: { maxTokens: 128_000 },
+      additionalModelRequestFields: {
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "high" },
+      },
+    });
+  });
+
+  it("preserves explicit caller maxTokens for Fable simple options", async () => {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        { messageStop: { stopReason: "end_turn" } },
+      ]),
+    } as never);
+
+    const stream = streamSimpleBedrock(fableModel(), context(), {
+      maxTokens: 12_000,
+    });
+    await stream.result();
+
+    const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
+    expect(command.input?.inferenceConfig).toEqual({ maxTokens: 12_000 });
+  });
+
   it("preserves explicit tool disabling", async () => {
     const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
       $metadata: { httpStatusCode: 200 },
@@ -477,6 +517,7 @@ describe("Bedrock canonical Claude aliases", () => {
         name: "Production Claude",
         reasoning: false,
         params: { canonicalModelId },
+        maxTokens: 128_000,
         thinkingLevelMap,
       });
 
@@ -492,7 +533,7 @@ describe("Bedrock canonical Claude aliases", () => {
       const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
       expect(command.input).toMatchObject({
         modelId: "production-claude",
-        inferenceConfig: {},
+        inferenceConfig: { maxTokens: 128_000 },
         additionalModelRequestFields: {
           thinking: { type: "adaptive", display: "summarized" },
           output_config: { effort: expectedEffort },
@@ -500,4 +541,40 @@ describe("Bedrock canonical Claude aliases", () => {
       });
     },
   );
+
+  it("preserves explicit caller maxTokens for adaptive Claude aliases", async () => {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        { messageStop: { stopReason: "end_turn" } },
+      ]),
+    } as never);
+    const model = bedrockModel({
+      id: "production-claude",
+      name: "Production Claude",
+      reasoning: false,
+      params: { canonicalModelId: "claude-opus-4-8" },
+      maxTokens: 128_000,
+      thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+    });
+
+    await streamSimpleBedrock(
+      model,
+      { messages: [{ role: "user", content: "Reply briefly.", timestamp: 0 }] } as never,
+      {
+        reasoning: "xhigh",
+        maxTokens: 12_000,
+      },
+    ).result();
+
+    const command = send.mock.calls[0]?.[0] as { input?: Record<string, unknown> };
+    expect(command.input).toMatchObject({
+      inferenceConfig: { maxTokens: 12_000 },
+      additionalModelRequestFields: {
+        thinking: { type: "adaptive", display: "summarized" },
+        output_config: { effort: "xhigh" },
+      },
+    });
+  });
 });

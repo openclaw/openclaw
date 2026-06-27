@@ -361,6 +361,7 @@ function resolveSimpleBedrockOptions(
   if (usesClaudeFable5BedrockContract(model)) {
     return {
       ...base,
+      maxTokens: resolveModelBackedMaxTokens(model, base.maxTokens),
       reasoning: options?.reasoning ?? "high",
       thinkingBudgets: options?.thinkingBudgets,
     } satisfies BedrockOptions;
@@ -372,6 +373,10 @@ function resolveSimpleBedrockOptions(
         : undefined;
     return {
       ...base,
+      maxTokens:
+        reasoning !== undefined
+          ? resolveModelBackedMaxTokens(model, base.maxTokens)
+          : base.maxTokens,
       reasoning,
     } satisfies BedrockOptions;
   }
@@ -380,6 +385,7 @@ function resolveSimpleBedrockOptions(
     if (supportsAdaptiveThinking(model)) {
       return {
         ...base,
+        maxTokens: resolveModelBackedMaxTokens(model, base.maxTokens),
         reasoning: options.reasoning,
         thinkingBudgets: options.thinkingBudgets,
       } satisfies BedrockOptions;
@@ -410,6 +416,13 @@ function resolveSimpleBedrockOptions(
     reasoning: options.reasoning,
     thinkingBudgets: options.thinkingBudgets,
   } satisfies BedrockOptions;
+}
+
+function resolveModelBackedMaxTokens(
+  model: Model<"bedrock-converse-stream">,
+  baseMaxTokens: number | undefined,
+): number {
+  return baseMaxTokens ?? model.maxTokens;
 }
 
 function handleContentBlockStart(
