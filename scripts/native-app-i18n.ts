@@ -52,7 +52,7 @@ const APPLE_EXTENSIONS = new Set([".swift"]);
 const APPLE_UI_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_MODIFIER_CALLS =
-  /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
+  /\.(?:navigationTitle|accessibilityLabel|accessibilityHint|help|alert|confirmationDialog)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_CALLS =
   /\b(?:Text|OutlinedTextField|BasicTextField|Button|IconButton|TopAppBar|Snackbar|AlertDialog)\s*\(\s*(?:text\s*=\s*)?"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_PROPERTIES =

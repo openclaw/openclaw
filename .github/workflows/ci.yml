@@ -647,10 +647,6 @@ jobs:
         if: needs.preflight.outputs.run_control_ui_i18n == 'true'
         run: pnpm ui:i18n:check
 
-      - name: Check native app i18n inventory
-        if: needs.preflight.outputs.run_macos == 'true' || needs.preflight.outputs.run_android == 'true'
-        run: pnpm native:i18n:check
-
       - name: Pack built runtime artifacts
         run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime
 
@@ -809,6 +805,28 @@ jobs:
           name: gateway-watch-regression
           path: .local/gateway-watch-regression/
           retention-days: 7
+
+  native-i18n:
+    permissions:
+      contents: read
+    needs: [preflight]
+    if: ${{ !cancelled() && always() && (needs.preflight.outputs.run_macos == 'true' || needs.preflight.outputs.run_android == 'true') }}
+    runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.checkout_revision }}
+          persist-credentials: false
+
+      - name: Setup Node environment
+        uses: ./.github/actions/setup-node-env
+        with:
+          install-bun: "false"
+
+      - name: Check native app i18n inventory
+        run: pnpm native:i18n:check
 
   checks-fast-core:
     permissions:
