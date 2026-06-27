@@ -13,7 +13,7 @@ import {
   resetRunCronIsolatedAgentTurnHarness,
   restoreFastTestEnv,
   runWithModelFallbackMock,
-  updateSessionStoreMock,
+  replaceSessionEntryMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
@@ -100,7 +100,7 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     });
 
     resolveAgentConfigMock.mockReturnValue(undefined);
-    updateSessionStoreMock.mockResolvedValue(undefined);
+    replaceSessionEntryMock.mockResolvedValue(undefined);
 
     cronSession = makeCronSession({
       sessionEntry: makeFreshSessionEntry(),
@@ -140,16 +140,12 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
       modelProvider?: string;
       systemSent?: boolean;
     }> = [];
-    updateSessionStoreMock.mockImplementation(
-      async (_path: string, cb: (s: Record<string, unknown>) => void) => {
-        const store: Record<string, unknown> = {};
-        cb(store);
-        const entry = Object.values(store)[0] as
-          | { model?: string; modelProvider?: string; systemSent?: boolean }
-          | undefined;
-        if (entry) {
-          persistedSnapshots.push(structuredClone(entry));
-        }
+    replaceSessionEntryMock.mockImplementation(
+      async (
+        _scope: unknown,
+        entry: { model?: string; modelProvider?: string; systemSent?: boolean },
+      ) => {
+        persistedSnapshots.push(structuredClone(entry));
       },
     );
 
@@ -229,7 +225,7 @@ describe("runCronIsolatedAgentTurn — cron model override (#21057)", () => {
     // Only the pre-run persist (call 2) should fail — the skills snapshot
     // persist is pre-existing code without a try-catch guard.
     let callCount = 0;
-    updateSessionStoreMock.mockImplementation(async () => {
+    replaceSessionEntryMock.mockImplementation(async () => {
       callCount++;
       if (callCount === 2) {
         throw new Error("ENOSPC: no space left on device");
