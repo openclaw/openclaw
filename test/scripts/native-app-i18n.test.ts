@@ -20,6 +20,11 @@ describe("native app i18n inventory", () => {
         (entry) => !/(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u.test(entry.path),
       ),
     ).toBe(true);
+    expect(
+      entries
+        .filter((entry) => entry.surface === "apple")
+        .every((entry) => entry.path.startsWith("apps/ios/")),
+    ).toBe(true);
     expect(entries.some((entry) => entry.source === "QR Scanner Unavailable")).toBe(true);
     expect(entries.some((entry) => entry.source === "Request ID: \\(requestId)")).toBe(true);
     expect(entries.some((entry) => entry.source === "Open ${row.title}")).toBe(true);
