@@ -156,11 +156,13 @@ show text commands for:
 /agentkit approve plugin:<approval-id> allow-always
 ```
 
-After the external proof succeeds, the plugin can resolve only its own pending
-approval through `plugin.approval.resolveVerified`. That method requires
-`operator.approvals` (or `operator.admin` as the usual operator-scope
-superset), checks that the pending approval's `pluginId` matches the requested
-plugin, and accepts only decisions exposed by `externalResolution`.
+After the external proof succeeds, a trusted plugin-side helper can resolve the
+pending approval through `plugin.approval.resolveVerified`. That method uses
+operator approval authority: it requires `operator.approvals` (or
+`operator.admin` as the usual operator-scope superset), treats `pluginId` as the
+pending approval owner selector rather than an authenticated plugin principal,
+checks that the pending approval's `pluginId` matches the requested plugin, and
+accepts only decisions exposed by `externalResolution`.
 When `externalResolution` is configured, OpenClaw rejects normal allow decisions
 on `allowedDecisions`; the normal `Deny` path remains owned by OpenClaw's
 approval controls.

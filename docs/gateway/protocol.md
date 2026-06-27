@@ -475,7 +475,7 @@ enumeration of `src/gateway/server-methods/*.ts`.
     - `exec.approvals.get` and `exec.approvals.set` manage gateway exec approval policy snapshots.
     - `exec.approvals.node.get` and `exec.approvals.node.set` manage node-local exec approval policy via node relay commands.
     - `plugin.approval.request`, `plugin.approval.list`, `plugin.approval.waitDecision`, and `plugin.approval.resolve` cover plugin-defined approval flows.
-    - `plugin.approval.resolveVerified` lets an approval-scoped plugin helper resolve only approvals owned by that plugin after an external proof succeeds.
+    - `plugin.approval.resolveVerified` lets an approval-scoped trusted helper submit a proof-backed allow decision after an external proof succeeds; the supplied `pluginId` must match the pending approval owner.
 
   </Accordion>
 

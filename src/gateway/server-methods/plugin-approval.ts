@@ -296,8 +296,9 @@ export function createPluginApprovalHandlers(
         context,
         client,
         exposeAmbiguousPrefixError: false,
-        // Verified plugin resolution is authorized by plugin ownership, not by
-        // the original reviewer connection that saw the pending approval.
+        // Verified resolution uses operator approval authority. The pluginId
+        // limits which pending plugin-owned approval may be resolved; it is not
+        // an authenticated plugin principal.
         enforceClientVisibility: false,
         validateDecision: (snapshot) => {
           if (normalizeOptionalString(snapshot.request.pluginId) !== pluginId) {
