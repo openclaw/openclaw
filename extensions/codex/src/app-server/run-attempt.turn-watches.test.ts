@@ -3734,6 +3734,70 @@ describe("runCodexAppServerAttempt turn watches", () => {
     );
   });
 
+  it("does not release post-tool assistant items without turn completion", async () => {
+    const harness = createStartedThreadHarness();
+    const params = createParams(
+      path.join(tempDir, "session.jsonl"),
+      path.join(tempDir, "workspace"),
+    );
+    params.timeoutMs = 200;
+
+    const run = runCodexAppServerAttempt(params, {
+      postToolRawAssistantCompletionIdleTimeoutMs: 5,
+      turnAssistantCompletionIdleTimeoutMs: 5,
+      turnCompletionIdleTimeoutMs: 50,
+      turnTerminalIdleTimeoutMs: 500,
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { type: "commandExecution", id: "cmd-1", status: "inProgress" },
+      },
+    });
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: { type: "commandExecution", id: "cmd-1", status: "completed" },
+      },
+    });
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          type: "agentMessage",
+          id: "msg-progress-1",
+          text: "Now let me create the remaining files.",
+        },
+      },
+    });
+
+    const result = await run;
+    expect(result.promptError).toBe(
+      "codex app-server turn idle timed out waiting for turn/completed",
+    );
+    expect(result.codexAppServerFailure).toMatchObject({
+      kind: "turn_completion_idle_timeout",
+      transport: "stdio",
+      threadId: "thread-1",
+      turnId: "turn-1",
+      replaySafe: false,
+    });
+    expect(result.assistantTexts).toEqual(["Now let me create the remaining files."]);
+    expect(result.codexAppServerFailure).toMatchObject({
+      turnWatchTimeoutKind: "completion",
+      diagnostics: {
+        lastNotificationMethod: "item/completed",
+      },
+    });
+  });
+
   it("keeps waiting when a current-turn item is still active", async () => {
     let notify: (notification: CodexServerNotification) => Promise<void> = async () => undefined;
     const request = vi.fn(async (method: string) => {
@@ -3803,6 +3867,18 @@ describe("runCodexAppServerAttempt turn watches", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         item: { type: "commandExecution", id: "cmd-1", status: "completed" },
+      },
+    });
+    await notify({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        turn: {
+          id: "turn-1",
+          status: "completed",
+          items: [{ type: "agentMessage", id: "msg-final-1", text: "Done." }],
+        },
       },
     });
 
