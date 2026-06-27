@@ -244,6 +244,13 @@ function buildUserTurnSenderMeta(
   };
 }
 
+function readOpenClawMessageMeta(message: AgentMessage): Record<string, unknown> | undefined {
+  const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
+  return meta && typeof meta === "object" && !Array.isArray(meta)
+    ? (meta as Record<string, unknown>)
+    : undefined;
+}
+
 function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
   const mediaFields = buildPersistedUserTurnMediaFields(params.media);
   const hasMedia = Boolean(mediaFields.MediaPath);
@@ -321,14 +328,8 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
   }
   const runtimeMessage = params.runtimeMessage as unknown as Record<string, unknown>;
   const preparedMessage = params.preparedMessage as unknown as Record<string, unknown>;
-  const runtimeMeta =
-    runtimeMessage["__openclaw"] && typeof runtimeMessage["__openclaw"] === "object"
-      ? (runtimeMessage["__openclaw"] as Record<string, unknown>)
-      : undefined;
-  const preparedMeta =
-    preparedMessage["__openclaw"] && typeof preparedMessage["__openclaw"] === "object"
-      ? (preparedMessage["__openclaw"] as Record<string, unknown>)
-      : undefined;
+  const runtimeMeta = readOpenClawMessageMeta(params.runtimeMessage);
+  const preparedMeta = readOpenClawMessageMeta(params.preparedMessage);
   return {
     ...runtimeMessage,
     ...preparedMessage,
@@ -356,6 +357,7 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const provenance = normalizeInputProvenance(
     (message as unknown as { provenance?: unknown }).provenance,
   );
+  const originalMeta = readOpenClawMessageMeta(message);
   const nextMessage = params.beforeMessageWrite({
     message,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -367,26 +369,19 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
   const nextUserMessage = provenance
     ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
     : nextMessage;
-  const originalOpenClaw = (message as unknown as { __openclaw?: unknown })["__openclaw"];
-  const senderIsOwner =
-    originalOpenClaw && typeof originalOpenClaw === "object"
-      ? (originalOpenClaw as { senderIsOwner?: unknown }).senderIsOwner
-      : undefined;
-  if (!idempotencyKey && typeof senderIsOwner !== "boolean") {
-    return nextUserMessage;
-  }
-  const nextRecord = nextUserMessage as unknown as Record<string, unknown>;
-  const nextOpenClaw =
-    nextRecord["__openclaw"] && typeof nextRecord["__openclaw"] === "object"
-      ? (nextRecord["__openclaw"] as Record<string, unknown>)
-      : {};
-  return {
-    ...nextRecord,
-    ...(idempotencyKey ? { idempotencyKey } : {}),
-    ...(typeof senderIsOwner === "boolean"
-      ? { __openclaw: { ...nextOpenClaw, senderIsOwner } }
-      : {}),
-  } as unknown as PersistedUserTurnMessage;
+  const nextMessageMeta = readOpenClawMessageMeta(nextUserMessage);
+  const nextUserMessageWithMetadata = originalMeta
+    ? ({
+        ...(nextUserMessage as unknown as Record<string, unknown>),
+        __openclaw: { ...nextMessageMeta, ...originalMeta },
+      } as unknown as PersistedUserTurnMessage)
+    : nextUserMessage;
+  return idempotencyKey
+    ? ({
+        ...(nextUserMessageWithMetadata as unknown as Record<string, unknown>),
+        idempotencyKey,
+      } as unknown as PersistedUserTurnMessage)
+    : nextUserMessageWithMetadata;
 }
 
 export async function appendUserTurnTranscriptMessage(
