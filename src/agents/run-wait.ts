@@ -319,7 +319,7 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
       ? latestReply.text
       : undefined;
   return {
-    status: "ok",
+    ...wait,
     replyText,
   };
 }

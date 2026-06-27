@@ -76,7 +76,7 @@ function expectAgentWaitRequest(
 
 describe("readLatestAssistantReply", () => {
   beforeEach(() => {
-    callGatewayMock.mockClear();
+    callGatewayMock.mockReset();
     testing.setDepsForTest({
       callGateway: async (opts) => await callGatewayMock(opts),
     });
@@ -226,7 +226,7 @@ describe("readLatestAssistantReply", () => {
 
 describe("waitForAgentRun", () => {
   beforeEach(() => {
-    callGatewayMock.mockClear();
+    callGatewayMock.mockReset();
     testing.setDepsForTest({
       callGateway: async (opts) => await callGatewayMock(opts),
     });
@@ -434,7 +434,7 @@ describe("waitForAgentRun", () => {
 
 describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
   beforeEach(() => {
-    callGatewayMock.mockClear();
+    callGatewayMock.mockReset();
     testing.setDepsForTest({
       callGateway: async (opts) => await callGatewayMock(opts),
     });
@@ -614,11 +614,52 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
       replyText: "fresh reply",
     });
   });
+
+  it("preserves successful wait metadata when returning an updated reply", async () => {
+    callGatewayMock
+      .mockResolvedValueOnce({
+        status: "ok",
+        startedAt: 100,
+        endedAt: 200,
+        stopReason: "completed",
+        yielded: true,
+        providerStarted: true,
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "fresh reply" }],
+            timestamp: 99,
+          },
+        ],
+      });
+
+    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+      runId: "run-with-metadata",
+      sessionKey: "agent:main:child",
+      timeoutMs: 1_000,
+      baseline: {
+        text: "older reply",
+        fingerprint: "old-fingerprint",
+      },
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      startedAt: 100,
+      endedAt: 200,
+      stopReason: "completed",
+      yielded: true,
+      providerStarted: true,
+      replyText: "fresh reply",
+    });
+  });
 });
 
 describe("waitForAgentRunsToDrain", () => {
   beforeEach(() => {
-    callGatewayMock.mockClear();
+    callGatewayMock.mockReset();
     testing.setDepsForTest({
       callGateway: async (opts) => await callGatewayMock(opts),
     });
