@@ -45,6 +45,9 @@ export async function recoverInstalledLaunchAgent(params: {
         }),
       );
     }
+    if (repaired.status === "system-launchdaemon-conflict") {
+      throw new Error(repaired.detail);
+    }
     return null;
   }
   return {

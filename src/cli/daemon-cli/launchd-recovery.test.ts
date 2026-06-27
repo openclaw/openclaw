@@ -89,4 +89,19 @@ describe("recoverInstalledLaunchAgent", () => {
       "requires a logged-in macOS GUI session",
     );
   });
+
+  it("surfaces system LaunchDaemon conflicts instead of falling back to unmanaged restart", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    launchAgentPlistExists.mockResolvedValue(true);
+    repairLaunchAgentBootstrap.mockResolvedValue({
+      ok: false,
+      status: "system-launchdaemon-conflict",
+      detail:
+        "Refusing to install LaunchAgent ai.openclaw.gateway because launchd already has system/ai.openclaw.gateway.",
+    });
+
+    await expect(recoverInstalledLaunchAgent({ result: "restarted" })).rejects.toThrow(
+      "launchd already has system/ai.openclaw.gateway",
+    );
+  });
 });

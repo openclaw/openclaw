@@ -575,6 +575,38 @@ describe("recoverInstalledLaunchAgentAfterUpdate", () => {
         "LaunchAgent was installed but not loaded; automatic bootstrap/kickstart recovery failed.",
     });
   });
+
+  it("preserves LaunchAgent recovery error details after update", async () => {
+    const readState = vi.fn(async () => ({
+      installed: true,
+      loaded: false,
+      running: false,
+      env: { OPENCLAW_PROFILE: "stomme" } as NodeJS.ProcessEnv,
+      command: null,
+      runtime: { status: "unknown", missingSupervision: true },
+    }));
+    const recover = vi.fn(async () => {
+      throw new Error(
+        "Refusing to install LaunchAgent ai.openclaw.gateway because launchd already has system/ai.openclaw.gateway.",
+      );
+    });
+
+    await expect(
+      recoverInstalledLaunchAgentAfterUpdate({
+        service: {} as never,
+        deps: {
+          platform: "darwin",
+          readState: readState as never,
+          recover: recover as never,
+        },
+      }),
+    ).resolves.toEqual({
+      attempted: true,
+      recovered: false,
+      detail:
+        "Refusing to install LaunchAgent ai.openclaw.gateway because launchd already has system/ai.openclaw.gateway.",
+    });
+  });
 });
 
 describe("recoverLaunchAgentAndRecheckGatewayHealth", () => {
