@@ -348,7 +348,7 @@ export function createSessionsHistoryTool(opts?: {
       const limit = readPositiveIntegerParam(params, "limit");
       const offset = readOffsetParam(params);
       const includeTools = Boolean(params.includeTools);
-      const includeFamily = Boolean(params.includeFamily ?? params.resetAncestors);
+      const includeFamily = params.includeFamily === true;
       const result = await gatewayCall<{
         messages: Array<unknown>;
         offset?: number;
