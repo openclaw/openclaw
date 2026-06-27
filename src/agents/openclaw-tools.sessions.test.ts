@@ -1153,13 +1153,15 @@ describe("sessions tools", () => {
     );
     const initialAgentParams = agentParams(initialAgentCall ?? {});
     expect(initialAgentParams.extraSystemPrompt).toContain(
-      "Agent 1 (requester) session: <REQUESTER_SESSION>.",
+      `Agent 1 (requester) session: ${requesterKey}.`,
+    );
+    expect(initialAgentParams.extraSystemPrompt).toContain(
+      `Return replies with sessions_send(sessionKey: "${requesterKey}", message: ...).`,
     );
     expect(initialAgentParams.extraSystemPrompt).toContain("Agent 1 (requester) channel: discord.");
     expect(initialAgentParams.extraSystemPrompt).toContain(
       "Agent 2 (target) session: <TARGET_SESSION>.",
     );
-    expect(initialAgentParams.extraSystemPrompt).not.toContain(requesterKey);
     expect(initialAgentParams.inputProvenance).toMatchObject({
       kind: "inter_session",
       sourceSessionKey: requesterKey,

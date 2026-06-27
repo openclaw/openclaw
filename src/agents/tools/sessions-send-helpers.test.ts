@@ -99,18 +99,38 @@ describe("resolvePingPongTurns", () => {
 });
 
 describe("agent-to-agent prompt context", () => {
-  it("keeps volatile routing identifiers out of system prompt context", () => {
+  it("includes the concrete requester session as the return path", () => {
     const context = buildAgentToAgentMessageContext({
       requesterSessionKey: "agent:main:slack:channel:C123:thread:171.222",
       requesterChannel: "slack",
       targetSessionKey: "agent:worker:discord:channel:ops:run:run-123",
     });
 
-    expect(context).toContain("Agent 1 (requester) session: <REQUESTER_SESSION>.");
+    expect(context).toContain(
+      "Agent 1 (requester) session: agent:main:slack:channel:C123:thread:171.222.",
+    );
+    expect(context).toContain(
+      'Return replies with sessions_send(sessionKey: "agent:main:slack:channel:C123:thread:171.222", message: ...).',
+    );
     expect(context).toContain("Agent 1 (requester) channel: slack.");
     expect(context).toContain("Agent 2 (target) session: <TARGET_SESSION>.");
-    expect(context).not.toContain("agent:main:slack:channel:C123:thread:171.222");
     expect(context).not.toContain("agent:worker:discord:channel:ops:run:run-123");
+  });
+
+  it("keeps WhatsApp group requester keys concrete for return routing", () => {
+    const context = buildAgentToAgentMessageContext({
+      requesterSessionKey: "agent:koro:whatsapp:group:120363426513385961@g.us",
+      requesterChannel: "whatsapp",
+      targetSessionKey: "agent:alfred:main",
+    });
+
+    expect(context).toContain(
+      "Agent 1 (requester) session: agent:koro:whatsapp:group:120363426513385961@g.us.",
+    );
+    expect(context).toContain(
+      'Return replies with sessions_send(sessionKey: "agent:koro:whatsapp:group:120363426513385961@g.us", message: ...).',
+    );
+    expect(context).toContain("Agent 1 (requester) channel: whatsapp.");
   });
 
   it("preserves optional session line shape with concrete channel values", () => {
@@ -124,11 +144,28 @@ describe("agent-to-agent prompt context", () => {
     });
 
     expect(context).toContain("Current agent: Agent 2 (target).");
-    expect(context).toContain("Agent 1 (requester) session: <REQUESTER_SESSION>.");
+    expect(context).toContain("Agent 1 (requester) session: agent:requester:main.");
+    expect(context).not.toContain("Return replies with sessions_send");
     expect(context).not.toContain("Agent 1 (requester) channel:");
     expect(context).toContain("Agent 2 (target) session: <TARGET_SESSION>.");
     expect(context).toContain("Agent 2 (target) channel: telegram.");
-    expect(context).not.toContain("agent:requester:main");
     expect(context).not.toContain("agent:target:main");
+  });
+
+  it("does not tell requester-side ping-pong turns to send to themselves", () => {
+    const context = buildAgentToAgentReplyContext({
+      requesterSessionKey: "agent:koro:whatsapp:group:120363426513385961@g.us",
+      requesterChannel: "whatsapp",
+      targetSessionKey: "agent:alfred:main",
+      currentRole: "requester",
+      turn: 2,
+      maxTurns: 5,
+    });
+
+    expect(context).toContain("Current agent: Agent 1 (requester).");
+    expect(context).toContain(
+      "Agent 1 (requester) session: agent:koro:whatsapp:group:120363426513385961@g.us.",
+    );
+    expect(context).not.toContain("Return replies with sessions_send");
   });
 });
