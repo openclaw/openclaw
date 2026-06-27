@@ -19,6 +19,7 @@ import {
   resolvePayloadMediaUrls,
   sendPayloadMediaSequenceOrFallback,
 } from "openclaw/plugin-sdk/reply-payload";
+import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import type { TelegramInlineButtons } from "./button-types.js";
@@ -60,6 +61,8 @@ async function resolveTelegramSendContext(params: {
   deps?: OutboundSendDeps;
   accountId?: string | null;
   replyToId?: string | null;
+  replyToIdSource?: TelegramSendOpts["replyToIdSource"];
+  replyToMode?: TelegramSendOpts["replyToMode"];
   threadId?: string | number | null;
   formatting?: OutboundDeliveryFormattingOptions;
   silent?: boolean;
@@ -74,6 +77,8 @@ async function resolveTelegramSendContext(params: {
     tableMode?: OutboundDeliveryFormattingOptions["tableMode"];
     messageThreadId?: number;
     replyToMessageId?: number;
+    replyToIdSource?: TelegramSendOpts["replyToIdSource"];
+    replyToMode?: TelegramSendOpts["replyToMode"];
     accountId?: string;
     silent?: boolean;
     gatewayClientScopes?: readonly string[];
@@ -87,6 +92,8 @@ async function resolveTelegramSendContext(params: {
       cfg: params.cfg,
       messageThreadId: parseTelegramThreadId(params.threadId),
       replyToMessageId: parseTelegramReplyToMessageId(params.replyToId),
+      ...(params.replyToIdSource !== undefined ? { replyToIdSource: params.replyToIdSource } : {}),
+      ...(params.replyToMode !== undefined ? { replyToMode: params.replyToMode } : {}),
       accountId: params.accountId ?? undefined,
       silent: params.silent,
       gatewayClientScopes: params.gatewayClientScopes,
@@ -151,6 +158,19 @@ export async function sendTelegramPayloadMessages(params: {
     quoteText,
     ...(params.payload.audioAsVoice === true ? { asVoice: true } : {}),
   };
+  const shouldConsumeImplicitReplyTarget =
+    payloadOpts.replyToIdSource === "implicit" &&
+    payloadOpts.replyToMode !== undefined &&
+    isSingleUseReplyToMode(payloadOpts.replyToMode);
+  const consumedImplicitReplyPayloadOpts = shouldConsumeImplicitReplyTarget
+    ? {
+        ...payloadOpts,
+        replyToMessageId: undefined,
+        replyToIdSource: undefined,
+        replyToMode: undefined,
+      }
+    : payloadOpts;
+  let implicitReplyTargetAvailable = true;
   if (reactionEmoji) {
     if (typeof replyToMessageId !== "number") {
       throw new Error("Telegram reaction requires a reply target");
@@ -179,12 +199,18 @@ export async function sendTelegramPayloadMessages(params: {
         ...payloadOpts,
         buttons,
       }),
-    send: async ({ text: textLocal, mediaUrl, isFirst }) =>
-      await params.send(params.to, textLocal, {
-        ...payloadOpts,
+    send: async ({ text: textLocal, mediaUrl, isFirst }) => {
+      const mediaPayloadOpts =
+        shouldConsumeImplicitReplyTarget && !implicitReplyTargetAvailable
+          ? consumedImplicitReplyPayloadOpts
+          : payloadOpts;
+      implicitReplyTargetAvailable = false;
+      return await params.send(params.to, textLocal, {
+        ...mediaPayloadOpts,
         mediaUrl,
         ...(isFirst ? { buttons } : {}),
-      }),
+      });
+    },
   });
 }
 
