@@ -1,0 +1,15 @@
+[Unit]
+Description=OpenClaw Discord Visible Reply Monitor
+After=network.target
+
+[Service]
+Type=oneshot
+# setup/distribution should render this placeholder to the checked-out monitor path.
+ExecStart=@OPENCLAW_DISCORD_VISIBLE_REPLY_MONITOR_PATH@
+# Defaults are #fiducian-chat -> #task-notifications; override as needed.
+# Environment=OPENCLAW_VISIBLE_REPLY_CHANNEL=1468361476585558210
+# Environment=OPENCLAW_VISIBLE_REPLY_ALERT_TARGET=channel:1473914995309023417
+# Environment=OPENCLAW_VISIBLE_REPLY_THRESHOLD_MIN=5
+
+[Install]
+WantedBy=default.target
