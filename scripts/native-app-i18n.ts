@@ -80,6 +80,19 @@ const APPLE_PLIST_STRINGS = /<string>([\s\S]*?)<\/string>/gu;
 const GENERATED_PATH_RE = /(?:^|[\\/])(?:build|\.gradle|\.build|DerivedData)(?:$|[\\/])/u;
 const EXCLUDED_PATH_RE = /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
 const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u;
+const BUILD_SETTING_RE = /\$\([A-Za-z0-9_.-]+\)/gu;
+
+function isTranslatableCandidate(source: string, kind: string): boolean {
+  if (BUILD_SETTING_RE.test(source)) {
+    BUILD_SETTING_RE.lastIndex = 0;
+    return false;
+  }
+  BUILD_SETTING_RE.lastIndex = 0;
+  if (/^[a-z0-9_.:/$-]+$/u.test(source) || /^[A-Z0-9_.:/$-]+$/u.test(source)) {
+    return false;
+  }
+  return kind !== "plist-string" || /\s/u.test(source);
+}
 
 function extractSwiftInterpolations(source: string): string[] | null {
   const values: string[] = [];
@@ -155,6 +168,9 @@ function addCandidate(
 ) {
   const normalized = normalizeSource(decodeLiteral(source));
   if (!normalized || !/\p{L}/u.test(normalized)) {
+    return;
+  }
+  if (!isTranslatableCandidate(normalized, kind)) {
     return;
   }
   if (
