@@ -19,6 +19,7 @@ const PROVIDER_ID = "xai";
 export const XAI_OAUTH_METHOD_ID = "oauth";
 export const XAI_OAUTH_CHOICE_ID = "xai-oauth";
 export const XAI_DEVICE_CODE_METHOD_ID = "device-code";
+export const XAI_DEVICE_CODE_CHOICE_ID = "xai-device-code";
 export const XAI_OAUTH_CLIENT_ID = "b1a00492-073a-47ea-816f-4c329264a828";
 export const XAI_OAUTH_SCOPE = "openid profile email offline_access grok-cli:access api:access";
 export const XAI_OAUTH_ISSUER = "https://auth.x.ai";
@@ -688,6 +689,16 @@ export function createXaiDeviceCodeAuthMethod(): ProviderAuthMethod {
     label: "xAI device code",
     hint: "Deprecated alias for xAI OAuth device-code login",
     kind: "device_code",
+    wizard: {
+      choiceId: XAI_DEVICE_CODE_CHOICE_ID,
+      choiceLabel: "xAI device code",
+      choiceHint: "Compatibility alias for xAI OAuth device-code sign-in",
+      assistantVisibility: "manual-only",
+      groupId: PROVIDER_ID,
+      groupLabel: "xAI (Grok)",
+      groupHint: "API key or OAuth",
+      methodId: XAI_DEVICE_CODE_METHOD_ID,
+    },
     run: async (ctx) => loginXaiDeviceCode(ctx),
   };
 }

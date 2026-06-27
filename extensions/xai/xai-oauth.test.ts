@@ -78,7 +78,9 @@ describe("xAI OAuth", () => {
 
     expect(method.id).toBe("device-code");
     expect(method.kind).toBe("device_code");
-    expect(method.wizard).toBeUndefined();
+    expect(method.wizard?.choiceId).toBe("xai-device-code");
+    expect(method.wizard?.methodId).toBe("device-code");
+    expect(method.wizard?.assistantVisibility).toBe("manual-only");
   });
 
   it("validates discovered endpoints before using them", async () => {

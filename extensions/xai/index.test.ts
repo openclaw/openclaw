@@ -92,7 +92,8 @@ describe("xai provider plugin", () => {
     expect(oauth?.wizard?.choiceId).toBe("xai-oauth");
     const deviceCode = provider.auth?.find((method) => method.id === "device-code");
     expect(deviceCode?.kind).toBe("device_code");
-    expect(deviceCode?.wizard).toBeUndefined();
+    expect(deviceCode?.wizard?.choiceId).toBe("xai-device-code");
+    expect(deviceCode?.wizard?.assistantVisibility).toBe("manual-only");
     expect(manifest.providerAuthChoices).toContainEqual(
       expect.objectContaining({
         assistantVisibility: "manual-only",
