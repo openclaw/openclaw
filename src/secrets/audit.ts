@@ -53,6 +53,32 @@ export type SecretsAuditCode =
 /** Audit severity used for CLI output and check-mode exit behavior. */
 export type SecretsAuditSeverity = "info" | "warn" | "error"; // pragma: allowlist secret
 
+const SECRETS_AUDIT_SEVERITY_RANK: Record<SecretsAuditSeverity, number> = {
+  info: 0,
+  warn: 1,
+  error: 2,
+};
+
+export function parseSecretsAuditSeverity(value: string): SecretsAuditSeverity | null {
+  if (value === "info" || value === "warn" || value === "error") {
+    return value;
+  }
+  if (value === "warning") {
+    return "warn";
+  }
+  return null;
+}
+
+function secretsAuditFindingMeetsSeverity(
+  finding: Pick<SecretsAuditFinding, "severity">,
+  severityMin: SecretsAuditSeverity,
+): boolean {
+  return (
+    SECRETS_AUDIT_SEVERITY_RANK[finding.severity] >=
+    SECRETS_AUDIT_SEVERITY_RANK[severityMin]
+  );
+}
+
 /** One secret audit finding with file/path context. */
 export type SecretsAuditFinding = {
   code: SecretsAuditCode;
@@ -709,11 +735,18 @@ export async function runSecretsAudit(
 }
 
 /** Maps audit results to CLI exit codes. */
-export function resolveSecretsAuditExitCode(report: SecretsAuditReport, check: boolean): number {
+export function resolveSecretsAuditExitCode(
+  report: SecretsAuditReport,
+  check: boolean,
+  severityMin: SecretsAuditSeverity = "info",
+): number {
   if (report.summary.unresolvedRefCount > 0) {
     return 2;
   }
-  if (check && report.findings.length > 0) {
+  if (
+    check &&
+    report.findings.some((finding) => secretsAuditFindingMeetsSeverity(finding, severityMin))
+  ) {
     return 1;
   }
   return 0;
