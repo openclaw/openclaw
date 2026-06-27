@@ -1505,6 +1505,17 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
+    // Reject orphaned deleted-agent session keys before any side effect (dedupe
+    // reservation, attachment media offload, reset, dispatch), matching the
+    // chat.send / sessions.send invariant. Voice-wake auto-routing below only
+    // retargets to knownAgents, so a post-routing key is never deleted; guarding
+    // the original requestedSessionKey here covers every dispatch path.
+    if (
+      requestedSessionKey &&
+      respondDeletedAgentSessionForKey({ sessionKey: requestedSessionKey, agentId, respond })
+    ) {
+      return;
+    }
     // Reserve the run before awaited attachment/session/delivery work so duplicate calls dedupe and
     // pre-registration chat.abort can be made durable by idempotency key.
     const preAcceptedReservedSessionKey =
@@ -1690,13 +1701,6 @@ export const agentHandlers: GatewayRequestHandlers = {
       let isNewSession = false;
       let skipAgentInitialSessionTouch = false;
       let pendingChatRun: { sessionKey: string; agentId?: string } | undefined;
-
-      if (
-        requestedSessionKey &&
-        respondDeletedAgentSessionForKey({ sessionKey: requestedSessionKey, agentId, respond })
-      ) {
-        return;
-      }
 
       const resetCommandMatch = message.match(RESET_COMMAND_RE);
       if (resetCommandMatch && requestedSessionKey) {
