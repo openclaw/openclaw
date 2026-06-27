@@ -92,6 +92,7 @@ function createHarness(params?: {
   consumeCompletedRunForPendingSend?: ConsumeCompletedRunMock;
   isRunObserved?: (runId: string) => boolean;
   flushPendingHistoryRefreshIfIdle?: FlushPendingHistoryRefreshMock;
+  sessionInfo?: Record<string, unknown>;
 }) {
   const sendChat =
     params?.sendChat ??
@@ -143,7 +144,7 @@ function createHarness(params?: {
     pendingSubmitDraft: null as { runId: string; text: string } | null,
     activityStatus: params?.activityStatus ?? "idle",
     isConnected: params?.isConnected ?? true,
-    sessionInfo: {},
+    sessionInfo: params?.sessionInfo ?? {},
   };
 
   const { handleCommand, openSessionSelector } = createCommandHandlers({
@@ -346,12 +347,12 @@ describe("tui command handlers", () => {
       currentSessionId: "session-before-relaunch",
     });
 
-    await handleCommand("/status");
+    await handleCommand("/unknown-cmd");
 
     expectSendChatFields(sendChat, {
       sessionKey: "agent:main:main",
       sessionId: "session-before-relaunch",
-      message: "/status",
+      message: "/unknown-cmd",
     });
   });
 
@@ -532,17 +533,57 @@ describe("tui command handlers", () => {
     });
   });
 
-  it("forwards /status to the shared gateway command path", async () => {
+  it("displays session-level status instead of forwarding to model (#71592)", async () => {
     const { handleCommand, sendChat, addPendingUser, addSystem } = createHarness();
 
     await handleCommand("/status");
 
-    expect(addSystem).not.toHaveBeenCalled();
-    expect(addPendingUser).toHaveBeenCalledWith(expect.any(String), "/status");
-    expectSendChatFields(sendChat, {
-      sessionKey: "agent:main:main",
-      message: "/status",
+    expect(addSystem).toHaveBeenCalled();
+    expect(addPendingUser).not.toHaveBeenCalled();
+    expect(sendChat).not.toHaveBeenCalled();
+  });
+
+  it("shows status with model and token info when available", async () => {
+    const { handleCommand, addSystem, sendChat } = createHarness({
+      sessionInfo: {
+        modelProvider: "openai-codex",
+        model: "gpt-5.4",
+        thinkingLevel: "high",
+        fastMode: "auto",
+        inputTokens: 500,
+        outputTokens: 200,
+      },
     });
+
+    await handleCommand("/status");
+
+    const systemText = addSystem.mock.calls.map((c: string[]) => c[0]).join("\n");
+    expect(systemText).toContain("openai-codex/gpt-5.4");
+    expect(systemText).toContain("Thinking: high");
+    expect(systemText).toContain("Fast: auto");
+    expect(systemText).toContain("Tokens: 500 in / 200 out");
+    expect(sendChat).not.toHaveBeenCalled();
+  });
+
+  it("reports no session info when none is available", async () => {
+    const { handleCommand, addSystem, sendChat } = createHarness({
+      sessionInfo: {},
+    });
+
+    await handleCommand("/status");
+
+    expect(addSystem).toHaveBeenCalledWith("no session info available");
+    expect(sendChat).not.toHaveBeenCalled();
+  });
+
+  it("displays compaction note instead of forwarding /compact to model (#71592)", async () => {
+    const { handleCommand, addSystem, sendChat, addPendingUser } = createHarness();
+
+    await handleCommand("/compact");
+
+    expect(addSystem).toHaveBeenCalled();
+    expect(addPendingUser).not.toHaveBeenCalled();
+    expect(sendChat).not.toHaveBeenCalled();
   });
 
   it("keeps gateway diagnostics on /gateway-status", async () => {
@@ -1465,9 +1506,7 @@ describe("tui command handlers", () => {
 
     await handleCommand("/usage reset");
 
-    expect(patchSession).toHaveBeenCalledWith(
-      expect.objectContaining({ responseUsage: null }),
-    );
+    expect(patchSession).toHaveBeenCalledWith(expect.objectContaining({ responseUsage: null }));
     expect(addSystem).toHaveBeenCalledWith("usage footer: reset to default");
     // Both stale local values must be cleared so the toggle/display is not stale
     // until refreshSessionInfo() repopulates the inherited default.
@@ -1492,9 +1531,7 @@ describe("tui command handlers", () => {
 
     await handleCommand("/usage");
 
-    expect(patchSession).toHaveBeenCalledWith(
-      expect.objectContaining({ responseUsage: "full" }),
-    );
+    expect(patchSession).toHaveBeenCalledWith(expect.objectContaining({ responseUsage: "full" }));
     expect(addSystem).toHaveBeenCalledWith("usage footer: full");
   });
 });

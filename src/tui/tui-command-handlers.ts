@@ -743,6 +743,33 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       case "settings":
         openSettings();
         break;
+      case "status": {
+        const info = state.sessionInfo;
+        const lines: string[] = [];
+        if (info.modelProvider && info.model) {
+          lines.push(`Model: ${modelKey(info.modelProvider, info.model)}`);
+        }
+        if (info.thinkingLevel) {
+          lines.push(`Thinking: ${info.thinkingLevel}`);
+        }
+        if (info.fastMode !== undefined) {
+          lines.push(`Fast: ${formatTuiFastMode(info.fastMode)}`);
+        }
+        if (typeof info.inputTokens === "number" || typeof info.outputTokens === "number") {
+          lines.push(`Tokens: ${info.inputTokens ?? "?"} in / ${info.outputTokens ?? "?"} out`);
+        }
+        if (lines.length > 0) {
+          chatLog.addSystem(lines.join("\n"));
+        } else {
+          chatLog.addSystem("no session info available");
+        }
+        break;
+      }
+      case "compact":
+        chatLog.addSystem(
+          "compaction runs automatically in this mode; use /reset to start a fresh session",
+        );
+        break;
       case "exit":
       case "quit":
         requestExit();
