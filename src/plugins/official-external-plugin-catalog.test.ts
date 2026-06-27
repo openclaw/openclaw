@@ -14,7 +14,6 @@ import {
   resolveOfficialExternalWebProviderContractPluginIdsForEnv,
   resolveOfficialExternalPluginId,
   resolveOfficialExternalPluginInstall,
-  resolveOfficialExternalPluginLabel,
 } from "./official-external-plugin-catalog.js";
 
 function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
@@ -111,13 +110,17 @@ describe("official external plugin catalog", () => {
       ],
     });
 
+    if (entry === undefined) {
+      throw new Error("Expected hosted ClawHub feed entry to parse");
+    }
+
     expect(entry).toMatchObject({
       id: "@expediagroup/expedia-openclaw",
       title: "Expedia Travel",
       version: "1.0.4",
     });
-    expect(resolveOfficialExternalPluginId(entry!)).toBeUndefined();
-    expect(resolveOfficialExternalPluginInstall(entry!)).toBeNull();
+    expect(resolveOfficialExternalPluginId(entry)).toBeUndefined();
+    expect(resolveOfficialExternalPluginInstall(entry)).toBeNull();
   });
 
   it("does not synthesize trusted installs for unavailable or untrusted hosted entries", () => {
