@@ -49,6 +49,27 @@ function makeAnthropicModel(overrides: Partial<Model<"anthropic-messages">> = {}
   } satisfies Model<"anthropic-messages">;
 }
 
+function emptyUsage() {
+  return {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 0,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+}
+
+function firstToolResultFromPayload(payload: unknown): Record<string, unknown> {
+  const messages = (payload as { messages?: Array<{ role: string; content: unknown }> }).messages;
+  const userMessage = messages?.find((message) => message.role === "user");
+  const [toolResult] = userMessage?.content as Array<Record<string, unknown>>;
+  if (!toolResult) {
+    throw new Error("expected Anthropic tool_result payload");
+  }
+  return toolResult;
+}
+
 describe("Anthropic provider", () => {
   beforeEach(() => {
     anthropicMockState.configs = [];
@@ -602,6 +623,118 @@ describe("Anthropic provider", () => {
     const assistantMessage = payload.messages.find((message) => message.role === "assistant");
     expect(assistantMessage?.content).toEqual([{ type: "text", text: "visible answer" }]);
     expect(JSON.stringify(assistantMessage)).not.toContain("sig_model_bound");
+  });
+
+  it.each([
+    ["empty string", ""],
+    ["whitespace-only", " \n\t "],
+    ["invalid-surrogate-only", String.fromCharCode(0xd83d)],
+  ])("replaces %s error tool results with a non-empty payload", async (_label, text) => {
+    let capturedPayload: unknown;
+    const stream = streamAnthropic(
+      makeAnthropicModel({ provider: "github-copilot", id: "claude-opus-4.7" }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "github-copilot",
+            api: "anthropic-messages",
+            model: "claude-opus-4.7",
+            stopReason: "toolUse",
+            timestamp: 0,
+            usage: emptyUsage(),
+            content: [{ type: "toolCall", id: "tool_1", name: "quiet", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            toolName: "quiet",
+            content: [{ type: "text", text }],
+            isError: true,
+            timestamp: 0,
+          },
+        ],
+      },
+      {
+        apiKey: "copilot-token",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+    const toolResult = firstToolResultFromPayload(capturedPayload);
+
+    expect(result.stopReason).toBe("error");
+    expect(toolResult).toMatchObject({
+      type: "tool_result",
+      tool_use_id: "tool_1",
+      content: "[tool error with no output]",
+      is_error: true,
+    });
+  });
+
+  it("drops empty text blocks from image tool results before Anthropic payloads", async () => {
+    let capturedPayload: unknown;
+    const imageData = Buffer.from("image").toString("base64");
+    const stream = streamAnthropic(
+      makeAnthropicModel({ input: ["text", "image"] }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            usage: emptyUsage(),
+            content: [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            toolName: "screenshot",
+            content: [
+              { type: "text", text: "" },
+              { type: "image", data: imageData, mimeType: "image/png" },
+            ],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      },
+      {
+        apiKey: "sk-ant-provider",
+        onPayload: (payload) => {
+          capturedPayload = payload;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+    const toolResult = firstToolResultFromPayload(capturedPayload);
+
+    expect(result.stopReason).toBe("error");
+    expect(toolResult).toMatchObject({
+      type: "tool_result",
+      tool_use_id: "tool_1",
+      is_error: false,
+    });
+    expect(toolResult.content).toEqual([
+      { type: "text", text: "(see attached image)" },
+      {
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: imageData,
+        },
+      },
+    ]);
   });
 
   it.each([
