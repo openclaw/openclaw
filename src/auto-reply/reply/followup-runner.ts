@@ -660,6 +660,7 @@ export function createFollowupRunner(params: {
         shouldEmitVerboseProgress() && !shouldSuppressDefaultToolProgressMessages();
       const shouldEmitToolOutputProgress = () =>
         resolveCurrentVerboseLevel() === "full" && !shouldSuppressDefaultToolProgressMessages();
+      const shouldEmitFailedToolProgress = () => resolveCurrentVerboseLevel() === "full";
       const isRoomEventFollowup = () => queued.currentInboundEventKind === "room_event";
       let observedVisibleToolErrorProgress = false;
       const markVisibleToolErrorProgress = () => {
@@ -1104,6 +1105,9 @@ export function createFollowupRunner(params: {
                 if (isRoomEventFollowup()) {
                   return;
                 }
+                if (payload.isError === true && !shouldEmitFailedToolProgress()) {
+                  return;
+                }
                 if (
                   run.sourceReplyDeliveryMode === "message_tool_only" &&
                   !shouldEmitToolResultProgress()
@@ -1455,7 +1459,9 @@ export function createFollowupRunner(params: {
                       evt,
                       opts: progressOpts,
                       detailMode: toolProgressDetail,
-                      emitChannelProgress: shouldEmitToolResultProgress(),
+                      emitChannelProgress:
+                        shouldEmitToolResultProgress() &&
+                        (!hasFailedFollowupProgressEvent(evt) || shouldEmitFailedToolProgress()),
                       onCompactionComplete: () => {
                         attemptCompactionCount += 1;
                       },

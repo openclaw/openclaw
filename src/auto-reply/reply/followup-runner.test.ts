@@ -3163,6 +3163,42 @@ describe("createFollowupRunner progress forwarding", () => {
     expect(routeReplyMock).not.toHaveBeenCalled();
   });
 
+  it("keeps queued regular-verbose failed tool result payloads hidden", async () => {
+    const queued = createQueuedRun({
+      originatingChannel: "discord",
+      originatingTo: "channel:C1",
+      originatingAccountId: "acct-1",
+      originatingThreadId: "thread-1",
+      run: {
+        messageProvider: "discord",
+        sourceReplyDeliveryMode: "message_tool_only",
+        verboseLevel: "on",
+      },
+    });
+
+    runEmbeddedAgentMock.mockImplementationOnce(
+      async (args: {
+        onToolResult?: (payload: { text: string; isError?: boolean }) => Promise<void>;
+      }) => {
+        await args.onToolResult?.({
+          text: "🛠️ Exec: failing queued helper",
+          isError: true,
+        });
+        return { payloads: [], meta: { agentMeta: {} } };
+      },
+    );
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "claude",
+    });
+
+    await runner(queued);
+
+    expect(routeReplyMock).not.toHaveBeenCalled();
+  });
+
   it("delivers queued fast auto progress for non-room-event message-tool-only turns", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(1_000);
@@ -3308,7 +3344,7 @@ describe("createFollowupRunner progress forwarding", () => {
       originatingThreadId: "thread-1",
       run: {
         messageProvider: "discord",
-        verboseLevel: "on",
+        verboseLevel: "full",
       },
     });
     let releaseProgressRoute: (() => void) | undefined;
@@ -3524,7 +3560,7 @@ describe("createFollowupRunner progress forwarding", () => {
       originatingThreadId: "thread-1",
       run: {
         messageProvider: "discord",
-        verboseLevel: "on",
+        verboseLevel: "full",
       },
     });
 
@@ -3883,7 +3919,7 @@ describe("createFollowupRunner progress forwarding", () => {
               exitCode: 1,
             },
           });
-          expect(shouldSuppress()).toBe(true);
+          expect(shouldSuppress()).toBeUndefined();
           return { payloads: [], meta: { agentMeta: {} } };
         },
       )
@@ -3921,7 +3957,7 @@ describe("createFollowupRunner progress forwarding", () => {
       }),
     );
 
-    expect(onCommandOutput).toHaveBeenCalledTimes(1);
+    expect(onCommandOutput).not.toHaveBeenCalled();
   });
 
   it("keeps queued tool-error fallbacks when the channel declines failed progress", async () => {
