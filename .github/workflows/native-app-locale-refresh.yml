@@ -25,7 +25,7 @@ concurrency:
 
 jobs:
   refresh:
-    if: github.repository == 'openclaw/openclaw' && (github.event_name != 'push' || github.actor != 'github-actions[bot]')
+    if: github.repository == 'openclaw/openclaw' && (github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/main') && (github.event_name != 'push' || github.actor != 'github-actions[bot]')
     strategy:
       fail-fast: false
       max-parallel: 2
