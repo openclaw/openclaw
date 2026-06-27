@@ -6,7 +6,7 @@ import type { GraphThreadMessage } from "../graph-thread.js";
 import { resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
 import "./message-handler-mock-support.test-support.js";
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
-import { createMSTeamsMessageHandler } from "./message-handler.js";
+import { createMSTeamsMessageHandler, resolveMSTeamsTurnChainKey } from "./message-handler.js";
 import { createMessageHandlerDeps } from "./message-handler.test-support.js";
 
 type HandlerInput = Parameters<ReturnType<typeof createMSTeamsMessageHandler>>[0];
@@ -732,6 +732,98 @@ describe("msteams monitor handler authz", () => {
     const ctxPayload = recordFromMockCall(dispatched.ctxPayload);
     expect(ctxPayload.BodyForAgent).toBe("abort");
     expect(ctxPayload.CommandAuthorized).toBe(true);
+  });
+
+  it("serializes immediate same-conversation turns through the inbound debouncer", () => {
+    const createInboundDebouncerSpy = vi.fn(createInboundDebouncer);
+    const { deps } = createDeps(
+      {
+        channels: {
+          msteams: {
+            groupPolicy: "open",
+          },
+        },
+      } as OpenClawConfig,
+      {
+        createInboundDebouncer: createInboundDebouncerSpy,
+      },
+    );
+
+    createMSTeamsMessageHandler(deps);
+
+    expect(createInboundDebouncerSpy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        serializeImmediate: true,
+      }),
+    );
+  });
+
+  it("serializes dispatch for concurrent turns that resolve to the same Teams session", async () => {
+    resetThreadMocks();
+    let releaseFirstDispatch!: () => void;
+    const firstDispatchStarted = new Promise<void>((resolve) => {
+      runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockImplementationOnce(
+        async (params: { ctxPayload: unknown }) => {
+          resolve();
+          await new Promise<void>((release) => {
+            releaseFirstDispatch = release;
+          });
+          return {
+            queuedFinal: false,
+            counts: {},
+            capturedCtxPayload: params.ctxPayload,
+          };
+        },
+      );
+    });
+    runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher.mockImplementation(
+      async (params: { ctxPayload: unknown }) => ({
+        queuedFinal: false,
+        counts: {},
+        capturedCtxPayload: params.ctxPayload,
+      }),
+    );
+    const { deps } = createDeps({
+      channels: {
+        msteams: {
+          groupPolicy: "open",
+          requireMention: false,
+        },
+      },
+    } as OpenClawConfig);
+
+    const handler = createMSTeamsMessageHandler(deps);
+    const first = handler(createAttackerGroupActivity({ text: "first" }));
+    await firstDispatchStarted;
+
+    const second = handler(createAttackerGroupActivity({ text: "second" }));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      1,
+    );
+
+    releaseFirstDispatch();
+    await Promise.all([first, second]);
+
+    expect(runtimeApiMockState.dispatchReplyFromConfigWithSettledDispatcher).toHaveBeenCalledTimes(
+      2,
+    );
+  });
+
+  it("uses the shared session store as the Teams turn chain key when available", () => {
+    expect(
+      resolveMSTeamsTurnChainKey({
+        storePath: "/tmp/openclaw-test-session-store.json",
+        sessionKey: "msteams:group:shared:legal",
+      }),
+    ).toBe("store:/tmp/openclaw-test-session-store.json");
+    expect(
+      resolveMSTeamsTurnChainKey({
+        sessionKey: "msteams:group:shared:legal",
+      }),
+    ).toBe("global");
   });
 
   it("marks skipped channel message system events as non-owner without duplicating body text", async () => {
