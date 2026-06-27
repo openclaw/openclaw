@@ -810,7 +810,7 @@ jobs:
     permissions:
       contents: read
     needs: [preflight]
-    if: ${{ !cancelled() && always() && (needs.preflight.outputs.run_macos == 'true' || needs.preflight.outputs.run_android == 'true') }}
+    if: ${{ !cancelled() && always() && (needs.preflight.outputs.run_macos == 'true' || needs.preflight.outputs.run_android == 'true' || needs.preflight.outputs.run_node == 'true') }}
     runs-on: ${{ github.repository == 'openclaw/openclaw' && 'blacksmith-4vcpu-ubuntu-2404' || 'ubuntu-24.04' }}
     timeout-minutes: 10
     steps:
