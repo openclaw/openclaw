@@ -158,6 +158,7 @@ const HOST_READ_ALLOWED_DOCUMENT_MIMES = new Set([
   "text/csv",
   "text/markdown",
   "text/plain",
+  "text/vcard",
   "application/json",
   "application/yaml",
 ]);
@@ -168,6 +169,7 @@ const HOST_READ_TEXT_PLAIN_ALIASES = new Set([
   "text/csv",
   "text/markdown",
   "text/plain",
+  "text/vcard",
   "application/json",
   "application/yaml",
 ]);
@@ -411,6 +413,16 @@ function assertHostReadMediaAllowed(params: {
     sniffedMime &&
     HOST_READ_ALLOWED_DOCUMENT_MIMES.has(sniffedMime)
   ) {
+    // For text-typed document MIMEs (e.g. text/vcard from file-type's BEGIN:VCARD
+    // prefix detection), run full-buffer text validation to reject binary content
+    // hiding behind a text header.
+    if (
+      sniffedMime.startsWith("text/") &&
+      params.buffer &&
+      !isValidatedHostReadText(params.buffer)
+    ) {
+      throw new LocalMediaAccessError("path-not-allowed", HOST_READ_DECLARED_TEXT_ERROR);
+    }
     return;
   }
   if (

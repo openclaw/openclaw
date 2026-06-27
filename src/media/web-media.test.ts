@@ -1182,4 +1182,34 @@ describe("loadWebMedia", () => {
   it("rejects media store URIs without an id", async () => {
     await expectLoadWebMediaErrorCode(loadWebMedia("media://inbound/"), "invalid-path");
   });
+
+  it("accepts host-read .vcf vCard files", async () => {
+    const vcfFile = path.join(fixtureRoot, "contact.vcf");
+    await fs.writeFile(vcfFile, "BEGIN:VCARD\nVERSION:3.0\nFN:Test Contact\nEND:VCARD\n", "utf8");
+    const result = await loadWebMedia(vcfFile, {
+      maxBytes: 1024 * 1024,
+      localRoots: "any",
+      readFile: async (filePath) => await fs.readFile(filePath),
+      hostReadCapability: true,
+    });
+    expect(result.kind).toBe("document");
+    expect(result.contentType).toBe("text/vcard");
+  });
+
+  it("rejects host-read .vcf files with binary content tail", async () => {
+    const vcfFile = path.join(fixtureRoot, "evil.vcf");
+    // Valid vCard header + binary tail (printableRatio < 0.95 → reject)
+    const header = "BEGIN:VCARD\nVERSION:3.0\nFN:Test\nEND:VCARD\n";
+    const binaryTail = Buffer.alloc(header.length * 2, 0x01);
+    await fs.writeFile(vcfFile, Buffer.concat([Buffer.from(header, "utf8"), binaryTail]));
+    await expectLoadWebMediaErrorCode(
+      loadWebMedia(vcfFile, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+      "path-not-allowed",
+    );
+  });
 });
