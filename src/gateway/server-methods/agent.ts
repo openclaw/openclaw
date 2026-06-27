@@ -152,6 +152,7 @@ import {
   canonicalizeSpawnedByForAgent,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
+  resolveDeletedAgentIdFromSessionKey,
   resolveGatewaySessionStoreTarget,
   resolveGatewayModelSupportsImages,
   resolveSessionStoreKey,
@@ -1789,8 +1790,23 @@ export const agentHandlers: GatewayRequestHandlers = {
           storePath,
           entry,
           canonicalKey,
+          legacyKey,
         } = loadSessionEntry(requestedSessionKey, sessionLoadOptions);
         cfgForAgent = cfgLocal;
+        const deletedAgentId = resolveDeletedAgentIdFromSessionKey(cfgLocal, canonicalKey, entry, {
+          acpMetadataSessionKey: legacyKey ?? canonicalKey,
+        });
+        if (deletedAgentId !== null) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              `Agent "${deletedAgentId}" no longer exists in configuration`,
+            ),
+          );
+          return;
+        }
         const sessionMaintenanceConfig = resolveMaintenanceConfigFromInput(
           cfgLocal.session?.maintenance,
         );
