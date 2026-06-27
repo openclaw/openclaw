@@ -582,6 +582,34 @@ function mapStopReason(reason: string | undefined): string {
   }
 }
 
+/**
+ * Tag a tool-using turn's leading visible text as commentary so it routes to the
+ * narration lane and stays out of the final reply. Anthropic has no native
+ * commentary channel — the only signal is that the text precedes a tool_use
+ * block — so we infer it. Idempotent: only untagged non-empty text blocks are
+ * touched and the index continues past already-tagged blocks, so the
+ * tool-boundary caller (tags as soon as the first tool_use opens, exposing the
+ * phase on that partial) and the finalize backstop can both run safely.
+ */
+function tagPendingCommentaryText(content: TransportContentBlock[]): void {
+  let commentaryTextIndex = content.filter(
+    (block) => block.type === "text" && block.textSignature !== undefined,
+  ).length;
+  for (const block of content) {
+    if (
+      block.type === "text" &&
+      block.text.trim().length > 0 &&
+      block.textSignature === undefined
+    ) {
+      block.textSignature = encodeAssistantTextSignatureV1(
+        `commentary-${commentaryTextIndex}`,
+        "commentary",
+      );
+      commentaryTextIndex += 1;
+    }
+  }
+}
+
 const DEFAULT_ANTHROPIC_BASE_URL = "https://api.anthropic.com";
 
 /** Resolve the effective Anthropic API base URL from model or environment. */
@@ -1340,6 +1368,12 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               continue;
             }
             if (contentBlock?.type === "tool_use") {
+              // The turn is now known to be a tool turn: any preceding visible
+              // text is pre-tool narration. Tag it commentary BEFORE the
+              // toolcall_start push so its `partial` snapshot already carries the
+              // phase — lets the subscriber release withheld text to the 💬 lane
+              // at this boundary instead of guessing during the unphased deltas.
+              tagPendingCommentaryText(output.content);
               const block: TransportContentBlock = {
                 type: "toolCall",
                 id: typeof contentBlock.id === "string" ? contentBlock.id : "",
@@ -1566,25 +1600,11 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
           throw new Error(output.errorMessage ?? "An unknown error occurred");
         }
         refusalBuffer?.flush();
-        // A tool-using turn's visible text is narration/preamble, not the final
-        // answer. Tag it commentary so it routes to the narration lane (💬 with
-        // /verbose) and stays out of the final reply — same contract as the
-        // openai transport.
+        // Backstop: streaming tags commentary at the tool-boundary above, but
+        // replay/non-streaming assembly may reach here with tool calls untagged.
+        // Idempotent, so it never double-tags the streaming path.
         if (output.stopReason === "toolUse") {
-          let commentaryTextIndex = 0;
-          for (const block of output.content) {
-            if (
-              block.type === "text" &&
-              block.text.trim().length > 0 &&
-              block.textSignature === undefined
-            ) {
-              block.textSignature = encodeAssistantTextSignatureV1(
-                `commentary-${commentaryTextIndex}`,
-                "commentary",
-              );
-              commentaryTextIndex += 1;
-            }
-          }
+          tagPendingCommentaryText(output.content);
         }
         finalizeTransportStream({ stream, output });
       } catch (error) {
