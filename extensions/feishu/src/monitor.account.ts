@@ -459,8 +459,16 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   const botOpenIdSource = params.botOpenIdSource ?? { kind: "fetch" };
   const botIdentity =
     botOpenIdSource.kind === "prefetched"
-      ? { botOpenId: botOpenIdSource.botOpenId, botName: botOpenIdSource.botName }
+      ? {
+          kind: "resolved" as const,
+          botOpenId: botOpenIdSource.botOpenId,
+          botName: botOpenIdSource.botName,
+        }
       : await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
+  if (botIdentity.kind === "aborted") {
+    log(`feishu[${accountId}]: bot identity probe aborted; stopping monitor startup`);
+    return;
+  }
   const { botOpenId } = applyBotIdentityState(accountId, botIdentity);
   log(`feishu[${accountId}]: bot open_id resolved: ${botOpenId ?? "unknown"}`);
 

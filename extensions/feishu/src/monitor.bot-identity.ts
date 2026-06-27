@@ -2,7 +2,10 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { RuntimeEnv } from "../runtime-api.js";
 import { waitForAbortableDelay } from "./async.js";
-import { fetchBotIdentityForMonitor, type FeishuMonitorBotIdentity } from "./monitor.startup.js";
+import {
+  fetchBotIdentityForMonitor,
+  type FeishuResolvedMonitorBotIdentity,
+} from "./monitor.startup.js";
 import { setFeishuBotIdentityState } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -12,7 +15,7 @@ const BOT_IDENTITY_RETRY_DELAYS_MS = [60_000, 120_000, 300_000, 600_000, 900_000
 
 export function applyBotIdentityState(
   accountId: string,
-  identity: FeishuMonitorBotIdentity,
+  identity: FeishuResolvedMonitorBotIdentity,
 ): { botOpenId?: string; botName?: string } {
   const botOpenId = normalizeOptionalString(identity.botOpenId);
   const botName = normalizeOptionalString(identity.botName);
@@ -42,6 +45,9 @@ async function retryBotIdentityProbe(
     }
 
     const identity = await fetchBotIdentityForMonitor(account, { runtime, abortSignal });
+    if (identity.kind === "aborted") {
+      return;
+    }
     const resolved = applyBotIdentityState(accountId, identity);
     if (resolved.botOpenId) {
       log(

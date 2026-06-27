@@ -4,6 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { monitorFeishuProvider, stopFeishuMonitor } from "./monitor.js";
 import { resolveStartupProbeTimeoutMs } from "./monitor.startup.js";
+import { botNames, botOpenIds, setFeishuBotIdentityState } from "./monitor.state.js";
 
 const probeFeishuMock = vi.hoisted(() => vi.fn());
 
@@ -227,6 +228,46 @@ describe("Feishu monitor startup preflight", () => {
       expect(started).toEqual(["alpha"]);
     } finally {
       abortController.abort();
+    }
+  });
+
+  it("does not let an aborted single-account identity probe clear replacement identity", async () => {
+    const started: string[] = [];
+    probeFeishuMock.mockImplementation(
+      (account: { accountId: string }, options: { abortSignal?: AbortSignal }) => {
+        started.push(account.accountId);
+        return new Promise((resolve) => {
+          options.abortSignal?.addEventListener(
+            "abort",
+            () => resolve({ ok: false, error: "probe aborted" }),
+            { once: true },
+          );
+        });
+      },
+    );
+
+    const abortController = new AbortController();
+    const monitorPromise = monitorFeishuProvider({
+      config: buildMultiAccountWebsocketConfig(["alpha"]),
+      accountId: "alpha",
+      abortSignal: abortController.signal,
+    });
+
+    try {
+      await waitForStartedAccount(started, "alpha");
+
+      abortController.abort();
+      setFeishuBotIdentityState("alpha", {
+        botOpenId: "ou_replacement",
+        botName: "Replacement",
+      });
+      await monitorPromise;
+
+      expect(botOpenIds.get("alpha")).toBe("ou_replacement");
+      expect(botNames.get("alpha")).toBe("Replacement");
+    } finally {
+      abortController.abort();
+      await monitorPromise;
     }
   });
 });

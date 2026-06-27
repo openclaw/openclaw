@@ -74,12 +74,12 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
     }
 
     // Probe sequentially so large multi-account startups do not burst Feishu's bot-info endpoint.
-    const { botOpenId, botName } = await fetchBotIdentityForMonitor(account, {
+    const botIdentity = await fetchBotIdentityForMonitor(account, {
       runtime: opts.runtime,
       abortSignal: opts.abortSignal,
     });
 
-    if (opts.abortSignal?.aborted) {
+    if (botIdentity.kind === "aborted" || opts.abortSignal?.aborted) {
       log("feishu: abort signal received during startup preflight; stopping startup");
       break;
     }
@@ -91,7 +91,11 @@ export async function monitorFeishuProvider(opts: MonitorFeishuOpts = {}): Promi
         channelRuntime: opts.channelRuntime,
         runtime: opts.runtime,
         abortSignal: opts.abortSignal,
-        botOpenIdSource: { kind: "prefetched", botOpenId, botName },
+        botOpenIdSource: {
+          kind: "prefetched",
+          botOpenId: botIdentity.botOpenId,
+          botName: botIdentity.botName,
+        },
       }),
     );
   }

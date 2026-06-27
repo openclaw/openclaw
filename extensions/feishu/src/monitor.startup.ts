@@ -30,10 +30,13 @@ type FetchBotOpenIdOptions = {
   timeoutMs?: number;
 };
 
-export type FeishuMonitorBotIdentity = {
+export type FeishuResolvedMonitorBotIdentity = {
+  kind: "resolved";
   botOpenId?: string;
   botName?: string;
 };
+
+export type FeishuMonitorBotIdentity = FeishuResolvedMonitorBotIdentity | { kind: "aborted" };
 
 function isTimeoutErrorMessage(message: string | undefined): boolean {
   const lower = normalizeLowercaseStringOrEmpty(message);
@@ -49,7 +52,7 @@ export async function fetchBotIdentityForMonitor(
   options: FetchBotOpenIdOptions = {},
 ): Promise<FeishuMonitorBotIdentity> {
   if (options.abortSignal?.aborted) {
-    return {};
+    return { kind: "aborted" };
   }
 
   const timeoutMs = options.timeoutMs ?? FEISHU_STARTUP_BOT_INFO_TIMEOUT_MS;
@@ -58,12 +61,15 @@ export async function fetchBotIdentityForMonitor(
     abortSignal: options.abortSignal,
   });
   if (result.ok) {
-    return { botOpenId: result.botOpenId, botName: result.botName };
+    return { kind: "resolved", botOpenId: result.botOpenId, botName: result.botName };
   }
 
   const probeError = result.error ?? undefined;
-  if (options.abortSignal?.aborted || isAbortErrorMessage(probeError)) {
-    return {};
+  if (options.abortSignal?.aborted) {
+    return { kind: "aborted" };
+  }
+  if (isAbortErrorMessage(probeError)) {
+    return { kind: "resolved" };
   }
 
   if (isTimeoutErrorMessage(probeError)) {
@@ -72,5 +78,5 @@ export async function fetchBotIdentityForMonitor(
       `feishu[${account.accountId}]: bot info probe timed out after ${timeoutMs}ms; continuing startup`,
     );
   }
-  return {};
+  return { kind: "resolved" };
 }
