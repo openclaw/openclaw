@@ -138,7 +138,6 @@ export async function loadSubagentSpawnModuleForTest(params: {
   forkSessionFromParentMock?: MockFn;
   resolveContextEngineMock?: MockFn;
   resolveParentForkDecisionMock?: MockFn;
-  pruneLegacyStoreKeysMock?: MockFn;
   registerSubagentRunMock?: MockFn;
   emitSessionLifecycleEventMock?: MockFn;
   hookRunner?: HookRunner;
@@ -261,6 +260,8 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getRuntimeConfig: () =>
       params.getRuntimeConfig?.() ??
       createSubagentSpawnTestConfig(params.workspaceDir ?? os.tmpdir()),
+    loadSessionEntry: (scope: { storePath?: string; sessionKey: string }) =>
+      ((params.loadSessionStoreMock?.(scope.storePath) ?? {}) as SessionStore)[scope.sessionKey],
     loadSessionStore: params.loadSessionStoreMock ?? (() => ({})),
     ensureContextEnginesInitialized:
       params.ensureContextEnginesInitializedMock ?? (() => undefined),
@@ -303,9 +304,29 @@ export async function loadSubagentSpawnModuleForTest(params: {
         await mutator(store);
         return store;
       }),
+    upsertSessionEntry: async (
+      scope: { storePath?: string; sessionKey: string },
+      patch: Record<string, unknown>,
+    ) => {
+      const updateSessionStore =
+        params.updateSessionStoreMock ??
+        (async (_storePath: string, mutator: SessionStoreMutator) => {
+          const store: SessionStore = {};
+          await mutator(store);
+          return store;
+        });
+      let updated: Record<string, unknown> | undefined;
+      await updateSessionStore(scope.storePath, (store: SessionStore) => {
+        updated = {
+          ...(store[scope.sessionKey] ?? {}),
+          ...patch,
+        };
+        store[scope.sessionKey] = updated;
+      });
+      return updated ?? null;
+    },
     isAdminOnlyMethod: (method: string) =>
       method === "sessions.patch" || method === "sessions.delete",
-    pruneLegacyStoreKeys: (...args: unknown[]) => params.pruneLegacyStoreKeysMock?.(...args),
     getSessionBindingService:
       params.getSessionBindingService ??
       (() => ({
