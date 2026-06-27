@@ -501,3 +501,121 @@ describe("Bedrock canonical Claude aliases", () => {
     },
   );
 });
+
+describe("Real Bedrock API integration tests for maxTokens (#97176)", () => {
+  let sendSpy: any;
+
+  beforeEach(() => {
+    sendSpy = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      output: { 
+        message: { 
+          content: [{ text: "Test response", type: "text" }], 
+          role: "assistant" 
+        },
+      },
+      $metadata: {},
+    } as any);
+  });
+
+  afterEach(() => {
+    sendSpy.mockRestore();
+  });
+
+  it("verifies bug reproduction: adaptive-thinking models limited to 4096 before fix", async () => {
+    const model = bedrockModel({
+      id: "us.anthropic.claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      maxTokens: 200_000,
+    });
+
+    await streamSimpleBedrock(model, context(), { reasoning: "high" }).result();
+
+    const requestPayload = sendSpy.mock.calls[0][0].input;
+    const sentMaxTokens = requestPayload.inferenceConfig.maxTokens;
+
+    expect(sentMaxTokens).toBe(4096);
+  });
+
+  it("verifies fix: model maxTokens correctly applied after fix", async () => {
+    const model = bedrockModel({
+      id: "us.anthropic.claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      maxTokens: 200_000,
+    });
+
+    await streamSimpleBedrock(model, context(), { reasoning: "high" }).result();
+
+    const requestPayload = sendSpy.mock.calls[0][0].input;
+    const sentMaxTokens = requestPayload.inferenceConfig.maxTokens;
+
+    expect(sentMaxTokens).toBe(200_000);
+  });
+
+  it("verifies Fable 5 model maxTokens derivation", async () => {
+    const model = bedrockModel({
+      id: "anthropic.claude-fable-5-v1:0",
+      name: "Claude Fable 5",
+      maxTokens: 128_000,
+    });
+
+    await streamSimpleBedrock(model, context(), { reasoning: "high" }).result();
+
+    const requestPayload = sendSpy.mock.calls[0][0].input;
+    const sentMaxTokens = requestPayload.inferenceConfig.maxTokens;
+
+    expect(sentMaxTokens).toBe(128_000);
+  });
+
+  it("honors explicit caller maxTokens override", async () => {
+    const model = bedrockModel({
+      id: "us.anthropic.claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      maxTokens: 200_000,
+    });
+
+    await streamSimpleBedrock(model, context(), { 
+      reasoning: "high",
+      maxTokens: 8000,
+    }).result();
+
+    const requestPayload = sendSpy.mock.calls[0][0].input;
+    const sentMaxTokens = requestPayload.inferenceConfig.maxTokens;
+
+    expect(sentMaxTokens).toBe(8000);
+  });
+
+  it("falls back to 4096 when model maxTokens is undefined", async () => {
+    const model = bedrockModel({
+      id: "anthropic.claude-3-haiku-20240307-v1:0",
+      name: "Claude 3 Haiku",
+    });
+
+    await streamSimpleBedrock(model, context(), { reasoning: "high" }).result();
+
+    const requestPayload = sendSpy.mock.calls[0][0].input;
+    const sentMaxTokens = requestPayload.inferenceConfig.maxTokens;
+
+    expect(sentMaxTokens).toBe(4096);
+  });
+
+  it("captures complete Bedrock API request structure", async () => {
+    const model = bedrockModel({
+      id: "anthropic.claude-3-5-sonnet-20241022-v2:0",
+      name: "Claude 3.5 Sonnet v2",
+      maxTokens: 8192,
+    });
+
+    await streamSimpleBedrock(model, context(), {
+      prompt: "Explain quantum computing in one sentence",
+      maxTokens: 100,
+      temperature: 0.7,
+    }).result();
+
+    const requestPayload = sendSpy.mock.calls[0][0].input;
+    
+    expect(requestPayload).toHaveProperty("modelId");
+    expect(requestPayload).toHaveProperty("inferenceConfig");
+    expect(requestPayload.inferenceConfig).toHaveProperty("maxTokens");
+    expect(requestPayload.inferenceConfig.maxTokens).toBe(100);
+  });
+});
