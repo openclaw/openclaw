@@ -1863,6 +1863,7 @@
     "glm52:runtime": "node scripts/glm52-local-runtime.mjs",
     "stanski:produce": "node scripts/stanski-production-loop.mjs",
     "snes:toolchain": "node scripts/snes-toolchain.mjs",
+    "snes:team": "node scripts/snes-team-orchestrator.mjs",
     "snes:mastery": "node .artifacts/snes-game-builder-reference/scripts/snes-mastery-harness.mjs",
     "snes:mastery:receipts": "node .artifacts/snes-game-builder-reference/scripts/validate-generic-receipts.mjs",
     "ui:smoke:snes-studio:dom": "node --import tsx scripts/dev/control-ui-snes-studio-dom-smoke.ts",

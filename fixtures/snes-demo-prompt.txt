@@ -1,0 +1,1 @@
+Create a legal clean-room SNES side-scrolling platformer about a brave kid exploring a bright clockwork forest, with readable sprites, fair first-screen teaching, one enemy, one reward, one checkpoint, a visible goal, original music cues, and no commercial SNES material.

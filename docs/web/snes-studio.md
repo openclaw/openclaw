@@ -27,6 +27,20 @@ game type first: story-driven side-scrolling platformers.
 Dense professional tools are still available, but they live behind **Expert
 Studio** so the beginner path stays clear.
 
+## Project Command Center
+
+SNES Studio now uses a Project Command Center (PCC) for long-running production work. The PCC keeps project intent, milestones, worker locks, receipts, repairs, model routing, and build history durable so agents can continue until a game is complete, blocked, paused, or escalated.
+
+Reference docs:
+
+- [SNES Studio Workflow](/reference/snes-studio-workflow)
+- [SNES Studio Agent Routing](/reference/snes-studio-agent-routing)
+- [SNES Studio Proof Gates](/reference/snes-studio-proof-gates)
+- [SNES Studio Art Pipeline](/reference/snes-studio-art-pipeline)
+- [SNES Studio Model Benchmarking](/reference/snes-studio-model-benchmarking)
+
+PCC v1 is deterministic orchestration and QA scaffolding. It does not automatically spend model calls or prove a finished game without the required project receipts.
+
 ## Guided Builder
 
 The first screen shows one obvious action:
