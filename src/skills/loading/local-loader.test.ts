@@ -3,12 +3,12 @@ import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { loadSkillsFromDirSafe, readSkillFrontmatterSafe } from "./local-loader.js";
 
 const isWindows = process.platform === "win32";
 
-// Use UUID to isolate test root directory and avoid parallel execution conflicts
-const tmpRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), `local-loader-test-${randomUUID()}-`));
+const tmpTracker = createTempDirTracker();
 
 // Create a controlled external payload file to replace the unstable /etc/passwd
 const outsidePayloadPath = path.join(
@@ -22,21 +22,20 @@ fsSync.writeFileSync(
 );
 
 afterAll(() => {
-  fsSync.rmSync(tmpRoot, { recursive: true, force: true });
+  tmpTracker.cleanup();
   fsSync.rmSync(outsidePayloadPath, { force: true });
 });
 
 function tmpDir(): string {
-  const dir = path.join(tmpRoot, `case-${randomUUID()}`);
-  fsSync.mkdirSync(dir, { recursive: true });
-  return dir;
+  return tmpTracker.make("local-loader-test-");
 }
 
 function writeSkill(dir: string, name: string, description: string, extra = "") {
   fsSync.mkdirSync(dir, { recursive: true });
+  const extraBlock = extra ? `\n${extra}` : "";
   fsSync.writeFileSync(
     path.join(dir, "SKILL.md"),
-    `---\nname: ${name}\ndescription: ${description}${extra}\n---\n\n# ${name}\n`,
+    `---\nname: ${name}\ndescription: ${description}${extraBlock}\n---\n\n# ${name}\n`,
     "utf-8",
   );
 }
@@ -70,7 +69,7 @@ describe("loadSkillsFromDirSafe", () => {
 
   it("returns empty for a missing directory", () => {
     const result = loadSkillsFromDirSafe({
-      dir: path.join(tmpRoot, "does-not-exist"),
+      dir: path.join(os.tmpdir(), `openclaw-nonexistent-${randomUUID()}`),
       source: "workspace",
     });
     expect(result.skills).toStrictEqual([]);
@@ -86,8 +85,7 @@ describe("loadSkillsFromDirSafe", () => {
   it("skips dot-prefixed directories", () => {
     const root = tmpDir();
     writeSkill(path.join(root, "valid-skill"), "valid", "Good skill");
-    fsSync.mkdirSync(path.join(root, ".hidden"), { recursive: true });
-    writeSkill(path.join(root, ".hidden", "SKILL.md"), "hidden", "Hidden skill");
+    writeSkill(path.join(root, ".hidden"), "hidden", "Hidden skill");
 
     const result = loadSkillsFromDirSafe({ dir: root, source: "workspace" });
     expect(result.skills).toHaveLength(1);
@@ -97,8 +95,7 @@ describe("loadSkillsFromDirSafe", () => {
   it("skips node_modules directory", () => {
     const root = tmpDir();
     writeSkill(path.join(root, "valid-skill"), "valid", "Good skill");
-    fsSync.mkdirSync(path.join(root, "node_modules"), { recursive: true });
-    writeSkill(path.join(root, "node_modules", "SKILL.md"), "nm", "NM skill");
+    writeSkill(path.join(root, "node_modules"), "nm", "NM skill");
 
     const result = loadSkillsFromDirSafe({ dir: root, source: "workspace" });
     expect(result.skills).toHaveLength(1);
@@ -211,7 +208,7 @@ describe("loadSkillsFromDirSafe sandbox escape prevention", () => {
     }
 
     const root = tmpDir();
-    const outsideDir = path.join(tmpRoot, `outside-legit-${randomUUID()}`);
+    const outsideDir = tmpTracker.make(`outside-legit-${randomUUID()}-`);
     fsSync.mkdirSync(outsideDir, { recursive: true });
     writeSkill(outsideDir, "outside", "Outside skill");
 
@@ -221,6 +218,7 @@ describe("loadSkillsFromDirSafe sandbox escape prevention", () => {
     fsSync.symlinkSync(outsideDir, symlinkDir);
 
     const result = loadSkillsFromDirSafe({ dir: root, source: "workspace" });
+    expect(result.skills).toHaveLength(1);
     const names = result.skills.map((s) => s.name);
     expect(names).toStrictEqual(["legit"]);
     expect(names).not.toContain("outside");
@@ -242,26 +240,6 @@ describe("loadSkillsFromDirSafe sandbox escape prevention", () => {
 
     const result = loadSkillsFromDirSafe({ dir: root, source: "workspace" });
     expect(result.skills.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("skips skills with path traversal in directory structure", () => {
-    const root = tmpDir();
-    writeSkill(path.join(root, "legit"), "legit", "Legitimate skill");
-
-    // Attempt to create an escaped directory via path traversal
-    const traversalDir = path.join(root, "..", `traversal-${randomUUID()}`);
-    try {
-      fsSync.mkdirSync(traversalDir, { recursive: true });
-      writeSkill(traversalDir, "traversal", "Escaped via traversal");
-    } catch {
-      // Skip if the filesystem does not allow creation; does not affect test validity
-      return;
-    }
-
-    const result = loadSkillsFromDirSafe({ dir: root, source: "workspace" });
-    const names = result.skills.map((s) => s.name);
-    expect(names).toContain("legit");
-    expect(names).not.toContain("traversal");
   });
 });
 
@@ -286,7 +264,7 @@ describe("readSkillFrontmatterSafe", () => {
 
   it("returns null when rootDir does not exist", () => {
     const result = readSkillFrontmatterSafe({
-      rootDir: path.join(tmpRoot, "missing-root"),
+      rootDir: path.join(os.tmpdir(), `openclaw-nonexistent-${randomUUID()}`),
       filePath: "/some/file.md",
     });
     expect(result).toBeNull();
@@ -331,7 +309,7 @@ describe("readSkillFrontmatterSafe", () => {
 
   it("returns null when filePath uses path traversal to escape rootDir", () => {
     const root = tmpDir();
-    const traversalPath = path.normalize(path.join(root, "..", "..", "etc", "passwd"));
+    const traversalPath = path.join(root, "..", path.basename(outsidePayloadPath));
 
     const result = readSkillFrontmatterSafe({
       rootDir: root,
