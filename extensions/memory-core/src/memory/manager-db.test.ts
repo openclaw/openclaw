@@ -238,6 +238,44 @@ describe("memory manager database publication", () => {
     await expect(fs.access(youngShadow)).resolves.toBeUndefined();
   });
 
+  it("reports the first aged orphan cleanup error after attempting every sidecar", async () => {
+    const databasePath = path.join(fixtureRoot, "agent.sqlite");
+    const database = new DatabaseSync(databasePath);
+    database.close();
+    const oldShadow = `${databasePath}.memory-reindex-11111111-2222-3333-4444-555555555555`;
+    const old = new Date(Date.now() - 48 * 60 * 60_000);
+    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+      await fs.writeFile(`${oldShadow}${suffix}`, "orphan");
+      await fs.utimes(`${oldShadow}${suffix}`, old, old);
+    }
+
+    const removedPaths: string[] = [];
+    const lockedError = Object.assign(new Error("EBUSY: resource busy or locked"), {
+      code: "EBUSY",
+    });
+    const laterError = Object.assign(new Error("EPERM: operation not permitted"), {
+      code: "EPERM",
+    });
+    vi.spyOn(fsSync, "rmSync").mockImplementation((filePath) => {
+      const resolvedPath = String(filePath);
+      removedPaths.push(resolvedPath);
+      if (resolvedPath.endsWith("-wal")) {
+        throw lockedError;
+      }
+      if (resolvedPath.endsWith("-journal")) {
+        throw laterError;
+      }
+    });
+
+    expect(() => cleanupAgedMemoryReindexTempFiles(databasePath)).toThrow("EBUSY");
+    expect(removedPaths).toEqual([
+      oldShadow,
+      `${oldShadow}-wal`,
+      `${oldShadow}-shm`,
+      `${oldShadow}-journal`,
+    ]);
+  });
+
   it("continues removing shadow sidecars after one cleanup failure", () => {
     const databasePath = path.join(fixtureRoot, "agent.sqlite.memory-reindex-shadow");
     const removedPaths: string[] = [];

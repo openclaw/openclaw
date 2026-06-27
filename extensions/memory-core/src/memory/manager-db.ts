@@ -255,6 +255,7 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
       }
     }
 
+    let firstCleanupError: unknown;
     for (const shadowBaseName of shadowBaseNames) {
       const filePaths = MEMORY_DATABASE_FILE_SUFFIXES.map((suffix) =>
         path.join(dir, `${shadowBaseName}${suffix}`),
@@ -280,11 +281,14 @@ export function cleanupAgedMemoryReindexTempFiles(dbPath: string, nowMs = Date.n
       ) {
         continue;
       }
-      for (const filePath of filePaths) {
-        try {
-          fs.rmSync(filePath, { force: true });
-        } catch {}
+      try {
+        removeMemoryDatabaseFiles(path.join(dir, shadowBaseName));
+      } catch (err) {
+        firstCleanupError ??= err;
       }
+    }
+    if (firstCleanupError) {
+      throw firstCleanupError;
     }
   } finally {
     try {
