@@ -121,12 +121,31 @@ export type HostedOfficialExternalPluginCatalogMetadata = {
   checksum: string;
 };
 
+export type HostedOfficialExternalPluginCatalogSnapshot = {
+  body: string;
+  metadata: HostedOfficialExternalPluginCatalogMetadata;
+  savedAt: string;
+};
+
+export type HostedOfficialExternalPluginCatalogSnapshotStore = {
+  read: (url: string) => Promise<HostedOfficialExternalPluginCatalogSnapshot | null | undefined>;
+  write: (snapshot: HostedOfficialExternalPluginCatalogSnapshot) => Promise<void>;
+};
+
 export type HostedOfficialExternalPluginCatalogLoadResult =
   | {
       source: "hosted";
       entries: OfficialExternalPluginCatalogEntry[];
       feed: OfficialExternalPluginCatalogFeed;
       metadata: HostedOfficialExternalPluginCatalogMetadata;
+    }
+  | {
+      source: "hosted-snapshot";
+      entries: OfficialExternalPluginCatalogEntry[];
+      feed: OfficialExternalPluginCatalogFeed;
+      metadata: HostedOfficialExternalPluginCatalogMetadata;
+      snapshot: HostedOfficialExternalPluginCatalogSnapshot;
+      error: string;
     }
   | {
       source: "bundled-fallback";
@@ -369,6 +388,10 @@ function resolveOfficialExternalPluginCatalogEntryKey(
   return undefined;
 }
 
+function formatHostedCatalogError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function bundledFallbackResult(
   error: unknown,
   metadata?: HostedOfficialExternalPluginCatalogLoadResult["metadata"],
@@ -376,8 +399,108 @@ function bundledFallbackResult(
   return {
     source: "bundled-fallback",
     entries: listOfficialExternalPluginCatalogEntries(),
-    error: error instanceof Error ? error.message : String(error),
+    error: formatHostedCatalogError(error),
     ...(metadata ? { metadata } : {}),
+  };
+}
+
+function loadHostedCatalogSnapshotResult(params: {
+  snapshot: HostedOfficialExternalPluginCatalogSnapshot;
+  error: unknown;
+  expectedSha256?: string;
+  ifNoneMatch?: string;
+  ifModifiedSince?: string;
+}): HostedOfficialExternalPluginCatalogLoadResult {
+  assertSnapshotMatchesRequestValidators({
+    snapshot: params.snapshot,
+    ifNoneMatch: params.ifNoneMatch,
+    ifModifiedSince: params.ifModifiedSince,
+  });
+  const checksum = sha256Hex(params.snapshot.body);
+  if (checksum !== params.snapshot.metadata.checksum) {
+    throw new Error("hosted catalog snapshot checksum mismatch");
+  }
+  if (params.expectedSha256 && params.expectedSha256 !== checksum) {
+    throw new Error("hosted catalog snapshot checksum did not match expected checksum");
+  }
+  const raw = JSON.parse(params.snapshot.body) as unknown;
+  if (!isOfficialExternalPluginCatalogFeed(raw)) {
+    throw new Error("hosted catalog snapshot did not match schema version 1");
+  }
+  return {
+    source: "hosted-snapshot",
+    entries: dedupeOfficialExternalPluginCatalogEntries(
+      parseOfficialExternalPluginCatalogEntries(raw),
+    ),
+    feed: raw,
+    metadata: params.snapshot.metadata,
+    snapshot: params.snapshot,
+    error: formatHostedCatalogError(params.error),
+  };
+}
+
+function assertSnapshotMatchesRequestValidators(params: {
+  snapshot: HostedOfficialExternalPluginCatalogSnapshot;
+  ifNoneMatch?: string;
+  ifModifiedSince?: string;
+}): void {
+  if (params.ifNoneMatch && params.snapshot.metadata.etag !== params.ifNoneMatch) {
+    throw new Error("hosted catalog snapshot ETag did not match request validator");
+  }
+  if (
+    !params.ifNoneMatch &&
+    params.ifModifiedSince &&
+    params.snapshot.metadata.lastModified !== params.ifModifiedSince
+  ) {
+    throw new Error("hosted catalog snapshot Last-Modified did not match request validator");
+  }
+}
+
+async function snapshotOrBundledFallbackResult(params: {
+  error: unknown;
+  snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore;
+  url: string;
+  metadata?: HostedOfficialExternalPluginCatalogLoadResult["metadata"];
+  expectedSha256?: string;
+  ifNoneMatch?: string;
+  ifModifiedSince?: string;
+}): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
+  if (params.snapshotStore) {
+    try {
+      const snapshot = await params.snapshotStore.read(params.url);
+      if (snapshot) {
+        return loadHostedCatalogSnapshotResult({
+          snapshot,
+          error: params.error,
+          expectedSha256: params.expectedSha256,
+          ifNoneMatch: params.ifNoneMatch,
+          ifModifiedSince: params.ifModifiedSince,
+        });
+      }
+    } catch (snapshotErr) {
+      return bundledFallbackResult(
+        `${formatHostedCatalogError(params.error)}; snapshot fallback failed: ${formatHostedCatalogError(snapshotErr)}`,
+        params.metadata,
+      );
+    }
+  }
+  return bundledFallbackResult(params.error, params.metadata);
+}
+
+export function createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(
+  initialSnapshots: HostedOfficialExternalPluginCatalogSnapshot[] = [],
+): HostedOfficialExternalPluginCatalogSnapshotStore {
+  const snapshots = new Map<string, HostedOfficialExternalPluginCatalogSnapshot>();
+  for (const snapshot of initialSnapshots) {
+    snapshots.set(snapshot.metadata.url, snapshot);
+  }
+  return {
+    async read(url) {
+      return snapshots.get(url) ?? null;
+    },
+    async write(snapshot) {
+      snapshots.set(snapshot.metadata.url, snapshot);
+    },
   };
 }
 
@@ -390,6 +513,8 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   ifNoneMatch?: string;
   ifModifiedSince?: string;
   expectedSha256?: string;
+  snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore;
+  now?: () => Date;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
   let url: URL;
   try {
@@ -400,6 +525,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   const headers = new Headers();
   const ifNoneMatch = normalizeOptionalString(params?.ifNoneMatch);
   const ifModifiedSince = normalizeOptionalString(params?.ifModifiedSince);
+  const expectedSha256 = normalizeOptionalString(params?.expectedSha256);
   if (ifNoneMatch) {
     headers.set("if-none-match", ifNoneMatch);
   }
@@ -434,13 +560,26 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     release = guarded.release;
     const base = metadataBase(response);
     if (response.status === 304) {
-      return bundledFallbackResult(
-        "hosted catalog feed returned HTTP 304 without a cached snapshot",
-        base,
-      );
+      return await snapshotOrBundledFallbackResult({
+        error: "hosted catalog feed returned HTTP 304",
+        snapshotStore: params?.snapshotStore,
+        url: url.href,
+        metadata: base,
+        expectedSha256,
+        ifNoneMatch,
+        ifModifiedSince,
+      });
     }
     if (!response.ok) {
-      return bundledFallbackResult(`hosted catalog feed returned HTTP ${response.status}`, base);
+      return await snapshotOrBundledFallbackResult({
+        error: `hosted catalog feed returned HTTP ${response.status}`,
+        snapshotStore: params?.snapshotStore,
+        url: url.href,
+        metadata: base,
+        expectedSha256,
+        ifNoneMatch,
+        ifModifiedSince,
+      });
     }
     const body = await readHostedCatalogResponseText({
       response,
@@ -449,36 +588,54 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         params?.chunkTimeoutMs ?? DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHUNK_TIMEOUT_MS,
     });
     const checksum = sha256Hex(body);
-    const expectedSha256 = normalizeOptionalString(params?.expectedSha256);
+    const metadata = { ...base, checksum };
     if (expectedSha256 && expectedSha256 !== checksum) {
-      return bundledFallbackResult(
-        `hosted catalog feed checksum mismatch: expected ${expectedSha256}`,
-        {
-          ...base,
-          checksum,
-        },
-      );
+      return await snapshotOrBundledFallbackResult({
+        error: `hosted catalog feed checksum mismatch: expected ${expectedSha256}`,
+        snapshotStore: params?.snapshotStore,
+        url: url.href,
+        metadata,
+        expectedSha256,
+        ifNoneMatch,
+        ifModifiedSince,
+      });
     }
     const raw = JSON.parse(body) as unknown;
     if (!isOfficialExternalPluginCatalogFeed(raw)) {
-      return bundledFallbackResult("hosted catalog feed did not match a supported schema version", {
-        ...base,
-        checksum,
+      return await snapshotOrBundledFallbackResult({
+        error: "hosted catalog feed did not match a supported schema version",
+        snapshotStore: params?.snapshotStore,
+        url: url.href,
+        metadata,
+        expectedSha256,
+        ifNoneMatch,
+        ifModifiedSince,
       });
     }
+    await params?.snapshotStore
+      ?.write({
+        body,
+        metadata,
+        savedAt: (params.now?.() ?? new Date()).toISOString(),
+      })
+      .catch(() => undefined);
     return {
       source: "hosted",
       entries: dedupeOfficialExternalPluginCatalogEntries(
         parseOfficialExternalPluginCatalogEntries(raw),
       ),
       feed: raw,
-      metadata: {
-        ...base,
-        checksum,
-      },
+      metadata,
     };
   } catch (err) {
-    return bundledFallbackResult(err);
+    return await snapshotOrBundledFallbackResult({
+      error: err,
+      snapshotStore: params?.snapshotStore,
+      url: url.href,
+      expectedSha256,
+      ifNoneMatch,
+      ifModifiedSince,
+    });
   } finally {
     if (response?.bodyUsed !== true) {
       await response?.body?.cancel().catch(() => undefined);

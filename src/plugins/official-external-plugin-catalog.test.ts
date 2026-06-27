@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import {
   type OfficialExternalPluginCatalogEntry,
+  DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL,
+  createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore,
   getOfficialExternalPluginCatalogEntry,
   isOfficialExternalPluginCatalogFeed,
   listOfficialExternalPluginCatalogEntries,
@@ -342,12 +344,312 @@ describe("official external plugin catalog", () => {
 
     expect(result.source).toBe("bundled-fallback");
     if (result.source === "bundled-fallback") {
-      expect(result.error).toContain("without a cached snapshot");
+      expect(result.error).toContain("HTTP 304");
       expect(result.metadata).toMatchObject({
         status: 304,
         etag: '"same"',
         lastModified: "Mon, 22 Jun 2026 01:00:00 GMT",
       });
+    }
+  });
+
+  it("writes a validated hosted feed snapshot after a successful fetch", async () => {
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore();
+    const writeSpy = vi.spyOn(snapshotStore, "write");
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 3,
+      entries: [
+        {
+          name: "@openclaw/snapshot-write-proof",
+          kind: "plugin",
+          openclaw: { plugin: { id: "snapshot-write-proof" } },
+        },
+      ],
+    });
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      now: () => new Date("2026-06-22T01:02:03.000Z"),
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { etag: '"fresh"' },
+          }),
+      ),
+    });
+
+    expect(result.source).toBe("hosted");
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    const snapshot = await snapshotStore.read(
+      result.source === "hosted" ? result.metadata.url : "",
+    );
+    expect(snapshot).toMatchObject({
+      body,
+      savedAt: "2026-06-22T01:02:03.000Z",
+      metadata: { etag: '"fresh"' },
+    });
+    expect(snapshot?.metadata.checksum).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it("uses the last known good snapshot when the hosted feed returns HTTP 304", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 4,
+      entries: [
+        {
+          name: "@openclaw/snapshot-proof",
+          kind: "plugin",
+          openclaw: { plugin: { id: "snapshot-proof" } },
+        },
+      ],
+    });
+    const seeded = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(),
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { etag: '"snapshot-v1"' },
+          }),
+      ),
+    });
+    if (seeded.source !== "hosted") {
+      throw new Error("expected seeded hosted feed");
+    }
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore([
+      {
+        body,
+        metadata: seeded.metadata,
+        savedAt: "2026-06-22T01:02:03.000Z",
+      },
+    ]);
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      ifNoneMatch: '"snapshot-v1"',
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(null, {
+            status: 304,
+            headers: { etag: '"snapshot-v1"' },
+          }),
+      ),
+    });
+
+    expect(result.source).toBe("hosted-snapshot");
+    expect(result.entries.map((entry) => entry.name)).toEqual(["@openclaw/snapshot-proof"]);
+    if (result.source === "hosted-snapshot") {
+      expect(result.error).toContain("HTTP 304");
+      expect(result.snapshot.savedAt).toBe("2026-06-22T01:02:03.000Z");
+      expect(result.metadata.checksum).toBe(seeded.metadata.checksum);
+    }
+  });
+
+  it("does not use a stale snapshot when HTTP 304 validators do not match", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 4,
+      entries: [
+        {
+          name: "@openclaw/stale-snapshot-proof",
+          kind: "plugin",
+          openclaw: { plugin: { id: "stale-snapshot-proof" } },
+        },
+      ],
+    });
+    const seeded = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(),
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(body, {
+            status: 200,
+            headers: { etag: '"snapshot-v1"' },
+          }),
+      ),
+    });
+    if (seeded.source !== "hosted") {
+      throw new Error("expected seeded hosted feed");
+    }
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore([
+      {
+        body,
+        metadata: seeded.metadata,
+        savedAt: "2026-06-22T01:02:03.000Z",
+      },
+    ]);
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      ifNoneMatch: '"snapshot-v2"',
+      fetchImpl: vi.fn(
+        async () =>
+          new Response(null, {
+            status: 304,
+            headers: { etag: '"snapshot-v2"' },
+          }),
+      ),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("snapshot fallback failed");
+      expect(result.error).toContain("ETag");
+    }
+  });
+
+  it("uses a valid snapshot before bundled fallback when hosted validation fails", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 5,
+      entries: [
+        {
+          name: "@openclaw/snapshot-validation-proof",
+          kind: "plugin",
+          openclaw: { plugin: { id: "snapshot-validation-proof" } },
+        },
+      ],
+    });
+    const seeded = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(),
+      fetchImpl: vi.fn(async () => new Response(body, { status: 200 })),
+    });
+    if (seeded.source !== "hosted") {
+      throw new Error("expected seeded hosted feed");
+    }
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore([
+      { body, metadata: seeded.metadata, savedAt: "2026-06-22T01:02:03.000Z" },
+    ]);
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      fetchImpl: vi.fn(async () => new Response("{ nope", { status: 200 })),
+    });
+
+    expect(result.source).toBe("hosted-snapshot");
+    expect(result.entries.map((entry) => entry.name)).toEqual([
+      "@openclaw/snapshot-validation-proof",
+    ]);
+    if (result.source === "hosted-snapshot") {
+      expect(result.error).toContain("JSON");
+    }
+  });
+
+  it("does not use a stale snapshot when hosted validation fails with unmatched validators", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 5,
+      entries: [
+        {
+          name: "@openclaw/stale-validation-snapshot-proof",
+          kind: "plugin",
+          openclaw: { plugin: { id: "stale-validation-snapshot-proof" } },
+        },
+      ],
+    });
+    const seeded = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(),
+      fetchImpl: vi.fn(
+        async () => new Response(body, { status: 200, headers: { etag: '"snapshot-v1"' } }),
+      ),
+    });
+    if (seeded.source !== "hosted") {
+      throw new Error("expected seeded hosted feed");
+    }
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore([
+      { body, metadata: seeded.metadata, savedAt: "2026-06-22T01:02:03.000Z" },
+    ]);
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      ifNoneMatch: '"snapshot-v2"',
+      fetchImpl: vi.fn(async () => new Response("{ nope", { status: 200 })),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("snapshot fallback failed");
+      expect(result.error).toContain("ETag");
+    }
+  });
+
+  it("falls back to bundled entries when the snapshot is invalid", async () => {
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore([
+      {
+        body: JSON.stringify({
+          schemaVersion: 1,
+          id: "openclaw-official-external-plugins",
+          generatedAt: "2026-06-22T00:00:00.000Z",
+          sequence: 1,
+          entries: [],
+        }),
+        metadata: {
+          url: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL,
+          status: 200,
+          checksum: "sha256:not-current",
+        },
+        savedAt: "2026-06-22T01:02:03.000Z",
+      },
+    ]);
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      fetchImpl: vi.fn(async () => new Response(null, { status: 304 })),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("snapshot fallback failed");
+      expect(result.error).toContain("checksum mismatch");
+    }
+  });
+
+  it("does not use a snapshot that violates the expected checksum", async () => {
+    const body = JSON.stringify({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      generatedAt: "2026-06-22T00:00:00.000Z",
+      sequence: 6,
+      entries: [
+        {
+          name: "@openclaw/snapshot-pin-proof",
+          kind: "plugin",
+          openclaw: { plugin: { id: "snapshot-pin-proof" } },
+        },
+      ],
+    });
+    const seeded = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore: createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(),
+      fetchImpl: vi.fn(async () => new Response(body, { status: 200 })),
+    });
+    if (seeded.source !== "hosted") {
+      throw new Error("expected seeded hosted feed");
+    }
+    const snapshotStore = createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore([
+      { body, metadata: seeded.metadata, savedAt: "2026-06-22T01:02:03.000Z" },
+    ]);
+
+    const result = await loadHostedOfficialExternalPluginCatalogEntries({
+      snapshotStore,
+      expectedSha256: "sha256:not-current",
+      fetchImpl: vi.fn(async () => new Response(body, { status: 200 })),
+    });
+
+    expect(result.source).toBe("bundled-fallback");
+    if (result.source === "bundled-fallback") {
+      expect(result.error).toContain("snapshot fallback failed");
+      expect(result.error).toContain("expected checksum");
     }
   });
 
