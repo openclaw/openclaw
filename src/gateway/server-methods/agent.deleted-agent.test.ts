@@ -12,6 +12,7 @@ import type { RespondFn } from "./types.js";
 
 const agentCommandFromIngressMock = vi.hoisted(() => vi.fn());
 const performGatewaySessionResetMock = vi.hoisted(() => vi.fn());
+const parseMessageWithAttachmentsMock = vi.hoisted(() => vi.fn());
 
 vi.mock("../../commands/agent.js", () => ({
   agentCommandFromIngress: agentCommandFromIngressMock,
@@ -23,11 +24,21 @@ vi.mock("../session-reset-service.js", () => ({
   emitGatewaySessionStartPluginHook: vi.fn(),
 }));
 
+vi.mock("../chat-attachments.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../chat-attachments.js")>("../chat-attachments.js");
+  return {
+    ...actual,
+    parseMessageWithAttachments: parseMessageWithAttachmentsMock,
+  };
+});
+
 describe("agent RPC deleted-agent guard", () => {
   beforeEach(() => {
     resetDeletedAgentSessionMocks();
     agentCommandFromIngressMock.mockReset();
     performGatewaySessionResetMock.mockReset();
+    parseMessageWithAttachmentsMock.mockReset();
   });
 
   it("rejects keys belonging to a deleted agent", async () => {
@@ -56,6 +67,43 @@ describe("agent RPC deleted-agent guard", () => {
       code: ErrorCodes.INVALID_REQUEST,
       message: 'Agent "deleted-agent" no longer exists in configuration',
     });
+    expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects deleted-agent sessions before media offload or dedupe reservation", async () => {
+    const orphanKey = mockDeletedAgentSession();
+
+    const respond = vi.fn() as unknown as RespondFn;
+    const dedupe = new Map();
+
+    await agentHandlers.agent({
+      req: { id: "req-attach" } as never,
+      params: {
+        sessionKey: orphanKey,
+        message: "see attachment",
+        idempotencyKey: "run-attach",
+        attachments: [
+          { type: "file", mimeType: "application/pdf", fileName: "doc.pdf", content: "aGVsbG8=" },
+        ],
+      },
+      respond,
+      context: {
+        dedupe,
+        chatAbortControllers: new Map(),
+        getRuntimeConfig: () => ({}),
+      } as never,
+      client: null,
+      isWebchatConnect: () => false,
+    });
+
+    expect(respond).toHaveBeenCalledWith(false, undefined, {
+      code: ErrorCodes.INVALID_REQUEST,
+      message: 'Agent "deleted-agent" no longer exists in configuration',
+    });
+    // Guard runs before attachment parsing (inbound media offload), the
+    // pre-accept dedupe reservation, and run dispatch.
+    expect(parseMessageWithAttachmentsMock).not.toHaveBeenCalled();
+    expect(dedupe.size).toBe(0);
     expect(agentCommandFromIngressMock).not.toHaveBeenCalled();
   });
 
