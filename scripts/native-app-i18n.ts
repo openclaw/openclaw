@@ -48,7 +48,7 @@ const SOURCE_ROOTS: Record<NativeI18nSurface, string> = {
 };
 
 const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
-const APPLE_EXTENSIONS = new Set([".swift"]);
+const APPLE_EXTENSIONS = new Set([".swift", ".plist"]);
 const APPLE_UI_CALLS =
   /(?:Text|Label|Button|TextField|SecureField|Picker|Section|LabeledContent|Toggle|Menu|ShareLink)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_MODIFIER_CALLS =
@@ -57,9 +57,17 @@ const ANDROID_CALLS =
   /\b(?:Text|OutlinedTextField|BasicTextField|Button|IconButton|TopAppBar|Snackbar|AlertDialog)\s*\(\s*(?:text\s*=\s*)?"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_PROPERTIES =
   /\b(?:contentDescription|label|placeholder|title|message|supportingText)\s*=\s*"((?:\\.|[^"\\])*)"/gu;
+const ANDROID_WRAPPER_ARGS =
+  /\b[A-Z][A-Za-z0-9_]*\s*\([^)\n]{0,160}?\b(?:text|title|label|message|contentDescription|placeholder)\s*=\s*"((?:\\.|[^"\\])*)"/gu;
+const ANDROID_TOAST_ARGS =
+  /\b(?:Toast\.makeText|Snackbar\.make)\s*\([^,\n]*,\s*"((?:\\.|[^"\\])*)"/gu;
+const ANDROID_RESOURCE_STRINGS = /<string\b[^>]*>([\s\S]*?)<\/string>/gu;
+const APPLE_ANY_CALLS = /\b[A-Z][A-Za-z0-9_]*\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
+const APPLE_NAMED_ARGUMENTS =
+  /\b(?:title|subtitle|label|message|text|prompt|description|help)\s*:\s*"((?:\\.|[^"\\])*)"/gu;
+const APPLE_PLIST_STRINGS = /<string>([\s\S]*?)<\/string>/gu;
 const GENERATED_PATH_RE = /(?:\/build\/|\/\.gradle\/|\/\.build\/|\/DerivedData\/)/u;
-const EXCLUDED_PATH_RE =
-  /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
+const EXCLUDED_PATH_RE = /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
 const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u;
 
 function extractSwiftInterpolations(source: string): string[] | null {
@@ -159,10 +167,14 @@ function extractCandidates(
       ? [
           [APPLE_UI_CALLS, "ui-call"],
           [APPLE_MODIFIER_CALLS, "ui-modifier"],
+          [APPLE_ANY_CALLS, "ui-call-generic"],
+          [APPLE_NAMED_ARGUMENTS, "ui-named-argument"],
         ]
       : [
           [ANDROID_CALLS, "ui-call"],
           [ANDROID_PROPERTIES, "ui-property"],
+          [ANDROID_WRAPPER_ARGS, "ui-wrapper-argument"],
+          [ANDROID_TOAST_ARGS, "ui-toast"],
         ];
   for (const [pattern, kind] of patterns) {
     for (const match of source.matchAll(pattern)) {
@@ -171,6 +183,32 @@ function extractCandidates(
       if (value) {
         addCandidate(entries, surface, repoPath, value, kind, lineNumber(source, offset));
       }
+    }
+  }
+  if (surface === "android" && repoPath.endsWith("/res/values/strings.xml")) {
+    for (const match of source.matchAll(ANDROID_RESOURCE_STRINGS)) {
+      if (match[1])
+        addCandidate(
+          entries,
+          surface,
+          repoPath,
+          match[1],
+          "resource-string",
+          lineNumber(source, match.index ?? 0),
+        );
+    }
+  }
+  if (surface === "apple" && repoPath.endsWith(".plist")) {
+    for (const match of source.matchAll(APPLE_PLIST_STRINGS)) {
+      if (match[1])
+        addCandidate(
+          entries,
+          surface,
+          repoPath,
+          match[1],
+          "plist-string",
+          lineNumber(source, match.index ?? 0),
+        );
     }
   }
   return entries;
@@ -192,12 +230,23 @@ async function walkFiles(
       continue;
     }
     const extension = path.extname(entry.name);
-    const allowed = surface === "apple" ? APPLE_EXTENSIONS : ANDROID_EXTENSIONS;
+    const allowed =
+      surface === "apple"
+        ? APPLE_EXTENSIONS
+        : fullPath.endsWith(`${path.sep}res${path.sep}values${path.sep}strings.xml`)
+          ? new Set([...ANDROID_EXTENSIONS, ".xml"])
+          : ANDROID_EXTENSIONS;
     const isAndroidUiFile =
       surface !== "android" ||
       fullPath.includes(`${path.sep}ui${path.sep}`) ||
-      fullPath.endsWith(`${path.sep}MainActivity.kt`);
-    if (entry.isFile() && allowed.has(extension) && isAndroidUiFile && !EXCLUDED_FILE_RE.test(entry.name)) {
+      fullPath.endsWith(`${path.sep}MainActivity.kt`) ||
+      fullPath.endsWith(`${path.sep}res${path.sep}values${path.sep}strings.xml`);
+    if (
+      entry.isFile() &&
+      allowed.has(extension) &&
+      isAndroidUiFile &&
+      !EXCLUDED_FILE_RE.test(entry.name)
+    ) {
       out.push(fullPath);
     }
   }
@@ -206,7 +255,12 @@ async function walkFiles(
 
 function withIds(entries: Candidate[]): NativeI18nEntry[] {
   const seen = new Set<string>();
-  return entries
+  const unique = [
+    ...new Map(
+      entries.map((entry) => [`${entry.surface}\u0000${entry.path}\u0000${entry.source}`, entry]),
+    ).values(),
+  ];
+  return unique
     .toSorted(
       (left, right) =>
         left.surface.localeCompare(right.surface) ||

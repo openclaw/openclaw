@@ -24,6 +24,9 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Request ID: \\(requestId)")).toBe(true);
     expect(entries.some((entry) => entry.source === "Open ${row.title}")).toBe(true);
     expect(entries.some((entry) => entry.source === "$deviceModel · $appVersion")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Approval command copied")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Save Profile")).toBe(true);
+    expect(entries.some((entry) => entry.path.endsWith("Info.plist"))).toBe(true);
     expect(NATIVE_I18N_LOCALES).toHaveLength(20);
   });
 });
