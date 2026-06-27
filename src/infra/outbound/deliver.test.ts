@@ -396,6 +396,51 @@ describe("deliverOutboundPayloads", () => {
     expect(results).toEqual([{ channel: "matrix", messageId: "m1", roomId: "!room:example" }]);
   });
 
+  it("delivers through full active plugin when pinned setup channel has a defined non-send outbound", async () => {
+    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+    // Setup-only shell with a DEFINED but non-send outbound ({ deliveryMode:
+    // "direct" }, no sendText). A capability-blind registry load returns this
+    // first matching entry's outbound and shadows the real runtime sender,
+    // failing with "Outbound not configured" after preflight passes.
+    const setupRegistry = createTestRegistry([
+      {
+        pluginId: "matrix",
+        source: "setup",
+        plugin: createOutboundTestPlugin({
+          id: "matrix",
+          outbound: { deliveryMode: "direct" },
+        }),
+      },
+    ]);
+    const runtimeRegistry = createTestRegistry([
+      {
+        pluginId: "matrix",
+        source: "runtime",
+        plugin: createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForTest }),
+      },
+    ]);
+
+    setActivePluginRegistry(setupRegistry);
+    pinActivePluginChannelRegistry(setupRegistry);
+    setActivePluginRegistry(runtimeRegistry);
+
+    const results = await deliverOutboundPayloads({
+      cfg: matrixChunkConfig,
+      channel: "matrix",
+      to: "!room:example",
+      payloads: [{ text: "hello from queue" }],
+      deps: { matrix: sendMatrix },
+    });
+
+    expect(sendMatrix).toHaveBeenCalledTimes(1);
+    expect(sendMatrix).toHaveBeenCalledWith("!room:example", "hello from queue", {
+      cfg: matrixChunkConfig,
+      accountId: undefined,
+      gifPlayback: undefined,
+    });
+    expect(results).toEqual([{ channel: "matrix", messageId: "m1", roomId: "!room:example" }]);
+  });
+
   it("reports unsupported durable final delivery when required capabilities are missing", async () => {
     setActivePluginRegistry(
       createTestRegistry([
