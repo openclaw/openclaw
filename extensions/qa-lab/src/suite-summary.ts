@@ -128,6 +128,19 @@ export function countQaSuiteFailedOrSkippedScenarios(
   return blocking;
 }
 
+function countQaSuiteEvidenceEntriesWhere(
+  entries: ReadonlyArray<QaEvidenceEntryStatus>,
+  isMatch: (status: unknown) => boolean,
+): number {
+  let count = 0;
+  for (const entry of entries) {
+    if (isMatch(entry.result?.status)) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
 export function readQaSuiteFailedScenarioCountFromSummary(summary: unknown): number | null {
   if (!summary || typeof summary !== "object") {
     return null;
@@ -144,7 +157,7 @@ export function readQaSuiteFailedScenarioCountFromSummary(summary: unknown): num
     ? countQaSuiteFailedScenarios(payload.scenarios)
     : null;
   const evidenceFailures = Array.isArray(payload.entries)
-    ? payload.entries.filter((entry) => entry.result?.status === "fail").length
+    ? countQaSuiteEvidenceEntriesWhere(payload.entries, (status) => status === "fail")
     : null;
   if (countedFailures !== null && scenarioFailures !== null) {
     return Math.max(countedFailures, scenarioFailures, evidenceFailures ?? 0);
@@ -185,7 +198,7 @@ export function readQaSuiteFailedOrSkippedScenarioCountFromSummary(
     ? countQaSuiteFailedOrSkippedScenarios(payload.scenarios)
     : null;
   const evidenceBlocking = Array.isArray(payload.entries)
-    ? payload.entries.filter((entry) => isQaSuiteBlockingStatus(entry.result?.status)).length
+    ? countQaSuiteEvidenceEntriesWhere(payload.entries, isQaSuiteBlockingStatus)
     : null;
   if (countedBlocking !== null && scenarioBlocking !== null) {
     return Math.max(countedBlocking, scenarioBlocking, evidenceBlocking ?? 0);
