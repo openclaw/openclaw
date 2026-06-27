@@ -127,9 +127,11 @@ describe("readLatestAssistantReply", () => {
         },
         {
           role: "assistant",
-          provider: "openclaw",
-          model: "delivery-mirror",
           content: [{ type: "text", text: "already delivered through message tool" }],
+          openclawMessageToolMirror: {
+            toolName: "message",
+            toolCallId: "call-message-send",
+          },
           timestamp: 11,
         },
         {
@@ -259,6 +261,28 @@ describe("waitForAgentRun", () => {
     const result = await waitForAgentRun({ runId: "run-pending", timeoutMs: 500 });
 
     expect(result).toEqual({ status: "pending" });
+  });
+
+  it("reports unexpected agent.wait statuses as errors", async () => {
+    callGatewayMock.mockResolvedValue({ status: "cancelled", error: "aborted" });
+
+    const result = await waitForAgentRun({ runId: "run-cancelled", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "error",
+      error: 'agent.wait returned unexpected status "cancelled": aborted',
+    });
+  });
+
+  it("reports malformed agent.wait responses as errors", async () => {
+    callGatewayMock.mockResolvedValue({});
+
+    const result = await waitForAgentRun({ runId: "run-malformed", timeoutMs: 500 });
+
+    expect(result).toEqual({
+      status: "error",
+      error: "agent.wait returned unexpected status missing",
+    });
   });
 
   it("preserves pending error diagnostics on wait timeouts", async () => {
@@ -485,6 +509,47 @@ describe("waitForAgentRunAndReadUpdatedAssistantReply", () => {
     });
   });
 
+  it("does not treat a projected message-tool mirror as a new waited reply", async () => {
+    const baselineMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "previous real reply" }],
+      timestamp: 41,
+    };
+    callGatewayMock
+      .mockResolvedValueOnce({
+        status: "ok",
+      })
+      .mockResolvedValueOnce({
+        messages: [
+          baselineMessage,
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "already delivered source reply" }],
+            openclawMessageToolMirror: {
+              toolName: "message",
+              toolCallId: "call-message-send",
+            },
+            timestamp: 42,
+          },
+        ],
+      });
+
+    const result = await waitForAgentRunAndReadUpdatedAssistantReply({
+      runId: "run-projected-source-reply",
+      sessionKey: "agent:main:child",
+      timeoutMs: 1_000,
+      baseline: {
+        text: "previous real reply",
+        fingerprint: JSON.stringify(baselineMessage),
+      },
+    });
+
+    expect(result).toEqual({
+      status: "ok",
+      replyText: undefined,
+    });
+  });
+
   it("does not resurrect an older reply when only a delivery mirror is newer", async () => {
     callGatewayMock
       .mockResolvedValueOnce({
@@ -646,6 +711,30 @@ describe("waitForAgentRunsToDrain", () => {
       expect(result.timedOut).toBe(false);
       expect(Number.isFinite(result.deadlineAtMs)).toBe(true);
       expectAgentWaitRequest(requireRequestAt(gatewayWaitRequests(), 0), "run-1", 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("uses the documented agent.wait default for omitted drain timeouts", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-30T00:00:00Z"));
+    callGatewayMock.mockResolvedValue({ status: "ok" });
+    let activeRunIds = ["run-1"];
+
+    try {
+      const startedAtMs = Date.now();
+      const result = await waitForAgentRunsToDrain({
+        getPendingRunIds: () => {
+          const current = activeRunIds;
+          activeRunIds = [];
+          return current;
+        },
+      });
+
+      expect(result.timedOut).toBe(false);
+      expect(result.deadlineAtMs).toBe(startedAtMs + 30_000);
+      expectAgentWaitRequest(requireRequestAt(gatewayWaitRequests(), 0), "run-1", 30_000);
     } finally {
       vi.useRealTimers();
     }

@@ -31,6 +31,8 @@ const defaultRunWaitDeps = {
   callGateway,
 };
 
+const DEFAULT_RUNS_DRAIN_TIMEOUT_MS = 30_000;
+
 let runWaitDeps: {
   callGateway: GatewayCaller;
 } = defaultRunWaitDeps;
@@ -43,10 +45,11 @@ function resolveRunWaitDeadlineAtMs(params: { deadlineAtMs?: number; timeoutMs?:
   if (params.deadlineAtMs !== undefined) {
     return asDateTimestampMs(params.deadlineAtMs) ?? resolveDateTimestampMs(Date.now());
   }
-  return (
-    resolveExpiresAtMsFromDurationMs(resolveRunWaitTimeoutMs(params.timeoutMs)) ??
-    resolveDateTimestampMs(Date.now())
-  );
+  const timeoutMs =
+    params.timeoutMs === undefined
+      ? DEFAULT_RUNS_DRAIN_TIMEOUT_MS
+      : resolveRunWaitTimeoutMs(params.timeoutMs);
+  return resolveExpiresAtMsFromDurationMs(timeoutMs) ?? resolveDateTimestampMs(Date.now());
 }
 
 /** Latest assistant reply plus a stable fingerprint for baseline comparisons. */
@@ -125,6 +128,15 @@ function normalizeTerminalOutcomeForWait(
   });
 }
 
+function formatUnexpectedAgentWaitStatusError(wait?: RawAgentWaitResponse): string {
+  const status =
+    typeof wait?.status === "string" && wait.status.trim()
+      ? JSON.stringify(wait.status)
+      : "missing";
+  const detail = typeof wait?.error === "string" && wait.error.trim() ? `: ${wait.error}` : "";
+  return `agent.wait returned unexpected status ${status}${detail}`;
+}
+
 const RECOVERABLE_AGENT_WAIT_ERROR_PATTERNS: readonly RegExp[] = [
   /gateway closed \(1006/i,
   /transport close/i,
@@ -164,9 +176,13 @@ function isTranscriptOnlyOpenClawAssistantMessage(message: {
   role?: unknown;
   provider?: unknown;
   model?: unknown;
+  openclawMessageToolMirror?: unknown;
 }): boolean {
   if (message.role !== "assistant") {
     return false;
+  }
+  if (message.openclawMessageToolMirror !== undefined) {
+    return true;
   }
   return (
     message.provider === "openclaw" &&
@@ -241,7 +257,7 @@ export async function waitForAgentRun(params: {
 }): Promise<AgentWaitResult> {
   const timeoutMs = resolveRunWaitTimeoutMs(params.timeoutMs);
   try {
-    const wait = await (params.callGateway ?? runWaitDeps.callGateway)({
+    const wait = await (params.callGateway ?? runWaitDeps.callGateway)<RawAgentWaitResponse>({
       method: "agent.wait",
       params: {
         runId: params.runId,
@@ -258,7 +274,13 @@ export async function waitForAgentRun(params: {
     if (wait?.status === "error") {
       return normalizeAgentWaitResult("error", wait);
     }
-    return normalizeAgentWaitResult("ok", wait);
+    if (wait?.status === "ok") {
+      return normalizeAgentWaitResult("ok", wait);
+    }
+    return normalizeAgentWaitResult("error", {
+      ...wait,
+      error: formatUnexpectedAgentWaitStatusError(wait),
+    });
   } catch (err) {
     const error = formatErrorMessage(err);
     return {
