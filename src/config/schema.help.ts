@@ -1509,6 +1509,8 @@ export const FIELD_HELP: Record<string, string> = {
     'Opt-in AGENTS.md H2/H3 section names re-injected after compaction so the agent reruns critical startup guidance. Leave unset or set [] to disable reinjection. Explicitly set ["Session Startup", "Red Lines"] to enable the legacy default pair with fallback to older "Every Session"/"Safety" headings. Enabling this can duplicate project context already present in the compaction summary.',
   "agents.defaults.compaction.timeoutSeconds":
     "Maximum time in seconds allowed for a single compaction operation before it is aborted (default: 180). Increase this for very large sessions that need more time to summarize, or decrease it to fail faster on unresponsive models.",
+  "agents.defaults.compaction.turnMaintenanceTaskTimeoutMs":
+    "Maximum time in milliseconds a single deferred (background) context-engine turn-maintenance run may hold its lane before it is timed out and the lane released (default: 120000). Lower this to free queued user messages sooner when maintenance wedges (for example on plugin lock contention); raise it for engines whose background maintenance legitimately runs long.",
   "agents.defaults.compaction.model":
     "Optional provider/model or configured bare alias used only for compaction summarization. Bare aliases resolve before dispatch; a configured literal model ID wins if it collides with an alias. Leave unset to keep using the primary agent model.",
   "agents.defaults.compaction.truncateAfterCompaction":

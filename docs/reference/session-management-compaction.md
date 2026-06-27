@@ -366,6 +366,12 @@ OpenClaw also enforces a safety floor for embedded runs:
   OpenClaw rotates the active transcript to a compacted successor JSONL after
   compaction. Branch/restore checkpoint actions use that compacted successor;
   legacy pre-compaction checkpoint files remain readable while referenced.
+- Set `agents.defaults.compaction.turnMaintenanceTaskTimeoutMs` (default
+  `120000`) to bound a single deferred background turn-maintenance run. On
+  timeout the maintenance lane is released so a queued user turn proceeds, and
+  late maintenance side effects (transcript rewrite, task completion) are fenced
+  off. Lower it to free queued messages sooner when maintenance wedges; raise it
+  for engines whose background maintenance legitimately runs long.
 
 Why: leave enough headroom for multi-turn "housekeeping" (like memory writes) before compaction becomes unavoidable.
 

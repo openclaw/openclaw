@@ -10,6 +10,7 @@ export type SessionState = {
   generation?: number;
   lastStuckWarnAgeMs?: number;
   lastLongRunningWarnAgeMs?: number;
+  lastStalledWarnAgeMs?: number;
   state: SessionStateValue;
   queueDepth: number;
   activeQueuedTurn?: boolean;
@@ -126,6 +127,10 @@ function mergeSessionState(target: SessionState, source: SessionState): void {
     target.lastLongRunningWarnAgeMs === undefined || source.lastLongRunningWarnAgeMs === undefined
       ? undefined
       : Math.max(target.lastLongRunningWarnAgeMs, source.lastLongRunningWarnAgeMs);
+  target.lastStalledWarnAgeMs =
+    target.lastStalledWarnAgeMs === undefined || source.lastStalledWarnAgeMs === undefined
+      ? undefined
+      : Math.max(target.lastStalledWarnAgeMs, source.lastStalledWarnAgeMs);
   if (source.toolCallHistory?.length) {
     target.toolCallHistory = [...(target.toolCallHistory ?? []), ...source.toolCallHistory];
   }
