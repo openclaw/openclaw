@@ -321,35 +321,87 @@ describe("session startup catch-up", () => {
     return { filePath, size: stat.size, mtimeMs: stat.mtimeMs };
   }
 
-  async function upsertTestSessionEntries(
-    storePath: string,
-    entries: Record<string, Parameters<typeof upsertSessionEntry>[1]>,
-  ): Promise<void> {
+  async function configureTestSessionStore(storePath: string): Promise<void> {
+    const configPath = path.join(stateDir, "openclaw.json");
     await fs.mkdir(path.dirname(storePath), { recursive: true });
-    for (const [sessionKey, entry] of Object.entries(entries)) {
-      await upsertSessionEntry({ sessionKey, storePath }, entry);
-    }
+    await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }), "utf-8");
+    setStartupConfigPath(configPath);
+    clearRuntimeConfigSnapshot();
+    clearConfigCache();
+  }
+
+  async function writeSqliteSession(
+    params: {
+      storePath?: string;
+      sessionId?: string;
+      sessionKey?: string;
+      content?: string;
+      role?: "assistant" | "user";
+      updatedAt?: number;
+    } = {},
+  ): Promise<{
+    marker: string;
+    storePath: string;
+    sessionId: string;
+    sessionKey: string;
+    corpusPath: string;
+  }> {
+    const storePath =
+      params.storePath ?? path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const sessionId = params.sessionId ?? "thread";
+    const sessionKey = params.sessionKey ?? `agent:main:chat:${sessionId}`;
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    await configureTestSessionStore(storePath);
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionFile: marker,
+        sessionId,
+        updatedAt: params.updatedAt ?? 10,
+      },
+    );
+    await appendTranscriptMessage(
+      { agentId: "main", sessionId, sessionKey, storePath },
+      {
+        cwd: stateDir,
+        message: {
+          role: params.role ?? "user",
+          content: params.content ?? "startup catchup",
+        },
+      },
+    );
+    return {
+      marker,
+      storePath,
+      sessionId,
+      sessionKey,
+      corpusPath: `sessions/main/${sessionId}`,
+    };
   }
 
   it("marks stale indexed session files dirty and schedules catch-up sync", async () => {
-    const session = await writeSessionFile("thread.jsonl");
+    const session = await writeSqliteSession();
     const harness = new SessionStartupCatchupHarness([
       {
-        path: "sessions/main/thread.jsonl",
+        path: session.corpusPath,
         hash: "old-hash",
-        mtime: session.mtimeMs - 1000,
-        size: session.size,
+        mtime: 0,
+        size: 0,
       },
     ]);
 
-    await expect(harness.catchUp()).resolves.toEqual([session.filePath]);
-    expect(harness.getDirtyArchiveFiles()).toEqual([session.filePath]);
+    await expect(harness.catchUp()).resolves.toEqual([session.marker]);
+    expect(harness.getDirtyArchiveFiles()).toEqual([session.marker]);
     expect(harness.isSessionsDirty()).toBe(true);
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
   });
 
   it("retries transient session transcript reads during session indexing", async () => {
-    const session = await writeSessionFile("thread.jsonl");
+    const session = await writeSessionFile("thread.jsonl.deleted.2026-02-16T22-27-33.000Z");
     const harness = new SessionStartupCatchupHarness([]);
 
     const realOpen = fs.open;
@@ -382,18 +434,18 @@ describe("session startup catch-up", () => {
   });
 
   it("can mark startup catch-up files without scheduling background sync", async () => {
-    const session = await writeSessionFile("thread.jsonl");
+    const session = await writeSqliteSession();
     const harness = new SessionStartupCatchupHarness([
       {
-        path: "sessions/main/thread.jsonl",
+        path: session.corpusPath,
         hash: "old-hash",
-        mtime: session.mtimeMs - 1000,
-        size: session.size,
+        mtime: 0,
+        size: 0,
       },
     ]);
 
-    await expect(harness.markStartupDirtyFiles()).resolves.toEqual([session.filePath]);
-    expect(harness.getDirtyArchiveFiles()).toEqual([session.filePath]);
+    await expect(harness.markStartupDirtyFiles()).resolves.toEqual([session.marker]);
+    expect(harness.getDirtyArchiveFiles()).toEqual([session.marker]);
     expect(harness.isSessionsDirty()).toBe(true);
     expect(harness.syncCalls).toEqual([]);
   });
@@ -507,29 +559,13 @@ describe("session startup catch-up", () => {
   });
 
   it("resolves identity-targeted delta sync through a custom session store", async () => {
-    const storeDir = path.join(stateDir, "custom-sessions");
-    const sessionFile = path.join(storeDir, "custom-thread.jsonl");
-    const storePath = path.join(storeDir, "sessions.json");
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.mkdir(storeDir, { recursive: true });
-    await fs.writeFile(
-      sessionFile,
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "custom store target" },
-      }) + "\n",
-      "utf-8",
-    );
-    await upsertTestSessionEntries(storePath, {
-      "agent:main:chat:custom": {
-        sessionFile: "custom-thread.jsonl",
-        sessionId: "custom-thread",
-      },
+    const storePath = path.join(stateDir, "custom-sessions", "sessions.json");
+    const session = await writeSqliteSession({
+      storePath,
+      sessionId: "custom-thread",
+      sessionKey: "agent:main:chat:custom",
+      content: "custom store target",
     });
-    await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }), "utf-8");
-    setStartupConfigPath(configPath);
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
     const harness = new SessionStartupCatchupHarness([]);
     (harness as unknown as { settings: ResolvedMemorySearchConfig }).settings.sync.sessions = {
       deltaBytes: 1,
@@ -545,47 +581,25 @@ describe("session startup catch-up", () => {
     await harness.processPendingSessionDeltas();
     await Promise.resolve();
 
-    expect(harness.getDirtyArchiveFiles()).toEqual([sessionFile]);
+    expect(harness.getDirtyArchiveFiles()).toEqual([session.marker]);
     expect(harness.syncCalls).toEqual([{ reason: "session-delta" }]);
   });
 
   it("preserves generated-session classification during targeted custom-store indexing", async () => {
-    const storeDir = path.join(stateDir, "custom-sessions");
-    const sessionFile = path.join(storeDir, "cron-thread.jsonl");
-    const otherSessionFile = path.join(storeDir, "other-thread.jsonl");
-    const storePath = path.join(storeDir, "sessions.json");
-    const configPath = path.join(stateDir, "openclaw.json");
-    await fs.mkdir(storeDir, { recursive: true });
-    await fs.writeFile(
-      sessionFile,
-      JSON.stringify({
-        type: "message",
-        message: { role: "assistant", content: "Internal cron output that must stay out." },
-      }) + "\n",
-      "utf-8",
-    );
-    await fs.writeFile(
-      otherSessionFile,
-      JSON.stringify({
-        type: "message",
-        message: { role: "user", content: "Other custom-store content" },
-      }) + "\n",
-      "utf-8",
-    );
-    await upsertTestSessionEntries(storePath, {
-      "agent:main:cron:job-1:run:run-1": {
-        sessionFile: "cron-thread.jsonl",
-        sessionId: "cron-thread",
-      },
-      "agent:main:chat:other": {
-        sessionFile: "other-thread.jsonl",
-        sessionId: "other-thread",
-      },
+    const storePath = path.join(stateDir, "custom-sessions", "sessions.json");
+    const session = await writeSqliteSession({
+      storePath,
+      sessionId: "cron-thread",
+      sessionKey: "agent:main:cron:job-1:run:run-1",
+      role: "assistant",
+      content: "Internal cron output that must stay out.",
     });
-    await fs.writeFile(configPath, JSON.stringify({ session: { store: storePath } }), "utf-8");
-    setStartupConfigPath(configPath);
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
+    await writeSqliteSession({
+      storePath,
+      sessionId: "other-thread",
+      sessionKey: "agent:main:chat:other",
+      content: "Other custom-store content",
+    });
     const harness = new SessionStartupCatchupHarness([]);
 
     await (
@@ -597,10 +611,10 @@ describe("session startup catch-up", () => {
       }
     ).syncArchiveFiles({
       needsFullReindex: false,
-      targetArchiveFiles: [sessionFile],
+      targetArchiveFiles: [session.marker],
     });
 
-    expect(harness.indexedPaths).toEqual(["sessions/cron-thread.jsonl"]);
+    expect(harness.indexedPaths).toEqual([session.corpusPath]);
     expect(harness.indexedContents).toEqual([""]);
   });
 
