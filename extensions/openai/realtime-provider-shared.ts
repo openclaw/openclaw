@@ -111,7 +111,7 @@ async function createOpenAIRealtimeSecret(
       if (!response.ok) {
         throw await createProviderHttpError(response, params.errorMessage);
       }
-      return (await readProviderJsonResponse(response, "openai.realtime-secret")) as unknown;
+      return await readProviderJsonResponse(response, "openai.realtime-secret");
     } finally {
       await release();
     }

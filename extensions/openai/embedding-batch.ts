@@ -100,7 +100,7 @@ async function fetchOpenAiBatchStatus(params: {
     path: `/batches/${params.batchId}`,
     errorPrefix: "openai batch status",
     parse: async (res) =>
-      (await readProviderJsonResponse(res, "openai.batch-status")) as OpenAiBatchStatus,
+      await readProviderJsonResponse<OpenAiBatchStatus>(res, "openai.batch-status"),
   });
 }
 
