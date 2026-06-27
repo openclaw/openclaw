@@ -136,11 +136,16 @@ export function assessClaimFreshness(params: {
   claim: WikiClaim;
   now?: Date;
 }): WikiFreshness {
-  const latestTimestamp = resolveLatestTimestamp([
-    params.claim.updatedAt,
-    params.page.updatedAt,
-    ...params.claim.evidence.map((evidence) => evidence.updatedAt),
-  ]);
+  let latestTimestamp = resolveLatestTimestamp([params.claim.updatedAt]);
+  let latestMs = parseTimestamp(latestTimestamp) ?? -1;
+  for (const evidence of params.claim.evidence) {
+    const evidenceMs = parseTimestamp(evidence.updatedAt);
+    if (evidenceMs === null || !evidence.updatedAt || evidenceMs <= latestMs) {
+      continue;
+    }
+    latestMs = evidenceMs;
+    latestTimestamp = evidence.updatedAt;
+  }
   return buildFreshnessFromTimestamp({ timestamp: latestTimestamp, now: params.now });
 }
 
