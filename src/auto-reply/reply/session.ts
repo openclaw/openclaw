@@ -72,6 +72,7 @@ import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import { resolveConversationBindingContextFromMessage } from "./conversation-binding-input.js";
 import { normalizeInboundTextNewlines } from "./inbound-text.js";
 import { stripMentions, stripStructuralPrefixes } from "./mentions.js";
+import { isReplyRunActiveForSessionId } from "./reply-run-registry.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
 import {
   maybeRetireLegacyMainDeliveryRoute,
@@ -547,7 +548,19 @@ async function initSessionStateAttemptLocked(
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
   // Without this, daily-reset transcripts are left as orphaned files on disk (#35481).
-  const previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
+  // However, when a turn is actively running for this session, deferring the archive
+  // prevents the running turn's transcript from being split across an archived file
+  // and a recreated orphan (#96546).  The next inbound message after the turn ends
+  // will perform the deferred archive.
+  const activeRunPreventsArchive =
+    !resetTriggered &&
+    !freshEntry &&
+    entry?.sessionId &&
+    isReplyRunActiveForSessionId(entry.sessionId);
+  const previousSessionEntry =
+    (resetTriggered || (!freshEntry && !activeRunPreventsArchive)) && entry
+      ? { ...entry }
+      : undefined;
   const previousSessionEndReason = resetTriggered
     ? resolveExplicitSessionEndReason(matchedResetTriggerLower)
     : resolveStaleSessionEndReason({

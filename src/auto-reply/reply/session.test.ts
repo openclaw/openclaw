@@ -44,6 +44,9 @@ const channelSummaryMocks = vi.hoisted(() => ({
 const browserMaintenanceMocks = vi.hoisted(() => ({
   closeTrackedBrowserTabsForSessions: vi.fn(async () => 0),
 }));
+const replyRunRegistryMocks = vi.hoisted(() => ({
+  isReplyRunActiveForSessionId: vi.fn((_sessionId: string) => false),
+}));
 
 type ForkSessionParamsForTest = {
   parentEntry: SessionEntry;
@@ -209,6 +212,7 @@ vi.mock("../../agents/model-catalog.js", () => ({
     { provider: "openai", id: "gpt-4o-mini", name: "GPT-4o mini" },
   ]),
 }));
+vi.mock("./reply-run-registry.js", () => replyRunRegistryMocks);
 
 let suiteRoot = "";
 let suiteCase = 0;
@@ -1322,6 +1326,57 @@ describe("initSessionState RawBody", () => {
     // ...while the auto-fallback model override is cleared.
     expect(result.sessionEntry.modelOverride).toBeUndefined();
     expect(result.sessionEntry.providerOverride).toBeUndefined();
+  });
+
+  it("defers transcript archive when an active run exists during daily stale rollover (#96546)", async () => {
+    // Regression: if a turn is still generating when the daily boundary is
+    // crossed, archiving (renaming) the live transcript mid-run splits the
+    // output across the archived file and a recreated orphan. The fix skips
+    // the archive when an active reply run is detected, deferring it to the
+    // next inbound message after the turn completes.
+    const root = await makeCaseDir("openclaw-daily-rollover-active-run-");
+    const storePath = path.join(root, "sessions.json");
+    const sessionKey = "agent:main:discord:channel:daily-rollover-active-run";
+    const existingSessionId = "session-with-active-run";
+    const staleStartedAt = Date.now() - 48 * 60 * 60 * 1000;
+
+    await writeSessionStoreFast(storePath, {
+      [sessionKey]: {
+        sessionId: existingSessionId,
+        updatedAt: staleStartedAt,
+        sessionStartedAt: staleStartedAt,
+        lastInteractionAt: staleStartedAt,
+        systemSent: true,
+      },
+    });
+
+    // Simulate an active reply run for the existing session.
+    replyRunRegistryMocks.isReplyRunActiveForSessionId.mockImplementation(
+      (sid: string) => sid === existingSessionId,
+    );
+
+    const cfg = {
+      session: { store: storePath },
+    } as OpenClawConfig;
+
+    const result = await initSessionState({
+      ctx: {
+        RawBody: "hello while running",
+        ChatType: "channel",
+        SessionKey: sessionKey,
+      },
+      cfg,
+      commandAuthorized: true,
+    });
+
+    // The session is still considered stale and rolls over.
+    expect(result.isNewSession).toBe(true);
+    expect(result.resetTriggered).toBe(false);
+    expect(result.sessionId).not.toBe(existingSessionId);
+    // But the previous transcript must NOT be archived while a run is active.
+    expect(result.previousSessionEntry).toBeUndefined();
+
+    replyRunRegistryMocks.isReplyRunActiveForSessionId.mockReset();
   });
 
   it("rotates local session state for /new on bound ACP sessions", async () => {
