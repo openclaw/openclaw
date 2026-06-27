@@ -119,7 +119,7 @@ export function inferBasePathFromPathname(pathname: string): string {
     }
     return index ? `/${segments.slice(0, index).join("/")}` : "";
   }
-  return normalized;
+  return "";
 }
 
 export function locationForRoute(routeId: RouteId, basePath: string): RouteLocation {

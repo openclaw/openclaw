@@ -311,23 +311,27 @@ class OpenClawShell extends LitElement {
     this.requestUpdate();
   };
 
+  private chatNavigationOptions(options?: ApplicationNavigationOptions) {
+    if (options) {
+      return options;
+    }
+    const sessionKey =
+      new URLSearchParams(this.routeState.location?.search).get("session")?.trim() ||
+      this.context?.gateway.snapshot.sessionKey.trim();
+    return sessionKey ? { search: searchForSession(sessionKey) } : undefined;
+  }
+
   private navigate(routeId: string, options?: ApplicationNavigationOptions) {
     const context = this.context;
     if (!context || routeId !== "chat") {
       return;
     }
-    const sessionKey =
-      new URLSearchParams(this.routeState.location?.search).get("session")?.trim() ||
-      context.gateway.snapshot.sessionKey.trim();
-    const navigationOptions =
-      options ??
-      (sessionKey
-        ? {
-            search: searchForSession(sessionKey),
-          }
-        : undefined);
     this.closeNavDrawer({ restoreFocus: true });
-    context.navigate("chat", navigationOptions);
+    context.navigate("chat", this.chatNavigationOptions(options));
+  }
+
+  private replaceChatWithCurrentSession() {
+    this.context?.replace("chat", this.chatNavigationOptions());
   }
 
   private toggleNavDrawer(trigger: HTMLElement) {
@@ -499,7 +503,7 @@ class OpenClawShell extends LitElement {
           <openclaw-router-outlet
             .router=${runtime.router}
             .retryContext=${context}
-            .onNotFound=${() => context.replace("chat")}
+            .onNotFound=${() => this.replaceChatWithCurrentSession()}
           ></openclaw-router-outlet>
         </main>
         <openclaw-exec-approval
