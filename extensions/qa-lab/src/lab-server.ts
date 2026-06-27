@@ -84,14 +84,25 @@ export function writeQaLabServerError(res: Parameters<typeof writeError>[0], err
 }
 
 function countQaLabScenarioRun(scenarios: QaLabScenarioOutcome[]) {
-  return {
+  const countKeyByStatus = {
+    pending: "pending",
+    running: "running",
+    pass: "passed",
+    fail: "failed",
+    skip: "skipped",
+  } as const;
+  const counts = {
     total: scenarios.length,
-    pending: scenarios.filter((scenario) => scenario.status === "pending").length,
-    running: scenarios.filter((scenario) => scenario.status === "running").length,
-    passed: scenarios.filter((scenario) => scenario.status === "pass").length,
-    failed: scenarios.filter((scenario) => scenario.status === "fail").length,
-    skipped: scenarios.filter((scenario) => scenario.status === "skip").length,
+    pending: 0,
+    running: 0,
+    passed: 0,
+    failed: 0,
+    skipped: 0,
   };
+  for (const scenario of scenarios) {
+    counts[countKeyByStatus[scenario.status]] += 1;
+  }
+  return counts;
 }
 
 function withQaLabRunCounts(run: Omit<QaLabScenarioRun, "counts">): QaLabScenarioRun {
