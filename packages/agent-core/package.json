@@ -96,7 +96,6 @@
   },
   "dependencies": {
     "@openclaw/llm-core": "workspace:*",
-    "@openclaw/normalization-core": "workspace:*",
     "typebox": "1.1.39"
   }
 }
