@@ -737,11 +737,42 @@ function ensureArgsObject(value: unknown): Record<string, unknown> {
   return parseJsonObjectPreservingUnsafeIntegers(value) ?? {};
 }
 
+/**
+ * Serialize tool-call arguments to a JSON string for the OpenAI-compatible
+ * Chat Completions wire format.
+ *
+ * The OpenAI spec (and Ollama Cloud's strict Go server behind
+ * `/v1/chat/completions`) requires `tool_calls[].function.arguments` to be a
+ * STRING. Native Ollama `/api/chat` instead wants an object — see
+ * {@link normalizeOllamaCompatMessageToolArgs} vs the native extraction path.
+ *
+ * Already-serialized strings are passed through unchanged so we don't
+ * double-encode; everything else is normalized through `ensureArgsObject`
+ * first (preserving unsafe integers) and then stringified.
+ */
+function ensureArgsString(value: unknown): string {
+  if (typeof value === "string") {
+    return value;
+  }
+  return JSON.stringify(ensureArgsObject(value));
+}
+
 function normalizeOllamaToolCallArguments(value: unknown): Record<string, unknown> {
   return ensureArgsObject(value);
 }
 
-function normalizeOllamaCompatMessageToolArgs(payloadRecord: Record<string, unknown>): void {
+/**
+ * Normalize `tool_calls[].function.arguments` on an OpenAI-compatible
+ * (`/v1/chat/completions`) payload to JSON STRINGS.
+ *
+ * Ollama Cloud (`*:cloud` models) proxies through an OpenAI-compatible Go
+ * server that rejects object-form arguments with
+ * `400 json: cannot unmarshal object into Go struct field
+ * .messages.tool_calls.function.arguments of type string` on the second turn,
+ * when prior assistant tool-call history is replayed. The native `/api/chat`
+ * path keeps object form and is handled separately (see {@link extractToolCalls}).
+ */
+export function normalizeOllamaCompatMessageToolArgs(payloadRecord: Record<string, unknown>): void {
   const messages = payloadRecord.messages;
   if (!Array.isArray(messages)) {
     return;
@@ -757,7 +788,7 @@ function normalizeOllamaCompatMessageToolArgs(payloadRecord: Record<string, unkn
     if (functionCall && typeof functionCall === "object" && !Array.isArray(functionCall)) {
       const functionCallRecord = functionCall as Record<string, unknown>;
       if (Object.hasOwn(functionCallRecord, "arguments")) {
-        functionCallRecord.arguments = ensureArgsObject(functionCallRecord.arguments);
+        functionCallRecord.arguments = ensureArgsString(functionCallRecord.arguments);
       }
     }
 
@@ -775,7 +806,7 @@ function normalizeOllamaCompatMessageToolArgs(payloadRecord: Record<string, unkn
       }
       const functionRecord = functionSpec as Record<string, unknown>;
       if (Object.hasOwn(functionRecord, "arguments")) {
-        functionRecord.arguments = ensureArgsObject(functionRecord.arguments);
+        functionRecord.arguments = ensureArgsString(functionRecord.arguments);
       }
     }
   }

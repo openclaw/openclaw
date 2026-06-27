@@ -9,7 +9,11 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
 }));
 
-import { buildAssistantMessage, createOllamaStreamFn } from "./stream.js";
+import {
+  buildAssistantMessage,
+  createOllamaStreamFn,
+  normalizeOllamaCompatMessageToolArgs,
+} from "./stream.js";
 
 function makeOllamaResponse(params: {
   content?: string;
@@ -520,5 +524,119 @@ describe("createOllamaStreamFn thinking events", () => {
       reason: "aborted",
       error: { stopReason: "aborted" },
     });
+  });
+});
+
+describe("normalizeOllamaCompatMessageToolArgs (OpenAI-compatible Ollama Cloud)", () => {
+  // Regression for #96441: Ollama Cloud (*:cloud) proxies through an
+  // OpenAI-compatible Go server that requires tool_calls[].function.arguments
+  // to be a JSON STRING. Replaying assistant tool-call history on the 2nd turn
+  // with object-form arguments produced:
+  //   400 json: cannot unmarshal object into Go struct field
+  //   .messages.tool_calls.function.arguments of type string
+  it("serializes object tool-call arguments to a JSON string", () => {
+    const payload = {
+      messages: [
+        {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id: "call_1",
+              type: "function",
+              function: { name: "config.get", arguments: { key: "gateway.port" } },
+            },
+          ],
+        },
+      ],
+    };
+
+    normalizeOllamaCompatMessageToolArgs(payload);
+
+    const args = (payload.messages[0].tool_calls as Array<Record<string, never>>)[0].function
+      .arguments;
+    expect(typeof args).toBe("string");
+    expect(JSON.parse(args as unknown as string)).toEqual({ key: "gateway.port" });
+  });
+
+  it("leaves already-stringified arguments unchanged (no double-encoding)", () => {
+    const payload = {
+      messages: [
+        {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              function: { name: "search", arguments: '{"q":"hello"}' },
+            },
+          ],
+        },
+      ],
+    };
+
+    normalizeOllamaCompatMessageToolArgs(payload);
+
+    const args = (payload.messages[0].tool_calls as Array<Record<string, never>>)[0].function
+      .arguments;
+    expect(args).toBe('{"q":"hello"}');
+    expect(JSON.parse(args as unknown as string)).toEqual({ q: "hello" });
+  });
+
+  it("normalizes the legacy function_call shape to a string", () => {
+    const payload = {
+      messages: [
+        {
+          role: "assistant",
+          content: "",
+          function_call: { name: "lookup", arguments: { id: 42 } },
+        },
+      ],
+    };
+
+    normalizeOllamaCompatMessageToolArgs(payload);
+
+    const args = (payload.messages[0].function_call as Record<string, unknown>).arguments;
+    expect(typeof args).toBe("string");
+    expect(JSON.parse(args as string)).toEqual({ id: 42 });
+  });
+
+  it("handles the second-turn replay payload from the bug report", () => {
+    // assistant tool call followed by its tool result, replayed on turn 2
+    const payload = {
+      messages: [
+        { role: "user", content: "What is config.gateway.port?" },
+        {
+          role: "assistant",
+          content: "",
+          tool_calls: [
+            {
+              id: "call_abc",
+              type: "function",
+              function: { name: "config.get", arguments: { key: "gateway.port" } },
+            },
+          ],
+        },
+        { role: "tool", tool_name: "config.get", content: "8642" },
+      ],
+    };
+
+    normalizeOllamaCompatMessageToolArgs(payload);
+
+    const assistant = payload.messages[1] as {
+      tool_calls: Array<{ function: { arguments: unknown } }>;
+    };
+    expect(typeof assistant.tool_calls[0].function.arguments).toBe("string");
+    // user + tool messages untouched
+    expect(payload.messages[0]).toEqual({ role: "user", content: "What is config.gateway.port?" });
+    expect(payload.messages[2]).toEqual({ role: "tool", tool_name: "config.get", content: "8642" });
+  });
+
+  it("is a no-op when there are no messages or tool calls", () => {
+    const empty = { model: "glm-5.2:cloud" } as Record<string, unknown>;
+    expect(() => normalizeOllamaCompatMessageToolArgs(empty)).not.toThrow();
+
+    const plain = { messages: [{ role: "user", content: "hi" }] };
+    normalizeOllamaCompatMessageToolArgs(plain);
+    expect(plain.messages[0]).toEqual({ role: "user", content: "hi" });
   });
 });
