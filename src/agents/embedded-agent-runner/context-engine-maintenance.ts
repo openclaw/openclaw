@@ -475,6 +475,14 @@ async function runDeferredTurnMaintenanceWorker(params: {
     }
 
     const endedAt = Date.now();
+    if (!result?.changed) {
+      setDetachedTaskDeliveryStatusByRunId({
+        runId: params.runId,
+        runtime: "acp",
+        sessionKey: params.sessionKey,
+        deliveryStatus: "not_applicable",
+      });
+    }
     completeTaskRunByRunId({
       runId: params.runId,
       runtime: "acp",
@@ -698,11 +706,21 @@ export async function runContextEngineMaintenance(params: {
     params.contextEngine.info.turnMaintenanceMode === "background";
 
   if (shouldDefer) {
+    const resolvedSessionKey = normalizeSessionKey(params.sessionKey) ?? params.sessionId;
+    const hasDeferredMaintenance = await resolveDeferredTurnMaintenanceHint({
+      contextEngine: params.contextEngine,
+      sessionId: params.sessionId,
+      sessionKey: resolvedSessionKey,
+      runtimeContext: params.runtimeContext,
+    });
+    if (!hasDeferredMaintenance) {
+      return undefined;
+    }
     try {
       const deferred = scheduleDeferredTurnMaintenance({
         contextEngine: params.contextEngine,
         sessionId: params.sessionId,
-        sessionKey: params.sessionKey ?? params.sessionId,
+        sessionKey: resolvedSessionKey,
         sessionFile: params.sessionFile,
         sessionManager: params.sessionManager,
         runtimeContext: params.runtimeContext,
@@ -739,5 +757,28 @@ export async function runContextEngineMaintenance(params: {
   } catch (err) {
     log.warn(`context engine maintain failed (${params.reason}): ${String(err)}`);
     return undefined;
+  }
+}
+
+async function resolveDeferredTurnMaintenanceHint(params: {
+  contextEngine: ContextEngine;
+  sessionId: string;
+  sessionKey?: string;
+  runtimeContext?: ContextEngineRuntimeContext;
+}): Promise<boolean> {
+  const hint = params.contextEngine.info.hasDeferredMaintenance;
+  if (typeof hint !== "function") {
+    return true;
+  }
+  try {
+    return await hint({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      reason: "turn",
+      runtimeContext: params.runtimeContext,
+    });
+  } catch (err) {
+    log.warn(`context engine maintenance hint failed: ${String(err)}`);
+    return true;
   }
 }

@@ -173,10 +173,28 @@ export type ContextEngineInfo = {
    */
   turnMaintenanceMode?: "foreground" | "background";
   /**
+   * Optional hint for background turn maintenance. Engines that can cheaply
+   * expose durable maintenance debt should return false when a turn-triggered
+   * background maintenance pass would be a no-op.
+   *
+   * Hosts preserve backward compatibility by scheduling maintenance when this
+   * hint is absent or fails.
+   */
+  hasDeferredMaintenance?: (
+    params: ContextEngineMaintenanceHintParams,
+  ) => boolean | Promise<boolean>;
+  /**
    * Host capability requirements for operations where using an unsupported
    * runtime would silently degrade or corrupt the engine's behavior.
    */
   hostRequirements?: Partial<Record<ContextEngineOperation, ContextEngineHostRequirements>>;
+};
+
+export type ContextEngineMaintenanceHintParams = {
+  sessionId: string;
+  sessionKey?: string;
+  reason: "turn";
+  runtimeContext?: ContextEngineRuntimeContext;
 };
 
 export type SubagentSpawnPreparation = {

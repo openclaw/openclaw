@@ -128,6 +128,7 @@ export type {
   ContextEngineHostCapability,
   ContextEngineHostRequirements,
   ContextEngineInfo,
+  ContextEngineMaintenanceHintParams,
   ContextEngineMaintenanceResult,
   ContextEngineOperation,
   ContextEngineRuntimeReasonCode,
