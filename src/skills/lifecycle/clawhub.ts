@@ -1380,7 +1380,13 @@ async function performClawHubSkillInstall(
             ...(params.ownerHandle ? { ownerHandle: params.ownerHandle } : {}),
           });
       if (latestResolution.installKind === "github") {
-        version = latestResolution.github.commit;
+        const pinnedCommit = normalizeGitHubCommitSegment(latestResolution.github.commit);
+        if (!pinnedCommit) {
+          throw new Error(
+            `Skill "${params.slug}" resolved to a non-immutable GitHub source ref "${latestResolution.github.commit}"; expected a commit sha.`,
+          );
+        }
+        version = pinnedCommit;
         officialClawHubSkill = isDefaultOfficialClawHubSkillSource({
           baseUrl: params.baseUrl,
           detail,
@@ -1391,7 +1397,7 @@ async function performClawHubSkillInstall(
         params.logger?.info?.(`Downloading ${params.slug}@${version} from GitHub…`);
         archive = await downloadClawHubGitHubSkillArchive({
           repo: latestResolution.github.repo,
-          commit: latestResolution.github.commit,
+          commit: pinnedCommit,
         });
       } else {
         version = latestResolution.archive.version;

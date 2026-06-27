@@ -1425,6 +1425,37 @@ describe("skills-clawhub", () => {
     });
   });
 
+  it("rejects a GitHub-backed ClawHub skill resolved to a non-immutable ref", async () => {
+    fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
+      ok: true,
+      slug: "aiq-deploy",
+      installKind: "github",
+      github: {
+        repo: "NVIDIA/skills",
+        path: "skills/aiq-deploy",
+        commit: "main",
+        contentHash: "hash-aiq-deploy",
+        sourceUrl: "https://github.com/NVIDIA/skills/tree/main/skills/aiq-deploy",
+      },
+    });
+    withExtractedArchiveRootMock.mockImplementationOnce(async (params) => {
+      return await params.onExtracted("/tmp/extracted-github-repo");
+    });
+    installPackageDirMock.mockResolvedValueOnce({
+      ok: true,
+      targetDir: "/tmp/workspace/skills/aiq-deploy",
+    });
+
+    const result = await installSkillFromClawHub({
+      workspaceDir: "/tmp/workspace",
+      slug: "aiq-deploy",
+    });
+
+    expect(result.ok).toBe(false);
+    expect(result.ok ? "" : result.error).toMatch(/non-immutable GitHub source ref/);
+    expect(downloadClawHubGitHubSkillArchiveMock).not.toHaveBeenCalled();
+  });
+
   it("passes forceInstall to the ClawHub install resolver", async () => {
     const commit = "b".repeat(40);
     fetchClawHubSkillInstallResolutionMock.mockResolvedValueOnce({
