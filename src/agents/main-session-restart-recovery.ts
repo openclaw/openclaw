@@ -646,6 +646,141 @@ async function resumeMainSession(params: {
   }
 }
 
+async function updatePendingFinalDeliveryAfterDirectAttempt(params: {
+  delivered: boolean;
+  error?: string;
+  pendingText: string;
+  storePath: string;
+  sessionKey: string;
+}): Promise<void> {
+  await applyRestartRecoveryLifecycle({
+    storePath: params.storePath,
+    update: (entries) => {
+      const current = entries.find((entry) => entry.sessionKey === params.sessionKey);
+      const entry = current?.entry;
+      if (!entry) {
+        return { result: undefined };
+      }
+      const currentPendingText =
+        typeof entry.pendingFinalDeliveryText === "string"
+          ? sanitizePendingFinalDeliveryText(entry.pendingFinalDeliveryText)
+          : "";
+      if (currentPendingText !== params.pendingText) {
+        return { result: undefined };
+      }
+
+      const now = Date.now();
+      if (params.delivered) {
+        entry.pendingFinalDelivery = undefined;
+        entry.pendingFinalDeliveryText = undefined;
+        entry.pendingFinalDeliveryCreatedAt = undefined;
+        entry.pendingFinalDeliveryLastAttemptAt = undefined;
+        entry.pendingFinalDeliveryAttemptCount = undefined;
+        entry.pendingFinalDeliveryLastError = undefined;
+        entry.pendingFinalDeliveryContext = undefined;
+        entry.pendingFinalDeliveryIntentId = undefined;
+      } else {
+        entry.pendingFinalDeliveryLastAttemptAt = now;
+        entry.pendingFinalDeliveryAttemptCount = (entry.pendingFinalDeliveryAttemptCount ?? 0) + 1;
+        entry.pendingFinalDeliveryLastError = params.error ?? "delivery failed";
+        entry.pendingFinalDeliveryText = params.pendingText;
+      }
+      entry.updatedAt = now;
+      return {
+        result: undefined,
+        replacements: [{ sessionKey: params.sessionKey, entry }],
+      };
+    },
+  });
+}
+
+async function deliverTerminalPendingFinalDelivery(params: {
+  cfg?: OpenClawConfig;
+  entry: SessionEntry;
+  storePath: string;
+  sessionKey: string;
+}): Promise<boolean> {
+  const pendingText =
+    typeof params.entry.pendingFinalDeliveryText === "string"
+      ? sanitizePendingFinalDeliveryText(params.entry.pendingFinalDeliveryText)
+      : "";
+  if (!pendingText) {
+    await updatePendingFinalDeliveryAfterDirectAttempt({
+      delivered: true,
+      pendingText,
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+    });
+    return true;
+  }
+
+  const deliveryContext = resolveRestartRecoveryDeliveryContext({
+    cfg: params.cfg,
+    entry: params.entry,
+    includeSessionDeliveryFallback: true,
+    sessionKey: params.sessionKey,
+  });
+  if (!deliveryContext) {
+    await updatePendingFinalDeliveryAfterDirectAttempt({
+      delivered: false,
+      error: "missing delivery context",
+      pendingText,
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+    });
+    return false;
+  }
+
+  const messageParams: Record<string, unknown> = {
+    to: deliveryContext.to,
+    message: pendingText,
+    bestEffort: true,
+  };
+  if (deliveryContext.threadId != null) {
+    messageParams.threadId = deliveryContext.threadId;
+  }
+  const actionParams: Record<string, unknown> = {
+    channel: deliveryContext.channel,
+    action: "send",
+    sessionKey: params.sessionKey,
+    sessionId: params.entry.sessionId,
+    idempotencyKey: `main-session-pending-final:${params.entry.sessionId}:${
+      params.entry.pendingFinalDeliveryCreatedAt ?? "unknown"
+    }`,
+    params: messageParams,
+  };
+  const accountId = normalizeOptionalString(deliveryContext.accountId);
+  if (accountId) {
+    actionParams.accountId = accountId;
+  }
+
+  try {
+    await callGateway({
+      method: "message.action",
+      params: actionParams,
+      timeoutMs: 10_000,
+    });
+    await updatePendingFinalDeliveryAfterDirectAttempt({
+      delivered: true,
+      pendingText,
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+    });
+    log.info(`delivered terminal pending final reply: ${params.sessionKey}`);
+    return true;
+  } catch (err) {
+    await updatePendingFinalDeliveryAfterDirectAttempt({
+      delivered: false,
+      error: String(err),
+      pendingText,
+      storePath: params.storePath,
+      sessionKey: params.sessionKey,
+    });
+    log.warn(`failed to deliver terminal pending final reply ${params.sessionKey}: ${String(err)}`);
+    return false;
+  }
+}
+
 export async function markRestartAbortedMainSessionsFromLocks(params: {
   sessionsDir: string;
   cleanedLocks: SessionLockInspection[];
@@ -748,7 +883,57 @@ async function recoverStore(params: {
   for (const [sessionKey, entry] of Object.entries(store).toSorted(([a], [b]) =>
     a.localeCompare(b),
   )) {
-    if (!entry || entry.status !== "running" || entry.abortedLastRun !== true) {
+    if (!entry) {
+      continue;
+    }
+    const hasPendingFinalDelivery =
+      entry.pendingFinalDelivery === true && Boolean(entry.pendingFinalDeliveryText);
+    if (hasPendingFinalDelivery && entry.status !== "running") {
+      if (shouldSkipMainRecovery(entry, sessionKey)) {
+        result.skipped++;
+        continue;
+      }
+      if (
+        !isRoutableRecoveryStore({
+          cfg: params.cfg,
+          sessionKey,
+          storePath: params.storePath,
+        })
+      ) {
+        result.skipped++;
+        continue;
+      }
+      if (
+        hasCurrentProcessOwner({
+          activeSessionIds: resolveActiveSessionIds(),
+          activeSessionKeys: resolveActiveSessionKeys(),
+          entry,
+          sessionKey,
+        })
+      ) {
+        result.skipped++;
+        continue;
+      }
+      const resumeDedupeKey = sessionKey;
+      if (params.resumedSessionKeys.has(resumeDedupeKey)) {
+        result.skipped++;
+        continue;
+      }
+      const delivered = await deliverTerminalPendingFinalDelivery({
+        cfg: params.cfg,
+        entry,
+        storePath: params.storePath,
+        sessionKey,
+      });
+      if (delivered) {
+        params.resumedSessionKeys.add(resumeDedupeKey);
+        result.recovered++;
+      } else {
+        result.failed++;
+      }
+      continue;
+    }
+    if (entry.status !== "running" || entry.abortedLastRun !== true) {
       continue;
     }
     if (shouldSkipMainRecovery(entry, sessionKey)) {
