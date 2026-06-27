@@ -100,11 +100,21 @@
       "choiceId": "xai-oauth",
       "choiceLabel": "xAI OAuth",
       "choiceHint": "Remote-friendly browser sign-in without a localhost callback",
-      "deprecatedChoiceIds": ["xai-device-code"],
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",
       "groupHint": "API key or OAuth",
       "onboardingFeatured": true
+    },
+    {
+      "provider": "xai",
+      "method": "device-code",
+      "choiceId": "xai-device-code",
+      "choiceLabel": "xAI device code",
+      "choiceHint": "Compatibility alias for xAI OAuth device-code sign-in",
+      "assistantVisibility": "manual-only",
+      "groupId": "xai",
+      "groupLabel": "xAI (Grok)",
+      "groupHint": "API key or OAuth"
     }
   ],
   "uiHints": {

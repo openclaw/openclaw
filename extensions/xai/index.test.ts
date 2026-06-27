@@ -95,9 +95,9 @@ describe("xai provider plugin", () => {
     expect(deviceCode?.wizard).toBeUndefined();
     expect(manifest.providerAuthChoices).toContainEqual(
       expect.objectContaining({
-        choiceId: "xai-oauth",
-        method: "oauth",
-        deprecatedChoiceIds: ["xai-device-code"],
+        assistantVisibility: "manual-only",
+        choiceId: "xai-device-code",
+        method: "device-code",
       }),
     );
   });
