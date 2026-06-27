@@ -13,6 +13,7 @@ import {
 import type { VoiceCallConfig } from "./config.js";
 import {
   resolveVoiceCallEffectiveConfig,
+  resolveVoiceCallNumberRouteKeyForCall,
   resolveVoiceCallSessionKey,
   resolveTwilioAuthToken,
   resolveVoiceCallConfig,
@@ -111,20 +112,19 @@ function loadRealtimeHandler(): Promise<RealtimeHandlerModule> {
 
 function resolveVoiceCallConsultSessionKey(call: {
   config: VoiceCallConfig;
+  coreSession?: OpenClawConfig["session"];
   sessionKey?: string;
   from?: string;
   to?: string;
   direction?: "inbound" | "outbound";
   callId: string;
 }): string {
-  if (call.sessionKey) {
-    return call.sessionKey;
-  }
-  const phone = call.direction === "outbound" ? call.to : call.from;
   return resolveVoiceCallSessionKey({
     config: call.config,
     callId: call.callId,
-    phone,
+    phone: call.direction === "outbound" ? call.to : call.from,
+    explicitSessionKey: call.sessionKey,
+    coreSession: call.coreSession,
   });
 }
 
@@ -309,7 +309,7 @@ export async function createVoiceCallRuntime(params: {
   if (stateRuntime) {
     setVoiceCallStateRuntime({ state: stateRuntime });
   }
-  const manager = new CallManager(config);
+  const manager = new CallManager(config, undefined, cfg.session);
   const realtimeProvider = config.realtime.enabled
     ? await resolveRealtimeProvider({
         config,
@@ -358,15 +358,13 @@ export async function createVoiceCallRuntime(params: {
           if (!call) {
             return { error: `Call "${callId}" not found` };
           }
-          const numberRouteKey =
-            typeof call.metadata?.numberRouteKey === "string"
-              ? call.metadata.numberRouteKey
-              : call.to;
+          const numberRouteKey = resolveVoiceCallNumberRouteKeyForCall(call);
           const effectiveConfig = resolveVoiceCallEffectiveConfig(config, numberRouteKey).config;
           const agentId = effectiveConfig.agentId ?? "main";
           const sessionKey = resolveVoiceCallConsultSessionKey({
             ...call,
             config: effectiveConfig,
+            coreSession: cfg.session,
           });
           const requesterSessionKey =
             typeof call.metadata?.requesterSessionKey === "string"
