@@ -97,6 +97,27 @@ describe("session accessor file-backed seam", () => {
     });
   });
 
+  it("keeps case-distinct Matrix sessions separate under nested agent ownership", async () => {
+    const mixedKey = "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org";
+    const lowerKey = "agent:voice:agent:other:matrix:channel:!Roomabc:example.org";
+
+    await upsertSessionEntry(
+      { sessionKey: mixedKey, storePath },
+      { sessionId: "mixed-session", updatedAt: 10 },
+    );
+    await upsertSessionEntry(
+      { sessionKey: lowerKey, storePath },
+      { sessionId: "lower-session", updatedAt: 20 },
+    );
+
+    expect(loadSessionEntry({ sessionKey: mixedKey, storePath })?.sessionId).toBe("mixed-session");
+    expect(loadSessionEntry({ sessionKey: lowerKey, storePath })?.sessionId).toBe("lower-session");
+    expect(listSessionEntries({ storePath }).map((entry) => entry.sessionKey)).toEqual([
+      mixedKey,
+      lowerKey,
+    ]);
+  });
+
   it("marks abort targets while canonicalizing legacy session keys", async () => {
     fs.writeFileSync(
       storePath,

@@ -597,6 +597,10 @@ describe("Integration: saveSessionStore with pruning", () => {
             lastChannel: "telegram",
             lastTo: "6101296751",
           },
+          "agent:main:telegram::direct:malformed": {
+            sessionId: "malformed-session",
+            updatedAt: now,
+          },
         } satisfies Record<string, SessionEntry>,
         null,
         2,
@@ -614,8 +618,9 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const preview = dryRun.previewResults[0];
     expect(preview?.summary.dmScopeRetired).toBe(1);
-    expect(preview?.summary.afterCount).toBe(1);
+    expect(preview?.summary.afterCount).toBe(2);
     expect(preview?.dmScopeRetiredKeys.has("agent:main:telegram:direct:6101296751")).toBe(true);
+    expect(preview?.dmScopeRetiredKeys.has("agent:main:telegram::direct:malformed")).toBe(false);
     expect(preview?.summary.unreferencedArtifacts.removedFiles).toBe(0);
     await expectPathExists(directTranscript);
   });
@@ -625,6 +630,7 @@ describe("Integration: saveSessionStore with pruning", () => {
 
     const now = Date.now();
     const directTranscript = path.join(testDir, "direct-session.jsonl");
+    const nestedTranscript = path.join(testDir, "nested-agent-session.jsonl");
     await fs.writeFile(
       storePath,
       JSON.stringify(
@@ -640,6 +646,11 @@ describe("Integration: saveSessionStore with pruning", () => {
             lastChannel: "telegram",
             lastTo: "6101296751",
           },
+          "agent:main:agent:direct:customer": {
+            sessionId: "nested-agent-session",
+            updatedAt: now,
+            sessionFile: nestedTranscript,
+          },
         } satisfies Record<string, SessionEntry>,
         null,
         2,
@@ -648,6 +659,7 @@ describe("Integration: saveSessionStore with pruning", () => {
     );
     await fs.writeFile(path.join(testDir, "main-session.jsonl"), "main", "utf-8");
     await fs.writeFile(directTranscript, "direct", "utf-8");
+    await fs.writeFile(nestedTranscript, "nested", "utf-8");
 
     const applied = await runSessionsCleanup({
       cfg: { session: { dmScope: "main" } },
@@ -658,8 +670,10 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(applied.appliedSummaries[0]?.dmScopeRetired).toBe(1);
     const persisted = loadSessionStore(storePath, { skipCache: true });
     expect(persisted).toHaveProperty("agent:main:main");
+    expect(persisted).toHaveProperty("agent:main:agent:direct:customer");
     expect(persisted["agent:main:telegram:direct:6101296751"]).toBeUndefined();
     await expectPathMissing(directTranscript);
+    await expectPathExists(nestedTranscript);
     const files = await fs.readdir(testDir);
     const archivedDirectTranscripts = files.filter((name) =>
       name.startsWith("direct-session.jsonl.deleted."),

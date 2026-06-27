@@ -217,11 +217,19 @@ function isMainScopeStaleDirectSessionKey(params: {
   if (!parsed || normalizeAgentId(parsed.agentId) !== normalizeAgentId(params.targetAgentId)) {
     return false;
   }
-  const parts = parsed.rest.split(":").filter(Boolean);
+  const parts = parsed.rest.split(":");
+  // A nested agent wrapper is opaque plugin identity, never a stale DM route.
+  if (parts[0] === "agent") {
+    return false;
+  }
   return (
-    (parts.length === 2 && parts[0] === "direct") ||
-    (parts.length === 3 && parts[1] === "direct") ||
-    (parts.length === 4 && parts[2] === "direct")
+    (parts.length === 2 && parts[0] === "direct" && Boolean(parts[1])) ||
+    (parts.length === 3 && Boolean(parts[0]) && parts[1] === "direct" && Boolean(parts[2])) ||
+    (parts.length === 4 &&
+      Boolean(parts[0]) &&
+      Boolean(parts[1]) &&
+      parts[2] === "direct" &&
+      Boolean(parts[3]))
   );
 }
 
