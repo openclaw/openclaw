@@ -88,6 +88,30 @@ describe("buildFeishuPostMessagePayload", () => {
     });
   });
 
+  it("upgrades single newlines to paragraph breaks so Feishu renders separate lines", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "first paragraph\nsecond paragraph\n- item one\n- item two",
+    });
+
+    const parsed = JSON.parse(payload.content) as {
+      zh_cn: { content: Array<Array<{ tag: string; text?: string }>> };
+    };
+    const md = parsed.zh_cn.content[0].find((el) => el.tag === "md");
+    expect(md?.text).toBe("first paragraph\n\nsecond paragraph\n\n- item one\n\n- item two");
+  });
+
+  it("preserves newlines inside fenced code blocks and collapses oversized gaps", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "intro\n\n\n\n```\nline1\nline2\n```\noutro",
+    });
+
+    const parsed = JSON.parse(payload.content) as {
+      zh_cn: { content: Array<Array<{ tag: string; text?: string }>> };
+    };
+    const md = parsed.zh_cn.content[0].find((el) => el.tag === "md");
+    expect(md?.text).toBe("intro\n\n```\nline1\nline2\n```\n\noutro");
+  });
+
   it("leaves body-supplied at tags literal in the markdown element", () => {
     const payload = buildFeishuPostMessagePayload({
       messageText: 'please keep <at user_id="ou_body">Body User</at> literal',
@@ -99,7 +123,10 @@ describe("buildFeishuPostMessagePayload", () => {
         content: [
           [
             { tag: "at", user_id: "ou_target", user_name: "Target User" },
-            { tag: "md", text: 'please keep <at user_id="ou_body">Body User</at> literal' },
+            {
+              tag: "md",
+              text: 'please keep <at user_id="ou_body">Body User</at> literal',
+            },
           ],
         ],
       },
@@ -251,7 +278,10 @@ describe("getMessageFeishu", () => {
             content: [
               [
                 { tag: "at", user_id: "ou_target", user_name: "Target User" },
-                { tag: "md", text: 'body <at user_id="ou_body">Body User</at>' },
+                {
+                  tag: "md",
+                  text: 'body <at user_id="ou_body">Body User</at>',
+                },
               ],
             ],
           },
@@ -729,7 +759,10 @@ describe("editMessageFeishu", () => {
         content: JSON.stringify({ schema: "2.0" }),
       },
     });
-    expect(result).toEqual({ messageId: "om_card", contentType: "interactive" });
+    expect(result).toEqual({
+      messageId: "om_card",
+      contentType: "interactive",
+    });
   });
 });
 
