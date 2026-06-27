@@ -709,9 +709,15 @@ function shouldRouteCheckpointSessionMutationToSqlite(params: {
   const checkpoint = entry.compactionCheckpoints?.find(
     (candidate) => candidate.checkpointId === params.checkpointId,
   );
-  const hasCheckpointFile =
-    Boolean(checkpoint?.preCompaction.sessionFile?.trim()) ||
-    Boolean(checkpoint?.postCompaction.sessionFile?.trim());
+  const preCheckpointFile = checkpoint?.preCompaction.sessionFile?.trim();
+  const postCheckpointFile = checkpoint?.postCompaction.sessionFile?.trim();
+  if (
+    parseSqliteSessionFileMarker(preCheckpointFile) ||
+    parseSqliteSessionFileMarker(postCheckpointFile)
+  ) {
+    return true;
+  }
+  const hasCheckpointFile = Boolean(preCheckpointFile) || Boolean(postCheckpointFile);
   const hasCheckpointRowBoundary =
     Boolean(checkpoint?.preCompaction.entryId?.trim()) ||
     Boolean(checkpoint?.postCompaction.entryId?.trim());
