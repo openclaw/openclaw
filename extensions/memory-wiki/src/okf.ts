@@ -141,7 +141,7 @@ async function collectOkfMarkdownFiles(
       return [];
     });
     const files: string[] = [];
-    for (const entry of entries.toSorted((left, right) => left.name.localeCompare(right.name))) {
+    for (const entry of entries) {
       if (entry.name === ".git" || entry.name === "node_modules") {
         continue;
       }
