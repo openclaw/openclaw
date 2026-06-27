@@ -787,6 +787,122 @@ describe("anthropic transport stream", () => {
     expect(result.errorMessage).toBe("Anthropic stream ended before message_stop");
   });
 
+  it("defers a pre-tool text block's text_end until it carries the commentary phase", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_defer", usage: { input_tokens: 5, output_tokens: 0 } },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "I'll check the repo." },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "content_block_start",
+          index: 1,
+          content_block: { type: "tool_use", id: "tool_1", name: "exec", input: {} },
+        },
+        { type: "content_block_stop", index: 1 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "tool_use" },
+          usage: { input_tokens: 5, output_tokens: 7 },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        makeAnthropicTransportModel(),
+        { messages: [{ role: "user", content: "inspect" }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+      ),
+    );
+    const order: string[] = [];
+    let textEndPhase: unknown;
+    for await (const event of stream as AsyncIterable<{
+      type: string;
+      contentIndex?: number;
+      partial?: { content?: Array<{ textSignature?: string }> };
+    }>) {
+      order.push(event.type);
+      if (event.type === "text_end" && typeof event.contentIndex === "number") {
+        const signature = event.partial?.content?.[event.contentIndex]?.textSignature;
+        textEndPhase =
+          typeof signature === "string"
+            ? (JSON.parse(signature) as { phase?: string }).phase
+            : undefined;
+      }
+    }
+    // The pre-tool text block's text_end is held until the tool boundary tags it
+    // commentary, so a block-reply consumer never durably commits the narration
+    // as the answer. It is still emitted (once) and still before the tool call.
+    expect(textEndPhase).toBe("commentary");
+    expect(order.filter((type) => type === "text_end")).toHaveLength(1);
+    expect(order.indexOf("text_end")).toBeLessThan(order.indexOf("toolcall_start"));
+  });
+
+  it("emits a non-tool text block's text_end as unphased answer text", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_answer", usage: { input_tokens: 5, output_tokens: 0 } },
+        },
+        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "Here is the answer." },
+        },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 5, output_tokens: 4 },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+    const streamFn = createAnthropicMessagesTransportStreamFn();
+    const stream = await Promise.resolve(
+      streamFn(
+        makeAnthropicTransportModel(),
+        { messages: [{ role: "user", content: "answer me" }] } as AnthropicStreamContext,
+        { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+      ),
+    );
+    const order: string[] = [];
+    let textEndPhase: unknown = "unset";
+    for await (const event of stream as AsyncIterable<{
+      type: string;
+      contentIndex?: number;
+      partial?: { content?: Array<{ textSignature?: string }> };
+    }>) {
+      order.push(event.type);
+      if (event.type === "text_end" && typeof event.contentIndex === "number") {
+        const signature = event.partial?.content?.[event.contentIndex]?.textSignature;
+        textEndPhase =
+          typeof signature === "string"
+            ? (JSON.parse(signature) as { phase?: string }).phase
+            : undefined;
+      }
+    }
+    const result = await stream.result();
+    // No tool follows, so the held text_end is flushed unphased at message_delta
+    // and the text is delivered as the answer (never tagged commentary).
+    expect(order.filter((type) => type === "text_end")).toHaveLength(1);
+    expect(textEndPhase).toBeUndefined();
+    const textBlock = findRecord(result.content, (record) => record.type === "text");
+    expect(textBlock.text).toBe("Here is the answer.");
+    expect(textBlock.textSignature).toBeUndefined();
+  });
+
   it("preserves unsafe integer Anthropic tool-use input deltas", async () => {
     guardedFetchMock.mockResolvedValueOnce(
       createSseResponse([

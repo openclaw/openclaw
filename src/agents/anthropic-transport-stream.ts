@@ -1151,6 +1151,16 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         const reasoningContentThinkingBlocks = new Map<number, number>();
         const reasoningContentTextBlocks = new Map<number, number>();
         let sawMessageStop = false;
+        const pendingTextEnds: Array<Parameters<typeof eventSink.push>[0]> = [];
+        // Anthropic reveals tool turns only after the leading text block stops,
+        // and stop_reason lands later; hold text_end so subscribers do not
+        // commit pre-tool narration before commentary tagging is known.
+        const flushPendingTextEnds = () => {
+          for (const event of pendingTextEnds) {
+            eventSink.push(event);
+          }
+          pendingTextEnds.length = 0;
+        };
         const eventIndexKey = (eventIndex: unknown) =>
           typeof eventIndex === "number" ? eventIndex : -1;
         const appendReasoningContentThinkingDelta = (
@@ -1374,6 +1384,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               // phase — lets the subscriber release withheld text to the 💬 lane
               // at this boundary instead of guessing during the unphased deltas.
               tagPendingCommentaryText(output.content);
+              flushPendingTextEnds();
               const block: TransportContentBlock = {
                 type: "toolCall",
                 id: typeof contentBlock.id === "string" ? contentBlock.id : "",
@@ -1524,7 +1535,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
             blockIndexes.delete(eventIndex);
             delete block.index;
             if (block.type === "text") {
-              eventSink.push({
+              pendingTextEnds.push({
                 type: "text_end",
                 contentIndex: index,
                 content: block.text,
@@ -1588,6 +1599,10 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
               output.usage.cacheRead +
               output.usage.cacheWrite;
             calculateCost(model, output.usage);
+            if (output.stopReason === "toolUse") {
+              tagPendingCommentaryText(output.content);
+            }
+            flushPendingTextEnds();
           }
         }
         if (refusalBuffer && !sawMessageStop) {
@@ -1606,6 +1621,7 @@ export function createAnthropicMessagesTransportStreamFn(): StreamFn {
         if (output.stopReason === "toolUse") {
           tagPendingCommentaryText(output.content);
         }
+        flushPendingTextEnds();
         finalizeTransportStream({ stream, output });
       } catch (error) {
         if (refusalBuffer) {
