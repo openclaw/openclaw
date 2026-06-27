@@ -5,7 +5,28 @@
   },
   "enabledByDefault": true,
   "name": "Inworld",
-  "description": "Inworld streaming text-to-speech (MP3, OGG_OPUS, PCM telephony).",
+  "description": "OpenClaw Inworld provider plugin for LLM routing and text-to-speech.",
+  "providers": ["inworld"],
+  "modelIdNormalization": {
+    "providers": {
+      "inworld": {
+        "prefixWhenBare": "inworld"
+      }
+    }
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "inworld",
+      "hostSuffixes": ["api.inworld.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "inworld": {
+        "family": "openai"
+      }
+    }
+  },
   "setup": {
     "providers": [
       {
@@ -14,6 +35,22 @@
       }
     ]
   },
+  "providerAuthChoices": [
+    {
+      "provider": "inworld",
+      "method": "api-key",
+      "choiceId": "inworld-api-key",
+      "choiceLabel": "Inworld API key",
+      "groupId": "inworld",
+      "groupLabel": "Inworld",
+      "groupHint": "API key",
+      "onboardingScopes": ["text-inference"],
+      "optionKey": "inworldApiKey",
+      "cliFlag": "--inworld-api-key",
+      "cliOption": "--inworld-api-key <key>",
+      "cliDescription": "Inworld API key"
+    }
+  ],
   "contracts": {
     "speechProviders": ["inworld"]
   },
