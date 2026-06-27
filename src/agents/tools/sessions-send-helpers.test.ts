@@ -5,6 +5,7 @@ import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
 import {
   buildAgentToAgentMessageContext,
+  buildAgentToAgentAnnounceContext,
   buildAgentToAgentReplyContext,
   resolveAnnounceTargetFromKey,
   resolvePingPongTurns,
@@ -133,7 +134,7 @@ describe("agent-to-agent prompt context", () => {
     expect(context).toContain("Agent 1 (requester) channel: whatsapp.");
   });
 
-  it("preserves optional session line shape with concrete channel values", () => {
+  it("keeps ping-pong session lines placeholdered with concrete channel values", () => {
     const context = buildAgentToAgentReplyContext({
       requesterSessionKey: "agent:requester:main",
       targetSessionKey: "agent:target:main",
@@ -144,11 +145,12 @@ describe("agent-to-agent prompt context", () => {
     });
 
     expect(context).toContain("Current agent: Agent 2 (target).");
-    expect(context).toContain("Agent 1 (requester) session: agent:requester:main.");
+    expect(context).toContain("Agent 1 (requester) session: <REQUESTER_SESSION>.");
     expect(context).not.toContain("Return replies with sessions_send");
     expect(context).not.toContain("Agent 1 (requester) channel:");
     expect(context).toContain("Agent 2 (target) session: <TARGET_SESSION>.");
     expect(context).toContain("Agent 2 (target) channel: telegram.");
+    expect(context).not.toContain("agent:requester:main");
     expect(context).not.toContain("agent:target:main");
   });
 
@@ -163,9 +165,25 @@ describe("agent-to-agent prompt context", () => {
     });
 
     expect(context).toContain("Current agent: Agent 1 (requester).");
-    expect(context).toContain(
-      "Agent 1 (requester) session: agent:koro:whatsapp:group:120363426513385961@g.us.",
-    );
+    expect(context).toContain("Agent 1 (requester) session: <REQUESTER_SESSION>.");
     expect(context).not.toContain("Return replies with sessions_send");
+    expect(context).not.toContain("agent:koro:whatsapp:group:120363426513385961@g.us");
+  });
+
+  it("keeps announce session lines placeholdered", () => {
+    const context = buildAgentToAgentAnnounceContext({
+      requesterSessionKey: "agent:koro:whatsapp:group:120363426513385961@g.us",
+      requesterChannel: "whatsapp",
+      targetSessionKey: "agent:alfred:main",
+      targetChannel: "agent",
+      originalMessage: "Please handle this.",
+      roundOneReply: "Handled.",
+      latestReply: "Handled.",
+    });
+
+    expect(context).toContain("Agent 1 (requester) session: <REQUESTER_SESSION>.");
+    expect(context).not.toContain("Return replies with sessions_send");
+    expect(context).not.toContain("agent:koro:whatsapp:group:120363426513385961@g.us");
+    expect(context).not.toContain("agent:alfred:main");
   });
 });

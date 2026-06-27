@@ -60,7 +60,11 @@ function buildAgentSessionLines(params: {
   includeRequesterReturnInstruction?: boolean;
 }): string[] {
   const requesterSessionLine = params.requesterSessionKey
-    ? `Agent 1 (requester) session: ${params.requesterSessionKey}.`
+    ? `Agent 1 (requester) session: ${
+        params.includeRequesterReturnInstruction
+          ? params.requesterSessionKey
+          : "<REQUESTER_SESSION>"
+      }.`
     : undefined;
   const requesterReturnLine =
     params.requesterSessionKey && params.includeRequesterReturnInstruction
