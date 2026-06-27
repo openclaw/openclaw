@@ -10,6 +10,7 @@ import {
   type InputProvenance,
 } from "../sessions/input-provenance.js";
 import {
+  mergePreparedUserTurnOpenClawMetaForRuntime,
   mergePreparedUserTurnMessageForRuntime,
   type PersistedUserTurnMessage,
 } from "../sessions/user-turn-transcript.js";
@@ -65,6 +66,7 @@ export function guardSessionManager(
 
   const hookRunner = getGlobalHookRunner();
   let pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
+  let preparedUserTurnMessageForWriteHook: PersistedUserTurnMessage | undefined;
   const beforeMessageWrite = (event: { message: AgentMessage }) => {
     let message = event.message;
     let changed = false;
@@ -74,6 +76,7 @@ export function guardSessionManager(
         sessionKey: opts?.sessionKey,
       });
       if (result?.block) {
+        preparedUserTurnMessageForWriteHook = undefined;
         return result;
       }
       if (result?.message) {
@@ -84,6 +87,17 @@ export function guardSessionManager(
     const redacted = redactTranscriptMessage(message, opts?.config);
     if (redacted !== message) {
       message = redacted;
+      changed = true;
+    }
+    const withPreparedMeta = mergePreparedUserTurnOpenClawMetaForRuntime({
+      runtimeMessage: message,
+      ...(preparedUserTurnMessageForWriteHook
+        ? { preparedMessage: preparedUserTurnMessageForWriteHook }
+        : {}),
+    });
+    preparedUserTurnMessageForWriteHook = undefined;
+    if (withPreparedMeta !== message) {
+      message = withPreparedMeta;
       changed = true;
     }
     return changed ? { message } : undefined;
@@ -124,6 +138,7 @@ export function guardSessionManager(
       });
       if (merged !== withProvenance) {
         pendingPreparedUserTurnMessage = undefined;
+        preparedUserTurnMessageForWriteHook = prepared;
       }
       return merged;
     },
