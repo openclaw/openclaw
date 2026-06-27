@@ -29,4 +29,13 @@ describe("formatTerminalLink", () => {
 
     expect(out).toBe("fallbacktext[31m");
   });
+
+  it("preserves explicit empty fallback text", () => {
+    const out = formatTerminalLink("label", "https://example.test", {
+      fallback: "",
+      force: false,
+    });
+
+    expect(out).toBe("");
+  });
 });

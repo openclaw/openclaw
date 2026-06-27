@@ -22,7 +22,9 @@ export function formatTerminalLink(
   const safeUrl = stripTerminalLinkControls(url);
   const allow = opts?.force === true ? true : opts?.force === false ? false : process.stdout.isTTY;
   if (!allow) {
-    return opts?.fallback ? stripTerminalLinkControls(opts.fallback) : `${safeLabel} (${safeUrl})`;
+    return opts?.fallback === undefined
+      ? `${safeLabel} (${safeUrl})`
+      : stripTerminalLinkControls(opts.fallback);
   }
   return `\u001b]8;;${safeUrl}\u0007${safeLabel}\u001b]8;;\u0007`;
 }
