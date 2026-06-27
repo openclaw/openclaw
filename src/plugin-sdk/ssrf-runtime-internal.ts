@@ -1,5 +1,5 @@
-// Private helper surface for bundled plugins with configured local IPC.
-// Keep managed proxy bypass capabilities out of the public plugin SDK surface.
+// Transitional compatibility surface for bundled plugins that need managed
+// proxy bypass helpers. Re-exports from infra until a generic SDK seam exists.
 
 export { fetchConfiguredLocalOriginWithSsrFGuard } from "../infra/net/fetch-guard.js";
 export { registerManagedProxyBrowserCdpBypass } from "../infra/net/proxy/proxy-lifecycle.js";

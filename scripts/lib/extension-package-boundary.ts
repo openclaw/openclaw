@@ -81,6 +81,7 @@ export const EXTENSION_PACKAGE_BOUNDARY_BASE_PATHS = {
   "openclaw/plugin-sdk/provider-entry": ["../dist/plugin-sdk/provider-entry.d.ts"],
   "openclaw/plugin-sdk/secret-ref-runtime": ["../dist/plugin-sdk/secret-ref-runtime.d.ts"],
   "openclaw/plugin-sdk/ssrf-runtime": ["../dist/plugin-sdk/ssrf-runtime.d.ts"],
+  "openclaw/plugin-sdk/ssrf-runtime-internal": ["../dist/plugin-sdk/ssrf-runtime-internal.d.ts"],
   "@openclaw/qa-channel/api.js": ["../dist/plugin-sdk/extensions/qa-channel/api.d.ts"],
   "@openclaw/discord/api.js": ["../dist/plugin-sdk/extensions/discord/api.d.ts"],
   "@openclaw/slack/api.js": ["../dist/plugin-sdk/extensions/slack/api.d.ts"],

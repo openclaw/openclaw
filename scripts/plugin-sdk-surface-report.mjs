@@ -201,9 +201,9 @@ let budgets;
 let publicDeprecatedExportsByEntrypointBudget;
 try {
   budgets = {
-    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 322),
-    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10388),
-    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5214),
+    publicEntrypoints: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_ENTRYPOINTS", 323),
+    publicExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_EXPORTS", 10390),
+    publicFunctionExports: readBudgetEnv("OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_FUNCTION_EXPORTS", 5216),
     publicDeprecatedExports: readBudgetEnv(
       "OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS",
       3247,
