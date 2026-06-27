@@ -7,6 +7,7 @@ import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import { enqueueSystemEvent, peekSystemEvents } from "../infra/system-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -256,11 +257,13 @@ test("sessions.reset closes ACP runtime handles for ACP sessions", async () => {
   expect(prepareFreshSession).toHaveBeenCalledWith({
     sessionKey: "agent:main:main",
   });
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { acp?: ResetAcpState }
-  >;
-  expect(store["agent:main:main"]).not.toHaveProperty("acp");
+  expect(
+    loadSessionEntry({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      storePath,
+    }),
+  ).not.toHaveProperty("acp");
   expectResetAcpState(readAcpSessionMeta({ sessionKey: "agent:main:main" }));
 });
 
@@ -348,11 +351,13 @@ test("sessions.reset preserves a newer session after lifecycle rotation", async 
     }),
   ).rejects.toThrow("stale lifecycle");
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { sessionId?: string }
-  >;
-  expect(store["agent:main:main"]?.sessionId).toBe("new-owner-session");
+  expect(
+    loadSessionEntry({
+      agentId: "main",
+      sessionKey: "agent:main:main",
+      storePath,
+    })?.sessionId,
+  ).toBe("new-owner-session");
 });
 
 test("sessions.reset closes child ACP runtime handles spawned from the parent", async () => {
@@ -429,31 +434,27 @@ test("sessions.reset closes a spawned ACP child that lives in a different agent 
   testState.sessionConfig = {
     store: path.join(stateDir, "agents", "{agentId}", "sessions", "sessions.json"),
   };
+  testState.agentsConfig = {
+    list: [{ id: "main", default: true }, { id: "codex" }],
+  };
   const mainStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
   const codexStorePath = path.join(stateDir, "agents", "codex", "sessions", "sessions.json");
-  await fs.mkdir(path.dirname(mainStorePath), { recursive: true });
-  await fs.mkdir(path.dirname(codexStorePath), { recursive: true });
-  await fs.writeFile(
-    mainStorePath,
-    JSON.stringify({
-      main: {
-        sessionId: "sess-main",
-        updatedAt: Date.now(),
-      },
-    }),
-    "utf-8",
-  );
-  await fs.writeFile(
-    codexStorePath,
-    JSON.stringify({
-      "agent:codex:acp:cross-store-child": {
-        sessionId: "sess-codex-child",
-        updatedAt: Date.now(),
+  await writeSessionStore({
+    agentId: "main",
+    entries: {
+      main: sessionStoreEntry("sess-main"),
+    },
+    storePath: mainStorePath,
+  });
+  await writeSessionStore({
+    agentId: "codex",
+    entries: {
+      "agent:codex:acp:cross-store-child": sessionStoreEntry("sess-codex-child", {
         spawnedBy: "agent:main:main",
-      },
-    }),
-    "utf-8",
-  );
+      }),
+    },
+    storePath: codexStorePath,
+  });
   writeAcpSessionMetaForMigration({
     sessionKey: "agent:main:main",
     meta: {
