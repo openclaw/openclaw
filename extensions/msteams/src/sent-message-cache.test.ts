@@ -42,14 +42,14 @@ describe("msteams sent message cache", () => {
     recordMSTeamsSentMessage("conv-1", "msg-2");
 
     await vi.waitFor(() => expect(register).toHaveBeenCalledTimes(1));
-    expect(register).toHaveBeenCalledWith("conv-1:msg-2", { sentAt: 1_234_567 });
+    expect(register).toHaveBeenCalledWith("default:conv-1:msg-2", { sentAt: 1_234_567 });
 
     clearMSTeamsSentMessageCache();
     await expect(
       wasMSTeamsMessageSentWithPersistence({ conversationId: "conv-1", messageId: "msg-2" }),
     ).resolves.toBe(true);
     expect(openKeyedStore).toHaveBeenCalledTimes(2);
-    expect(lookup).toHaveBeenCalledWith("conv-1:msg-2");
+    expect(lookup).toHaveBeenCalledWith("default:conv-1:msg-2");
 
     lookup.mockClear();
     await expect(
@@ -103,5 +103,39 @@ describe("msteams sent message cache", () => {
 
     expect(wasMSTeamsMessageSent("conv-1", "msg-3")).toBe(true);
     expect(warn).toHaveBeenCalled();
+  });
+
+  it("scopes sent-message markers by account", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(1_234_567);
+    const register = vi.fn().mockResolvedValue(undefined);
+    const lookup = vi.fn().mockResolvedValue(undefined);
+    const openKeyedStore = vi.fn(() => ({
+      register,
+      lookup,
+      consume: vi.fn(),
+      delete: vi.fn(),
+      entries: vi.fn(),
+      clear: vi.fn(),
+    }));
+    setMSTeamsRuntime({
+      state: { openKeyedStore },
+      logging: { getChildLogger: () => ({ warn: vi.fn() }) },
+    } as never);
+
+    recordMSTeamsSentMessage("conv-1", "msg-1", { accountId: "support" });
+
+    expect(wasMSTeamsMessageSent("conv-1", "msg-1", { accountId: "support" })).toBe(true);
+    expect(wasMSTeamsMessageSent("conv-1", "msg-1", { accountId: "finance" })).toBe(false);
+    await vi.waitFor(() =>
+      expect(register).toHaveBeenCalledWith("support:conv-1:msg-1", { sentAt: 1_234_567 }),
+    );
+    await expect(
+      wasMSTeamsMessageSentWithPersistence({
+        conversationId: "conv-1",
+        messageId: "msg-1",
+        accountId: "finance",
+      }),
+    ).resolves.toBe(false);
+    expect(lookup).toHaveBeenCalledWith("finance:conv-1:msg-1");
   });
 });

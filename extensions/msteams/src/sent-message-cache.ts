@@ -15,6 +15,10 @@ type MSTeamsSentMessageStore = {
   lookup(key: string): Promise<MSTeamsSentMessageRecord | undefined>;
 };
 
+type MSTeamsSentMessageScope = {
+  accountId?: string | null;
+};
+
 let sentMessageCache: Map<string, Map<string, number>> | undefined;
 let persistentStore: MSTeamsSentMessageStore | undefined;
 let persistentStoreDisabled = false;
@@ -30,8 +34,24 @@ function getSentMessageCache(): Map<string, Map<string, number>> {
   return sentMessageCache;
 }
 
-function makePersistentKey(conversationId: string, messageId: string): string {
-  return `${conversationId}:${messageId}`;
+function normalizeSentMessageAccountId(accountId?: string | null): string {
+  const trimmed = accountId?.trim();
+  return trimmed ? trimmed : "default";
+}
+
+function makeConversationScopeKey(
+  conversationId: string,
+  options?: MSTeamsSentMessageScope,
+): string {
+  return `${normalizeSentMessageAccountId(options?.accountId)}:${conversationId}`;
+}
+
+function makePersistentKey(
+  conversationId: string,
+  messageId: string,
+  options?: MSTeamsSentMessageScope,
+): string {
+  return `${makeConversationScopeKey(conversationId, options)}:${messageId}`;
 }
 
 function reportPersistentSentMessageError(error: unknown): void {
@@ -89,16 +109,18 @@ function rememberSentMessageInMemory(
   conversationId: string,
   messageId: string,
   sentAt: number,
+  options?: MSTeamsSentMessageScope,
 ): void {
+  const scopeKey = makeConversationScopeKey(conversationId, options);
   const store = getSentMessageCache();
-  let entry = store.get(conversationId);
+  let entry = store.get(scopeKey);
   if (!entry) {
     entry = new Map<string, number>();
-    store.set(conversationId, entry);
+    store.set(scopeKey, entry);
   }
   entry.set(messageId, sentAt);
   if (entry.size > 200) {
-    cleanupExpired(conversationId, entry, sentAt);
+    cleanupExpired(scopeKey, entry, sentAt);
   }
 }
 
@@ -106,66 +128,86 @@ function rememberPersistentSentMessage(params: {
   conversationId: string;
   messageId: string;
   sentAt: number;
+  accountId?: string | null;
 }): void {
   const store = getPersistentSentMessageStore();
   if (!store) {
     return;
   }
   void store
-    .register(makePersistentKey(params.conversationId, params.messageId), { sentAt: params.sentAt })
+    .register(makePersistentKey(params.conversationId, params.messageId, params), {
+      sentAt: params.sentAt,
+    })
     .catch(disablePersistentSentMessageStore);
 }
 
 async function lookupPersistentSentMessage(params: {
   conversationId: string;
   messageId: string;
+  accountId?: string | null;
 }): Promise<number | undefined> {
   const store = getPersistentSentMessageStore();
   if (!store) {
     return undefined;
   }
   try {
-    return (await store.lookup(makePersistentKey(params.conversationId, params.messageId)))?.sentAt;
+    return (await store.lookup(makePersistentKey(params.conversationId, params.messageId, params)))
+      ?.sentAt;
   } catch (error) {
     disablePersistentSentMessageStore(error);
     return undefined;
   }
 }
 
-export function recordMSTeamsSentMessage(conversationId: string, messageId: string): void {
+export function recordMSTeamsSentMessage(
+  conversationId: string,
+  messageId: string,
+  options?: MSTeamsSentMessageScope,
+): void {
   if (!conversationId || !messageId) {
     return;
   }
   const now = Date.now();
-  rememberSentMessageInMemory(conversationId, messageId, now);
-  rememberPersistentSentMessage({ conversationId, messageId, sentAt: now });
+  rememberSentMessageInMemory(conversationId, messageId, now, options);
+  rememberPersistentSentMessage({
+    conversationId,
+    messageId,
+    sentAt: now,
+    accountId: options?.accountId,
+  });
 }
 
-export function wasMSTeamsMessageSent(conversationId: string, messageId: string): boolean {
-  const entry = getSentMessageCache().get(conversationId);
+export function wasMSTeamsMessageSent(
+  conversationId: string,
+  messageId: string,
+  options?: MSTeamsSentMessageScope,
+): boolean {
+  const scopeKey = makeConversationScopeKey(conversationId, options);
+  const entry = getSentMessageCache().get(scopeKey);
   if (!entry) {
     return false;
   }
-  cleanupExpired(conversationId, entry, Date.now());
+  cleanupExpired(scopeKey, entry, Date.now());
   return entry.has(messageId);
 }
 
 export async function wasMSTeamsMessageSentWithPersistence(params: {
   conversationId: string;
   messageId: string;
+  accountId?: string | null;
 }): Promise<boolean> {
   if (!params.conversationId || !params.messageId) {
     return false;
   }
-  if (wasMSTeamsMessageSent(params.conversationId, params.messageId)) {
+  if (wasMSTeamsMessageSent(params.conversationId, params.messageId, params)) {
     return true;
   }
   const sentAt = await lookupPersistentSentMessage(params);
   if (sentAt == null) {
     return false;
   }
-  rememberSentMessageInMemory(params.conversationId, params.messageId, sentAt);
-  return wasMSTeamsMessageSent(params.conversationId, params.messageId);
+  rememberSentMessageInMemory(params.conversationId, params.messageId, sentAt, params);
+  return wasMSTeamsMessageSent(params.conversationId, params.messageId, params);
 }
 
 export function clearMSTeamsSentMessageCache(): void {

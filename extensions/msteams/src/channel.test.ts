@@ -61,9 +61,9 @@ describe("msteamsPlugin", () => {
           enabled: true,
           tenantId: "tenant-id",
           accounts: {
-            legal: {
-              appId: "legal-app-id",
-              appPassword: "legal-secret",
+            support: {
+              appId: "support-app-id",
+              appPassword: "support-secret",
               webhook: { port: 3979 },
             },
           },
@@ -80,7 +80,7 @@ describe("msteamsPlugin", () => {
     expect(
       msteamsPlugin.actions?.describeMessageTool?.({
         cfg,
-        accountId: "legal",
+        accountId: "support",
       })?.actions,
     ).toContain("upload-file");
   });
@@ -505,16 +505,16 @@ describe("msTeamsApprovalAuth", () => {
 
   it("uses account-scoped approvers for named Teams accounts", () => {
     const rootApprover = "123e4567-e89b-12d3-a456-426614174000";
-    const legalApprover = "223e4567-e89b-12d3-a456-426614174000";
+    const supportApprover = "223e4567-e89b-12d3-a456-426614174000";
     const cfg = {
       channels: {
         msteams: {
           allowFrom: [`user:${rootApprover}`],
           accounts: {
-            legal: {
-              appId: "legal-app-id",
-              appPassword: "legal-secret",
-              allowFrom: [`user:${legalApprover}`],
+            support: {
+              appId: "support-app-id",
+              appPassword: "support-secret",
+              allowFrom: [`user:${supportApprover}`],
               webhook: { port: 3979 },
             },
           },
@@ -525,8 +525,8 @@ describe("msTeamsApprovalAuth", () => {
     expect(
       msTeamsApprovalAuth.authorizeActorAction({
         cfg,
-        accountId: "legal",
-        senderId: legalApprover,
+        accountId: "support",
+        senderId: supportApprover,
         action: "approve",
         approvalKind: "exec",
       }),
@@ -534,7 +534,7 @@ describe("msTeamsApprovalAuth", () => {
     expect(
       msTeamsApprovalAuth.authorizeActorAction({
         cfg,
-        accountId: "legal",
+        accountId: "support",
         senderId: rootApprover,
         action: "approve",
         approvalKind: "exec",
@@ -556,14 +556,14 @@ describe("msteams directory contract", () => {
           appPassword: "default-secret",
           allowFrom: ["user:default-user"],
           accounts: {
-            legal: {
-              appId: "legal-app-id",
-              appPassword: "legal-secret",
-              allowFrom: ["user:legal-user"],
+            support: {
+              appId: "support-app-id",
+              appPassword: "support-secret",
+              allowFrom: ["user:support-user"],
               teams: {
                 team1: {
                   channels: {
-                    "19:legal-channel": {},
+                    "19:support-channel": {},
                   },
                 },
               },
@@ -577,23 +577,23 @@ describe("msteams directory contract", () => {
     await expect(
       msteamsDirectoryContractPlugin.directory.self?.({
         cfg,
-        accountId: "legal",
+        accountId: "support",
         runtime: {} as never,
       }),
-    ).resolves.toEqual({ kind: "user", id: "legal-app-id", name: "legal-app-id" });
+    ).resolves.toEqual({ kind: "user", id: "support-app-id", name: "support-app-id" });
     await expect(
       msteamsDirectoryContractPlugin.directory.listPeers?.({
         cfg,
-        accountId: "legal",
+        accountId: "support",
         runtime: {} as never,
       }),
-    ).resolves.toEqual([{ id: "user:legal-user", kind: "user" }]);
+    ).resolves.toEqual([{ id: "user:support-user", kind: "user" }]);
     await expect(
       msteamsDirectoryContractPlugin.directory.listGroups?.({
         cfg,
-        accountId: "legal",
+        accountId: "support",
         runtime: {} as never,
       }),
-    ).resolves.toEqual([{ id: "conversation:19:legal-channel", kind: "group" }]);
+    ).resolves.toEqual([{ id: "conversation:19:support-channel", kind: "group" }]);
   });
 });

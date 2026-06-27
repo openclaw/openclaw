@@ -46,16 +46,42 @@ function resolveRawMSTeamsAccountConfig(
   return normalized === DEFAULT_ACCOUNT_ID ? msteams : (msteams.accounts?.[normalized] ?? {});
 }
 
+function splitRootIdentity(msteams: MSTeamsMultiAccountConfig): {
+  root: MSTeamsMultiAccountConfig;
+  defaultAccount: MSTeamsSetupAccountConfig;
+} {
+  const { appId, appPassword, webhook, ...root } = msteams;
+  const rootWebhook = webhook ? { ...webhook } : undefined;
+  const defaultWebhook = rootWebhook?.port === undefined ? undefined : { port: rootWebhook.port };
+  if (rootWebhook) {
+    delete rootWebhook.port;
+  }
+  const defaultAccount: MSTeamsSetupAccountConfig = {
+    ...(appId !== undefined ? { appId } : {}),
+    ...(appPassword !== undefined ? { appPassword } : {}),
+    ...(defaultWebhook ? { webhook: defaultWebhook } : {}),
+  };
+  return {
+    root: {
+      ...root,
+      ...(rootWebhook && Object.keys(rootWebhook).length > 0 ? { webhook: rootWebhook } : {}),
+    },
+    defaultAccount,
+  };
+}
+
 export function patchMSTeamsAccountConfig(params: {
   cfg: OpenClawConfig;
   accountId: string;
   patch: MSTeamsSetupAccountConfig;
   ensureEnabled?: boolean;
+  scopeDefaultToAccounts?: boolean;
 }): OpenClawConfig {
   const accountId = normalizeAccountId(params.accountId);
   const msteams = (params.cfg.channels?.msteams ?? {}) as MSTeamsMultiAccountConfig;
   const ensureEnabled = params.ensureEnabled ?? true;
-  if (accountId === DEFAULT_ACCOUNT_ID) {
+  const scopeDefaultToAccounts = params.scopeDefaultToAccounts ?? false;
+  if (accountId === DEFAULT_ACCOUNT_ID && !scopeDefaultToAccounts) {
     return {
       ...params.cfg,
       channels: {
@@ -69,14 +95,29 @@ export function patchMSTeamsAccountConfig(params: {
     };
   }
 
-  const accounts = msteams.accounts ?? {};
-  const existing = (accounts[accountId] ?? {}) as MSTeamsSetupAccountConfig;
+  const { root: baseMsteams, defaultAccount } = splitRootIdentity(msteams);
+  const baseAccounts = baseMsteams.accounts ?? {};
+  const hasPromotedDefaultIdentity = Object.keys(defaultAccount).length > 0;
+  const accounts =
+    hasPromotedDefaultIdentity && accountId !== DEFAULT_ACCOUNT_ID
+      ? {
+          ...baseAccounts,
+          default: {
+            ...defaultAccount,
+            ...(baseAccounts.default ?? {}),
+          },
+        }
+      : baseAccounts;
+  const existing =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? ({ ...defaultAccount, ...(accounts[accountId] ?? {}) } as MSTeamsSetupAccountConfig)
+      : ((accounts[accountId] ?? {}) as MSTeamsSetupAccountConfig);
   return {
     ...params.cfg,
     channels: {
       ...params.cfg.channels,
       msteams: {
-        ...msteams,
+        ...baseMsteams,
         ...(ensureEnabled ? { enabled: true } : {}),
         accounts: {
           ...accounts,
@@ -155,6 +196,7 @@ export const msteamsSetupAdapter: ChannelSetupAdapter = {
       cfg,
       accountId: resolvedAccountId,
       patch,
+      scopeDefaultToAccounts: true,
     });
   },
 };
@@ -187,6 +229,7 @@ function setMSTeamsAccountCredentials(params: {
         ? { webhook: { ...existing.webhook, port: params.webhookPort } }
         : {}),
     },
+    scopeDefaultToAccounts: params.accountId === DEFAULT_ACCOUNT_ID,
   });
 }
 

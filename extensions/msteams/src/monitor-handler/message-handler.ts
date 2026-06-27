@@ -894,7 +894,7 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       textLimit,
       onSentMessageIds: (ids) => {
         for (const id of ids) {
-          recordMSTeamsSentMessage(conversationId, id);
+          recordMSTeamsSentMessage(conversationId, id, { accountId: route.accountId });
         }
       },
       tokenProvider,
@@ -1071,7 +1071,11 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     const implicitMentionKinds: Array<"reply_to_bot"> =
       conversationId &&
       replyToId &&
-      (await wasMSTeamsMessageSentWithPersistence({ conversationId, messageId: replyToId }))
+      (await wasMSTeamsMessageSentWithPersistence({
+        conversationId,
+        messageId: replyToId,
+        accountId,
+      }))
         ? ["reply_to_bot"]
         : [];
 

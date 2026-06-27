@@ -54,21 +54,21 @@ describe("msteams secret contract", () => {
             tenantId: "tenant-id",
             webhook: { path: "/api/messages" },
             accounts: {
-              legal: {
+              support: {
                 enabled: true,
-                appId: "legal-app-id",
-                appPassword: { source: "env", provider: "default", id: "LEGAL_MSTEAMS_SECRET" },
+                appId: "support-app-id",
+                appPassword: { source: "env", provider: "default", id: "SUPPORT_MSTEAMS_SECRET" },
                 webhook: { port: 3979 },
               },
             },
           },
         },
       } as OpenClawConfig,
-      { LEGAL_MSTEAMS_SECRET: "resolved-legal-secret" },
+      { SUPPORT_MSTEAMS_SECRET: "resolved-support-secret" },
     );
 
-    expect(resolved.config.channels?.msteams?.accounts?.legal?.appPassword).toBe(
-      "resolved-legal-secret",
+    expect(resolved.config.channels?.msteams?.accounts?.support?.appPassword).toBe(
+      "resolved-support-secret",
     );
     expect(resolved.warnings).toStrictEqual([]);
   });

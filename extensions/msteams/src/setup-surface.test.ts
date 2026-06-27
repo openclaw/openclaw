@@ -58,7 +58,7 @@ describe("msteams setup surface", () => {
     expect(msteamsSetupAdapter.resolveAccountId?.({ accountId: "work" } as never)).toBe("work");
   });
 
-  it("enables the msteams channel without dropping existing config", () => {
+  it("enables the msteams channel and promotes existing default identity", () => {
     expect(
       msteamsSetupAdapter.applyAccountConfig?.({
         cfg: {
@@ -74,14 +74,19 @@ describe("msteams setup surface", () => {
     ).toEqual({
       channels: {
         msteams: {
-          appId: "existing-app",
           enabled: true,
+          accounts: {
+            default: {
+              enabled: true,
+              appId: "existing-app",
+            },
+          },
         },
       },
     });
   });
 
-  it("applies named account config without moving root defaults", () => {
+  it("applies named account config without moving shared root defaults", () => {
     expect(
       msteamsSetupAdapter.applyAccountConfig?.({
         cfg: {
@@ -108,6 +113,50 @@ describe("msteams setup surface", () => {
           allowFrom: ["user-1"],
           enabled: true,
           accounts: {
+            support: {
+              enabled: true,
+              appId: "support-app",
+              appPassword: "support-secret",
+              tenantId: "tenant-id",
+            },
+          },
+        },
+      },
+    });
+  });
+
+  it("promotes root identity when adding a named account", () => {
+    expect(
+      msteamsSetupAdapter.applyAccountConfig?.({
+        cfg: {
+          channels: {
+            msteams: {
+              appId: "default-app",
+              appPassword: "default-secret",
+              tenantId: "shared-tenant",
+              webhook: { port: 3978, path: "/api/messages" },
+            },
+          },
+        },
+        accountId: "support",
+        input: {
+          appId: "support-app",
+          appPassword: "support-secret",
+          tenantId: "tenant-id",
+        },
+      } as never),
+    ).toEqual({
+      channels: {
+        msteams: {
+          tenantId: "shared-tenant",
+          webhook: { path: "/api/messages" },
+          enabled: true,
+          accounts: {
+            default: {
+              appId: "default-app",
+              appPassword: "default-secret",
+              webhook: { port: 3978 },
+            },
             support: {
               enabled: true,
               appId: "support-app",
@@ -263,9 +312,14 @@ describe("msteams setup surface", () => {
         channels: {
           msteams: {
             enabled: true,
-            appId: "app-id",
-            appPassword: "app-password",
-            tenantId: "tenant-id",
+            accounts: {
+              default: {
+                enabled: true,
+                appId: "app-id",
+                appPassword: "app-password",
+                tenantId: "tenant-id",
+              },
+            },
           },
         },
       },
