@@ -460,6 +460,38 @@ describe("delivery-queue recovery", () => {
     expect(entries[0]?.lastError).toContain("provider lookup timed out");
   });
 
+  it("counts adapter null reconciliation results against retry budget", async () => {
+    const id = await enqueueDelivery(
+      { channel: "demo-channel-a", to: "+1", payloads: [{ text: "null result" }] },
+      tmpDir(),
+    );
+    setQueuedEntryState(tmpDir(), id, {
+      retryCount: 0,
+      platformSendStartedAt: Date.now(),
+      recoveryState: "unknown_after_send",
+    });
+    const reconcileUnknownSend = vi.fn().mockResolvedValue(null);
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        capabilities: { reconcileUnknownSend: true },
+        reconcileUnknownSend,
+      },
+    });
+
+    const deliver = vi.fn().mockResolvedValue([]);
+    const { result } = await runRecovery({ deliver });
+
+    expect(reconcileUnknownSend).toHaveBeenCalledTimes(1);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result.failed).toBe(1);
+    const entries = await loadPendingDeliveries(tmpDir());
+    expect(entries).toHaveLength(1);
+    expect(entries[0]?.id).toBe(id);
+    expect(entries[0]?.retryCount).toBe(1);
+    expect(entries[0]?.recoveryState).toBe("unknown_after_send");
+    expect(entries[0]?.lastError).toContain("no unknown-send reconciliation result");
+  });
+
   it("keeps unknown-after-send entries pending unless the adapter declares the capability", async () => {
     const id = await enqueueDelivery(
       { channel: "demo-channel-a", to: "+1", payloads: [{ text: "hidden method" }] },

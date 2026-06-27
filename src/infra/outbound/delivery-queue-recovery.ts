@@ -70,6 +70,10 @@ export type ActiveDeliveryClaimResult<T> =
 
 const MAX_RETRIES = 5;
 
+type UnknownSendReconciliationAttempt =
+  | { status: "unavailable" }
+  | { status: "completed"; result: ChannelMessageUnknownSendReconciliationResult };
+
 const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /no conversation reference found/i,
   /chat not found/i,
@@ -154,22 +158,22 @@ async function reconcileUnknownQueuedDelivery(opts: {
   entry: QueuedDelivery;
   cfg: OpenClawConfig;
   log: RecoveryLogger;
-}): Promise<ChannelMessageUnknownSendReconciliationResult | null> {
+}): Promise<UnknownSendReconciliationAttempt> {
   const adapter = resolveOutboundChannelMessageAdapter({
     channel: opts.entry.channel,
     cfg: opts.cfg,
     allowBootstrap: true,
   });
   if (adapter?.durableFinal?.capabilities?.reconcileUnknownSend !== true) {
-    return null;
+    return { status: "unavailable" };
   }
   const reconcileUnknownSend = adapter?.durableFinal?.reconcileUnknownSend;
   if (!reconcileUnknownSend) {
-    return null;
+    return { status: "unavailable" };
   }
   const { entry } = opts;
   try {
-    return await reconcileUnknownSend({
+    const result = await reconcileUnknownSend({
       cfg: opts.cfg,
       queueId: entry.id,
       channel: entry.channel,
@@ -187,10 +191,21 @@ async function reconcileUnknownQueuedDelivery(opts: {
       ...(entry.threadId !== undefined ? { threadId: entry.threadId } : {}),
       ...(entry.silent !== undefined ? { silent: entry.silent } : {}),
     });
+    return {
+      status: "completed",
+      result: result ?? {
+        status: "unresolved",
+        error: "adapter returned no unknown-send reconciliation result",
+        retryable: true,
+      },
+    };
   } catch (err) {
     const error = formatErrorMessage(err);
     opts.log.warn(`Delivery entry ${opts.entry.id} unknown-send reconciliation failed: ${error}`);
-    return { status: "unresolved", error, retryable: true };
+    return {
+      status: "completed",
+      result: { status: "unresolved", error, retryable: true },
+    };
   }
 }
 
@@ -358,11 +373,13 @@ async function drainQueuedEntry(opts: {
   if (hasAmbiguousSendState(entry)) {
     // A crash after platform send start cannot be blindly replayed; adapters
     // must reconcile whether the platform already committed the message.
-    const reconciliation = await reconcileUnknownQueuedDelivery({
+    const reconciliationAttempt = await reconcileUnknownQueuedDelivery({
       entry,
       cfg: opts.cfg,
       log: opts.log,
     });
+    const reconciliation =
+      reconciliationAttempt.status === "completed" ? reconciliationAttempt.result : null;
     if (reconciliation?.status === "sent") {
       try {
         await ackDelivery(entry.id, opts.stateDir);
@@ -408,7 +425,7 @@ async function drainQueuedEntry(opts: {
       }
       opts.log.warn(`Delivery entry ${entry.id} ${errMsg}`);
       opts.onFailed?.(entry, errMsg);
-      if (reconciliation == null) {
+      if (reconciliationAttempt.status === "unavailable") {
         try {
           await deferDeliveryRecovery(entry.id, errMsg, opts.stateDir);
           return "failed";
@@ -419,7 +436,11 @@ async function drainQueuedEntry(opts: {
         }
         return "failed";
       }
-      if (reconciliation.status === "unresolved" && reconciliation.retryable === true) {
+      const completedReconciliation = reconciliationAttempt.result;
+      if (
+        completedReconciliation.status === "unresolved" &&
+        completedReconciliation.retryable === true
+      ) {
         try {
           await failDelivery(entry.id, errMsg, opts.stateDir);
           return "failed";
