@@ -18,6 +18,7 @@ import {
 } from "../sessions/user-turn-transcript.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
+import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 function assistantToolCall(id: string): AgentMessage {
   return {
@@ -170,6 +171,7 @@ describe("guardSessionManager integration", () => {
             message: {
               role: "user",
               content: "[redacted by hook]",
+              timestamp: 124,
               __openclaw: { hookOwned: true },
             } as AgentMessage,
           }),
@@ -192,7 +194,7 @@ describe("guardSessionManager integration", () => {
       } as Extract<AgentMessage, { role: "user" }>,
     });
 
-    sm.appendMessage({ role: "user", content: "runtime prompt" } as AgentMessage);
+    sm.appendMessage({ role: "user", content: "runtime prompt", timestamp: 125 });
 
     const message = sm.getEntries().find((entry) => entry.type === "message") as
       | { message?: AgentMessage }
@@ -240,10 +242,11 @@ describe("guardSessionManager integration", () => {
     );
 
     sm.appendMessage(runtimeMessage);
-    sm.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "acknowledged" }],
-    } as AgentMessage);
+    sm.appendMessage(
+      makeAgentAssistantMessage({
+        content: [{ type: "text", text: "acknowledged" }],
+      }),
+    );
 
     const entries = readFileSync(sessionFile, "utf8")
       .trim()
