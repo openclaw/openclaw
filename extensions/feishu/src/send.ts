@@ -81,11 +81,21 @@ type FeishuCreateMessageClient = {
       reply: (opts: {
         path: { message_id: string };
         data: { content: string; msg_type: string; reply_in_thread?: true };
-      }) => Promise<{ code?: number; msg?: string; data?: { message_id?: string } }>;
+      }) => Promise<{
+        code?: number;
+        msg?: string;
+        data?: { message_id?: string };
+      }>;
       create: (opts: {
-        params: { receive_id_type: "chat_id" | "email" | "open_id" | "union_id" | "user_id" };
+        params: {
+          receive_id_type: "chat_id" | "email" | "open_id" | "union_id" | "user_id";
+        };
         data: { receive_id: string; content: string; msg_type: string };
-      }) => Promise<{ code?: number; msg?: string; data?: { message_id?: string } }>;
+      }) => Promise<{
+        code?: number;
+        msg?: string;
+        data?: { message_id?: string };
+      }>;
     };
   };
 };
@@ -571,6 +581,20 @@ function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostM
   return elements;
 }
 
+/**
+ * Normalize single newlines to double newlines for Feishu post+md rendering.
+ * Feishu's post+md treats \n\n as a paragraph break but \n alone as a space.
+ * Preserves existing \n\n sequences and fenced code blocks (#97074).
+ */
+function normalizeFeishuNewlines(text: string): string {
+  // Split on fenced code blocks to preserve their internal line breaks
+  const parts = text.split(/(```[\s\S]*?```)/g);
+  for (let i = 0; i < parts.length; i += 2) {
+    parts[i] = parts[i].replace(/(?<!\n)\n(?!\n)/g, "\n\n");
+  }
+  return parts.join("");
+}
+
 export function buildFeishuPostMessagePayload(params: {
   messageText: string;
   mentions?: MentionTarget[];
@@ -583,7 +607,7 @@ export function buildFeishuPostMessagePayload(params: {
     ...buildFeishuPostMentionElements(mentions),
     {
       tag: "md",
-      text: messageText,
+      text: normalizeFeishuNewlines(messageText),
     },
   ];
   return {
@@ -609,7 +633,11 @@ export async function sendMessageFeishu(
     mentions,
     accountId,
   } = params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+    cfg,
+    to,
+    accountId,
+  });
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "feishu",
@@ -617,7 +645,10 @@ export async function sendMessageFeishu(
 
   const messageText = convertMarkdownTables(text ?? "", tableMode);
 
-  const { content, msgType } = buildFeishuPostMessagePayload({ messageText, mentions });
+  const { content, msgType } = buildFeishuPostMessagePayload({
+    messageText,
+    mentions,
+  });
 
   const directParams = { receiveId, receiveIdType, content, msgType };
   return sendReplyOrFallbackDirect(client, {
@@ -646,10 +677,19 @@ export type SendFeishuCardParams = {
 export async function sendCardFeishu(params: SendFeishuCardParams): Promise<FeishuSendResult> {
   const { cfg, to, card, replyToMessageId, replyInThread, allowTopLevelReplyFallback, accountId } =
     params;
-  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({ cfg, to, accountId });
+  const { client, receiveId, receiveIdType } = resolveFeishuSendTarget({
+    cfg,
+    to,
+    accountId,
+  });
   const content = JSON.stringify(card);
 
-  const directParams = { receiveId, receiveIdType, content, msgType: "interactive" };
+  const directParams = {
+    receiveId,
+    receiveIdType,
+    content,
+    msgType: "interactive",
+  };
   return sendReplyOrFallbackDirect(client, {
     replyToMessageId,
     replyInThread,
@@ -767,7 +807,10 @@ export function buildStructuredCard(
   const elements: Record<string, unknown>[] = [{ tag: "markdown", content: text }];
   if (options?.note) {
     elements.push({ tag: "hr" });
-    elements.push({ tag: "markdown", content: `<font color='grey'>${options.note}</font>` });
+    elements.push({
+      tag: "markdown",
+      content: `<font color='grey'>${options.note}</font>`,
+    });
   }
   const card: Record<string, unknown> = {
     schema: "2.0",

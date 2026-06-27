@@ -99,11 +99,41 @@ describe("buildFeishuPostMessagePayload", () => {
         content: [
           [
             { tag: "at", user_id: "ou_target", user_name: "Target User" },
-            { tag: "md", text: 'please keep <at user_id="ou_body">Body User</at> literal' },
+            {
+              tag: "md",
+              text: 'please keep <at user_id="ou_body">Body User</at> literal',
+            },
           ],
         ],
       },
     });
+  });
+
+  it("upgrades single \\n to \\n\\n for paragraph breaks (#97074)", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "Hello\nWorld",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("Hello\n\nWorld");
+  });
+
+  it("preserves existing \\n\\n sequences (#97074)", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "Para 1\n\nPara 2\n\nPara 3",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("Para 1\n\nPara 2\n\nPara 3");
+  });
+
+  it("preserves newlines inside fenced code blocks (#97074)", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "Before\n```\ncode\nblock\n```\nAfter",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("Before\n\n```\ncode\nblock\n```\n\nAfter");
   });
 });
 
@@ -251,7 +281,10 @@ describe("getMessageFeishu", () => {
             content: [
               [
                 { tag: "at", user_id: "ou_target", user_name: "Target User" },
-                { tag: "md", text: 'body <at user_id="ou_body">Body User</at>' },
+                {
+                  tag: "md",
+                  text: 'body <at user_id="ou_body">Body User</at>',
+                },
               ],
             ],
           },
@@ -729,7 +762,10 @@ describe("editMessageFeishu", () => {
         content: JSON.stringify({ schema: "2.0" }),
       },
     });
-    expect(result).toEqual({ messageId: "om_card", contentType: "interactive" });
+    expect(result).toEqual({
+      messageId: "om_card",
+      contentType: "interactive",
+    });
   });
 });
 
