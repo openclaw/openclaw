@@ -513,6 +513,7 @@ export function pluginRegistryIssueToHealthFinding(
         fixHint: "Run `openclaw doctor --fix` to relink managed npm plugin packages.",
       };
   }
+  return assertNeverPluginRegistryIssue(issue);
 }
 
 export function pluginRegistryIssueToRepairEffect(
@@ -548,6 +549,13 @@ export function pluginRegistryIssueToRepairEffect(
         dryRunSafe: false,
       };
   }
+  return assertNeverPluginRegistryIssue(issue);
+}
+
+function assertNeverPluginRegistryIssue(issue: never): never {
+  throw new Error(
+    `Unhandled plugin registry issue kind: ${String((issue as { kind?: unknown }).kind)}`,
+  );
 }
 
 /**
