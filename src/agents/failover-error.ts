@@ -20,6 +20,8 @@ import { isSessionWriteLockAcquireError } from "./session-write-lock-error.js";
 
 const ABORT_TIMEOUT_RE = /request was aborted|request aborted/i;
 const MAX_FAILOVER_CAUSE_DEPTH = 25;
+const MISSING_TOOL_RESULT_REASON = "missing_tool_result";
+const MISSING_TOOL_RESULT_TEXT_RE = /native Codex tool\.call without a matching tool\.result/i;
 
 /** Structured error used to carry model fallback/failover metadata across layers. */
 export class FailoverError extends Error {
@@ -344,15 +346,65 @@ function hasEmbeddedAttemptSessionTakeover(err: unknown, seen: Set<object> = new
   );
 }
 
+function readField(value: unknown, key: string): unknown {
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  return (value as Record<string, unknown>)[key];
+}
+
+function readStringField(value: unknown, key: string): string | undefined {
+  const field = readField(value, key);
+  return typeof field === "string" ? field : undefined;
+}
+
+function isMissingToolResultMessage(value: string): boolean {
+  return MISSING_TOOL_RESULT_TEXT_RE.test(value);
+}
+
+function isMissingToolResultMarker(value: string): boolean {
+  return value.trim() === MISSING_TOOL_RESULT_REASON;
+}
+
+function readMissingToolResultMarker(err: unknown): true | undefined {
+  const message = readDirectErrorMessage(err);
+  if (message && isMissingToolResultMessage(message)) {
+    return true;
+  }
+  for (const key of ["code", "reason", "status"] as const) {
+    const value = readStringField(err, key);
+    if (value && isMissingToolResultMarker(value)) {
+      return true;
+    }
+  }
+  const output = readStringField(err, "output");
+  if (output && isMissingToolResultMessage(output)) {
+    return true;
+  }
+  const resultReason = readStringField(readField(err, "result"), "reason");
+  const detailReason = readStringField(readField(err, "detail"), "reason");
+  if (resultReason === MISSING_TOOL_RESULT_REASON || detailReason === MISSING_TOOL_RESULT_REASON) {
+    return true;
+  }
+  return undefined;
+}
+
+function hasMissingToolResultFailure(err: unknown): boolean {
+  return findErrorProperty(err, readMissingToolResultMarker) === true;
+}
+
 /**
- * True when the error is a local runtime coordination error (session write-lock
- * timeout or embedded attempt session takeover) rather than a provider/model
- * failure. The model fallback chain must abort on these instead of consuming
- * candidate slots — retrying any model would hit the same local condition.
- * See #83510.
+ * True when the error is a local runtime coordination/tool-execution error
+ * rather than a provider/model failure. The model fallback chain must abort on
+ * these instead of consuming candidate slots — retrying any model would hit the
+ * same local condition. See #83510 and #95474.
  */
 export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
-  if (!hasSessionWriteLockContention(err) && !hasEmbeddedAttemptSessionTakeover(err)) {
+  if (
+    !hasSessionWriteLockContention(err) &&
+    !hasEmbeddedAttemptSessionTakeover(err) &&
+    !hasMissingToolResultFailure(err)
+  ) {
     return false;
   }
   if (isFailoverError(err)) {

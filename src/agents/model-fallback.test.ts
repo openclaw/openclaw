@@ -752,6 +752,65 @@ describe("runWithModelFallback", () => {
     expect(result.attempts[0].reason).toBe("unknown");
   });
 
+  it("does not treat Codex missing tool-result failures as model fallback candidates", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const missingToolResultError = new Error(
+      "OpenClaw recorded a native Codex tool.call without a matching tool.result before the turn completed.",
+    );
+    const run = vi.fn().mockRejectedValue(missingToolResultError);
+
+    await expect(
+      runWithModelFallback({
+        cfg,
+        provider: "openai",
+        model: "gpt-5.4",
+        run,
+      }),
+    ).rejects.toBe(missingToolResultError);
+    expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("still falls back on unstructured provider text that merely mentions missing_tool_result", async () => {
+    const cfg = makeCfg({
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+      },
+    });
+    const run = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("provider diagnostic reason=missing_tool_result"))
+      .mockResolvedValueOnce("ok");
+
+    const result = await runWithModelFallback({
+      cfg,
+      provider: "openai",
+      model: "gpt-5.4",
+      run,
+    });
+
+    expect(result.result).toBe("ok");
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(requireMockCall(run, 1, "fallback run")).toEqual([
+      "anthropic",
+      "claude-sonnet-4-6",
+      { isFinalFallbackAttempt: true },
+    ]);
+  });
+
   it("falls back on a Zhipu GLM 1305 overload body and classifies it as overloaded", async () => {
     const cfg = makeCfg();
     const glmOverload = new Error("[1305][该模型当前访问量过大，请您稍后再试]");
