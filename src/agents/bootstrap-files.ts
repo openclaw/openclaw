@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { appendAppProfileBootstrapFile } from "./app-profile-context.js";
 import { isAppUserSession } from "./app-user-workspace.js";
 import { applyBootstrapHookOverrides } from "./bootstrap-hooks.js";
+import { appendMemoryRecallBootstrapFile } from "./memory-recall-context.js";
 import type { EmbeddedContextFile } from "./pi-embedded-helpers.js";
 import {
   buildBootstrapContextFiles,
@@ -60,10 +61,15 @@ export async function resolveBootstrapFilesForRun(params: {
   // Phase 3: inject the per-user app_profile as a synthetic APP_PROFILE.md context file for
   // app-user sessions (no-op otherwise). After shaping so it is neither excluded nor swapped;
   // before the buildBootstrapContextFiles clamp so it is budgeted too.
-  return appendAppProfileBootstrapFile(shaped, {
+  const withProfile = await appendAppProfileBootstrapFile(shaped, {
     workspaceDir: params.workspaceDir,
     sessionKey: params.sessionKey,
   });
+
+  // Deterministic durable-memory recall: inject the user's top Graphiti facts as a synthetic
+  // MEMORY_RECALL.md so a returning user is recalled even when the agent doesn't search itself
+  // (report 4A). App-sessions only; timeboxed + fail-open (never blocks the turn).
+  return appendMemoryRecallBootstrapFile(withProfile, { sessionKey: params.sessionKey });
 }
 
 export async function resolveBootstrapContextForRun(params: {
