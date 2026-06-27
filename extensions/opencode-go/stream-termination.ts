@@ -55,7 +55,11 @@ function isProviderProgressEvent(event: AssistantMessageEvent): boolean {
   return (
     event.type === "text_delta" ||
     event.type === "thinking_delta" ||
-    event.type === "toolcall_delta"
+    event.type === "toolcall_delta" ||
+    event.type === "text_end" ||
+    event.type === "thinking_end" ||
+    event.type === "toolcall_start" ||
+    event.type === "toolcall_end"
   );
 }
 
