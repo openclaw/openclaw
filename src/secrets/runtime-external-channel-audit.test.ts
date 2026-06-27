@@ -435,6 +435,85 @@ describe("secrets runtime externalized channel SecretRef audit", () => {
     expectMetadataBackedContractsWereUsed(["feishu"]);
   });
 
+  it("skips stale Feishu top-level appSecret refs when explicit default overrides them", async () => {
+    const records = configureExternalChannelRecords(["feishu"]);
+    const staleTopLevelRef = ref("FEISHU_STALE_TOP_LEVEL_APP_SECRET");
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "cli_top_level",
+            appSecret: staleTopLevelRef,
+            accounts: {
+              default: {
+                enabled: true,
+                appId: "cli_default",
+                appSecret: "default-secret", // pragma: allowlist secret
+              },
+              resource: {
+                enabled: true,
+                appId: "cli_resource",
+                appSecret: "resource-secret", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      }),
+      env: {},
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: externalChannelOrigins(records),
+    });
+
+    expect(getPath(snapshot.config, ["channels", "feishu", "appSecret"])).toEqual(staleTopLevelRef);
+    expectResolvedPaths(snapshot.config, {
+      "channels.feishu.accounts.default.appSecret": "default-secret",
+      "channels.feishu.accounts.resource.appSecret": "resource-secret",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toStrictEqual([
+      "channels.feishu.appSecret",
+    ]);
+    expectMetadataBackedContractsWereUsed(["feishu"]);
+  });
+
+  it("skips stale Feishu top-level appSecret refs when explicit default is disabled", async () => {
+    const records = configureExternalChannelRecords(["feishu"]);
+    const staleTopLevelRef = ref("FEISHU_DISABLED_DEFAULT_TOP_LEVEL_APP_SECRET");
+    const snapshot = await prepareSecretsRuntimeSnapshot({
+      config: asConfig({
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "cli_top_level",
+            appSecret: staleTopLevelRef,
+            accounts: {
+              default: {
+                enabled: false,
+              },
+              resource: {
+                enabled: true,
+                appId: "cli_resource",
+                appSecret: "resource-secret", // pragma: allowlist secret
+              },
+            },
+          },
+        },
+      }),
+      env: {},
+      includeAuthStoreRefs: false,
+      loadablePluginOrigins: externalChannelOrigins(records),
+    });
+
+    expect(getPath(snapshot.config, ["channels", "feishu", "appSecret"])).toEqual(staleTopLevelRef);
+    expectResolvedPaths(snapshot.config, {
+      "channels.feishu.accounts.resource.appSecret": "resource-secret",
+    });
+    expect(snapshot.warnings.map((warning) => warning.path)).toStrictEqual([
+      "channels.feishu.appSecret",
+    ]);
+    expectMetadataBackedContractsWereUsed(["feishu"]);
+  });
+
   it("skips inactive exec-backed SecretRefs for every externalized channel contract", async () => {
     const records = configureExternalChannelRecords();
     const config = asConfig({

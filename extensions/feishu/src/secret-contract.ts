@@ -1,4 +1,5 @@
 // Feishu plugin module implements secret contract behavior.
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   collectConditionalChannelFieldAssignments,
   collectSecretInputAssignment,
@@ -92,9 +93,13 @@ export function collectRuntimeConfigAssignments(params: {
   }
   const { channel: feishu, surface } = resolved;
   // Feishu account listing starts an implicit default account from top-level credentials
-  // even when every named account overrides appSecret.
+  // only when an explicit default account does not already own that account id.
+  const hasExplicitDefaultAccount =
+    surface.hasExplicitAccounts &&
+    surface.accounts.some(({ accountId }) => normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID);
   const hasImplicitDefaultAccount =
     surface.channelEnabled &&
+    !hasExplicitDefaultAccount &&
     hasConfiguredSecretInputValue(feishu.appId, params.defaults) &&
     hasConfiguredSecretInputValue(feishu.appSecret, params.defaults);
   const topLevelAppSecretActive =
