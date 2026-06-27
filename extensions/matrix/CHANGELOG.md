@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026.6.27
+
+### Fixes
+
+- Matrix: remove the injectable Node bootstrap command path from the packaged crypto runtime bootstrap while preserving the fixed dependency repair behavior.
+
 ## 2026.6.10
 
 ### Changes
