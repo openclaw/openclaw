@@ -192,7 +192,7 @@ describe("gateway/node-command-policy", () => {
 
     expect(allowlist.has("device.info")).toBe(true);
     expect(allowlist.has("device.apps")).toBe(true);
-    expect(allowlist.has("canvas.snapshot")).toBe(true);
+    expect(allowlist.has("canvas.snapshot")).toBe(false);
     expect(allowlist.has("openphone.screen.get")).toBe(true);
     expect(allowlist.has("openphone.local.screen_understanding")).toBe(true);
     expect(allowlist.has("openphone.jobs.list")).toBe(true);
@@ -211,7 +211,7 @@ describe("gateway/node-command-policy", () => {
         declaredCommands: ["canvas.snapshot"],
         allowlist,
       }),
-    ).toEqual({ ok: true });
+    ).toEqual({ ok: false, reason: "command not allowlisted" });
   });
 
   it("keeps explicitly approved host commands for desktop platforms", () => {

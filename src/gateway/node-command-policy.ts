@@ -50,7 +50,6 @@ const SMS_DANGEROUS_COMMANDS = ["sms.send", "sms.search"];
 const TALK_PTT_COMMANDS = ["talk.ptt.start", "talk.ptt.stop", "talk.ptt.cancel", "talk.ptt.once"];
 
 const OPENPHONE_ANDROID_READ_COMMANDS = [
-  "canvas.snapshot",
   "openphone.screen.get",
   "openphone.local.screen_understanding",
   "openphone.jobs.list",

@@ -829,6 +829,7 @@ describe("openphone attention events", () => {
       thinking: "low",
     });
     const optsRecord = opts as Record<string, unknown>;
+    expect(optsRecord.transcriptMessage).toBe("Open settings and show battery usage");
     expect(String(optsRecord.message)).toContain("Open settings and show battery usage");
     expect(String(optsRecord.message)).toContain("OpenPhone request context:");
     expect(String(optsRecord.message)).toContain("OpenPhone screen preflight observation:");
@@ -885,6 +886,41 @@ describe("openphone attention events", () => {
     });
     expect(agentCommandMock).toHaveBeenCalledTimes(1);
     expect(canonicalizeSessionEntryAliasesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not dedupe retryable OpenPhone attention ids before run admission", async () => {
+    const ctx = buildCtx();
+    const payloadJSON = JSON.stringify({
+      attention_id: "attn-retry",
+      phone_session_id: "phone-sess-retry",
+      text: "Summarize my screen",
+    });
+    canonicalizeSessionEntryAliasesMock
+      .mockRejectedValueOnce(new Error("session store unavailable"))
+      .mockImplementation(async ({ target, update }) => {
+        const entry = update ? await update(undefined) : undefined;
+        return { canonicalKey: target.canonicalKey, entry };
+      });
+
+    await expect(
+      handleNodeEvent(ctx, "pixel-retry", {
+        event: "openphone.attention.requested",
+        payloadJSON,
+      }),
+    ).rejects.toThrow("session store unavailable");
+
+    const result = await handleNodeEvent(ctx, "pixel-retry", {
+      event: "openphone.attention.requested",
+      payloadJSON,
+    });
+
+    expect(result).toEqual({
+      ok: true,
+      event: "openphone.attention.requested",
+      handled: true,
+      reason: "dispatched",
+    });
+    expect(agentCommandMock).toHaveBeenCalledTimes(1);
   });
 
   it("ignores OpenPhone attention events without text", async () => {

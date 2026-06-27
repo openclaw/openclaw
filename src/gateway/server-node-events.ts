@@ -166,7 +166,7 @@ function resolveOpenPhoneAttentionId(obj: Record<string, unknown>): string {
   );
 }
 
-function shouldDropDuplicateOpenPhoneAttention(params: {
+function hasRecentOpenPhoneAttention(params: {
   nodeId: string;
   attentionId: string;
   now: number;
@@ -182,6 +182,18 @@ function shouldDropDuplicateOpenPhoneAttention(params: {
   ) {
     return true;
   }
+  return false;
+}
+
+function rememberOpenPhoneAttention(params: {
+  nodeId: string;
+  attentionId: string;
+  now: number;
+}): void {
+  if (!params.attentionId) {
+    return;
+  }
+  const fingerprint = `${params.nodeId}:${params.attentionId}`;
 
   recentOpenPhoneAttentions.set(fingerprint, params.now);
   pruneBoundedTimestampMap(recentOpenPhoneAttentions, {
@@ -189,7 +201,6 @@ function shouldDropDuplicateOpenPhoneAttention(params: {
     ttlMs: OPENPHONE_ATTENTION_DEDUPE_WINDOW_MS,
     maxEntries: MAX_RECENT_OPENPHONE_ATTENTIONS,
   });
-  return false;
 }
 
 function compactOpenPhoneContextForPrompt(raw: unknown): string {
@@ -611,7 +622,7 @@ export const handleNodeEvent = async (
       const attentionId = resolveOpenPhoneAttentionId(obj);
       const now = Date.now();
       if (
-        shouldDropDuplicateOpenPhoneAttention({
+        hasRecentOpenPhoneAttention({
           nodeId,
           attentionId,
           now,
@@ -645,6 +656,11 @@ export const handleNodeEvent = async (
         sessionKey: canonicalKey,
         clientRunId,
       });
+      rememberOpenPhoneAttention({
+        nodeId,
+        attentionId,
+        now,
+      });
 
       dispatchNodeAgentCommand(ctx, nodeId, {
         runId,
@@ -654,6 +670,7 @@ export const handleNodeEvent = async (
           sessionKey: canonicalKey,
           obj,
         }),
+        transcriptMessage: text,
         sessionId,
         sessionKey: canonicalKey,
         thinking: "low",

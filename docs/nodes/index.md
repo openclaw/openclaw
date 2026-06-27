@@ -269,7 +269,7 @@ Node-related settings live under `gateway.nodes` and `tools.exec`:
         autoApproveCidrs: ["192.168.1.0/24"],
       },
       // Opt into dangerous/privacy-heavy node commands (camera.snap, etc.).
-      allowCommands: ["camera.snap", "screen.record", "openphone.ui.tap"],
+      allowCommands: ["camera.snap", "screen.record"],
       // Block exact command names even if defaults or allowCommands include them.
       denyCommands: ["camera.clip"],
     },
