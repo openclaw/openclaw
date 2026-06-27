@@ -26,7 +26,10 @@ export {
 } from "./host/read-file-shared.js";
 export { resolveMemoryBackendConfig } from "./host/backend-config.js";
 export type {
+  ResolvedHybridConfig,
+  ResolvedHybridRouteRule,
   ResolvedMemoryBackendConfig,
+  ResolvedMem0Config,
   ResolvedQmdConfig,
   ResolvedQmdMcporterConfig,
 } from "./host/backend-config.js";

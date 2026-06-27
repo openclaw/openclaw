@@ -1,0 +1,63 @@
+{
+  "id": "hermes-bridge",
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": ["hermes_bridge"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "enabled": {
+        "type": "boolean",
+        "default": false,
+        "description": "Enable the Hermes bridge HTTP route and optional tool."
+      },
+      "mode": {
+        "type": "string",
+        "enum": ["mock", "live"],
+        "default": "mock",
+        "description": "Execution mode. V1 tasks remain mock-safe unless a live template is explicitly added."
+      },
+      "hermesMode": {
+        "type": "string",
+        "enum": ["mock", "real"],
+        "default": "mock",
+        "description": "Hermes integration mode. Real mode requires a verified local Hermes checkout and rejects non-dry-run mock-only task execution."
+      },
+      "hermesAgentPath": {
+        "type": "string",
+        "default": "../hermes-agent",
+        "description": "Local path to the official NousResearch/hermes-agent checkout used by the presence check and future real runtime adapter."
+      },
+      "sharedSecretEnv": {
+        "type": "string",
+        "default": "OPENCLAW_HERMES_BRIDGE_TOKEN",
+        "description": "Environment variable that contains the Hermes bridge shared secret."
+      },
+      "allowedTasks": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": [],
+        "description": "Task template IDs Hermes may invoke."
+      },
+      "allowedTools": {
+        "type": "array",
+        "items": {
+          "type": "string"
+        },
+        "default": [],
+        "description": "OpenClaw tool capability names that approved task templates may use."
+      },
+      "maxRequestBytes": {
+        "type": "number",
+        "default": 65536,
+        "description": "Maximum JSON request body size accepted by the bridge route."
+      }
+    }
+  }
+}

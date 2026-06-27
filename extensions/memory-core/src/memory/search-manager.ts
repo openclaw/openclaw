@@ -136,6 +136,8 @@ export type MemorySearchManagerResult = {
   debug?: MemorySearchManagerDebug;
 };
 
+export type MemorySearchManagerPurpose = "cli" | "default" | "status";
+
 async function getOrCreateMem0Manager(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -172,7 +174,7 @@ function buildHybridCacheKey(params: {
   qmd?: ResolvedQmdConfig;
   mem0?: unknown;
   hybrid?: ResolvedHybridConfig;
-  purpose?: "default" | "status";
+  purpose?: MemorySearchManagerPurpose;
 }): string {
   return `${params.agentId}:${params.purpose ?? "default"}:${JSON.stringify({
     qmd: params.qmd,
@@ -204,7 +206,7 @@ function applyManagerDebug(
 export async function getMemorySearchManager(params: {
   cfg: OpenClawConfig;
   agentId: string;
-  purpose?: "default" | "status";
+  purpose?: MemorySearchManagerPurpose;
 }): Promise<MemorySearchManagerResult> {
   const acquireStartedAt = Date.now();
   const purpose = params.purpose ?? "default";
