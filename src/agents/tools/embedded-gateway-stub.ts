@@ -5,8 +5,8 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeFastMode, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type {
   SessionsListParams,
   SessionsResolveParams,
@@ -525,7 +525,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
       : localMessagesForHistory;
   const recencyFilteredMessages = rt.dropPreSessionStartAnnouncePairs(
     rawMessages,
-    sessionStartedAt,
+    !includeFamilyHistory ? sessionStartedAt : undefined,
   );
 
   const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars(cfg);
