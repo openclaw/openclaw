@@ -309,6 +309,10 @@ export function isRecoverableTelegramNetworkError(
       : options.context !== "send";
 
   for (const candidate of collectTelegramErrorCandidates(err)) {
+    if (options.context !== "send" && isTelegramServerError(candidate)) {
+      return true;
+    }
+
     const code = normalizeCode(getErrorCode(candidate));
     if (code && RECOVERABLE_ERROR_CODES.has(code)) {
       return true;

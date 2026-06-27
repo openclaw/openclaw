@@ -148,6 +148,20 @@ describe("isRecoverableTelegramNetworkError", () => {
     ).toBe(true);
   });
 
+  it("treats Telegram 5xx responses as recoverable for polling and setup contexts", () => {
+    const err = errorWithTelegramCode("Bad Gateway", 502);
+
+    expect(isRecoverableTelegramNetworkError(err, { context: "polling" })).toBe(true);
+    expect(isRecoverableTelegramNetworkError(err, { context: "webhook" })).toBe(true);
+    expect(isRecoverableTelegramNetworkError(err, { context: "unknown" })).toBe(true);
+  });
+
+  it("does not classify Telegram 5xx responses as recoverable for send context", () => {
+    const err = errorWithTelegramCode("Bad Gateway", 502);
+
+    expect(isRecoverableTelegramNetworkError(err, { context: "send" })).toBe(false);
+  });
+
   it("returns false for unrelated errors", () => {
     expect(isRecoverableTelegramNetworkError(new Error("invalid token"))).toBe(false);
   });
