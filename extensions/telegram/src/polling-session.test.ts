@@ -72,6 +72,7 @@ let isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess: typeof import("./telegr
 let listTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.js").listTelegramSpooledUpdateClaims;
 let listTelegramSpooledUpdates: typeof import("./telegram-ingress-spool.js").listTelegramSpooledUpdates;
 let recoverStaleTelegramSpooledUpdateClaims: typeof import("./telegram-ingress-spool.js").recoverStaleTelegramSpooledUpdateClaims;
+let telegramSpooledUpdateClaimLeaseMs: typeof import("./telegram-ingress-spool.js").TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS;
 let writeTelegramSpooledUpdate: typeof import("./telegram-ingress-spool.js").writeTelegramSpooledUpdate;
 let createTelegramSpooledReplayDeferredParticipant: typeof import("./bot-processing-outcome.js").createTelegramSpooledReplayDeferredParticipant;
 let TelegramMessageDispatchReplayForgetError: typeof import("./message-dispatch-dedupe.js").TelegramMessageDispatchReplayForgetError;
@@ -685,6 +686,7 @@ describe("TelegramPollingSession", () => {
       listTelegramSpooledUpdateClaims,
       listTelegramSpooledUpdates,
       recoverStaleTelegramSpooledUpdateClaims,
+      TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS: telegramSpooledUpdateClaimLeaseMs,
       writeTelegramSpooledUpdate,
     } = await import("./telegram-ingress-spool.js"));
     ({ createTelegramSpooledReplayDeferredParticipant } =
@@ -1067,13 +1069,13 @@ describe("TelegramPollingSession", () => {
           const queue = createChannelIngressQueue({ ...options, channelId: "telegram" });
           return {
             ...queue,
-            claim: async (...args: Parameters<typeof queue.claim>) => {
-              if (args[0] === "0000000000000001" && !blockedFirstClaim) {
+            claimNext: async (...args: Parameters<typeof queue.claimNext>) => {
+              if (!blockedFirstClaim) {
                 blockedFirstClaim = true;
                 firstClaimStarted?.();
                 await firstClaimGate;
               }
-              return queue.claim(...args);
+              return queue.claimNext(...args);
             },
           };
         },
@@ -1661,6 +1663,86 @@ describe("TelegramPollingSession", () => {
     });
   });
 
+  it("stops refreshing a claim when the drain loop is stalled", async () => {
+    vi.useFakeTimers({ now: 1_000 });
+    const refreshHarness = installSpooledClaimRefreshHarness();
+    await withTempSpool(async (tempDir) => {
+      let blockedSecondClaim = false;
+      let releaseSecondClaim: (() => void) | undefined;
+      const secondClaimStarted = new Promise<void>((resolve) => {
+        const gate = new Promise<void>((release) => {
+          releaseSecondClaim = release;
+        });
+        setTelegramRuntime({
+          state: {
+            resolveStateDir: () => tempDir,
+            openChannelIngressQueue: (
+              options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
+            ) => {
+              const queue = createChannelIngressQueue({ ...options, channelId: "telegram" });
+              return {
+                ...queue,
+                claimNext: async (...args: Parameters<typeof queue.claimNext>) => {
+                  const claimOptions = args[0];
+                  const blockedLaneKeys = claimOptions?.blockedLaneKeys
+                    ? Array.from(claimOptions.blockedLaneKeys)
+                    : [];
+                  const candidateIds = claimOptions?.candidateIds
+                    ? Array.from(claimOptions.candidateIds)
+                    : [];
+                  if (
+                    candidateIds.includes("0000000000000043") &&
+                    blockedLaneKeys.length > 0 &&
+                    !blockedSecondClaim
+                  ) {
+                    blockedSecondClaim = true;
+                    resolve();
+                    await gate;
+                  }
+                  return queue.claimNext(...args);
+                },
+              };
+            },
+          },
+        } as TelegramRuntime);
+      });
+      const abort = new AbortController();
+      let releaseHandler: (() => void) | undefined;
+      const handlerDone = new Promise<void>((resolve) => {
+        releaseHandler = resolve;
+      });
+      await writeSpooledTestUpdates(tempDir, [
+        topicUpdate(42, 10, "first topic 10 turn"),
+        topicUpdate(43, 11, "blocked topic 11 turn"),
+      ]);
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        handleUpdate: async () => {
+          await handlerDone;
+        },
+      });
+
+      try {
+        await secondClaimStarted;
+        const before = await claimedAtForUpdate(tempDir, 42);
+        vi.setSystemTime(1_000 + pollingSessionTesting.spooledClaimRefreshIntervalMs * 2 + 1);
+        refreshHarness.triggerRefresh();
+        await Promise.resolve();
+        expect(await claimedAtForUpdate(tempDir, 42)).toBe(before);
+      } finally {
+        releaseSecondClaim?.();
+        releaseHandler?.();
+        abort.abort();
+        stopWorker();
+        refreshHarness.restore();
+        vi.useRealTimers();
+        await runPromise;
+      }
+    });
+  });
+
   it("holds buffered spooled claims until deferred processing settles without blocking same-lane buffering", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
@@ -2180,10 +2262,11 @@ describe("TelegramPollingSession", () => {
       if (!claimed) {
         throw new Error("Expected claimed update");
       }
+      const liveOwnerPid = process.ppid > 0 ? process.ppid : 1;
       await adoptClaimOwner({
         spoolDir: tempDir,
         updateId: 42,
-        ownerId: `1:other-process`,
+        ownerId: `${liveOwnerPid}:other-process`,
         claimedAt: Date.now(),
       });
 
@@ -2203,10 +2286,9 @@ describe("TelegramPollingSession", () => {
     });
   });
 
-  it("fails timed-out current-process claims before draining later same-lane updates", async () => {
+  it("releases pid-reused claims before draining later same-lane updates", async () => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
-      const log = vi.fn();
       const events: string[] = [];
       await writeSpooledTestUpdates(tempDir, [
         topicUpdate(42, 10, "wedged topic 10 turn"),
@@ -2232,7 +2314,6 @@ describe("TelegramPollingSession", () => {
       const { runPromise, stopWorker } = startIsolatedIngressSession({
         abort,
         spoolDir: tempDir,
-        log,
         spooledUpdateHandlerTimeoutMs: 100,
         handleUpdate: async (update) => {
           events.push(`handled:${update.update_id}`);
@@ -2240,18 +2321,55 @@ describe("TelegramPollingSession", () => {
         },
       });
 
-      await vi.waitFor(() => expect(events).toEqual(["handled:43"]));
+      await vi.waitFor(() => expect(events).toEqual(["handled:42"]));
       await runPromise;
-      expect(await failedUpdateReasons(tempDir)).toEqual([
-        { id: 42, reason: "lane-released-on-stuck" },
-      ]);
-      expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      expect(await failedUpdateReasons(tempDir)).toEqual([]);
+      expect(await pendingUpdateIds(tempDir, "all")).toEqual([43]);
       expect(await listTelegramSpooledUpdateClaims({ spoolDir: tempDir })).toEqual([]);
-      expectLogIncludes(
-        log,
-        "spooled update 42 Telegram spooled update claim owned by this process",
-      );
       stopWorker();
+    });
+  });
+
+  it("reclaims an expired foreign claim so the lane can drain", async () => {
+    await withTempSpool(async (tempDir) => {
+      const abort = new AbortController();
+      const events: number[] = [];
+      await writeSpooledTestUpdates(tempDir, [
+        topicUpdate(42, 10, "expired foreign claim"),
+        topicUpdate(43, 10, "later topic 10 turn"),
+      ]);
+      const interrupted = (await listTelegramSpooledUpdates({ spoolDir: tempDir })).find(
+        (update) => update.updateId === 42,
+      );
+      if (!interrupted) {
+        throw new Error("Expected interrupted update");
+      }
+      const claimed = await claimTelegramSpooledUpdate(interrupted);
+      if (!claimed) {
+        throw new Error("Expected claimed update");
+      }
+      await adoptClaimOwner({
+        spoolDir: tempDir,
+        updateId: 42,
+        ownerId: "1:other-process",
+        claimedAt: Date.now() - telegramSpooledUpdateClaimLeaseMs - 1,
+      });
+
+      const { runPromise, stopWorker } = startIsolatedIngressSession({
+        abort,
+        spoolDir: tempDir,
+        spooledUpdateHandlerTimeoutMs: 100,
+        handleUpdate: async (update) => {
+          events.push(update.update_id ?? -1);
+          if (events.length === 2) {
+            abort.abort();
+          }
+        },
+      });
+
+      await vi.waitFor(() => expect(events).toEqual([42, 43]));
+      stopWorker();
+      await runPromise;
     });
   });
 
