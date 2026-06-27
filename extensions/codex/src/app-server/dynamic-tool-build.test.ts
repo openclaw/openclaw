@@ -1355,10 +1355,11 @@ describe("Codex app-server dynamic tool build", () => {
     expect(isCodexWorkspaceOnlyFsPolicyActive(params)).toBe(true);
   });
 
-  it("uses default agent workspace-only fs policy when no agent id matches", () => {
+  it("uses default agent workspace-only fs policy when no active agent id is resolved", () => {
     const workspaceDir = path.join(tempDir, "workspace");
     const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
     params.disableTools = false;
+    params.sessionKey = undefined;
     params.config = {
       agents: {
         list: [
@@ -1373,16 +1374,92 @@ describe("Codex app-server dynamic tool build", () => {
       },
     } as never;
 
-    expect(
-      shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
-        agentId: "missing",
-      }),
-    ).toBe(false);
+    expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+    expect(isCodexWorkspaceOnlyFsPolicyActive(params)).toBe(true);
+  });
+
+  it("falls back to global workspace-only fs policy when explicit agent id is missing", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      tools: {
+        fs: { workspaceOnly: true },
+      },
+      agents: {
+        list: [
+          {
+            id: "fallback",
+            default: true,
+            tools: {
+              fs: { workspaceOnly: false },
+            },
+          },
+        ],
+      },
+    } as never;
+
     expect(
       isCodexWorkspaceOnlyFsPolicyActive(params, {
         agentId: "missing",
       }),
     ).toBe(true);
+  });
+
+  it("falls back to global workspace-only fs policy when runtime session agent is missing", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      tools: {
+        fs: { workspaceOnly: true },
+      },
+      agents: {
+        list: [
+          {
+            id: "fallback",
+            default: true,
+            tools: {
+              fs: { workspaceOnly: false },
+            },
+          },
+        ],
+      },
+    } as never;
+
+    expect(
+      isCodexWorkspaceOnlyFsPolicyActive(params, {
+        runtimeSessionKey: "agent:missing:session-1",
+      }),
+    ).toBe(true);
+  });
+
+  it("disables Codex native surface for global workspace-only when explicit agent id is missing", () => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.config = {
+      tools: {
+        fs: { workspaceOnly: true },
+      },
+      agents: {
+        list: [
+          {
+            id: "fallback",
+            default: true,
+            tools: {
+              fs: { workspaceOnly: false },
+            },
+          },
+        ],
+      },
+    } as never;
+
+    expect(
+      shouldEnableCodexAppServerNativeToolSurface(params, undefined, {
+        agentId: "missing",
+      }),
+    ).toBe(false);
   });
 
   it("resolves workspace-only fs policy from the runtime session key", () => {

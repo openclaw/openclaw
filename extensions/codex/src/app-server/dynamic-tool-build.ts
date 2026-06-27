@@ -511,8 +511,9 @@ type WorkspaceOnlyPolicyAgent = NonNullable<
  * Per-agent `workspaceOnly` is authoritative: `true` enables the workspace
  * sandbox and `false` explicitly opts that agent out even when global config is
  * true.
- * When no matching agent policy exists, the default agent policy is consulted
- * before falling back to global `tools.fs.workspaceOnly`.
+ * Default-agent policy only applies when there is no active agent identity.
+ * A stale or unknown active agent id must fall back to global policy, matching
+ * OpenClaw-owned fs tools and avoiding a split native-filesystem boundary.
  */
 export function isCodexWorkspaceOnlyFsPolicyActive(
   params: EmbeddedRunAttemptParams,
@@ -552,11 +553,8 @@ function resolveWorkspaceOnlyPolicyAgent(
   const agentId =
     normalizeWorkspaceOnlyAgentId(options.agentId) ??
     (candidateSessionKey ? resolveAgentIdFromSessionKey(candidateSessionKey) : undefined);
-  if (agentId) {
-    const match = agents.find((entry) => normalizeWorkspaceOnlyAgentId(entry?.id) === agentId);
-    if (match) {
-      return match;
-    }
+  if (agentId !== undefined) {
+    return agents.find((entry) => normalizeWorkspaceOnlyAgentId(entry?.id) === agentId);
   }
   return agents.find((entry) => entry?.default === true);
 }
