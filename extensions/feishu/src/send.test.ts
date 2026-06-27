@@ -145,6 +145,89 @@ describe("buildFeishuPostMessagePayload", () => {
     const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
     expect(mdEl.text).toBe("Before\n\n```\ncode\nblock\n```\n\nAfter");
   });
+
+  // FIX #97074: preserve unordered list structure (P2: markdown-aware)
+  it("preserves single newlines in unordered lists", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "- Item 1\n- Item 2\n- Item 3",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("- Item 1\n- Item 2\n- Item 3");
+  });
+
+  // FIX #97074: preserve ordered list structure (P2: markdown-aware)
+  it("preserves single newlines in ordered lists", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "1. First\n2. Second\n3. Third",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("1. First\n2. Second\n3. Third");
+  });
+
+  // FIX #97074: preserve blockquote structure (P2: markdown-aware)
+  it("preserves single newlines in blockquotes", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "> Line 1\n> Line 2\n> Line 3",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("> Line 1\n> Line 2\n> Line 3");
+  });
+
+  // FIX #97074: mixed content — paragraphs become \n\n, lists stay compact (P2)
+  it("handles mixed paragraphs and lists correctly", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText:
+        "First paragraph\nStill first paragraph\n\n- List A\n- List B\n\nAnother paragraph",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe(
+      "First paragraph\n\nStill first paragraph\n\n- List A\n- List B\n\nAnother paragraph",
+    );
+  });
+
+  // FIX #97074: nested/indented list items preserved (P2: markdown-aware)
+  it("preserves indented list structure when separated by blank line", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "Main\n\n  - Sub A\n  - Sub B",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("Main\n\n  - Sub A\n  - Sub B");
+  });
+
+  // FIX #97074: empty input and edge cases handled gracefully
+  it("handles empty string", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("");
+  });
+
+  // FIX #97074: no newlines — unchanged
+  it("passes through text without newlines", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "Single line of text",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("Single line of text");
+  });
+
+  // FIX #97074: triple newlines normalize to double
+  it("normalizes triple newlines to blank-line-separated blocks", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: "A\n\n\nB",
+    });
+    const content = JSON.parse(payload.content);
+    const mdEl = content.zh_cn.content[0].find((e: any) => e.tag === "md");
+    expect(mdEl.text).toBe("A\n\nB");
+  });
 });
 
 describe("getMessageFeishu", () => {

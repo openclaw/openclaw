@@ -575,15 +575,40 @@ function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostM
  * Normalize single newlines to double newlines for Feishu post+md rendering.
  * Feishu's post+md treats \n\n as a paragraph break but \n alone as a space,
  * which causes multi-line text to appear cramped. This function upgrades single
- * \n to \n\n while preserving existing \n\n sequences and fenced code blocks.
+ * \n to \n\n while preserving existing \n\n sequences, fenced code blocks, and
+ * block-level markdown structures (lists, blockquotes).
+ *
+ * Block-level structures (lines starting with -, *, +, \d+., >) are detected by
+ * splitting on existing \n\n boundaries first. Blocks containing any marker line
+ * keep their internal \n; plain text blocks get \n upgraded to \n\n.
  *
  * FIX #97074: Single \n rendered as space in Feishu post+md messages.
  */
 function normalizeFeishuNewlines(text: string): string {
+  // 1. Preserve fenced code blocks: split on ```...``` boundaries
   const parts = text.split(/(```[\s\S]*?```)/g);
   for (let i = 0; i < parts.length; i += 2) {
     // Even indices are non-code sections; odd indices are code blocks (preserved)
-    parts[i] = parts[i].replace(/(?<!\n)\n(?!\n)/g, "\n\n");
+    const segment = parts[i];
+    if (!segment) continue;
+
+    // 2. Split non-code sections into blocks at existing \n\n boundaries
+    const blocks = segment.split(/\n\n+/);
+
+    for (let j = 0; j < blocks.length; j++) {
+      const block = blocks[j];
+      // 3. Within each block, check for block-level markdown markers
+      //    Unordered lists (-, *, +), ordered lists (\d+.), blockquotes (>)
+      //    If any line in the block is a marker, preserve internal \n
+      if (!/^\s*(?:[-*+]\s|\d+\.\s|>\s)/m.test(block)) {
+        // Plain paragraph block: upgrade single \n to \n\n
+        blocks[j] = block.replace(/(?<!\n)\n(?!\n)/g, "\n\n");
+      }
+      // else: block-level structure (list, blockquote) — preserve \n as-is
+    }
+
+    // 4. Rejoin blocks with a single blank line between them
+    parts[i] = blocks.join("\n\n");
   }
   return parts.join("");
 }
