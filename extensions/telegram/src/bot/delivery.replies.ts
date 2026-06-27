@@ -326,36 +326,39 @@ async function sendTelegramVoiceFallbackText(opts: {
   silent?: boolean;
   replyMarkup?: ReturnType<typeof buildInlineKeyboard>;
   replyQuoteText?: string;
+  replyToMode?: ReplyToMode;
 }): Promise<number | undefined> {
   let firstDeliveredMessageId: number | undefined;
   const chunks = filterEmptyTelegramTextChunks(opts.chunkText(opts.text));
-  let appliedReplyTo = false;
-  for (const chunk of chunks) {
-    // Only apply reply reference, quote text, and buttons to the first chunk.
-    const replyToForChunk = !appliedReplyTo ? opts.replyToId : undefined;
-    const applyQuoteForChunk = !appliedReplyTo;
-    const messageId = await sendTelegramText(opts.bot, opts.chatId, chunk.text, opts.runtime, {
-      replyToMessageId: replyToForChunk,
-      replyQuoteMessageId: applyQuoteForChunk ? opts.replyQuoteMessageId : undefined,
-      replyQuoteText: applyQuoteForChunk ? opts.replyQuoteText : undefined,
-      replyQuotePosition: applyQuoteForChunk ? opts.replyQuotePosition : undefined,
-      replyQuoteEntities: applyQuoteForChunk ? opts.replyQuoteEntities : undefined,
-      thread: opts.thread,
-      textMode: chunk.textMode,
-      plainText: chunk.plainText,
-      richMessages: opts.richMessages,
-      linkPreview: opts.linkPreview,
-      tableMode: opts.tableMode,
-      silent: opts.silent,
-      replyMarkup: !appliedReplyTo ? opts.replyMarkup : undefined,
-    });
-    if (firstDeliveredMessageId == null) {
-      firstDeliveredMessageId = messageId;
-    }
-    if (replyToForChunk) {
-      appliedReplyTo = true;
-    }
-  }
+  await sendChunkedTelegramReplyText({
+    chunks,
+    progress: { hasReplied: false, hasDelivered: false },
+    replyToId: opts.replyToId,
+    replyToMode: opts.replyToMode ?? "first",
+    replyMarkup: opts.replyMarkup,
+    replyQuoteText: opts.replyQuoteText,
+    quoteOnlyOnFirstChunk: true,
+    sendChunk: async ({ chunk, replyToMessageId, replyMarkup, replyQuoteText }) => {
+      const messageId = await sendTelegramText(opts.bot, opts.chatId, chunk.text, opts.runtime, {
+        replyToMessageId,
+        replyQuoteMessageId: replyToMessageId ? opts.replyQuoteMessageId : undefined,
+        replyQuoteText,
+        replyQuotePosition: replyToMessageId ? opts.replyQuotePosition : undefined,
+        replyQuoteEntities: replyToMessageId ? opts.replyQuoteEntities : undefined,
+        thread: opts.thread,
+        textMode: chunk.textMode,
+        plainText: chunk.plainText,
+        richMessages: opts.richMessages,
+        linkPreview: opts.linkPreview,
+        tableMode: opts.tableMode,
+        silent: opts.silent,
+        replyMarkup,
+      });
+      if (firstDeliveredMessageId == null) {
+        firstDeliveredMessageId = messageId;
+      }
+    },
+  });
   return firstDeliveredMessageId;
 }
 
@@ -535,6 +538,7 @@ async function deliverMediaReply(params: {
               silent: params.silent,
               replyMarkup: params.replyMarkup,
               replyQuoteText: params.replyQuoteText,
+              replyToMode: params.replyToMode,
             });
             if (firstDeliveredMessageId == null) {
               firstDeliveredMessageId = fallbackMessageId;

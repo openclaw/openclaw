@@ -1484,7 +1484,7 @@ describe("deliverReplies", () => {
     expectRecordFields(mockCallArg(sendMessage, 0, 2), { disable_notification: true });
   });
 
-  it("voice fallback applies reply-to only on first chunk when replyToMode is first", async () => {
+  it("voice fallback avoids native replies for chunked first-mode fallback text", async () => {
     const { runtime, sendVoice, sendMessage, bot } = createVoiceFailureHarness({
       voiceError: createVoiceMessagesForbiddenError(),
       sendMessageResult: {
@@ -1520,15 +1520,12 @@ describe("deliverReplies", () => {
     expect(sendVoice).toHaveBeenCalledTimes(1);
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
     expectRecordFields(mockCallArg(sendMessage, 0, 2), {
-      reply_parameters: {
-        message_id: 77,
-        quote: "quoted context",
-        allow_sending_without_reply: true,
-      },
       reply_markup: {
         inline_keyboard: [[{ text: "Ack", callback_data: "ack" }]],
       },
     });
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("reply_to_message_id");
+    expect(mockCallArg(sendMessage, 0, 2)).not.toHaveProperty("reply_parameters");
     expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_to_message_id", 77);
     expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_parameters");
     expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_markup");
@@ -1555,7 +1552,32 @@ describe("deliverReplies", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("replyToMode 'first' only applies reply-to to the first text chunk", async () => {
+  it("replyToMode 'first' keeps native reply-to for a single text chunk", async () => {
+    const runtime = createRuntime();
+    const sendMessage = vi.fn().mockResolvedValue({
+      message_id: 20,
+      chat: { id: "123" },
+    });
+    const bot = createBot({ sendMessage });
+
+    await deliverReplies({
+      replies: [{ text: "one chunk", replyToId: "700" }],
+      chatId: "123",
+      token: "tok",
+      runtime,
+      bot,
+      replyToMode: "first",
+      textLimit: 4000,
+    });
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
+      reply_to_message_id: 700,
+      allow_sending_without_reply: true,
+    });
+  });
+
+  it("replyToMode 'first' avoids native reply-to for chunked text", async () => {
     const runtime = createRuntime();
     const sendMessage = vi.fn().mockResolvedValue({
       message_id: 20,
@@ -1575,13 +1597,10 @@ describe("deliverReplies", () => {
     });
 
     expect(sendMessage.mock.calls.length).toBeGreaterThanOrEqual(2);
-    // First chunk should have reply_to_message_id
-    expectRecordFields(mockCallArg(sendMessage, 0, 2), {
-      reply_to_message_id: 700,
-      allow_sending_without_reply: true,
-    });
-    // Second chunk should NOT have reply_to_message_id
-    expect(mockCallArg(sendMessage, 1, 2)).not.toHaveProperty("reply_to_message_id");
+    for (const call of sendMessage.mock.calls) {
+      expect(call[2]).not.toHaveProperty("reply_to_message_id");
+      expect(call[2]).not.toHaveProperty("reply_parameters");
+    }
   });
 
   it("clamps reply chunks to Telegram rich message limit", async () => {
