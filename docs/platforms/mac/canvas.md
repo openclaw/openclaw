@@ -123,9 +123,9 @@ Supported query parameters:
 - `timeoutSeconds`: optional run timeout.
 - `key`: app-generated safety token for trusted local callers.
 
-The app prompts for confirmation unless a valid key is provided. The prompt
-shows the decoded message and destination, and execution uses the normal
-Gateway run path after approval.
+The app prompts for confirmation unless a valid key is provided. Unkeyed links
+show the message and URL before approval, and ignore delivery routing fields;
+keyed links use the normal Gateway run path.
 
 ## Security notes
 

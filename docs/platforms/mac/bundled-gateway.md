@@ -81,7 +81,7 @@ swift run openclaw-mac discover --timeout 3000 --json
 ```
 
 `connect` accepts `--url`, `--token`, `--timeout`, and `--json`. `discover`
-accepts `--host`, `--port`, `--timeout`, and `--json`. Compare discovery output
+accepts `--timeout`, `--json`, and `--include-local`. Compare discovery output
 with `openclaw gateway discover --json` when you need to separate CLI discovery
 from app-side connection issues.
 
