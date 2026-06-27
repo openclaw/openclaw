@@ -433,6 +433,12 @@ async function toSessionFileEntry(
   if (!resolved) {
     // Files outside the workspace root may still exist — try the original
     // path directly (handles Unix-style /tmp/foo on Windows too).
+    // When content is requested, we can never serve it for paths outside the
+    // workspace sandbox: return missing so the caller produces
+    // session_file_not_found rather than session_file_too_large.
+    if (opts.includeContent) {
+      return { ...base, missing: true };
+    }
     const entry = directStat(touched.path);
     if (entry) {
       return entry;
@@ -444,10 +450,15 @@ async function toSessionFileEntry(
   if (!stat || workspaceStatKind(stat) !== "file") {
     // Workspace sandbox could not resolve the path; try the original path
     // and the resolved path directly before declaring missing.
-    const entry =
-      directStat(touched.path) ?? (resolved !== touched.path ? directStat(resolved) : undefined);
-    if (entry) {
-      return entry;
+    // When content is requested, directStat cannot provide it (we rely on
+    // the sandbox for safe reads); return missing so the caller produces
+    // session_file_not_found rather than session_file_too_large.
+    if (!opts.includeContent) {
+      const entry =
+        directStat(touched.path) ?? (resolved !== touched.path ? directStat(resolved) : undefined);
+      if (entry) {
+        return entry;
+      }
     }
     return { ...base, missing: true };
   }
