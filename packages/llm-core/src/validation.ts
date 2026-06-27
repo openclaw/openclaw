@@ -6,6 +6,8 @@ import type { Tool, ToolCall } from "./types.js";
 
 const validatorCache = new WeakMap<object, ReturnType<typeof Compile>>();
 const TYPEBOX_KIND = Symbol.for("TypeBox.Kind");
+const MAX_SCHEMA_READABILITY_DEPTH = 20;
+const MAX_SCHEMA_READABILITY_FIELDS = 1000;
 
 interface JsonSchemaObject {
   type?: string | string[];
@@ -62,6 +64,118 @@ function matchesJsonType(value: unknown, type: string): boolean {
 
 function isValidatorSchema(value: unknown): value is Tool["parameters"] {
   return isRecord(value);
+}
+
+function formatSchemaKey(key: PropertyKey): string {
+  return typeof key === "symbol" ? String(key) : String(key);
+}
+
+function formatSchemaPath(parent: string, key: PropertyKey): string {
+  const segment = formatSchemaKey(key);
+  return parent ? `${parent}.${segment}` : segment;
+}
+
+function readSchemaKeys(value: object): PropertyKey[] | undefined {
+  try {
+    return Reflect.ownKeys(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function readSchemaValue(
+  value: object,
+  key: PropertyKey,
+): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: Reflect.get(value, key) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+type SchemaReadabilityIssue = {
+  path: string;
+  reason: "too_deep" | "too_large" | "unreadable";
+};
+
+function findUnreadableSchemaPath(
+  value: unknown,
+  path: string,
+  depth = MAX_SCHEMA_READABILITY_DEPTH,
+  seen = new WeakSet<object>(),
+): SchemaReadabilityIssue | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  if (seen.has(value)) {
+    return undefined;
+  }
+  if (depth <= 0) {
+    return { path, reason: "too_deep" };
+  }
+  seen.add(value);
+
+  const keys = readSchemaKeys(value);
+  if (!keys) {
+    return { path, reason: "unreadable" };
+  }
+  if (keys.length > MAX_SCHEMA_READABILITY_FIELDS) {
+    return { path, reason: "too_large" };
+  }
+
+  for (const key of keys) {
+    const childPath = formatSchemaPath(path, key);
+    const childValue = readSchemaValue(value, key);
+    if (!childValue.ok) {
+      return { path: childPath, reason: "unreadable" };
+    }
+    const issue = findUnreadableSchemaPath(childValue.value, childPath, depth - 1, seen);
+    if (issue) {
+      return issue;
+    }
+  }
+
+  return undefined;
+}
+
+function toolErrorName(tool: Tool, fallbackName: string): string {
+  try {
+    return typeof tool.name === "string" && tool.name ? tool.name : fallbackName;
+  } catch {
+    return fallbackName;
+  }
+}
+
+function readToolParameters(tool: Tool, fallbackName: string): Tool["parameters"] {
+  try {
+    return tool.parameters;
+  } catch {
+    throw new Error(
+      `Unsupported tool schema for "${toolErrorName(tool, fallbackName)}": unreadable schema at parameters`,
+    );
+  }
+}
+
+function assertToolSchemaReadable(
+  parameters: Tool["parameters"],
+  tool: Tool,
+  fallbackName: string,
+): void {
+  const issue = findUnreadableSchemaPath(parameters, "parameters");
+  if (issue) {
+    const reason =
+      issue.reason === "too_deep"
+        ? "schema nesting exceeds inspection budget"
+        : issue.reason === "too_large"
+          ? "schema field count exceeds inspection budget"
+          : "unreadable schema";
+    throw new Error(
+      `Unsupported tool schema for "${toolErrorName(tool, fallbackName)}": ${reason} at ${
+        issue.path
+      }`,
+    );
+  }
 }
 
 const JSON_NUMBER_TOKEN_RE = /^[+-]?(?:(?:\d+\.?\d*)|(?:\.\d+))(?:e[+-]?\d+)?$/iu;
@@ -293,14 +407,16 @@ export function validateToolCall(tools: Tool[], toolCall: ToolCall): unknown {
 
 /** Validates tool arguments against TypeBox or plain JSON-schema parameters. */
 export function validateToolArguments(tool: Tool, toolCall: ToolCall): unknown {
+  const parameters = readToolParameters(tool, toolCall.name);
+  assertToolSchemaReadable(parameters, tool, toolCall.name);
   const args = structuredClone(toolCall.arguments);
-  Value.Convert(tool.parameters, args);
+  Value.Convert(parameters, args);
 
-  const validator = getValidator(tool.parameters);
-  if (!hasTypeBoxMetadata(tool.parameters) && isJsonSchemaObject(tool.parameters)) {
+  const validator = getValidator(parameters);
+  if (!hasTypeBoxMetadata(parameters) && isJsonSchemaObject(parameters)) {
     // TypeBox Value.Convert is intentionally conservative for plain JSON schemas;
     // mirror the provider-facing coercions so model-emitted string numbers validate.
-    const coerced = coerceWithJsonSchema(args, tool.parameters);
+    const coerced = coerceWithJsonSchema(args, parameters);
     if (coerced !== args) {
       if (isRecord(args) && isRecord(coerced)) {
         for (const key of Object.keys(args)) {
