@@ -333,20 +333,31 @@ function buildSnippet(raw: string, query: string): string {
   const queryLower = normalizeLowercaseStringOrEmpty(query);
   const queryTokens = buildQueryTokens(queryLower);
   const searchable = buildSnippetSearchText(raw);
-  const lines = searchable.split(/\r?\n/).filter((line) => line.trim().length > 0);
-  const matchingLine =
-    lines.find((line) =>
-      lineMatchesQuery(normalizeLowercaseStringOrEmpty(line), queryLower, queryTokens),
-    ) ??
-    lines
-      .map((line) => ({
-        line,
-        hits: queryTokens.filter((token) => normalizeLowercaseStringOrEmpty(line).includes(token))
-          .length,
-      }))
-      .toSorted((left, right) => right.hits - left.hits)
-      .find((candidate) => candidate.hits > 0)?.line;
-  return matchingLine?.trim() || lines.find((line) => line.trim() !== "---")?.trim() || "";
+  let bestTokenLine: string | undefined;
+  let bestTokenHits = 0;
+  let fallbackLine: string | undefined;
+  for (const line of searchable.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) {
+      continue;
+    }
+    fallbackLine ??= trimmed !== "---" ? line : undefined;
+    const lineLower = normalizeLowercaseStringOrEmpty(line);
+    if (lineMatchesQuery(lineLower, queryLower, queryTokens)) {
+      return trimmed;
+    }
+    let hits = 0;
+    for (const token of queryTokens) {
+      if (lineLower.includes(token)) {
+        hits += 1;
+      }
+    }
+    if (hits > bestTokenHits) {
+      bestTokenHits = hits;
+      bestTokenLine = line;
+    }
+  }
+  return bestTokenLine?.trim() || fallbackLine?.trim() || "";
 }
 
 function buildPageSearchText(page: QueryableWikiPage): string {
