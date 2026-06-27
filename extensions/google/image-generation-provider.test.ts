@@ -563,8 +563,8 @@ describe("Google image-generation provider", () => {
   });
 
   it("falls back to the default Gemini model when unset or blank", () => {
-    expect(geminiWebSearchTesting.resolveGeminiModel()).toBe("gemini-2.5-flash");
-    expect(geminiWebSearchTesting.resolveGeminiModel({ model: "  " })).toBe("gemini-2.5-flash");
+    expect(geminiWebSearchTesting.resolveGeminiModel()).toBe("gemini-flash-latest");
+    expect(geminiWebSearchTesting.resolveGeminiModel({ model: "  " })).toBe("gemini-flash-latest");
     expect(geminiWebSearchTesting.resolveGeminiModel({ model: "gemini-2.5-pro" })).toBe(
       "gemini-2.5-pro",
     );
