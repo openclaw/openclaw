@@ -67,7 +67,6 @@ export async function fetchCodexUsage(
     Accept: "application/json",
     originator: "openclaw",
     ...(version ? { version } : {}),
-    "User-Agent": `openclaw/${version || "dev"}`,
   };
   if (accountId) {
     defaultHeaders["ChatGPT-Account-Id"] = accountId;
@@ -80,6 +79,12 @@ export async function fetchCodexUsage(
       transport: "http",
       defaultHeaders,
     }) ?? defaultHeaders;
+
+  // Override User-Agent after attribution policy resolution to use a
+  // browser-like header for Cloudflare-protected chatgpt.com/backend-api.
+  // See #94432.
+  headers["User-Agent"] =
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
   const res = await fetchJson(
     "https://chatgpt.com/backend-api/wham/usage",

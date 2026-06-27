@@ -448,10 +448,13 @@ const AUTH_INVALID_TOKEN_HINT_RE =
   /\bunauthorized\b|\b(?:invalid|incorrect|expired|stale)[_\s-]?api[_\s-]?key\b|\b(?:invalid|incorrect|expired|stale)\s+(?:token|jwt|credential|api[_\s-]?key)\b|\b(?:token|jwt|credential|api[_\s-]?key)\s+(?:is\s+)?(?:invalid|incorrect|expired|stale)\b/i;
 const HTML_BODY_RE = /^\s*(?:<!doctype\s+html\b|<html\b)/i;
 const HTML_CLOSE_RE = /<\/html>/i;
-// Cloudflare browser-challenge markers mean the CDN/gateway blocked the request,
-// so a 403 HTML response should not be reported as an auth failure.
+// Cloudflare browser-challenge markers that indicate a CDN/gateway block
+// rather than an auth failure. This set aligns with the shared Cloudflare
+// detector in src/shared/assistant-error-format.ts (STANDALONE_HTML_ERROR_HINT_RE)
+// to avoid gaps where a 403 challenge page with shared markers but without
+// the original three patterns would still fall through to auth_html.
 const CLOUDFLARE_CHALLENGE_RE =
-  /cdn-cgi\/challenge-platform|challenge-error-text|Enable\s+JavaScript\s+and\s+cookies\s+to\s+continue|cf-browser-verification|__cf_challenge/i;
+  /cdn-cgi\/challenge-platform|challenge-error-text|Enable\s+JavaScript\s+and\s+cookies\s+to\s+continue|cf-browser-verification|__cf_challenge|\bcloudflare\b|\bcaptcha\b|attention required/i;
 const PROXY_ERROR_RE =
   /\bproxyconnect\b|\bhttps?_proxy\b|\b407\b|\bproxy authentication required\b|\btunnel connection failed\b|\bconnect tunnel\b|\bsocks proxy\b|\bproxy error\b/i;
 const DNS_ERROR_RE = /\benotfound\b|\beai_again\b|\bgetaddrinfo\b|\bno such host\b|\bdns\b/i;
@@ -1244,6 +1247,8 @@ export function classifyProviderRuntimeFailureKind(
   }
   if (message && isHtmlErrorResponse(message, status)) {
     // Cloudflare browser-challenge pages are CDN/gateway blocks, not auth failures.
+    // chatgpt.com/backend-api returns these when the HTTP client lacks browser
+    // characteristics (TLS fingerprint, HTTP/2, browser-like headers).
     if (status === 403 && isCloudflareChallengeResponse(message)) {
       return "upstream_html";
     }
