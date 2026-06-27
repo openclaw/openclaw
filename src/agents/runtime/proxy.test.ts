@@ -284,4 +284,74 @@ describe("streamProxy", () => {
       usage,
     });
   });
+
+  it("rejects an oversized unterminated buffer without newline across multiple chunks", async () => {
+    // First chunk has \n, leaving a 600 KiB unterminated tail in buffer.
+    // Second chunk appends 600 KiB more without \n. The tail cap fires when
+    // the accumulated unterminated tail exceeds 1 MiB.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const encoder = new TextEncoder();
+        const chunkIndex = { current: 0 };
+        return new Response(
+          new ReadableStream({
+            async pull(controller) {
+              if (chunkIndex.current === 0) {
+                // "hello\n" + 600 KiB — has \n, leaves 600 KiB tail
+                controller.enqueue(encoder.encode("hello\n" + "x".repeat(600 * 1024)));
+              } else if (chunkIndex.current === 1) {
+                // 600 KiB more without \n → buffer = 1.2 MiB → tail cap fires
+                controller.enqueue(encoder.encode("y".repeat(600 * 1024)));
+              } else {
+                controller.close();
+              }
+              chunkIndex.current++;
+            },
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(events.at(-1)?.type).toBe("error");
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toMatch(/exceeds maximum allowed size/i);
+  });
+
+  it("rejects an oversized final frame at EOF without trailing newline", async () => {
+    // Server closes connection after a 1.2 MiB data: line without any \n.
+    // The line is split into lines[0] (the entire data), which triggers the
+    // byte-accurate line cap — proving all buffered data is bounded.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        return new Response("data: " + "x".repeat(1200 * 1024));
+      }),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(events.at(-1)?.type).toBe("error");
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toMatch(/exceeds maximum allowed size/i);
+  });
 });

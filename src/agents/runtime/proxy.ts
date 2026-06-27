@@ -227,6 +227,14 @@ export function streamProxy(
         const lines = buffer.split("\n");
         buffer = lines.pop() || "";
 
+        // Cap the unterminated tail (current in-flight line). At 1 MiB this is
+        // deterministic because total accumulated bytes exceed the cap regardless
+        // of TCP chunking, unlike the prior 64 KiB tail cap (#96993) which was
+        // close enough to legitimate data sizes to produce chunk-dependent results.
+        if (Buffer.byteLength(buffer, "utf-8") > 1024 * 1024) {
+          throw new Error("Proxy SSE buffer exceeds maximum allowed size of 1 MiB");
+        }
+
         for (const line of lines) {
           // Byte-accurate complete-line cap (1 MiB, aligned with sibling SSE handling)
           if (Buffer.byteLength(line, "utf-8") > 1024 * 1024) {
@@ -240,6 +248,10 @@ export function streamProxy(
         throw new Error("Request aborted by user");
       }
       buffer += decoder.decode();
+      // Byte-accurate cap on the EOF final frame (same policy)
+      if (Buffer.byteLength(buffer, "utf-8") > 1024 * 1024) {
+        throw new Error("Proxy SSE buffer exceeds maximum allowed size of 1 MiB");
+      }
       if (buffer.trim()) {
         processSseLine(buffer);
       }
