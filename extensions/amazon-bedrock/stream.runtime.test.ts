@@ -294,6 +294,19 @@ describe("Bedrock thinking effort mapping", () => {
     expect(x.reasoning).toBe("xhigh");
   });
 
+  it("preserves low effort with model maxTokens (#97176)", () => {
+    const options = testing.resolveSimpleBedrockOptions(
+      bedrockModel({
+        id: "us.anthropic.claude-opus-4-8",
+        name: "Claude Opus 4.8",
+        maxTokens: 200_000,
+      }),
+      { reasoning: "low" },
+    );
+    expect(options.maxTokens).toBe(200_000);
+    expect(options.reasoning).toBe("low");
+  });
+
   it("keeps base default when model.maxTokens is undefined for adaptive-thinking (#97176)", () => {
     const options = testing.resolveSimpleBedrockOptions(
       bedrockModel({
@@ -366,6 +379,20 @@ describe("Bedrock Fable contract", () => {
       maxTokens: 16000,
     });
     expect(opts.maxTokens).toBe(16000);
+  });
+
+  it("keeps base default when model.maxTokens is undefined for Fable 5 (#97176)", () => {
+    const model = bedrockModel({
+      id: "production-fable",
+      name: "Production deployment",
+      params: { canonicalModelId: "claude-fable-5" },
+      contextWindow: 1_000_000,
+      // no maxTokens — should stay at base default 4096
+    });
+    const opts = testing.resolveSimpleBedrockOptions(model, {
+      reasoning: "high",
+    });
+    expect(opts.maxTokens).toBe(4096);
   });
 
   it("sends model.maxTokens in inferenceConfig for Fable 5 (#97176)", async () => {

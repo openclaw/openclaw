@@ -358,13 +358,6 @@ function formatBedrockError(error: unknown): string {
   return message;
 }
 
-/** Stream a Bedrock Converse request from the generic OpenClaw stream options. */
-export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", SimpleStreamOptions> = (
-  model: Model<"bedrock-converse-stream">,
-  context: Context,
-  options?: SimpleStreamOptions,
-) => streamBedrock(model, context, resolveSimpleBedrockOptions(model, options));
-
 /** When the caller did not set an explicit maxTokens cap, use the
  * model's resolved maxTokens instead of leaving it at the core default
  * 4096.  This prevents adaptive-thinking and Fable 5 Bedrock requests
@@ -436,6 +429,13 @@ function resolveSimpleBedrockOptions(
     thinkingBudgets: options.thinkingBudgets,
   } satisfies BedrockOptions;
 }
+
+/** Stream a Bedrock Converse request from the generic OpenClaw stream options. */
+export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", SimpleStreamOptions> = (
+  model: Model<"bedrock-converse-stream">,
+  context: Context,
+  options?: SimpleStreamOptions,
+) => streamBedrock(model, context, resolveSimpleBedrockOptions(model, options));
 
 function handleContentBlockStart(
   event: ContentBlockStartEvent,
