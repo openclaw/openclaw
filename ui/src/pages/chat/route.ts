@@ -34,7 +34,7 @@ export const page = definePage({
     };
   },
   component: () =>
-    import("./page.ts").then(() => ({
+    import("./chat-page.ts").then(() => ({
       header: true,
       render: (data: unknown) => html`<openclaw-chat-page .data=${data}></openclaw-chat-page>`,
     })),

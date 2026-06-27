@@ -11,7 +11,7 @@ export const page = definePage({
   id: "skill-workshop",
   path: "/skills/workshop",
   component: () =>
-    import("./page.ts").then(() => ({
+    import("./skill-workshop-page.ts").then(() => ({
       render: (data: unknown) => html`
         <openclaw-skill-workshop-page
           .data=${data as SkillWorkshopRouteData | undefined}
