@@ -1517,11 +1517,12 @@ describe("buildGuardedModelFetch", () => {
     expect(String(caught)).toMatch(/exceeded.*bytes while synthesizing SSE/i);
   });
 
-  it("caps non-OK response body via guarded-fetch wrapper", async () => {
-    // The shared SSE sanitizer returns !response.ok bodies unchanged, leaving
-    // an unbounded buffering path via response.text(). The azure-openai-responses
-    // provider wraps guardedFetch with a non-OK body cap at SSE_SANITIZE_BUFFER_MAX_BYTES.
-    const OVER_LIMIT = 100 * 1024; // ~100 KiB, well over the 64 KiB cap
+  it("caps non-OK response body lazily so SDK can still cancel retryable responses", async () => {
+    // Regression: a 429/5xx non-OK body used to be returned unchanged by the
+    // shared sanitizer, so a hostile endpoint could OOM the SDK when it called
+    // response.text(). The cap is applied lazily via TransformStream so the SDK
+    // can still cancel the response before reading any body.
+    const OVER_LIMIT = 100 * 1024;
     fetchWithSsrFGuardMock.mockResolvedValue({
       response: new Response(
         new ReadableStream({
@@ -1532,10 +1533,9 @@ describe("buildGuardedModelFetch", () => {
         }),
         { status: 429, statusText: "Too Many Requests" },
       ),
-      finalUrl: "https://custom-azure.openai.azure.com",
+      finalUrl: "https://custom-azure.openai.azure.com/openai/v1/responses",
       release: vi.fn(async () => undefined),
     });
-
     const model = {
       id: "gpt-5.5",
       provider: "azure",
@@ -1548,39 +1548,57 @@ describe("buildGuardedModelFetch", () => {
       { method: "POST" },
     );
 
-    // Shared guard returns non-OK unchanged — body is still ~100 KiB
     expect(response.status).toBe(429);
     expect(response.ok).toBe(false);
 
-    // Apply the same non-OK cap wrapper used by azure-openai-responses
-    const reader = response.body!.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    try {
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) {
-          break;
-        }
-        const nextTotal = total + value.byteLength;
-        if (nextTotal > 64 * 1024) {
-          const remaining = 64 * 1024 - total;
-          if (remaining > 0) {
-            chunks.push(value.subarray(0, remaining));
-          }
-          await reader.cancel().catch(() => {});
-          break;
-        }
-        chunks.push(value);
-        total = nextTotal;
-      }
-    } finally {
-      reader.releaseLock();
-    }
+    const text = await response.text();
+    expect(text.length).toBeLessThanOrEqual(64 * 1024);
+    expect(text.length).toBeLessThan(OVER_LIMIT);
+  });
 
-    const capped = new Blob([Buffer.concat(chunks)]);
-    expect(capped.size).toBeLessThanOrEqual(64 * 1024);
-    expect(capped.size).toBeLessThan(OVER_LIMIT);
+  it("preserves SDK ability to cancel retryable non-OK responses before reading body", async () => {
+    // Regression: a non-OK body wrapper must be lazy. The OpenAI SDK may decide
+    // to cancel a 429/5xx response and retry before reading the body. If the
+    // wrapper eagerly reads the body, the SDK loses that capability.
+    const TOTAL_BYTES = 80 * 1024;
+    let bytesPulled = 0;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          pull(controller) {
+            if (bytesPulled < TOTAL_BYTES) {
+              const chunk = new Uint8Array(8 * 1024);
+              bytesPulled += chunk.byteLength;
+              controller.enqueue(chunk);
+            } else {
+              controller.close();
+            }
+          },
+        }),
+        { status: 503, statusText: "Service Unavailable" },
+      ),
+      finalUrl: "https://custom-azure.openai.azure.com/openai/v1/responses",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.5",
+      provider: "azure",
+      api: "azure-openai-responses",
+      baseUrl: "https://custom-azure.openai.azure.com/openai/v1",
+    } as unknown as Model<"azure-openai-responses">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://custom-azure.openai.azure.com/openai/v1/responses",
+      { method: "POST" },
+    );
+
+    expect(response.status).toBe(503);
+    // SDK cancels the response body before reading anything. The lazy cap must
+    // not pull the full body from the source — a small pre-buffered chunk is
+    // allowed (ReadableStream default high-water-mark), but the full payload
+    // must remain unconsumed so the SDK can still retry.
+    await response.body?.cancel();
+    expect(bytesPulled).toBeLessThan(TOTAL_BYTES);
   });
 
   describe("long retry-after handling", () => {

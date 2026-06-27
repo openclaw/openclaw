@@ -1,10 +1,7 @@
 // Azure OpenAI Responses provider adapts Azure deployments to Responses API streams.
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
-import {
-  buildGuardedModelFetch,
-  SSE_SANITIZE_BUFFER_MAX_BYTES,
-} from "../../agents/provider-transport-fetch.js";
+import { buildGuardedModelFetch } from "../../agents/provider-transport-fetch.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../../shared/azure-openai-responses-client-compat.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type {
@@ -204,56 +201,13 @@ function createClient(
   const { baseUrl, apiVersion } = resolveAzureConfig(model, options);
   const guardedFetch = buildGuardedModelFetch({ ...model, baseUrl });
 
-  // Wrap guarded fetch to cap non-OK response body size. The shared SSE
-  // sanitizer (sanitizeOpenAISdkSseResponse) returns !response.ok bodies
-  // unchanged, but the SDK reads error bodies with response.text() — an
-  // unbounded buffering path for hostile 4xx/5xx SSE responses.
-  const azureGuardedFetch = async (
-    input: RequestInfo | URL,
-    init?: RequestInit,
-  ): Promise<Response> => {
-    const response = await guardedFetch(input, init);
-    if (!response.ok && response.body) {
-      const reader = response.body.getReader();
-      const chunks: Uint8Array[] = [];
-      let total = 0;
-      try {
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) {
-            break;
-          }
-          const nextTotal = total + value.byteLength;
-          if (nextTotal > SSE_SANITIZE_BUFFER_MAX_BYTES) {
-            const remaining = SSE_SANITIZE_BUFFER_MAX_BYTES - total;
-            if (remaining > 0) {
-              chunks.push(value.subarray(0, remaining));
-            }
-            await reader.cancel("Response error body exceeds maximum allowed size").catch(() => {});
-            break;
-          }
-          chunks.push(value);
-          total = nextTotal;
-        }
-      } finally {
-        reader.releaseLock();
-      }
-      return new Response(new Blob([Buffer.concat(chunks)]), {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers,
-      });
-    }
-    return response;
-  };
-
   if (isOpenAICompatibleAzureResponsesBaseUrl(baseUrl)) {
     return new OpenAI({
       apiKey,
       dangerouslyAllowBrowser: true,
       defaultHeaders: headers,
       baseURL: baseUrl,
-      fetch: azureGuardedFetch,
+      fetch: guardedFetch,
     });
   }
 
@@ -263,7 +217,7 @@ function createClient(
     dangerouslyAllowBrowser: true,
     defaultHeaders: headers,
     baseURL: baseUrl,
-    fetch: azureGuardedFetch,
+    fetch: guardedFetch,
   });
 }
 
