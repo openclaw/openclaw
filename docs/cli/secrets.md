@@ -22,6 +22,7 @@ Recommended operator loop:
 
 ```bash
 openclaw secrets audit --check
+openclaw secrets audit --check --severity-min warn
 openclaw secrets configure
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json --dry-run
 openclaw secrets apply --from /tmp/openclaw-secrets-plan.json
@@ -33,8 +34,9 @@ If your plan includes `exec` SecretRefs/providers, pass `--allow-exec` on both d
 
 Exit code note for CI/gates:
 
-- `audit --check` returns `1` on findings.
-- unresolved refs return `2`.
+- `audit --check` returns `1` when findings meet `--severity-min`.
+- `--severity-min` defaults to `info`, preserving the existing behavior where any finding fails `--check`.
+- unresolved refs return `2`, regardless of the selected severity threshold.
 
 Related:
 
@@ -82,14 +84,18 @@ Header residue note:
 ```bash
 openclaw secrets audit
 openclaw secrets audit --check
+openclaw secrets audit --check --severity-min warn
 openclaw secrets audit --json
 openclaw secrets audit --allow-exec
 ```
 
 Exit behavior:
 
-- `--check` exits non-zero on findings.
-- unresolved refs exit with higher-priority non-zero code.
+- `--check` exits non-zero when findings meet `--severity-min`.
+- `--severity-min <severity>` accepts `info`, `warn`, `warning`, or `error`.
+- `--severity-min` defaults to `info`, so plain `--check` still exits `1` on any finding.
+- Use `--severity-min warn` when `info` findings should stay visible in the report but should not fail the automation gate.
+- unresolved refs exit with code `2` even when the selected threshold would otherwise ignore lower-severity findings.
 
 Report shape highlights:
 
