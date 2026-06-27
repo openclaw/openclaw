@@ -81,7 +81,7 @@ Automatic fast mode starts short conversations quickly, then returns longer or f
 
 - Prevents [Docker](https://docs.openclaw.ai/install/docker) and [Podman](https://docs.openclaw.ai/install/podman) setup from running unbounded on hosts where GNU timeout is installed as `gtimeout`, so image pulls, builds, and detached startup receive the intended guard. [62b2e9e](https://github.com/openclaw/openclaw/commit/62b2e9ef14b4be6fd396621c8e5e248331f08695).
 
-### Plugins, Packaging, and QA
+### Plugins and Packaging
 
 #### Codex service-tier clearing
 
@@ -96,7 +96,6 @@ Automatic fast mode starts short conversations quickly, then returns longer or f
 #### Doctor check ordering
 
 - Keeps core [`openclaw doctor`](https://docs.openclaw.ai/gateway/doctor) diagnostics in their normal order before extension checks, making lint and repair output easier to follow. [PR #86627](https://github.com/openclaw/openclaw/pull/86627). Thanks @giodl73-repo.
-
 ## 2026.6.9
 
 ### Highlights
