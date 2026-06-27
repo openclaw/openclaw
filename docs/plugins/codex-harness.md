@@ -465,7 +465,13 @@ do not receive Gateway env API-key fallback; use an explicit auth profile or the
 remote app-server's own account.
 When native Codex plugins are configured, OpenClaw installs or refreshes those
 plugins through the connected app-server before exposing plugin-owned apps to
-the Codex thread.
+the Codex thread. `app/list` remains the source of truth for app ids,
+accessibility, and metadata, but OpenClaw owns the per-thread enablement
+decision: if policy allows a listed accessible app, OpenClaw sends
+`thread/start.config.apps[appId].enabled = true` even when `app/list` currently
+reports that app disabled. This path does not invent app installation for
+unknown ids; OpenClaw only activates marketplace plugins with `plugin/install`
+and then refreshes inventory.
 
 If a subscription profile hits a Codex usage limit, OpenClaw records the reset
 time when Codex reports one and tries the next ordered auth profile for the same
