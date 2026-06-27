@@ -41,6 +41,7 @@ import {
   sanitizeAssistantVisibleStreamText,
 } from "./embedded-agent-utils.js";
 import type { AgentEvent, AgentMessage } from "./runtime/index.js";
+import { hasNonzeroUsage, normalizeUsage, type UsageLike } from "./usage.js";
 
 function shouldSuppressAssistantVisibleOutput(message: AgentMessage | undefined): boolean {
   return resolveAssistantMessagePhase(message) === "commentary";
@@ -69,6 +70,20 @@ function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined):
   }
   const api = normalizeOptionalString((message as { api?: unknown }).api) ?? "";
   return api === "openai-completions" || api === "openclaw-openai-completions-transport";
+}
+
+function preservePendingAssistantUsage(
+  state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantUsage">,
+  message: AgentMessage,
+): AgentMessage {
+  if (message.role !== "assistant" || !hasNonzeroUsage(state.pendingAssistantUsage)) {
+    return message;
+  }
+  const messageUsage = normalizeUsage((message as { usage?: UsageLike }).usage);
+  if (hasNonzeroUsage(messageUsage)) {
+    return message;
+  }
+  return { ...message, usage: state.pendingAssistantUsage };
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -911,7 +926,7 @@ export function handleMessageEnd(
     return;
   }
 
-  const assistantMessage = msg;
+  const assistantMessage = preservePendingAssistantUsage(ctx.state, msg);
   const assistantPhase = resolveAssistantMessagePhase(assistantMessage);
   const suppressVisibleAssistantOutput = shouldSuppressAssistantVisibleOutput(assistantMessage);
   const suppressDeterministicApprovalOutput = shouldSuppressDeterministicApprovalOutput(ctx.state);
