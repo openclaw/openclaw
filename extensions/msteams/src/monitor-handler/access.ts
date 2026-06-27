@@ -12,6 +12,7 @@ import {
   resolveDefaultGroupPolicy,
   type OpenClawConfig,
 } from "../../runtime-api.js";
+import { resolveMSTeamsAccountConfig } from "../accounts.js";
 import { normalizeMSTeamsConversationId } from "../inbound.js";
 import { resolveMSTeamsRouteConfig } from "../policy.js";
 import { getMSTeamsRuntime } from "../runtime.js";
@@ -46,7 +47,8 @@ export async function resolveMSTeamsSenderAccess(params: {
   hasControlCommand?: boolean;
 }) {
   const activity = params.activity;
-  const msteamsCfg = params.cfg.channels?.msteams;
+  const accountId = params.accountId ?? DEFAULT_ACCOUNT_ID;
+  const msteamsCfg = resolveMSTeamsAccountConfig(params.cfg, accountId);
   const conversationId = normalizeMSTeamsConversationId(activity.conversation?.id ?? "unknown");
   const convType = normalizeOptionalLowercaseString(activity.conversation?.conversationType);
   const isDirectMessage = convType === "personal" || (!convType && !activity.conversation?.isGroup);
@@ -57,7 +59,7 @@ export async function resolveMSTeamsSenderAccess(params: {
   const pairing = createChannelPairingController({
     core,
     channel: "msteams",
-    accountId: params.accountId ?? DEFAULT_ACCOUNT_ID,
+    accountId,
   });
   const dmPolicy = msteamsCfg?.dmPolicy ?? "pairing";
   const configuredDmAllowFrom = msteamsCfg?.allowFrom ?? [];

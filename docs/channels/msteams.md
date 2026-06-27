@@ -111,8 +111,10 @@ The output will show `CLIENT_ID`, `CLIENT_SECRET`, `TENANT_ID`, and a **Teams Ap
 This is the same account-based shape used for one bot or many bots. A single
 bot just uses one account, usually `default`.
 
-Backward-compatible single-bot configs can still keep credentials at the root
-and omit explicit bindings:
+### Backward-compatible single-bot config
+
+Existing single-bot configs can keep credentials at the root and omit explicit
+`bindings`:
 
 ```json5
 {
@@ -128,8 +130,9 @@ and omit explicit bindings:
 }
 ```
 
-Without `bindings`, inbound Teams messages route to the default agent, matching
-the legacy single-agent behavior.
+In this legacy shape, `bindings` are intentionally optional. When no binding
+matches, inbound Teams messages route to the default agent, matching the old
+single-agent behavior.
 
 <Note>
 Environment variables apply only to the default Microsoft Teams account. Named

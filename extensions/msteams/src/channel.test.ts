@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { MSTeamsConfigSchema } from "../config-api.js";
+import { msteamsDirectoryContractPlugin } from "../directory-contract-api.js";
 import {
   listMSTeamsAccountIds,
   resolveMSTeamsAccount,
@@ -51,6 +52,37 @@ describe("msteamsPlugin", () => {
       "removeParticipant",
       "renameGroup",
     ]);
+  });
+
+  it("uses account-scoped Teams credentials for message-tool discovery", () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          enabled: true,
+          tenantId: "tenant-id",
+          accounts: {
+            legal: {
+              appId: "legal-app-id",
+              appPassword: "legal-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      msteamsPlugin.actions?.describeMessageTool?.({
+        cfg,
+        accountId: "default",
+      })?.actions,
+    ).toEqual([]);
+    expect(
+      msteamsPlugin.actions?.describeMessageTool?.({
+        cfg,
+        accountId: "legal",
+      })?.actions,
+    ).toContain("upload-file");
   });
 
   it("reuses the shared Teams target-id matcher for explicit targets", () => {
@@ -469,5 +501,99 @@ describe("msTeamsApprovalAuth", () => {
         approvalKind: "exec",
       }),
     ).toEqual({ authorized: true });
+  });
+
+  it("uses account-scoped approvers for named Teams accounts", () => {
+    const rootApprover = "123e4567-e89b-12d3-a456-426614174000";
+    const legalApprover = "223e4567-e89b-12d3-a456-426614174000";
+    const cfg = {
+      channels: {
+        msteams: {
+          allowFrom: [`user:${rootApprover}`],
+          accounts: {
+            legal: {
+              appId: "legal-app-id",
+              appPassword: "legal-secret",
+              allowFrom: [`user:${legalApprover}`],
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(
+      msTeamsApprovalAuth.authorizeActorAction({
+        cfg,
+        accountId: "legal",
+        senderId: legalApprover,
+        action: "approve",
+        approvalKind: "exec",
+      }),
+    ).toEqual({ authorized: true });
+    expect(
+      msTeamsApprovalAuth.authorizeActorAction({
+        cfg,
+        accountId: "legal",
+        senderId: rootApprover,
+        action: "approve",
+        approvalKind: "exec",
+      }),
+    ).toEqual({
+      authorized: false,
+      reason: "❌ You are not authorized to approve exec requests on Microsoft Teams.",
+    });
+  });
+});
+
+describe("msteams directory contract", () => {
+  it("uses account-scoped Teams config", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          tenantId: "tenant-id",
+          appId: "default-app-id",
+          appPassword: "default-secret",
+          allowFrom: ["user:default-user"],
+          accounts: {
+            legal: {
+              appId: "legal-app-id",
+              appPassword: "legal-secret",
+              allowFrom: ["user:legal-user"],
+              teams: {
+                team1: {
+                  channels: {
+                    "19:legal-channel": {},
+                  },
+                },
+              },
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      msteamsDirectoryContractPlugin.directory.self?.({
+        cfg,
+        accountId: "legal",
+        runtime: {} as never,
+      }),
+    ).resolves.toEqual({ kind: "user", id: "legal-app-id", name: "legal-app-id" });
+    await expect(
+      msteamsDirectoryContractPlugin.directory.listPeers?.({
+        cfg,
+        accountId: "legal",
+        runtime: {} as never,
+      }),
+    ).resolves.toEqual([{ id: "user:legal-user", kind: "user" }]);
+    await expect(
+      msteamsDirectoryContractPlugin.directory.listGroups?.({
+        cfg,
+        accountId: "legal",
+        runtime: {} as never,
+      }),
+    ).resolves.toEqual([{ id: "conversation:19:legal-channel", kind: "group" }]);
   });
 });

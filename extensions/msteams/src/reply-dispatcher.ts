@@ -17,6 +17,7 @@ import {
   type ReplyPayload,
   type RuntimeEnv,
 } from "../runtime-api.js";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import type { MSTeamsAccessTokenProvider } from "./attachments/types.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import type { StoredConversationReference } from "./conversation-store.js";
@@ -59,7 +60,7 @@ export function createMSTeamsReplyDispatcher(params: {
   sharePointSiteId?: string;
 }) {
   const core = getMSTeamsRuntime();
-  const msteamsCfg = params.cfg.channels?.msteams;
+  const msteamsCfg = resolveMSTeamsAccountConfig(params.cfg, params.accountId);
   const conversationType = normalizeOptionalLowercaseString(
     params.conversationRef.conversation?.conversationType,
   );
@@ -161,10 +162,16 @@ export function createMSTeamsReplyDispatcher(params: {
     channel: "msteams",
   });
   const mediaMaxBytes = resolveChannelMediaMaxBytes({
-    cfg: params.cfg,
+    cfg: {
+      ...params.cfg,
+      channels: {
+        ...params.cfg.channels,
+        msteams: msteamsCfg,
+      },
+    },
     resolveChannelLimitMb: ({ cfg }) => cfg.channels?.msteams?.mediaMaxMb,
   });
-  const feedbackLoopEnabled = params.cfg.channels?.msteams?.feedbackEnabled !== false;
+  const feedbackLoopEnabled = msteamsCfg.feedbackEnabled !== false;
   const streamController = createTeamsReplyStreamController({
     conversationType,
     context: params.context,

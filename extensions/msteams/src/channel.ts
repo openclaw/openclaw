@@ -398,10 +398,11 @@ async function runWithRequiredActionPinnedMessageTarget<T>(params: {
 
 function describeMSTeamsMessageTool({
   cfg,
+  accountId,
 }: Parameters<
   NonNullable<ChannelMessageActionAdapter["describeMessageTool"]>
 >[0]): ChannelMessageToolDiscovery {
-  const msteamsCfg = resolveMSTeamsAccountConfig(cfg);
+  const msteamsCfg = resolveMSTeamsAccountConfig(cfg, accountId);
   const enabled =
     cfg.channels?.msteams?.enabled !== false && Boolean(resolveMSTeamsCredentials(msteamsCfg));
   return {

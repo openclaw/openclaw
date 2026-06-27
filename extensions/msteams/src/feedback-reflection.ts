@@ -4,6 +4,7 @@ import {
   dispatchReplyFromConfigWithSettledDispatcher,
   type OpenClawConfig,
 } from "../runtime-api.js";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { formatUnknownError } from "./errors.js";
@@ -60,6 +61,7 @@ export type RunFeedbackReflectionParams = {
   cfg: OpenClawConfig;
   app: MSTeamsApp;
   appId: string;
+  accountId: string;
   conversationRef: StoredConversationReference;
   sessionKey: string;
   agentId: string;
@@ -144,15 +146,17 @@ function createReflectionCaptureDispatcher(params: {
 async function sendReflectionFollowUp(params: {
   cfg: OpenClawConfig;
   app: MSTeamsApp;
+  accountId: string;
   conversationRef: StoredConversationReference;
   userMessage: string;
 }): Promise<void> {
+  const msteamsCfg = resolveMSTeamsAccountConfig(params.cfg, params.accountId);
   const baseRef = buildConversationReference(params.conversationRef);
   await sendMSTeamsActivityWithReference(
     params.app,
     baseRef,
     { type: "message", text: params.userMessage },
-    { serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(params.cfg.channels?.msteams) },
+    { serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg) },
   );
 }
 
@@ -162,7 +166,8 @@ async function sendReflectionFollowUp(params: {
  */
 export async function runFeedbackReflection(params: RunFeedbackReflectionParams): Promise<void> {
   const { cfg, log, sessionKey } = params;
-  const cooldownMs = cfg.channels?.msteams?.feedbackReflectionCooldownMs ?? DEFAULT_COOLDOWN_MS;
+  const msteamsCfg = resolveMSTeamsAccountConfig(cfg, params.accountId);
+  const cooldownMs = msteamsCfg.feedbackReflectionCooldownMs ?? DEFAULT_COOLDOWN_MS;
   if (!isReflectionAllowed(sessionKey, cooldownMs)) {
     log.debug?.("skipping reflection (cooldown active)", { sessionKey });
     return;
@@ -253,6 +258,7 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
     await sendReflectionFollowUp({
       cfg,
       app: params.app,
+      accountId: params.accountId,
       conversationRef: params.conversationRef,
       userMessage: parsedReflection.userMessage!,
     });

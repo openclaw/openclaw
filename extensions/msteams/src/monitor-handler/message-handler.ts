@@ -20,6 +20,7 @@ import {
   createChannelHistoryWindow,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
+import { resolveMSTeamsAccountConfig } from "../accounts.js";
 import {
   buildMSTeamsAttachmentPlaceholder,
   buildMSTeamsMediaPayload,
@@ -198,7 +199,9 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
       log.debug?.(message);
     }
   };
-  const msteamsCfg = cfg.channels?.msteams;
+  const msteamsCfg = cfg.channels?.msteams
+    ? resolveMSTeamsAccountConfig(cfg, accountId)
+    : undefined;
   const contextVisibilityMode = resolveChannelContextVisibilityMode({
     cfg,
     channel: "msteams",

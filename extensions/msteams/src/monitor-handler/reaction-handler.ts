@@ -1,3 +1,4 @@
+import { resolveMSTeamsAccountConfig } from "../accounts.js";
 // Msteams plugin module implements reaction handler behavior.
 import { normalizeMSTeamsConversationId } from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
@@ -32,7 +33,9 @@ type ReactionDirection = "added" | "removed";
 export function createMSTeamsReactionHandler(deps: MSTeamsMessageHandlerDeps) {
   const { cfg, accountId, log } = deps;
   const core = getMSTeamsRuntime();
-  const msteamsCfg = cfg.channels?.msteams;
+  const msteamsCfg = cfg.channels?.msteams
+    ? resolveMSTeamsAccountConfig(cfg, accountId)
+    : undefined;
 
   return async function handleReaction(
     context: MSTeamsTurnContext,

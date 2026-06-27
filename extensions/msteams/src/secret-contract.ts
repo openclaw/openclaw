@@ -1,46 +1,56 @@
 // Msteams plugin module implements secret contract behavior.
 import {
-  collectSecretInputAssignment,
-  getChannelRecord,
+  collectSimpleChannelFieldAssignments,
+  getChannelSurface,
   type ResolverContext,
   type SecretDefaults,
+  type SecretTargetRegistryEntry,
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 
-export const secretTargetRegistryEntries: import("openclaw/plugin-sdk/channel-secret-basic-runtime").SecretTargetRegistryEntry[] =
-  [
-    {
-      id: "channels.msteams.appPassword",
-      targetType: "channels.msteams.appPassword",
-      configFile: "openclaw.json",
-      pathPattern: "channels.msteams.appPassword",
-      secretShape: "secret_input",
-      expectedResolvedValue: "string",
-      includeInPlan: true,
-      includeInConfigure: true,
-      includeInAudit: true,
-    },
-  ];
+export const secretTargetRegistryEntries: SecretTargetRegistryEntry[] = [
+  {
+    id: "channels.msteams.accounts.*.appPassword",
+    targetType: "channels.msteams.accounts.*.appPassword",
+    configFile: "openclaw.json",
+    pathPattern: "channels.msteams.accounts.*.appPassword",
+    secretShape: "secret_input",
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+  {
+    id: "channels.msteams.appPassword",
+    targetType: "channels.msteams.appPassword",
+    configFile: "openclaw.json",
+    pathPattern: "channels.msteams.appPassword",
+    secretShape: "secret_input",
+    expectedResolvedValue: "string",
+    includeInPlan: true,
+    includeInConfigure: true,
+    includeInAudit: true,
+  },
+];
 
 export function collectRuntimeConfigAssignments(params: {
   config: { channels?: Record<string, unknown> };
   defaults?: SecretDefaults;
   context: ResolverContext;
 }): void {
-  const msteams = getChannelRecord(params.config, "msteams");
-  if (!msteams) {
+  const resolved = getChannelSurface(params.config, "msteams");
+  if (!resolved) {
     return;
   }
-  collectSecretInputAssignment({
-    value: msteams.appPassword,
-    path: "channels.msteams.appPassword",
-    expected: "string",
+  const { channel: msteams, surface } = resolved;
+  collectSimpleChannelFieldAssignments({
+    channelKey: "msteams",
+    field: "appPassword",
+    channel: msteams,
+    surface,
     defaults: params.defaults,
     context: params.context,
-    active: msteams.enabled !== false,
-    inactiveReason: "Microsoft Teams channel is disabled.",
-    apply: (value) => {
-      msteams.appPassword = value;
-    },
+    topInactiveReason: "no enabled account inherits this top-level Microsoft Teams appPassword.",
+    accountInactiveReason: "Microsoft Teams account is disabled.",
   });
 }
 
