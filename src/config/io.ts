@@ -298,7 +298,7 @@ function hashConfigRaw(raw: string | null): string {
   return crypto.createHash("sha256").update(raw).digest("hex");
 }
 
-async function assertBaseSnapshotStillCurrent(
+export async function assertBaseSnapshotStillCurrent(
   snapshot: ConfigFileSnapshot,
   configPath: string,
   ioFs: typeof fs,
