@@ -31,6 +31,7 @@ export class ChatLog extends Container {
     }
   >();
   private pendingSystemNotices = new Map<string, Container>();
+  private pluginApprovalSystemGroups = new Map<string, Component[]>();
   private btwMessage: BtwInlineMessage | null = null;
   private toolsExpanded = false;
   private repeatableSystemMessage: RepeatableSystemMessage | null = null;
@@ -62,6 +63,17 @@ export class ChatLog extends Container {
         this.pendingSystemNotices.delete(runId);
       }
     }
+    for (const [approvalId, entries] of this.pluginApprovalSystemGroups.entries()) {
+      const retained = entries.filter((entry) => entry !== component);
+      if (retained.length === entries.length) {
+        continue;
+      }
+      if (retained.length === 0) {
+        this.pluginApprovalSystemGroups.delete(approvalId);
+      } else {
+        this.pluginApprovalSystemGroups.set(approvalId, retained);
+      }
+    }
     if (this.btwMessage === component) {
       this.btwMessage = null;
     }
@@ -86,6 +98,36 @@ export class ChatLog extends Container {
     this.pruneOverflow();
   }
 
+  private insertAt(component: Component, index: number) {
+    this.children.splice(Math.max(0, Math.min(index, this.children.length)), 0, component);
+    this.pruneOverflow();
+  }
+
+  private insertAfter(component: Component, anchor: Component) {
+    const anchorIndex = this.children.indexOf(anchor);
+    if (anchorIndex === -1) {
+      this.append(component);
+      return;
+    }
+    this.insertAt(component, anchorIndex + 1);
+  }
+
+  private resolvePluginApprovalAnchor(toolCallId?: string | null) {
+    if (toolCallId) {
+      const tool = this.toolById.get(toolCallId);
+      if (tool && this.children.includes(tool)) {
+        return tool;
+      }
+    }
+    for (let index = this.children.length - 1; index >= 0; index--) {
+      const candidate = this.children[index];
+      if (candidate instanceof AssistantMessageComponent) {
+        return candidate;
+      }
+    }
+    return null;
+  }
+
   private appendNonSystem(component: Component) {
     this.repeatableSystemMessage = null;
     this.append(component);
@@ -96,6 +138,7 @@ export class ChatLog extends Container {
     this.toolById.clear();
     this.streamingRuns.clear();
     this.pendingSystemNotices.clear();
+    this.pluginApprovalSystemGroups.clear();
     this.btwMessage = null;
     this.repeatableSystemMessage = null;
     if (!opts?.preservePendingUsers) {
@@ -158,6 +201,29 @@ export class ChatLog extends Container {
     const message = this.createSystemMessage(text);
     this.append(message.component);
     this.repeatableSystemMessage = opts?.coalesceConsecutive ? message : null;
+  }
+
+  addPluginApprovalSystem(approvalId: string, text: string, opts?: { toolCallId?: string | null }) {
+    const message = this.createSystemMessage(text);
+    this.repeatableSystemMessage = null;
+
+    const currentGroup = (this.pluginApprovalSystemGroups.get(approvalId) ?? []).filter(
+      (component) => this.children.includes(component),
+    );
+    const lastGroupComponent = currentGroup[currentGroup.length - 1];
+    if (lastGroupComponent) {
+      this.insertAfter(message.component, lastGroupComponent);
+      this.pluginApprovalSystemGroups.set(approvalId, [...currentGroup, message.component]);
+      return;
+    }
+
+    const anchor = this.resolvePluginApprovalAnchor(opts?.toolCallId ?? null);
+    if (anchor) {
+      this.insertAt(message.component, this.children.indexOf(anchor));
+    } else {
+      this.append(message.component);
+    }
+    this.pluginApprovalSystemGroups.set(approvalId, [message.component]);
   }
 
   addPendingSystem(runId: string, text: string) {

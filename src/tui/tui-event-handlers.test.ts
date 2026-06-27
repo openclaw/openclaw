@@ -15,6 +15,7 @@ type HandlerChatLog = {
   startTool: (...args: unknown[]) => void;
   updateToolResult: (...args: unknown[]) => void;
   addSystem: (...args: unknown[]) => void;
+  addPluginApprovalSystem: (...args: unknown[]) => void;
   addPendingSystem: (...args: unknown[]) => void;
   dismissPendingSystem: (...args: unknown[]) => void;
   updateAssistant: (...args: unknown[]) => void;
@@ -30,6 +31,7 @@ type MockChatLog = {
   startTool: MockFn;
   updateToolResult: MockFn;
   addSystem: MockFn;
+  addPluginApprovalSystem: MockFn;
   addPendingSystem: MockFn;
   dismissPendingSystem: MockFn;
   updateAssistant: MockFn;
@@ -47,6 +49,7 @@ function createMockChatLog(): MockChatLog & HandlerChatLog {
     startTool: vi.fn(),
     updateToolResult: vi.fn(),
     addSystem: vi.fn(),
+    addPluginApprovalSystem: vi.fn(),
     addPendingSystem: vi.fn(),
     dismissPendingSystem: vi.fn(),
     updateAssistant: vi.fn(),
@@ -140,6 +143,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     btw?: HandlerBtwPresenter;
     localMode?: boolean;
     refreshSessionInfo?: () => Promise<void>;
+    openPluginApprovalSelector?: MockFn;
   }) => {
     const state = makeState(params?.state);
     const context = makeContext(state);
@@ -154,6 +158,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       refreshSessionInfo: params?.refreshSessionInfo,
       loadHistory: context.loadHistory,
       noteLocalRunId: context.noteLocalRunId,
+      openPluginApprovalSelector: params?.openPluginApprovalSelector,
       isLocalRunId: context.isLocalRunId,
       forgetLocalRunId: context.forgetLocalRunId,
       clearLocalRunIds: context.clearLocalRunIds,
@@ -190,6 +195,130 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
     expect(chatLog.startTool).toHaveBeenCalledWith("tc1", "exec", { command: "echo hi" });
     expect(tui.requestRender).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders plugin approval choices for the active TUI session", () => {
+    const openPluginApprovalSelector = vi.fn();
+    const { chatLog, tui, setActivityStatus, handlePluginApprovalRequested } =
+      createHandlersHarness({ openPluginApprovalSelector });
+
+    const approvalRequest = {
+      id: "plugin:approval-1",
+      request: {
+        pluginId: "agentkit",
+        title: "World proof required for exec",
+        description: "Verify with World before `exec` runs in this session.",
+        severity: "warning",
+        toolName: "exec",
+        toolCallId: "tool-approval-1",
+        allowedDecisions: ["deny"],
+        externalResolution: {
+          label: "Verify with World",
+          commands: [
+            {
+              decision: "allow-once",
+              label: "Verify once",
+              description: "Approve this blocked action only",
+              command: "/agentkit approve plugin:approval-1 allow-once",
+            },
+            {
+              decision: "allow-always",
+              label: "Verify and trust for session",
+              description: "Trust approvals for this session",
+              command: "/agentkit approve plugin:approval-1 allow-always",
+            },
+          ],
+        },
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      },
+      createdAtMs: Date.now(),
+      expiresAtMs: Date.now() + 600_000,
+    };
+    handlePluginApprovalRequested(approvalRequest);
+
+    const rendered = String(chatLog.addPluginApprovalSystem.mock.calls[0]?.[1] ?? "");
+    expect(chatLog.addPluginApprovalSystem).toHaveBeenCalledWith(
+      "plugin:approval-1",
+      expect.any(String),
+      { toolCallId: "tool-approval-1" },
+    );
+    expect(rendered).toContain("Plugin approval required");
+    expect(rendered).toContain("World proof required for exec");
+    expect(rendered).toContain("Verify once: Approve this blocked action only");
+    expect(rendered).toContain("/agentkit approve plugin:approval-1 allow-once");
+    expect(rendered).toContain("Verify and trust for session: Trust approvals for this session");
+    expect(rendered).toContain("Deny: Reject this blocked action");
+    expect(setActivityStatus).toHaveBeenCalledWith("approval required");
+    expect(openPluginApprovalSelector).toHaveBeenCalledWith(approvalRequest);
+    expect(tui.requestRender).toHaveBeenCalledWith(true);
+  });
+
+  it("ignores plugin approval requests for other TUI sessions", () => {
+    const { chatLog, tui, handlePluginApprovalRequested } = createHandlersHarness({
+      state: { currentSessionKey: "agent:main:main" },
+    });
+
+    handlePluginApprovalRequested({
+      id: "plugin:approval-other",
+      request: {
+        pluginId: "agentkit",
+        title: "World proof required for exec",
+        description: "Verify with World before `exec` runs in this session.",
+        sessionKey: "agent:main:other",
+      },
+      createdAtMs: Date.now(),
+      expiresAtMs: Date.now() + 600_000,
+    });
+
+    expect(chatLog.addPluginApprovalSystem).not.toHaveBeenCalled();
+    expect(tui.requestRender).not.toHaveBeenCalled();
+  });
+
+  it("renders plugin approval resolution once for the active TUI session", () => {
+    const { chatLog, handlePluginApprovalRequested, handlePluginApprovalResolved } =
+      createHandlersHarness();
+
+    handlePluginApprovalRequested({
+      id: "plugin:approval-1",
+      request: {
+        pluginId: "agentkit",
+        title: "World proof required for exec",
+        description: "Verify with World before `exec` runs in this session.",
+        sessionKey: "agent:main:main",
+      },
+      createdAtMs: Date.now(),
+      expiresAtMs: Date.now() + 600_000,
+    });
+    handlePluginApprovalResolved({
+      id: "plugin:approval-1",
+      decision: "allow-once",
+      resolvedBy: "AgentKit proof-backed approval",
+      ts: Date.now(),
+      request: {
+        pluginId: "agentkit",
+        title: "World proof required for exec",
+        description: "Verify with World before `exec` runs in this session.",
+        sessionKey: "agent:main:main",
+      },
+    });
+    handlePluginApprovalResolved({
+      id: "plugin:approval-1",
+      decision: "allow-once",
+      resolvedBy: "AgentKit proof-backed approval",
+      ts: Date.now(),
+      request: {
+        pluginId: "agentkit",
+        title: "World proof required for exec",
+        description: "Verify with World before `exec` runs in this session.",
+        sessionKey: "agent:main:main",
+      },
+    });
+
+    expect(chatLog.addPluginApprovalSystem).toHaveBeenCalledTimes(2);
+    expect(String(chatLog.addPluginApprovalSystem.mock.calls[1]?.[1] ?? "")).toContain(
+      "Resolved by AgentKit proof-backed approval",
+    );
   });
 
   it("ignores tool events when runId does not match activeChatRunId", () => {

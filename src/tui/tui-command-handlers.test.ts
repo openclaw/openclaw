@@ -93,6 +93,7 @@ function createHarness(params?: {
   abortActive?: AbortActiveMock;
   consumeCompletedRunForPendingSend?: ConsumeCompletedRunMock;
   isRunObserved?: (runId: string) => boolean;
+  getPluginApprovalSnapshot?: ReturnType<typeof vi.fn>;
   flushPendingHistoryRefreshIfIdle?: FlushPendingHistoryRefreshMock;
 }) {
   const sendChat =
@@ -116,6 +117,7 @@ function createHarness(params?: {
   const dropPendingUser = vi.fn();
   const rekeyPendingUser = vi.fn();
   const addSystem = vi.fn();
+  const addPluginApprovalSystem = vi.fn();
   const clearTools = vi.fn();
   const reserveAssistantSlot = vi.fn();
   const requestRender = vi.fn();
@@ -170,6 +172,7 @@ function createHarness(params?: {
       dropPendingUser,
       rekeyPendingUser,
       addSystem,
+      addPluginApprovalSystem,
       clearTools,
       reserveAssistantSlot,
     } as never,
@@ -195,6 +198,7 @@ function createHarness(params?: {
     forgetLocalBtwRunId,
     consumeCompletedRunForPendingSend: params?.consumeCompletedRunForPendingSend,
     isRunObserved: params?.isRunObserved,
+    getPluginApprovalSnapshot: params?.getPluginApprovalSnapshot,
     flushPendingHistoryRefreshIfIdle: params?.flushPendingHistoryRefreshIfIdle,
     runAuthFlow,
     requestExit,
@@ -221,6 +225,7 @@ function createHarness(params?: {
     dropPendingUser,
     rekeyPendingUser,
     addSystem,
+    addPluginApprovalSystem,
     clearTools,
     reserveAssistantSlot,
     requestRender,
@@ -313,13 +318,12 @@ describe("tui command handlers", () => {
       ok: true,
       reply: "Verify with World\nScan with World App",
     });
-    const { handleCommand, sendChat, addPendingUser, addSystem, setActivityStatus } = createHarness(
-      {
+    const { handleCommand, sendChat, addPendingUser, addPluginApprovalSystem, setActivityStatus } =
+      createHarness({
         activeChatRunId: "run-waiting-for-approval",
         activityStatus: "streaming",
         runPluginSessionAction,
-      },
-    );
+      });
 
     await handleCommand("/agentkit approve plugin:approval-1 allow-once");
 
@@ -334,9 +338,54 @@ describe("tui command handlers", () => {
         decision: "allow-once",
       },
     });
-    expect(addSystem).toHaveBeenCalledWith("Verify with World\nScan with World App");
+    expect(addPluginApprovalSystem).toHaveBeenCalledWith(
+      "plugin:approval-1",
+      "Verify with World\nScan with World App",
+    );
     expect(setActivityStatus).toHaveBeenCalledWith("approval");
     expect(setActivityStatus).toHaveBeenCalledWith("streaming");
+  });
+
+  it("includes the rendered approval snapshot when starting an external approval action", async () => {
+    const runPluginSessionAction = vi.fn().mockResolvedValue({
+      ok: true,
+      reply: "Verify with World\nScan with World App",
+    });
+    const approvalSnapshot = {
+      id: "plugin:approval-1",
+      createdAtMs: 1,
+      expiresAtMs: 2,
+      request: {
+        pluginId: "agentkit",
+        title: "World proof required for exec",
+        description: "Verify before exec",
+        severity: "warning",
+        toolName: "exec",
+        toolCallId: "tool-call-1",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        allowedDecisions: ["deny"],
+      },
+    };
+    const { handleCommand } = createHarness({
+      activeChatRunId: "run-waiting-for-approval",
+      activityStatus: "streaming",
+      runPluginSessionAction,
+      getPluginApprovalSnapshot: vi.fn(() => approvalSnapshot),
+    });
+
+    await handleCommand("/agentkit approve plugin:approval-1 allow-always");
+
+    expect(runPluginSessionAction).toHaveBeenCalledWith({
+      pluginId: "agentkit",
+      actionId: "approve",
+      sessionKey: "agent:main:main",
+      payload: {
+        approvalId: "plugin:approval-1",
+        decision: "allow-always",
+        approval: approvalSnapshot,
+      },
+    });
   });
 
   it("resolves denied plugin approvals without sending a chat turn", async () => {

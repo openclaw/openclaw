@@ -17,6 +17,7 @@ import {
 } from "../auto-reply/thinking.js";
 import { isChatStopCommandText } from "../gateway/chat-abort.js";
 import { formatRelativeTimestamp } from "../infra/format-time/format-relative.ts";
+import type { PluginApprovalRequest } from "../infra/plugin-approvals.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { helpText, parseCommand } from "./commands.js";
 import type { ChatLog } from "./components/chat-log.js";
@@ -83,6 +84,7 @@ type CommandHandlerContext = {
   forgetLocalBtwRunId?: (runId: string) => void;
   consumeCompletedRunForPendingSend?: (runId: string) => boolean;
   isRunObserved?: (runId: string) => boolean;
+  getPluginApprovalSnapshot?: (approvalId: string) => PluginApprovalRequest | null | undefined;
   flushPendingHistoryRefreshIfIdle?: () => void;
   runAuthFlow?: (params: {
     provider?: string;
@@ -461,6 +463,7 @@ export function createCommandHandlers(context: CommandHandlerContext) {
       return false;
     }
     try {
+      const approval = context.getPluginApprovalSnapshot?.(parsed.approvalId) ?? null;
       const result = await runWithTemporaryActivityStatus("approval", async () =>
         client.runPluginSessionAction?.({
           pluginId: parsed.pluginId,
@@ -469,19 +472,29 @@ export function createCommandHandlers(context: CommandHandlerContext) {
           payload: {
             approvalId: parsed.approvalId,
             decision: parsed.decision,
+            ...(approval ? { approval } : {}),
           },
         }),
       );
       if (!result) {
-        chatLog.addSystem("plugin action failed: plugin session action returned no result");
+        chatLog.addPluginApprovalSystem(
+          parsed.approvalId,
+          "plugin action failed: plugin session action returned no result",
+        );
       } else if (!result.ok) {
         const message = result.error;
-        chatLog.addSystem(`plugin action failed: ${sanitizeRenderableText(message)}`);
+        chatLog.addPluginApprovalSystem(
+          parsed.approvalId,
+          `plugin action failed: ${sanitizeRenderableText(message)}`,
+        );
       } else {
-        chatLog.addSystem(formatPluginActionReply(result.reply));
+        chatLog.addPluginApprovalSystem(parsed.approvalId, formatPluginActionReply(result.reply));
       }
     } catch (err) {
-      chatLog.addSystem(`plugin action failed: ${sanitizeRenderableText(String(err))}`);
+      chatLog.addPluginApprovalSystem(
+        parsed.approvalId,
+        `plugin action failed: ${sanitizeRenderableText(String(err))}`,
+      );
     }
     return true;
   };
