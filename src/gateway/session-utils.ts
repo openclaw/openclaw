@@ -1352,9 +1352,11 @@ function resolveGatewaySessionStoreCandidates(
 function loadGatewaySessionLookupStore(
   storePath: string,
   clone: boolean | undefined,
+  agentId?: string,
 ): Record<string, SessionEntry> {
   return Object.fromEntries(
     listAccessorSessionEntries({
+      ...(agentId ? { agentId } : {}),
       ...(clone === false ? { clone: false } : {}),
       storePath,
     }).map(({ sessionKey, entry }) => [sessionKey, entry]),
@@ -1379,9 +1381,10 @@ function resolveGatewaySessionStoreLookup(params: {
     agentId: params.agentId,
     storePath: resolveStorePath(params.cfg.session?.store, { agentId: params.agentId }),
   };
-  const loadStore = (storePath: string) => loadGatewaySessionLookupStore(storePath, params.clone);
+  const loadStore = (target: SessionStoreTarget) =>
+    loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId);
   let selectedStorePath = fallback.storePath;
-  let selectedStore = params.initialStore ?? loadStore(fallback.storePath);
+  let selectedStore = params.initialStore ?? loadStore(fallback);
   let selectedMatch = findFreshestStoreMatch(selectedStore, ...scanTargets);
   let selectedUpdatedAt = selectedMatch?.entry.updatedAt ?? Number.NEGATIVE_INFINITY;
 
@@ -1390,7 +1393,7 @@ function resolveGatewaySessionStoreLookup(params: {
     if (!candidate) {
       continue;
     }
-    const store = loadStore(candidate.storePath);
+    const store = loadStore(candidate);
     const match = findFreshestStoreMatch(store, ...scanTargets);
     if (!match) {
       continue;
@@ -1451,7 +1454,7 @@ function resolveExplicitDeletedLegacyMainStoreTarget(params: {
     if (target.agentId !== legacyAgentId) {
       continue;
     }
-    const store = loadGatewaySessionLookupStore(target.storePath, params.clone);
+    const store = loadGatewaySessionLookupStore(target.storePath, params.clone, target.agentId);
     const match = findFreshestStoreMatch(store, ...lookupSeeds);
     if (!match) {
       continue;
