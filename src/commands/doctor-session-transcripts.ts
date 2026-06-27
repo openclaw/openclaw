@@ -453,12 +453,21 @@ export async function noteSessionTranscriptHealth(params?: {
   } else {
     results.push(...(await detectSessionTranscriptHealthIssues({ sessionDirs })));
   }
-  const broken = results.filter((result) => result.broken);
+  const broken: TranscriptRepairResult[] = [];
+  let repairedCount = 0;
+  for (const result of results) {
+    if (!result.broken) {
+      continue;
+    }
+    broken.push(result);
+    if (result.repaired) {
+      repairedCount += 1;
+    }
+  }
   if (broken.length === 0) {
     return;
   }
 
-  const repairedCount = broken.filter((result) => result.repaired).length;
   const lines = [
     `- Found ${broken.length} transcript file${broken.length === 1 ? "" : "s"} with legacy state.`,
     ...broken.slice(0, 20).map((result) => {
