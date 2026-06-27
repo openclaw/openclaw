@@ -1,5 +1,5 @@
 {
-  "originHash" : "4f7b315ce0e0a16d150d8d74dce445628c03d8926485ad2f5595e091b4d33440",
+  "originHash" : "8ce3e754325bd325f78f363546e2db5a8c5815ecee4da7d252043f181d751e99",
   "pins" : [
     {
       "identity" : "axorcist",
@@ -42,8 +42,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/steipete/Peekaboo.git",
       "state" : {
-        "revision" : "1fa8eead7eeac3ff618a3111fc333ae78db043d2",
-        "version" : "3.5.2"
+        "revision" : "f22e46cc1aedf2c409e2fbb07efe6c9577662f38",
+        "version" : "3.5.3"
       }
     },
     {
@@ -69,8 +69,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/pointfreeco/swift-concurrency-extras",
       "state" : {
-        "revision" : "5a3825302b1a0d744183200915a47b508c828e6f",
-        "version" : "1.3.2"
+        "revision" : "a90e2e40a7a840a853dd29e57cbef5dbb72c9d5b",
+        "version" : "1.4.0"
       }
     },
     {
