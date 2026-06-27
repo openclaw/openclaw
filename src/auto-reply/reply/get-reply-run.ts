@@ -937,6 +937,18 @@ export async function runPreparedReply(
   }
   const internalOpts = opts as InternalGetReplyOptions | undefined;
   const providedReplyOperation = internalOpts?.replyOperation;
+  if (
+    providedReplyOperation !== undefined &&
+    providedReplyOperation.result === null &&
+    providedReplyOperation.phase === "queued" &&
+    sessionId !== undefined &&
+    sessionId !== providedReplyOperation.sessionId
+  ) {
+    // Dispatch reserves a queued operation before session init. If stale init
+    // rotates the session, move the reservation so later steer/abort paths
+    // target the session that will actually run.
+    providedReplyOperation.updateSessionId(sessionId);
+  }
   const isOwnPreDispatchOperationSession = (candidateSessionId: string | undefined): boolean =>
     providedReplyOperation !== undefined &&
     providedReplyOperation.result === null &&

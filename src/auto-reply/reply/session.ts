@@ -78,6 +78,7 @@ import {
   resolveLastChannelRaw,
   resolveLastToRaw,
 } from "./session-delivery.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import {
   createReplySessionEntryHandle,
   type ReplySessionEntryHandle,
@@ -543,11 +544,25 @@ async function initSessionStateAttemptLocked(
       (entryFreshness?.fresh ?? false) ||
       (softResetAllowed && canReuseExistingEntry)) &&
       !terminalMainTranscriptNewerThanRegistry);
+  const activeReplyOperation = replyRunRegistry.get(sessionKey);
+  const deferImplicitRolloverForActiveRun =
+    !resetTriggered &&
+    !freshEntry &&
+    canReuseExistingEntry &&
+    entryFreshness?.fresh === false &&
+    entryFreshness.staleReason != null &&
+    activeReplyOperation?.phase !== "queued" &&
+    activeReplyOperation?.sessionId === entry?.sessionId;
+  // Implicit daily/idle rollover must not rename a transcript while that exact
+  // session's active writer is still running. Admission will steer/wait/queue;
+  // queued pre-dispatch reservations still let the current turn roll over.
+  const effectiveFreshEntry = deferImplicitRolloverForActiveRun ? true : freshEntry;
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
   // Without this, daily-reset transcripts are left as orphaned files on disk (#35481).
-  const previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
+  const previousSessionEntry =
+    (resetTriggered || !effectiveFreshEntry) && entry ? { ...entry } : undefined;
   const previousSessionEndReason = resetTriggered
     ? resolveExplicitSessionEndReason(matchedResetTriggerLower)
     : resolveStaleSessionEndReason({
@@ -562,7 +577,7 @@ async function initSessionStateAttemptLocked(
     clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId]);
   }
 
-  if (!isNewSession && freshEntry && canReuseExistingEntry) {
+  if (!isNewSession && effectiveFreshEntry && canReuseExistingEntry) {
     sessionId = entry.sessionId;
     systemSent = entry.systemSent ?? false;
     abortedLastRun = entry.abortedLastRun ?? false;
@@ -633,7 +648,7 @@ async function initSessionStateAttemptLocked(
     }
   }
 
-  const baseEntry = !isNewSession && freshEntry ? entry : undefined;
+  const baseEntry = !isNewSession && effectiveFreshEntry ? entry : undefined;
   const usageFamilyKey = previousSessionEntry
     ? (previousSessionEntry.usageFamilyKey ?? sessionKey)
     : baseEntry?.usageFamilyKey;
