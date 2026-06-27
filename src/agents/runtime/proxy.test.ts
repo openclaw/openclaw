@@ -189,4 +189,99 @@ describe("streamProxy", () => {
       errorMessage: "Proxy stream ended before terminal event",
     });
   });
+
+  it("rejects an oversized complete SSE line (> 1 MiB) in a single chunk", async () => {
+    const largeLine = "data: " + "x".repeat(1024 * 1024 + 1) + "\n\n";
+    const doneLine = `data: ${JSON.stringify({ type: "done", reason: "stop", usage })}\n\n`;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => responseFromText(largeLine + doneLine)),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(events.at(-1)?.type).toBe("error");
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toMatch(/exceeds maximum allowed size/i);
+  });
+
+  it("rejects an oversized line deterministically regardless of TCP chunking", async () => {
+    // Same line split across TWO chunks — must behave identically
+    const largeLine = "data: " + "x".repeat(1024 * 1024 + 1) + "\n";
+    const doneLine = `data: ${JSON.stringify({ type: "done", reason: "stop", usage })}\n\n`;
+    const chunk1 = largeLine.slice(0, 500 * 1024);
+    const chunk2 = largeLine.slice(500 * 1024);
+    const responseText = chunk1 + chunk2 + doneLine;
+
+    const responseFromTwoChunks = (text: string): Response => {
+      const encoder = new TextEncoder();
+      const chunks = text.match(/[\s\S]{1,524288}/g) ?? [];
+      return new Response(
+        new ReadableStream({
+          async pull(controller) {
+            for (const chunk of chunks) {
+              controller.enqueue(encoder.encode(chunk));
+            }
+            controller.close();
+          },
+        }),
+        { status: 200 },
+      );
+    };
+
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => responseFromTwoChunks(responseText)),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(events.at(-1)?.type).toBe("error");
+    const result = await stream.result();
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toMatch(/exceeds maximum allowed size/i);
+  });
+
+  it("allows many small coalesced lines in a single chunk without false positive", async () => {
+    // 2000 small lines + terminal event in one chunk
+    const smallLines: string[] = [];
+    for (let i = 0; i < 2000; i++) {
+      smallLines.push(`data: ${JSON.stringify({ type: "pending", index: i })}\n`);
+    }
+    smallLines.push(`data: ${JSON.stringify({ type: "done", reason: "stop", usage })}\n\n`);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => responseFromText(smallLines.join(""))),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(events.at(-1)?.type).toBe("done");
+    await expect(stream.result()).resolves.toMatchObject({
+      stopReason: "stop",
+      usage,
+    });
+  });
 });

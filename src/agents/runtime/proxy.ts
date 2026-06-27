@@ -228,6 +228,10 @@ export function streamProxy(
         buffer = lines.pop() || "";
 
         for (const line of lines) {
+          // Byte-accurate complete-line cap (1 MiB, aligned with sibling SSE handling)
+          if (Buffer.byteLength(line, "utf-8") > 1024 * 1024) {
+            throw new Error("Proxy SSE line exceeds maximum allowed size of 1 MiB");
+          }
           processSseLine(line);
         }
       }
