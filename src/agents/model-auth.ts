@@ -131,6 +131,10 @@ function openAIModelApiAllowsBearerAuth(modelApi: string): boolean {
   return modelApi === OPENAI_CODEX_RESPONSES_API || modelApi === OPENAI_AUDIO_TRANSCRIPTIONS_API;
 }
 
+function resolveEnvAuthModeFromSource(source: string): ResolvedProviderAuth["mode"] {
+  return source.includes("OAUTH_TOKEN") ? "oauth" : "api-key";
+}
+
 function directOpenAIPlatformModelRequiresApiKey(params: {
   provider: string;
   modelApi?: string;
@@ -1456,16 +1460,26 @@ export async function resolveApiKeyForProvider(params: {
       mode: "api-key",
     };
   }
-  const localMarkerEnv = resolveConfigAwareEnvApiKey(
+  const envAuthBeforeDefaultProfiles = resolveConfigAwareEnvApiKey(
     cfg,
     provider,
     params.workspaceDir,
     params.skipSetupProviderFallback,
   );
-  if (localMarkerEnv && isNonSecretApiKeyMarker(localMarkerEnv.apiKey)) {
+  const envAuthModeBeforeDefaultProfiles = envAuthBeforeDefaultProfiles
+    ? resolveDirectProviderCredentialMode({
+        cfg,
+        provider,
+        inferredMode: resolveEnvAuthModeFromSource(envAuthBeforeDefaultProfiles.source),
+      })
+    : undefined;
+  if (
+    envAuthBeforeDefaultProfiles &&
+    isNonSecretApiKeyMarker(envAuthBeforeDefaultProfiles.apiKey)
+  ) {
     return {
-      apiKey: localMarkerEnv.apiKey,
-      source: localMarkerEnv.source,
+      apiKey: envAuthBeforeDefaultProfiles.apiKey,
+      source: envAuthBeforeDefaultProfiles.source,
       mode: "api-key",
     };
   }
@@ -1546,6 +1560,16 @@ export async function resolveApiKeyForProvider(params: {
         ) {
           continue;
         }
+        // OpenAI audio can use OAuth, but shipped mixed setups use env API keys
+        // unless the request explicitly locked a profile before this fallback order.
+        const shouldPreserveOpenAIAudioEnvApiKeyPrecedence =
+          normalizeProviderId(provider) === OPENAI_PROVIDER_ID &&
+          normalizeLowercaseStringOrEmpty(params.modelApi) === OPENAI_AUDIO_TRANSCRIPTIONS_API &&
+          result.mode !== "api-key" &&
+          envAuthModeBeforeDefaultProfiles === "api-key";
+        if (shouldPreserveOpenAIAudioEnvApiKeyPrecedence) {
+          continue;
+        }
         if (
           shouldDeferSyntheticProfileAuth({
             cfg,
@@ -1579,18 +1603,9 @@ export async function resolveApiKeyForProvider(params: {
     }
   }
 
-  const envResolved = resolveConfigAwareEnvApiKey(
-    cfg,
-    provider,
-    params.workspaceDir,
-    params.skipSetupProviderFallback,
-  );
+  const envResolved = envAuthBeforeDefaultProfiles;
   if (envResolved) {
-    const resolvedMode = resolveDirectProviderCredentialMode({
-      cfg,
-      provider,
-      inferredMode: envResolved.source.includes("OAUTH_TOKEN") ? "oauth" : "api-key",
-    });
+    const resolvedMode = envAuthModeBeforeDefaultProfiles ?? "api-key";
     if (
       isAuthModeAllowedForModel({
         provider,
