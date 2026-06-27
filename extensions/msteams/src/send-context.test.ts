@@ -161,10 +161,10 @@ describe("resolveMSTeamsSendContext", () => {
               appId: "default-app-id",
               appPassword: "default-app-password",
             },
-            legal: {
+            secondary: {
               enabled: true,
-              appId: "legal-app-id",
-              appPassword: "legal-app-password",
+              appId: "secondary-app-id",
+              appPassword: "secondary-app-password",
               webhook: { port: 3979 },
             },
           },
@@ -175,19 +175,21 @@ describe("resolveMSTeamsSendContext", () => {
     await expect(
       resolveMSTeamsSendContext({
         cfg,
-        accountId: "legal",
+        accountId: "secondary",
         to: "conversation:19:channel@thread.tacv2",
       }),
     ).resolves.toMatchObject({
-      appId: "legal-app-id",
+      appId: "secondary-app-id",
       conversationId: "19:channel@thread.tacv2",
     });
 
-    expect(sendContextMockState.store.get).toHaveBeenCalledWith("legal:19:channel@thread.tacv2");
+    expect(sendContextMockState.store.get).toHaveBeenCalledWith(
+      "secondary:19:channel@thread.tacv2",
+    );
     expect(sendContextMockState.loadMSTeamsSdkWithAuth).toHaveBeenCalledWith(
       {
-        appId: "legal-app-id",
-        appPassword: "legal-app-password",
+        appId: "secondary-app-id",
+        appPassword: "secondary-app-password",
         tenantId: "tenant-id",
         type: "secret",
       },

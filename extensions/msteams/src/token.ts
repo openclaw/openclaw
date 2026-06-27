@@ -1,6 +1,8 @@
 // Msteams plugin module implements token behavior.
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import { isFutureDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { privateFileStoreSync } from "openclaw/plugin-sdk/security-runtime";
 import type { MSTeamsConfig } from "../runtime-api.js";
@@ -159,21 +161,43 @@ export function resolveMSTeamsCredentials(
 
 const DELEGATED_TOKEN_FILENAME = "msteams-delegated.json";
 
-function resolveDelegatedTokenPath(): string {
-  return resolveMSTeamsStorePath({ filename: DELEGATED_TOKEN_FILENAME });
+function normalizeDelegatedTokenAccountId(accountId?: string | null): string {
+  const trimmed = accountId?.trim();
+  return trimmed || DEFAULT_ACCOUNT_ID;
 }
 
-export function loadDelegatedTokens(): MSTeamsDelegatedTokens | undefined {
+function accountScopedDelegatedTokenFilename(accountId?: string | null): string {
+  const normalized = normalizeDelegatedTokenAccountId(accountId);
+  if (normalized === DEFAULT_ACCOUNT_ID) {
+    return DELEGATED_TOKEN_FILENAME;
+  }
+  if (/^[A-Za-z0-9_.-]+$/.test(normalized)) {
+    return `msteams-delegated.${normalized}.json`;
+  }
+  const digest = createHash("sha256").update(normalized).digest("hex").slice(0, 16);
+  return `msteams-delegated.${digest}.json`;
+}
+
+function resolveDelegatedTokenPath(accountId?: string | null): string {
+  return resolveMSTeamsStorePath({ filename: accountScopedDelegatedTokenFilename(accountId) });
+}
+
+export function loadDelegatedTokens(params?: {
+  accountId?: string | null;
+}): MSTeamsDelegatedTokens | undefined {
   try {
-    const content = readFileSync(resolveDelegatedTokenPath(), "utf8");
+    const content = readFileSync(resolveDelegatedTokenPath(params?.accountId), "utf8");
     return JSON.parse(content) as MSTeamsDelegatedTokens;
   } catch {
     return undefined;
   }
 }
 
-export function saveDelegatedTokens(tokens: MSTeamsDelegatedTokens): void {
-  const tokenPath = resolveDelegatedTokenPath();
+export function saveDelegatedTokens(
+  tokens: MSTeamsDelegatedTokens,
+  params?: { accountId?: string | null },
+): void {
+  const tokenPath = resolveDelegatedTokenPath(params?.accountId);
   privateFileStoreSync(dirname(tokenPath)).writeJson(basename(tokenPath), tokens);
 }
 
@@ -181,8 +205,9 @@ export async function resolveDelegatedAccessToken(params: {
   tenantId: string;
   clientId: string;
   clientSecret: string;
+  accountId?: string | null;
 }): Promise<string | undefined> {
-  const tokens = loadDelegatedTokens();
+  const tokens = loadDelegatedTokens({ accountId: params.accountId });
   if (!tokens) {
     return undefined;
   }
@@ -201,7 +226,7 @@ export async function resolveDelegatedAccessToken(params: {
       refreshToken: tokens.refreshToken,
       scopes: tokens.scopes,
     });
-    saveDelegatedTokens(refreshed);
+    saveDelegatedTokens(refreshed, { accountId: params.accountId });
     return refreshed.accessToken;
   } catch {
     return undefined;

@@ -5,12 +5,14 @@ const {
   loadMSTeamsSdkWithAuthMock,
   createMSTeamsTokenProviderMock,
   readAccessTokenMock,
+  resolveDelegatedAccessTokenMock,
   resolveMSTeamsCredentialsMock,
 } = vi.hoisted(() => {
   return {
     loadMSTeamsSdkWithAuthMock: vi.fn(),
     createMSTeamsTokenProviderMock: vi.fn(),
     readAccessTokenMock: vi.fn(),
+    resolveDelegatedAccessTokenMock: vi.fn(),
     resolveMSTeamsCredentialsMock: vi.fn(),
   };
 });
@@ -25,6 +27,7 @@ vi.mock("./token-response.js", () => ({
 }));
 
 vi.mock("./token.js", () => ({
+  resolveDelegatedAccessToken: resolveDelegatedAccessTokenMock,
   resolveMSTeamsCredentials: resolveMSTeamsCredentialsMock,
 }));
 
@@ -57,6 +60,7 @@ import {
 const originalFetch = globalThis.fetch;
 const graphToken = "graph-token";
 const mockCredentials = {
+  type: "secret",
   appId: "app-id",
   appPassword: "app-password",
   tenantId: "tenant-id",
@@ -340,6 +344,32 @@ describe("msteams graph helpers", () => {
 
     expect(createMSTeamsTokenProviderMock).toHaveBeenCalledWith(mockApp);
     expect(getAccessToken).toHaveBeenCalledWith("https://graph.microsoft.com");
+  });
+
+  it("scopes delegated Graph token lookup by account", async () => {
+    resolveMSTeamsCredentialsMock.mockReturnValue(mockCredentials);
+    resolveDelegatedAccessTokenMock.mockResolvedValue("delegated-token");
+
+    await expect(
+      resolveGraphToken(
+        {
+          channels: {
+            msteams: {
+              delegatedAuth: { enabled: true },
+            },
+          },
+        },
+        { accountId: "secondary", preferDelegated: true },
+      ),
+    ).resolves.toBe("delegated-token");
+
+    expect(resolveDelegatedAccessTokenMock).toHaveBeenCalledWith({
+      tenantId: "tenant-id",
+      clientId: "app-id",
+      clientSecret: "app-password",
+      accountId: "secondary",
+    });
+    expect(loadMSTeamsSdkWithAuthMock).not.toHaveBeenCalled();
   });
 
   it("fails closed for China cloud Graph token resolution", async () => {

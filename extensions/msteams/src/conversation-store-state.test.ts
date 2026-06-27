@@ -182,7 +182,7 @@ describe("msteams conversation store (plugin state)", () => {
     const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
     const store = createMSTeamsConversationStoreState({ stateDir });
     const defaultStore = createAccountScopedMSTeamsConversationStore(store, "default");
-    const legalStore = createAccountScopedMSTeamsConversationStore(store, "legal");
+    const secondaryStore = createAccountScopedMSTeamsConversationStore(store, "secondary");
 
     await defaultStore.upsert("default-dm", {
       conversation: { id: "default-dm", conversationType: "personal" },
@@ -190,25 +190,25 @@ describe("msteams conversation store (plugin state)", () => {
       serviceUrl: "https://default.example.com",
       user: { id: "default-user", aadObjectId: "aad-shared" },
     });
-    await legalStore.upsert("legal-channel", {
-      conversation: { id: "legal-channel", conversationType: "channel" },
+    await secondaryStore.upsert("secondary-channel", {
+      conversation: { id: "secondary-channel", conversationType: "channel" },
       channelId: "msteams",
-      serviceUrl: "https://legal-channel.example.com",
-      user: { id: "legal-channel-user", aadObjectId: "aad-shared" },
+      serviceUrl: "https://secondary-channel.example.com",
+      user: { id: "secondary-channel-user", aadObjectId: "aad-shared" },
     });
-    await legalStore.upsert("legal-dm", {
-      conversation: { id: "legal-dm", conversationType: "personal" },
+    await secondaryStore.upsert("secondary-dm", {
+      conversation: { id: "secondary-dm", conversationType: "personal" },
       channelId: "msteams",
-      serviceUrl: "https://legal.example.com",
-      user: { id: "legal-user", aadObjectId: "aad-shared" },
+      serviceUrl: "https://secondary.example.com",
+      user: { id: "secondary-user", aadObjectId: "aad-shared" },
     });
 
-    await expect(legalStore.findPreferredDmByUserId("aad-shared")).resolves.toMatchObject({
-      conversationId: "legal-dm",
+    await expect(secondaryStore.findPreferredDmByUserId("aad-shared")).resolves.toMatchObject({
+      conversationId: "secondary-dm",
       reference: {
-        conversation: { id: "legal-dm", conversationType: "personal" },
-        serviceUrl: "https://legal.example.com",
-        user: { id: "legal-user", aadObjectId: "aad-shared" },
+        conversation: { id: "secondary-dm", conversationType: "personal" },
+        serviceUrl: "https://secondary.example.com",
+        user: { id: "secondary-user", aadObjectId: "aad-shared" },
       },
     });
   });

@@ -101,6 +101,14 @@ export async function monitorMSTeamsProvider(
     },
   };
 
+  cfg = {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      msteams: msteamsCfg,
+    },
+  };
+
   let allowFrom = msteamsCfg.allowFrom;
   let groupAllowFrom = msteamsCfg.groupAllowFrom;
   let teamsConfig = msteamsCfg.teams;
@@ -359,7 +367,7 @@ export async function monitorMSTeamsProvider(
   if (msteamsCfg.sso?.enabled && msteamsCfg.sso.connectionName) {
     ssoDeps = {
       tokenProvider,
-      tokenStore: createMSTeamsSsoTokenStoreFs(),
+      tokenStore: createMSTeamsSsoTokenStoreFs({ accountId }),
       connectionName: msteamsCfg.sso.connectionName,
     };
     log.debug?.("msteams sso enabled", {
@@ -571,6 +579,7 @@ export async function monitorMSTeamsProvider(
         await Promise.all(
           userIds.map((userId) =>
             ssoDeps.tokenStore.save({
+              accountId,
               connectionName,
               userId,
               token: ctx.token.token,

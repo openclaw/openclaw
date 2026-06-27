@@ -180,13 +180,13 @@ describe("msteams config schema", () => {
       webhook: { path: "/api/messages" },
       accounts: {
         default: {
-          appId: "dale-app-id",
-          appPassword: "dale-secret",
+          appId: "primary-app-id",
+          appPassword: "primary-secret",
           webhook: { port: 3978 },
         },
-        legal: {
-          appId: "legal-app-id",
-          appPassword: "legal-secret",
+        secondary: {
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
           webhook: { port: 3979 },
         },
       },
@@ -198,14 +198,14 @@ describe("msteams config schema", () => {
 
   it("rejects named accounts that would inherit identity or port from root", () => {
     const res = MSTeamsConfigSchema.safeParse({
-      appId: "dale-app-id",
-      appPassword: "dale-secret",
+      appId: "primary-app-id",
+      appPassword: "primary-secret",
       tenantId: "tenant-id",
       webhook: { port: 3978, path: "/api/messages" },
       accounts: {
-        legal: {
-          appId: "legal-app-id",
-          appPassword: "legal-secret",
+        secondary: {
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
         },
       },
     });
@@ -229,6 +229,78 @@ describe("msteams config schema", () => {
 
     expect(res.success).toBe(false);
   });
+
+  it("rejects duplicate enabled account webhook ports", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      accounts: {
+        default: {
+          appId: "primary-app-id",
+          appPassword: "primary-secret",
+          webhook: { port: 3978 },
+        },
+        secondary: {
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
+          webhook: { port: 3978 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+  });
+
+  it("allows duplicate webhook ports when one account is disabled", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      accounts: {
+        default: {
+          appId: "primary-app-id",
+          appPassword: "primary-secret",
+          webhook: { port: 3978 },
+        },
+        secondary: {
+          enabled: false,
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
+          webhook: { port: 3978 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects enabled named federated accounts without a certificate or managed identity", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      accounts: {
+        secondary: {
+          authType: "federated",
+          appId: "secondary-app-id",
+          webhook: { port: 3979 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+  });
+
+  it("accepts enabled named federated accounts with inherited certificate config", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      authType: "federated",
+      tenantId: "tenant-id",
+      certificatePath: "/secure/secondary.pem",
+      accounts: {
+        secondary: {
+          appId: "secondary-app-id",
+          webhook: { port: 3979 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
 });
 
 describe("msteams account config", () => {
@@ -236,14 +308,14 @@ describe("msteams account config", () => {
     const cfg = {
       channels: {
         msteams: {
-          appId: "dale-app-id",
-          appPassword: "dale-secret",
+          appId: "primary-app-id",
+          appPassword: "primary-secret",
           tenantId: "tenant-id",
           webhook: { port: 3978 },
           accounts: {
-            legal: {
-              appId: "legal-app-id",
-              appPassword: "legal-secret",
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
               webhook: { port: 3979 },
             },
           },
@@ -251,23 +323,23 @@ describe("msteams account config", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(listMSTeamsAccountIds(cfg)).toEqual(["default", "legal"]);
+    expect(listMSTeamsAccountIds(cfg)).toEqual(["default", "secondary"]);
   });
 
   it("inherits shared webhook path but not identity or port for named accounts", () => {
     const cfg = {
       channels: {
         msteams: {
-          appId: "dale-app-id",
-          appPassword: "dale-secret",
+          appId: "primary-app-id",
+          appPassword: "primary-secret",
           tenantId: "tenant-id",
           webhook: { port: 3978, path: "/api/messages" },
           dmPolicy: "open",
           allowFrom: ["*"],
           accounts: {
-            legal: {
-              appId: "legal-app-id",
-              appPassword: "legal-secret",
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
               webhook: { port: 3979 },
             },
           },
@@ -275,13 +347,13 @@ describe("msteams account config", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const legal = resolveMSTeamsAccountConfig(cfg, "legal");
+    const secondary = resolveMSTeamsAccountConfig(cfg, "secondary");
 
-    expect(legal.appId).toBe("legal-app-id");
-    expect(legal.appPassword).toBe("legal-secret");
-    expect(legal.tenantId).toBe("tenant-id");
-    expect(legal.webhook).toEqual({ port: 3979, path: "/api/messages" });
-    expect(legal.allowFrom).toEqual(["*"]);
+    expect(secondary.appId).toBe("secondary-app-id");
+    expect(secondary.appPassword).toBe("secondary-secret");
+    expect(secondary.tenantId).toBe("tenant-id");
+    expect(secondary.webhook).toEqual({ port: 3979, path: "/api/messages" });
+    expect(secondary.allowFrom).toEqual(["*"]);
   });
 
   it("keeps identity when resolving an already account-scoped named account config", () => {
@@ -289,8 +361,8 @@ describe("msteams account config", () => {
       channels: {
         msteams: {
           enabled: true,
-          appId: "legal-app-id",
-          appPassword: "legal-secret",
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
           tenantId: "tenant-id",
           webhook: { port: 3979, path: "/api/messages" },
           dmPolicy: "open",
@@ -299,25 +371,25 @@ describe("msteams account config", () => {
       },
     } as unknown as OpenClawConfig;
 
-    const legal = resolveMSTeamsAccountConfig(cfg, "legal");
+    const secondary = resolveMSTeamsAccountConfig(cfg, "secondary");
 
-    expect(legal.appId).toBe("legal-app-id");
-    expect(legal.appPassword).toBe("legal-secret");
-    expect(legal.tenantId).toBe("tenant-id");
-    expect(legal.webhook).toEqual({ port: 3979, path: "/api/messages" });
-    expect(resolveMSTeamsAccount({ cfg, accountId: "legal" }).configured).toBe(true);
+    expect(secondary.appId).toBe("secondary-app-id");
+    expect(secondary.appPassword).toBe("secondary-secret");
+    expect(secondary.tenantId).toBe("tenant-id");
+    expect(secondary.webhook).toEqual({ port: 3979, path: "/api/messages" });
+    expect(resolveMSTeamsAccount({ cfg, accountId: "secondary" }).configured).toBe(true);
   });
 
   it("marks named accounts without explicit identity as unconfigured", () => {
     const cfg = {
       channels: {
         msteams: {
-          appId: "dale-app-id",
-          appPassword: "dale-secret",
+          appId: "primary-app-id",
+          appPassword: "primary-secret",
           tenantId: "tenant-id",
           webhook: { port: 3978, path: "/api/messages" },
           accounts: {
-            legal: {
+            secondary: {
               webhook: { port: 3979 },
             },
           },
@@ -325,7 +397,7 @@ describe("msteams account config", () => {
       },
     } as unknown as OpenClawConfig;
 
-    expect(resolveMSTeamsAccount({ cfg, accountId: "legal" }).configured).toBe(false);
+    expect(resolveMSTeamsAccount({ cfg, accountId: "secondary" }).configured).toBe(false);
   });
 });
 

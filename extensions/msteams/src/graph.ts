@@ -206,7 +206,7 @@ export async function fetchAllGraphPages<T>(params: {
 
 export async function resolveGraphToken(
   cfg: unknown,
-  options?: { preferDelegated?: boolean },
+  options?: { accountId?: string | null; preferDelegated?: boolean },
 ): Promise<string> {
   const msteamsCfg = (cfg as { channels?: { msteams?: MSTeamsConfig } })?.channels?.msteams;
   const creds = resolveMSTeamsCredentials(msteamsCfg);
@@ -225,6 +225,7 @@ export async function resolveGraphToken(
       tenantId: creds.tenantId,
       clientId: creds.appId,
       clientSecret: creds.appPassword,
+      accountId: options.accountId,
     });
     if (delegated) {
       return delegated;

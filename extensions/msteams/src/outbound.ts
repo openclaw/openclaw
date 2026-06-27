@@ -17,6 +17,7 @@ import {
   normalizeStringEntries,
   type ChannelOutboundAdapter,
 } from "../runtime-api.js";
+import { resolveDefaultMSTeamsAccountId } from "./accounts.js";
 import { formatUnknownError } from "./errors.js";
 import { createAccountScopedMSTeamsPollStore, createMSTeamsPollStoreState } from "./polls.js";
 import { buildMSTeamsPresentationCard, MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
@@ -261,10 +262,11 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       }
     },
     sendPoll: async ({ cfg, to, poll, accountId }) => {
+      const effectiveAccountId = accountId ?? resolveDefaultMSTeamsAccountId(cfg);
       const maxSelections = poll.maxSelections ?? 1;
       const result = await sendPollMSTeams({
         cfg,
-        ...(accountId ? { accountId } : {}),
+        accountId: effectiveAccountId,
         to,
         question: poll.question,
         options: poll.options,
@@ -272,7 +274,7 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       });
       const pollStore = createAccountScopedMSTeamsPollStore(
         createMSTeamsPollStoreState(),
-        accountId ?? "default",
+        effectiveAccountId,
       );
       await pollStore.createPoll({
         id: result.pollId,

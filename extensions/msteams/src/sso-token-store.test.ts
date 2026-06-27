@@ -77,6 +77,38 @@ describe("msteams sso token store (plugin state)", () => {
     await expect(fs.access(storePath)).resolves.toBeUndefined();
   });
 
+  it("keeps default and named account tokens separate", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-sso-account-"));
+    const defaultStore = createMSTeamsSsoTokenStoreFs({ stateDir });
+    const namedStore = createMSTeamsSsoTokenStoreFs({ accountId: "secondary", stateDir });
+    const defaultToken = {
+      connectionName: "graph",
+      userId: "aad-user",
+      token: "default-token",
+      updatedAt: "2026-04-10T00:00:00.000Z",
+    } as const;
+    const namedToken = {
+      connectionName: "graph",
+      userId: "aad-user",
+      token: "secondary-token",
+      updatedAt: "2026-04-10T00:00:01.000Z",
+    } as const;
+
+    await defaultStore.save(defaultToken);
+    await namedStore.save(namedToken);
+
+    expect(await defaultStore.get(defaultToken)).toEqual(defaultToken);
+    expect(await namedStore.get(namedToken)).toEqual({
+      ...namedToken,
+      accountId: "secondary",
+    });
+    expect(await defaultStore.remove(defaultToken)).toBe(true);
+    expect(await namedStore.get(namedToken)).toEqual({
+      ...namedToken,
+      accountId: "secondary",
+    });
+  });
+
   it("keeps plugin-state keys bounded for long Teams identifiers", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-sso-long-"));
     const store = createMSTeamsSsoTokenStoreFs({ stateDir });

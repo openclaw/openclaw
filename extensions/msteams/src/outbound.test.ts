@@ -19,8 +19,16 @@ vi.mock("./polls.js", () => ({
   createMSTeamsPollStoreState: () => ({
     createPoll: mocks.createPoll,
   }),
-  createAccountScopedMSTeamsPollStore: (store: { createPoll: (poll: unknown) => Promise<void> }) =>
-    store,
+  createAccountScopedMSTeamsPollStore: (
+    store: { createPoll: (poll: unknown) => Promise<void> },
+    accountId: string,
+  ) => ({
+    createPoll: async (poll: unknown) =>
+      await store.createPoll({
+        ...(poll && typeof poll === "object" && !Array.isArray(poll) ? poll : {}),
+        accountId,
+      }),
+  }),
 }));
 
 import { msteamsOutbound } from "./outbound.js";
@@ -152,16 +160,57 @@ describe("msteamsOutbound cfg threading", () => {
   it("passes accountId to sendMessageMSTeams for named account text sends", async () => {
     await requireSendText()({
       cfg,
-      accountId: "legal",
-      to: "user:legal-user",
-      text: "hello legal",
+      accountId: "secondary",
+      to: "user:secondary-user",
+      text: "hello secondary",
     });
 
     expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
       cfg,
-      accountId: "legal",
-      to: "user:legal-user",
-      text: "hello legal",
+      accountId: "secondary",
+      to: "user:secondary-user",
+      text: "hello secondary",
+    });
+  });
+
+  it("stores polls under the configured default account when accountId is omitted", async () => {
+    const cfgWithNamedDefault = {
+      channels: {
+        msteams: {
+          defaultAccount: "secondary",
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    await requireSendPoll()({
+      cfg: cfgWithNamedDefault,
+      to: "conversation:abc",
+      poll: {
+        question: "Approve?",
+        options: ["Yes", "No"],
+      },
+    });
+
+    expect(mocks.sendPollMSTeams).toHaveBeenCalledWith({
+      cfg: cfgWithNamedDefault,
+      accountId: "secondary",
+      to: "conversation:abc",
+      question: "Approve?",
+      options: ["Yes", "No"],
+      maxSelections: 1,
+    });
+    expect(firstPollRecord()).toMatchObject({
+      accountId: "secondary",
+      id: "poll-1",
+      conversationId: "conv-1",
+      messageId: "msg-poll-1",
     });
   });
 
@@ -173,15 +222,15 @@ describe("msteamsOutbound cfg threading", () => {
 
     const result = await requireSendText()({
       cfg,
-      accountId: "legal",
+      accountId: "secondary",
       deps: { msteams: injected },
-      to: "user:legal-user",
-      text: "hello legal",
+      to: "user:secondary-user",
+      text: "hello secondary",
     });
 
-    expect(injected).toHaveBeenCalledWith("user:legal-user", "hello legal", {
+    expect(injected).toHaveBeenCalledWith("user:secondary-user", "hello secondary", {
       cfg,
-      accountId: "legal",
+      accountId: "secondary",
     });
     expect(mocks.sendMessageMSTeams).not.toHaveBeenCalled();
     expect(result).toEqual({
@@ -202,7 +251,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     await requireSendMedia()({
       cfg: cfgValue,
-      accountId: "legal",
+      accountId: "secondary",
       to: "conversation:abc",
       text: "photo",
       mediaUrl: "file:///tmp/photo.png",
@@ -211,7 +260,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     expect(mocks.sendMessageMSTeams).toHaveBeenCalledWith({
       cfg: cfgValue,
-      accountId: "legal",
+      accountId: "secondary",
       to: "conversation:abc",
       text: "photo",
       mediaUrl: "file:///tmp/photo.png",
@@ -227,20 +276,20 @@ describe("msteamsOutbound cfg threading", () => {
 
     const result = await requireSendMedia()({
       cfg,
-      accountId: "legal",
+      accountId: "secondary",
       deps: { msteams: injected },
-      to: "user:legal-user",
+      to: "user:secondary-user",
       text: "photo",
       mediaUrl: "file:///tmp/photo.png",
       mediaLocalRoots: ["/tmp"],
     });
 
-    expect(injected).toHaveBeenCalledWith("user:legal-user", "photo", {
+    expect(injected).toHaveBeenCalledWith("user:secondary-user", "photo", {
       mediaUrl: "file:///tmp/photo.png",
       mediaLocalRoots: ["/tmp"],
       mediaReadFile: undefined,
       cfg,
-      accountId: "legal",
+      accountId: "secondary",
     });
     expect(mocks.sendMessageMSTeams).not.toHaveBeenCalled();
     expect(result).toEqual({
@@ -292,7 +341,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     const result = await requireSendPayload()({
       cfg,
-      accountId: "legal",
+      accountId: "secondary",
       to: "conversation:abc",
       text: "Deploy finished",
       payload: rendered!,
@@ -300,7 +349,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     expect(mocks.sendAdaptiveCardMSTeams).toHaveBeenCalledWith({
       cfg,
-      accountId: "legal",
+      accountId: "secondary",
       to: "conversation:abc",
       card: (rendered!.channelData!.msteams as { presentationCard: unknown }).presentationCard,
     });
@@ -441,7 +490,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     await requireSendPoll()({
       cfg: cfgLocal,
-      accountId: "legal",
+      accountId: "secondary",
       to: "conversation:abc",
       poll: {
         question: "Snack?",
@@ -451,7 +500,7 @@ describe("msteamsOutbound cfg threading", () => {
 
     expect(mocks.sendPollMSTeams).toHaveBeenCalledWith({
       cfg: cfgLocal,
-      accountId: "legal",
+      accountId: "secondary",
       to: "conversation:abc",
       question: "Snack?",
       options: ["Pizza", "Sushi"],
@@ -459,6 +508,7 @@ describe("msteamsOutbound cfg threading", () => {
     });
     const pollRecord = firstPollRecord();
     expect(pollRecord).toEqual({
+      accountId: "secondary",
       id: "poll-1",
       question: "Snack?",
       options: ["Pizza", "Sushi"],

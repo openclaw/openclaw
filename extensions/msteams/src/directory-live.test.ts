@@ -93,6 +93,43 @@ describe("msteams directory live", () => {
     });
   });
 
+  it("resolves directory graph credentials from the named account config", async () => {
+    resolveGraphTokenMock.mockResolvedValue("graph-token");
+    searchGraphUsersMock.mockResolvedValue([]);
+    const cfg = {
+      channels: {
+        msteams: {
+          appId: "default-app-id",
+          appPassword: "default-secret",
+          tenantId: "tenant-id",
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    };
+
+    await listMSTeamsDirectoryPeersLive({
+      cfg,
+      accountId: "secondary",
+      query: "alice",
+    });
+
+    expect(resolveGraphTokenMock).toHaveBeenCalledWith({
+      channels: {
+        msteams: expect.objectContaining({
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
+          tenantId: "tenant-id",
+        }),
+      },
+    });
+  });
+
   it("returns team entries without channel queries and honors limits", async () => {
     resolveGraphTokenMock.mockResolvedValue("graph-token");
     listTeamsByNameMock.mockResolvedValue([

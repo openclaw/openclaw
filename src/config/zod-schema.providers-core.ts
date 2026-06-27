@@ -1690,6 +1690,23 @@ export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
 })
   .strict()
   .superRefine((value, ctx) => {
+    const webhookPorts = new Map<number, string>();
+    const recordWebhookPort = (port: number | undefined, path: Array<string | number>) => {
+      if (typeof port !== "number") {
+        return;
+      }
+      const existing = webhookPorts.get(port);
+      if (existing) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path,
+          message: `Microsoft Teams webhook port ${port} is already used by ${existing}`,
+        });
+        return;
+      }
+      webhookPorts.set(port, path.join("."));
+    };
+
     requireOpenAllowFrom({
       policy: value.dmPolicy,
       allowFrom: value.allowFrom,
@@ -1768,6 +1785,8 @@ export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
           "channels.msteams can define the default Teams identity either at the root or in accounts.default, not both",
       });
     }
+
+    recordWebhookPort(value.webhook?.port, ["webhook", "port"]);
 
     for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
       if (!account) {
@@ -1851,12 +1870,25 @@ export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
               "channels.msteams.accounts.*.appId is required for named Microsoft Teams bot accounts",
           });
         }
+        const effectiveAuthType = account.authType ?? value.authType ?? "secret";
         if ((account.authType ?? value.authType ?? "secret") === "secret" && !account.appPassword) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: [...path, "appPassword"],
             message:
               "channels.msteams.accounts.*.appPassword is required for named Microsoft Teams bot accounts using secret auth",
+          });
+        }
+        if (
+          effectiveAuthType === "federated" &&
+          !(account.certificatePath ?? value.certificatePath)?.trim() &&
+          (account.useManagedIdentity ?? value.useManagedIdentity) !== true
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path, "authType"],
+            message:
+              "channels.msteams.accounts.* using federated auth must configure certificatePath or useManagedIdentity",
           });
         }
         if (account.webhook?.port === undefined) {
@@ -1867,6 +1899,9 @@ export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
               "channels.msteams.accounts.*.webhook.port is required for named Microsoft Teams bot accounts",
           });
         }
+      }
+      if (account.enabled !== false) {
+        recordWebhookPort(account.webhook?.port, [...path, "webhook", "port"]);
       }
     }
 

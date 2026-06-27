@@ -599,7 +599,14 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         }),
       }),
       resolver: {
-        resolveTargets: async ({ cfg, inputs, kind, runtime }) => {
+        resolveTargets: async ({ cfg, accountId, inputs, kind, runtime }) => {
+          const scopedCfg = {
+            ...cfg,
+            channels: {
+              ...cfg.channels,
+              msteams: resolveMSTeamsAccountConfig(cfg, accountId),
+            },
+          };
           const results = inputs.map((input) => ({
             input,
             resolved: false,
@@ -661,7 +668,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
 
             await resolvePending(
               pending,
-              (entries) => resolveMSTeamsUserAllowlist({ cfg, entries }),
+              (entries) => resolveMSTeamsUserAllowlist({ cfg: scopedCfg, entries }),
               (target, entry) => {
                 target.resolved = entry.resolved;
                 target.id = entry.id;
@@ -698,7 +705,7 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
 
           await resolvePending(
             pending,
-            (entries) => resolveMSTeamsChannelAllowlist({ cfg, entries }),
+            (entries) => resolveMSTeamsChannelAllowlist({ cfg: scopedCfg, entries }),
             (target, entry) => {
               if (!entry.resolved || !entry.teamId) {
                 target.resolved = false;
@@ -1229,10 +1236,11 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
         idLabel: "msteamsUserId",
         message: PAIRING_APPROVED_MESSAGE,
         normalizeAllowEntry: createPairingPrefixStripper(/^(msteams|user):/i),
-        notify: async ({ cfg, id, message }) => {
+        notify: async ({ cfg, accountId, id, message }) => {
           const { sendMessageMSTeams } = await loadMSTeamsChannelRuntime();
           await sendMessageMSTeams({
             cfg,
+            accountId,
             to: id,
             text: message,
           });
