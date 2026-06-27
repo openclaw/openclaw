@@ -278,10 +278,36 @@ export function extractToolResultText(result: unknown): string | undefined {
       return trimmed ? trimmed : undefined;
     })
     .filter((value): value is string => Boolean(value));
-  if (texts.length === 0) {
-    return undefined;
+  if (texts.length > 0) {
+    return texts.join("\n");
   }
-  return texts.join("\n");
+
+  // Fallback: serialize structured non-image blocks so tool results with
+  // JSON/resource content produce visible text instead of collapsing to an
+  // attachment placeholder (#97267).
+  const content = record.content;
+  if (Array.isArray(content)) {
+    const fallbackParts: string[] = [];
+    for (const block of content) {
+      if (!block || typeof block !== "object") {
+        continue;
+      }
+      const b = block as Record<string, unknown>;
+      if (b.type === "text" || b.type === "image") {
+        continue;
+      }
+      try {
+        fallbackParts.push(JSON.stringify(block));
+      } catch {
+        // skip unserializable blocks
+      }
+    }
+    if (fallbackParts.length > 0) {
+      return fallbackParts.join("\n");
+    }
+  }
+
+  return undefined;
 }
 
 function pushUniqueMessagingMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {

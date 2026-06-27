@@ -6,6 +6,7 @@ import {
   buildToolLifecycleErrorResult,
   extractToolErrorCode,
   extractToolErrorMessage,
+  extractToolResultText,
   isToolResultError,
   sanitizeToolArgs,
   sanitizeToolResult,
@@ -386,5 +387,58 @@ describe("sanitizeToolArgs", () => {
       count: 3,
       file_path: "/tmp/x.txt",
     });
+  });
+});
+
+describe("extractToolResultText", () => {
+  it("returns undefined for non-object results", () => {
+    expect(extractToolResultText(null)).toBeUndefined();
+    expect(extractToolResultText(undefined)).toBeUndefined();
+    expect(extractToolResultText("string")).toBeUndefined();
+  });
+
+  it("collects text from explicit text content blocks", () => {
+    expect(
+      extractToolResultText({
+        content: [
+          { type: "text", text: "hello" },
+          { type: "text", text: "world" },
+        ],
+      }),
+    ).toBe("hello\nworld");
+  });
+
+  it("serializes structured non-image blocks as fallback visible text (#97267)", () => {
+    const text = extractToolResultText({
+      content: [{ type: "resource", resource: { uri: "file:///tmp/data.json" } }],
+    });
+    expect(text).toBeDefined();
+    expect(text).toContain("resource");
+    expect(text).toContain("file:///tmp/data.json");
+  });
+
+  it("skips image blocks in the structured fallback (#97267)", () => {
+    const text = extractToolResultText({
+      content: [{ type: "image", data: "base64...", mimeType: "image/png" }],
+    });
+    expect(text).toBeUndefined();
+  });
+
+  it("returns text blocks directly when present, structured fallback only activates without text (#97267)", () => {
+    // When text blocks exist, they are returned directly.
+    const withText = extractToolResultText({
+      content: [
+        { type: "text", text: "visible output" },
+        { type: "resource", resource: { uri: "file:///tmp/data.json" } },
+      ],
+    });
+    expect(withText).toBe("visible output");
+
+    // When only structured non-image blocks exist, the fallback serializes them.
+    const withoutText = extractToolResultText({
+      content: [{ type: "resource", resource: { uri: "file:///tmp/data.json" } }],
+    });
+    expect(withoutText).toBeDefined();
+    expect(withoutText).toContain("resource");
   });
 });
