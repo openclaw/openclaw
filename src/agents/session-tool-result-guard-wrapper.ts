@@ -87,9 +87,7 @@ export function guardSessionManager(
       if (result?.message) {
         message = mergePreparedUserTurnOpenClawMetaForRuntime({
           runtimeMessage: result.message,
-          ...(event.message.role === "user"
-            ? { preparedMessage: event.message as PersistedUserTurnMessage }
-            : {}),
+          ...(event.message.role === "user" ? { preparedMessage: event.message } : {}),
         });
         changed = true;
       }
