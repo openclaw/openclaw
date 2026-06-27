@@ -192,8 +192,12 @@ export function buildClaimContradictionClusters(params: {
       if (entries.length < 2) {
         return [];
       }
-      const distinctTexts = new Set(entries.map((entry) => normalizeClaimTextKey(entry.text)));
-      const distinctStatuses = new Set(entries.map((entry) => entry.status));
+      const distinctTexts = new Set<string>();
+      const distinctStatuses = new Set<string>();
+      for (const entry of entries) {
+        distinctTexts.add(normalizeClaimTextKey(entry.text));
+        distinctStatuses.add(entry.status);
+      }
       if (distinctTexts.size < 2 && distinctStatuses.size < 2) {
         return [];
       }
