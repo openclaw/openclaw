@@ -893,6 +893,10 @@ Key settings (see `/gateway/configuration` for shared channel patterns):
 - `channels.msteams.dangerouslyAllowNameMatching`: break-glass toggle to re-enable mutable UPN/display-name matching and direct team/channel name routing.
 - `channels.msteams.textChunkLimit`: outbound text chunk size.
 - `channels.msteams.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
+- `channels.msteams.streaming.mode`: personal-chat preview delivery mode. Set
+  `"block"` to disable Teams native preview streaming and send normal message
+  blocks instead. This setting can be shared at the root or overridden per
+  account.
 - `channels.msteams.mediaAllowHosts`: allowlist for inbound attachment hosts (defaults to Microsoft/Teams domains).
 - `channels.msteams.mediaAuthAllowHosts`: allowlist for attaching Authorization headers on media retries (defaults to Graph + Bot Framework hosts).
 - `channels.msteams.requireMention`: require @mention in channels/groups (default true).
@@ -1212,6 +1216,11 @@ Bots have limited support in private channels:
 
 - **Images not showing in channels:** Graph permissions or admin consent missing. Reinstall the Teams app and fully quit/reopen Teams.
 - **No responses in channel:** mentions are required by default; set `channels.msteams.requireMention=false` or configure per team/channel.
+- **Personal chat shows typing or a stale preview after the reply was sent:**
+  set `channels.msteams.streaming.mode = "block"` to bypass Teams native
+  preview streaming and deliver replies as normal message blocks. This is most
+  useful when testing multiple bot accounts concurrently or when the Teams
+  client does not refresh an in-flight preview card until the chat is reopened.
 - **Version mismatch (Teams still shows old manifest):** remove + re-add the app and fully quit Teams to refresh.
 - **401 Unauthorized from webhook:** Expected when testing manually without Azure JWT - means endpoint is reachable but auth failed. Use Azure Web Chat to test properly.
 

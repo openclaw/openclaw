@@ -812,16 +812,19 @@ describe("msteams monitor handler authz", () => {
     );
   });
 
-  it("uses the shared session store as the Teams turn chain key when available", () => {
+  it("scopes Teams turn chains by session when a shared session store is available", () => {
+    const storePath = "openclaw-test-session-store.json";
+    const sessionKey = "msteams:group:shared:support";
+
     expect(
       resolveMSTeamsTurnChainKey({
-        storePath: "/tmp/openclaw-test-session-store.json",
-        sessionKey: "msteams:group:shared:legal",
+        storePath,
+        sessionKey,
       }),
-    ).toBe("store:/tmp/openclaw-test-session-store.json");
+    ).toBe(`store:${storePath}:session:${sessionKey}`);
     expect(
       resolveMSTeamsTurnChainKey({
-        sessionKey: "msteams:group:shared:legal",
+        sessionKey,
       }),
     ).toBe("global");
   });

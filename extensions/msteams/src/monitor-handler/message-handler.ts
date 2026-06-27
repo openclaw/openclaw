@@ -109,11 +109,11 @@ export function resolveMSTeamsTurnChainKey(params: {
   storePath?: string;
   sessionKey: string;
 }): string {
+  const sessionKey = params.sessionKey.trim();
   const storePath = params.storePath?.trim();
   if (storePath) {
-    return `store:${storePath}`;
+    return sessionKey ? `store:${storePath}:session:${sessionKey}` : `store:${storePath}`;
   }
-  const sessionKey = params.sessionKey.trim();
   return sessionKey ? "global" : "";
 }
 
