@@ -3,9 +3,18 @@
 import { describe, expect, it } from "vitest";
 import { MAX_TIMER_TIMEOUT_MS } from "../../shared/number-coercion.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-channel.js";
-import { resolveOutboundMessageGatewayOptions } from "./message-gateway-options.js";
+import {
+  DEFAULT_OUTBOUND_MESSAGE_GATEWAY_TIMEOUT_MS,
+  resolveOutboundMessageGatewayOptions,
+} from "./message-gateway-options.js";
 
 describe("resolveOutboundMessageGatewayOptions", () => {
+  it("waits long enough for bounded provider sends to finish", () => {
+    expect(resolveOutboundMessageGatewayOptions().timeoutMs).toBe(
+      DEFAULT_OUTBOUND_MESSAGE_GATEWAY_TIMEOUT_MS,
+    );
+  });
+
   it("clamps oversized gateway timeouts", () => {
     expect(
       resolveOutboundMessageGatewayOptions({ timeoutMs: Number.MAX_SAFE_INTEGER }).timeoutMs,
