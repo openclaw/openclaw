@@ -1438,7 +1438,7 @@ async function performClawHubSkillInstall(
                 registry,
                 authority: officialClawHubSkill ? "official" : "third-party",
                 repo: latestResolution.github.repo,
-                commit: latestResolution.github.commit,
+                commit: version,
                 force: params.force,
                 logger: params.logger,
                 config: params.config,
