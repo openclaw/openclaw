@@ -291,6 +291,7 @@ describe("ensureGlobalUndiciStreamTimeouts", () => {
 
   it("preserves explicit env proxy options when replacing EnvHttpProxyAgent dispatcher", () => {
     vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(matchesNoProxy).mockReturnValue(false);
     vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
       httpProxy: "socks5://proxy.test:1080",
       httpsProxy: "socks5://proxy.test:1080",
