@@ -211,6 +211,18 @@ each carrier call should start with fresh context, for example reception,
 booking, IVR, or Google Meet bridge flows where the same phone number may
 represent different meetings.
 
+Voice Call stores generated session keys under the configured agent namespace
+(`agent:<agentId>:voice:*`) so call memory survives Gateway session-key
+canonicalization after restarts. Raw explicit integration keys use the same
+agent namespace. A canonical `agent:<configuredAgentId>:*` key keeps that owner,
+and its main aliases honor core `session.mainKey` and global scope. Foreign or
+malformed `agent:*` input is scoped as an opaque key under the configured agent;
+`global` and `unknown` remain global sentinels. Gateway startup promotes older
+raw keys in default or `{agentId}`-templated stores where the path proves one
+owner. In fixed custom stores, ambiguous legacy rows remain untouched because
+they do not contain enough information to choose an owner; new calls use
+canonical agent-scoped history.
+
 ## Realtime voice conversations
 
 `realtime` selects a full-duplex realtime voice provider for live call

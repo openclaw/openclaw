@@ -7131,6 +7131,28 @@ describe("runAgentTurnWithFallback", () => {
     }
   });
 
+  it("does not suggest re-authentication for typed format failures", async () => {
+    state.runEmbeddedAgentMock.mockRejectedValueOnce(
+      new FailoverError("Format failover exhausted for provider openai", {
+        reason: "format",
+        provider: "openai",
+        authProfileFailure: { allInCooldown: true },
+        cause: new Error("messages must alternate roles"),
+      }),
+    );
+
+    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
+    const result = await runAgentTurnWithFallback(createMinimalRunAgentTurnParams());
+
+    expect(result.kind).toBe("final");
+    if (result.kind === "final") {
+      expect(result.payload.text).toContain("Couldn't reach openai");
+      expect(result.payload.text).toContain("messages must alternate roles");
+      expect(result.payload.text).not.toContain("models auth login");
+      expect(result.payload.text).not.toContain("openclaw configure");
+    }
+  });
+
   it("points stale openai missing-key failures at doctor repair with re-auth fallback", async () => {
     state.runEmbeddedAgentMock.mockRejectedValueOnce(
       new Error('No API key found for provider "openai".'),
