@@ -344,7 +344,6 @@ export function maybeNotifyIsolatedAgentSetupTimeout(
   if (!notified) {
     return false;
   }
-  state.restartRecoveryPending = true;
   return true;
 }
 

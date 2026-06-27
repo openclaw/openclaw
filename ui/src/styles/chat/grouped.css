@@ -651,8 +651,11 @@ details.msg-meta:not([open]) .msg-meta__details {
     margin-right: 0;
   }
 
+  /* 95% on mobile gives readable full-width content while keeping
+     a small visual margin from screen edges.
+     Previously 82%, which produced ~190px effective width on phones. */
   .chat-group-messages {
-    max-width: 82%;
+    max-width: min(95%, 720px);
   }
 
   .chat-group.tool .chat-group-messages {
@@ -660,7 +663,8 @@ details.msg-meta:not([open]) .msg-meta__details {
   }
 }
 
-@media (max-width: 400px) {
+@media (max-width: 480px) {
+  /* Full-width on small phones; hide avatars to reclaim horizontal space. */
   .chat-group-messages {
     max-width: 100%;
   }

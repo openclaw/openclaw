@@ -855,7 +855,7 @@ describe("google-meet plugin", () => {
   });
 
   it("registers the node-host command used by chrome-node transport", () => {
-    const { nodeHostCommands } = setup();
+    const { nodeHostCommands, nodeInvokePolicies } = setup();
 
     const command = nodeHostCommands.find(
       (entry): entry is Record<string, unknown> =>
@@ -865,7 +865,13 @@ describe("google-meet plugin", () => {
       throw new Error("expected googlemeet.chrome node host command");
     }
     expect(command.cap).toBe("google-meet");
+    expect(command.dangerous).toBe(true);
     expect(typeof command.handle).toBe("function");
+    expect(nodeInvokePolicies).toHaveLength(1);
+    expect(nodeInvokePolicies[0]).toMatchObject({
+      commands: ["googlemeet.chrome"],
+      dangerous: true,
+    });
   });
 
   it("keeps the agent tool visible on non-macOS hosts but blocks local Chrome talk-back joins", async () => {
@@ -2239,6 +2245,9 @@ describe("google-meet plugin", () => {
     try {
       const { methods, runCommandWithTimeout } = setup({
         defaultMode: "transcribe",
+        chrome: {
+          browserProfile: "meet-devtools",
+        },
       });
       const callGatewayFromCli = mockLocalMeetBrowserRequest({
         inCall: true,
@@ -3428,7 +3437,12 @@ describe("google-meet plugin", () => {
       },
     );
     chromeTransportTesting.setDepsForTest({ callGatewayFromCli });
-    const { tools, nodesInvoke } = setup({ defaultTransport: "chrome" });
+    const { tools, nodesInvoke } = setup({
+      defaultTransport: "chrome",
+      chrome: {
+        browserProfile: "meet-devtools",
+      },
+    });
     const tool = tools[0] as {
       execute: (
         id: string,
@@ -3458,6 +3472,7 @@ describe("google-meet plugin", () => {
     expect(focusCall[0]).toBe("browser.request");
     expect(requireRecord(focusCall[2], "focus request").method).toBe("POST");
     expect(requireRecord(focusCall[2], "focus request").path).toBe("/tabs/focus");
+    expect(requireRecord(focusCall[2], "focus request").query).toBeUndefined();
     expect(focusCall[3]).toEqual({ progress: false });
     expect(nodesInvoke).not.toHaveBeenCalled();
   });

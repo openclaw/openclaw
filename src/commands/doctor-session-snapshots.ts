@@ -12,10 +12,13 @@ import {
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { expandHomePrefix } from "../infra/home-dir.js";
 import { writeTextAtomic } from "../infra/json-files.js";
 import { resolveBundledSkillsDir } from "../skills/loading/bundled-dir.js";
 import { shortenHomePath } from "../utils.js";
+
+const SESSION_SNAPSHOTS_CHECK_ID = "core/doctor/session-snapshots";
 
 type SnapshotPathSource =
   | "skillsSnapshot.prompt"
@@ -32,6 +35,10 @@ type StaleSessionSnapshotPathFinding = {
   field: SnapshotPathSource;
   cachedPath: string;
   expectedPath: string;
+};
+
+export type SessionSnapshotHealthIssue = StaleSessionSnapshotPathFinding & {
+  storePath: string;
 };
 
 function decodeXmlText(value: string): string {
@@ -284,6 +291,72 @@ function loadSessionStoreForSnapshotScan(storePath: string): Record<string, Sess
   const store = parsed as Record<string, SessionEntry>;
   hydrateSessionStoreSkillPromptRefs({ storePath, store });
   return store;
+}
+
+export async function detectSessionSnapshotHealthIssues(params?: {
+  storePaths?: string[];
+  bundledSkillsDir?: string;
+  cfg?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+}): Promise<SessionSnapshotHealthIssue[]> {
+  const bundledSkillsDir = params?.bundledSkillsDir ?? resolveBundledSkillsDir();
+  if (!bundledSkillsDir) {
+    return [];
+  }
+  const storePaths =
+    params?.storePaths ??
+    resolveSessionStorePaths({ cfg: params?.cfg, env: params?.env }) ??
+    (await listSessionStorePaths(resolveStateDir(params?.env)));
+  const issues: SessionSnapshotHealthIssue[] = [];
+  for (const storePath of storePaths) {
+    let store: Record<string, SessionEntry>;
+    try {
+      store = loadSessionStoreForSnapshotScan(storePath);
+    } catch {
+      continue;
+    }
+    const findings = scanSessionStoreForStaleRuntimeSnapshotPaths({
+      store,
+      bundledSkillsDir,
+      env: params?.env,
+    });
+    for (const finding of findings) {
+      issues.push({
+        sessionKey: finding.sessionKey,
+        field: finding.field,
+        cachedPath: finding.cachedPath,
+        expectedPath: finding.expectedPath,
+        storePath,
+      });
+    }
+  }
+  return issues;
+}
+
+export function sessionSnapshotIssueToHealthFinding(
+  issue: SessionSnapshotHealthIssue,
+): HealthFinding {
+  return {
+    checkId: SESSION_SNAPSHOTS_CHECK_ID,
+    severity: "info",
+    message: `${issue.sessionKey} cached session metadata references an inactive runtime root that can be cleaned up.`,
+    path: issue.storePath,
+    target: issue.cachedPath,
+    requirement: `Current bundled skill path: ${issue.expectedPath}`,
+    fixHint:
+      "To clean up the advisory artifact, run `openclaw doctor --fix` to rewrite stale cached session metadata paths, or start a fresh session after confirming history can be retired.",
+  };
+}
+
+export function sessionSnapshotIssueToRepairEffect(
+  issue: SessionSnapshotHealthIssue,
+): HealthRepairEffect {
+  return {
+    kind: "file",
+    action: "would-rewrite-session-snapshot-path",
+    target: issue.storePath,
+    dryRunSafe: false,
+  };
 }
 
 /** Replaces stale paths in raw, JSON-escaped, and XML-escaped prompt text. */

@@ -697,8 +697,9 @@
 
 .chat-composer-model-control {
   display: inline-flex;
-  flex: 0 1 220px;
+  flex: 0 0 auto;
   min-width: 0;
+  max-width: 70vw;
 }
 
 .chat-composer-model-control .chat-controls__model {
@@ -2188,7 +2189,7 @@
   z-index: 80;
   display: grid;
   gap: 2px;
-  width: max(100%, min(260px, calc(100vw - 32px)));
+  width: max(300%, min(300px, calc(100vw - 32px)));
   max-height: min(280px, calc(100vh - 120px));
   padding: 6px;
   border: 1px solid color-mix(in srgb, var(--border) 82%, transparent);
@@ -2596,11 +2597,11 @@
 }
 
 .chat-loading-skeleton .chat-msg {
-  width: min(560px, 82%);
+  width: min(560px, 92%);
 }
 
 .chat-loading-skeleton .chat-line.user .chat-msg {
-  width: min(360px, 70%);
+  width: min(420px, 85%);
 }
 
 .chat-loading-skeleton .chat-bubble {
