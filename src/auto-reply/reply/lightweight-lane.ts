@@ -132,18 +132,18 @@ const HIGH_STAKES_TERMS = [
 const CURRENT_INFO_PATTERNS = [
   /\bwho won\b/i,
   /\blast night\b/i,
-  /\b(?:latest|current|news|score)\b/i,
+  /\b(?:latest|current|news|score|weather)\b/i,
   /\bwhat'?s happening\b/i,
 ];
 
 const OBVIOUS_SMALL_TALK_PATTERNS = [
-  /\b(?:hi|hey|hello|morning|afternoon|evening)\b/i,
-  /\b(?:thanks?|thank you|cheers|appreciate it|much appreciated)\b/i,
-  /\b(?:haha|lol|lmao|hehe)\b/i,
-  /\b(?:no worries|never mind|nevermind|all good|sounds good|talk later)\b/i,
-  /\bhow (?:are|r) (?:you|u)\b/i,
-  /\bhow'?s (?:your|ur) (?:day|morning|afternoon|evening)\b/i,
-  /\bwhat do you think about (?:jazz|music|movies|films|books|coffee|tea|football)\b/i,
+  /^(?:hi|hey|hello|good (?:morning|afternoon|evening))[!.:),\s]*$/i,
+  /^(?:thanks?|thank you|cheers|appreciate it|much appreciated)(?:,?\s+that (?:really )?helped)?[!.:),\s]*$/i,
+  /^(?:haha|lol|lmao|hehe)(?:\s+(?:that(?:'s| is)?|this is)?\s*(?:funny|hilarious|great))?[!.:),\s]*$/i,
+  /^(?:no worries(?:,?\s+talk later)?|never mind|nevermind|all good|sounds good|talk later)[!.:),\s]*$/i,
+  /^how (?:are|r) (?:you|u)(?: doing)?(?: today)?[?.!,\s]*$/i,
+  /^how'?s (?:your|ur) (?:day|morning|afternoon|evening)(?: going)?[?.!,\s]*$/i,
+  /^what do you think about (?:jazz|music|movies|films|books|coffee|tea|football)[?.!,\s]*$/i,
 ];
 
 function buildTermMatcher(terms: readonly string[]): RegExp {
@@ -230,5 +230,5 @@ export function applyLightweightReplyLane(
   if (!classifyLightweightLane(signals).eligible) {
     return undefined;
   }
-  return { ...opts, bootstrapContextMode: "lightweight", disableTools: true };
+  return { ...opts, bootstrapContextMode: "lightweight" };
 }

@@ -9,7 +9,7 @@ import {
 
 function signals(overrides: Partial<LightweightLaneSignals> = {}): LightweightLaneSignals {
   return {
-    text: "hey, how's your day going?",
+    text: "how's your day going?",
     hasMedia: false,
     hasLink: false,
     isNativeCommand: false,
@@ -96,6 +96,12 @@ describe("classifyLightweightLane", () => {
       eligible: false,
       reason: "not_obvious_small_talk",
     });
+    expect(
+      classifyLightweightLane(signals({ text: "good morning, what's the weather today?" })),
+    ).toEqual({
+      eligible: false,
+      reason: "not_obvious_small_talk",
+    });
     expect(classifyLightweightLane(signals({ text: "what's happening in London today?" }))).toEqual(
       {
         eligible: false,
@@ -119,16 +125,19 @@ describe("classifyLightweightLane", () => {
 
   it("matches verbs on word boundaries, not substrings", () => {
     // "fixate" / "reading" must not trip the bare "fix" / "read" verbs.
+    expect(classifyLightweightLane(signals({ text: "haha that's hilarious" }))).toEqual({
+      eligible: true,
+    });
     expect(
       classifyLightweightLane(signals({ text: "haha I keep fixating on small things" })),
-    ).toEqual({ eligible: true });
+    ).toEqual({ eligible: false, reason: "not_obvious_small_talk" });
   });
 });
 
 describe("applyLightweightReplyLane", () => {
-  it("upgrades eligible chat with lightweight context and disabled tools", () => {
+  it("upgrades eligible chat with lightweight context", () => {
     const result = applyLightweightReplyLane(undefined, signals());
-    expect(result).toEqual({ bootstrapContextMode: "lightweight", disableTools: true });
+    expect(result).toEqual({ bootstrapContextMode: "lightweight" });
   });
 
   it("preserves unrelated caller options while upgrading", () => {
@@ -138,7 +147,6 @@ describe("applyLightweightReplyLane", () => {
       runId: "abc",
       suppressTyping: true,
       bootstrapContextMode: "lightweight",
-      disableTools: true,
     });
   });
 
