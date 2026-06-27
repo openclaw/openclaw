@@ -311,7 +311,7 @@ export async function executeNodeHostCommand(
               trigger: params.trigger,
               host: "node",
               security: hostSecurity,
-              ask: hostAsk,
+              ask: approvalDecisionAsk,
               askFallback,
             }),
           );
@@ -457,7 +457,7 @@ export async function executeNodeHostCommand(
           unavailableReason,
           allowedDecisions,
           nodeId: target.nodeId,
-          ask: hostAsk,
+          ask: approvalDecisionAsk,
         });
       }
     }
