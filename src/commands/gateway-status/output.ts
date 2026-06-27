@@ -90,13 +90,20 @@ export function buildGatewayStatusWarnings(params: {
   localTlsLoadError?: string | null;
   discoveryCount?: number;
 }): GatewayStatusWarning[] {
-  const reachable = params.probed.filter((entry) => isProbeReachable(entry.probe));
-  const degradedScopeLimited = params.probed.filter((entry) =>
-    isScopeLimitedProbeFailure(entry.probe),
-  );
-  const degradedDetailFailed = params.probed.filter(
-    (entry) => isPostConnectProbeFailure(entry.probe) && !isScopeLimitedProbeFailure(entry.probe),
-  );
+  const reachable: GatewayStatusProbedTarget[] = [];
+  const degradedScopeLimited: GatewayStatusProbedTarget[] = [];
+  const degradedDetailFailed: GatewayStatusProbedTarget[] = [];
+  for (const entry of params.probed) {
+    if (isProbeReachable(entry.probe)) {
+      reachable.push(entry);
+    }
+    const scopeLimited = isScopeLimitedProbeFailure(entry.probe);
+    if (scopeLimited) {
+      degradedScopeLimited.push(entry);
+    } else if (isPostConnectProbeFailure(entry.probe)) {
+      degradedDetailFailed.push(entry);
+    }
+  }
   const warnings: GatewayStatusWarning[] = [];
   if (params.sshTarget && !params.sshTunnelStarted) {
     warnings.push({
