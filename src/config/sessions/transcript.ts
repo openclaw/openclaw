@@ -18,6 +18,7 @@ import {
 } from "./paths.js";
 import {
   listSessionEntries,
+  loadSessionEntry,
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
   readLatestTranscriptAssistantText,
@@ -25,7 +26,7 @@ import {
   type SessionTranscriptTurnWriteContext,
 } from "./session-accessor.js";
 import { parseSqliteSessionFileMarker, type SqliteSessionFileMarker } from "./sqlite-marker.js";
-import { loadSessionStore, resolveSessionStoreEntry } from "./store.js";
+import { resolveSessionStoreEntry } from "./store.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
 import {
@@ -272,14 +273,12 @@ function resolveSessionConversationTranscriptTarget(params: {
   if (!sessionKey) {
     return {};
   }
-  const storePath = params.storePath ?? resolveDefaultSessionStorePath(params.agentId);
-  const store = loadSessionStore(storePath, { skipCache: true });
-  const resolved = resolveSessionStoreEntry({ store, sessionKey });
-  const entry = resolved.existing;
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey) ?? "main";
+  const storePath = params.storePath ?? resolveDefaultSessionStorePath(agentId);
+  const entry = loadSessionEntry({ agentId, sessionKey, storePath });
   if (!entry?.sessionId) {
     return {};
   }
-  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(sessionKey) ?? "main";
   return {
     sessionFile: resolveSessionFilePath(entry.sessionId, entry, {
       sessionsDir: path.dirname(storePath),
