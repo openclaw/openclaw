@@ -23,7 +23,11 @@ describe("native app i18n inventory", () => {
     expect(
       entries
         .filter((entry) => entry.surface === "apple")
-        .every((entry) => entry.path.startsWith("apps/ios/")),
+        .every((entry) =>
+          /^(?:apps\/ios|apps\/macos\/Sources|apps\/shared\/OpenClawKit\/Sources)\//u.test(
+            entry.path,
+          ),
+        ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "QR Scanner Unavailable")).toBe(true);
     expect(entries.some((entry) => entry.source === "Request ID: \\(requestId)")).toBe(true);
@@ -34,6 +38,10 @@ describe("native app i18n inventory", () => {
     expect(entries.some((entry) => entry.source === "Pairing required")).toBe(true);
     expect(entries.some((entry) => entry.source === "Mute")).toBe(true);
     expect(entries.some((entry) => entry.source === "Creating...")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Permission required")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Searching…")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Run now")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Loading chat")).toBe(true);
     expect(entries.some((entry) => entry.path.endsWith("Info.plist"))).toBe(true);
     expect(NATIVE_I18N_LOCALES).toHaveLength(20);
   });
