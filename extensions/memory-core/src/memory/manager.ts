@@ -540,6 +540,19 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         settings: this.settings,
       });
       if (!primaryResult.provider || primaryResult.fallbackFrom) {
+        // Primary is still unavailable and loadProviderResult may have
+        // instantiated the configured fallback to probe it. Close that
+        // discarded provider so a sustained outage does not leak a fresh
+        // fallback worker on every throttle window. Skip when the returned
+        // provider is the one this manager already holds.
+        const discarded = primaryResult.provider;
+        if (discarded && discarded !== this.provider) {
+          void Promise.resolve(discarded.close?.()).catch((err: unknown) => {
+            log.debug(
+              `memory embeddings: failed to close discarded recovery probe: ${String(err)}`,
+            );
+          });
+        }
         return false;
       }
       // Probe the freshly-built primary with a ping before adopting it so a

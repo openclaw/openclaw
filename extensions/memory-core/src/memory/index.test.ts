@@ -1999,7 +1999,7 @@ describe("memory index", () => {
       error: expect.stringContaining("Local embedding worker exited"),
     });
 
-    const results = await manager.search("alpha");
+    await manager.search("alpha");
 
     // Fallback must be activated during the search flow (probe-time
     // degradation triggers fallback). Search itself either returns []
