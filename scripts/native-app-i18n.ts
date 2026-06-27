@@ -105,7 +105,6 @@ function addCandidate(
   }
   if (
     normalized.length > 500 ||
-    normalized.includes("${") ||
     hasUnbalancedSwiftInterpolation(normalized)
   ) {
     return;

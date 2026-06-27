@@ -22,6 +22,8 @@ describe("native app i18n inventory", () => {
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "QR Scanner Unavailable")).toBe(true);
     expect(entries.some((entry) => entry.source === "Request ID: \\(requestId)")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Open ${row.title}")).toBe(true);
+    expect(entries.some((entry) => entry.source === "$deviceModel · $appVersion")).toBe(true);
     expect(NATIVE_I18N_LOCALES).toHaveLength(20);
   });
 });

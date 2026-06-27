@@ -323,6 +323,22 @@
     },
     {
       "kind": "ui-call",
+      "line": 167,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
+      "source": "${display.emoji} ${display.label}",
+      "surface": "android",
+      "id": "native.android.5f93173e06eda5c0"
+    },
+    {
+      "kind": "ui-call",
+      "line": 184,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
+      "source": "... +${toolCalls.size - 6} more",
+      "surface": "android",
+      "id": "native.android.b9fd526ca2b6ce1a"
+    },
+    {
+      "kind": "ui-call",
       "line": 263,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatMessageViews.kt",
       "source": "Unsupported attachment",
@@ -424,6 +440,14 @@
       "source": "What can you help me do from this phone right now?",
       "surface": "android",
       "id": "native.android.e7bda5878f50af2e"
+    },
+    {
+      "kind": "ui-call",
+      "line": 661,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/chat/ChatScreen.kt",
+      "source": "+${toolCalls.size - 4} more",
+      "surface": "android",
+      "id": "native.android.a4afe69b3b414d03"
     },
     {
       "kind": "ui-call",
@@ -539,6 +563,14 @@
     },
     {
       "kind": "ui-property",
+      "line": 208,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
+      "source": "Open ${row.title}",
+      "surface": "android",
+      "id": "native.android.9e265012c092ba2e"
+    },
+    {
+      "kind": "ui-property",
       "line": 262,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/CommandPalette.kt",
       "source": "Open session",
@@ -608,6 +640,14 @@
       "source": "Connect Gateway",
       "surface": "android",
       "id": "native.android.29b6c84cc243897f"
+    },
+    {
+      "kind": "ui-call",
+      "line": 336,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ConnectTabScreen.kt",
+      "source": "OpenClaw Android ${openClawAndroidVersionLabel()}",
+      "surface": "android",
+      "id": "native.android.d4cf912850bd01fa"
     },
     {
       "kind": "ui-call",
@@ -1147,6 +1187,14 @@
     },
     {
       "kind": "ui-call",
+      "line": 217,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
+      "source": "Verify the certificate fingerprint before continuing.\n\n${prompt.fingerprintSha256}",
+      "surface": "android",
+      "id": "native.android.644eda7a3020dd44"
+    },
+    {
+      "kind": "ui-call",
       "line": 225,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/OnboardingFlow.kt",
       "source": "Trust",
@@ -1634,6 +1682,14 @@
       "id": "native.android.2a3bd62ebc2201d0"
     },
     {
+      "kind": "ui-call",
+      "line": 134,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
+      "source": "Sort: ${if (recentFirst)",
+      "surface": "android",
+      "id": "native.android.518ebeb3afb0db91"
+    },
+    {
       "kind": "ui-property",
       "line": 137,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
@@ -1904,6 +1960,14 @@
       "source": "No matching apps.",
       "surface": "android",
       "id": "native.android.d6bea54944c65885"
+    },
+    {
+      "kind": "ui-call",
+      "line": 697,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SettingsScreens.kt",
+      "source": "Showing ${visibleApps.size} of ${apps.size}. Refine search for more.",
+      "surface": "android",
+      "id": "native.android.f2b987298eab2b21"
     },
     {
       "kind": "ui-property",
@@ -2666,6 +2730,14 @@
       "id": "native.android.bf3f9215e63dcc53"
     },
     {
+      "kind": "ui-property",
+      "line": 757,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
+      "source": "Open ${card.title}",
+      "surface": "android",
+      "id": "native.android.a211c62f56c2f33a"
+    },
+    {
       "kind": "ui-call",
       "line": 825,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
@@ -2747,6 +2819,14 @@
     },
     {
       "kind": "ui-property",
+      "line": 1233,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
+      "source": "Open ${row.title}",
+      "surface": "android",
+      "id": "native.android.f5166613ab6c0742"
+    },
+    {
+      "kind": "ui-property",
       "line": 1307,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "Open session",
@@ -2779,6 +2859,14 @@
     },
     {
       "kind": "ui-call",
+      "line": 1488,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
+      "source": "OpenClaw ${BuildConfig.VERSION_NAME} (${BuildConfig.VERSION_CODE})",
+      "surface": "android",
+      "id": "native.android.64a6258d1becc495"
+    },
+    {
+      "kind": "ui-call",
       "line": 1707,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
       "source": "OpenClaw mobile",
@@ -2792,6 +2880,14 @@
       "source": "Open profile",
       "surface": "android",
       "id": "native.android.10d5cf9b543e57a5"
+    },
+    {
+      "kind": "ui-property",
+      "line": 1773,
+      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
+      "source": "Open ${row.title}",
+      "surface": "android",
+      "id": "native.android.f5166613ab6c0742.1773"
     },
     {
       "kind": "ui-property",
