@@ -269,6 +269,43 @@ describe("Bedrock thinking effort mapping", () => {
     expect(options.maxTokens).toBeGreaterThan(4096);
   });
 
+  it("preserves medium/xhigh effort with model maxTokens (#97176)", () => {
+    // medium effort
+    const m = testing.resolveSimpleBedrockOptions(
+      bedrockModel({
+        id: "us.anthropic.claude-opus-4-8",
+        name: "Claude Opus 4.8",
+        maxTokens: 200_000,
+      }),
+      { reasoning: "medium" },
+    );
+    expect(m.maxTokens).toBe(200_000);
+    expect(m.reasoning).toBe("medium");
+    // xhigh effort
+    const x = testing.resolveSimpleBedrockOptions(
+      bedrockModel({
+        id: "us.anthropic.claude-opus-4-8",
+        name: "Claude Opus 4.8",
+        maxTokens: 200_000,
+      }),
+      { reasoning: "xhigh" },
+    );
+    expect(x.maxTokens).toBe(200_000);
+    expect(x.reasoning).toBe("xhigh");
+  });
+
+  it("keeps base default when model.maxTokens is undefined for adaptive-thinking (#97176)", () => {
+    const options = testing.resolveSimpleBedrockOptions(
+      bedrockModel({
+        id: "us.anthropic.claude-opus-4-8",
+        name: "Claude Opus 4.8",
+        // no maxTokens override — should stay at base default 4096
+      }),
+      { reasoning: "high" },
+    );
+    expect(options.maxTokens).toBe(4096);
+  });
+
   it("honors explicit caller maxTokens for adaptive-thinking models (#97176)", () => {
     const options = testing.resolveSimpleBedrockOptions(
       bedrockModel({
@@ -315,12 +352,40 @@ describe("Bedrock Fable contract", () => {
     expect(opts.maxTokens).toBeGreaterThan(4096);
   });
 
+  it("derives maxTokens for Fable 5 with default reasoning (no explicit options) (#97176)", () => {
+    const opts = testing.resolveSimpleBedrockOptions(fableModel(), {});
+    // Fable 5 defaults to "high" reasoning — should still get model maxTokens
+    expect(opts.maxTokens).toBe(128_000);
+    expect(opts.maxTokens).toBeGreaterThan(4096);
+    expect(opts.reasoning).toBe("high");
+  });
+
   it("honors explicit caller maxTokens for Fable 5 (#97176)", () => {
     const opts = testing.resolveSimpleBedrockOptions(fableModel(), {
       reasoning: "high",
       maxTokens: 16000,
     });
     expect(opts.maxTokens).toBe(16000);
+  });
+
+  it("sends model.maxTokens in inferenceConfig for Fable 5 (#97176)", async () => {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        { messageStop: { stopReason: "end_turn" } },
+      ]),
+    } as never);
+    await streamSimpleBedrock(fableModel(), context(), {
+      reasoning: "high",
+      temperature: 0.2,
+    }).result();
+    const command = send.mock.calls[0]?.[0] as {
+      input?: Record<string, unknown>;
+    };
+    const maxTokens = (command.input?.inferenceConfig as Record<string, unknown>)?.maxTokens;
+    expect(maxTokens).toBe(128_000);
+    expect(maxTokens).toBeGreaterThan(4096);
   });
 
   it("sends always-adaptive high effort without unsupported request controls", async () => {
@@ -358,6 +423,35 @@ describe("Bedrock Fable contract", () => {
       },
       additionalModelResponseFieldPaths: ["/stop_details"],
     });
+  });
+
+  it("sends inferenceConfig.maxTokens above 4096 for adaptive-thinking Opus 4.8 (#97176)", async () => {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
+      $metadata: { httpStatusCode: 200 },
+      stream: streamEvents([
+        { messageStart: { role: ConversationRole.ASSISTANT } },
+        { messageStop: { stopReason: "end_turn" } },
+      ]),
+    } as never);
+    const model = bedrockModel({
+      id: "us.anthropic.claude-opus-4-8",
+      name: "Claude Opus 4.8",
+      maxTokens: 200_000,
+      contextWindow: 1_000_000,
+    });
+    await streamSimpleBedrock(
+      model,
+      {
+        messages: [{ role: "user", content: "test", timestamp: 0 }],
+      } as never,
+      { reasoning: "high", temperature: 0.2 },
+    ).result();
+    const command = send.mock.calls[0]?.[0] as {
+      input?: Record<string, unknown>;
+    };
+    const maxTokens = (command.input?.inferenceConfig as Record<string, unknown>)?.maxTokens;
+    expect(maxTokens).toBe(200_000);
+    expect(maxTokens).toBeGreaterThan(4096);
   });
 
   it("preserves explicit tool disabling", async () => {
