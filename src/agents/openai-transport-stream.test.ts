@@ -44,6 +44,7 @@ function createDeepSeekCompletionsModel(): Model<"openai-completions"> {
     api: "openai-completions",
     provider: "deepseek",
     baseUrl: "https://api.deepseek.com",
+    compat: { thinkingFormat: "deepseek" },
     reasoning: true,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -1468,7 +1469,7 @@ describe("openai transport stream", () => {
       name: "qwen-coder-plus",
       api: "openai-completions",
       provider: "qwen",
-      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      baseUrl: "",
       reasoning: false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -2801,6 +2802,46 @@ describe("openai transport stream", () => {
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
   });
+
+  it.each([
+    { finishReason: "length", stopReason: "length" },
+    { finishReason: "content_filter", stopReason: "error" },
+  ])(
+    "does not authorize recovered DeepSeek DSML calls after $finishReason",
+    async ({ finishReason, stopReason }) => {
+      const model = createDeepSeekCompletionsModel();
+      const output = createAssistantOutput(model);
+      expect(testing.getCompat(model).thinkingFormat).toBe("deepseek");
+
+      await testing.processOpenAICompletionsStream(
+        streamChunks([
+          {
+            id: "chatcmpl-deepseek-dsml-terminal",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: model.id,
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  content:
+                    '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/partial.md"}</|DSML|invoke></|DSML|tool_calls>',
+                },
+                logprobs: null,
+                finish_reason: finishReason,
+              },
+            ],
+          },
+        ]),
+        output,
+        model,
+        { push() {} },
+      );
+
+      expect(output.stopReason).toBe(stopReason);
+      expect(output.content).toEqual([]);
+    },
+  );
 
   it("parses repeated DeepSeek DSML name attributes consistently", async () => {
     // Guards the cached attribute matchers: repeated parses must stay identical
@@ -6716,6 +6757,7 @@ describe("openai transport stream", () => {
         api: "openai-completions",
         provider: "qwen",
         baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        compat: { supportsUsageInStreaming: true },
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -6745,6 +6787,7 @@ describe("openai transport stream", () => {
         api: "openai-completions",
         provider: "generic",
         baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+        compat: { supportsUsageInStreaming: true },
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

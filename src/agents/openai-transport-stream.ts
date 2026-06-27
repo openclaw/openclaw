@@ -2976,7 +2976,11 @@ async function processOpenAICompletionsStream(
       currentBlock = null;
       flushPendingPostToolCallDeltas();
     }
-    output.stopReason = "toolUse";
+    // Recovery may run after this chunk's finish reason was parsed. Preserve
+    // length/error terminals so complete-looking partial DSML never executes.
+    if (output.stopReason === "stop") {
+      output.stopReason = "toolUse";
+    }
     recoveredDeepSeekToolCallIndex += 1;
     const block: ToolCallBlock = {
       type: "toolCall",
