@@ -184,6 +184,7 @@
   flex-direction: column;
   min-height: 0;
   padding-top: 8px;
+  flex-shrink: 0;
 }
 
 .chat-workspace-rail__section-title {
@@ -192,6 +193,7 @@
   line-height: 1.1;
   padding: 0 12px 6px;
   text-transform: uppercase;
+  flex-shrink: 0;
 }
 
 .chat-workspace-rail__summary {

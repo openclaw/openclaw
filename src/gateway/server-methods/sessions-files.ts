@@ -1,4 +1,5 @@
 // Gateway methods expose files referenced by one session transcript.
+import fs from "node:fs";
 import path from "node:path";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -405,12 +406,49 @@ async function toSessionFileEntry(
     name: displayNameForPath(touched.path),
     kind: touched.kind,
   } satisfies Pick<SessionFileEntry, "path" | "name" | "kind">;
+
+  // Best-effort direct stat when the workspace sandbox cannot resolve the
+  // path — still-existing files outside the workspace root (e.g. /tmp/foo)
+  // should not be reported as missing.
+  const directStat = (absolutePath: string): SessionFileEntry | undefined => {
+    if (!fs.existsSync(absolutePath)) {
+      return undefined;
+    }
+    try {
+      const stat = fs.statSync(absolutePath);
+      if (!stat.isFile()) {
+        return undefined;
+      }
+      return {
+        ...base,
+        missing: false,
+        size: stat.size,
+        updatedAtMs: Math.floor(stat.mtimeMs),
+      };
+    } catch {
+      return undefined;
+    }
+  };
+
   if (!resolved) {
+    // Files outside the workspace root may still exist — try the original
+    // path directly (handles Unix-style /tmp/foo on Windows too).
+    const entry = directStat(touched.path);
+    if (entry) {
+      return entry;
+    }
     return { ...base, missing: true };
   }
   const browserPath = toDisplayPath(root!, resolved);
   const stat = await statWorkspacePath(root!, browserPath);
   if (!stat || workspaceStatKind(stat) !== "file") {
+    // Workspace sandbox could not resolve the path; try the original path
+    // and the resolved path directly before declaring missing.
+    const entry =
+      directStat(touched.path) ?? (resolved !== touched.path ? directStat(resolved) : undefined);
+    if (entry) {
+      return entry;
+    }
     return { ...base, missing: true };
   }
   const entry: SessionFileEntry = {
