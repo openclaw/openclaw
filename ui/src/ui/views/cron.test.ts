@@ -446,6 +446,30 @@ describe("cron view", () => {
     expect(onDraftChange).toHaveBeenCalledWith({ model: "openai/gpt-5.5" });
   });
 
+  it("hides quick-create model selection for silent systemEvent presets", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderCronQuickCreate({
+        open: true,
+        step: "how",
+        draft: {
+          ...createDefaultDraft(),
+          deliveryPreset: "silent",
+          model: "openai/gpt-5.2",
+        },
+        modelSuggestions: ["openai/gpt-5.2"],
+        onDraftChange: () => undefined,
+        onStepChange: () => undefined,
+        onCreate: () => undefined,
+        onCancel: () => undefined,
+      }),
+      container,
+    );
+
+    expect(container.querySelector("#cron-quick-create-model")).toBeNull();
+  });
+
   it("shows webhook delivery details for jobs", () => {
     const container = document.createElement("div");
     const job = {
