@@ -46,6 +46,115 @@ describe("edit tool", () => {
     ).rejects.toThrow(/Current file contents:\nactual current content/);
   });
 
+  it("adds nearest candidate lines to whitespace mismatch errors", async () => {
+    const filePath = await createTempFile("function demo() {\n  return value;\n}\n");
+    const tool = createEditTool(tmpDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "      return value;", newText: "      return next;" }],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(
+      /Nearest candidate lines:\nCandidate 1 \(line 2\):\n  indentation: expected 6 spaces, candidate 2 spaces\n- "      return value;"\n\+ "  return value;"/,
+    );
+  });
+
+  it("shows nearest multi-line candidate windows on mismatch", async () => {
+    const filePath = await createTempFile("alpha\n  beta\n  gamma\nomega\n");
+    const tool = createEditTool(tmpDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "  beta\n    gamma", newText: "  beta\n    delta" }],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(
+      /Candidate 1 \(line 2\):\n  indentation: expected 4 spaces, candidate 2 spaces\n  "  beta"\n- "    gamma"\n\+ "  gamma"/,
+    );
+  });
+
+  it("limits mismatch candidates to three blocks", async () => {
+    const filePath = await createTempFile("alpha 1\nalpha 2\nalpha 3\nalpha 4\nalpha 5\n");
+    const tool = createEditTool(tmpDir);
+
+    let message = "";
+    try {
+      await tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "alpha 9", newText: "alpha changed" }],
+        },
+        undefined,
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toMatch(/Candidate 3 \(line \d+\):/);
+    expect(message).not.toContain("Candidate 4");
+  });
+
+  it("omits candidate lines for no-op validation mismatches", async () => {
+    const filePath = await createTempFile("present no-op\nnear absent tex\n");
+    const tool = createEditTool(tmpDir);
+
+    let message = "";
+    try {
+      await tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [
+            { oldText: "present no-op", newText: "present no-op" },
+            { oldText: "absent text", newText: "replacement" },
+          ],
+        },
+        undefined,
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("Current file contents:");
+    expect(message).not.toContain("Nearest candidate lines:");
+  });
+
+  it("omits candidate lines for indexed no-op validation mismatches", async () => {
+    const filePath = await createTempFile("present no-op\nvalid real\nnear absent tex\n");
+    const tool = createEditTool(tmpDir);
+
+    let message = "";
+    try {
+      await tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [
+            { oldText: "present no-op", newText: "present no-op" },
+            { oldText: "valid real", newText: "changed real" },
+            { oldText: "absent text", newText: "replacement" },
+          ],
+        },
+        undefined,
+      );
+    } catch (error) {
+      message = error instanceof Error ? error.message : String(error);
+    }
+
+    expect(message).toContain("Current file contents:");
+    expect(message).not.toContain("Nearest candidate lines:");
+  });
+
   it("recovers success after a post-write throw when the edit already applied", async () => {
     // Some backends throw after flushing content; a readback match is the
     // contract that lets the tool report success without duplicating edits.
@@ -172,7 +281,7 @@ describe("edit tool", () => {
     const component = tool.renderCall?.(args, testTheme, context);
     await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
 
-    expect(readFile).toHaveBeenCalledWith(path.join("/workspace", "remote.txt"));
+    expect(readFile).toHaveBeenCalledWith(path.resolve("/workspace", "remote.txt"));
     expect((component as { preview?: { diff?: string } } | undefined)?.preview?.diff).toContain(
       "remote changed",
     );
