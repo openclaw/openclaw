@@ -289,12 +289,16 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
   lines.push(
     allowedDecisions.includes("allow-always")
       ? "Background mode note: non-interactive runs cannot wait for chat approvals; use pre-approved policy (allow-always or ask=off)."
-      : "Background mode note: non-interactive runs cannot wait for chat approvals; the effective policy still requires per-run approval unless ask=off.",
+      : request.request.ask === "always"
+        ? "Background mode note: non-interactive runs cannot wait for chat approvals; the effective policy still requires per-run approval unless ask=off."
+        : "Background mode note: non-interactive runs cannot wait for chat approvals; this command cannot be pre-approved for persistent reuse.",
   );
   lines.push(`Reply with: /approve ${request.id} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
     lines.push(
-      "Allow Always is unavailable because the effective policy requires approval every time.",
+      request.request.ask === "always"
+        ? "Allow Always is unavailable because the effective policy requires approval every time."
+        : "Allow Always is unavailable because this command is not eligible for persistent reuse (e.g., shell redirection).",
     );
   }
   return lines.join("\n");

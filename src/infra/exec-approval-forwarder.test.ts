@@ -645,6 +645,25 @@ describe("exec approval forwarder", () => {
     expect(text).toContain("Allow Always is unavailable");
   });
 
+  it("shows one-shot message when command cannot be persisted (#97069)", async () => {
+    vi.useFakeTimers();
+    const { deliver, forwarder } = createForwarder({ cfg: TARGETS_CFG });
+    await expect(
+      forwarder.handleRequested({
+        ...baseRequest,
+        request: {
+          ...baseRequest.request,
+          ask: "on-miss",
+          unavailableDecisions: ["allow-always"],
+        },
+      }),
+    ).resolves.toBe(true);
+    await Promise.resolve();
+    const text = getFirstDeliveryText(deliver);
+    expect(text).toContain("Allow Always is unavailable because this command is not eligible for persistent reuse");
+    expect(text).not.toContain("effective policy requires approval every time");
+  });
+
   it.each([
     {
       command: "bash safe\u200B.sh",

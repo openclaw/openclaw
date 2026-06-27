@@ -316,7 +316,7 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).not.toContain("C:\\Users\\alice");
   });
 
-  it("omits allow-always actions when the effective policy requires approval every time", () => {
+  it("omits allow-always and shows policy message when ask=always (#97069)", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-ask-always",
       approvalSlug: "slug-always",
@@ -338,6 +338,22 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).toContain(
       "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     );
+  });
+
+  it("omits allow-always and shows one-shot message when command is not persistable (#97069)", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-one-shot",
+      approvalSlug: "slug-one-shot",
+      ask: "on-miss",
+      allowedDecisions: ["allow-once", "deny"],
+      command: "openclaw --version 2>&1",
+      host: "gateway",
+    });
+
+    expect(payload.text).not.toContain("allow-always");
+    expect(payload.text).toContain(
+      "This command is not eligible for Allow Always (e.g., shell redirection cannot be persisted for reuse).",
+    );
     expect(payload.presentation).toEqual({
       blocks: [
         {
@@ -347,18 +363,18 @@ describe("exec approval reply helpers", () => {
               label: "Allow Once",
               action: {
                 type: "command",
-                command: "/approve req-ask-always allow-once",
+                command: "/approve req-one-shot allow-once",
               },
-              value: "/approve req-ask-always allow-once",
+              value: "/approve req-one-shot allow-once",
               style: "success",
             },
             {
               label: "Deny",
               action: {
                 type: "command",
-                command: "/approve req-ask-always deny",
+                command: "/approve req-one-shot deny",
               },
-              value: "/approve req-ask-always deny",
+              value: "/approve req-one-shot deny",
               style: "danger",
             },
           ],
