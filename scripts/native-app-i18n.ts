@@ -60,6 +60,7 @@ const ANDROID_PROPERTIES =
 const GENERATED_PATH_RE = /(?:\/build\/|\/\.gradle\/|\/\.build\/|\/DerivedData\/)/u;
 const EXCLUDED_PATH_RE =
   /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
+const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u;
 
 function lineNumber(source: string, offset: number): number {
   return source.slice(0, offset).split("\n").length;
@@ -89,7 +90,7 @@ function addCandidate(
   if (!normalized || !/\p{L}/u.test(normalized)) {
     return;
   }
-  if (normalized.length > 500 || normalized.includes("${")) {
+  if (normalized.length > 500 || normalized.includes("${") || normalized.includes("\\(")) {
     return;
   }
   entries.push({ kind, line, path: repoPath, source: normalized, surface });
@@ -144,7 +145,7 @@ async function walkFiles(
       surface !== "android" ||
       fullPath.includes(`${path.sep}ui${path.sep}`) ||
       fullPath.endsWith(`${path.sep}MainActivity.kt`);
-    if (entry.isFile() && allowed.has(extension) && isAndroidUiFile) {
+    if (entry.isFile() && allowed.has(extension) && isAndroidUiFile && !EXCLUDED_FILE_RE.test(entry.name)) {
       out.push(fullPath);
     }
   }

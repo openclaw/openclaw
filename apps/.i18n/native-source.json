@@ -3170,22 +3170,6 @@
       "id": "native.apple.95300e4dfd7aad42"
     },
     {
-      "kind": "ui-call",
-      "line": 306,
-      "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
-      "source": "\\(day.entryCount) \\(day.entryCount == 1 ?",
-      "surface": "apple",
-      "id": "native.apple.24a461117e467712"
-    },
-    {
-      "kind": "ui-call",
-      "line": 378,
-      "path": "apps/ios/Sources/Design/AgentProDreamingDestination.swift",
-      "source": "\\(entry.totalSignalCount)",
-      "surface": "apple",
-      "id": "native.apple.32c1207f3fb0ea37"
-    },
-    {
       "kind": "ui-modifier",
       "line": 32,
       "path": "apps/ios/Sources/Design/AgentProNodesDestination.swift",
@@ -3208,22 +3192,6 @@
       "source": "Presence",
       "surface": "apple",
       "id": "native.apple.c0a8f74751fe7761"
-    },
-    {
-      "kind": "ui-call",
-      "line": 234,
-      "path": "apps/ios/Sources/Design/AgentProNodesDestination.swift",
-      "source": "Copy \\(title)",
-      "surface": "apple",
-      "id": "native.apple.58dafd47a9d00243"
-    },
-    {
-      "kind": "ui-modifier",
-      "line": 234,
-      "path": "apps/ios/Sources/Design/AgentProNodesDestination.swift",
-      "source": "Copy \\(title)",
-      "surface": "apple",
-      "id": "native.apple.4b2a40c2512edb6b"
     },
     {
       "kind": "ui-call",
@@ -3378,70 +3346,6 @@
       "id": "native.apple.efcb886f500e918d.114"
     },
     {
-      "kind": "ui-call",
-      "line": 170,
-      "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
-      "source": "Install \\(result.displayName)",
-      "surface": "apple",
-      "id": "native.apple.b69fd83a32b7b549"
-    },
-    {
-      "kind": "ui-modifier",
-      "line": 170,
-      "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
-      "source": "Install \\(result.displayName)",
-      "surface": "apple",
-      "id": "native.apple.a46408193c7d93e8"
-    },
-    {
-      "kind": "ui-call",
-      "line": 287,
-      "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
-      "source": "Missing: \\(missing)",
-      "surface": "apple",
-      "id": "native.apple.7c9ea375c01972ee"
-    },
-    {
-      "kind": "ui-call",
-      "line": 293,
-      "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
-      "source": "Setup: \\(install)",
-      "surface": "apple",
-      "id": "native.apple.61ebcf220ca6f7f4"
-    },
-    {
-      "kind": "ui-call",
-      "line": 312,
-      "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
-      "source": "Set up \\(skill.displayName)",
-      "surface": "apple",
-      "id": "native.apple.305b98a10fc4f2ff"
-    },
-    {
-      "kind": "ui-modifier",
-      "line": 312,
-      "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
-      "source": "Set up \\(skill.displayName)",
-      "surface": "apple",
-      "id": "native.apple.e94ab5a64ed0052b"
-    },
-    {
-      "kind": "ui-call",
-      "line": 321,
-      "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
-      "source": "Edit \\(skill.displayName)",
-      "surface": "apple",
-      "id": "native.apple.16ff2932470c1a04"
-    },
-    {
-      "kind": "ui-modifier",
-      "line": 321,
-      "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
-      "source": "Edit \\(skill.displayName)",
-      "surface": "apple",
-      "id": "native.apple.801febb8177c45d6"
-    },
-    {
       "kind": "ui-modifier",
       "line": 381,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
@@ -3491,14 +3395,6 @@
     },
     {
       "kind": "ui-call",
-      "line": 526,
-      "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
-      "source": "Missing: \\(missing)",
-      "surface": "apple",
-      "id": "native.apple.7c9ea375c01972ee.526"
-    },
-    {
-      "kind": "ui-call",
       "line": 530,
       "path": "apps/ios/Sources/Design/AgentProTab+Skills.swift",
       "source": "No missing requirements reported.",
@@ -3512,14 +3408,6 @@
       "source": "Totals",
       "surface": "apple",
       "id": "native.apple.a65066d19ed879fd"
-    },
-    {
-      "kind": "ui-call",
-      "line": 69,
-      "path": "apps/ios/Sources/Design/AgentProTab+Usage.swift",
-      "source": "\\(Self.compactNumber(day.totalTokens ?? 0)) tokens",
-      "surface": "apple",
-      "id": "native.apple.a17ce77200834d9c"
     },
     {
       "kind": "ui-call",
@@ -3554,22 +3442,6 @@
       "id": "native.apple.e8018adcccaa2a4d"
     },
     {
-      "kind": "ui-call",
-      "line": 116,
-      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Gateway \\(self.gatewayStateText)",
-      "surface": "apple",
-      "id": "native.apple.2eedcda16e90fa8a"
-    },
-    {
-      "kind": "ui-modifier",
-      "line": 116,
-      "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
-      "source": "Gateway \\(self.gatewayStateText)",
-      "surface": "apple",
-      "id": "native.apple.1dd03a218068f08e"
-    },
-    {
       "kind": "ui-modifier",
       "line": 117,
       "path": "apps/ios/Sources/Design/CommandCenterTab.swift",
@@ -3600,54 +3472,6 @@
       "source": "Recent sessions",
       "surface": "apple",
       "id": "native.apple.27bd187915ec8d2b"
-    },
-    {
-      "kind": "ui-call",
-      "line": 105,
-      "path": "apps/ios/Sources/Design/IPadSidebarFeaturePreviews.swift",
-      "source": "Phone queue",
-      "surface": "apple",
-      "id": "native.apple.32f86add1b5bc82c"
-    },
-    {
-      "kind": "ui-call",
-      "line": 107,
-      "path": "apps/ios/Sources/Design/IPadSidebarFeaturePreviews.swift",
-      "source": "Tap for detail, swipe or long-press for card actions.",
-      "surface": "apple",
-      "id": "native.apple.c4b157a8d93ac38c"
-    },
-    {
-      "kind": "ui-call",
-      "line": 163,
-      "path": "apps/ios/Sources/Design/IPadSidebarFeaturePreviews.swift",
-      "source": "Phone proposals",
-      "surface": "apple",
-      "id": "native.apple.c1a259f4f71002a8"
-    },
-    {
-      "kind": "ui-call",
-      "line": 165,
-      "path": "apps/ios/Sources/Design/IPadSidebarFeaturePreviews.swift",
-      "source": "Tap for detail, swipe or long-press for proposal actions.",
-      "surface": "apple",
-      "id": "native.apple.0a19ca3be8ebe45a"
-    },
-    {
-      "kind": "ui-call",
-      "line": 595,
-      "path": "apps/ios/Sources/Design/IPadSidebarFeaturePreviews.swift",
-      "source": "iPad kanban",
-      "surface": "apple",
-      "id": "native.apple.686fca97adbcc9aa"
-    },
-    {
-      "kind": "ui-call",
-      "line": 597,
-      "path": "apps/ios/Sources/Design/IPadSidebarFeaturePreviews.swift",
-      "source": "Wide layout with populated, empty, held, and custom proposal lanes.",
-      "surface": "apple",
-      "id": "native.apple.8ee291caf2fedcd2"
     },
     {
       "kind": "ui-modifier",
@@ -3688,14 +3512,6 @@
       "source": "Refresh",
       "surface": "apple",
       "id": "native.apple.f343b3c8847ae5a6"
-    },
-    {
-      "kind": "ui-call",
-      "line": 144,
-      "path": "apps/ios/Sources/Design/IPadSkillWorkshopScreen.swift",
-      "source": "\\(self.filteredProposals.count) proposals",
-      "surface": "apple",
-      "id": "native.apple.57ea1dae1aa22723"
     },
     {
       "kind": "ui-call",
@@ -3963,14 +3779,6 @@
     },
     {
       "kind": "ui-call",
-      "line": 180,
-      "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
-      "source": "\\(self.filteredCards.count) cards",
-      "surface": "apple",
-      "id": "native.apple.fb9e29033d18989e"
-    },
-    {
-      "kind": "ui-call",
       "line": 196,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "Dispatch",
@@ -4032,22 +3840,6 @@
       "source": "Workboard board scope",
       "surface": "apple",
       "id": "native.apple.e2418405eb6a9908"
-    },
-    {
-      "kind": "ui-call",
-      "line": 332,
-      "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
-      "source": "Show \\(IPadWorkboardDefaults.label(for: status)) cards",
-      "surface": "apple",
-      "id": "native.apple.7b410ba26d2d83b2"
-    },
-    {
-      "kind": "ui-modifier",
-      "line": 332,
-      "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
-      "source": "Show \\(IPadWorkboardDefaults.label(for: status)) cards",
-      "surface": "apple",
-      "id": "native.apple.1025db84f77e09e2"
     },
     {
       "kind": "ui-call",
@@ -4155,14 +3947,6 @@
     },
     {
       "kind": "ui-call",
-      "line": 1003,
-      "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
-      "source": "Move to \\(IPadWorkboardDefaults.label(for: status))",
-      "surface": "apple",
-      "id": "native.apple.774f595a01eca278"
-    },
-    {
-      "kind": "ui-call",
       "line": 1012,
       "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
       "source": "Card Actions",
@@ -4224,14 +4008,6 @@
       "source": "Inspect",
       "surface": "apple",
       "id": "native.apple.c1f2821d719e37f8.1132"
-    },
-    {
-      "kind": "ui-call",
-      "line": 1134,
-      "path": "apps/ios/Sources/Design/IPadWorkboardScreen.swift",
-      "source": "Move to \\(IPadWorkboardDefaults.label(for: status))",
-      "surface": "apple",
-      "id": "native.apple.774f595a01eca278.1134"
     },
     {
       "kind": "ui-call",
@@ -4323,14 +4099,6 @@
     },
     {
       "kind": "ui-call",
-      "line": 97,
-      "path": "apps/ios/Sources/Design/OpenClawDocsScreen.swift",
-      "source": "v\\(DeviceInfoHelper.openClawVersionString())",
-      "surface": "apple",
-      "id": "native.apple.c589f3ed9e2505cc"
-    },
-    {
-      "kind": "ui-call",
       "line": 402,
       "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
       "source": "OpenClaw",
@@ -4346,22 +4114,6 @@
       "id": "native.apple.cf9bb65f8e405cc8"
     },
     {
-      "kind": "ui-call",
-      "line": 465,
-      "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
-      "source": "Gateway \\(self.title)",
-      "surface": "apple",
-      "id": "native.apple.6552beb81114fa49"
-    },
-    {
-      "kind": "ui-modifier",
-      "line": 465,
-      "path": "apps/ios/Sources/Design/OpenClawProComponents.swift",
-      "source": "Gateway \\(self.title)",
-      "surface": "apple",
-      "id": "native.apple.51c566ed34b67acf"
-    },
-    {
       "kind": "ui-modifier",
       "line": 30,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
@@ -4370,36 +4122,12 @@
       "id": "native.apple.a2d8e7b4dba29764"
     },
     {
-      "kind": "ui-call",
-      "line": 118,
-      "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
-      "source": "Gateway \\(self.gatewayStateText)",
-      "surface": "apple",
-      "id": "native.apple.8d9b28f827f013a8"
-    },
-    {
-      "kind": "ui-modifier",
-      "line": 118,
-      "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
-      "source": "Gateway \\(self.gatewayStateText)",
-      "surface": "apple",
-      "id": "native.apple.b050fa88ddfab280"
-    },
-    {
       "kind": "ui-modifier",
       "line": 119,
       "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
       "source": "Opens Settings / Gateway",
       "surface": "apple",
       "id": "native.apple.597471e86dda3d38"
-    },
-    {
-      "kind": "ui-call",
-      "line": 184,
-      "path": "apps/ios/Sources/Design/RootTabsPhoneControlHub.swift",
-      "source": "v\\(DeviceInfoHelper.openClawVersionString())",
-      "surface": "apple",
-      "id": "native.apple.77d9ff112b9d70ad"
     },
     {
       "kind": "ui-call",
@@ -5203,14 +4931,6 @@
     },
     {
       "kind": "ui-call",
-      "line": 39,
-      "path": "apps/ios/Sources/Gateway/GatewayProblemView.swift",
-      "source": "Request ID: \\(requestId)",
-      "surface": "apple",
-      "id": "native.apple.9958308c545765cc"
-    },
-    {
-      "kind": "ui-call",
       "line": 54,
       "path": "apps/ios/Sources/Gateway/GatewayProblemView.swift",
       "source": "Details",
@@ -6011,35 +5731,11 @@
     },
     {
       "kind": "ui-call",
-      "line": 292,
-      "path": "apps/ios/Sources/RootTabs.swift",
-      "source": "OpenClaw \\(self.sidebarGatewayStatusTitle)",
-      "surface": "apple",
-      "id": "native.apple.fe50072094141b8d"
-    },
-    {
-      "kind": "ui-modifier",
-      "line": 292,
-      "path": "apps/ios/Sources/RootTabs.swift",
-      "source": "OpenClaw \\(self.sidebarGatewayStatusTitle)",
-      "surface": "apple",
-      "id": "native.apple.39042da9fc187030"
-    },
-    {
-      "kind": "ui-call",
       "line": 329,
       "path": "apps/ios/Sources/RootTabs.swift",
       "source": "VERSION",
       "surface": "apple",
       "id": "native.apple.c50d02be6bd4818d"
-    },
-    {
-      "kind": "ui-call",
-      "line": 333,
-      "path": "apps/ios/Sources/RootTabs.swift",
-      "source": "v\\(DeviceInfoHelper.openClawVersionString())",
-      "surface": "apple",
-      "id": "native.apple.f4f6d9a52238752e"
     },
     {
       "kind": "ui-call",
@@ -6208,22 +5904,6 @@
       "source": "OpenClaw",
       "surface": "apple",
       "id": "native.apple.5ac0c79487a492b4"
-    },
-    {
-      "kind": "ui-call",
-      "line": 34,
-      "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
-      "source": "Version \\(self.versionString)",
-      "surface": "apple",
-      "id": "native.apple.383d9c0a8f5f4f7e"
-    },
-    {
-      "kind": "ui-call",
-      "line": 37,
-      "path": "apps/macos/Sources/OpenClaw/AboutSettings.swift",
-      "source": "Built \\(buildTimestamp)\\(self.buildSuffix)",
-      "surface": "apple",
-      "id": "native.apple.33f4ac3e111b264f"
     },
     {
       "kind": "ui-call",
@@ -6467,14 +6147,6 @@
     },
     {
       "kind": "ui-call",
-      "line": 145,
-      "path": "apps/macos/Sources/OpenClaw/ChannelsSettings+View.swift",
-      "source": "Last check \\(self.channelLastCheckText(channel))",
-      "surface": "apple",
-      "id": "native.apple.b4bc7f2d70f7d6f6"
-    },
-    {
-      "kind": "ui-call",
       "line": 149,
       "path": "apps/macos/Sources/OpenClaw/ChannelsSettings+View.swift",
       "source": "Error",
@@ -6608,22 +6280,6 @@
       "source": "Today",
       "surface": "apple",
       "id": "native.apple.47eb7fbdc9792b54"
-    },
-    {
-      "kind": "ui-call",
-      "line": 34,
-      "path": "apps/macos/Sources/OpenClaw/CostUsageMenuView.swift",
-      "source": "Last \\(self.summary.days)d",
-      "surface": "apple",
-      "id": "native.apple.ebfc6af133da68bf"
-    },
-    {
-      "kind": "ui-call",
-      "line": 77,
-      "path": "apps/macos/Sources/OpenClaw/CostUsageMenuView.swift",
-      "source": "Partial: \\(self.summary.totals.missingCostEntries) entries missing cost",
-      "surface": "apple",
-      "id": "native.apple.936bfd42a2f08232"
     },
     {
       "kind": "ui-call",
@@ -7075,14 +6731,6 @@
     },
     {
       "kind": "ui-call",
-      "line": 139,
-      "path": "apps/macos/Sources/OpenClaw/CronSettings+Layout.swift",
-      "source": "Error: \\(err)",
-      "surface": "apple",
-      "id": "native.apple.62a13e9cad6985af"
-    },
-    {
-      "kind": "ui-call",
       "line": 167,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Layout.swift",
       "source": "No cron jobs yet.",
@@ -7243,14 +6891,6 @@
     },
     {
       "kind": "ui-call",
-      "line": 117,
-      "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
-      "source": "\\(date.formatted(date: .abbreviated, time: .standard)) · \\(relativeAge(from: date))",
-      "surface": "apple",
-      "id": "native.apple.7718fbae883d5389"
-    },
-    {
-      "kind": "ui-call",
       "line": 123,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Last status",
@@ -7283,27 +6923,11 @@
     },
     {
       "kind": "ui-call",
-      "line": 185,
-      "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
-      "source": "\\(ms)ms",
-      "surface": "apple",
-      "id": "native.apple.6ec996f25c175bbc"
-    },
-    {
-      "kind": "ui-call",
       "line": 211,
       "path": "apps/macos/Sources/OpenClaw/CronSettings+Rows.swift",
       "source": "Payload",
       "surface": "apple",
       "id": "native.apple.07c987127cde7927"
-    },
-    {
-      "kind": "ui-call",
-      "line": 68,
-      "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
-      "source": "Kill \\(listener.command) (\\(listener.pid))?",
-      "surface": "apple",
-      "id": "native.apple.4c70e8fb1c642be1"
     },
     {
       "kind": "ui-call",
@@ -7328,14 +6952,6 @@
       "source": "Attach only (skip launchd install)",
       "surface": "apple",
       "id": "native.apple.85986510973b69a5"
-    },
-    {
-      "kind": "ui-call",
-      "line": 89,
-      "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
-      "source": "When enabled, OpenClaw won't install or manage \\(gatewayLaunchdLabel).",
-      "surface": "apple",
-      "id": "native.apple.1982d180ff261216"
     },
     {
       "kind": "ui-call",
@@ -7376,14 +6992,6 @@
       "source": "PID",
       "surface": "apple",
       "id": "native.apple.50a498bb5d21fce5"
-    },
-    {
-      "kind": "ui-call",
-      "line": 168,
-      "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
-      "source": "\\(ProcessInfo.processInfo.processIdentifier)",
-      "surface": "apple",
-      "id": "native.apple.a1b7117088ad315f"
     },
     {
       "kind": "ui-call",
@@ -7552,30 +7160,6 @@
       "source": "Reset SSH tunnel",
       "surface": "apple",
       "id": "native.apple.f41a77907a653c26"
-    },
-    {
-      "kind": "ui-call",
-      "line": 349,
-      "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
-      "source": "Check which process owns \\(GatewayEnvironment.gatewayPort()) and suggest fixes.",
-      "surface": "apple",
-      "id": "native.apple.7d3bb8db32ac31b8"
-    },
-    {
-      "kind": "ui-call",
-      "line": 355,
-      "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
-      "source": "Port \\(report.port)",
-      "surface": "apple",
-      "id": "native.apple.b5c922d5a81b9a82"
-    },
-    {
-      "kind": "ui-call",
-      "line": 364,
-      "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
-      "source": "\\(listener.command) (\\(listener.pid))",
-      "surface": "apple",
-      "id": "native.apple.0dbd56f870683617"
     },
     {
       "kind": "ui-call",
@@ -7779,22 +7363,6 @@
     },
     {
       "kind": "ui-call",
-      "line": 578,
-      "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
-      "source": "eval → \\(canvasEvalResult)",
-      "surface": "apple",
-      "id": "native.apple.ad26da5399b2e89a"
-    },
-    {
-      "kind": "ui-call",
-      "line": 587,
-      "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
-      "source": "snapshot → \\(canvasSnapshotPath)",
-      "surface": "apple",
-      "id": "native.apple.2fa497069eba7671"
-    },
-    {
-      "kind": "ui-call",
       "line": 593,
       "path": "apps/macos/Sources/OpenClaw/DebugSettings.swift",
       "source": "Reveal",
@@ -7851,22 +7419,6 @@
     },
     {
       "kind": "ui-call",
-      "line": 354,
-      "path": "apps/macos/Sources/OpenClaw/DevicePairingApprovalPrompter.swift",
-      "source": "\\(label):",
-      "surface": "apple",
-      "id": "native.apple.4c4cb5589f9c56b2"
-    },
-    {
-      "kind": "ui-call",
-      "line": 372,
-      "path": "apps/macos/Sources/OpenClaw/DevicePairingApprovalPrompter.swift",
-      "source": "• \\(text)",
-      "surface": "apple",
-      "id": "native.apple.1b1ad7c8d65069fe"
-    },
-    {
-      "kind": "ui-call",
       "line": 24,
       "path": "apps/macos/Sources/OpenClaw/GatewayDiscoveryMenu.swift",
       "source": "No gateways found yet.",
@@ -7912,14 +7464,6 @@
       "source": "OpenClaw active",
       "surface": "apple",
       "id": "native.apple.7fe6df69d8050832"
-    },
-    {
-      "kind": "ui-call",
-      "line": 244,
-      "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
-      "source": "\\(Int(ping)) ms",
-      "surface": "apple",
-      "id": "native.apple.8d5db3462778dd6f"
     },
     {
       "kind": "ui-call",
@@ -8075,51 +7619,11 @@
     },
     {
       "kind": "ui-call",
-      "line": 627,
-      "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
-      "source": "Installed: \\(gatewayVersion) · Required: \\(required)",
-      "surface": "apple",
-      "id": "native.apple.9ff8bc297026d7cb"
-    },
-    {
-      "kind": "ui-call",
-      "line": 631,
-      "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
-      "source": "Gateway \\(gatewayVersion) detected",
-      "surface": "apple",
-      "id": "native.apple.6a9514b81425ea1d"
-    },
-    {
-      "kind": "ui-call",
-      "line": 637,
-      "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
-      "source": "Node \\(node)",
-      "surface": "apple",
-      "id": "native.apple.4593770894a0b662"
-    },
-    {
-      "kind": "ui-call",
-      "line": 649,
-      "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
-      "source": "Last failure: \\(failure)",
-      "surface": "apple",
-      "id": "native.apple.50ab01059b763acd"
-    },
-    {
-      "kind": "ui-call",
       "line": 654,
       "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
       "source": "Recheck",
       "surface": "apple",
       "id": "native.apple.c55734a4ee849a4c"
-    },
-    {
-      "kind": "ui-call",
-      "line": 657,
-      "path": "apps/macos/Sources/OpenClaw/GeneralSettings.swift",
-      "source": "Gateway auto-starts in local mode via launchd (\\(gatewayLaunchdLabel)).",
-      "surface": "apple",
-      "id": "native.apple.8fcaa10d4558a03d"
     },
     {
       "kind": "ui-call",
@@ -8136,14 +7640,6 @@
       "source": "Open logs",
       "surface": "apple",
       "id": "native.apple.6393591d17837eb0"
-    },
-    {
-      "kind": "ui-call",
-      "line": 17,
-      "path": "apps/macos/Sources/OpenClaw/InstancesSettings.swift",
-      "source": "Error: \\(err)",
-      "surface": "apple",
-      "id": "native.apple.729f356a45366d00"
     },
     {
       "kind": "ui-call",
@@ -8176,30 +7672,6 @@
       "source": "Copy Debug Summary",
       "surface": "apple",
       "id": "native.apple.d49a2a06f0b30967"
-    },
-    {
-      "kind": "ui-modifier",
-      "line": 171,
-      "path": "apps/macos/Sources/OpenClaw/InstancesSettings.swift",
-      "source": "Presence updated \\(inst.ageDescription).",
-      "surface": "apple",
-      "id": "native.apple.231b8e86486fd129"
-    },
-    {
-      "kind": "ui-call",
-      "line": 172,
-      "path": "apps/macos/Sources/OpenClaw/InstancesSettings.swift",
-      "source": "\\(status.label) presence",
-      "surface": "apple",
-      "id": "native.apple.7017ebe54c8e3da3"
-    },
-    {
-      "kind": "ui-modifier",
-      "line": 172,
-      "path": "apps/macos/Sources/OpenClaw/InstancesSettings.swift",
-      "source": "\\(status.label) presence",
-      "surface": "apple",
-      "id": "native.apple.12d83e5f01c98fc0"
     },
     {
       "kind": "ui-call",
@@ -8480,14 +7952,6 @@
       "source": "Disconnected (using System default)",
       "surface": "apple",
       "id": "native.apple.3e248379359c7593"
-    },
-    {
-      "kind": "ui-call",
-      "line": 284,
-      "path": "apps/macos/Sources/OpenClaw/NodesMenu.swift",
-      "source": "\\(self.label):",
-      "surface": "apple",
-      "id": "native.apple.4443962db00a2def"
     },
     {
       "kind": "ui-call",
@@ -8811,14 +8275,6 @@
     },
     {
       "kind": "ui-call",
-      "line": 669,
-      "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
-      "source": "Installed at \\(loc)",
-      "surface": "apple",
-      "id": "native.apple.e6a9668517354178"
-    },
-    {
-      "kind": "ui-call",
       "line": 694,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "Agent workspace",
@@ -8955,35 +8411,11 @@
     },
     {
       "kind": "ui-call",
-      "line": 905,
-      "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
-      "source": "Details: \\(error)",
-      "surface": "apple",
-      "id": "native.apple.b6de2a51e5fb8397"
-    },
-    {
-      "kind": "ui-call",
       "line": 911,
       "path": "apps/macos/Sources/OpenClaw/OnboardingView+Pages.swift",
       "source": "No skills reported yet.",
       "surface": "apple",
       "id": "native.apple.b82621bc28d4c6e3"
-    },
-    {
-      "kind": "ui-call",
-      "line": 65,
-      "path": "apps/macos/Sources/OpenClaw/OnboardingView+Testing.swift",
-      "source": "Test",
-      "surface": "apple",
-      "id": "native.apple.4836cf45f5747d88"
-    },
-    {
-      "kind": "ui-call",
-      "line": 66,
-      "path": "apps/macos/Sources/OpenClaw/OnboardingView+Testing.swift",
-      "source": "Card",
-      "surface": "apple",
-      "id": "native.apple.f6838ff32eba156f"
     },
     {
       "kind": "ui-call",
@@ -9171,14 +8603,6 @@
     },
     {
       "kind": "ui-call",
-      "line": 33,
-      "path": "apps/macos/Sources/OpenClaw/SessionMenuLabelView.swift",
-      "source": "\\(self.row.tokens.contextSummaryShort) · \\(self.row.ageText)",
-      "surface": "apple",
-      "id": "native.apple.c83f50f9eafa4e4a"
-    },
-    {
-      "kind": "ui-call",
       "line": 39,
       "path": "apps/macos/Sources/OpenClaw/SessionsSettings.swift",
       "source": "Sessions",
@@ -9235,35 +8659,11 @@
     },
     {
       "kind": "ui-call",
-      "line": 138,
-      "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
-      "source": "Config: \\(configPath)",
-      "surface": "apple",
-      "id": "native.apple.deb89a876875cb48"
-    },
-    {
-      "kind": "ui-call",
-      "line": 139,
-      "path": "apps/macos/Sources/OpenClaw/SettingsRootView.swift",
-      "source": "State: \\(stateDir)",
-      "surface": "apple",
-      "id": "native.apple.e20f8f3494d04da8"
-    },
-    {
-      "kind": "ui-call",
       "line": 69,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Enable ready skills, or install missing tools on the Gateway or this Mac.",
       "surface": "apple",
       "id": "native.apple.6a9cf4d0e171abb0"
-    },
-    {
-      "kind": "ui-call",
-      "line": 78,
-      "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
-      "source": "\\(total)",
-      "surface": "apple",
-      "id": "native.apple.79d4590049b0a8f2"
     },
     {
       "kind": "ui-call",
@@ -9307,30 +8707,6 @@
     },
     {
       "kind": "ui-call",
-      "line": 418,
-      "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
-      "source": "Missing binaries: \\(self.missingBins.joined(separator:",
-      "surface": "apple",
-      "id": "native.apple.d22cf1207d0cbdd0"
-    },
-    {
-      "kind": "ui-call",
-      "line": 423,
-      "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
-      "source": "Missing env: \\(self.missingEnv.joined(separator:",
-      "surface": "apple",
-      "id": "native.apple.5f64ec059341abb5"
-    },
-    {
-      "kind": "ui-call",
-      "line": 428,
-      "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
-      "source": "Requires config: \\(self.missingConfig.joined(separator:",
-      "surface": "apple",
-      "id": "native.apple.f21f469c47906fa5"
-    },
-    {
-      "kind": "ui-call",
       "line": 471,
       "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
       "source": "Install on Gateway",
@@ -9352,14 +8728,6 @@
       "source": "Install on This Mac",
       "surface": "apple",
       "id": "native.apple.4dc7c4fc6c93d9d7.484"
-    },
-    {
-      "kind": "ui-call",
-      "line": 602,
-      "path": "apps/macos/Sources/OpenClaw/SkillsSettings.swift",
-      "source": "Saved to openclaw.json under skills.entries.\\(self.editor.skillKey)",
-      "surface": "apple",
-      "id": "native.apple.d769a8ac65441d48"
     },
     {
       "kind": "ui-call",
@@ -9480,30 +8848,6 @@
       "source": "Pattern",
       "surface": "apple",
       "id": "native.apple.e98b56cbbe3a9cae"
-    },
-    {
-      "kind": "ui-call",
-      "line": 341,
-      "path": "apps/macos/Sources/OpenClaw/SystemRunSettingsView.swift",
-      "source": "Last used \\(Self.relativeFormatter.localizedString(for: date, relativeTo: Date()))",
-      "surface": "apple",
-      "id": "native.apple.61954e6ed7118ddb"
-    },
-    {
-      "kind": "ui-call",
-      "line": 347,
-      "path": "apps/macos/Sources/OpenClaw/SystemRunSettingsView.swift",
-      "source": "Last command: \\(lastUsedCommand)",
-      "surface": "apple",
-      "id": "native.apple.29f7d0d5d832b577"
-    },
-    {
-      "kind": "ui-call",
-      "line": 353,
-      "path": "apps/macos/Sources/OpenClaw/SystemRunSettingsView.swift",
-      "source": "Resolved path: \\(lastResolvedPath)",
-      "surface": "apple",
-      "id": "native.apple.0ac3d7bc8c69e6a2"
     },
     {
       "kind": "ui-call",
@@ -9643,14 +8987,6 @@
     },
     {
       "kind": "ui-call",
-      "line": 19,
-      "path": "apps/macos/Sources/OpenClaw/VoiceWakeOverlayController+Testing.swift",
-      "source": "Edited text",
-      "surface": "apple",
-      "id": "native.apple.02d8bfada90dea87"
-    },
-    {
-      "kind": "ui-call",
       "line": 129,
       "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift",
       "source": "Voice Wake requires macOS 26 or newer",
@@ -9747,14 +9083,6 @@
     },
     {
       "kind": "ui-call",
-      "line": 577,
-      "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift",
-      "source": "\\(self.friendlyName(for: current)) (System)",
-      "surface": "apple",
-      "id": "native.apple.d57fd5213daf2a6e"
-    },
-    {
-      "kind": "ui-call",
       "line": 597,
       "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift",
       "source": "Add",
@@ -9786,14 +9114,6 @@
       "id": "native.apple.87c3465e9398bc2f"
     },
     {
-      "kind": "ui-call",
-      "line": 861,
-      "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift",
-      "source": "Language \\(self.index + 2)",
-      "surface": "apple",
-      "id": "native.apple.2f9a1ff3cb47a58a"
-    },
-    {
       "kind": "ui-modifier",
       "line": 878,
       "path": "apps/macos/Sources/OpenClaw/VoiceWakeSettings.swift",
@@ -9816,14 +9136,6 @@
       "source": "Test Voice Wake",
       "surface": "apple",
       "id": "native.apple.2bcc6f4eca98f7f2"
-    },
-    {
-      "kind": "ui-call",
-      "line": 30,
-      "path": "apps/macos/Sources/OpenClaw/VoiceWakeTestCard.swift",
-      "source": "Heard: \\(text)",
-      "surface": "apple",
-      "id": "native.apple.bcee3926c9672842"
     },
     {
       "kind": "ui-call",
@@ -10016,14 +9328,6 @@
       "source": "Running tools…",
       "surface": "apple",
       "id": "native.apple.6b18ea1d85b5d3a2"
-    },
-    {
-      "kind": "ui-call",
-      "line": 672,
-      "path": "apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatMessageViews.swift",
-      "source": "\\(display.emoji) \\(display.label)",
-      "surface": "apple",
-      "id": "native.apple.7c99becc26501014"
     },
     {
       "kind": "ui-modifier",
