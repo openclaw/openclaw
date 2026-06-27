@@ -1170,6 +1170,22 @@ describe("sendMessageTelegram", () => {
     expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
   });
 
+  it("escapes literal reasoning-looking tags on the text path", async () => {
+    botApi.sendMessage.mockResolvedValue({ message_id: 47, chat: { id: "123" } });
+
+    await sendMessageTelegram("123", "Before <think>literal tag text after", {
+      cfg: TELEGRAM_TEST_CFG,
+      token: "tok",
+    });
+
+    expect(botApi.sendMessage).toHaveBeenCalledWith(
+      "123",
+      "Before &lt;think&gt;literal tag text after",
+      { parse_mode: "HTML" },
+    );
+    expect(botRawApi.sendRichMessage).not.toHaveBeenCalled();
+  });
+
   it("escapes HTML media tags on the text path", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 48, chat: { id: "123" } });
 
