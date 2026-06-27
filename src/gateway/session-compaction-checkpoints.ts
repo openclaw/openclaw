@@ -703,7 +703,19 @@ function shouldRouteCheckpointSessionMutationToSqlite(params: {
   if (!entry) {
     return false;
   }
-  return Boolean(parseSqliteSessionFileMarker(entry.sessionFile));
+  if (parseSqliteSessionFileMarker(entry.sessionFile)) {
+    return true;
+  }
+  const checkpoint = entry.compactionCheckpoints?.find(
+    (candidate) => candidate.checkpointId === params.checkpointId,
+  );
+  const hasCheckpointFile =
+    Boolean(checkpoint?.preCompaction.sessionFile?.trim()) ||
+    Boolean(checkpoint?.postCompaction.sessionFile?.trim());
+  const hasCheckpointRowBoundary =
+    Boolean(checkpoint?.preCompaction.entryId?.trim()) ||
+    Boolean(checkpoint?.postCompaction.entryId?.trim());
+  return hasCheckpointRowBoundary && !hasCheckpointFile;
 }
 
 /**

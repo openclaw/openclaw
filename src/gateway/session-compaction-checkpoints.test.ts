@@ -448,6 +448,85 @@ describe("session-compaction-checkpoints", () => {
     ).toBe(true);
   });
 
+  test("checkpoint store branches row-backed checkpoints when entry sessionFile is stale", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-sqlite-stale-"));
+    tempDirs.push(dir);
+    const storePath = path.join(dir, "openclaw-agent.sqlite");
+    const sessionId = "sqlite-checkpoint-stale-source";
+    const sessionKey = MAIN_SESSION_KEY;
+    const scope = {
+      agentId: MAIN_AGENT_ID,
+      sessionId,
+      sessionKey,
+      storePath,
+    };
+    const marker = formatSqliteSessionFileMarker({
+      agentId: MAIN_AGENT_ID,
+      sessionId,
+      storePath,
+    });
+    const staleSessionFile = path.join(dir, "stale-transcript.jsonl");
+
+    await upsertSessionEntry(scope, {
+      sessionId,
+      sessionFile: staleSessionFile,
+      updatedAt: Date.now(),
+    });
+    await appendTranscriptEvent(scope, {
+      type: "session",
+      version: CURRENT_SESSION_VERSION,
+      id: sessionId,
+      timestamp: "2026-06-26T12:00:00.000Z",
+      cwd: dir,
+    });
+    await appendTranscriptMessage(scope, {
+      message: { role: "user", content: "stale entry row-backed checkpoint", timestamp: 1 },
+      now: Date.parse("2026-06-26T12:00:01.000Z"),
+    });
+    const sourceLeafId = requireNonEmptyString(
+      SessionManager.open(marker).getLeafId(),
+      "SQLite stale-entry leaf id missing",
+    );
+    const checkpoint: SessionCompactionCheckpoint = {
+      checkpointId: "sqlite-checkpoint-stale",
+      sessionKey,
+      sessionId,
+      createdAt: Date.now(),
+      reason: "manual",
+      preCompaction: {
+        sessionId,
+        leafId: sourceLeafId,
+        entryId: sourceLeafId,
+      },
+      postCompaction: {
+        sessionId,
+        leafId: sourceLeafId,
+        entryId: sourceLeafId,
+      },
+    };
+    await upsertSessionEntry(scope, {
+      sessionId,
+      sessionFile: staleSessionFile,
+      updatedAt: Date.now(),
+      compactionCheckpoints: [checkpoint],
+    });
+
+    const branchKey = "agent:main:stale-checkpoint-branch";
+    const branched = await createFileBackedCompactionCheckpointStore().branchCheckpointSession({
+      storePath,
+      sourceKey: sessionKey,
+      nextKey: branchKey,
+      checkpointId: checkpoint.checkpointId,
+    });
+
+    if (branched.status !== "created") {
+      throw new Error("expected stale-entry SQLite checkpoint branch");
+    }
+    expect(branched.entry.sessionFile).toContain("sqlite:main:");
+    expect(fsSync.existsSync(staleSessionFile)).toBe(false);
+    expect(fsSync.readdirSync(dir).some((file) => file.endsWith(".jsonl"))).toBe(false);
+  });
+
   test("checkpoint store does not fork retired legacy snapshots for SQLite marker entries", async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-checkpoint-sqlite-legacy-"));
     tempDirs.push(dir);
