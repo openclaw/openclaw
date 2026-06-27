@@ -620,6 +620,29 @@ describe("subagent announce formatting", () => {
     expect(call?.params?.internalEvents?.[0]?.result).toContain("Worker executed successfully");
   });
 
+  it("marks required progress-only completion handoffs as blocked in the requester prompt", async () => {
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:worker",
+      childRunId: "run-progress-only-required",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+      expectsCompletionMessage: true,
+      roundOneReply: "I'll inspect the repo now.",
+    });
+
+    const call = getAgentCall() as {
+      params?: {
+        internalEvents?: Array<{ status?: string; statusLabel?: string; result?: string }>;
+      };
+    };
+    expect(call?.params?.internalEvents?.[0]?.status).toBe("error");
+    expect(call?.params?.internalEvents?.[0]?.statusLabel).toBe(
+      "Required completion ended with progress-only text, not a final deliverable.",
+    );
+    expect(call?.params?.internalEvents?.[0]?.result).toBe("I'll inspect the repo now.");
+  });
+
   it("uses child-run announce identity for direct idempotency", async () => {
     await runSubagentAnnounceFlow({
       childSessionKey: "agent:main:subagent:worker",
