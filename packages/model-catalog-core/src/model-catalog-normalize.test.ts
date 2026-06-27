@@ -133,7 +133,7 @@ describe("model catalog normalization", () => {
               headers: {
                 "x-model": "gpt-5.4",
               },
-              input: ["text", "image", "document"],
+              input: ["text", "image", "document", "audio"],
               reasoning: true,
               contextWindow: 256000,
               contextTokens: 200000,
