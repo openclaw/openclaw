@@ -5,6 +5,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { CONFIG_DIR } from "../../utils.js";
 import { normalizeFingerprint } from "./fingerprint.js";
 import { loadGatewayTlsRuntime } from "./gateway.js";
 
@@ -194,11 +195,14 @@ describe("loadGatewayTlsRuntime", () => {
   });
 
   it("upgrades existing CN-only OpenClaw-generated cert to include subjectAltName", async () => {
-    const dir = await createTempDir();
-    const certPath = path.join(dir, "gateway-cert.pem");
-    const keyPath = path.join(dir, "gateway-key.pem");
+    // Use default gateway TLS paths so the upgrade gate (isDefaultCertPath) triggers.
+    // Create a CN-only cert at the default location to simulate a pre-fix install.
+    const defaultCertPath = path.join(CONFIG_DIR, "gateway", "tls", "gateway-cert.pem");
+    const defaultKeyPath = path.join(CONFIG_DIR, "gateway", "tls", "gateway-key.pem");
+    await import("node:fs/promises").then((fs) =>
+      fs.mkdir(path.join(CONFIG_DIR, "gateway", "tls"), { recursive: true }),
+    );
 
-    // Generate a CN-only cert directly via openssl (simulating pre-fix OpenClaw)
     const { execFile } = await import("node:child_process");
     const { promisify } = await import("node:util");
     const execFileAsync = promisify(execFile);
@@ -212,39 +216,51 @@ describe("loadGatewayTlsRuntime", () => {
       "3650",
       "-nodes",
       "-keyout",
-      keyPath,
+      defaultKeyPath,
       "-out",
-      certPath,
+      defaultCertPath,
       "-subj",
       "/CN=openclaw-gateway",
-      // no -addext → intentionally CN-only
     ]);
 
-    // Verify the cert is CN-only (no SAN)
     const fs = await import("node:fs/promises");
-    const x509Before = new X509Certificate(await fs.readFile(certPath, "utf8"));
+    const x509Before = new X509Certificate(await fs.readFile(defaultCertPath, "utf8"));
     expect(x509Before.subject).toContain("CN=openclaw-gateway");
     expect(x509Before.subjectAltName).toBeFalsy();
 
-    // Load with autoGenerate=true — should detect and regenerate
+    // Load with empty certPath/keyPath (use defaults) and autoGenerate=true
     const result = await loadGatewayTlsRuntime({
       enabled: true,
-      certPath,
-      keyPath,
+      certPath: "",
+      keyPath: "",
       autoGenerate: true,
     });
 
     expect(result.enabled).toBe(true);
     expect(result.error).toBeUndefined();
 
-    // After upgrade, cert must have SANs — verify via openssl CLI
-    const certPem = await fs.readFile(certPath, "utf8");
+    // After upgrade, cert must have SANs — verified unconditionally
+    const certPem = await fs.readFile(defaultCertPath, "utf8");
     const x509After = new X509Certificate(certPem);
-    // X509Certificate.subjectAltName may not be available in all Node.js versions;
-    // when it is, verify the expected entries.
-    if (x509After.subjectAltName) {
-      expect(x509After.subjectAltName).toContain("DNS:localhost");
-      expect(x509After.subjectAltName).toContain("IP Address:127.0.0.1");
+    expect(x509After.subjectAltName).toBeTruthy();
+    expect(x509After.subjectAltName).toContain("DNS:localhost");
+    expect(x509After.subjectAltName).toContain("IP Address:127.0.0.1");
+
+    // Also verify via openssl CLI for cross-platform proof
+    const opensslBin = (await import("../resolve-system-bin.js")).resolveSystemBin("openssl");
+    if (opensslBin) {
+      const { execFile } = await import("node:child_process");
+      const { promisify } = await import("node:util");
+      const sanOutput = await promisify(execFile)(opensslBin, [
+        "x509",
+        "-in",
+        defaultCertPath,
+        "-noout",
+        "-ext",
+        "subjectAltName",
+      ]);
+      expect(sanOutput.stdout).toContain("DNS:localhost");
+      expect(sanOutput.stdout).toContain("IP Address:127.0.0.1");
     }
   });
 
