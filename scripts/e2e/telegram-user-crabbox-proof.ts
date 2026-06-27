@@ -530,6 +530,7 @@ function gatewayEnv(params: { configPath: string; stateDir: string; sutToken: st
   return {
     ...childProcessBaseEnv(),
     OPENAI_API_KEY: "sk-openclaw-e2e-mock",
+    OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER: "1",
     OPENCLAW_CONFIG_PATH: params.configPath,
     OPENCLAW_STATE_DIR: params.stateDir,
     TELEGRAM_BOT_TOKEN: params.sutToken,
@@ -1118,6 +1119,7 @@ function writeSutConfig(params: {
   const config = {
     agents: {
       defaults: {
+        imageGenerationModel: { primary: "openai/gpt-image-1", timeoutMs: 30_000 },
         model: { primary: "openai/gpt-5.5" },
         models: { "openai/gpt-5.5": { params: { openaiWsWarmup: false, transport: "sse" } } },
       },

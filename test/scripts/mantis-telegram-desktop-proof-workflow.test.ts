@@ -465,7 +465,22 @@ describe("Mantis Telegram Desktop proof workflow", () => {
     const proofScript = readFileSync(PROOF_SCRIPT, "utf8");
     expect(proofScript).toContain("function childProcessBaseEnv()");
     expect(proofScript).toContain("...childProcessBaseEnv()");
+    expect(proofScript).toContain('OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER: "1"');
     expect(proofScript).not.toContain("...process.env,\n    OPENAI_API_KEY");
     expect(proofScript).not.toContain("...process.env,\n    MOCK_PORT");
+  });
+
+  it("enables generated-media wake-false Telegram proof through the mock image provider", () => {
+    const proofScript = readFileSync(PROOF_SCRIPT, "utf8");
+    const prompt = readFileSync(PROMPT, "utf8");
+    const marker = "OPENCLAW_E2E_GENERATED_MEDIA_WAKE_FALSE_PROOF";
+
+    expect(proofScript).toContain(
+      'imageGenerationModel: { primary: "openai/gpt-image-1", timeoutMs: 30_000 }',
+    );
+    expect(prompt).toContain(marker);
+    expect(prompt).toContain("first call `image_generate`");
+    expect(prompt).toContain("missing or blocked generated media delivery");
+    expect(prompt).toContain("exactly one generated image visible in Telegram Desktop");
   });
 });
