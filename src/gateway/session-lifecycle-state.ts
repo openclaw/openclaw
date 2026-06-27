@@ -277,13 +277,12 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       ? params.event.sessionId
       : undefined;
 
-  await updateSessionEntry({
-    storePath: sessionEntry.storePath,
-    sessionKey: sessionEntry.canonicalKey,
-    skipMaintenance: true,
-    takeCacheOwnership: true,
-    requireWriteSuccess: true,
-    update: async (entry) => {
+  await updateSessionEntry(
+    {
+      storePath: sessionEntry.storePath,
+      sessionKey: sessionEntry.canonicalKey,
+    },
+    async (entry) => {
       // Reject a pre-reset run's lifecycle event: sessions.reset rotates the row
       // to a new sessionId under the same sessionKey, so an old in-flight run's
       // late start/end/error must not overwrite the fresh row's status (#88538).
@@ -296,5 +295,10 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       });
       return Object.keys(patch).length > 0 ? patch : null;
     },
-  });
+    {
+      skipMaintenance: true,
+      takeCacheOwnership: true,
+      requireWriteSuccess: true,
+    },
+  );
 }

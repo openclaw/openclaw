@@ -718,21 +718,18 @@ describe("gateway server chat", () => {
   });
 
   test("marks a running webchat session failed when dispatch rejects before a reply", async () => {
-    await withMainSessionStore(async (dir) => {
+    await withMainSessionStore(async () => {
       await writeSessionStore({
         entries: {
           main: {
             sessionId: "sess-main",
-            sessionFile: path.join(dir, "sess-main.jsonl"),
             updatedAt: 1_000,
-            status: "running",
-            startedAt: 900,
           },
         },
       });
       const subscribeRes = await rpcReq(ws, "sessions.subscribe", {});
       expect(subscribeRes.ok).toBe(true);
-      dispatchInboundMessageMock.mockRejectedValueOnce(new Error("provider rejected request"));
+      dispatchInboundMessageMock.mockRejectedValue(new Error("provider rejected request"));
 
       const errorPromise = onceMessage(
         ws,
@@ -758,6 +755,9 @@ describe("gateway server chat", () => {
         idempotencyKey: "idem-dispatch-error-1",
       });
       expect(res.ok).toBe(true);
+      await vi.waitFor(() => {
+        expect(dispatchInboundMessageMock).toHaveBeenCalled();
+      });
       await errorPromise;
       const sessionChanged = await sessionChangedPromise;
       expectRecordFields(sessionChanged.payload, {
@@ -1399,18 +1399,16 @@ describe("gateway server chat", () => {
   });
 
   test("routes /btw replies through side-result events without transcript injection", async () => {
-    await withMainSessionStore(async (dir) => {
-      await fs.writeFile(
-        path.join(dir, "sess-main.jsonl"),
-        `${JSON.stringify({
+    await withMainSessionStore(async () => {
+      await writeMainSessionTranscriptLines([
+        JSON.stringify({
           message: {
             role: "user",
             content: [{ type: "text", text: "main thread context" }],
             timestamp: Date.now(),
           },
-        })}\n`,
-        "utf-8",
-      );
+        }),
+      ]);
       dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
         const [params] = args as [
           {
@@ -1487,18 +1485,16 @@ describe("gateway server chat", () => {
   });
 
   test("routes block-streamed /btw replies through side-result events", async () => {
-    await withMainSessionStore(async (dir) => {
-      await fs.writeFile(
-        path.join(dir, "sess-main.jsonl"),
-        `${JSON.stringify({
+    await withMainSessionStore(async () => {
+      await writeMainSessionTranscriptLines([
+        JSON.stringify({
           message: {
             role: "assistant",
             content: [{ type: "text", text: "existing context" }],
             timestamp: Date.now(),
           },
-        })}\n`,
-        "utf-8",
-      );
+        }),
+      ]);
       dispatchInboundMessageMock.mockImplementationOnce(async (...args: unknown[]) => {
         const [params] = args as [
           {
