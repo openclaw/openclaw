@@ -86,7 +86,7 @@ function clearManualCronJobActive(
   state.activeManualRunJobIds.delete(jobId);
   clearCronJobActive(jobId, activeJobMarker);
   if (state.activeManualRunJobIds.size === 0) {
-    state.manualSetupTimeoutRestartNotified = false;
+    state.manualSetupTimeoutNotified = false;
   }
 }
 
@@ -98,11 +98,11 @@ function maybeNotifyManualIsolatedSetupTimeout(
     isolatedAgentSetupTimeout?: IsolatedAgentSetupTimeoutSignal;
   },
 ): boolean {
-  if (!result.isolatedAgentSetupTimeout || state.manualSetupTimeoutRestartNotified) {
+  if (!result.isolatedAgentSetupTimeout || state.manualSetupTimeoutNotified) {
     return false;
   }
   const notified = maybeNotifyIsolatedAgentSetupTimeout(state, result);
-  state.manualSetupTimeoutRestartNotified ||= notified;
+  state.manualSetupTimeoutNotified ||= notified;
   return notified;
 }
 

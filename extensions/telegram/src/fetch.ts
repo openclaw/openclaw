@@ -414,8 +414,8 @@ function logResolverNetworkDecisions(params: {
   }
 }
 
-function collectErrorChain(err: unknown): unknown[] {
-  const values: unknown[] = [];
+function collectErrorCodes(err: unknown): Set<string> {
+  const codes = new Set<string>();
   const queue: unknown[] = [err];
   const seen = new Set<unknown>();
 
@@ -426,77 +426,32 @@ function collectErrorChain(err: unknown): unknown[] {
       continue;
     }
     seen.add(current);
-    values.push(current);
-    if (typeof current !== "object") {
-      continue;
-    }
-    const cause = (current as { cause?: unknown }).cause;
-    if (cause && !seen.has(cause)) {
-      queue.push(cause);
-    }
-    const errors = (current as { errors?: unknown }).errors;
-    if (Array.isArray(errors)) {
-      for (const nested of errors) {
-        if (nested && !seen.has(nested)) {
-          queue.push(nested);
+    if (typeof current === "object") {
+      const code = (current as { code?: unknown }).code;
+      if (typeof code === "string" && code.trim()) {
+        codes.add(code.trim().toUpperCase());
+      }
+      const cause = (current as { cause?: unknown }).cause;
+      if (cause && !seen.has(cause)) {
+        queue.push(cause);
+      }
+      const errors = (current as { errors?: unknown }).errors;
+      if (Array.isArray(errors)) {
+        for (const nested of errors) {
+          if (nested && !seen.has(nested)) {
+            queue.push(nested);
+          }
         }
       }
     }
   }
 
-  return values;
-}
-
-function collectErrorCodes(err: unknown): Set<string> {
-  const codes = new Set<string>();
-  for (const current of collectErrorChain(err)) {
-    if (typeof current !== "object") {
-      continue;
-    }
-    const code = (current as { code?: unknown }).code;
-    if (typeof code === "string" && code.trim()) {
-      codes.add(code.trim().toUpperCase());
-    }
-  }
   return codes;
 }
 
 function formatErrorCodes(err: unknown): string {
   const codes = [...collectErrorCodes(err)];
   return codes.length > 0 ? codes.join(",") : "none";
-}
-
-function hasErrorMessageContaining(err: unknown, fragment: string): boolean {
-  const target = normalizeLowercaseStringOrEmpty(fragment);
-  if (!target) {
-    return false;
-  }
-
-  for (const current of collectErrorChain(err)) {
-    const message =
-      typeof current === "string"
-        ? current
-        : typeof current === "object"
-          ? (current as { message?: unknown }).message
-          : undefined;
-    if (typeof message === "string" && normalizeLowercaseStringOrEmpty(message).includes(target)) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
-function isLocalSocketAllocationError(err: unknown, codes = collectErrorCodes(err)): boolean {
-  return codes.has("EADDRNOTAVAIL") || hasErrorMessageContaining(err, "EADDRNOTAVAIL");
-}
-
-function logLocalSocketAllocationError(err: unknown): void {
-  log.warn(
-    `telegram transport error: local socket allocation failure (EADDRNOTAVAIL) ` +
-      `-- check ephemeral port range / network extensions; remote IP rotation ` +
-      `will not help (codes=${formatErrorCodes(err)})`,
-  );
 }
 
 class TelegramTransportAttemptUnhealthyError extends Error {
@@ -511,17 +466,12 @@ function shouldUseTelegramTransportFallback(err: unknown): boolean {
   if (err instanceof TelegramTransportAttemptUnhealthyError) {
     return true;
   }
-  const codes = collectErrorCodes(err);
-  if (isLocalSocketAllocationError(err, codes)) {
-    logLocalSocketAllocationError(err);
-    return false;
-  }
   const ctx: TelegramTransportFallbackContext = {
     message:
       err && typeof err === "object" && "message" in err
         ? normalizeLowercaseStringOrEmpty(String(err.message))
         : "",
-    codes,
+    codes: collectErrorCodes(err),
   };
   const hasFetchFailedEnvelope = ctx.message.includes("fetch failed");
   const hasKnownNetworkCode = FALLBACK_RETRY_ERROR_CODES.some((code) => ctx.codes.has(code));
@@ -538,7 +488,8 @@ export type TelegramTransport = {
   dispatcherAttempts?: TelegramDispatcherAttempt[];
   /**
    * Promote this transport to its next fallback dispatcher before the next
-   * request. Returns false when no fallback path exists.
+   * request. The original error, when available, is retained in diagnostics.
+   * Returns false when no fallback path exists.
    */
   forceFallback?: (reason: string, err?: unknown) => boolean;
   /**
@@ -613,7 +564,8 @@ function createTelegramTransportAttempts(params: {
     },
     exportAttempt: { dispatcherPolicy: fallbackIpPolicy },
     logLevel: "warn",
-    logMessage: "fetch fallback: DNS-resolved IP unreachable; trying alternative Telegram API IP",
+    logMessage:
+      "fetch fallback: primary connection path failed; trying alternative Telegram API IP",
   });
 
   return attempts;
@@ -914,17 +866,8 @@ export function resolveTelegramTransport(
     fetch: resolvedFetch,
     sourceFetch,
     dispatcherAttempts: transportAttempts.map((attempt) => attempt.exportAttempt),
-    forceFallback: (reason: string, err?: unknown) => {
-      if (err !== undefined && isLocalSocketAllocationError(err)) {
-        logLocalSocketAllocationError(err);
-        return false;
-      }
-      return promoteStickyAttempt(
-        stickyAttemptIndex + 1,
-        err ?? new Error("forced fallback"),
-        reason,
-      );
-    },
+    forceFallback: (reason: string, err?: unknown) =>
+      promoteStickyAttempt(stickyAttemptIndex + 1, err ?? new Error("forced fallback"), reason),
     close,
   };
 }

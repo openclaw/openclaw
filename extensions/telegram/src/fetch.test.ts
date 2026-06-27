@@ -240,13 +240,6 @@ function buildCodeLessFetchFallbackError() {
   return new TypeError("fetch failed");
 }
 
-function buildMessageOnlyFetchFallbackError(message: string) {
-  const connectErr = new Error(message);
-  return Object.assign(new TypeError("fetch failed"), {
-    cause: connectErr,
-  });
-}
-
 const STICKY_IPV4_FALLBACK_NETWORK = {
   network: {
     autoSelectFamily: true,
@@ -964,7 +957,7 @@ describe("resolveTelegramFetch", () => {
     expect(eighthDispatcher).toBe(firstDispatcher);
     expect(ninthDispatcher).toBe(firstDispatcher);
     expectPinnedFallbackIpDispatcher(3);
-    expectLoggerMessageContaining(loggerWarn, "fetch fallback: DNS-resolved IP unreachable");
+    expectLoggerMessageContaining(loggerWarn, "fetch fallback: primary connection path failed");
     expectLoggerMessageContaining(
       loggerDebug,
       "fetch fallback: recovered from attempt 2 to attempt 0",
@@ -1200,7 +1193,7 @@ describe("resolveTelegramFetch", () => {
     expect(undiciFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("logs local socket allocation failures without retrying IP fallback", async () => {
+  it("does not automatically retry structured EADDRNOTAVAIL fetch failures", async () => {
     const fetchError = buildFetchFallbackError("EADDRNOTAVAIL");
     undiciFetch.mockRejectedValue(fetchError);
 
@@ -1211,38 +1204,17 @@ describe("resolveTelegramFetch", () => {
     );
 
     expect(undiciFetch).toHaveBeenCalledTimes(1);
-    expectLoggerMessageContaining(loggerWarn, "local socket allocation failure");
-    expectLoggerMessageContaining(loggerWarn, "EADDRNOTAVAIL");
-    expectNoLoggerMessageContaining(loggerWarn, "DNS-resolved IP unreachable");
   });
 
-  it("does not retry IP fallback when only the nested error message names EADDRNOTAVAIL", async () => {
-    const fetchError = buildMessageOnlyFetchFallbackError(
-      "connect EADDRNOTAVAIL api.telegram.org:443",
-    );
-    undiciFetch.mockRejectedValue(fetchError);
-
-    const resolved = resolveTelegramFetchOrThrow(undefined, STICKY_IPV4_FALLBACK_NETWORK);
-
-    await expect(resolved("https://api.telegram.org/botx/sendMessage")).rejects.toThrow(
-      "fetch failed",
-    );
-
-    expect(undiciFetch).toHaveBeenCalledTimes(1);
-    expectLoggerMessageContaining(loggerWarn, "local socket allocation failure");
-    expectNoLoggerMessageContaining(loggerWarn, "DNS-resolved IP unreachable");
-  });
-
-  it("does not force fallback on EADDRNOTAVAIL probe errors", () => {
+  it("preserves EADDRNOTAVAIL in forced fallback diagnostics", () => {
     const transport = resolveTelegramTransport(undefined, STICKY_IPV4_FALLBACK_NETWORK);
+    const fetchError = buildFetchFallbackError("EADDRNOTAVAIL");
 
-    expect(
-      transport.forceFallback?.(
-        "probe timeout/network error",
-        buildFetchFallbackError("EADDRNOTAVAIL"),
-      ),
-    ).toBe(false);
-    expectLoggerMessageContaining(loggerWarn, "local socket allocation failure");
+    expect(transport.forceFallback?.("probe timeout/network error", fetchError)).toBe(true);
+    expect(transport.forceFallback?.("probe timeout/network error", fetchError)).toBe(true);
+
+    expectLoggerMessageContaining(loggerWarn, "primary connection path failed");
+    expectLoggerMessageContaining(loggerWarn, "codes=EADDRNOTAVAIL");
     expectNoLoggerMessageContaining(loggerWarn, "DNS-resolved IP unreachable");
   });
 
