@@ -2381,8 +2381,6 @@ describe("anthropic transport stream", () => {
   });
 
   it("serializes structured non-image blocks in tool results as JSON text", async () => {
-    const imageData = Buffer.from("image").toString("base64");
-
     await runTransportStream(
       makeAnthropicTransportModel({ id: "claude-sonnet-4-6" }),
       {
@@ -2427,11 +2425,9 @@ describe("anthropic transport stream", () => {
       userMessage.content,
       (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
     );
-    // Structured non-image block should be serialized, not dropped
-    expect(toolResult.content).toBe(
-      // No images → returns sanitized text string, not array
-      expect.stringContaining('{"type":"resource"'),
-    );
+    // No images → returns sanitized text string, not array
+    expect(typeof toolResult.content).toBe("string");
+    expect(toolResult.content).toContain('"type":"resource"');
     expect(toolResult.content).toContain("ok");
     expect(toolResult.is_error).toBe(false);
   });

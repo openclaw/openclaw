@@ -43,7 +43,6 @@ import type {
   AssistantMessageEvent,
   CacheRetention,
   Context,
-  ImageContent,
   Message,
   Model,
   ModelThinkingLevel,
@@ -168,19 +167,23 @@ function convertContentBlocks(content: readonly unknown[]):
   }
 
   for (const block of Array.isArray(content) ? content : []) {
-    if (!block || typeof block !== "object") continue;
+    if (!block || typeof block !== "object") {
+      continue;
+    }
     const record = block as Record<string, unknown>;
-    if (record.type !== "image") continue;
+    if (record.type !== "image") {
+      continue;
+    }
     blocks.push({
       type: "image" as const,
       source: {
         type: "base64" as const,
-        media_type: String(record.mimeType || "image/jpeg") as
+        media_type: (typeof record.mimeType === "string" ? record.mimeType : "image/jpeg") as
           | "image/jpeg"
           | "image/png"
           | "image/gif"
           | "image/webp",
-        data: String(record.data || ""),
+        data: typeof record.data === "string" ? record.data : "",
       },
     });
   }

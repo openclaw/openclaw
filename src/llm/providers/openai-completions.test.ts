@@ -1074,7 +1074,7 @@ describe("openai-completions stop-reason tool-call guard", () => {
             timestamp: 0,
           },
         ],
-      } as Context,
+      } as unknown as Context,
       {
         apiKey: "sk-test",
         onPayload(payload) {

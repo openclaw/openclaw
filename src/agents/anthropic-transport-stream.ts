@@ -320,15 +320,19 @@ function convertContentBlocks(content: readonly unknown[]) {
     blocks.push({ type: "text", text: "(see attached image)" });
   }
   for (const block of Array.isArray(content) ? content : []) {
-    if (!block || typeof block !== "object") continue;
+    if (!block || typeof block !== "object") {
+      continue;
+    }
     const record = block as Record<string, unknown>;
-    if (record.type !== "image") continue;
+    if (record.type !== "image") {
+      continue;
+    }
     blocks.push({
       type: "image" as const,
       source: {
         type: "base64",
-        media_type: String(record.mimeType || "image/png"),
-        data: String(record.data || ""),
+        media_type: typeof record.mimeType === "string" ? record.mimeType : "image/png",
+        data: typeof record.data === "string" ? record.data : "",
       },
     });
   }
