@@ -115,12 +115,12 @@ function tryMatchModel(modelPattern: string, availableModels: Model[]): Model | 
   const datedVersions = matches.filter((m) => !isAlias(m.id));
 
   if (aliases.length > 0) {
-    // Prefer alias - if multiple aliases, pick the one that sorts highest
-    aliases.sort((a, b) => b.id.localeCompare(a.id));
+    // Prefer alias - if multiple aliases, pick the numerically newest
+    aliases.sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }));
     return aliases[0];
   }
   // No alias found, pick latest dated version
-  datedVersions.sort((a, b) => b.id.localeCompare(a.id));
+  datedVersions.sort((a, b) => b.id.localeCompare(a.id, undefined, { numeric: true }));
   return datedVersions[0];
 }
 
