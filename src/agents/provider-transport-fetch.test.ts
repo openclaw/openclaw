@@ -1465,6 +1465,58 @@ describe("buildGuardedModelFetch", () => {
     expect(String(caught)).toMatch(/exceeded.*bytes while synthesizing SSE/i);
   });
 
+  it("caps oversized JSON body through openai-responses fetch pipeline", async () => {
+    const CHUNK = 1024 * 1024;
+    let sends = 0;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          pull(controller) {
+            if (sends < 17) {
+              sends++;
+              controller.enqueue(new Uint8Array(CHUNK));
+            } else {
+              controller.close();
+            }
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+      finalUrl: "https://custom-openai.example.com/v1/responses",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.5",
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://custom-openai.example.com/v1",
+    } as unknown as Model<"openai-responses">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://custom-openai.example.com/v1/responses",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.5", stream: true }),
+      },
+    );
+
+    const reader = response.body?.getReader();
+    let caught: unknown = null;
+    try {
+      while (true) {
+        const { done } = await reader!.read();
+        if (done) {
+          break;
+        }
+      }
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeTruthy();
+    expect(String(caught)).toMatch(/exceeded.*bytes while synthesizing SSE/i);
+  });
+
   describe("long retry-after handling", () => {
     const anthropicModel = {
       id: "sonnet-4.6",
