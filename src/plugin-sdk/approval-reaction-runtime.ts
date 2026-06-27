@@ -312,7 +312,7 @@ function buildApprovalReactionPromptText(params: {
   const manualInstructions = buildManualInstructionSection({
     approvalId: view.approvalId,
     allowedDecisions,
-    ask: view.ask,
+    ask: view.approvalKind === "exec" ? view.ask : undefined,
   });
   if (manualInstructions.length > 0) {
     sections.push(manualInstructions.join("\n"));
