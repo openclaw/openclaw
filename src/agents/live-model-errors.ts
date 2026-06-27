@@ -40,6 +40,9 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
   if (/model/i.test(msg) && /does not exist/i.test(msg)) {
     return true;
   }
+  if (/selected model/i.test(msg) && /not(?:[_\-\s])?found/i.test(msg)) {
+    return true;
+  }
   if (/model/i.test(msg) && /deprecated/i.test(msg) && /(upgrade|transition) to/i.test(msg)) {
     return true;
   }
@@ -53,13 +56,4 @@ export function isModelNotFoundErrorMessage(raw: string): boolean {
     return true;
   }
   return false;
-}
-
-/** Returns whether a MiniMax HTML-style 404 body is a model-not-found signal. */
-export function isMiniMaxModelNotFoundErrorMessage(raw: string): boolean {
-  const msg = raw.trim();
-  if (!msg) {
-    return false;
-  }
-  return /\b404\b.*\bpage not found\b/i.test(msg);
 }

@@ -85,7 +85,6 @@ setCliRunnerExecuteTestDeps({
     },
     cancel: vi.fn(),
     cancelScope: vi.fn(),
-    reconcileOrphans: vi.fn(),
     getRecord: vi.fn(),
   }),
   enqueueSystemEvent: (

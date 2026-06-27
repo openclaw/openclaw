@@ -5,7 +5,7 @@ import type { ReplyPayload } from "../types.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 
 /** Coalesces many streaming reply fragments into fewer outbound payloads. */
-export type BlockReplyCoalescer = {
+type BlockReplyCoalescer = {
   enqueue: (payload: ReplyPayload) => void;
   flush: (options?: { force?: boolean }) => Promise<void>;
   hasBuffered: () => boolean;

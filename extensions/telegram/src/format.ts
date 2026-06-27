@@ -32,6 +32,10 @@ function escapeHtmlAttr(text: string): string {
   return escapeHtml(text).replace(/"/g, "&quot;");
 }
 
+function isTelegramRichLinkHref(href: string): boolean {
+  return /^(?:https?:\/\/|tg:\/\/|mailto:|tel:|#)/i.test(href);
+}
+
 /**
  * File extensions that share TLDs and commonly appear in code/documentation.
  * These are wrapped in <code> tags to prevent Telegram from generating
@@ -49,6 +53,11 @@ function buildTelegramLink(link: MarkdownLinkSpan, text: string) {
     return null;
   }
   if (link.start === link.end) {
+    return null;
+  }
+  // Telegram rich links reject local or relative hrefs; keep the label visible
+  // instead of letting one unsupported link drop the whole message.
+  if (!isTelegramRichLinkHref(href)) {
     return null;
   }
   // Suppress auto-linkified file references (e.g. README.md → http://README.md)
@@ -226,6 +235,35 @@ const TELEGRAM_ATTR_HTML_TAG_PATTERNS = new Map([
 const TELEGRAM_CODE_LANGUAGE_ATTR_PATTERN = /^\s+class="language-[^"]+"\s*$/;
 const TELEGRAM_RICH_TEXT_TABLE_COLUMN_LIMIT = 20;
 const TELEGRAM_VOID_HTML_TAGS = new Set(["br", "hr", "img", "input", "tg-map"]);
+const TELEGRAM_RICH_BLOCK_HTML_TAGS = new Set([
+  "aside",
+  "audio",
+  "blockquote",
+  "details",
+  "figure",
+  "footer",
+  "h1",
+  "h2",
+  "h3",
+  "h4",
+  "h5",
+  "h6",
+  "hr",
+  "img",
+  "li",
+  "ol",
+  "p",
+  "pre",
+  "table",
+  "tg-collage",
+  "tg-map",
+  "tg-math-block",
+  "tg-slideshow",
+  "tr",
+  "ul",
+  "video",
+]);
+const TELEGRAM_RICH_MEDIA_HTML_TAGS = new Set(["audio", "img", "video"]);
 const TELEGRAM_RICH_SIMPLE_HTML_TAGS = new Set([
   ...TELEGRAM_SIMPLE_HTML_TAGS,
   "a",
@@ -307,6 +345,8 @@ type TelegramHtmlTagSupport = {
   simpleTags: ReadonlySet<string>;
   attrPatterns: ReadonlyMap<string, RegExp>;
 };
+
+type TelegramTableAlignment = NonNullable<MarkdownTableMeta["aligns"]>[number];
 
 const TELEGRAM_LEGACY_HTML_TAG_SUPPORT: TelegramHtmlTagSupport = {
   simpleTags: TELEGRAM_SIMPLE_HTML_TAGS,
@@ -675,7 +715,7 @@ export function renderTelegramHtmlText(
 ): string {
   const textMode = options.textMode ?? "markdown";
   if (textMode === "html") {
-    return escapeUnsupportedTelegramHtml(text);
+    return escapeUnsupportedTelegramHtmlWithTableFallback(text);
   }
   // markdownToTelegramHtml already wraps file references by default
   return markdownToTelegramHtml(text, { tableMode: options.tableMode });
@@ -687,6 +727,87 @@ export function sanitizeTelegramRichHtml(html: string): string {
       escapeUnsupportedTelegramHtml(html, TELEGRAM_RICH_HTML_TAG_SUPPORT),
     ),
   );
+}
+
+function escapeUnsupportedTelegramHtmlWithTableFallback(html: string): string {
+  return escapeUnsupportedTelegramHtml(
+    normalizeTelegramLegacyHtmlTables(html),
+    TELEGRAM_LEGACY_HTML_TAG_SUPPORT,
+  );
+}
+
+function isInsideTelegramHtmlCodeContext(html: string, offset: number): boolean {
+  let codeDepth = 0;
+  let preDepth = 0;
+  HTML_TAG_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HTML_TAG_PATTERN.exec(html)) !== null && match.index < offset) {
+    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+    if (tagName !== "code" && tagName !== "pre") {
+      continue;
+    }
+    const isClosing = match[1] === "</";
+    if (tagName === "code") {
+      codeDepth = isClosing ? Math.max(0, codeDepth - 1) : codeDepth + 1;
+    } else {
+      preDepth = isClosing ? Math.max(0, preDepth - 1) : preDepth + 1;
+    }
+  }
+  return codeDepth > 0 || preDepth > 0;
+}
+
+function normalizeTelegramLegacyHtmlTables(html: string): string {
+  TELEGRAM_RICH_HTML_TABLE_PATTERN.lastIndex = 0;
+  return html.replace(TELEGRAM_RICH_HTML_TABLE_PATTERN, (tableHtml, offset: number) => {
+    if (isInsideTelegramHtmlCodeContext(html, offset)) {
+      return tableHtml;
+    }
+    const rows = parseTelegramRichHtmlTableRows(tableHtml);
+    return rows.length ? renderTelegramRichHtmlRawTableFallback(tableHtml, rows) : tableHtml;
+  });
+}
+
+export function limitTelegramRichHtmlNesting(html: string, maxDepth: number): string {
+  const normalizedMaxDepth = Math.max(1, Math.floor(maxDepth));
+  const stack: Array<{ name: string; kept: boolean }> = [];
+  let keptDepth = 0;
+  let output = "";
+  let lastIndex = 0;
+
+  HTML_TAG_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HTML_TAG_PATTERN.exec(html)) !== null) {
+    output += html.slice(lastIndex, match.index);
+    const rawTag = match[0];
+    const isClosing = match[1] === "</";
+    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+    const isSelfClosing =
+      !isClosing && (TELEGRAM_VOID_HTML_TAGS.has(tagName) || rawTag.trimEnd().endsWith("/>"));
+
+    if (isClosing) {
+      const entryIndex = stack.findLastIndex((entry) => entry.name === tagName);
+      if (entryIndex >= 0) {
+        const [entry] = stack.splice(entryIndex, 1);
+        if (entry?.kept) {
+          keptDepth = Math.max(0, keptDepth - 1);
+          output += rawTag;
+        }
+      }
+    } else if (isSelfClosing) {
+      if (tagName === "br" || keptDepth < normalizedMaxDepth) {
+        output += rawTag;
+      }
+    } else {
+      const kept = keptDepth < normalizedMaxDepth;
+      stack.push({ name: tagName, kept });
+      if (kept) {
+        keptDepth += 1;
+        output += rawTag;
+      }
+    }
+    lastIndex = HTML_TAG_PATTERN.lastIndex;
+  }
+  return output + html.slice(lastIndex);
 }
 
 function normalizeTelegramRichMediaBlock(block: string): string {
@@ -853,19 +974,25 @@ function renderTelegramRichHtmlTable(table: MarkdownTableMeta): string {
   }
   const renderCellValue = (cell: MarkdownTableCell | undefined) =>
     cell ? renderTelegramHtml(cell) : "";
-  const renderCell = (tag: "td" | "th", value: MarkdownTableCell | undefined) =>
-    `<${tag}>${renderCellValue(value)}</${tag}>`;
+  const renderCell = (
+    tag: "td" | "th",
+    value: MarkdownTableCell | undefined,
+    align: TelegramTableAlignment | undefined,
+  ) => {
+    const alignAttr = align ? ` align="${align}"` : "";
+    return `<${tag}${alignAttr}>${renderCellValue(value)}</${tag}>`;
+  };
   const head = table.headers.length
-    ? `<thead><tr>${table.headerCells.map((cell) => renderCell("th", cell)).join("")}</tr></thead>`
+    ? `<thead><tr>${table.headerCells.map((cell, index) => renderCell("th", cell, table.aligns?.[index])).join("")}</tr></thead>`
     : "";
   const bodyRows = table.rowCells
     .map(
       (row) =>
-        `<tr>${Array.from({ length: columnCount }, (_value, index) => renderCell("td", row[index])).join("")}</tr>`,
+        `<tr>${Array.from({ length: columnCount }, (_value, index) => renderCell("td", row[index], table.aligns?.[index])).join("")}</tr>`,
     )
     .join("");
   const body = bodyRows ? `<tbody>${bodyRows}</tbody>` : "";
-  return `<table>${head}${body}</table>\n\n`;
+  return `<table bordered striped>${head}${body}</table>\n\n`;
 }
 
 function renderTelegramRichHtmlDocument(
@@ -897,6 +1024,102 @@ function renderTelegramRichHtmlDocument(
   );
 }
 
+function convertTelegramRichSegmentNewlines(
+  segment: string,
+  prevStructural: boolean,
+  nextStructural: boolean,
+): string {
+  if (!segment.includes("\n")) {
+    return segment;
+  }
+  // Keep newline runs that hug a structural tag: Telegram already starts a new
+  // line there, so a stray <br> would add a blank line or land as an invalid
+  // child inside a container (table/figure/details/list).
+  return segment.replace(/\n+/g, (run: string, offset: number) => {
+    const hugsPrev = offset === 0 && prevStructural;
+    const hugsNext = offset + run.length === segment.length && nextStructural;
+    return hugsPrev || hugsNext ? run : "<br>".repeat(run.length);
+  });
+}
+
+// Tags whose inner whitespace Telegram renders verbatim, so their newlines stay
+// literal: code/pre keep source formatting and math holds raw LaTeX.
+const TELEGRAM_RICH_LITERAL_WHITESPACE_TAGS = new Set(["code", "pre", "tg-math", "tg-math-block"]);
+
+// Structural tags whose surrounding/inner newlines are layout whitespace, not
+// prose: the rich block set plus the table/figure/details container children
+// that TELEGRAM_RICH_BLOCK_HTML_TAGS omits (it is tuned for chunk block
+// counting). A <br> wedged between these would be an invalid container child or
+// a stray blank line, so their boundary newlines stay literal.
+const TELEGRAM_RICH_LINE_BREAK_STRUCTURAL_TAGS: ReadonlySet<string> = new Set([
+  ...TELEGRAM_RICH_BLOCK_HTML_TAGS,
+  "caption",
+  "col",
+  "colgroup",
+  "figcaption",
+  "summary",
+  "tbody",
+  "td",
+  "tfoot",
+  "th",
+  "thead",
+]);
+
+function isTelegramRichLineBreakStructuralTag(rawTag: string, tagName: string): boolean {
+  return (
+    TELEGRAM_RICH_LINE_BREAK_STRUCTURAL_TAGS.has(tagName) ||
+    (tagName === "a" && /\sname="[^"]+"/i.test(rawTag))
+  );
+}
+
+// Bot API 10.1 rich messages parse structured HTML, so literal newlines are
+// insignificant whitespace — unlike the legacy HTML parse mode that renders them
+// as line breaks. Materialize inline newlines as <br> so multi-line prose and
+// bullet runs keep their breaks, while leaving newlines literal inside
+// code/pre/math and where they only separate block-level tags.
+export function materializeTelegramRichHtmlLineBreaks(html: string): string {
+  if (!html.includes("\n")) {
+    return html;
+  }
+  let result = "";
+  let lastIndex = 0;
+  let literalDepth = 0;
+  let prevStructural = false;
+
+  HTML_TAG_PATTERN.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = HTML_TAG_PATTERN.exec(html)) !== null) {
+    const tagStart = match.index;
+    const tagEnd = HTML_TAG_PATTERN.lastIndex;
+    const rawTag = match[0];
+    const isClosing = match[1] === "</";
+    const tagName = normalizeLowercaseStringOrEmpty(match[2]);
+    // <br> already emits a break, so treat it like a structural boundary: a
+    // hugging newline stays literal instead of doubling into a blank line.
+    const tagIsStructural =
+      tagName === "br" || isTelegramRichLineBreakStructuralTag(rawTag, tagName);
+    const segment = html.slice(lastIndex, tagStart);
+    result +=
+      literalDepth > 0
+        ? segment
+        : convertTelegramRichSegmentNewlines(segment, prevStructural, tagIsStructural);
+
+    // Self-closing literal tags (e.g. a stray <pre/>) must not open a region that
+    // never closes and swallows every later line break.
+    if (TELEGRAM_RICH_LITERAL_WHITESPACE_TAGS.has(tagName) && !rawTag.trimEnd().endsWith("/>")) {
+      literalDepth = isClosing ? Math.max(0, literalDepth - 1) : literalDepth + 1;
+    }
+    result += rawTag;
+    lastIndex = tagEnd;
+    prevStructural = tagIsStructural;
+  }
+
+  const tail = html.slice(lastIndex);
+  result +=
+    literalDepth > 0 ? tail : convertTelegramRichSegmentNewlines(tail, prevStructural, false);
+  return result;
+}
+
 export function markdownToTelegramRichHtml(
   markdown: string,
   options: { tableMode?: MarkdownTableMode; skipEntityDetection?: boolean } = {},
@@ -925,6 +1148,8 @@ type TelegramHtmlTag = {
   name: string;
   openTag: string;
   closeTag: string;
+  richBlock: boolean;
+  richMedia: boolean;
 };
 
 const TELEGRAM_SELF_CLOSING_HTML_TAGS = TELEGRAM_VOID_HTML_TAGS;
@@ -943,6 +1168,13 @@ function buildTelegramHtmlCloseSuffix(tags: TelegramHtmlTag[]): string {
 
 function buildTelegramHtmlCloseSuffixLength(tags: TelegramHtmlTag[]): number {
   return tags.reduce((total, tag) => total + tag.closeTag.length, 0);
+}
+
+function isTelegramRichBlockHtmlTag(rawTag: string, tagName: string): boolean {
+  return (
+    TELEGRAM_RICH_BLOCK_HTML_TAGS.has(tagName) ||
+    (tagName === "a" && /\sname="[^"]+"/i.test(rawTag))
+  );
 }
 
 function findTelegramHtmlEntityEnd(text: string, start: number): number {
@@ -989,11 +1221,30 @@ function findTelegramHtmlEntityEnd(text: string, start: number): number {
   return text[index] === ";" ? index : -1;
 }
 
+// Never return a split index that lands between a UTF-16 surrogate pair, or
+// both chunks would carry a lone surrogate that re-encodes to U+FFFD. If the
+// pair starts the segment, keep it whole so chunking still advances.
+function clampToSurrogateBoundary(text: string, index: number): number {
+  const high = text.charCodeAt(index - 1);
+  const low = text.charCodeAt(index);
+  const splitsPair =
+    index > 0 && high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
+  if (!splitsPair) {
+    return index;
+  }
+  return index > 1 ? index - 1 : index + 1;
+}
+
 function findTelegramHtmlSafeSplitIndex(text: string, maxLength: number): number {
   if (text.length <= maxLength) {
     return text.length;
   }
   const normalizedMaxLength = Math.max(1, Math.floor(maxLength));
+  const splitIndex = findTelegramHtmlEntitySafeSplitIndex(text, normalizedMaxLength);
+  return clampToSurrogateBoundary(text, splitIndex);
+}
+
+function findTelegramHtmlEntitySafeSplitIndex(text: string, normalizedMaxLength: number): number {
   const lastAmpersand = text.lastIndexOf("&", normalizedMaxLength - 1);
   if (lastAmpersand === -1) {
     return normalizedMaxLength;
@@ -1018,22 +1269,34 @@ function popTelegramHtmlTag(tags: TelegramHtmlTag[], name: string): void {
   }
 }
 
-export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
+export function splitTelegramHtmlChunks(
+  html: string,
+  limit: number,
+  options: { blockLimit?: number; mediaLimit?: number } = {},
+): string[] {
   if (!html) {
     return [];
   }
   const normalizedLimit = Math.max(1, Math.floor(limit));
-  if (html.length <= normalizedLimit) {
+  const blockLimit =
+    options.blockLimit == null ? undefined : Math.max(1, Math.floor(options.blockLimit));
+  const mediaLimit =
+    options.mediaLimit == null ? undefined : Math.max(1, Math.floor(options.mediaLimit));
+  if (html.length <= normalizedLimit && blockLimit === undefined && mediaLimit === undefined) {
     return [html];
   }
 
   const chunks: string[] = [];
   const openTags: TelegramHtmlTag[] = [];
   let current = "";
+  let currentBlockCount = 0;
+  let currentMediaCount = 0;
   let chunkHasPayload = false;
 
   const resetCurrent = () => {
     current = buildTelegramHtmlOpenPrefix(openTags);
+    currentBlockCount = openTags.filter((tag) => tag.richBlock).length;
+    currentMediaCount = openTags.filter((tag) => tag.richMedia).length;
     chunkHasPayload = false;
   };
 
@@ -1096,16 +1359,24 @@ export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
     const isSelfClosing =
       !isClosing &&
       (TELEGRAM_SELF_CLOSING_HTML_TAGS.has(tagName) || rawTag.trimEnd().endsWith("/>"));
+    const isRichBlock = !isClosing && isTelegramRichBlockHtmlTag(rawTag, tagName);
+    const isRichMedia =
+      !isClosing &&
+      (tagName === "figure" ||
+        (TELEGRAM_RICH_MEDIA_HTML_TAGS.has(tagName) &&
+          !openTags.some((tag) => tag.name === "figure")));
 
     if (!isClosing) {
       const nextCloseLength = isSelfClosing ? 0 : `</${tagName}>`.length;
       if (
         chunkHasPayload &&
-        current.length +
-          rawTag.length +
-          buildTelegramHtmlCloseSuffixLength(openTags) +
-          nextCloseLength >
-          normalizedLimit
+        ((blockLimit !== undefined && isRichBlock && currentBlockCount >= blockLimit) ||
+          (mediaLimit !== undefined && isRichMedia && currentMediaCount >= mediaLimit) ||
+          current.length +
+            rawTag.length +
+            buildTelegramHtmlCloseSuffixLength(openTags) +
+            nextCloseLength >
+            normalizedLimit)
       ) {
         flushCurrent();
       }
@@ -1115,6 +1386,12 @@ export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
     if (isSelfClosing) {
       chunkHasPayload = true;
     }
+    if (isRichBlock) {
+      currentBlockCount += 1;
+    }
+    if (isRichMedia) {
+      currentMediaCount += 1;
+    }
     if (isClosing) {
       popTelegramHtmlTag(openTags, tagName);
     } else if (!isSelfClosing) {
@@ -1122,6 +1399,8 @@ export function splitTelegramHtmlChunks(html: string, limit: number): string[] {
         name: tagName,
         openTag: rawTag,
         closeTag: `</${tagName}>`,
+        richBlock: isRichBlock,
+        richMedia: isRichMedia,
       });
     }
     lastIndex = tagEnd;

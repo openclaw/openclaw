@@ -81,7 +81,7 @@ export function createChannelProgressDraftCompositor(params: {
   };
 
   const render = async (options?: { flush?: boolean }): Promise<boolean> => {
-    if (!params.active || params.mode !== "progress") {
+    if (!params.active || params.mode !== "progress" || finalReplyStarted || finalReplyDelivered) {
       return false;
     }
     const text = formatDraftText();
@@ -171,8 +171,12 @@ export function createChannelProgressDraftCompositor(params: {
       return true;
     }
     if (options?.startImmediately || params.shouldStartNow?.(line)) {
+      const alreadyStarted = gate.hasStarted;
       await gate.startNow();
-      return gate.hasStarted ? await render() : false;
+      if (!gate.hasStarted) {
+        return false;
+      }
+      return alreadyStarted ? await render() : true;
     }
     const alreadyStarted = gate.hasStarted;
     const progressActive = await gate.noteWork();
@@ -197,9 +201,11 @@ export function createChannelProgressDraftCompositor(params: {
     },
     markFinalReplyStarted() {
       finalReplyStarted = true;
+      gate.cancel();
     },
     markFinalReplyDelivered() {
       finalReplyDelivered = true;
+      gate.cancel();
     },
     reset() {
       clearProgressState(false);
@@ -215,6 +221,27 @@ export function createChannelProgressDraftCompositor(params: {
     },
     start() {
       return gate.startNow();
+    },
+    async noteActivity(options?: { startImmediately?: boolean }) {
+      if (
+        !params.active ||
+        params.mode !== "progress" ||
+        progressSuppressed ||
+        finalReplyStarted ||
+        finalReplyDelivered
+      ) {
+        return false;
+      }
+      if (options?.startImmediately) {
+        await gate.startNow();
+        return gate.hasStarted ? await render({ flush: true }) : false;
+      }
+      const alreadyStarted = gate.hasStarted;
+      const progressActive = await gate.noteWork();
+      if ((alreadyStarted || progressActive) && gate.hasStarted) {
+        return await render();
+      }
+      return false;
     },
     pushToolProgress: noteProgress,
     async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }) {
@@ -312,7 +339,7 @@ function normalizeReasoningProgressLine(text: string): string {
 }
 
 const REASONING_PROGRESS_TAG_RE =
-  /<\s*(\/?)\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/giu;
+  /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/giu;
 const REASONING_PROGRESS_TAG_NAMES = [
   "think",
   "thinking",
@@ -321,6 +348,9 @@ const REASONING_PROGRESS_TAG_NAMES = [
   "antml:think",
   "antml:thinking",
   "antml:thought",
+  "mm:think",
+  "mm:thinking",
+  "mm:thought",
 ] as const;
 const REASONING_PROGRESS_TAG_PREFIXES = REASONING_PROGRESS_TAG_NAMES.flatMap((name) => [
   `<${name}`,

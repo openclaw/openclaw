@@ -1258,6 +1258,35 @@ describe("message tool explicit target guard", () => {
     expect(mocks.runMessageAction).not.toHaveBeenCalled();
   });
 
+  it.each([
+    {
+      action: "poll",
+      params: {
+        action: "poll",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+    },
+    {
+      action: "sticker",
+      params: {
+        action: "sticker",
+        stickerId: "sticker-1",
+      },
+    },
+  ] as const)("requires an explicit target for $action when configured", async ({ params }) => {
+    const tool = createMessageTool({
+      runMessageAction: mocks.runMessageAction as never,
+      requireExplicitTarget: true,
+      currentChannelProvider: "slack",
+      currentChannelId: "channel:C123",
+    });
+
+    await expect(tool.execute("1", params)).rejects.toThrow(/Explicit message target required/i);
+
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+  });
+
   it("allows upload-file when an explicit target is provided", async () => {
     mocks.runMessageAction.mockResolvedValueOnce({
       kind: "action",

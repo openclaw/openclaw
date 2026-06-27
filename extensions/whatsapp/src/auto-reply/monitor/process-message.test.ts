@@ -1,12 +1,14 @@
 // Whatsapp tests cover process message plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../../inbound/send-result.test-helper.js";
+import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 
 // Hoisted mocks used across tests so vi.mock factories can reference them.
 const {
   resolvePolicyMock,
   buildContextMock,
   isControlCommandMessageMock,
+  dispatchBufferedReplyMock,
   runMessageReceivedMock,
   shouldComputeCommandAuthorizedMock,
   trackBackgroundTaskMock,
@@ -14,6 +16,10 @@ const {
   resolvePolicyMock: vi.fn(),
   buildContextMock: vi.fn(),
   isControlCommandMessageMock: vi.fn(() => false),
+  dispatchBufferedReplyMock: vi.fn(async () => ({
+    queuedFinal: false,
+    counts: { tool: 0, block: 0, final: 0 },
+  })),
   runMessageReceivedMock: vi.fn(async () => undefined),
   shouldComputeCommandAuthorizedMock: vi.fn(() => false),
   trackBackgroundTaskMock: vi.fn(),
@@ -33,10 +39,7 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
   return {
     ...actual,
     buildWhatsAppInboundContext: buildContextMock,
-    dispatchWhatsAppBufferedReply: async () => ({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    }),
+    dispatchWhatsAppBufferedReply: dispatchBufferedReplyMock,
     resolveWhatsAppDmRouteTarget: () => null,
     resolveWhatsAppResponsePrefix: () => undefined,
     updateWhatsAppMainLastRoute: () => {},
@@ -172,7 +175,7 @@ const GROUP_JID = "123@g.us";
 
 function makeBaseMsg(overrides: { body?: string } = {}) {
   const body = overrides.body ?? "hi";
-  return {
+  return createTestWebInboundMessage({
     event: {
       id: "msg1",
       timestamp: 1710000000,
@@ -190,14 +193,23 @@ function makeBaseMsg(overrides: { body?: string } = {}) {
       reply: async () => createAcceptedWhatsAppSendResult("text", "r1"),
       sendMedia: async () => createAcceptedWhatsAppSendResult("media", "m1"),
     },
-    from: GROUP_JID,
-    conversationId: GROUP_JID,
-    accountId: "default",
-    chatType: "group" as const,
+    admission: {
+      accountId: "default",
+      conversation: {
+        kind: "group",
+        id: GROUP_JID,
+      },
+      sender: {
+        id: "+15550002222",
+      },
+      senderAccess: {
+        reasonCode: "group_policy_allowed",
+      },
+    },
     group: {
       subject: "Test Group",
     },
-  };
+  });
 }
 
 const baseRoute = {
@@ -249,6 +261,7 @@ function mockCallArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex 
 describe("processMessage group system prompt wiring", () => {
   beforeEach(() => {
     buildContextMock.mockReset();
+    dispatchBufferedReplyMock.mockClear();
     isControlCommandMessageMock.mockReset();
     isControlCommandMessageMock.mockReturnValue(false);
     resolvePolicyMock.mockReset();
@@ -474,5 +487,45 @@ describe("processMessage group system prompt wiring", () => {
     expect(mockCallArg(trackBackgroundTaskMock, "trackBackgroundTask", 0, 1)).toBeInstanceOf(
       Promise,
     );
+  });
+
+  it("drops blocked admission before session record and reply dispatch", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    buildContextMock.mockImplementationOnce(() => ({
+      Body: "hi",
+      RawBody: "hi",
+      CommandBody: "hi",
+      SessionKey: baseRoute.sessionKey,
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+    }));
+
+    const result = await callProcessMessage({
+      msg: createTestWebInboundMessage({
+        admission: {
+          ingress: {
+            admission: "drop",
+            decision: "block",
+            reasonCode: "dm_policy_not_allowlisted",
+          },
+          senderAccess: {
+            allowed: false,
+            decision: "block",
+            reasonCode: "dm_policy_not_allowlisted",
+          },
+          activationAccess: {
+            allowed: false,
+            shouldSkip: true,
+            reasonCode: "dm_policy_not_allowlisted",
+          },
+        },
+      }),
+    });
+
+    expect(result).toBe(false);
+    expect(buildContextMock).not.toHaveBeenCalled();
+    expect(trackBackgroundTaskMock).not.toHaveBeenCalled();
+    expect(dispatchBufferedReplyMock).not.toHaveBeenCalled();
+    expect(runMessageReceivedMock).not.toHaveBeenCalled();
   });
 });

@@ -82,6 +82,22 @@ export const slackChannelConfigUiHints = {
     label: "Slack Socket Mode Ping/Pong Logging",
     help: "Enable Slack SDK ping/pong transport logs while debugging Socket Mode websocket health.",
   },
+  relay: {
+    label: "Slack Relay Mode",
+    help: 'Relay-delivered Slack events. Use with mode="relay" when openclaw-slack-router owns the Slack Socket Mode connection.',
+  },
+  "relay.url": {
+    label: "Slack Relay URL",
+    help: "Full websocket URL for openclaw-slack-router. Include the route path, for example ws://127.0.0.1:8081/gateway/ws.",
+  },
+  "relay.authToken": {
+    label: "Slack Relay Auth Token",
+    help: "Bearer token used by this gateway to authenticate its reverse websocket connection to openclaw-slack-router.",
+  },
+  "relay.gatewayId": {
+    label: "Slack Relay Gateway ID",
+    help: "Destination id that openclaw-slack-router uses when routing user-group mentions to this gateway.",
+  },
   botToken: {
     label: "Slack Bot Token",
     help: "Slack bot token used for standard chat actions in the configured workspace. Keep this credential scoped and rotate if workspace app permissions change.",

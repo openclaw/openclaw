@@ -17,6 +17,7 @@ import {
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
   recoverStaleTelegramSpooledUpdateClaims,
+  refreshTelegramSpooledUpdateClaim,
   releaseTelegramSpooledUpdateClaim,
   TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS,
   writeTelegramSpooledUpdate,
@@ -140,6 +141,32 @@ describe("Telegram ingress spool", () => {
     });
   });
 
+  it("refreshes active claim timestamps through the Telegram spool queue", async () => {
+    await withTempSpool(async (spoolDir) => {
+      await writeTelegramSpooledUpdate({
+        spoolDir,
+        update: { update_id: 31, message: { text: "refresh me" } },
+      });
+      const update = (await listTelegramSpooledUpdates({ spoolDir }))[0];
+      if (!update) {
+        throw new Error("Expected a spooled update");
+      }
+      const claimed = await claimTelegramSpooledUpdate(update);
+      if (!claimed) {
+        throw new Error("Expected a claimed update");
+      }
+
+      await expect(refreshTelegramSpooledUpdateClaim(claimed, { refreshedAt: 123 })).resolves.toBe(
+        true,
+      );
+
+      const claims = await listTelegramSpooledUpdateClaims({ spoolDir });
+      expect(claims).toHaveLength(1);
+      expect(claims[0]?.updateId).toBe(31);
+      expect(claims[0]?.claim?.claimedAt).toBe(123);
+    });
+  });
+
   it("marks timed out claims failed without requeueing them", async () => {
     await withTempSpool(async (spoolDir) => {
       await writeTelegramSpooledUpdate({
@@ -258,7 +285,25 @@ describe("Telegram ingress spool", () => {
     });
   });
 
-  it("does not treat claims with the current process pid as other live process claims", () => {
+  it("does not treat stale claims with reused pids as live-owned", () => {
+    const now = Date.now();
+    expect(
+      isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess({
+        updateId: 50,
+        path: path.join(os.tmpdir(), "50.json.processing"),
+        pendingPath: path.join(os.tmpdir(), "50.json"),
+        update: { update_id: 50 },
+        receivedAt: now,
+        claim: {
+          processId: "other-process",
+          processPid: process.pid,
+          claimedAt: now - TELEGRAM_SPOOLED_UPDATE_PROCESSING_STALE_MS - 1,
+        },
+      }),
+    ).toBe(false);
+  });
+
+  it("treats fresh claims with reused pids and different owner ids as live-owned", () => {
     const now = Date.now();
     expect(
       isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess({
@@ -273,6 +318,6 @@ describe("Telegram ingress spool", () => {
           claimedAt: now,
         },
       }),
-    ).toBe(false);
+    ).toBe(true);
   });
 });

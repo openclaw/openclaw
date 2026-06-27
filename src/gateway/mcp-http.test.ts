@@ -23,6 +23,9 @@ type MockBeforeToolCallHookResult =
 
 type ScopedToolsCall = {
   sessionKey?: string;
+  sessionId?: string;
+  yieldContextCacheKey?: string;
+  onYield?: (message: string) => Promise<void> | void;
   accountId?: string;
   messageProvider?: string;
   currentChannelId?: string;
@@ -683,6 +686,7 @@ describe("mcp loopback server", () => {
       token: runtime?.nonOwnerToken,
       headers: jsonHeaders({
         "x-session-key": "agent:main:telegram:group:chat123",
+        "x-openclaw-session-id": "session-123",
         "x-openclaw-account-id": "work",
         "x-openclaw-message-channel": "telegram",
         "x-openclaw-current-channel-id": "telegram:chat123",
@@ -699,6 +703,7 @@ describe("mcp loopback server", () => {
     expect(response.status).toBe(200);
     const call = getScopedToolsCall(0);
     expect(call.sessionKey).toBe("agent:main:telegram:group:chat123");
+    expect(call.sessionId).toBe("session-123");
     expect(call.accountId).toBe("work");
     expect(call.messageProvider).toBe("telegram");
     expect(call.currentChannelId).toBe("telegram:chat123");
@@ -717,6 +722,65 @@ describe("mcp loopback server", () => {
       "exec",
       "process",
     ]);
+  });
+
+  it("routes sessions_yield to the current CLI capture", async () => {
+    resolveGatewayScopedToolsMock.mockImplementation((input): MockGatewayScopedTools => {
+      const call = input as ScopedToolsCall;
+      return {
+        agentId: "main",
+        tools: [
+          makeMockTool({
+            name: "sessions_yield",
+            execute: async (_toolCallId, args) => {
+              if (!call.sessionId) {
+                throw new Error("No session context");
+              }
+              if (!call.onYield) {
+                throw new Error("Yield not supported in this context");
+              }
+              const message = (args as { message?: string }).message ?? "Turn yielded.";
+              await call.onYield(message);
+              return {
+                content: [{ type: "text", text: JSON.stringify({ status: "yielded", message }) }],
+              };
+            },
+          }),
+        ],
+      };
+    });
+    const { runtime } = await startLoopbackServerForTest();
+    const firstYield = vi.fn();
+    const secondYield = vi.fn();
+    const sendYield = async (
+      captureKey: string,
+      message: string,
+      onYield: (message: string) => void,
+    ) => {
+      beginMcpLoopbackToolCallCapture({
+        captureKey,
+        onYield,
+        onToolCallResult: vi.fn(),
+      });
+      return await sendLoopbackToolCall({
+        token: runtime.ownerToken,
+        name: "sessions_yield",
+        args: { message },
+        headers: {
+          "x-session-key": "agent:main:main",
+          "x-openclaw-session-id": "session-reused",
+          "x-openclaw-cli-capture-key": captureKey,
+        },
+      });
+    };
+
+    const captureKey = "capture-reused";
+    expect((await sendYield(captureKey, "first yield", firstYield)).status).toBe(200);
+    expect((await sendYield(captureKey, "second yield", secondYield)).status).toBe(200);
+
+    expect(firstYield).toHaveBeenCalledWith("first yield");
+    expect(secondYield).toHaveBeenCalledWith("second yield");
+    expect(resolveGatewayScopedToolsMock).toHaveBeenCalledTimes(2);
   });
 
   it("keeps loopback tool cache entries separate by inbound event, delivery, audio, and target policy", async () => {
@@ -1624,11 +1688,18 @@ describe("mcp loopback server", () => {
 describe("createMcpLoopbackServerConfig", () => {
   it("builds a server entry with env-driven headers", () => {
     const config = createMcpLoopbackServerConfig(23119) as {
-      mcpServers?: Record<string, { url?: string; headers?: Record<string, string> }>;
+      mcpServers?: Record<
+        string,
+        { alwaysLoad?: boolean; url?: string; headers?: Record<string, string> }
+      >;
     };
     expect(config.mcpServers?.openclaw?.url).toBe("http://127.0.0.1:23119/mcp");
+    expect(config.mcpServers?.openclaw?.alwaysLoad).toBe(true);
     expect(config.mcpServers?.openclaw?.headers?.Authorization).toBe(
       "Bearer ${OPENCLAW_MCP_TOKEN}",
+    );
+    expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-session-id"]).toBe(
+      "${OPENCLAW_MCP_SESSION_ID}",
     );
     expect(config.mcpServers?.openclaw?.headers?.["x-openclaw-message-channel"]).toBe(
       "${OPENCLAW_MCP_MESSAGE_CHANNEL}",

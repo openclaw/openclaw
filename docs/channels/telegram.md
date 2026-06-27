@@ -111,6 +111,10 @@ After a successful startup, OpenClaw caches the bot identity in the state direct
 
 ## Access control and activation
 
+### Group bot identity
+
+In Telegram groups and forum topics, an explicit mention of the configured bot handle (for example `@my_bot`) is treated as addressing the selected OpenClaw agent, even when the agent persona name differs from the Telegram username. The group silence policy still applies to unrelated group traffic, but the bot handle itself is not considered "someone else."
+
 <Tabs>
   <Tab title="DM policy">
     `channels.telegram.dmPolicy` controls direct message access:
@@ -276,6 +280,23 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
 }
 ```
 
+    Group history context defaults to `mention-only`: prior group messages are
+    included only when they were addressed to the bot, are replies to the bot,
+    or are the bot's own messages. Set `includeGroupHistoryContext: "recent"` to
+    include recent room history for trusted groups. Set
+    `includeGroupHistoryContext: "none"` to send no prior Telegram group history
+    with the next turn.
+
+```json5
+{
+  channels: {
+    telegram: {
+      includeGroupHistoryContext: "recent",
+    },
+  },
+}
+```
+
     Getting the group chat ID:
 
     - forward a group message to `@userinfobot` / `@getidsbot`
@@ -315,7 +336,8 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
     Requirement:
 
     - `channels.telegram.streaming` is `off | partial | block | progress` (default: `partial`)
-    - `progress` keeps one editable status draft for tool progress, clears it at completion, and sends the final answer as a normal message
+    - short initial answer previews are debounced, then materialized after a bounded delay if the run is still active
+    - `progress` keeps one editable status draft for tool progress, shows the stable status label when answer activity arrives before tool progress, clears it at completion, and sends the final answer as a normal message
     - `streaming.preview.toolProgress` controls whether tool/progress updates reuse the same edited preview message (default: `true` when preview streaming is active)
     - `streaming.preview.commandText` controls command/exec detail inside those tool-progress lines: `raw` (default, preserves released behavior) or `status` (tool label only)
     - `streaming.progress.commentary` (default: `false`) opts into assistant commentary/preamble text in the temporary progress draft
@@ -401,13 +423,30 @@ curl "https://api.telegram.org/bot<bot_token>/getUpdates"
   </Accordion>
 
   <Accordion title="Rich message formatting">
-    Outbound text uses Telegram rich messages.
+    Outbound text uses standard Telegram HTML messages by default so replies remain readable across current Telegram clients. This compatibility mode supports normal bold, italic, links, code, spoilers, and quotes, but not Bot API 10.1 rich-only blocks such as native tables, details, rich media, and formulas.
 
+    Set `channels.telegram.richMessages: true` to opt into Bot API 10.1 rich messages:
+
+```json5
+{
+  channels: {
+    telegram: {
+      richMessages: true,
+    },
+  },
+}
+```
+
+    When enabled:
+
+    - The agent is told that Telegram rich messages are available for this bot/account.
     - Markdown text is rendered through OpenClaw's Markdown IR and sent as Telegram rich HTML.
     - Explicit rich HTML payloads preserve supported Bot API 10.1 tags such as headings, tables, details, rich media, and formulas.
     - Media captions still use Telegram HTML captions because rich messages do not replace captions.
 
     This keeps model text away from Telegram Rich Markdown sigils, so currency like `$400-600K` is not parsed as math. Long rich text is split automatically across Telegram's rich text and rich block limits. Tables over Telegram's column limit are sent as code blocks.
+
+    Default: off for client compatibility. Rich messages require compatible Telegram clients; some current Desktop, Web, Android, and third-party clients display accepted rich messages as unsupported. Keep this option disabled unless every client used with the bot can render them. `/status` shows whether the current Telegram session has rich messages on or off.
 
     Link previews are enabled by default. `channels.telegram.linkPreview: false` skips automatic entity detection for rich text.
 
@@ -1064,7 +1103,7 @@ Primary reference: [Configuration reference - Telegram](/gateway/config-channels
 - command/menu: `commands.native`, `commands.nativeSkills`, `customCommands`
 - threading/replies: `replyToMode`
 - streaming: `streaming` (preview), `streaming.preview.toolProgress`, `blockStreaming`
-- formatting/delivery: `textChunkLimit`, `chunkMode`, `linkPreview`, `responsePrefix`
+- formatting/delivery: `textChunkLimit`, `chunkMode`, `richMessages`, `linkPreview`, `responsePrefix`
 - media/network: `mediaMaxMb`, `mediaGroupFlushMs`, `timeoutSeconds`, `pollingStallThresholdMs`, `retry`, `network.autoSelectFamily`, `network.dangerouslyAllowPrivateNetwork`, `proxy`
 - custom API root: `apiRoot` (Bot API root only; do not include `/bot<TOKEN>`)
 - webhook: `webhookUrl`, `webhookSecret`, `webhookPath`, `webhookHost`

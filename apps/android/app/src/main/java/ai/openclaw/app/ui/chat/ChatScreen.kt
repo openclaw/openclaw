@@ -1,6 +1,7 @@
 package ai.openclaw.app.ui.chat
 
 import ai.openclaw.app.MainViewModel
+import ai.openclaw.app.R
 import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatMessageContent
 import ai.openclaw.app.chat.ChatPendingToolCall
@@ -39,6 +40,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
@@ -63,6 +65,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -153,12 +156,11 @@ fun ChatScreen(
     modifier =
       Modifier
         .fillMaxSize()
-        .padding(horizontal = 18.dp, vertical = 6.dp),
-    verticalArrangement = Arrangement.spacedBy(5.dp),
+        .padding(horizontal = 16.dp, vertical = 10.dp),
+    verticalArrangement = Arrangement.spacedBy(8.dp),
   ) {
     ChatHeader(
       sessionTitle = currentSessionTitle(sessionKey = sessionKey, sessions = sessions),
-      thinkingLevel = thinkingLevel,
       healthOk = healthOk,
       pendingRunCount = pendingRunCount,
       onMore = {
@@ -261,11 +263,11 @@ private fun ChatSessionSwitcher(
     if (sessions.size > choices.size) {
       Surface(
         onClick = onOpenSessions,
-        modifier = Modifier.heightIn(min = 36.dp),
+        modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),
         shape = RoundedCornerShape(ClawTheme.radii.pill),
-        color = ClawTheme.colors.canvas,
+        color = ClawTheme.colors.surfaceRaised.copy(alpha = 0.72f),
         contentColor = ClawTheme.colors.textMuted,
-        border = BorderStroke(1.dp, ClawTheme.colors.border),
+        border = BorderStroke(1.dp, ClawTheme.colors.border.copy(alpha = 0.7f)),
       ) {
         Row(
           modifier = Modifier.padding(horizontal = 10.dp, vertical = 7.dp),
@@ -288,11 +290,11 @@ private fun ChatSessionChip(
 ) {
   Surface(
     onClick = onClick,
-    modifier = Modifier.heightIn(min = 36.dp),
+    modifier = Modifier.heightIn(min = ClawTheme.spacing.touchTarget),
     shape = RoundedCornerShape(ClawTheme.radii.pill),
-    color = if (active) ClawTheme.colors.primary else ClawTheme.colors.surfaceRaised,
-    contentColor = if (active) ClawTheme.colors.primaryText else ClawTheme.colors.text,
-    border = BorderStroke(1.dp, if (active) ClawTheme.colors.primary else ClawTheme.colors.border),
+    color = if (active) ClawTheme.colors.surfacePressed.copy(alpha = 0.9f) else ClawTheme.colors.surfaceRaised.copy(alpha = 0.72f),
+    contentColor = ClawTheme.colors.text,
+    border = BorderStroke(1.dp, if (active) ClawTheme.colors.borderStrong else ClawTheme.colors.border.copy(alpha = 0.7f)),
   ) {
     Text(
       text = text,
@@ -307,48 +309,56 @@ private fun ChatSessionChip(
 @Composable
 private fun ChatHeader(
   sessionTitle: String,
-  thinkingLevel: String,
   healthOk: Boolean,
   pendingRunCount: Int,
   onMore: () -> Unit,
 ) {
-  Row(
-    modifier = Modifier.fillMaxWidth(),
-    verticalAlignment = Alignment.CenterVertically,
-    horizontalArrangement = Arrangement.spacedBy(6.dp),
-  ) {
-    Box(modifier = Modifier.size(ClawTheme.spacing.touchTarget))
-
-    Column(
-      modifier = Modifier.weight(1f),
-      horizontalAlignment = Alignment.CenterHorizontally,
-      verticalArrangement = Arrangement.spacedBy(3.dp),
+  Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+      Icon(
+        painter = painterResource(id = R.drawable.openclaw_logo),
+        contentDescription = null,
+        modifier = Modifier.size(25.dp),
+        tint = ClawTheme.colors.text,
+      )
       Text(
-        text = sessionTitle,
-        style = ClawTheme.type.title.copy(fontSize = 18.sp, lineHeight = 23.sp),
+        text = "OpenClaw",
+        style = ClawTheme.type.title.copy(fontSize = 17.sp, lineHeight = 21.sp),
         color = ClawTheme.colors.text,
+        modifier = Modifier.weight(1f),
         maxLines = 1,
         overflow = TextOverflow.Ellipsis,
-        textAlign = TextAlign.Center,
       )
       ModelPill(
         text =
           when {
             pendingRunCount > 0 -> "Working"
-            healthOk -> "auto"
-            else -> "offline"
+            healthOk -> "Ready"
+            else -> "Offline"
           },
         status =
           when {
             pendingRunCount > 0 -> ClawStatus.Warning
-            healthOk -> ClawStatus.Neutral
+            healthOk -> ClawStatus.Success
             else -> ClawStatus.Danger
           },
       )
+      HeaderIcon(icon = Icons.Default.Refresh, contentDescription = "Refresh chat", onClick = onMore)
     }
-
-    HeaderIcon(icon = Icons.Default.Refresh, contentDescription = "Refresh chat", onClick = onMore)
+    Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+      Text(text = "Chat", style = ClawTheme.type.display.copy(fontSize = 24.sp, lineHeight = 28.sp), color = ClawTheme.colors.text, maxLines = 1)
+      Text(
+        text = sessionTitle,
+        style = ClawTheme.type.caption.copy(fontSize = 13.sp, lineHeight = 17.sp),
+        color = ClawTheme.colors.textMuted,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+      )
+    }
   }
 }
 
@@ -365,7 +375,13 @@ private fun ModelPill(
     }
   Surface(
     shape = RoundedCornerShape(ClawTheme.radii.pill),
-    color = ClawTheme.colors.surfaceRaised,
+    color =
+      when (status) {
+        ClawStatus.Success -> ClawTheme.colors.successSoft
+        ClawStatus.Warning -> ClawTheme.colors.warningSoft
+        ClawStatus.Danger -> ClawTheme.colors.dangerSoft
+        ClawStatus.Neutral -> ClawTheme.colors.surfaceRaised
+      },
     contentColor = ClawTheme.colors.textMuted,
     border = BorderStroke(1.dp, borderColor),
   ) {
@@ -577,13 +593,15 @@ private fun ChatBubble(
     horizontalArrangement = if (isUser) Arrangement.End else Arrangement.Start,
   ) {
     Surface(
-      modifier = Modifier.fillMaxWidth(if (isUser) 0.64f else 0.56f),
+      modifier = Modifier.fillMaxWidth(if (isUser) 0.84f else 0.94f),
       shape = RoundedCornerShape(7.dp),
-      color = ClawTheme.colors.surfaceRaised,
+      color = if (isUser) ClawTheme.colors.surfacePressed.copy(alpha = 0.86f) else ClawTheme.colors.surfaceRaised.copy(alpha = 0.84f),
       contentColor = ClawTheme.colors.text,
-      border = BorderStroke(1.dp, if (live) ClawTheme.colors.borderStrong else ClawTheme.colors.border),
+      border = BorderStroke(1.dp, if (live) ClawTheme.colors.borderStrong else ClawTheme.colors.border.copy(alpha = 0.45f)),
+      tonalElevation = 1.dp,
+      shadowElevation = 2.dp,
     ) {
-      Column(modifier = Modifier.padding(horizontal = 7.dp, vertical = 3.5.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+      Column(modifier = Modifier.padding(horizontal = 11.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         Text(
           text =
             when {
@@ -764,7 +782,7 @@ private fun ChatContextMeter(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
       ) {
-        Icon(imageVector = Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(12.dp), tint = ClawTheme.colors.textSubtle)
+        Icon(imageVector = Icons.Default.ArrowDropDown, contentDescription = null, modifier = Modifier.size(13.dp), tint = ClawTheme.colors.textSubtle)
         Text(
           text = contextMeterLabel(contextUsage, thinkingLevel),
           style = ClawTheme.type.caption.copy(fontSize = 12.5.sp, lineHeight = 16.sp),
@@ -936,7 +954,7 @@ internal fun resolveChatContextUsage(
         sessionKey = sessionKey,
         mainSessionKey = mainSessionKey,
       )
-  }
+    }
   return ChatContextUsage(
     totalTokens = entry?.totalTokens,
     totalTokensFresh = entry?.totalTokensFresh,
@@ -972,24 +990,6 @@ private fun userFacingChatError(error: String): String {
     else -> error
   }
 }
-
-/** Normalizes persisted thinking values into compact UI labels. */
-private fun thinkingDisplay(value: String): String =
-  when (value.lowercase(Locale.US)) {
-    "low" -> "Low"
-    "medium" -> "Medium"
-    "high" -> "High"
-    else -> "Off"
-  }
-
-/** Converts displayed thinking labels back to gateway request values. */
-private fun thinkingValue(display: String): String =
-  when (display.lowercase(Locale.US)) {
-    "low" -> "low"
-    "medium" -> "medium"
-    "high" -> "high"
-    else -> "off"
-  }
 
 /** Cycles through context budget presets from the compact composer control. */
 private fun nextThinkingValue(value: String): String =

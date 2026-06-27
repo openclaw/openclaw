@@ -175,6 +175,7 @@ type DispatchInboundParams = {
     }) => Promise<void> | void;
     onReplyStart?: () => Promise<void> | void;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+    typingKeepalive?: boolean;
     disableBlockStreaming?: boolean;
     suppressDefaultToolProgressMessages?: boolean;
     queuedDeliveryCorrelations?: Array<{ begin: () => () => void }>;
@@ -184,6 +185,7 @@ type DispatchInboundParams = {
     onPartialReply?: (payload: { text?: string }) => Promise<void> | void;
     onAssistantMessageStart?: () => Promise<void> | void;
     allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
+    allowToolLifecycleWhenProgressHidden?: boolean;
     onTypingCleanup?: () => Promise<void> | void;
   };
 };
@@ -203,31 +205,18 @@ const recordInboundSession = vi.hoisted(() =>
   vi.fn<(params?: unknown) => Promise<void>>(async () => {}),
 );
 const configSessionsMocks = vi.hoisted(() => ({
-  loadSessionStore: vi.fn<(storePath: string, opts?: unknown) => Record<string, unknown>>(
-    () => ({}),
-  ),
-  readSessionUpdatedAt: vi.fn<(params?: unknown) => number | undefined>(() => undefined),
-  readLatestAssistantTextFromSessionTranscript: vi.fn<
-    (sessionFile: string) => Promise<{ text: string; timestamp?: number } | undefined>
+  getSessionEntry: vi.fn<(params?: unknown) => unknown>(() => undefined),
+  readLatestAssistantTextByIdentity: vi.fn<
+    (params?: unknown) => Promise<{ text: string; timestamp?: number } | undefined>
   >(async () => undefined),
-  resolveAndPersistSessionFile: vi.fn<(params?: unknown) => Promise<{ sessionFile: string }>>(
-    async () => ({ sessionFile: "/tmp/openclaw-discord-process-test-session.jsonl" }),
-  ),
-  resolveSessionStoreEntry: vi.fn<
-    (params: { store: Record<string, unknown>; sessionKey?: string }) => { existing?: unknown }
-  >((params) => ({
-    existing: params.sessionKey ? params.store[params.sessionKey] : undefined,
-  })),
+  readSessionUpdatedAt: vi.fn<(params?: unknown) => number | undefined>(() => undefined),
   resolveStorePath: vi.fn<(path?: unknown, opts?: unknown) => string>(
     () => "/tmp/openclaw-discord-process-test-sessions.json",
   ),
 }));
-const loadSessionStore = configSessionsMocks.loadSessionStore;
+const getSessionEntry = configSessionsMocks.getSessionEntry;
+const readLatestAssistantTextByIdentity = configSessionsMocks.readLatestAssistantTextByIdentity;
 const readSessionUpdatedAt = configSessionsMocks.readSessionUpdatedAt;
-const readLatestAssistantTextFromSessionTranscript =
-  configSessionsMocks.readLatestAssistantTextFromSessionTranscript;
-const resolveAndPersistSessionFile = configSessionsMocks.resolveAndPersistSessionFile;
-const resolveSessionStoreEntry = configSessionsMocks.resolveSessionStoreEntry;
 const resolveStorePath = configSessionsMocks.resolveStorePath;
 const createDiscordRestClientSpy = vi.hoisted(() =>
   vi.fn<
@@ -399,17 +388,15 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", () => ({
-  loadSessionStore: (storePath: string, opts?: unknown) =>
-    configSessionsMocks.loadSessionStore(storePath, opts),
+  getSessionEntry: (params?: unknown) => configSessionsMocks.getSessionEntry(params),
   readSessionUpdatedAt: (params?: unknown) => configSessionsMocks.readSessionUpdatedAt(params),
-  readLatestAssistantTextFromSessionTranscript: (sessionFile: string) =>
-    configSessionsMocks.readLatestAssistantTextFromSessionTranscript(sessionFile),
-  resolveAndPersistSessionFile: (params?: unknown) =>
-    configSessionsMocks.resolveAndPersistSessionFile(params),
-  resolveSessionStoreEntry: (params: { store: Record<string, unknown>; sessionKey?: string }) =>
-    configSessionsMocks.resolveSessionStoreEntry(params),
   resolveStorePath: (path?: unknown, opts?: unknown) =>
     configSessionsMocks.resolveStorePath(path, opts),
+}));
+
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", () => ({
+  readLatestAssistantTextByIdentity: (params?: unknown) =>
+    configSessionsMocks.readLatestAssistantTextByIdentity(params),
 }));
 
 vi.mock("../client.js", () => ({
@@ -504,24 +491,16 @@ beforeEach(() => {
   createDiscordDraftStream.mockClear();
   dispatchInboundMessage.mockClear();
   recordInboundSession.mockClear();
-  loadSessionStore.mockClear();
   readSessionUpdatedAt.mockClear();
-  readLatestAssistantTextFromSessionTranscript.mockClear();
-  resolveAndPersistSessionFile.mockClear();
-  resolveSessionStoreEntry.mockClear();
+  getSessionEntry.mockClear();
+  readLatestAssistantTextByIdentity.mockClear();
   resolveStorePath.mockClear();
   createDiscordRestClientSpy.mockClear();
   dispatchInboundMessage.mockResolvedValue(createNoQueuedDispatchResult());
   recordInboundSession.mockResolvedValue(undefined);
-  loadSessionStore.mockReturnValue({});
   readSessionUpdatedAt.mockReturnValue(undefined);
-  readLatestAssistantTextFromSessionTranscript.mockResolvedValue(undefined);
-  resolveAndPersistSessionFile.mockResolvedValue({
-    sessionFile: "/tmp/openclaw-discord-process-test-session.jsonl",
-  });
-  resolveSessionStoreEntry.mockImplementation((params) => ({
-    existing: params.sessionKey ? params.store[params.sessionKey] : undefined,
-  }));
+  getSessionEntry.mockReturnValue(undefined);
+  readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
   resolveStorePath.mockReturnValue("/tmp/openclaw-discord-process-test-sessions.json");
   threadBindingTesting.resetThreadBindingsForTests();
 });
@@ -851,6 +830,39 @@ describe("processDiscordMessage ack reactions", () => {
     });
   });
 
+  it("records accepted mention ingress before acking and dispatching", async () => {
+    const events: string[] = [];
+    recordInboundSession.mockImplementationOnce(async () => {
+      events.push("record");
+    });
+    sendMocks.reactMessageDiscord.mockImplementationOnce(async () => {
+      events.push("ack");
+    });
+    dispatchInboundMessage.mockImplementationOnce(async () => {
+      events.push("dispatch");
+      return createNoQueuedDispatchResult();
+    });
+    const ctx = await createAutomaticSourceDeliveryContext({
+      accountId: "ops",
+      shouldRequireMention: true,
+      effectiveWasMentioned: true,
+      route: {
+        agentId: "main",
+        channel: "discord",
+        accountId: "ops",
+        sessionKey: "agent:main:discord:channel:c1",
+        mainSessionKey: "agent:main:main",
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(events).toEqual(["record", "ack", "dispatch"]);
+    expect(recordInboundSession).toHaveBeenCalledTimes(1);
+    expect(sendMocks.reactMessageDiscord).toHaveBeenCalled();
+    expect(dispatchInboundMessage).toHaveBeenCalledTimes(1);
+  });
+
   it("uses preflight-resolved messageChannelId when message.channelId is missing", async () => {
     const ctx = await createAutomaticSourceDeliveryContext({
       message: {
@@ -933,6 +945,7 @@ describe("processDiscordMessage ack reactions", () => {
     expect(replyTypingFeedback.onReplyStart).toHaveBeenCalledTimes(1);
     expect(replyTypingFeedback.onIdle).toHaveBeenCalledTimes(1);
     expect(replyTypingFeedback.onCleanup).toHaveBeenCalledTimes(1);
+    expect(getLastDispatchReplyOptions()?.typingKeepalive).toBe(false);
     expect(typingMocks.sendTyping).not.toHaveBeenCalled();
   });
 
@@ -973,6 +986,33 @@ describe("processDiscordMessage ack reactions", () => {
     }
   });
 
+  it("keeps one typing refresh loop for default message-tool replies", async () => {
+    vi.useFakeTimers();
+    try {
+      dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+        await params?.replyOptions?.onReplyStart?.();
+        await vi.advanceTimersByTimeAsync(3_500);
+        return createNoQueuedDispatchResult();
+      });
+      const ctx = await createBaseContext({
+        shouldRequireMention: false,
+        effectiveWasMentioned: false,
+        cfg: {
+          messages: { groupChat: { visibleReplies: "message_tool" } },
+          session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+        },
+        route: BASE_CHANNEL_ROUTE,
+      });
+
+      await runProcessDiscordMessage(ctx);
+
+      expect(getLastDispatchReplyOptions()?.typingKeepalive).toBe(false);
+      expect(typingMocks.sendTyping).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("debounces intermediate phase reactions and jumps to done for short runs", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onReasoningStream?.();
@@ -984,6 +1024,7 @@ describe("processDiscordMessage ack reactions", () => {
 
     await runProcessDiscordMessage(ctx);
 
+    expect(getLastDispatchReplyOptions()?.allowToolLifecycleWhenProgressHidden).toBe(true);
     const emojis = getReactionEmojis();
     expect(emojis).toContain("👀");
     expect(emojis).toContain(DEFAULT_EMOJIS.done);
@@ -1152,6 +1193,7 @@ describe("processDiscordMessage ack reactions", () => {
 
     await runProcessDiscordMessage(ctx);
 
+    expect(getLastDispatchReplyOptions()?.allowToolLifecycleWhenProgressHidden).toBeUndefined();
     expect(getReactionEmojis()).toEqual(["👀"]);
   });
 
@@ -1519,6 +1561,7 @@ describe("processDiscordMessage session routing", () => {
 
     expectRecordFields(requireRecord(getLastDispatchReplyOptions(), "dispatch reply options"), {
       sourceReplyDeliveryMode: "message_tool_only",
+      typingKeepalive: false,
       disableBlockStreaming: true,
     });
     expect(createDiscordDraftStream).not.toHaveBeenCalled();
@@ -2154,12 +2197,12 @@ describe("processDiscordMessage draft streaming", () => {
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
-  it("streams Discord tool progress for coding-profile message-tool-only guild replies", async () => {
-    const draftStream = createMockDraftStreamForTest();
-
+  it("keeps Discord tool progress private for coding-profile message-tool-only guild replies", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       expect(params?.replyOptions?.sourceReplyDeliveryMode).toBe("message_tool_only");
-      expect(params?.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
+      expect(
+        params?.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed,
+      ).toBeUndefined();
       await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
       await params?.replyOptions?.onItemEvent?.({ progressText: "exec done" });
       return createNoQueuedDispatchResult();
@@ -2179,7 +2222,36 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     expect(getLastDispatchReplyOptions()?.sourceReplyDeliveryMode).toBe("message_tool_only");
-    expect(draftStream.update).toHaveBeenCalledWith("Pinching\n\n🛠️ Exec\n• exec done");
+    expect(createDiscordDraftStream).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).not.toHaveBeenCalled();
+  });
+
+  it("preserves explicitly enabled status reactions without exposing tool progress drafts", async () => {
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      expect(params?.replyOptions?.sourceReplyDeliveryMode).toBe("message_tool_only");
+      expect(params?.replyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
+      expect(params?.replyOptions?.suppressDefaultToolProgressMessages).toBe(true);
+      await params?.replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+      return createNoQueuedDispatchResult();
+    });
+
+    const ctx = await createBaseContext({
+      cfg: {
+        tools: { profile: "coding" },
+        messages: {
+          ackReaction: "👀",
+          groupChat: { visibleReplies: "message_tool" },
+          statusReactions: { enabled: true, timing: { debounceMs: 0 } },
+        },
+        session: { store: "/tmp/openclaw-discord-process-test-sessions.json" },
+      },
+      route: BASE_CHANNEL_ROUTE,
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expect(getReactionEmojis()).toContain(DEFAULT_EMOJIS.done);
+    expect(createDiscordDraftStream).not.toHaveBeenCalled();
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
@@ -2207,10 +2279,8 @@ describe("processDiscordMessage draft streaming", () => {
       (_value, index) => `continuation${index}`,
     ).join(" ")}`;
 
-    loadSessionStore.mockReturnValue({
-      "agent:main:discord:channel:c1": { sessionId: "session-1" },
-    });
-    readLatestAssistantTextFromSessionTranscript.mockResolvedValue({
+    getSessionEntry.mockReturnValue({ sessionId: "session-1" });
+    readLatestAssistantTextByIdentity.mockResolvedValue({
       text: fullAnswer,
       timestamp: Date.now() + 60_000,
     });
@@ -2574,17 +2644,20 @@ describe("processDiscordMessage draft streaming", () => {
     expect(deliverDiscordReply).not.toHaveBeenCalled();
   });
 
-  it("suppresses reasoning payload delivery to Discord", async () => {
+  it("delivers reasoning block payloads to Discord", async () => {
     mockDispatchSingleBlockReply({ text: "thinking...", isReasoning: true });
     await processStreamOffDiscordMessage();
 
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [{ text: "thinking...", isReasoning: true }],
+    });
   });
 
-  it("suppresses reasoning-tagged final payload delivery to Discord", async () => {
+  it("delivers reasoning-tagged final payload to Discord", async () => {
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.dispatcher.sendFinalReply({
-        text: "Reasoning:\nthis should stay internal",
+        text: "Reasoning:\nthis should be visible",
         isReasoning: true,
       });
       return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
@@ -2596,8 +2669,10 @@ describe("processDiscordMessage draft streaming", () => {
 
     await runProcessDiscordMessage(ctx);
 
-    expect(deliverDiscordReply).not.toHaveBeenCalled();
-    expect(editMessageDiscord).not.toHaveBeenCalled();
+    expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
+    expect(firstMockArg(deliverDiscordReply, "deliverDiscordReply")).toMatchObject({
+      replies: [{ text: "this should be visible", isReasoning: true }],
+    });
   });
 
   it("delivers non-reasoning block payloads to Discord", async () => {
@@ -2992,8 +3067,8 @@ describe("processDiscordMessage draft streaming", () => {
     await runProcessDiscordMessage(ctx);
 
     const lastUpdate = draftStream.update.mock.calls.at(-1)?.[0];
-    expect(lastUpdate).toContain("completed");
-    expect(lastUpdate).not.toContain("install dependencies");
+    expect(lastUpdate).toContain("install dependencies");
+    expect(lastUpdate).not.toContain("completed");
   });
 
   it("drops later tool warning finals after progress preview final replies", async () => {

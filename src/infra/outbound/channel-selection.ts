@@ -8,6 +8,7 @@ import {
   resolveMissingOfficialExternalChannelPluginRepairHint,
 } from "../../plugins/official-external-plugin-repair-hints.js";
 import { defaultRuntime } from "../../runtime.js";
+import { isAccountEnabled } from "../../shared/account-enabled.js";
 import {
   listDeliverableMessageChannels,
   type DeliverableMessageChannel,
@@ -130,14 +131,6 @@ function formatMultipleConfiguredChannelsMessage(configured: readonly string[]):
     `Channel is required when multiple channels are configured: ${configured.join(", ")}.`,
     "Pass --channel <channel> to choose one.",
   ].join(" ");
-}
-
-function isAccountEnabled(account: unknown): boolean {
-  if (!account || typeof account !== "object") {
-    return true;
-  }
-  const enabled = (account as { enabled?: boolean }).enabled;
-  return enabled !== false;
 }
 
 const loggedChannelSelectionErrors = new Set<string>();

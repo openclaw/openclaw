@@ -11,6 +11,13 @@ const inboundBodyMock = vi.hoisted(() =>
     historyKey: undefined,
     commandAuthorized: false,
     effectiveWasMentioned: false,
+    mentionFacts: {
+      canDetectMention: true,
+      wasMentioned: false,
+      effectiveWasMentioned: false,
+      requireMention: false,
+      shouldSkip: false,
+    },
     canDetectMention: true,
     shouldBypassMention: false,
     hasControlCommand: false,

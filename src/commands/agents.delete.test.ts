@@ -2,7 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { resolveWorkspaceAttestationPath } from "../agents/workspace.js";
+import { resolveWorkspaceAttestationPaths } from "../agents/workspace.js";
 import { loadSessionStore, resolveStorePath, saveSessionStore } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
@@ -26,6 +26,14 @@ const gatewayMocks = vi.hoisted(() => ({
   isGatewayCredentialsRequiredError: vi.fn(),
   isGatewayTransportError: vi.fn(),
 }));
+
+function resolveCurrentWorkspaceAttestationPath(dir: string): string {
+  const [attestationPath] = resolveWorkspaceAttestationPaths(dir);
+  if (!attestationPath) {
+    throw new Error("expected current workspace attestation path");
+  }
+  return attestationPath;
+}
 
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
@@ -256,7 +264,9 @@ describe("agents delete command", () => {
         deletedAgentId: "ops",
         sessions: {},
       });
-      const attestationPath = resolveWorkspaceAttestationPath(path.join(stateDir, "workspace-ops"));
+      const attestationPath = resolveCurrentWorkspaceAttestationPath(
+        path.join(stateDir, "workspace-ops"),
+      );
       await fs.mkdir(path.dirname(attestationPath), { recursive: true });
       await fs.writeFile(
         attestationPath,
@@ -346,7 +356,7 @@ describe("agents delete command", () => {
     await withStateDirEnv("openclaw-agents-delete-shared-workspace-", async ({ stateDir }) => {
       const sharedWorkspace = path.join(stateDir, "workspace-shared");
       await fs.mkdir(sharedWorkspace, { recursive: true });
-      const attestationPath = resolveWorkspaceAttestationPath(sharedWorkspace);
+      const attestationPath = resolveCurrentWorkspaceAttestationPath(sharedWorkspace);
       await fs.mkdir(path.dirname(attestationPath), { recursive: true });
       await fs.writeFile(
         attestationPath,

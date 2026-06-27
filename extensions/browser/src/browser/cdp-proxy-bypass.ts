@@ -67,10 +67,6 @@ function appendLoopbackEntries(value: string | undefined): string {
   return value ? `${value},${LOOPBACK_ENTRIES}` : LOOPBACK_ENTRIES;
 }
 
-export async function withNoProxyForLocalhost<T>(fn: () => Promise<T>): Promise<T> {
-  return await withNoProxyForCdpUrl("http://127.0.0.1", fn);
-}
-
 function isLoopbackCdpUrl(url: string): boolean {
   try {
     return isLoopbackHost(new URL(url).hostname);

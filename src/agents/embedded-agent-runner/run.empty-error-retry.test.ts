@@ -25,31 +25,35 @@ function emptyErrorAttempt(
 ): EmbeddedRunAttemptResult {
   // Models can report stopReason=error with no output after tool activity; that
   // is replay-safe only when the attempt metadata records no side effects.
+  const assistant = {
+    role: "assistant",
+    stopReason: "error",
+    provider,
+    model,
+    content,
+    usage: { input: 100, output: outputTokens, totalTokens: 100 + outputTokens },
+    ...(errorMessage ? { errorMessage } : {}),
+  } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
   return makeAttemptResult({
     assistantTexts: [],
-    lastAssistant: {
-      role: "assistant",
-      stopReason: "error",
-      provider,
-      model,
-      content,
-      usage: { input: 100, output: outputTokens, totalTokens: 100 + outputTokens },
-      ...(errorMessage ? { errorMessage } : {}),
-    } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
   });
 }
 
 function successAttempt(provider: string, model: string): EmbeddedRunAttemptResult {
+  const assistant = {
+    role: "assistant",
+    stopReason: "stop",
+    provider,
+    model,
+    content: [{ type: "text", text: "Done." }],
+    usage: { input: 100, output: 5, totalTokens: 105 },
+  } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
   return makeAttemptResult({
     assistantTexts: ["Done."],
-    lastAssistant: {
-      role: "assistant",
-      stopReason: "stop",
-      provider,
-      model,
-      content: [{ type: "text", text: "Done." }],
-      usage: { input: 100, output: 5, totalTokens: 105 },
-    } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
   });
 }
 

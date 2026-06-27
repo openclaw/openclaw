@@ -9,7 +9,7 @@ import {
 import {
   findOpenAIStrictToolProjectionDiagnostics,
   normalizeOpenAIStrictToolParameters,
-  resolveOpenAIStrictToolFlagForProjection,
+  resolveOpenAIProjectedToolsStrictToolFlag,
 } from "../../agents/openai-tool-schema.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { Model, Tool } from "../types.js";
@@ -96,7 +96,7 @@ function resolveResponsesStrictToolFlag(
   strictSetting: boolean | null | undefined,
   model: Model | undefined,
 ): boolean | undefined {
-  const strict = resolveOpenAIStrictToolFlagForProjection(projection, strictSetting);
+  const strict = resolveOpenAIProjectedToolsStrictToolFlag(projection, strictSetting);
   if (strictSetting === true && strict === false && model && log.isEnabled("debug", "any")) {
     const diagnostics = findOpenAIStrictToolProjectionDiagnostics(projection);
     if (shouldLogStrictToolDowngradeDiagnostic(diagnostics, model)) {

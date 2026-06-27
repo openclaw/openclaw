@@ -3,6 +3,7 @@
  */
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import {
+  isMessageToolConversationCreateActionName,
   isMessageToolSendActionName,
   isMessagingToolDeliveryAction,
 } from "./embedded-agent-messaging.js";
@@ -27,13 +28,7 @@ const RESULT_ENVELOPE_KEYS = [
 const BROADCAST_SEND_ENVELOPE_KEYS = ["payload", "result", "sendResult", "toolResult"];
 const PARTIAL_DELIVERY_ENVELOPE_KEYS = [...RESULT_ENVELOPE_KEYS, "error", "cause"];
 const SESSIONS_SEND_DELIVERY_STATUSES = new Set(["accepted", "ok"]);
-const CONVERSATION_CREATE_ACTIONS = new Set([
-  "thread-create",
-  "topic-create",
-  "threadcreate",
-  "createforumtopic",
-]);
-
+const BARE_OK_DELIVERY_STATUS = "ok";
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
@@ -57,6 +52,14 @@ function hasExplicitMessageRoute(args: Record<string, unknown>): boolean {
 
 function normalizeStatus(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim().toLowerCase() : undefined;
+}
+
+function isBareOkDeliveryStatus(value: unknown): boolean {
+  return normalizeStatus(value) === BARE_OK_DELIVERY_STATUS;
+}
+
+function isBareSentDeliveryStatus(value: unknown): boolean {
+  return normalizeStatus(value) === SENT_DELIVERY_STATUS;
 }
 
 function parseJsonRecord(value: string): Record<string, unknown> | undefined {
@@ -131,6 +134,9 @@ function deliveryEnvelopeHasCreatedConversationId(value: unknown, depth = 0): bo
 }
 
 function deliveryEnvelopeIndicatesOk(value: unknown, depth = 0): boolean {
+  if (isBareOkDeliveryStatus(value)) {
+    return true;
+  }
   if (!value || typeof value !== "object" || depth > 4) {
     return false;
   }
@@ -144,6 +150,9 @@ function deliveryEnvelopeIndicatesOk(value: unknown, depth = 0): boolean {
   if (typeof record.text === "string") {
     const parsed = parseJsonRecord(record.text);
     if (parsed && deliveryEnvelopeIndicatesOk(parsed, depth + 1)) {
+      return true;
+    }
+    if (isBareOkDeliveryStatus(record.text)) {
       return true;
     }
   }
@@ -333,25 +342,37 @@ function deliveryEnvelopeIndicatesDryRun(value: unknown, depth = 0): boolean {
   );
 }
 
-function deliveryEnvelopeIndicatesDelivered(value: unknown, depth = 0): boolean {
+function deliveryEnvelopeIndicatesDelivered(
+  value: unknown,
+  depth = 0,
+  requireReceipt = false,
+): boolean {
+  if (!requireReceipt && isBareSentDeliveryStatus(value)) {
+    return true;
+  }
   if (!value || typeof value !== "object" || depth > 4) {
     return false;
   }
   if (Array.isArray(value)) {
-    return value.some((item) => deliveryEnvelopeIndicatesDelivered(item, depth + 1));
+    return value.some((item) =>
+      deliveryEnvelopeIndicatesDelivered(item, depth + 1, requireReceipt),
+    );
   }
 
   const record = value as Record<string, unknown>;
   if (
-    normalizeStatus(record.deliveryStatus) === SENT_DELIVERY_STATUS ||
-    normalizeStatus(record.status) === SENT_DELIVERY_STATUS ||
+    (!requireReceipt && normalizeStatus(record.deliveryStatus) === SENT_DELIVERY_STATUS) ||
+    (!requireReceipt && normalizeStatus(record.status) === SENT_DELIVERY_STATUS) ||
     recordHasDeliveredMessageId(record)
   ) {
     return true;
   }
   if (typeof record.text === "string") {
     const parsed = parseJsonRecord(record.text);
-    if (parsed && deliveryEnvelopeIndicatesDelivered(parsed, depth + 1)) {
+    if (parsed && deliveryEnvelopeIndicatesDelivered(parsed, depth + 1, requireReceipt)) {
+      return true;
+    }
+    if (!requireReceipt && isBareSentDeliveryStatus(record.text)) {
       return true;
     }
   }
@@ -359,14 +380,14 @@ function deliveryEnvelopeIndicatesDelivered(value: unknown, depth = 0): boolean 
   const content = record.content;
   if (Array.isArray(content)) {
     for (const item of content) {
-      if (deliveryEnvelopeIndicatesDelivered(item, depth + 1)) {
+      if (deliveryEnvelopeIndicatesDelivered(item, depth + 1, requireReceipt)) {
         return true;
       }
       if (item && typeof item === "object" && !Array.isArray(item)) {
         const text = (item as Record<string, unknown>).text;
         if (typeof text === "string") {
           const parsed = parseJsonRecord(text);
-          if (parsed && deliveryEnvelopeIndicatesDelivered(parsed, depth + 1)) {
+          if (parsed && deliveryEnvelopeIndicatesDelivered(parsed, depth + 1, requireReceipt)) {
             return true;
           }
         }
@@ -375,8 +396,13 @@ function deliveryEnvelopeIndicatesDelivered(value: unknown, depth = 0): boolean 
   }
 
   return RESULT_ENVELOPE_KEYS.some((key) =>
-    deliveryEnvelopeIndicatesDelivered(record[key], depth + 1),
+    deliveryEnvelopeIndicatesDelivered(record[key], depth + 1, requireReceipt),
   );
+}
+
+/** Return true when a result envelope carries a provider message identifier. */
+export function hasMessagingDeliveryReceipt(value: unknown): boolean {
+  return deliveryEnvelopeIndicatesDelivered(value, 0, true);
 }
 
 function deliveryEnvelopeIndicatesSessionsSendAccepted(value: unknown, depth = 0): boolean {
@@ -458,7 +484,7 @@ export function isDeliveredMessagingToolResult(params: {
   }
   if (
     action &&
-    CONVERSATION_CREATE_ACTIONS.has(action) &&
+    isMessageToolConversationCreateActionName(action) &&
     (deliveryEnvelopeHasCreatedConversationId(params.result) ||
       deliveryEnvelopeHasCreatedConversationId(params.hookResult))
   ) {
@@ -487,6 +513,14 @@ export function isDeliveredMessagingToolResult(params: {
     !deliveryEnvelopeIndicatesNoOp(params.hookResult)
   ) {
     return true;
+  }
+  if (
+    deliveryEnvelopeIndicatesNonDelivery(params.result) ||
+    deliveryEnvelopeIndicatesNonDelivery(params.hookResult) ||
+    deliveryEnvelopeIndicatesNoOp(params.result) ||
+    deliveryEnvelopeIndicatesNoOp(params.hookResult)
+  ) {
+    return false;
   }
   if (normalizedToolName === SESSIONS_SEND_TOOL_NAME) {
     return (

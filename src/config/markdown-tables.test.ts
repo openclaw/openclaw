@@ -30,23 +30,25 @@ vi.mock("../plugins/runtime.js", async () => {
   };
 });
 
-import { DEFAULT_TABLE_MODES, resolveMarkdownTableMode } from "./markdown-tables.js";
+import { resolveMarkdownTableMode } from "./markdown-tables.js";
 
-describe("DEFAULT_TABLE_MODES", () => {
+describe("resolveMarkdownTableMode default modes", () => {
   it("mattermost mode is off", () => {
-    expect(DEFAULT_TABLE_MODES.get("mattermost")).toBe("off");
+    expect(resolveMarkdownTableMode({ channel: "mattermost" })).toBe("off");
   });
 
   it("signal mode is block", () => {
-    expect(DEFAULT_TABLE_MODES.get("signal")).toBe("block");
+    expect(resolveMarkdownTableMode({ channel: "signal", supportsBlockTables: true })).toBe(
+      "block",
+    );
   });
 
   it("whatsapp mode is bullets", () => {
-    expect(DEFAULT_TABLE_MODES.get("whatsapp")).toBe("bullets");
+    expect(resolveMarkdownTableMode({ channel: "whatsapp" })).toBe("bullets");
   });
 
   it("slack has no special default in this seam-only slice", () => {
-    expect(DEFAULT_TABLE_MODES.get("slack")).toBeUndefined();
+    expect(resolveMarkdownTableMode({ channel: "slack" })).toBe("code");
   });
 });
 

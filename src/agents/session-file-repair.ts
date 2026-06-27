@@ -18,8 +18,8 @@ import { extractToolCallsFromAssistant, extractToolResultId } from "./tool-call-
  * Preserves the user turn so strict providers that require at least one user
  * message do not reject the transcript.
  */
-export const BLANK_USER_FALLBACK_TEXT = "(continue)";
-export const CORRUPTED_IMAGE_FALLBACK_TEXT = "[image omitted: corrupted base64 payload]";
+const BLANK_USER_FALLBACK_TEXT = "(continue)";
+const CORRUPTED_IMAGE_FALLBACK_TEXT = "[image omitted: corrupted base64 payload]";
 
 type RepairReport = {
   repaired: boolean;
@@ -41,8 +41,6 @@ type SessionRepairFileSnapshot = {
   mtimeNs: bigint;
   ctimeNs: bigint;
 };
-
-export type TrustedSessionRepairSnapshot = SessionRepairFileSnapshot;
 
 type SessionRepairCacheEntry = {
   snapshot: SessionRepairFileSnapshot;
@@ -414,6 +412,78 @@ function isCodeModeToolCallRepairCandidate(entry: unknown): entry is SessionMess
   );
 }
 
+function normalizeTrimmedString(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function isOpenAIResponsesReplayApi(value: unknown): boolean {
+  const api = normalizeTrimmedString(value);
+  return (
+    api === "openai-responses" ||
+    api === "azure-openai-responses" ||
+    api === "openai-codex-responses"
+  );
+}
+
+function isTranscriptOnlyDeliveryMirrorEntry(entry: unknown): boolean {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { type?: unknown; message?: unknown };
+  if (record.type !== "message" || !record.message || typeof record.message !== "object") {
+    return false;
+  }
+  const message = record.message as { role?: unknown; provider?: unknown; model?: unknown };
+  return (
+    message.role === "assistant" &&
+    normalizeTrimmedString(message.provider) === "openclaw" &&
+    (normalizeTrimmedString(message.model) === "delivery-mirror" ||
+      normalizeTrimmedString(message.model) === "gateway-injected")
+  );
+}
+
+function isResponsesMessageToolRepairCandidate(entry: unknown): entry is SessionMessageEntry {
+  if (!entry || typeof entry !== "object") {
+    return false;
+  }
+  const record = entry as { type?: unknown; message?: unknown };
+  if (record.type !== "message" || !record.message || typeof record.message !== "object") {
+    return false;
+  }
+  const message = record.message as {
+    role?: unknown;
+    api?: unknown;
+    stopReason?: unknown;
+  };
+  return (
+    message.role === "assistant" &&
+    isOpenAIResponsesReplayApi(message.api) &&
+    message.stopReason !== "error" &&
+    message.stopReason !== "aborted"
+  );
+}
+
+function isMessageToolCallName(value: unknown): boolean {
+  return normalizeTrimmedString(value).toLowerCase() === "message";
+}
+
+function findNextSessionMessageEntry(
+  entries: unknown[],
+  startIndex: number,
+): SessionMessageEntry | undefined {
+  for (let i = startIndex + 1; i < entries.length; i += 1) {
+    const entry = entries[i];
+    if (!entry || typeof entry !== "object") {
+      continue;
+    }
+    const record = entry as { type?: unknown; message?: unknown };
+    if (record.type === "message" && record.message && typeof record.message === "object") {
+      return entry as SessionMessageEntry;
+    }
+  }
+  return undefined;
+}
+
 function collectPersistedToolResultIds(entries: unknown[]): Set<string> {
   const ids = new Set<string>();
   for (const entry of entries) {
@@ -480,6 +550,56 @@ function insertMissingCodeModeToolResults(
     );
     for (const toolCall of toolCalls) {
       if (resultIds.has(toolCall.id)) {
+        continue;
+      }
+      out.push(
+        makeSyntheticToolResultEntry({
+          parent: entry,
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+        }),
+      );
+      resultIds.add(toolCall.id);
+      insertedToolResults += 1;
+    }
+  }
+
+  return {
+    entries: insertedToolResults > 0 ? out : entries,
+    insertedToolResults,
+    resultIds,
+  };
+}
+
+function insertMissingMessageToolDeliveryMirrorResults(
+  entries: unknown[],
+  existingResultIds: ReadonlySet<string> = new Set(),
+): {
+  entries: unknown[];
+  insertedToolResults: number;
+  resultIds: Set<string>;
+} {
+  const resultIds = new Set(existingResultIds);
+  for (const resultId of collectPersistedToolResultIds(entries)) {
+    resultIds.add(resultId);
+  }
+  let insertedToolResults = 0;
+  const out: unknown[] = [];
+
+  for (let i = 0; i < entries.length; i += 1) {
+    const entry = entries[i];
+    out.push(entry);
+    if (!isResponsesMessageToolRepairCandidate(entry)) {
+      continue;
+    }
+    if (!isTranscriptOnlyDeliveryMirrorEntry(findNextSessionMessageEntry(entries, i))) {
+      continue;
+    }
+    const toolCalls = extractToolCallsFromAssistant(
+      entry.message as unknown as Extract<AgentMessage, { role: "assistant" }>,
+    );
+    for (const toolCall of toolCalls) {
+      if (!isMessageToolCallName(toolCall.name) || resultIds.has(toolCall.id)) {
         continue;
       }
       out.push(
@@ -595,7 +715,7 @@ async function tryIncrementalSessionRepair(params: {
   sessionFile: string;
   currentSnapshot: SessionRepairFileSnapshot;
   cached: SessionRepairCacheEntry;
-  trustedSnapshot: TrustedSessionRepairSnapshot | undefined;
+  trustedSnapshot: SessionRepairFileSnapshot | undefined;
 }): Promise<RepairReport | undefined> {
   if (isSameSessionRepairSnapshot(params.cached.snapshot, params.currentSnapshot)) {
     return {
@@ -634,17 +754,24 @@ async function tryIncrementalSessionRepair(params: {
   if (hasEntryRepairs(repairedEntries)) {
     return undefined;
   }
-  const repairedToolResults = insertMissingCodeModeToolResults(
+  const codeModeToolResultRepair = insertMissingCodeModeToolResults(
     repairedEntries.entries,
     params.cached.toolResultIds,
   );
-  if (repairedToolResults.insertedToolResults > 0) {
+  if (codeModeToolResultRepair.insertedToolResults > 0) {
+    return undefined;
+  }
+  const messageDeliveryToolResultRepair = insertMissingMessageToolDeliveryMirrorResults(
+    codeModeToolResultRepair.entries,
+    codeModeToolResultRepair.resultIds,
+  );
+  if (messageDeliveryToolResultRepair.insertedToolResults > 0) {
     return undefined;
   }
 
   rememberSessionRepair(params.sessionFile, {
     snapshot: afterReadSnapshot,
-    toolResultIds: repairedToolResults.resultIds,
+    toolResultIds: messageDeliveryToolResultRepair.resultIds,
     endsWithNewline: true,
   });
   return {
@@ -657,7 +784,7 @@ async function tryIncrementalSessionRepair(params: {
 /** Repair a persisted session JSONL file in place when replay-breaking corruption is found. */
 export async function repairSessionFileIfNeeded(params: {
   sessionFile: string;
-  trustedSnapshot?: TrustedSessionRepairSnapshot;
+  trustedSnapshot?: SessionRepairFileSnapshot;
   debug?: (message: string) => void;
   warn?: (message: string) => void;
 }): Promise<RepairReport> {
@@ -720,8 +847,22 @@ export async function repairSessionFileIfNeeded(params: {
     return { repaired: false, droppedLines, reason: "invalid session header" };
   }
 
-  const repairedToolResults = insertMissingCodeModeToolResults(entries);
-  const insertedToolResults = repairedToolResults.insertedToolResults;
+  const codeModeToolResultRepair = insertMissingCodeModeToolResults(entries);
+  let insertedToolResults = codeModeToolResultRepair.insertedToolResults;
+  if (codeModeToolResultRepair.insertedToolResults > 0) {
+    entries.splice(0, entries.length, ...codeModeToolResultRepair.entries);
+  }
+
+  const messageDeliveryToolResultRepair = insertMissingMessageToolDeliveryMirrorResults(
+    entries,
+    codeModeToolResultRepair.resultIds,
+  );
+  insertedToolResults += messageDeliveryToolResultRepair.insertedToolResults;
+  if (messageDeliveryToolResultRepair.insertedToolResults > 0) {
+    entries.splice(0, entries.length, ...messageDeliveryToolResultRepair.entries);
+  }
+  const repairedToolResultIds = messageDeliveryToolResultRepair.resultIds;
+
   if (!hasEntryRepairs(repairedEntries) && insertedToolResults === 0) {
     const afterReadSnapshot = await readSessionRepairSnapshot(sessionFile);
     const validatedSnapshot =
@@ -733,7 +874,7 @@ export async function repairSessionFileIfNeeded(params: {
     if (validatedSnapshot) {
       rememberSessionRepair(sessionFile, {
         snapshot: validatedSnapshot,
-        toolResultIds: repairedToolResults.resultIds,
+        toolResultIds: repairedToolResultIds,
         endsWithNewline: content.endsWith("\n"),
       });
     } else {
@@ -744,9 +885,6 @@ export async function repairSessionFileIfNeeded(params: {
       droppedLines: 0,
       ...(validatedSnapshot ? { validatedSnapshot } : {}),
     };
-  }
-  if (insertedToolResults > 0) {
-    entries.splice(0, entries.length, ...repairedToolResults.entries);
   }
 
   const cleaned = `${entries.map((entry) => JSON.stringify(entry)).join("\n")}\n`;
@@ -804,7 +942,7 @@ export async function repairSessionFileIfNeeded(params: {
   if (repairedSnapshot) {
     rememberSessionRepair(sessionFile, {
       snapshot: repairedSnapshot,
-      toolResultIds: repairedToolResults.resultIds,
+      toolResultIds: repairedToolResultIds,
       endsWithNewline: true,
     });
   } else {

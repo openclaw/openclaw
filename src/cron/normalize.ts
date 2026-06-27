@@ -79,6 +79,18 @@ function normalizeCommandArgv(value: unknown): string[] | undefined {
   return [...value];
 }
 
+function hasAgentTurnOnlyPayloadHint(payload: UnknownRecord): boolean {
+  return (
+    "model" in payload ||
+    "fallbacks" in payload ||
+    "thinking" in payload ||
+    "timeoutSeconds" in payload ||
+    "toolsAllow" in payload ||
+    typeof payload.lightContext === "boolean" ||
+    typeof payload.allowUnsafeExternalContent === "boolean"
+  );
+}
+
 function coerceSchedule(schedule: UnknownRecord) {
   const next: UnknownRecord = { ...schedule };
   const rawKind = normalizeLowercaseStringOrEmpty(schedule.kind);
@@ -198,7 +210,7 @@ function coercePayload(payload: UnknownRecord) {
     }
   }
   if ("fallbacks" in next) {
-    const fallbacks = normalizeTrimmedStringArray(next.fallbacks);
+    const fallbacks = normalizeTrimmedStringArray(next.fallbacks, { allowNull: true });
     if (fallbacks !== undefined) {
       next.fallbacks = fallbacks;
     } else {
@@ -264,6 +276,10 @@ function coercePayload(payload: UnknownRecord) {
     typeof next.allowUnsafeExternalContent !== "boolean"
   ) {
     delete next.allowUnsafeExternalContent;
+  }
+  if (!("kind" in next) && typeof next.text === "string" && hasAgentTurnOnlyPayloadHint(next)) {
+    next.kind = "agentTurn";
+    next.message = next.text;
   }
   if (next.kind === "systemEvent") {
     delete next.message;

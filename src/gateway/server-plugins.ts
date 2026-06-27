@@ -536,11 +536,20 @@ export async function dispatchGatewayMethodInProcess<T>(
   return await dispatchGatewayMethod<T>(method, params, options);
 }
 
+const PLUGIN_SUBAGENT_SESSION_MESSAGES_MAX_LIMIT = 1_000;
+
 export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
   const getSessionMessages: PluginRuntime["subagent"]["getSessionMessages"] = async (params) => {
+    const limit =
+      params.limit == null || !Number.isFinite(params.limit)
+        ? undefined
+        : Math.min(
+            PLUGIN_SUBAGENT_SESSION_MESSAGES_MAX_LIMIT,
+            Math.max(1, Math.floor(params.limit)),
+          );
     const payload = await dispatchGatewayMethod<{ messages?: unknown[] }>("sessions.get", {
       key: params.sessionKey,
-      ...(params.limit != null && { limit: params.limit }),
+      ...(limit != null && { limit }),
     });
     return { messages: Array.isArray(payload?.messages) ? payload.messages : [] };
   };
@@ -608,13 +617,20 @@ export function createGatewaySubagentRuntime(): PluginRuntime["subagent"] {
           ...(params.timeoutMs != null && { timeoutMs: params.timeoutMs }),
         },
       );
-      const status = payload?.status;
+      let status = payload?.status;
+      if (status === "completed" || status === "succeeded") {
+        status = "ok";
+      } else if (status === "error" && payload?.error?.trim().toLowerCase() === "completed") {
+        status = "ok";
+      }
       if (status !== "ok" && status !== "error" && status !== "timeout") {
-        throw new Error(`Gateway agent.wait returned unexpected status: ${status}`);
+        throw new Error(`Gateway agent.wait returned unexpected status: ${payload?.status}`);
       }
       return {
         status,
-        ...(typeof payload?.error === "string" && payload.error && { error: payload.error }),
+        ...(status !== "ok" &&
+          typeof payload?.error === "string" &&
+          payload.error && { error: payload.error }),
       };
     },
     getSessionMessages,

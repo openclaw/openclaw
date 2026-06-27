@@ -21,7 +21,6 @@ import { resolveInternalSessionKey, resolveMainSessionAlias } from "./sessions-r
 
 export {
   createAgentToAgentPolicy,
-  createSessionVisibilityChecker,
   createSessionVisibilityGuard,
   createSessionVisibilityRowChecker,
   listSpawnedSessionKeys,

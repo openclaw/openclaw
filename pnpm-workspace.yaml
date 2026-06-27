@@ -7,6 +7,7 @@ packages:
 minimumReleaseAge: 2880
 
 minimumReleaseAgeExclude:
+  - "@openclaw/crabline@0.1.0"
   - "@openclaw/fs-safe@0.3.0"
   - "@openclaw/proxyline@0.3.3"
   - "acpx"
@@ -94,10 +95,11 @@ blockExoticSubdeps: true
 
 overrides:
   "@anthropic-ai/sdk": 0.100.1
+  "@opentelemetry/core": 2.8.0
   "@aws-sdk/core": 3.974.13
   "@aws-sdk/credential-provider-node": 3.972.52
   "@aws-sdk/xml-builder": 3.972.25
-  hono: 4.12.21
+  hono: 4.12.25
   "@hono/node-server": 1.19.14
   axios: 1.16.0
   fast-uri: 3.1.2
@@ -115,10 +117,10 @@ overrides:
   qs: 6.15.2
   node-domexception: "npm:@nolyfill/domexception@1.0.28"
   typebox: 1.1.39
-  tar: 7.5.15
+  tar: 7.5.16
   tough-cookie: 4.1.3
   yauzl: 3.2.1
-  protobufjs: 8.4.1
+  protobufjs: 7.6.3
   uuid: 14.0.0
 
 allowBuilds:
@@ -133,12 +135,13 @@ allowBuilds:
   "@discordjs/opus": false
   esbuild: true
   koffi: false
-  node-llama-cpp: true
+  node-llama-cpp: false
   protobufjs: true
   tree-sitter-bash: false
   openclaw: true
   "@openclaw/proxyline": true
   clawpdf: true
+  "@openclaw/crabline": true
   rastermill: true
 
 packageExtensions:

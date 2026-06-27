@@ -591,6 +591,14 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   it("records same-model rate-limit retries without a profile-rotation trace", async () => {
     const rateLimitMessage =
       "429 rate_limit_exceeded: requests per minute exceeded; Retry-After: 30";
+    const rateLimitAssistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "openai",
+      model: "gpt-5.5",
+      errorMessage: rateLimitMessage,
+      content: [],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
     mockedClassifyFailoverReason.mockImplementation((raw) =>
       raw.includes("429") ? "rate_limit" : null,
     );
@@ -603,14 +611,8 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "error",
-          provider: "openai",
-          model: "gpt-5.5",
-          errorMessage: rateLimitMessage,
-          content: [],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        lastAssistant: rateLimitAssistant,
+        currentAttemptAssistant: rateLimitAssistant,
       }),
     );
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
@@ -774,23 +776,25 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
 
   it("retries reasoning-only turns when the assistant ended in error", async () => {
     mockedClassifyFailoverReason.mockReturnValue(null);
+    const errorAssistant = {
+      role: "assistant",
+      stopReason: "error",
+      provider: "openai",
+      model: "gpt-5.4",
+      errorMessage: "provider failed after emitting reasoning",
+      content: [
+        {
+          type: "thinking",
+          thinking: "internal reasoning",
+          thinkingSignature: JSON.stringify({ id: "rs_error_turn", type: "reasoning" }),
+        },
+      ],
+    } as unknown as NonNullable<EmbeddedRunAttemptResult["lastAssistant"]>;
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(
       makeAttemptResult({
         assistantTexts: [],
-        lastAssistant: {
-          role: "assistant",
-          stopReason: "error",
-          provider: "openai",
-          model: "gpt-5.4",
-          errorMessage: "provider failed after emitting reasoning",
-          content: [
-            {
-              type: "thinking",
-              thinking: "internal reasoning",
-              thinkingSignature: JSON.stringify({ id: "rs_error_turn", type: "reasoning" }),
-            },
-          ],
-        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+        lastAssistant: errorAssistant,
+        currentAttemptAssistant: errorAssistant,
       }),
     );
     mockedRunEmbeddedAttempt.mockResolvedValueOnce(

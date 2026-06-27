@@ -328,6 +328,29 @@ describe("getMemorySearchManager caching", () => {
     expect(createQmdManagerMock.mock.calls).toHaveLength(1);
   });
 
+  it("keeps the cached QMD manager active when the caller cancels a search", async () => {
+    const agentId = "cancelled-search";
+    const cfg = createQmdCfg(agentId);
+    const controller = new AbortController();
+    const abortError = new Error("memory_search timed out after 15s");
+    mockPrimary.search.mockImplementationOnce(async () => {
+      controller.abort(abortError);
+      throw abortError;
+    });
+
+    const first = await getMemorySearchManager({ cfg, agentId });
+    const firstManager = requireManager(first);
+    await expect(firstManager.search("hello", { signal: controller.signal })).rejects.toBe(
+      abortError,
+    );
+
+    expect(mockPrimary.close).not.toHaveBeenCalled();
+    expect(fallbackSearch).not.toHaveBeenCalled();
+    const second = await getMemorySearchManager({ cfg, agentId });
+    expect(second.manager).toBe(first.manager);
+    expect(createQmdManagerMock).toHaveBeenCalledTimes(1);
+  });
+
   it("evicts failed qmd wrapper so next call retries qmd", async () => {
     const retryAgentId = "retry-agent";
     const {

@@ -27,6 +27,8 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
     private var execApprovalResolveHandler: (@Sendable (WatchExecApprovalResolveEvent) -> Void)?
     private var execApprovalSnapshotRequestHandler: (
         @Sendable (WatchExecApprovalSnapshotRequestEvent) -> Void)?
+    private var appSnapshotRequestHandler: (@Sendable (WatchAppSnapshotRequestEvent) -> Void)?
+    private var appCommandHandler: (@Sendable (WatchAppCommandEvent) -> Void)?
 
     init(transport: WatchConnectivityTransport = WatchConnectivityTransport()) {
         self.transport = transport
@@ -48,6 +50,16 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
         self.transport.setExecApprovalSnapshotRequestHandler { [weak self] event in
             Task { @MainActor [weak self] in
                 self?.emitExecApprovalSnapshotRequest(event)
+            }
+        }
+        self.transport.setAppSnapshotRequestHandler { [weak self] event in
+            Task { @MainActor [weak self] in
+                self?.emitAppSnapshotRequest(event)
+            }
+        }
+        self.transport.setAppCommandHandler { [weak self] event in
+            Task { @MainActor [weak self] in
+                self?.emitAppCommand(event)
             }
         }
     }
@@ -95,6 +107,14 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
         self.execApprovalSnapshotRequestHandler = handler
     }
 
+    func setAppSnapshotRequestHandler(_ handler: (@Sendable (WatchAppSnapshotRequestEvent) -> Void)?) {
+        self.appSnapshotRequestHandler = handler
+    }
+
+    func setAppCommandHandler(_ handler: (@Sendable (WatchAppCommandEvent) -> Void)?) {
+        self.appCommandHandler = handler
+    }
+
     func sendNotification(
         id: String,
         params: OpenClawWatchNotifyParams) async throws -> WatchNotificationSendResult
@@ -131,6 +151,13 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
             WatchMessagingPayloadCodec.encodeExecApprovalSnapshotPayload(message))
     }
 
+    func syncAppSnapshot(
+        _ message: OpenClawWatchAppSnapshotMessage) async throws -> WatchNotificationSendResult
+    {
+        try await self.transport.sendSnapshotPayload(
+            WatchMessagingPayloadCodec.encodeAppSnapshotPayload(message))
+    }
+
     private func emitStatusIfChanged(_ snapshot: WatchMessagingStatus) {
         guard snapshot != self.lastEmittedStatus else {
             return
@@ -158,5 +185,21 @@ final class WatchMessagingService: @preconcurrency WatchMessagingServicing {
                 + "id=\(event.requestId) transport=\(event.transport) "
                 + "sentAtMs=\(event.sentAtMs ?? -1)")
         self.execApprovalSnapshotRequestHandler?(event)
+    }
+
+    private func emitAppSnapshotRequest(_ event: WatchAppSnapshotRequestEvent) {
+        GatewayDiagnostics.log(
+            "watch messaging: app snapshot request "
+                + "id=\(event.requestId) transport=\(event.transport) "
+                + "sentAtMs=\(event.sentAtMs ?? -1)")
+        self.appSnapshotRequestHandler?(event)
+    }
+
+    private func emitAppCommand(_ event: WatchAppCommandEvent) {
+        GatewayDiagnostics.log(
+            "watch messaging: app command "
+                + "id=\(event.commandId) command=\(event.command.rawValue) "
+                + "transport=\(event.transport)")
+        self.appCommandHandler?(event)
     }
 }

@@ -202,25 +202,6 @@ async function runNgrokCommand(args: string[]): Promise<string> {
 }
 
 /**
- * Check if ngrok is installed and available.
- */
-export async function isNgrokAvailable(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const proc = spawn("ngrok", ["version"], {
-      stdio: "ignore",
-    });
-
-    proc.on("close", (code) => {
-      resolve(code === 0);
-    });
-
-    proc.on("error", () => {
-      resolve(false);
-    });
-  });
-}
-
-/**
  * Start a Tailscale serve/funnel tunnel.
  */
 export async function startTailscaleTunnel(config: {

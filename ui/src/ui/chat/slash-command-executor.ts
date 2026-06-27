@@ -4,11 +4,16 @@
  */
 
 import {
+  formatFastModeCommandOptions,
+  formatFastModeCurrentStatus,
+} from "../../../../src/shared/fast-mode.js";
+import {
   createChatModelOverride,
   resolvePreferredServerChatModelValue,
 } from "../chat-model-ref.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import { DEFAULT_AGENT_ID, DEFAULT_MAIN_KEY, parseAgentSessionKey } from "../session-key.ts";
+import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -23,12 +28,14 @@ import type {
   ChatModelOverride,
   GatewaySessionRow,
   GatewayThinkingLevelOption,
+  FastMode,
   ModelCatalogEntry,
   SessionsListResult,
   SessionsPatchResult,
 } from "../types.ts";
 import { generateUUID } from "../uuid.ts";
 import { SLASH_COMMANDS } from "./slash-commands.ts";
+import { formatCompactTokenCount } from "./token-format.ts";
 
 export type SlashCommandResult = {
   /** Markdown-formatted result to display in chat. */
@@ -349,6 +356,19 @@ async function executeVerbose(
   }
 }
 
+function normalizeFastMode(raw: string): FastMode | undefined {
+  if (raw === "auto") {
+    return "auto";
+  }
+  if (raw === "on") {
+    return true;
+  }
+  if (raw === "off") {
+    return false;
+  }
+  return undefined;
+}
+
 async function executeFast(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -362,8 +382,10 @@ async function executeFast(
       const session = await loadCurrentSession(client, sessionKey);
       return {
         content: formatDirectiveOptions(
-          `Current fast mode: ${resolveCurrentFastMode(session)}.`,
-          "status, on, off, default",
+          resolveCurrentFastModeStatus(session),
+          formatFastModeCommandOptions({
+            fastAutoOnSeconds: session?.fastAutoOnSeconds,
+          }),
         ),
       };
     } catch (err) {
@@ -387,9 +409,10 @@ async function executeFast(
     }
   }
 
-  if (rawMode !== "on" && rawMode !== "off") {
+  const nextMode = normalizeFastMode(rawMode);
+  if (nextMode === undefined) {
     return {
-      content: `Unrecognized fast mode "${args.trim()}". Valid levels: status, on, off, default.`,
+      content: `Unrecognized fast mode "${args.trim()}". Valid levels: on, off, auto, default, status.`,
     };
   }
 
@@ -397,10 +420,13 @@ async function executeFast(
     await client.request("sessions.patch", {
       key: sessionKey,
       ...selectedGlobalScope(sessionKey, context),
-      fastMode: rawMode === "on",
+      fastMode: nextMode,
     });
     return {
-      content: `Fast mode ${rawMode === "on" ? "enabled" : "disabled"}.`,
+      content:
+        nextMode === "auto"
+          ? "Fast mode set to auto."
+          : `Fast mode ${nextMode ? "enabled" : "disabled"}.`,
       action: "refresh",
     };
   } catch (err) {
@@ -435,16 +461,16 @@ async function executeUsage(
     const totalDisplay =
       cumulativeTotal === null
         ? "n/a"
-        : `${totalTokensFresh ? "" : "~"}${fmtTokens(cumulativeTotal)}`;
+        : `${totalTokensFresh ? "" : "~"}${formatCompactTokenCount(cumulativeTotal)}`;
 
     const lines = [
       "**Session Usage**",
-      `Input: **${fmtTokens(input)}** tokens`,
-      `Output: **${fmtTokens(output)}** tokens`,
+      `Input: **${formatCompactTokenCount(input)}** tokens`,
+      `Output: **${formatCompactTokenCount(output)}** tokens`,
       `Total: **${totalDisplay}** tokens`,
     ];
     if (pct !== null) {
-      lines.push(`Context: **${pct}%** of ${fmtTokens(ctx)}`);
+      lines.push(`Context: **${pct}%** of ${formatCompactTokenCount(ctx)}`);
     }
     if (session.model) {
       lines.push(`Model: \`${session.model}\``);
@@ -594,16 +620,6 @@ function resolveThinkingLevelOptionsForSession(
   }));
 }
 
-function sessionModelMatchesDefaults(
-  session: GatewaySessionRow | undefined,
-  defaults: SessionsListResult["defaults"] | undefined,
-): boolean {
-  return (
-    (!session?.modelProvider || session.modelProvider === defaults?.modelProvider) &&
-    (!session?.model || session.model === defaults?.model)
-  );
-}
-
 async function loadCurrentSession(
   client: GatewayBrowserClient,
   sessionKey: string,
@@ -702,8 +718,13 @@ function resolveCurrentThinkingLevel(
   });
 }
 
-function resolveCurrentFastMode(session: GatewaySessionRow | undefined): "on" | "off" {
-  return session?.fastMode === true ? "on" : "off";
+function resolveCurrentFastModeStatus(session: GatewaySessionRow | undefined): string {
+  const mode = session?.effectiveFastMode ?? session?.fastMode;
+  return formatFastModeCurrentStatus({
+    mode,
+    source: session?.effectiveFastModeSource,
+    fastAutoOnSeconds: session?.fastAutoOnSeconds,
+  });
 }
 
 async function resolveSteerTarget(
@@ -722,6 +743,38 @@ async function resolveSteerTarget(
 
 function isActiveSteerSession(session: GatewaySessionRow | undefined): boolean {
   return session?.status === "running" && session.endedAt == null;
+}
+
+type SteerChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
+
+function normalizeSteerChatSendAckStatus(payload: unknown): SteerChatSendAckStatus {
+  if (!payload || typeof payload !== "object") {
+    return "started";
+  }
+  const status = (payload as Record<string, unknown>).status;
+  return status === "in_flight" || status === "ok" || status === "timeout" || status === "error"
+    ? status
+    : "started";
+}
+
+function formatTerminalSteerAckContent(status: SteerChatSendAckStatus): string | undefined {
+  if (status === "timeout") {
+    return "The active run ended before the steer message was accepted.";
+  }
+  if (status === "error") {
+    return "Steer failed before it reached the run; try again.";
+  }
+  return undefined;
+}
+
+function formatTerminalRedirectAckContent(status: SteerChatSendAckStatus): string | undefined {
+  if (status === "timeout") {
+    return "The active run ended before the redirect message was accepted.";
+  }
+  if (status === "error") {
+    return "Redirect failed before it reached the run; try again.";
+  }
+  return undefined;
 }
 
 /** Soft inject — queues a message into the active run via chat.send (deliver: false). */
@@ -750,17 +803,24 @@ async function executeSteer(
         content: "No active run. Use the chat input or `/redirect` instead.",
       };
     }
-    await client.request("chat.send", {
-      sessionKey: resolved.key,
-      ...selectedGlobalScope(resolved.key, context),
-      message: resolved.message,
-      deliver: false,
-      idempotencyKey: generateUUID(),
-    });
-    return {
-      content: "Steered.",
-      pendingCurrentRun: resolved.key === sessionKey,
-    };
+    const ackStatus = normalizeSteerChatSendAckStatus(
+      await client.request("chat.send", {
+        sessionKey: resolved.key,
+        ...selectedGlobalScope(resolved.key, context),
+        message: resolved.message,
+        deliver: false,
+        idempotencyKey: generateUUID(),
+      }),
+    );
+    const terminalAckContent = formatTerminalSteerAckContent(ackStatus);
+    if (terminalAckContent) {
+      return { content: terminalAckContent };
+    }
+    const result: SlashCommandResult = { content: "Steered." };
+    if (ackStatus === "started" || ackStatus === "in_flight") {
+      result.pendingCurrentRun = resolved.key === sessionKey;
+    }
+    return result;
   } catch (err) {
     return { content: `Failed to steer: ${String(err)}` };
   }
@@ -780,27 +840,22 @@ async function executeRedirect(
         content: resolved.error === "empty" ? "Usage: `/redirect <message>`" : resolved.error,
       };
     }
-    const resp = await client.request<{ runId?: string }>("sessions.steer", {
+    const resp = await client.request<{ runId?: string; status?: unknown }>("sessions.steer", {
       key: resolved.key,
       ...selectedGlobalScope(resolved.key, context),
       message: resolved.message,
     });
+    const ackStatus = normalizeSteerChatSendAckStatus(resp);
+    const terminalAckContent = formatTerminalRedirectAckContent(ackStatus);
+    if (terminalAckContent) {
+      return { content: terminalAckContent };
+    }
     const runId = typeof resp?.runId === "string" ? resp.runId : undefined;
     return {
       content: "Redirected.",
-      trackRunId: runId,
+      ...(ackStatus === "started" || ackStatus === "in_flight" ? { trackRunId: runId } : {}),
     };
   } catch (err) {
     return { content: `Failed to redirect: ${String(err)}` };
   }
-}
-
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) {
-    return `${(n / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
-  }
-  if (n >= 1_000) {
-    return `${(n / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
-  }
-  return String(n);
 }
