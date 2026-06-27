@@ -201,6 +201,9 @@ Deploy OpenClaw on a cloud server or VPS:
   <Card title="Northflank" href="/install/northflank">
     Northflank deployment.
   </Card>
+  <Card title="OpenClaw Launch" href="/install/openclawlaunch">
+    Managed hosting, no install.
+  </Card>
 </CardGroup>
 
 ## Update, migrate, or uninstall
