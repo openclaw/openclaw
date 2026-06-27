@@ -279,7 +279,7 @@ export function convertMessages<T extends GoogleApiType>(
       });
     } else if (msg.role === "toolResult") {
       // Extract text and image content
-      const textResult = extractToolResultText(msg.content as Array<Record<string, unknown>>);
+      const textResult = extractToolResultText(msg.content);
       const imageContent = model.input.includes("image")
         ? msg.content.filter((c): c is ImageContent => c.type === "image")
         : [];

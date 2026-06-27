@@ -1,8 +1,6 @@
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 
-type ToolResultContentBlock = Record<string, unknown>;
-
-function stringifyStructuredBlock(block: ToolResultContentBlock): string | undefined {
+function stringifyStructuredBlock(block: Record<string, unknown>): string | undefined {
   const seen = new WeakSet<object>();
   try {
     const serialized = JSON.stringify(block, (_key, value) => {
@@ -32,23 +30,24 @@ function stringifyStructuredBlock(block: ToolResultContentBlock): string | undef
   }
 }
 
-export function extractToolResultText(blocks: readonly ToolResultContentBlock[]): string {
+export function extractToolResultText(blocks: readonly unknown[]): string {
   const parts: string[] = [];
   for (const block of blocks) {
     if (!block || typeof block !== "object") {
       continue;
     }
-    if (block.type === "image") {
+    const record = block as Record<string, unknown>;
+    if (record.type === "image") {
       continue;
     }
-    if (block.type === "text") {
-      const text = typeof block.text === "string" ? block.text : "";
+    if (record.type === "text") {
+      const text = typeof record.text === "string" ? record.text : "";
       if (text) {
         parts.push(text);
       }
       continue;
     }
-    const structured = stringifyStructuredBlock(block);
+    const structured = stringifyStructuredBlock(record);
     if (structured) {
       parts.push(structured);
     }

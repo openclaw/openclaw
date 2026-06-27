@@ -402,7 +402,7 @@ export function convertResponsesMessages<TApi extends Api>(
       }
       messages.push(...output);
     } else if (msg.role === "toolResult") {
-      const textResult = extractToolResultText(msg.content as Array<Record<string, unknown>>);
+      const textResult = extractToolResultText(msg.content);
       const sanitizedTextResult = sanitizeSurrogates(textResult);
       const hasImages = msg.content.some((c): c is ImageContent => c.type === "image");
       const hasText = sanitizedTextResult.trim().length > 0;

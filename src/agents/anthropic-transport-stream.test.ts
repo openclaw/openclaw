@@ -2554,6 +2554,116 @@ describe("anthropic transport stream", () => {
     expect(toolResult.is_error).toBe(false);
   });
 
+  it("serializes structured non-image blocks in tool results as JSON text", async () => {
+    const imageData = Buffer.from("image").toString("base64");
+
+    await runTransportStream(
+      makeAnthropicTransportModel({ id: "claude-sonnet-4-6" }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [{ type: "toolCall", id: "tool_1", name: "fetch", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            content: [
+              { type: "text", text: "ok" },
+              {
+                type: "resource",
+                resource: {
+                  uri: "https://example.com/data.json",
+                  mimeType: "application/json",
+                  text: '{"key":"value"}',
+                },
+              },
+            ],
+            isError: false,
+          },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    const userMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "user",
+    );
+    const toolResult = findRecord(
+      userMessage.content,
+      (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
+    );
+    // Structured non-image block should be serialized, not dropped
+    expect(toolResult.content).toBe(
+      // No images → returns sanitized text string, not array
+      expect.stringContaining('{"type":"resource"'),
+    );
+    expect(toolResult.content).toContain("ok");
+    expect(toolResult.is_error).toBe(false);
+  });
+
+  it("includes serialized structured blocks alongside images in tool results", async () => {
+    const imageData = Buffer.from("image").toString("base64");
+
+    await runTransportStream(
+      makeAnthropicTransportModel({ id: "claude-sonnet-4-6" }),
+      {
+        messages: [
+          {
+            role: "assistant",
+            provider: "anthropic",
+            api: "anthropic-messages",
+            model: "claude-sonnet-4-6",
+            stopReason: "toolUse",
+            timestamp: 0,
+            content: [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "tool_1",
+            content: [
+              {
+                type: "resource",
+                resource: {
+                  uri: "https://example.com/data.json",
+                  mimeType: "application/json",
+                  text: '{"key":"value"}',
+                },
+              },
+              { type: "image", data: imageData, mimeType: "image/png" },
+            ],
+            isError: false,
+          },
+        ],
+      } as AnthropicStreamContext,
+      {
+        apiKey: "sk-ant-api",
+      } as AnthropicStreamOptions,
+    );
+
+    const userMessage = findRecord(
+      latestAnthropicRequest().payload.messages,
+      (record) => record.role === "user",
+    );
+    const toolResult = findRecord(
+      userMessage.content,
+      (record) => record.type === "tool_result" && record.tool_use_id === "tool_1",
+    );
+    // When images are present, content is an array
+    const textBlock = findRecord(toolResult.content, (record) => record.type === "text");
+    // Structured block should be serialized as text alongside the image
+    expect(textBlock.text).toEqual(expect.stringContaining('{"type":"resource"'));
+    expect(toolResult.is_error).toBe(false);
+  });
+
   it("cancels stalled SSE body reads when the abort signal fires mid-stream", async () => {
     const controller = new AbortController();
     const abortReason = new Error("anthropic test abort");

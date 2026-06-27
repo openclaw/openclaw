@@ -27,6 +27,7 @@ import { resolveAzureDeploymentNameFromMap } from "../llm/providers/azure-deploy
 import { convertMessages } from "../llm/providers/openai-completions.js";
 import { clampOpenAIPromptCacheKey } from "../llm/providers/openai-prompt-cache.js";
 import { mapOpenAIStopReason } from "../llm/providers/openai-stop-reason.js";
+import { extractToolResultText } from "../llm/providers/tool-result-text.js";
 import type { Api, Context, Model } from "../llm/types.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { parseStreamingJson } from "../llm/utils/json-parse.js";
@@ -1274,10 +1275,7 @@ function convertResponsesMessages(
         messages.push(...output);
       }
     } else if (msg.role === "toolResult") {
-      const textResult = msg.content
-        .filter((item) => item.type === "text")
-        .map((item) => item.text)
-        .join("\n");
+      const textResult = extractToolResultText(msg.content);
       const sanitizedTextResult = sanitizeTransportPayloadText(textResult);
       const hasText = sanitizedTextResult.trim().length > 0;
       const hasImages = msg.content.some((item) => item.type === "image");
