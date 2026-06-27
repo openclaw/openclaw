@@ -13,7 +13,11 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { redactSecrets } from "../../logging/redact.js";
-import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import {
+  DEFAULT_AGENT_ID,
+  normalizeAgentId,
+  resolveAgentIdFromSessionKey,
+} from "../../routing/session-key.js";
 import {
   emitInternalSessionTranscriptUpdate,
   emitSessionTranscriptUpdate,
@@ -1286,6 +1290,7 @@ function resolveSqliteScope(
     scopedAgentId: scope.agentId,
     sessionKey: scope.sessionKey,
     storeAgentId: storeTarget?.agentId,
+    useDefaultAgentForUnownedStore: Boolean(storeTarget?.path && !storeTarget.agentId),
   });
   if (!agentId) {
     throw new Error("Cannot resolve SQLite session scope without an agent id");
@@ -1309,6 +1314,7 @@ function resolveSqliteReadScope(
     scopedAgentId: scope.agentId,
     sessionKey,
     storeAgentId: storeTarget?.agentId,
+    useDefaultAgentForUnownedStore: Boolean(storeTarget?.path && !storeTarget.agentId),
   });
   if (!agentId) {
     throw new Error("Cannot resolve SQLite transcript read scope without an agent id");
@@ -1329,12 +1335,16 @@ function resolveSqliteAgentId(params: {
   scopedAgentId?: string;
   sessionKey?: string;
   storeAgentId?: string;
+  useDefaultAgentForUnownedStore?: boolean;
 }): string | undefined {
   const scopedAgentId = params.scopedAgentId ? normalizeAgentId(params.scopedAgentId) : undefined;
   if (scopedAgentId && params.storeAgentId && scopedAgentId !== params.storeAgentId) {
     throw new Error(
       `SQLite session store path belongs to agent ${params.storeAgentId}; requested agent ${scopedAgentId}.`,
     );
+  }
+  if (params.useDefaultAgentForUnownedStore) {
+    return DEFAULT_AGENT_ID;
   }
   return (
     scopedAgentId ??
