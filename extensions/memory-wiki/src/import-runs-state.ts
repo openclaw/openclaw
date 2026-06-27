@@ -224,12 +224,19 @@ function composeImportRunRecord(
   meta: MemoryWikiImportRunMetaStateRecord,
   pathRows: MemoryWikiImportRunPathStateRecord[],
 ): ChatGptImportRunRecord {
-  const createdPaths = pathRows
-    .filter((row) => row.kind === "created-path")
+  const createdRows: MemoryWikiImportRunPathStateRecord[] = [];
+  const updatedRows: MemoryWikiImportRunPathStateRecord[] = [];
+  for (const row of pathRows) {
+    if (row.kind === "created-path") {
+      createdRows.push(row);
+    } else {
+      updatedRows.push(row);
+    }
+  }
+  const createdPaths = createdRows
     .toSorted((left, right) => left.index - right.index)
     .map((row) => row.path);
-  const updatedPaths = pathRows
-    .filter((row) => row.kind === "updated-path")
+  const updatedPaths = updatedRows
     .toSorted((left, right) => left.index - right.index)
     .map((row) => {
       const entry: ChatGptImportRunEntry = { path: row.path };
@@ -392,7 +399,7 @@ export function createMemoryWikiImportRunStateStore(
     async list(vaultRoot) {
       const vaultRootKey = resolveVaultRootKey(vaultRoot);
       const metaRows = new Map<string, MemoryWikiImportRunMetaStateRecord>();
-      const pathRows: MemoryWikiImportRunPathStateRecord[] = [];
+      const pathRowsByRunId = new Map<string, MemoryWikiImportRunPathStateRecord[]>();
       for (const row of await openStore().entries()) {
         const meta = normalizeMetaRecord(row.value);
         if (meta?.vaultRootKey === vaultRootKey) {
@@ -401,14 +408,13 @@ export function createMemoryWikiImportRunStateStore(
         }
         const pathRecord = normalizePathRecord(row.value);
         if (pathRecord?.vaultRootKey === vaultRootKey) {
+          const pathRows = pathRowsByRunId.get(pathRecord.runId) ?? [];
           pathRows.push(pathRecord);
+          pathRowsByRunId.set(pathRecord.runId, pathRows);
         }
       }
       return [...metaRows.values()].map((meta) =>
-        composeImportRunRecord(
-          meta,
-          pathRows.filter((row) => row.runId === meta.runId),
-        ),
+        composeImportRunRecord(meta, pathRowsByRunId.get(meta.runId) ?? []),
       );
     },
     async rowCount() {
