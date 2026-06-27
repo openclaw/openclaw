@@ -226,24 +226,20 @@ function buildPersistedUserTurnMediaFields(
   };
 }
 
-function buildUserTurnSenderMeta(params: UserTurnInput): Record<string, unknown> | undefined {
-  const senderId = normalizeOptionalText(params.senderId);
-  const senderName = normalizeOptionalText(params.senderName);
-  const senderUsername = normalizeOptionalText(params.senderUsername);
+function buildUserTurnSenderMeta(
+  sender: UserTurnInput["sender"],
+): Record<string, string> | undefined {
+  const senderId = normalizeOptionalText(sender?.id);
+  const senderName = normalizeOptionalText(sender?.name);
+  const senderUsername = normalizeOptionalText(sender?.username);
   if (!senderId && !senderName && !senderUsername) {
     return undefined;
   }
-  const meta: Record<string, unknown> = {};
-  if (senderId) {
-    meta.senderId = senderId;
-  }
-  if (senderName) {
-    meta.senderName = senderName;
-  }
-  if (senderUsername) {
-    meta.senderUsername = senderUsername;
-  }
-  return meta;
+  return {
+    ...(senderId ? { senderId } : {}),
+    ...(senderName ? { senderName } : {}),
+    ...(senderUsername ? { senderUsername } : {}),
+  };
 }
 
 function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurnMessage {
@@ -257,7 +253,7 @@ function buildPersistedUserTurnMessage(params: UserTurnInput): PersistedUserTurn
   // here would NOT match the bare-current arrival (the gateway no longer stamps
   // the live turn) — see https://github.com/openclaw/openclaw/issues/3658.
   const content = text || (hasMedia ? (params.mediaOnlyText ?? "") : "");
-  const senderMeta = buildUserTurnSenderMeta(params);
+  const senderMeta = buildUserTurnSenderMeta(params.sender);
   const message = {
     role: "user",
     content,
@@ -304,9 +300,20 @@ export function mergePreparedUserTurnMessageForRuntime(params: {
   ) {
     return params.runtimeMessage;
   }
+  const runtimeMessage = params.runtimeMessage as unknown as Record<string, unknown>;
+  const preparedMessage = params.preparedMessage as unknown as Record<string, unknown>;
+  const runtimeMeta =
+    runtimeMessage["__openclaw"] && typeof runtimeMessage["__openclaw"] === "object"
+      ? (runtimeMessage["__openclaw"] as Record<string, unknown>)
+      : undefined;
+  const preparedMeta =
+    preparedMessage["__openclaw"] && typeof preparedMessage["__openclaw"] === "object"
+      ? (preparedMessage["__openclaw"] as Record<string, unknown>)
+      : undefined;
   return {
-    ...(params.runtimeMessage as unknown as Record<string, unknown>),
-    ...(params.preparedMessage as unknown as Record<string, unknown>),
+    ...runtimeMessage,
+    ...preparedMessage,
+    ...(preparedMeta ? { __openclaw: { ...runtimeMeta, ...preparedMeta } } : {}),
   } as unknown as AgentMessage;
 }
 

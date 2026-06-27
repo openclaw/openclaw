@@ -201,6 +201,33 @@ describe("user turn transcript persistence", () => {
       });
     });
 
+    it("preserves runtime metadata when adding prepared sender attribution", () => {
+      const recorder = createUserTurnTranscriptRecorder({
+        input: {
+          text: "group prompt",
+          sender: { id: "user-42", name: "Ada" },
+        },
+        target: { transcriptPath: "/tmp/session.jsonl" },
+      });
+
+      expect(
+        mergePreparedUserTurnMessageForRuntime({
+          runtimeMessage: castAgentMessage({
+            role: "user",
+            content: "runtime prompt",
+            __openclaw: { mirrorIdentity: "run-1:prompt" },
+          }),
+          preparedMessage: recorder.message,
+        }),
+      ).toMatchObject({
+        __openclaw: {
+          mirrorIdentity: "run-1:prompt",
+          senderId: "user-42",
+          senderName: "Ada",
+        },
+      });
+    });
+
     it("does not replace blocked before_agent_run user markers", () => {
       const recorder = createUserTurnTranscriptRecorder({
         input: { text: "raw prompt" },
@@ -304,9 +331,11 @@ describe("user turn transcript persistence", () => {
         cwd: dir,
         input: {
           text: "hello from group",
-          senderId: "8489979671",
-          senderName: "Ram Shenoy",
-          senderUsername: "ram_s",
+          sender: {
+            id: "8489979671",
+            name: "Ram Shenoy",
+            username: "ram_s",
+          },
         },
         updateMode: "none",
       });
@@ -344,8 +373,7 @@ describe("user turn transcript persistence", () => {
         cwd: dir,
         input: {
           text: "hello without sender",
-          senderId: "",
-          senderName: null,
+          sender: { id: "", name: null },
         },
         updateMode: "none",
       });
