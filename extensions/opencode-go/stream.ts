@@ -47,6 +47,39 @@ export function createOpencodeGoKimiNoReasoningWrapper(
   };
 }
 
+// Minimax models using the Anthropic Messages path through opencode-go return
+// thinking content as regular text blocks rather than proper type:"thinking"
+// Anthropic blocks. Disable thinking at the request level for these models
+// to prevent internal reasoning from leaking to channel output.
+function isOpencodeGoMinimaxAnthropicModelId(modelId: unknown): boolean {
+  return typeof modelId === "string" && modelId.trim().toLowerCase() === "minimax-m3";
+}
+
+function injectMinimaxThinkingDisabled(payloadObj: Record<string, unknown>): void {
+  payloadObj.thinking = { type: "disabled" };
+}
+
+export function createOpencodeGoMinimaxNoThinkingWrapper(
+  baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
+): ProviderWrapStreamFnContext["streamFn"] {
+  if (!baseStreamFn) {
+    return undefined;
+  }
+  const underlying = baseStreamFn;
+  return (model, context, options) => {
+    if (model.provider !== "opencode-go" || !isOpencodeGoMinimaxAnthropicModelId(model.id)) {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(
+      underlying,
+      model,
+      context,
+      options,
+      injectMinimaxThinkingDisabled,
+    );
+  };
+}
+
 export function createOpencodeGoWrapper(
   baseStreamFn: ProviderWrapStreamFnContext["streamFn"],
   thinkingLevel: ProviderWrapStreamFnContext["thinkingLevel"],
@@ -54,7 +87,8 @@ export function createOpencodeGoWrapper(
   if (!baseStreamFn) {
     return undefined;
   }
-  const kimiWrapped = createOpencodeGoKimiNoReasoningWrapper(baseStreamFn) ?? baseStreamFn;
+  const minimaxWrapped = createOpencodeGoMinimaxNoThinkingWrapper(baseStreamFn) ?? baseStreamFn;
+  const kimiWrapped = createOpencodeGoKimiNoReasoningWrapper(minimaxWrapped) ?? minimaxWrapped;
   const deepSeekWrapped =
     createOpencodeGoDeepSeekV4Wrapper(kimiWrapped, thinkingLevel) ?? kimiWrapped;
   // Outermost layer: provider-owned stalled SSE termination so the underlying
