@@ -141,10 +141,19 @@ function responseStreamChunkByteLengthUnchecked(chunk: unknown): number | undefi
   // When chunk is Proxy-wrapped (via observeModelCallStream), rest destructuring
   // triggers dictionary mode for the chunk object, leading to exponential RSS
   // growth over millions of stream chunks. See #91588.
-  const snapshotlessChunk: Record<string, unknown> = {};
+  //
+  // Use null-prototype target + defineProperty to preserve object-rest semantics:
+  // - Own enumerable __proto__ is copied as a plain data field, not prototype setter
+  // - No prototype pollution risk at diagnostic boundary
+  const snapshotlessChunk = Object.create(null) as Record<string, unknown>;
   for (const key of Object.keys(chunk)) {
     if (key !== "partial") {
-      snapshotlessChunk[key] = (chunk as Record<string, unknown>)[key];
+      Object.defineProperty(snapshotlessChunk, key, {
+        value: (chunk as Record<string, unknown>)[key],
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
     }
   }
   return utf8JsonByteLength(snapshotlessChunk);
