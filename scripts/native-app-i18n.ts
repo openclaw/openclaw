@@ -511,6 +511,12 @@ function enclosingCallName(source: string, offset: number): string | null {
   return null;
 }
 
+function structuralTokenSignature(source: string): string {
+  const interpolations = [...source.matchAll(/\\\([^)]*\)/gu)].map((match) => match[0]);
+  const lineBreaks = (source.match(/\n/gu) ?? []).length;
+  return JSON.stringify({ interpolations, lineBreaks });
+}
+
 function addCandidate(
   entries: Candidate[],
   surface: NativeI18nSurface,
@@ -923,6 +929,13 @@ async function syncNativeLocale(locale: string, entries: NativeI18nEntry[]) {
         translated.get(entry.id) ?? previousById.get(entry.id)?.translated ?? entry.source,
     })),
   };
+  for (const entry of artifact.entries) {
+    if (structuralTokenSignature(entry.source) !== structuralTokenSignature(entry.translated)) {
+      throw new Error(
+        `native translation changed placeholders or line breaks for ${locale}:${entry.id}`,
+      );
+    }
+  }
   await mkdir(TRANSLATIONS_DIR, { recursive: true });
   await writeFile(artifactPath, `${JSON.stringify(artifact, null, 2)}\n`, "utf8");
   process.stdout.write(
