@@ -70,6 +70,8 @@ const gpt56SolModel = {
   thinkingLevelMap: { off: null, xhigh: "xhigh", max: "max" },
 } satisfies Model<"openai-responses">;
 
+const testAllowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
+
 function createAssistantOutput(): AssistantMessage {
   return {
     role: "assistant",
@@ -244,6 +246,37 @@ describe("convertResponsesTools", () => {
 
     expect(params).not.toHaveProperty("tools");
   });
+
+  it("serializes structured tool results as text instead of image placeholders", () => {
+    const input = convertResponsesMessages(
+      nativeOpenAIModel,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_structured",
+            toolName: "session_status",
+            content: [
+              {
+                type: "json",
+                payload: { sessionKey: "current", model: "openai/gpt-5.4", status: "ok" },
+              },
+            ],
+            isError: false,
+            timestamp: 1,
+          },
+        ],
+      } satisfies Context,
+      allowedToolCallProviders,
+      { includeSystemPrompt: false, replayResponsesItemIds: false },
+    ) as unknown as Array<Record<string, unknown>>;
+    expect(input).toContainEqual({
+      type: "function_call_output",
+      call_id: "call_structured",
+      output: expect.stringContaining('"type":"json"'),
+    });
+  });
 });
 
 describe("Responses reasoning effort", () => {
@@ -284,7 +317,7 @@ describe("Responses reasoning effort", () => {
 });
 
 describe("convertResponsesMessages", () => {
-  const allowedToolCallProviders = new Set(["openai", "openai-codex", "opencode"]);
+  const allowedToolCallProviders = testAllowedToolCallProviders;
 
   it("adds explicit message item types for system and user input items", () => {
     const input = convertResponsesMessages(

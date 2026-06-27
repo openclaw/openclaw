@@ -49,6 +49,7 @@ import { headersToRecord } from "../utils/headers.js";
 import { parseStreamingJson } from "../utils/json-parse.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { convertResponsesToolPayload, convertResponsesTools } from "./openai-responses-tools.js";
+import { extractToolResultText } from "./tool-result-text.js";
 import { transformMessages } from "./transform-messages.js";
 
 // =============================================================================
@@ -401,10 +402,7 @@ export function convertResponsesMessages<TApi extends Api>(
       }
       messages.push(...output);
     } else if (msg.role === "toolResult") {
-      const textResult = msg.content
-        .filter((c): c is TextContent => c.type === "text")
-        .map((c) => c.text)
-        .join("\n");
+      const textResult = extractToolResultText(msg.content as Array<Record<string, unknown>>);
       const sanitizedTextResult = sanitizeSurrogates(textResult);
       const hasImages = msg.content.some((c): c is ImageContent => c.type === "image");
       const hasText = sanitizedTextResult.trim().length > 0;
