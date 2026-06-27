@@ -263,6 +263,75 @@ describe("qa mock openai server", () => {
     expect(text.match(/[.!?]+(?:\s|$)/g)).toHaveLength(2);
   });
 
+  it("plans sessions_send for the A2A message-tool mirror proof scenario", async () => {
+    const server = await startMockServer();
+    const prompt =
+      'qa a2a message-tool mirror check. sessionKey="agent:qa:a2a-target". exact marker: `QA-A2A-MIRROR-OK`';
+
+    const toolPlan = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.5",
+      tools: [{ type: "function", name: "sessions_send" }],
+      input: [makeUserInput(prompt)],
+    });
+
+    const args = outputToolArgs(toolPlan);
+    expect(outputItem(toolPlan).type).toBe("function_call");
+    expect(outputItem(toolPlan).name).toBe("sessions_send");
+    expect(args).toMatchObject({
+      sessionKey: "agent:qa:a2a-target",
+      timeoutSeconds: 0,
+    });
+    expect(String(args.message)).toContain("qa group visible reply tool check");
+    expect(String(args.message)).toContain("QA-A2A-MIRROR-OK");
+
+    const debugResponse = await fetch(`${server.baseUrl}/debug/last-request`);
+    expect(debugResponse.status).toBe(200);
+    const debugPayload = requireRecord(await debugResponse.json(), "debug request");
+    expect(debugPayload.plannedToolName).toBe("sessions_send");
+    expect(debugPayload.plannedToolArgs).toMatchObject({
+      sessionKey: "agent:qa:a2a-target",
+      timeoutSeconds: 0,
+    });
+
+    const final = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.5",
+      tools: [{ type: "function", name: "sessions_send" }],
+      input: [
+        makeUserInput(prompt),
+        {
+          type: "function_call_output",
+          call_id: "call_mock_sessions_send_fixture",
+          output: JSON.stringify({ status: "accepted", delivery: { mode: "announce" } }),
+        },
+      ],
+    });
+    expect(outputText(final)).toBe("");
+
+    const targetToolPlan = await expectResponsesJson(server, {
+      stream: false,
+      model: "gpt-5.5",
+      tools: [
+        { type: "function", name: "sessions_send" },
+        { type: "function", name: "message" },
+      ],
+      input: [
+        makeUserInput(prompt),
+        makeUserInput(
+          "qa group visible reply tool check. Use the visible room reply path. exact marker: `QA-A2A-MIRROR-OK`",
+        ),
+      ],
+    });
+
+    expect(outputItem(targetToolPlan).type).toBe("function_call");
+    expect(outputItem(targetToolPlan).name).toBe("message");
+    expect(outputToolArgs(targetToolPlan)).toMatchObject({
+      action: "send",
+      message: "QA-A2A-MIRROR-OK",
+    });
+  });
+
   it("emits deterministic text deltas for generic streaming QA prompts", async () => {
     const server = await startMockServer();
 

@@ -179,7 +179,21 @@ function normalizePendingRunIds(runIds: Iterable<string>): string[] {
 function isWaitedReplyTranscriptArtifact(message: unknown): boolean {
   return (
     isTranscriptOnlyOpenClawAssistantMessage(message) ||
-    isOpenClawMessageToolMirrorAssistantMessage(message)
+    isOpenClawMessageToolMirrorAssistantMessage(message) ||
+    isInterSessionInputMessage(message)
+  );
+}
+
+function isInterSessionInputMessage(message: unknown): boolean {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return false;
+  }
+  const provenance = (message as { provenance?: unknown }).provenance;
+  return (
+    Boolean(provenance) &&
+    typeof provenance === "object" &&
+    !Array.isArray(provenance) &&
+    (provenance as { kind?: unknown }).kind === "inter_session"
   );
 }
 

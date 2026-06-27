@@ -227,6 +227,28 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 
+  it("does not announce incomplete-turn fallback text from a waited A2A run", async () => {
+    vi.mocked(readLatestAssistantReplySnapshot).mockResolvedValueOnce({
+      text: "Agent couldn't generate a response. Note: some tool actions may have already been executed.",
+      fingerprint: "incomplete-turn-fallback",
+    });
+
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:discord:channel:target-room",
+      displayKey: "agent:main:discord:channel:target-room",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      waitRunId: "run-incomplete-turn",
+    });
+
+    expect(firstMockArg(vi.mocked(waitForAgentRun), "agent run wait").runId).toBe(
+      "run-incomplete-turn",
+    );
+    expect(runAgentStep).not.toHaveBeenCalled();
+    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+  });
+
   it("keeps the announce decider for same-session sends from a different channel", async () => {
     vi.mocked(runAgentStep).mockResolvedValueOnce("ANNOUNCE_SKIP");
 
@@ -244,6 +266,22 @@ describe("runSessionsSendA2AFlow announce delivery", () => {
     expect(runAgentStep).toHaveBeenCalledTimes(1);
     const stepInput = firstMockArg(vi.mocked(runAgentStep), "agent step");
     expect(stepInput.message).toBe("Agent-to-agent announce step.");
+    expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
+  });
+
+  it("does not run the announce decider for same-session sends without an announce target", async () => {
+    await runSessionsSendA2AFlow({
+      targetSessionKey: "agent:main:main",
+      displayKey: "agent:main:main",
+      message: "Test message",
+      announceTimeoutMs: 10_000,
+      maxPingPongTurns: 2,
+      requesterSessionKey: "agent:main:main",
+      requesterChannel: "qa-channel",
+      roundOneReply: "Already delivered through the source message tool",
+    });
+
+    expect(runAgentStep).not.toHaveBeenCalled();
     expect(gatewayCalls.find((call) => call.method === "send")).toBeUndefined();
   });
 

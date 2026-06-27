@@ -149,6 +149,32 @@ describe("readLatestAssistantReply", () => {
     expect(result).toBeUndefined();
   });
 
+  it("does not treat trailing inter-session input rows as assistant replies", async () => {
+    callGatewayMock.mockResolvedValue({
+      messages: [
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "older worker reply" }],
+          timestamp: 10,
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "forwarded sessions_send prompt" }],
+          provenance: {
+            kind: "inter_session",
+            sourceSessionKey: "agent:main:source",
+            sourceTool: "sessions_send",
+          },
+          timestamp: 11,
+        },
+      ],
+    });
+
+    const result = await readLatestAssistantReply({ sessionKey: "agent:main:target" });
+
+    expect(result).toBeUndefined();
+  });
+
   it("returns assistant fingerprints for delta comparisons", async () => {
     callGatewayMock.mockResolvedValue({
       messages: [

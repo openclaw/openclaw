@@ -28,6 +28,8 @@ import {
 
 const log = createSubsystemLogger("agents/sessions-send");
 
+const INCOMPLETE_TURN_FALLBACK_REPLY_RE = /Agent couldn't generate a response/i;
+
 type GatewayCaller = <T = unknown>(opts: CallGatewayOptions) => Promise<T>;
 
 const defaultSessionsSendA2ADeps = {
@@ -73,6 +75,13 @@ async function deliverAnnounceReply(params: {
   }
 }
 
+function isNonDeliverableA2AReply(text: string | undefined): boolean {
+  return (
+    isNonDeliverableSessionsReply(text) ||
+    Boolean(text && INCOMPLETE_TURN_FALLBACK_REPLY_RE.test(text))
+  );
+}
+
 export async function runSessionsSendA2AFlow(params: {
   targetSessionKey: string;
   displayKey: string;
@@ -109,7 +118,7 @@ export async function runSessionsSendA2AFlow(params: {
     if (!latestReply) {
       return;
     }
-    if (isNonDeliverableSessionsReply(latestReply)) {
+    if (isNonDeliverableA2AReply(latestReply)) {
       return;
     }
 
@@ -121,14 +130,13 @@ export async function runSessionsSendA2AFlow(params: {
 
     // A same-session send is a human-facing source-channel reply, not a true
     // agent-to-agent announcement. Asking the same session to decide whether to
-    // announce can learn stale ANNOUNCE_SKIP patterns from its own history and
-    // silently drop a normal channel response.
-    if (
+    // announce can re-run the same prompt and duplicate source-reply side effects.
+    const sameSessionSourceReply =
+      params.requesterSessionKey && params.requesterSessionKey === params.targetSessionKey;
+    const canDirectDeliverSameSessionReply =
       announceTarget &&
-      params.requesterSessionKey &&
-      params.requesterSessionKey === params.targetSessionKey &&
-      params.requesterChannel === announceTarget.channel
-    ) {
+      (!params.requesterChannel || params.requesterChannel === announceTarget.channel);
+    if (sameSessionSourceReply && canDirectDeliverSameSessionReply) {
       if (params.waitRunId && !params.roundOneReply && !params.baseline) {
         return;
       }
@@ -137,6 +145,9 @@ export async function runSessionsSendA2AFlow(params: {
         message: latestReply,
         runContextId,
       });
+      return;
+    }
+    if (sameSessionSourceReply && !announceTarget) {
       return;
     }
 
@@ -171,7 +182,7 @@ export async function runSessionsSendA2AFlow(params: {
             nextSessionKey === params.requesterSessionKey ? params.requesterChannel : targetChannel,
           sourceTool: "sessions_send",
         });
-        if (!replyText || isReplySkip(replyText) || isNonDeliverableSessionsReply(replyText)) {
+        if (!replyText || isReplySkip(replyText) || isNonDeliverableA2AReply(replyText)) {
           break;
         }
         latestReply = replyText;
@@ -207,7 +218,7 @@ export async function runSessionsSendA2AFlow(params: {
       announceReply &&
       announceReply.trim() &&
       !isAnnounceSkip(announceReply) &&
-      !isNonDeliverableSessionsReply(announceReply)
+      !isNonDeliverableA2AReply(announceReply)
     ) {
       await deliverAnnounceReply({
         announceTarget,
