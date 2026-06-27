@@ -81,18 +81,16 @@ function isOpenAiCompletionsAssistantMessage(message: AgentMessage | undefined):
 
 function preservePendingAssistantUsage(
   state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantUsage">,
-  message: AgentMessage,
-): AgentMessage {
-  if (message.role !== "assistant" || !hasNonzeroUsage(state.pendingAssistantUsage)) {
+  message: AssistantMessage,
+): AssistantMessage {
+  if (!hasNonzeroUsage(state.pendingAssistantUsage)) {
     return message;
   }
   const messageUsage = normalizeUsage((message as { usage?: UsageLike }).usage);
   if (hasNonzeroUsage(messageUsage)) {
     return message;
   }
-  (message as AgentMessage & { usage?: AssistantUsageSnapshot }).usage = toAssistantUsageSnapshot(
-    state.pendingAssistantUsage,
-  );
+  message.usage = toAssistantUsageSnapshot(state.pendingAssistantUsage);
   return message;
 }
 

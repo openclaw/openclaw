@@ -917,7 +917,10 @@ describe("handleMessageEnd", () => {
     } as never);
 
     expect(
-      firstMockArg(ctx.noteLastAssistant as { mock: { calls: unknown[][] } }, "last assistant"),
+      firstMockArg(
+        ctx.noteLastAssistant as unknown as { mock: { calls: unknown[][] } },
+        "last assistant",
+      ),
     ).toMatchObject({
       usage: { input: 7, output: 5, cacheRead: 0, cacheWrite: 0, totalTokens: 12 },
     });
