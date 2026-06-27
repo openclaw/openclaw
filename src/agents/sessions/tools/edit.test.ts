@@ -37,7 +37,10 @@ describe("edit tool", () => {
     await expect(
       tool.execute(
         "call-1",
-        { path: filePath, edits: [{ oldText: "missing", newText: "replacement" }] },
+        {
+          path: filePath,
+          edits: [{ oldText: "missing", newText: "replacement" }],
+        },
         undefined,
       ),
     ).rejects.toThrow(/Current file contents:\nactual current content/);
@@ -173,5 +176,347 @@ describe("edit tool", () => {
     expect((component as { preview?: { diff?: string } } | undefined)?.preview?.diff).toContain(
       "remote changed",
     );
+  });
+
+  it("filters fuzzy no-op edits from mixed previews", async () => {
+    const readFile = vi.fn(async () => Buffer.from("foo\u00a0bar\n"));
+    const operations: EditOperations = {
+      access: async () => {},
+      readFile,
+      writeFile: async () => {},
+    };
+    const tool = createEditToolDefinition("/workspace", { operations });
+    const args = {
+      path: "remote.txt",
+      edits: [
+        { oldText: "foo bar", newText: "foo bar" },
+        { oldText: "foo\u00a0", newText: "baz" },
+      ],
+    };
+    const context = {
+      args,
+      argsComplete: true,
+      cwd: "/workspace",
+      executionStarted: false,
+      expanded: false,
+      invalidate: vi.fn(),
+      isError: false,
+      isPartial: false,
+      lastComponent: undefined,
+      showImages: false,
+      state: {},
+      toolCallId: "call-preview-mixed",
+    };
+
+    const component = tool.renderCall?.(args, testTheme, context);
+    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+
+    expect(
+      (component as { preview?: { error?: string; diff?: string } } | undefined)?.preview,
+    ).toEqual(expect.objectContaining({ diff: expect.stringContaining("bazbar") }));
+    expect(
+      (component as { preview?: { error?: string } } | undefined)?.preview?.error,
+    ).toBeUndefined();
+  });
+
+  it("validates no-op targets in mixed previews", async () => {
+    const readFile = vi.fn(async () => Buffer.from("alpha beta\n"));
+    const operations: EditOperations = {
+      access: async () => {},
+      readFile,
+      writeFile: async () => {},
+    };
+    const tool = createEditToolDefinition("/workspace", { operations });
+    const args = {
+      path: "remote.txt",
+      edits: [
+        { oldText: "missing", newText: "missing" },
+        { oldText: "alpha", newText: "ALPHA" },
+      ],
+    };
+    const context = {
+      args,
+      argsComplete: true,
+      cwd: "/workspace",
+      executionStarted: false,
+      expanded: false,
+      invalidate: vi.fn(),
+      isError: false,
+      isPartial: false,
+      lastComponent: undefined,
+      showImages: false,
+      state: {},
+      toolCallId: "call-preview-invalid-no-op",
+    };
+
+    const component = tool.renderCall?.(args, testTheme, context);
+    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+
+    expect((component as { preview?: { error?: string } } | undefined)?.preview?.error).toContain(
+      "Could not find the exact text",
+    );
+  });
+
+  it("returns terminal no-op when oldText equals newText", async () => {
+    const filePath = await createTempFile("unchanged content\n");
+    const tool = createEditTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [{ oldText: "unchanged", newText: "unchanged" }],
+      },
+      undefined,
+    );
+
+    const tc0 = result.content[0];
+    expect("text" in tc0 ? tc0.text : "").toContain("No changes made");
+    expect((result as any).terminate).toBe(true);
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("unchanged content\n");
+  });
+
+  it("shows an empty preview for an all-no-op edit", async () => {
+    const readFile = vi.fn(async () => Buffer.from("unchanged content\n"));
+    const operations: EditOperations = {
+      access: async () => {},
+      readFile,
+      writeFile: async () => {},
+    };
+    const tool = createEditToolDefinition("/workspace", { operations });
+    const args = {
+      path: "remote.txt",
+      edits: [{ oldText: "unchanged", newText: "unchanged" }],
+    };
+    const context = {
+      args,
+      argsComplete: true,
+      cwd: "/workspace",
+      executionStarted: false,
+      expanded: false,
+      invalidate: vi.fn(),
+      isError: false,
+      isPartial: false,
+      lastComponent: undefined,
+      showImages: false,
+      state: {},
+      toolCallId: "call-preview-no-op",
+    };
+
+    const component = tool.renderCall?.(args, testTheme, context);
+    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+
+    expect(
+      (component as { preview?: { error?: string; diff?: string } } | undefined)?.preview,
+    ).toEqual({ diff: "", firstChangedLine: undefined });
+  });
+
+  it("shows an empty preview for a fuzzy net no-op", async () => {
+    const readFile = vi.fn(async () => Buffer.from("foo\n"));
+    const operations: EditOperations = {
+      access: async () => {},
+      readFile,
+      writeFile: async () => {},
+    };
+    const tool = createEditToolDefinition("/workspace", { operations });
+    const args = {
+      path: "remote.txt",
+      edits: [{ oldText: "foo ", newText: "foo" }],
+    };
+    const context = {
+      args,
+      argsComplete: true,
+      cwd: "/workspace",
+      executionStarted: false,
+      expanded: false,
+      invalidate: vi.fn(),
+      isError: false,
+      isPartial: false,
+      lastComponent: undefined,
+      showImages: false,
+      state: {},
+      toolCallId: "call-preview-fuzzy-no-op",
+    };
+
+    const component = tool.renderCall?.(args, testTheme, context);
+    await vi.waitFor(() => expect(context.invalidate).toHaveBeenCalled());
+
+    expect(
+      (component as { preview?: { error?: string; diff?: string } } | undefined)?.preview,
+    ).toEqual({ diff: "", firstChangedLine: undefined });
+  });
+
+  it("does not hide a mismatched no-op edit", async () => {
+    const filePath = await createTempFile("actual content\n");
+    const tool = createEditTool(tmpDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "missing", newText: "missing" }],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(/Current file contents:\nactual content/);
+  });
+
+  it("does not hide unrelated errors that mention no changes", async () => {
+    const filePath = await createTempFile("old content\n");
+    const operations: EditOperations = {
+      access: async (absolutePath) => {
+        await fs.access(absolutePath);
+      },
+      readFile: (absolutePath) => fs.readFile(absolutePath),
+      writeFile: async () => {
+        throw new Error("No changes made to the disk because it is full");
+      },
+    };
+    const tool = createEditTool(tmpDir, { operations });
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "old", newText: "new" }],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow("No changes made to the disk because it is full");
+  });
+
+  it("does not rewrite fuzzy-matched no-op text", async () => {
+    const filePath = await createTempFile("foo\n");
+    const tool = createEditTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [{ oldText: "foo ", newText: "foo " }],
+      },
+      undefined,
+    );
+
+    expect((result as any).terminate).toBe(true);
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo\n");
+  });
+
+  it("preserves real sibling edits beside a fuzzy no-op", async () => {
+    const filePath = await createTempFile("foo\u00a0bar\n");
+    const tool = createEditTool(tmpDir);
+
+    await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [
+          { oldText: "foo bar", newText: "foo bar" },
+          { oldText: "foo\u00a0", newText: "baz" },
+        ],
+      },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("bazbar\n");
+  });
+
+  it("preserves unrelated whitespace beside a fuzzy-equivalent no-op", async () => {
+    const filePath = await createTempFile("foo  \nkeep  \n");
+    const tool = createEditTool(tmpDir);
+
+    await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [
+          { oldText: "foo  ", newText: "foo" },
+          { oldText: "keep", newText: "changed" },
+        ],
+      },
+      undefined,
+    );
+
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("foo  \nchanged  \n");
+  });
+
+  it("rejects duplicate no-op entries", async () => {
+    const filePath = await createTempFile("foo\n");
+    const tool = createEditTool(tmpDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [
+            { oldText: "foo", newText: "foo" },
+            { oldText: "foo", newText: "foo" },
+          ],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(/overlap/);
+  });
+
+  it("rejects an exact no-op overlapping a real edit", async () => {
+    const filePath = await createTempFile("foo\n");
+    const tool = createEditTool(tmpDir);
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [
+            { oldText: "foo", newText: "foo" },
+            { oldText: "foo", newText: "bar" },
+          ],
+        },
+        undefined,
+      ),
+    ).rejects.toThrow(/overlap/);
+  });
+
+  it("preserves valid sibling edits when batch contains a no-op entry", async () => {
+    const filePath = await createTempFile("alpha beta gamma\n");
+    const tool = createEditTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [
+          { oldText: "alpha", newText: "alpha" }, // no-op
+          { oldText: "gamma", newText: "GAMMA" }, // real change
+        ],
+      },
+      undefined,
+    );
+
+    const tcText = result.content[0];
+    expect("text" in tcText ? tcText.text : "").toContain("Successfully replaced");
+    expect((result as any).terminate).toBeFalsy();
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("alpha beta GAMMA\n");
+  });
+
+  it("applies real changes normally (no false positive for no-op)", async () => {
+    const filePath = await createTempFile("old content\n");
+    const tool = createEditTool(tmpDir);
+
+    const result = await tool.execute(
+      "call-1",
+      {
+        path: filePath,
+        edits: [{ oldText: "old", newText: "new" }],
+      },
+      undefined,
+    );
+
+    const tc1 = result.content[0];
+    expect("text" in tc1 ? tc1.text : "").toContain("Successfully replaced");
+    await expect(fs.readFile(filePath, "utf-8")).resolves.toBe("new content\n");
   });
 });

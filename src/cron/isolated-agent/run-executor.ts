@@ -161,8 +161,19 @@ function buildCronDeliveryTargetRuntimeContext(params: {
   ].join("\n");
 }
 
-function resolveCliRuntimeToolsAllow(toolsAllow?: string[]): string[] | undefined {
-  return toolsAllow?.some((toolName) => normalizeToolName(toolName) === "*")
+function resolveCliRuntimeToolsAllow(
+  toolsAllow?: string[],
+  toolsAllowIsDefault?: boolean,
+): string[] | undefined {
+  if (toolsAllow === undefined) {
+    return undefined;
+  }
+  // CLI runners reject runtime toolsAllow. Drop only the auto-stamped default;
+  // explicit per-cron restrictions stay fail-closed in prepareCliRunContext.
+  if (toolsAllowIsDefault) {
+    return undefined;
+  }
+  return toolsAllow.some((toolName) => normalizeToolName(toolName) === "*")
     ? undefined
     : toolsAllow;
 }
@@ -272,6 +283,7 @@ export function createCronPromptExecutor(params: {
       agentDir: params.agentDir,
       agentId: params.agentId,
       sessionKey: params.runSessionKey,
+      abortSignal: params.abortSignal,
       prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
         await ensureSelectedAgentHarnessPlugin({
           config: params.cfgWithAgentDefaults,
@@ -326,7 +338,10 @@ export function createCronPromptExecutor(params: {
             messageChannel,
             sourceReplyDeliveryMode,
             requireExplicitMessageTarget: params.sourceDelivery.messageTool.requireExplicitTarget,
-            toolsAllow: resolveCliRuntimeToolsAllow(params.agentPayload?.toolsAllow),
+            toolsAllow: resolveCliRuntimeToolsAllow(
+              params.agentPayload?.toolsAllow,
+              params.agentPayload?.toolsAllowIsDefault,
+            ),
             abortSignal: params.abortSignal,
             onExecutionStarted: params.onExecutionStarted,
             onExecutionPhase: params.onExecutionPhase,

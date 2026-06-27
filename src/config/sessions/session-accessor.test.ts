@@ -11,6 +11,7 @@ import {
   appendTranscriptEvent,
   applySessionEntryLifecycleMutation,
   applySessionPatchProjection,
+  branchSessionFromCompactionCheckpoint,
   canonicalizeSessionEntryAliases,
   cleanupSessionLifecycleArtifacts,
   commitReplySessionInitialization,
@@ -27,7 +28,9 @@ import {
   publishTranscriptUpdate,
   readSessionUpdatedAt,
   replaceSessionEntry,
+  resolveSessionEntryCandidateTarget,
   resolveSessionEntryAccessTarget,
+  restoreSessionFromCompactionCheckpoint,
   resolveSessionTranscriptReadTarget,
   resolveSessionTranscriptRuntimeReadTarget,
   resolveSessionTranscriptRuntimeTarget,
@@ -92,6 +95,27 @@ describe("session accessor file-backed seam", () => {
       sessionId: "session-1",
       updatedAt: expect.any(Number),
     });
+  });
+
+  it("keeps case-distinct Matrix sessions separate under nested agent ownership", async () => {
+    const mixedKey = "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org";
+    const lowerKey = "agent:voice:agent:other:matrix:channel:!Roomabc:example.org";
+
+    await upsertSessionEntry(
+      { sessionKey: mixedKey, storePath },
+      { sessionId: "mixed-session", updatedAt: 10 },
+    );
+    await upsertSessionEntry(
+      { sessionKey: lowerKey, storePath },
+      { sessionId: "lower-session", updatedAt: 20 },
+    );
+
+    expect(loadSessionEntry({ sessionKey: mixedKey, storePath })?.sessionId).toBe("mixed-session");
+    expect(loadSessionEntry({ sessionKey: lowerKey, storePath })?.sessionId).toBe("lower-session");
+    expect(listSessionEntries({ storePath }).map((entry) => entry.sessionKey)).toEqual([
+      mixedKey,
+      lowerKey,
+    ]);
   });
 
   it("marks abort targets while canonicalizing legacy session keys", async () => {
@@ -222,6 +246,69 @@ describe("session accessor file-backed seam", () => {
       updatedAt: now + 2,
     });
     expect(persisted.main).toBeUndefined();
+  });
+
+  it("resolves status-style ordered candidate keys without exposing the store", async () => {
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify({
+        "agent:main:current": {
+          label: "literal-current",
+          sessionId: "session-current",
+          updatedAt: 30,
+        },
+        "agent:main:main": {
+          label: "main",
+          sessionId: "session-main",
+          updatedAt: 10,
+        },
+      } satisfies Record<string, SessionEntry>),
+      "utf8",
+    );
+
+    const resolved = resolveSessionEntryCandidateTarget({
+      agentId: "main",
+      candidateKeys: ["agent:main:main", "agent:main:current"],
+      cfg: { session: { store: storePath } },
+    });
+
+    expect(resolved).toEqual({
+      agentId: "main",
+      candidateKey: "agent:main:main",
+      entry: expect.objectContaining({
+        label: "main",
+        sessionId: "session-main",
+      }),
+      persisted: true,
+      sessionKey: "agent:main:main",
+    });
+  });
+
+  it("returns an implicit candidate fallback without persisting it", () => {
+    const resolved = resolveSessionEntryCandidateTarget({
+      agentId: "main",
+      candidateKeys: ["agent:main:missing"],
+      cfg: { session: { store: storePath } },
+      fallback: {
+        sessionKey: "agent:main:current",
+        entry: {
+          sessionId: "",
+          updatedAt: 40,
+        },
+      },
+    });
+
+    expect(resolved).toEqual({
+      agentId: "main",
+      candidateKey: "agent:main:current",
+      entry: {
+        sessionId: "",
+        updatedAt: 40,
+      },
+      persisted: false,
+      sessionKey: "agent:main:current",
+    });
+    expect(fs.existsSync(storePath)).toBe(false);
   });
 
   it("purges deleted-agent entries from the current locked store", async () => {
@@ -885,6 +972,220 @@ describe("session accessor file-backed seam", () => {
       status: "running",
       updatedAt: 20,
     });
+  });
+
+  it("branches checkpoint sessions without exposing mutable store rows", async () => {
+    const sourceSessionId = "11111111-1111-4111-8111-111111111111";
+    const branchSessionId = "22222222-2222-4222-8222-222222222222";
+    const branchPath = path.join(tempDir, "branch.jsonl");
+    const now = Date.now();
+    fs.writeFileSync(transcriptPath, `{"type":"session","id":"${sourceSessionId}"}\n`, "utf8");
+    fs.writeFileSync(branchPath, `{"type":"session","id":"${branchSessionId}"}\n`, "utf8");
+    const checkpoint = {
+      checkpointId: "checkpoint-1",
+      sessionKey: "agent:main:main",
+      sessionId: sourceSessionId,
+      createdAt: now,
+      reason: "manual",
+      preCompaction: {
+        sessionId: sourceSessionId,
+        sessionFile: transcriptPath,
+        leafId: "leaf-1",
+      },
+      postCompaction: { sessionId: "33333333-3333-4333-8333-333333333333" },
+    } satisfies NonNullable<SessionEntry["compactionCheckpoints"]>[number];
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          main: {
+            label: "Main",
+            sessionFile: transcriptPath,
+            sessionId: sourceSessionId,
+            updatedAt: now,
+            compactionCheckpoints: [checkpoint],
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await branchSessionFromCompactionCheckpoint({
+      storePath,
+      sourceKey: "agent:main:main",
+      sourceStoreKey: "main",
+      nextKey: "agent:main:branch",
+      checkpointId: "checkpoint-1",
+      forkTranscriptFromCheckpoint: async (selectedCheckpoint) => {
+        expect(selectedCheckpoint).toEqual(checkpoint);
+        return {
+          status: "created",
+          transcript: {
+            sessionFile: branchPath,
+            sessionId: branchSessionId,
+            totalTokens: 42,
+          },
+        };
+      },
+      buildEntry: ({ currentEntry, forkedTranscript }) => ({
+        ...currentEntry,
+        sessionFile: forkedTranscript.sessionFile,
+        sessionId: forkedTranscript.sessionId,
+        totalTokens: forkedTranscript.totalTokens,
+        updatedAt: now + 1,
+      }),
+    });
+
+    expect(result).toMatchObject({
+      status: "created",
+      key: "agent:main:branch",
+      entry: {
+        sessionFile: branchPath,
+        sessionId: branchSessionId,
+        totalTokens: 42,
+      },
+    });
+    expect(loadSessionStore(storePath)).toEqual({
+      main: expect.objectContaining({ sessionId: sourceSessionId }),
+      "agent:main:branch": expect.objectContaining({
+        sessionFile: branchPath,
+        sessionId: branchSessionId,
+        totalTokens: 42,
+      }),
+    });
+  });
+
+  it("branches from the newest matching compaction checkpoint without sorting all checkpoints", async () => {
+    const sourceSessionId = "11111111-1111-4111-8111-111111111111";
+    const branchSessionId = "22222222-2222-4222-8222-222222222222";
+    const branchPath = path.join(tempDir, "branch-newest.jsonl");
+    fs.writeFileSync(branchPath, `{"type":"session","id":"${branchSessionId}"}\n`, "utf8");
+    const oldMatchingCheckpoint = {
+      checkpointId: "checkpoint-1",
+      sessionKey: "agent:main:main",
+      sessionId: sourceSessionId,
+      createdAt: 10,
+      reason: "manual",
+      preCompaction: {
+        sessionId: sourceSessionId,
+        leafId: "old-leaf",
+      },
+      postCompaction: { sessionId: "33333333-3333-4333-8333-333333333333" },
+    } satisfies NonNullable<SessionEntry["compactionCheckpoints"]>[number];
+    const newestMatchingCheckpoint = {
+      ...oldMatchingCheckpoint,
+      createdAt: 20,
+      preCompaction: {
+        sessionId: sourceSessionId,
+        leafId: "new-leaf",
+      },
+      postCompaction: { sessionId: "44444444-4444-4444-8444-444444444444" },
+    } satisfies NonNullable<SessionEntry["compactionCheckpoints"]>[number];
+    const newestDifferentCheckpoint = {
+      ...oldMatchingCheckpoint,
+      checkpointId: "checkpoint-2",
+      createdAt: 30,
+      preCompaction: {
+        sessionId: sourceSessionId,
+        leafId: "different-leaf",
+      },
+      postCompaction: { sessionId: "55555555-5555-4555-8555-555555555555" },
+    } satisfies NonNullable<SessionEntry["compactionCheckpoints"]>[number];
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: sourceSessionId,
+            updatedAt: 30,
+            compactionCheckpoints: [
+              oldMatchingCheckpoint,
+              newestDifferentCheckpoint,
+              newestMatchingCheckpoint,
+            ],
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await branchSessionFromCompactionCheckpoint({
+      storePath,
+      sourceKey: "agent:main:main",
+      sourceStoreKey: "main",
+      nextKey: "agent:main:branch-newest",
+      checkpointId: "checkpoint-1",
+      forkTranscriptFromCheckpoint: async (selectedCheckpoint) => {
+        expect(selectedCheckpoint).toEqual(newestMatchingCheckpoint);
+        return {
+          status: "created",
+          transcript: {
+            sessionFile: branchPath,
+            sessionId: branchSessionId,
+          },
+        };
+      },
+      buildEntry: ({ currentEntry, forkedTranscript }) => ({
+        ...currentEntry,
+        sessionFile: forkedTranscript.sessionFile,
+        sessionId: forkedTranscript.sessionId,
+      }),
+    });
+
+    expect(result).toMatchObject({
+      status: "created",
+      key: "agent:main:branch-newest",
+      checkpoint: newestMatchingCheckpoint,
+    });
+  });
+
+  it("does not persist checkpoint restores when the transcript boundary is missing", async () => {
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          "agent:main:main": {
+            sessionId: "session-1",
+            updatedAt: 10,
+            compactionCheckpoints: [
+              {
+                checkpointId: "checkpoint-1",
+                sessionKey: "agent:main:main",
+                sessionId: "session-1",
+                createdAt: 20,
+                reason: "manual",
+                preCompaction: {
+                  sessionId: "session-1",
+                  leafId: "leaf-1",
+                },
+                postCompaction: { sessionId: "session-2" },
+              },
+            ],
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const before = fs.readFileSync(storePath, "utf8");
+    const result = await restoreSessionFromCompactionCheckpoint({
+      storePath,
+      sessionKey: "agent:main:main",
+      checkpointId: "checkpoint-1",
+      forkTranscriptFromCheckpoint: async () => ({ status: "missing-boundary" }),
+      buildEntry: () => {
+        throw new Error("missing boundary should skip entry replacement");
+      },
+    });
+
+    expect(result).toEqual({ status: "missing-boundary" });
+    expect(fs.readFileSync(storePath, "utf8")).toBe(before);
   });
 
   it("cleans scoped lifecycle entries and unreferenced transcript artifacts", async () => {

@@ -92,6 +92,7 @@ describe("lazy protocol validators", () => {
         agentId: "work",
         limit: 50,
         includeFamily: true,
+        offset: 100,
       }),
     ).toBe(true);
     expect(

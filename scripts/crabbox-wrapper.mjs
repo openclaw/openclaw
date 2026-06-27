@@ -1056,8 +1056,8 @@ function commandNeedsAwsMacosPackageManager(commandArgs, options = {}) {
     return true;
   }
   if (commandArgs.length === 1) {
-    return shellCommandWordCandidates(commandArgs[0]).some(
-      (words) => commandWordsNeedAwsMacosPackageManager(words, options),
+    return shellCommandWordCandidates(commandArgs[0]).some((words) =>
+      commandWordsNeedAwsMacosPackageManager(words, options),
     );
   }
   return commandWordsNeedAwsMacosPackageManager(normalizedCommandWords(commandArgs), options);
@@ -1964,7 +1964,7 @@ function remoteGitBootstrapForChangedGate(changedGateBase) {
 }
 
 function injectRemoteChangedGateEnvironment(commandArgs) {
-  if (commandArgs[0] !== "run" || isWindowsRemoteTarget(commandArgs)) {
+  if (commandArgs[0] !== "run" || isNativeWindowsRemoteTarget(commandArgs)) {
     return commandArgs;
   }
 
@@ -2055,6 +2055,16 @@ function isAwsMacosRemoteTarget(commandArgs, providerName) {
   );
 }
 
+function isBrokeredWsl2RemoteTarget(commandArgs, providerName) {
+  const canonicalProvider = providerAliases.get(providerName) ?? providerName;
+  return (
+    commandArgs[0] === "run" &&
+    (canonicalProvider === "aws" || canonicalProvider === "azure") &&
+    isWindowsRemoteTarget(commandArgs) &&
+    optionValue(commandArgs, "--windows-mode") === "wsl2"
+  );
+}
+
 function isHydratedNativeWindowsProvider(providerName) {
   return providerName === "aws" || providerName === "azure";
 }
@@ -2141,6 +2151,31 @@ function injectRemoteChangedGateGitBootstrap(commandArgs, changedGateBase) {
   return normalizedArgs;
 }
 
+function remotePosixJsEnvBootstrap() {
+  return [
+    "openclaw_crabbox_env() {",
+    "openclaw_env_args=();",
+    "openclaw_env_ignore=0;",
+    "openclaw_env_path_seen=0;",
+    'while [ "$#" -gt 0 ]; do',
+    'case "$1" in',
+    '-i|--ignore-environment) openclaw_env_ignore=1; openclaw_env_args+=("$1"); shift ;;',
+    '-S|--split-string|-S*|--split-string=*) command env "${openclaw_env_args[@]}" "$@"; return ;;',
+    '-[!-]*i*) openclaw_env_ignore=1; openclaw_env_args+=("$1"); shift ;;',
+    '-u|--unset|-C|--chdir) openclaw_env_args+=("$1"); shift; if [ "$#" -gt 0 ]; then openclaw_env_args+=("$1"); shift; fi ;;',
+    '--unset=*|--chdir=*) openclaw_env_args+=("$1"); shift ;;',
+    'PATH=*) if [ "$openclaw_env_ignore" = "1" ]; then openclaw_env_args+=("PATH=${OPENCLAW_CRABBOX_BOOTSTRAP_PATH:-$PATH}:${1#PATH=}"); else openclaw_env_args+=("$1"); fi; openclaw_env_path_seen=1; shift ;;',
+    '[A-Za-z_]*=*) openclaw_env_args+=("$1"); shift ;;',
+    '--) openclaw_env_args+=("--"); shift; break ;;',
+    "*) break ;;",
+    "esac;",
+    "done;",
+    'if [ "$openclaw_env_ignore" = "1" ] && [ "$openclaw_env_path_seen" = "0" ]; then openclaw_env_args+=("PATH=${OPENCLAW_CRABBOX_BOOTSTRAP_PATH:-$PATH}"); fi;',
+    'command env "${openclaw_env_args[@]}" "$@";',
+    "};",
+  ];
+}
+
 function remoteAwsMacosJsBootstrap({ packageManager = false, bun = false } = {}) {
   const nodeVersion = process.env.OPENCLAW_CRABBOX_MACOS_NODE_VERSION?.trim() || "24.15.0";
   const bootstrap = [
@@ -2192,26 +2227,7 @@ function remoteAwsMacosJsBootstrap({ packageManager = false, bun = false } = {})
     "release_install_lock;",
     "fi;",
     "node --version >&2 || return 1;",
-    "openclaw_crabbox_env() {",
-    "openclaw_env_args=();",
-    "openclaw_env_ignore=0;",
-    "openclaw_env_path_seen=0;",
-    'while [ "$#" -gt 0 ]; do',
-    'case "$1" in',
-    '-i|--ignore-environment) openclaw_env_ignore=1; openclaw_env_args+=("$1"); shift ;;',
-    '-S|--split-string|-S*|--split-string=*) command env "${openclaw_env_args[@]}" "$@"; return ;;',
-    '-[!-]*i*) openclaw_env_ignore=1; openclaw_env_args+=("$1"); shift ;;',
-    '-u|--unset|-C|--chdir) openclaw_env_args+=("$1"); shift; if [ "$#" -gt 0 ]; then openclaw_env_args+=("$1"); shift; fi ;;',
-    '--unset=*|--chdir=*) openclaw_env_args+=("$1"); shift ;;',
-    'PATH=*) if [ "$openclaw_env_ignore" = "1" ]; then openclaw_env_args+=("PATH=${OPENCLAW_CRABBOX_BOOTSTRAP_PATH:-$PATH}:${1#PATH=}"); else openclaw_env_args+=("$1"); fi; openclaw_env_path_seen=1; shift ;;',
-    '[A-Za-z_]*=*) openclaw_env_args+=("$1"); shift ;;',
-    '--) openclaw_env_args+=("--"); shift; break ;;',
-    "*) break ;;",
-    "esac;",
-    "done;",
-    'if [ "$openclaw_env_ignore" = "1" ] && [ "$openclaw_env_path_seen" = "0" ]; then openclaw_env_args+=("PATH=${OPENCLAW_CRABBOX_BOOTSTRAP_PATH:-$PATH}"); fi;',
-    'command env "${openclaw_env_args[@]}" "$@";',
-    "};",
+    ...remotePosixJsEnvBootstrap(),
   ];
   if (packageManager) {
     bootstrap.push(
@@ -2264,6 +2280,71 @@ function remoteAwsMacosJsBootstrap({ packageManager = false, bun = false } = {})
   return bootstrap.join(" ");
 }
 
+function remoteWsl2JsBootstrap({ packageManager = false } = {}) {
+  const nodeVersion = process.env.OPENCLAW_CRABBOX_WSL2_NODE_VERSION?.trim() || "24.15.0";
+  const bootstrap = [
+    "openclaw_crabbox_bootstrap_wsl2_js() {",
+    'tool_root="${OPENCLAW_CRABBOX_WSL2_TOOLCHAIN_DIR:-$HOME/.openclaw-crabbox-toolchain}";',
+    `node_version=${shellQuote(nodeVersion)};`,
+    'arch="$(uname -m)";',
+    'case "$arch" in arm64|aarch64) node_arch=arm64 ;; x86_64|amd64) node_arch=x64 ;; *) echo "unsupported WSL2 arch: $arch" >&2; return 2 ;; esac;',
+    'if [ -z "${TMPDIR:-}" ]; then export TMPDIR="/tmp"; fi;',
+    'if [ ! -d "$TMPDIR" ]; then mkdir -p "$TMPDIR" 2>/dev/null || export TMPDIR="/tmp"; fi;',
+    'if [ ! -d "$TMPDIR" ]; then echo "usable TMPDIR not found: $TMPDIR" >&2; return 1; fi;',
+    'node_dir="$tool_root/node-v${node_version}-linux-${node_arch}";',
+    'ready_marker="$node_dir/.openclaw-crabbox-node-ready";',
+    'export PATH="$node_dir/bin:$PATH";',
+    'if [ ! -x "$node_dir/bin/node" ] || [ ! -f "$ready_marker" ]; then',
+    'mkdir -p "$tool_root" || { status=$?; return "$status"; };',
+    'install_lock="$tool_root/.node-${node_version}-${node_arch}.lock";',
+    "lock_acquired=0;",
+    "lock_deadline=$((SECONDS + 300));",
+    "while true; do",
+    'if mkdir "$install_lock" 2>/dev/null; then lock_acquired=1; printf "%s\\n" "$$" >"$install_lock/pid" || { status=$?; rm -rf "$install_lock"; return "$status"; }; break; fi;',
+    'if [ -x "$node_dir/bin/node" ] && [ -f "$ready_marker" ]; then break; fi;',
+    'if [ "$SECONDS" -ge "$lock_deadline" ]; then',
+    'lock_pid="$(cat "$install_lock/pid" 2>/dev/null || true)";',
+    'if [ -n "$lock_pid" ] && kill -0 "$lock_pid" 2>/dev/null; then echo "timed out waiting for active WSL2 Node toolchain install lock: $install_lock pid=$lock_pid" >&2; return 1; fi;',
+    'echo "reclaiming stale WSL2 Node toolchain install lock: $install_lock" >&2;',
+    'rm -rf "$install_lock" || return 1;',
+    "lock_deadline=$((SECONDS + 300));",
+    "fi;",
+    "sleep 1;",
+    "done;",
+    'release_install_lock() { if [ "$lock_acquired" = "1" ]; then rm -rf "$install_lock" 2>/dev/null || true; fi; };',
+    'if [ ! -x "$node_dir/bin/node" ] || [ ! -f "$ready_marker" ]; then',
+    'tmp_dir="$(mktemp -d)" || { release_install_lock; return 1; };',
+    'pkg="node-v${node_version}-linux-${node_arch}.tar.gz";',
+    'base_url="https://nodejs.org/dist/v${node_version}";',
+    'curl -fsSL --connect-timeout 10 --max-time 300 --retry 2 --retry-delay 2 -o "$tmp_dir/$pkg" "$base_url/$pkg" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
+    'curl -fsSL --connect-timeout 10 --max-time 60 --retry 2 --retry-delay 2 -o "$tmp_dir/SHASUMS256.txt" "$base_url/SHASUMS256.txt" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
+    '(cd "$tmp_dir" && grep " $pkg$" SHASUMS256.txt | sha256sum -c -) || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
+    'rm -rf "$node_dir" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
+    'tar -xzf "$tmp_dir/$pkg" -C "$tool_root" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
+    'touch "$ready_marker" || { status=$?; release_install_lock; rm -rf "$tmp_dir"; return "$status"; };',
+    'rm -rf "$tmp_dir";',
+    "fi;",
+    "release_install_lock;",
+    "fi;",
+    "node --version >&2 || return 1;",
+    ...remotePosixJsEnvBootstrap(),
+  ];
+  if (packageManager) {
+    bootstrap.push(
+      'export COREPACK_HOME="${COREPACK_HOME:-$tool_root/corepack}";',
+      'export PNPM_HOME="${PNPM_HOME:-$tool_root/pnpm-home}";',
+      'mkdir -p "$COREPACK_HOME" "$PNPM_HOME" || return 1;',
+      'export PATH="$PNPM_HOME:$PATH";',
+      'corepack enable --install-directory "$PNPM_HOME" || return 1;',
+      "pnpm --version >&2;",
+      "if [ -f pnpm-lock.yaml ] && [ ! -f node_modules/.modules.yaml ]; then pnpm install --frozen-lockfile || return 1; fi;",
+    );
+  }
+  bootstrap.push('export OPENCLAW_CRABBOX_BOOTSTRAP_PATH="$PATH";');
+  bootstrap.push("};", "openclaw_crabbox_bootstrap_wsl2_js");
+  return bootstrap.join(" ");
+}
+
 function scopedAwsMacosEnvCommand(commandArgs) {
   if (commandArgs.length <= 1 || !isSupportedSystemEnvCommand(commandArgs[0])) {
     return null;
@@ -2280,11 +2361,7 @@ function scopedAwsMacosEnvCommand(commandArgs) {
     commandWordsNeedAwsMacosPackageManager(targetWords);
   const needsRuntime = jsRuntimeEntrypoints.has(targetEntrypoint);
   const needsBun = awsMacosBunEntrypoints.has(targetEntrypoint);
-  if (
-    !needsRuntime &&
-    !needsPackageManager &&
-    !needsBun
-  ) {
+  if (!needsRuntime && !needsPackageManager && !needsBun) {
     return null;
   }
 
@@ -2521,6 +2598,73 @@ function readLeadingShellWord(command, start) {
   return word ? { word, end: command.length } : null;
 }
 
+function remoteWsl2JsBootstrapRequirements(commandArgs) {
+  const runArgs = runCommandArgs(commandArgs);
+  const directScopedEnvCommand = hasOption(commandArgs, "--shell")
+    ? null
+    : scopedAwsMacosEnvCommand(runArgs);
+  const shellScopedEnvCommand =
+    hasOption(commandArgs, "--shell") && runArgs.length === 1
+      ? scopedAwsMacosShellEnvCommand(runArgs[0])
+      : null;
+  const scopedEnvCommand = directScopedEnvCommand ?? shellScopedEnvCommand;
+  const packageManagerFallbackNeeded = scopedEnvCommand
+    ? commandNeedsAwsMacosPackageManager(runArgs)
+    : commandNeedsAwsMacosPackageManager(runArgs, { canShimIgnoreEnvironment: false });
+  const packageManagerNeeded = scopedEnvCommand?.packageManager || packageManagerFallbackNeeded;
+  const runtimeEntrypoint =
+    scopedEnvCommand?.runtimeEntrypoint || commandRuntimeEntrypoint(runArgs);
+  const runtimeNeeded =
+    runtimeEntrypoint && !awsMacosBunEntrypoints.has(runtimeEntrypoint) ? runtimeEntrypoint : "";
+
+  return {
+    scopedEnvCommand,
+    packageManager: packageManagerNeeded,
+    runtimeEntrypoint: runtimeNeeded,
+  };
+}
+
+function prepareRemoteWsl2JsBootstrapScript(commandArgs, providerName) {
+  const requirements = remoteWsl2JsBootstrapRequirements(commandArgs);
+  if (
+    !isBrokeredWsl2RemoteTarget(commandArgs, providerName) ||
+    (!requirements.runtimeEntrypoint && !requirements.packageManager)
+  ) {
+    return { args: commandArgs, cleanup: () => {}, prepared: false };
+  }
+
+  const { start, optionEnd } = runCommandBounds(commandArgs);
+  if (start < 0) {
+    return { args: commandArgs, cleanup: () => {}, prepared: false };
+  }
+
+  const scriptRoot = mkdtempSync(resolve(tmpdir(), "openclaw-crabbox-wsl2-script-"));
+  const scriptPath = resolve(scriptRoot, "script.sh");
+  const remoteCommand = commandArgs.slice(start);
+  const originalShellCommand =
+    requirements.scopedEnvCommand?.shellCommand ??
+    (hasOption(commandArgs, "--shell") && remoteCommand.length === 1
+      ? remoteCommand[0]
+      : shellJoin(remoteCommand));
+  const script = `${remoteWsl2JsBootstrap({
+    packageManager: requirements.packageManager,
+  })} || exit $?\n{ ${originalShellCommand}\n}\n`;
+  writeFileSync(scriptPath, script, "utf8");
+  chmodSync(scriptPath, 0o700);
+
+  const normalizedArgs = commandArgs.slice(0, optionEnd);
+  if (!hasOption(normalizedArgs, "--no-hydrate")) {
+    normalizedArgs.push("--no-hydrate");
+  }
+  normalizedArgs.push("--script", scriptPath);
+
+  return {
+    args: normalizedArgs,
+    cleanup: () => rmSync(scriptRoot, { recursive: true, force: true }),
+    prepared: true,
+  };
+}
+
 function injectRemoteAwsMacosJsBootstrap(commandArgs, providerName) {
   const runArgs = runCommandArgs(commandArgs);
   const directScopedEnvCommand = hasOption(commandArgs, "--shell")
@@ -2531,12 +2675,10 @@ function injectRemoteAwsMacosJsBootstrap(commandArgs, providerName) {
       ? scopedAwsMacosShellEnvCommand(runArgs[0])
       : null;
   const scopedEnvCommand = directScopedEnvCommand ?? shellScopedEnvCommand;
-  const packageManagerFallbackNeeded =
-    scopedEnvCommand
-      ? commandNeedsAwsMacosPackageManager(runArgs)
-      : commandNeedsAwsMacosPackageManager(runArgs, { canShimIgnoreEnvironment: false });
-  const packageManagerNeeded =
-    scopedEnvCommand?.packageManager || packageManagerFallbackNeeded;
+  const packageManagerFallbackNeeded = scopedEnvCommand
+    ? commandNeedsAwsMacosPackageManager(runArgs)
+    : commandNeedsAwsMacosPackageManager(runArgs, { canShimIgnoreEnvironment: false });
+  const packageManagerNeeded = scopedEnvCommand?.packageManager || packageManagerFallbackNeeded;
   const bunNeeded = scopedEnvCommand?.bun || commandNeedsAwsMacosBun(runArgs);
   const runtimeEntrypoint =
     scopedEnvCommand?.runtimeEntrypoint || commandRuntimeEntrypoint(runArgs);
@@ -3170,6 +3312,9 @@ if (canonicalProvider === "blacksmith-testbox") {
   console.error(
     `[crabbox] provider=blacksmith-testbox ${source}; if Testbox is queued or down, ${fallback}`,
   );
+  console.error(
+    "[crabbox] delegated Testbox proof uses the wrapper exitCode and timing JSON; the linked Actions run can show cancelled during external lease cleanup",
+  );
   enforceCrabboxOwnedBlacksmithLease(normalizedArgs);
 }
 
@@ -3182,6 +3327,7 @@ let remoteChangedGateBase = "";
 const scriptBootstrap = prepareAwsMacosScriptStdinBootstrap(normalizedArgs, provider);
 normalizedArgs = scriptBootstrap.args;
 const scriptStdinPrepared = scriptBootstrap.prepared;
+let wsl2ScriptBootstrap = { args: normalizedArgs, cleanup: () => {}, prepared: false };
 try {
   if (shouldUseFullCheckoutForCleanRemoteSync(normalizedArgs, provider)) {
     const runWords = runCommandArgs(normalizedArgs);
@@ -3212,6 +3358,7 @@ function cleanupOnce() {
   }
   cleanupDone = true;
   stopFullCheckoutKeepalive();
+  wsl2ScriptBootstrap.cleanup();
   scriptBootstrap.cleanup();
   preserveTemporaryCrabboxRuns();
   cleanupChildCwd();
@@ -3234,6 +3381,14 @@ if (
       : "pnpm crabbox:warmup, then pnpm crabbox:hydrate -- --id <id>";
     console.error(
       `[crabbox] warning: provider=aws raw boxes may lack Node/Corepack/pnpm/Bun for ${runtimeEntrypoint}; hydrate first (${hydrate}) or pass --provider blacksmith-testbox for OpenClaw CI-like proof; not switching providers automatically`,
+    );
+  }
+}
+if (normalizedArgs[0] === "run" && isBrokeredWsl2RemoteTarget(normalizedArgs, provider)) {
+  const wsl2Requirements = remoteWsl2JsBootstrapRequirements(normalizedArgs);
+  if (wsl2Requirements.runtimeEntrypoint || wsl2Requirements.packageManager) {
+    console.error(
+      `[crabbox] provider=${provider} WSL2 raw boxes may lack Node/Corepack/pnpm for ${wsl2Requirements.runtimeEntrypoint || "package-manager"}; using no-hydrate pinned user-local JavaScript tooling before the command`,
     );
   }
 }
@@ -3265,11 +3420,20 @@ const remoteMarkedArgs = injectRemoteChangedGateEnvironment(normalizedArgs);
 const remoteMarkedNeedsAwsMacosSwift =
   isAwsMacosRemoteTarget(remoteMarkedArgs, provider) &&
   commandNeedsAwsMacosSwiftToolchain(runCommandArgs(remoteMarkedArgs));
+try {
+  wsl2ScriptBootstrap = prepareRemoteWsl2JsBootstrapScript(
+    childCwd === repoRoot ? remoteMarkedArgs : absolutizeLocalRunPaths(remoteMarkedArgs),
+    provider,
+  );
+} catch (error) {
+  cleanupOnce();
+  throw error;
+}
 const childArgs =
   childCwd === repoRoot
     ? injectRemoteWindowsHydratedNodeModulesBootstrap(
         injectRemoteAwsMacosSwiftBootstrap(
-          injectRemoteAwsMacosJsBootstrap(remoteMarkedArgs, provider),
+          injectRemoteAwsMacosJsBootstrap(wsl2ScriptBootstrap.args, provider),
           provider,
           remoteMarkedNeedsAwsMacosSwift,
         ),
@@ -3278,7 +3442,7 @@ const childArgs =
     : injectRemoteChangedGateGitBootstrap(
         injectRemoteWindowsHydratedNodeModulesBootstrap(
           injectRemoteAwsMacosSwiftBootstrap(
-            injectRemoteAwsMacosJsBootstrap(absolutizeLocalRunPaths(remoteMarkedArgs), provider),
+            injectRemoteAwsMacosJsBootstrap(wsl2ScriptBootstrap.args, provider),
             provider,
             remoteMarkedNeedsAwsMacosSwift,
           ),
