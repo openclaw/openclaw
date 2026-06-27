@@ -1165,7 +1165,10 @@ async function scanTranscriptFile(params: {
         // above.
         entry.costTotal = undefined;
         entry.costBreakdown = undefined;
-      } else if (entry.costTotal === undefined) {
+      } else if (
+        entry.costTotal === undefined ||
+        (entry.costTotal === 0 && computeUsageTokenTotals(entry.usage).totalTokens > 0)
+      ) {
         // Fill in missing cost estimates.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
       }
