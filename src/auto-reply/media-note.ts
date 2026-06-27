@@ -8,7 +8,43 @@ function stripDarwinPrivatePrefix(value: string): string {
   return value.startsWith("/private/var/") ? value.slice("/private".length) : value;
 }
 
-function normalizeManagedInboundMediaRef(value: string): string {
+/**
+ * MIME types (or prefixes) whose inbound attachments the runtime either inlines
+ * (image -> vision, audio -> transcript) or resolves through a dedicated
+ * claim-check tool that understands `media://inbound/<id>` (e.g. the PDF tool,
+ * native image injection). For these, the stable `media://inbound/` URI is the
+ * correct prompt-visible reference and the raw host path is intentionally hidden.
+ */
+function inboundTypeHasManagedConsumer(type: string | undefined): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(type);
+  if (!normalized) {
+    // Unknown type: fall back to the safe legacy URI form rather than leaking a path.
+    return true;
+  }
+  return (
+    normalized.startsWith("image/") ||
+    normalized.startsWith("audio/") ||
+    normalized.startsWith("video/") ||
+    normalized === "application/pdf"
+  );
+}
+
+/**
+ * Resolves an inbound attachment reference for prompt rendering.
+ *
+ * Inlined / tool-backed media (image, audio, video, PDF) keeps the stable
+ * `media://inbound/<basename>` URI so prompts do not leak host-specific temp
+ * paths and the downstream claim-check resolvers keep working.
+ *
+ * Binary documents with no inliner and no claim-check tool (PDF aside) -- e.g.
+ * application/zip, application/octet-stream, arbitrary file types -- previously
+ * received only the opaque `media://inbound/<id>` URI plus a bare
+ * `<media:document>` placeholder, with no readable path. A shell-capable agent
+ * could not open the file. Restoring prior behavior, those types render the
+ * guarded absolute path (already proven to live inside the inbound dir) so the
+ * agent can read the file directly. See issue: inbound documents unreadable.
+ */
+function normalizeManagedInboundMediaRef(value: string, type?: string): string {
   if (!path.isAbsolute(value)) {
     return value;
   }
@@ -16,7 +52,8 @@ function normalizeManagedInboundMediaRef(value: string): string {
   const candidate = stripDarwinPrivatePrefix(path.resolve(value));
   const inboundDir = path.join(mediaDir, "inbound");
   const relativeToInbound = path.relative(inboundDir, candidate);
-  // Managed inbound media gets a stable URI so prompts do not leak host-specific temp paths.
+  // Only managed inbound media (path resolves inside the inbound dir) is eligible
+  // for rewriting; anything else is returned untouched.
   if (
     !relativeToInbound ||
     relativeToInbound.startsWith("..") ||
@@ -24,15 +61,22 @@ function normalizeManagedInboundMediaRef(value: string): string {
   ) {
     return value;
   }
+  // Binary documents have no inliner/claim-check consumer: hand the agent the
+  // real, readable absolute path (guarded to be inside the inbound dir above).
+  if (!inboundTypeHasManagedConsumer(type)) {
+    return candidate;
+  }
+  // Inlined / tool-backed media gets a stable URI so prompts do not leak
+  // host-specific temp paths and claim-check resolvers keep matching.
   return `media://inbound/${path.basename(candidate)}`;
 }
 
-function sanitizeInlineMediaNoteValue(value: string | undefined): string {
+function sanitizeInlineMediaNoteValue(value: string | undefined, type?: string): string {
   const trimmed = value?.trim();
   if (!trimmed) {
     return "";
   }
-  return normalizeManagedInboundMediaRef(trimmed)
+  return normalizeManagedInboundMediaRef(trimmed, type)
     .replace(/[\p{Cc}\]]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -49,10 +93,12 @@ function formatMediaAttachedLine(params: {
     typeof params.index === "number" && typeof params.total === "number"
       ? `[media attached ${params.index}/${params.total}: `
       : "[media attached: ";
-  const pathValue = sanitizeInlineMediaNoteValue(params.path);
+  const pathValue = sanitizeInlineMediaNoteValue(params.path, params.type);
   const typeRaw = sanitizeInlineMediaNoteValue(params.type);
   const typePart = typeRaw ? ` (${typeRaw})` : "";
-  const urlRaw = sanitizeInlineMediaNoteValue(params.url);
+  // Normalize the URL with the same type so a mirrored inbound path (Telegram
+  // album media) still collapses against the rendered path form (#47587).
+  const urlRaw = sanitizeInlineMediaNoteValue(params.url, params.type);
   // When the channel mirrors the local path into MediaUrl (Telegram album
   // media is the canonical case), rendering ` | ${url}` adds no information
   // and clutters the prompt with `path | path` duplication (issue #47587).

@@ -48,6 +48,57 @@ describe("buildInboundMediaNote", () => {
     );
   });
 
+  it("renders inbound BINARY documents as a readable absolute path, not an opaque URI", () => {
+    // Regression: binary documents (application/pdf aside) have no inliner and
+    // no claim-check tool, so the opaque media://inbound/<id> URI left
+    // shell-capable agents unable to open the file. The guarded absolute path
+    // (proven inside the inbound dir) must be prompt-visible. Restores prior
+    // behavior where agents could open inbound PDFs/zips directly.
+    const inboundPath = path.join(getMediaDir(), "inbound", "report---abc123.zip");
+    const note = buildInboundMediaNote({
+      MediaPath: inboundPath,
+      MediaType: "application/zip",
+      MediaUrl: inboundPath,
+    });
+    expect(note).toBe(`[media attached: ${inboundPath} (application/zip)]`);
+    // The agent-visible reference is a real, readable path - not the opaque URI.
+    expect(note).not.toContain("media://inbound/");
+    expect(note).toContain(inboundPath);
+  });
+
+  it("renders inbound octet-stream documents as a readable absolute path", () => {
+    const inboundPath = path.join(getMediaDir(), "inbound", "blob---def456.bin");
+    const note = buildInboundMediaNote({
+      MediaPath: inboundPath,
+      MediaType: "application/octet-stream",
+      MediaUrl: inboundPath,
+    });
+    expect(note).toBe(`[media attached: ${inboundPath} (application/octet-stream)]`);
+    expect(note).not.toContain("media://inbound/");
+  });
+
+  it("keeps the stable URI for inbound PDFs (handled by the dedicated PDF claim-check tool)", () => {
+    // PDFs resolve media://inbound/<id> via the PDF tool, so the URI form is
+    // still correct and the host path stays hidden.
+    const inboundPath = path.join(getMediaDir(), "inbound", "doc---abc123.pdf");
+    const note = buildInboundMediaNote({
+      MediaPath: inboundPath,
+      MediaType: "application/pdf",
+      MediaUrl: inboundPath,
+    });
+    expect(note).toBe("[media attached: media://inbound/doc---abc123.pdf (application/pdf)]");
+  });
+
+  it("keeps the stable URI for inbound images (native injection + workspace-only safety)", () => {
+    const inboundPath = path.join(getMediaDir(), "inbound", "photo---abc123.png");
+    const note = buildInboundMediaNote({
+      MediaPath: inboundPath,
+      MediaType: "image/png",
+      MediaUrl: inboundPath,
+    });
+    expect(note).toBe("[media attached: media://inbound/photo---abc123.png (image/png)]");
+  });
+
   it("formats multiple MediaPaths as numbered media notes (collapses duplicate URLs, #47587)", () => {
     const note = buildInboundMediaNote({
       MediaPaths: ["/tmp/a.png", "/tmp/b.png", "/tmp/c.png"],
