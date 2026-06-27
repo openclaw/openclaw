@@ -852,6 +852,12 @@ describe("loadWebMedia", () => {
       body: "ok: true\n",
       contentType: "application/yaml",
     },
+    {
+      label: "vCard",
+      fileName: "contact.vcf",
+      body: "BEGIN:VCARD\nFN:Test Contact\nEND:VCARD\n",
+      contentType: "text/vcard",
+    },
   ])("allows host-read $label files", async ({ fileName, body, contentType }) => {
     const result = await loadDocumentWithHostRead(fileName, body);
     expect(result.kind).toBe("document");
@@ -874,6 +880,25 @@ describe("loadWebMedia", () => {
     );
   });
 
+  it("rejects vCard files with a valid header and binary tail", async () => {
+    const fakeVcf = path.join(fixtureRoot, "evil.vcf");
+    const vcfHeader = Buffer.from("BEGIN:VCARD\n", "utf8");
+    const binaryTail = Buffer.alloc(9000);
+    for (let i = 0; i < binaryTail.length; i += 1) {
+      binaryTail[i] = (i % 255) + 1;
+    }
+    await fs.writeFile(fakeVcf, Buffer.concat([vcfHeader, binaryTail]));
+    await expectLoadWebMediaErrorCode(
+      loadWebMedia(fakeVcf, {
+        maxBytes: 1024 * 1024,
+        localRoots: "any",
+        readFile: async (filePath) => await fs.readFile(filePath),
+        hostReadCapability: true,
+      }),
+      "path-not-allowed",
+    );
+  });
+
   it.each([
     { label: "CSV", fileName: "opaque.csv" },
     { label: "HTML", fileName: "opaque.html" },
@@ -882,6 +907,7 @@ describe("loadWebMedia", () => {
     { label: "JSON", fileName: "opaque.json" },
     { label: "YAML", fileName: "opaque.yaml" },
     { label: "YML", fileName: "opaque.yml" },
+    { label: "vCard", fileName: "opaque.vcf" },
   ])("rejects opaque non-NUL binary data disguised as $label", async ({ fileName }) => {
     const fakeTextFile = path.join(fixtureRoot, fileName);
     const opaqueBinary = Buffer.alloc(9000);
