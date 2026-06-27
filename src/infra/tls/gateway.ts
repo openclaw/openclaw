@@ -223,8 +223,12 @@ export async function loadGatewayTlsRuntime(
     const ca = caPath ? await fs.readFile(caPath, "utf8") : undefined;
 
     // Upgrade path: if the loaded cert is an older OpenClaw-generated CN-only
-    // certificate (missing subjectAltName), regenerate with SANs.
-    if (autoGenerate && caPath === undefined) {
+    // certificate (missing subjectAltName), regenerate with SANs.  Only run
+    // for default cert/key paths — explicit user-provided paths are never
+    // rewritten, even if the certificate happens to be CN=openclaw-gateway.
+    const isDefaultCertPath = !(typeof cfg.certPath === "string" && cfg.certPath.trim());
+    const isDefaultKeyPath = !(typeof cfg.keyPath === "string" && cfg.keyPath.trim());
+    if (autoGenerate && caPath === undefined && isDefaultCertPath && isDefaultKeyPath) {
       const upgraded = await maybeUpgradeCnOnlyCert({
         certPath,
         keyPath,
