@@ -15,6 +15,11 @@ import {
   resolveMainSessionKeyFromConfig,
   type SessionEntry,
 } from "../config/sessions.js";
+import {
+  applySessionEntryLifecycleMutation,
+  listSessionEntries,
+} from "../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import { resetAgentRunContextForTest } from "../infra/agent-events.js";
 import {
   loadOrCreateDeviceIdentity,
@@ -209,9 +214,12 @@ export async function writeSessionStore(params: {
     throw new Error("writeSessionStore requires testState.sessionStorePath");
   }
   const agentId = params.agentId ?? DEFAULT_AGENT_ID;
-  const store: Record<string, Partial<SessionEntry>> = {};
+  const upserts: Array<{ sessionKey: string; entry: SessionEntry }> = [];
   for (const [requestKey, entry] of Object.entries(params.entries)) {
     const rawKey = requestKey.trim();
+    if (typeof entry.sessionId !== "string" || entry.sessionId.trim().length === 0) {
+      continue;
+    }
     const storeKey =
       rawKey === "global" || rawKey === "unknown"
         ? rawKey
@@ -220,15 +228,30 @@ export async function writeSessionStore(params: {
             requestKey,
             mainKey: params.mainKey,
           });
-    store[storeKey] = entry;
+    upserts.push({
+      sessionKey: storeKey,
+      entry: {
+        ...entry,
+        sessionId: entry.sessionId,
+        updatedAt: entry.updatedAt ?? 0,
+        sessionFile: formatSqliteSessionFileMarker({
+          agentId,
+          sessionId: entry.sessionId,
+          storePath,
+        }),
+      },
+    });
   }
-  // Gateway suites often reuse the same store path across tests while writing the
-  // file directly; clear the in-process cache so handlers reload the seeded state.
   clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
-  const serializedStore = JSON.stringify(store, null, 2);
   await fs.mkdir(path.dirname(storePath), { recursive: true });
-  await fs.writeFile(storePath, serializedStore, "utf-8");
+  const removals = listSessionEntries({ storePath }).map(({ sessionKey }) => ({ sessionKey }));
+  await applySessionEntryLifecycleMutation({
+    storePath,
+    removals,
+    upserts,
+    skipMaintenance: true,
+  });
   clearSessionStoreCacheForTest();
 }
 
