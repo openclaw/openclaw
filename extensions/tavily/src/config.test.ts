@@ -106,6 +106,87 @@ describe("resolveTavilyApiKey", () => {
     ).toBeUndefined();
   });
 
+  it("does NOT fall back when the configured SecretRef source is exec (any id)", () => {
+    // Symmetric with the file-source test: any non-env source is blocked
+    // before the ambient env fallback is consulted.
+    process.env.TAVILY_API_KEY = "env-fallback-key";
+    expect(
+      resolveTavilyApiKey({
+        plugins: {
+          entries: {
+            tavily: {
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "exec",
+                    provider: "default",
+                    id: "TAVILY_API_KEY",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as never),
+    ).toBeUndefined();
+  });
+
+  it("trims whitespace from the configured env SecretRef id before matching", () => {
+    // The helper applies .trim() in the resolver so YAML config that pads
+    // env var names still matches TAVILY_API_KEY. This pins the behavior.
+    process.env.TAVILY_API_KEY = "env-fallback-key";
+    expect(
+      resolveTavilyApiKey({
+        plugins: {
+          entries: {
+            tavily: {
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "default",
+                    id: "  TAVILY_API_KEY  ",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as never),
+    ).toBe("env-fallback-key");
+  });
+
+  it("does NOT fall back when the configured env SecretRef uses a provider not in the env allowlist", () => {
+    // canResolveEnvSecretRefInReadOnlyPath gates on cfg.secrets.providers
+    // allowlist. A non-default provider without an allowlist entry must not
+    // silently fall through to process.env.TAVILY_API_KEY.
+    process.env.TAVILY_API_KEY = "env-fallback-key";
+    expect(
+      resolveTavilyApiKey({
+        secrets: {
+          providers: {
+            "unknown-vault": { source: "env", allowlist: [] },
+          },
+        },
+        plugins: {
+          entries: {
+            tavily: {
+              config: {
+                webSearch: {
+                  apiKey: {
+                    source: "env",
+                    provider: "unknown-vault",
+                    id: "TAVILY_API_KEY",
+                  },
+                },
+              },
+            },
+          },
+        },
+      } as never),
+    ).toBeUndefined();
+  });
+
   it("returns undefined when neither config nor env var is set", () => {
     delete process.env.TAVILY_API_KEY;
     expect(
