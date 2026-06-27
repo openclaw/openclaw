@@ -380,10 +380,6 @@ const TRANSIENT_ANNOUNCE_DELIVERY_ERROR_PATTERNS: readonly RegExp[] = [
   /\b(econnreset|econnrefused|etimedout|enotfound|ehostunreach|network error)\b/i,
 ];
 
-// Embedded prompt lock errors are a concurrent-session race: the parent session
-// transcript is being modified while the subagent completion tries to inject.
-// Retrying does not help because the parent turn-maintenance lane continues
-// writing; each retry independently triggers a duplicate outbound send (see #91527).
 const SESSION_FILE_CHANGED_ANNOUNCE_RE =
   /session file changed while embedded prompt lock was released/i;
 
@@ -404,15 +400,32 @@ function isSessionFileChangedAnnounceError(message: string): boolean {
   return SESSION_FILE_CHANGED_ANNOUNCE_RE.test(message);
 }
 
-function hasSessionFileChangedAnnounceError(
+const ANNOUNCE_ERROR_CHAIN_KEYS = [
+  "cause",
+  "cleanupError",
+  "error",
+  "promptError",
+  "reason",
+] as const;
+type AnnounceErrorChainKey = (typeof ANNOUNCE_ERROR_CHAIN_KEYS)[number];
+type AnnounceErrorRecord = Partial<Record<AnnounceErrorChainKey, unknown>> & {
+  sentBeforeError?: unknown;
+  visibleReplySent?: unknown;
+};
+
+function isAnnounceErrorRecord(error: unknown): error is AnnounceErrorRecord {
+  return Boolean(error && typeof error === "object");
+}
+
+function hasAnnounceErrorMatch(
   error: unknown,
+  matches: (candidate: unknown) => boolean,
   seen: Set<object> = new Set(),
 ): boolean {
-  const message = summarizeDeliveryError(error);
-  if (message && isSessionFileChangedAnnounceError(message)) {
+  if (matches(error)) {
     return true;
   }
-  if (!error || typeof error !== "object") {
+  if (!isAnnounceErrorRecord(error)) {
     return false;
   }
   if (seen.has(error)) {
@@ -420,19 +433,12 @@ function hasSessionFileChangedAnnounceError(
   }
   seen.add(error);
 
-  const candidate = error as {
-    cause?: unknown;
-    cleanupError?: unknown;
-    error?: unknown;
-    promptError?: unknown;
-    reason?: unknown;
-  };
-  return (
-    hasSessionFileChangedAnnounceError(candidate.cause, seen) ||
-    hasSessionFileChangedAnnounceError(candidate.cleanupError, seen) ||
-    hasSessionFileChangedAnnounceError(candidate.error, seen) ||
-    hasSessionFileChangedAnnounceError(candidate.promptError, seen) ||
-    hasSessionFileChangedAnnounceError(candidate.reason, seen)
+  return ANNOUNCE_ERROR_CHAIN_KEYS.some((key) => hasAnnounceErrorMatch(error[key], matches, seen));
+}
+
+function hasSessionFileChangedAnnounceError(error: unknown): boolean {
+  return hasAnnounceErrorMatch(error, (candidate) =>
+    isSessionFileChangedAnnounceError(summarizeDeliveryError(candidate)),
   );
 }
 
@@ -447,9 +453,6 @@ function isTransientAnnounceDeliveryError(error: unknown): boolean {
 
   const sessionFileChanged = hasSessionFileChangedAnnounceError(error);
   if (sessionFileChanged) {
-    // Safety valve: a session-file-changed error without send evidence is still
-    // transient — the send may not have occurred yet, so retry can recover.
-    // When send evidence exists, the error is truly permanent (duplicate prevention).
     return !hasAnnounceSendEvidence(error);
   }
 
@@ -486,77 +489,22 @@ function isSessionWriteLockAnnounceAgentError(error: unknown): boolean {
   );
 }
 
-function didVisibleSendFailAfterPartialDelivery(error: unknown): boolean {
+function hasDirectAnnounceSendEvidence(error: unknown): boolean {
   if (isOutboundDeliveryError(error) && error.sentBeforeError) {
     return true;
   }
-  const maybeDeliveryError = error as {
-    sentBeforeError?: unknown;
-    visibleReplySent?: unknown;
-  };
-  return (
-    maybeDeliveryError.sentBeforeError === true || maybeDeliveryError.visibleReplySent === true
-  );
+  if (!isAnnounceErrorRecord(error)) {
+    return false;
+  }
+  return error.sentBeforeError === true || error.visibleReplySent === true;
 }
 
-/**
- * Walk the error chain to determine whether any outbound send occurred before
- * the error was thrown.  Used as structured send evidence for the session-file-
- * changed takeover error: when a send has already happened, retrying would
- * produce duplicate channel messages (#91527).
- *
- * Evidence sources (recursive through cause / error / reason chains):
- *  1. An `OutboundDeliveryError` with `sentBeforeError: true`
- *  2. A generic error carrying `sentBeforeError: true` or `visibleReplySent: true`
- *  3. An `EmbeddedAttemptPromptErrorWithCleanupTakeoverError` whose `promptError`
- *     field implies the model ran (and may have sent) before the takeover was
- *     detected — recurse into `promptError` for further evidence
- */
-function hasAnnounceSendEvidence(error: unknown, seen: Set<object> = new Set()): boolean {
-  if (!error || typeof error !== "object") {
-    return false;
-  }
-  if (seen.has(error)) {
-    return false;
-  }
-  seen.add(error);
+function didVisibleSendFailAfterPartialDelivery(error: unknown): boolean {
+  return hasAnnounceSendEvidence(error);
+}
 
-  // Evidence 1: OutboundDeliveryError with confirmed send-before-error
-  if (isOutboundDeliveryError(error) && error.sentBeforeError) {
-    return true;
-  }
-
-  // Evidence 2: generic sentBeforeError / visibleReplySent flags
-  const maybe = error as {
-    sentBeforeError?: unknown;
-    visibleReplySent?: unknown;
-    promptError?: unknown;
-  };
-  if (maybe.sentBeforeError === true || maybe.visibleReplySent === true) {
-    return true;
-  }
-
-  // Evidence 3: EmbeddedAttemptPromptErrorWithCleanupTakeoverError carries a
-  // promptError field — the model completed its run before the takeover was
-  // detected, so tool calls (including send_message) may have executed.
-  // Recurse into promptError in case it carries its own send evidence.
-  if (maybe.promptError !== undefined) {
-    if (hasAnnounceSendEvidence(maybe.promptError, seen)) {
-      return true;
-    }
-  }
-
-  // Walk nested cause / error / reason chains
-  const candidate = error as {
-    cause?: unknown;
-    error?: unknown;
-    reason?: unknown;
-  };
-  return (
-    hasAnnounceSendEvidence(candidate.cause, seen) ||
-    hasAnnounceSendEvidence(candidate.error, seen) ||
-    hasAnnounceSendEvidence(candidate.reason, seen)
-  );
+function hasAnnounceSendEvidence(error: unknown): boolean {
+  return hasAnnounceErrorMatch(error, hasDirectAnnounceSendEvidence);
 }
 
 async function waitForAnnounceRetryDelay(ms: number, signal?: AbortSignal): Promise<void> {
@@ -1628,9 +1576,6 @@ async function sendSubagentAnnounceDirectly(params: {
           }),
       });
     } catch (err) {
-      // Permanent + send evidence already exists → no recovery possible,
-      // retrying would only produce duplicates (#91527).  Session-file-changed
-      // errors without send evidence fall through to the fallback paths below.
       if (isPermanentAnnounceDeliveryError(err) && hasAnnounceSendEvidence(err)) {
         throw err;
       }
@@ -1910,7 +1855,6 @@ export const testing = {
         }
       : defaultSubagentAnnounceDeliveryDeps;
   },
-  // Exported for focused testing of session-file-changed send-evidence behavior (#91527)
   hasAnnounceSendEvidence,
   hasSessionFileChangedAnnounceError,
   isSessionFileChangedAnnounceError,

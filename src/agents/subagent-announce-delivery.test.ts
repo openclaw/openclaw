@@ -4969,19 +4969,15 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     });
   });
 
-  // ─── session-file-changed send-evidence behaviour (#91527) ─────────────────
-
-  it("does not retry when session-file-changed error carries send evidence (permanent, fixes #91527)", async () => {
-    // When a send already occurred, the error must be treated as permanent to
-    // prevent duplicate outbound messages.
+  it("does not retry session-file-changed failures with send evidence", async () => {
     const sendErr = new OutboundDeliveryError("outbound delivery failed", {
       cause: new Error("outbound delivery failed"),
       results: [{ channel: "telegram", messageId: "msg-1" }],
     });
     const callGateway = vi.fn(async () => {
-      const err = new Error("session file changed while embedded prompt lock was released");
-      err.cause = sendErr;
-      throw err;
+      throw new Error("session file changed while embedded prompt lock was released", {
+        cause: sendErr,
+      });
     }) as unknown as typeof runtimeCallGateway;
     const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock(["no_active_run"]);
     const result = await deliverSlackChannelAnnouncement({
@@ -4993,28 +4989,23 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       directIdempotencyKey: "announce-permanent-lock-error-evidence",
     });
 
-    // Should fail immediately without retries (send evidence present).
     expect(result.delivered).toBe(false);
     expect(result.path).toBe("direct");
     expect(result.terminal).toBe(true);
     expect(result.phases?.map((phase) => phase.phase)).toEqual(["direct-primary"]);
-    // Only one call — no retry attempts.
     expect(callGateway).toHaveBeenCalledTimes(1);
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
   });
 
-  it("does not fallback-steer after wrapped prompt-lock takeover error with send evidence", async () => {
-    const takeoverErr = new Error(
-      "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+  it("does not fallback-steer after wrapped prompt-lock takeover with send evidence", async () => {
+    const takeoverErr = Object.assign(
+      new Error("session file changed while embedded prompt lock was released: /tmp/session.jsonl"),
+      { name: "EmbeddedAttemptSessionTakeoverError" },
     );
-    takeoverErr.name = "EmbeddedAttemptSessionTakeoverError";
 
-    const promptErr = new Error("some model error");
-    (promptErr as unknown as Record<string, unknown>).visibleReplySent = true;
-
-    const wrapperErr = new Error("some model error", { cause: takeoverErr });
-    wrapperErr.name = "EmbeddedAttemptSessionTakeoverError";
-    Object.assign(wrapperErr, {
+    const promptErr = Object.assign(new Error("some model error"), { visibleReplySent: true });
+    const wrapperErr = Object.assign(new Error("some model error", { cause: takeoverErr }), {
+      name: "EmbeddedAttemptSessionTakeoverError",
       cleanupError: takeoverErr,
       promptError: promptErr,
     });
@@ -5041,15 +5032,13 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(1);
   });
 
-  it("allows retry when session-file-changed error has no send evidence (pre-send recovery)", async () => {
-    // Without send evidence, the error may be pre-send — retry can recover.
+  it("retries session-file-changed failures without send evidence", async () => {
     let attempts = 0;
     const callGateway = vi.fn(async () => {
       attempts++;
       if (attempts <= 1) {
         throw new Error("session file changed while embedded prompt lock was released");
       }
-      // Second attempt succeeds
       return {
         result: {
           payloads: [{ text: "recovered after retry" }],
@@ -5066,23 +5055,23 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       directIdempotencyKey: "announce-retry-lock-error-no-evidence",
     });
 
-    // Should succeed after retry (no send evidence → transient).
     expect(result.delivered).toBe(true);
     expect(result.path).toBe("direct");
     expect(callGateway).toHaveBeenCalledTimes(2);
   });
 
-  it("classifies session-file-changed error as has-send-evidence when OutboundDeliveryError with sentBeforeError is in the chain", () => {
+  it("detects send evidence from OutboundDeliveryError in the error chain", () => {
     const err = new Error(
       "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+      {
+        cause: new OutboundDeliveryError("outbound delivery failed", {
+          cause: new Error("outbound delivery failed"),
+          results: [{ channel: "telegram", messageId: "msg-1" }],
+        }),
+      },
     );
-    err.cause = new OutboundDeliveryError("outbound delivery failed", {
-      cause: new Error("outbound delivery failed"),
-      results: [{ channel: "telegram", messageId: "msg-1" }],
-    });
 
     expect(testing.isSessionFileChangedAnnounceError(err.message)).toBe(true);
-    // OutboundDeliveryError with at least one ok result has sentBeforeError: true
     expect(testing.hasAnnounceSendEvidence(err)).toBe(true);
   });
 
@@ -5096,41 +5085,36 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   });
 
   it("detects send evidence from visibleReplySent flag on session-file-changed error", () => {
-    const err = new Error(
-      "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+    const err = Object.assign(
+      new Error("session file changed while embedded prompt lock was released: /tmp/session.jsonl"),
+      { visibleReplySent: true },
     );
-    (err as unknown as Record<string, unknown>).visibleReplySent = true;
 
     expect(testing.hasAnnounceSendEvidence(err)).toBe(true);
   });
 
   it("detects send evidence from sentBeforeError flag on session-file-changed error", () => {
-    const err = new Error(
-      "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+    const err = Object.assign(
+      new Error("session file changed while embedded prompt lock was released: /tmp/session.jsonl"),
+      { sentBeforeError: true },
     );
-    (err as unknown as Record<string, unknown>).sentBeforeError = true;
 
     expect(testing.hasAnnounceSendEvidence(err)).toBe(true);
   });
 
-  it("detects send evidence recursively through promptError field (EmbeddedAttemptPromptErrorWithCleanupTakeoverError pattern)", () => {
-    // This mirrors the shape of EmbeddedAttemptPromptErrorWithCleanupTakeoverError:
-    // name = "EmbeddedAttemptSessionTakeoverError", carries a promptError field
-    const takeoverErr = new Error(
-      "session file changed while embedded prompt lock was released: /tmp/session.jsonl",
+  it("detects send evidence recursively through promptError", () => {
+    const takeoverErr = Object.assign(
+      new Error("session file changed while embedded prompt lock was released: /tmp/session.jsonl"),
+      { name: "EmbeddedAttemptSessionTakeoverError" },
     );
-    takeoverErr.name = "EmbeddedAttemptSessionTakeoverError";
 
-    const promptErr = new Error("some model error");
-    (promptErr as unknown as Record<string, unknown>).visibleReplySent = true;
+    const promptErr = Object.assign(new Error("some model error"), { visibleReplySent: true });
 
-    // The wrapper error uses the prompt error's message as its own message
-    // and carries promptError as a field
-    const wrapperErr = new Error("some model error", { cause: takeoverErr });
-    wrapperErr.name = "EmbeddedAttemptSessionTakeoverError";
-    (wrapperErr as unknown as Record<string, unknown>).promptError = promptErr;
+    const wrapperErr = Object.assign(new Error("some model error", { cause: takeoverErr }), {
+      name: "EmbeddedAttemptSessionTakeoverError",
+      promptError: promptErr,
+    });
 
-    // The message contains the model error text, not the session-file-changed text
     expect(testing.hasAnnounceSendEvidence(wrapperErr)).toBe(true);
     expect(testing.hasSessionFileChangedAnnounceError(wrapperErr)).toBe(true);
   });
