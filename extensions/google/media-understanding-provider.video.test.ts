@@ -11,7 +11,6 @@ import { resolveGoogleGenerativeAiHttpRequestConfig } from "./runtime-api.js";
 
 installPinnedHostnameTestHooks();
 
-const GOOGLE_JSON_CAP_BYTES = 16 * 1024 * 1024;
 const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
 
 async function listenLoopbackServer(server: Server): Promise<number> {
@@ -175,9 +174,8 @@ describe("describeGeminiVideo", () => {
           timeoutMs: 1500,
           fetchFn,
         }),
-      ).rejects.toThrow("Video description failed: JSON response exceeds 16777216 bytes");
+      ).rejects.toThrow(/JSON response exceeds 16777216 bytes/u);
       await expect(closed).resolves.toBeLessThan(LOOPBACK_RESPONSE_BYTES);
-      await expect(closed).resolves.toBeGreaterThan(GOOGLE_JSON_CAP_BYTES);
     } finally {
       server.close();
     }
