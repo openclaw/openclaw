@@ -859,7 +859,8 @@ function isOfficialGoogleGenerativeAiBaseUrl(baseUrl: string | undefined): boole
     return true;
   }
   try {
-    return new URL(baseUrl).hostname === "generativelanguage.googleapis.com";
+    const url = new URL(baseUrl);
+    return url.protocol === "https:" && url.hostname === "generativelanguage.googleapis.com";
   } catch {
     return false;
   }
