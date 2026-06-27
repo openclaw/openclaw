@@ -10,8 +10,9 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { homedir } from "node:os";
 import path from "node:path";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/sandbox";
 import type {
   SandboxBackendHandle,
   SandboxBackendExecSpec,
@@ -119,7 +120,9 @@ function uniqueContainerId(runtimeId: string): string {
 function createLauncherPayloadFile(
   payloadJson: string,
 ): MxcExecFinalizeToken & { payloadFile: string } {
-  const payloadDir = mkdtempSync(path.join(tmpdir(), "openclaw-mxc-payload-"));
+  const payloadDir = mkdtempSync(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-mxc-payload-"),
+  );
   const payloadFile = path.join(payloadDir, "payload.json");
   try {
     writeFileSync(payloadFile, payloadJson, { flag: "wx", mode: 0o600 });
