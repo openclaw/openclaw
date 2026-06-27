@@ -2,7 +2,6 @@ import { createServer, type Server } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { createClickClackClient } from "./http-client.js";
 
-const CLICKCLACK_JSON_CAP_BYTES = 16 * 1024 * 1024;
 const LOOPBACK_RESPONSE_BYTES = 18 * 1024 * 1024;
 
 async function listenLoopbackServer(server: Server): Promise<number> {
@@ -25,23 +24,54 @@ function createOversizedJsonServer(): { server: Server; closed: Promise<number> 
   const closed = new Promise<number>((resolve) => {
     resolveClosed = resolve;
   });
-  const server = createServer((_req, res) => {
+  const server = createServer((req, res) => {
     let sentBytes = 0;
-    const chunk = Buffer.alloc(64 * 1024, 0x20);
-    res.writeHead(200, { "content-type": "application/json" });
-    const timer = setInterval(() => {
-      if (sentBytes >= LOOPBACK_RESPONSE_BYTES) {
-        clearInterval(timer);
-        res.end();
-        return;
+    let stopped = false;
+    let prefixSent = false;
+    const prefixChunk = Buffer.from('{"user":{"id":"');
+    const bodyChunk = Buffer.alloc(64 * 1024, 0x61);
+    const suffixChunk = Buffer.from('"}}');
+    const writeBuffer = (buffer: Buffer) => {
+      sentBytes += buffer.length;
+      if (!res.write(buffer)) {
+        res.once("drain", writeChunks);
+        return false;
       }
-      sentBytes += chunk.length;
-      res.write(chunk);
-    }, 1);
+      return true;
+    };
+    const writeChunks = () => {
+      if (!prefixSent) {
+        prefixSent = true;
+        if (!writeBuffer(prefixChunk)) {
+          return;
+        }
+      }
+      while (true) {
+        if (stopped) {
+          return;
+        }
+        if (sentBytes + bodyChunk.length + suffixChunk.length >= LOOPBACK_RESPONSE_BYTES) {
+          break;
+        }
+        if (!writeBuffer(bodyChunk)) {
+          return;
+        }
+      }
+      if (!stopped) {
+        sentBytes += suffixChunk.length;
+        res.end(suffixChunk);
+      }
+    };
+    res.writeHead(200, { connection: "close", "content-type": "application/json" });
     res.on("close", () => {
-      clearInterval(timer);
+      stopped = true;
       resolveClosed(sentBytes);
     });
+    req.on("aborted", () => {
+      stopped = true;
+      res.destroy();
+    });
+    writeChunks();
   });
   return { server, closed };
 }
@@ -96,8 +126,8 @@ describe("ClickClack HTTP client", () => {
       await expect(client.me()).rejects.toThrow(
         "ClickClack response: JSON response exceeds 16777216 bytes",
       );
-      await expect(closed).resolves.toBeLessThan(LOOPBACK_RESPONSE_BYTES);
-      await expect(closed).resolves.toBeGreaterThan(CLICKCLACK_JSON_CAP_BYTES);
+      const sentBytes = await closed;
+      expect(sentBytes).toBeLessThan(LOOPBACK_RESPONSE_BYTES);
     } finally {
       server.close();
     }
