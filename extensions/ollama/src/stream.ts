@@ -656,10 +656,15 @@ function estimateTokensFromChars(chars: number): number {
 }
 
 function resolveOllamaStopReason(response: OllamaChatResponse) {
+  // Ollama's length terminal means generation hit its token limit, even when
+  // the partial response already contains a complete-looking tool call.
+  if (response.done_reason === "length") {
+    return "length" as const;
+  }
   if (response.message.tool_calls?.length) {
     return "toolUse" as const;
   }
-  return response.done_reason === "length" ? ("length" as const) : ("stop" as const);
+  return "stop" as const;
 }
 
 function estimateOllamaPromptTokens(params: {
