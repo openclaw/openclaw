@@ -7,6 +7,8 @@ import { extractAssistantTextForPhase } from "../../shared/chat-message-content.
 import { sanitizeAssistantVisibleTextWithProfile } from "../../shared/text/assistant-visible-text.js";
 import { sanitizeUserFacingText } from "../embedded-agent-helpers/sanitize-user-facing-text.js";
 
+const DISPLAY_TRUNCATION_MARKER_LINE_RE = /(^|\r?\n)\s*\.\.\.\(truncated\)\.\.\.\s*(?=\r?\n|$)/i;
+
 export function stripToolMessages(messages: unknown[]): unknown[] {
   return messages.filter((msg) => {
     if (!msg || typeof msg !== "object") {
@@ -48,4 +50,24 @@ export function extractAssistantText(message: unknown): string | undefined {
   const errorContext = stopReason === "error";
 
   return joined ? sanitizeUserFacingText(joined, { errorContext }) : undefined;
+}
+
+export function hasDisplayTruncationMarker(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  if ((message as { role?: unknown }).role !== "assistant") {
+    return false;
+  }
+  const joined =
+    extractAssistantTextForPhase(message, {
+      phase: "final_answer",
+      sanitizeText: (text) => text,
+      joinWith: "\n",
+    }) ??
+    extractAssistantTextForPhase(message, {
+      sanitizeText: (text) => text,
+      joinWith: "\n",
+    });
+  return typeof joined === "string" && DISPLAY_TRUNCATION_MARKER_LINE_RE.test(joined);
 }

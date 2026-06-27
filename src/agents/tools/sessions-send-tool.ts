@@ -567,12 +567,14 @@ export function createSessionsSendTool(opts?: {
           ? await readLatestAssistantReplySnapshot({
               sessionKey: resolvedKey,
               limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+              fullText: true,
               callGateway: gatewayCall,
             })
           : sameSessionA2A
             ? await readLatestAssistantReplySnapshot({
                 sessionKey: resolvedKey,
                 limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+                fullText: true,
                 callGateway: gatewayCall,
               }).catch(() => undefined)
             : undefined;
@@ -707,6 +709,7 @@ export function createSessionsSendTool(opts?: {
         sessionKey: resolvedKey,
         timeoutMs,
         limit: SESSIONS_SEND_REPLY_HISTORY_LIMIT,
+        fullText: true,
         baseline: baselineReply,
         callGateway: gatewayCall,
       });

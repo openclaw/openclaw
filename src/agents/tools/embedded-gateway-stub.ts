@@ -47,6 +47,10 @@ interface EmbeddedGatewayRuntime {
     maxSingleMessageBytes: number;
   }) => { messages: unknown[] };
   resolveEffectiveChatHistoryMaxChars: (cfg: OpenClawConfig) => number;
+  projectChatDisplayMessage: (
+    message: unknown,
+    opts?: { maxChars?: number },
+  ) => Record<string, unknown> | undefined;
   projectRecentChatDisplayMessages: (
     msgs: unknown[],
     opts?: { maxChars?: number; maxMessages?: number },
@@ -129,7 +133,67 @@ async function handleSessionsResolve(params: Record<string, unknown>) {
   return { ok: true, key: resolved.key };
 }
 
-async function handleChatHistory(params: Record<string, unknown>): Promise<{
+function readChatHistoryMessageId(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const metadata = (message as Record<string, unknown>)["__openclaw"];
+  if (!metadata || typeof metadata !== "object") {
+    return undefined;
+  }
+  const id = (metadata as { id?: unknown }).id;
+  return typeof id === "string" ? id : undefined;
+}
+
+function readRequestedAgentId(
+  params: Record<string, unknown>,
+  sessionKey: string,
+): string | undefined {
+  const agentId = typeof params.agentId === "string" ? params.agentId : undefined;
+  return agentId ?? parseAgentSessionKey(sessionKey)?.agentId;
+}
+
+function historyMessageCacheKey(
+  sessionKey: string,
+  requestedAgentId: string | undefined,
+  messageId: string,
+): string {
+  return `${sessionKey}\u0000${requestedAgentId ?? ""}\u0000${messageId}`;
+}
+
+function cacheExposedHistoryMessages(
+  historyMessageCache: Map<string, unknown>,
+  sessionKey: string,
+  requestedAgentId: string | undefined,
+  rawMessages: unknown[],
+  exposedMessages: unknown[],
+): void {
+  const prefix = `${sessionKey}\u0000${requestedAgentId ?? ""}\u0000`;
+  for (const key of historyMessageCache.keys()) {
+    if (key.startsWith(prefix)) {
+      historyMessageCache.delete(key);
+    }
+  }
+  const rawById = new Map<string, unknown>();
+  for (const message of rawMessages) {
+    const id = readChatHistoryMessageId(message);
+    if (id) {
+      rawById.set(id, message);
+    }
+  }
+  for (const message of exposedMessages) {
+    const id = readChatHistoryMessageId(message);
+    const raw = id ? rawById.get(id) : undefined;
+    if (id && raw) {
+      historyMessageCache.set(historyMessageCacheKey(sessionKey, requestedAgentId, id), raw);
+    }
+  }
+}
+
+async function handleChatHistory(
+  params: Record<string, unknown>,
+  historyMessageCache: Map<string, unknown>,
+): Promise<{
   sessionKey: string;
   sessionId: string | undefined;
   messages: unknown[];
@@ -140,9 +204,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   const rt = await getRuntime();
 
   const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey : "";
-  const agentId = typeof params.agentId === "string" ? params.agentId : undefined;
-  const parsedAgentId = parseAgentSessionKey(sessionKey)?.agentId;
-  const requestedAgentId = agentId ?? parsedAgentId;
+  const requestedAgentId = readRequestedAgentId(params, sessionKey);
   const limit = readPositiveIntegerParam(params, "limit");
 
   const sessionLoadOptions = requestedAgentId ? { agentId: requestedAgentId } : undefined;
@@ -209,6 +271,13 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   });
   const capped = rt.capArrayByJsonBytes(replaced.messages, maxHistoryBytes).items;
   const bounded = rt.enforceChatHistoryFinalBudget({ messages: capped, maxBytes: maxHistoryBytes });
+  cacheExposedHistoryMessages(
+    historyMessageCache,
+    sessionKey,
+    requestedAgentId,
+    rawMessages,
+    bounded.messages,
+  );
 
   return {
     sessionKey,
@@ -220,8 +289,34 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
   };
 }
 
+async function handleChatMessageGet(
+  params: Record<string, unknown>,
+  historyMessageCache: Map<string, unknown>,
+): Promise<{ ok: boolean; message?: unknown; unavailableReason?: "not_found" | "not_visible" }> {
+  const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey : "";
+  const messageId = typeof params.messageId === "string" ? params.messageId : "";
+  const requestedAgentId = readRequestedAgentId(params, sessionKey);
+  const source = historyMessageCache.get(
+    historyMessageCacheKey(sessionKey, requestedAgentId, messageId),
+  );
+  if (!source) {
+    return { ok: false, unavailableReason: "not_found" };
+  }
+  const maxChars = readPositiveIntegerParam(params, "maxChars") ?? 1_000_000;
+  const rt = await getRuntime();
+  const projected = rt.projectChatDisplayMessage(source, { maxChars });
+  if (!projected) {
+    return { ok: false, unavailableReason: "not_visible" };
+  }
+  return {
+    ok: true,
+    message: rt.augmentChatHistoryWithCanvasBlocks([projected])[0],
+  };
+}
+
 /** Creates a local callGateway replacement for supported session methods. */
 export function createEmbeddedCallGateway(): EmbeddedCallGateway {
+  const historyMessageCache = new Map<string, unknown>();
   return async <T = Record<string, unknown>>(opts: CallGatewayOptions): Promise<T> => {
     const method = opts.method?.trim();
     const params = (opts.params ?? {}) as Record<string, unknown>;
@@ -232,7 +327,9 @@ export function createEmbeddedCallGateway(): EmbeddedCallGateway {
       case "sessions.resolve":
         return (await handleSessionsResolve(params)) as T;
       case "chat.history":
-        return (await handleChatHistory(params)) as T;
+        return (await handleChatHistory(params, historyMessageCache)) as T;
+      case "chat.message.get":
+        return (await handleChatMessageGet(params, historyMessageCache)) as T;
       default:
         throw new Error(
           `Method "${method}" requires a running gateway (unavailable in local embedded mode).`,

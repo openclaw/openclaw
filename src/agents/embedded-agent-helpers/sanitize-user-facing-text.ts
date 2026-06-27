@@ -380,6 +380,10 @@ function stripToolCallsOmittedPlaceholderLines(text: string): string {
   return result;
 }
 
+type SanitizeUserFacingTextOptions = {
+  errorContext?: boolean;
+};
+
 function collapseConsecutiveDuplicateBlocks(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -424,7 +428,10 @@ export function isLikelyHttpErrorText(raw: string): boolean {
   return HTTP_ERROR_HINTS.some((hint) => message.includes(hint));
 }
 
-export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: boolean }): string {
+export function sanitizeUserFacingText(
+  text: unknown,
+  opts?: SanitizeUserFacingTextOptions,
+): string {
   const raw = coerceChatContentText(text);
   if (!raw) {
     return raw;

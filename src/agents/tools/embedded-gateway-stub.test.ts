@@ -19,6 +19,7 @@ const runtime = vi.hoisted(() => ({
   ),
   resolveEffectiveChatHistoryMaxChars: vi.fn(() => 100_000),
   projectRecentChatDisplayMessages: vi.fn((messages: unknown[]): unknown[] => messages),
+  projectChatDisplayMessage: vi.fn((message: unknown): unknown => message),
   augmentChatHistoryWithCanvasBlocks: vi.fn((messages: unknown[]) => messages),
   getMaxChatHistoryMessagesBytes: vi.fn(() => 100_000),
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES: 100_000,
@@ -41,6 +42,7 @@ describe("embedded gateway stub", () => {
     runtime.getRuntimeConfig.mockClear();
     runtime.resolveSessionKeyFromResolveParams.mockReset();
     runtime.projectRecentChatDisplayMessages.mockClear();
+    runtime.projectChatDisplayMessage.mockClear();
     runtime.readSessionMessagesAsync.mockClear();
     runtime.loadSessionEntry.mockClear();
     runtime.resolveSessionAgentId.mockClear();
@@ -257,5 +259,80 @@ describe("embedded gateway stub", () => {
       }),
     ).rejects.toThrow("limit must be a positive integer");
     expect(runtime.readSessionMessagesAsync).not.toHaveBeenCalled();
+  });
+
+  it("hydrates only transcript rows exposed by embedded chat history", async () => {
+    const fullMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "complete response" }],
+      __openclaw: { id: "reply-full" },
+    };
+    runtime.readSessionMessagesAsync.mockResolvedValueOnce([fullMessage]);
+    runtime.projectRecentChatDisplayMessages.mockReturnValueOnce([
+      {
+        ...fullMessage,
+        content: [{ type: "text", text: "partial\n...(truncated)..." }],
+      },
+    ]);
+
+    const callGateway = createEmbeddedCallGateway();
+    await callGateway({
+      method: "chat.history",
+      params: { sessionKey: "agent:main:main" },
+    });
+    const result = await callGateway<{ ok: boolean; message?: unknown }>({
+      method: "chat.message.get",
+      params: {
+        sessionKey: "agent:main:main",
+        messageId: "reply-full",
+        maxChars: 2_000_000,
+      },
+    });
+
+    expect(result).toEqual({ ok: true, message: fullMessage });
+    expect(runtime.projectChatDisplayMessage).toHaveBeenCalledWith(fullMessage, {
+      maxChars: 2_000_000,
+    });
+  });
+
+  it("does not hydrate embedded rows that history did not expose", async () => {
+    const callGateway = createEmbeddedCallGateway();
+
+    await expect(
+      callGateway({
+        method: "chat.message.get",
+        params: {
+          sessionKey: "agent:main:main",
+          messageId: "not-exposed",
+        },
+      }),
+    ).resolves.toEqual({ ok: false, unavailableReason: "not_found" });
+  });
+
+  it("keeps embedded global chat hydration isolated by agent scope", async () => {
+    const workMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "work-only response" }],
+      __openclaw: { id: "reply-global" },
+    };
+    runtime.readSessionMessagesAsync.mockResolvedValueOnce([workMessage]);
+    runtime.projectRecentChatDisplayMessages.mockReturnValueOnce([workMessage]);
+
+    const callGateway = createEmbeddedCallGateway();
+    await callGateway({
+      method: "chat.history",
+      params: { sessionKey: "global", agentId: "work" },
+    });
+
+    await expect(
+      callGateway({
+        method: "chat.message.get",
+        params: {
+          sessionKey: "global",
+          agentId: "main",
+          messageId: "reply-global",
+        },
+      }),
+    ).resolves.toEqual({ ok: false, unavailableReason: "not_found" });
   });
 });

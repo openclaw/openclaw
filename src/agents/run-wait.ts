@@ -23,7 +23,11 @@ import {
   normalizeProviderStarted,
   type AgentRunTimeoutPhase,
 } from "./run-timeout-attribution.js";
-import { extractAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
+import {
+  extractAssistantText,
+  hasDisplayTruncationMarker,
+  stripToolMessages,
+} from "./tools/chat-history-text.js";
 
 type GatewayCaller = typeof callGateway;
 
@@ -160,7 +164,48 @@ function normalizePendingRunIds(runIds: Iterable<string>): string[] {
   return [...seen];
 }
 
-function resolveLatestAssistantReplySnapshot(messages: unknown[]): AssistantReplySnapshot {
+const FULL_REPLY_MAX_CHARS = 2_000_000;
+
+function readChatHistoryMessageId(message: unknown): string | undefined {
+  if (!message || typeof message !== "object") {
+    return undefined;
+  }
+  const metadata = (message as Record<string, unknown>)["__openclaw"];
+  if (!metadata || typeof metadata !== "object") {
+    return undefined;
+  }
+  const id = (metadata as { id?: unknown }).id;
+  return typeof id === "string" ? id : undefined;
+}
+
+function isChatHistoryMessageToolMirror(message: unknown): boolean {
+  if (!message || typeof message !== "object") {
+    return false;
+  }
+  const mirror = (message as Record<string, unknown>).openclawMessageToolMirror;
+  return Boolean(mirror && typeof mirror === "object" && !Array.isArray(mirror));
+}
+
+function createAssistantReplySnapshot(candidate: unknown): AssistantReplySnapshot {
+  const text = extractAssistantText(candidate);
+  if (!text?.trim()) {
+    return {};
+  }
+  let fingerprint: string | undefined;
+  try {
+    fingerprint = JSON.stringify(candidate);
+  } catch {
+    fingerprint = text;
+  }
+  return { text, fingerprint };
+}
+
+function resolveLatestAssistantReply(messages: unknown[]):
+  | {
+      candidate: unknown;
+      snapshot: AssistantReplySnapshot;
+    }
+  | undefined {
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const candidate = messages[i];
     if (!candidate || typeof candidate !== "object") {
@@ -169,36 +214,66 @@ function resolveLatestAssistantReplySnapshot(messages: unknown[]): AssistantRepl
     if ((candidate as { role?: unknown }).role !== "assistant") {
       continue;
     }
-    const text = extractAssistantText(candidate);
-    if (!text?.trim()) {
+    const snapshot = createAssistantReplySnapshot(candidate);
+    if (!snapshot.text?.trim()) {
       continue;
     }
-    let fingerprint: string | undefined;
-    try {
-      fingerprint = JSON.stringify(candidate);
-    } catch {
-      fingerprint = text;
-    }
-    return { text, fingerprint };
+    return { candidate, snapshot };
   }
-  return {};
+  return undefined;
 }
 
 /** Read the latest non-tool assistant message for a session. */
 export async function readLatestAssistantReplySnapshot(params: {
   sessionKey: string;
   limit?: number;
+  fullText?: boolean;
   callGateway?: GatewayCaller;
 }): Promise<AssistantReplySnapshot> {
-  const history = await (params.callGateway ?? runWaitDeps.callGateway)<{
+  const gateway = params.callGateway ?? runWaitDeps.callGateway;
+  const history = await gateway<{
     messages: Array<unknown>;
   }>({
     method: "chat.history",
     params: { sessionKey: params.sessionKey, limit: params.limit ?? 50 },
   });
-  return resolveLatestAssistantReplySnapshot(
+  const latest = resolveLatestAssistantReply(
     stripToolMessages(Array.isArray(history?.messages) ? history.messages : []),
   );
+  if (!latest) {
+    return {};
+  }
+  if (!params.fullText || !hasDisplayTruncationMarker(latest.candidate)) {
+    return latest.snapshot;
+  }
+
+  const messageId = readChatHistoryMessageId(latest.candidate);
+  if (!messageId) {
+    return latest.snapshot;
+  }
+  try {
+    const full = await gateway<{
+      ok?: boolean;
+      message?: unknown;
+    }>({
+      method: "chat.message.get",
+      params: {
+        sessionKey: params.sessionKey,
+        messageId,
+        maxChars: FULL_REPLY_MAX_CHARS,
+      },
+    });
+    if (!full?.ok || !full.message) {
+      return isChatHistoryMessageToolMirror(latest.candidate) ? latest.snapshot : {};
+    }
+    const fullSnapshot = createAssistantReplySnapshot(full.message);
+    if (fullSnapshot.text?.trim()) {
+      return fullSnapshot;
+    }
+    return isChatHistoryMessageToolMirror(latest.candidate) ? latest.snapshot : {};
+  } catch {
+    return isChatHistoryMessageToolMirror(latest.candidate) ? latest.snapshot : {};
+  }
 }
 
 /** Read only the latest assistant text for call sites that do not need fingerprints. */
@@ -257,6 +332,7 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
   sessionKey: string;
   timeoutMs: number;
   limit?: number;
+  fullText?: boolean;
   baseline?: AssistantReplySnapshot;
   callGateway?: GatewayCaller;
 }): Promise<AgentWaitResult & { replyText?: string }> {
@@ -272,6 +348,7 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
   const latestReply = await readLatestAssistantReplySnapshot({
     sessionKey: params.sessionKey,
     limit: params.limit,
+    fullText: params.fullText,
     callGateway: params.callGateway,
   });
   const baselineFingerprint = params.baseline?.fingerprint;

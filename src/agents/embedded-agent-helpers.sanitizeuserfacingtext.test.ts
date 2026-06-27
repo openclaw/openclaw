@@ -244,6 +244,72 @@ describe("sanitizeUserFacingText", () => {
     expect(sanitizeUserFacingText("A\n[tool calls omitted]\n[tool calls omitted]\nB")).toBe("A\nB");
   });
 
+  it.each([
+    "...(truncated)...",
+    "... (truncated)",
+    "...<truncated>",
+    "...[truncated]...",
+    "...[additional startup memory truncated]...",
+    "...(live output truncated)...",
+    "…(truncated AGENTS.md: kept 100+policy 8+50 chars of 500)…",
+    "[...truncated, read AGENTS.md for full content...]",
+    "[...truncated, read src/agents/example file.ts for full content...]",
+    "[…truncated 100+50/500]",
+    "[... 42 more characters truncated]",
+    "[... 123 more characters truncated; rerun with narrower args if needed]",
+    "[... 4 chars truncated; narrow args]",
+    "…9 tokens truncated…",
+  ])("preserves standalone truncation-marker text without producer provenance: %s", (input) => {
+    expect(sanitizeUserFacingText(input)).toBe(input);
+  });
+
+  it("preserves copied-log truncation marker lines without producer provenance", () => {
+    const input = [
+      "Visible before.",
+      "",
+      "[... 42 more characters truncated]",
+      "...(truncated)...",
+      "Visible after.",
+      "",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe(input);
+  });
+
+  it("preserves chat-history display marker text without producer provenance", () => {
+    const input = ["Visible prefix.", "...(truncated)..."].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe(input);
+  });
+
+  it.each([
+    "Wait... let me think.",
+    "What does [... 42 more characters truncated] mean?",
+    "The literal marker is `...(truncated)...`.",
+    "abc…1 chars truncated…def",
+  ])("preserves ordinary truncation-marker prose: %s", (input) => {
+    expect(sanitizeUserFacingText(input)).toBe(input);
+  });
+
+  it("preserves truncation sentinel examples inside fenced code", () => {
+    const input = [
+      "Example:",
+      "```",
+      "...(truncated)...",
+      "[... 42 more characters truncated]",
+      "[...truncated, read AGENTS.md for full content...]",
+      "```",
+    ].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe(input);
+  });
+
+  it("preserves truncation sentinel examples inside longer Markdown fences", () => {
+    const input = ["````md", "```", "[... 42 more characters truncated]", "```", "````"].join("\n");
+
+    expect(sanitizeUserFacingText(input)).toBe(input);
+  });
+
   it("strips legacy uppercase TOOL_CALL blocks before user-facing delivery", () => {
     const input = [
       "Before",
