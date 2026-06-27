@@ -14,10 +14,10 @@ import {
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
   resolveExecApprovalAllowedDecisions,
+  type ExecAsk,
   type ExecHost,
   type ExecApprovalDecision,
   type ExecTarget,
-  type ExecAsk,
 } from "../infra/exec-approvals.js";
 import { requestHeartbeat } from "../infra/heartbeat-wake.js";
 import { findPathKey, mergePathPrepend, removePathPrepend } from "../infra/path-prepend.js";
