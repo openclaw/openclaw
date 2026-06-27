@@ -533,6 +533,19 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       return false;
     }
     this.lastPrimaryRecoveryAttemptMs = nowMs;
+    // Track a freshly-loaded provider that this attempt has not yet adopted
+    // into manager state. Closed on any failure path so a sustained primary
+    // outage does not leak a fresh worker each throttle window.
+    let pendingProvider: EmbeddingProvider | null = null;
+    const discardPending = (label: string): void => {
+      const provider = pendingProvider;
+      pendingProvider = null;
+      if (provider && provider !== this.provider) {
+        void Promise.resolve(provider.close?.()).catch((err: unknown) => {
+          log.debug(`memory embeddings: failed to close ${label}: ${String(err)}`);
+        });
+      }
+    };
     try {
       const primaryResult = await MemoryIndexManager.loadProviderResult({
         cfg: this.cfg,
@@ -540,21 +553,14 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
         settings: this.settings,
       });
       if (!primaryResult.provider || primaryResult.fallbackFrom) {
-        // Primary is still unavailable and loadProviderResult may have
-        // instantiated the configured fallback to probe it. Close that
-        // discarded provider so a sustained outage does not leak a fresh
-        // fallback worker on every throttle window. Skip when the returned
-        // provider is the one this manager already holds.
-        const discarded = primaryResult.provider;
-        if (discarded && discarded !== this.provider) {
-          void Promise.resolve(discarded.close?.()).catch((err: unknown) => {
-            log.debug(
-              `memory embeddings: failed to close discarded recovery probe: ${String(err)}`,
-            );
-          });
-        }
+        // Primary still unavailable; loadProviderResult may have instantiated
+        // the configured fallback to probe it. Close the discarded provider
+        // unless it is the one this manager already holds.
+        pendingProvider = primaryResult.provider;
+        discardPending("discarded recovery probe");
         return false;
       }
+      pendingProvider = primaryResult.provider;
       // Probe the freshly-built primary with a ping before adopting it so a
       // provider that resolved but cannot reach its backend does not evict a
       // working fallback.
@@ -564,6 +570,8 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       this.providerKey = this.computeProviderKey();
       this.batch = this.resolveBatchConfig();
       this.lastPrimaryRecoveryAttemptMs = 0;
+      // Ownership of pendingProvider transferred to this.provider.
+      pendingProvider = null;
       if (previousProvider && previousProvider !== this.provider) {
         void Promise.resolve(previousProvider.close?.()).catch((err: unknown) => {
           log.debug(
@@ -577,6 +585,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       );
       return true;
     } catch (err) {
+      discardPending("failed recovery probe");
       log.debug(
         `memory embeddings: primary recovery attempted but failed: ${formatErrorMessage(err)}`,
       );
