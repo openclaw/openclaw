@@ -42,9 +42,13 @@ type Candidate = Omit<NativeI18nEntry, "id">;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, "..");
 const OUTPUT_PATH = path.join(ROOT, "apps", ".i18n", "native-source.json");
-const SOURCE_ROOTS: Record<NativeI18nSurface, string> = {
-  android: path.join(ROOT, "apps", "android", "app", "src", "main"),
-  apple: path.join(ROOT, "apps", "ios"),
+const SOURCE_ROOTS: Record<NativeI18nSurface, string[]> = {
+  android: [path.join(ROOT, "apps", "android", "app", "src", "main")],
+  apple: [
+    path.join(ROOT, "apps", "ios"),
+    path.join(ROOT, "apps", "macos", "Sources"),
+    path.join(ROOT, "apps", "shared", "OpenClawKit", "Sources"),
+  ],
 };
 
 const ANDROID_EXTENSIONS = new Set([".kt", ".kts"]);
@@ -61,6 +65,9 @@ const ANDROID_WRAPPER_ARGS =
   /\b[A-Z][A-Za-z0-9_]*\s*\([^)\n]{0,160}?\b(?:text|title|label|message|contentDescription|placeholder)\s*=\s*"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_TOAST_ARGS =
   /\b(?:Toast\.makeText|Snackbar\.make)\s*\([^,\n]*,\s*"((?:\\.|[^"\\])*)"/gu;
+const ANDROID_DIALOG_CALLS =
+  /\.(?:setTitle|setMessage|setPositiveButton|setNegativeButton|setNeutralButton)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
+const ANDROID_STATE_CALLS = /\b(?:MutableStateFlow|StateFlow|flowOf)\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
 const CONDITIONAL_BRANCHES = [
   /\bif\s*\([^)]*\)\s*"((?:\\.|[^"\\])*)"\s*else\s*"((?:\\.|[^"\\])*)"/gu,
   /\?\s*"((?:\\.|[^"\\])*)"\s*:\s*"((?:\\.|[^"\\])*)"/gu,
@@ -180,6 +187,8 @@ function extractCandidates(
           [ANDROID_PROPERTIES, "ui-property"],
           [ANDROID_WRAPPER_ARGS, "ui-wrapper-argument"],
           [ANDROID_TOAST_ARGS, "ui-toast"],
+          [ANDROID_DIALOG_CALLS, "ui-dialog"],
+          [ANDROID_STATE_CALLS, "ui-state"],
           ...CONDITIONAL_BRANCHES.map((pattern) => [pattern, "conditional-branch"] as const),
         ];
   for (const [pattern, kind] of patterns) {
@@ -243,17 +252,7 @@ async function walkFiles(
         : fullPath.endsWith(`${path.sep}res${path.sep}values${path.sep}strings.xml`)
           ? new Set([...ANDROID_EXTENSIONS, ".xml"])
           : ANDROID_EXTENSIONS;
-    const isAndroidUiFile =
-      surface !== "android" ||
-      fullPath.includes(`${path.sep}ui${path.sep}`) ||
-      fullPath.endsWith(`${path.sep}MainActivity.kt`) ||
-      fullPath.endsWith(`${path.sep}res${path.sep}values${path.sep}strings.xml`);
-    if (
-      entry.isFile() &&
-      allowed.has(extension) &&
-      isAndroidUiFile &&
-      !EXCLUDED_FILE_RE.test(entry.name)
-    ) {
+    if (entry.isFile() && allowed.has(extension) && !EXCLUDED_FILE_RE.test(entry.name)) {
       out.push(fullPath);
     }
   }
@@ -293,11 +292,13 @@ function withIds(entries: Candidate[]): NativeI18nEntry[] {
 export async function collectNativeI18nEntries(): Promise<NativeI18nEntry[]> {
   const entries: Candidate[] = [];
   for (const surface of ["android", "apple"] as const) {
-    const files = await walkFiles(SOURCE_ROOTS[surface], surface);
-    for (const filePath of files.toSorted()) {
-      const source = await readFile(filePath, "utf8");
-      const repoPath = path.relative(ROOT, filePath).split(path.sep).join("/");
-      entries.push(...extractCandidates(surface, repoPath, source));
+    for (const sourceRoot of SOURCE_ROOTS[surface]) {
+      const files = await walkFiles(sourceRoot, surface);
+      for (const filePath of files.toSorted()) {
+        const source = await readFile(filePath, "utf8");
+        const repoPath = path.relative(ROOT, filePath).split(path.sep).join("/");
+        entries.push(...extractCandidates(surface, repoPath, source));
+      }
     }
   }
   return withIds(entries);
