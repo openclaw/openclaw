@@ -1,15 +1,11 @@
 import { once } from "node:events";
 // Loopback proof: probeDiscord getMe through the production bounded JSON read path.
 import { createServer } from "node:http";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { resolve } from "node:path";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const pkgRoot = resolve(__dirname, "..");
+const pkgRoot = resolve(import.meta.dirname, "..");
 
 const { probeDiscord } = await import(`${pkgRoot}/extensions/discord/src/probe.ts`);
-const { readProviderJsonResponse } = await import(`${pkgRoot}/src/plugin-sdk/provider-http.ts`);
 
 const CAP = 16 * 1024 * 1024;
 const STREAM_SIZE = 24 * 1024 * 1024;
@@ -94,7 +90,9 @@ async function withServer(server, fn) {
   try {
     await fn(port, fetcher);
   } finally {
-    await new Promise((resolveDone) => server.close(resolveDone));
+    await new Promise((resolveDone) => {
+      server.close(resolveDone);
+    });
   }
 }
 
@@ -104,11 +102,15 @@ console.log(`  cap=${CAP} bytes (16 MiB), would-stream≈${STREAM_SIZE} bytes (2
 await withServer(createHugeServer(), async (_port, fetcher) => {
   serverBytesWritten = 0;
   const result = await probeDiscord("MTIz.abc.def", 5_000, { fetcher });
-  await new Promise((r) => setTimeout(r, 50));
+  await new Promise((done) => {
+    setTimeout(done, 50);
+  });
   check("oversized getMe probe fails closed (ok=false)", result.ok === false);
   check(
     `bounded error present: "${result.error?.slice(0, 72)}"`,
-    !!result.error?.includes("discord.probe.getMe: JSON response exceeds 16777216 bytes"),
+    String(result.error ?? "").includes(
+      "discord.probe.getMe: JSON response exceeds 16777216 bytes",
+    ),
   );
   check(
     `server wrote ${serverBytesWritten} bytes, stopped before full 24 MiB stream`,
@@ -120,7 +122,9 @@ await withServer(createHugeServer(), async (port) => {
   serverBytesWritten = 0;
   const res = await fetch(`http://127.0.0.1:${port}/huge`);
   await res.json().catch(() => undefined);
-  await new Promise((r) => setTimeout(r, 50));
+  await new Promise((done) => {
+    setTimeout(done, 50);
+  });
   check(
     `negative control: unbounded .json() wrote ${serverBytesWritten} bytes (>> ${CAP})`,
     serverBytesWritten > CAP,
