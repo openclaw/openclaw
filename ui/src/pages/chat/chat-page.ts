@@ -820,6 +820,38 @@ export class ChatPage extends LitElement {
     chatMessage: string;
     chatQueue: ChatQueueItem[];
   } | null = null;
+  private pendingCreatedSessionComposer: {
+    sessionKey: string;
+    chatMessage: string;
+    chatAttachments: ChatAttachment[];
+  } | null = null;
+
+  private applyRouteSessionKey(sessionKey: string) {
+    const state = this.state;
+    if (!state) {
+      return;
+    }
+    const nextSessionKey = resolveSessionKey(sessionKey, this.context.gateway.snapshot.hello);
+    if (!nextSessionKey) {
+      return;
+    }
+    state.sessionKey = nextSessionKey;
+    if (
+      state.settings.sessionKey !== nextSessionKey ||
+      state.settings.lastActiveSessionKey !== nextSessionKey
+    ) {
+      state.settings = {
+        ...state.settings,
+        sessionKey: nextSessionKey,
+        lastActiveSessionKey: nextSessionKey,
+      };
+      saveSettings(state.settings);
+    }
+    const agentId = parseAgentSessionKey(nextSessionKey)?.agentId;
+    if (agentId) {
+      this.context.agentSelection.set(agentId);
+    }
+  }
 
   private persistComposer(immediate = false) {
     const state = this.state;
@@ -922,13 +954,11 @@ export class ChatPage extends LitElement {
       }
       return false;
     }
-    switchChatSession(state, nextSessionKey, {
-      syncUrl: false,
-      requestUpdate: false,
-    });
-    state.chatMessage = preservedDraft;
-    state.chatAttachments = preservedAttachments;
-    state.requestUpdate?.();
+    this.pendingCreatedSessionComposer = {
+      sessionKey: nextSessionKey,
+      chatMessage: preservedDraft,
+      chatAttachments: preservedAttachments,
+    };
     this.context.navigate("chat", {
       search: searchForSession(nextSessionKey),
     });
@@ -1045,14 +1075,7 @@ export class ChatPage extends LitElement {
     };
     this.announceCommandPaletteTarget(this.handleCommandPaletteSlashCommand);
     if (this.data?.sessionKey) {
-      this.state.sessionKey = resolveSessionKey(
-        this.data.sessionKey,
-        this.context.gateway.snapshot.hello,
-      );
-      const agentId = parseAgentSessionKey(this.data.sessionKey)?.agentId;
-      if (agentId) {
-        this.context.agentSelection.set(agentId);
-      }
+      this.applyRouteSessionKey(this.data.sessionKey);
     }
     restoreChatComposerState(this.state, { preserveCurrent: true });
     if (this.data?.draft !== undefined) {
@@ -1091,6 +1114,15 @@ export class ChatPage extends LitElement {
           syncUrl: false,
           requestUpdate: false,
         });
+      } else if (nextSessionKey) {
+        this.applyRouteSessionKey(nextSessionKey);
+      }
+      const pending = this.pendingCreatedSessionComposer;
+      if (pending?.sessionKey === nextSessionKey) {
+        this.pendingCreatedSessionComposer = null;
+        this.state.chatMessage = pending.chatMessage;
+        this.state.chatAttachments = pending.chatAttachments;
+        this.persistComposer(true);
       }
       if (this.data.draft !== undefined && this.data.draft !== this.state.chatMessage) {
         this.state.handleChatDraftChange(this.data.draft);
@@ -1147,20 +1179,20 @@ export class ChatPage extends LitElement {
     state.connected = snapshot.connected;
     state.hello = snapshot.hello;
     state.assistantAgentId = snapshot.assistantAgentId;
-    const previousSessionKey = state.sessionKey;
-    state.sessionKey = snapshot.sessionKey || state.sessionKey;
-    if (state.sessionKey !== state.settings.sessionKey) {
-      state.settings = {
-        ...state.settings,
-        sessionKey: state.sessionKey,
-        lastActiveSessionKey: state.sessionKey,
-      };
-    }
-    if (state.sessionKey !== previousSessionKey) {
-      restoreChatComposerState(state, {
-        preserveCurrent: true,
-        sessionKey: state.sessionKey,
+    const routeSessionKey = this.data?.sessionKey?.trim();
+    const canonicalRouteSessionKey = routeSessionKey
+      ? resolveSessionKey(routeSessionKey, snapshot.hello)
+      : null;
+    if (
+      routeSessionKey &&
+      canonicalRouteSessionKey &&
+      canonicalRouteSessionKey !== routeSessionKey
+    ) {
+      this.context.replace("chat", {
+        search: searchForSession(canonicalRouteSessionKey),
       });
+      state.requestUpdate?.();
+      return;
     }
     state.assistantName = this.context.assistantName;
     if (!snapshot.connected) {

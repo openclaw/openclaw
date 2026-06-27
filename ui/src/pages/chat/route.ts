@@ -1,9 +1,8 @@
 import { html } from "lit";
 import type { ApplicationContext } from "../../app/context.ts";
-import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { resolveAgentIdFromSessionKey } from "../../lib/sessions/session-key.ts";
 import type { RouteLocation } from "../../router/index.ts";
-import { definePage } from "../../router/index.ts";
+import { definePage, notFound } from "../../router/index.ts";
 
 function sessionKeyFromLocation(location: RouteLocation): string | undefined {
   const sessionKey = new URLSearchParams(location.search).get("session")?.trim();
@@ -20,11 +19,11 @@ export const page = definePage({
   path: "/chat",
   loaderDeps: (_context: ApplicationContext, location: RouteLocation) =>
     `${sessionKeyFromLocation(location) ?? ""}\u0000${draftFromLocation(location) ?? ""}`,
-  loader: async (context: ApplicationContext, { location }) => {
-    const sessionKey = resolveSessionKey(
-      sessionKeyFromLocation(location) ?? context.gateway.snapshot.sessionKey,
-      context.gateway.snapshot.hello,
-    );
+  loader: async (_context: ApplicationContext, { location }) => {
+    const sessionKey = sessionKeyFromLocation(location);
+    if (!sessionKey) {
+      return notFound({ routeId: "chat" });
+    }
     return {
       sessionKey,
       draft: draftFromLocation(location),
