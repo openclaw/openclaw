@@ -1418,10 +1418,17 @@ export async function applySessionPatchProjection<
   if (!projected.ok) {
     return projected;
   }
-  await replaceSessionEntry(
-    { sessionKey: target.primaryKey, storePath: params.storePath },
-    projected.entry,
+  const candidateKeys = uniqueStrings(
+    (target.candidateKeys ?? [target.primaryKey]).map((key) => key.trim()).filter(Boolean),
   );
+  await applySessionEntryLifecycleMutation({
+    storePath: params.storePath,
+    removals: candidateKeys
+      .filter((sessionKey) => sessionKey !== target.primaryKey)
+      .map((sessionKey) => ({ sessionKey })),
+    upserts: [{ sessionKey: target.primaryKey, entry: projected.entry }],
+    skipMaintenance: true,
+  });
   return { ...projected, entry: structuredClone(projected.entry) };
 }
 

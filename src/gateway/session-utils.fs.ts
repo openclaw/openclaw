@@ -1885,18 +1885,22 @@ function extractMediaSummary(message: TranscriptPreviewMessage): string | null {
   return null;
 }
 
-function buildPreviewItems(
-  messages: TranscriptPreviewMessage[],
+export function buildSessionPreviewItems(
+  messages: readonly unknown[],
   maxItems: number,
   maxChars: number,
 ): SessionPreviewItem[] {
   const items: SessionPreviewItem[] = [];
   for (const message of messages) {
-    const toolCall = isToolCall(message);
-    const role = normalizeRole(message.role, toolCall);
-    let text = extractPreviewText(message);
+    if (!message || typeof message !== "object" || Array.isArray(message)) {
+      continue;
+    }
+    const previewMessage = message as TranscriptPreviewMessage;
+    const toolCall = isToolCall(previewMessage);
+    const role = normalizeRole(previewMessage.role, toolCall);
+    let text = extractPreviewText(previewMessage);
     if (!text) {
-      const toolNames = extractToolNames(message);
+      const toolNames = extractToolNames(previewMessage);
       if (toolNames.length > 0) {
         const shown = toolNames.slice(0, 2);
         const overflow = toolNames.length - shown.length;
@@ -1907,7 +1911,7 @@ function buildPreviewItems(
       }
     }
     if (!text) {
-      text = extractMediaSummary(message);
+      text = extractMediaSummary(previewMessage);
     }
     if (!text) {
       continue;
@@ -1998,7 +2002,7 @@ export function readSessionPreviewItemsFromTranscript(
   for (const readSize of PREVIEW_READ_SIZES) {
     const messages = readRecentMessagesFromTranscript(filePath, boundedItems, readSize);
     if (messages.length > 0 || readSize === PREVIEW_READ_SIZES[PREVIEW_READ_SIZES.length - 1]) {
-      return buildPreviewItems(messages, boundedItems, boundedChars);
+      return buildSessionPreviewItems(messages, boundedItems, boundedChars);
     }
   }
 
