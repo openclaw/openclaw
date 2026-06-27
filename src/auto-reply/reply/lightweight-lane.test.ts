@@ -85,6 +85,25 @@ describe("classifyLightweightLane", () => {
     }
   });
 
+  it("escalates ambiguous current-information chat instead of admitting by denylist fallback", () => {
+    expect(classifyLightweightLane(signals({ text: "who won the game last night?" }))).toEqual({
+      eligible: false,
+      reason: "not_obvious_small_talk",
+    });
+    expect(
+      classifyLightweightLane(signals({ text: "good morning, who won the game last night?" })),
+    ).toEqual({
+      eligible: false,
+      reason: "not_obvious_small_talk",
+    });
+    expect(classifyLightweightLane(signals({ text: "what's happening in London today?" }))).toEqual(
+      {
+        eligible: false,
+        reason: "not_obvious_small_talk",
+      },
+    );
+  });
+
   it("escalates code, system, and high-stakes topics", () => {
     expect(classifyLightweightLane(signals({ text: "what is in the codebase?" }))).toEqual({
       eligible: false,
@@ -100,9 +119,9 @@ describe("classifyLightweightLane", () => {
 
   it("matches verbs on word boundaries, not substrings", () => {
     // "fixate" / "reading" must not trip the bare "fix" / "read" verbs.
-    expect(classifyLightweightLane(signals({ text: "I keep fixating on small things" }))).toEqual({
-      eligible: true,
-    });
+    expect(
+      classifyLightweightLane(signals({ text: "haha I keep fixating on small things" })),
+    ).toEqual({ eligible: true });
   });
 });
 

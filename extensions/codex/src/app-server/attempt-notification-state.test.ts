@@ -43,7 +43,6 @@ function createTurnWatchStub() {
 
 const THREAD_ID = "thread-1";
 const TURN_ID = "turn-1";
-const INITIAL_PROGRESS_TIMEOUT_MS = 5 * 60_000;
 
 function applyNotification(
   notification: CodexServerNotification,
@@ -61,14 +60,13 @@ function applyNotification(
     pendingOpenClawDynamicToolCompletionIds: new Set<string>(),
     turnCrossedToolHandoff: false,
     postToolRawAssistantCompletionIdleTimeoutMs: 60_000,
-    turnInitialProgressIdleTimeoutMs: INITIAL_PROGRESS_TIMEOUT_MS,
     onScheduleTerminalDynamicToolReleaseCheck: () => {},
     onReportExecutionNotification: () => {},
   });
 }
 
-describe("applyCodexTurnNotificationState initial-progress watchdog", () => {
-  it("caps the attempt watch to the initial-progress window when the turn is accepted", () => {
+describe("applyCodexTurnNotificationState accepted-turn watchdog", () => {
+  it("keeps accepted turns on the configured attempt timeout before item progress", () => {
     const { controller, touchActivityCalls } = createTurnWatchStub();
 
     const result = applyNotification(
@@ -81,8 +79,8 @@ describe("applyCodexTurnNotificationState initial-progress watchdog", () => {
     expect(touchActivityCalls[0]?.reason).toBe("notification:turn/started");
     expect(touchActivityCalls[0]?.options).toMatchObject({
       attemptProgress: true,
-      attemptTimeoutMs: INITIAL_PROGRESS_TIMEOUT_MS,
     });
+    expect(touchActivityCalls[0]?.options?.attemptTimeoutMs).toBeUndefined();
   });
 
   it("reverts to the full attempt timeout once item-level progress arrives", () => {

@@ -98,7 +98,6 @@ export function applyCodexTurnNotificationState(params: {
   pendingOpenClawDynamicToolCompletionIds: Set<string>;
   turnCrossedToolHandoff: boolean;
   postToolRawAssistantCompletionIdleTimeoutMs: number;
-  turnInitialProgressIdleTimeoutMs: number;
   onScheduleTerminalDynamicToolReleaseCheck: () => void;
   onReportExecutionNotification: (notification: CodexServerNotification) => void;
 }): {
@@ -118,15 +117,9 @@ export function applyCodexTurnNotificationState(params: {
   let turnCrossedToolHandoff = params.turnCrossedToolHandoff;
 
   if (isCurrentTurnNotification && !isNativeResponseStreamDelta) {
-    // `turn/started` only acknowledges that Codex accepted the turn; real
-    // item-level work has not begun. Hold the attempt watchdog to the tighter
-    // initial-progress window until the first substantive notification arrives
-    // (any later touchActivity without an override reverts to the full timeout).
-    const isTurnAccepted = notification.method === "turn/started";
     turnWatches.touchActivity(`notification:${notification.method}`, {
       details: describeNotificationActivity(notification),
       attemptProgress: true,
-      ...(isTurnAccepted ? { attemptTimeoutMs: params.turnInitialProgressIdleTimeoutMs } : {}),
     });
     params.onReportExecutionNotification(notification);
     updateActiveTurnItemIds(notification, params.activeTurnItemIds);

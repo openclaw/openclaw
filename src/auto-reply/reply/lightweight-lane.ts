@@ -20,6 +20,7 @@ export type LightweightLaneIneligibleReason =
   | "native_command"
   | "slash_command"
   | "reply_target_dependency"
+  | "not_obvious_small_talk"
   | "action_intent"
   | "code_or_repo"
   | "system_or_config"
@@ -128,6 +129,23 @@ const HIGH_STAKES_TERMS = [
   "attorney",
 ];
 
+const CURRENT_INFO_PATTERNS = [
+  /\bwho won\b/i,
+  /\blast night\b/i,
+  /\b(?:latest|current|news|score)\b/i,
+  /\bwhat'?s happening\b/i,
+];
+
+const OBVIOUS_SMALL_TALK_PATTERNS = [
+  /\b(?:hi|hey|hello|morning|afternoon|evening)\b/i,
+  /\b(?:thanks?|thank you|cheers|appreciate it|much appreciated)\b/i,
+  /\b(?:haha|lol|lmao|hehe)\b/i,
+  /\b(?:no worries|never mind|nevermind|all good|sounds good|talk later)\b/i,
+  /\bhow (?:are|r) (?:you|u)\b/i,
+  /\bhow'?s (?:your|ur) (?:day|morning|afternoon|evening)\b/i,
+  /\bwhat do you think about (?:jazz|music|movies|films|books|coffee|tea|football)\b/i,
+];
+
 function buildTermMatcher(terms: readonly string[]): RegExp {
   const escaped = terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
   return new RegExp(`\\b(?:${escaped.join("|")})\\b`, "i");
@@ -169,6 +187,12 @@ export function classifyLightweightLane(signals: LightweightLaneSignals): Lightw
   }
   if (HIGH_STAKES_MATCHER.test(text)) {
     return { eligible: false, reason: "high_stakes" };
+  }
+  if (CURRENT_INFO_PATTERNS.some((pattern) => pattern.test(text))) {
+    return { eligible: false, reason: "not_obvious_small_talk" };
+  }
+  if (!OBVIOUS_SMALL_TALK_PATTERNS.some((pattern) => pattern.test(text))) {
+    return { eligible: false, reason: "not_obvious_small_talk" };
   }
   return { eligible: true };
 }

@@ -17,13 +17,6 @@ export const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
 export const CODEX_POST_TOOL_RAW_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 5 * 60_000;
 /** Guard after reasoning/commentary progress when no tool handoff occurred. */
 export const CODEX_POST_REASONING_REPLY_IDLE_TIMEOUT_MS = 5 * 60_000;
-// Cap for the gap between Codex accepting a turn (`turn/started`) and the first
-// item-level progress. Healthy turns produce reasoning/tool/assistant items
-// well inside this window; a silent gap this long means the bridge has lost
-// contact with model progress, so the caller should regain control rather than
-// wait out the full attempt timeout. Always clamped to the attempt timeout at
-// the call site so a short configured timeout is never extended.
-export const CODEX_TURN_INITIAL_PROGRESS_IDLE_TIMEOUT_MS = 5 * 60_000;
 /** Long terminal idle watch for app-server turns that never send completion. */
 export const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 
