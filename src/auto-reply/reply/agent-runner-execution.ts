@@ -40,6 +40,7 @@ import {
   isRateLimitErrorMessage,
   isConnectionError,
   isTransientHttpError,
+  isTimeoutErrorMessage,
 } from "../../agents/embedded-agent-helpers.js";
 import { sanitizeUserFacingText } from "../../agents/embedded-agent-helpers/sanitize-user-facing-text.js";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
@@ -844,11 +845,28 @@ const CLI_BACKEND_NO_OUTPUT_STALL_RE =
   /\bCLI produced no output for\s+(\d+)\s*s\s+and was terminated\b/iu;
 const CLI_BACKEND_OVERALL_TIMEOUT_RE =
   /\bCLI exceeded timeout\s*\(\s*(\d+)\s*s\s*\)\s+and was terminated\b/iu;
+
 const CLI_BACKEND_ROUTING_REF_BEFORE_ERROR_RE = /\b([\w.-]+\/[A-Za-z][\w.-]*)\s*:\s*CLI\b/iu;
 const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
   /\bcodex app-server client closed before turn completed\b/iu;
 const CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE =
   /\bcodex app-server turn idle timed out waiting for turn\/completed\b/iu;
+
+// CLI subprocess budget kills (no-output stall / overall turn budget) and Codex
+// app-server bridge failures (client closed / turn-completion idle timeout) read
+// like timeout strings but are not transport timeouts: they are subprocess kills
+// and bridge failures with their own surfaced copy and their own retry handling.
+// Identify them so the network transient gate skips them and lets their own copy
+// through instead of swallowing it behind a redundant retry.
+function hasDedicatedNonTransportTimeoutCopy(message: string): boolean {
+  const normalized = collapseRepeatedFailureDetail(message);
+  return (
+    CLI_BACKEND_NO_OUTPUT_STALL_RE.test(normalized) ||
+    CLI_BACKEND_OVERALL_TIMEOUT_RE.test(normalized) ||
+    CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE.test(normalized) ||
+    CODEX_APP_SERVER_TURN_COMPLETION_IDLE_TIMEOUT_RE.test(normalized)
+  );
+}
 
 function buildCodexAppServerFailureText(message: string): string | null {
   const normalizedMessage = collapseRepeatedFailureDetail(message);
@@ -3261,6 +3279,24 @@ export async function runAgentTurnWithFallback(params: {
       // error.") carry no leading HTTP status, so they need their own predicate
       // alongside the status-based transient check below.
       const isTransientConnection = isConnectionError(message);
+      // Request-timeout transport errors get rethrown to this single-model
+      // outer gate after the SDK's in-window timeout retries were pinned to 0
+      // (#87180). isTimeoutErrorMessage matches timeout strings broadly, so the
+      // !isFallbackSummaryError guard keeps a timeout-only fallback summary (one
+      // that does not also read as a connection error) from re-running through
+      // this timeout disjunct: that summary means multi-model failover already
+      // ran, so a redundant timeout retry is wrong. This guard is scoped to the
+      // timeout disjunct only; it does not touch the isTransientConnection path,
+      // which by its established behavior may still re-run once on a
+      // connection-flavored exhausted summary. Also exclude CLI subprocess
+      // budget timeouts (no-output stall / overall CLI turn budget) and Codex
+      // app-server bridge failures: they are subprocess kills / bridge failures,
+      // not transport timeouts, and have their own surfaced copy and replay
+      // handling that this gate would otherwise swallow.
+      const isTransientTimeout =
+        isTimeoutErrorMessage(message) &&
+        !isFallbackSummaryError(err) &&
+        !hasDedicatedNonTransportTimeoutCopy(message);
 
       // Drain/restart aborts stay silent and defer to post-restart
       // main-session recovery, which resumes the interrupted turn (or emits its
@@ -3353,7 +3389,10 @@ export async function runAgentTurnWithFallback(params: {
         };
       }
 
-      if ((isTransientHttp || isTransientConnection) && consumeTransientHttpRetry()) {
+      if (
+        (isTransientHttp || isTransientConnection || isTransientTimeout) &&
+        consumeTransientHttpRetry()
+      ) {
         pendingLifecycleTerminal = undefined;
         // Retry the full runWithModelFallback() cycle — transient errors
         // (502/521/etc.) and bare connection drops (ECONNRESET, socket hang up)
@@ -3368,7 +3407,11 @@ export async function runAgentTurnWithFallback(params: {
         // get their own label so the cause stays distinguishable in logs.
         defaultRuntime.error(
           `${
-            isTransientHttp ? "Transient HTTP provider error" : "Transient connection error"
+            isTransientHttp
+              ? "Transient HTTP provider error"
+              : isTransientConnection
+                ? "Transient connection error"
+                : "Transient timeout error"
           } before reply (${message}). Retrying once in ${TRANSIENT_HTTP_RETRY_DELAY_MS}ms.`,
         );
         await new Promise<void>((resolve) => {
