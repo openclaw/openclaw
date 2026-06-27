@@ -182,12 +182,12 @@ describe("ci workflow guards", () => {
     expect(workflow.concurrency["cancel-in-progress"]).toContain(
       "github.event_name == 'pull_request'",
     );
-    expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(16);
-    expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(8);
-    expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(8);
+    expect(workflow.jobs["checks-fast-core"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["checks-node-core-test-nondist-shard"].strategy["max-parallel"]).toBe(24);
+    expect(workflow.jobs["checks-fast-plugin-contracts-shard"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["checks-fast-channel-contracts-shard"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["check-shard"].strategy["max-parallel"]).toBe(12);
+    expect(workflow.jobs["check-additional-shard"].strategy["max-parallel"]).toBe(12);
     expect(workflow.jobs["checks-windows"].strategy["max-parallel"]).toBe(2);
     expect(workflow.jobs.android.strategy["max-parallel"]).toBe(2);
   });
@@ -573,7 +573,11 @@ describe("ci workflow guards", () => {
     expect(runStep.run).toContain("childEnv[key] = value");
   });
 
-  it("uploads a CI timing summary after the run lanes finish", () => {
+  it("keeps the CI timing summary parked for timing optimization work", () => {
+    expect(readFileSync(".github/workflows/ci.yml", "utf8")).toContain(
+      "Re-enable this job when we want to collect CI timing data for timing optimization.",
+    );
+
     const workflow = readCiWorkflow();
     const timingJob = workflow.jobs["ci-timings-summary"];
 
@@ -598,6 +602,7 @@ describe("ci workflow guards", () => {
       "ios-build",
       "android",
     ]);
+    expect(timingJob.if).toContain("false");
     expect(timingJob.if).toContain("always()");
     expect(timingJob.if).toContain("!cancelled()");
 
