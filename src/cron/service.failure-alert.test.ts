@@ -624,8 +624,10 @@ describe("CronService failure alerts", () => {
     expect(typeof alertText).toBe("string");
     if (typeof alertText !== "string") throw new Error("expected failure alert text");
 
-    // Verify no dangling surrogates in the truncated error text
-    for (let i = 0; i < alertText.length - 1; i++) {
+    // Verify no dangling surrogates in the truncated error text.
+    // Must check every character including the last: a dangling high surrogate
+    // at the final position would be missed by stopping at length-1.
+    for (let i = 0; i < alertText.length; i++) {
       const cu = alertText.charCodeAt(i);
       if (cu >= 0xd800 && cu <= 0xdbff) {
         expect(alertText.charCodeAt(i + 1) >= 0xdc00 && alertText.charCodeAt(i + 1) <= 0xdfff).toBe(
