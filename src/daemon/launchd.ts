@@ -49,6 +49,7 @@ const LAUNCH_AGENT_ENV_FILE_MODE = 0o600;
 const LAUNCH_AGENT_ENV_WRAPPER_MODE = 0o700;
 const LAUNCH_AGENT_ENV_DIR_NAME = "service-env";
 const LAUNCH_AGENT_STDERR_PATH = "/dev/null";
+const LAUNCH_DAEMON_SYSTEM_DIR = "/Library/LaunchDaemons";
 const OPENCLAW_UPDATE_LAUNCHD_LABEL_PREFIX = "ai.openclaw.update.";
 const OPENCLAW_MANUAL_UPDATE_LAUNCHD_LABEL_PATTERN = /^ai\.openclaw\.manual-update\.\d+$/;
 const LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000;
@@ -130,6 +131,10 @@ function resolveLaunchAgentPlistPathForLabel(
 ): string {
   const home = toPosixPath(resolveHomeDir(env));
   return path.posix.join(home, "Library", "LaunchAgents", `${label}.plist`);
+}
+
+function resolveSystemLaunchDaemonPlistPathForLabel(label: string): string {
+  return path.posix.join(LAUNCH_DAEMON_SYSTEM_DIR, `${label}.plist`);
 }
 
 function resolveLaunchAgentEnvDir(env: GatewayServiceEnv): string {
@@ -337,6 +342,47 @@ async function execLaunchctl(
   const file = isWindows ? getWindowsCmdExePath() : "launchctl";
   const fileArgs = isWindows ? ["/d", "/s", "/c", "launchctl", ...args] : args;
   return await execFileUtf8(file, fileArgs, isWindows ? { windowsHide: true } : {});
+}
+
+type SystemLaunchDaemonConflict = {
+  serviceTarget: string;
+  plistPath: string;
+};
+
+async function resolveSystemLaunchDaemonConflict(
+  label: string,
+): Promise<SystemLaunchDaemonConflict | null> {
+  if (process.platform !== "darwin") {
+    return null;
+  }
+  const plistPath = resolveSystemLaunchDaemonPlistPathForLabel(label);
+  const serviceTarget = `system/${label}`;
+  const printed = await execLaunchctl(["print", serviceTarget]);
+  if (printed.code === 0) {
+    return { serviceTarget, plistPath };
+  }
+  try {
+    await fs.access(plistPath);
+    return { serviceTarget, plistPath };
+  } catch {
+    return null;
+  }
+}
+
+async function assertNoSystemLaunchDaemonConflict(label: string): Promise<void> {
+  const conflict = await resolveSystemLaunchDaemonConflict(label);
+  if (!conflict) {
+    return;
+  }
+  // A system-domain job owns this label across users; adding a gui LaunchAgent
+  // would create dueling KeepAlive managers for the same gateway port.
+  throw new Error(
+    [
+      `Existing system LaunchDaemon ${conflict.serviceTarget} detected at ${conflict.plistPath}.`,
+      "Refusing to install a gui-domain LaunchAgent for the same gateway label because duplicate launchd managers can restart-loop the gateway.",
+      `Keep the system LaunchDaemon, or remove it first with \`sudo launchctl bootout ${conflict.serviceTarget}\` and \`sudo rm ${conflict.plistPath}\`, then rerun \`openclaw gateway install\`.`,
+    ].join("\n"),
+  );
 }
 
 export function parseLaunchctlListOpenClawUpdateJobs(
@@ -932,11 +978,13 @@ async function writeLaunchAgentPlist({
   stdout,
   warn,
 }: GatewayServiceInstallArgs): Promise<{ plistPath: string; stdoutPath: string }> {
+  const label = resolveLaunchAgentLabel({ env });
+  await assertNoSystemLaunchDaemonConflict(label);
+
   const { logDir, stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
   await ensureSecureDirectory(logDir);
 
   const domain = resolveGuiDomain();
-  const label = resolveLaunchAgentLabel({ env });
   for (const legacyLabel of resolveLegacyGatewayLaunchAgentLabels(env.OPENCLAW_PROFILE)) {
     const legacyPlistPath = resolveLaunchAgentPlistPathForLabel(env, legacyLabel);
     await execLaunchctl(["bootout", domain, legacyPlistPath]);
