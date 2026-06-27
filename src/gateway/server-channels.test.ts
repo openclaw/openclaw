@@ -599,6 +599,45 @@ describe("server-channels auto restart", () => {
     expect(hoisted.sleepWithAbort).not.toHaveBeenCalled();
   });
 
+  it("force-restarts when a timed-out recovery stop task never settles", async () => {
+    // Models the production wedge: a poller stuck on a network call that ignores
+    // its abort signal, so the recovery stop times out and the task never
+    // settles. The completion tail that would normally reboot never runs, so a
+    // repeated start (e.g. the next health-monitor cycle) must orphan the wedged
+    // task and boot a fresh provider instead of deferring forever.
+    const startAccount = vi.fn(async ({ abortSignal }: { abortSignal: AbortSignal }) => {
+      abortSignal.addEventListener("abort", () => {}, { once: true });
+      await new Promise<void>(() => {});
+    });
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.startChannels();
+    const recoveryStopTask = manager.stopChannel("discord", DEFAULT_ACCOUNT_ID, { manual: false });
+    await vi.advanceTimersByTimeAsync(5_000);
+    await recoveryStopTask;
+    expect(startAccount).toHaveBeenCalledTimes(1);
+
+    // First post-timeout start defers to the (wedged) task's reboot tail.
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    expect(startAccount).toHaveBeenCalledTimes(1);
+    expect(
+      manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID]?.restartPending,
+    ).toBe(true);
+
+    // Second start: the task is still wedged, so escape-hatch into a fresh boot.
+    await manager.startChannel("discord", DEFAULT_ACCOUNT_ID);
+    await waitForMicrotaskCondition(
+      () => startAccount.mock.calls.length === 2,
+      "expected a wedged recovery task to be force-restarted",
+    );
+
+    const account = manager.getRuntimeSnapshot().channelAccounts.discord?.[DEFAULT_ACCOUNT_ID];
+    expect(startAccount).toHaveBeenCalledTimes(2);
+    expect(account?.running).toBe(true);
+    expect(account?.restartPending).toBe(false);
+  });
+
   it("consumes startup failures during immediate recovery restart", async () => {
     const unhandledRejection = vi.fn();
     process.on("unhandledRejection", unhandledRejection);

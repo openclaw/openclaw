@@ -421,6 +421,10 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       store.runtimes.delete(id);
       restartAttempts.delete(restartKey(channelId, id));
       manuallyStopped.delete(restartKey(channelId, id));
+      // Clear both recovery flags together: evicting a stale account must not
+      // leave a dangling timed-out-recovery marker that would mis-route a later
+      // fresh boot of the same id into the recovery branch.
+      recoveryStopTimedOut.delete(restartKey(channelId, id));
       recoveryStartRequested.delete(restartKey(channelId, id));
     }
   };
@@ -456,17 +460,35 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
       tasks: accountIds.map((id) => async () => {
         const rKey = restartKey(channelId, id);
         if (store.tasks.has(id)) {
-          if (recoveryStopTimedOut.has(rKey)) {
-            if (!preserveManualStop) {
-              manuallyStopped.delete(rKey);
-            }
-            if (manuallyStopped.has(rKey)) {
-              return;
-            }
+          if (!recoveryStopTimedOut.has(rKey)) {
+            // A live or cleanly-stopping task still owns this account; its own
+            // lifecycle will boot/replace it, so never double-start here.
+            return;
+          }
+          if (!preserveManualStop) {
+            manuallyStopped.delete(rKey);
+          }
+          if (manuallyStopped.has(rKey)) {
+            return;
+          }
+          if (!recoveryStartRequested.has(rKey)) {
+            // First start after a recovery stop timed out: the previous task was
+            // aborted and its provider lease force-released, but the task promise
+            // has not settled yet. Defer once so its completion tail can reboot.
             recoveryStartRequested.add(rKey);
             setRuntime(channelId, id, { accountId: id, restartPending: true });
+            return;
           }
-          return;
+          // A reboot was already requested and the aborted task still has not
+          // settled, so its completion tail will never run to honor it. Without
+          // this escape hatch the channel stays "stopped" forever: the health
+          // monitor keeps logging restarts while this guard short-circuits every
+          // attempt. Orphan the wedged task and fall through to a fresh start;
+          // its settle handlers below no-op once a replacement owns the slot.
+          recoveryStopTimedOut.delete(rKey);
+          recoveryStartRequested.delete(rKey);
+          store.tasks.delete(id);
+          store.aborts.delete(id);
         }
         const existingStart = store.starting.get(id);
         if (existingStart) {
@@ -629,7 +651,13 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
           });
           const trackedPromise = task
             .then(() => {
-              if (abort.signal.aborted || manuallyStopped.has(rKey)) {
+              // Skip shared-runtime writes if a forced recovery restart already
+              // orphaned this task and a replacement owns the account slot.
+              if (
+                store.tasks.get(id) !== trackedPromise ||
+                abort.signal.aborted ||
+                manuallyStopped.has(rKey)
+              ) {
                 return;
               }
               const message = "channel exited without an error";
@@ -637,17 +665,30 @@ export function createChannelManager(opts: ChannelManagerOptions): ChannelManage
               log.error?.(`[${id}] ${message}`);
             })
             .catch((err: unknown) => {
+              if (store.tasks.get(id) !== trackedPromise) {
+                return;
+              }
               const message = formatErrorMessage(err);
               setRuntime(channelId, id, { accountId: id, lastError: message });
               log.error?.(`[${id}] channel exited: ${message}`);
             })
             .then(async () => {
+              // Always release this task's own scoped runtime, but only mark the
+              // account stopped while this task still owns the slot.
               await cleanupTaskScopedApprovalRuntime("channel cleanup failed");
+              if (store.tasks.get(id) !== trackedPromise) {
+                return;
+              }
               setStoppedRuntime(channelId, id, {
                 lastStopAt: Date.now(),
               });
             })
             .then(async () => {
+              if (store.tasks.get(id) !== trackedPromise) {
+                // Orphaned by a forced recovery restart; the replacement task
+                // owns recovery/restart state, so do nothing here.
+                return;
+              }
               if (manuallyStopped.has(rKey)) {
                 recoveryStopTimedOut.delete(rKey);
                 recoveryStartRequested.delete(rKey);
