@@ -249,9 +249,9 @@ describe("loadGatewayTlsRuntime", () => {
     // Also verify via openssl CLI for cross-platform proof
     const opensslBin = (await import("../resolve-system-bin.js")).resolveSystemBin("openssl");
     if (opensslBin) {
-      const { execFile } = await import("node:child_process");
-      const { promisify } = await import("node:util");
-      const sanOutput = await promisify(execFile)(opensslBin, [
+      const { execFile: opensslExec } = await import("node:child_process");
+      const { promisify: p } = await import("node:util");
+      const sanOutput = await p(opensslExec)(opensslBin, [
         "x509",
         "-in",
         defaultCertPath,
