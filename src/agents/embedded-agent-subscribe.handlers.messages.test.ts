@@ -102,9 +102,11 @@ function createMessageEndContext(
     finalizeAssistantTexts?: ReturnType<typeof vi.fn>;
     flushBlockReplyBuffer?: ReturnType<typeof vi.fn>;
     consumeReplyDirectives?: ReturnType<typeof vi.fn>;
+    stripBlockTags?: ReturnType<typeof vi.fn>;
     warn?: ReturnType<typeof vi.fn>;
     builtinToolNames?: ReadonlySet<string>;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
+    enforceFinalTag?: boolean;
     blockChunker?: { hasBuffered: () => boolean; reset: () => void };
     state?: Record<string, unknown>;
   } = {},
@@ -119,6 +121,7 @@ function createMessageEndContext(
       ...(params.sourceReplyDeliveryMode
         ? { sourceReplyDeliveryMode: params.sourceReplyDeliveryMode }
         : {}),
+      ...(params.enforceFinalTag !== undefined ? { enforceFinalTag: params.enforceFinalTag } : {}),
       ...(params.onAgentEvent ? { onAgentEvent: params.onAgentEvent } : {}),
       ...(params.onBlockReply ? { onBlockReply: params.onBlockReply } : { onBlockReply: vi.fn() }),
     },
@@ -156,7 +159,7 @@ function createMessageEndContext(
     commitAssistantUsage: vi.fn(),
     log: { debug: vi.fn(), info: vi.fn(), warn: params.warn ?? vi.fn() },
     builtinToolNames: params.builtinToolNames,
-    stripBlockTags: (text: string) => text,
+    stripBlockTags: params.stripBlockTags ?? vi.fn((text: string) => text),
     finalizeAssistantTexts: params.finalizeAssistantTexts ?? vi.fn(),
     emitAssistantStreamData: vi.fn(
       (data: Parameters<EmbeddedAgentSubscribeContext["emitAssistantStreamData"]>[0]) => {
@@ -1158,6 +1161,76 @@ describe("handleMessageEnd", () => {
       text: "",
       mediaUrls: ["/tmp/final.png"],
     });
+  });
+
+  it("preserves literal reasoning-looking tags in unphased final visible text", () => {
+    const onAgentEvent = vi.fn();
+    const stripBlockTags = vi.fn(() => "Before");
+    const ctx = createMessageEndContext({
+      onAgentEvent,
+      stripBlockTags,
+      consumeReplyDirectives: vi.fn((text: string) => ({ text })),
+      state: {
+        blockBuffer: "",
+        deltaBuffer: "",
+      },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [
+          {
+            type: "text",
+            text: "Before <think>literal tag text after",
+            textSignature: JSON.stringify({ v: 1, id: "item_unphased" }),
+          },
+        ],
+        usage: { input: 10, output: 5, total: 15 },
+      },
+    } as never);
+
+    expect(stripBlockTags).not.toHaveBeenCalled();
+    expect(firstMockArg(ctx.emitAssistantStreamData as never, "assistant stream")).toMatchObject({
+      text: "Before <think>literal tag text after",
+      delta: "Before <think>literal tag text after",
+    });
+    expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "Before <think>literal tag text after" }),
+    );
+  });
+
+  it("keeps final-tag enforcement in message_end fallback", () => {
+    const onAgentEvent = vi.fn();
+    const stripBlockTags = vi.fn(() => "");
+    const ctx = createMessageEndContext({
+      enforceFinalTag: true,
+      onAgentEvent,
+      stripBlockTags,
+      consumeReplyDirectives: vi.fn((text: string) => ({ text })),
+      state: {
+        blockBuffer: "",
+        deltaBuffer: "",
+      },
+    });
+
+    void handleMessageEnd(ctx, {
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: "Hello world",
+        usage: { input: 10, output: 5, total: 15 },
+      },
+    } as never);
+
+    expect(stripBlockTags).toHaveBeenCalledWith(
+      "Hello world",
+      { thinking: false, final: false },
+      { final: true },
+    );
+    expect(ctx.emitAssistantStreamData).not.toHaveBeenCalled();
+    expect(ctx.finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text: "" }));
   });
 
   it("emits a replacement final assistant event when final_answer appears only at message_end", () => {
