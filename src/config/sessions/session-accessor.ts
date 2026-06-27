@@ -1902,6 +1902,14 @@ export async function loadTranscriptEvents(
   return await loadSqliteTranscriptEvents(scope);
 }
 
+/** Replaces all transcript records for one SQLite-backed transcript. */
+export async function replaceTranscriptEvents(
+  scope: SessionTranscriptAccessScope,
+  events: TranscriptEvent[],
+): Promise<void> {
+  await replaceSqliteTranscriptEvents(scope, events);
+}
+
 /** Reads parsed transcript records synchronously from the SQLite transcript store. */
 export function loadTranscriptEventsSync(scope: SessionTranscriptReadScope): TranscriptEvent[] {
   return loadSqliteTranscriptEventsSync(scope);

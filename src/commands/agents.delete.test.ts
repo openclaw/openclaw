@@ -3,7 +3,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveWorkspaceAttestationPaths } from "../agents/workspace.js";
-import { loadSessionStore, resolveStorePath, saveSessionStore } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
+import { listSessionEntries, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
@@ -67,7 +69,9 @@ async function arrangeAgentsDeleteTest(params: {
 }) {
   const deletedAgentId = params.deletedAgentId ?? "ops";
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: deletedAgentId });
-  await saveSessionStore(storePath, params.sessions);
+  for (const [sessionKey, entry] of Object.entries(params.sessions)) {
+    await replaceSessionEntry({ sessionKey, storePath }, entry as SessionEntry);
+  }
   await fs.mkdir(path.join(params.stateDir, `workspace-${deletedAgentId}`), { recursive: true });
   await fs.mkdir(path.join(params.stateDir, "agents", deletedAgentId, "agent"), {
     recursive: true,
@@ -88,7 +92,11 @@ function expectSessionStore(
   storePath: string,
   sessions: Record<string, { sessionId: string; updatedAt: number }>,
 ) {
-  expect(loadSessionStore(storePath, { skipCache: true })).toEqual(sessions);
+  expect(
+    Object.fromEntries(
+      listSessionEntries({ storePath }).map(({ entry, sessionKey }) => [sessionKey, entry]),
+    ),
+  ).toEqual(sessions);
 }
 
 function readJsonLogs(): Array<Record<string, unknown>> {

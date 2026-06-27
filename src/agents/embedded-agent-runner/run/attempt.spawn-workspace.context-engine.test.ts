@@ -67,6 +67,18 @@ type MockCallSource = {
   };
 };
 
+async function readTrajectoryEvents(tempPaths: string[]): Promise<TrajectoryEvent[]> {
+  const workspaceDir = tempPaths[0];
+  if (!workspaceDir) {
+    throw new Error("missing trajectory workspace path");
+  }
+  return (await fs.readFile(path.join(workspaceDir, "embedded-session.jsonl"), "utf8"))
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as TrajectoryEvent);
+}
+
 function requireRecord(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object") {
     throw new Error(`expected ${label}`);
@@ -877,12 +889,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     );
     expect(seen.systemPrompt).not.toContain("secret runtime context");
     expect(JSON.stringify(seen.messages)).not.toContain("visible ask");
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const promptSubmitted = trajectoryEvents.find((event) => event.type === "prompt.submitted");
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     const modelCompleted = trajectoryEvents.find((event) => event.type === "model.completed");
@@ -1648,12 +1655,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(mockParams(hoisted.detectAndLoadPromptImagesMock, 0, "prompt image params").prompt).toBe(
       "what does this mean?",
     );
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const promptSubmitted = trajectoryEvents.find((event) => event.type === "prompt.submitted");
     expect(promptSubmitted?.data?.prompt).toBe(seenPrompt);
     expect(promptSubmitted?.data?.prompt).toContain("WT daily plan - Sat May 2");
@@ -1789,12 +1791,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
           message.role === "user" && String(message.content).includes("internal heartbeat event"),
       ),
     ).toBe(false);
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(contextCompiled?.data?.prompt).toContain("dynamic hook context");
     expect(contextCompiled?.data?.prompt).toContain("internal heartbeat event");
@@ -1836,12 +1833,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(seenPrompt).toContain("orphaned ask");
     expect(seenPrompt).not.toContain("internal heartbeat event");
     expect(result.finalPromptText).toBe(seenPrompt);
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     const runtimeContext = findRecord(
       requireRecords(seenMessages, "seen messages"),
@@ -1891,12 +1883,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(seenPrompt).toContain("Hello from the replied message");
     expect(seenPrompt).toContain("Continue the OpenClaw runtime event.");
     expect(result.finalPromptText).toBe(seenPrompt);
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(contextCompiled?.data?.prompt).toContain("Hello from the replied message");
     expect(contextCompiled?.data?.systemPrompt).toContain("runtime bare mention event");
@@ -1964,12 +1951,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(JSON.stringify(seenModelMessages)).toContain("dynamic hook context");
     expect(JSON.stringify(seenModelMessages)).toContain("dynamic hook tail");
     expect(result.finalPromptText).toBe(seenPrompt);
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     const contextCompiled = trajectoryEvents.find((event) => event.type === "context.compiled");
     expect(contextCompiled?.data?.prompt).toContain("visible_reply_contract: message_tool_only");
     expect(contextCompiled?.data?.prompt).toContain("[OpenClaw room event]");
@@ -2000,12 +1982,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
       role: "user",
       content: "seed",
     });
-    const trajectoryEvents = (
-      await fs.readFile(path.join(tempPaths[0] ?? "", "session.trajectory.jsonl"), "utf8")
-    )
-      .trim()
-      .split("\n")
-      .map((line) => JSON.parse(line) as TrajectoryEvent);
+    const trajectoryEvents = await readTrajectoryEvents(tempPaths);
     expect(trajectoryEvents.some((event) => event.type === "prompt.submitted")).toBe(false);
     const skipped = findRecord(
       trajectoryEvents as Array<Record<string, unknown>>,

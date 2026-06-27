@@ -1265,8 +1265,13 @@ export async function createContextEngineAttemptRunner(params: {
   }));
 
   const previousTrajectoryEnv = process.env.OPENCLAW_TRAJECTORY;
+  const previousTrajectoryDirEnv = process.env.OPENCLAW_TRAJECTORY_DIR;
   if (params.trajectory !== true) {
     process.env.OPENCLAW_TRAJECTORY = "0";
+    delete process.env.OPENCLAW_TRAJECTORY_DIR;
+  } else {
+    delete process.env.OPENCLAW_TRAJECTORY;
+    process.env.OPENCLAW_TRAJECTORY_DIR = workspaceDir;
   }
   try {
     return await (
@@ -1320,6 +1325,11 @@ export async function createContextEngineAttemptRunner(params: {
       delete process.env.OPENCLAW_TRAJECTORY;
     } else {
       process.env.OPENCLAW_TRAJECTORY = previousTrajectoryEnv;
+    }
+    if (previousTrajectoryDirEnv === undefined) {
+      delete process.env.OPENCLAW_TRAJECTORY_DIR;
+    } else {
+      process.env.OPENCLAW_TRAJECTORY_DIR = previousTrajectoryDirEnv;
     }
   }
 }
