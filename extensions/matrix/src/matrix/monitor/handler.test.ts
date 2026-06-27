@@ -1452,9 +1452,9 @@ describe("matrix monitor handler pairing account scope", () => {
   it("skips the shared-session notice when Matrix DMs are isolated per room", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-room-scope-"));
     const storePath = path.join(tempDir, "sessions.json");
-    fs.writeFileSync(
+    await saveSessionStore(
       storePath,
-      JSON.stringify({
+      {
         "agent:ops:main": {
           sessionId: "sess-main",
           updatedAt: Date.now(),
@@ -1464,8 +1464,8 @@ describe("matrix monitor handler pairing account scope", () => {
             accountId: "ops",
           },
         },
-      }),
-      "utf8",
+      },
+      { skipMaintenance: true },
     );
     const sendNotice = vi.fn(async () => "$notice");
 
@@ -1499,9 +1499,9 @@ describe("matrix monitor handler pairing account scope", () => {
   it("skips the shared-session notice when a Matrix DM is explicitly bound", async () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "matrix-dm-bound-notice-"));
     const storePath = path.join(tempDir, "sessions.json");
-    fs.writeFileSync(
+    await saveSessionStore(
       storePath,
-      JSON.stringify({
+      {
         "agent:bound:session-1": {
           sessionId: "sess-bound",
           updatedAt: Date.now(),
@@ -1511,8 +1511,8 @@ describe("matrix monitor handler pairing account scope", () => {
             accountId: "ops",
           },
         },
-      }),
-      "utf8",
+      },
+      { skipMaintenance: true },
     );
     const sendNotice = vi.fn(async () => "$notice");
     const touch = vi.fn();
