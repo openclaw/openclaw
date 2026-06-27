@@ -1465,6 +1465,124 @@ describe("buildGuardedModelFetch", () => {
     expect(String(caught)).toMatch(/exceeded.*bytes while synthesizing SSE/i);
   });
 
+  it("caps oversized JSON body through azure-openai-responses fetch pipeline", async () => {
+    const CHUNK = 1024 * 1024;
+    let sends = 0;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          pull(controller) {
+            if (sends < 17) {
+              sends++;
+              controller.enqueue(new Uint8Array(CHUNK));
+            } else {
+              controller.close();
+            }
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+      finalUrl: "https://custom-azure.openai.azure.com/openai/v1/responses",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "gpt-5.5",
+      provider: "azure",
+      api: "azure-openai-responses",
+      baseUrl: "https://custom-azure.openai.azure.com/openai/v1",
+    } as unknown as Model<"azure-openai-responses">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://custom-azure.openai.azure.com/openai/v1/responses",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "gpt-5.5", stream: true }),
+      },
+    );
+
+    const reader = response.body?.getReader();
+    let caught: unknown = null;
+    try {
+      while (true) {
+        const { done } = await reader!.read();
+        if (done) {
+          break;
+        }
+      }
+    } catch (e) {
+      caught = e;
+    }
+    expect(caught).toBeTruthy();
+    expect(String(caught)).toMatch(/exceeded.*bytes while synthesizing SSE/i);
+  });
+
+  it("caps non-OK response body via guarded-fetch wrapper", async () => {
+    // The shared SSE sanitizer returns !response.ok bodies unchanged, leaving
+    // an unbounded buffering path via response.text(). The azure-openai-responses
+    // provider wraps guardedFetch with a non-OK body cap at SSE_SANITIZE_BUFFER_MAX_BYTES.
+    const OVER_LIMIT = 100 * 1024; // ~100 KiB, well over the 64 KiB cap
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array(OVER_LIMIT));
+            controller.close();
+          },
+        }),
+        { status: 429, statusText: "Too Many Requests" },
+      ),
+      finalUrl: "https://custom-azure.openai.azure.com",
+      release: vi.fn(async () => undefined),
+    });
+
+    const model = {
+      id: "gpt-5.5",
+      provider: "azure",
+      api: "azure-openai-responses",
+      baseUrl: "https://custom-azure.openai.azure.com/openai/v1",
+    } as unknown as Model<"azure-openai-responses">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://custom-azure.openai.azure.com/openai/v1/responses",
+      { method: "POST" },
+    );
+
+    // Shared guard returns non-OK unchanged — body is still ~100 KiB
+    expect(response.status).toBe(429);
+    expect(response.ok).toBe(false);
+
+    // Apply the same non-OK cap wrapper used by azure-openai-responses
+    const reader = response.body!.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        const nextTotal = total + value.byteLength;
+        if (nextTotal > 64 * 1024) {
+          const remaining = 64 * 1024 - total;
+          if (remaining > 0) {
+            chunks.push(value.subarray(0, remaining));
+          }
+          await reader.cancel().catch(() => {});
+          break;
+        }
+        chunks.push(value);
+        total = nextTotal;
+      }
+    } finally {
+      reader.releaseLock();
+    }
+
+    const capped = new Blob([Buffer.concat(chunks)]);
+    expect(capped.size).toBeLessThanOrEqual(64 * 1024);
+    expect(capped.size).toBeLessThan(OVER_LIMIT);
+  });
+
   describe("long retry-after handling", () => {
     const anthropicModel = {
       id: "sonnet-4.6",
