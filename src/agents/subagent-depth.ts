@@ -3,13 +3,12 @@
  *
  * Reads persisted session store state to recover spawn depth and parent lineage across restarts.
  */
-import fs from "node:fs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStorePath } from "../config/sessions/paths.js";
+import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 import { getSubagentDepth, parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { resolveDefaultAgentId } from "./agent-scope.js";
 
 type SessionDepthEntry = {
@@ -30,13 +29,14 @@ function normalizeSpawnDepth(value: unknown): number | undefined {
 
 function readSessionStore(storePath: string): Record<string, SessionDepthEntry> {
   try {
-    const raw = fs.readFileSync(storePath, "utf-8");
-    const parsed = parseJsonWithJson5Fallback(raw);
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-      return parsed as Record<string, SessionDepthEntry>;
-    }
+    return Object.fromEntries(
+      listSessionEntries({ storePath, clone: false }).map(({ sessionKey, entry }) => [
+        sessionKey,
+        entry,
+      ]),
+    );
   } catch {
-    // ignore missing/invalid stores
+    // ignore missing/unavailable stores
   }
   return {};
 }

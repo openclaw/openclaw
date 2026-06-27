@@ -12,7 +12,8 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_SUBAGENT_MAX_SPAWN_DEPTH } from "../config/agent-limits.js";
-import { loadSessionStore, resolveStorePath } from "../config/sessions.js";
+import { resolveStorePath } from "../config/sessions.js";
+import { listSessionEntries } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   isAcpSessionKey,
@@ -88,7 +89,12 @@ function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string
 
 function readSessionStore(storePath: string): Record<string, SessionCapabilityEntry> {
   try {
-    return loadSessionStore(storePath);
+    return Object.fromEntries(
+      listSessionEntries({ storePath, clone: false }).map(({ sessionKey, entry }) => [
+        sessionKey,
+        entry,
+      ]),
+    );
   } catch {
     return {};
   }
