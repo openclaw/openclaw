@@ -400,6 +400,37 @@ function compareNpmSemverForUpdate(left: string, right: string): number {
   return compareComparableSemver(parseComparableSemver(left), parseComparableSemver(right)) ?? 0;
 }
 
+async function resolveNewerExactPinnedNpmDefaultLine(params: {
+  currentVersion: string | undefined;
+  effectiveSpec: string | undefined;
+  probeNpmVersion: string | undefined;
+  timeoutMs?: number;
+}): Promise<{ packageName: string; version: string } | undefined> {
+  if (!params.currentVersion || !params.probeNpmVersion || !params.effectiveSpec) {
+    return undefined;
+  }
+  const packageName = resolveNpmSpecPackageName(params.effectiveSpec);
+  const exactVersion = resolveExactNpmSpecVersion(params.effectiveSpec);
+  if (!packageName || !exactVersion || params.probeNpmVersion !== exactVersion) {
+    return undefined;
+  }
+
+  const metadataResult = await resolveNpmSpecMetadata({
+    spec: packageName,
+    timeoutMs: params.timeoutMs,
+  }).catch(() => undefined);
+  if (
+    !metadataResult?.ok ||
+    metadataResult.metadata.name !== packageName ||
+    !metadataResult.metadata.version
+  ) {
+    return undefined;
+  }
+  return compareNpmSemverForUpdate(metadataResult.metadata.version, params.currentVersion) > 0
+    ? { packageName, version: metadataResult.metadata.version }
+    : undefined;
+}
+
 async function loadNpmPackageVersionsForUpdate(params: {
   packageName: string;
   timeoutMs?: number;
@@ -1950,13 +1981,32 @@ export async function updateNpmInstalledPlugins(params: {
           : Boolean(
               currentVersion && resolvedProbeVersion && currentVersion === resolvedProbeVersion,
             );
+      const newerExactPinnedDefaultLine =
+        unchanged &&
+        record.source === "npm" &&
+        !params.specOverrides?.[pluginId] &&
+        !officialNpmSpec
+          ? await resolveNewerExactPinnedNpmDefaultLine({
+              currentVersion,
+              effectiveSpec,
+              probeNpmVersion: npmProbeVersion,
+              timeoutMs: params.timeoutMs,
+            })
+          : undefined;
       if (unchanged) {
+        const message =
+          newerExactPinnedDefaultLine && effectiveSpec
+            ? `${pluginId} is pinned to ${effectiveSpec} (installed ${currentLabel}); ` +
+              `registry default resolves to ${newerExactPinnedDefaultLine.version}. ` +
+              `Pass \`openclaw plugins update ${newerExactPinnedDefaultLine.packageName}@latest\` to follow the registry default line.` +
+              channelFallbackSuffix
+            : `${pluginId} is up to date (${currentLabel}).${channelFallbackSuffix}`;
         outcomes.push({
           pluginId,
           status: "unchanged",
           currentVersion: currentVersion ?? undefined,
           nextVersion: resolvedProbeVersion,
-          message: `${pluginId} is up to date (${currentLabel}).${channelFallbackSuffix}`,
+          message,
           ...(npmChannelFallback ? { channelFallback: npmChannelFallback } : {}),
         });
       } else {
