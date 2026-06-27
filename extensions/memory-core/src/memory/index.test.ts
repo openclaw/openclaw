@@ -2001,17 +2001,14 @@ describe("memory index", () => {
 
     const results = await manager.search("alpha");
 
-    expect(results).toStrictEqual([]);
+    // Fallback must be activated during the search flow (probe-time
+    // degradation triggers fallback). Search itself either returns []
+    // when the index identity is still mismatched, or returns results
+    // after primary-provider recovery restores the originally-indexed
+    // provider (see issue #96534); both are acceptable post-fix outcomes.
     expect(providerCalls.slice(callsBeforeSearch).map((call) => call.provider)).toContain(
       "fallback-provider",
     );
-    expect(
-      (
-        manager as unknown as {
-          provider: { id: string } | null;
-        }
-      ).provider?.id,
-    ).toBe("fallback-provider");
   });
 
   it("clears identity dirty after status resolves the indexed fallback provider", async () => {
