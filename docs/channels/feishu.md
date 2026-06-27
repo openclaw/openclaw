@@ -431,8 +431,8 @@ If a named account created an unscoped dynamic agent on an older release, that l
       allowFrom: ["*"],
       dynamicAgentCreation: {
         enabled: true,
-        workspaceTemplate: "~/.openclaw/workspace-{agentId}",
-        agentDirTemplate: "~/.openclaw/agents/{agentId}/agent",
+        workspaceTemplate: "~/.openclaw/workspaces/{agentId}",
+        agentDirTemplate: "{agentId}",
       },
     },
   },
@@ -460,8 +460,8 @@ When a new user sends their first DM:
 | Setting                                                  | Description                                | Default                              |
 | -------------------------------------------------------- | ------------------------------------------ | ------------------------------------ |
 | `channels.feishu.dynamicAgentCreation.enabled`           | Enable automatic per-user agent creation   | `false`                              |
-| `channels.feishu.dynamicAgentCreation.workspaceTemplate` | Path template for dynamic agent workspaces | `~/.openclaw/workspace-{agentId}`    |
-| `channels.feishu.dynamicAgentCreation.agentDirTemplate`  | Agent directory name template              | `~/.openclaw/agents/{agentId}/agent` |
+| `channels.feishu.dynamicAgentCreation.workspaceTemplate` | Path template for dynamic agent workspaces | `~/.openclaw/workspaces/{agentId}`  |
+| `channels.feishu.dynamicAgentCreation.agentDirTemplate`  | Agent directory name template              | `{agentId}`                          |
 | `channels.feishu.dynamicAgentCreation.maxAgents`         | Maximum number of dynamic agents to create | unlimited                            |
 
 Template variables:
@@ -511,8 +511,8 @@ Use `"per-account-channel-peer"` when named Feishu accounts should keep separate
       requireMention: true,
       dynamicAgentCreation: {
         enabled: true,
-        workspaceTemplate: "~/.openclaw/workspace-{agentId}",
-        agentDirTemplate: "~/.openclaw/agents/{agentId}/agent",
+        workspaceTemplate: "~/.openclaw/workspaces/{agentId}",
+        agentDirTemplate: "{agentId}",
       },
     },
   },
@@ -578,8 +578,8 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.groups.<chat_id>.requireMention`        | Per-group @mention override; explicit IDs also admit the group in allowlist mode | inherited                            |
 | `channels.feishu.groups.<chat_id>.enabled`               | Enable/disable a specific group                                                  | `true`                               |
 | `channels.feishu.dynamicAgentCreation.enabled`           | Enable automatic per-user agent creation                                         | `false`                              |
-| `channels.feishu.dynamicAgentCreation.workspaceTemplate` | Path template for dynamic agent workspaces                                       | `~/.openclaw/workspace-{agentId}`    |
-| `channels.feishu.dynamicAgentCreation.agentDirTemplate`  | Agent directory name template                                                    | `~/.openclaw/agents/{agentId}/agent` |
+| `channels.feishu.dynamicAgentCreation.workspaceTemplate` | Path template for dynamic agent workspaces                                       | `~/.openclaw/workspaces/{agentId}`   |
+| `channels.feishu.dynamicAgentCreation.agentDirTemplate`  | Agent directory name template                                                    | `{agentId}`                          |
 | `channels.feishu.dynamicAgentCreation.maxAgents`         | Maximum number of dynamic agents to create                                       | unlimited                            |
 | `channels.feishu.textChunkLimit`                         | Message chunk size                                                               | `2000`                               |
 | `channels.feishu.mediaMaxMb`                             | Media size limit                                                                 | `30`                                 |
