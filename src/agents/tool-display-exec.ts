@@ -272,7 +272,9 @@ function summarizeKnownExec(words: string[]): string {
       return `${mode} ${script}`;
     }
 
-    return `run ${bin} ${script}`;
+    // Avoid "run python3 /path/to/script.py" — the "run" prefix
+    // makes the framework label look like an agent-typed command (#97319).
+    return `${bin} ${script}`;
   }
 
   if (bin === "openclaw") {

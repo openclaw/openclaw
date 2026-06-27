@@ -479,6 +479,20 @@ describe("tool display details", () => {
     expect(detail).toContain("node: raspberrypi");
   });
 
+  it("omits misleading run prefix for interpreter commands (#97319)", () => {
+    const detail = formatToolDetail(
+      resolveToolDisplay({
+        name: "exec",
+        args: {
+          command: "python3 /path/to/daily-cost-audit.py",
+        },
+      }),
+    );
+    // Should show "python3 /path/to/daily-cost-audit.py" not "run python3 /path/to/..."
+    expect(detail).toContain("python3 /path/to/daily-cost-audit.py");
+    expect(detail).not.toContain("run python3");
+  });
+
   it("includes both cwd and node name in exec detail for known commands", () => {
     const detail = formatToolDetail(
       resolveToolDisplay({
