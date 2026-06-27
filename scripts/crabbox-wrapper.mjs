@@ -3312,6 +3312,9 @@ if (canonicalProvider === "blacksmith-testbox") {
   console.error(
     `[crabbox] provider=blacksmith-testbox ${source}; if Testbox is queued or down, ${fallback}`,
   );
+  console.error(
+    "[crabbox] delegated Testbox proof uses the wrapper exitCode and timing JSON; the linked Actions run can show cancelled during external lease cleanup",
+  );
   enforceCrabboxOwnedBlacksmithLease(normalizedArgs);
 }
 
