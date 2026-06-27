@@ -570,6 +570,16 @@ function throwWorkerFailureWithOutput(params: {
   throw params.error;
 }
 
+function disposeVmAfterRun(vm: QuickJS): void {
+  try {
+    vm.dispose();
+  } catch (error) {
+    if (!isQuickJsInterruptedError(error)) {
+      throw error;
+    }
+  }
+}
+
 function drainPendingJobs(vm: QuickJS): void {
   for (let index = 0; index < 1000; index += 1) {
     if (vm.executePendingJobs() === 0) {
@@ -671,7 +681,7 @@ async function runVmExecution(params: {
       vm: params.vm,
     });
   } finally {
-    params.vm.dispose();
+    disposeVmAfterRun(params.vm);
   }
 }
 
