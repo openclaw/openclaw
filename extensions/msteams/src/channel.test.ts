@@ -284,6 +284,30 @@ describe("msteams account config", () => {
     expect(legal.allowFrom).toEqual(["*"]);
   });
 
+  it("keeps identity when resolving an already account-scoped named account config", () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          enabled: true,
+          appId: "legal-app-id",
+          appPassword: "legal-secret",
+          tenantId: "tenant-id",
+          webhook: { port: 3979, path: "/api/messages" },
+          dmPolicy: "open",
+          allowFrom: ["*"],
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    const legal = resolveMSTeamsAccountConfig(cfg, "legal");
+
+    expect(legal.appId).toBe("legal-app-id");
+    expect(legal.appPassword).toBe("legal-secret");
+    expect(legal.tenantId).toBe("tenant-id");
+    expect(legal.webhook).toEqual({ port: 3979, path: "/api/messages" });
+    expect(resolveMSTeamsAccount({ cfg, accountId: "legal" }).configured).toBe(true);
+  });
+
   it("marks named accounts without explicit identity as unconfigured", () => {
     const cfg = {
       channels: {

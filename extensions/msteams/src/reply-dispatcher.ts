@@ -276,9 +276,14 @@ export function createMSTeamsReplyDispatcher(params: {
         }
       }
       if (failed > 0) {
+        const classification = classifyMSTeamsSendError(lastFailedError);
+        const hint = formatMSTeamsSendErrorHint(classification);
         params.log.warn?.(`failed to deliver ${failed} of ${total} message blocks`, {
           failed,
           total,
+          error: formatUnknownError(lastFailedError),
+          classification,
+          ...(hint ? { hint } : {}),
         });
         queueDeliveryFailureSystemEvent({
           failed,

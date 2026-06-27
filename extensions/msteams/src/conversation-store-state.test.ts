@@ -8,7 +8,10 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it } from "vitest";
-import { createMSTeamsConversationStoreState } from "./conversation-store-state.js";
+import {
+  createAccountScopedMSTeamsConversationStore,
+  createMSTeamsConversationStoreState,
+} from "./conversation-store-state.js";
 import type { StoredConversationReference } from "./conversation-store.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
@@ -172,6 +175,41 @@ describe("msteams conversation store (plugin state)", () => {
       graphChatId: "19:resolved@unq.gbl.spaces",
       timezone: "Europe/London",
       tenantId: "tenant-1",
+    });
+  });
+
+  it("finds account-scoped personal DMs by AAD object id", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
+    const store = createMSTeamsConversationStoreState({ stateDir });
+    const defaultStore = createAccountScopedMSTeamsConversationStore(store, "default");
+    const legalStore = createAccountScopedMSTeamsConversationStore(store, "legal");
+
+    await defaultStore.upsert("default-dm", {
+      conversation: { id: "default-dm", conversationType: "personal" },
+      channelId: "msteams",
+      serviceUrl: "https://default.example.com",
+      user: { id: "default-user", aadObjectId: "aad-shared" },
+    });
+    await legalStore.upsert("legal-channel", {
+      conversation: { id: "legal-channel", conversationType: "channel" },
+      channelId: "msteams",
+      serviceUrl: "https://legal-channel.example.com",
+      user: { id: "legal-channel-user", aadObjectId: "aad-shared" },
+    });
+    await legalStore.upsert("legal-dm", {
+      conversation: { id: "legal-dm", conversationType: "personal" },
+      channelId: "msteams",
+      serviceUrl: "https://legal.example.com",
+      user: { id: "legal-user", aadObjectId: "aad-shared" },
+    });
+
+    await expect(legalStore.findPreferredDmByUserId("aad-shared")).resolves.toMatchObject({
+      conversationId: "legal-dm",
+      reference: {
+        conversation: { id: "legal-dm", conversationType: "personal" },
+        serviceUrl: "https://legal.example.com",
+        user: { id: "legal-user", aadObjectId: "aad-shared" },
+      },
     });
   });
 

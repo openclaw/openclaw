@@ -17,8 +17,10 @@ import {
   normalizeStringEntries,
   type ChannelOutboundAdapter,
 } from "../runtime-api.js";
+import { formatUnknownError } from "./errors.js";
 import { createAccountScopedMSTeamsPollStore, createMSTeamsPollStoreState } from "./polls.js";
 import { buildMSTeamsPresentationCard, MSTEAMS_PRESENTATION_CAPABILITIES } from "./presentation.js";
+import { getMSTeamsRuntime } from "./runtime.js";
 import { sendAdaptiveCardMSTeams, sendMessageMSTeams, sendPollMSTeams } from "./send.js";
 
 function asObjectRecord(value: unknown): Record<string, unknown> | undefined {
@@ -32,32 +34,62 @@ const MSTEAMS_TEXT_CHUNK_LIMIT = 4000;
 type MSTeamsSendConfig = Parameters<typeof sendMessageMSTeams>[0]["cfg"];
 type MSTeamsSendResult = { messageId: string; conversationId: string };
 type MSTeamsMediaSendOptions = {
+  cfg?: MSTeamsSendConfig;
+  accountId?: string | null;
   mediaUrl?: string;
   mediaLocalRoots?: readonly string[];
   mediaReadFile?: (filePath: string) => Promise<Buffer>;
 };
-type MSTeamsTextSendFn = (to: string, text: string) => Promise<MSTeamsSendResult>;
+type MSTeamsTextSendOptions = {
+  cfg: MSTeamsSendConfig;
+  accountId?: string | null;
+};
+type MSTeamsTextSendFn = (
+  to: string,
+  text: string,
+  opts?: MSTeamsTextSendOptions,
+) => Promise<MSTeamsSendResult>;
 type MSTeamsMediaSendFn = (
   to: string,
   text: string,
   opts?: MSTeamsMediaSendOptions,
 ) => Promise<MSTeamsSendResult>;
 
+function logMSTeamsOutboundFailure(params: {
+  kind: string;
+  to: string;
+  accountId?: string | null;
+  error: unknown;
+}): void {
+  getMSTeamsRuntime()
+    .logging.getChildLogger({ name: "msteams:outbound" })
+    .warn?.(`${params.kind} failed`, {
+      to: params.to,
+      ...(params.accountId ? { accountId: params.accountId } : {}),
+      error: formatUnknownError(params.error),
+    });
+}
+
 function resolveMSTeamsTextSend(params: {
   cfg: MSTeamsSendConfig;
   accountId?: string | null;
   deps?: OutboundSendDeps;
 }): MSTeamsTextSendFn {
-  return (
-    resolveOutboundSendDep<MSTeamsTextSendFn>(params.deps, "msteams") ??
-    ((to, text) =>
-      sendMessageMSTeams({
+  const injected = resolveOutboundSendDep<MSTeamsTextSendFn>(params.deps, "msteams");
+  if (injected) {
+    return async (to, text) =>
+      await injected(to, text, {
         cfg: params.cfg,
         ...(params.accountId ? { accountId: params.accountId } : {}),
-        to,
-        text,
-      }))
-  );
+      });
+  }
+  return (to, text) =>
+    sendMessageMSTeams({
+      cfg: params.cfg,
+      ...(params.accountId ? { accountId: params.accountId } : {}),
+      to,
+      text,
+    });
 }
 
 function resolveMSTeamsMediaSend(params: {
@@ -65,19 +97,25 @@ function resolveMSTeamsMediaSend(params: {
   accountId?: string | null;
   deps?: OutboundSendDeps;
 }): MSTeamsMediaSendFn {
-  return (
-    resolveOutboundSendDep<MSTeamsMediaSendFn>(params.deps, "msteams") ??
-    ((to, text, opts) =>
-      sendMessageMSTeams({
+  const injected = resolveOutboundSendDep<MSTeamsMediaSendFn>(params.deps, "msteams");
+  if (injected) {
+    return async (to, text, opts) =>
+      await injected(to, text, {
+        ...opts,
         cfg: params.cfg,
         ...(params.accountId ? { accountId: params.accountId } : {}),
-        to,
-        text,
-        mediaUrl: opts?.mediaUrl,
-        mediaLocalRoots: opts?.mediaLocalRoots,
-        mediaReadFile: opts?.mediaReadFile,
-      }))
-  );
+      });
+  }
+  return (to, text, opts) =>
+    sendMessageMSTeams({
+      cfg: params.cfg,
+      ...(params.accountId ? { accountId: params.accountId } : {}),
+      to,
+      text,
+      mediaUrl: opts?.mediaUrl,
+      mediaLocalRoots: opts?.mediaLocalRoots,
+      mediaReadFile: opts?.mediaReadFile,
+    });
 }
 
 export const msteamsOutbound: ChannelOutboundAdapter = {
@@ -126,58 +164,78 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
     accountId,
     deps,
   }) => {
-    const msteamsData = asObjectRecord(payload.channelData?.msteams);
-    const presentationCard = msteamsData?.presentationCard;
-    if (
-      presentationCard &&
-      typeof presentationCard === "object" &&
-      !Array.isArray(presentationCard)
-    ) {
-      const result = await sendAdaptiveCardMSTeams({
-        cfg,
-        ...(accountId ? { accountId } : {}),
-        to,
-        card: presentationCard as Record<string, unknown>,
-      });
-      return attachChannelToResult("msteams", result);
-    }
-    const mediaUrls = normalizeStringEntries(
-      resolvePayloadMediaUrls({
-        ...payload,
-        mediaUrl: payload.mediaUrl ?? mediaUrl,
-      }),
-    );
-    if (mediaUrls.length > 0) {
-      const send = resolveMSTeamsMediaSend({ cfg, accountId, deps });
-      const result = await sendPayloadMediaSequence({
-        text,
-        mediaUrls,
-        send: async ({ text: textLocal, mediaUrl: mediaUrlLocal }) =>
-          await send(to, textLocal, { mediaUrl: mediaUrlLocal, mediaLocalRoots, mediaReadFile }),
-      });
-      if (result) {
+    try {
+      const msteamsData = asObjectRecord(payload.channelData?.msteams);
+      const presentationCard = msteamsData?.presentationCard;
+      if (
+        presentationCard &&
+        typeof presentationCard === "object" &&
+        !Array.isArray(presentationCard)
+      ) {
+        const result = await sendAdaptiveCardMSTeams({
+          cfg,
+          ...(accountId ? { accountId } : {}),
+          to,
+          card: presentationCard as Record<string, unknown>,
+        });
         return attachChannelToResult("msteams", result);
       }
-    }
-    if (text.trim()) {
-      const send = resolveMSTeamsTextSend({ cfg, accountId, deps });
-      const chunks = resolveTextChunksWithFallback(
-        text,
-        chunkTextForOutbound(text, MSTEAMS_TEXT_CHUNK_LIMIT),
+      const mediaUrls = normalizeStringEntries(
+        resolvePayloadMediaUrls({
+          ...payload,
+          mediaUrl: payload.mediaUrl ?? mediaUrl,
+        }),
       );
-      let result: Awaited<ReturnType<MSTeamsTextSendFn>>;
-      for (const chunk of chunks) {
-        result = await send(to, chunk);
+      if (mediaUrls.length > 0) {
+        const send = resolveMSTeamsMediaSend({ cfg, accountId, deps });
+        const result = await sendPayloadMediaSequence({
+          text,
+          mediaUrls,
+          send: async ({ text: textLocal, mediaUrl: mediaUrlLocal }) =>
+            await send(to, textLocal, { mediaUrl: mediaUrlLocal, mediaLocalRoots, mediaReadFile }),
+        });
+        if (result) {
+          return attachChannelToResult("msteams", result);
+        }
       }
-      return attachChannelToResult("msteams", result!);
+      if (text.trim()) {
+        const send = resolveMSTeamsTextSend({ cfg, accountId, deps });
+        const chunks = resolveTextChunksWithFallback(
+          text,
+          chunkTextForOutbound(text, MSTEAMS_TEXT_CHUNK_LIMIT),
+        );
+        let result: Awaited<ReturnType<MSTeamsTextSendFn>>;
+        for (const chunk of chunks) {
+          result = await send(to, chunk);
+        }
+        return attachChannelToResult("msteams", result!);
+      }
+      throw new Error("MS Teams payload send requires text, media, or a presentation card.");
+    } catch (error) {
+      logMSTeamsOutboundFailure({
+        kind: "payload send",
+        to,
+        accountId,
+        error,
+      });
+      throw error;
     }
-    throw new Error("MS Teams payload send requires text, media, or a presentation card.");
   },
   ...createAttachedChannelResultAdapter({
     channel: "msteams",
     sendText: async ({ cfg, to, text, accountId, deps }) => {
-      const send = resolveMSTeamsTextSend({ cfg, accountId, deps });
-      return await send(to, text);
+      try {
+        const send = resolveMSTeamsTextSend({ cfg, accountId, deps });
+        return await send(to, text);
+      } catch (error) {
+        logMSTeamsOutboundFailure({
+          kind: "text send",
+          to,
+          accountId,
+          error,
+        });
+        throw error;
+      }
     },
     sendMedia: async ({
       cfg,
@@ -189,8 +247,18 @@ export const msteamsOutbound: ChannelOutboundAdapter = {
       accountId,
       deps,
     }) => {
-      const send = resolveMSTeamsMediaSend({ cfg, accountId, deps });
-      return await send(to, text, { mediaUrl, mediaLocalRoots, mediaReadFile });
+      try {
+        const send = resolveMSTeamsMediaSend({ cfg, accountId, deps });
+        return await send(to, text, { mediaUrl, mediaLocalRoots, mediaReadFile });
+      } catch (error) {
+        logMSTeamsOutboundFailure({
+          kind: "media send",
+          to,
+          accountId,
+          error,
+        });
+        throw error;
+      }
     },
     sendPoll: async ({ cfg, to, poll, accountId }) => {
       const maxSelections = poll.maxSelections ?? 1;

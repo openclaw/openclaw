@@ -165,6 +165,32 @@ describe("msteamsOutbound cfg threading", () => {
     });
   });
 
+  it("passes accountId through injected text send dependencies", async () => {
+    const injected = vi.fn().mockResolvedValue({
+      messageId: "dep-msg-1",
+      conversationId: "dep-conv-1",
+    });
+
+    const result = await requireSendText()({
+      cfg,
+      accountId: "legal",
+      deps: { msteams: injected },
+      to: "user:legal-user",
+      text: "hello legal",
+    });
+
+    expect(injected).toHaveBeenCalledWith("user:legal-user", "hello legal", {
+      cfg,
+      accountId: "legal",
+    });
+    expect(mocks.sendMessageMSTeams).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      channel: "msteams",
+      messageId: "dep-msg-1",
+      conversationId: "dep-conv-1",
+    });
+  });
+
   it("passes resolved cfg and media roots for media sends", async () => {
     const cfgValue = {
       channels: {
@@ -190,6 +216,37 @@ describe("msteamsOutbound cfg threading", () => {
       text: "photo",
       mediaUrl: "file:///tmp/photo.png",
       mediaLocalRoots: ["/tmp"],
+    });
+  });
+
+  it("passes accountId through injected media send dependencies", async () => {
+    const injected = vi.fn().mockResolvedValue({
+      messageId: "dep-media-1",
+      conversationId: "dep-conv-1",
+    });
+
+    const result = await requireSendMedia()({
+      cfg,
+      accountId: "legal",
+      deps: { msteams: injected },
+      to: "user:legal-user",
+      text: "photo",
+      mediaUrl: "file:///tmp/photo.png",
+      mediaLocalRoots: ["/tmp"],
+    });
+
+    expect(injected).toHaveBeenCalledWith("user:legal-user", "photo", {
+      mediaUrl: "file:///tmp/photo.png",
+      mediaLocalRoots: ["/tmp"],
+      mediaReadFile: undefined,
+      cfg,
+      accountId: "legal",
+    });
+    expect(mocks.sendMessageMSTeams).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      channel: "msteams",
+      messageId: "dep-media-1",
+      conversationId: "dep-conv-1",
     });
   });
 

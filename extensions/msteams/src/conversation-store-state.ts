@@ -267,12 +267,7 @@ export function createAccountScopedMSTeamsConversationStore(
     remove: async (conversationId) => await store.remove(scopedId(conversationId)),
     list: listScoped,
     findPreferredDmByUserId: async (id) =>
-      (await listScoped()).find(
-        (entry) => entry.reference.user?.id === id || entry.reference.aadObjectId === id,
-      ) ?? null,
-    findByUserId: async (id) =>
-      (await listScoped()).find(
-        (entry) => entry.reference.user?.id === id || entry.reference.aadObjectId === id,
-      ) ?? null,
+      findPreferredDmConversationByUserId(await listScoped(), id),
+    findByUserId: async (id) => findPreferredDmConversationByUserId(await listScoped(), id),
   };
 }

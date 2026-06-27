@@ -2816,7 +2816,7 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
     expect(queueMocks.failDelivery).toHaveBeenCalledWith(
       "mock-queue-id",
-      "partial delivery failure (bestEffort)",
+      "partial delivery failure (bestEffort): fail",
     );
   });
 
@@ -2826,7 +2826,7 @@ describe("deliverOutboundPayloads", () => {
     expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
     expect(queueMocks.failDelivery).toHaveBeenCalledWith(
       "mock-queue-id",
-      "partial delivery failure (bestEffort)",
+      "partial delivery failure (bestEffort): fail",
     );
   });
 
@@ -2837,7 +2837,7 @@ describe("deliverOutboundPayloads", () => {
 
     expect(queueMocks.failDelivery).toHaveBeenCalledWith(
       "mock-queue-id",
-      "partial delivery failure (bestEffort)",
+      "partial delivery failure (bestEffort): fail",
     );
     const warnCall = requireMockCall(logMocks.warn, "warn");
     const warnMessage = String(warnCall[0]);

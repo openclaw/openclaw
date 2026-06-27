@@ -172,6 +172,34 @@ export async function resolveMSTeamsSendContext(params: {
         : `channels.msteams.accounts.${accountId}`,
   });
   if (!creds) {
+    const rawMsteamsCfg = (params.cfg as { channels?: { msteams?: MSTeamsConfig } }).channels
+      ?.msteams;
+    const rawAccountCfg = (rawMsteamsCfg as { accounts?: Record<string, Partial<MSTeamsConfig>> })
+      ?.accounts?.[accountId];
+    getMSTeamsRuntime()
+      .logging.getChildLogger({ name: "msteams:send" })
+      .warn?.("msteams credentials not configured", {
+        accountId,
+        rawRoot: {
+          hasMsteamsConfig: Boolean(rawMsteamsCfg),
+          hasTenantId: Boolean(rawMsteamsCfg?.tenantId),
+          hasAppId: Boolean(rawMsteamsCfg?.appId),
+          hasAppPassword: Boolean(rawMsteamsCfg?.appPassword),
+        },
+        rawAccount: {
+          hasAccountConfig: Boolean(rawAccountCfg),
+          hasTenantId: Boolean(rawAccountCfg?.tenantId),
+          hasAppId: Boolean(rawAccountCfg?.appId),
+          hasAppPassword: Boolean(rawAccountCfg?.appPassword),
+          hasWebhookPort: Boolean(rawAccountCfg?.webhook?.port),
+        },
+        resolved: {
+          hasTenantId: Boolean(msteamsCfg?.tenantId),
+          hasAppId: Boolean(msteamsCfg?.appId),
+          hasAppPassword: Boolean(msteamsCfg?.appPassword),
+          hasWebhookPort: Boolean(msteamsCfg?.webhook?.port),
+        },
+      });
     throw new Error("msteams credentials not configured");
   }
 

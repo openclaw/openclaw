@@ -36,6 +36,16 @@ function accountDefinesIdentity(account: Partial<MSTeamsConfig> | undefined): bo
   return Boolean(account?.appId || account?.appPassword || account?.webhook?.port);
 }
 
+function isAccountScopedChannelConfig(
+  channelConfig: MSTeamsMultiAccountConfig | undefined,
+): boolean {
+  if (!channelConfig) {
+    return false;
+  }
+  const accounts = channelConfig.accounts;
+  return (!accounts || Object.keys(accounts).length === 0) && accountDefinesIdentity(channelConfig);
+}
+
 function clearNamedAccountInheritedIdentity(
   merged: MSTeamsConfig,
   account: Partial<MSTeamsConfig> | undefined,
@@ -92,6 +102,9 @@ export function resolveMSTeamsAccountConfig(
   });
 
   if (resolvedAccountId === DEFAULT_ACCOUNT_ID) {
+    return merged;
+  }
+  if (!account && isAccountScopedChannelConfig(channelConfig)) {
     return merged;
   }
   return clearNamedAccountInheritedIdentity(merged, account);
