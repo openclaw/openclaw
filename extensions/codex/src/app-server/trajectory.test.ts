@@ -313,4 +313,178 @@ describe("Codex trajectory recorder", () => {
     expect(parsed.data.droppedFields).toContain("messagesSnapshot");
     expect(Buffer.byteLength(JSON.stringify(parsed), "utf8")).toBeLessThanOrEqual(256 * 1024);
   });
+
+  it("drops oversized preserved fields when needed to keep completion events bounded", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const attempt = {
+      sessionFile,
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      provider: "codex",
+      modelId: "gpt-5.4",
+      model: { api: "responses" },
+    } as never;
+    const oversizedUsage = Object.fromEntries(
+      Array.from({ length: 100 }, (_value, index) => [`field-${index}`, "x".repeat(5_000)]),
+    );
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt,
+      env: {},
+    });
+
+    const trajectoryRecorder = expectTrajectoryRecorder(recorder);
+    recordCodexTrajectoryCompletion(trajectoryRecorder, {
+      attempt,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      timedOut: false,
+      result: {
+        aborted: false,
+        attemptUsage: oversizedUsage,
+        assistantTexts: ["x".repeat(32_000)],
+        messagesSnapshot: [{ role: "assistant", content: "x".repeat(32_000) }],
+      } as never,
+    });
+    await trajectoryRecorder.flush();
+
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
+    );
+    expect(parsed.data).toMatchObject({
+      truncated: true,
+      reason: "trajectory-event-size-limit",
+    });
+    expect(parsed.data.usage).toBeUndefined();
+    expect(parsed.data.droppedFields).toEqual(
+      expect.arrayContaining(["usage", "assistantTexts", "messagesSnapshot"]),
+    );
+    expect(Buffer.byteLength(JSON.stringify(parsed), "utf8")).toBeLessThanOrEqual(256 * 1024);
+  });
+
+  it("preserves usage on non-final oversized model completion events", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const attempt = {
+      sessionFile,
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      provider: "codex",
+      modelId: "gpt-5.4",
+      model: { api: "responses" },
+    } as never;
+    const firstUsage = {
+      input: 384_954,
+      output: 5_624,
+      cacheRead: 333_824,
+      reasoningTokens: 2_038,
+      total: 724_402,
+    };
+    const secondUsage = { input: 12, output: 3, total: 15 };
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt,
+      env: {},
+    });
+
+    const trajectoryRecorder = expectTrajectoryRecorder(recorder);
+    recordCodexTrajectoryCompletion(trajectoryRecorder, {
+      attempt,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      timedOut: false,
+      result: {
+        aborted: false,
+        attemptUsage: firstUsage,
+        assistantTexts: ["first"],
+        messagesSnapshot: Array.from({ length: 20 }, (_value, index) => ({
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `message-${index} ${"x".repeat(32_000)}`,
+        })),
+      } as never,
+    });
+    recordCodexTrajectoryCompletion(trajectoryRecorder, {
+      attempt,
+      threadId: "thread-1",
+      turnId: "turn-2",
+      timedOut: false,
+      result: {
+        aborted: false,
+        attemptUsage: secondUsage,
+        assistantTexts: ["final answer"],
+        messagesSnapshot: [{ role: "assistant", content: "final answer" }],
+      } as never,
+    });
+    await trajectoryRecorder.flush();
+
+    const events = fs
+      .readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8")
+      .trim()
+      .split(/\r?\n/u)
+      .map((line) => JSON.parse(line));
+    expect(events).toHaveLength(2);
+    expect(events[0].data).toMatchObject({
+      truncated: true,
+      usage: firstUsage,
+    });
+    expect(events[1].data).toMatchObject({
+      turnId: "turn-2",
+      usage: secondUsage,
+      assistantTexts: ["final answer"],
+    });
+    expect(events[1].data.truncated).toBeUndefined();
+  });
+
+  it("redacts secrets before preserving usage in truncated completion events", async () => {
+    const tmpDir = makeTempDir();
+    const sessionFile = path.join(tmpDir, "session.jsonl");
+    const attempt = {
+      sessionFile,
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      runId: "run-1",
+      provider: "codex",
+      modelId: "gpt-5.4",
+      model: { api: "responses" },
+    } as never;
+    const recorder = createCodexTrajectoryRecorder({
+      cwd: tmpDir,
+      attempt,
+      env: {},
+    });
+
+    const trajectoryRecorder = expectTrajectoryRecorder(recorder);
+    recordCodexTrajectoryCompletion(trajectoryRecorder, {
+      attempt,
+      threadId: "thread-1",
+      turnId: "turn-1",
+      timedOut: false,
+      result: {
+        aborted: false,
+        attemptUsage: {
+          total: 1,
+          apiKey: "sk-test-secret-token",
+          authorization: "Bearer sk-other-secret-token",
+        },
+        assistantTexts: ["done"],
+        messagesSnapshot: Array.from({ length: 20 }, (_value, index) => ({
+          role: index % 2 === 0 ? "user" : "assistant",
+          content: `message-${index} ${"x".repeat(32_000)}`,
+        })),
+      } as never,
+    });
+    await trajectoryRecorder.flush();
+
+    const parsed = JSON.parse(
+      fs.readFileSync(path.join(tmpDir, "session.trajectory.jsonl"), "utf8"),
+    );
+    const preservedUsage = JSON.stringify(parsed.data.usage);
+    expect(parsed.data.truncated).toBe(true);
+    expect(preservedUsage).toContain("redacted");
+    expect(preservedUsage).not.toContain("sk-test-secret-token");
+    expect(preservedUsage).not.toContain("sk-other-secret-token");
+  });
 });
