@@ -58,7 +58,8 @@ const ANDROID_CALLS =
 const ANDROID_PROPERTIES =
   /\b(?:contentDescription|label|placeholder|title|message|supportingText)\s*=\s*"((?:\\.|[^"\\])*)"/gu;
 const GENERATED_PATH_RE = /(?:\/build\/|\/\.gradle\/|\/\.build\/|\/DerivedData\/)/u;
-const EXCLUDED_PATH_RE = /(?:\/Tests?\/|\/UITests?\/|\/test\/|\/Preview(?:s)?\/)/u;
+const EXCLUDED_PATH_RE =
+  /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
 
 function lineNumber(source: string, offset: number): number {
   return source.slice(0, offset).split("\n").length;

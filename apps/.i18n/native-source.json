@@ -6130,46 +6130,6 @@
       "id": "native.apple.0c5336129f70faed"
     },
     {
-      "kind": "ui-call",
-      "line": 178,
-      "path": "apps/ios/Tests/RootTabsPresentationTests.swift",
-      "source": "quarantined",
-      "surface": "apple",
-      "id": "native.apple.a892da29071dc4c3"
-    },
-    {
-      "kind": "ui-call",
-      "line": 179,
-      "path": "apps/ios/Tests/RootTabsPresentationTests.swift",
-      "source": "pending",
-      "surface": "apple",
-      "id": "native.apple.fa338869ebe86039"
-    },
-    {
-      "kind": "ui-call",
-      "line": 180,
-      "path": "apps/ios/Tests/RootTabsPresentationTests.swift",
-      "source": "needs-review",
-      "surface": "apple",
-      "id": "native.apple.2a0e160bfe78e347"
-    },
-    {
-      "kind": "ui-call",
-      "line": 181,
-      "path": "apps/ios/Tests/RootTabsPresentationTests.swift",
-      "source": "manual_QA",
-      "surface": "apple",
-      "id": "native.apple.4bccd47831234643"
-    },
-    {
-      "kind": "ui-call",
-      "line": 243,
-      "path": "apps/ios/Tests/RootTabsPresentationTests.swift",
-      "source": "clickclack",
-      "surface": "apple",
-      "id": "native.apple.d33cfc7a9611b6f8"
-    },
-    {
       "kind": "ui-modifier",
       "line": 1050,
       "path": "apps/ios/WatchApp/Sources/WatchInboxView.swift",
