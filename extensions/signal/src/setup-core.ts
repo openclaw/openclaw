@@ -193,10 +193,6 @@ export function createSignalCliPathTextInput(
     resolvePath: ({ cfg, accountId, credentialValues }) =>
       resolveSignalCliPath({ cfg, accountId, credentialValues }),
     shouldPrompt,
-    helpTitle: "Signal",
-    helpLines: [
-      "signal-cli not found. Install it, then rerun this step or set channels.signal.cliPath.",
-    ],
   });
 }
 

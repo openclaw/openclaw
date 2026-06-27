@@ -18,7 +18,7 @@ import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-install-records.js";
-import { installPluginFromClawHub } from "../plugins/clawhub.js";
+import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../plugins/clawhub.js";
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../plugins/git-install.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
@@ -43,6 +43,7 @@ import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trac
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { formatCliCommand } from "./command-format.js";
 import { looksLikeLocalInstallSpec } from "./install-spec.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
@@ -79,6 +80,14 @@ type ConfigSnapshotForInstallExecution = ConfigSnapshotForInstallPersist & {
   hookMutation: ConfigMutationPreflight;
   pluginMutation: ConfigMutationPreflight;
 };
+
+function isClawHubBlockedCliFailure(result: { code?: string; warning?: string }): boolean {
+  return (
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_DOWNLOAD_BLOCKED &&
+    typeof result.warning === "string" &&
+    result.warning.trim().length > 0
+  );
+}
 
 function resolveInstallMode(force?: boolean): "install" | "update" {
   return force ? "update" : "install";
@@ -854,6 +863,7 @@ export async function loadConfigForInstall(
 export async function runPluginInstallCommand(params: {
   raw: string;
   opts: InstallSafetyOverrides & {
+    acknowledgeClawHubRisk?: boolean;
     force?: boolean;
     link?: boolean;
     pin?: boolean;
@@ -994,7 +1004,9 @@ export async function runPluginInstallCommand(params: {
       logger: createPluginInstallLogger(runtime),
     });
     if (!result.ok) {
-      runtime.error(result.error);
+      if (!isClawHubBlockedCliFailure(result)) {
+        runtime.error(result.error);
+      }
       return runtime.exit(1);
     }
 
@@ -1301,13 +1313,19 @@ export async function runPluginInstallCommand(params: {
   if (clawhubSpec) {
     const result = await installPluginFromClawHub({
       ...safetyOverrides,
+      ...resolveClawHubRiskAcknowledgementCliOptions({
+        acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
+        action: "installing",
+      }),
       mode: installMode,
       spec: raw,
       extensionsDir,
       logger: createPluginInstallLogger(runtime),
     });
     if (!result.ok) {
-      runtime.error(result.error);
+      if (!isClawHubBlockedCliFailure(result)) {
+        runtime.error(result.error);
+      }
       return runtime.exit(1);
     }
 
