@@ -182,7 +182,14 @@ function createNoProxyAwareEnvDispatcher(
         return value;
       }
       if (UNDICI_DISPATCHER_LIFECYCLE_METHODS.has(property)) {
-        return value.bind(target);
+        return (...args: unknown[]) => {
+          // Close/destroy both the proxy agent and the bypass agent.
+          Reflect.apply(value, target, args);
+          const bypassValue = Reflect.get(bypassAgent, property, bypassAgent);
+          if (typeof bypassValue === "function") {
+            Reflect.apply(bypassValue, bypassAgent, args);
+          }
+        };
       }
       if (UNDICI_DISPATCH_HELPER_METHODS.has(property)) {
         return (...args: unknown[]) => Reflect.apply(value, receiver, args);
