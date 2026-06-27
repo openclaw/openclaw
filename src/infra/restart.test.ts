@@ -36,7 +36,7 @@ vi.mock("../config/paths.js", () => ({
 
 const { testing, cleanStaleGatewayProcessesSync, findGatewayPidsOnPortSync } =
   await import("./restart-stale-pids.js");
-const { triggerOpenClawRestart } = await import("./restart.js");
+const { testing: restartTesting, triggerOpenClawRestart } = await import("./restart.js");
 
 let currentTimeMs = 0;
 const envSnapshot = captureFullEnv();
@@ -74,6 +74,19 @@ function requireFirstSpawnSyncCall(): [unknown, unknown, unknown] {
   }
   return call as [unknown, unknown, unknown];
 }
+
+describe("restart diagnostics", () => {
+  it("redacts session keys in restart warning fields", () => {
+    const redacted = restartTesting.formatRestartSessionKeyForLog(
+      "agent:main:discord:channel:1515157916540211291",
+    );
+
+    expect(redacted).toMatch(/^<redacted:[a-f0-9]{12}>$/);
+    expect(redacted).not.toContain("discord");
+    expect(redacted).not.toContain("1515157916540211291");
+    expect(restartTesting.formatRestartSessionKeyForLog(undefined)).toBe("unspecified");
+  });
+});
 
 describe.runIf(process.platform !== "win32")("findGatewayPidsOnPortSync", () => {
   it("parses lsof output and filters non-openclaw/current processes", () => {

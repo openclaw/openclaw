@@ -1,5 +1,6 @@
 // Coordinates gateway restart requests across supported supervisors.
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
 import { getRuntimeConfig } from "../config/config.js";
@@ -330,6 +331,15 @@ function normalizeRestartAuditString(value: string | undefined, max = 200): stri
   return normalized ? normalized.slice(0, max) : null;
 }
 
+function formatRestartSessionKeyForLog(value: string | undefined): string {
+  const normalized = normalizeRestartAuditString(value, 512);
+  if (!normalized) {
+    return "unspecified";
+  }
+  const fingerprint = createHash("sha256").update(normalized).digest("hex").slice(0, 12);
+  return `<redacted:${fingerprint}>`;
+}
+
 function serializeRestartAuditJson(value: unknown): string | null {
   if (value === undefined || value === null) {
     return null;
@@ -408,7 +418,7 @@ function formatRestartAudit(audit: RestartAuditInfo | undefined): string {
     typeof audit?.clientIp === "string" && audit.clientIp.trim() ? audit.clientIp.trim() : null;
   const changed = summarizeChangedPaths(audit?.changedPaths);
   const source = normalizeRestartAuditString(audit?.source);
-  const sessionKey = normalizeRestartAuditString(audit?.sessionKey, 512);
+  const sessionKey = formatRestartSessionKeyForLog(audit?.sessionKey);
   const fields = [];
   if (actor) {
     fields.push(`actor=${actor}`);
@@ -416,7 +426,7 @@ function formatRestartAudit(audit: RestartAuditInfo | undefined): string {
   if (source) {
     fields.push(`source=${source}`);
   }
-  if (sessionKey) {
+  if (sessionKey !== "unspecified") {
     fields.push(`sessionKey=${sessionKey}`);
   }
   if (deviceId) {
@@ -1118,7 +1128,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
       const emitHooksQueued = updatePendingRestartEmitHooks(opts?.emitHooks, opts?.sessionKey);
       if (opts?.emitHooks && !emitHooksQueued) {
         restartLog.warn(
-          `restart continuation dropped: another session owns the pending restart (callerSessionKey=${opts.sessionKey ?? "unspecified"} pendingSessionKey=${pendingRestartSessionKey ?? "unspecified"})`,
+          `restart continuation dropped: another session owns the pending restart (callerSessionKey=${formatRestartSessionKeyForLog(opts.sessionKey)} pendingSessionKey=${formatRestartSessionKeyForLog(pendingRestartSessionKey)})`,
         );
       }
       return {
@@ -1135,6 +1145,13 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     }
   }
 
+  pendingRestartDueAt = requestedDueAt;
+  pendingRestartReason = reason;
+  pendingRestartEmitHooks = nextPendingEmitHooks;
+  pendingRestartSessionKey = nextPendingSessionKey;
+  pendingRestartSkipDeferral = skipDeferral;
+  armPendingRestartTimer(requestedDueAt, nowMs);
+
   writeGatewayRestartAuditEventSync({
     eventType: "scheduled",
     reason,
@@ -1147,13 +1164,6 @@ export function scheduleGatewaySigusr1Restart(opts?: {
     sessionKey: opts?.sessionKey,
     audit: opts?.audit,
   });
-
-  pendingRestartDueAt = requestedDueAt;
-  pendingRestartReason = reason;
-  pendingRestartEmitHooks = nextPendingEmitHooks;
-  pendingRestartSessionKey = nextPendingSessionKey;
-  pendingRestartSkipDeferral = skipDeferral;
-  armPendingRestartTimer(requestedDueAt, nowMs);
   return {
     ok: true,
     pid: process.pid,
@@ -1168,6 +1178,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
 }
 
 export const testing = {
+  formatRestartSessionKeyForLog,
   resetSigusr1State() {
     sigusr1AuthorizedCount = 0;
     sigusr1AuthorizedUntil = 0;
