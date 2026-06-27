@@ -7,8 +7,9 @@ import type {
   TelegramAccountConfig,
   TelegramExecApprovalConfig,
 } from "openclaw/plugin-sdk/config-contracts";
+import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { afterEach, describe, expect, it } from "vitest";
-import { saveSessionStore } from "../../../src/config/sessions/store.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../../src/state/openclaw-agent-db.js";
 import {
   getTelegramExecApprovalApprovers,
   isTelegramExecApprovalAuthorizedSender,
@@ -28,6 +29,7 @@ type TelegramExecApprovalRequest = Parameters<
 >[0]["request"];
 
 afterEach(() => {
+  closeOpenClawAgentDatabasesForTest();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -233,23 +235,21 @@ describe("telegram exec approvals", () => {
   it("scopes non-telegram turn sources to the stored telegram account", async () => {
     const tmpDir = createTempDir();
     const storePath = path.join(tmpDir, "sessions.json");
-    await saveSessionStore(
+    await upsertSessionEntry({
       storePath,
-      {
-        "agent:ops:telegram:direct:123": {
-          sessionId: "main",
-          updatedAt: 1,
-          origin: {
-            provider: "telegram",
-            accountId: "ops",
-          },
-          lastChannel: "slack",
-          lastTo: "channel:C999",
-          lastAccountId: "work",
+      sessionKey: "agent:ops:telegram:direct:123",
+      entry: {
+        sessionId: "main",
+        updatedAt: 1,
+        origin: {
+          provider: "telegram",
+          accountId: "ops",
         },
+        lastChannel: "slack",
+        lastTo: "channel:C999",
+        lastAccountId: "work",
       },
-      { skipMaintenance: true },
-    );
+    });
     const cfg = buildMultiAccountTelegramConfig({ sessionStorePath: storePath });
     const request = makeForeignChannelApprovalRequest({
       id: "req-2",
