@@ -713,4 +713,100 @@ describe("createOpencodeGoStalledStreamWrapper", () => {
     controller.end();
     await consumer;
   });
+
+  it("must NOT abort a live stream that keeps emitting block-boundary events between deltas", async () => {
+    // Regression for https://github.com/openclaw/openclaw/issues/96518:
+    // the idle timer must re-arm on block-boundary events (text_end,
+    // thinking_end, toolcall_start, toolcall_end), not only on token
+    // deltas. A stream that keeps producing boundary events between
+    // deltas is demonstrably alive and must not be aborted.
+    const { stream: baseStream, controller } = createFakeBaseStream();
+    let abortCalled = false;
+    const underlying = vi.fn((_model, _context, options) => {
+      if (options?.signal) {
+        options.signal.addEventListener("abort", () => {
+          abortCalled = true;
+        });
+      }
+      return baseStream;
+    });
+
+    const idleTimeoutMs = 5_000;
+    const wrapper = createOpencodeGoStalledStreamWrapper(underlying as any, {
+      provider: "opencode-go",
+      idleTimeoutMs,
+    });
+
+    const downstream = await Promise.resolve(
+      wrapper({ provider: "opencode-go", id: "glm-4.6" } as any, {} as any, {} as any),
+    );
+    expect(downstream).toBeDefined();
+      if (!downstream) {
+        return;
+      }
+
+    const received: AnyEvent[] = [];
+    const consumer = (async () => {
+      for await (const event of downstream) {
+        received.push(event);
+      }
+    })();
+
+    const partial = { role: "assistant", content: [{ type: "text", text: "x" }] };
+
+    // Provider starts producing a tool-call turn. The last *delta* arms the idle timer.
+    controller.emit({ type: "start", partial } as any);
+    controller.emit({
+      type: "toolcall_delta",
+      contentIndex: 0,
+      delta: "{",
+      partial,
+    } as any);
+    await vi.advanceTimersByTimeAsync(0);
+
+    // The model finalizes the tool call and deliberates on the next one,
+    // emitting real block-boundary events that prove the SSE socket is alive.
+    // Each gap is < idleTimeoutMs, so a liveness-aware watchdog must stay armed.
+    await vi.advanceTimersByTimeAsync(3_000);
+    controller.emit({
+      type: "toolcall_end",
+      contentIndex: 0,
+      toolCall: { name: "f", arguments: "{}" },
+      partial,
+    } as any);
+    await vi.advanceTimersByTimeAsync(3_000);
+    controller.emit({
+      type: "toolcall_start",
+      contentIndex: 1,
+      partial,
+    } as any);
+
+    // Advance to 5s after the last delta, but only 2s after the last
+    // boundary event. The idle timer should have been re-armed by the
+    // boundary events, so it must NOT fire yet.
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    // The provider's completed answer arrives right after.
+    controller.emit({
+      type: "done",
+      reason: "stop",
+      message: {
+        ...partial,
+        content: [{ type: "text", text: "final answer" }],
+        stopReason: "stop",
+      },
+    } as any);
+    controller.end();
+    await vi.advanceTimersByTimeAsync(0);
+    await consumer;
+
+    const hasDone = received.some((e) => e.type === "done");
+    const hasStalledError = received.some(
+      (e) => e.type === "error" && (e as any).error?.stopReason === "error",
+    );
+
+    expect(abortCalled).toBe(false);
+    expect(hasDone).toBe(true);
+    expect(hasStalledError).toBe(false);
+  });
 });
