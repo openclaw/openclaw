@@ -19,7 +19,7 @@ export function applyExecPolicyLayer<TBase extends ExecPolicyLayer>(
       ...base,
       mode: layer.mode,
       ...resolveExecPolicyForMode(layer.mode),
-    };
+    } as unknown as TBase & ExecPolicyLayer;
   }
   if (layer.security !== undefined || layer.ask !== undefined) {
     const { mode: _mode, ...baseWithoutMode } = base;
