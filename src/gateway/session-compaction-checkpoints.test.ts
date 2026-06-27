@@ -504,11 +504,27 @@ describe("session-compaction-checkpoints", () => {
         entryId: sourceLeafId,
       },
     };
+    const markerCheckpoint: SessionCompactionCheckpoint = {
+      checkpointId: "sqlite-checkpoint-stale-marker",
+      sessionKey,
+      sessionId,
+      createdAt: Date.now() + 1,
+      reason: "manual",
+      preCompaction: {
+        sessionId,
+        leafId: sourceLeafId,
+      },
+      postCompaction: {
+        sessionId,
+        sessionFile: marker,
+        leafId: sourceLeafId,
+      },
+    };
     await upsertSessionEntry(scope, {
       sessionId,
       sessionFile: staleSessionFile,
       updatedAt: Date.now(),
-      compactionCheckpoints: [checkpoint],
+      compactionCheckpoints: [checkpoint, markerCheckpoint],
     });
 
     const branchKey = "agent:main:stale-checkpoint-branch";
@@ -525,6 +541,18 @@ describe("session-compaction-checkpoints", () => {
     expect(branched.entry.sessionFile).toContain("sqlite:main:");
     expect(fsSync.existsSync(staleSessionFile)).toBe(false);
     expect(fsSync.readdirSync(dir).some((file) => file.endsWith(".jsonl"))).toBe(false);
+
+    const markerBranched =
+      await createFileBackedCompactionCheckpointStore().branchCheckpointSession({
+        storePath,
+        sourceKey: sessionKey,
+        nextKey: "agent:main:stale-marker-checkpoint-branch",
+        checkpointId: markerCheckpoint.checkpointId,
+      });
+    if (markerBranched.status !== "created") {
+      throw new Error("expected stale-entry SQLite marker checkpoint branch");
+    }
+    expect(markerBranched.entry.sessionFile).toContain("sqlite:main:");
   });
 
   test("checkpoint store does not fork retired legacy snapshots for SQLite marker entries", async () => {
