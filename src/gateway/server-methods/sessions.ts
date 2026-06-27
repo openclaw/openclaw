@@ -59,7 +59,6 @@ import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.j
 import {
   applySessionPatchProjection,
   createSessionEntryWithTranscript,
-  loadSessionEntry as loadAccessorSessionEntry,
   loadTranscriptEvents,
   patchSessionEntry as patchAccessorSessionEntry,
   resolveSessionTranscriptRuntimeTarget,
@@ -262,6 +261,49 @@ function resolveGatewaySessionTargetFromKey(
     ...(opts?.agentId ? { agentId: opts.agentId } : {}),
   });
   return { cfg, target, storePath: target.storePath };
+}
+
+function loadAccessorSessionEntryForGatewayTarget(params: {
+  key: string;
+  cfg: OpenClawConfig;
+  agentId?: string;
+}) {
+  const target = resolveGatewaySessionStoreTargetWithStore({
+    cfg: params.cfg,
+    key: params.key,
+    clone: false,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+  });
+  let best:
+    | {
+        entry: SessionEntry;
+        sessionStoreKey: string;
+      }
+    | undefined;
+  for (const sessionStoreKey of target.storeKeys) {
+    const entry = target.store[sessionStoreKey];
+    if (entry) {
+      if (!best || (entry.updatedAt ?? 0) > (best.entry.updatedAt ?? 0)) {
+        best = { entry, sessionStoreKey };
+      }
+    }
+  }
+  if (best) {
+    return {
+      target,
+      storePath: target.storePath,
+      entry: best.entry,
+      canonicalKey: target.canonicalKey,
+      sessionStoreKey: best.sessionStoreKey,
+    };
+  }
+  return {
+    target,
+    storePath: target.storePath,
+    entry: undefined,
+    canonicalKey: target.canonicalKey,
+    sessionStoreKey: target.canonicalKey,
+  };
 }
 
 function loadSessionEntriesForTarget(params: {
@@ -1195,7 +1237,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const { entry, canonicalKey } = loadSessionEntry(key, {
+    const { entry, canonicalKey } = loadAccessorSessionEntryForGatewayTarget({
+      key,
+      cfg,
       agentId: requestedAgent.agentId,
     });
     respond(
@@ -1235,7 +1279,9 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const { entry, canonicalKey } = loadSessionEntry(key, {
+    const { entry, canonicalKey } = loadAccessorSessionEntryForGatewayTarget({
+      key,
+      cfg,
       agentId: requestedAgent.agentId,
     });
     const checkpoint = getSessionCompactionCheckpoint({ entry, checkpointId });
@@ -1595,13 +1641,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const loaded = loadSessionEntry(key, { agentId: requestedAgent.agentId });
-    const { cfg: loadedCfg, entry, canonicalKey, legacyKey } = loaded;
-    const target = resolveGatewaySessionStoreTarget({
-      cfg: loadedCfg,
-      key: canonicalKey,
-      agentId: requestedAgent.agentId,
-    });
+    const { entry, canonicalKey, sessionStoreKey, target, storePath } =
+      loadAccessorSessionEntryForGatewayTarget({
+        key,
+        cfg,
+        agentId: requestedAgent.agentId,
+      });
     if (!entry?.sessionId) {
       respond(
         false,
@@ -1621,9 +1666,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
     const nextKey = buildDashboardSessionKey(target.agentId);
     const branchedSession = await compactionCheckpointStore.branchCheckpointSession({
-      storePath: target.storePath,
+      agentId: target.agentId,
+      storePath,
       sourceKey: canonicalKey,
-      sourceStoreKey: legacyKey,
+      sourceStoreKey: sessionStoreKey,
       nextKey,
       checkpointId,
     });
@@ -1717,8 +1763,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       respond(false, undefined, requestedAgent.error);
       return;
     }
-    const loaded = loadSessionEntry(key, { agentId: requestedAgent.agentId });
-    const { entry, canonicalKey, legacyKey, storePath } = loaded;
+    const { entry, canonicalKey, sessionStoreKey, storePath } =
+      loadAccessorSessionEntryForGatewayTarget({
+        key,
+        cfg,
+        agentId: requestedAgent.agentId,
+      });
     if (!entry?.sessionId) {
       respond(
         false,
@@ -1752,9 +1802,10 @@ export const sessionsHandlers: GatewayRequestHandlers = {
     }
 
     const restoredSession = await compactionCheckpointStore.restoreCheckpointSession({
+      agentId: requestedAgent.agentId,
       storePath,
       sessionKey: canonicalKey,
-      sessionStoreKey: legacyKey,
+      sessionStoreKey,
       checkpointId,
     });
     if (
@@ -2412,18 +2463,16 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const { target, storePath } = resolveGatewaySessionTargetFromKey(key, cfg, {
+    const { entry, sessionStoreKey, target, storePath } = loadAccessorSessionEntryForGatewayTarget({
+      key,
+      cfg,
       agentId: requestedAgentId,
     });
     const compactSessionScope = {
       agentId: target.agentId,
-      sessionKey: target.canonicalKey,
+      sessionKey: sessionStoreKey,
       storePath,
     };
-    const entry = loadAccessorSessionEntry({
-      ...compactSessionScope,
-      readConsistency: "latest",
-    });
     const sessionId = entry?.sessionId;
     if (!sessionId) {
       respond(
@@ -2443,7 +2492,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       const transcriptEvents = await loadTranscriptEvents({
         agentId: target.agentId,
         sessionId,
-        sessionKey: target.canonicalKey,
+        sessionKey: sessionStoreKey,
         storePath,
       }).catch(() => []);
       if (transcriptEvents.length === 0) {
@@ -2462,7 +2511,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       const compactionTranscriptTarget = await resolveSessionTranscriptRuntimeTarget({
         agentId: target.agentId,
         sessionId,
-        sessionKey: target.canonicalKey,
+        sessionKey: sessionStoreKey,
         storePath,
       });
 
@@ -2498,12 +2547,12 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       try {
         result = await compactEmbeddedAgentSession({
           sessionId,
-          sessionKey: target.canonicalKey,
+          sessionKey: sessionStoreKey,
           agentId: target.agentId,
           sessionTarget: {
             agentId: target.agentId,
             sessionId,
-            sessionKey: target.canonicalKey,
+            sessionKey: sessionStoreKey,
             storePath,
           },
           allowGatewaySubagentBinding: true,
@@ -2607,7 +2656,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       {
         sessionId,
         storePath,
-        sessionKey: target.canonicalKey,
+        sessionKey: sessionStoreKey,
         agentId: target.agentId,
       },
       {
@@ -2664,7 +2713,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       {
         sessionId,
         storePath,
-        sessionKey: target.canonicalKey,
+        sessionKey: sessionStoreKey,
         agentId: target.agentId,
       },
       {

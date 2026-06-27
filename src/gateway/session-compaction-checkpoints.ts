@@ -84,6 +84,7 @@ export type CompactionCheckpointTranscriptForkResult =
 export type CompactionCheckpointSessionMutationResult = SessionCompactionCheckpointMutationResult;
 
 export type BranchCheckpointSessionParams = {
+  agentId?: string;
   storePath: string;
   sourceKey: string;
   sourceStoreKey?: string;
@@ -92,6 +93,7 @@ export type BranchCheckpointSessionParams = {
 };
 
 export type RestoreCheckpointSessionParams = {
+  agentId?: string;
   storePath: string;
   sessionKey: string;
   sessionStoreKey?: string;
@@ -620,11 +622,13 @@ async function branchCheckpointSessionFromStoredBoundary(
   if (
     shouldRouteCheckpointSessionMutationToSqlite({
       checkpointId: params.checkpointId,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       sessionKey: params.sourceStoreKey ?? params.sourceKey,
       storePath: params.storePath,
     })
   ) {
     return await branchSqliteCompactionCheckpointSession({
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       storePath: params.storePath,
       sourceKey: params.sourceKey,
       nextKey: params.nextKey,
@@ -662,11 +666,13 @@ async function restoreCheckpointSessionFromStoredBoundary(
   if (
     shouldRouteCheckpointSessionMutationToSqlite({
       checkpointId: params.checkpointId,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       sessionKey: params.sessionStoreKey ?? params.sessionKey,
       storePath: params.storePath,
     })
   ) {
     return await restoreSqliteCompactionCheckpointSession({
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       storePath: params.storePath,
       sessionKey: params.sessionKey,
       checkpointId: params.checkpointId,
@@ -692,11 +698,13 @@ async function restoreCheckpointSessionFromStoredBoundary(
 }
 
 function shouldRouteCheckpointSessionMutationToSqlite(params: {
+  agentId?: string;
   checkpointId: string;
   sessionKey: string;
   storePath: string;
 }): boolean {
   const entry = loadSessionEntry({
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     sessionKey: params.sessionKey,
     storePath: params.storePath,
   });

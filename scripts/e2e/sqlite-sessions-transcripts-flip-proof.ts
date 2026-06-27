@@ -95,6 +95,16 @@ type PluginSdkConsumerEvidence = {
   transcriptEventsBeforeAppend: number;
 };
 
+type ManualCompactionEvidence = {
+  checkpointCount: number;
+  compacted: boolean;
+  rowCountAfter: number;
+  rowCountBefore: number;
+  sessionFileMarker: string;
+  sessionId: string;
+  sessionKey: string;
+};
+
 export type SqliteSessionsTranscriptsFlipProofReport = {
   ok: boolean;
   agentId: string;
@@ -108,6 +118,8 @@ export type SqliteSessionsTranscriptsFlipProofReport = {
   fullTurnSessionKey: string;
   gatewayEntrypoint: string[];
   legacySessionId: string;
+  manualCompaction?: ManualCompactionEvidence;
+  manualCompactionSessionKey: string;
   mockOpenAiRequestLog: string;
   oldStateSessionKeys: string[];
   pluginSdkConsumer?: PluginSdkConsumerEvidence;
@@ -130,6 +142,7 @@ type ProofContext = {
   fullTurnSessionKey: string;
   legacySessionsDir: string;
   legacySessionId: string;
+  manualCompactionSessionKey: string;
   mockOpenAiRequestLog: string;
   oldStateSessionKeys: string[];
   pluginSdkAppendText: string;
@@ -156,6 +169,7 @@ const CONCURRENT_SEND_TEXT = "sqlite concurrent send history reset";
 const CONCURRENT_DELETE_TEXT = "sqlite concurrent delete while send is active";
 const FULL_TURN_ASSISTANT_TEXT = "OPENCLAW_E2E_OK_12";
 const FULL_TURN_SESSION_KEY = "agent:main:sqlite-full-turn";
+const MANUAL_COMPACTION_SESSION_KEY = "agent:main:dashboard:sqlite-manual-compact";
 const PLUGIN_SDK_APPEND_TEXT = "sqlite sdk consumer appended by identity";
 const PLUGIN_SDK_SESSION_KEY = "agent:main:dashboard:sqlite-sdk-consumer";
 const SHARED_SESSION_KEYS = [
@@ -189,6 +203,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(
   const checkpoints: ProofCheckpoint[] = [];
   const failures: string[] = [];
   let gatewayEntrypoint: string[] = [];
+  let manualCompaction: ManualCompactionEvidence | undefined;
   let mockOpenAi: ChildProcessWithoutNullStreams | undefined;
   let pluginSdkConsumer: PluginSdkConsumerEvidence | undefined;
 
@@ -299,6 +314,9 @@ export async function runSqliteSessionsTranscriptsFlipProof(
       await requireMockOpenAiRequest(context.mockOpenAiRequestLog);
       await record("after-full-agent-turn");
 
+      manualCompaction = await runManualCompactionProof(restartedClient, context);
+      await record("after-manual-compaction");
+
       const pluginSdkRunId = await sendGatewayUserMessage(
         restartedClient,
         context.pluginSdkSessionKey,
@@ -376,6 +394,8 @@ export async function runSqliteSessionsTranscriptsFlipProof(
     fullTurnSessionKey: context.fullTurnSessionKey,
     gatewayEntrypoint,
     legacySessionId: context.legacySessionId,
+    ...(manualCompaction ? { manualCompaction } : {}),
+    manualCompactionSessionKey: context.manualCompactionSessionKey,
     mockOpenAiRequestLog: context.mockOpenAiRequestLog,
     oldStateSessionKeys: [...context.oldStateSessionKeys],
     ...(pluginSdkConsumer ? { pluginSdkConsumer } : {}),
@@ -412,6 +432,7 @@ function buildProofContext(stateDir: string): ProofContext {
     fullTurnSessionKey: FULL_TURN_SESSION_KEY,
     legacySessionsDir,
     legacySessionId: "sqlite-legacy-main",
+    manualCompactionSessionKey: MANUAL_COMPACTION_SESSION_KEY,
     mockOpenAiRequestLog: path.join(stateDir, "mock-openai-requests.ndjson"),
     oldStateSessionKeys: [...OLD_STATE_SESSION_KEYS],
     pluginSdkAppendText: PLUGIN_SDK_APPEND_TEXT,
@@ -427,6 +448,7 @@ function buildProofContext(stateDir: string): ProofContext {
       CONCURRENT_RESET_SESSION_KEY,
       CONCURRENT_DELETE_SESSION_KEY,
       FULL_TURN_SESSION_KEY,
+      MANUAL_COMPACTION_SESSION_KEY,
       PLUGIN_SDK_SESSION_KEY,
       ...SHARED_SESSION_KEYS,
       ...OLD_STATE_SESSION_KEYS,
@@ -744,6 +766,93 @@ async function appendProofMessage(
   if (!result?.appended || !result.messageId) {
     throw new Error(`appendTranscriptMessage failed for ${sessionKey}`);
   }
+}
+
+async function runManualCompactionProof(
+  client: Awaited<ReturnType<typeof connectGatewayClient>>,
+  context: ProofContext,
+): Promise<ManualCompactionEvidence> {
+  const runId = await sendGatewayUserMessage(
+    client,
+    context.manualCompactionSessionKey,
+    `Reply with exactly ${context.fullTurnAssistantText}. Manual compaction proof.`,
+  );
+  await waitForAgentRunOk(client, runId);
+  const sessionId = await waitForSqliteSessionId(
+    context.agentDbPath,
+    context.manualCompactionSessionKey,
+  );
+  await waitForSqliteMessageContains(
+    context.agentDbPath,
+    sessionId,
+    "assistant",
+    context.fullTurnAssistantText,
+  );
+  const rowCountBefore = countSqliteTranscriptEvents(context.agentDbPath, sessionId);
+  if (rowCountBefore < 2) {
+    throw new Error(
+      `manual compaction source transcript had too few rows: ${rowCountBefore} for ${sessionId}`,
+    );
+  }
+  const listed: { sessions?: Array<{ key?: string; sessionId?: string }> } = await client.request(
+    "sessions.list",
+    {},
+  );
+  const listedSession = (listed.sessions ?? []).find(
+    (session) =>
+      session.sessionId === sessionId || session.key === context.manualCompactionSessionKey,
+  );
+  if (!listedSession?.key) {
+    throw new Error(
+      `manual compaction session was not listed before compact: ${JSON.stringify(listed)}`,
+    );
+  }
+
+  const compacted: {
+    compacted?: boolean;
+    key?: string;
+    ok?: boolean;
+  } = await client.request("sessions.compact", {
+    key: listedSession.key,
+  });
+  if (compacted.ok !== true || compacted.compacted !== true) {
+    throw new Error(
+      `manual compaction did not compact using ${listedSession.key}: ${JSON.stringify(
+        compacted,
+      )}; listed=${JSON.stringify(listed)}`,
+    );
+  }
+
+  const evidence = readSqliteEvidence(context.agentDbPath, [context.manualCompactionSessionKey]);
+  const row = evidence.trackedEntries.find(
+    (entry) => entry.sessionKey === context.manualCompactionSessionKey,
+  );
+  if (!row?.entry) {
+    throw new Error(`manual compaction entry missing for ${context.manualCompactionSessionKey}`);
+  }
+  const checkpointCount = Array.isArray(row.entry.compactionCheckpoints)
+    ? row.entry.compactionCheckpoints.length
+    : 0;
+  if (checkpointCount < 1) {
+    throw new Error(`manual compaction did not write checkpoint metadata: ${JSON.stringify(row)}`);
+  }
+  const sessionFileMarker = typeof row.entry.sessionFile === "string" ? row.entry.sessionFile : "";
+  if (!sessionFileMarker.startsWith("sqlite:")) {
+    throw new Error(`manual compaction entry did not keep a SQLite marker: ${sessionFileMarker}`);
+  }
+  if (fsSync.existsSync(sessionFileMarker)) {
+    throw new Error(`manual compaction marker unexpectedly exists as a file: ${sessionFileMarker}`);
+  }
+
+  return {
+    checkpointCount,
+    compacted: compacted.compacted,
+    rowCountAfter: countSqliteTranscriptEvents(context.agentDbPath, row.sessionId),
+    rowCountBefore,
+    sessionFileMarker,
+    sessionId: row.sessionId,
+    sessionKey: context.manualCompactionSessionKey,
+  };
 }
 
 async function runPluginSdkConsumerProbe(
@@ -1246,6 +1355,22 @@ function readSqliteTranscriptMessages(
         ? [{ role: message.role, content: message.content }]
         : [];
     });
+  } finally {
+    db.close();
+  }
+}
+
+function countSqliteTranscriptEvents(dbPath: string, sessionId: string): number {
+  if (!fsSync.existsSync(dbPath)) {
+    return 0;
+  }
+  const db = new DatabaseSync(dbPath, { readOnly: true });
+  try {
+    return scalarNumber(
+      db,
+      "SELECT COUNT(*) AS count FROM transcript_events WHERE session_id = ?",
+      [sessionId],
+    );
   } finally {
     db.close();
   }

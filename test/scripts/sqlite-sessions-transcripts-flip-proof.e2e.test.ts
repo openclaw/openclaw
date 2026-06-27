@@ -16,6 +16,7 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
       "after-gateway-restart",
       "after-chat-send",
       "after-full-agent-turn",
+      "after-manual-compaction",
       "after-plugin-sdk-consumer",
       "after-concurrent-multi-client",
       "after-sessions-reset",
@@ -100,6 +101,27 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
           checkpoint.sqlite.trackedEntries.some(
             (entry) =>
               entry.sessionKey === report.fullTurnSessionKey && entry.transcriptEvents >= 2,
+          ),
+      ),
+    ).toBe(true);
+    expect(report.manualCompaction).toMatchObject({
+      checkpointCount: 1,
+      compacted: true,
+      sessionKey: report.manualCompactionSessionKey,
+    });
+    expect(report.manualCompaction?.sessionFileMarker.startsWith("sqlite:")).toBe(true);
+    expect(report.manualCompaction?.rowCountBefore).toBeGreaterThanOrEqual(2);
+    expect(report.manualCompaction?.rowCountAfter).toBeGreaterThanOrEqual(1);
+    expect(
+      report.checkpoints.some(
+        (checkpoint) =>
+          checkpoint.label === "after-manual-compaction" &&
+          checkpoint.activeJsonl.length === 0 &&
+          checkpoint.sqlite.trackedEntries.some(
+            (entry) =>
+              entry.sessionKey === report.manualCompactionSessionKey &&
+              Array.isArray(entry.entry?.compactionCheckpoints) &&
+              entry.entry.compactionCheckpoints.length >= 1,
           ),
       ),
     ).toBe(true);
