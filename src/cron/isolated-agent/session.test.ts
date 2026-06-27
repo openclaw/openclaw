@@ -1,10 +1,7 @@
 // Isolated agent session tests cover session creation and metadata for cron runs.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
-
-vi.mock("../../config/sessions/store-load.js", () => ({
-  loadSessionStore: vi.fn(),
-}));
+import type { SessionEntry } from "../../config/sessions/types.js";
 
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveStorePath: vi.fn().mockReturnValue("/tmp/test-store.json"),
@@ -28,14 +25,12 @@ vi.mock("../../agents/bootstrap-cache.js", () => ({
 
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { evaluateSessionFreshness } from "../../config/sessions/reset-policy.js";
-import { loadSessionStore } from "../../config/sessions/store-load.js";
 import { resolveCronSession } from "./session.js";
 
 const NOW_MS = 1_737_600_000_000;
 
-type SessionStore = ReturnType<typeof loadSessionStore>;
-type SessionStoreEntry = SessionStore[string];
-type MockSessionStoreEntry = Partial<SessionStoreEntry>;
+type SessionStore = Record<string, SessionEntry>;
+type MockSessionStoreEntry = Partial<SessionEntry>;
 
 function resolveWithStoredEntry(params?: {
   sessionKey?: string;
@@ -45,9 +40,8 @@ function resolveWithStoredEntry(params?: {
 }) {
   const sessionKey = params?.sessionKey ?? "webhook:stable-key";
   const store: SessionStore = params?.entry
-    ? ({ [sessionKey]: params.entry as SessionStoreEntry } as SessionStore)
+    ? ({ [sessionKey]: params.entry as SessionEntry } as SessionStore)
     : {};
-  vi.mocked(loadSessionStore).mockReturnValue(store);
   vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: params?.fresh ?? true });
 
   return resolveCronSession({
@@ -56,6 +50,7 @@ function resolveWithStoredEntry(params?: {
     agentId: "main",
     nowMs: NOW_MS,
     forceNew: params?.forceNew,
+    store,
   });
 }
 
