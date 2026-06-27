@@ -1,10 +1,9 @@
 // SQLite transcript markers are storage targets, not filesystem paths.
-import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveSessionFilePath } from "./paths.js";
+import { loadSessionEntry, upsertSessionEntry } from "./session-accessor.js";
 import { resolveAndPersistSessionFile } from "./session-file.js";
-import { loadSessionStore } from "./store.js";
 import { useTempSessionsFixture } from "./test-helpers.js";
 
 describe("SQLite sessionFile markers", () => {
@@ -30,22 +29,22 @@ describe("SQLite sessionFile markers", () => {
         sessionFile: marker,
       },
     };
-    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
-    const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
+    await upsertSessionEntry({ storePath: fixture.storePath(), sessionKey }, store[sessionKey]);
 
     const result = await resolveAndPersistSessionFile({
       sessionId,
       sessionKey,
-      sessionStore,
+      sessionStore: store,
       storePath: fixture.storePath(),
-      sessionEntry: sessionStore[sessionKey],
+      sessionEntry: store[sessionKey],
     });
 
     expect(result.sessionFile).toBe(marker);
     expect(result.sessionEntry.sessionFile).toBe(marker);
 
-    const saved = loadSessionStore(fixture.storePath(), { skipCache: true });
-    expect(saved[sessionKey]?.sessionFile).toBe(marker);
+    expect(loadSessionEntry({ storePath: fixture.storePath(), sessionKey })?.sessionFile).toBe(
+      marker,
+    );
   });
 
   it("does not preserve persisted markers for a different session", async () => {
@@ -59,19 +58,20 @@ describe("SQLite sessionFile markers", () => {
         sessionFile: staleMarker,
       },
     };
-    fs.writeFileSync(fixture.storePath(), JSON.stringify(store), "utf-8");
-    const sessionStore = loadSessionStore(fixture.storePath(), { skipCache: true });
 
     const result = await resolveAndPersistSessionFile({
       sessionId,
       sessionKey,
-      sessionStore,
+      sessionStore: store,
       storePath: fixture.storePath(),
-      sessionEntry: sessionStore[sessionKey],
+      sessionEntry: store[sessionKey],
     });
 
     const expectedSessionFile = `sqlite:main:${sessionId}:${fixture.storePath()}`;
     expect(result.sessionFile).toBe(expectedSessionFile);
     expect(result.sessionEntry.sessionFile).toBe(result.sessionFile);
+    expect(loadSessionEntry({ storePath: fixture.storePath(), sessionKey })?.sessionFile).toBe(
+      expectedSessionFile,
+    );
   });
 });
