@@ -146,6 +146,24 @@ function resolveChatHistoryNextOffset(params: {
   return params.offset + params.rawPageMessages;
 }
 
+function capOffsetChatHistoryProjectedMessages(messages: unknown[], max: number): unknown[] {
+  if (messages.length <= max) {
+    return messages;
+  }
+  const start = Math.max(0, messages.length - max);
+  const boundarySeq = readChatHistoryMessageSeq(messages[start]);
+  if (boundarySeq === undefined) {
+    return messages.slice(start);
+  }
+  // Offset cursors can only resume at transcript-record boundaries.
+  // Keep boundary rows with the same seq together so projection mirrors are not stranded.
+  let safeStart = start;
+  while (safeStart > 0 && readChatHistoryMessageSeq(messages[safeStart - 1]) === boundarySeq) {
+    safeStart--;
+  }
+  return messages.slice(safeStart);
+}
+
 function dropChatHistoryOverreadContextMessage(
   messages: unknown[],
   contextMessage: unknown,
@@ -339,7 +357,10 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
             maxMessages: max,
           })
         : rt.projectChatDisplayMessages(recencyFilteredMessages, { maxChars: effectiveMaxChars });
-  const windowed = projected;
+  const windowed =
+    params.offset === undefined || offset === 0
+      ? projected
+      : capOffsetChatHistoryProjectedMessages(projected, max);
   const normalized = rt.augmentChatHistoryWithCanvasBlocks(windowed);
 
   const perMessageHardCap = Math.min(rt.CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES, maxHistoryBytes);

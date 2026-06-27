@@ -273,6 +273,39 @@ describe("embedded gateway stub", () => {
     expect(result.nextOffset).toBeUndefined();
   });
 
+  it("caps projected offset chat history pages to the requested limit", async () => {
+    const rawMessages = [
+      { role: "assistant", content: "overread", __openclaw: { seq: 1 } },
+      { role: "assistant", content: "page anchor", __openclaw: { seq: 2 } },
+    ];
+    const projectedMessages = [
+      { role: "assistant", content: "projected one", __openclaw: { seq: 2 } },
+      { role: "assistant", content: "projected two", __openclaw: { seq: 3 } },
+    ];
+    runtime.readSessionMessagesPageWithStatsAsync.mockImplementationOnce(async () => ({
+      messages: rawMessages,
+      totalMessages: 4,
+    }));
+    runtime.projectChatDisplayMessages.mockReturnValueOnce(projectedMessages);
+
+    const callGateway = createEmbeddedCallGateway();
+    const result = await callGateway<{
+      messages: unknown[];
+      nextOffset?: number;
+      hasMore?: boolean;
+    }>({
+      method: "chat.history",
+      params: { sessionKey: "agent:main:main", limit: 1, offset: 1 },
+    });
+
+    expect(runtime.projectChatDisplayMessages).toHaveBeenCalledWith([rawMessages[1]], {
+      maxChars: 100_000,
+    });
+    expect(result.messages).toEqual([projectedMessages[1]]);
+    expect(result.nextOffset).toBe(2);
+    expect(result.hasMore).toBe(true);
+  });
+
   it("filters offset chat history pages at the session start boundary", async () => {
     const rawMessages = [
       { role: "user", content: "stale announce", __openclaw: { seq: 1 } },
