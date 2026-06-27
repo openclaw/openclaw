@@ -2510,16 +2510,17 @@ function resolveSqliteCheckpointTranscriptForkSources(
 ): SqliteCheckpointTranscriptForkSource[] {
   const sources: SqliteCheckpointTranscriptForkSource[] = [];
   if (checkpoint.preCompaction.sessionId) {
+    const preLeafId = checkpoint.preCompaction.entryId ?? checkpoint.preCompaction.leafId;
     sources.push({
       sessionId: checkpoint.preCompaction.sessionId,
-      ...(checkpoint.preCompaction.leafId ? { leafId: checkpoint.preCompaction.leafId } : {}),
+      ...(preLeafId ? { leafId: preLeafId } : {}),
       ...(typeof checkpoint.tokensBefore === "number"
         ? { totalTokens: checkpoint.tokensBefore }
         : {}),
     });
   }
 
-  const postLeafId = checkpoint.postCompaction.leafId ?? checkpoint.postCompaction.entryId;
+  const postLeafId = checkpoint.postCompaction.entryId ?? checkpoint.postCompaction.leafId;
   if (checkpoint.postCompaction.sessionId && postLeafId) {
     sources.push({
       sessionId: checkpoint.postCompaction.sessionId,
