@@ -1268,17 +1268,14 @@ export async function runPreparedReply(
           // is identical whether this turn is sent as the current turn or
           // replayed as history. See: https://github.com/openclaw/openclaw/issues/3658
           ...(userTurnTimestamp ? { timestamp: userTurnTimestamp } : {}),
-          // Group transcripts need participant attribution. Direct transcripts
-          // keep their existing shape and avoid a broader identity-storage change.
-          ...(persistGroupSender
+          // Direct transcripts keep their existing identity-storage boundary.
+          sender: persistGroupSender
             ? {
-                sender: {
-                  id: normalizeOptionalString(sessionCtx.SenderId),
-                  name: normalizeOptionalString(sessionCtx.SenderName),
-                  username: normalizeOptionalString(sessionCtx.SenderUsername),
-                },
+                id: normalizeOptionalString(sessionCtx.SenderId),
+                name: normalizeOptionalString(sessionCtx.SenderName),
+                username: normalizeOptionalString(sessionCtx.SenderUsername),
               }
-            : {}),
+            : undefined,
         }
       : undefined;
   const userTurnTranscriptRecorder =

@@ -18,12 +18,6 @@ export type PersistedUserTurnMediaInput = {
 
 export type PersistedUserTurnMessage = Extract<AgentMessage, { role: "user" }>;
 
-export type UserTurnSenderInput = {
-  id?: string | null;
-  name?: string | null;
-  username?: string | null;
-};
-
 export type UserTurnInput = {
   text?: string | null;
   media?: readonly PersistedUserTurnMediaInput[] | null;
@@ -32,7 +26,7 @@ export type UserTurnInput = {
   provenance?: InputProvenance;
   mediaOnlyText?: string;
   /** Durable participant attribution. Callers must opt in at the product boundary. */
-  sender?: UserTurnSenderInput | null;
+  sender?: { id?: string | null; name?: string | null; username?: string | null } | null;
 };
 
 export type UserTurnTranscriptUpdateMode = "inline" | "none";

@@ -336,12 +336,6 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     (message as unknown as { provenance?: unknown }).provenance,
   );
   const originalMeta = readOpenClawMessageMeta(message);
-  const senderMeta = buildUserTurnSenderMeta({
-    id: typeof originalMeta?.senderId === "string" ? originalMeta.senderId : undefined,
-    name: typeof originalMeta?.senderName === "string" ? originalMeta.senderName : undefined,
-    username:
-      typeof originalMeta?.senderUsername === "string" ? originalMeta.senderUsername : undefined,
-  });
   const nextMessage = params.beforeMessageWrite({
     message,
     ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -354,18 +348,18 @@ export function preparePersistedUserTurnMessageForTranscriptWrite(
     ? (applyInputProvenanceToUserMessage(nextMessage, provenance) as PersistedUserTurnMessage)
     : nextMessage;
   const nextMessageMeta = readOpenClawMessageMeta(nextUserMessage);
-  const nextUserMessageWithSender = senderMeta
+  const nextUserMessageWithMetadata = originalMeta
     ? ({
         ...(nextUserMessage as unknown as Record<string, unknown>),
-        __openclaw: { ...nextMessageMeta, ...senderMeta },
+        __openclaw: { ...nextMessageMeta, ...originalMeta },
       } as unknown as PersistedUserTurnMessage)
     : nextUserMessage;
   return idempotencyKey
     ? ({
-        ...(nextUserMessageWithSender as unknown as Record<string, unknown>),
+        ...(nextUserMessageWithMetadata as unknown as Record<string, unknown>),
         idempotencyKey,
       } as unknown as PersistedUserTurnMessage)
-    : nextUserMessageWithSender;
+    : nextUserMessageWithMetadata;
 }
 
 export async function appendUserTurnTranscriptMessage(
