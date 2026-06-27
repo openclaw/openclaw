@@ -590,7 +590,9 @@ function normalizeFeishuNewlines(text: string): string {
   for (let i = 0; i < parts.length; i += 2) {
     // Even indices are non-code sections; odd indices are code blocks (preserved)
     const segment = parts[i];
-    if (!segment) continue;
+    if (!segment) {
+      continue;
+    }
 
     // 2. Split non-code sections into blocks at existing \n\n boundaries
     const blocks = segment.split(/\n\n+/);
