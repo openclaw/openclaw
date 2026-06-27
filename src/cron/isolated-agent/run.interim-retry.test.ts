@@ -227,7 +227,7 @@ describe("runCronIsolatedAgentTurn — CLI interim ack retry with cleanup", () =
     expect(runCliAgentMock).toHaveBeenCalledTimes(2);
 
     // Both calls must pass cleanupCliLiveSessionOnRunEnd: true
-    for (const [callIdx, callArgs] of runCliAgentMock.mock.calls.entries()) {
+    for (const callArgs of runCliAgentMock.mock.calls) {
       const params = callArgs[0] as { cleanupCliLiveSessionOnRunEnd?: boolean };
       expect(params.cleanupCliLiveSessionOnRunEnd).toBe(true);
     }
