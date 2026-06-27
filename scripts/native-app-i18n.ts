@@ -62,6 +62,19 @@ const EXCLUDED_PATH_RE =
   /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
 const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u;
 
+function hasUnbalancedSwiftInterpolation(source: string): boolean {
+  let depth = 0;
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] === "\\" && source[index + 1] === "(") {
+      depth += 1;
+      index += 1;
+    } else if (depth > 0 && source[index] === ")") {
+      depth -= 1;
+    }
+  }
+  return depth !== 0;
+}
+
 function lineNumber(source: string, offset: number): number {
   return source.slice(0, offset).split("\n").length;
 }
@@ -75,7 +88,7 @@ function decodeLiteral(raw: string): string {
 }
 
 function normalizeSource(source: string): string {
-  return source.replace(/\s+/gu, " ").trim();
+  return source.replace(/[ \t]+/gu, " ").trim();
 }
 
 function addCandidate(
@@ -90,7 +103,11 @@ function addCandidate(
   if (!normalized || !/\p{L}/u.test(normalized)) {
     return;
   }
-  if (normalized.length > 500 || normalized.includes("${") || normalized.includes("\\(")) {
+  if (
+    normalized.length > 500 ||
+    normalized.includes("${") ||
+    hasUnbalancedSwiftInterpolation(normalized)
+  ) {
     return;
   }
   entries.push({ kind, line, path: repoPath, source: normalized, surface });

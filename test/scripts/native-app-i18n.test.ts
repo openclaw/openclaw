@@ -21,6 +21,7 @@ describe("native app i18n inventory", () => {
       ),
     ).toBe(true);
     expect(entries.some((entry) => entry.source === "QR Scanner Unavailable")).toBe(true);
+    expect(entries.some((entry) => entry.source === "Request ID: \\(requestId)")).toBe(true);
     expect(NATIVE_I18N_LOCALES).toHaveLength(20);
   });
 });
