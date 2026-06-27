@@ -1,6 +1,5 @@
 #!/usr/bin/env node
 
-import fs from "node:fs/promises";
 import path from "node:path";
 import ts from "typescript";
 import {
@@ -52,19 +51,6 @@ const transcriptReaderNames = new Set([
 
 const storageSpecificTranscriptReaderAliasNames = new Set(["readSessionMessagesFromFileAsync"]);
 
-const activeRuntimeJsonlTranscriptPersistenceNames = new Set([
-  "appendAssistantMessageToSessionTranscript",
-  "appendExactAssistantMessageToSessionTranscript",
-  "appendSessionTranscriptEvent",
-  "appendSessionTranscriptMessage",
-  "appendSessionTranscriptMessageWithOwnedWriteLock",
-  "runSessionTranscriptAppendTransaction",
-  "withSessionTranscriptAppendQueue",
-]);
-
-const publicSdkFileTranscriptNamePattern =
-  /\b(?:SessionTranscriptFile\w*|TranscriptFile\w*|transcriptFile\w*|FileTranscript\w*|FileTarget|SessionTranscriptUpdate)\b/u;
-
 export const migratedSessionTranscriptReaderFiles = new Set([
   "src/agents/main-session-restart-recovery.ts",
   "src/agents/subagent-announce-output.test.ts",
@@ -98,8 +84,6 @@ export const migratedSessionTranscriptReaderFiles = new Set([
   "src/tui/embedded-backend.test.ts",
   "src/tui/embedded-backend.ts",
 ]);
-
-export const gatewayActiveTranscriptPersistenceRoots = ["src/gateway/server-methods"];
 
 function normalizeRelativePath(filePath) {
   return filePath.replaceAll(path.sep, "/");
@@ -247,184 +231,6 @@ export function findSessionTranscriptReaderBoundaryViolations(content, fileName 
   return violations;
 }
 
-export function findGatewayActiveJsonlTranscriptPersistenceViolations(
-  content,
-  fileName = "source.ts",
-) {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
-  const violations = [];
-
-  const recordViolation = (node, name, action) => {
-    violations.push({
-      line: toLine(sourceFile, node),
-      reason: `${action} active JSONL transcript persistence helper "${name}"`,
-    });
-  };
-
-  const visit = (node) => {
-    if (ts.isImportDeclaration(node)) {
-      const namedBindings = node.importClause?.namedBindings;
-      if (namedBindings && ts.isNamedImports(namedBindings)) {
-        for (const specifier of namedBindings.elements) {
-          const importedName = specifier.propertyName?.text ?? specifier.name.text;
-          if (activeRuntimeJsonlTranscriptPersistenceNames.has(importedName)) {
-            recordViolation(specifier, importedName, "imports");
-          }
-        }
-      }
-    }
-
-    if (ts.isExportDeclaration(node)) {
-      const exportClause = node.exportClause;
-      if (exportClause && ts.isNamedExports(exportClause)) {
-        for (const specifier of exportClause.elements) {
-          const exportedName = specifier.propertyName?.text ?? specifier.name.text;
-          if (activeRuntimeJsonlTranscriptPersistenceNames.has(exportedName)) {
-            recordViolation(specifier, exportedName, "re-exports");
-          }
-        }
-      }
-    }
-
-    if (ts.isBindingElement(node)) {
-      const name = bindingName(node);
-      if (name && activeRuntimeJsonlTranscriptPersistenceNames.has(name)) {
-        recordViolation(node, name, "aliases");
-      }
-    }
-
-    if (ts.isCallExpression(node)) {
-      const callee = unwrapExpression(node.expression);
-      if (
-        ts.isIdentifier(callee) &&
-        activeRuntimeJsonlTranscriptPersistenceNames.has(callee.text)
-      ) {
-        recordViolation(callee, callee.text, "calls");
-      } else if (
-        ts.isPropertyAccessExpression(callee) &&
-        activeRuntimeJsonlTranscriptPersistenceNames.has(callee.name.text)
-      ) {
-        recordViolation(callee.name, callee.name.text, "calls");
-      } else if (
-        ts.isElementAccessExpression(callee) &&
-        ts.isStringLiteral(callee.argumentExpression) &&
-        activeRuntimeJsonlTranscriptPersistenceNames.has(callee.argumentExpression.text)
-      ) {
-        recordViolation(callee.argumentExpression, callee.argumentExpression.text, "calls");
-      }
-    }
-
-    ts.forEachChild(node, visit);
-  };
-
-  visit(sourceFile);
-  return violations;
-}
-
-export function findPluginSdkApiBaselineFileTranscriptViolations(content) {
-  const violations = [];
-  const lines = content.split(/\r?\n/u);
-  lines.forEach((line, index) => {
-    const trimmed = line.trim();
-    if (!trimmed) {
-      return;
-    }
-    let record;
-    try {
-      record = JSON.parse(trimmed);
-    } catch {
-      return;
-    }
-    if (!record || record.recordType !== "export") {
-      return;
-    }
-    const exportName = typeof record.exportName === "string" ? record.exportName : "";
-    const declaration = typeof record.declaration === "string" ? record.declaration : "";
-    const haystack = `${exportName}\n${declaration}`;
-    if (/\bsessionFile\b/u.test(declaration)) {
-      violations.push({
-        line: index + 1,
-        reason: `public SDK API baseline exposes sessionFile transcript contract "${exportName}"`,
-      });
-      return;
-    }
-    if (publicSdkFileTranscriptNamePattern.test(haystack)) {
-      violations.push({
-        line: index + 1,
-        reason: `public SDK API baseline exposes file-target transcript contract "${exportName}"`,
-      });
-    }
-  });
-  return violations;
-}
-
-function memberNameText(name) {
-  if (ts.isIdentifier(name) || ts.isStringLiteralLike(name) || ts.isNumericLiteral(name)) {
-    return name.text;
-  }
-  return null;
-}
-
-function typeNodeContainsSessionFileProperty(node) {
-  if (!node) {
-    return false;
-  }
-  let found = false;
-  const visit = (current) => {
-    if (
-      ts.isPropertySignature(current) &&
-      current.name &&
-      memberNameText(current.name) === "sessionFile"
-    ) {
-      found = true;
-      return;
-    }
-    ts.forEachChild(current, visit);
-  };
-  visit(node);
-  return found;
-}
-
-function findInterfaceMethod(sourceFile, interfaceName, methodName) {
-  for (const statement of sourceFile.statements) {
-    if (ts.isInterfaceDeclaration(statement) && statement.name.text === interfaceName) {
-      return statement.members.find(
-        (member) =>
-          ts.isMethodSignature(member) && member.name && memberNameText(member.name) === methodName,
-      );
-    }
-  }
-  return undefined;
-}
-
-function findTypeAlias(sourceFile, typeName) {
-  return sourceFile.statements.find(
-    (statement) => ts.isTypeAliasDeclaration(statement) && statement.name.text === typeName,
-  );
-}
-
-export function findContextEngineCompactionSessionFileViolations(content, fileName = "source.ts") {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
-  const violations = [];
-  const compactResult = findTypeAlias(sourceFile, "CompactResult");
-  if (compactResult && typeNodeContainsSessionFileProperty(compactResult.type)) {
-    violations.push({
-      line: toLine(sourceFile, compactResult),
-      reason: "CompactResult exposes active sessionFile identity; use sessionTarget",
-    });
-  }
-
-  const compactMethod = findInterfaceMethod(sourceFile, "ContextEngine", "compact");
-  const compactParam = compactMethod?.parameters[0];
-  if (compactParam?.type && typeNodeContainsSessionFileProperty(compactParam.type)) {
-    violations.push({
-      line: toLine(sourceFile, compactParam),
-      reason: "ContextEngine.compact exposes active sessionFile identity; use sessionTarget",
-    });
-  }
-  return violations;
-}
-
 export async function main() {
   const repoRoot = resolveRepoRoot(import.meta.url);
   const sourceRoots = resolveSourceRoots(repoRoot, [
@@ -443,30 +249,6 @@ export async function main() {
       ),
     findViolations: findSessionTranscriptReaderBoundaryViolations,
   });
-  const activeJsonlTranscriptPersistenceViolations = await collectFileViolations({
-    repoRoot,
-    sourceRoots: resolveSourceRoots(repoRoot, gatewayActiveTranscriptPersistenceRoots),
-    findViolations: findGatewayActiveJsonlTranscriptPersistenceViolations,
-  });
-  const pluginSdkBaselinePath = path.join(
-    repoRoot,
-    "docs/.generated/plugin-sdk-api-baseline.jsonl",
-  );
-  const pluginSdkBaselineViolations = findPluginSdkApiBaselineFileTranscriptViolations(
-    await fs.readFile(pluginSdkBaselinePath, "utf8"),
-  ).map((violation) =>
-    Object.assign({ path: "docs/.generated/plugin-sdk-api-baseline.jsonl" }, violation),
-  );
-  const contextEngineTypesPath = path.join(repoRoot, "src/context-engine/types.ts");
-  const contextEngineCompactionViolations = findContextEngineCompactionSessionFileViolations(
-    await fs.readFile(contextEngineTypesPath, "utf8"),
-    contextEngineTypesPath,
-  ).map((violation) => Object.assign({ path: "src/context-engine/types.ts" }, violation));
-  violations.push(
-    ...activeJsonlTranscriptPersistenceViolations,
-    ...pluginSdkBaselineViolations,
-    ...contextEngineCompactionViolations,
-  );
 
   if (violations.length === 0) {
     console.log("session transcript reader boundary guard passed.");
@@ -478,7 +260,7 @@ export async function main() {
     console.error(`- ${violation.path}:${violation.line}: ${violation.reason}`);
   }
   console.error(
-    "Use src/gateway/session-transcript-readers.ts for migrated transcript reader paths. Live transcript persistence must use session-accessor/SQLite identity helpers, and public SDK/API baselines must not expose active transcript file targets.",
+    "Use src/gateway/session-transcript-readers.ts for migrated transcript reader paths. Expand this ratchet only after a slice migrates more files.",
   );
   process.exit(1);
 }

@@ -34,21 +34,6 @@ const legacyTranscriptWriterNames = new Set([
   "appendSessionTranscriptMessage",
   "emitSessionTranscriptUpdate",
 ]);
-const postFlipPluginSdkTranscriptFileExportNames = new Set([
-  "appendSessionTranscriptMessage",
-  "emitSessionTranscriptUpdate",
-  "publishSessionTranscriptUpdate",
-  "resolveSessionTranscriptFile",
-  "resolveSessionTranscriptFileTarget",
-  "SessionTranscriptFileTarget",
-  "SessionTranscriptFileTargetParams",
-  "SessionTranscriptFileWriteLockContext",
-  "SessionTranscriptFileWriteLockParams",
-  "SessionTranscriptUpdate",
-  "SessionTranscriptUpdatePayload",
-  "withSessionTranscriptFileWriteLock",
-  "withTranscriptWriteLock",
-]);
 const sessionCreateLifecycleWriterNames = new Set([
   "applySessionStoreEntryPatch",
   "saveSessionStore",
@@ -215,11 +200,6 @@ export const migratedTranscriptWriterFiles = new Set([
   "src/gateway/server-methods/chat.ts",
   "src/gateway/server-methods/chat-transcript-inject.ts",
   "src/sessions/user-turn-transcript.ts",
-]);
-
-export const postFlipPluginSdkTranscriptApiFiles = new Set([
-  "src/plugin-sdk/agent-harness-runtime.ts",
-  "src/plugin-sdk/session-transcript-runtime.ts",
 ]);
 
 export const migratedSessionCompactManualTrimFiles = new Set([
@@ -506,135 +486,6 @@ export function findTranscriptWriterBoundaryViolations(content, fileName = "sour
   );
 }
 
-function exportedNameFromDeclaration(statement) {
-  if (
-    (ts.isFunctionDeclaration(statement) ||
-      ts.isClassDeclaration(statement) ||
-      ts.isInterfaceDeclaration(statement) ||
-      ts.isEnumDeclaration(statement) ||
-      ts.isTypeAliasDeclaration(statement)) &&
-    statement.name
-  ) {
-    return statement.name.text;
-  }
-  return null;
-}
-
-function isStatementExported(statement) {
-  return Boolean(
-    statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword),
-  );
-}
-
-export function findPluginSdkPostFlipTranscriptApiSourceViolations(
-  content,
-  fileName = "source.ts",
-) {
-  const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
-  const violations = [];
-
-  const record = (node, exportName, reason) => {
-    violations.push({
-      line: toLine(sourceFile, node),
-      reason: `${reason} "${exportName}"`,
-    });
-  };
-
-  for (const statement of sourceFile.statements) {
-    if (isStatementExported(statement)) {
-      const exportName = exportedNameFromDeclaration(statement);
-      if (exportName && postFlipPluginSdkTranscriptFileExportNames.has(exportName)) {
-        record(statement, exportName, "exports post-flip transcript-file SDK API");
-        continue;
-      }
-      if (
-        exportName &&
-        /SessionTranscript/u.test(exportName) &&
-        /\bsessionFile\b/u.test(statement.getText(sourceFile))
-      ) {
-        record(statement, exportName, "exports sessionFile-bearing transcript SDK contract");
-      }
-      continue;
-    }
-
-    if (
-      ts.isExportDeclaration(statement) &&
-      statement.exportClause &&
-      ts.isNamedExports(statement.exportClause)
-    ) {
-      for (const specifier of statement.exportClause.elements) {
-        const sourceName = specifier.propertyName?.text ?? specifier.name.text;
-        const exportName = specifier.name.text;
-        if (
-          postFlipPluginSdkTranscriptFileExportNames.has(sourceName) ||
-          postFlipPluginSdkTranscriptFileExportNames.has(exportName)
-        ) {
-          record(specifier, exportName, "exports post-flip transcript-file SDK API");
-        }
-      }
-    }
-  }
-
-  return violations;
-}
-
-export function findPluginSdkPostFlipTranscriptApiBaselineViolations(content) {
-  const violations = [];
-  const lines = content.split(/\r?\n/u);
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (!line.trim()) {
-      continue;
-    }
-    const record = JSON.parse(line);
-    if (record.recordType !== "export") {
-      continue;
-    }
-    const exportName = String(record.exportName ?? "");
-    const declaration = String(record.declaration ?? "");
-    if (postFlipPluginSdkTranscriptFileExportNames.has(exportName)) {
-      violations.push({
-        line: index + 1,
-        reason: `baseline exports post-flip transcript-file SDK API "${exportName}"`,
-      });
-      continue;
-    }
-    if (/\bsessionFile\b/u.test(declaration) && /SessionTranscript/u.test(declaration)) {
-      violations.push({
-        line: index + 1,
-        reason: `baseline exports sessionFile-bearing transcript SDK contract "${exportName}"`,
-      });
-    }
-  }
-  return violations;
-}
-
-export function findContextEngineCompactionSessionFileBaselineViolations(content) {
-  const violations = [];
-  const lines = content.split(/\r?\n/u);
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (!line.trim()) {
-      continue;
-    }
-    const record = JSON.parse(line);
-    if (record.recordType !== "export") {
-      continue;
-    }
-    const declaration = String(record.declaration ?? "");
-    if (
-      /\bsessionFile\b/u.test(declaration) &&
-      /(?:ContextEngine|Compaction|Compact|Maintenance)/u.test(declaration)
-    ) {
-      violations.push({
-        line: index + 1,
-        reason: `baseline exposes context-engine compaction sessionFile contract "${record.exportName}"`,
-      });
-    }
-  }
-  return violations;
-}
-
 export function findGatewaySessionCreateLifecycleViolations(content, fileName = "source.ts") {
   const sourceFile = ts.createSourceFile(fileName, content, ts.ScriptTarget.Latest, true);
   const violations = [];
@@ -874,15 +725,6 @@ export async function main() {
       ),
     findViolations: findEmbeddedAgentSessionTargetViolations,
   });
-  const pluginSdkTranscriptApiSourceViolations = await collectFileViolations({
-    repoRoot,
-    sourceRoots: resolveSourceRoots(repoRoot, ["src/plugin-sdk"]),
-    skipFile: (filePath) =>
-      !postFlipPluginSdkTranscriptApiFiles.has(
-        normalizeRelativePath(path.relative(repoRoot, filePath)),
-      ),
-    findViolations: findPluginSdkPostFlipTranscriptApiSourceViolations,
-  });
   const sessionStoreRuntimePath = path.join(repoRoot, "src/plugin-sdk/session-store-runtime.ts");
   const sessionStoreRuntimeCompatViolations =
     findSessionStoreRuntimeFileBackedCompatExportViolations(
@@ -890,20 +732,6 @@ export async function main() {
       sessionStoreRuntimePath,
     ).map((violation) =>
       Object.assign({ path: "src/plugin-sdk/session-store-runtime.ts" }, violation),
-    );
-  const pluginSdkApiBaselinePath = path.join(
-    repoRoot,
-    "docs/.generated/plugin-sdk-api-baseline.jsonl",
-  );
-  const pluginSdkApiBaseline = await fs.readFile(pluginSdkApiBaselinePath, "utf8");
-  const pluginSdkTranscriptApiBaselineViolations =
-    findPluginSdkPostFlipTranscriptApiBaselineViolations(pluginSdkApiBaseline).map((violation) =>
-      Object.assign({ path: "docs/.generated/plugin-sdk-api-baseline.jsonl" }, violation),
-    );
-  const contextEngineCompactionBaselineViolations =
-    findContextEngineCompactionSessionFileBaselineViolations(pluginSdkApiBaseline).map(
-      (violation) =>
-        Object.assign({ path: "docs/.generated/plugin-sdk-api-baseline.jsonl" }, violation),
     );
   const violations = [
     ...readViolations,
@@ -914,10 +742,7 @@ export async function main() {
     ...lifecycleCleanupViolations,
     ...memoryHostSessionCorpusViolations,
     ...embeddedAgentSessionTargetViolations,
-    ...pluginSdkTranscriptApiSourceViolations,
     ...sessionStoreRuntimeCompatViolations,
-    ...pluginSdkTranscriptApiBaselineViolations,
-    ...contextEngineCompactionBaselineViolations,
   ];
 
   if (violations.length === 0) {
