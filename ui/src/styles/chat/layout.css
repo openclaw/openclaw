@@ -2003,7 +2003,27 @@
 .chat-session-picker__option-main {
   display: grid;
   gap: 3px;
+  flex: 1 1 auto;
   min-width: 0;
+}
+
+.chat-session-picker__option-index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 26px;
+}
+
+.chat-session-picker__option--selected .chat-session-picker__option-index {
+  border-color: color-mix(in srgb, var(--accent) 36%, transparent);
+  color: var(--accent);
 }
 
 .chat-session-picker__option-label,

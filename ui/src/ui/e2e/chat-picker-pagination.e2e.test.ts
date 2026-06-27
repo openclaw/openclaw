@@ -182,7 +182,15 @@ describeControlUiE2e("Control UI chat picker mocked Gateway E2E", () => {
       });
       expect(requestParams(initialRequest)).not.toHaveProperty("search");
       expect(requestParams(initialRequest)).not.toHaveProperty("offset");
-      await page.getByRole("option", { name: /Alpha planning/u }).waitFor({ timeout: 10_000 });
+      const alphaOption = page.getByRole("option", {
+        name: /Alpha planning, current session, session 1 of 2 in the loaded list/u,
+      });
+      await alphaOption.waitFor({ timeout: 10_000 });
+      expect(
+        await page
+          .locator('[data-chat-session-picker-option="true"][data-session-key="agent:alpha"]')
+          .getAttribute("data-chat-session-picker-position"),
+      ).toBe("1");
 
       await searchInput.fill(" telegram ");
       await page.locator('[data-chat-session-search-submit="true"]').last().click();
@@ -198,9 +206,11 @@ describeControlUiE2e("Control UI chat picker mocked Gateway E2E", () => {
         limit: 50,
         search: "telegram",
       });
-      await page.getByRole("option", { name: /Telegram follow-up/u }).waitFor({
-        timeout: 10_000,
-      });
+      await page
+        .getByRole("option", {
+          name: /Telegram follow-up, session 1 of 2 in the loaded list/u,
+        })
+        .waitFor({ timeout: 10_000 });
       await page.getByText("2 / 4").waitFor({ timeout: 10_000 });
 
       await page.getByRole("button", { name: "Load more sessions" }).click();
@@ -288,7 +298,9 @@ describeControlUiE2e("Control UI chat picker mocked Gateway E2E", () => {
       await page.getByRole("button", { name: "Chat session" }).click();
 
       await page.getByRole("option", { name: /Main chat/u }).waitFor({ timeout: 10_000 });
-      await page.getByText("1", { exact: true }).waitFor({ timeout: 10_000 });
+      await page.locator(".chat-session-picker__count").getByText("1", { exact: true }).waitFor({
+        timeout: 10_000,
+      });
       await expect
         .poll(() => page.getByRole("option", { name: /Subagent first/u }).count())
         .toBe(0);
@@ -319,7 +331,9 @@ describeControlUiE2e("Control UI chat picker mocked Gateway E2E", () => {
       });
 
       await page.getByRole("option", { name: /Main work/u }).waitFor({ timeout: 10_000 });
-      await page.getByText("2", { exact: true }).waitFor({ timeout: 10_000 });
+      await page.locator(".chat-session-picker__count").getByText("2", { exact: true }).waitFor({
+        timeout: 10_000,
+      });
       await expect
         .poll(() => page.getByRole("option", { name: /Subagent second/u }).count())
         .toBe(0);

@@ -3657,6 +3657,39 @@ describe("chat session controls", () => {
     );
   });
 
+  it("labels session picker rows with linear position and current-session state", () => {
+    const { state } = createChatHeaderState();
+    state.sessionKey = "agent:main:main";
+    state.settings.sessionKey = state.sessionKey;
+    state.chatSessionPickerOpen = true;
+    state.chatSessionPickerSurface = "desktop";
+    state.chatSessionPickerResult = createSessionsResultFromRows([
+      { key: "agent:main:main", kind: "direct", label: "Main chat", updatedAt: 6 },
+      { key: "agent:main:work", kind: "direct", label: "Main work", updatedAt: 5 },
+    ]);
+    const container = document.createElement("div");
+    render(renderChatSessionSelect(state), container);
+
+    const options = Array.from(
+      container.querySelectorAll<HTMLButtonElement>(
+        'button[data-chat-session-picker-option="true"]',
+      ),
+    );
+
+    expect(options).toHaveLength(2);
+    expect(options[0]?.dataset.chatSessionPickerPosition).toBe("1");
+    expect(options[0]?.querySelector(".chat-session-picker__option-index")?.textContent?.trim())
+      .toBe("1");
+    expect(options[0]?.getAttribute("aria-label")).toContain(
+      "Main chat, current session, session 1 of 2 in the loaded list",
+    );
+    expect(options[1]?.dataset.chatSessionPickerPosition).toBe("2");
+    expect(options[1]?.getAttribute("aria-label")).toContain(
+      "Main work, session 2 of 2 in the loaded list",
+    );
+    expect(options[1]?.getAttribute("aria-label")).not.toContain("current session");
+  });
+
   it("renders only active-agent chat sessions in the picker popover", () => {
     const { state } = createChatHeaderState();
     state.sessionKey = "agent:main:main";
