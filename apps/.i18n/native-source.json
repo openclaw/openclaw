@@ -1682,14 +1682,6 @@
       "id": "native.android.2a3bd62ebc2201d0"
     },
     {
-      "kind": "ui-call",
-      "line": 134,
-      "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
-      "source": "Sort: ${if (recentFirst)",
-      "surface": "android",
-      "id": "native.android.518ebeb3afb0db91"
-    },
-    {
       "kind": "ui-property",
       "line": 137,
       "path": "apps/android/app/src/main/java/ai/openclaw/app/ui/SessionsScreen.kt",
