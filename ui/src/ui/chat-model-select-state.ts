@@ -1,9 +1,11 @@
 import type { ModelCatalogEntry } from "../api/types.ts";
 // Control UI module implements chat model select state behavior.
+import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { AppViewState } from "./app-view-state.ts";
 import {
   buildCatalogDisplayLookup,
   buildChatModelOptionFromLookup,
+  createChatModelOverride,
   formatCatalogChatModelDisplayFromLookup,
   normalizeChatModelOverrideValue,
   resolvePreferredServerChatModelValue,
@@ -13,7 +15,9 @@ import { pushUniqueTrimmedSelectOption } from "./select-options.ts";
 type ChatModelSelectStateInput = Pick<
   AppViewState,
   "sessionKey" | "chatModelOverrides" | "chatModelCatalog" | "sessionsResult"
->;
+> & {
+  sessions?: Pick<SessionCapability, "state">;
+};
 
 export type ChatModelSelectOption = {
   value: string;
@@ -35,7 +39,15 @@ function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
   const catalog = state.chatModelCatalog ?? [];
 
-  // Prefer the local cache — it reflects in-flight patches before sessionsResult refreshes.
+  const sharedOverrides = state.sessions?.state.modelOverrides;
+  if (sharedOverrides && Object.hasOwn(sharedOverrides, state.sessionKey)) {
+    const shared = sharedOverrides[state.sessionKey];
+    return shared === null
+      ? ""
+      : normalizeChatModelOverrideValue(createChatModelOverride(shared), catalog);
+  }
+
+  // Keep the legacy host value as input compatibility while Chat migrates to the capability.
   const cached = state.chatModelOverrides[state.sessionKey];
   if (cached) {
     return normalizeChatModelOverrideValue(cached, catalog);

@@ -75,9 +75,11 @@ import {
   handleAbortChat,
   handleSendChat,
   hasAbortableSessionRun,
+  markQueuedChatSendsWaitingForReconnect,
   recordChatSendServerTiming,
   refreshChat,
   removeQueuedMessage,
+  retryReconnectableQueuedChatSends,
   retryQueuedChatMessage,
   steerQueuedChatMessage,
   type ChatHost,
@@ -1146,6 +1148,7 @@ export class ChatPage extends LitElement {
     if (!state) {
       return;
     }
+    const wasConnected = state.connected;
     const clientChanged = this.connectedClient !== snapshot.client;
     state.client = snapshot.client;
     state.connected = snapshot.connected;
@@ -1168,6 +1171,9 @@ export class ChatPage extends LitElement {
     }
     state.assistantName = this.context.assistantName;
     if (!snapshot.connected) {
+      if (wasConnected) {
+        markQueuedChatSendsWaitingForReconnect(state);
+      }
       this.connectedClient = null;
       state.realtimeTalkSession?.stop();
       state.realtimeTalkSession = null;
@@ -1179,6 +1185,7 @@ export class ChatPage extends LitElement {
     }
     if (clientChanged) {
       this.connectedClient = snapshot.client;
+      void retryReconnectableQueuedChatSends(state);
       void refreshPageChat(state, { startup: true }).finally(() => state.requestUpdate?.());
       void state.loadAssistantIdentity();
     }

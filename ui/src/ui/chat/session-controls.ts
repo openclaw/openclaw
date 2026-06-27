@@ -36,7 +36,6 @@ import {
 import { refreshVisibleToolsEffectiveForCurrentSession } from "../../pages/agents/data.ts";
 import { createChatSessionsLoadOverrides } from "../../pages/chat/session-scope.ts";
 import type { AppViewState } from "../app-view-state.ts";
-import { createChatModelOverride } from "../chat-model-ref.ts";
 import {
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
@@ -1657,13 +1656,9 @@ async function switchChatModel(state: AppViewState, nextModel: string): Promise<
     return true;
   }
   const targetSessionKey = state.sessionKey;
-  const prevOverride = state.chatModelOverrides[targetSessionKey];
+  const sessions = sessionCapability(state);
+  const previousModelOverride = sessions.state.modelOverrides[targetSessionKey];
   setChatError(state, null);
-  // Write the override cache immediately so the picker stays in sync during the RPC round-trip.
-  state.chatModelOverrides = {
-    ...state.chatModelOverrides,
-    [targetSessionKey]: createChatModelOverride(nextModel),
-  };
   const switchPromiseRef: { current?: Promise<boolean> } = {};
   const clearPendingSwitch = () => {
     if (state.chatModelSwitchPromises?.[targetSessionKey] === switchPromiseRef.current) {
@@ -1674,7 +1669,7 @@ async function switchChatModel(state: AppViewState, nextModel: string): Promise<
   };
   const switchPromise: Promise<boolean> = (async () => {
     try {
-      await sessionCapability(state).patch(
+      await sessions.patch(
         targetSessionKey,
         {
           model: nextModel || null,
@@ -1686,7 +1681,7 @@ async function switchChatModel(state: AppViewState, nextModel: string): Promise<
       return true;
     } catch (err) {
       // Roll back so the picker reflects the actual server model.
-      state.chatModelOverrides = { ...state.chatModelOverrides, [targetSessionKey]: prevOverride };
+      sessions.setModelOverride(targetSessionKey, previousModelOverride);
       setChatError(state, `Failed to set model: ${String(err)}`);
       return false;
     } finally {
