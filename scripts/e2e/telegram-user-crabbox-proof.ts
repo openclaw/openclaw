@@ -530,6 +530,7 @@ function gatewayEnv(params: { configPath: string; stateDir: string; sutToken: st
   return {
     ...childProcessBaseEnv(),
     OPENAI_API_KEY: "sk-openclaw-e2e-mock",
+    OPENCLAW_E2E_FORCE_GENERATED_MEDIA_WAKE_FALSE: "1",
     OPENCLAW_QA_ALLOW_LOCAL_IMAGE_PROVIDER: "1",
     OPENCLAW_CONFIG_PATH: params.configPath,
     OPENCLAW_STATE_DIR: params.stateDir,

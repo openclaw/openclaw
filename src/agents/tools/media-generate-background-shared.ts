@@ -39,11 +39,16 @@ import {
   deliverSubagentAnnouncement,
   loadRequesterSessionEntry,
 } from "../subagent-announce-delivery.js";
-import type { SubagentAnnounceDeliveryFailureReason } from "../subagent-announce-dispatch.js";
+import type {
+  SubagentAnnounceDeliveryFailureReason,
+  SubagentAnnounceDeliveryResult,
+} from "../subagent-announce-dispatch.js";
 import { resolveAnnounceOrigin } from "../subagent-announce-origin.js";
 
 const log = createSubsystemLogger("agents/tools/media-generate-background-shared");
 const MEDIA_GENERATION_TASK_KEEPALIVE_INTERVAL_MS = 60_000;
+const GENERATED_MEDIA_WAKE_FALSE_PROOF_ENV = "OPENCLAW_E2E_FORCE_GENERATED_MEDIA_WAKE_FALSE";
+const GENERATED_MEDIA_WAKE_FALSE_PROOF_MARKER = "OPENCLAW_E2E_GENERATED_MEDIA_WAKE_FALSE_PROOF";
 const MEDIA_DIRECT_FALLBACK_DELIVERY_REASONS = new Set<SubagentAnnounceDeliveryFailureReason>([
   "generated_media_missing",
   "message_tool_delivery_missing",
@@ -148,6 +153,43 @@ function touchMediaGenerationTaskRunContext(handle: MediaGenerationTaskHandle) {
     sessionKey: handle.requesterSessionKey,
     lastActiveAt: Date.now(),
   });
+}
+
+function resolveGeneratedMediaWakeFalseProofDelivery(params: {
+  handle: MediaGenerationTaskHandle;
+  status: "ok" | "error";
+  result: string;
+  attachments?: AgentGeneratedAttachment[];
+  mediaUrls?: string[];
+  toolName: string;
+}): SubagentAnnounceDeliveryResult | undefined {
+  if (process.env[GENERATED_MEDIA_WAKE_FALSE_PROOF_ENV] !== "1") {
+    return undefined;
+  }
+  if (params.status !== "ok" || params.toolName !== "image_generate") {
+    return undefined;
+  }
+  const markerSources = [
+    params.handle.taskLabel,
+    params.result,
+    ...(params.mediaUrls ?? []),
+    ...(params.attachments ?? []).flatMap((attachment) => [
+      attachment.path,
+      attachment.name,
+      attachment.url,
+      attachment.mediaUrl,
+      attachment.filePath,
+    ]),
+  ].filter((value): value is string => typeof value === "string");
+  if (!markerSources.some((value) => value.includes(GENERATED_MEDIA_WAKE_FALSE_PROOF_MARKER))) {
+    return undefined;
+  }
+  return {
+    delivered: false,
+    path: "direct",
+    reason: "generated_media_missing",
+    error: "E2E generated-media wake-false proof forced a recoverable delivery miss",
+  };
 }
 
 function createMediaGenerationTaskRun(params: {
@@ -553,6 +595,24 @@ async function wakeMediaGenerationTaskCompletion(params: {
 }): Promise<boolean> {
   if (!params.handle) {
     return true;
+  }
+  const forcedProofDelivery = resolveGeneratedMediaWakeFalseProofDelivery({
+    handle: params.handle,
+    status: params.status,
+    result: params.result,
+    attachments: params.attachments,
+    mediaUrls: params.mediaUrls,
+    toolName: params.toolName,
+  });
+  if (forcedProofDelivery) {
+    log.warn("Media generation completion wake false proof forced a delivery miss", {
+      taskId: params.handle.taskId,
+      runId: params.handle.runId,
+      toolName: params.toolName,
+      reason: forcedProofDelivery.reason,
+      error: forcedProofDelivery.error,
+    });
+    return false;
   }
   const announceId = `${params.toolName}:${params.handle.taskId}:${params.status}`;
   const mediaUrls = Array.from(

@@ -1,6 +1,6 @@
 // Background media generation tests cover detached task completion, requester
 // wake delivery, and direct media fallback behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 
 const subagentAnnounceDeliveryMocks = vi.hoisted(() => ({
@@ -35,6 +35,10 @@ beforeEach(() => {
   subagentAnnounceDeliveryMocks.loadRequesterSessionEntry.mockReturnValue({ entry: undefined });
   detachedTaskRuntimeMocks.createRunningTaskRun.mockClear();
   taskRegistryDeliveryRuntimeMocks.sendMessage.mockReset();
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 function createImageMediaLifecycle() {
@@ -557,6 +561,62 @@ describe("createMediaGenerationTaskLifecycle", () => {
         result: "generated",
       }),
     ).resolves.toBe(true);
+  });
+
+  it("forces generated-media wake-false proof misses only for the dedicated marker", async () => {
+    vi.stubEnv("OPENCLAW_E2E_FORCE_GENERATED_MEDIA_WAKE_FALSE", "1");
+    const lifecycle = createImageMediaLifecycle();
+    const marker = "OPENCLAW_E2E_GENERATED_MEDIA_WAKE_FALSE_PROOF";
+
+    await expect(
+      lifecycle.wakeTaskCompletion({
+        handle: {
+          taskId: "task-image-wake-false-proof",
+          runId: "tool:image_generate:wake-false-proof",
+          requesterSessionKey: "agent:main:telegram:proof-room",
+          taskLabel: `Generate proof image ${marker}`,
+          requesterOrigin: {
+            channel: "telegram",
+            to: "proof-room",
+          },
+        },
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "Generated 1 image.",
+        mediaUrls: ["/tmp/openclaw-proof.png"],
+      }),
+    ).resolves.toBe(false);
+
+    expect(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement).not.toHaveBeenCalled();
+  });
+
+  it("keeps normal generated-media wake delivery when the proof marker is absent", async () => {
+    vi.stubEnv("OPENCLAW_E2E_FORCE_GENERATED_MEDIA_WAKE_FALSE", "1");
+    subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement.mockResolvedValueOnce({
+      delivered: true,
+    });
+    const lifecycle = createImageMediaLifecycle();
+
+    await expect(
+      lifecycle.wakeTaskCompletion({
+        handle: {
+          taskId: "task-image-normal-proof-env",
+          runId: "tool:image_generate:normal-proof-env",
+          requesterSessionKey: "agent:main:telegram:proof-room",
+          taskLabel: "Generate ordinary proof image",
+          requesterOrigin: {
+            channel: "telegram",
+            to: "proof-room",
+          },
+        },
+        status: "ok",
+        statusLabel: "completed successfully",
+        result: "Generated 1 image.",
+        mediaUrls: ["/tmp/openclaw-proof.png"],
+      }),
+    ).resolves.toBe(true);
+
+    expect(subagentAnnounceDeliveryMocks.deliverSubagentAnnouncement).toHaveBeenCalledTimes(1);
   });
 
   it("treats terminal generated-media fallback failure as handled", async () => {

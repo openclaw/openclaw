@@ -299,9 +299,9 @@ function generatedMediaWakeFalseProofEvents(body, bodyText) {
   if (toolOutput) {
     return responseEvents(
       [
-        "Generated media completion acknowledged.",
+        "Generated media wake-false proof hook armed.",
         generatedMediaWakeFalseProofMarker,
-        "The image is ready; attach the generated media in the visible reply.",
+        "The generated image task prompt carries the marker so the trusted SUT can force a recoverable scheduler-level delivery miss.",
       ].join(" "),
     );
   }

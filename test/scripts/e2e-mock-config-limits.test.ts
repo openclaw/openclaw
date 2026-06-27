@@ -245,7 +245,7 @@ describe("e2e mock and config helper numeric limits", () => {
     }
   });
 
-  it("drives generated-media wake-false proof through image_generate then text completion", async () => {
+  it("drives generated-media wake-false proof through image_generate then marker-preserving completion", async () => {
     const marker = "OPENCLAW_E2E_GENERATED_MEDIA_WAKE_FALSE_PROOF";
     await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
       const firstResponse = await fetch(`${baseUrl}/v1/responses`, {
@@ -305,6 +305,12 @@ describe("e2e mock and config helper numeric limits", () => {
           }),
         ],
       });
+      expect(JSON.stringify(secondBody.output)).toContain(
+        "Generated media wake-false proof hook armed.",
+      );
+      expect(JSON.stringify(secondBody.output)).toContain(
+        "trusted SUT can force a recoverable scheduler-level delivery miss",
+      );
       expect(JSON.stringify(secondBody.output)).not.toContain('"type":"function_call"');
     });
   });
