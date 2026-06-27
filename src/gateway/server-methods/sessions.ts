@@ -53,7 +53,6 @@ import {
   listConfiguredSessionStoreAgentIds,
   deleteSessionEntryLifecycle,
   type SessionEntry,
-  updateSessionStore,
 } from "../../config/sessions.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import {
