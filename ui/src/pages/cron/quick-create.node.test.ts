@@ -54,4 +54,13 @@ describe("cron quick create", () => {
 
     expect(patch.payloadModel).toBe("openai/gpt-5.2");
   });
+
+  it("does not map a model for silent systemEvent presets", () => {
+    const patch = draftToCronFormPatch(
+      createDraft({ deliveryPreset: "silent", model: "openai/gpt-5.2" }),
+    );
+
+    expect(patch.payloadKind).toBe("systemEvent");
+    expect(patch.payloadModel).toBeUndefined();
+  });
 });
