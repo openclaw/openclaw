@@ -12,6 +12,7 @@ import {
 const log = createSubsystemLogger("session-running-reconciliation");
 
 const STALE_RUNNING_STATUSES = new Set(["running", "processing"]);
+const ACTIVE_TASK_STATUSES = new Set(["queued", "running"]);
 
 export type SessionRunningReconciliationResult = {
   changed: boolean;
@@ -44,7 +45,7 @@ export function countRunningTasksForSessionKey(sessionKey: string | undefined): 
       ...listFreshTasksForOwnerKeyForStatus(key),
       ...listTasksForSessionKeyForStatus(key),
       ...listTasksForRelatedSessionKeyForStatus(key),
-    ]).filter((task) => task.status === "running").length;
+    ]).filter((task) => ACTIVE_TASK_STATUSES.has(task.status)).length;
   } catch (error) {
     log.warn("failed to count running tasks for persisted session reconciliation", {
       sessionKey: key,

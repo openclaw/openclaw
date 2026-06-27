@@ -14,6 +14,8 @@ import {
   registerAgentRunContext,
   resetAgentRunContextForTest,
 } from "../infra/agent-events.js";
+import { createTaskRecord, resetTaskRegistryForTests } from "../tasks/runtime-internal.js";
+import type { TaskRecord } from "../tasks/task-registry.types.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -36,10 +38,12 @@ let tmpDir: string;
 beforeEach(async () => {
   vi.clearAllMocks();
   resetAgentRunContextForTest();
+  resetTaskRegistryForTests({ persist: false });
   tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-main-restart-recovery-"));
 });
 
 afterEach(async () => {
+  resetTaskRegistryForTests({ persist: false });
   await fs.rm(tmpDir, { recursive: true, force: true });
 });
 
@@ -94,6 +98,14 @@ function firstGatewayParams(): Record<string, unknown> {
     throw new Error("expected gateway params");
   }
   return params as Record<string, unknown>;
+}
+
+function createRequiredTask(params: Parameters<typeof createTaskRecord>[0]): TaskRecord {
+  const task = createTaskRecord(params);
+  if (!task) {
+    throw new Error("expected task creation to succeed");
+  }
+  return task;
 }
 
 describe("main-session-restart-recovery", () => {
@@ -1338,6 +1350,47 @@ describe("main-session-restart-recovery", () => {
     expect(store[killedKey]?.status).toBe("killed");
     expect(store[killedKey]?.updatedAt).toBe(terminalUpdatedAt);
     expect(store[killedKey]?.recoveredFromStaleRunning).toBeUndefined();
+  });
+
+  it("does not reconcile startup stale running rows while queued task work exists", async () => {
+    const sessionsDir = await makeSessionsDir("openclaw");
+    const sessionKey = "agent:openclaw:telegram:group:-1003789377335:topic:25537";
+    const originalUpdatedAt = Date.now() - 10_000;
+    createRequiredTask({
+      runtime: "cli",
+      requesterSessionKey: sessionKey,
+      ownerKey: sessionKey,
+      task: "queued topic recovery work",
+      status: "queued",
+    });
+    await writeStore(sessionsDir, {
+      [sessionKey]: {
+        sessionId: "telegram-topic-queued-task",
+        updatedAt: originalUpdatedAt,
+        status: "running",
+        abortedLastRun: true,
+        subagentRole: "leaf",
+      },
+    });
+
+    const result = await recoverStartupOrphanedMainSessions({
+      stateDir: tmpDir,
+      activeSessionIds: [],
+      activeSessionKeys: [],
+      updatedBeforeMs: Date.now(),
+    });
+
+    expect(result).toMatchObject({
+      marked: 0,
+      recovered: 0,
+      failed: 0,
+      reconciledStale: 0,
+    });
+    expect(callGateway).not.toHaveBeenCalled();
+    const store = readSessionStoreForTest(path.join(sessionsDir, "sessions.json"));
+    expect(store[sessionKey]?.status).toBe("running");
+    expect(store[sessionKey]?.updatedAt).toBe(originalUpdatedAt);
+    expect(store[sessionKey]?.recoveredFromStaleRunning).toBeUndefined();
   });
 
   it("fails marked sessions whose transcript tail cannot be resumed", async () => {

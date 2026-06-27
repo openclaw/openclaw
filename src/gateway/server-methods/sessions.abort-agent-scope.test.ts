@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { loadSessionStore, saveSessionStore, type SessionEntry } from "../../config/sessions.js";
+import { createTaskRecord, resetTaskRegistryForTests } from "../../tasks/runtime-internal.js";
+import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const chatAbortMock = vi.fn();
@@ -82,6 +84,14 @@ function createContext(
 
 function createRespond(): RespondFn {
   return vi.fn() as unknown as RespondFn;
+}
+
+function createRequiredTask(params: Parameters<typeof createTaskRecord>[0]): TaskRecord {
+  const task = createTaskRecord(params);
+  if (!task) {
+    throw new Error("expected task creation to succeed");
+  }
+  return task;
 }
 
 async function withSessionStore<T>(
@@ -189,6 +199,7 @@ describe("sessions.abort agent scope", () => {
       store: {},
     });
     loadSessionEntryMock.mockClear();
+    resetTaskRegistryForTests({ persist: false });
   });
 
   it("does not abort an active run whose session key belongs to another requested agent", async () => {
@@ -416,6 +427,66 @@ describe("sessions.abort agent scope", () => {
         expect(store[killedKey]?.status).toBe("killed");
         expect(store[killedKey]?.updatedAt).toBe(originalUpdatedAt);
         expect(store[killedKey]?.recoveredFromStaleRunning).toBeUndefined();
+        expect(broadcastToConnIds).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("preserves queued session task state when abort finds no active run", async () => {
+    const sessionKey = "agent:main:main";
+    const originalUpdatedAt = Date.now() - 60_000;
+    createRequiredTask({
+      runtime: "cli",
+      requesterSessionKey: sessionKey,
+      ownerKey: sessionKey,
+      task: "queued session work",
+      status: "queued",
+    });
+    await withSessionStore(
+      {
+        [sessionKey]: {
+          sessionId: "session-queued-task",
+          updatedAt: originalUpdatedAt,
+          status: "running",
+          restartRecoveryDeliveryRunId: "run-queued-task",
+        },
+      },
+      async (storePath) => {
+        const broadcastToConnIds = vi.fn();
+        loadSessionEntryMock.mockReturnValueOnce({
+          canonicalKey: sessionKey,
+          storePath,
+        });
+        chatAbortMock.mockImplementationOnce(
+          async ({ respond: abortRespond }: { respond: RespondFn }) => {
+            abortRespond(true, { ok: true, aborted: false, runIds: [] });
+          },
+        );
+        const context = createContext({
+          extra: {
+            getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+            broadcastToConnIds,
+            dedupe: new Map(),
+          },
+        });
+
+        const respond = await callSessions(
+          "sessions.abort",
+          { key: sessionKey },
+          { context, reqId: "req-queued-task-no-active-run" },
+        );
+
+        expect(respond).toHaveBeenCalledWith(
+          true,
+          { ok: true, abortedRunId: null, status: "no-active-run" },
+          undefined,
+          undefined,
+        );
+        const stored = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+        expect(stored?.status).toBe("running");
+        expect(stored?.updatedAt).toBe(originalUpdatedAt);
+        expect(stored?.recoveredFromStaleRunning).toBeUndefined();
+        expect(stored?.restartRecoveryDeliveryRunId).toBe("run-queued-task");
         expect(broadcastToConnIds).not.toHaveBeenCalled();
       },
     );
