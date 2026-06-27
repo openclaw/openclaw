@@ -60,7 +60,10 @@ function readScopes(value: unknown): string[] | undefined {
   return out.length > 0 ? out : undefined;
 }
 
-export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsResult> {
+export async function probeMSTeams(
+  cfg?: MSTeamsConfig,
+  params?: { accountId?: string | null },
+): Promise<ProbeMSTeamsResult> {
   const creds = resolveMSTeamsCredentials(cfg);
   if (!creds) {
     return {
@@ -100,7 +103,7 @@ export async function probeMSTeams(cfg?: MSTeamsConfig): Promise<ProbeMSTeamsRes
     let delegatedAuth: ProbeMSTeamsResult["delegatedAuth"];
     if (cfg?.delegatedAuth?.enabled) {
       try {
-        const tokens = loadDelegatedTokens();
+        const tokens = loadDelegatedTokens({ accountId: params?.accountId });
         if (tokens) {
           const isExpired = !isFutureDateTimestampMs(tokens.expiresAt);
           delegatedAuth = {

@@ -171,8 +171,9 @@ local account port. For example:
 ```
 
 <Note>
-The interactive Teams setup wizard currently configures the default account.
-For multiple Teams bot accounts, edit `channels.msteams.accounts` directly.
+The interactive Teams setup wizard can configure a selected Teams account.
+Environment variables remain default-account only. Named accounts should define
+their bot identity in config and use a unique webhook port.
 </Note>
 
 **5. Install the app in Teams**

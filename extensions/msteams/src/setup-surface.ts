@@ -1,9 +1,9 @@
 // Msteams plugin module implements setup surface behavior.
 import {
-  createTopLevelChannelAllowFromSetter,
-  createTopLevelChannelDmPolicy,
-  createTopLevelChannelGroupPolicySetter,
+  createAccountScopedGroupAccessSection,
+  createLegacyCompatChannelDmPolicy,
   mergeAllowFromEntries,
+  setAccountDmAllowFromForChannel,
   splitSetupEntries,
   createSetupTranslator,
   type ChannelSetupDmPolicy,
@@ -12,25 +12,19 @@ import {
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup";
 import type { MSTeamsTeamConfig } from "../runtime-api.js";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { formatUnknownError } from "./errors.js";
 import {
   parseMSTeamsTeamEntry,
   resolveMSTeamsChannelAllowlist,
   resolveMSTeamsUserAllowlist,
 } from "./resolve-allowlist.js";
-import { createMSTeamsSetupWizardBase } from "./setup-core.js";
+import { createMSTeamsSetupWizardBase, patchMSTeamsAccountConfig } from "./setup-core.js";
 import { resolveMSTeamsCredentials, saveDelegatedTokens } from "./token.js";
 
 const t = createSetupTranslator();
 
 const channel = "msteams" as const;
-const setMSTeamsAllowFrom = createTopLevelChannelAllowFromSetter({
-  channel,
-});
-const setMSTeamsGroupPolicy = createTopLevelChannelGroupPolicySetter({
-  channel,
-  enabled: true,
-});
 
 export function openDelegatedOAuthUrl(url: string): Promise<void> {
   return Promise.reject(
@@ -44,9 +38,11 @@ function looksLikeGuid(value: string): boolean {
 
 async function promptMSTeamsAllowFrom(params: {
   cfg: OpenClawConfig;
+  accountId?: string;
   prompter: WizardPrompter;
 }): Promise<OpenClawConfig> {
-  const existing = params.cfg.channels?.msteams?.allowFrom ?? [];
+  const accountId = params.accountId ?? "default";
+  const existing = resolveMSTeamsAccountConfig(params.cfg, accountId).allowFrom ?? [];
   await params.prompter.note(
     [
       t("wizard.msteams.allowlistIntro"),
@@ -76,7 +72,7 @@ async function promptMSTeamsAllowFrom(params: {
     }
 
     const resolved = await resolveMSTeamsUserAllowlist({
-      cfg: params.cfg,
+      cfg: withMSTeamsAccountConfig(params.cfg, accountId),
       entries: parts,
     }).catch(() => null);
 
@@ -90,7 +86,12 @@ async function promptMSTeamsAllowFrom(params: {
         continue;
       }
       const unique = mergeAllowFromEntries(existing, ids);
-      return setMSTeamsAllowFrom(params.cfg, unique);
+      return setAccountDmAllowFromForChannel({
+        cfg: params.cfg,
+        channel,
+        accountId,
+        allowFrom: unique,
+      });
     }
 
     const unresolved = resolved.filter((item) => !item.resolved || !item.id);
@@ -106,15 +107,31 @@ async function promptMSTeamsAllowFrom(params: {
 
     const ids = resolved.map((item) => item.id as string);
     const unique = mergeAllowFromEntries(existing, ids);
-    return setMSTeamsAllowFrom(params.cfg, unique);
+    return setAccountDmAllowFromForChannel({
+      cfg: params.cfg,
+      channel,
+      accountId,
+      allowFrom: unique,
+    });
   }
+}
+
+function withMSTeamsAccountConfig(cfg: OpenClawConfig, accountId?: string | null): OpenClawConfig {
+  return {
+    ...cfg,
+    channels: {
+      ...cfg.channels,
+      msteams: resolveMSTeamsAccountConfig(cfg, accountId),
+    },
+  };
 }
 
 function setMSTeamsTeamsAllowlist(
   cfg: OpenClawConfig,
+  accountId: string,
   entries: Array<{ teamKey: string; channelKey?: string }>,
 ): OpenClawConfig {
-  const baseTeams = cfg.channels?.msteams?.teams ?? {};
+  const baseTeams = resolveMSTeamsAccountConfig(cfg, accountId).teams ?? {};
   const teams: Record<string, { channels?: Record<string, unknown> }> = { ...baseTeams };
   for (const entry of entries) {
     const teamKey = entry.teamKey;
@@ -130,44 +147,50 @@ function setMSTeamsTeamsAllowlist(
       teams[teamKey] = existing;
     }
   }
-  return {
-    ...cfg,
-    channels: {
-      ...cfg.channels,
-      msteams: {
-        ...cfg.channels?.msteams,
-        enabled: true,
-        teams: teams as Record<string, MSTeamsTeamConfig>,
-      },
-    },
-  };
+  return patchMSTeamsAccountConfig({
+    cfg,
+    accountId,
+    patch: { teams: teams as Record<string, MSTeamsTeamConfig> },
+  });
 }
 
-function listMSTeamsGroupEntries(cfg: OpenClawConfig): string[] {
-  return Object.entries(cfg.channels?.msteams?.teams ?? {}).flatMap(([teamKey, value]) => {
-    const channels = value?.channels ?? {};
-    const channelKeys = Object.keys(channels);
-    if (channelKeys.length === 0) {
-      return [teamKey];
-    }
-    return channelKeys.map((channelKey) => `${teamKey}/${channelKey}`);
-  });
+function listMSTeamsGroupEntries(cfg: OpenClawConfig, accountId: string): string[] {
+  return Object.entries(resolveMSTeamsAccountConfig(cfg, accountId).teams ?? {}).flatMap(
+    ([teamKey, value]) => {
+      const channels = value?.channels ?? {};
+      const channelKeys = Object.keys(channels);
+      if (channelKeys.length === 0) {
+        return [teamKey];
+      }
+      return channelKeys.map((channelKey) => `${teamKey}/${channelKey}`);
+    },
+  );
 }
 
 async function resolveMSTeamsGroupAllowlist(params: {
   cfg: OpenClawConfig;
+  accountId: string;
   entries: string[];
   prompter: Pick<WizardPrompter, "note">;
 }): Promise<Array<{ teamKey: string; channelKey?: string }>> {
   let resolvedEntries = params.entries
     .map((entry) => parseMSTeamsTeamEntry(entry))
     .filter(Boolean) as Array<{ teamKey: string; channelKey?: string }>;
-  if (params.entries.length === 0 || !resolveMSTeamsCredentials(params.cfg.channels?.msteams)) {
+  if (
+    params.entries.length === 0 ||
+    !resolveMSTeamsCredentials(resolveMSTeamsAccountConfig(params.cfg, params.accountId), {
+      allowEnvFallback: params.accountId === "default",
+      pathPrefix:
+        params.accountId === "default"
+          ? "channels.msteams"
+          : `channels.msteams.accounts.${params.accountId}`,
+    })
+  ) {
     return resolvedEntries;
   }
   try {
     const lookups = await resolveMSTeamsChannelAllowlist({
-      cfg: params.cfg,
+      cfg: withMSTeamsAccountConfig(params.cfg, params.accountId),
       entries: params.entries,
     });
     const resolvedChannels = lookups.filter(
@@ -224,25 +247,34 @@ async function resolveMSTeamsGroupAllowlist(params: {
   }
 }
 
-const msteamsGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> = {
-  label: t("wizard.msteams.channelsLabel"),
-  placeholder: "Team Name/Channel Name, teamId/conversationId",
-  currentPolicy: ({ cfg }) => cfg.channels?.msteams?.groupPolicy ?? "allowlist",
-  currentEntries: ({ cfg }) => listMSTeamsGroupEntries(cfg),
-  updatePrompt: ({ cfg }) => Boolean(cfg.channels?.msteams?.teams),
-  setPolicy: ({ cfg, policy }) => setMSTeamsGroupPolicy(cfg, policy),
-  resolveAllowlist: async ({ cfg, entries, prompter }) =>
-    await resolveMSTeamsGroupAllowlist({ cfg, entries, prompter }),
-  applyAllowlist: ({ cfg, resolved }) =>
-    setMSTeamsTeamsAllowlist(cfg, resolved as Array<{ teamKey: string; channelKey?: string }>),
-};
+const msteamsGroupAccess: NonNullable<ChannelSetupWizard["groupAccess"]> =
+  createAccountScopedGroupAccessSection({
+    channel,
+    label: t("wizard.msteams.channelsLabel"),
+    placeholder: "Team Name/Channel Name, teamId/conversationId",
+    currentPolicy: ({ cfg, accountId }) =>
+      resolveMSTeamsAccountConfig(cfg, accountId).groupPolicy ?? "allowlist",
+    currentEntries: ({ cfg, accountId }) => listMSTeamsGroupEntries(cfg, accountId),
+    updatePrompt: ({ cfg, accountId }) =>
+      Boolean(resolveMSTeamsAccountConfig(cfg, accountId).teams),
+    resolveAllowlist: async ({ cfg, accountId, entries, prompter }) =>
+      await resolveMSTeamsGroupAllowlist({ cfg, accountId, entries, prompter }),
+    fallbackResolved: (entries) =>
+      entries.map((entry) => parseMSTeamsTeamEntry(entry)).filter(Boolean) as Array<{
+        teamKey: string;
+        channelKey?: string;
+      }>,
+    applyAllowlist: ({ cfg, accountId, resolved }) =>
+      setMSTeamsTeamsAllowlist(
+        cfg,
+        accountId,
+        resolved as Array<{ teamKey: string; channelKey?: string }>,
+      ),
+  });
 
-const msteamsDmPolicy: ChannelSetupDmPolicy = createTopLevelChannelDmPolicy({
+const msteamsDmPolicy: ChannelSetupDmPolicy = createLegacyCompatChannelDmPolicy({
   label: "MS Teams",
   channel,
-  policyKey: "channels.msteams.dmPolicy",
-  allowFromKey: "channels.msteams.allowFrom",
-  getCurrent: (cfg) => cfg.channels?.msteams?.dmPolicy ?? "pairing",
   promptAllowFrom: promptMSTeamsAllowFrom,
 });
 
@@ -260,23 +292,29 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
     const baseFinalize = msteamsSetupWizardBase.finalize;
     const baseResult = baseFinalize ? await baseFinalize(params) : undefined;
     let next = baseResult?.cfg ?? params.cfg;
-    const finalCreds = resolveMSTeamsCredentials(next.channels?.msteams);
+    const resolvedAccountId =
+      (baseResult as { accountId?: string } | undefined)?.accountId ?? params.accountId;
+    const finalCreds = resolveMSTeamsCredentials(
+      resolveMSTeamsAccountConfig(next, resolvedAccountId),
+      {
+        allowEnvFallback: resolvedAccountId === "default",
+        pathPrefix:
+          resolvedAccountId === "default"
+            ? "channels.msteams"
+            : `channels.msteams.accounts.${resolvedAccountId}`,
+      },
+    );
     if (finalCreds?.type === "secret") {
       const enableDelegated = await params.prompter.confirm({
         message: t("wizard.msteams.delegatedAuthPrompt"),
         initialValue: false,
       });
       if (enableDelegated) {
-        next = {
-          ...next,
-          channels: {
-            ...next.channels,
-            msteams: {
-              ...next.channels?.msteams,
-              delegatedAuth: { enabled: true },
-            },
-          },
-        };
+        next = patchMSTeamsAccountConfig({
+          cfg: next,
+          accountId: resolvedAccountId,
+          patch: { delegatedAuth: { enabled: true } },
+        });
         try {
           const { loginMSTeamsDelegated } = await import("./oauth.js");
           const progress = params.prompter.progress(t("wizard.msteams.delegatedOAuthProgress"));
@@ -297,7 +335,7 @@ export const msteamsSetupWizard: ChannelSetupWizard = {
               clientSecret: finalCreds.appPassword,
             },
           );
-          saveDelegatedTokens(tokens);
+          saveDelegatedTokens(tokens, { accountId: resolvedAccountId });
           progress.stop(t("wizard.msteams.delegatedAuthConfigured"));
         } catch (err) {
           await params.prompter.note(

@@ -1166,7 +1166,11 @@ export const msteamsPlugin: ChannelPlugin<ResolvedMSTeamsAccount, ProbeMSTeamsRe
             port: snapshot.port ?? null,
           }),
         probeAccount: async ({ cfg, account }) =>
-          await (await loadMSTeamsChannelRuntime()).probeMSTeams(account.config),
+          await (
+            await loadMSTeamsChannelRuntime()
+          ).probeMSTeams(account.config, {
+            accountId: account.accountId,
+          }),
         formatCapabilitiesProbe: ({ probe }) => {
           const teamsProbe = probe;
           const lines: Array<{ text: string; tone?: "error" }> = [];
