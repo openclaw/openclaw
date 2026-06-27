@@ -98,6 +98,8 @@ import { stripSystemPromptCacheBoundary } from "./system-prompt-cache-boundary.j
 import { transformTransportMessages } from "./transport-message-transform.js";
 import {
   assignTransportErrorDetails,
+  failTransportStream,
+  finalizeTransportStream,
   mergeTransportMetadata,
   sanitizeTransportPayloadText,
 } from "./transport-stream-shared.js";
@@ -2801,15 +2803,9 @@ export function createOpenAICompletionsTransportStreamFn(): StreamFn {
           signal: options?.signal,
           emitReasoning,
         });
-        if (options?.signal?.aborted) {
-          throw new Error("Request was aborted");
-        }
-        stream.push({ type: "done", reason: output.stopReason as never, message: output as never });
-        stream.end();
+        finalizeTransportStream({ stream, output, signal: options?.signal });
       } catch (error) {
-        assignTransportErrorDetails(output, error, options?.signal);
-        stream.push({ type: "error", reason: output.stopReason as never, error: output as never });
-        stream.end();
+        failTransportStream({ stream, output, signal: options?.signal, error });
       }
     })();
     return eventStream as unknown as ReturnType<StreamFn>;
@@ -2975,11 +2971,6 @@ async function processOpenAICompletionsStream(
     if (switchingToolCall) {
       currentBlock = null;
       flushPendingPostToolCallDeltas();
-    }
-    // Recovery may run after this chunk's finish reason was parsed. Preserve
-    // length/error terminals so complete-looking partial DSML never executes.
-    if (output.stopReason === "stop") {
-      output.stopReason = "toolUse";
     }
     recoveredDeepSeekToolCallIndex += 1;
     const block: ToolCallBlock = {
@@ -3250,6 +3241,8 @@ async function processOpenAICompletionsStream(
   if (output.stopReason === "toolUse" && !hasToolCalls) {
     output.stopReason = "stop";
   }
+  // Tool-call recovery is executable only after an explicit provider terminal.
+  // EOF alone can mean transport truncation, even when the recovered call parses.
   if (sawStopFinishReason && output.stopReason === "stop" && hasToolCalls && !hasVisibleText) {
     output.stopReason = "toolUse";
   }

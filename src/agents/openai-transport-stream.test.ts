@@ -2843,6 +2843,125 @@ describe("openai transport stream", () => {
     },
   );
 
+  it("does not authorize recovered DeepSeek DSML calls when the stream omits a terminal", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-no-terminal",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/partial.md"}</|DSML|invoke></|DSML|tool_calls>',
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.stopReason).toBe("stop");
+    expect(output.content).toEqual([]);
+  });
+
+  it("emits recovered DeepSeek content-filter terminals as errors", async () => {
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-deepseek-dsml-content-filter",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: "deepseek-v4-pro",
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  content:
+                    '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/partial.md"}</|DSML|invoke></|DSML|tool_calls>',
+                },
+                finish_reason: "content_filter",
+              },
+            ],
+          })}\n\n`,
+        );
+        res.end("data: [DONE]\n\n");
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = {
+        ...createDeepSeekCompletionsModel(),
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Read the file", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      const terminalEvents: Array<{
+        type: string;
+        reason?: string;
+        error?: Record<string, unknown>;
+      }> = [];
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        reason?: string;
+        error?: Record<string, unknown>;
+      }>) {
+        if (event.type === "done" || event.type === "error") {
+          terminalEvents.push(event);
+        }
+      }
+
+      expect(terminalEvents).toEqual([
+        expect.objectContaining({
+          type: "error",
+          reason: "error",
+          error: expect.objectContaining({
+            stopReason: "error",
+            errorMessage: "Provider finish_reason: content_filter",
+            content: [],
+          }),
+        }),
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
   it("parses repeated DeepSeek DSML name attributes consistently", async () => {
     // Guards the cached attribute matchers: repeated parses must stay identical
     // (no stale RegExp lastIndex) across separate stream invocations.

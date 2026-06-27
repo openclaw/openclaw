@@ -159,7 +159,7 @@ describe("consumeGoogleGenerateContentStream", () => {
               finishReason: FinishReason.MAX_TOKENS,
             },
           ],
-        } as GenerateContentResponse,
+        } as unknown as GenerateContentResponse,
       ]),
       model,
       output,
