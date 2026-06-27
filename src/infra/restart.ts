@@ -1049,7 +1049,7 @@ export function scheduleGatewaySigusr1Restart(opts?: {
         !canReplacePendingRestartEmitHooks(opts?.emitHooks, opts?.sessionKey)
       ) {
         restartLog.warn(
-          `restart continuation dropped: another session owns the pending restart (callerSessionKey=${opts?.sessionKey ?? "unspecified"} pendingSessionKey=${pendingRestartSessionKey ?? "unspecified"})`,
+          `restart continuation dropped: another session owns the pending restart (callerSessionKey=${formatRestartSessionKeyForLog(opts?.sessionKey)} pendingSessionKey=${formatRestartSessionKeyForLog(pendingRestartSessionKey)})`,
         );
         if (pendingRestartTimer) {
           clearTimeout(pendingRestartTimer);
