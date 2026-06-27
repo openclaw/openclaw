@@ -71,6 +71,91 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     expectSinglePayloadText(payloads, "Done.");
   });
 
+  it("does not revive signed unphased text when explicit final-answer text is empty", () => {
+    expectNoPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/old.png",
+            textSignature: JSON.stringify({ v: 1, id: "item_old" }),
+          },
+          {
+            type: "text",
+            text: "   ",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+  });
+
+  it("does not revive signed unphased text when explicit output_text final-answer text is empty", () => {
+    expectNoPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text: "MEDIA:/tmp/old.png",
+            textSignature: JSON.stringify({ v: 1, id: "item_old" }),
+          },
+          {
+            type: "output_text",
+            text: "   ",
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+  });
+
+  it("keeps literal mid-answer reasoning-looking tags in final-answer text", () => {
+    const text = "Before <think>literal tag text after";
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: [
+          {
+            type: "text",
+            text,
+            textSignature: JSON.stringify({
+              v: 1,
+              id: "item_final",
+              phase: "final_answer",
+            }),
+          },
+        ],
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, text);
+  });
+
+  it("keeps strict reasoning-tag stripping for legacy string fallback text", () => {
+    const payloads = buildPayloads({
+      lastAssistant: {
+        role: "assistant",
+        stopReason: "stop",
+        content: "Visible prefix <think>private reasoning tail",
+      } as AssistantMessage,
+    });
+
+    expectSinglePayloadText(payloads, "Visible prefix");
+  });
+
   it("falls back to final-answer assistant text when streamed text only contains blanks", () => {
     const payloads = buildPayloads({
       assistantTexts: ["   "],
