@@ -123,12 +123,14 @@ async function cleanupArchivedTranscriptsForSummary(params: {
   storePath: string;
   maintenance: ResolvedSessionMaintenanceConfig;
   dryRun: boolean;
+  excludeCanonicalPaths?: ReadonlySet<string>;
 }): Promise<SessionArchiveCleanupReport> {
   const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
   const result = await cleanupArchivedSessionTranscripts({
     directories: [path.dirname(path.resolve(params.storePath))],
     rules: resolveSessionArchiveCleanupRules(params.maintenance),
     dryRun: params.dryRun,
+    excludeCanonicalPaths: params.excludeCanonicalPaths,
   });
   return {
     scannedFiles: result.scanned,
@@ -479,6 +481,7 @@ async function previewStoreCleanup(params: {
     storePath: params.target.storePath,
     maintenance: params.maintenance,
     dryRun: true,
+    excludeCanonicalPaths: budgetRemovedFilePaths,
   });
   const budgetEvictedKeys = new Set<string>();
   for (const key of Object.keys(beforeBudgetStore)) {

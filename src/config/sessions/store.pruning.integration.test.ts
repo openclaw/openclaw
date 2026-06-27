@@ -704,6 +704,51 @@ describe("Integration: saveSessionStore with pruning", () => {
     await expectPathExists(oldOrphanTranscript);
   });
 
+  it("sessions cleanup dry-run does not double-count archives already covered by disk budget", async () => {
+    mockLoadConfig.mockReturnValue({
+      session: {
+        maintenance: {
+          mode: "enforce",
+          pruneAfter: "7d",
+          resetArchiveRetention: "7d",
+          maxEntries: 500,
+          maxDiskBytes: 1000,
+          highWaterBytes: 900,
+        },
+      },
+    });
+
+    const now = Date.now();
+    const store: Record<string, SessionEntry> = {
+      fresh: { sessionId: "fresh-session", updatedAt: now },
+    };
+    const oldArchived = path.join(
+      testDir,
+      `old-session.jsonl.deleted.${archiveTimestamp(now - 10 * DAY_MS)}`,
+    );
+    await fs.writeFile(storePath, JSON.stringify(store, null, 2), "utf-8");
+    await fs.writeFile(oldArchived, "x".repeat(2000), "utf-8");
+    const oldDate = new Date(now - 10 * DAY_MS);
+    await fs.utimes(oldArchived, oldDate, oldDate);
+
+    const dryRun = await runSessionsCleanup({
+      cfg: {},
+      opts: { store: storePath, dryRun: true, enforce: true },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    const diskBudgetSummary = dryRun.previewResults[0]?.summary.diskBudget;
+    if (diskBudgetSummary === null || diskBudgetSummary === undefined) {
+      throw new Error("expected disk budget cleanup summary");
+    }
+    expect(diskBudgetSummary.removedFiles).toBe(1);
+    expect(dryRun.previewResults[0]?.summary.archiveCleanup).toEqual({
+      scannedFiles: 0,
+      removedFiles: 0,
+    });
+    await expectPathExists(oldArchived);
+  });
+
   it("sessions cleanup dry-run excludes stale and capped entry transcripts from orphan counts", async () => {
     mockLoadConfig.mockReturnValue({
       session: {

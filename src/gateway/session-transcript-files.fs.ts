@@ -490,6 +490,7 @@ export async function cleanupArchivedSessionTranscripts(opts: {
   rules: SessionArchiveCleanupRule[];
   nowMs?: number;
   dryRun?: boolean;
+  excludeCanonicalPaths?: ReadonlySet<string>;
 }): Promise<{ removed: number; scanned: number }> {
   const rules = opts.rules.filter(
     (rule) => Number.isFinite(rule.olderThanMs) && rule.olderThanMs >= 0,
@@ -510,9 +511,12 @@ export async function cleanupArchivedSessionTranscripts(opts: {
         if (timestamp == null) {
           continue;
         }
+        const fullPath = path.join(dir, entry);
+        if (opts.excludeCanonicalPaths?.has(canonicalizePathForComparison(fullPath))) {
+          break;
+        }
         scanned += 1;
         if (now - timestamp > rule.olderThanMs) {
-          const fullPath = path.join(dir, entry);
           const stat = await fs.promises.stat(fullPath).catch(() => null);
           if (stat?.isFile()) {
             if (!opts.dryRun) {
