@@ -5,6 +5,7 @@ Docs: https://docs.openclaw.ai
 ## Unreleased
 
 ### Fixes
+- **Tavily plugin SecretRef fallback:** `resolveTavilyApiKey` now uses inspect-mode SecretRef resolution and treats file/exec SecretRefs and env SecretRefs whose id is not `TAVILY_API_KEY` as `blocked`, so a configured non-`TAVILY_API_KEY` credential cannot be silently rewritten to ambient `process.env.TAVILY_API_KEY`. ([PR #95110](https://github.com/openclaw/openclaw/pull/95110), [Issue #95109](https://github.com/openclaw/openclaw/issues/95109)). Thanks @kzzalews.
 
 - **WeChat account routing:** `startAccount` preserves session routing by resolving manifest channel account config from raw account keys with opaque provider ids, while still ignoring manifest account keys that normalize to blocked object keys. (#93686) Thanks @zhangguiping-xydt.
 
