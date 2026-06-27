@@ -20,6 +20,12 @@ type VolcengineTTSParams = {
   emotion?: string;
   encoding?: VolcengineTtsEncoding;
   timeoutMs?: number;
+  /** When true, allow connections to fake-IP ranges used by TUN proxy stacks
+   * (sing-box, Clash, Surge) for DNS resolution — specifically RFC 2544
+   * benchmark range 198.18.0.0/15 and IPv6 Unique Local addresses. This does
+   * NOT open up the full RFC 1918 private network space, so DNS-rebind attacks
+   * against metadata / intranet addresses remain blocked. Defaults to false. */
+  allowPrivateNetwork?: boolean;
 };
 
 const DEFAULT_SEED_VOICE = "en_female_anna_mars_bigtts";
@@ -122,6 +128,7 @@ async function seedSpeechTTS(params: VolcengineTTSParams & { apiKey: string }): 
     emotion,
     encoding = "ogg_opus",
     timeoutMs = 30_000,
+    allowPrivateNetwork = false,
   } = params;
   const audioFormat = seedAudioFormat(encoding);
 
@@ -153,7 +160,15 @@ async function seedSpeechTTS(params: VolcengineTTSParams & { apiKey: string }): 
       body: payload,
     },
     timeoutMs,
-    policy: { hostnameAllowlist: hostnameAllowlist(baseUrl) },
+    policy: {
+      hostnameAllowlist: hostnameAllowlist(baseUrl),
+      // Use narrow fake-IP policy flags rather than the broad allowPrivateNetwork
+      // flag, so only the 198.18/15 benchmark range (RFC 2544) and IPv6 ULA
+      // ranges used by TUN proxy stacks are opened — not the full RFC 1918 space.
+      ...(allowPrivateNetwork
+        ? { allowRfc2544BenchmarkRange: true, allowIpv6UniqueLocalRange: true }
+        : {}),
+    },
     auditContext: "volcengine.tts",
   });
 
@@ -203,6 +218,7 @@ async function legacyVolcengineTTS(
     emotion,
     encoding = "ogg_opus",
     timeoutMs = 30_000,
+    allowPrivateNetwork = false,
   } = params;
 
   const payload = JSON.stringify({
@@ -235,7 +251,15 @@ async function legacyVolcengineTTS(
       body: payload,
     },
     timeoutMs,
-    policy: { hostnameAllowlist: hostnameAllowlist(baseUrl) },
+    policy: {
+      hostnameAllowlist: hostnameAllowlist(baseUrl),
+      // Use narrow fake-IP policy flags rather than the broad allowPrivateNetwork
+      // flag, so only the 198.18/15 benchmark range (RFC 2544) and IPv6 ULA
+      // ranges used by TUN proxy stacks are opened — not the full RFC 1918 space.
+      ...(allowPrivateNetwork
+        ? { allowRfc2544BenchmarkRange: true, allowIpv6UniqueLocalRange: true }
+        : {}),
+    },
     auditContext: "volcengine.tts",
   });
 
