@@ -27,10 +27,7 @@ import {
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
-import {
-  scrubDreamingNarrativeArtifacts,
-  type NarrativePhaseData,
-} from "./dreaming-narrative.js";
+import type { NarrativePhaseData } from "./dreaming-narrative.js";
 import {
   formatErrorMessage,
   includesSystemEventToken,
@@ -43,6 +40,13 @@ const STARTUP_CRON_RETRY_MAX_ATTEMPTS = 12;
 const HEARTBEAT_ISOLATED_SESSION_SUFFIX = ":heartbeat";
 
 type Logger = Pick<OpenClawPluginApi["logger"], "info" | "warn" | "error">;
+let dreamingNarrativeModulePromise:
+  | Promise<typeof import("./dreaming-narrative.js")>
+  | undefined;
+
+function loadDreamingNarrativeModule(): Promise<typeof import("./dreaming-narrative.js")> {
+  return (dreamingNarrativeModulePromise ??= import("./dreaming-narrative.js"));
+}
 
 type CronSchedule = { kind: "cron"; expr: string; tz?: string };
 type CronPayload =
@@ -568,7 +572,7 @@ export async function runShortTermDreamingPromotionIfTriggered(params: {
     },
   ] = await Promise.all([
     import("./dreaming-markdown.js"),
-    import("./dreaming-narrative.js"),
+    loadDreamingNarrativeModule(),
     import("./dreaming-phases.js"),
     import("./short-term-promotion.js"),
   ]);
@@ -908,11 +912,13 @@ export function registerShortTermPromotionDreaming(api: OpenClawPluginApi): void
 
   const scheduleStartupDreamingArtifactsScrub = (): void => {
     // Startup cleanup can scan session stores, so run it out-of-band.
-    void scrubDreamingNarrativeArtifacts(api.logger).catch((err: unknown) => {
-      api.logger.warn(
-        `memory-core: dreaming startup cleanup failed: ${formatErrorMessage(err)}`,
-      );
-    });
+    void loadDreamingNarrativeModule()
+      .then(({ scrubDreamingNarrativeArtifacts }) => scrubDreamingNarrativeArtifacts(api.logger))
+      .catch((err: unknown) => {
+        api.logger.warn(
+          `memory-core: dreaming startup cleanup failed: ${formatErrorMessage(err)}`,
+        );
+      });
   };
 
   api.on("gateway_start", async (_event, ctx) => {
