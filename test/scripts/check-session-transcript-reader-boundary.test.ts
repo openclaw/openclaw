@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
+  findContextEngineCompactionSessionFileViolations,
+  findGatewayActiveJsonlTranscriptPersistenceViolations,
+  findPluginSdkApiBaselineFileTranscriptViolations,
   findSessionTranscriptReaderBoundaryViolations,
+  gatewayActiveTranscriptPersistenceRoots,
   migratedSessionTranscriptReaderFiles,
 } from "../../scripts/check-session-transcript-reader-boundary.mjs";
 
@@ -41,6 +45,10 @@ describe("session transcript reader boundary guard", () => {
         "src/tui/embedded-backend.ts",
       ]),
     );
+  });
+
+  it("ratchets active transcript persistence across gateway server methods", () => {
+    expect(gatewayActiveTranscriptPersistenceRoots).toEqual(["src/gateway/server-methods"]);
   });
 
   it("flags legacy transcript reader imports", () => {
@@ -145,5 +153,155 @@ describe("session transcript reader boundary guard", () => {
         reason: 'uses storage-specific transcript reader alias "readSessionMessagesFromFileAsync"',
       },
     ]);
+  });
+
+  it("flags active JSONL transcript persistence helpers in gateway server methods", () => {
+    expect(
+      findGatewayActiveJsonlTranscriptPersistenceViolations(`
+        import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
+        import { appendExactAssistantMessageToSessionTranscript as appendExact } from "../../config/sessions/transcript.js";
+        await appendSessionTranscriptMessage({ transcriptPath, message });
+        await transcript.appendSessionTranscriptEvent({ transcriptPath, event });
+        await transcript["runSessionTranscriptAppendTransaction"]({ transcriptPath }, run);
+        const { withSessionTranscriptAppendQueue } = transcript;
+        export { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
+      `),
+    ).toEqual([
+      {
+        line: 2,
+        reason:
+          'imports active JSONL transcript persistence helper "appendSessionTranscriptMessage"',
+      },
+      {
+        line: 3,
+        reason:
+          'imports active JSONL transcript persistence helper "appendExactAssistantMessageToSessionTranscript"',
+      },
+      {
+        line: 4,
+        reason: 'calls active JSONL transcript persistence helper "appendSessionTranscriptMessage"',
+      },
+      {
+        line: 5,
+        reason: 'calls active JSONL transcript persistence helper "appendSessionTranscriptEvent"',
+      },
+      {
+        line: 6,
+        reason:
+          'calls active JSONL transcript persistence helper "runSessionTranscriptAppendTransaction"',
+      },
+      {
+        line: 7,
+        reason:
+          'aliases active JSONL transcript persistence helper "withSessionTranscriptAppendQueue"',
+      },
+      {
+        line: 8,
+        reason:
+          're-exports active JSONL transcript persistence helper "appendAssistantMessageToSessionTranscript"',
+      },
+    ]);
+  });
+
+  it("allows gateway server methods to use session-accessor transcript identity helpers", () => {
+    expect(
+      findGatewayActiveJsonlTranscriptPersistenceViolations(`
+        import {
+          appendTranscriptMessage,
+          createSessionEntryWithTranscript,
+          persistSessionTranscriptTurn,
+          publishTranscriptUpdate,
+          withTranscriptWriteLock,
+        } from "../../config/sessions/session-accessor.js";
+        await createSessionEntryWithTranscript(scope);
+        await appendTranscriptMessage(scope, options);
+        await persistSessionTranscriptTurn(turn);
+        await withTranscriptWriteLock(scope, run);
+        await publishTranscriptUpdate(scope, update);
+      `),
+    ).toEqual([]);
+  });
+
+  it("flags public SDK baseline records that expose sessionFile transcript contracts", () => {
+    expect(
+      findPluginSdkApiBaselineFileTranscriptViolations(
+        [
+          JSON.stringify({
+            declaration:
+              "export function withSessionTranscriptWriteLock(params: { sessionFile: string }): Promise<void>;",
+            exportName: "withSessionTranscriptWriteLock",
+            recordType: "export",
+          }),
+          JSON.stringify({
+            declaration: "export type SessionTranscriptFileTarget = { path: string };",
+            exportName: "SessionTranscriptFileTarget",
+            recordType: "export",
+          }),
+          JSON.stringify({
+            declaration:
+              "export function publishSessionTranscriptUpdateByIdentity(params: SessionTranscriptReadParams): Promise<void>;",
+            exportName: "publishSessionTranscriptUpdateByIdentity",
+            recordType: "export",
+          }),
+        ].join("\n"),
+      ),
+    ).toEqual([
+      {
+        line: 1,
+        reason:
+          'public SDK API baseline exposes sessionFile transcript contract "withSessionTranscriptWriteLock"',
+      },
+      {
+        line: 2,
+        reason:
+          'public SDK API baseline exposes file-target transcript contract "SessionTranscriptFileTarget"',
+      },
+    ]);
+  });
+
+  it("flags context-engine compaction sessionFile contracts", () => {
+    expect(
+      findContextEngineCompactionSessionFileViolations(`
+        export type CompactResult = {
+          ok: boolean;
+          result?: { sessionFile?: string };
+        };
+        export interface ContextEngine {
+          compact(params: {
+            sessionId: string;
+            sessionKey: string;
+            sessionFile: string;
+          }): Promise<CompactResult>;
+        }
+      `),
+    ).toEqual([
+      {
+        line: 2,
+        reason: "CompactResult exposes active sessionFile identity; use sessionTarget",
+      },
+      {
+        line: 7,
+        reason: "ContextEngine.compact exposes active sessionFile identity; use sessionTarget",
+      },
+    ]);
+  });
+
+  it("allows context-engine sessionFile fields outside the compact identity contract", () => {
+    expect(
+      findContextEngineCompactionSessionFileViolations(`
+        export type CompactResult = {
+          ok: boolean;
+          result?: { sessionTarget?: ContextEngineSessionTarget };
+        };
+        export interface ContextEngine {
+          bootstrap?(params: { sessionId: string; sessionFile: string }): Promise<void>;
+          compact(params: {
+            sessionId: string;
+            sessionKey: string;
+            sessionTarget?: ContextEngineSessionTarget;
+          }): Promise<CompactResult>;
+        }
+      `),
+    ).toEqual([]);
   });
 });
