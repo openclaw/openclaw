@@ -45,7 +45,6 @@ function toNonResumableCronSessionEntry(entry: SessionEntry): SessionEntry {
   const next = { ...entry } as Partial<SessionEntry>;
   // If the transcript never materialized, do not persist stale resume handles
   // that would make the next cron run believe a resumable CLI session exists.
-  delete next.sessionId;
   delete next.sessionFile;
   delete next.sessionStartedAt;
   delete next.lastInteractionAt;

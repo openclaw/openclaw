@@ -87,13 +87,14 @@ describe("createPersistCronSessionEntry", () => {
 
     await persist();
 
-    expect(cronSession.store["agent:main:cron:shell-only"]?.sessionId).toBeUndefined();
+    expect(cronSession.store["agent:main:cron:shell-only"]?.sessionId).toBe("run-session-id");
     expect(cronSession.store["agent:main:cron:shell-only"]?.sessionFile).toBeUndefined();
     expect(persistSessionEntry).toHaveBeenCalledWith({
       storePath: "/tmp/sessions.json",
       sessionKey: "agent:main:cron:shell-only",
       entry: {
         label: "Cron: shell-only",
+        sessionId: "run-session-id",
         status: "running",
         updatedAt: 1000,
         systemSent: true,

@@ -295,10 +295,10 @@ export async function updateSessionStoreAfterAgentRun(params: {
         (!preserveUserFacingRunState &&
           context.existingEntry &&
           context.existingEntry.sessionId !== entry.sessionId) ||
-        (!context.existingEntry && sessionStore[sessionKey])
+        (preserveUserFacingRunState && !context.existingEntry && sessionStore[sessionKey])
       ) {
         // A normal run may rotate its session id, so compare to the pre-run entry.
-        // Do not merge stale finalizer metadata after a delete or a competing reset.
+        // User-facing state preservation only touches an existing visible row.
         return null;
       }
       return metadataPatch;
