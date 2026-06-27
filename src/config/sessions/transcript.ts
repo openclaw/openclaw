@@ -17,14 +17,15 @@ import {
   resolveStorePath,
 } from "./paths.js";
 import {
+  listSessionEntries,
   loadTranscriptEvents,
   persistSessionTranscriptTurn,
   readLatestTranscriptAssistantText,
+  updateSessionEntry,
   type SessionTranscriptTurnWriteContext,
 } from "./session-accessor.js";
-import { resolveAndPersistSessionFile } from "./session-file.js";
 import { parseSqliteSessionFileMarker, type SqliteSessionFileMarker } from "./sqlite-marker.js";
-import { loadSessionStore, resolveSessionStoreEntry, updateSessionStore } from "./store.js";
+import { loadSessionStore, resolveSessionStoreEntry } from "./store.js";
 import { resolveMirroredTranscriptText } from "./transcript-mirror.js";
 import { streamSessionTranscriptLinesReverse } from "./transcript-stream.js";
 import {
@@ -529,7 +530,12 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
   const storeAgentId = transcriptAgentId ?? resolveAgentIdFromSessionKey(sessionKey);
   const storePath =
     params.storePath ?? resolveStorePath(params.config?.session?.store, { agentId: storeAgentId });
-  const store = loadSessionStore(storePath, { skipCache: true });
+  const store = Object.fromEntries(
+    listSessionEntries({ agentId: transcriptAgentId, storePath }).map(({ sessionKey, entry }) => [
+      sessionKey,
+      entry,
+    ]),
+  );
   const resolved = resolveSessionStoreEntry({ store, sessionKey });
   const entry = resolved.existing;
   if (params.expectedSessionId && entry?.sessionId !== params.expectedSessionId) {
@@ -643,21 +649,14 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
       try {
         if (parseSqliteSessionFileMarker(turn.sessionFile)) {
           await touchSqliteAssistantAppendSessionEntry({
+            agentId: transcriptAgentId,
             currentEntry,
             sessionFile: turn.sessionFile,
             sessionKey: resolved.normalizedKey,
-            sessionStore: store,
             storePath,
           });
         } else {
-          await resolveAndPersistSessionFile({
-            sessionId: currentEntry.sessionId,
-            sessionKey: resolved.normalizedKey,
-            sessionStore: store,
-            storePath,
-            sessionEntry: currentEntry,
-            agentId: transcriptAgentId,
-          });
+          return { ok: false, reason: `unexpected transcript target: ${turn.sessionFile}` };
         }
       } catch (err) {
         return {
@@ -679,10 +678,10 @@ export async function appendExactAssistantMessageToSessionTranscript(params: {
 }
 
 async function touchSqliteAssistantAppendSessionEntry(params: {
+  agentId?: string;
   currentEntry: SessionEntry;
   sessionFile: string;
   sessionKey: string;
-  sessionStore: Record<string, SessionEntry>;
   storePath: string;
 }): Promise<void> {
   const now = Date.now();
@@ -691,22 +690,19 @@ async function touchSqliteAssistantAppendSessionEntry(params: {
     sessionStartedAt: entry?.sessionStartedAt ?? params.currentEntry.sessionStartedAt ?? now,
     sessionFile: params.sessionFile,
   });
-  const currentMemoryEntry = params.sessionStore[params.sessionKey];
-  if (currentMemoryEntry?.sessionId === params.currentEntry.sessionId) {
-    params.sessionStore[params.sessionKey] = {
-      ...currentMemoryEntry,
-      ...buildPatch(currentMemoryEntry),
-    };
-  }
-  await updateSessionStore(params.storePath, (store) => {
-    if (store[params.sessionKey]?.sessionId !== params.currentEntry.sessionId) {
-      return;
-    }
-    store[params.sessionKey] = {
-      ...store[params.sessionKey],
-      ...buildPatch(store[params.sessionKey]),
-    };
-  });
+  await updateSessionEntry(
+    {
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
+    (entry) => {
+      if (entry.sessionId !== params.currentEntry.sessionId) {
+        return null;
+      }
+      return buildPatch(entry);
+    },
+  );
 }
 
 function isRedundantDeliveryMirror(message: SessionTranscriptAssistantMessage): boolean {
