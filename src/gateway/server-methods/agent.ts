@@ -2,7 +2,6 @@
 // and related session-aware RPC handlers used by UI and operator clients.
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import path from "node:path";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -74,15 +73,10 @@ import {
   resolveSessionResetType,
   type SessionEntry,
   type SessionFreshness,
-  updateSessionStore,
 } from "../../config/sessions.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
-import { patchSessionEntry } from "../../config/sessions/session-accessor.js";
-import { resolveSqliteTargetFromSessionStorePath } from "../../config/sessions/session-sqlite-target.js";
-import {
-  formatSqliteSessionFileMarker,
-  parseSqliteSessionFileMarker,
-} from "../../config/sessions/sqlite-marker.js";
+import { patchSessionEntryTarget } from "../../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitDiagnosticEvent } from "../../infra/diagnostic-events.js";
@@ -163,9 +157,7 @@ import { reactivateCompletedSubagentSession } from "../session-subagent-reactiva
 import {
   canonicalizeSpawnedByForAgent,
   loadSessionEntry,
-  migrateAndPruneGatewaySessionStoreKey,
   resolveDeletedAgentIdFromSessionKey,
-  resolveGatewaySessionStoreTarget,
   resolveGatewayModelSupportsImages,
   resolveSessionStoreKey,
   resolveSessionModelRef,
@@ -1089,26 +1081,6 @@ function shouldSuppressAgentPromptPersistence(params: {
   );
 }
 
-function shouldUseSqliteSessionAdmissionStore(params: {
-  storePath: string;
-  entry?: SessionEntry;
-}): boolean {
-  const marker = parseSqliteSessionFileMarker(params.entry?.sessionFile);
-  if (marker?.storePath && path.resolve(marker.storePath) === path.resolve(params.storePath)) {
-    return true;
-  }
-  const storePath = path.resolve(params.storePath);
-  if (storePath.endsWith(".sqlite")) {
-    return existsSync(storePath);
-  }
-  const sqliteTarget = resolveSqliteTargetFromSessionStorePath(storePath);
-  return (
-    sqliteTarget.agentId !== undefined &&
-    sqliteTarget.path !== undefined &&
-    existsSync(sqliteTarget.path)
-  );
-}
-
 function withSqliteSessionFileMarker(params: {
   agentId: string | undefined;
   entry: SessionEntry;
@@ -1911,6 +1883,7 @@ export const agentHandlers: GatewayRequestHandlers = {
           entry,
           canonicalKey,
           legacyKey,
+          storeKeys,
         } = loadSessionEntry(requestedSessionKey, sessionLoadOptions);
         cfgForAgent = cfgLocal;
         if (
@@ -2288,139 +2261,60 @@ export const agentHandlers: GatewayRequestHandlers = {
           if (abortForLifecycleRotation({ sessionKey: canonicalSessionKey, agentId })) {
             return;
           }
-          const useSqliteAdmissionStore = shouldUseSqliteSessionAdmissionStore({
-            storePath,
-            entry,
-          });
-          const requestedStoreKey = requestedSessionKey;
           let deniedBySendPolicy = false;
           let deniedSessionEntry: SessionEntry | undefined;
           let persisted: SessionEntry | undefined;
           try {
-            if (useSqliteAdmissionStore) {
-              persisted = await patchSessionEntry(
-                {
-                  storePath,
-                  sessionKey: canonicalSessionKey,
-                },
-                (_currentEntry, context) => {
-                  // The writer lock may outlive this request's lifecycle. Check at
-                  // transaction admission; once admitted, let the atomic write finish.
-                  assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-                  const freshEntry = context.existingEntry;
-                  patchBuild = buildSessionPatch(freshEntry);
-                  const effectivePatch =
-                    recoveredSessionStartedAt !== undefined &&
-                    freshEntry?.sessionStartedAt === undefined &&
-                    freshEntry?.sessionId === entry?.sessionId
-                      ? { ...patchBuild.patch, sessionStartedAt: recoveredSessionStartedAt }
-                      : patchBuild.patch;
-                  const merged = withSqliteSessionFileMarker({
-                    agentId: sessionAgentId,
-                    entry: mergeSessionEntry(freshEntry, effectivePatch),
-                    sessionKey: canonicalSessionKey,
-                    storePath,
-                  });
-                  const sendPolicy =
-                    request.deliver === true
-                      ? resolveSendPolicy({
-                          cfg: cfgLocal,
-                          entry: merged,
-                          sessionKey: canonicalKey,
-                          channel: merged?.channel,
-                          chatType: merged?.chatType,
-                        })
-                      : "allow";
-                  if (sendPolicy === "deny") {
-                    deniedBySendPolicy = true;
-                    deniedSessionEntry = merged;
-                    return null;
-                  }
-                  return merged;
-                },
-                {
-                  fallbackEntry: entry ?? mergeSessionEntry(undefined, patchBuild.patch),
-                  replaceEntry: true,
-                  takeCacheOwnership: true,
-                  maintenanceConfig: sessionMaintenanceConfig,
-                },
-              );
-            } else {
-              let singleEntryPersistence:
-                | {
-                    sessionKey: string;
-                    entry: SessionEntry;
-                  }
-                | undefined;
-              persisted = await updateSessionStore(
+            persisted = await patchSessionEntryTarget(
+              {
                 storePath,
-                (store) => {
-                  // The writer lock may outlive this request's lifecycle. Check at
-                  // transaction admission; once admitted, let the atomic write finish.
-                  assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-                  const storeKeysBeforeMigration = new Set(Object.keys(store));
-                  const preMigrationTarget = resolveGatewaySessionStoreTarget({
-                    cfg: cfgLocal,
-                    key: requestedStoreKey,
-                    store,
-                    ...(sessionAgentId ? { agentId: sessionAgentId } : {}),
-                  });
-                  const hadLegacyStoreKey = preMigrationTarget.storeKeys.some(
-                    (storeKey) =>
-                      storeKey !== preMigrationTarget.canonicalKey &&
-                      Object.hasOwn(store, storeKey),
-                  );
-                  const { target, primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-                    cfg: cfgLocal,
-                    key: requestedStoreKey,
-                    store,
-                  });
-                  const prunedStoreKey = [...storeKeysBeforeMigration].some(
-                    (storeKey) => !Object.hasOwn(store, storeKey),
-                  );
-                  const freshEntry = store[primaryKey];
-                  patchBuild = buildSessionPatch(freshEntry);
-                  const effectivePatch =
-                    recoveredSessionStartedAt !== undefined &&
-                    freshEntry?.sessionStartedAt === undefined &&
-                    freshEntry?.sessionId === entry?.sessionId
-                      ? { ...patchBuild.patch, sessionStartedAt: recoveredSessionStartedAt }
-                      : patchBuild.patch;
-                  const merged = mergeSessionEntry(freshEntry, effectivePatch);
-                  const sendPolicy =
-                    request.deliver === true
-                      ? resolveSendPolicy({
-                          cfg: cfgLocal,
-                          entry: merged,
-                          sessionKey: canonicalKey,
-                          channel: merged?.channel,
-                          chatType: merged?.chatType,
-                        })
-                      : "allow";
-                  if (sendPolicy === "deny") {
-                    deniedBySendPolicy = true;
-                    deniedSessionEntry = merged;
-                    return merged;
-                  }
-                  store[primaryKey] = merged;
-                  const canonicalKeyChanged =
-                    target.canonicalKey !== preMigrationTarget.canonicalKey;
-                  singleEntryPersistence =
-                    freshEntry && !hadLegacyStoreKey && !canonicalKeyChanged && !prunedStoreKey
-                      ? {
-                          sessionKey: primaryKey,
-                          entry: merged,
-                        }
-                      : undefined;
-                  return merged;
+                target: {
+                  canonicalKey: canonicalSessionKey,
+                  storeKeys: storeKeys ?? [canonicalSessionKey],
                 },
-                {
-                  takeCacheOwnership: true,
-                  maintenanceConfig: sessionMaintenanceConfig,
-                  resolveSingleEntryPersistence: () => singleEntryPersistence,
-                },
-              );
-            }
+              },
+              (_currentEntry, context) => {
+                // The writer lock may outlive this request's lifecycle. Check at
+                // transaction admission; once admitted, let the atomic write finish.
+                assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+                const freshEntry = context.existingEntry;
+                patchBuild = buildSessionPatch(freshEntry);
+                const effectivePatch =
+                  recoveredSessionStartedAt !== undefined &&
+                  freshEntry?.sessionStartedAt === undefined &&
+                  freshEntry?.sessionId === entry?.sessionId
+                    ? { ...patchBuild.patch, sessionStartedAt: recoveredSessionStartedAt }
+                    : patchBuild.patch;
+                const merged = withSqliteSessionFileMarker({
+                  agentId: sessionAgentId,
+                  entry: mergeSessionEntry(freshEntry, effectivePatch),
+                  sessionKey: canonicalSessionKey,
+                  storePath,
+                });
+                const sendPolicy =
+                  request.deliver === true
+                    ? resolveSendPolicy({
+                        cfg: cfgLocal,
+                        entry: merged,
+                        sessionKey: canonicalKey,
+                        channel: merged?.channel,
+                        chatType: merged?.chatType,
+                      })
+                    : "allow";
+                if (sendPolicy === "deny") {
+                  deniedBySendPolicy = true;
+                  deniedSessionEntry = merged;
+                  return null;
+                }
+                return merged;
+              },
+              {
+                fallbackEntry: entry ?? mergeSessionEntry(undefined, patchBuild.patch),
+                replaceEntry: true,
+                takeCacheOwnership: true,
+                maintenanceConfig: sessionMaintenanceConfig,
+              },
+            );
           } catch (err) {
             if (abortForLifecycleRotation({ sessionKey: canonicalSessionKey, agentId })) {
               return;

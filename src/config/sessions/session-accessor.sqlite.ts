@@ -52,6 +52,7 @@ import type {
   SessionEntryPatchContext,
   SessionEntryPatchOptions,
   SessionEntrySummary,
+  SessionEntryTargetPatchScope,
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
   SessionEntryUpdateOptions,
@@ -333,6 +334,57 @@ export async function patchSqliteSessionEntry(
       deleteLegacySessionEntryRows(writeDatabase, fresh?.legacyKeys ?? [], resolved.sessionKey);
       applySqliteSessionEntryMaintenance(writeDatabase, {
         activeSessionKey: resolved.sessionKey,
+        archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+        maintenanceConfig: options.maintenanceConfig,
+        skipMaintenance: options.skipMaintenance,
+      });
+      result = cloneSessionEntry(next);
+    }, toDatabaseOptions(resolved));
+    return result;
+  });
+}
+
+/** Patches one logical entry selected from a canonical key and alias set. */
+export async function patchSqliteSessionEntryTarget(
+  scope: SessionEntryTargetPatchScope,
+  update: (
+    entry: SessionEntry,
+    context: SessionEntryPatchContext,
+  ) => Promise<Partial<SessionEntry> | null> | Partial<SessionEntry> | null,
+  options: SqliteSessionEntryPatchOptions = {},
+): Promise<SessionEntry | null> {
+  const resolved = resolveSqliteStoreScope(scope.storePath);
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    const existing = resolveSqliteLifecyclePrimaryEntry(database, scope.target)?.entry;
+    const base = existing ?? options.fallbackEntry;
+    if (!base) {
+      return null;
+    }
+    const patch = await update(cloneSessionEntry(base), {
+      existingEntry: existing ? cloneSessionEntry(existing) : undefined,
+    });
+    if (!patch) {
+      return cloneSessionEntry(base);
+    }
+
+    let result: SessionEntry | null = null;
+    runOpenClawAgentWriteTransaction((writeDatabase) => {
+      const fresh = resolveSqliteLifecyclePrimaryEntry(writeDatabase, scope.target);
+      const writeBase = fresh?.entry ?? options.fallbackEntry;
+      if (!writeBase) {
+        result = null;
+        return;
+      }
+      const next = options.replaceEntry
+        ? cloneSessionEntry(patch as SessionEntry)
+        : options.preserveActivity
+          ? mergeSessionEntryPreserveActivity(writeBase, patch)
+          : mergeSessionEntry(writeBase, patch);
+      deleteSqliteLifecycleTargetRows(writeDatabase, scope.target);
+      writeSessionEntry(writeDatabase, scope.target.canonicalKey, next);
+      applySqliteSessionEntryMaintenance(writeDatabase, {
+        activeSessionKey: scope.target.canonicalKey,
         archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
         maintenanceConfig: options.maintenanceConfig,
         skipMaintenance: options.skipMaintenance,
