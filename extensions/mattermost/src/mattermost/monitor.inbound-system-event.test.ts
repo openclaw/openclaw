@@ -957,6 +957,220 @@ describe("mattermost inbound user posts", () => {
     expect(ctx?.CommandAuthorized).toBe(true);
   });
 
+  it("uses an edit-specific message id for edited post turns", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+
+    const monitor = monitorMattermostProvider({
+      config: testConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "post_edited",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-lone-edit",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "@openclaw edited wake",
+          create_at: 1_714_000_000_000,
+          edit_at: 1_714_000_000_125,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
+    expect(ctx?.BodyForAgent).toBe("edited wake");
+    expect(ctx?.MessageSid).toBe("post-lone-edit:edit:1714000000125");
+    expect(ctx?.MessageSids).toBeUndefined();
+  });
+
+  it("collapses debounced edited posts to the latest post body", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const debounceConfig: OpenClawConfig = {
+      ...testConfig,
+      messages: { inbound: { debounceMs: 5 } },
+    };
+    const runtimeCore = createRuntimeCore(debounceConfig, undefined, {
+      inboundDebounceMs: 5,
+      createInboundDebouncer,
+    });
+    mockState.runtimeCore = runtimeCore;
+
+    const monitor = monitorMattermostProvider({
+      config: debounceConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-edited",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "stale pre-edit text",
+          create_at: 1_714_000_000_000,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+    await socket.emitMessage({
+      event: "post_edited",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-edited",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "@openclaw latest edited text",
+          create_at: 1_714_000_000_000,
+          edit_at: 1_714_000_000_050,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
+    expect(ctx?.BodyForAgent).toBe("latest edited text");
+    expect(ctx?.Body).toContain("latest edited text");
+    expect(ctx?.Body).not.toContain("stale pre-edit text");
+    expect(ctx?.MessageSid).toBe("post-edited:edit:1714000000050");
+    expect(ctx?.MessageSids).toEqual(["post-edited", "post-edited:edit:1714000000050"]);
+    expect(ctx?.MessageSidFirst).toBe("post-edited");
+    expect(ctx?.MessageSidLast).toBe("post-edited:edit:1714000000050");
+  });
+
+  it("does not let bot edited draft posts consume debounced user posts", async () => {
+    const socket = new FakeWebSocket();
+    const abortController = new AbortController();
+    mockState.abortController = abortController;
+    const debounceConfig: OpenClawConfig = {
+      ...testConfig,
+      messages: { inbound: { debounceMs: 5 } },
+    };
+    const runtimeCore = createRuntimeCore(debounceConfig, undefined, {
+      inboundDebounceMs: 5,
+      createInboundDebouncer,
+    });
+    mockState.runtimeCore = runtimeCore;
+
+    const monitor = monitorMattermostProvider({
+      config: debounceConfig,
+      runtime: testRuntime(),
+      abortSignal: abortController.signal,
+      webSocketFactory: () => socket,
+    });
+
+    await vi.waitFor(() => {
+      expect(socket.openListenerCount).toBeGreaterThan(0);
+    });
+    socket.emitOpen();
+
+    await socket.emitMessage({
+      event: "posted",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "alice",
+        post: JSON.stringify({
+          id: "post-user",
+          channel_id: "chan-1",
+          user_id: "user-1",
+          message: "user question",
+          create_at: 1_714_000_000_000,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "user-1",
+      },
+    });
+    await socket.emitMessage({
+      event: "post_edited",
+      data: {
+        channel_id: "chan-1",
+        channel_name: "town-square",
+        channel_display_name: "Town Square",
+        sender_name: "openclaw",
+        post: JSON.stringify({
+          id: "preview-post",
+          channel_id: "chan-1",
+          user_id: "bot-user",
+          message: "bot draft preview",
+          create_at: 1_714_000_000_025,
+          edit_at: 1_714_000_000_050,
+        }),
+      },
+      broadcast: {
+        channel_id: "chan-1",
+        user_id: "bot-user",
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(mockState.dispatchReplyFromConfig).toHaveBeenCalledTimes(1);
+    });
+    socket.emitClose(1000);
+    await monitor;
+
+    const ctx = mockState.dispatchReplyFromConfig.mock.calls.at(0)?.[0].ctx;
+    expect(ctx?.BodyForAgent).toBe("user question");
+    expect(ctx?.Body).toContain("user question");
+    expect(ctx?.Body).not.toContain("bot draft preview");
+    expect(ctx?.MessageSid).toBe("post-user");
+    expect(ctx?.MessageSids).toBeUndefined();
+  });
+
   it("pins direct-message main route updates to the configured owner", async () => {
     const socket = new FakeWebSocket();
     const abortController = new AbortController();

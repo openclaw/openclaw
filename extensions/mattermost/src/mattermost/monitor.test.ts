@@ -13,6 +13,7 @@ import {
   formatMattermostFinalDeliveryOutcomeLog,
   MattermostRetryableInboundError,
   processMattermostReplayGuardedPost,
+  resolveMattermostPostReplayMessageIds,
   resolveMattermostReactionChannelId,
   resolveMattermostEffectiveReplyToId,
   resolveMattermostReplyRootId,
@@ -979,6 +980,49 @@ describe("processMattermostReplayGuardedPost", () => {
 
     expect(handlePost).toHaveBeenCalledTimes(1);
     expect(visibleSideEffect).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows an edited post to process after the original post id was committed", async () => {
+    const replayGuard = createClaimableDedupe({
+      ttlMs: 10_000,
+      memoryMaxSize: 100,
+    });
+    const handlePost = vi.fn(async () => undefined);
+    const originalIds = resolveMattermostPostReplayMessageIds({
+      payload: { event: "posted" },
+      post: { id: "post-4" },
+    });
+    const editedIds = resolveMattermostPostReplayMessageIds({
+      payload: { event: "post_edited" },
+      post: { id: "post-4", edit_at: 1_714_000_000_100 },
+    });
+
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: originalIds,
+        handlePost,
+      }),
+    ).resolves.toBe("processed");
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: editedIds,
+        handlePost,
+      }),
+    ).resolves.toBe("processed");
+    await expect(
+      processMattermostReplayGuardedPost({
+        replayGuard,
+        accountId: "acct",
+        messageIds: editedIds,
+        handlePost,
+      }),
+    ).resolves.toBe("duplicate");
+
+    expect(handlePost).toHaveBeenCalledTimes(2);
   });
 });
 

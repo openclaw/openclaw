@@ -1,8 +1,10 @@
 // Mattermost tests cover monitor websocket plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../runtime-api.js";
+import type { MattermostPost } from "./client.js";
 import {
   createMattermostConnectOnce,
+  type MattermostEventPayload,
   type MattermostWebSocketLike,
   WebSocketClosedBeforeOpenError,
 } from "./monitor-websocket.js";
@@ -241,6 +243,57 @@ describe("mattermost websocket monitor", () => {
     expect(payload).toEqual({
       event: "reaction_added",
       data: { reaction },
+    });
+  });
+
+  it("dispatches edited posts through the posted handler", async () => {
+    const socket = new FakeWebSocket();
+    const onPosted = vi.fn(async (_post: MattermostPost, _payload: MattermostEventPayload) => {});
+    const connectOnce = createMattermostConnectOnce({
+      wsUrl: "wss://example.invalid/api/v4/websocket",
+      botToken: "token",
+      runtime: testRuntime(),
+      nextSeq: () => 1,
+      onPosted,
+      webSocketFactory: () => socket,
+    });
+
+    const connected = connectOnce();
+    queueMicrotask(() => {
+      socket.emitOpen();
+      socket.emitMessage(
+        Buffer.from(
+          JSON.stringify({
+            event: "post_edited",
+            data: {
+              channel_id: "channel-1",
+              post: JSON.stringify({
+                id: "post-1",
+                channel_id: "channel-1",
+                user_id: "user-1",
+                message: "@openclaw can you check this?",
+                edit_at: 1_714_000_000_100,
+              }),
+            },
+            broadcast: {
+              channel_id: "channel-1",
+              user_id: "user-1",
+            },
+          }),
+        ),
+      );
+      socket.emitClose(1000);
+    });
+
+    await connected;
+
+    expect(onPosted).toHaveBeenCalledTimes(1);
+    expect(onPosted.mock.calls.at(0)?.[0]).toMatchObject({
+      id: "post-1",
+      message: "@openclaw can you check this?",
+    });
+    expect(onPosted.mock.calls.at(0)?.[1]).toMatchObject({
+      event: "post_edited",
     });
   });
 
