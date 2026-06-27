@@ -493,4 +493,45 @@ describe("lintMemoryWikiVault", () => {
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Contradictions");
     await expect(fs.readFile(result.reportPath, "utf8")).resolves.toContain("### Open Questions");
   });
+
+  it("reports unparsable frontmatter as a lint issue instead of failing the whole vault (#96125)", async () => {
+    const { rootDir, config } = await createVault({
+      prefix: "memory-wiki-lint-invalid-frontmatter-",
+    });
+    await fs.mkdir(path.join(rootDir, "syntheses"), { recursive: true });
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "broken.md"),
+      [
+        "---",
+        "pageType: synthesis",
+        "id: synthesis.broken",
+        "sourceIds:",
+        '  - **MEMORY.md line 235**:"some quoted, value"',
+        "---",
+        "",
+        "# Broken",
+        "",
+        "Body text.",
+      ].join("\n"),
+      "utf8",
+    );
+    await fs.writeFile(
+      path.join(rootDir, "syntheses", "healthy.md"),
+      renderWikiMarkdown({
+        frontmatter: {
+          pageType: "synthesis",
+          id: "synthesis.healthy",
+          title: "Healthy",
+          sourceIds: ["source.alpha"],
+        },
+        body: "# Healthy\n",
+      }),
+      "utf8",
+    );
+
+    const result = await lintMemoryWikiVault(config);
+
+    expect(issueCodesForPath(result, "syntheses/broken.md")).toEqual(["invalid-frontmatter"]);
+    expect(issueCodesForPath(result, "syntheses/healthy.md")).not.toContain("invalid-frontmatter");
+  });
 });

@@ -79,6 +79,8 @@ export type WikiPageSummary = {
   kind: WikiPageKind;
   title: string;
   hasFrontmatter: boolean;
+  /** Set when frontmatter YAML failed to parse; frontmatter-derived fields fall back to empty. */
+  frontmatterError?: string;
   id?: string;
   pageType?: string;
   entityType?: string;
@@ -173,19 +175,27 @@ export function createWikiPageFilename(stem: string, extension = ".md"): string 
   return `${capWikiValueWithHash(stem, maxStemBytes, "page")}${normalizedExtension}`;
 }
 
-export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
+function splitWikiFrontmatterBlock(content: string): { yamlSource: string; body: string } | null {
   const match = content.match(FRONTMATTER_PATTERN);
   if (!match) {
+    return null;
+  }
+  return { yamlSource: match[1] ?? "", body: content.slice(match[0].length) };
+}
+
+export function parseWikiMarkdown(content: string): ParsedWikiMarkdown {
+  const split = splitWikiFrontmatterBlock(content);
+  if (!split) {
     return { hasFrontmatter: false, frontmatter: {}, body: content };
   }
-  const parsed = YAML.parse(match[1]) as unknown;
+  const parsed = YAML.parse(split.yamlSource) as unknown;
   return {
     hasFrontmatter: true,
     frontmatter:
       parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? (parsed as Record<string, unknown>)
         : {},
-    body: content.slice(match[0].length),
+    body: split.body,
   };
 }
 
@@ -622,7 +632,24 @@ export function toWikiPageSummary(params: {
   if (!kind) {
     return null;
   }
-  const parsed = parseWikiMarkdown(params.raw);
+  // A page with unparsable YAML frontmatter must not crash vault-wide scans
+  // (compile/lint/query/status) over unrelated pages; degrade to empty
+  // frontmatter and surface the failure via WikiPageSummary.frontmatterError.
+  // Callers that call parseWikiMarkdown directly (apply, chatgpt-import) still
+  // throw on bad frontmatter so edits never silently overwrite metadata.
+  let parsed: ParsedWikiMarkdown;
+  let frontmatterError: string | undefined;
+  try {
+    parsed = parseWikiMarkdown(params.raw);
+  } catch (error) {
+    frontmatterError = error instanceof Error ? error.message : String(error);
+    const fallback = splitWikiFrontmatterBlock(params.raw);
+    parsed = {
+      hasFrontmatter: true,
+      frontmatter: {},
+      body: fallback?.body ?? params.raw,
+    };
+  }
   const title =
     (typeof parsed.frontmatter.title === "string" && parsed.frontmatter.title.trim()) ||
     extractTitleFromMarkdown(parsed.body) ||
@@ -643,6 +670,7 @@ export function toWikiPageSummary(params: {
     kind,
     title,
     hasFrontmatter: parsed.hasFrontmatter,
+    ...(frontmatterError ? { frontmatterError } : {}),
     id: normalizeOptionalString(parsed.frontmatter.id),
     pageType: normalizeOptionalString(parsed.frontmatter.pageType),
     entityType: normalizeOptionalString(parsed.frontmatter.entityType),
