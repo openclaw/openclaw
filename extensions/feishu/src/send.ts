@@ -571,6 +571,34 @@ function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostM
   return elements;
 }
 
+function normalizeFeishuPostMarkdownLineBreaks(text: string): string {
+  const lines = text.replace(/\r\n?/g, "\n").split("\n");
+  const parts: string[] = [];
+  let inFence = false;
+  let fenceMarker: "`" | "~" | null = null;
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? "";
+    parts.push(line);
+
+    const fence = /^(```+|~~~+)/u.exec(line.trimStart())?.[1];
+    const marker = fence?.startsWith("`") ? "`" : fence?.startsWith("~") ? "~" : null;
+    if (marker && (!inFence || marker === fenceMarker)) {
+      inFence = !inFence;
+      fenceMarker = inFence ? marker : null;
+    }
+
+    if (index === lines.length - 1) {
+      continue;
+    }
+
+    const nextLine = lines[index + 1] ?? "";
+    parts.push(inFence || line.length === 0 || nextLine.length === 0 ? "\n" : "\n\n");
+  }
+
+  return parts.join("");
+}
+
 export function buildFeishuPostMessagePayload(params: {
   messageText: string;
   mentions?: MentionTarget[];
@@ -583,7 +611,7 @@ export function buildFeishuPostMessagePayload(params: {
     ...buildFeishuPostMentionElements(mentions),
     {
       tag: "md",
-      text: messageText,
+      text: normalizeFeishuPostMarkdownLineBreaks(messageText),
     },
   ];
   return {

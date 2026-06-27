@@ -105,6 +105,48 @@ describe("buildFeishuPostMessagePayload", () => {
       },
     });
   });
+
+  it("expands single markdown newlines outside fenced code blocks", () => {
+    const payload = buildFeishuPostMessagePayload({
+      messageText: [
+        "First line",
+        "Second line",
+        "",
+        "Already separated",
+        "```ts",
+        "const a = 1;",
+        "const b = 2;",
+        "```",
+        "After",
+      ].join("\n"),
+    });
+
+    expect(JSON.parse(payload.content)).toEqual({
+      zh_cn: {
+        content: [
+          [
+            {
+              tag: "md",
+              text: [
+                "First line",
+                "",
+                "Second line",
+                "",
+                "Already separated",
+                "",
+                "```ts",
+                "const a = 1;",
+                "const b = 2;",
+                "```",
+                "",
+                "After",
+              ].join("\n"),
+            },
+          ],
+        ],
+      },
+    });
+  });
 });
 
 describe("getMessageFeishu", () => {
