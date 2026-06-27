@@ -371,7 +371,6 @@ context. To restart GLM safely and try bounded local launch profiles, run:
 
 ```bash
 pnpm glm52:runtime -- repair --json
-pnpm glm52:runtime -- restart --profile metal-agent-8k --startup-timeout 900 --timeout 60 --json
 ```
 
 The repair command only stops a process on the GLM port when the port owner is
@@ -379,8 +378,10 @@ The repair command only stops a process on the GLM port when the port owner is
 `metal-low`, `metal-no-mmap`, and `cpu-safe` profiles in order, stopping after
 the first successful decode probe. Metal profiles keep Flash Attention enabled
 when using q8 KV cache because llama.cpp rejects quantized V cache without it.
-The OpenClaw agent proof needs the explicit `metal-agent-8k` profile; the older
-4096-token route can decode but overflows on the SNES hardware-QA prompt.
+Use the successful low-memory repair profile for SNES benchmark work. Treat
+`metal-agent-8k` and `metal-agent-4k` as experimental profiles only: they may
+decode on an idle machine, but can fail with Metal out-of-memory and a
+`Compute error` under benchmark conditions.
 
 When a local GLM-5.2 run wins a role, make it a real OpenClaw model route before
 expecting SNES Studio agents to use it:

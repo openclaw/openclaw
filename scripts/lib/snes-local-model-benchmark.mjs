@@ -708,6 +708,12 @@ function callOllamaModel({ maxOutputTokens, modelRef, prompt, spawn = spawnSync,
     { encoding: "utf8", maxBuffer: 8 * 1024 * 1024, timeout: timeoutSeconds * 1000 },
   );
   const response = extractJsonObject(result.stdout);
+  const raw =
+    typeof response?.response === "string" && response.response.trim()
+      ? response.response
+      : typeof response?.thinking === "string" && response.thinking.trim()
+        ? response.thinking
+        : (result.stdout ?? "");
   return {
     error: result.error
       ? String(result.error.message ?? result.error)
@@ -717,7 +723,7 @@ function callOllamaModel({ maxOutputTokens, modelRef, prompt, spawn = spawnSync,
           ? null
           : result.stderr,
     latencyMs: Date.now() - started,
-    raw: typeof response?.response === "string" ? response.response : (result.stdout ?? ""),
+    raw,
     status: result.status ?? null,
   };
 }
@@ -859,8 +865,12 @@ export function createSnesOutputBenchmarkReport(options = {}) {
     : null;
   const requestedRoles = Array.isArray(options.roles) ? new Set(options.roles) : null;
   const candidates = requestedCandidateRefs
-    ? SNES_BENCHMARK_CANDIDATES.filter((candidate) =>
-        requestedCandidateRefs.has(candidate.modelRef),
+    ? [...requestedCandidateRefs].map(
+        (modelRef) =>
+          SNES_BENCHMARK_CANDIDATES.find((candidate) => candidate.modelRef === modelRef) ?? {
+            modelRef,
+            reason: "User-requested installed local benchmark candidate.",
+          },
       )
     : SNES_BENCHMARK_CANDIDATES;
   const roles = requestedRoles
@@ -909,9 +919,7 @@ export function createSnesOutputBenchmarkReport(options = {}) {
           });
           continue;
         }
-        const prompt = benchmarkPrompt(task, {
-          compact: candidate.modelRef === "local-glm-5.2-2bit",
-        });
+        const prompt = benchmarkPrompt(task, { compact: true });
         const call =
           candidate.modelRef === "local-glm-5.2-2bit"
             ? callLocalGlmModel({ maxOutputTokens, prompt, spawn, timeoutSeconds })
