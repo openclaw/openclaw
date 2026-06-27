@@ -235,6 +235,53 @@ describe("continue_delegate tool", () => {
     ]);
   });
 
+  it("normalizes provider-supplied empty target arrays away for default silent-wake returns", async () => {
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+
+    const result = await executeTool(tool, 0, {
+      task: "default return without explicit targets",
+      mode: "silent-wake",
+      targetSessionKeys: [],
+    });
+
+    expect(result).toMatchObject({
+      status: "scheduled",
+      mode: "silent-wake",
+    });
+    expect(result).not.toHaveProperty("model");
+    expect(result).not.toHaveProperty("targetSessionKey");
+    expect(result).not.toHaveProperty("targetSessionKeys");
+    expect(consumePendingDelegates("test-session")).toEqual([
+      expect.objectContaining({
+        task: "default return without explicit targets",
+        mode: "silent-wake",
+      }),
+    ]);
+  });
+
+  it("normalizes empty targetSessionKey away for default silent returns", async () => {
+    const tool = createContinueDelegateTool({ agentSessionKey: "test-session" });
+
+    const result = await executeTool(tool, 0, {
+      task: "silent default return",
+      mode: "silent",
+      targetSessionKey: "",
+    });
+
+    expect(result).toMatchObject({
+      status: "scheduled",
+      mode: "silent",
+    });
+    expect(result).not.toHaveProperty("targetSessionKey");
+    expect(result).not.toHaveProperty("targetSessionKeys");
+    expect(consumePendingDelegates("test-session")).toEqual([
+      expect.objectContaining({
+        task: "silent default return",
+        mode: "silent",
+      }),
+    ]);
+  });
+
   it("persists singular cross-session target metadata", async () => {
     setRuntimeConfigSnapshot({
       agents: { defaults: { continuation: { crossSessionTargeting: "enabled" } } },

@@ -458,6 +458,39 @@ describe("tool delegate dispatch contract", () => {
     });
   });
 
+  it("dispatches silent and silent-wake default returns without target fields", async () => {
+    const sessionKey = "session-delegate-default-return-modes";
+    enqueuePendingDelegate(sessionKey, { task: "silent default", mode: "silent" });
+    enqueuePendingDelegate(sessionKey, { task: "wake default", mode: "silent-wake" });
+
+    const result = await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+
+    expect(result).toMatchObject({ dispatched: 2, rejected: 0 });
+    const spawnParams = spawnSubagentDirectMock.mock.calls.map(
+      (call) => call[0] as Record<string, unknown>,
+    );
+    expect(spawnParams[0]).toMatchObject({
+      task: expect.stringContaining("silent default"),
+      silentAnnounce: true,
+    });
+    expect(spawnParams[0]).not.toHaveProperty("continuationTargetSessionKey");
+    expect(spawnParams[0]).not.toHaveProperty("continuationTargetSessionKeys");
+    expect(spawnParams[0]).not.toHaveProperty("continuationFanoutMode");
+    expect(spawnParams[1]).toMatchObject({
+      task: expect.stringContaining("wake default"),
+      silentAnnounce: true,
+      wakeOnReturn: true,
+    });
+    expect(spawnParams[1]).not.toHaveProperty("continuationTargetSessionKey");
+    expect(spawnParams[1]).not.toHaveProperty("continuationTargetSessionKeys");
+    expect(spawnParams[1]).not.toHaveProperty("continuationFanoutMode");
+  });
+
   it("threads cross-session targeting metadata into spawned continuation runs", async () => {
     setRuntimeConfigSnapshot({
       agents: { defaults: { continuation: { crossSessionTargeting: "enabled" } } },
@@ -519,7 +552,7 @@ describe("tool delegate dispatch contract", () => {
     const sessionKey = "session-delegate-model";
     enqueuePendingDelegate(sessionKey, {
       task: "continue on a specific model",
-      model: "github-copilot/claude-haiku-4.5",
+      model: "github-copilot/gpt-5.4-nano",
     });
 
     await dispatchToolDelegates({
@@ -532,12 +565,28 @@ describe("tool delegate dispatch contract", () => {
     expect(spawnSubagentDirectMock).toHaveBeenCalledWith(
       expect.objectContaining({
         task: expect.stringContaining("continue on a specific model"),
-        model: "github-copilot/claude-haiku-4.5",
+        model: "github-copilot/gpt-5.4-nano",
       }),
       expect.objectContaining({
         agentSessionKey: sessionKey,
       }),
     );
+  });
+
+  it("omits model from spawned continuation runs when the delegate inherits the parent model", async () => {
+    const sessionKey = "session-delegate-inherited-model";
+    enqueuePendingDelegate(sessionKey, { task: "continue with inherited model" });
+
+    await dispatchToolDelegates({
+      sessionKey,
+      chainState: { currentChainCount: 0, chainStartedAt: Date.now(), accumulatedChainTokens: 0 },
+      ctx: { sessionKey },
+      maxChainLength: 10,
+    });
+
+    const spawnParams = spawnSubagentDirectMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(spawnParams.task).toEqual(expect.stringContaining("continue with inherited model"));
+    expect(spawnParams).not.toHaveProperty("model");
   });
 
   it("resolves persisted logical traceparents before spawning continuation runs", async () => {

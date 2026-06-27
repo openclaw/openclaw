@@ -235,7 +235,7 @@ describe("parseContinuationSignal", () => {
 
   it("parses delegate model override", () => {
     const signal = parseContinuationSignal(
-      "[[CONTINUE_DELEGATE: route to a cheaper model | model=github-copilot/claude-haiku-4.5]]",
+      "[[CONTINUE_DELEGATE: route to a cheaper model | model=github-copilot/gpt-5.4-nano]]",
     );
     expect(signal).toEqual({
       kind: "delegate",
@@ -243,7 +243,21 @@ describe("parseContinuationSignal", () => {
       delayMs: undefined,
       silent: undefined,
       silentWake: undefined,
-      model: "github-copilot/claude-haiku-4.5",
+      model: "github-copilot/gpt-5.4-nano",
+    });
+  });
+
+  it("composes delegate model override with a silent-wake return modifier", () => {
+    const signal = parseContinuationSignal(
+      "[[CONTINUE_DELEGATE: enrich silently | silent-wake | model=github-copilot/gpt-5.4-nano]]",
+    );
+    expect(signal).toEqual({
+      kind: "delegate",
+      task: "enrich silently",
+      delayMs: undefined,
+      silent: undefined,
+      silentWake: true,
+      model: "github-copilot/gpt-5.4-nano",
     });
   });
 
