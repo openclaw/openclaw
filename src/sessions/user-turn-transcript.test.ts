@@ -455,7 +455,7 @@ describe("user turn transcript persistence", () => {
       ]);
     });
 
-    it("preserves idempotency keys when before_message_write replaces a user turn", async () => {
+    it("preserves transcript metadata when before_message_write replaces a user turn", async () => {
       let hookCalls = 0;
       const provenance = {
         kind: "inter_session" as const,
@@ -472,6 +472,7 @@ describe("user turn transcript persistence", () => {
                 message: castAgentMessage({
                   role: "user",
                   content: "[redacted by hook]",
+                  __openclaw: { hookOwned: true },
                 }),
               };
             },
@@ -487,6 +488,7 @@ describe("user turn transcript persistence", () => {
           text: "secret prompt",
           idempotencyKey: "chat-run-1:user",
           provenance,
+          sender: { id: "user-42", name: "Ada" },
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
@@ -496,6 +498,7 @@ describe("user turn transcript persistence", () => {
           text: "secret prompt",
           idempotencyKey: "chat-run-1:user",
           provenance,
+          sender: { id: "user-42", name: "Ada" },
         },
         beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
       });
@@ -506,6 +509,7 @@ describe("user turn transcript persistence", () => {
           content: "[redacted by hook]",
           idempotencyKey: "chat-run-1:user",
           provenance,
+          __openclaw: { hookOwned: true, senderId: "user-42", senderName: "Ada" },
         }),
       ]);
       expect(hookCalls).toBe(1);
