@@ -1,7 +1,6 @@
 // Session cleanup service for store entries and transcript/artifact files.
 // Supports dry-run/apply modes, stale pruning, missing transcript fixes, DM-scope retirement, and disk budgets.
 
-import fs from "node:fs";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getLogger } from "../../logging/logger.js";
@@ -13,19 +12,13 @@ import {
   resolveSessionArtifactCanonicalPathsForEntry,
   type SessionUnreferencedArtifactSweepResult,
 } from "./disk-budget.js";
-import { extractGeneratedTranscriptSessionId } from "./generated-transcript-session-id.js";
-import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  resolveSessionTranscriptPathInDir,
-  resolveStorePath,
-} from "./paths.js";
+import { resolveStorePath } from "./paths.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntries,
+  loadTranscriptEventsSync,
   purgeDeletedAgentSessionEntries,
   type SessionEntryLifecycleRemoval,
-  type SessionEntryLifecycleUpsert,
 } from "./session-accessor.js";
 import { cloneSessionStoreRecord } from "./store-cache.js";
 import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
@@ -56,7 +49,6 @@ export type SessionsCleanupOptions = SessionStoreSelectionOptions & {
 
 export type SessionCleanupAction =
   | "keep"
-  | "repair-session-file"
   | "prune-missing"
   | "prune-model-run"
   | "prune-stale"
@@ -71,7 +63,6 @@ export type SessionCleanupSummary = {
   dryRun: boolean;
   beforeCount: number;
   afterCount: number;
-  repaired: number;
   missing: number;
   dmScopeRetired: number;
   modelRunPruned: number;
@@ -98,7 +89,6 @@ export type SessionsCleanupRunResult = {
   previewResults: Array<{
     summary: SessionCleanupSummary;
     beforeStore: Record<string, SessionEntry>;
-    repairedKeys: Set<string>;
     missingKeys: Set<string>;
     modelRunPrunedKeys: Set<string>;
     staleKeys: Set<string>;
@@ -108,8 +98,6 @@ export type SessionsCleanupRunResult = {
   }>;
   appliedSummaries: SessionCleanupSummary[];
 };
-
-const EMPTY_TRANSCRIPT_MAX_BYTES = 4096;
 
 function loadCleanupSessionStore(target: SessionStoreTarget): Record<string, SessionEntry> {
   return Object.fromEntries(
@@ -173,62 +161,21 @@ function isTranscriptMessageRecord(entry: unknown): boolean {
   return record.type === undefined && isTranscriptMessageRole(record.role);
 }
 
-function transcriptHasNoMessageRecords(transcriptPath: string): boolean {
-  let stat: fs.Stats;
-  try {
-    stat = fs.statSync(transcriptPath);
-  } catch {
-    return false;
-  }
-  if (!stat.isFile() || stat.size > EMPTY_TRANSCRIPT_MAX_BYTES) {
-    // Only inspect small transcript files; larger files are assumed to contain real history.
-    return false;
-  }
-
-  let raw: string;
-  try {
-    raw = fs.readFileSync(transcriptPath, "utf-8");
-  } catch {
-    return false;
-  }
-
-  const lines = raw.split(/\r?\n/u).filter((line) => line.trim().length > 0);
-  if (lines.length === 0) {
-    return true;
-  }
-  for (const line of lines) {
-    let entry: unknown;
-    try {
-      entry = JSON.parse(line) as unknown;
-    } catch {
-      return false;
-    }
-    if (isTranscriptMessageRecord(entry)) {
-      return false;
-    }
-  }
-  return true;
-}
-
-function transcriptExistsWithMessages(transcriptPath: string): boolean {
-  return fs.existsSync(transcriptPath) && !transcriptHasNoMessageRecords(transcriptPath);
-}
-
-function isStaleGeneratedBaseTranscript(params: {
+function sqliteTranscriptHasMessageRecords(params: {
   sessionId: string;
-  sessionFile?: string;
+  sessionKey: string;
+  storePath: string;
 }): boolean {
-  const generatedSessionId = extractGeneratedTranscriptSessionId(params.sessionFile);
-  if (!generatedSessionId || generatedSessionId === params.sessionId) {
+  try {
+    return loadTranscriptEventsSync(params).some(isTranscriptMessageRecord);
+  } catch {
     return false;
   }
-  return path.basename(params.sessionFile?.trim() ?? "") === `${generatedSessionId}.jsonl`;
 }
 
 /** Resolves the action label for one session key from cleanup key sets. */
 export function resolveSessionCleanupAction(params: {
   key: string;
-  repairedKeys: Set<string>;
   missingKeys: Set<string>;
   modelRunPrunedKeys: Set<string>;
   staleKeys: Set<string>;
@@ -253,9 +200,6 @@ export function resolveSessionCleanupAction(params: {
   }
   if (params.budgetEvictedKeys.has(params.key)) {
     return "evict-budget";
-  }
-  if (params.repairedKeys.has(params.key)) {
-    return "repair-session-file";
   }
   return "keep";
 }
@@ -337,19 +281,8 @@ function pruneMissingTranscriptEntries(params: {
   store: Record<string, SessionEntry>;
   storePath: string;
   onPruned?: (key: string, entry: SessionEntry) => void;
-  onRepaired?: (
-    key: string,
-    entry: SessionEntry,
-    sessionFile: string,
-    previousSessionFile: string | undefined,
-  ) => void;
-}): { removed: number; repaired: number } {
-  const sessionPathOpts = resolveSessionFilePathOptions({
-    storePath: params.storePath,
-  });
-  const sessionsDir = path.dirname(params.storePath);
+}): number {
   let removed = 0;
-  let repaired = 0;
   for (const [key, entry] of Object.entries(params.store)) {
     if (parseAgentSessionKey(key) && entry.sessionId === key && !entry.sessionFile) {
       continue;
@@ -364,47 +297,19 @@ function pruneMissingTranscriptEntries(params: {
       params.onPruned?.(key, entry);
       continue;
     }
-    let canonicalTranscriptPath: string | undefined;
-    try {
-      canonicalTranscriptPath = resolveSessionTranscriptPathInDir(entry.sessionId, sessionsDir);
-    } catch {
-      // Malformed legacy rows cannot resolve a transcript path; --fix-missing prunes them.
-    }
-    let transcriptPath: string | undefined;
-    try {
-      transcriptPath = resolveSessionFilePath(entry.sessionId, entry, sessionPathOpts);
-    } catch {
-      // Malformed sessionFile metadata can still be repaired via the canonical path below.
-    }
     if (
-      isStaleGeneratedBaseTranscript({
+      !sqliteTranscriptHasMessageRecords({
         sessionId: entry.sessionId,
-        sessionFile: entry.sessionFile,
-      }) &&
-      canonicalTranscriptPath &&
-      canonicalTranscriptPath !== transcriptPath &&
-      transcriptExistsWithMessages(canonicalTranscriptPath)
-    ) {
-      const previousSessionFile = entry.sessionFile;
-      entry.sessionFile = canonicalTranscriptPath;
-      repaired += 1;
-      params.onRepaired?.(key, entry, canonicalTranscriptPath, previousSessionFile);
-      continue;
-    }
-    if (transcriptPath && transcriptExistsWithMessages(transcriptPath)) {
-      continue;
-    }
-    if (
-      !transcriptPath ||
-      !fs.existsSync(transcriptPath) ||
-      transcriptHasNoMessageRecords(transcriptPath)
+        sessionKey: key,
+        storePath: params.storePath,
+      })
     ) {
       delete params.store[key];
       removed += 1;
       params.onPruned?.(key, entry);
     }
   }
-  return { removed, repaired };
+  return removed;
 }
 
 function addEntryArtifactPathsToSet(params: {
@@ -444,10 +349,9 @@ async function previewStoreCleanup(params: {
   const staleKeys = new Set<string>();
   const cappedKeys = new Set<string>();
   const missingKeys = new Set<string>();
-  const repairedKeys = new Set<string>();
   const modelRunPrunedKeys = new Set<string>();
   const dmScopeRetiredKeys = new Set<string>();
-  const missingResult =
+  const missing =
     params.fixMissing === true
       ? pruneMissingTranscriptEntries({
           store: previewStore,
@@ -455,12 +359,8 @@ async function previewStoreCleanup(params: {
           onPruned: (key) => {
             missingKeys.add(key);
           },
-          onRepaired: (key) => {
-            repairedKeys.add(key);
-          },
         })
-      : { removed: 0, repaired: 0 };
-  const missing = missingResult.removed;
+      : 0;
   const dmScopeRetired =
     params.fixDmScope === true
       ? retireMainScopeDirectSessionEntries({
@@ -556,22 +456,10 @@ async function previewStoreCleanup(params: {
       budgetEvictedKeys.add(key);
     }
   }
-  for (const removedKey of [
-    ...missingKeys,
-    ...modelRunPrunedKeys,
-    ...staleKeys,
-    ...cappedKeys,
-    ...budgetEvictedKeys,
-    ...dmScopeRetiredKeys,
-  ]) {
-    repairedKeys.delete(removedKey);
-  }
-  const repaired = repairedKeys.size;
   const beforeCount = Object.keys(beforeStore).length;
   const afterPreviewCount = Object.keys(previewStore).length;
   const wouldMutate =
     missing > 0 ||
-    repaired > 0 ||
     dmScopeRetired > 0 ||
     modelRunPruned > 0 ||
     pruned > 0 ||
@@ -587,7 +475,6 @@ async function previewStoreCleanup(params: {
     dryRun: params.dryRun,
     beforeCount,
     afterCount: afterPreviewCount,
-    repaired,
     missing,
     dmScopeRetired,
     modelRunPruned,
@@ -601,7 +488,6 @@ async function previewStoreCleanup(params: {
   return {
     summary,
     beforeStore,
-    repairedKeys,
     missingKeys,
     modelRunPrunedKeys,
     staleKeys,
@@ -648,8 +534,6 @@ export async function runSessionsCleanup(params: {
     for (const target of targets) {
       const applyStore = loadCleanupSessionStore(target);
       const missingRemovals: SessionEntryLifecycleRemoval[] = [];
-      const missingRepairPlans: Array<{ sessionKey: string; sessionFile: string }> = [];
-      const missingRepairs: SessionEntryLifecycleUpsert[] = [];
       const dmScopeRetiredRemovals: SessionEntryLifecycleRemoval[] = [];
       if (opts.fixMissing) {
         pruneMissingTranscriptEntries({
@@ -659,24 +543,6 @@ export async function runSessionsCleanup(params: {
             missingRemovals.push({
               sessionKey,
               expectedEntry: cloneSessionStoreRecord({ entry }).entry,
-            });
-          },
-          onRepaired: (sessionKey, entry, sessionFile, previousSessionFile) => {
-            const expectedSessionId = entry.sessionId;
-            missingRepairPlans.push({ sessionKey, sessionFile });
-            missingRepairs.push({
-              sessionKey,
-              buildEntry: ({ currentEntry }) => {
-                if (
-                  !currentEntry ||
-                  currentEntry.sessionId !== expectedSessionId ||
-                  currentEntry.sessionFile !== previousSessionFile ||
-                  !transcriptExistsWithMessages(sessionFile)
-                ) {
-                  return undefined;
-                }
-                return { ...currentEntry, sessionFile };
-              },
             });
           },
         });
@@ -703,7 +569,6 @@ export async function runSessionsCleanup(params: {
       const lifecycleResult = await applySessionEntryLifecycleMutation({
         storePath: target.storePath,
         removals,
-        upserts: missingRepairs,
         activeSessionKey: opts.activeKey,
         maintenanceOverride: {
           ...maintenance,
@@ -732,13 +597,6 @@ export async function runSessionsCleanup(params: {
               dryRun: false,
             });
       const removedSessionKeys = new Set(lifecycleResult.removedSessionKeys);
-      const postApplyStore: Record<string, SessionEntry> =
-        missingRepairPlans.length > 0
-          ? loadSessionStore(target.storePath, { skipCache: true })
-          : {};
-      const repairedApplied = missingRepairPlans.filter(
-        ({ sessionKey, sessionFile }) => postApplyStore[sessionKey]?.sessionFile === sessionFile,
-      ).length;
       const missingApplied = missingRemovals.filter(({ sessionKey }) =>
         removedSessionKeys.has(sessionKey),
       ).length;
@@ -774,7 +632,6 @@ export async function runSessionsCleanup(params: {
                 dryRun: false,
                 beforeCount: 0,
                 afterCount: 0,
-                repaired: 0,
                 missing: 0,
                 dmScopeRetired: 0,
                 modelRunPruned: 0,
@@ -788,7 +645,6 @@ export async function runSessionsCleanup(params: {
               unreferencedArtifacts,
               wouldMutate:
                 (preview?.summary.wouldMutate ?? false) || unreferencedArtifacts.removedFiles > 0,
-              repaired: repairedApplied,
               applied: true,
               appliedCount: lifecycleResult.afterCount,
             }
@@ -799,7 +655,6 @@ export async function runSessionsCleanup(params: {
               dryRun: false,
               beforeCount: appliedReport.beforeCount,
               afterCount: appliedReport.afterCount,
-              repaired: repairedApplied,
               missing: missingApplied,
               dmScopeRetired: dmScopeRetiredApplied,
               modelRunPruned: appliedReport.modelRunPruned,
@@ -809,7 +664,6 @@ export async function runSessionsCleanup(params: {
               diskBudget: appliedReport.diskBudget,
               wouldMutate:
                 missingApplied > 0 ||
-                repairedApplied > 0 ||
                 dmScopeRetiredApplied > 0 ||
                 appliedReport.modelRunPruned > 0 ||
                 appliedReport.pruned > 0 ||

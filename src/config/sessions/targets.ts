@@ -8,6 +8,7 @@ import { DEFAULT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js
 import { resolveStateDir } from "../paths.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import { resolveAgentsDirFromSessionStorePath, resolveStorePath } from "./paths.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 
 /** CLI/session-store target selection options. */
 export type SessionStoreSelectionOptions = {
@@ -91,16 +92,20 @@ function resolveValidatedDiscoveredStorePathSync(params: {
   realAgentsRoot?: string;
 }): string | undefined {
   const storePath = path.join(params.sessionsDir, "sessions.json");
+  const sqlitePath = resolveSqliteTargetFromSessionStorePath(storePath).path;
+  if (!sqlitePath) {
+    return undefined;
+  }
   try {
-    const stat = fsSync.lstatSync(storePath);
-    // Discovered stores must be real files under the agents root; symlinked stores could escape
-    // the managed agent tree.
+    const stat = fsSync.lstatSync(sqlitePath);
+    // Discovered stores must be real SQLite files under the agents root; symlinked stores could
+    // escape the managed agent tree.
     if (stat.isSymbolicLink() || !stat.isFile()) {
       return undefined;
     }
-    const realStorePath = fsSync.realpathSync.native(storePath);
+    const realStorePath = fsSync.realpathSync.native(sqlitePath);
     const realAgentsRoot = params.realAgentsRoot ?? fsSync.realpathSync.native(params.agentsRoot);
-    return isWithinRoot(realStorePath, realAgentsRoot) ? realStorePath : undefined;
+    return isWithinRoot(realStorePath, realAgentsRoot) ? storePath : undefined;
   } catch (err) {
     if (shouldSkipDiscoveryError(err)) {
       return undefined;
