@@ -7,6 +7,10 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionTranscriptPathInDir } from "../../../config/sessions/paths.js";
 import {
+  loadTranscriptEvents,
+  upsertSessionEntry,
+} from "../../../config/sessions/session-accessor.js";
+import {
   appendSessionTranscriptEvent,
   appendSessionTranscriptMessage,
 } from "../../../config/sessions/transcript-append.js";
@@ -2568,17 +2572,15 @@ describe("embedded attempt session lock lifecycle", () => {
     const sessionKey = "facade";
     const storePath = path.join(dir, "sessions.json");
     const sessionFile = resolveSessionTranscriptPathInDir(sessionId, dir);
-    await fs.writeFile(
-      storePath,
-      JSON.stringify({
-        [sessionKey]: {
-          sessionId,
-          chatType: "direct",
-          channel: "discord",
-          spawnedCwd: dir,
-        },
-      }),
-      "utf8",
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionId,
+        chatType: "direct",
+        channel: "discord",
+        spawnedCwd: dir,
+        updatedAt: Date.now(),
+      },
     );
     const mergePromptReleasedSessionEntries = vi.fn();
     const controller = await createEmbeddedAttemptSessionLockController({
@@ -2626,9 +2628,16 @@ describe("embedded attempt session lock lifecycle", () => {
     );
 
     expect(result.ok).toBe(true);
-    expect(mergePromptReleasedSessionEntries).toHaveBeenCalledWith([
-      expect.objectContaining({ type: "message" }),
-    ]);
+    const events = await loadTranscriptEvents({ sessionId, sessionKey, storePath });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          content: [{ type: "text", text: "first-turn delivery" }],
+          role: "assistant",
+        }),
+      }),
+    );
+    expect(mergePromptReleasedSessionEntries).not.toHaveBeenCalled();
     expect(controller.hasSessionTakeover()).toBe(false);
     await controller.dispose();
   });
