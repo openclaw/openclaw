@@ -911,6 +911,25 @@ describe("forceResetGlobalDispatcher", () => {
     expect(setGlobalDispatcher).not.toHaveBeenCalled();
     expect(getCurrentDispatcher()).toBe(dispatcher);
   });
+
+  it("close/destroy on wrapped EnvHttpProxyAgent cleans both dispatchers", () => {
+    vi.mocked(hasEnvHttpProxyAgentConfigured).mockReturnValue(true);
+    vi.mocked(resolveEnvHttpProxyAgentOptions).mockReturnValue({
+      httpsProxy: "http://proxy.test:8080",
+    });
+    ensureGlobalUndiciEnvProxyDispatcher();
+
+    const dispatcher = getCurrentDispatcher() as {
+      close?: () => void;
+      destroy?: () => void;
+    };
+    expect(typeof dispatcher?.close).toBe("function");
+    expect(typeof dispatcher?.destroy).toBe("function");
+
+    // close and destroy should not throw
+    expect(() => dispatcher.close?.()).not.toThrow();
+    expect(() => dispatcher.destroy?.()).not.toThrow();
+  });
 });
 
 afterAll(() => {

@@ -183,16 +183,18 @@ function createNoProxyAwareEnvDispatcher(
       }
       if (UNDICI_DISPATCHER_LIFECYCLE_METHODS.has(property)) {
         return (...args: unknown[]) => {
-          // Close/destroy the proxy dispatcher normally.
-          const proxyResult = Reflect.apply(value, target, args);
-          // Also clean up the bypass agent.  Strip any trailing callback to
-          // avoid double-callback when both dispatchers receive the same args.
-          const noCallbackArgs = args.filter((a) => typeof a !== "function");
+          // Clean up both the proxy dispatcher and the bypass agent.
+          // Strip trailing callbacks for the bypass agent to avoid
+          // double-callback when both dispatchers receive the same args.
           const bypassValue = Reflect.get(bypassAgent, property, bypassAgent);
           if (typeof bypassValue === "function") {
-            Reflect.apply(bypassValue, bypassAgent, noCallbackArgs);
+            Reflect.apply(
+              bypassValue,
+              bypassAgent,
+              args.filter((a) => typeof a !== "function"),
+            );
           }
-          return proxyResult;
+          return Reflect.apply(value, target, args);
         };
       }
       if (UNDICI_DISPATCH_HELPER_METHODS.has(property)) {
