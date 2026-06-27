@@ -1401,6 +1401,8 @@ export const ru: TranslationMap = {
       sessionSearch: "Поиск сеансов",
       clearSessionSearch: "Очистить поиск сеансов",
       loadMoreSessions: "Загрузить еще сеансы",
+      currentSession: "current session",
+      sessionLoadedListPosition: "session {position} of {total} in the loaded list",
       model: "Модель чата",
       thinkingLevel: "Уровень мышления чата",
     },

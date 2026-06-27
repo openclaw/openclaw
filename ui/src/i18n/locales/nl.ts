@@ -1397,6 +1397,8 @@ export const nl: TranslationMap = {
       sessionSearch: "Sessies zoeken",
       clearSessionSearch: "Sessiezoekopdracht wissen",
       loadMoreSessions: "Meer sessies laden",
+      currentSession: "current session",
+      sessionLoadedListPosition: "session {position} of {total} in the loaded list",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

@@ -565,8 +565,11 @@ function formatChatSessionPickerOptionAriaLabel(params: {
 }): string {
   return [
     params.label,
-    params.selected ? "current session" : null,
-    `session ${params.position} of ${params.total} in the loaded list`,
+    params.selected ? t("chat.selectors.currentSession") : null,
+    t("chat.selectors.sessionLoadedListPosition", {
+      position: String(params.position),
+      total: String(params.total),
+    }),
     params.meta || null,
   ]
     .filter(Boolean)

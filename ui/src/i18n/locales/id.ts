@@ -1391,6 +1391,8 @@ export const id: TranslationMap = {
       sessionSearch: "Cari sesi",
       clearSessionSearch: "Hapus pencarian sesi",
       loadMoreSessions: "Muat sesi lainnya",
+      currentSession: "current session",
+      sessionLoadedListPosition: "session {position} of {total} in the loaded list",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },

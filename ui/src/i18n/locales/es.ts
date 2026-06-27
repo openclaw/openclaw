@@ -1399,6 +1399,8 @@ export const es: TranslationMap = {
       sessionSearch: "Buscar sesiones",
       clearSessionSearch: "Borrar búsqueda de sesiones",
       loadMoreSessions: "Cargar más sesiones",
+      currentSession: "current session",
+      sessionLoadedListPosition: "session {position} of {total} in the loaded list",
       model: "Chat model",
       thinkingLevel: "Chat thinking level",
     },
