@@ -569,7 +569,7 @@ describe("getApiKeyForModel", () => {
     ["OPENAI_API_KEY", { CODEX_API_KEY: undefined, OPENAI_API_KEY: "env-openai-key" }],
   ] as const)(
     "keeps %s ahead of default OpenAI OAuth profiles for audio transcriptions",
-    async (envVar, env) => {
+    async (sourceEnvVar, env) => {
       const store = {
         version: 1 as const,
         profiles: {
@@ -589,11 +589,11 @@ describe("getApiKeyForModel", () => {
         });
 
         expect(resolved).toMatchObject({
-          apiKey: envVar === "CODEX_API_KEY" ? "codex-env-openai-key" : "env-openai-key",
+          apiKey: sourceEnvVar === "CODEX_API_KEY" ? "codex-env-openai-key" : "env-openai-key",
           mode: "api-key",
         });
         expect(resolved.profileId).toBeUndefined();
-        expect(resolved.source).toContain(envVar);
+        expect(resolved.source).toContain(sourceEnvVar);
       });
     },
   );
