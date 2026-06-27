@@ -91,6 +91,10 @@ const refreshQueuedFollowupSessionMock = vi.fn();
 const compactState = vi.hoisted(() => ({
   compactEmbeddedAgentSessionMock: vi.fn(),
 }));
+const sessionAccountingState = vi.hoisted(() => ({
+  incrementRunCompactionCountMock: vi.fn(),
+  incrementRunCompactionCountImpl: undefined as undefined | ((params: unknown) => Promise<unknown>),
+}));
 
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
@@ -161,6 +165,24 @@ vi.mock("./queue.js", () => {
     scheduleFollowupDrain: vi.fn(),
     clearSessionQueues: (...args: unknown[]) => clearSessionQueuesMock(...args),
     refreshQueuedFollowupSession: (...args: unknown[]) => refreshQueuedFollowupSessionMock(...args),
+  };
+});
+
+vi.mock("./session-run-accounting.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./session-run-accounting.js")>();
+  return {
+    ...actual,
+    incrementRunCompactionCount: async (
+      params: Parameters<typeof actual.incrementRunCompactionCount>[0],
+    ) => {
+      sessionAccountingState.incrementRunCompactionCountMock(params);
+      if (sessionAccountingState.incrementRunCompactionCountImpl) {
+        return (await sessionAccountingState.incrementRunCompactionCountImpl(params)) as
+          | number
+          | undefined;
+      }
+      return actual.incrementRunCompactionCount(params);
+    },
   };
 });
 
@@ -272,6 +294,8 @@ beforeEach(() => {
     compacted: false,
     reason: "test-preflight-disabled",
   });
+  sessionAccountingState.incrementRunCompactionCountMock.mockClear();
+  sessionAccountingState.incrementRunCompactionCountImpl = undefined;
   clearSessionQueuesMock.mockReset();
   clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
   refreshQueuedFollowupSessionMock.mockReset();
@@ -538,6 +562,130 @@ describe("runReplyAgent auto-compaction token update", () => {
     expectReplyText(result, "ok");
     expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
   });
+
+  it("returns quiet compaction replies before post-reply accounting finishes", async () => {
+    const sessionKey = "main";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session",
+      sessionFile: "/tmp/session.jsonl",
+      updatedAt: Date.now(),
+      totalTokens: 50_000,
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    let releaseAccounting: (() => void) | undefined;
+    const accountingStarted = new Promise<void>((resolveStarted) => {
+      sessionAccountingState.incrementRunCompactionCountImpl = async (params) => {
+        resolveStarted();
+        await new Promise<void>((resolve) => {
+          releaseAccounting = resolve;
+        });
+        const accountingParams = params as {
+          amount?: number;
+          newSessionFile?: string;
+          newSessionId?: string;
+          sessionKey?: string;
+          sessionStore?: Record<string, SessionEntry>;
+        };
+        const key = accountingParams.sessionKey;
+        const entry = key ? accountingParams.sessionStore?.[key] : undefined;
+        if (key && entry && accountingParams.sessionStore) {
+          accountingParams.sessionStore[key] = {
+            ...entry,
+            compactionCount: (entry.compactionCount ?? 0) + (accountingParams.amount ?? 1),
+            sessionFile: accountingParams.newSessionFile ?? entry.sessionFile,
+            sessionId: accountingParams.newSessionId ?? entry.sessionId,
+          };
+        }
+        return 1;
+      };
+    });
+    runEmbeddedAgentMock.mockResolvedValue({
+      payloads: [{ text: "ok" }],
+      meta: {
+        agentMeta: {
+          compactionCount: 1,
+          lastCallUsage: { input: 10_000, output: 500, total: 10_500 },
+          sessionFile: "/tmp/session-rotated.jsonl",
+          sessionId: "session-rotated",
+        },
+      },
+    });
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun({
+      storePath: "",
+      sessionEntry,
+    });
+
+    const runPromise = runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: false,
+      isActive: false,
+      isStreaming: false,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultModel: "anthropic/claude-opus-4-6",
+      agentCfgContextTokens: 200_000,
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    await accountingStarted;
+    try {
+      const resultRace = await Promise.race([
+        runPromise.then((value) => ({ kind: "result" as const, value })),
+        new Promise<{ kind: "timeout" }>((resolve) =>
+          setTimeout(() => resolve({ kind: "timeout" }), 1_000),
+        ),
+      ]);
+
+      expect(resultRace.kind).toBe("result");
+      if (resultRace.kind !== "result") {
+        throw new Error("quiet compaction reply did not return before accounting finished");
+      }
+      expectReplyText(resultRace.value, "ok");
+      expect(replyRunRegistry.get(sessionKey)).toBeUndefined();
+      expect(refreshQueuedFollowupSessionMock).not.toHaveBeenCalled();
+      expect(scheduleFollowupDrain).not.toHaveBeenCalled();
+      expect(() =>
+        createReplyOperation({
+          sessionKey,
+          sessionId: "session-rotated",
+          resetTriggered: false,
+          respectFollowupAdmissionBarrier: true,
+        }),
+      ).toThrow();
+
+      releaseAccounting?.();
+
+      await vi.waitFor(() => {
+        expect(refreshQueuedFollowupSessionMock).toHaveBeenCalledTimes(1);
+      });
+      await vi.waitFor(() => {
+        expect(scheduleFollowupDrain).toHaveBeenCalledTimes(1);
+      });
+      const nextOperation = createReplyOperation({
+        sessionKey,
+        sessionId: "session-rotated",
+        resetTriggered: false,
+        respectFollowupAdmissionBarrier: true,
+      });
+      nextOperation.complete();
+    } finally {
+      releaseAccounting?.();
+      await runPromise.catch(() => undefined);
+    }
+  }, 10_000);
 
   it("keeps a provided reply operation active until final delivery completes", async () => {
     const sessionKey = "main";
