@@ -360,7 +360,7 @@ async function handleChatHistory(params: Record<string, unknown>): Promise<{
       : localMessagesForHistory;
   const recencyFilteredMessages = rt.dropPreSessionStartAnnouncePairs(
     rawMessages,
-    sessionStartedAt,
+    !includeFamilyHistory ? sessionStartedAt : undefined,
   );
 
   const effectiveMaxChars = rt.resolveEffectiveChatHistoryMaxChars(cfg);

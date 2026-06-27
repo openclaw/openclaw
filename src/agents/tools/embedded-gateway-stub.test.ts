@@ -295,6 +295,73 @@ describe("embedded gateway stub", () => {
     });
   });
 
+  it("preserves ancestor announce rows in embedded family history", async () => {
+    const sessionsDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-family-announce-")),
+    );
+    const storePath = path.join(sessionsDir, "sessions.json");
+    const ancestorActive = path.join(sessionsDir, "ancestor-announce-session.jsonl");
+    const currentActive = path.join(sessionsDir, "current-announce-session.jsonl");
+    const ancestorAnnounce = {
+      role: "user",
+      content: "ancestor announce",
+      __openclaw: { type: "subagent_announce", timestamp: 1_000 },
+    };
+    const ancestorReply = {
+      role: "assistant",
+      content: "ancestor reply",
+      __openclaw: { timestamp: 1_001 },
+    };
+    const currentMessage = {
+      role: "user",
+      content: "current message",
+      __openclaw: { timestamp: 2_001 },
+    };
+    fs.writeFileSync(storePath, "", "utf8");
+    fs.writeFileSync(ancestorActive, "", "utf8");
+    fs.writeFileSync(currentActive, "", "utf8");
+    runtime.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      storePath,
+      entry: {
+        sessionId: "current-announce-session",
+        sessionFile: currentActive,
+        sessionStartedAt: 2_000,
+        usageFamilySessionIds: ["ancestor-announce-session", "current-announce-session"],
+      },
+    });
+    runtime.readSessionMessagesAsync.mockImplementation(async (scope: { sessionId: string }) =>
+      scope.sessionId === "ancestor-announce-session"
+        ? [ancestorAnnounce, ancestorReply]
+        : [currentMessage],
+    );
+    runtime.dropPreSessionStartAnnouncePairs.mockImplementation(
+      (messages: unknown[], sessionStartedAt?: number) =>
+        sessionStartedAt === undefined
+          ? messages
+          : messages.filter(
+              (message) =>
+                typeof (message as { __openclaw?: { timestamp?: unknown } }).__openclaw
+                  ?.timestamp !== "number" ||
+                ((message as { __openclaw?: { timestamp?: number } }).__openclaw?.timestamp ?? 0) >=
+                  sessionStartedAt,
+            ),
+    );
+
+    const callGateway = createEmbeddedCallGateway();
+    const result = await callGateway<{ includeFamily?: boolean; messages: unknown[] }>({
+      method: "chat.history",
+      params: { sessionKey: "agent:main:main", includeFamily: true },
+    });
+
+    expect(result.includeFamily).toBe(true);
+    expect(result.messages).toEqual([ancestorAnnounce, ancestorReply, currentMessage]);
+    expect(runtime.dropPreSessionStartAnnouncePairs).toHaveBeenLastCalledWith(
+      [ancestorAnnounce, ancestorReply, currentMessage],
+      undefined,
+    );
+  });
+
   it("keeps embedded current chat history when family targets hit the cap", async () => {
     const sessionsDir = fs.realpathSync(
       fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-embedded-family-cap-")),
