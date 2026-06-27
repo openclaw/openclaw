@@ -39,4 +39,34 @@ describe("validateToolArguments", () => {
       }),
     ).toThrow(/Validation failed for tool "decimal-tool"/);
   });
+
+  it("reports unreadable plain JSON schema fields as schema errors", () => {
+    const unreadableProperties = new Proxy<Record<string, unknown>>(
+      {
+        amount: { type: "number" },
+      },
+      {
+        ownKeys() {
+          throw new Error("schema properties exploded");
+        },
+      },
+    );
+    const tool = {
+      name: "unreadable-schema-tool",
+      description: "test tool",
+      parameters: {
+        type: "object",
+        properties: unreadableProperties,
+      },
+    } as unknown as Tool;
+
+    expect(() =>
+      validateToolArguments(tool, {
+        type: "toolCall",
+        id: "call-1",
+        name: "unreadable-schema-tool",
+        arguments: { amount: "1" },
+      }),
+    ).toThrow(/Invalid parameter schema for tool "unreadable-schema-tool"/);
+  });
 });
