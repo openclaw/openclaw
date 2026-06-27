@@ -384,6 +384,23 @@ describe("exec approval reply helpers", () => {
     expect(payload.text).not.toContain("cannot be persisted");
   });
 
+  it("shows policy-required reason when allow-always is unavailable and ask is null", () => {
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "req-null-ask",
+      approvalSlug: "slug-null-ask",
+      ask: null,
+      allowedDecisions: ["allow-once", "deny"],
+      command: "echo hello",
+      host: "gateway",
+    });
+
+    expect(payload.text).not.toContain("allow-always");
+    expect(payload.text).toContain(
+      "The effective approval policy requires approval every time, so Allow Always is unavailable.",
+    );
+    expect(payload.text).not.toContain("cannot be persisted");
+  });
+
   it("shows non-persistable reason when allow-always is unavailable without ask=always", () => {
     const payload = buildExecApprovalPendingReplyPayload({
       approvalId: "req-oneshot",

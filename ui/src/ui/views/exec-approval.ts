@@ -156,7 +156,7 @@ function renderUnavailableDecisionWarning(
   if (active.kind !== "exec" || decisions.includes("allow-always")) {
     return nothing;
   }
-  const isNonPersistable = active.request.ask !== undefined && active.request.ask !== "always";
+  const isNonPersistable = active.request.ask != null && active.request.ask !== "always";
   const key = isNonPersistable
     ? "execApproval.allowAlwaysUnavailableNonPersistable"
     : "execApproval.allowAlwaysUnavailable";

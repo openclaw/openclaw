@@ -294,7 +294,7 @@ export function buildExecApprovalRequestMessage(request: ExecApprovalRequest, no
   lines.push(`Reply with: /approve ${request.id} ${decisionText}`);
   if (!allowedDecisions.includes("allow-always")) {
     lines.push(
-      request.request.ask !== undefined && request.request.ask !== "always"
+      request.request.ask != null && request.request.ask !== "always"
         ? "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content)."
         : "Allow Always is unavailable because the effective policy requires approval every time.",
     );

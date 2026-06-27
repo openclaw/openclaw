@@ -380,7 +380,7 @@ export function buildExecApprovalPendingReplyPayload(
     // without the full exec context), default to the policy-required explanation
     // rather than the non-persistable message.
     lines.push(
-      params.ask !== undefined && params.ask !== "always"
+      params.ask != null && params.ask !== "always"
         ? "Allow Always is unavailable because this command cannot be persisted (e.g., shell redirection or dynamic content)."
         : "The effective approval policy requires approval every time, so Allow Always is unavailable.",
     );
