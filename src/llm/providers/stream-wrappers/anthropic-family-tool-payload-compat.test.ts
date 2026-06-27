@@ -259,7 +259,7 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
     });
   });
 
-  it("preserves custom tools and named custom choices", () => {
+  it("converts custom tools to Anthropic format and preserves named custom choices", () => {
     const payload = runWrapper({
       tools: [
         {
@@ -279,11 +279,9 @@ describe("createOpenAIAnthropicToolPayloadCompatibilityWrapper", () => {
     expect(payload).toEqual({
       tools: [
         {
-          type: "custom",
-          custom: {
-            name: "shell",
-            description: "Run a shell command.",
-          },
+          name: "shell",
+          description: "Run a shell command.",
+          input_schema: { type: "object", properties: {} },
         },
       ],
       tool_choice: {

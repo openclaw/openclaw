@@ -237,7 +237,21 @@ function normalizeOpenAiFunctionAnthropicToolDefinition(
     }
     if (snapshot.type === "custom" && isRecord(snapshot.custom)) {
       const name = normalizeOptionalString(snapshot.custom.name) ?? undefined;
-      return name ? { kind: "custom", name, tool: snapshot } : undefined;
+      if (name) {
+        // Anthropic Messages API rejects type: "custom" for tool definitions.
+        // Convert custom tools to standard Anthropic tool format (name, description, input_schema).
+        const description = normalizeOptionalString(snapshot.custom.description) ?? undefined;
+        return {
+          kind: "custom",
+          name,
+          tool: {
+            name,
+            ...(description ? { description } : {}),
+            input_schema: { type: "object", properties: {} },
+          },
+        };
+      }
+      return undefined;
     }
     return { tool: snapshot };
   }
