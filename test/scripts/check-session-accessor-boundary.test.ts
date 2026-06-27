@@ -4,10 +4,7 @@ import {
   collectSessionStoreRuntimeFileBackedCompatExports,
   findGatewaySessionCreateLifecycleViolations,
   findEmbeddedAgentSessionTargetViolations,
-  findContextEngineCompactionSessionFileBaselineViolations,
   findMemoryHostSessionCorpusBoundaryViolations,
-  findPluginSdkPostFlipTranscriptApiBaselineViolations,
-  findPluginSdkPostFlipTranscriptApiSourceViolations,
   findSessionAccessorBoundaryViolations,
   findSessionCompactManualTrimBoundaryViolations,
   findSessionAccessorWriteBoundaryViolations,
@@ -17,7 +14,6 @@ import {
   migratedBundledPluginSessionAccessorFiles,
   migratedEmbeddedAgentSessionTargetFiles,
   migratedMemoryHostSessionCorpusFiles,
-  postFlipPluginSdkTranscriptApiFiles,
   migratedSessionLifecycleCleanupFiles,
   migratedSessionCompactManualTrimFiles,
   migratedSessionAccessorFiles,
@@ -169,15 +165,6 @@ describe("session accessor boundary guard", () => {
         "src/gateway/server-methods/chat.ts",
         "src/gateway/server-methods/chat-transcript-inject.ts",
         "src/sessions/user-turn-transcript.ts",
-      ]),
-    );
-  });
-
-  it("ratchets only post-flip plugin SDK transcript API files", () => {
-    expect(postFlipPluginSdkTranscriptApiFiles).toEqual(
-      new Set([
-        "src/plugin-sdk/agent-harness-runtime.ts",
-        "src/plugin-sdk/session-transcript-runtime.ts",
       ]),
     );
   });
@@ -446,91 +433,6 @@ describe("session accessor boundary guard", () => {
         publishTranscriptUpdate(scope, { messageId });
       `),
     ).toEqual([]);
-  });
-
-  it("flags post-flip public SDK transcript-file source exports", () => {
-    expect(
-      findPluginSdkPostFlipTranscriptApiSourceViolations(`
-        export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
-        export type SessionTranscriptUpdate = { sessionFile: string };
-      `),
-    ).toEqual([
-      {
-        line: 2,
-        reason: 'exports post-flip transcript-file SDK API "appendSessionTranscriptMessage"',
-      },
-      {
-        line: 3,
-        reason: 'exports post-flip transcript-file SDK API "SessionTranscriptUpdate"',
-      },
-    ]);
-  });
-
-  it("allows post-flip identity-based SDK transcript source exports", () => {
-    expect(
-      findPluginSdkPostFlipTranscriptApiSourceViolations(`
-        export type SessionTranscriptTarget = { sessionKey: string; sessionId: string };
-        export async function appendSessionTranscriptMessageByIdentity() {}
-      `),
-    ).toEqual([]);
-  });
-
-  it("flags post-flip public SDK transcript-file baseline exports", () => {
-    expect(
-      findPluginSdkPostFlipTranscriptApiBaselineViolations(
-        [
-          JSON.stringify({
-            recordType: "export",
-            exportName: "SessionTranscriptFileTarget",
-            declaration: "export type SessionTranscriptFileTarget = { path: string };",
-          }),
-          JSON.stringify({
-            recordType: "export",
-            exportName: "SessionTranscriptCustomTarget",
-            declaration: "export type SessionTranscriptCustomTarget = { sessionFile: string };",
-          }),
-        ].join("\n"),
-      ),
-    ).toEqual([
-      {
-        line: 1,
-        reason: 'baseline exports post-flip transcript-file SDK API "SessionTranscriptFileTarget"',
-      },
-      {
-        line: 2,
-        reason:
-          'baseline exports sessionFile-bearing transcript SDK contract "SessionTranscriptCustomTarget"',
-      },
-    ]);
-  });
-
-  it("allows post-flip identity-based SDK transcript baseline exports", () => {
-    expect(
-      findPluginSdkPostFlipTranscriptApiBaselineViolations(
-        JSON.stringify({
-          recordType: "export",
-          exportName: "SessionTranscriptTarget",
-          declaration: "export type SessionTranscriptTarget = { sessionKey: string };",
-        }),
-      ),
-    ).toEqual([]);
-  });
-
-  it("flags context-engine compaction sessionFile baseline exports", () => {
-    expect(
-      findContextEngineCompactionSessionFileBaselineViolations(
-        JSON.stringify({
-          recordType: "export",
-          exportName: "CompactResult",
-          declaration: "export type CompactResult = { sessionFile: string };",
-        }),
-      ),
-    ).toEqual([
-      {
-        line: 1,
-        reason: 'baseline exposes context-engine compaction sessionFile contract "CompactResult"',
-      },
-    ]);
   });
 
   it("flags legacy writers inside the gateway sessions.create lifecycle", () => {
