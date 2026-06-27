@@ -988,7 +988,7 @@ describe("stuck session diagnostics threshold", () => {
     );
   });
 
-  it("recovers stale model calls without active embedded-run ownership", async () => {
+  it("keeps stale processing model calls without active embedded-run ownership observe-only", async () => {
     const events: DiagnosticEventPayload[] = [];
     const recoverStuckSession = vi.fn();
     const stuckSessionWarnMs = 30_000;
@@ -1033,11 +1033,7 @@ describe("stuck session diagnostics threshold", () => {
         lastProgressReason: "model_call:started",
       },
     );
-    expectRecoveryCall(
-      recoverStuckSession,
-      { sessionId: "s1", sessionKey: "main", queueDepth: 0, allowActiveAbort: true },
-      ["ageMs", "stateGeneration"],
-    );
+    expect(recoverStuckSession).not.toHaveBeenCalled();
   });
 
   it("does not recover a recent native tool call just because the session is old", async () => {
