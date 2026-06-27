@@ -61,6 +61,10 @@ const ANDROID_WRAPPER_ARGS =
   /\b[A-Z][A-Za-z0-9_]*\s*\([^)\n]{0,160}?\b(?:text|title|label|message|contentDescription|placeholder)\s*=\s*"((?:\\.|[^"\\])*)"/gu;
 const ANDROID_TOAST_ARGS =
   /\b(?:Toast\.makeText|Snackbar\.make)\s*\([^,\n]*,\s*"((?:\\.|[^"\\])*)"/gu;
+const CONDITIONAL_BRANCHES = [
+  /\bif\s*\([^)]*\)\s*"((?:\\.|[^"\\])*)"\s*else\s*"((?:\\.|[^"\\])*)"/gu,
+  /\?\s*"((?:\\.|[^"\\])*)"\s*:\s*"((?:\\.|[^"\\])*)"/gu,
+];
 const ANDROID_RESOURCE_STRINGS = /<string\b[^>]*>([\s\S]*?)<\/string>/gu;
 const APPLE_ANY_CALLS = /\b[A-Z][A-Za-z0-9_]*\s*\(\s*"((?:\\.|[^"\\])*)"/gu;
 const APPLE_NAMED_ARGUMENTS =
@@ -169,19 +173,22 @@ function extractCandidates(
           [APPLE_MODIFIER_CALLS, "ui-modifier"],
           [APPLE_ANY_CALLS, "ui-call-generic"],
           [APPLE_NAMED_ARGUMENTS, "ui-named-argument"],
+          ...CONDITIONAL_BRANCHES.map((pattern) => [pattern, "conditional-branch"] as const),
         ]
       : [
           [ANDROID_CALLS, "ui-call"],
           [ANDROID_PROPERTIES, "ui-property"],
           [ANDROID_WRAPPER_ARGS, "ui-wrapper-argument"],
           [ANDROID_TOAST_ARGS, "ui-toast"],
+          ...CONDITIONAL_BRANCHES.map((pattern) => [pattern, "conditional-branch"] as const),
         ];
   for (const [pattern, kind] of patterns) {
     for (const match of source.matchAll(pattern)) {
-      const value = match[1];
       const offset = match.index ?? 0;
-      if (value) {
-        addCandidate(entries, surface, repoPath, value, kind, lineNumber(source, offset));
+      for (const value of match.slice(1)) {
+        if (value) {
+          addCandidate(entries, surface, repoPath, value, kind, lineNumber(source, offset));
+        }
       }
     }
   }
