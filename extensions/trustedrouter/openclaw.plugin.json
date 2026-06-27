@@ -1,0 +1,118 @@
+{
+  "id": "trustedrouter",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providers": ["trustedrouter"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "trustedrouter-native",
+      "hosts": ["api.trustedrouter.com"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "trustedrouter": {
+        "family": "trustedrouter"
+      }
+    }
+  },
+  "modelCatalog": {
+    "providers": {
+      "trustedrouter": {
+        "baseUrl": "https://api.trustedrouter.com/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "auto",
+            "name": "TrustedRouter Auto",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 200000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "cheap",
+            "name": "TrustedRouter Cheap",
+            "input": ["text"],
+            "reasoning": false,
+            "contextWindow": 200000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "fusion",
+            "name": "TrustedRouter Fusion",
+            "input": ["text"],
+            "reasoning": true,
+            "contextWindow": 200000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          },
+          {
+            "id": "zdr",
+            "name": "TrustedRouter ZDR",
+            "input": ["text", "image"],
+            "reasoning": true,
+            "contextWindow": 200000,
+            "maxTokens": 8192,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "trustedrouter": "static"
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "trustedrouter",
+        "envVars": ["TRUSTEDROUTER_API_KEY"]
+      }
+    ]
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "trustedrouter",
+      "method": "api-key",
+      "choiceId": "trustedrouter-api-key",
+      "choiceLabel": "TrustedRouter API key",
+      "groupId": "trustedrouter",
+      "groupLabel": "TrustedRouter",
+      "groupHint": "Attested, privacy-preserving frontier model routing",
+      "optionKey": "trustedrouterApiKey",
+      "cliFlag": "--trustedrouter-api-key",
+      "cliOption": "--trustedrouter-api-key <key>",
+      "cliDescription": "TrustedRouter API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
