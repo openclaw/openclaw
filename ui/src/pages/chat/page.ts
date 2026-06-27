@@ -2,12 +2,7 @@ import { consume } from "@lit/context";
 import { html, LitElement, type TemplateResult } from "lit";
 import { property } from "lit/decorators.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
-import type {
-  AgentsListResult,
-  ChatModelOverride,
-  ModelCatalogEntry,
-  SessionsListResult,
-} from "../../api/types.ts";
+import type { AgentsListResult, ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
 import { searchForSession } from "../../app-routes.ts";
 import {
   fetchAssistantIdentity,
@@ -161,7 +156,6 @@ type ChatPageHost = ChatHost &
     chatQueueBySession: Record<string, ChatQueueItem[]>;
     chatMessagesBySession: Map<string, unknown[]>;
     chatSideResultTerminalRuns: Set<string>;
-    chatModelOverrides: Record<string, ChatModelOverride | null>;
     chatModelSwitchPromises: Record<string, Promise<boolean>>;
     chatModelCatalog: ModelCatalogEntry[];
     sessionsResult: SessionsListResult | null;
@@ -538,7 +532,6 @@ function createPageState(
     chatAvatarUrl: null,
     chatAvatarStatus: null,
     chatAvatarReason: null,
-    chatModelOverrides: {} as Record<string, ChatModelOverride | null>,
     chatModelSwitchPromises: {} as Record<string, Promise<boolean>>,
     chatModelsLoading: false,
     chatModelCatalog: [] as ModelCatalogEntry[],

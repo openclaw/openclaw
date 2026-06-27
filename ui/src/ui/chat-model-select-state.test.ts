@@ -18,7 +18,7 @@ function createChatModelState(
 ): ChatModelStateInput {
   return {
     sessionKey: "main",
-    chatModelOverrides: {},
+    sessions: { state: { modelOverrides: {} } },
     chatModelCatalog: [],
     sessionsResult: createSessionsListResult({ model: null, modelProvider: null }),
     ...params,
@@ -51,7 +51,9 @@ describe("chat-model-select-state", () => {
 
   it("normalizes cached bare overrides to the matching catalog option", () => {
     const state = createChatModelState({
-      chatModelOverrides: { main: { kind: "raw", value: "gpt-5-mini" } },
+      sessions: {
+        state: { modelOverrides: { main: "gpt-5-mini" } },
+      },
       chatModelCatalog: createModelCatalog(...DEFAULT_CHAT_MODEL_CATALOG),
     });
 

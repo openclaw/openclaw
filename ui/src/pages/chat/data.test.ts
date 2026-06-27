@@ -183,7 +183,6 @@ function makeHost(overrides?: Partial<ChatHost>): ChatHost {
     sessionsCheckpointLoadingKey: null,
     sessionsCheckpointBusyKey: null,
     sessionsCheckpointErrorByKey: {},
-    chatModelOverrides: {},
     chatModelSwitchPromises: {},
     chatModelsLoading: false,
     chatModelCatalog: [],
@@ -2112,10 +2111,7 @@ describe("handleSendChat", () => {
       key: "main",
       model: "gpt-5-mini",
     });
-    expect(host.chatModelOverrides.main).toEqual({
-      kind: "qualified",
-      value: "openai/gpt-5-mini",
-    });
+    expect(host.sessions.state.modelOverrides.main).toBe("openai/gpt-5-mini");
     expect(onSlashAction).toHaveBeenCalledWith("refresh-tools-effective");
   });
 

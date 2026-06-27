@@ -11,6 +11,10 @@ import {
 type ToolStreamHost = Parameters<typeof handleAgentEvent>[0];
 type AgentEvent = NonNullable<Parameters<typeof handleAgentEvent>[1]>;
 type MutableHost = ToolStreamHost & {
+  sessions: {
+    state: { modelOverrides: Record<string, string | null> };
+    setModelOverride: (key: string, value: string | null | undefined) => void;
+  };
   compactionStatus?: unknown;
   compactionClearTimer?: number | null;
   fallbackStatus?: FallbackStatus | null;
@@ -19,6 +23,7 @@ type MutableHost = ToolStreamHost & {
 const TOOL_STREAM_TEST_NOW = new Date("2026-05-09T00:00:00.000Z").getTime();
 
 function createHost(overrides?: Partial<MutableHost>): MutableHost {
+  const modelOverrides: Record<string, string | null> = {};
   return {
     sessionKey: "main",
     chatRunId: null,
@@ -30,7 +35,16 @@ function createHost(overrides?: Partial<MutableHost>): MutableHost {
     chatToolMessages: [],
     activityEntries: [],
     toolStreamSyncTimer: null,
-    chatModelOverrides: {},
+    sessions: {
+      state: { modelOverrides },
+      setModelOverride: (key, value) => {
+        if (value === undefined) {
+          delete modelOverrides[key];
+        } else {
+          modelOverrides[key] = value;
+        }
+      },
+    },
     compactionStatus: null,
     compactionClearTimer: null,
     fallbackStatus: null,
@@ -247,18 +261,12 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       },
     });
 
-    expect(host.chatModelOverrides?.main).toEqual({
-      kind: "qualified",
-      value: "anthropic/claude-sonnet-4-6",
-    });
+    expect(host.sessions.state.modelOverrides.main).toBe("anthropic/claude-sonnet-4-6");
   });
 
   it("clears the chat model cache from session_status default resets", () => {
-    const host = createHost({
-      chatModelOverrides: {
-        main: { kind: "qualified", value: "anthropic/claude-sonnet-4-6" },
-      },
-    });
+    const host = createHost();
+    host.sessions.setModelOverride("main", "anthropic/claude-sonnet-4-6");
 
     handleAgentEvent(host, {
       runId: "run-1",
@@ -283,7 +291,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       },
     });
 
-    expect(host.chatModelOverrides?.main).toBeNull();
+    expect(host.sessions.state.modelOverrides.main).toBeNull();
   });
 
   it("tags stream segments with the tool they precede", () => {

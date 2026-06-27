@@ -170,6 +170,7 @@ function withSessionCapability<T extends object>(state: T): T & { sessions: Sess
     updateComplete:
       (state as { updateComplete?: Promise<unknown> }).updateComplete ?? Promise.resolve(),
     sessions: {
+      state: { modelOverrides: {} },
       refresh: sessionsRefreshMock,
       subscribeMessages: sessionsSubscribeMessagesMock,
     } as unknown as SessionCapability,

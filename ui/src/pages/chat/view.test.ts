@@ -34,8 +34,8 @@ const refreshVisibleToolsEffectiveForCurrentSessionMock = vi.hoisted(() =>
     const agentId = state.agentsSelectedId ?? "main";
     const sessionKey = state.sessionKey;
     await state.client?.request("tools.effective", { agentId, sessionKey });
-    const override = state.chatModelOverrides[sessionKey];
-    state.toolsEffectiveResultKey = `${agentId}:${sessionKey}:model=${override?.value ?? "(default)"}`;
+    const override = state.sessions.state.modelOverrides[sessionKey];
+    state.toolsEffectiveResultKey = `${agentId}:${sessionKey}:model=${override ?? "(default)"}`;
     state.toolsEffectiveResult = { agentId, profile: "coding", groups: [] };
   }),
 );
@@ -380,7 +380,6 @@ function createChatHeaderState(
       thinkingDefault: overrides.thinkingDefault,
       omitSessionFromList,
     }),
-    chatModelOverrides: {},
     chatModelCatalog: catalog,
     chatModelsLoading: false,
     chatSessionPickerOpen: false,
@@ -442,6 +441,7 @@ function createChatHeaderState(
   const sessionState = {
     result: state.sessionsResult,
     agentId: null,
+    modelOverrides: {} as Record<string, string | null>,
     loading: false,
     error: null,
     deletedKeys: [],

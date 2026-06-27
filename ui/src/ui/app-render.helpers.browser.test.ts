@@ -56,7 +56,7 @@ function createState(overrides: Partial<AppViewState> = {}) {
     chatMobileControlsOpen: false,
     setChatMobileControlsOpen: () => undefined,
     chatModelCatalog: [],
-    chatModelOverrides: {},
+    sessions: { state: { modelOverrides: {} } },
     chatModelsLoading: false,
     chatSessionPickerOpen: false,
     chatSessionPickerSurface: null,

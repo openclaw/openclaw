@@ -9,7 +9,6 @@ import type {
   AgentIdentityResult,
   ConfigSnapshot,
   ConfigUiHints,
-  ChatModelOverride,
   CronJob,
   CronRunLogEntry,
   CronStatus,
@@ -205,6 +204,9 @@ export class OpenClawApp extends LitElement {
     this as unknown as Parameters<typeof createApplicationContext>[0],
     createRouterOutletSnapshot(appRouter),
   );
+  get sessions() {
+    return this.applicationContext.sessions;
+  }
   private applicationContextDisposed = false;
   clientInstanceId = generateUUID();
   connectGeneration = 0;
@@ -293,7 +295,6 @@ export class OpenClawApp extends LitElement {
   @state() chatAvatarReason: string | null = null;
   @state() chatThinkingLevel: string | null = null;
   @state() chatVerboseLevel: string | null = null;
-  @state() chatModelOverrides: Record<string, ChatModelOverride | null> = {};
   @state() chatModelSwitchPromises: Record<string, Promise<boolean>> = {};
   @state() chatModelsLoading = false;
   @state() chatModelCatalog: ModelCatalogEntry[] = [];

@@ -1,13 +1,13 @@
 // Control UI controller manages agents gateway state.
 import type {
   AgentsListResult,
-  ChatModelOverride,
   ModelCatalogEntry,
   SessionsListResult,
   ToolsCatalogResult,
   ToolsEffectiveResult,
 } from "../../api/types.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
+import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { resolveAgentIdFromSessionKey } from "../../lib/sessions/session-key.ts";
 import {
   normalizeChatModelOverrideValue,
@@ -32,6 +32,7 @@ export type AgentsState = {
   agentsError: string | null;
   agentsList: AgentsListResult | null;
   agentsSelectedId: string | null;
+  sessions: Pick<SessionCapability, "state">;
   toolsCatalogLoading: boolean;
   toolsCatalogLoadingAgentId?: string | null;
   toolsCatalogError: string | null;
@@ -43,7 +44,6 @@ export type AgentsState = {
   toolsEffectiveResult: ToolsEffectiveResult | null;
   sessionKey?: string;
   sessionsResult?: SessionsListResult | null;
-  chatModelOverrides?: Record<string, ChatModelOverride | null>;
   chatModelCatalog?: ModelCatalogEntry[];
   agentsPanel?: "overview" | "files" | "tools" | "skills" | "channels" | "cron";
 };
@@ -220,7 +220,7 @@ export function resetToolsEffectiveState(state: AgentsState) {
 }
 
 export function buildToolsEffectiveRequestKey(
-  state: Pick<AgentsState, "sessionsResult" | "chatModelOverrides" | "chatModelCatalog">,
+  state: Pick<AgentsState, "sessions" | "sessionsResult" | "chatModelCatalog">,
   params: { agentId: string; sessionKey: string },
 ): string {
   const resolvedAgentId = params.agentId.trim();
@@ -247,7 +247,7 @@ export function refreshVisibleToolsEffectiveForCurrentSession(
 }
 
 function resolveEffectiveToolsModelKey(
-  state: Pick<AgentsState, "sessionsResult" | "chatModelOverrides" | "chatModelCatalog">,
+  state: Pick<AgentsState, "sessions" | "sessionsResult" | "chatModelCatalog">,
   sessionKey: string,
 ): string {
   const resolvedSessionKey = sessionKey.trim();
@@ -255,7 +255,7 @@ function resolveEffectiveToolsModelKey(
     return "";
   }
   const catalog = state.chatModelCatalog ?? [];
-  const cachedOverride = state.chatModelOverrides?.[resolvedSessionKey];
+  const cachedOverride = state.sessions.state.modelOverrides[resolvedSessionKey];
   const defaults = state.sessionsResult?.defaults;
   const defaultModel = resolvePreferredServerChatModelValue(
     defaults?.model,

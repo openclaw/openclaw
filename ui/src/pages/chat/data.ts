@@ -3,12 +3,7 @@ import {
   type GatewayBrowserClient,
   type GatewayHelloOk,
 } from "../../api/gateway.ts";
-import type {
-  AgentsListResult,
-  ChatModelOverride,
-  GatewaySessionRow,
-  ModelCatalogEntry,
-} from "../../api/types.ts";
+import type { AgentsListResult, GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
@@ -119,7 +114,6 @@ export type ChatHost = ChatInputHistoryState & {
   chatAvatarReason?: string | null;
   chatSideResult?: ChatSideResult | null;
   chatSideResultTerminalRuns?: Set<string>;
-  chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelSwitchPromises?: Record<string, Promise<boolean>>;
   chatModelsLoading: boolean;
   chatModelCatalog: ModelCatalogEntry[];
@@ -1960,10 +1954,10 @@ async function dispatchSlashCommand(
   }
 
   if (result.sessionPatch && "modelOverride" in result.sessionPatch) {
-    host.chatModelOverrides = {
-      ...host.chatModelOverrides,
-      [targetSessionKey]: result.sessionPatch.modelOverride ?? null,
-    };
+    host.sessions.setModelOverride(
+      targetSessionKey,
+      result.sessionPatch.modelOverride?.value ?? null,
+    );
     await host.onSlashAction?.("refresh-tools-effective");
   }
 

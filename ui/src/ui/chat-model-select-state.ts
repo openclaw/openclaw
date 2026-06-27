@@ -14,9 +14,9 @@ import { pushUniqueTrimmedSelectOption } from "./select-options.ts";
 
 type ChatModelSelectStateInput = Pick<
   AppViewState,
-  "sessionKey" | "chatModelOverrides" | "chatModelCatalog" | "sessionsResult"
+  "sessionKey" | "chatModelCatalog" | "sessionsResult"
 > & {
-  sessions?: Pick<SessionCapability, "state">;
+  sessions: Pick<SessionCapability, "state">;
 };
 
 export type ChatModelSelectOption = {
@@ -39,21 +39,12 @@ function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
 export function resolveChatModelOverrideValue(state: ChatModelSelectStateInput): string {
   const catalog = state.chatModelCatalog ?? [];
 
-  const sharedOverrides = state.sessions?.state.modelOverrides;
-  if (sharedOverrides && Object.hasOwn(sharedOverrides, state.sessionKey)) {
+  const sharedOverrides = state.sessions.state.modelOverrides;
+  if (Object.hasOwn(sharedOverrides, state.sessionKey)) {
     const shared = sharedOverrides[state.sessionKey];
     return shared === null
       ? ""
       : normalizeChatModelOverrideValue(createChatModelOverride(shared), catalog);
-  }
-
-  // Keep the legacy host value as input compatibility while Chat migrates to the capability.
-  const cached = state.chatModelOverrides[state.sessionKey];
-  if (cached) {
-    return normalizeChatModelOverrideValue(cached, catalog);
-  }
-  if (cached === null) {
-    return "";
   }
 
   const activeRow = resolveActiveSessionRow(state);
