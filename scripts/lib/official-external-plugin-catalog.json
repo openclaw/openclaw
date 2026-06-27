@@ -1,4 +1,9 @@
 {
+  "schemaVersion": 1,
+  "id": "openclaw-official-external-plugins",
+  "generatedAt": "2026-06-22T00:00:00.000Z",
+  "sequence": 1,
+  "description": "Bundled fallback feed for official external OpenClaw plugins.",
   "entries": [
     {
       "name": "@openclaw/acpx",

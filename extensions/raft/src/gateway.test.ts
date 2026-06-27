@@ -30,35 +30,33 @@ function createContext(accountId = "default") {
     lastStopAt: null,
     lastError: null,
   };
-  const run = vi.fn(
-    async (params: {
-      raw: unknown;
-      adapter: {
-        ingest: (raw: unknown) => {
-          id: string;
-          timestamp: number;
-          rawText: string;
-          textForAgent: string;
-          textForCommands: string;
-        };
-        resolveTurn: (input: {
-          id: string;
-          timestamp: number;
-          rawText: string;
-          textForAgent: string;
-          textForCommands: string;
-        }) => Promise<{
-          delivery: {
-            deliver: () => Promise<{ visibleReplySent: false }>;
-          };
-        }>;
+  const run = vi.fn(async (params: {
+    raw: unknown;
+    adapter: {
+      ingest: (raw: unknown) => {
+        id: string;
+        timestamp: number;
+        rawText: string;
+        textForAgent: string;
+        textForCommands: string;
       };
-    }) => {
-      const input = params.adapter.ingest(params.raw);
-      const turn = await params.adapter.resolveTurn(input);
-      await turn.delivery.deliver();
-    },
-  );
+      resolveTurn: (input: {
+        id: string;
+        timestamp: number;
+        rawText: string;
+        textForAgent: string;
+        textForCommands: string;
+      }) => Promise<{
+        delivery: {
+          deliver: () => Promise<{ visibleReplySent: false }>;
+        };
+      }>;
+    };
+  }) => {
+    const input = params.adapter.ingest(params.raw);
+    const turn = await params.adapter.resolveTurn(input);
+    await turn.delivery.deliver();
+  });
   const ctx = {
     cfg: {},
     accountId,
@@ -487,4 +485,5 @@ describe("Raft wake gateway", () => {
       resetPluginStateStoreForTests();
     }
   });
+
 });

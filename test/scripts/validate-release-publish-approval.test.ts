@@ -70,9 +70,10 @@ describe("scripts/validate-release-publish-approval.mjs", () => {
 
   it("accepts completed success or failure runs for direct recovery", () => {
     for (const conclusion of ["success", "failure"]) {
-      const result = runApprovalScript(approvalRun({ conclusion, status: "completed" }), {
-        DIRECT_RELEASE_RECOVERY: "true",
-      });
+      const result = runApprovalScript(
+        approvalRun({ conclusion, status: "completed" }),
+        { DIRECT_RELEASE_RECOVERY: "true" },
+      );
 
       expect(result.status).toBe(0);
       expect(result.stdout).toContain(

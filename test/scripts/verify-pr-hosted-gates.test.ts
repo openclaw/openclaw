@@ -376,16 +376,7 @@ describe("verify-pr-hosted-gates", () => {
     const duplicateCases = [
       [
         "--repo",
-        [
-          "--repo",
-          "openclaw/openclaw",
-          "--repo",
-          "fork/openclaw",
-          "--sha",
-          sha,
-          "--output",
-          "out.json",
-        ],
+        ["--repo", "openclaw/openclaw", "--repo", "fork/openclaw", "--sha", sha, "--output", "out.json"],
       ],
       [
         "--sha",
@@ -393,16 +384,7 @@ describe("verify-pr-hosted-gates", () => {
       ],
       [
         "--output",
-        [
-          "--repo",
-          "openclaw/openclaw",
-          "--sha",
-          sha,
-          "--output",
-          "one.json",
-          "--output",
-          "two.json",
-        ],
+        ["--repo", "openclaw/openclaw", "--sha", sha, "--output", "one.json", "--output", "two.json"],
       ],
       ["--changelog-only", [...requiredArgs, "--changelog-only", "--changelog-only"]],
     ] satisfies Array<[string, string[]]>;

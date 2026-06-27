@@ -194,11 +194,8 @@ function cookieSecretValues(cookieHeader) {
 }
 
 function authDiagnosticSecretValues(authHeaders) {
-  const authorization =
-    typeof authHeaders.authorization === "string" ? authHeaders.authorization : "";
-  const bearerToken = authorization.startsWith("Bearer ")
-    ? authorization.slice("Bearer ".length)
-    : "";
+  const authorization = typeof authHeaders.authorization === "string" ? authHeaders.authorization : "";
+  const bearerToken = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length) : "";
   const cookie = typeof authHeaders.cookie === "string" ? authHeaders.cookie : "";
   return [bearerToken, authorization, cookie, ...cookieSecretValues(cookie)].filter(Boolean);
 }

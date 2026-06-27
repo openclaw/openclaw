@@ -177,7 +177,9 @@ describe("kitchen-sink RPC isolated state", () => {
   it("clamps timer env values before they reach Node timers", () => {
     const oversizedTimerMs = String(Number.MAX_SAFE_INTEGER);
 
-    expect(readPositiveTimerMs(oversizedTimerMs, 60_000)).toBe(MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS);
+    expect(readPositiveTimerMs(oversizedTimerMs, 60_000)).toBe(
+      MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS,
+    );
 
     const config = resolveKitchenSinkRpcConfig({
       OPENCLAW_KITCHEN_SINK_RPC_CALL_MS: oversizedTimerMs,
@@ -762,15 +764,11 @@ setInterval(() => {}, 1000);
       "utf8",
     );
 
-    const runPromise = runCommand(
-      process.execPath,
-      [scriptPath, grandchildPidPath, grandchildReadyPath],
-      {
-        detached: undefined,
-        timeoutKillGraceMs: 25,
-        timeoutMs: 500,
-      },
-    );
+    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath, grandchildReadyPath], {
+      detached: undefined,
+      timeoutKillGraceMs: 25,
+      timeoutMs: 500,
+    });
     const runErrorPromise = runPromise.then(
       () => {
         throw new Error("expected timed command to reject");
@@ -1059,14 +1057,10 @@ setInterval(() => {}, 1000);
       "utf8",
     );
 
-    const runPromise = runCommand(
-      process.execPath,
-      [scriptPath, grandchildPidPath, grandchildReadyPath],
-      {
-        timeoutKillGraceMs: 2_000,
-        timeoutMs: 1_500,
-      },
-    );
+    const runPromise = runCommand(process.execPath, [scriptPath, grandchildPidPath, grandchildReadyPath], {
+      timeoutKillGraceMs: 2_000,
+      timeoutMs: 1_500,
+    });
     const runErrorPromise = runPromise.then(
       () => {
         throw new Error("expected timed command to reject");

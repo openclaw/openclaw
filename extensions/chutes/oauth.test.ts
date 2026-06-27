@@ -2,10 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { loginChutes } from "./oauth.js";
 
-function boundedErrorResponse(
-  body: string,
-  status = 500,
-): {
+function boundedErrorResponse(body: string, status = 500): {
   response: Response;
   cancel: ReturnType<typeof vi.fn>;
   releaseLock: ReturnType<typeof vi.fn>;

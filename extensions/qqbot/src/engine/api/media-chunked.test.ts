@@ -12,7 +12,10 @@ import {
   type UploadPrepareResponse,
 } from "../types.js";
 import type { ApiClient } from "./api-client.js";
-import { ChunkedMediaApi, UploadDailyLimitExceededError } from "./media-chunked.js";
+import {
+  ChunkedMediaApi,
+  UploadDailyLimitExceededError,
+} from "./media-chunked.js";
 import type { UploadCacheAdapter } from "./media.js";
 import { UPLOAD_PREPARE_FALLBACK_CODE } from "./retry.js";
 import type { TokenManager } from "./token.js";

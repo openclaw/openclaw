@@ -24,10 +24,7 @@ function jsonResponse(value: unknown, init?: ResponseInit): Response {
   });
 }
 
-function boundedTextErrorResponse(
-  body: string,
-  status = 502,
-): {
+function boundedTextErrorResponse(body: string, status = 502): {
   response: Response;
   cancel: ReturnType<typeof vi.fn>;
   releaseLock: ReturnType<typeof vi.fn>;

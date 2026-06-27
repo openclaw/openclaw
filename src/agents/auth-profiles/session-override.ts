@@ -84,10 +84,11 @@ export async function clearSessionAuthProfileOverride(params: {
   if (storePath) {
     await (
       await loadSessionAccessor()
-    ).patchSessionEntry({ storePath, sessionKey }, () => sessionEntry, {
-      fallbackEntry: sessionEntry,
-      replaceEntry: true,
-    });
+    ).patchSessionEntry(
+      { storePath, sessionKey },
+      () => sessionEntry,
+      { fallbackEntry: sessionEntry, replaceEntry: true },
+    );
   }
 }
 
@@ -238,10 +239,11 @@ export async function resolveSessionAuthProfileOverride(params: {
     if (storePath) {
       await (
         await loadSessionAccessor()
-      ).patchSessionEntry({ storePath, sessionKey }, () => sessionEntry, {
-        fallbackEntry: sessionEntry,
-        replaceEntry: true,
-      });
+      ).patchSessionEntry(
+        { storePath, sessionKey },
+        () => sessionEntry,
+        { fallbackEntry: sessionEntry, replaceEntry: true },
+      );
     }
   }
 

@@ -87,10 +87,7 @@ describe("release candidate checklist", () => {
       secondValue: string,
       prefix = requiredArgs,
     ): [string, string[]] => [flag, [...prefix, flag, firstValue, flag, secondValue]];
-    const duplicateFlag = (flag: string): [string, string[]] => [
-      flag,
-      [...requiredArgs, flag, flag],
-    ];
+    const duplicateFlag = (flag: string): [string, string[]] => [flag, [...requiredArgs, flag, flag]];
     const duplicateCases = [
       duplicateOption("--tag", "v2026.5.14-beta.3", "v2026.5.14-beta.4", []),
       duplicateOption("--workflow-ref", "release/a", "release/b"),

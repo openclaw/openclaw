@@ -70,6 +70,7 @@ export const ConnectParamsSchema = Type.Object(
           deviceToken: Type.Optional(Type.String()),
           password: Type.Optional(Type.String()),
           approvalRuntimeToken: Type.Optional(Type.String()),
+          agentRuntimeIdentityToken: Type.Optional(Type.String()),
         },
         { additionalProperties: false },
       ),

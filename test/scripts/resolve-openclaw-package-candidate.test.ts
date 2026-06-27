@@ -219,14 +219,7 @@ describe("resolve-openclaw-package-candidate", () => {
       ["--package-sha256", [...requiredArgs, "--package-sha256", "", "--package-sha256", "abc123"]],
       [
         "--source",
-        [
-          "--source",
-          "npm",
-          "--source",
-          "artifact",
-          "--output-dir",
-          ".artifacts/docker-e2e-package",
-        ],
+        ["--source", "npm", "--source", "artifact", "--output-dir", ".artifacts/docker-e2e-package"],
       ],
       [
         "--trusted-source-id",
@@ -234,13 +227,7 @@ describe("resolve-openclaw-package-candidate", () => {
       ],
       [
         "--trusted-source-policy",
-        [
-          ...requiredArgs,
-          "--trusted-source-policy",
-          "one.json",
-          "--trusted-source-policy",
-          "two.json",
-        ],
+        [...requiredArgs, "--trusted-source-policy", "one.json", "--trusted-source-policy", "two.json"],
       ],
     ] satisfies Array<[string, string[]]>;
 

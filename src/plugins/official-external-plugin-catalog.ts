@@ -84,6 +84,16 @@ export type OfficialExternalPluginCatalogEntry = {
   kind?: string;
 } & Partial<Record<ManifestKey, OfficialExternalPluginCatalogManifest>>;
 
+/** Feed-shaped wrapper used by the bundled external plugin catalog fallback. */
+export type OfficialExternalPluginCatalogFeed = {
+  schemaVersion: number;
+  id: string;
+  generatedAt: string;
+  sequence: number;
+  description?: string;
+  entries: readonly OfficialExternalPluginCatalogEntry[];
+};
+
 type OfficialExternalProviderContract =
   | "embeddingProviders"
   | "mediaUnderstandingProviders"
@@ -97,11 +107,43 @@ const OFFICIAL_CATALOG_SOURCES = [
   officialExternalPluginCatalog,
 ] as const;
 
-function parseCatalogEntries(raw: unknown): OfficialExternalPluginCatalogEntry[] {
+const OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSION = 1;
+
+export function isOfficialExternalPluginCatalogFeed(
+  raw: unknown,
+): raw is OfficialExternalPluginCatalogFeed {
+  if (!isRecord(raw)) {
+    return false;
+  }
+  const sequence = raw.sequence;
+  return (
+    raw.schemaVersion === OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSION &&
+    typeof raw.id === "string" &&
+    raw.id.trim().length > 0 &&
+    typeof raw.generatedAt === "string" &&
+    raw.generatedAt.trim().length > 0 &&
+    typeof sequence === "number" &&
+    Number.isInteger(sequence) &&
+    sequence >= 0 &&
+    Array.isArray(raw.entries)
+  );
+}
+
+export function parseOfficialExternalPluginCatalogEntries(
+  raw: unknown,
+): OfficialExternalPluginCatalogEntry[] {
   if (Array.isArray(raw)) {
     return raw.filter((entry): entry is OfficialExternalPluginCatalogEntry => isRecord(entry));
   }
+  if (isOfficialExternalPluginCatalogFeed(raw)) {
+    return raw.entries.filter((entry): entry is OfficialExternalPluginCatalogEntry =>
+      isRecord(entry),
+    );
+  }
   if (!isRecord(raw)) {
+    return [];
+  }
+  if ("schemaVersion" in raw) {
     return [];
   }
   const list = raw.entries ?? raw.packages ?? raw.plugins;
@@ -191,7 +233,9 @@ export function resolveOfficialExternalPluginInstall(
 }
 
 export function listOfficialExternalPluginCatalogEntries(): OfficialExternalPluginCatalogEntry[] {
-  const entries = OFFICIAL_CATALOG_SOURCES.flatMap((source) => parseCatalogEntries(source));
+  const entries = OFFICIAL_CATALOG_SOURCES.flatMap((source) =>
+    parseOfficialExternalPluginCatalogEntries(source),
+  );
   const resolved = new Map<string, OfficialExternalPluginCatalogEntry>();
   for (const entry of entries) {
     const pluginId = resolveOfficialExternalPluginId(entry);

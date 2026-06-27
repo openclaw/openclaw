@@ -860,9 +860,7 @@ describe("resolveEffectiveResponseUsage", () => {
     // Explicit "off" is stored and wins — non-off config default cannot re-enable it.
     expect(resolveEffectiveResponseUsage("off", "tokens")).toBe("off");
     expect(resolveEffectiveResponseUsage("off", "full")).toBe("off");
-    expect(
-      resolveEffectiveResponseUsage("off", { default: "full", discord: "full" }, "discord"),
-    ).toBe("off");
+    expect(resolveEffectiveResponseUsage("off", { default: "full", discord: "full" }, "discord")).toBe("off");
   });
 
   it("session explicit on value overrides config default", () => {
@@ -876,6 +874,6 @@ describe("resolveEffectiveResponseUsage", () => {
     // - "off"     = explicit off  → stays off
     const cfg = "tokens" as const;
     expect(resolveEffectiveResponseUsage(undefined, cfg)).toBe("tokens"); // inherits
-    expect(resolveEffectiveResponseUsage("off", cfg)).toBe("off"); // explicit off persists
+    expect(resolveEffectiveResponseUsage("off", cfg)).toBe("off");        // explicit off persists
   });
 });

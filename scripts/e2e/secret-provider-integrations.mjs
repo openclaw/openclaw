@@ -104,7 +104,10 @@ function readPositiveInt(raw, fallback, label) {
 
 function clampSecretProofTimerTimeoutMs(valueMs) {
   const value = Number.isFinite(valueMs) ? valueMs : 1;
-  return Math.min(Math.max(1, Math.floor(value)), MAX_SECRET_PROOF_TIMER_TIMEOUT_MS);
+  return Math.min(
+    Math.max(1, Math.floor(value)),
+    MAX_SECRET_PROOF_TIMER_TIMEOUT_MS,
+  );
 }
 
 function readPositiveTimerMs(raw, fallback, label) {
