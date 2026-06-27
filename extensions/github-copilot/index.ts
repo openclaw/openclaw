@@ -37,6 +37,7 @@ import { wrapCopilotProviderStream } from "./stream.js";
 
 const COPILOT_ENV_VARS = ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"];
 const DEFAULT_COPILOT_MODEL = "github-copilot/claude-opus-4.7";
+const DEFAULT_COPILOT_MODEL_CHAIN = [DEFAULT_COPILOT_MODEL, "github-copilot/gpt-5.5"];
 const DEFAULT_COPILOT_PROFILE_ID = "github-copilot:github";
 
 type GithubCopilotPluginConfig = {
@@ -49,9 +50,17 @@ async function loadGithubCopilotRuntime() {
   return await import("./register.runtime.js");
 }
 
+function resolveDefaultCopilotModelFallbacks(primary: string): string[] {
+  return DEFAULT_COPILOT_MODEL_CHAIN.filter((candidate) => candidate !== primary);
+}
+
 function applyCopilotDefaultModel(cfg: OpenClawConfig): OpenClawConfig {
   const defaults = cfg.agents?.defaults;
   const existingModel = defaults?.model;
+  const existingFallbacks =
+    typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
+      ? (existingModel as { fallbacks?: string[] }).fallbacks
+      : undefined;
   const existingPrimary =
     typeof existingModel === "string"
       ? existingModel.trim()
@@ -59,12 +68,26 @@ function applyCopilotDefaultModel(cfg: OpenClawConfig): OpenClawConfig {
         ? existingModel.primary.trim()
         : "";
   if (existingPrimary) {
-    return cfg;
+    if (
+      !existingPrimary.toLowerCase().startsWith(`${PROVIDER_ID}/`) ||
+      existingFallbacks !== undefined
+    ) {
+      return cfg;
+    }
+    return {
+      ...cfg,
+      agents: {
+        ...cfg.agents,
+        defaults: {
+          ...defaults,
+          model: {
+            primary: existingPrimary,
+            fallbacks: resolveDefaultCopilotModelFallbacks(existingPrimary),
+          },
+        },
+      },
+    };
   }
-  const fallbacks =
-    typeof existingModel === "object" && existingModel !== null && "fallbacks" in existingModel
-      ? (existingModel as { fallbacks?: string[] }).fallbacks
-      : undefined;
   return {
     ...cfg,
     agents: {
@@ -72,8 +95,9 @@ function applyCopilotDefaultModel(cfg: OpenClawConfig): OpenClawConfig {
       defaults: {
         ...defaults,
         model: {
-          ...(fallbacks ? { fallbacks } : undefined),
           primary: DEFAULT_COPILOT_MODEL,
+          fallbacks:
+            existingFallbacks ?? resolveDefaultCopilotModelFallbacks(DEFAULT_COPILOT_MODEL),
         },
         models: {
           ...defaults?.models,

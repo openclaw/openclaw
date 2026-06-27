@@ -600,6 +600,7 @@ describe("github-copilot plugin", () => {
     });
     expect(result?.agents?.defaults?.model).toEqual({
       primary: "github-copilot/claude-opus-4.7",
+      fallbacks: ["github-copilot/gpt-5.5"],
     });
     expect(result?.agents?.defaults?.models?.["github-copilot/claude-opus-4.7"]).toStrictEqual({});
 
@@ -748,6 +749,77 @@ describe("github-copilot plugin", () => {
     });
     expect(result?.agents?.defaults?.models).toEqual({
       "github-copilot/gpt-5.4": { label: "Existing" },
+    });
+  });
+
+  it("adds Copilot fallbacks when an existing Copilot primary has no fallback list", async () => {
+    const provider = registerProviderWithPluginConfig({});
+    const method = provider.auth[0];
+    const agentDir = await createAgentDir();
+    const runtime = { error: vi.fn(), exit: vi.fn() };
+
+    const result = await method.runNonInteractive({
+      authChoice: "github-copilot",
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "github-copilot/gpt-5.5",
+            },
+          },
+        },
+      },
+      baseConfig: {},
+      opts: { githubCopilotToken: "ghu_test" },
+      runtime,
+      agentDir,
+      resolveApiKey: vi.fn(async () => ({
+        key: "ghu_test",
+        source: "flag" as const,
+      })),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(result?.agents?.defaults?.model).toEqual({
+      primary: "github-copilot/gpt-5.5",
+      fallbacks: ["github-copilot/claude-opus-4.7"],
+    });
+  });
+
+  it("preserves an explicit empty Copilot fallback list during non-interactive onboarding", async () => {
+    const provider = registerProviderWithPluginConfig({});
+    const method = provider.auth[0];
+    const agentDir = await createAgentDir();
+    const runtime = { error: vi.fn(), exit: vi.fn() };
+
+    const result = await method.runNonInteractive({
+      authChoice: "github-copilot",
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "github-copilot/gpt-5.5",
+              fallbacks: [],
+            },
+          },
+        },
+      },
+      baseConfig: {},
+      opts: { githubCopilotToken: "ghu_test" },
+      runtime,
+      agentDir,
+      resolveApiKey: vi.fn(async () => ({
+        key: "ghu_test",
+        source: "flag" as const,
+      })),
+      toApiKeyCredential: vi.fn(),
+    });
+
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(result?.agents?.defaults?.model).toEqual({
+      primary: "github-copilot/gpt-5.5",
+      fallbacks: [],
     });
   });
 
