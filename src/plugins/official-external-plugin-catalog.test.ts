@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
+import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import {
   type OfficialExternalPluginCatalogEntry,
   getOfficialExternalPluginCatalogEntry,
+  isOfficialExternalPluginCatalogFeed,
   listOfficialExternalPluginCatalogEntries,
+  parseOfficialExternalPluginCatalogEntries,
   resolveOfficialExternalProviderContractPluginIds,
   resolveOfficialExternalProviderPluginIds,
   resolveOfficialExternalProviderPluginIdsForEnv,
@@ -20,6 +23,54 @@ function expectCatalogEntry(id: string): OfficialExternalPluginCatalogEntry {
 }
 
 describe("official external plugin catalog", () => {
+  it("ships the official plugin catalog as a feed-shaped bundled fallback", () => {
+    expect(isOfficialExternalPluginCatalogFeed(officialExternalPluginCatalog)).toBe(true);
+    expect(officialExternalPluginCatalog).toMatchObject({
+      schemaVersion: 1,
+      id: "openclaw-official-external-plugins",
+      sequence: 1,
+    });
+    expect(officialExternalPluginCatalog.entries.length).toBeGreaterThan(0);
+  });
+
+  it("does not allow malformed feed wrappers to count as feed documents", () => {
+    expect(
+      isOfficialExternalPluginCatalogFeed({
+        schemaVersion: 1,
+        id: " ",
+        generatedAt: "2026-06-22T00:00:00.000Z",
+        sequence: 1,
+        entries: [],
+      }),
+    ).toBe(false);
+    expect(
+      isOfficialExternalPluginCatalogFeed({
+        schemaVersion: 2,
+        id: "openclaw-official-external-plugins",
+        generatedAt: "2026-06-22T00:00:00.000Z",
+        sequence: 1,
+        entries: [],
+      }),
+    ).toBe(false);
+  });
+
+  it("keeps unsupported versioned feed wrappers out of legacy catalog parsing", () => {
+    expect(
+      parseOfficialExternalPluginCatalogEntries({
+        schemaVersion: 2,
+        id: "future-feed",
+        generatedAt: "2026-06-22T00:00:00.000Z",
+        sequence: 1,
+        entries: [{ name: "should-not-load" }],
+      }),
+    ).toEqual([]);
+    expect(
+      parseOfficialExternalPluginCatalogEntries({
+        entries: [{ name: "legacy-catalog-entry" }],
+      }),
+    ).toEqual([{ name: "legacy-catalog-entry" }]);
+  });
+
   it("lists the externalized provider and capability plugins with install metadata", () => {
     const providers = [
       ["arcee", "@openclaw/arcee-provider"],
