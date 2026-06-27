@@ -62,17 +62,52 @@ const EXCLUDED_PATH_RE =
   /(?:^|[\\/])(?:Tests?|UITests?|test|Preview(?:s)?)(?:$|[\\/])/u;
 const EXCLUDED_FILE_RE = /(?:Tests?|UITests?|Previews?|Testing)\.(?:swift|kt|kts)$/u;
 
-function hasUnbalancedSwiftInterpolation(source: string): boolean {
-  let depth = 0;
+function extractSwiftInterpolations(source: string): string[] | null {
+  const values: string[] = [];
   for (let index = 0; index < source.length; index += 1) {
-    if (source[index] === "\\" && source[index + 1] === "(") {
-      depth += 1;
-      index += 1;
-    } else if (depth > 0 && source[index] === ")") {
-      depth -= 1;
+    if (source[index] !== "\\" || source[index + 1] !== "(") continue;
+    const start = index;
+    let depth = 1;
+    let quoted = false;
+    let escaped = false;
+    for (index += 2; index < source.length; index += 1) {
+      const character = source[index];
+      if (escaped) escaped = false;
+      else if (character === "\\") escaped = true;
+      else if (character === '"') quoted = !quoted;
+      else if (!quoted && character === "(") depth += 1;
+      else if (!quoted && character === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          values.push(source.slice(start, index + 1));
+          break;
+        }
+      }
     }
+    if (depth !== 0) return null;
   }
-  return depth !== 0;
+  return values;
+}
+
+function extractKotlinInterpolations(source: string): string[] | null {
+  const values = [...source.matchAll(/\$[A-Za-z_][A-Za-z0-9_]*/gu)].map((match) => match[0]);
+  for (let index = 0; index < source.length; index += 1) {
+    if (source[index] !== "$" || source[index + 1] !== "{") continue;
+    const start = index;
+    let depth = 1;
+    for (index += 2; index < source.length; index += 1) {
+      if (source[index] === "{") depth += 1;
+      else if (source[index] === "}") {
+        depth -= 1;
+        if (depth === 0) {
+          values.push(source.slice(start, index + 1));
+          break;
+        }
+      }
+    }
+    if (depth !== 0) return null;
+  }
+  return values;
 }
 
 function lineNumber(source: string, offset: number): number {
@@ -105,7 +140,8 @@ function addCandidate(
   }
   if (
     normalized.length > 500 ||
-    hasUnbalancedSwiftInterpolation(normalized)
+    extractSwiftInterpolations(normalized) === null ||
+    extractKotlinInterpolations(normalized) === null
   ) {
     return;
   }
