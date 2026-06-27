@@ -273,8 +273,7 @@ function formatXaiOAuthCloudflareChallengeError(params: {
  * Single source of truth for how a non-OK token response is reported and whether
  * it is worth retrying. Detection runs once so the message and the retry decision
  * never disagree: a structured OAuth error (e.g. invalid_grant) is authoritative
- * and final, transient transport failures (5xx/429) and Cloudflare HTML
- * challenges are retryable.
+ * and final, while intermediary Cloudflare HTML challenges are retryable.
  */
 function describeXaiOAuthTokenFailure(params: {
   context: string;
@@ -290,7 +289,7 @@ function describeXaiOAuthTokenFailure(params: {
     message: isCloudflareChallenge
       ? formatXaiOAuthCloudflareChallengeError({ context, status })
       : formatXaiOAuthError({ context, status, body: body.json }),
-    retryable: status >= 500 || status === 429 || isCloudflareChallenge,
+    retryable: isCloudflareChallenge,
   };
 }
 
@@ -329,8 +328,7 @@ async function exchangeXaiOAuthToken(
     } catch (err) {
       // Transport failures are not safe to retry for refresh grants: xAI rotates
       // refresh tokens, so a response lost after xAI consumed the token would burn
-      // it on resend. Retryable Cloudflare/5xx/429 cases are handled on the response
-      // branch below, where the request provably did not consume the refresh token.
+      // it on resend. Only Cloudflare challenge responses are retried below.
       throw new Error(`${params.context} failed: ${formatErrorMessage(err)}`, { cause: err });
     }
     const body = await readResponseBody(response);

@@ -311,6 +311,31 @@ describe("xAI OAuth", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
+  it("does not retry refresh-token service failures", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () =>
+      jsonResponse(
+        {
+          error: "server_error",
+          error_description: "try again later",
+        },
+        { status: 503 },
+      ),
+    );
+    const credential = {
+      type: "oauth",
+      provider: "xai",
+      access: "access-1",
+      refresh: "refresh-1",
+      expires: 100,
+      tokenEndpoint: "https://auth.x.ai/oauth2/token",
+    } satisfies OAuthCredential & { tokenEndpoint: string };
+
+    await expect(refreshXaiOAuthCredential(credential, { fetchImpl })).rejects.toThrow(
+      "server_error (try again later)",
+    );
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
   it("does not retry refresh on transport errors so a rotated refresh token is never resent", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => {
       throw new Error("socket hang up");
