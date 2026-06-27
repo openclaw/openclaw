@@ -287,6 +287,17 @@ function createApplicationGateway(
           lastErrorCode: error?.code ?? null,
         });
       },
+      onGap: ({ expected, received }) => {
+        if (client !== nextClient) {
+          return;
+        }
+        setSnapshot({
+          ...snapshot,
+          lastError: `event gap detected (expected seq ${expected}, got ${received}); reconnecting`,
+          lastErrorCode: null,
+        });
+        connect();
+      },
     });
     client = nextClient;
     syncClientEvents(nextClient);
