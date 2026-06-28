@@ -1,5 +1,8 @@
 // Memory Core tests cover manager reindex state plugin behavior.
-import type { MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  MEMORY_CHUNKER_ALGORITHM_VERSION,
+  type MemorySource,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it } from "vitest";
 import {
   resolveConfiguredScopeHash,
@@ -19,6 +22,7 @@ function createMeta(overrides: Partial<MemoryIndexMeta> = {}): MemoryIndexMeta {
     scopeHash: "scope-v1",
     chunkTokens: 4000,
     chunkOverlap: 0,
+    chunkerAlgorithmVersion: MEMORY_CHUNKER_ALGORITHM_VERSION,
     ftsTokenizer: "unicode61",
     ...overrides,
   };
@@ -35,6 +39,7 @@ function createIdentityParams(
     configuredScopeHash?: string;
     chunkTokens?: number;
     chunkOverlap?: number;
+    chunkerAlgorithmVersion?: string;
     vectorReady?: boolean;
     hasIndexedChunks?: boolean;
     ftsTokenizer?: string;
@@ -48,6 +53,7 @@ function createIdentityParams(
     configuredScopeHash: "scope-v1",
     chunkTokens: 4000,
     chunkOverlap: 0,
+    chunkerAlgorithmVersion: MEMORY_CHUNKER_ALGORITHM_VERSION,
     vectorReady: false,
     hasIndexedChunks: true,
     ftsTokenizer: "unicode61",
@@ -307,5 +313,40 @@ describe("memory reindex state", () => {
         }),
       ),
     ).toEqual({ status: "valid" });
+  });
+
+  it("marks identity dirty when chunker algorithm version changes", () => {
+    expect(
+      isMemoryIndexIdentityDirty(
+        createIdentityParams({
+          chunkerAlgorithmVersion: "v3-hypothetical",
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("marks identity dirty when persisted meta lacks a chunker algorithm version", () => {
+    // Pre-versioning indexes do not carry chunkerAlgorithmVersion; the first
+    // run after a chunker bump must treat the missing field as a mismatch so
+    // stale chunks get rebuilt instead of reused.
+    expect(
+      isMemoryIndexIdentityDirty(
+        createIdentityParams({
+          meta: createMeta({ chunkerAlgorithmVersion: undefined }),
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("reports mismatch reason when chunker algorithm version changes", () => {
+    const state = resolveMemoryIndexIdentityState(
+      createIdentityParams({
+        chunkerAlgorithmVersion: "v3-hypothetical",
+      }),
+    );
+    expect(state).toEqual({
+      status: "mismatched",
+      reason: "index chunker algorithm changed",
+    });
   });
 });

@@ -433,13 +433,10 @@ describe("memory index", () => {
     return await getRequiredMemoryIndexManager({ cfg, agentId: "main", purpose });
   }
 
-  function rewritePersistedProviderIdentity(manager: MemoryIndexManager, model: string): void {
-    const providerKey = hashText(
-      JSON.stringify({
-        provider: identityAliasFixture.provider,
-        model,
-      }),
-    );
+  function updatePersistedMeta(
+    manager: MemoryIndexManager,
+    update: (meta: MemoryIndexMeta) => MemoryIndexMeta,
+  ): void {
     const db = Reflect.get(manager, "db") as {
       prepare: (sql: string) => {
         get: (...params: unknown[]) => { value?: string } | undefined;
@@ -451,9 +448,24 @@ describe("memory index", () => {
       .get("memory_index_meta_v1");
     const meta = JSON.parse(metaRow?.value ?? "{}") as MemoryIndexMeta;
     db.prepare("UPDATE memory_index_meta SET value = ? WHERE key = ?").run(
-      JSON.stringify({ ...meta, model, providerKey }),
+      JSON.stringify(update(meta)),
       "memory_index_meta_v1",
     );
+  }
+
+  function rewritePersistedProviderIdentity(manager: MemoryIndexManager, model: string): void {
+    const providerKey = hashText(
+      JSON.stringify({
+        provider: identityAliasFixture.provider,
+        model,
+      }),
+    );
+    const db = Reflect.get(manager, "db") as {
+      prepare: (sql: string) => {
+        run: (...params: unknown[]) => void;
+      };
+    };
+    updatePersistedMeta(manager, (meta) => ({ ...meta, model, providerKey }));
     db.prepare("UPDATE memory_index_chunks SET model = ?").run(model);
     db.prepare(
       "UPDATE memory_embedding_cache SET model = ?, provider_key = ? WHERE provider = ?",
@@ -1066,6 +1078,35 @@ describe("memory index", () => {
     }
   });
 
+  it("rebuilds pre-versioned chunks before search when the chunker algorithm changes", async () => {
+    const cfg = createCfg({
+      hybrid: { enabled: true, vectorWeight: 0.5, textWeight: 0.5 },
+    });
+    const oldManager = await getFreshManager(cfg);
+    await oldManager.sync({ reason: "test", force: true });
+    updatePersistedMeta(oldManager, (meta) => {
+      const legacyMeta = { ...meta };
+      delete legacyMeta.chunkerAlgorithmVersion;
+      return legacyMeta;
+    });
+    expect(oldManager.status().custom?.indexIdentity).toEqual({
+      status: "mismatched",
+      reason: "index chunker algorithm changed",
+    });
+    await oldManager.close?.();
+
+    const nextManager = await getFreshManager(cfg);
+    try {
+      const results = await nextManager.search("alpha");
+
+      expect(nextManager.status().dirty).toBe(false);
+      expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+      expect(results.some((result) => result.path.endsWith("memory/2026-01-12.md"))).toBe(true);
+    } finally {
+      await nextManager.close?.();
+    }
+  });
+
   it("does not search stale provider rows after embeddings become unavailable", async () => {
     const oldCfg = createCfg({
       model: "semantic-embed",
@@ -1232,6 +1273,66 @@ describe("memory index", () => {
           status: "missing",
           reason: "index metadata is missing",
         });
+      } finally {
+        await nextManager.close?.();
+      }
+    } finally {
+      restoreMemoryIndexStateDir();
+    }
+  });
+
+  it("rebuilds pre-versioned sessions-only chunks before search", async () => {
+    try {
+      setMemoryIndexStateDir(path.join(workspaceDir, ".state-sessions-chunker-version"));
+      const sessionsDir = resolveSessionTranscriptsDirForAgent("main");
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(
+        path.join(sessionsDir, "session-chunker-version.jsonl"),
+        [
+          JSON.stringify({
+            type: "session",
+            id: "session-chunker-version",
+            timestamp: "2026-04-07T15:24:04.113Z",
+          }),
+          JSON.stringify({
+            type: "message",
+            message: {
+              role: "assistant",
+              timestamp: "2026-04-07T15:25:04.113Z",
+              content: [{ type: "text", text: "Session-only chunker upgrade marker." }],
+            },
+          }),
+        ].join("\n") + "\n",
+        "utf8",
+      );
+
+      const cfg = createCfg({
+        sources: ["sessions"],
+        sessionMemory: true,
+      });
+      const oldManager = await getFreshManager(cfg);
+      await oldManager.sync({ reason: "test", force: true });
+      updatePersistedMeta(oldManager, (meta) => {
+        const legacyMeta = { ...meta };
+        delete legacyMeta.chunkerAlgorithmVersion;
+        return legacyMeta;
+      });
+      await oldManager.close?.();
+
+      const nextManager = await getFreshManager(cfg);
+      try {
+        expect(nextManager.status().custom?.indexIdentity).toEqual({
+          status: "mismatched",
+          reason: "index chunker algorithm changed",
+        });
+
+        const results = await nextManager.search("Session-only chunker upgrade marker", {
+          maxResults: 3,
+        });
+
+        expect(nextManager.status().dirty).toBe(false);
+        expect(nextManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
+        expect(results.some((result) => result.source === "sessions")).toBe(true);
       } finally {
         await nextManager.close?.();
       }

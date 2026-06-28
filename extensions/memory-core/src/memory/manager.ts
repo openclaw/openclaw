@@ -651,7 +651,7 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     void this.warmSession(opts?.sessionKey);
     await startAsyncSearchSync({
       enabled: this.settings.sync.onSearch,
-      dirty: this.dirty,
+      dirty: this.dirty || this.indexIdentityDirty,
       sessionsDirty: this.sessionsDirty,
       sync: async (params) => await this.sync(params),
       onError: (err) => {
