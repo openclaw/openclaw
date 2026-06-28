@@ -1619,9 +1619,7 @@ function resolveSqliteScope(
 ): ResolvedSqliteScope {
   const scopedAgentId = resolveExplicitSqliteAgentId(scope);
   const storeTarget = scope.storePath
-    ? resolveSqliteTargetFromSessionStorePath(scope.storePath, {
-        ...(scopedAgentId ? { agentId: scopedAgentId } : {}),
-      })
+    ? resolveSqliteTargetFromSessionStorePath(scope.storePath, { agentId: scopedAgentId })
     : undefined;
   const agentId = resolveSqliteAgentId({
     scopedAgentId,
@@ -1648,9 +1646,7 @@ function resolveSqliteReadScope(
   const sessionKey = scope.sessionKey ? normalizeSqliteSessionKey(scope.sessionKey) : undefined;
   const scopedAgentId = resolveExplicitSqliteAgentId({ ...scope, sessionKey });
   const storeTarget = scope.storePath
-    ? resolveSqliteTargetFromSessionStorePath(scope.storePath, {
-        ...(scopedAgentId ? { agentId: scopedAgentId } : {}),
-      })
+    ? resolveSqliteTargetFromSessionStorePath(scope.storePath, { agentId: scopedAgentId })
     : undefined;
   const agentId = resolveSqliteAgentId({
     scopedAgentId,
