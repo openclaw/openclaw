@@ -200,10 +200,7 @@ function resolveMemoryManagerSearchTimeoutMs(
   manager: ActiveMemoryManagerContext["manager"],
   opts?: { qmdSearchModeOverride?: "query" | "search" | "vsearch" },
 ): number {
-  const getSearchTimeoutMs = manager.getSearchTimeoutMs as
-    | ((opts?: { qmdSearchModeOverride?: "query" | "search" | "vsearch" }) => number)
-    | undefined;
-  const timeoutMs = getSearchTimeoutMs?.(opts);
+  const timeoutMs = manager.getSearchTimeoutMs?.(opts);
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
     ? Math.max(DEFAULT_MEMORY_SEARCH_TOOL_TIMEOUT_MS, Math.floor(timeoutMs))
     : DEFAULT_MEMORY_SEARCH_TOOL_TIMEOUT_MS;
