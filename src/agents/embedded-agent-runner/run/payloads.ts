@@ -263,21 +263,72 @@ function extractLiteralExecCommand(body: string): string | undefined {
   return undefined;
 }
 
+type RawExecContext = {
+  leading: string[];
+  trailing: string[];
+};
+
 function extractRawExecCommand(body: string): string | undefined {
   const match = body.match(/^(?:(.*)(?:,\s*| · ))?`([^`]+)`$/u);
   const inlineCode = match?.[2];
   if (!inlineCode) {
     return undefined;
   }
-  const context = extractRawExecContext(match?.[1]);
-  return context ? `${context} · ${inlineCode}` : inlineCode;
+  const context = extractRawExecContext(match?.[1], inlineCode);
+  const command = context.trailing.reduce((value, suffix) => `${value} ${suffix}`, inlineCode);
+  return context.leading.length > 0 ? `${context.leading.join(" · ")} · ${command}` : command;
 }
 
-function extractRawExecContext(prefix: string | undefined): string {
-  const contexts = [...(prefix ?? "").matchAll(/(?:^|,\s*| · )(node:\s*[^,·]+)(?=,\s*| · |$)/gu)]
+function extractRawExecContext(prefix: string | undefined, inlineCode: string): RawExecContext {
+  const value = prefix ?? "";
+  const leading = [...value.matchAll(/(?:^|,\s*| · )(node:\s*[^,·]+)(?=,\s*| · |$)/gu)]
     .map((match) => match[1]?.trim())
     .filter((part): part is string => Boolean(part));
-  return contexts.join(" · ");
+  const trailing = [
+    ...value.matchAll(
+      /(\((?:agent|repo|sandbox|workspace)\)|\(in [^)\r\n]+\))(?=\s*(?:,\s*| · |$))/gu,
+    ),
+  ]
+    .filter((match) => shouldKeepRawExecTrailingContext(value, match, inlineCode))
+    .map((match) => match[1]?.trim())
+    .filter((part): part is string => Boolean(part));
+  return { leading, trailing };
+}
+
+function shouldKeepRawExecTrailingContext(
+  prefix: string,
+  match: RegExpMatchArray,
+  inlineCode: string,
+): boolean {
+  const suffix = match[1]?.trim();
+  if (!suffix || inlineCode.includes(suffix)) {
+    return false;
+  }
+  const segment = prefix
+    .slice(0, match.index ?? 0)
+    .trimEnd()
+    .split(/,\s*| · /u)
+    .at(-1)
+    ?.trim();
+  const segmentCommand = segment ? extractLiteralExecCommand(segment) : undefined;
+  if (segmentCommand === inlineCode || segment === inlineCode) {
+    return true;
+  }
+  if (isCompactCwdSuffix(suffix)) {
+    return true;
+  }
+  return isPathLikeCwdSuffix(suffix);
+}
+
+function isCompactCwdSuffix(suffix: string): boolean {
+  return /^\((?:agent|repo|workspace)\)$/u.test(suffix);
+}
+
+function isPathLikeCwdSuffix(suffix: string): boolean {
+  const cwd = suffix.match(/^\(in ([^)\r\n]+)\)$/u)?.[1]?.trim();
+  return Boolean(
+    cwd && (/^(?:\/|~|\.{1,2}(?:\/|$)|[A-Za-z]:[\\/]|\\\\)/u.test(cwd) || cwd.includes("/")),
+  );
 }
 
 function isKnownLiteralRunSummary(subject: string): boolean {

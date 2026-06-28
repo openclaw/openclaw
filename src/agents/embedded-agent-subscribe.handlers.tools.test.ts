@@ -1468,6 +1468,102 @@ describe("handleToolExecutionEnd timeout metadata", () => {
     );
   });
 
+  it("preserves cwd context in raw exec metadata payload warnings", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.toolProgressDetail = "raw";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-cwd-raw-command",
+        args: { command: "python3 audit.py", workdir: "/tmp/build" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-cwd-raw-command",
+        isError: true,
+        result: {
+          error: "Command exited with code 1",
+          content: [{ type: "text", text: "Command exited with code 1" }],
+          details: { status: "failed", exitCode: 1 },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      meta: "run python3 audit.py (in /tmp/build), `python3 audit.py`",
+    });
+
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: ctx.state.toolMetas,
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+
+    expect(payloads[0]?.text).toBe(
+      "⚠️ 🛠️ Exec failed: `python3 audit.py (in /tmp/build)` (exit 1)",
+    );
+  });
+
+  it("preserves compact cwd labels in semantic raw exec metadata payload warnings", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.toolProgressDetail = "raw";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-repo-raw-command",
+        args: { command: "git status", workdir: "/Users/agent/Projects/OpenClaw" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-repo-raw-command",
+        isError: true,
+        result: {
+          error: "Command exited with code 1",
+          content: [{ type: "text", text: "Command exited with code 1" }],
+          details: { status: "failed", exitCode: 1 },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      meta: "check git status (repo), `git status`",
+    });
+
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: ctx.state.toolMetas,
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+
+    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed: `git status (repo)` (exit 1)");
+  });
+
   it("records structured error codes for failed tool results", async () => {
     const { ctx } = createTestContext();
 

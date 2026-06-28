@@ -821,6 +821,49 @@ describe("buildEmbeddedRunPayloads", () => {
     });
   });
 
+  it("preserves raw exec cwd context before trailing raw command metadata", () => {
+    const cwdPayloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: "run python3 audit.py (in /tmp/build) · `python3 audit.py`",
+        error: "Command exited with code 1",
+        mutatingAction: true,
+      },
+      toolResultFormat: "markdown",
+    });
+    const workspaceNodePayloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: "run python3 audit.py (workspace), node: mac-1, `python3 audit.py`",
+        error: "Command exited with code 1",
+        mutatingAction: true,
+      },
+      toolResultFormat: "markdown",
+    });
+    const semanticCompactPayloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: "check git status (repo), `git status`",
+        error: "Command exited with code 1",
+        mutatingAction: true,
+      },
+      toolResultFormat: "markdown",
+    });
+
+    expectSinglePayloadSummary(cwdPayloads, {
+      text: "⚠️ 🛠️ Exec failed: `python3 audit.py (in /tmp/build)` (exit 1)",
+      isError: true,
+    });
+    expectSinglePayloadSummary(workspaceNodePayloads, {
+      text: "⚠️ 🛠️ Exec failed: `node: mac-1 · python3 audit.py (workspace)` (exit 1)",
+      isError: true,
+    });
+    expectSinglePayloadSummary(semanticCompactPayloads, {
+      text: "⚠️ 🛠️ Exec failed: `git status (repo)` (exit 1)",
+      isError: true,
+    });
+  });
+
   it("does not promote display-summary commas into raw exec context", () => {
     const payloads = buildPayloads({
       lastToolError: {
@@ -834,6 +877,40 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectSinglePayloadSummary(payloads, {
       text: '⚠️ 🛠️ Exec failed: `rg "foo,bar" src` (exit 1)',
+      isError: true,
+    });
+  });
+
+  it("does not treat parenthesized raw command arguments as cwd context", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: 'list files in (in progress) · `ls "(in progress)"`',
+        error: "Command exited with code 1",
+        mutatingAction: true,
+      },
+      toolResultFormat: "markdown",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: '⚠️ 🛠️ Exec failed: `ls "(in progress)"` (exit 1)',
+      isError: true,
+    });
+  });
+
+  it("does not duplicate compact cwd labels already present in raw command arguments", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: 'print text (repo) · `printf "%s" "(repo)"`',
+        error: "Command exited with code 1",
+        mutatingAction: true,
+      },
+      toolResultFormat: "markdown",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: '⚠️ 🛠️ Exec failed: `printf "%s" "(repo)"` (exit 1)',
       isError: true,
     });
   });
