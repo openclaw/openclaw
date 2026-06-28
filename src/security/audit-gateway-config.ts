@@ -100,8 +100,23 @@ export function collectGatewayConfigFindings(
   const gatewayToolsAllow = new Set(
     gatewayToolsAllowRaw.map((v) => normalizeOptionalLowercaseString(v) ?? "").filter(Boolean),
   );
-  const reenabledOverHttp = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) =>
-    gatewayToolsAllow.has(name),
+  // Suppress `dangerous_allow` for a dual-key gated tool ONLY while its class
+  // opt-in is active — then the more specific `host_read_allow` / `host_write_allow`
+  // finding fires instead. When the opt-in is INACTIVE, `allow: ["read"]` (or
+  // `["write"]`) still removes the name from the HTTP deny list, which can make a
+  // same-named plugin tool reachable over `/tools/invoke` while the built-in stays
+  // unmaterialized; in that case `dangerous_allow` must fire so the exposure is
+  // visible. See ClawSweeper [P1] on PR #85664: "Preserve auditing for same-named
+  // plugin tools". `apply_patch` is never suppressed (the coding-tool factory does
+  // not produce it, so `hostFsWrite` has no effect on it).
+  const hostFsReadOptIn = cfg.gateway?.tools?.directInvoke?.hostFsRead === true;
+  const hostFsWriteOptIn = cfg.gateway?.tools?.directInvoke?.hostFsWrite === true;
+  const classOptInActiveForTool = new Set<string>([
+    ...(hostFsReadOptIn ? ["read"] : []),
+    ...(hostFsWriteOptIn ? ["write", "edit"] : []),
+  ]);
+  const reenabledOverHttp = DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter(
+    (name) => gatewayToolsAllow.has(name) && !classOptInActiveForTool.has(name),
   );
   if (reenabledOverHttp.length > 0) {
     const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
@@ -115,6 +130,60 @@ export function collectGatewayConfigFindings(
       remediation:
         "Remove these entries from gateway.tools.allow (recommended). " +
         "If you keep them enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, and treat the gateway token/password as full-admin.",
+    });
+  }
+
+  // Host-FS read opt-in finding: only fires when BOTH gates are set
+  // (`directInvoke.hostFsRead: true` AND `tools.allow` includes "read"). With
+  // the opt-in active the built-in `read` is materialized (see
+  // `tool-resolution.ts` dual-key gating); this is the specific exposure
+  // finding that supersedes the generic `dangerous_allow` warning above.
+  if (hostFsReadOptIn && gatewayToolsAllow.has("read")) {
+    const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
+    findings.push({
+      checkId: "gateway.tools_invoke_http.host_read_allow",
+      severity: extraRisk ? "critical" : "warn",
+      title: "Gateway HTTP /tools/invoke exposes host filesystem reads",
+      detail:
+        "gateway.tools.directInvoke.hostFsRead is true and gateway.tools.allow includes 'read', " +
+        "which exposes the `read` coding tool over both HTTP `POST /tools/invoke` and SDK RPC `tools.invoke`. " +
+        "Without `tools.fs.workspaceOnly: true`, this grants reads of any file the gateway process can open " +
+        "(outside the configured workspace).",
+      remediation:
+        "Confine reads to the workspace by setting `tools.fs.workspaceOnly: true` (recommended). " +
+        "Or remove `gateway.tools.directInvoke.hostFsRead` to disable host-FS read over direct-invoke entirely. " +
+        "If you keep host-FS read enabled, keep gateway.bind loopback-only (or tailnet-only) and restrict network exposure.",
+    });
+  }
+
+  // Host-FS write opt-in finding. Same dual-key gating pattern as hostFsRead:
+  // only fires when `directInvoke.hostFsWrite: true` is set AND at least one
+  // write tool name appears in `tools.allow`. write-class is materially more
+  // dangerous than read so the finding escalates to critical on any non-loopback
+  // bind (or tailnet funnel), and warns on loopback.
+  // Only includes tool names the coding tool factory currently produces for the
+  // direct-invoke surface. `apply_patch` is intentionally NOT included (the
+  // factory does not produce it yet) so the audit does not falsely claim
+  // host-write exposure for an inert `allow: ["apply_patch"]` entry.
+  // Addresses ClawSweeper [P2] on #63919: docs/audit/resolver must agree.
+  const WRITE_CLASS_TOOLS = ["write", "edit"] as const;
+  const writeToolsInAllow = WRITE_CLASS_TOOLS.filter((name) => gatewayToolsAllow.has(name));
+  if (hostFsWriteOptIn && writeToolsInAllow.length > 0) {
+    const extraRisk = bind !== "loopback" || tailscaleMode === "funnel";
+    findings.push({
+      checkId: "gateway.tools_invoke_http.host_write_allow",
+      severity: extraRisk ? "critical" : "warn",
+      title: "Gateway HTTP /tools/invoke exposes host filesystem writes",
+      detail:
+        `gateway.tools.directInvoke.hostFsWrite is true and gateway.tools.allow includes ${writeToolsInAllow.join(", ")}, ` +
+        "which exposes the `write` and `edit` coding tools over both HTTP `POST /tools/invoke` and SDK RPC `tools.invoke`. " +
+        "Without `tools.fs.workspaceOnly: true`, this grants writes/edits on any file the gateway process can open " +
+        "(outside the configured workspace) — destructive blast radius if the gateway token leaks.",
+      remediation:
+        "Confine writes to the workspace by setting `tools.fs.workspaceOnly: true` (strongly recommended). " +
+        "Or remove `gateway.tools.directInvoke.hostFsWrite` to disable host-FS writes over direct-invoke entirely. " +
+        "If you keep host-FS writes enabled, keep gateway.bind loopback-only (or tailnet-only), restrict network exposure, " +
+        "and treat the gateway token/password as full-admin.",
     });
   }
   if (bind !== "loopback" && !hasSharedSecret && auth.mode !== "trusted-proxy") {

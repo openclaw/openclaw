@@ -13,7 +13,15 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "spawn",
   // Shell command execution — immediate RCE surface
   "shell",
-  // Arbitrary file mutation on the host
+  // Canonical workspace write tool — arbitrary file mutation on the host;
+  // opt-in via BOTH `gateway.tools.allow: ["write"]` AND
+  // `gateway.tools.directInvoke.hostFsWrite: true`.
+  "write",
+  // Canonical workspace edit tool — arbitrary file mutation on the host;
+  // opt-in via BOTH `gateway.tools.allow: ["edit"]` AND
+  // `gateway.tools.directInvoke.hostFsWrite: true`.
+  "edit",
+  // Arbitrary file mutation on the host (legacy/alternate name)
   "fs_write",
   // Arbitrary file deletion on the host
   "fs_delete",
@@ -31,7 +39,25 @@ export const DEFAULT_GATEWAY_HTTP_TOOL_DENY = [
   "gateway",
   // Node command relay can reach system.run on paired hosts
   "nodes",
+  // Host filesystem read — opt-in via BOTH `gateway.tools.allow: ["read"]` AND
+  // `gateway.tools.directInvoke.hostFsRead: true`. The default-deny prevents
+  // an upgrade-time compatibility break where pre-existing `allow: ["read"]`
+  // entries (kept around for non-direct-invoke surfaces) would silently grant
+  // host-FS read here. See `tool-resolution.ts` dual-key gating.
+  "read",
 ] as const;
+
+/**
+ * Subset of {@link DEFAULT_GATEWAY_HTTP_TOOL_DENY} whose default-deny exists to
+ * gate the BUILT-IN host-FS coding tool (`read`/`write`/`edit`, materialized
+ * behind `gateway.tools.directInvoke.hostFsRead`/`hostFsWrite`) — NOT to block a
+ * same-named tool from another source. These names commonly collide with plugin
+ * tool names, so a plugin tool an operator has allowlisted must stay reachable on
+ * `/tools/invoke` + SDK `tools.invoke`; only the built-in is gated. The resolver
+ * (`tool-resolution.ts`, final gateway deny filter) preserves a same-named plugin
+ * tool when its sole deny reason is this default — the built-in stays denied.
+ */
+export const HOST_FS_BUILTIN_CODING_DENY_NAMES = ["read", "write", "edit"] as const;
 
 /**
  * Core tools that require sender owner identity on Gateway-scoped surfaces.

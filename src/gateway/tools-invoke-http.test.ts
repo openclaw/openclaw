@@ -139,6 +139,25 @@ vi.mock("../agents/openclaw-tools.js", () => {
       execute: async () => ({ ok: true, result: "apply_patch" }),
     },
     {
+      // A same-named PLUGIN `read` tool. The host-FS default-deny is scoped to the
+      // built-in coding tool, so this plugin stays reachable by default (#63919 [P1]).
+      // The collision-precedence tests (PR #85664 [P1]) assert that the opted-in
+      // BUILT-IN reader wins over this plugin when both are present.
+      name: "read",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "PLUGIN-read" }),
+    },
+    {
+      // A same-named PLUGIN `write` tool. The host-FS default-deny is scoped to the
+      // built-in coding tool, so this plugin stays reachable by default (#63919 [P1]).
+      // The collision-precedence tests (PR #63919) assert that the opted-in BUILT-IN
+      // writer wins over this plugin when both are present, and that a non-owner
+      // caller falls through to this plugin (built-in not materialized).
+      name: "write",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "PLUGIN-write" }),
+    },
+    {
       name: "nodes",
       parameters: { type: "object", properties: {} },
       execute: async () => ({ ok: true, result: "nodes" }),
@@ -206,13 +225,27 @@ vi.mock("../agents/openclaw-tools.js", () => {
   return {
     createOpenClawTools: (ctx: Record<string, unknown>) => {
       lastCreateOpenClawToolsContext = ctx;
-      return ctx.disablePluginTools ? tools.filter((tool) => tool.name !== "browser") : tools;
+      const base = ctx.disablePluginTools ? tools.filter((tool) => tool.name !== "browser") : tools;
+      // Mirror the production plugin loader: a PLUGIN-owned tool whose name is in
+      // `pluginToolDenylist` is filtered out during resolution, before the gateway
+      // deny filter runs. Built-in tools (no plugin meta) are unaffected here. This
+      // is the real path the #63919 [P1] plugin-name preservation must survive.
+      const pluginDenylist = new Set(
+        Array.isArray(ctx.pluginToolDenylist) ? (ctx.pluginToolDenylist as string[]) : [],
+      );
+      return base.filter(
+        (tool) => !(pluginDenylist.has(tool.name) && pluginToolMetaState.has(tool.name)),
+      );
     },
   };
 });
 
 vi.mock("../agents/agent-tools.js", () => ({
   resolveToolLoopDetectionConfig: hookMocks.resolveToolLoopDetectionConfig,
+  // tool-resolution.ts imports this for the dual-key direct-invoke coding-tool
+  // materialization (PR #85664). These suites never enable the
+  // gateway.tools.directInvoke opt-ins, so an empty tool list is correct.
+  createOpenClawCodingToolsRaw: vi.fn(() => []),
 }));
 
 vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
@@ -220,6 +253,7 @@ vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
 }));
 
 const { authorizeHttpGatewayConnect } = await import("./auth.js");
+const { createOpenClawCodingToolsRaw } = await import("../agents/agent-tools.js");
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
 const { toolsInvokeHandlers } = await import("./server-methods/tools-invoke.js");
 
@@ -279,6 +313,10 @@ beforeEach(() => {
   lastCreateOpenClawToolsContext = undefined;
   pluginToolMetaState.clear();
   pluginToolMetaState.set("plugin_doctor", { pluginId: "test-plugin", optional: true });
+  // Default: no direct-invoke coding tools materialized. Collision tests opt in
+  // per-case via mockReturnValueOnce.
+  vi.mocked(createOpenClawCodingToolsRaw).mockReset();
+  vi.mocked(createOpenClawCodingToolsRaw).mockImplementation(() => []);
   hookMocks.resolveToolLoopDetectionConfig.mockClear();
   hookMocks.resolveToolLoopDetectionConfig.mockImplementation(() => ({ warnAt: 3 }));
   hookMocks.runBeforeToolCallHook.mockClear();
@@ -1038,6 +1076,188 @@ describe("POST /tools/invoke", () => {
     expect(body.result).toEqual({ ok: true, result: "browser" });
     expect(lastCreateOpenClawToolsContext?.disablePluginTools).toBe(false);
   });
+
+  // PR #85664 [P1]: collision precedence between the opt-in built-in `read`
+  // coding tool and a same-named PLUGIN tool. The mocked tool set already
+  // registers a plugin `read` (returns "PLUGIN-read"); here we materialize a
+  // built-in `read` (returns "BUILTIN-read") via the direct-invoke opt-in.
+  describe("read coding-tool collision precedence", () => {
+    const builtinRead = {
+      name: "read",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "BUILTIN-read" }),
+    };
+
+    it("resolves `read` to the opted-in built-in over a same-named plugin for an owner caller", async () => {
+      // Mark the mocked `read` entry as plugin-originated.
+      pluginToolMetaState.set("read", { pluginId: "test-plugin", optional: false });
+      vi.mocked(createOpenClawCodingToolsRaw).mockReturnValueOnce([builtinRead] as never);
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["read"] } }] },
+        gateway: {
+          tools: { allow: ["read"], directInvoke: { hostFsRead: true } },
+        },
+      };
+
+      // Owner caller (operator.admin → senderIsOwner === true): the host-read
+      // opt-in materializes the built-in, which wins the name collision.
+      const res = await invokeTool({
+        port: sharedPort,
+        headers: gatewayAdminHeaders(),
+        tool: "read",
+        sessionKey: "main",
+      });
+      const body = await expectOkInvokeResponse(res);
+      expect(body.result?.result).toBe("BUILTIN-read");
+      expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
+    });
+
+    it("does not materialize the built-in read for a non-owner caller even with the opt-in ON", async () => {
+      // Owner gate (PR #85664 non-owner finding): both opt-in keys are set, but
+      // the caller is a non-owner operator.write trusted-proxy principal
+      // (senderIsOwner === false), so the host-FS read built-in is NOT
+      // materialized — the factory is never invoked — and the same-named plugin
+      // executes instead. This closes the gap where a non-owner direct-invoke
+      // caller could reach host filesystem read.
+      pluginToolMetaState.set("read", { pluginId: "test-plugin", optional: false });
+      vi.mocked(createOpenClawCodingToolsRaw).mockReturnValueOnce([builtinRead] as never);
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["read"] } }] },
+        gateway: {
+          tools: { allow: ["read"], directInvoke: { hostFsRead: true } },
+        },
+      };
+
+      const res = await invokeToolAuthed({ tool: "read", sessionKey: "main" });
+      const body = await expectOkInvokeResponse(res);
+      expect(body.result?.result).toBe("PLUGIN-read");
+      expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(false);
+      expect(vi.mocked(createOpenClawCodingToolsRaw)).not.toHaveBeenCalled();
+    });
+
+    it("leaves the same-named plugin reachable when the hostFsRead opt-in is OFF", async () => {
+      // No opt-in → built-in is not materialized (default mock returns []), so
+      // the same-named plugin executes. This is the exposure that the config
+      // audit's `dangerous_allow` finding now warns about (see
+      // audit-gateway-tools-http.test.ts).
+      pluginToolMetaState.set("read", { pluginId: "test-plugin", optional: false });
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["read"] } }] },
+        gateway: { tools: { allow: ["read"] } },
+      };
+
+      const res = await invokeToolAuthed({ tool: "read", sessionKey: "main" });
+      const body = await expectOkInvokeResponse(res);
+      expect(body.result?.result).toBe("PLUGIN-read");
+    });
+
+    it("keeps a same-named plugin reachable by default WITHOUT a gateway.tools.allow entry (PR #63919 [P1])", async () => {
+      // Regression: adding `read`/`write`/`edit` to DEFAULT_GATEWAY_HTTP_TOOL_DENY
+      // must NOT name-deny a same-named PLUGIN tool. With the opt-in OFF and NO
+      // `gateway.tools.allow: ["read"]` entry, a pre-existing non-optional plugin
+      // `read` stays reachable — the default-deny is scoped to the built-in coding
+      // tool only (`getPluginToolMeta`-aware filter in tool-resolution.ts). Before
+      // that fix this returned 404, breaking existing plugins on upgrade.
+      pluginToolMetaState.set("read", { pluginId: "test-plugin", optional: false });
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["read"] } }] },
+        gateway: { tools: {} },
+      };
+
+      const res = await invokeToolAuthed({ tool: "read", sessionKey: "main" });
+      const body = await expectOkInvokeResponse(res);
+      expect(body.result?.result).toBe("PLUGIN-read");
+    });
+  });
+
+  // PR #63919: the write-class extension. `write`/`edit` are materialized only
+  // behind `gateway.tools.directInvoke.hostFsWrite: true` AND the per-tool
+  // `allow` entry AND the owner gate — exactly mirroring read's triple-key
+  // gating. Host-FS write is materially more dangerous than read, so the
+  // non-owner denial is the load-bearing case here.
+  describe("write coding-tool collision precedence", () => {
+    const builtinWrite = {
+      name: "write",
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ ok: true, result: "BUILTIN-write" }),
+    };
+
+    it("resolves `write` to the opted-in built-in over a same-named plugin for an owner caller", async () => {
+      pluginToolMetaState.set("write", { pluginId: "test-plugin", optional: false });
+      vi.mocked(createOpenClawCodingToolsRaw).mockReturnValueOnce([builtinWrite] as never);
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["write"] } }] },
+        gateway: {
+          tools: { allow: ["write"], directInvoke: { hostFsWrite: true } },
+        },
+      };
+
+      // Owner caller (operator.admin → senderIsOwner === true): the host-write
+      // opt-in materializes the built-in, which wins the name collision.
+      const res = await invokeTool({
+        port: sharedPort,
+        headers: gatewayAdminHeaders(),
+        tool: "write",
+        sessionKey: "main",
+      });
+      const body = await expectOkInvokeResponse(res);
+      expect(body.result?.result).toBe("BUILTIN-write");
+      expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
+    });
+
+    it("does not materialize the built-in write for a non-owner caller even with the opt-in ON", async () => {
+      // Owner gate: both opt-in keys are set, but the caller is a non-owner
+      // operator.write trusted-proxy principal (senderIsOwner === false), so the
+      // host-FS write built-in is NOT materialized — the factory is never
+      // invoked — and the same-named plugin executes instead. This closes the
+      // gap where a non-owner direct-invoke caller could mutate host files.
+      pluginToolMetaState.set("write", { pluginId: "test-plugin", optional: false });
+      vi.mocked(createOpenClawCodingToolsRaw).mockReturnValueOnce([builtinWrite] as never);
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["write"] } }] },
+        gateway: {
+          tools: { allow: ["write"], directInvoke: { hostFsWrite: true } },
+        },
+      };
+
+      const res = await invokeToolAuthed({ tool: "write", sessionKey: "main" });
+      const body = await expectOkInvokeResponse(res);
+      expect(body.result?.result).toBe("PLUGIN-write");
+      expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(false);
+      expect(vi.mocked(createOpenClawCodingToolsRaw)).not.toHaveBeenCalled();
+    });
+
+    it("leaves the same-named plugin reachable when the hostFsWrite opt-in is OFF", async () => {
+      // No opt-in → built-in is not materialized (default mock returns []), so
+      // the same-named plugin executes. This is the exposure that the config
+      // audit's `dangerous_allow` finding now warns about.
+      pluginToolMetaState.set("write", { pluginId: "test-plugin", optional: false });
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["write"] } }] },
+        gateway: { tools: { allow: ["write"] } },
+      };
+
+      const res = await invokeToolAuthed({ tool: "write", sessionKey: "main" });
+      const body = await expectOkInvokeResponse(res);
+      expect(body.result?.result).toBe("PLUGIN-write");
+    });
+
+    it("keeps a same-named plugin reachable by default WITHOUT a gateway.tools.allow entry (PR #63919 [P1])", async () => {
+      // Regression for the write-class deny entry: with the opt-in OFF and no
+      // `gateway.tools.allow: ["write"]`, a pre-existing non-optional plugin
+      // `write` stays reachable (default-deny scoped to the built-in only). The
+      // built-in writer is never materialized here, so no host-FS exposure.
+      pluginToolMetaState.set("write", { pluginId: "test-plugin", optional: false });
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["write"] } }] },
+        gateway: { tools: {} },
+      };
+
+      const res = await invokeToolAuthed({ tool: "write", sessionKey: "main" });
+      const body = await expectOkInvokeResponse(res);
+      expect(body.result?.result).toBe("PLUGIN-write");
+    });
+  });
 });
 
 describe("tools.invoke Gateway RPC", () => {
@@ -1109,6 +1329,34 @@ describe("tools.invoke Gateway RPC", () => {
     expect(call?.[1]?.toolName).toBe("nodes");
     expect(call?.[1]?.output).toEqual({ ok: true, result: "nodes" });
     expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(true);
+  });
+
+  it("does not materialize the built-in read for a non-owner RPC caller even with the opt-in ON", async () => {
+    // Owner gate (PR #85664 non-owner finding) on the SDK-facing RPC surface:
+    // both opt-in keys are set, but the default RPC caller carries operator.write
+    // (senderIsOwner === false), so the host-FS read built-in is NOT materialized
+    // — the factory is never invoked — and the same-named plugin executes.
+    pluginToolMetaState.set("read", { pluginId: "test-plugin", optional: false });
+    vi.mocked(createOpenClawCodingToolsRaw).mockReturnValueOnce([
+      {
+        name: "read",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ ok: true, result: "BUILTIN-read" }),
+      },
+    ] as never);
+    cfg = {
+      agents: { list: [{ id: "main", default: true, tools: { allow: ["read"] } }] },
+      gateway: { tools: { allow: ["read"], directInvoke: { hostFsRead: true } } },
+    };
+
+    const call = await invokeToolsRpc({ name: "read", args: {}, sessionKey: "main" });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]?.ok).toBe(true);
+    expect(call?.[1]?.toolName).toBe("read");
+    expect(call?.[1]?.output).toEqual({ ok: true, result: "PLUGIN-read" });
+    expect(lastCreateOpenClawToolsContext?.senderIsOwner).toBe(false);
+    expect(vi.mocked(createOpenClawCodingToolsRaw)).not.toHaveBeenCalled();
   });
 
   it("returns typed approval-needed refusal when the policy hook blocks", async () => {
