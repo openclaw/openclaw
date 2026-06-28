@@ -251,7 +251,7 @@ function selectMismatchExpectedLine(oldText: string): string {
   const lines = normalizeToLF(oldText).split("\n");
   const nonEmpty = lines.filter((line) => line.trim().length > 0);
   const candidates = nonEmpty.length > 0 ? nonEmpty : lines;
-  return candidates.slice().sort((a, b) => b.trim().length - a.trim().length)[0] ?? "";
+  return candidates.toSorted((a, b) => b.trim().length - a.trim().length)[0] ?? "";
 }
 
 function findClosestMismatchLines(
@@ -267,7 +267,7 @@ function findClosestMismatchLines(
       score: lineDistanceScore(expectedLine, line),
     }))
     .filter((candidate) => candidate.text.length > 0)
-    .sort((a, b) => a.score - b.score || a.lineNumber - b.lineNumber)
+    .toSorted((a, b) => a.score - b.score || a.lineNumber - b.lineNumber)
     .slice(0, EDIT_MISMATCH_CANDIDATE_LIMIT);
 }
 
