@@ -127,6 +127,8 @@ export async function generateImage(
         size: sanitized.size,
         aspectRatio: sanitized.aspectRatio,
         resolution: sanitized.resolution,
+        resolutionInferred:
+          params.resolutionInferred === true && sanitized.resolution !== undefined,
         quality: sanitized.quality,
         outputFormat: sanitized.outputFormat,
         background: sanitized.background,

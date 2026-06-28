@@ -116,6 +116,12 @@ receive supported `aspectRatio` and `resolution` hints through OpenRouter's
 OpenRouter image models; the `image_generate` tool's per-call `timeoutMs`
 parameter still wins.
 
+For `/images` models, OpenClaw honors model-specific OpenRouter limits before
+submission. Gemini and Microsoft image models request one output at a time,
+Microsoft receives only supported aspect-ratio/reference-image fields, and
+OpenAI image models do not receive unsupported Gemini-style
+`aspect_ratio`/`resolution` fields.
+
 The bundled OpenRouter image provider exposes a curated set of OpenRouter
 image-output models, including `google/gemini-3.1-flash-image`,
 `google/gemini-3-pro-image`, `google/gemini-2.5-flash-image`,

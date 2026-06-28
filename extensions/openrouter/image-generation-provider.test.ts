@@ -110,8 +110,11 @@ describe("openrouter image generation provider", () => {
     expect(provider.models).toContain("microsoft/mai-image-2.5");
     expect(provider.capabilities.generate.maxCount).toBe(4);
     expect(provider.capabilities.generate.supportsAspectRatio).toBe(true);
+    expect(provider.capabilities.geometry?.aspectRatios).toContain("1:4");
+    expect(provider.capabilities.geometry?.aspectRatios).toContain("8:1");
     expect(provider.capabilities.edit.enabled).toBe(true);
-    expect(provider.capabilities.edit.maxInputImages).toBe(5);
+    expect(provider.capabilities.edit.maxInputImages).toBe(10);
+    expect(provider.capabilities.edit.supportsResolution).toBe(true);
   });
 
   it("sends current image models through OpenRouter images API", async () => {
@@ -131,8 +134,8 @@ describe("openrouter image generation provider", () => {
       model: "microsoft/mai-image-2.5",
       prompt: "draw a sticker",
       aspectRatio: "16:9",
-      resolution: "2K",
-      count: 2,
+      count: 1,
+      inputImages: [{ buffer: Buffer.from("source-one"), mimeType: "image/png" }],
       cfg: {},
     });
 
@@ -142,13 +145,144 @@ describe("openrouter image generation provider", () => {
       body: {
         model: "microsoft/mai-image-2.5",
         prompt: "draw a sticker",
-        n: 2,
+        n: 1,
         aspect_ratio: "16:9",
-        resolution: "2K",
+        input_references: [
+          {
+            type: "image_url",
+            image_url: {
+              url: `data:image/png;base64,${Buffer.from("source-one").toString("base64")}`,
+            },
+          },
+        ],
       },
     });
     expect(result.model).toBe("microsoft/mai-image-2.5");
     expect(requireGeneratedImage(result, 0).buffer.toString()).toBe("png-one");
+  });
+
+  it("rejects unsupported Images API count and reference image limits before request", async () => {
+    const provider = buildOpenRouterImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openrouter",
+        model: "microsoft/mai-image-2.5",
+        prompt: "draw a sticker",
+        count: 2,
+        cfg: {},
+      }),
+    ).rejects.toThrow("supports at most 1 output image");
+
+    await expect(
+      provider.generateImage({
+        provider: "openrouter",
+        model: "microsoft/mai-image-2.5",
+        prompt: "draw a sticker",
+        inputImages: [
+          { buffer: Buffer.from("source-one"), mimeType: "image/png" },
+          { buffer: Buffer.from("source-two"), mimeType: "image/png" },
+        ],
+        cfg: {},
+      }),
+    ).rejects.toThrow("supports at most 1 reference image");
+
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects unsupported Images API geometry before request", async () => {
+    const provider = buildOpenRouterImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openrouter",
+        model: "microsoft/mai-image-2.5",
+        prompt: "draw a sticker",
+        resolution: "2K",
+        cfg: {},
+      }),
+    ).rejects.toThrow("does not support resolution=2K");
+
+    await expect(
+      provider.generateImage({
+        provider: "openrouter",
+        model: "openai/gpt-5-image",
+        prompt: "draw a sticker",
+        aspectRatio: "16:9",
+        cfg: {},
+      }),
+    ).rejects.toThrow("does not support aspectRatio=16:9");
+
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
+  });
+
+  it("sends OpenAI image models through OpenRouter images API without geometry", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          data: [{ b64_json: Buffer.from("png-one").toString("base64") }],
+        }),
+      },
+      release,
+    });
+
+    const provider = buildOpenRouterImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openrouter",
+      model: "openai/gpt-5-image",
+      prompt: "draw a sticker",
+      count: 4,
+      cfg: {},
+    });
+
+    expect(requireOpenRouterPostRequest()).toMatchObject({
+      url: "https://openrouter.ai/api/v1/images",
+      body: {
+        model: "openai/gpt-5-image",
+        prompt: "draw a sticker",
+        n: 4,
+      },
+    });
+    expect(requireOpenRouterPostRequest().body).not.toHaveProperty("aspect_ratio");
+    expect(requireOpenRouterPostRequest().body).not.toHaveProperty("resolution");
+  });
+
+  it("ignores unsupported inferred edit resolution for Images API models", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          data: [{ b64_json: Buffer.from("png-one").toString("base64") }],
+        }),
+      },
+      release,
+    });
+
+    const provider = buildOpenRouterImageGenerationProvider();
+    await provider.generateImage({
+      provider: "openrouter",
+      model: "openai/gpt-5-image",
+      prompt: "draw a sticker",
+      inputImages: [{ buffer: Buffer.from("source-one"), mimeType: "image/png" }],
+      resolution: "1K",
+      resolutionInferred: true,
+      cfg: {},
+    });
+
+    const body = requireOpenRouterPostRequest().body as Record<string, unknown>;
+    expect(body).toMatchObject({
+      model: "openai/gpt-5-image",
+      prompt: "draw a sticker",
+      n: 1,
+      input_references: [
+        {
+          type: "image_url",
+          image_url: {
+            url: `data:image/png;base64,${Buffer.from("source-one").toString("base64")}`,
+          },
+        },
+      ],
+    });
+    expect(body).not.toHaveProperty("resolution");
   });
 
   it("sends chat completion image requests with Gemini image config and count", async () => {
@@ -347,6 +481,24 @@ describe("openrouter image generation provider", () => {
     const image = requireGeneratedImage(result, 0);
     expect(image.buffer.toString()).toBe("webp-one");
     expect(image.mimeType).toBe("image/webp");
+  });
+
+  it("rejects too many legacy chat-image references before request", async () => {
+    const provider = buildOpenRouterImageGenerationProvider();
+    await expect(
+      provider.generateImage({
+        provider: "openrouter",
+        model: "google/gemini-3.1-flash-image-preview",
+        prompt: "turn these into watercolor",
+        inputImages: Array.from({ length: 6 }, (_, index) => ({
+          buffer: Buffer.from(`source-image-${index}`),
+          mimeType: "image/png",
+        })),
+        cfg: {},
+      }),
+    ).rejects.toThrow("supports at most 5 reference images");
+
+    expect(postJsonRequestMock).not.toHaveBeenCalled();
   });
 
   it("wraps wrong-shape successful OpenRouter image responses", async () => {

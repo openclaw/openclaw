@@ -693,6 +693,7 @@ async function executeImageGenerationJob(params: {
   size?: string;
   aspectRatio?: string;
   resolution?: ImageGenerationResolution;
+  resolutionInferred?: boolean;
   quality?: ImageGenerationQuality;
   outputFormat?: ImageGenerationOutputFormat;
   background?: ImageGenerationBackground;
@@ -721,6 +722,7 @@ async function executeImageGenerationJob(params: {
     size: params.size,
     aspectRatio: params.aspectRatio,
     resolution: params.resolution,
+    resolutionInferred: params.resolutionInferred,
     quality: params.quality,
     outputFormat: params.outputFormat,
     background: params.background,
@@ -1063,6 +1065,7 @@ export function createImageGenerateTool(options?: {
               size,
               aspectRatio,
               resolution,
+              resolutionInferred: Boolean(resolution && !explicitResolution),
               quality,
               outputFormat,
               background,
@@ -1120,6 +1123,7 @@ export function createImageGenerateTool(options?: {
           size,
           aspectRatio,
           resolution,
+          resolutionInferred: Boolean(resolution && !explicitResolution),
           quality,
           outputFormat,
           background,
