@@ -292,14 +292,9 @@ function renderNativeTalkSelect(params: {
   onSelect: (value: string) => void;
   selectedLabel?: string;
 }) {
-  const selectedLabel =
-    params.selectedLabel ?? params.options.find((entry) => entry.value === params.value)?.label;
   return html`
     <label class="agent-chat__talk-field" data-talk-select=${params.label.toLowerCase()}>
       <span>${params.label}</span>
-      ${selectedLabel
-        ? html`<span class="agent-chat__talk-select-label">${selectedLabel}</span>`
-        : nothing}
       <select
         .value=${params.value}
         @change=${(event: Event) =>

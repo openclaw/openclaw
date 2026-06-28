@@ -1108,14 +1108,6 @@
   box-shadow: var(--focus-ring);
 }
 
-.agent-chat__talk-select-label {
-  min-width: 0;
-  overflow: hidden;
-  line-height: 1.35;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .agent-chat__talk-select-icon,
 .agent-chat__talk-select-check {
   display: inline-flex;
