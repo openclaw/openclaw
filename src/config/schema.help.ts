@@ -781,6 +781,10 @@ export const FIELD_HELP: Record<string, string> = {
     "Per-agent message guard for sending across providers. Keep false for public or sandboxed agents.",
   "agents.list[].tools.message.actions.allow":
     'Per-agent message action allowlist for the message tool. Set to a minimal list such as ["send"] for public sandbox agents so read, edit, delete, reaction, and other provider-specific message actions stay hidden and blocked.',
+  "agents.list[].tools.agentToAgent":
+    "Outbound agent-to-agent policy for this requester agent. It narrows cross-agent session access after the global tools.agentToAgent gate allows both agents to participate.",
+  "agents.list[].tools.agentToAgent.allow":
+    "Target agent ids or wildcard patterns this requester agent may contact with session tools. An empty array denies all outbound agent-to-agent access for this requester.",
   "tools.exec.approvalRunningNoticeMs":
     "Delay in milliseconds before showing an in-progress notice after an exec approval is granted. Increase to reduce flicker for fast commands, or lower for quicker operator feedback.",
   "tools.links.enabled":

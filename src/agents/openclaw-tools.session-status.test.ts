@@ -966,6 +966,28 @@ describe("session_status tool", () => {
     ).rejects.toThrow(/visibility is restricted/);
   });
 
+  it("rejects sandboxed subagent sessionId status lookup outside its visible tree", async () => {
+    resetSessionStore({
+      "agent:main:main": {
+        sessionId: "s-parent",
+        updatedAt: 10,
+        status: "running",
+      },
+      "agent:main:subagent:child": {
+        sessionId: "s-child",
+        updatedAt: 20,
+        status: "running",
+      },
+    });
+    installSandboxedSessionStatusConfig();
+
+    const tool = getSessionStatusTool("agent:main:subagent:child", { sandboxed: true });
+
+    await expect(
+      tool.execute("call-sandboxed-subagent-parent-session-id", { sessionKey: "s-parent" }),
+    ).rejects.toThrow(/visibility is restricted to the current session tree/);
+  });
+
   it("treats the TUI client label as the current requester session", async () => {
     resetSessionStore({
       "agent:main:main": {

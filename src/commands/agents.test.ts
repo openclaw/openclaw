@@ -396,4 +396,25 @@ describe("agents helpers", () => {
     expect(result.removedBindings).toBe(1);
     expect(result.removedAllow).toBe(1);
   });
+
+  it("pruneAgentConfig removes pruned ids from per-agent allowlists without mutating input", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          { id: "work", default: true, workspace: "/work-ws" },
+          {
+            id: "home",
+            workspace: "/home-ws",
+            tools: { agentToAgent: { allow: ["work", "ops"] } },
+          },
+        ],
+      },
+    };
+    const originalConfig = JSON.stringify(cfg);
+
+    const result = pruneAgentConfig(cfg, "work");
+
+    expect(result.config.agents?.list?.[0]?.tools?.agentToAgent?.allow).toEqual(["ops"]);
+    expect(JSON.stringify(cfg)).toBe(originalConfig);
+  });
 });

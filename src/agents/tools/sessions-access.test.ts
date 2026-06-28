@@ -222,6 +222,53 @@ describe("createAgentToAgentPolicy", () => {
     expect(policy.matchesAllow("OPS.[PROD]-worker")).toBe(true);
     expect(policy.matchesAllow("opsXprod-worker")).toBe(false);
   });
+
+  it("applies requester-owned per-agent outbound allowlists after global participation", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["main", "ops", "support"],
+        },
+      },
+      agents: {
+        list: [
+          { id: "main", tools: { agentToAgent: { allow: ["ops"] } } },
+          { id: "ops", tools: { agentToAgent: { allow: [] } } },
+        ],
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.evaluateAccess("main", "ops")).toEqual({ allowed: true });
+    expect(policy.evaluateAccess("main", "support")).toEqual({
+      allowed: false,
+      reason: "per_agent_outbound",
+    });
+    expect(policy.evaluateAccess("support", "ops")).toEqual({ allowed: true });
+    expect(policy.evaluateAccess("ops", "main")).toEqual({
+      allowed: false,
+      reason: "per_agent_outbound",
+    });
+  });
+
+  it("reports global participation denials before per-agent outbound denials", () => {
+    const policy = createAgentToAgentPolicy({
+      tools: {
+        agentToAgent: {
+          enabled: true,
+          allow: ["main"],
+        },
+      },
+      agents: {
+        list: [{ id: "main", tools: { agentToAgent: { allow: ["ops"] } } }],
+      },
+    } as unknown as OpenClawConfig);
+
+    expect(policy.evaluateAccess("main", "ops")).toEqual({
+      allowed: false,
+      reason: "global_participation",
+    });
+  });
 });
 
 describe("createSessionVisibilityGuard", () => {
@@ -279,6 +326,36 @@ describe("createSessionVisibilityGuard", () => {
       status: "forbidden",
       error:
         "Session list visibility is restricted. Set tools.sessions.visibility=all and tools.agentToAgent.enabled=true to allow cross-agent access; use tools.agentToAgent.allow to restrict permitted agent pairs.",
+    });
+  });
+
+  it("keeps old SDK A2A policy objects working for cross-agent row checks", () => {
+    const legacyPolicy = {
+      enabled: true,
+      matchesAllow: (agentId: string) => agentId === "main" || agentId === "ops",
+      isAllowed: (requesterAgentId: string, targetAgentId: string) =>
+        requesterAgentId === "main" && targetAgentId === "ops",
+    } as unknown as ReturnType<typeof createAgentToAgentPolicy>;
+    const guard = createSessionVisibilityRowChecker({
+      action: "list",
+      requesterSessionKey: "agent:main:main",
+      visibility: "all",
+      a2aPolicy: legacyPolicy,
+    });
+
+    expect(
+      guard.check({
+        key: "agent:ops:main",
+      }),
+    ).toEqual({ allowed: true });
+    expect(
+      guard.check({
+        key: "agent:support:main",
+      }),
+    ).toEqual({
+      allowed: false,
+      status: "forbidden",
+      error: "Agent-to-agent listing denied by tools.agentToAgent.allow.",
     });
   });
 

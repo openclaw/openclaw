@@ -13,6 +13,8 @@ export {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
   createSessionVisibilityRowChecker,
+  formatAgentToAgentAccessError,
+  listSpawnedSessionKeys,
   resolveEffectiveSessionToolsVisibility,
 } from "../../plugin-sdk/session-visibility.js";
 

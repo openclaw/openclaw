@@ -221,6 +221,8 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.list[].tools.message.crossContext.allowAcrossProviders":
     "Agent Cross-Context Messaging (Across Providers)",
   "agents.list[].tools.message.actions.allow": "Agent Message Action Allowlist",
+  "agents.list[].tools.agentToAgent": "Agent Outbound A2A Access",
+  "agents.list[].tools.agentToAgent.allow": "Agent Outbound A2A Allowlist",
   "tools.exec.applyPatch.enabled": "Enable apply_patch",
   "tools.exec.applyPatch.workspaceOnly": "apply_patch Workspace-Only",
   "tools.exec.applyPatch.allowModels": "apply_patch Model Allowlist",
