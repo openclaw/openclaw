@@ -2265,56 +2265,57 @@ export const agentHandlers: GatewayRequestHandlers = {
           let deniedSessionEntry: SessionEntry | undefined;
           let persisted: SessionEntry | undefined;
           try {
-            persisted = await patchSessionEntryTarget(
-              {
-                storePath,
-                target: {
-                  canonicalKey: canonicalSessionKey,
-                  storeKeys: storeKeys ?? [canonicalSessionKey],
-                },
-              },
-              (_currentEntry, context) => {
-                // The writer lock may outlive this request's lifecycle. Check at
-                // transaction admission; once admitted, let the atomic write finish.
-                assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
-                const freshEntry = context.existingEntry;
-                patchBuild = buildSessionPatch(freshEntry);
-                const effectivePatch =
-                  recoveredSessionStartedAt !== undefined &&
-                  freshEntry?.sessionStartedAt === undefined &&
-                  freshEntry?.sessionId === entry?.sessionId
-                    ? { ...patchBuild.patch, sessionStartedAt: recoveredSessionStartedAt }
-                    : patchBuild.patch;
-                const merged = withSqliteSessionFileMarker({
-                  agentId: sessionAgentId,
-                  entry: mergeSessionEntry(freshEntry, effectivePatch),
-                  sessionKey: canonicalSessionKey,
+            persisted =
+              (await patchSessionEntryTarget(
+                {
                   storePath,
-                });
-                const sendPolicy =
-                  request.deliver === true
-                    ? resolveSendPolicy({
-                        cfg: cfgLocal,
-                        entry: merged,
-                        sessionKey: canonicalKey,
-                        channel: merged?.channel,
-                        chatType: merged?.chatType,
-                      })
-                    : "allow";
-                if (sendPolicy === "deny") {
-                  deniedBySendPolicy = true;
-                  deniedSessionEntry = merged;
-                  return null;
-                }
-                return merged;
-              },
-              {
-                fallbackEntry: entry ?? mergeSessionEntry(undefined, patchBuild.patch),
-                replaceEntry: true,
-                takeCacheOwnership: true,
-                maintenanceConfig: sessionMaintenanceConfig,
-              },
-            );
+                  target: {
+                    canonicalKey: canonicalSessionKey,
+                    storeKeys: storeKeys ?? [canonicalSessionKey],
+                  },
+                },
+                (_currentEntry, context) => {
+                  // The writer lock may outlive this request's lifecycle. Check at
+                  // transaction admission; once admitted, let the atomic write finish.
+                  assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
+                  const freshEntry = context.existingEntry;
+                  patchBuild = buildSessionPatch(freshEntry);
+                  const effectivePatch =
+                    recoveredSessionStartedAt !== undefined &&
+                    freshEntry?.sessionStartedAt === undefined &&
+                    freshEntry?.sessionId === entry?.sessionId
+                      ? { ...patchBuild.patch, sessionStartedAt: recoveredSessionStartedAt }
+                      : patchBuild.patch;
+                  const merged = withSqliteSessionFileMarker({
+                    agentId: sessionAgentId,
+                    entry: mergeSessionEntry(freshEntry, effectivePatch),
+                    sessionKey: canonicalSessionKey,
+                    storePath,
+                  });
+                  const sendPolicy =
+                    request.deliver === true
+                      ? resolveSendPolicy({
+                          cfg: cfgLocal,
+                          entry: merged,
+                          sessionKey: canonicalKey,
+                          channel: merged?.channel,
+                          chatType: merged?.chatType,
+                        })
+                      : "allow";
+                  if (sendPolicy === "deny") {
+                    deniedBySendPolicy = true;
+                    deniedSessionEntry = merged;
+                    return null;
+                  }
+                  return merged;
+                },
+                {
+                  fallbackEntry: entry ?? mergeSessionEntry(undefined, patchBuild.patch),
+                  replaceEntry: true,
+                  takeCacheOwnership: true,
+                  maintenanceConfig: sessionMaintenanceConfig,
+                },
+              )) ?? undefined;
           } catch (err) {
             if (abortForLifecycleRotation({ sessionKey: canonicalSessionKey, agentId })) {
               return;

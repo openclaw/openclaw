@@ -2463,7 +2463,7 @@ export const sessionsHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const { entry, sessionStoreKey, target, storePath } = loadAccessorSessionEntryForGatewayTarget({
+    const { entry, target, storePath } = loadAccessorSessionEntryForGatewayTarget({
       key,
       cfg,
       agentId: requestedAgentId,

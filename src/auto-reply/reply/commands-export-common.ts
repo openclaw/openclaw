@@ -52,19 +52,23 @@ export function resolveExportCommandSessionTarget(
   params: HandleCommandsParams,
 ): ExportCommandSessionTarget | ReplyPayload {
   const targetAgentId = resolveAgentIdFromSessionKey(params.sessionKey) || params.agentId;
+  if (!targetAgentId) {
+    return { text: `❌ Failed to resolve agent for session: ${params.sessionKey}` };
+  }
   const storePath = params.storePath ?? resolveDefaultSessionStorePath(targetAgentId);
   const entry = loadSessionEntry({
     storePath,
     sessionKey: params.sessionKey,
     clone: false,
   });
-  if (!entry?.sessionId) {
+  const sessionId = entry?.sessionId;
+  if (!sessionId) {
     return { text: `❌ Session not found: ${params.sessionKey}` };
   }
 
   try {
     const sessionFile = resolveSessionFilePath(
-      entry.sessionId,
+      sessionId,
       entry,
       resolveSessionFilePathOptions({ agentId: targetAgentId, storePath }),
     );
@@ -72,7 +76,7 @@ export function resolveExportCommandSessionTarget(
       agentId: targetAgentId,
       entry,
       sessionFile,
-      sessionId: entry.sessionId,
+      sessionId,
       sessionKey: params.sessionKey,
       storePath,
     };

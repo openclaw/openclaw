@@ -63,6 +63,10 @@ function expectRetryContinuesFromTranscript() {
   expect(retryParams.prompt).not.toBe(baseParams.prompt);
 }
 
+function makeUserMessage(content: string = baseParams.prompt) {
+  return { role: "user" as const, content, timestamp: 1 };
+}
+
 describe("overflow compaction in run loop", () => {
   beforeAll(async () => {
     ({ runEmbeddedAgent } = await loadRunOverflowCompactionHarness());
@@ -206,7 +210,7 @@ describe("overflow compaction in run loop", () => {
   });
 
   it("persists the canonical user turn when the embedded runtime writes its prompt file", async () => {
-    const persistedMessage = { role: "user" as const, content: baseParams.prompt };
+    const persistedMessage = makeUserMessage();
     const persistApproved = vi.fn(async () => ({
       sessionFile: "/tmp/openclaw-transcript.jsonl",
       sessionEntry: undefined,
@@ -221,15 +225,15 @@ describe("overflow compaction in run loop", () => {
         attemptParams as {
           onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
         }
-      ).onUserMessagePersisted?.({ role: "user", content: baseParams.prompt });
+      ).onUserMessagePersisted?.(makeUserMessage());
       return makeAttemptResult({ promptError: null });
     });
 
     await runEmbeddedAgent({
       ...baseParams,
       userTurnTranscriptRecorder: {
-        message: { role: "user", content: baseParams.prompt },
-        resolveMessage: vi.fn(async () => ({ role: "user", content: baseParams.prompt })),
+        message: makeUserMessage(),
+        resolveMessage: vi.fn(async () => makeUserMessage()),
         markRuntimePersistencePending,
         markRuntimePersisted,
         markBlocked: vi.fn(),
@@ -252,7 +256,7 @@ describe("overflow compaction in run loop", () => {
 
   it("suppresses retry persistence when the runtime already marked the user turn persisted", async () => {
     const overflowError = makeOverflowError();
-    const runtimeMessage = { role: "user" as const, content: baseParams.prompt };
+    const runtimeMessage = makeUserMessage();
     const persistApproved = vi.fn(async () => undefined);
     const onUserMessagePersisted = vi.fn();
     mockedRunEmbeddedAttempt
@@ -300,8 +304,7 @@ describe("overflow compaction in run loop", () => {
 
   it("does not persist the original embedded prompt when before_agent_run writes a block marker", async () => {
     const blockedMessage = {
-      role: "user" as const,
-      content: "[blocked by before_agent_run]",
+      ...makeUserMessage("[blocked by before_agent_run]"),
       __openclaw: {
         beforeAgentRunBlocked: {
           blockedBy: "before_agent_run",
@@ -309,17 +312,17 @@ describe("overflow compaction in run loop", () => {
         },
       },
     };
-    const persistBlocked = vi.fn(async (message: typeof blockedMessage) => ({
+    const persistBlocked = vi.fn(async (message: unknown) => ({
       sessionFile: "/tmp/openclaw-transcript.jsonl",
       sessionEntry: undefined,
       messageId: "msg-user-1",
-      message,
+      message: message as typeof blockedMessage,
     }));
     const persistApproved = vi.fn(async () => ({
       sessionFile: "/tmp/openclaw-transcript.jsonl",
       sessionEntry: undefined,
       messageId: "msg-user-1",
-      message: { role: "user" as const, content: baseParams.prompt },
+      message: makeUserMessage(),
     }));
     const markBlocked = vi.fn();
     const markRuntimePersistencePending = vi.fn();
@@ -338,8 +341,8 @@ describe("overflow compaction in run loop", () => {
       ...baseParams,
       onUserMessagePersisted,
       userTurnTranscriptRecorder: {
-        message: { role: "user", content: baseParams.prompt },
-        resolveMessage: vi.fn(async () => ({ role: "user", content: baseParams.prompt })),
+        message: makeUserMessage(),
+        resolveMessage: vi.fn(async () => makeUserMessage()),
         markRuntimePersistencePending,
         markRuntimePersisted,
         markBlocked,
@@ -371,7 +374,7 @@ describe("overflow compaction in run loop", () => {
           attemptParams as {
             onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
           }
-        ).onUserMessagePersisted?.({ role: "user", content: baseParams.prompt });
+        ).onUserMessagePersisted?.(makeUserMessage());
         return makeAttemptResult({ promptError: overflowError });
       })
       .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
@@ -389,8 +392,8 @@ describe("overflow compaction in run loop", () => {
       currentMessageId: "telegram-msg-blocked",
       onUserMessagePersisted,
       userTurnTranscriptRecorder: {
-        message: { role: "user", content: baseParams.prompt },
-        resolveMessage: vi.fn(async () => ({ role: "user", content: baseParams.prompt })),
+        message: makeUserMessage(),
+        resolveMessage: vi.fn(async () => makeUserMessage()),
         markRuntimePersistencePending: vi.fn(),
         markRuntimePersisted: vi.fn(),
         markBlocked: vi.fn(),
@@ -413,7 +416,7 @@ describe("overflow compaction in run loop", () => {
 
   it("waits for pending canonical embedded user turn persistence before retry suppression", async () => {
     const overflowError = makeOverflowError();
-    const persistedMessage = { role: "user" as const, content: baseParams.prompt };
+    const persistedMessage = makeUserMessage();
     let resolvePersistApproved:
       | ((result: {
           sessionFile: string;
@@ -441,7 +444,7 @@ describe("overflow compaction in run loop", () => {
           attemptParams as {
             onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
           }
-        ).onUserMessagePersisted?.({ role: "user", content: baseParams.prompt });
+        ).onUserMessagePersisted?.(makeUserMessage());
         return makeAttemptResult({ promptError: overflowError });
       })
       .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));
@@ -507,7 +510,7 @@ describe("overflow compaction in run loop", () => {
           attemptParams as {
             onUserMessagePersisted?: (message: { role: "user"; content: string }) => void;
           }
-        ).onUserMessagePersisted?.({ role: "user", content: baseParams.prompt });
+        ).onUserMessagePersisted?.(makeUserMessage());
         return makeAttemptResult({ promptError: overflowError });
       })
       .mockResolvedValueOnce(makeAttemptResult({ promptError: null }));

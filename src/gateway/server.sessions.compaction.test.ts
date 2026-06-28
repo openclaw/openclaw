@@ -766,7 +766,6 @@ test("sessions.compact uses the freshest persisted key when main-key aliases exi
     await patchAccessorSessionEntry(
       {
         agentId: "main",
-        sessionId: "sess-alias",
         sessionKey: "agent:main:main",
         storePath,
       },

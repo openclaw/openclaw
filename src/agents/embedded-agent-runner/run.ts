@@ -1023,7 +1023,8 @@ async function runEmbeddedAgentInternal(
         sessionKey: normalizedSessionKey,
         modelFallbacksOverride: params.modelFallbacksOverride,
       });
-      const resolvedSessionKey = normalizedSessionKey;
+      const resolvedSessionKey =
+        normalizedSessionKey ?? params.sessionTarget?.sessionKey ?? params.sessionId;
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
         runId: params.runId,

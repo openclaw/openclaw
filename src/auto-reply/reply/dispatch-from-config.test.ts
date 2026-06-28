@@ -10956,11 +10956,10 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4.6",
     };
-    sessionStoreMocks.loadSessionStoreEntry.mockImplementation((params: unknown) =>
+    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(((params: unknown) =>
       (params as { sessionKey?: string }).sessionKey === parentSessionKey
         ? parentEntry
-        : sessionStoreMocks.currentEntry,
-    );
+        : sessionStoreMocks.currentEntry) as () => Record<string, unknown> | undefined);
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
       expect(opts?.sourceReplyDeliveryMode).toBe("automatic");

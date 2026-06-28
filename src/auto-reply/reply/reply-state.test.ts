@@ -87,7 +87,9 @@ async function rotateCompactionSessionFile(params: {
     storePath,
     newSessionId: params.newSessionId,
   });
-  const stored = { [sessionKey]: await loadStoredEntry(storePath, sessionKey) };
+  const stored: Record<string, SessionEntry> = {
+    [sessionKey]: await loadStoredEntry(storePath, sessionKey),
+  };
   const expectedDir = await fs.realpath(tmp);
   return { stored, sessionKey, expectedDir };
 }

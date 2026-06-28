@@ -23,7 +23,8 @@ import {
   appendTranscriptMessage,
   loadSessionEntry as loadSqliteSessionEntry,
   loadTranscriptEventsSync,
-  type SessionTranscriptWriteScope,
+  type SessionAccessScope,
+  type SessionTranscriptReadScope,
   upsertSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
@@ -521,7 +522,7 @@ async function withSqliteTranscriptFixtureState(
   await withEnvAsync({ OPENCLAW_STATE_DIR: fixtureDir }, async () => await run(fixtureDir));
 }
 
-function transcriptScope(): SessionTranscriptWriteScope {
+function transcriptScope(): SessionTranscriptReadScope {
   return {
     agentId: "main",
     sessionId: mockState.sessionId,
@@ -530,15 +531,23 @@ function transcriptScope(): SessionTranscriptWriteScope {
   };
 }
 
+function sessionEntryScope(): SessionAccessScope {
+  return {
+    agentId: "main",
+    sessionKey: "main",
+    storePath: path.join(path.dirname(mockState.transcriptPath), "sessions.json"),
+  };
+}
+
 async function seedSqliteSessionEntry(entry: Record<string, unknown> = {}): Promise<void> {
-  await upsertSessionEntry(transcriptScope(), {
+  await upsertSessionEntry(sessionEntryScope(), {
     sessionId: mockState.sessionId,
     ...entry,
   });
 }
 
 function readSqliteMainSessionEntry(): Record<string, any> | undefined {
-  return loadSqliteSessionEntry(transcriptScope()) as Record<string, any> | undefined;
+  return loadSqliteSessionEntry(sessionEntryScope()) as Record<string, any> | undefined;
 }
 
 async function appendSourceReplyMirrorEntry(params: {
