@@ -449,6 +449,32 @@ function getNoProgressStreak(
   return { count: streak, latestResultHash };
 }
 
+function getSessionNoProgressStreak(history: Array<{ resultHash?: string }>): {
+  count: number;
+  latestResultHash?: string;
+} {
+  let streak = 0;
+  let latestResultHash: string | undefined;
+
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const record = history[i];
+    if (typeof record?.resultHash !== "string" || !record.resultHash) {
+      break;
+    }
+    if (!latestResultHash) {
+      latestResultHash = record.resultHash;
+      streak = 1;
+      continue;
+    }
+    if (record.resultHash !== latestResultHash) {
+      break;
+    }
+    streak += 1;
+  }
+
+  return { count: streak, latestResultHash };
+}
+
 function getPingPongStreak(
   history: Array<{ toolName: string; argsHash: string; resultHash?: string }>,
   currentSignature: string,
@@ -575,6 +601,8 @@ export function detectToolCallLoop(
   const unknownToolStreak = getUnknownToolRepeatStreak(history, toolName);
   const noProgress = getNoProgressStreak(history, toolName, currentHash);
   const noProgressStreak = noProgress.count;
+  const sessionNoProgress = getSessionNoProgressStreak(history);
+  const sessionNoProgressStreak = sessionNoProgress.count;
   const knownPollTool = isKnownPollToolCall(toolName, params);
   const pingPong = getPingPongStreak(history, currentHash);
 
@@ -589,17 +617,17 @@ export function detectToolCallLoop(
     };
   }
 
-  if (noProgressStreak >= resolvedConfig.globalCircuitBreakerThreshold) {
+  if (sessionNoProgressStreak >= resolvedConfig.globalCircuitBreakerThreshold) {
     log.error(
-      `Global circuit breaker triggered: ${toolName} repeated ${noProgressStreak} times with no progress`,
+      `Global circuit breaker triggered: session recorded ${sessionNoProgressStreak} consecutive no-progress outcomes`,
     );
     return {
       stuck: true,
       level: "critical",
       detector: "global_circuit_breaker",
-      count: noProgressStreak,
-      message: `CRITICAL: ${toolName} has repeated identical no-progress outcomes ${noProgressStreak} times. Session execution blocked by global circuit breaker to prevent runaway loops.`,
-      warningKey: `global:${toolName}:${currentHash}:${noProgress.latestResultHash ?? "none"}`,
+      count: sessionNoProgressStreak,
+      message: `CRITICAL: Session has repeated identical no-progress outcomes ${sessionNoProgressStreak} times across recent tool calls. Session execution blocked by global circuit breaker to prevent runaway loops.`,
+      warningKey: `global:session:${sessionNoProgress.latestResultHash ?? "none"}`,
     };
   }
 
