@@ -53,6 +53,22 @@ describe("command-execution-startup", () => {
     });
   });
 
+  it("resolves ACP startup as protocol stdout without requiring --json", () => {
+    expect(
+      mod.resolveCliExecutionStartupContext({
+        argv: ["node", "openclaw", "acp"],
+        jsonOutputMode: false,
+        env: {},
+      }).startupPolicy,
+    ).toEqual({
+      suppressDoctorStdout: true,
+      hideBanner: true,
+      skipConfigGuard: false,
+      loadPlugins: false,
+      pluginRegistry: { scope: "all" },
+    });
+  });
+
   it("uses process env banner suppression when startup env is omitted", () => {
     const originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
     try {

@@ -12,6 +12,7 @@ import { resolveGatewayCatalogCommandPath } from "./gateway-run-argv.js";
 const DEFAULT_CLI_COMMAND_PATH_POLICY: CliCommandPathPolicy = {
   bypassConfigGuard: false,
   routeConfigGuard: "never",
+  suppressDoctorStdout: false,
   loadPlugins: "never",
   pluginRegistry: { scope: "all" },
   hideBanner: false,

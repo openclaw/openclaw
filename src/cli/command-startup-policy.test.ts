@@ -178,6 +178,23 @@ describe("command-startup-policy", () => {
     expect(resolvePolicy({ commandPath: ["status"], env: {} }).hideBanner).toBe(false);
   });
 
+  it("treats ACP as protocol stdout even without --json", () => {
+    expect(
+      resolveCliStartupPolicy({
+        argv: ["node", "openclaw", "acp"],
+        commandPath: ["acp"],
+        jsonOutputMode: false,
+        env: {},
+      }),
+    ).toEqual({
+      suppressDoctorStdout: true,
+      hideBanner: true,
+      skipConfigGuard: false,
+      loadPlugins: false,
+      pluginRegistry: { scope: "all" },
+    });
+  });
+
   it("uses process env banner suppression when startup env is omitted", () => {
     const originalHideBanner = process.env.OPENCLAW_HIDE_BANNER;
     try {

@@ -146,6 +146,7 @@ describe("registerPreActionHooks", () => {
       .command("status")
       .option("--json")
       .action(() => {});
+    programLocal.command("acp").action(() => {});
     const gateway = programLocal
       .command("gateway")
       .option("--force")
@@ -605,6 +606,22 @@ describe("registerPreActionHooks", () => {
     });
 
     expect(routeLogsToStderrMock).not.toHaveBeenCalled();
+  });
+
+  it("treats ACP startup as protocol stdout without --json", async () => {
+    await runPreAction({
+      parseArgv: ["acp"],
+      processArgv: ["node", "openclaw", "acp"],
+    });
+
+    expect(routeLogsToStderrMock).toHaveBeenCalledOnce();
+    expect(emitCliBannerMock).not.toHaveBeenCalled();
+    expect(ensureConfigReadyMock).toHaveBeenCalledWith({
+      runtime: runtimeMock,
+      commandPath: ["acp"],
+      suppressDoctorStdout: true,
+    });
+    expect(ensurePluginRegistryLoadedMock).not.toHaveBeenCalled();
   });
 
   it("does not preload plugins for agents list JSON output", async () => {
