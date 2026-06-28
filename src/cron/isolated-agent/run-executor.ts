@@ -322,6 +322,7 @@ export function createCronPromptExecutor(params: {
             agentId: params.agentId,
             trigger: "cron",
             jobId: params.job.id,
+            cleanupCliLiveSessionOnRunEnd: params.job.sessionTarget === "isolated",
             sessionFile,
             workspaceDir: params.workspaceDir,
             config: params.cfgWithAgentDefaults,
