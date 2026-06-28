@@ -31,9 +31,14 @@ export function mergeSkillFilter(
     return inherited;
   }
 
+  const add = normalizeSkillFilter(mergeConfig.add) ?? [];
   const remove = new Set(normalizeSkillFilter(mergeConfig.remove) ?? []);
+  if (add.length === 0 && remove.size === 0) {
+    return inherited;
+  }
+
   const merged = (inherited ?? []).filter((skill) => !remove.has(skill));
-  for (const skill of normalizeSkillFilter(mergeConfig.add) ?? []) {
+  for (const skill of add) {
     if (!remove.has(skill) && !merged.includes(skill)) {
       merged.push(skill);
     }

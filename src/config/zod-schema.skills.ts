@@ -6,4 +6,7 @@ export const SkillFilterMergeSchema = z
     add: z.array(z.string()).optional(),
     remove: z.array(z.string()).optional(),
   })
-  .strict();
+  .strict()
+  .refine((value) => (value.add?.length ?? 0) + (value.remove?.length ?? 0) > 0, {
+    message: "skillsMerge requires at least one skill in add or remove",
+  });

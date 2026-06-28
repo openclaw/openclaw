@@ -1390,6 +1390,25 @@ describe("resolveAgentSkillsFilter", () => {
     expect(resolveAgentSkillsFilter(cfg, "restricted")).toStrictEqual([]);
   });
 
+  it("treats empty agents.list[].skillsMerge as absent", () => {
+    const cfgWithDefaults: OpenClawConfig = {
+      agents: {
+        defaults: {
+          skills: ["github"],
+        },
+        list: [{ id: "writer", skillsMerge: {} }],
+      },
+    };
+    const cfgWithoutDefaults: OpenClawConfig = {
+      agents: {
+        list: [{ id: "writer", skillsMerge: {} }],
+      },
+    };
+
+    expect(resolveAgentSkillsFilter(cfgWithDefaults, "writer")).toEqual(["github"]);
+    expect(resolveAgentSkillsFilter(cfgWithoutDefaults, "writer")).toBeUndefined();
+  });
+
   it("keeps agents.list[].skills replacement ahead of skillsMerge", () => {
     const cfg: OpenClawConfig = {
       agents: {

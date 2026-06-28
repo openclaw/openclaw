@@ -196,6 +196,31 @@ describe("config schema", () => {
     expect(directResult.success).toBe(false);
   });
 
+  it("rejects empty skillsMerge config", () => {
+    const agentResult = OpenClawSchema.safeParse({
+      agents: {
+        list: [{ id: "writer", skillsMerge: {} }],
+      },
+    });
+    const topicResult = TelegramConfigSchema.safeParse({
+      groups: {
+        "-1001234567890": {
+          topics: {
+            "99": {
+              skillsMerge: {
+                add: [],
+                remove: [],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(agentResult.success).toBe(false);
+    expect(topicResult.success).toBe(false);
+  });
+
   it("accepts qmd query rerank override", () => {
     const result = OpenClawSchema.safeParse({
       memory: {
