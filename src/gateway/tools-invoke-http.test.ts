@@ -1140,6 +1140,24 @@ describe("POST /tools/invoke", () => {
       const body = await expectOkInvokeResponse(res);
       expect(body.result?.result).toBe("PLUGIN-read");
     });
+
+    it("keeps a same-named plugin reachable by default WITHOUT a gateway.tools.allow entry (PR #63919 [P1])", async () => {
+      // Regression: adding `read`/`write`/`edit` to DEFAULT_GATEWAY_HTTP_TOOL_DENY
+      // must NOT name-deny a same-named PLUGIN tool. With the opt-in OFF and NO
+      // `gateway.tools.allow: ["read"]` entry, a pre-existing non-optional plugin
+      // `read` stays reachable — the default-deny is scoped to the built-in coding
+      // tool only (`getPluginToolMeta`-aware filter in tool-resolution.ts). Before
+      // that fix this returned 404, breaking existing plugins on upgrade.
+      pluginToolMetaState.set("read", { pluginId: "test-plugin", optional: false });
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["read"] } }] },
+        gateway: { tools: {} },
+      };
+
+      const res = await invokeToolAuthed({ tool: "read", sessionKey: "main" });
+      const body = await expectOkInvokeResponse(res);
+      expect(body.result?.result).toBe("PLUGIN-read");
+    });
   });
 
   // PR #63919: the write-class extension. `write`/`edit` are materialized only
@@ -1207,6 +1225,22 @@ describe("POST /tools/invoke", () => {
       cfg = {
         agents: { list: [{ id: "main", default: true, tools: { allow: ["write"] } }] },
         gateway: { tools: { allow: ["write"] } },
+      };
+
+      const res = await invokeToolAuthed({ tool: "write", sessionKey: "main" });
+      const body = await expectOkInvokeResponse(res);
+      expect(body.result?.result).toBe("PLUGIN-write");
+    });
+
+    it("keeps a same-named plugin reachable by default WITHOUT a gateway.tools.allow entry (PR #63919 [P1])", async () => {
+      // Regression for the write-class deny entry: with the opt-in OFF and no
+      // `gateway.tools.allow: ["write"]`, a pre-existing non-optional plugin
+      // `write` stays reachable (default-deny scoped to the built-in only). The
+      // built-in writer is never materialized here, so no host-FS exposure.
+      pluginToolMetaState.set("write", { pluginId: "test-plugin", optional: false });
+      cfg = {
+        agents: { list: [{ id: "main", default: true, tools: { allow: ["write"] } }] },
+        gateway: { tools: {} },
       };
 
       const res = await invokeToolAuthed({ tool: "write", sessionKey: "main" });

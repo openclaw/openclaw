@@ -40,6 +40,7 @@ import { getPluginToolMeta } from "../plugins/tools.js";
 import {
   DEFAULT_GATEWAY_HTTP_TOOL_DENY,
   GATEWAY_OWNER_ONLY_CORE_TOOLS,
+  HOST_FS_BUILTIN_CODING_DENY_NAMES,
 } from "../security/dangerous-tools.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
@@ -344,13 +345,33 @@ export function resolveGatewayScopedTools(params: {
     }),
   });
 
+  const explicitGatewayDeny = Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : [];
   const gatewayDenySet = new Set([
     ...defaultGatewayDeny,
     ...ownerOnlyGatewayDeny,
-    ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
+    ...explicitGatewayDeny,
     ...excludedToolNames,
   ]);
-  const tools = policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name));
+  const hostFsBuiltinCodingDeny = new Set<string>(HOST_FS_BUILTIN_CODING_DENY_NAMES);
+  const tools = policyFiltered.filter((tool) => {
+    if (!gatewayDenySet.has(tool.name)) {
+      return true;
+    }
+    // Preserve a same-named PLUGIN tool when the ONLY reason it is denied is the
+    // host-FS built-in coding default-deny (`read`/`write`/`edit`). That default
+    // exists to gate the BUILT-IN coding tool (which has no plugin meta) behind
+    // the directInvoke opt-in — not to break a plugin tool the operator
+    // allowlisted. The built-in stays denied; any OTHER deny reason
+    // (owner-only, explicit `gateway.tools.deny`, excluded, or the inherently
+    // dangerous names like `exec`/`fs_write`) still drops the tool.
+    const deniedOnlyByHostFsBuiltinDefault =
+      hostFsBuiltinCodingDeny.has(tool.name) &&
+      defaultGatewayDeny.includes(tool.name) &&
+      !ownerOnlyGatewayDeny.includes(tool.name) &&
+      !explicitGatewayDeny.includes(tool.name) &&
+      !excludedToolNames.includes(tool.name);
+    return deniedOnlyByHostFsBuiltinDefault && getPluginToolMeta(tool) !== undefined;
+  });
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, tools);
   }
