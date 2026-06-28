@@ -6,6 +6,7 @@ import {
   parseFiniteNumber,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { serializeRequestBody } from "./rest-body.js";
 import {
   DiscordError,
@@ -88,6 +89,24 @@ const defaultLaneOptions: Record<RestRequestPriority, { staleAfterMs?: number; w
   standard: { weight: 3 },
   background: { staleAfterMs: 20_000, weight: 1 },
 };
+
+// Cap the REST response body well above any legitimate Discord JSON payload
+// (bulk message/member fetches stay in the low hundreds of KB) so a controlled
+// or hijacked endpoint cannot flood the body into an unbounded buffer (OOM).
+const DISCORD_REST_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024;
+
+async function readResponseBodyText(response: Response, idleTimeoutMs: number): Promise<string> {
+  const buffer = await readResponseWithLimit(response, DISCORD_REST_RESPONSE_BODY_MAX_BYTES, {
+    chunkTimeoutMs: idleTimeoutMs,
+    onOverflow: ({ size }) =>
+      new Error(
+        `Discord REST response body exceeds ${DISCORD_REST_RESPONSE_BODY_MAX_BYTES} bytes (received ${size})`,
+      ),
+    onIdleTimeout: ({ chunkTimeoutMs }) =>
+      new Error(`Discord REST response stalled: no data received for ${chunkTimeoutMs}ms`),
+  });
+  return buffer.toString("utf8");
+}
 
 function coerceResponseBody(raw: string): unknown {
   if (!raw) {
@@ -249,7 +268,7 @@ export class RequestClient {
         body: await normalizeFetchBody(body, headers),
         signal,
       });
-      const text = await response.text();
+      const text = await readResponseBodyText(response, this.options.timeout ?? 15_000);
       const parsed = coerceResponseBody(text);
       this.scheduler.recordResponse(routeKey, path, response, parsed);
       if (response.status === 204) {

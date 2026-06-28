@@ -39,7 +39,6 @@ import {
   describeFailoverError,
   isFailoverError,
   isNonProviderRuntimeCoordinationError,
-  isTimeoutError,
 } from "./failover-error.js";
 import {
   shouldAllowCooldownProbeForReason,
@@ -189,25 +188,6 @@ type ModelFallbackRunFn<T> = (
   options?: ModelFallbackRunOptions,
 ) => Promise<T>;
 
-/**
- * Fallback abort check. Only treats explicit AbortError names as user aborts.
- * Message-based checks (e.g., "aborted") can mask timeouts and skip fallback.
- */
-function isFallbackAbortError(err: unknown): boolean {
-  if (!err || typeof err !== "object") {
-    return false;
-  }
-  if (isFailoverError(err)) {
-    return false;
-  }
-  const name = "name" in err ? String(err.name) : "";
-  return name === "AbortError";
-}
-
-function shouldRethrowAbort(err: unknown): boolean {
-  return isFallbackAbortError(err) && !isTimeoutError(err);
-}
-
 function isTerminalAbort(signal: AbortSignal | undefined): boolean {
   if (!signal?.aborted) {
     return false;
@@ -223,6 +203,10 @@ function isTerminalAbort(signal: AbortSignal | undefined): boolean {
     return true;
   }
   return reason.name === "ClientDisconnectError";
+}
+
+function isCallerAbortSignal(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
 }
 
 function createModelCandidateCollector(allowlist: Set<string> | null | undefined): {
@@ -367,7 +351,10 @@ async function runFallbackCandidate<T>(params: {
     if (isNonProviderRuntimeCoordinationError(err)) {
       throw err;
     }
-    if (isTerminalAbort(params.abortSignal)) {
+    if (isTerminalAbort(params.abortSignal) || isCallerAbortSignal(params.abortSignal)) {
+      throw err;
+    }
+    if (isAgentRunRestartAbortReason(err)) {
       throw err;
     }
     // Normalize abort-wrapped rate-limit errors (e.g. Google Vertex RESOURCE_EXHAUSTED)
@@ -378,9 +365,6 @@ async function runFallbackCandidate<T>(params: {
       sessionId: params.attribution?.sessionId,
       lane: params.attribution?.lane,
     });
-    if (shouldRethrowAbort(err) && !normalizedFailover) {
-      throw err;
-    }
     return { ok: false, error: normalizedFailover ?? err };
   }
 }
@@ -430,7 +414,7 @@ async function runFallbackAttempt<T>(params: {
       attribution: params.attribution,
     });
     if (classifiedError) {
-      if (isTerminalAbort(params.abortSignal)) {
+      if (isTerminalAbort(params.abortSignal) || isCallerAbortSignal(params.abortSignal)) {
         throw toErrorObject(classifiedError, "Non-Error thrown");
       }
       const preserveResultOnExhaustion =
@@ -1323,7 +1307,8 @@ function shouldDiscardDeferredSessionSuspension(params: {
 }): boolean {
   return (
     isTerminalAbort(params.abortSignal) ||
-    shouldRethrowAbort(params.error) ||
+    isCallerAbortSignal(params.abortSignal) ||
+    isAgentRunRestartAbortReason(params.error) ||
     isCommandLaneTaskTimeoutError(params.error) ||
     isNonProviderRuntimeCoordinationError(params.error) ||
     isLikelyContextOverflowError(formatErrorMessage(params.error))
