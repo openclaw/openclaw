@@ -93,6 +93,10 @@ function mockGoogleChatMediaLoaders() {
 vi.mock("./channel.runtime.js", () => {
   return {
     googleChatChannelRuntime: {
+      isGoogleChatAttachmentUploadUnauthorized: (err: unknown) =>
+        /\b403\b|PERMISSION_DENIED|insufficient authentication scopes/i.test(
+          String((err as { message?: unknown })?.message ?? err),
+        ),
       probeGoogleChat: (...args: unknown[]) => probeGoogleChatMock(...args),
       resolveGoogleChatWebhookPath: () => "/googlechat/webhook",
       sendGoogleChatMessage: (...args: unknown[]) => sendGoogleChatMessageMock(...args),
@@ -406,6 +410,45 @@ describe("googlechatPlugin outbound sendMedia", () => {
     expect(result.messageId).toBe("spaces/AAA/messages/msg-2");
     expect(result.chatId).toBe("spaces/AAA");
     expect(result.receipt.primaryPlatformMessageId).toBe("spaces/AAA/messages/msg-2");
+  });
+
+  it("falls back to a text link when the attachment upload is unauthorized", async () => {
+    const { readRemoteMediaBuffer } = setupRuntimeMediaMocks({
+      loadFileName: "unused.png",
+      loadBytes: "should-not-be-used",
+    });
+
+    uploadGoogleChatAttachmentMock.mockRejectedValue(
+      new Error(
+        "Google Chat upload 403: Request had insufficient authentication scopes. (PERMISSION_DENIED)",
+      ),
+    );
+    sendGoogleChatMessageMock.mockResolvedValue({
+      messageName: "spaces/AAA/messages/link-1",
+    });
+
+    const cfg = createGoogleChatCfg();
+
+    const result = await googlechatOutboundAdapter.attachedResults.sendMedia({
+      cfg,
+      to: "spaces/AAA",
+      text: "caption",
+      mediaUrl: "https://example.com/screenshot.png",
+      accountId: "default",
+    });
+
+    expect(readRemoteMediaBuffer).toHaveBeenCalled();
+    const sendRequest = requireMockArg(sendGoogleChatMessageMock) as {
+      space?: string;
+      text?: string;
+      attachments?: unknown;
+    };
+    expect(sendRequest.space).toBe("spaces/AAA");
+    expect(sendRequest.text).toBe("caption\nhttps://example.com/screenshot.png");
+    expect(sendRequest.attachments).toBeUndefined();
+    expect(result.messageId).toBe("spaces/AAA/messages/link-1");
+    expect(result.chatId).toBe("spaces/AAA");
+    expect(result.receipt.parts[0]?.kind).toBe("text");
   });
 });
 

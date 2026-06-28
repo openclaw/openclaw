@@ -316,15 +316,48 @@ export const googlechatOutboundAdapter = {
             mediaLocalRoots,
             mediaReadFile,
           });
-      const { sendGoogleChatMessage, uploadGoogleChatAttachment } =
-        await loadGoogleChatChannelRuntime();
-      const upload = await uploadGoogleChatAttachment({
-        account,
-        space,
-        filename: loaded.fileName ?? "attachment",
-        buffer: loaded.buffer,
-        contentType: loaded.contentType,
-      });
+      const {
+        isGoogleChatAttachmentUploadUnauthorized,
+        sendGoogleChatMessage,
+        uploadGoogleChatAttachment,
+      } = await loadGoogleChatChannelRuntime();
+      let upload: { attachmentUploadToken?: string };
+      try {
+        upload = await uploadGoogleChatAttachment({
+          account,
+          space,
+          filename: loaded.fileName ?? "attachment",
+          buffer: loaded.buffer,
+          contentType: loaded.contentType,
+        });
+      } catch (err) {
+        // App auth (chat.bot) cannot upload attachments (403). For remote URLs,
+        // deliver the media as a text link so the message still reaches the user
+        // instead of failing the whole outbound (e.g. a sub-agent announce).
+        if (isGoogleChatAttachmentUploadUnauthorized(err) && /^https?:\/\//i.test(mediaUrl)) {
+          const linkText = [text, mediaUrl]
+            .map((part) => part?.trim())
+            .filter(Boolean)
+            .join("\n");
+          const linkResult = await sendGoogleChatMessage({
+            account,
+            space,
+            text: linkText,
+            thread,
+          });
+          const linkMessageId = linkResult?.messageName ?? "";
+          return {
+            messageId: linkMessageId,
+            chatId: space,
+            receipt: createGoogleChatSendReceipt({
+              messageId: linkMessageId,
+              chatId: space,
+              kind: "text",
+            }),
+          };
+        }
+        throw err;
+      }
       const result = await sendGoogleChatMessage({
         account,
         space,
