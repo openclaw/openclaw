@@ -7,9 +7,9 @@ const MIN_DUPLICATE_TEXT_LENGTH = 10;
 const MIN_REVERSE_SUBSTRING_DUPLICATE_RATIO = 0.5;
 const MAX_POST_TOOL_SEND_META_ACK_LENGTH = 80;
 const POST_TOOL_SEND_META_ACK_PATTERNS: readonly RegExp[] = [
-  /^(?:已发(?:送|出|完毕)?|回复已发(?:送|出)?|主回复已发|消息已发(?:送|出)?)(?:[\s,，。.!！:：-]*(?:[#＃][\p{L}\p{N}_-]+|\d+))?[\s。.!！]*$/iu,
-  /^(?:核心回答如下|总结如下|答案如下|不再追加(?:内容|回复)?)[\s。.!！:：]*$/u,
-  /^(?:sent(?:\s+(?:above|already|[#＃][\p{L}\p{N}_-]+))?|posted|done|ok(?:ay)?|roger|got\s+it|ack(?:nowledged)?|replied\s+above)[\s。.!！]*$/iu,
+  /^(?:已发(?:送|出|完毕)?|回复已发(?:送|出)?|主回复已发|消息已发(?:送|出)?)(?:[\s,，。.!！:：-]*(?:[#＃][\p{L}\p{N}_-]+|\d+|\((?:[#＃][\p{L}\p{N}_-]+|\d+)\)|不再追加(?:总结|内容|回复)?))?[\s。.!！]*$/iu,
+  /^(?:核心回答如下|总结如下|答案如下|不再追加(?:总结|内容|回复)?)[\s。.!！:：]*$/u,
+  /^(?:sent(?:\s+(?:above|already|[#＃][\p{L}\p{N}_-]+))?|posted|done|ok(?:ay)?|roger|got\s+it|ack(?:nowledged)?|replied\s+above)(?:[\s,，。.!！:：-]*(?:replied\s+(?:above|in\s+thread)|that's\s+the\s+fix|no\s+more\s+content))?[\s。.!！]*$/iu,
 ];
 
 /**
