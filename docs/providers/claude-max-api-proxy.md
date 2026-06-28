@@ -15,9 +15,17 @@ usage outside Claude Code in the past. You must decide for yourself whether to u
 it and verify Anthropic's current billing rules before relying on it.
 
 Anthropic's current support docs say `claude -p` is Agent SDK/programmatic usage.
-Starting June 15, 2026, subscription-plan `claude -p` usage draws from a separate
-monthly Agent SDK credit first, then from usage credits at standard API rates if
-usage credits are enabled.
+Anthropic's June 15, 2026 support update paused the announced separate Agent SDK
+credit plan. For now, Claude Agent SDK, `claude -p`, and third-party app usage
+still draw from the signed-in subscription's usage limits.
+
+Before relying on this path, check Anthropic's [Agent SDK plan
+article](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan),
+plus the Claude Code support articles for
+[Pro/Max](https://support.claude.com/en/articles/11145838-use-claude-code-with-your-pro-or-max-plan)
+or
+[Team/Enterprise](https://support.claude.com/en/articles/11845131-use-claude-code-with-your-team-or-enterprise-plan)
+accounts.
 </Warning>
 
 ## Why use this?
