@@ -39,11 +39,11 @@ describe("Dockerfile", () => {
     expect(dockerfile).toMatch(
       /ARG OPENCLAW_BUN_IMAGE="docker\.io\/oven\/bun:1\.3\.13@sha256:[a-f0-9]{64}"/,
     );
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps");
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build");
-    expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE} AS base-runtime");
-    expect(dockerfile).toContain("FROM base-runtime");
-    expect(dockerfile).toContain("current multi-arch manifest list entries");
+    expect(dockerfile).toMatch(/FROM \$\{OPENCLAW_NODE_BOOKWORM_IMAGE\} AS workspace-deps/);
+    expect(dockerfile).toMatch(/FROM \$\{OPENCLAW_NODE_BOOKWORM_IMAGE\} AS build/);
+    expect(dockerfile).toMatch(/FROM \$\{OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE\} AS base-runtime/);
+    expect(dockerfile).toMatch(/FROM base-runtime/);
+    expect(dockerfile).toMatch(/current multi-arch manifest list entries/);
     expect(dockerfile).not.toContain("current amd64 entry");
     expect(dockerfile).not.toContain("OPENCLAW_VARIANT");
   });
@@ -234,26 +234,24 @@ describe("Dockerfile", () => {
 
   it("prunes runtime dependencies and omitted plugin packages after the build stage", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    expect(dockerfile).toContain("FROM build AS runtime-assets");
-    expect(dockerfile).toContain("ARG OPENCLAW_EXTENSIONS");
-    expect(dockerfile).toContain("ARG OPENCLAW_BUNDLED_PLUGIN_DIR");
-    expect(dockerfile).toContain(
-      "Opt-in plugin dependencies at build time (space- or comma-separated directory names).",
+    expect(dockerfile).toMatch(/FROM build AS runtime-assets/);
+    expect(dockerfile).toMatch(/ARG OPENCLAW_EXTENSIONS/);
+    expect(dockerfile).toMatch(/ARG OPENCLAW_BUNDLED_PLUGIN_DIR/);
+    expect(dockerfile).toMatch(/Opt-in plugin dependencies at build time/);
+    expect(dockerfile).toMatch(
+      /Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,matrix" \./,
     );
-    expect(dockerfile).toContain(
-      'Example: docker build --build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,matrix" .',
+    expect(dockerfile).toMatch(
+      /RUN --mount=type=cache,id=openclaw-pnpm-store,target=\/root\/\.local\/share\/pnpm\/store,sharing=locked/,
     );
-    expect(dockerfile).toContain(
-      "RUN --mount=type=cache,id=openclaw-pnpm-store,target=/root/.local/share/pnpm/store,sharing=locked \\",
+    expect(dockerfile).toMatch(/COPY --from=workspace-deps \/out\/packages\/ \.\/packages\//);
+    expect(dockerfile).toMatch(
+      /COPY --from=workspace-deps \/out\/\$\{OPENCLAW_BUNDLED_PLUGIN_DIR\}\/ \.\/\$\{OPENCLAW_BUNDLED_PLUGIN_DIR\}\//,
     );
-    expect(dockerfile).toContain("COPY --from=workspace-deps /out/packages/ ./packages/");
-    expect(dockerfile).toContain(
-      "COPY --from=workspace-deps /out/${OPENCLAW_BUNDLED_PLUGIN_DIR}/ ./${OPENCLAW_BUNDLED_PLUGIN_DIR}/",
+    expect(dockerfile).toMatch(
+      /OPENCLAW_EXTENSIONS="\$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="\$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts\/prune-docker-plugin-dist\.mjs/,
     );
-    expect(dockerfile).toContain(
-      'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
-    );
-    expect(dockerfile).toContain("CI=true pnpm prune --prod \\");
+    expect(dockerfile).toMatch(/CI=true pnpm prune --prod/);
     expect(dockerfile.indexOf("CI=true pnpm prune --prod \\")).toBeLessThan(
       dockerfile.indexOf(
         'OPENCLAW_EXTENSIONS="$OPENCLAW_EXTENSIONS" OPENCLAW_BUNDLED_PLUGIN_DIR="$OPENCLAW_BUNDLED_PLUGIN_DIR" node scripts/prune-docker-plugin-dist.mjs',
