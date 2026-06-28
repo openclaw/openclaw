@@ -157,6 +157,11 @@ export function collectRuntimePluginHealthSnapshot(): StatusPluginHealthSnapshot
   const registry = getActiveRuntimePluginRegistry();
   const diagnostics = (registry?.diagnostics ?? []).map(normalizeDiagnostic);
   const plugins = (registry?.plugins ?? []).map(normalizeSnapshotPlugin);
+  // Confirmed runtime-loaded ids let detailed status separate actually-loaded
+  // plugins from disk-scan inventory that the merged snapshot also marks "loaded".
+  const runtimeLoadedPluginIds = plugins
+    .filter((plugin) => plugin.status === "loaded")
+    .map((plugin) => plugin.id);
   return {
     plugins,
     diagnostics,
@@ -168,6 +173,7 @@ export function collectRuntimePluginHealthSnapshot(): StatusPluginHealthSnapshot
     channelPluginFailures: collectChannelPluginFailures({
       diagnostics,
     }),
+    runtimeLoadedPluginIds,
   };
 }
 

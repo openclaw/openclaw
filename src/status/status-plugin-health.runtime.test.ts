@@ -245,4 +245,16 @@ describe("runtime plugin health snapshot", () => {
     ]);
     expect(resolveReadOnlyChannelPluginsForConfigMock).not.toHaveBeenCalled();
   });
+
+  it("records only runtime status:loaded plugins as runtime-loaded", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      { id: "runtime-ok", status: "loaded", enabled: true } as never,
+      { id: "runtime-broken", status: "error", enabled: true } as never,
+      { id: "runtime-off", status: "disabled", enabled: false } as never,
+    );
+    setActivePluginRegistry(registry, "runtime-loaded-ids", "default", "/tmp/ws");
+
+    expect(collectRuntimePluginHealthSnapshot().runtimeLoadedPluginIds).toEqual(["runtime-ok"]);
+  });
 });
