@@ -7,7 +7,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { writeAcpSessionMetaForMigration } from "../acp/runtime/session-meta.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/config.js";
-import { loadSessionStore, type SessionEntry } from "../config/sessions.js";
+import type { SessionEntry } from "../config/sessions.js";
 import {
   appendTranscriptMessageSync,
   replaceSessionEntry,
@@ -40,10 +40,6 @@ import {
   resolveSessionModelRef,
   resolveSessionStoreKey,
 } from "./session-utils.js";
-
-function resolveSyncRealpath(filePath: string): string {
-  return fs.realpathSync.native(filePath);
-}
 
 function closeSessionSqliteDatabasesForTest(): void {
   closeOpenClawAgentDatabasesForTest();
