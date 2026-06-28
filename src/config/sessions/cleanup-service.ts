@@ -1,10 +1,12 @@
 // Session cleanup service for store entries and transcript/artifact files.
 // Supports dry-run/apply modes, stale pruning, missing transcript fixes, DM-scope retirement, and disk budgets.
 
+import fs from "node:fs";
 import path from "node:path";
 import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { getLogger } from "../../logging/logger.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
+import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   enforceSessionDiskBudget,
@@ -20,6 +22,7 @@ import {
   purgeDeletedAgentSessionEntries,
   type SessionEntryLifecycleRemoval,
 } from "./session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { cloneSessionStoreRecord } from "./store-cache.js";
 import { collectSessionMaintenancePreserveKeys } from "./store-maintenance-preserve.js";
 import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
@@ -98,7 +101,20 @@ export type SessionsCleanupRunResult = {
   appliedSummaries: SessionCleanupSummary[];
 };
 
-function loadCleanupSessionStore(target: SessionStoreTarget): Record<string, SessionEntry> {
+function resolveCleanupSqlitePath(target: SessionStoreTarget): string {
+  return (
+    resolveSqliteTargetFromSessionStorePath(target.storePath).path ??
+    resolveOpenClawAgentSqlitePath({ agentId: target.agentId })
+  );
+}
+
+function loadCleanupSessionStore(
+  target: SessionStoreTarget,
+  options: { createIfMissing?: boolean } = {},
+): Record<string, SessionEntry> {
+  if (options.createIfMissing !== true && !fs.existsSync(resolveCleanupSqlitePath(target))) {
+    return {};
+  }
   return Object.fromEntries(
     listSessionEntries({
       agentId: target.agentId,
@@ -318,7 +334,9 @@ async function previewStoreCleanup(params: {
   fixMissing?: boolean;
   fixDmScope?: boolean;
 }) {
-  const beforeStore = loadCleanupSessionStore(params.target);
+  const beforeStore = loadCleanupSessionStore(params.target, {
+    createIfMissing: !params.dryRun,
+  });
   // Preview always mutates a clone so dry-run output can report exact counts without touching disk.
   const previewStore = cloneSessionStoreRecord(beforeStore);
   const staleKeys = new Set<string>();
@@ -507,7 +525,7 @@ export async function runSessionsCleanup(params: {
   const appliedSummaries: SessionCleanupSummary[] = [];
   if (!opts.dryRun) {
     for (const target of targets) {
-      const applyStore = loadCleanupSessionStore(target);
+      const applyStore = loadCleanupSessionStore(target, { createIfMissing: true });
       const missingRemovals: SessionEntryLifecycleRemoval[] = [];
       const dmScopeRetiredRemovals: SessionEntryLifecycleRemoval[] = [];
       if (opts.fixMissing) {
@@ -551,7 +569,7 @@ export async function runSessionsCleanup(params: {
         },
         restrictArchivedTranscriptsToStoreDir: true,
       });
-      const postApplyStore = loadCleanupSessionStore(target);
+      const postApplyStore = loadCleanupSessionStore(target, { createIfMissing: true });
       const appliedUnreferencedArtifacts =
         mode === "warn"
           ? null

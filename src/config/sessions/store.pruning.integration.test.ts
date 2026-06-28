@@ -268,6 +268,23 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(loaded).toHaveProperty(recentModelRun);
   });
 
+  it("sessions cleanup dry-run does not create a missing SQLite store", async () => {
+    applyEnforcedMaintenanceConfig(mockLoadConfig);
+    const sqlitePath = path.join(testDir, "openclaw-agent.sqlite");
+
+    await expectPathMissing(sqlitePath);
+
+    const dryRun = await runSessionsCleanup({
+      cfg: { session: { store: storePath } },
+      opts: { dryRun: true, enforce: true, store: storePath },
+      targets: [{ agentId: "main", storePath }],
+    });
+
+    expect(dryRun.previewResults[0]?.summary.beforeCount).toBe(0);
+    expect(dryRun.previewResults[0]?.summary.afterCount).toBe(0);
+    await expectPathMissing(sqlitePath);
+  });
+
   it("saveSessionStore pressure-gates unset default model-run pruning", async () => {
     const now = Date.now();
     const staleModelRun = "agent:main:explicit:model-run-123e4567-e89b-12d3-a456-426614174020";

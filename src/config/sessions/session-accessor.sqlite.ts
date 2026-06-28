@@ -6,6 +6,7 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import type { Selectable } from "kysely";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { redactTranscriptMessage } from "../../agents/transcript-redact.js";
+import { deriveSessionTotalTokens, normalizeUsage } from "../../agents/usage.js";
 import { resolveStoredSessionOwnerAgentId } from "../../gateway/session-store-key.js";
 import {
   executeSqliteQuerySync,
@@ -481,7 +482,16 @@ export async function forkSqliteSessionEntryFromParentTarget(
       };
     }
 
-    const decision = resolveSqliteParentForkDecision(parent.entry);
+    const needsTranscriptTokenEstimate =
+      typeof resolveFreshSessionTotalTokens(parent.entry) !== "number" &&
+      typeof parent.entry.sessionId === "string" &&
+      parent.entry.sessionId.length > 0;
+    const transcriptParentTokens = needsTranscriptTokenEstimate
+      ? estimateSqliteTranscriptPromptTokens(
+          loadSqliteTranscriptEventsFromDatabase(database, parent.entry.sessionId),
+        )
+      : undefined;
+    const decision = resolveSqliteParentForkDecision(parent.entry, transcriptParentTokens);
     if (decision.status === "skip") {
       const patch = params.decisionSkipPatch?.({
         decision,
@@ -2681,9 +2691,12 @@ function formatParentForkTooLargeMessage(params: {
   );
 }
 
-function resolveSqliteParentForkDecision(parentEntry: SessionEntry): SessionParentForkDecision {
+function resolveSqliteParentForkDecision(
+  parentEntry: SessionEntry,
+  transcriptParentTokens?: number,
+): SessionParentForkDecision {
   const maxTokens = DEFAULT_PARENT_FORK_MAX_TOKENS;
-  const parentTokens = resolveFreshSessionTotalTokens(parentEntry);
+  const parentTokens = resolveFreshSessionTotalTokens(parentEntry) ?? transcriptParentTokens;
   if (typeof parentTokens === "number" && parentTokens > maxTokens) {
     return {
       status: "skip",
@@ -2698,6 +2711,33 @@ function resolveSqliteParentForkDecision(parentEntry: SessionEntry): SessionPare
     maxTokens,
     ...(typeof parentTokens === "number" ? { parentTokens } : {}),
   };
+}
+
+function estimateSqliteTranscriptPromptTokens(
+  events: readonly TranscriptEvent[],
+): number | undefined {
+  let byteEstimate = 0;
+  let usageEstimate: number | undefined;
+  for (const event of events) {
+    const serialized = JSON.stringify(event);
+    byteEstimate += Buffer.byteLength(serialized) + 1;
+    if (!isRecord(event)) {
+      continue;
+    }
+    const message = isRecord(event.message) ? event.message : undefined;
+    const usageRaw = isRecord(message?.usage)
+      ? message.usage
+      : isRecord(event.usage)
+        ? event.usage
+        : undefined;
+    const usage = normalizeUsage(usageRaw);
+    const totalTokens = deriveSessionTotalTokens({ usage });
+    if (typeof totalTokens === "number") {
+      usageEstimate = Math.max(usageEstimate ?? 0, totalTokens);
+    }
+  }
+  const estimatedFromBytes = Math.ceil(byteEstimate / 4);
+  return Math.max(usageEstimate ?? 0, estimatedFromBytes) || undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
