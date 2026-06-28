@@ -20,6 +20,7 @@ import {
   readSessionMessageByIdAsync,
   readSessionMessageCountAsync,
   readSessionMessagesAsync,
+  readSessionMessagesPageWithStatsAsync,
   readSessionTitleFieldsFromTranscript,
   type SessionTranscriptReadScope,
 } from "./session-transcript-readers.js";
@@ -411,6 +412,41 @@ describe("session transcript reader facade", () => {
       inputTokens: 5,
       outputTokens: 6,
     });
+  });
+
+  test("pages SQLite transcript messages through the reader facade", async () => {
+    const sessionId = "reader-sqlite-page";
+    const scope = {
+      agentId: "main",
+      sessionId,
+      sessionKey: `agent:main:${sessionId}`,
+      storePath,
+    };
+    await persistSessionTranscriptTurn(scope, {
+      messages: [
+        { message: { role: "user", content: "first" } },
+        { message: { role: "assistant", content: "second" } },
+        { message: { role: "user", content: "third" } },
+        { message: { role: "assistant", content: "fourth" } },
+      ],
+      touchSessionEntry: false,
+    });
+
+    const page = await readSessionMessagesPageWithStatsAsync(scope, {
+      maxMessages: 2,
+      offset: 1,
+    });
+
+    expect(page.totalMessages).toBe(4);
+    expect(page.messages.map((message) => (message as { content?: string }).content)).toEqual([
+      "second",
+      "third",
+    ]);
+    expect(
+      page.messages.map(
+        (message) => (message as { __openclaw?: { seq?: number } })["__openclaw"]?.seq,
+      ),
+    ).toEqual([3, 4]);
   });
 
   test("ignores zero-usage SQLite delivery mirrors for latest usage", async () => {

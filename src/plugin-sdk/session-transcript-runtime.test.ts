@@ -303,7 +303,17 @@ describe("session transcript runtime SDK", () => {
       offInternal();
     }
 
-    expect(emitSpy).not.toHaveBeenCalled();
+    expect(emitSpy).toHaveBeenCalledWith({
+      agentId: "main",
+      messageId: "message-from-direct-publish",
+      sessionId: "publish-session",
+      sessionKey: "agent:main:main",
+      target: {
+        agentId: "main",
+        sessionId: "publish-session",
+        sessionKey: "agent:main:main",
+      },
+    });
     expect(internalUpdates).toEqual([
       {
         agentId: "main",
@@ -429,7 +439,17 @@ describe("session transcript runtime SDK", () => {
 
     expect(result).toBe("complete");
     expect(callbackCompleted).toBe(true);
-    expect(emitSpy).not.toHaveBeenCalled();
+    expect(emitSpy).toHaveBeenCalledWith({
+      agentId: "main",
+      messageId: "message-from-callback",
+      sessionId: "queued-publish-session",
+      sessionKey: "agent:main:main",
+      target: {
+        agentId: "main",
+        sessionId: "queued-publish-session",
+        sessionKey: "agent:main:main",
+      },
+    });
     await expect(readSessionTranscriptEvents(scope)).resolves.toEqual([
       expect.objectContaining({ type: "session" }),
       expect.objectContaining({

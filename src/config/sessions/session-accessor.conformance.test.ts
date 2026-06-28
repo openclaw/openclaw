@@ -70,6 +70,7 @@ import { getRuntimeConfig } from "../config.js";
 type AccessorAdapter = {
   name: string;
   publishesTranscriptUpdates: boolean;
+  usesSqliteStore: boolean;
   entryScope(paths: TestPaths): SessionAccessScope;
   transcriptReadScope(paths: TestPaths, id?: string): SessionTranscriptReadScope;
   transcriptScope(paths: TestPaths, id?: string): SessionTranscriptAccessScope;
@@ -123,7 +124,8 @@ type TestPaths = {
 
 const publicAccessorAdapter: AccessorAdapter = {
   name: "public-accessor",
-  publishesTranscriptUpdates: false,
+  publishesTranscriptUpdates: true,
+  usesSqliteStore: true,
   entryScope: (paths) => ({
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
@@ -160,7 +162,8 @@ const publicAccessorAdapter: AccessorAdapter = {
 
 const sqliteAdapter: AccessorAdapter = {
   name: "sqlite",
-  publishesTranscriptUpdates: false,
+  publishesTranscriptUpdates: true,
+  usesSqliteStore: true,
   entryScope: (paths) => ({
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
@@ -333,7 +336,7 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
     it("conforms for lifecycle entry and transcript cleanup", async () => {
       const nowMs = Date.now();
       const oldTimestamp = nowMs - 600_000;
-      const usesSqliteStore = !adapter.publishesTranscriptUpdates;
+      const usesSqliteStore = adapter.usesSqliteStore;
       const cleanupStorePath = usesSqliteStore
         ? path.join(paths.stateDir, "agents", "main", "sessions", "sessions.json")
         : paths.storePath;

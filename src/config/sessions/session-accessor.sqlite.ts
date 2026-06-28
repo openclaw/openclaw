@@ -18,10 +18,7 @@ import {
   normalizeAgentId,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
-import {
-  emitInternalSessionTranscriptUpdate,
-  emitSessionTranscriptUpdate,
-} from "../../sessions/transcript-events.js";
+import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { extractAssistantVisibleText } from "../../shared/chat-message-content.js";
 import { runQueuedStoreWrite, type StoreWriterQueue } from "../../shared/store-writer-queue.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
@@ -1513,7 +1510,7 @@ export async function publishSqliteTranscriptUpdate(
   update: TranscriptUpdatePayload = {},
 ): Promise<void> {
   const resolved = resolveSqliteTranscriptScope(scope);
-  emitInternalSessionTranscriptUpdate({
+  emitSessionTranscriptUpdate({
     ...update,
     agentId: resolved.agentId,
     sessionKey: resolved.sessionKey,
