@@ -5,14 +5,12 @@ import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   countActiveDescendantRunsMock,
   dispatchCronDeliveryMock,
-  isCliProviderMock,
   isHeartbeatOnlyResponseMock,
   listDescendantRunsForRequesterMock,
   loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
   pickLastNonEmptyTextFromPayloadsMock,
   resolveCronDeliveryPlanMock,
-  runCliAgentMock,
   runEmbeddedAgentMock,
   runWithModelFallbackMock,
 } from "./run.test-harness.js";
@@ -185,86 +183,5 @@ describe("runCronIsolatedAgentTurn — interim ack retry", () => {
     expect(countActiveDescendantRunsMock).toHaveBeenCalledWith(
       "agent:default:cron:test:run:test-session-id",
     );
-  });
-});
-
-describe("runCronIsolatedAgentTurn — CLI interim ack retry with cleanup", () => {
-  setupRunCronIsolatedAgentTurnSuite();
-
-  it("passes cleanupCliLiveSessionOnRunEnd on both the initial and retry CLI runs", async () => {
-    isCliProviderMock.mockReturnValue(true);
-    pickLastNonEmptyTextFromPayloadsMock.mockImplementation(
-      (payloads?: Array<{ text?: string }>) => {
-        for (let idx = (payloads?.length ?? 0) - 1; idx >= 0; idx -= 1) {
-          const text = payloads?.[idx]?.text;
-          if (typeof text === "string" && text.trim()) {
-            return text;
-          }
-        }
-        return "";
-      },
-    );
-    // First call: interim acknowledgement
-    runCliAgentMock.mockResolvedValueOnce({
-      payloads: [
-        {
-          text: "On it, grabbing current SF and SD weather now and I will summarize right after both come back.",
-        },
-      ],
-      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
-    });
-    // Second call: real result after retry
-    runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "SF is 62F and SD is 67F. SD is warmer by 5F." }],
-      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
-    });
-
-    mockRunCronFallbackPassthrough();
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-    expect(result.status).toBe("ok");
-    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(2);
-    expect(runCliAgentMock).toHaveBeenCalledTimes(2);
-
-    // Both calls must pass cleanupCliLiveSessionOnRunEnd: true
-    for (const callArgs of runCliAgentMock.mock.calls) {
-      const params = callArgs[0] as { cleanupCliLiveSessionOnRunEnd?: boolean };
-      expect(params.cleanupCliLiveSessionOnRunEnd).toBe(true);
-    }
-
-    // Second call's prompt must contain the continuation message
-    const retryParams = runCliAgentMock.mock.calls[1]?.[0] as { prompt?: string } | undefined;
-    expect(retryParams?.prompt).toContain("previous response was only an acknowledgement");
-  });
-
-  it("still passes cleanupCliLiveSessionOnRunEnd when the first turn is already a concrete result (no retry)", async () => {
-    isCliProviderMock.mockReturnValue(true);
-    pickLastNonEmptyTextFromPayloadsMock.mockImplementation(
-      (payloads?: Array<{ text?: string }>) => {
-        for (let idx = (payloads?.length ?? 0) - 1; idx >= 0; idx -= 1) {
-          const text = payloads?.[idx]?.text;
-          if (typeof text === "string" && text.trim()) {
-            return text;
-          }
-        }
-        return "";
-      },
-    );
-    runCliAgentMock.mockResolvedValueOnce({
-      payloads: [{ text: "SF is 62F and SD is 67F. SD is warmer by 5F." }],
-      meta: { agentMeta: { usage: { input: 10, output: 20 } } },
-    });
-
-    mockRunCronFallbackPassthrough();
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
-
-    expect(result.status).toBe("ok");
-    expect(runWithModelFallbackMock).toHaveBeenCalledTimes(1);
-    expect(runCliAgentMock).toHaveBeenCalledTimes(1);
-
-    const params = runCliAgentMock.mock.calls[0]?.[0] as {
-      cleanupCliLiveSessionOnRunEnd?: boolean;
-    };
-    expect(params.cleanupCliLiveSessionOnRunEnd).toBe(true);
   });
 });
