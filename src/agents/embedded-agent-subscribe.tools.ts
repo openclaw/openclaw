@@ -281,14 +281,25 @@ function stringifyStructuredToolResultContent(block: unknown): string | undefine
   }
   const record = block as Record<string, unknown>;
   const type = readStringValue(record.type);
-  if (type === "text" || type === "image") {
+  if (type === "text" || type === "image" || type === "image_url" || type === "audio") {
     return undefined;
   }
   const seen = new WeakSet<object>();
   try {
-    const serialized = JSON.stringify(record, (_key, value) => {
+    const serialized = JSON.stringify(record, function (key, value) {
       if (typeof value === "string") {
-        return redactInlineDataUriValue(value);
+        const parentType = readStringValue(this?.type);
+        // MCP audio/resource blocks can carry large bare-base64 fields that are not data URIs.
+        if (
+          key === "blob" ||
+          (key === "data" && (parentType === "audio" || parentType === "image"))
+        ) {
+          return `[binary omitted: ${value.length} chars]`;
+        }
+        return truncateToolText(redactInlineDataUriValue(redactSensitiveFieldValue(key, value)));
+      }
+      if (typeof value === "bigint") {
+        return value.toString();
       }
       if (!value || typeof value !== "object") {
         return value;
@@ -305,12 +316,25 @@ function stringifyStructuredToolResultContent(block: unknown): string | undefine
   }
 }
 
+function resolveToolResultContentBlocks(result: object): unknown[] {
+  if (Array.isArray(result)) {
+    return result;
+  }
+  const record = result as Record<string, unknown>;
+  if (Array.isArray(record.content)) {
+    return record.content;
+  }
+  if (record.content && typeof record.content === "object") {
+    return [record.content];
+  }
+  return [record];
+}
+
 export function extractToolResultText(result: unknown): string | undefined {
   if (!result || typeof result !== "object") {
     return undefined;
   }
-  const record = result as Record<string, unknown>;
-  const content = Array.isArray(record.content) ? record.content : [];
+  const content = resolveToolResultContentBlocks(result);
   const texts = collectTextContentBlocks(content)
     .map((item) => {
       const trimmed = item.trim();
@@ -774,6 +798,10 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
   const fromRootStatus = extractErrorField(record);
   if (fromRootStatus) {
     return fromRootStatus;
+  }
+  const status = readToolResultStatus(result);
+  if (status && !isErrorLikeStatus(status)) {
+    return undefined;
   }
   return text ? normalizeToolErrorText(text) : undefined;
 }

@@ -405,6 +405,18 @@ describe("extractToolResultText", () => {
     expect(text).not.toContain("see attached image");
   });
 
+  it("normalizes top-level CLI result arrays and objects", () => {
+    expect(
+      extractToolResultText([
+        { type: "web_search_result", title: "OpenClaw", url: "https://example.com" },
+      ]),
+    ).toContain('"title":"OpenClaw"');
+    expect(extractToolResultText([{ type: "text", text: "hello" }])).toBe("hello");
+    expect(
+      extractToolResultText({ type: "web_search_tool_result_error", error_code: "unavailable" }),
+    ).toContain('"error_code":"unavailable"');
+  });
+
   it("keeps existing text blocks and skips image blocks", () => {
     const text = extractToolResultText({
       content: [
@@ -441,6 +453,29 @@ describe("extractToolResultText", () => {
     expect(text).toContain('"note":"metadata:foo"');
     expect(text).toContain('"uri":"[inline data URI:');
     expect(text).not.toContain("abcdefghijklmnopqrstuvwxyz0123456789");
+  });
+
+  it("suppresses MCP binary fields and structured secrets", () => {
+    const text = extractToolResultText({
+      content: [
+        { type: "audio", data: "audio-base64-secret", mimeType: "audio/mpeg" },
+        {
+          type: "resource",
+          apiKey: "sk-structured-secret-1234567890",
+          resource: {
+            uri: "blob://result",
+            blob: "resource-base64-secret",
+            mimeType: "application/pdf",
+          },
+        },
+      ],
+    });
+
+    expect(text).toContain('"uri":"blob://result"');
+    expect(text).toContain('"blob":"[binary omitted:');
+    expect(text).not.toContain("audio-base64-secret");
+    expect(text).not.toContain("resource-base64-secret");
+    expect(text).not.toContain("sk-structured-secret-1234567890");
   });
 
   it("caps structured fallback output", () => {
