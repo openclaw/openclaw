@@ -41,6 +41,7 @@ import {
   extractAssistantThinking,
   extractAssistantVisibleText,
 } from "../../embedded-agent-utils.js";
+import { stripLeadingExecDisplayVerb } from "../../tool-display-exec.js";
 import { isExecLikeToolName, type ToolErrorSummary } from "../../tool-error-summary.js";
 import { isLikelyMutatingToolName } from "../../tool-mutation.js";
 
@@ -550,9 +551,18 @@ export function buildEmbeddedRunPayloads(params: {
     // Surface mutating failures unless the assistant explicitly acknowledged the failed action.
     // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
     if (warningPolicy.showWarning) {
+      // For exec/bash failures, strip the leading framework verb from the meta so the
+      // backtick-wrapped text is exactly what was run, not `run <command>`. Otherwise the
+      // verb adjacent to the command in the rendered warning is indistinguishable from an
+      // agent-typed `run <command>` invocation (issue #97319).
+      const meta = params.lastToolError.meta;
+      const displayMeta =
+        isExecLikeToolName(params.lastToolError.toolName) && meta
+          ? stripLeadingExecDisplayVerb(meta)
+          : meta;
       const toolSummary = formatToolAggregate(
         params.lastToolError.toolName,
-        params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
+        displayMeta ? [displayMeta] : undefined,
         { markdown: useMarkdown },
       );
       const errorSuffix =

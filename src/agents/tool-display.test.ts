@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
-import { resolveExecDetail } from "./tool-display-exec.js";
+import { resolveExecDetail, stripLeadingExecDisplayVerb } from "./tool-display-exec.js";
 import { formatToolDetail, formatToolSummary, resolveToolDisplay } from "./tool-display.js";
 
 describe("tool display details", () => {
@@ -583,6 +583,34 @@ describe("compactRawCommand middle truncation", () => {
     expect(result).toContain("/opt/custom/bin/run");
     expect(result).toContain("…");
     expect(result).toMatch(/b{4}$/);
+  });
+});
+
+describe("stripLeadingExecDisplayVerb", () => {
+  it("strips a known exec display verb so it stays outside backtick-wrapped command text", () => {
+    expect(stripLeadingExecDisplayVerb("run python3 /path/to/script.py")).toBe(
+      "python3 /path/to/script.py",
+    );
+    expect(stripLeadingExecDisplayVerb("check git status")).toBe("git status");
+    expect(stripLeadingExecDisplayVerb("show some-file.txt (workspace)")).toBe(
+      "some-file.txt (workspace)",
+    );
+    expect(stripLeadingExecDisplayVerb('find files named "x" in /path')).toBe(
+      'files named "x" in /path',
+    );
+  });
+
+  it("returns the meta unchanged when the first token is not a known exec display verb", () => {
+    // `cd` is a real shell builtin, not a summary verb, so a raw `cd ~/dir && ls` meta survives.
+    expect(stripLeadingExecDisplayVerb("cd ~/dir && ls")).toBe("cd ~/dir && ls");
+    expect(stripLeadingExecDisplayVerb("git status")).toBe("git status");
+    expect(stripLeadingExecDisplayVerb("npm install")).toBe("npm install");
+  });
+
+  it("returns the meta unchanged for single-token or empty input", () => {
+    expect(stripLeadingExecDisplayVerb("run")).toBe("run");
+    expect(stripLeadingExecDisplayVerb("")).toBe("");
+    expect(stripLeadingExecDisplayVerb("   ")).toBe("   ");
   });
 });
 

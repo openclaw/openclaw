@@ -287,6 +287,55 @@ function summarizeKnownExec(words: string[]): string {
   return /^[A-Za-z0-9._/-]+$/.test(arg) ? `run ${bin} ${arg}` : `run ${bin}`;
 }
 
+// Known display verbs that summarizeKnownExec emits as the first token of an exec label.
+// Used to split the framework action from the literal command subject so progress and
+// failure surfaces do not backtick-wrap the verb together with the command (issue #97319).
+const EXEC_DISPLAY_VERBS: ReadonlySet<string> = new Set([
+  "run",
+  "check",
+  "view",
+  "show",
+  "list",
+  "switch",
+  "create",
+  "pull",
+  "push",
+  "fetch",
+  "merge",
+  "rebase",
+  "stage",
+  "restore",
+  "reset",
+  "stash",
+  "find",
+  "search",
+  "print",
+  "copy",
+  "move",
+  "remove",
+  "install",
+  "start",
+]);
+
+/**
+ * Strips a leading exec display verb (e.g. "run" in "run python3 /path") so the
+ * framework action label is not backtick-wrapped together with the literal command.
+ *
+ * Returns the original meta when no known exec display verb prefix is present, so
+ * raw shell command text passes through unchanged.
+ */
+export function stripLeadingExecDisplayVerb(meta: string): string {
+  const match = meta.match(/^(\S+)\s+(\S.*)$/);
+  if (!match) {
+    return meta;
+  }
+  const verb = match[1];
+  if (!EXEC_DISPLAY_VERBS.has(verb)) {
+    return meta;
+  }
+  return match[2];
+}
+
 function summarizePipeline(stage: string): string {
   const pipeline = splitTopLevelPipes(stage);
   if (pipeline.length > 1) {
