@@ -79,8 +79,8 @@ async function createFinalizeRetrySession(): Promise<{
   return { tempDir, sessionFile, manager };
 }
 
-function appendAssistantTurn(manager: SessionManager, text: string): void {
-  manager.appendMessage({
+function appendAssistantTurn(manager: SessionManager, text: string): string {
+  return manager.appendMessage({
     role: "assistant",
     content: [{ type: "text", text }],
     stopReason: "stop",
@@ -191,6 +191,45 @@ describe("runEmbeddedAgent before_agent_finalize", () => {
 
       expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
       expect(result.payloads).toEqual([{ text: "Revised answer." }]);
+      expect(readVisibleTranscriptTexts(sessionFile, tempDir)).toEqual([
+        "Question?",
+        "Revised answer.",
+      ]);
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("preserves trailing metadata while resetting a finalize retry transcript", async () => {
+    const { tempDir, sessionFile, manager } = await createFinalizeRetrySession();
+    try {
+      mockedRunEmbeddedAttempt
+        .mockImplementationOnce(async () => {
+          const assistantId = appendAssistantTurn(manager, "First answer.");
+          manager.appendLabelChange(assistantId, "reviewed");
+          return finalAnswerAttempt("First answer.", {
+            beforeAgentFinalizeRevisionReason: "Tighten the final wording.",
+          });
+        })
+        .mockImplementationOnce(async () => {
+          expect(readVisibleTranscriptTexts(sessionFile, tempDir)).toEqual(["Question?"]);
+          appendAssistantTurn(
+            SessionManager.open(sessionFile, tempDir, tempDir),
+            "Revised answer.",
+          );
+          return finalAnswerAttempt("Revised answer.");
+        });
+
+      await runEmbeddedAgent({
+        ...overflowBaseRunParams,
+        sessionFile,
+        workspaceDir: tempDir,
+        provider: "openai",
+        model: "gpt-5.5",
+        runId: "run-before-finalize-retry-trailing-metadata",
+      });
+
+      expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
       expect(readVisibleTranscriptTexts(sessionFile, tempDir)).toEqual([
         "Question?",
         "Revised answer.",

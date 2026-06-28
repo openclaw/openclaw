@@ -37,6 +37,7 @@ import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
 import { enqueueCommandInLane, getCommandLaneSnapshot } from "../../process/command-queue.js";
 import type { CommandQueueEnqueueOptions } from "../../process/command-queue.types.js";
+import { isTranscriptOnlyOpenClawAssistantMessage } from "../../shared/transcript-only-openclaw-assistant.js";
 import { createAgentHarnessTaskRuntimeScope } from "../../tasks/agent-harness-task-runtime-scope.js";
 import { resolveUserPath } from "../../utils.js";
 import { isMarkdownCapableMessageChannel } from "../../utils/message-channel.js";
@@ -362,6 +363,17 @@ function resolveAssistantRevisionMatchText(
   );
 }
 
+function shouldPreserveBeforeAgentFinalizeRevisionTrailingEntry(
+  entry: ReturnType<SessionManager["getEntries"]>[number],
+): boolean {
+  return (
+    entry.type === "custom" ||
+    entry.type === "label" ||
+    entry.type === "session_info" ||
+    (entry.type === "message" && isTranscriptOnlyOpenClawAssistantMessage(entry.message))
+  );
+}
+
 function resetBeforeAgentFinalizeRevisionTranscript(params: {
   sessionFile: string;
   sessionId: string;
@@ -377,20 +389,21 @@ function resetBeforeAgentFinalizeRevisionTranscript(params: {
   }
   try {
     const sessionManager = SessionManager.open(params.sessionFile);
-    const leafEntry = sessionManager.getLeafEntry();
-    if (leafEntry?.type !== "message" || leafEntry.message.role !== "assistant") {
-      return "not_found";
-    }
-    const leafText = resolveAssistantRevisionMatchText(
-      leafEntry.message as EmbeddedRunAttemptForRunner["lastAssistant"],
-    );
-    if (leafText !== expectedText) {
-      return "not_found";
-    }
-
     // The revision pass is authoritative. Remove the rejected terminal answer
     // before retrying so the model does not see it as finalized history.
-    const removed = sessionManager.removeTrailingEntries((entry) => entry.id === leafEntry.id);
+    const removed = sessionManager.removeTrailingEntries(
+      (entry) => {
+        if (entry.type !== "message" || entry.message.role !== "assistant") {
+          return false;
+        }
+        return (
+          resolveAssistantRevisionMatchText(
+            entry.message as EmbeddedRunAttemptForRunner["lastAssistant"],
+          ) === expectedText
+        );
+      },
+      { preserveTrailing: shouldPreserveBeforeAgentFinalizeRevisionTrailingEntry },
+    );
     return removed > 0 ? "removed" : "not_found";
   } catch (err) {
     log.warn(
