@@ -72,6 +72,7 @@ export type StartCodexAttemptThreadResult = {
   client: CodexAppServerClient;
   thread: CodexAppServerThreadLifecycleBinding;
   pluginAppServer: CodexAppServerRuntimeOptions;
+  pluginApprovalsRequireUser: boolean;
   sandboxEnvironment: CodexSandboxExecEnvironment | undefined;
   environmentSelection: CodexTurnEnvironmentParams[] | undefined;
   executionCwd: string;
@@ -366,6 +367,7 @@ export async function startCodexAttemptThread(params: {
               return {
                 client: activeStartupClient,
                 thread: startupThread,
+                pluginApprovalsRequireUser: resolvedPluginPolicy?.enabled === true,
                 sandboxEnvironment: startupSandboxEnvironment,
                 environmentSelection: startupEnvironmentSelection,
                 executionCwd: startupExecutionCwd,
