@@ -35,6 +35,14 @@ const TOOL_RESULT_MAX_CHARS = 8000;
 const TOOL_ERROR_MAX_CHARS = 400;
 const TOOL_DENIAL_ERROR_CODES = ["SYSTEM_RUN_DENIED", "INVALID_REQUEST"] as const;
 const OPAQUE_STRUCTURED_RESULT_FIELDS = new Set(["encrypted_content", "encrypted_stdout"]);
+const SENSITIVE_STRUCTURED_HEADER_FIELDS = new Set([
+  "authorization",
+  "proxy-authorization",
+  "cookie",
+  "set-cookie",
+  "x-api-key",
+  "x-auth-token",
+]);
 
 function truncateToolText(text: string): string {
   if (text.length <= TOOL_RESULT_MAX_CHARS) {
@@ -280,6 +288,49 @@ function redactInlineDataUriValue(value: string): string {
   return `[inline data URI: ${value.length} chars]`;
 }
 
+function sanitizeStructuredToolResultValue(
+  value: unknown,
+  key = "",
+  parentType?: string,
+  seen = new WeakSet<object>(),
+): unknown {
+  if (typeof value === "string") {
+    if (SENSITIVE_STRUCTURED_HEADER_FIELDS.has(key.toLowerCase())) {
+      return "***";
+    }
+    if (key === "blob" || (key === "data" && (parentType === "audio" || parentType === "image"))) {
+      return `[binary omitted: ${value.length} chars]`;
+    }
+    // Claude CLI result blocks carry replay-only ciphertext that is not useful display text.
+    if (OPAQUE_STRUCTURED_RESULT_FIELDS.has(key)) {
+      return `[opaque data omitted: ${value.length} chars]`;
+    }
+    return truncateToolText(redactInlineDataUriValue(redactSensitiveFieldValue(key, value)));
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (seen.has(value)) {
+    return "[Circular]";
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    // Keep the owning key so arrays of credentials inherit the same redaction policy.
+    return value.map((item) => sanitizeStructuredToolResultValue(item, key, parentType, seen));
+  }
+  const record = value as Record<string, unknown>;
+  const type = readStringValue(record.type);
+  return Object.fromEntries(
+    Object.entries(record).map(([childKey, child]) => [
+      childKey,
+      sanitizeStructuredToolResultValue(child, childKey, type, seen),
+    ]),
+  );
+}
+
 function stringifyStructuredToolResultContent(block: unknown): string | undefined {
   if (!block || typeof block !== "object") {
     return undefined;
@@ -289,36 +340,8 @@ function stringifyStructuredToolResultContent(block: unknown): string | undefine
   if (type === "text" || type === "image" || type === "image_url" || type === "audio") {
     return undefined;
   }
-  const seen = new WeakSet<object>();
   try {
-    const serialized = JSON.stringify(record, function (key, value) {
-      if (typeof value === "string") {
-        const parentType = readStringValue(this?.type);
-        // MCP audio/resource blocks can carry large bare-base64 fields that are not data URIs.
-        if (
-          key === "blob" ||
-          (key === "data" && (parentType === "audio" || parentType === "image"))
-        ) {
-          return `[binary omitted: ${value.length} chars]`;
-        }
-        // Claude CLI result blocks carry replay-only ciphertext that is not useful display text.
-        if (OPAQUE_STRUCTURED_RESULT_FIELDS.has(key)) {
-          return `[opaque data omitted: ${value.length} chars]`;
-        }
-        return truncateToolText(redactInlineDataUriValue(redactSensitiveFieldValue(key, value)));
-      }
-      if (typeof value === "bigint") {
-        return value.toString();
-      }
-      if (!value || typeof value !== "object") {
-        return value;
-      }
-      if (seen.has(value)) {
-        return "[Circular]";
-      }
-      seen.add(value);
-      return value;
-    });
+    const serialized = JSON.stringify(sanitizeStructuredToolResultValue(record));
     const redacted = serialized ? redactToolPayloadText(serialized) : serialized;
     return redacted && redacted !== "{}" ? redacted : undefined;
   } catch {
@@ -331,6 +354,10 @@ function resolveToolResultContentBlocks(result: object): unknown[] {
     return result;
   }
   const record = result as Record<string, unknown>;
+  // Typed provider blocks own their `content`; only untyped tool-result envelopes unwrap it.
+  if (readStringValue(record.type)) {
+    return [record];
+  }
   if (Array.isArray(record.content)) {
     return record.content;
   }

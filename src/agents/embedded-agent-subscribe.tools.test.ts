@@ -421,6 +421,15 @@ describe("extractToolResultText", () => {
     expect(
       extractToolResultText({ type: "web_search_tool_result_error", error_code: "unavailable" }),
     ).toContain('"error_code":"unavailable"');
+    expect(
+      extractToolResultText({
+        type: "code_execution_result",
+        content: [],
+        return_code: 0,
+        stderr: "",
+        stdout: "command output",
+      }),
+    ).toContain('"stdout":"command output"');
   });
 
   it("keeps existing text blocks and skips image blocks", () => {
@@ -490,9 +499,10 @@ describe("extractToolResultText", () => {
         type: "web_search_result",
         encrypted_content: "opaque-search-ciphertext".repeat(500),
         encrypted_stdout: "opaque-command-ciphertext".repeat(500),
+        apiKey: ["array-valued-api-secret"],
         headers: {
-          cookie: "session=structured-cookie-secret",
-          "set-cookie": "sid=structured-set-cookie-secret; HttpOnly",
+          cookie: ["session=structured-cookie-secret"],
+          "set-cookie": ["sid=structured-set-cookie-secret; HttpOnly"],
         },
         title: "Useful result",
       },
@@ -503,6 +513,7 @@ describe("extractToolResultText", () => {
     expect(text).toContain('"title":"Useful result"');
     expect(text).not.toContain("opaque-search-ciphertext");
     expect(text).not.toContain("opaque-command-ciphertext");
+    expect(text).not.toContain("array-valued-api-secret");
     expect(text).not.toContain("structured-cookie-secret");
     expect(text).not.toContain("structured-set-cookie-secret");
   });
