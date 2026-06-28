@@ -1,0 +1,103 @@
+{
+  "id": "pioneer",
+  "activation": {
+    "onStartup": false
+  },
+  "enabledByDefault": true,
+  "providerCatalogEntry": "./provider-discovery.ts",
+  "providers": ["pioneer"],
+  "providerAuthEnvVars": {
+    "pioneer": ["PIONEER_API_KEY"]
+  },
+  "providerEndpoints": [
+    {
+      "endpointClass": "pioneer-native",
+      "hosts": ["api.pioneer.ai"]
+    }
+  ],
+  "providerRequest": {
+    "providers": {
+      "pioneer": {
+        "family": "openai-compatible"
+      }
+    }
+  },
+  "setup": {
+    "providers": [
+      {
+        "id": "pioneer",
+        "authMethods": ["api-key"],
+        "envVars": ["PIONEER_API_KEY"]
+      }
+    ]
+  },
+  "modelCatalog": {
+    "providers": {
+      "pioneer": {
+        "baseUrl": "https://api.pioneer.ai/v1",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "claude-sonnet-4-6",
+            "name": "Pioneer Sonnet 4.6",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens"
+            }
+          },
+          {
+            "id": "pioneer/auto",
+            "name": "Pioneer Auto",
+            "reasoning": false,
+            "input": ["text"],
+            "contextWindow": 1048576,
+            "maxTokens": 128000,
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "compat": {
+              "supportsUsageInStreaming": true,
+              "maxTokensField": "max_tokens"
+            }
+          }
+        ]
+      }
+    },
+    "discovery": {
+      "pioneer": "runtime"
+    }
+  },
+  "providerAuthChoices": [
+    {
+      "provider": "pioneer",
+      "method": "api-key",
+      "choiceId": "pioneer-api-key",
+      "choiceLabel": "Pioneer API key",
+      "groupId": "pioneer",
+      "groupLabel": "Pioneer",
+      "groupHint": "OpenAI-compatible Pioneer endpoint",
+      "optionKey": "pioneerApiKey",
+      "cliFlag": "--pioneer-api-key",
+      "cliOption": "--pioneer-api-key <key>",
+      "cliDescription": "Pioneer API key"
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}
