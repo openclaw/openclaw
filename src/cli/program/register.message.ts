@@ -11,6 +11,7 @@ import {
   registerMessageEmojiCommands,
   registerMessageStickerCommands,
 } from "./message/register.emoji-sticker.js";
+import { registerMessageLocationCommands } from "./message/register.location.js";
 import {
   registerMessagePermissionsCommand,
   registerMessageSearchCommand,
@@ -46,6 +47,18 @@ ${formatHelpExamples([
     'openclaw message react --channel discord --target 123 --message-id 456 --emoji "✅"',
     "React to a message.",
   ],
+  [
+    "openclaw message sendLocation --channel telegram --target 318445470 --latitude 55.7558 --longitude 37.6173",
+    "Send a location pin via Telegram.",
+  ],
+  [
+    'openclaw message sendVenue --channel telegram --target 318445470 --latitude 55.7539 --longitude 37.6208 --title "Red Square" --address "Moscow"',
+    "Send a venue card via Telegram.",
+  ],
+  [
+    "openclaw message sendVideoNote --channel telegram --target 318445470 --media /path/to/video.mp4",
+    "Send a round video note via Telegram.",
+  ],
 ])}
 
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/message")}`,
@@ -66,5 +79,6 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/m
   registerMessageThreadCommands(message, helpers);
   registerMessageEmojiCommands(message, helpers);
   registerMessageStickerCommands(message, helpers);
+  registerMessageLocationCommands(message, helpers);
   registerMessageDiscordAdminCommands(message, helpers);
 }

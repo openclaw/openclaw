@@ -22,6 +22,7 @@ import {
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
 import {
   createTelegramButtonsExtraToolSchemas,
+  createTelegramLocationExtraToolSchemas,
   createTelegramMediaExtraToolSchemas,
   createTelegramPollExtraToolSchemas,
 } from "./message-tool-schema.js";
@@ -191,6 +192,12 @@ function describeTelegramMessageTool({
     properties: createTelegramMediaExtraToolSchemas(),
     visibility: "all-configured",
   });
+  if (discovery.isEnabled("sendMessage")) {
+    schema.push({
+      properties: createTelegramLocationExtraToolSchemas(),
+      visibility: "all-configured",
+    });
+  }
   if (discovery.buttonsEnabled) {
     schema.push({
       properties: createTelegramButtonsExtraToolSchemas(),

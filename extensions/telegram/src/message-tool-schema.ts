@@ -2,6 +2,51 @@
 import { optionalPositiveIntegerSchema } from "openclaw/plugin-sdk/channel-actions";
 import { Type } from "typebox";
 
+/** Schema additions for sendLocation and sendVenue actions. */
+export function createTelegramLocationExtraToolSchemas() {
+  return {
+    latitude: Type.Optional(
+      Type.Number({
+        description:
+          "Latitude for sendLocation or sendVenue action (required for those actions). Range: -90 to 90.",
+        minimum: -90,
+        maximum: 90,
+      }),
+    ),
+    longitude: Type.Optional(
+      Type.Number({
+        description:
+          "Longitude for sendLocation or sendVenue action (required for those actions). Range: -180 to 180.",
+        minimum: -180,
+        maximum: 180,
+      }),
+    ),
+    horizontalAccuracy: Type.Optional(
+      Type.Number({
+        description: "Radius of uncertainty for sendLocation in metres (0–1500). Optional.",
+        minimum: 0,
+        maximum: 1500,
+      }),
+    ),
+    title: Type.Optional(
+      Type.String({
+        description: "Venue name shown as the title. Required for sendVenue action.",
+      }),
+    ),
+    address: Type.Optional(
+      Type.String({
+        description: "Venue street address shown below the title. Required for sendVenue action.",
+      }),
+    ),
+    foursquareId: Type.Optional(
+      Type.String({ description: "Foursquare venue ID for sendVenue (optional)." }),
+    ),
+    googlePlaceId: Type.Optional(
+      Type.String({ description: "Google Places ID for sendVenue (optional)." }),
+    ),
+  };
+}
+
 export function createTelegramPollExtraToolSchemas() {
   return {
     pollDurationSeconds: optionalPositiveIntegerSchema(),

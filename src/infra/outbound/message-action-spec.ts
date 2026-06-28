@@ -74,6 +74,9 @@ export const MESSAGE_ACTION_TARGET_MODE: Record<ChannelMessageActionName, Messag
     "set-presence": "none",
     "download-file": "none",
     "upload-file": "to",
+    sendLocation: "to",
+    sendVenue: "to",
+    sendVideoNote: "to",
   };
 
 type ActionTargetAliasSpec = {
