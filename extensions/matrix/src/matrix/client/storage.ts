@@ -139,6 +139,13 @@ function resolveStorageRootMtimeMs(rootDir: string): number {
   }
 }
 
+type PopulatedMatrixStorageRoot = {
+  tokenHash: string;
+  rootDir: string;
+  score: number;
+  mtimeMs: number;
+};
+
 export function normalizeMatrixStorageMetadata(value: unknown): MatrixStorageMetadata | null {
   if (!isRecord(value)) {
     return null;
@@ -251,28 +258,17 @@ function resolvePreferredMatrixStorageRoot(params: {
 } {
   const parentDir = path.dirname(params.canonicalRootDir);
   const bestCurrentScore = scoreStorageRoot(params.canonicalRootDir);
+  const bestCurrentMtimeMs = resolveStorageRootMtimeMs(params.canonicalRootDir);
   let best = {
     rootDir: params.canonicalRootDir,
     tokenHash: params.canonicalTokenHash,
     score: bestCurrentScore,
-    mtimeMs: resolveStorageRootMtimeMs(params.canonicalRootDir),
+    mtimeMs: bestCurrentMtimeMs,
   };
 
   // Without a confirmed device identity, reusing a populated sibling root after
   // token rotation can silently bind this run to the wrong Matrix device state.
   if (!params.deviceId?.trim()) {
-    return {
-      rootDir: best.rootDir,
-      tokenHash: best.tokenHash,
-    };
-  }
-
-  const canonicalMetadata = readStoredRootMetadata(params.canonicalRootDir);
-  if (
-    canonicalMetadata.accessTokenHash === params.canonicalTokenHash &&
-    canonicalMetadata.deviceId?.trim() === params.deviceId.trim() &&
-    canonicalMetadata.currentTokenStateClaimed === true
-  ) {
     return {
       rootDir: best.rootDir,
       tokenHash: best.tokenHash,
@@ -289,7 +285,9 @@ function resolvePreferredMatrixStorageRoot(params: {
     };
   }
 
-  for (const entry of siblingEntries) {
+  const compatiblePopulatedSiblings: PopulatedMatrixStorageRoot[] = [];
+  const populatedTokenHashes = bestCurrentScore > 0 ? [params.canonicalTokenHash] : [];
+  for (const entry of siblingEntries.toSorted((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isDirectory()) {
       continue;
     }
@@ -315,20 +313,50 @@ function resolvePreferredMatrixStorageRoot(params: {
     if (candidateScore <= 0) {
       continue;
     }
-    const candidateMtimeMs = resolveStorageRootMtimeMs(candidateRootDir);
-    if (
-      candidateScore > best.score ||
-      (best.rootDir !== params.canonicalRootDir &&
-        candidateScore === best.score &&
-        candidateMtimeMs > best.mtimeMs)
-    ) {
-      best = {
-        rootDir: candidateRootDir,
-        tokenHash: entry.name,
-        score: candidateScore,
-        mtimeMs: candidateMtimeMs,
-      };
+    populatedTokenHashes.push(entry.name);
+    compatiblePopulatedSiblings.push({
+      rootDir: candidateRootDir,
+      tokenHash: entry.name,
+      score: candidateScore,
+      mtimeMs: resolveStorageRootMtimeMs(candidateRootDir),
+    });
+  }
+
+  const canonicalMetadata = readStoredRootMetadata(params.canonicalRootDir);
+  const shouldKeepCanonicalCurrentRoot =
+    canonicalMetadata.accessTokenHash === params.canonicalTokenHash &&
+    canonicalMetadata.deviceId?.trim() === params.deviceId.trim() &&
+    canonicalMetadata.currentTokenStateClaimed === true;
+
+  if (!shouldKeepCanonicalCurrentRoot) {
+    for (const candidate of compatiblePopulatedSiblings) {
+      if (
+        candidate.score > best.score ||
+        (best.rootDir !== params.canonicalRootDir &&
+          candidate.score === best.score &&
+          candidate.mtimeMs > best.mtimeMs)
+      ) {
+        best = {
+          rootDir: candidate.rootDir,
+          tokenHash: candidate.tokenHash,
+          score: candidate.score,
+          mtimeMs: candidate.mtimeMs,
+        };
+      }
     }
+  }
+
+  if (populatedTokenHashes.length > 1) {
+    getMatrixRuntime()
+      .logging.getChildLogger({ module: "matrix-storage" })
+      .warn("matrix: multiple populated token-hash storage roots detected", {
+        parentDir,
+        canonicalTokenHash: params.canonicalTokenHash,
+        selectedTokenHash: best.tokenHash,
+        populatedTokenHashes,
+        populatedSiblingTokenHashes: compatiblePopulatedSiblings.map((root) => root.tokenHash),
+        populatedRootCount: populatedTokenHashes.length,
+      });
   }
 
   return {
