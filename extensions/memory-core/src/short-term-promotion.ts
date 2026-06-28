@@ -1457,8 +1457,13 @@ export async function recordShortTermRecalls(params: {
       const recallDays = mergeRecentDistinct(recallDaysBase, todayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
 
-      const unchangedDedupeSignal = dedupeSignal && existing?.snippet === snippet;
-      const lastRecalledAt = unchangedDedupeSignal ? (existing?.lastRecalledAt ?? nowIso) : nowIso;
+      const unchangedRepeatedSignal =
+        Boolean(params.dedupeByQueryPerDay) &&
+        queryHashesBase.includes(queryHash) &&
+        existing?.snippet === snippet;
+      const lastRecalledAt = unchangedRepeatedSignal
+        ? (existing?.lastRecalledAt ?? nowIso)
+        : nowIso;
 
       store.entries[key] = {
         key,
@@ -1609,8 +1614,13 @@ export async function recordGroundedShortTermCandidates(params: {
       const recallDays = mergeRecentDistinct(recallDaysBase, dayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: item.path, snippet: item.snippet });
 
-      const unchangedDedupeSignal = dedupeSignal && existing?.snippet === item.snippet;
-      const lastRecalledAt = unchangedDedupeSignal ? (existing?.lastRecalledAt ?? nowIso) : nowIso;
+      const unchangedRepeatedSignal =
+        Boolean(params.dedupeByQueryPerDay) &&
+        queryHashesBase.includes(queryHash) &&
+        existing?.snippet === item.snippet;
+      const lastRecalledAt = unchangedRepeatedSignal
+        ? (existing?.lastRecalledAt ?? nowIso)
+        : nowIso;
 
       store.entries[key] = {
         key,

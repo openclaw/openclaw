@@ -110,6 +110,7 @@ describe("short-term promotion", () => {
         claimHash?: unknown;
         firstRecalledAt?: unknown;
         lastRecalledAt?: unknown;
+        dailyCount?: unknown;
         recallCount?: unknown;
         snippet?: unknown;
         totalScore?: unknown;

@@ -3029,6 +3029,7 @@ describe("memory-core dreaming phases", () => {
     });
     expect(after1).toHaveLength(1);
     expect(after1[0]?.dailyCount).toBe(1);
+    expect(after1[0]?.lastRecalledAt).toBe("2026-04-05T10:00:00.000Z");
 
     const day2Ms = Date.parse("2026-04-06T10:00:00.000Z");
     const { beforeAgentReply: reply2 } = createHarness(configForTest, workspaceDir);
@@ -3049,6 +3050,7 @@ describe("memory-core dreaming phases", () => {
     });
     expect(after2).toHaveLength(1);
     expect(after2[0]?.dailyCount).toBe(2);
+    expect(after2[0]?.lastRecalledAt).toBe("2026-04-05T10:00:00.000Z");
   });
 });
 
