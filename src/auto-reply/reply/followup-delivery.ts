@@ -105,7 +105,7 @@ export function resolveFollowupDeliveryPayloads(params: {
       messagingToolSentTargets: params.sentTargets,
       originatingTo,
       originatingThreadId: params.originatingThreadId,
-      replyToId: payload.replyToId,
+      replyToId: payload.replyToId ?? undefined,
       replyToIsExplicit: Boolean(
         getReplyPayloadMetadata(payload)?.replyToIdExplicit ||
         payload.replyToTag ||
