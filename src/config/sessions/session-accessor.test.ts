@@ -1358,7 +1358,7 @@ describe("session accessor file-backed seam", () => {
     ).toHaveLength(1);
   });
 
-  it("persists reset lifecycle entry changes with transcript replay and cleanup", async () => {
+  it("persists reset lifecycle entry changes with transcript replay and archive", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:main";
     const previousTranscript = path.join(tempDir, "previous-session.jsonl");
@@ -1410,6 +1410,16 @@ describe("session accessor file-backed seam", () => {
     expect(result.replayedMessages).toBe(2);
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(nextEntry);
     expect(fs.existsSync(previousTranscript)).toBe(false);
+    const archivedPreviousTranscripts = fs
+      .readdirSync(tempDir)
+      .filter((file) => file.startsWith("previous-session.jsonl.reset."));
+    expect(archivedPreviousTranscripts).toHaveLength(1);
+    const [archivedPreviousTranscriptName] = archivedPreviousTranscripts;
+    const archivedPreviousTranscript = path.join(tempDir, archivedPreviousTranscriptName);
+    expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain(
+      '"id":"previous-session"',
+    );
+    expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain('"content":"hi"');
     expect(fs.readFileSync(nextTranscript, "utf-8")).toContain('"content":"hello"');
   });
 

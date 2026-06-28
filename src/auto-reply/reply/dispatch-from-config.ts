@@ -95,6 +95,7 @@ import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveSilentReplyPolicyFromPolicies } from "../../shared/silent-reply-policy.js";
+import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 import { createTtsDirectiveTextStreamCleaner } from "../../tts/directives.js";
 import {
   normalizeTtsAutoMode,
@@ -174,6 +175,7 @@ import {
   isUnauthorizedTextSlashCommand,
   resolveSourceReplyVisibilityPolicy,
 } from "./source-reply-delivery-mode.js";
+import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 import { resolveStoredModelOverride } from "./stored-model-override.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
 
@@ -202,6 +204,10 @@ function isDispatchReplyOperationAbortedError(
   error: unknown,
 ): error is DispatchReplyOperationAbortedError {
   return error instanceof DispatchReplyOperationAbortedError;
+}
+
+function isRecoverableTerminalSessionStatus(status: SessionEntry["status"] | undefined): boolean {
+  return status === "failed" || status === "timeout" || status === "killed";
 }
 
 function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
@@ -1419,6 +1425,48 @@ export async function dispatchReplyFromConfig(
         });
       }
     }
+    if (
+      admission.status === "skipped" &&
+      admission.reason === "active-run" &&
+      // Only visible reply turns may force-clear a stale terminal operation.
+      // A heartbeat/control turn can also see the terminal snapshot, but it must
+      // not abort an in-flight visible recovery a concurrent visible turn just
+      // admitted (before that op is marked `terminalRecovery`); let it fall
+      // through to normal busy/skip handling instead.
+      replyTurnKind === "visible" &&
+      isRecoverableTerminalSessionStatus(sessionStoreEntry.entry?.status) &&
+      // Only clear the leftover op that belongs to the SAME terminal session.
+      // A concurrent reset/rotation can admit a fresh op (new sessionId) under
+      // this session key while we still hold the stale terminal snapshot;
+      // force-clearing by the active op's id would drop that valid in-flight
+      // reply and recreate the message loss this fix exists to prevent (#86827).
+      admission.activeOperation?.sessionId === sessionStoreEntry.entry?.sessionId &&
+      // Only clear the proven stale leftover from the failed lifecycle. A
+      // freshly-admitted visible recovery op is marked `terminalRecovery` at the
+      // admission choke point below; force-failing that op would drop the very
+      // recovery turn this path exists to protect (concurrent visible turns can
+      // read the same terminal snapshot before it clears).
+      !admission.activeOperation?.terminalRecovery
+    ) {
+      const cleared = forceClearReplyRunBySessionId(
+        admission.activeOperation?.sessionId ?? operationSessionId,
+        new Error("clearing stale terminal reply operation"),
+      );
+      if (cleared) {
+        logVerbose(
+          `dispatch-from-config: cleared stale active reply operation for terminal session ${dispatchOperationSessionKey}`,
+        );
+        admission = await admitReplyTurn({
+          sessionKey: dispatchOperationSessionKey,
+          sessionId: operationSessionId,
+          kind: replyTurnKind,
+          resetTriggered: false,
+          routeThreadId,
+          upstreamAbortSignal: params.replyOptions?.abortSignal,
+          waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
+        });
+      }
+    }
     if (admission.status === "skipped") {
       if (allowActivePreDispatch && admission.reason === "active-run") {
         preDispatchAbortOperation = admission.activeOperation;
@@ -1442,6 +1490,20 @@ export async function dispatchReplyFromConfig(
         `dispatch-from-config: skipped reply operation admission for ${dispatchOperationSessionKey}; reason=${admission.reason}`,
       );
       return { status: "busy" };
+    }
+    // Mark every freshly-admitted visible recovery of a terminal session at this
+    // single choke point (both the clean no-stale admission and the
+    // re-admission after a sibling force-clear flow through here). The marker
+    // protects this op from being force-cleared by a concurrent sibling visible
+    // turn that reads the same terminal snapshot (#86827). Genuine stale
+    // leftovers from the original failed run never pass through this admission,
+    // so they stay unmarked and remain force-clearable.
+    if (
+      replyTurnKind === "visible" &&
+      isRecoverableTerminalSessionStatus(sessionStoreEntry.entry?.status) &&
+      operationSessionId === sessionStoreEntry.entry?.sessionId
+    ) {
+      admission.operation.markTerminalRecovery();
     }
     dispatchReplyOperation = admission.operation;
     dispatchReplyOperation.retainFailureUntilComplete();
@@ -1551,20 +1613,86 @@ export async function dispatchReplyFromConfig(
     ensureRuntimePluginsLoaded({ config: cfg, workspaceDir });
   });
   const hookRunner = getGlobalHookRunner();
-
   // Extract message context for hooks (plugin and internal)
   const timestamp =
     typeof ctx.Timestamp === "number" && Number.isFinite(ctx.Timestamp) ? ctx.Timestamp : undefined;
   const messageIdForHook =
     ctx.MessageSidFull ?? ctx.MessageSid ?? ctx.MessageSidFirst ?? ctx.MessageSidLast;
-  const hookContext = deriveInboundMessageHookContext(ctx, { messageId: messageIdForHook });
+  const hookCtx = { ...ctx };
+  const buildHookState = (sourceCtx: FinalizedMsgContext) => {
+    const nextHookContext = deriveInboundMessageHookContext(sourceCtx, {
+      messageId: messageIdForHook,
+    });
+    return {
+      hookContext: nextHookContext,
+      inboundClaimContext: toPluginInboundClaimContext(nextHookContext),
+      inboundClaimEvent: toPluginInboundClaimEvent(nextHookContext, {
+        commandAuthorized:
+          typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
+        wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
+      }),
+    };
+  };
+  let { hookContext, inboundClaimContext, inboundClaimEvent } = buildHookState(hookCtx);
   const { isGroup, groupId } = hookContext;
-  const inboundClaimContext = toPluginInboundClaimContext(hookContext);
-  const inboundClaimEvent = toPluginInboundClaimEvent(hookContext, {
-    commandAuthorized:
-      typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
-    wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
-  });
+  let hookMediaPrepared = false;
+  let hookMediaMetadataStaged = false;
+  const prepareHookMediaMetadata = async () => {
+    if (hookMediaPrepared) {
+      return;
+    }
+    hookMediaPrepared = true;
+    // Plugin hooks may run in a different Codex cwd from core dispatch, so
+    // only actual hook/plugin-claim consumers get remote-cache media paths.
+    // Keep ctx unstaged for the normal get-reply single-stage path.
+    const staged = await traceReplyPhase("reply.stage_remote_media_for_dispatch", () =>
+      stageRemoteInboundMediaIfNeeded({
+        ctx: hookCtx,
+        cfg,
+        sessionKey: acpDispatchSessionKey,
+        workspaceDir,
+        remoteMediaMode: "cache",
+      }),
+    );
+    if (staged) {
+      hookMediaMetadataStaged = true;
+      ({ hookContext, inboundClaimContext, inboundClaimEvent } = buildHookState(hookCtx));
+    }
+  };
+  const buildMessageReceivedHookContext = () => {
+    const mediaRemoteHost = normalizeOptionalString(ctx.MediaRemoteHost);
+    const hasUnstagedRemoteMediaMetadata = Boolean(
+      hookContext.mediaPath ||
+      hookContext.mediaUrl ||
+      hookContext.mediaType ||
+      hookContext.mediaPaths?.length ||
+      hookContext.mediaUrls?.length ||
+      hookContext.mediaTypes?.length,
+    );
+    if (hookMediaMetadataStaged || !mediaRemoteHost || !hasUnstagedRemoteMediaMetadata) {
+      return hookContext;
+    }
+    const messageReceivedCtx = { ...hookCtx };
+    // message_received hooks run before normal get-reply staging, so remote
+    // host paths are not safe as live media. Keep originals as debug metadata.
+    delete messageReceivedCtx.MediaPath;
+    delete messageReceivedCtx.MediaPaths;
+    delete messageReceivedCtx.MediaUrl;
+    delete messageReceivedCtx.MediaUrls;
+    delete messageReceivedCtx.MediaType;
+    delete messageReceivedCtx.MediaTypes;
+    return {
+      ...buildHookState(messageReceivedCtx).hookContext,
+      mediaRemoteHost,
+      mediaStagingPending: true,
+      originalMediaPath: hookContext.mediaPath,
+      originalMediaUrl: hookContext.mediaUrl,
+      originalMediaType: hookContext.mediaType,
+      originalMediaPaths: hookContext.mediaPaths,
+      originalMediaUrls: hookContext.mediaUrls,
+      originalMediaTypes: hookContext.mediaTypes,
+    };
+  };
 
   // Check if we should route replies to originating channel instead of dispatcher.
   // Only route when the originating channel is DIFFERENT from the current surface.
@@ -2020,11 +2148,14 @@ export async function dispatchReplyFromConfig(
         `plugin-bound inbound routed to ${pluginOwnedBinding.pluginId} conversation=${pluginOwnedBinding.conversationId}`,
       );
       const targetedClaimOutcome = hookRunner?.runInboundClaimForPluginOutcome
-        ? await hookRunner.runInboundClaimForPluginOutcome(
-            pluginOwnedBinding.pluginId,
-            inboundClaimEvent,
-            { ...inboundClaimContext, pluginBinding: pluginOwnedBinding },
-          )
+        ? await (async () => {
+            await prepareHookMediaMetadata();
+            return hookRunner.runInboundClaimForPluginOutcome(
+              pluginOwnedBinding.pluginId,
+              inboundClaimEvent,
+              { ...inboundClaimContext, pluginBinding: pluginOwnedBinding },
+            );
+          })()
         : (() => {
             const pluginLoaded =
               getGlobalPluginRegistry()?.plugins.some(
@@ -2116,11 +2247,14 @@ export async function dispatchReplyFromConfig(
   }
 
   // Trigger plugin hooks (fire-and-forget)
-  if (ctx.SuppressMessageReceivedHooks !== true && hookRunner?.hasHooks("message_received")) {
+  const hasMessageReceivedHookConsumer =
+    ctx.SuppressMessageReceivedHooks !== true && hookRunner?.hasHooks("message_received") === true;
+  if (hasMessageReceivedHookConsumer) {
+    const messageReceivedHookContext = buildMessageReceivedHookContext();
     fireAndForgetHook(
       hookRunner.runMessageReceived(
-        toPluginMessageReceivedEvent(hookContext),
-        toPluginMessageContext(hookContext),
+        toPluginMessageReceivedEvent(messageReceivedHookContext),
+        toPluginMessageContext(messageReceivedHookContext),
       ),
       "dispatch-from-config: message_received plugin hook failed",
     );
@@ -2128,10 +2262,11 @@ export async function dispatchReplyFromConfig(
 
   // Bridge to internal hooks (HOOK.md discovery system) - refs #8807
   if (ctx.SuppressMessageReceivedHooks !== true && sessionKey) {
+    const messageReceivedHookContext = buildMessageReceivedHookContext();
     fireAndForgetHook(
       triggerInternalHook(
         createInternalHookEvent("message", "received", sessionKey, {
-          ...toInternalMessageReceivedContext(hookContext),
+          ...toInternalMessageReceivedContext(messageReceivedHookContext),
           timestamp,
         }),
       ),
@@ -2565,7 +2700,7 @@ export async function dispatchReplyFromConfig(
       if (collapsed.length <= 80) {
         return collapsed;
       }
-      return `${collapsed.slice(0, 77).trimEnd()}...`;
+      return `${truncateUtf16Safe(collapsed, 77).trimEnd()}...`;
     };
     const formatPlanUpdateText = (payload: { explanation?: string; steps?: string[] }) => {
       const explanation = payload.explanation?.replace(/\s+/g, " ").trim();

@@ -30,6 +30,11 @@ describe("markdownToTelegramHtml", () => {
         "<script>nope</script>",
         "&lt;script&gt;nope&lt;/script&gt;",
       ],
+      [
+        "escapes literal reasoning-looking tags",
+        "Before <think>literal tag text after",
+        "Before &lt;think&gt;literal tag text after",
+      ],
       ["escapes unsafe characters", "a & b < c", "a &amp; b &lt; c"],
       ["renders paragraphs with blank lines", "first\n\nsecond", "first\n\nsecond"],
       ["renders lists without block HTML", "- one\n- two", "• one\n• two"],

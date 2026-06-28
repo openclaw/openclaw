@@ -126,6 +126,34 @@ describe("SessionHistorySseState", () => {
     }
   });
 
+  test("carries inline user idempotency keys into history metadata", () => {
+    const state = newState([]);
+
+    const appended = state.appendInlineMessage({
+      message: {
+        role: "user",
+        content: [{ type: "text", text: "optimistic turn" }],
+        idempotencyKey: "client-turn-2",
+      },
+      messageId: "message-user-2",
+      messageSeq: 2,
+    });
+
+    expect(appended).toBeDefined();
+    expect(appended?.messageSeq).toBe(2);
+    expect(
+      (
+        appended!.message as {
+          __openclaw?: { id?: string; idempotencyKey?: string; seq?: number };
+        }
+      )["__openclaw"],
+    ).toMatchObject({
+      id: "message-user-2",
+      idempotencyKey: "client-turn-2",
+      seq: 2,
+    });
+  });
+
   test("reuses one canonical array for items and messages", () => {
     const snapshot = buildSessionHistorySnapshot({
       rawMessages: [assistantTextMessage("first", 1), assistantTextMessage("second", 2)],
