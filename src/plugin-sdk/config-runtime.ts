@@ -151,8 +151,18 @@ export type {
 export {
   clearSessionStoreCacheForTest,
   recordSessionMetaFromInbound,
+  /**
+   * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
+   * whole-store helper is kept only during the transition before SQLite
+   * migration. Callers must migrate away from writing sessions.json directly.
+   */
   saveSessionStore,
   updateLastRoute,
+  /**
+   * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
+   * whole-store helper is kept only during the transition before SQLite
+   * migration. Callers must migrate away from updating sessions.json directly.
+   */
   updateSessionStore,
   resolveSessionStoreEntry,
 } from "../config/sessions/store.js";
