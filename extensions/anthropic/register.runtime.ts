@@ -636,22 +636,31 @@ function buildAnthropicAuthDoctorHint(params: {
 
 function resolveClaudeCliSyntheticAuth() {
   const credential = claudeCliAuth.readClaudeCliCredentialsForRuntime();
-  if (!credential) {
-    return undefined;
+  if (credential) {
+    return credential.type === "oauth"
+      ? {
+          apiKey: credential.access,
+          source: "Claude CLI native auth",
+          mode: "oauth" as const,
+          expiresAt: credential.expires,
+        }
+      : {
+          apiKey: credential.token,
+          source: "Claude CLI native auth",
+          mode: "token" as const,
+          expiresAt: credential.expires,
+        };
   }
-  return credential.type === "oauth"
-    ? {
-        apiKey: credential.access,
-        source: "Claude CLI native auth",
-        mode: "oauth" as const,
-        expiresAt: credential.expires,
-      }
-    : {
-        apiKey: credential.token,
-        source: "Claude CLI native auth",
-        mode: "token" as const,
-        expiresAt: credential.expires,
-      };
+  // apiKeyHelper in ~/.claude/settings.json means Claude CLI fetches the key at
+  // spawn time — the gate just needs to know auth is configured.
+  if (claudeCliAuth.hasClaudeCliApiKeyHelper()) {
+    return {
+      apiKey: claudeCliAuth.CLAUDE_CLI_API_KEY_HELPER_MARKER,
+      source: "Claude CLI apiKeyHelper",
+      mode: "api-key" as const,
+    };
+  }
+  return undefined;
 }
 
 async function runAnthropicCliMigration(ctx: ProviderAuthContext): Promise<ProviderAuthResult> {

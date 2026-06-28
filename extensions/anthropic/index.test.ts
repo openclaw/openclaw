@@ -9,17 +9,22 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { readClaudeCliCredentialsForSetupMock, readClaudeCliCredentialsForRuntimeMock } = vi.hoisted(
-  () => ({
-    readClaudeCliCredentialsForSetupMock: vi.fn(),
-    readClaudeCliCredentialsForRuntimeMock: vi.fn(),
-  }),
-);
+const {
+  readClaudeCliCredentialsForSetupMock,
+  readClaudeCliCredentialsForRuntimeMock,
+  hasClaudeCliApiKeyHelperMock,
+} = vi.hoisted(() => ({
+  readClaudeCliCredentialsForSetupMock: vi.fn(),
+  readClaudeCliCredentialsForRuntimeMock: vi.fn(),
+  hasClaudeCliApiKeyHelperMock: vi.fn<() => boolean>(() => false),
+}));
 
 vi.mock("./cli-auth-seam.js", () => {
   return {
     readClaudeCliCredentialsForSetup: readClaudeCliCredentialsForSetupMock,
     readClaudeCliCredentialsForRuntime: readClaudeCliCredentialsForRuntimeMock,
+    hasClaudeCliApiKeyHelper: hasClaudeCliApiKeyHelperMock,
+    CLAUDE_CLI_API_KEY_HELPER_MARKER: "claude-cli-api-key-helper",
   };
 });
 
@@ -28,6 +33,7 @@ import anthropicPlugin from "./index.js";
 beforeEach(() => {
   readClaudeCliCredentialsForSetupMock.mockReset();
   readClaudeCliCredentialsForRuntimeMock.mockReset();
+  hasClaudeCliApiKeyHelperMock.mockReset().mockReturnValue(false);
 });
 
 afterAll(() => {
@@ -991,6 +997,36 @@ describe("anthropic provider replay hooks", () => {
       mode: "token",
       expiresAt: 123,
     });
+  });
+
+  it("resolves claude-cli synthetic auth for apiKeyHelper when no stored credential", async () => {
+    readClaudeCliCredentialsForRuntimeMock.mockReturnValue(null);
+    hasClaudeCliApiKeyHelperMock.mockReturnValue(true);
+
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    expect(
+      provider.resolveSyntheticAuth?.({
+        provider: "claude-cli",
+      } as never),
+    ).toEqual({
+      apiKey: "claude-cli-api-key-helper",
+      source: "Claude CLI apiKeyHelper",
+      mode: "api-key",
+    });
+  });
+
+  it("returns undefined synthetic auth when no credential and no apiKeyHelper", async () => {
+    readClaudeCliCredentialsForRuntimeMock.mockReturnValue(null);
+    hasClaudeCliApiKeyHelperMock.mockReturnValue(false);
+
+    const provider = await registerSingleProviderPlugin(anthropicPlugin);
+
+    expect(
+      provider.resolveSyntheticAuth?.({
+        provider: "claude-cli",
+      } as never),
+    ).toBeUndefined();
   });
 
   it("stores a claude-cli auth profile during anthropic cli migration", async () => {
