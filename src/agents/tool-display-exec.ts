@@ -328,8 +328,8 @@ export function stripLeadingExecDisplayVerb(meta: string): string {
   if (!binary) {
     return meta;
   }
-  const binaryName = binary.split("/").pop() ?? binary;
-  if (!RUN_PREFIX_BINARIES.has(binaryName)) {
+  const resolvedBinName = binary.split("/").pop() ?? binary;
+  if (!RUN_PREFIX_BINARIES.has(resolvedBinName)) {
     return meta;
   }
   return rest;
