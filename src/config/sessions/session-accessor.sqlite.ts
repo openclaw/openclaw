@@ -1432,7 +1432,7 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
     message: finalMessage,
   };
   const appended = appendTranscriptEventInTransaction(database, resolved, event, {
-    dedupeByMessageIdempotency: options.idempotencyLookup === "scan",
+    dedupeByMessageIdempotency: options.idempotencyLookup !== "caller-checked",
   });
   if (!appended && idempotencyKey && options.idempotencyLookup === "scan") {
     const existing = readTranscriptMessageByIdempotencyKey(database, resolved, idempotencyKey);
