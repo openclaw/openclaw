@@ -240,12 +240,20 @@ describe("Code Mode", () => {
   });
 
   it("resolves the packaged worker URL from stable and hashed dist modules", () => {
-    expect(testing.resolveCodeModeWorkerUrl("file:///repo/dist/agents/code-mode.js").pathname).toBe(
-      "/repo/dist/agents/code-mode.worker.js",
-    );
-    expect(testing.resolveCodeModeWorkerUrl("file:///repo/dist/selection-abc123.js").pathname).toBe(
-      "/repo/dist/agents/code-mode.worker.js",
-    );
+    // Use pathToFileURL so the test is correct on Windows (drive-letter paths)
+    // as well as POSIX systems, rather than hardcoding file:///repo/...
+    const { pathToFileURL } = require("node:url");
+    const path = require("node:path");
+
+    const distDir = path.join(path.sep, "repo", "dist");
+    const agentsDir = path.join(distDir, "agents");
+    const workerPath = pathToFileURL(path.join(agentsDir, "code-mode.worker.js")).pathname;
+
+    const stableUrl = pathToFileURL(path.join(agentsDir, "code-mode.js")).href;
+    const hashedUrl = pathToFileURL(path.join(distDir, "selection-abc123.js")).href;
+
+    expect(testing.resolveCodeModeWorkerUrl(stableUrl).pathname).toBe(workerPath);
+    expect(testing.resolveCodeModeWorkerUrl(hashedUrl).pathname).toBe(workerPath);
   });
 
   it("hides all normal tools behind exec and wait", () => {
