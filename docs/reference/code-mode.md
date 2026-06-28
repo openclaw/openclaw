@@ -25,13 +25,15 @@ different `exec` contracts:
   configured. It runs in the OpenClaw generic agent runtime, where the model
   writes JavaScript or TypeScript programs through an `exec.code` contract.
 
-Codex Code Mode and Codex-native dynamic tool search are Codex-owned harness
-surfaces that upstream Codex still marks as under development (`code_mode` and
-`code_mode_only` are `Stage::UnderDevelopment`). OpenClaw enables them for Codex
-app-server threads but does not own their stability. OpenClaw code mode is an
-OpenClaw-owned experimental tool-surface adapter for generic OpenClaw runs. It
-uses `quickjs-wasi`, a hidden OpenClaw tool catalog, and the normal OpenClaw tool
-executor.
+Codex Code Mode is a Codex-owned harness surface that upstream Codex still marks
+as under development (`code_mode` and `code_mode_only` are `Stage::UnderDevelopment`).
+Codex-native dynamic tool search is a separate Codex surface: its `tool_search`
+and `search_tool` feature flags are removed compatibility no-ops now that tool
+search is always enabled (`Stage::Removed`), not an under-development stage.
+OpenClaw enables Codex Code Mode for Codex app-server threads but does not own its
+stability. OpenClaw code mode is an OpenClaw-owned experimental tool-surface
+adapter for generic OpenClaw runs. It uses `quickjs-wasi`, a hidden OpenClaw tool
+catalog, and the normal OpenClaw tool executor.
 
 ## OpenClaw code mode vs Codex Code Mode
 
