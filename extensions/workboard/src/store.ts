@@ -2236,6 +2236,20 @@ function closeRunningAttempts(
   );
 }
 
+function verdictFromCardTitle(title: string): string {
+  const dashVerdict = title
+    .split(/\s[—-]\s/g)
+    .at(-1)
+    ?.trim();
+  if (dashVerdict && /^[A-Z0-9_ /-]+$/.test(dashVerdict)) {
+    return dashVerdict;
+  }
+  const matched = title.match(
+    /\b(?:APPROVE(?:D)?|BLOCK(?:ED)?|CODE_PASS|HOLD|HOLD_PENDING_GATES|REQUEST_CHANGES|REJECT(?:ED)?|CONDITIONAL(?:_PASS)?)[A-Z0-9_ /-]*/,
+  );
+  return matched?.[0]?.trim() || "verdict_from_title_unresolved";
+}
+
 function notificationSequence(event: WorkboardNotification): number | undefined {
   return typeof event.sequence === "number" && Number.isFinite(event.sequence)
     ? Math.trunc(event.sequence)
@@ -4122,11 +4136,28 @@ export class WorkboardStore {
           Boolean(maxRuntimeSeconds && runtimeStartedAt) &&
           now - runtimeStartedAt! > secondsToDurationMs(maxRuntimeSeconds!);
         const claimExpired = Boolean(claim?.expiresAt && now - claim.expiresAt > CLAIM_RECLAIM_MS);
+        const heartbeatStale = Boolean(
+          claim?.lastHeartbeatAt && now - claim.lastHeartbeatAt > CLAIM_RECLAIM_MS,
+        );
         const retriesExhausted = retryBudgetExhausted(latest);
-        if (latest.status === "running" && (timedOut || claimExpired)) {
-          const reason = timedOut
-            ? "Run exceeded the card max runtime."
-            : "Claim expired without a recent heartbeat.";
+        if (latest.status === "running" && claimExpired && heartbeatStale) {
+          const verdict = verdictFromCardTitle(latest.title);
+          latest = await this.completeDirect(
+            latest.id,
+            {
+              summary: `Stale claim reaped. Verdict from title: ${verdict}. stale_claim_reaped`,
+              proof: {
+                status: "passed",
+                label: "stale_claim_reaped",
+                command: "workboard_dispatch stale-claim reaper",
+                note: `Expired claim owner=${claim!.ownerId}; expiresAt=${claim!.expiresAt}; lastHeartbeatAt=${claim!.lastHeartbeatAt}`,
+              },
+            },
+            null,
+          );
+          reclaimed.push(latest);
+        } else if (latest.status === "running" && timedOut) {
+          const reason = "Run exceeded the card max runtime.";
           const execution =
             latest.execution?.status === "running"
               ? { ...latest.execution, status: "blocked" as const, updatedAt: now }

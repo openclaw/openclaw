@@ -1560,9 +1560,19 @@ describe("WorkboardStore", () => {
         metadata: { automation: { dispatchCount: 1, lastDispatchAt: 600_000 } },
         events: expect.arrayContaining([expect.objectContaining({ kind: "dispatch" })]),
       });
-      const blockedExpired = await store.get(expired.id);
-      expect(blockedExpired).toMatchObject({ status: "blocked" });
-      expect(blockedExpired?.metadata?.claim).toBeUndefined();
+      const reapedExpired = await store.get(expired.id);
+      expect(reapedExpired).toMatchObject({ status: "done" });
+      expect(reapedExpired?.metadata?.claim).toBeUndefined();
+      expect(reapedExpired?.metadata?.comments).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            body: expect.stringContaining("stale_claim_reaped"),
+          }),
+        ]),
+      );
+      expect(reapedExpired?.metadata?.proof).toEqual(
+        expect.arrayContaining([expect.objectContaining({ label: "stale_claim_reaped" })]),
+      );
       await expect(store.get(timed.id)).resolves.toMatchObject({
         status: "blocked",
         execution: { status: "blocked" },
@@ -1570,13 +1580,11 @@ describe("WorkboardStore", () => {
           attempts: [expect.objectContaining({ status: "blocked", endedAt: 600_000 })],
         },
       });
-      const blockedClaimed = await store.get(claimedTimed.id);
-      expect(blockedClaimed).toMatchObject({ status: "blocked" });
-      expect(blockedClaimed?.metadata?.claim).toBeUndefined();
-      expect(blockedClaimed?.metadata?.notifications).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({ message: "Run exceeded the card max runtime." }),
-        ]),
+      const reapedClaimed = await store.get(claimedTimed.id);
+      expect(reapedClaimed).toMatchObject({ status: "done" });
+      expect(reapedClaimed?.metadata?.claim).toBeUndefined();
+      expect(reapedClaimed?.metadata?.proof).toEqual(
+        expect.arrayContaining([expect.objectContaining({ label: "stale_claim_reaped" })]),
       );
       await expect(store.get(createdRunningTimed.id)).resolves.toMatchObject({
         status: "blocked",
