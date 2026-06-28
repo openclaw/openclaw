@@ -233,6 +233,47 @@ describe("memory search config", () => {
     expect(resolved?.provider).toBe("none");
   });
 
+  it("defaults the rerank pipeline to disabled with no stages", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: { enabled: true },
+        },
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.query.hybrid.rerank).toStrictEqual({ enabled: false, stages: [] });
+  });
+
+  it("resolves rerank stages and clamps topK and lambda", () => {
+    const cfg = asConfig({
+      agents: {
+        defaults: {
+          memorySearch: {
+            enabled: true,
+            query: {
+              hybrid: {
+                rerank: {
+                  enabled: true,
+                  stages: [
+                    { provider: "memory-mmr", topK: 12.7, lambda: 0.6 },
+                    { provider: "memory-external-reranker", lambda: 1.8 },
+                  ],
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+    const resolved = resolveMemorySearchConfig(cfg, "main");
+    expect(resolved?.query.hybrid.rerank.enabled).toBe(true);
+    expect(resolved?.query.hybrid.rerank.stages).toStrictEqual([
+      { provider: "memory-mmr", topK: 12, lambda: 0.6 },
+      { provider: "memory-external-reranker", topK: undefined, lambda: 1 },
+    ]);
+  });
+
   it("resolves custom provider ids through their configured api owner", () => {
     // Workspace provider aliases inherit embedding defaults from their API
     // owner while keeping the configured provider id for auth/routing.

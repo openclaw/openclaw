@@ -424,7 +424,9 @@ describe("Parallels smoke model selection", () => {
     expect(script).not.toContain("'openclaw-parallels-plugin-isolation.cjs'");
     expect(script).toContain("try {");
     expect(script).toContain("} finally {");
-    expect(script).toContain("Remove-Item $isolationScriptPath -Force -ErrorAction SilentlyContinue");
+    expect(script).toContain(
+      "Remove-Item $isolationScriptPath -Force -ErrorAction SilentlyContinue",
+    );
     expect(script).toContain("Remove-Item Env:OPENCLAW_PARALLELS_PLUGIN_ISOLATION");
   });
 
@@ -2096,9 +2098,7 @@ setInterval(() => {}, 1000);
     );
 
     expect(duplicateNpmUpdatePlatformResult.status).toBe(1);
-    expect(duplicateNpmUpdatePlatformResult.stderr).toContain(
-      "duplicate --platform entry: macos",
-    );
+    expect(duplicateNpmUpdatePlatformResult.stderr).toContain("duplicate --platform entry: macos");
 
     expect(readFileSync(TS_PATHS.macos, "utf8")).toContain(
       'this.updateDevTimeoutSeconds = readPositiveIntEnv(\n      "OPENCLAW_PARALLELS_MACOS_UPDATE_DEV_TIMEOUT_S"',

@@ -114,6 +114,7 @@
     "!dist/extensions/lobster/**",
     "!dist/extensions/mattermost/**",
     "!dist/extensions/memory-lancedb/**",
+    "!dist/extensions/memory-external-reranker/**",
     "!dist/extensions/matrix/**",
     "!dist/extensions/moonshot/**",
     "!dist/extensions/msteams/**",
@@ -1152,6 +1153,10 @@
     "./plugin-sdk/memory-core-host-engine-foundation": {
       "types": "./dist/plugin-sdk/memory-core-host-engine-foundation.d.ts",
       "default": "./dist/plugin-sdk/memory-core-host-engine-foundation.js"
+    },
+    "./plugin-sdk/memory-core-host-engine-reranker": {
+      "types": "./dist/plugin-sdk/memory-core-host-engine-reranker.d.ts",
+      "default": "./dist/plugin-sdk/memory-core-host-engine-reranker.js"
     },
     "./plugin-sdk/memory-core-host-engine-qmd": {
       "types": "./dist/plugin-sdk/memory-core-host-engine-qmd.d.ts",

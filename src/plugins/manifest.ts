@@ -415,6 +415,7 @@ export type PluginManifestContracts = {
   externalAuthProviders?: string[];
   embeddingProviders?: string[];
   memoryEmbeddingProviders?: string[];
+  memoryRerankers?: string[];
   speechProviders?: string[];
   realtimeTranscriptionProviders?: string[];
   realtimeVoiceProviders?: string[];
@@ -852,6 +853,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
   const externalAuthProviders = normalizeTrimmedStringList(value.externalAuthProviders);
   const embeddingProviders = normalizeTrimmedStringList(value.embeddingProviders);
   const memoryEmbeddingProviders = normalizeTrimmedStringList(value.memoryEmbeddingProviders);
+  const memoryRerankers = normalizeTrimmedStringList(value.memoryRerankers);
   const speechProviders = normalizeTrimmedStringList(value.speechProviders);
   const realtimeTranscriptionProviders = normalizeTrimmedStringList(
     value.realtimeTranscriptionProviders,
@@ -876,6 +878,7 @@ function normalizeManifestContracts(value: unknown): PluginManifestContracts | u
     ...(externalAuthProviders.length > 0 ? { externalAuthProviders } : {}),
     ...(embeddingProviders.length > 0 ? { embeddingProviders } : {}),
     ...(memoryEmbeddingProviders.length > 0 ? { memoryEmbeddingProviders } : {}),
+    ...(memoryRerankers.length > 0 ? { memoryRerankers } : {}),
     ...(speechProviders.length > 0 ? { speechProviders } : {}),
     ...(realtimeTranscriptionProviders.length > 0 ? { realtimeTranscriptionProviders } : {}),
     ...(realtimeVoiceProviders.length > 0 ? { realtimeVoiceProviders } : {}),

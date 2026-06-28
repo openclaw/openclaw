@@ -962,9 +962,9 @@
       }
     },
     "node_modules/bare-stream": {
-      "version": "2.13.1",
-      "resolved": "https://registry.npmjs.org/bare-stream/-/bare-stream-2.13.1.tgz",
-      "integrity": "sha512-Vp0cnjYyrEC4whYTymQ+YZi6pBpfiICZO3cfRG8sy67ZNWe951urv1x4eW1BKNngw3U+3fPYb5JQvHbCtxH7Ow==",
+      "version": "2.13.2",
+      "resolved": "https://registry.npmjs.org/bare-stream/-/bare-stream-2.13.2.tgz",
+      "integrity": "sha512-2V5j0dOfxv3iIngIWMnW1O6UPXpeoU70HJzUJGVth/+RURhDyq7SEWTD70Y2SkUB0MQonYYWpIX3f85P/I22+Q==",
       "license": "Apache-2.0",
       "dependencies": {
         "streamx": "^2.25.0",
@@ -1983,14 +1983,14 @@
       }
     },
     "node_modules/side-channel": {
-      "version": "1.1.0",
-      "resolved": "https://registry.npmjs.org/side-channel/-/side-channel-1.1.0.tgz",
-      "integrity": "sha512-ZX99e6tRweoUXqR+VBrslhda51Nh5MTQwou5tnUDgbtyM0dBgmhEDtWGP/xbKn6hqfPRHujUNwz5fy/wbbhnpw==",
+      "version": "1.1.1",
+      "resolved": "https://registry.npmjs.org/side-channel/-/side-channel-1.1.1.tgz",
+      "integrity": "sha512-6x6dK6zJdpTzF4sQeNYxwtvBzf6Eg4GtlesS94HOvTudUeyK2WXAaIfmDgsyslYrRBeFIlsi54AYsFGUuhmvrQ==",
       "license": "MIT",
       "dependencies": {
         "es-errors": "^1.3.0",
-        "object-inspect": "^1.13.3",
-        "side-channel-list": "^1.0.0",
+        "object-inspect": "^1.13.4",
+        "side-channel-list": "^1.0.1",
         "side-channel-map": "^1.0.1",
         "side-channel-weakmap": "^1.0.2"
       },

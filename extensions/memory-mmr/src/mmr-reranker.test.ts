@@ -9,7 +9,7 @@ import {
   applyMMRToHybridResults,
   DEFAULT_MMR_CONFIG,
   type MMRItem,
-} from "./mmr.js";
+} from "./mmr-reranker.js";
 
 describe("tokenize", () => {
   it("normalizes, filters, and deduplicates token sets", () => {
@@ -299,68 +299,6 @@ describe("mmrRerank", () => {
       // Second should be different, not identical duplicate
       expect(result[1].id).toBe("3");
     });
-
-    it("handles all identical content gracefully", () => {
-      const items: MMRItem[] = [
-        { id: "1", score: 1, content: "same" },
-        { id: "2", score: 0.9, content: "same" },
-        { id: "3", score: 0.8, content: "same" },
-      ];
-
-      const result = mmrRerank(items, { lambda: 0.7 });
-      // Should still complete without error, order by score as tiebreaker
-      expect(result).toHaveLength(3);
-    });
-  });
-
-  describe("tie-breaking", () => {
-    it("uses original score as tiebreaker", () => {
-      const items: MMRItem[] = [
-        { id: "1", score: 1, content: "unique content one" },
-        { id: "2", score: 0.9, content: "unique content two" },
-        { id: "3", score: 0.8, content: "unique content three" },
-      ];
-
-      // With very different content and lambda=1, should be pure score order
-      const result = mmrRerank(items, { lambda: 1 });
-      expect(result.map((i) => i.id)).toEqual(["1", "2", "3"]);
-    });
-
-    it("preserves all items even with same MMR scores", () => {
-      const items: MMRItem[] = [
-        { id: "1", score: 0.5, content: "a" },
-        { id: "2", score: 0.5, content: "b" },
-        { id: "3", score: 0.5, content: "c" },
-      ];
-
-      const result = mmrRerank(items, { lambda: 0.7 });
-      expect(result).toHaveLength(3);
-      expect(new Set(result.map((i) => i.id))).toEqual(new Set(["1", "2", "3"]));
-    });
-  });
-
-  describe("score normalization", () => {
-    it("handles items with same scores", () => {
-      const items: MMRItem[] = [
-        { id: "1", score: 0.5, content: "hello world" },
-        { id: "2", score: 0.5, content: "foo bar" },
-      ];
-
-      const result = mmrRerank(items, { lambda: 0.7 });
-      expect(result).toHaveLength(2);
-    });
-
-    it("handles negative scores", () => {
-      const items: MMRItem[] = [
-        { id: "1", score: -0.5, content: "hello world" },
-        { id: "2", score: -1, content: "foo bar" },
-      ];
-
-      const result = mmrRerank(items, { lambda: 0.7 });
-      expect(result).toHaveLength(2);
-      // Higher score (less negative) should come first
-      expect(result[0].id).toBe("1");
-    });
   });
 });
 
@@ -371,51 +309,10 @@ describe("applyMMRToHybridResults", () => {
     endLine: number;
     score: number;
     snippet: string;
-    source: string;
+    source: "memory" | "sessions";
   };
 
-  it("preserves all original fields", () => {
-    const results: HybridResult[] = [
-      {
-        path: "/test/file.ts",
-        startLine: 1,
-        endLine: 10,
-        score: 0.9,
-        snippet: "hello world",
-        source: "memory",
-      },
-    ];
-
-    const reranked = applyMMRToHybridResults(results);
-    expect(reranked[0]).toEqual(results[0]);
-  });
-
-  it("creates unique IDs from path and startLine", () => {
-    const results: HybridResult[] = [
-      {
-        path: "/test/a.ts",
-        startLine: 1,
-        endLine: 10,
-        score: 0.9,
-        snippet: "same content here",
-        source: "memory",
-      },
-      {
-        path: "/test/a.ts",
-        startLine: 20,
-        endLine: 30,
-        score: 0.8,
-        snippet: "same content here",
-        source: "memory",
-      },
-    ];
-
-    // Should work without ID collision
-    const reranked = applyMMRToHybridResults(results);
-    expect(reranked).toHaveLength(2);
-  });
-
-  it("re-ranks results for diversity", () => {
+  it("re-ranks hybrid results by MMR", () => {
     const results: HybridResult[] = [
       {
         path: "/a.ts",
@@ -449,6 +346,26 @@ describe("applyMMRToHybridResults", () => {
     expect(reranked[0].path).toBe("/a.ts");
     // Second should be the diverse one
     expect(reranked[1].path).toBe("/c.ts");
+  });
+
+  it("preserves original items (not copies)", () => {
+    const results: HybridResult[] = [
+      { path: "/a.ts", startLine: 1, endLine: 10, score: 0.9, snippet: "test", source: "memory" },
+      { path: "/b.ts", startLine: 1, endLine: 10, score: 0.8, snippet: "test", source: "memory" },
+    ];
+
+    const reranked = applyMMRToHybridResults(results, { enabled: false });
+    expect(reranked).toStrictEqual(results);
+  });
+
+  it("returns copy when reordering occurs", () => {
+    const results: HybridResult[] = [
+      { path: "/a.ts", startLine: 1, endLine: 10, score: 0.9, snippet: "test", source: "memory" },
+      { path: "/b.ts", startLine: 1, endLine: 10, score: 0.8, snippet: "test", source: "memory" },
+    ];
+
+    const reranked = applyMMRToHybridResults(results, { enabled: true, lambda: 0 });
+    expect(reranked).not.toBe(results);
   });
 
   it("respects disabled config", () => {

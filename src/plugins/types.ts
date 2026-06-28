@@ -2917,6 +2917,10 @@ export type OpenClawPluginApi = {
   registerMemoryEmbeddingProvider: (
     adapter: import("./memory-embedding-providers.js").MemoryEmbeddingProviderAdapter,
   ) => void;
+  /** Register a memory reranker plugin. Multiple rerankers may coexist. */
+  registerMemoryReranker: (
+    reranker: import("../plugin-sdk/memory-core-host-engine-reranker.js").MemoryRerankerPlugin,
+  ) => void;
   resolvePath: (input: string) => string;
   /** Register a lifecycle hook handler */
   on: <K extends PluginHookName>(

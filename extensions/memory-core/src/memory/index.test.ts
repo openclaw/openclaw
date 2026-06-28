@@ -1635,6 +1635,59 @@ describe("memory index", () => {
     );
   });
 
+  it("returns vector hits below minScore when FTS has no results for the query", async () => {
+    // Regression: when FTS returns 0 keyword results and all vector candidates
+    // score below minScore, the hybrid path previously called selectScoredResults
+    // with relaxedMinScore=minScore (no relaxation), returning 0 results.
+    // It should fall back to relaxedMinScore=0 so the best vector hits surface.
+    const cfg = createCfg({
+      minScore: 0.35,
+      hybrid: { enabled: true, vectorWeight: 0.7, textWeight: 0.3 },
+    });
+    const manager = await getFreshManager(cfg);
+    try {
+      const status = manager.status();
+      if (!status.fts?.available) {
+        return;
+      }
+
+      // Write memory whose embedding will match the query but whose FTS tokens
+      // won't (gibberish FTS target keeps keyword results empty).
+      await fs.writeFile(path.join(memoryDir, "2026-01-12.md"), "# Log\nAlpha memory line.\n");
+      await manager.sync({ reason: "test" });
+
+      // Override the embed provider so the query vector closely matches the
+      // stored chunk's vector, but use a high-entropy string that FTS won't hit.
+      const stored = [1, 0, 0, 0];
+      (
+        manager as unknown as {
+          provider: {
+            embedQuery: (text: string) => Promise<number[]>;
+          };
+        }
+      ).provider.embedQuery = async () => stored;
+
+      // The mock embedder stores [1,0,0,0] for every chunk; the query vector
+      // also returns [1,0,0,0], giving cosine similarity = 1.0. But to simulate
+      // a low-score scenario, reduce the query vector to something orthogonally
+      // partial so the score is < 0.35 while still being the best available hit.
+      (
+        manager as unknown as {
+          provider: {
+            embedQuery: (text: string) => Promise<number[]>;
+          };
+        }
+      ).provider.embedQuery = async () => [0.5, 0.5, 0, 0];
+
+      // "xyzzy_nocontent" has no FTS tokens in the index so keyword results = 0.
+      const results = await manager.search("xyzzy_nocontent");
+      // The vector hit should be returned even though its score is below 0.35.
+      expect(results.length).toBeGreaterThan(0);
+    } finally {
+      await manager.close?.();
+    }
+  });
+
   it("bounds per-keyword FTS fallback in provider-backed hybrid search", async () => {
     const cfg = createCfg({
       minScore: 0.35,

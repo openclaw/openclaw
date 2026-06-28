@@ -479,24 +479,24 @@
       }
     },
     "node_modules/react": {
-      "version": "19.2.4",
-      "resolved": "https://registry.npmjs.org/react/-/react-19.2.4.tgz",
-      "integrity": "sha512-9nfp2hYpCwOjAN+8TZFGhtWEwgvWHXqESH8qT89AT/lWklpLON22Lc8pEtnpsZz7VmawabSU0gCjnj8aC0euHQ==",
+      "version": "19.2.7",
+      "resolved": "https://registry.npmjs.org/react/-/react-19.2.7.tgz",
+      "integrity": "sha512-HNe9WslTbXmFK8o8cmwgAeJFSBvt1bPdHCVKtaaV+WlAN36mpT4hcRpwbf3fY56ar2oIXzsBpOAiIRHAdY0OlQ==",
       "license": "MIT",
       "engines": {
         "node": ">=0.10.0"
       }
     },
     "node_modules/react-dom": {
-      "version": "19.2.4",
-      "resolved": "https://registry.npmjs.org/react-dom/-/react-dom-19.2.4.tgz",
-      "integrity": "sha512-AXJdLo8kgMbimY95O2aKQqsz2iWi9jMgKJhRBAxECE4IFxfcazB2LmzloIoibJI3C12IlY20+KFaLv+71bUJeQ==",
+      "version": "19.2.7",
+      "resolved": "https://registry.npmjs.org/react-dom/-/react-dom-19.2.7.tgz",
+      "integrity": "sha512-t0BRVXvbiE/o20Hfw669rLbMCDWtYZLvmJigy2f0MxsXF+71pxhR3xOkspmsO8h3ZlNzyibAmtCa3l4lYKk6gQ==",
       "license": "MIT",
       "dependencies": {
         "scheduler": "^0.27.0"
       },
       "peerDependencies": {
-        "react": "^19.2.4"
+        "react": "^19.2.7"
       }
     },
     "node_modules/regex": {

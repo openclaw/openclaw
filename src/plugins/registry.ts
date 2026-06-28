@@ -39,6 +39,10 @@ import {
   NODE_SYSTEM_RUN_COMMANDS,
 } from "../infra/node-commands.js";
 import {
+  getRegisteredMemoryRerankerEntry,
+  registerMemoryReranker,
+} from "../plugin-sdk/memory-core-host-engine-reranker.js";
+import {
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   type OpenKeyedStoreOptions,
@@ -3211,6 +3215,55 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
                   pluginId: record.id,
                   pluginName: record.name,
                   provider: adapter,
+                  source: record.source,
+                  rootDir: record.rootDir,
+                });
+              },
+              registerMemoryReranker: (reranker) => {
+                if (hasKind(record.kind, "memory")) {
+                  if (
+                    Array.isArray(record.kind) &&
+                    record.kind.length > 1 &&
+                    !record.memorySlotSelected
+                  ) {
+                    pushDiagnostic({
+                      level: "warn",
+                      pluginId: record.id,
+                      source: record.source,
+                      message:
+                        "dual-kind plugin not selected for memory slot; skipping memory reranker registration",
+                    });
+                    return;
+                  }
+                } else if (!(record.contracts?.memoryRerankers ?? []).includes(reranker.id)) {
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `plugin must own memory slot or declare contracts.memoryRerankers for reranker: ${reranker.id}`,
+                  });
+                  return;
+                }
+                const existing = getRegisteredMemoryRerankerEntry(reranker.id);
+                if (existing) {
+                  const ownerDetail = existing.ownerPluginId
+                    ? ` (owner: ${existing.ownerPluginId})`
+                    : "";
+                  pushDiagnostic({
+                    level: "error",
+                    pluginId: record.id,
+                    source: record.source,
+                    message: `memory reranker already registered: ${reranker.id}${ownerDetail}`,
+                  });
+                  return;
+                }
+                registerMemoryReranker(reranker, {
+                  ownerPluginId: record.id,
+                });
+                registry.memoryRerankers.push({
+                  pluginId: record.id,
+                  pluginName: record.name,
+                  provider: reranker,
                   source: record.source,
                   rootDir: record.rootDir,
                 });

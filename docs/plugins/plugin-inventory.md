@@ -105,6 +105,8 @@ Each entry lists the package, distribution route, and description.
 
 - **[memory-core](/plugins/reference/memory-core)** (`@openclaw/memory-core`) - included in OpenClaw. Adds agent-callable tools.
 
+- **[memory-mmr](/plugins/reference/memory-mmr)** (`@openclaw/memory-mmr`) - included in OpenClaw. Bundled OpenClaw MMR (Maximal Marginal Relevance) reranker for memory hybrid search diversity.
+
 - **[memory-wiki](/plugins/reference/memory-wiki)** (`@openclaw/memory-wiki`) - included in OpenClaw. Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.
 
 - **[microsoft](/plugins/reference/microsoft)** (`@openclaw/microsoft-speech`) - included in OpenClaw. Adds text-to-speech provider support.
@@ -173,7 +175,7 @@ Each entry lists the package, distribution route, and description.
 
 ## Official external packages
 
-68 plugins
+69 plugins
 
 - **[acpx](/plugins/reference/acpx)** (`@openclaw/acpx`) - npm; ClawHub. OpenClaw ACP runtime backend with plugin-owned session and transport management.
 
@@ -248,6 +250,8 @@ Each entry lists the package, distribution route, and description.
 - **[matrix](/plugins/reference/matrix)** (`@openclaw/matrix`) - ClawHub: `clawhub:@openclaw/matrix`; npm. OpenClaw Matrix channel plugin for rooms and direct messages.
 
 - **[mattermost](/plugins/reference/mattermost)** (`@openclaw/mattermost`) - npm; ClawHub: `clawhub:@openclaw/mattermost`. Adds the Mattermost channel surface for sending and receiving OpenClaw messages.
+
+- **[memory-external-reranker](/plugins/reference/memory-external-reranker)** (`@openclaw/memory-external-reranker`) - npm; ClawHub. OpenClaw memory reranker plugin that proxies to a Cohere-compatible /v1/rerank endpoint (Cohere, Jina, Voyage, llama.cpp).
 
 - **[memory-lancedb](/plugins/reference/memory-lancedb)** (`@openclaw/memory-lancedb`) - npm; ClawHub. OpenClaw LanceDB-backed long-term memory plugin with auto-recall, auto-capture, and vector search.
 

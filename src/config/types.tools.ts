@@ -567,12 +567,24 @@ export type MemorySearchConfig = {
       textWeight?: number;
       /** Multiplier for candidate pool size (default: 4). */
       candidateMultiplier?: number;
-      /** Optional MMR re-ranking for result diversity. */
-      mmr?: {
-        /** Enable MMR re-ranking (default: false). */
+      /** Optional serial multi-stage reranking pipeline. */
+      rerank?: {
+        /** Enable the reranking pipeline (default: false). */
         enabled?: boolean;
-        /** Lambda: 0 = max diversity, 1 = max relevance (default: 0.7). */
-        lambda?: number;
+        /**
+         * Ordered reranker stages. Each stage runs a registered reranker plugin
+         * over the previous stage's output, then the stage's top-K filter
+         * narrows the survivors before they reach the next stage so slow,
+         * precise stages only ever see a small candidate set.
+         */
+        stages?: Array<{
+          /** Registered reranker plugin id (e.g. "memory-mmr", "memory-external-reranker"). */
+          provider: string;
+          /** Top-K survivors passed to the next stage. Ignored on the final stage. */
+          topK?: number;
+          /** MMR relevance-vs-diversity weight (0-1); ignored by rerankers that do not use it. */
+          lambda?: number;
+        }>;
       };
       /** Optional temporal decay to boost recency in hybrid scoring. */
       temporalDecay?: {

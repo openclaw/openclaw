@@ -1,6 +1,7 @@
 // Captures plugin registrations for controlled registry assembly.
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { MemoryRerankerPlugin } from "../plugin-sdk/memory-core-host-engine-reranker.js";
 import type {
   AgentToolResultMiddleware,
   AgentToolResultMiddlewareOptions,
@@ -74,6 +75,7 @@ export type CapturedPluginRegistration = {
   webSearchProviders: WebSearchProviderPlugin[];
   migrationProviders: MigrationProviderPlugin[];
   memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[];
+  memoryRerankers: MemoryRerankerPlugin[];
   sessionExtensions: PluginSessionExtensionRegistration[];
   trustedToolPolicies: PluginTrustedToolPolicyRegistration[];
   toolMetadata: PluginToolMetadataRegistration[];
@@ -113,6 +115,7 @@ export function createCapturedPluginRegistration(params?: {
   const webSearchProviders: WebSearchProviderPlugin[] = [];
   const migrationProviders: MigrationProviderPlugin[] = [];
   const memoryEmbeddingProviders: MemoryEmbeddingProviderAdapter[] = [];
+  const memoryRerankers: MemoryRerankerPlugin[] = [];
   const sessionExtensions: PluginSessionExtensionRegistration[] = [];
   const trustedToolPolicies: PluginTrustedToolPolicyRegistration[] = [];
   const toolMetadata: PluginToolMetadataRegistration[] = [];
@@ -155,6 +158,7 @@ export function createCapturedPluginRegistration(params?: {
     webSearchProviders,
     migrationProviders,
     memoryEmbeddingProviders,
+    memoryRerankers,
     sessionExtensions,
     trustedToolPolicies,
     toolMetadata,
@@ -268,6 +272,9 @@ export function createCapturedPluginRegistration(params?: {
         },
         registerMemoryEmbeddingProvider(adapter: MemoryEmbeddingProviderAdapter) {
           memoryEmbeddingProviders.push(adapter);
+        },
+        registerMemoryReranker(reranker: MemoryRerankerPlugin) {
+          memoryRerankers.push(reranker);
         },
         registerSessionExtension(extension: PluginSessionExtensionRegistration) {
           sessionExtensions.push(extension);

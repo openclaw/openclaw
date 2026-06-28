@@ -1534,10 +1534,7 @@ describe("package artifact reuse", () => {
 
     for (const item of cases) {
       const label = `${item.workflowPath} ${item.jobName}`;
-      const uploadStep = workflowStep(
-        workflowJob(item.workflowPath, item.jobName),
-        item.stepName,
-      );
+      const uploadStep = workflowStep(workflowJob(item.workflowPath, item.jobName), item.stepName);
 
       expect(uploadStep.if, label).toContain("always()");
       expect(uploadStep.uses, label).toBe(UPLOAD_ARTIFACT_V7);

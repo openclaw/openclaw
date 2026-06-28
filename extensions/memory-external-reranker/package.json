@@ -1,0 +1,36 @@
+{
+  "name": "@openclaw/memory-external-reranker",
+  "version": "2026.6.2",
+  "description": "OpenClaw external memory reranker plugin (Cohere-compatible /v1/rerank).",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/openclaw/openclaw"
+  },
+  "type": "module",
+  "main": "index.ts",
+  "types": "index.ts",
+  "devDependencies": {
+    "@openclaw/plugin-sdk": "workspace:*"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "install": {
+      "npmSpec": "@openclaw/memory-external-reranker",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.6.2"
+    },
+    "compat": {
+      "pluginApi": ">=2026.6.2"
+    },
+    "build": {
+      "openclawVersion": "2026.6.2"
+    },
+    "release": {
+      "bundleRuntimeDependencies": false,
+      "publishToClawHub": true,
+      "publishToNpm": true
+    }
+  }
+}

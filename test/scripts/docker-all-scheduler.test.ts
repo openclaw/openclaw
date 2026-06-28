@@ -519,8 +519,8 @@ postgres Created
       )}`,
       env: process.env,
       label: "oversized-capture-timeout",
-        timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
-        timeoutMs: Number.MAX_SAFE_INTEGER,
+      timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
     });
 
     expect(result).toMatchObject({
@@ -608,7 +608,7 @@ setInterval(() => {}, 1000);
       command: `exec ${JSON.stringify(process.execPath)} ${JSON.stringify(scriptPath)}`,
       env: process.env,
       label: "oversized-timeout-grace",
-        timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
+      timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
       timeoutMs: 500,
     });
 

@@ -148,9 +148,9 @@
       "license": "MIT"
     },
     "node_modules/@types/node": {
-      "version": "25.9.2",
-      "resolved": "https://registry.npmjs.org/@types/node/-/node-25.9.2.tgz",
-      "integrity": "sha512-G05zqtJhcDLb8uslf5EjCxXg9G1KQxiV8OS0R26IC//Eoyitzqe8z37I7cqvnZlrlSfgocQRfSn/AHBZJJFyGw==",
+      "version": "25.9.1",
+      "resolved": "https://registry.npmjs.org/@types/node/-/node-25.9.1.tgz",
+      "integrity": "sha512-xfrlY7UD5rMJk3ZVJP8BNzS28J36YJg+xp+LPXV1TdWxr8uMH5A860QNxYDGQe/ylDSgjxE52Q9VnO7p75tJxg==",
       "license": "MIT",
       "dependencies": {
         "undici-types": ">=7.24.0 <7.24.7"
@@ -169,15 +169,6 @@
       "license": "MIT",
       "dependencies": {
         "@types/node": "*"
-      }
-    },
-    "node_modules/@types/ws/node_modules/@types/node": {
-      "version": "25.9.1",
-      "resolved": "https://registry.npmjs.org/@types/node/-/node-25.9.1.tgz",
-      "integrity": "sha512-xfrlY7UD5rMJk3ZVJP8BNzS28J36YJg+xp+LPXV1TdWxr8uMH5A860QNxYDGQe/ylDSgjxE52Q9VnO7p75tJxg==",
-      "license": "MIT",
-      "dependencies": {
-        "undici-types": ">=7.24.0 <7.24.7"
       }
     },
     "node_modules/accepts": {
@@ -1220,14 +1211,14 @@
       "license": "ISC"
     },
     "node_modules/side-channel": {
-      "version": "1.1.0",
-      "resolved": "https://registry.npmjs.org/side-channel/-/side-channel-1.1.0.tgz",
-      "integrity": "sha512-ZX99e6tRweoUXqR+VBrslhda51Nh5MTQwou5tnUDgbtyM0dBgmhEDtWGP/xbKn6hqfPRHujUNwz5fy/wbbhnpw==",
+      "version": "1.1.1",
+      "resolved": "https://registry.npmjs.org/side-channel/-/side-channel-1.1.1.tgz",
+      "integrity": "sha512-6x6dK6zJdpTzF4sQeNYxwtvBzf6Eg4GtlesS94HOvTudUeyK2WXAaIfmDgsyslYrRBeFIlsi54AYsFGUuhmvrQ==",
       "license": "MIT",
       "dependencies": {
         "es-errors": "^1.3.0",
-        "object-inspect": "^1.13.3",
-        "side-channel-list": "^1.0.0",
+        "object-inspect": "^1.13.4",
+        "side-channel-list": "^1.0.1",
         "side-channel-map": "^1.0.1",
         "side-channel-weakmap": "^1.0.2"
       },

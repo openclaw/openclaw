@@ -83,6 +83,7 @@ export type BuildPluginApiParams = {
       | "registerMemoryFlushPlan"
       | "registerMemoryRuntime"
       | "registerMemoryEmbeddingProvider"
+      | "registerMemoryReranker"
       | "on"
     >
   >;
@@ -178,6 +179,7 @@ const noopRegisterMemoryFlushPlan: OpenClawPluginApi["registerMemoryFlushPlan"] 
 const noopRegisterMemoryRuntime: OpenClawPluginApi["registerMemoryRuntime"] = () => {};
 const noopRegisterMemoryEmbeddingProvider: OpenClawPluginApi["registerMemoryEmbeddingProvider"] =
   () => {};
+const noopRegisterMemoryReranker: OpenClawPluginApi["registerMemoryReranker"] = () => {};
 const noopOn: OpenClawPluginApi["on"] = () => {};
 
 export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi {
@@ -288,6 +290,7 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     registerMemoryRuntime: handlers.registerMemoryRuntime ?? noopRegisterMemoryRuntime,
     registerMemoryEmbeddingProvider:
       handlers.registerMemoryEmbeddingProvider ?? noopRegisterMemoryEmbeddingProvider,
+    registerMemoryReranker: handlers.registerMemoryReranker ?? noopRegisterMemoryReranker,
     resolvePath: params.resolvePath,
     on: handlers.on ?? noopOn,
   };

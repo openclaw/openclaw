@@ -125,6 +125,7 @@ describe("plugin SDK surface report", () => {
 
   it("accepts exact deprecated export budget overrides by public entrypoint", () => {
     const result = runSurfaceReport({
+      ...relaxedSdkBudgetEnv,
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 2 }),
     });
 
@@ -148,6 +149,7 @@ describe("plugin SDK surface report", () => {
 
   it("rejects deprecated export growth by public entrypoint", () => {
     const result = runSurfaceReport({
+      ...relaxedSdkBudgetEnv,
       OPENCLAW_PLUGIN_SDK_MAX_PUBLIC_DEPRECATED_EXPORTS_BY_ENTRYPOINT: JSON.stringify({ core: 1 }),
     });
 

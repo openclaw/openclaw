@@ -243,19 +243,18 @@ function readLegacyDebugProxyCapture(params: { sourcePath: string; blobDir: stri
     const blobs: LegacyCaptureBlobRow[] = [];
     for (const [blobId, referencingEvents] of blobEvents) {
       const candidateBlobDirs = [
-        ...new Set(
-          [
-            ...referencingEvents.map(
-              (event) => blobDirBySession.get(event.session_id) ?? params.blobDir,
-            ),
-            params.blobDir,
-          ],
-        ),
+        ...new Set([
+          ...referencingEvents.map(
+            (event) => blobDirBySession.get(event.session_id) ?? params.blobDir,
+          ),
+          params.blobDir,
+        ]),
       ];
       const blobPath =
         candidateBlobDirs
           .map((blobDir) => path.join(blobDir, `${blobId}.bin.gz`))
-          .find(fileExists) ?? path.join(candidateBlobDirs[0] ?? params.blobDir, `${blobId}.bin.gz`);
+          .find(fileExists) ??
+        path.join(candidateBlobDirs[0] ?? params.blobDir, `${blobId}.bin.gz`);
       const data = fs.readFileSync(blobPath);
       const raw = gunzipSync(data);
       const sha256 = createHash("sha256").update(raw).digest("hex");

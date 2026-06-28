@@ -95,9 +95,13 @@ export type ResolvedMemorySearchConfig = {
       vectorWeight: number;
       textWeight: number;
       candidateMultiplier: number;
-      mmr: {
+      rerank: {
         enabled: boolean;
-        lambda: number;
+        stages: Array<{
+          provider: string;
+          topK?: number;
+          lambda?: number;
+        }>;
       };
       temporalDecay: {
         enabled: boolean;
@@ -124,8 +128,7 @@ const DEFAULT_HYBRID_ENABLED = true;
 const DEFAULT_HYBRID_VECTOR_WEIGHT = 0.7;
 const DEFAULT_HYBRID_TEXT_WEIGHT = 0.3;
 const DEFAULT_HYBRID_CANDIDATE_MULTIPLIER = 4;
-const DEFAULT_MMR_ENABLED = false;
-const DEFAULT_MMR_LAMBDA = 0.7;
+const DEFAULT_RERANK_ENABLED = false;
 const DEFAULT_TEMPORAL_DECAY_ENABLED = false;
 const DEFAULT_TEMPORAL_DECAY_HALF_LIFE_DAYS = 30;
 const DEFAULT_CACHE_ENABLED = true;
@@ -322,15 +325,13 @@ function mergeConfig(
       overrides?.query?.hybrid?.candidateMultiplier ??
       defaults?.query?.hybrid?.candidateMultiplier ??
       DEFAULT_HYBRID_CANDIDATE_MULTIPLIER,
-    mmr: {
+    rerank: {
       enabled:
-        overrides?.query?.hybrid?.mmr?.enabled ??
-        defaults?.query?.hybrid?.mmr?.enabled ??
-        DEFAULT_MMR_ENABLED,
-      lambda:
-        overrides?.query?.hybrid?.mmr?.lambda ??
-        defaults?.query?.hybrid?.mmr?.lambda ??
-        DEFAULT_MMR_LAMBDA,
+        overrides?.query?.hybrid?.rerank?.enabled ??
+        defaults?.query?.hybrid?.rerank?.enabled ??
+        DEFAULT_RERANK_ENABLED,
+      stages:
+        overrides?.query?.hybrid?.rerank?.stages ?? defaults?.query?.hybrid?.rerank?.stages ?? [],
     },
     temporalDecay: {
       enabled:
@@ -402,11 +403,19 @@ function mergeConfig(
         vectorWeight: normalizedVectorWeight,
         textWeight: normalizedTextWeight,
         candidateMultiplier,
-        mmr: {
-          enabled: hybrid.mmr.enabled,
-          lambda: Number.isFinite(hybrid.mmr.lambda)
-            ? Math.max(0, Math.min(1, hybrid.mmr.lambda))
-            : DEFAULT_MMR_LAMBDA,
+        rerank: {
+          enabled: hybrid.rerank.enabled,
+          stages: hybrid.rerank.stages.map((stage) => ({
+            provider: stage.provider,
+            topK:
+              stage.topK !== undefined && Number.isFinite(stage.topK)
+                ? Math.max(1, Math.floor(stage.topK))
+                : undefined,
+            lambda:
+              stage.lambda !== undefined && Number.isFinite(stage.lambda)
+                ? Math.max(0, Math.min(1, stage.lambda))
+                : undefined,
+          })),
         },
         temporalDecay: {
           enabled: hybrid.temporalDecay.enabled,

@@ -170,6 +170,7 @@ export function createPluginLoadResult(
     codexAppServerExtensionFactories: [],
     agentToolResultMiddlewares: [],
     memoryEmbeddingProviders: [],
+    memoryRerankers: [],
     textTransforms: [],
     agentHarnesses: [],
     tools: [],

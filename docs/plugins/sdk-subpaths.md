@@ -364,6 +364,7 @@ usage endpoint failed or returned no usable usage data.
     | `plugin-sdk/memory-core-host-embedding-registry` | Lightweight memory embedding provider registry helpers |
     | `plugin-sdk/memory-core-host-engine-foundation` | Memory host foundation engine exports |
     | `plugin-sdk/memory-core-host-engine-embeddings` | Memory host embedding contracts, registry access, local provider, and generic batch/remote helpers. `registerMemoryEmbeddingProvider` on this surface is deprecated; use the generic embedding provider API for new providers. |
+    | `plugin-sdk/memory-core-host-engine-reranker` | Memory host reranker contracts and registry. Use `registerMemoryReranker` to register a reranker plugin and `getRegisteredMemoryReranker` to look up a registered reranker by id. |
     | `plugin-sdk/memory-core-host-engine-qmd` | Memory host QMD engine exports |
     | `plugin-sdk/memory-core-host-engine-storage` | Memory host storage engine exports |
     | `plugin-sdk/memory-core-host-multimodal` | Memory host multimodal helpers |

@@ -1264,10 +1264,16 @@ export const FIELD_HELP: Record<string, string> = {
     "Controls how strongly BM25 keyword relevance influences hybrid ranking (0-1). Increase for exact-term matching; decrease when semantic matches should rank higher.",
   "agents.defaults.memorySearch.query.hybrid.candidateMultiplier":
     "Expands the candidate pool before reranking (default: 4). Raise this for better recall on noisy corpora, but expect more compute and slightly slower searches.",
-  "agents.defaults.memorySearch.query.hybrid.mmr.enabled":
-    "Adds MMR reranking to diversify results and reduce near-duplicate snippets in a single answer window. Enable when recall looks repetitive; keep off for strict score ordering.",
-  "agents.defaults.memorySearch.query.hybrid.mmr.lambda":
-    "Sets MMR relevance-vs-diversity balance (0 = most diverse, 1 = most relevant, default: 0.7). Lower values reduce repetition; higher values keep tightly relevant but may duplicate.",
+  "agents.defaults.memorySearch.query.hybrid.rerank.enabled":
+    "Enables the staged reranking pipeline that reorders hybrid candidates after temporal decay. Keep off for strict score ordering; enable when you want diversity or model-based rerankers to refine results.",
+  "agents.defaults.memorySearch.query.hybrid.rerank.stages":
+    "Defines the ordered reranker stages run serially over hybrid candidates. Each stage reranks with one plugin, then its top-K filter narrows survivors before the next stage so slow, precise rerankers only see a small set. Leave empty to skip reranking.",
+  "agents.defaults.memorySearch.query.hybrid.rerank.stages[].provider":
+    'Selects the registered reranker plugin id for this stage (e.g. "memory-mmr", "memory-external-reranker"). Use a fast diversity reranker first and a precise model reranker later. Stages whose plugin is not installed are skipped.',
+  "agents.defaults.memorySearch.query.hybrid.rerank.stages[].topK":
+    "Sets how many top survivors this stage passes to the next stage. Use a small value to keep slow downstream rerankers cheap. Ignored on the final stage, where query.maxResults caps the returned results.",
+  "agents.defaults.memorySearch.query.hybrid.rerank.stages[].lambda":
+    "Sets the MMR relevance-vs-diversity balance for this stage (0 = most diverse, 1 = most relevant, default: 0.7). Lower values reduce near-duplicate snippets; rerankers that do not use lambda ignore it.",
   "agents.defaults.memorySearch.query.hybrid.temporalDecay.enabled":
     "Applies recency decay so newer memory can outrank older memory when scores are close. Enable when timeliness matters; keep off for timeless reference knowledge.",
   "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays":

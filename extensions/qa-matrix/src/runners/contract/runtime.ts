@@ -18,6 +18,7 @@ import {
   type QaReportCheck,
 } from "openclaw/plugin-sdk/qa-runtime";
 import { normalizeQaProviderMode, type QaProviderModeInput } from "../../run-config.js";
+import { createLiveTransportQaRunId } from "../../shared/live-transport-artifacts.js";
 import { buildMatrixQaObservedEventsArtifact } from "../../substrate/artifacts.js";
 import { provisionMatrixQaRoom, type MatrixQaProvisionResult } from "../../substrate/client.js";
 import {
@@ -29,7 +30,6 @@ import {
 } from "../../substrate/config.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { startMatrixQaHarness } from "../../substrate/harness.runtime.js";
-import { createLiveTransportQaRunId } from "../../shared/live-transport-artifacts.js";
 import { resolveMatrixQaModels, type ResolvedMatrixQaModels } from "./model-selection.js";
 import type { MatrixQaSyncStreams } from "./scenario-runtime-shared.js";
 import {

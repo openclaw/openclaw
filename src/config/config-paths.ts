@@ -1,6 +1,6 @@
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 // Resolves and classifies config paths for reads, writes, and metadata.
 import { isPlainObject } from "../utils.js";
-import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
 type PathNode = Record<string, unknown>;
 

@@ -1,0 +1,64 @@
+{
+  "id": "memory-external-reranker",
+  "name": "Memory External Reranker",
+  "description": "OpenClaw memory reranker plugin that proxies to a Cohere-compatible /v1/rerank endpoint (Cohere, Jina, Voyage, llama.cpp).",
+  "activation": {
+    "onStartup": false,
+    "onConfigPaths": [
+      "agents.defaults.memorySearch.query.hybrid.rerank",
+      "agents.*.memorySearch.query.hybrid.rerank"
+    ]
+  },
+  "contracts": {
+    "tools": [],
+    "memoryRerankers": ["memory-external-reranker"]
+  },
+  "uiHints": {
+    "provider": {
+      "label": "Provider",
+      "placeholder": "cohere",
+      "help": "Provider ID — must match a key in models.providers in your OpenClaw config"
+    },
+    "model": {
+      "label": "Model",
+      "placeholder": "rerank-english-v3.0",
+      "help": "Model ID sent in the rerank request body"
+    },
+    "modelFallbacks": {
+      "label": "Model Fallbacks",
+      "advanced": true,
+      "help": "Ordered list of alternate model IDs (same provider) tried on failure"
+    },
+    "endpointPath": {
+      "label": "Endpoint Path",
+      "placeholder": "/v1/rerank",
+      "advanced": true,
+      "help": "HTTP path appended to the provider baseUrl (default '/v1/rerank')"
+    },
+    "topN": {
+      "label": "Top N",
+      "advanced": true,
+      "help": "Maximum number of results returned by the rerank endpoint"
+    },
+    "additionalBodyParams": {
+      "label": "Additional Body Params",
+      "advanced": true,
+      "help": "Extra key/value pairs merged into the rerank request body (e.g. max_chunks_per_doc, truncation)"
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "provider": { "type": "string" },
+      "model": { "type": "string" },
+      "modelFallbacks": {
+        "type": "array",
+        "items": { "type": "string" }
+      },
+      "endpointPath": { "type": "string" },
+      "topN": { "type": "integer", "minimum": 1 },
+      "additionalBodyParams": { "type": "object" }
+    }
+  }
+}

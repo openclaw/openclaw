@@ -1281,10 +1281,7 @@ async function openHttpsPackageDownloadResponse(parsed, options) {
 
 async function openPackageDownloadResponse(url, options) {
   const lookupHost = options.lookupHost ?? defaultLookupHost;
-  const timeoutMs = resolveTimerTimeoutMs(
-    options.timeoutMs,
-    PACKAGE_URL_DOWNLOAD_TIMEOUT_MS,
-  );
+  const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, PACKAGE_URL_DOWNLOAD_TIMEOUT_MS);
   const maxRedirects = options.maxRedirects ?? PACKAGE_URL_MAX_REDIRECTS;
   const trustedSource = options.trustedSource;
   let parsed = new URL(url);

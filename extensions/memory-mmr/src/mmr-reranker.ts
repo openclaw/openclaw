@@ -1,25 +1,18 @@
 // Memory Core plugin module implements mmr behavior.
-import { jaccardSimilarity, textSimilarity, tokenize } from "./tokenize.js";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { jaccardSimilarity, tokenize } from "./tokenize.js";
+
+const log = createSubsystemLogger("memory/mmr");
 
 /**
- * Maximal Marginal Relevance (MMR) re-ranking algorithm.
- *
- * MMR balances relevance with diversity by iteratively selecting results
- * that maximize: λ * relevance - (1-λ) * max_similarity_to_selected
- *
+ * Maximal Marginal Relevance (MMR) re-ranking.
+ * MMR balances relevance with diversity:
+ *   score = λ * relevance - (1-λ) * max_similarity_to_selected
  * @see Carbonell & Goldstein, "The Use of MMR, Diversity-Based Reranking" (1998)
  */
 
-export type MMRItem = {
-  id: string;
-  score: number;
-  content: string;
-};
-
 export type MMRConfig = {
-  /** Enable/disable MMR re-ranking. Default: false (opt-in) */
   enabled: boolean;
-  /** Lambda parameter: 0 = max diversity, 1 = max relevance. Default: 0.7 */
   lambda: number;
 };
 
@@ -28,10 +21,41 @@ export const DEFAULT_MMR_CONFIG: MMRConfig = {
   lambda: 0.7,
 };
 
-// Re-export the shared CJK-aware tokenizer + Jaccard helpers so existing
-// `import { tokenize, jaccardSimilarity, textSimilarity } from "./mmr.js"`
-// callers (including `mmr.test.ts`) continue to work without churn.
-export { jaccardSimilarity, textSimilarity, tokenize };
+export function computeMMRScore(
+  normalizedRelevance: number,
+  maxSimilarity: number,
+  lambda: number,
+): number {
+  return lambda * normalizedRelevance - (1 - lambda) * maxSimilarity;
+}
+
+export type MMRItem = {
+  id: string;
+  score: number;
+  content: string;
+};
+
+/** Compact score distribution for debug logs: count plus highest/lowest score. */
+function summarizeScores(items: Array<{ score: number }>): {
+  count: number;
+  topScore: number | null;
+  bottomScore: number | null;
+} {
+  if (items.length === 0) {
+    return { count: 0, topScore: null, bottomScore: null };
+  }
+  let top = items[0].score;
+  let bottom = items[0].score;
+  for (const item of items) {
+    if (item.score > top) {
+      top = item.score;
+    }
+    if (item.score < bottom) {
+      bottom = item.score;
+    }
+  }
+  return { count: items.length, topScore: top, bottomScore: bottom };
+}
 
 /**
  * Compute the maximum similarity between an item and all selected items.
@@ -60,14 +84,6 @@ function maxSimilarityToSelected(
 }
 
 /**
- * Compute MMR score for a candidate item.
- * MMR = λ * relevance - (1-λ) * max_similarity_to_selected
- */
-export function computeMMRScore(relevance: number, maxSimilarity: number, lambda: number): number {
-  return lambda * relevance - (1 - lambda) * maxSimilarity;
-}
-
-/**
  * Re-rank items using Maximal Marginal Relevance (MMR).
  *
  * The algorithm iteratively selects items that balance relevance with diversity:
@@ -82,8 +98,28 @@ export function computeMMRScore(relevance: number, maxSimilarity: number, lambda
 export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConfig> = {}): T[] {
   const { enabled = DEFAULT_MMR_CONFIG.enabled, lambda = DEFAULT_MMR_CONFIG.lambda } = config;
 
+  log.debug("mmr rerank start", {
+    enabled,
+    lambda,
+    items: items.length,
+    scores: summarizeScores(items),
+  });
+
+  // Validate lambda
+  if (lambda !== undefined) {
+    if (typeof lambda !== "number" || !Number.isFinite(lambda)) {
+      throw new Error(`lambda must be a finite number, got ${lambda}`);
+    }
+  }
+
   // Early exits
   if (!enabled || items.length <= 1) {
+    log.debug("mmr rerank early exit", {
+      enabled,
+      items: items.length,
+      returned: items.length,
+      scores: summarizeScores(items),
+    });
     return [...items];
   }
 
@@ -145,6 +181,13 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
     }
   }
 
+  log.debug("mmr rerank complete", {
+    input: items.length,
+    reranked: selected.length,
+    filtered: items.length - selected.length,
+    inputScores: summarizeScores(items),
+    outputScores: summarizeScores(selected),
+  });
   return selected;
 }
 
@@ -155,7 +198,13 @@ export function mmrRerank<T extends MMRItem>(items: T[], config: Partial<MMRConf
 export function applyMMRToHybridResults<
   T extends { score: number; snippet: string; path: string; startLine: number },
 >(results: T[], config: Partial<MMRConfig> = {}): T[] {
+  log.debug("mmr apply to hybrid results", {
+    results: results.length,
+    config,
+    scores: summarizeScores(results),
+  });
   if (results.length === 0) {
+    log.debug("mmr apply: no results to rerank");
     return results;
   }
 
@@ -176,5 +225,15 @@ export function applyMMRToHybridResults<
   const reranked = mmrRerank(mmrItems, config);
 
   // Map back to original items using the ID
-  return reranked.map((item) => itemById.get(item.id)!);
+  const finalResults = reranked.map((item) => itemById.get(item.id)!);
+  log.debug("mmr apply complete", {
+    input: results.length,
+    returned: finalResults.length,
+    filtered: results.length - finalResults.length,
+    inputScores: summarizeScores(results),
+    outputScores: summarizeScores(finalResults),
+  });
+  return finalResults;
 }
+
+export { tokenize, jaccardSimilarity, textSimilarity } from "./tokenize.js";

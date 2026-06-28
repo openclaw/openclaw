@@ -21,6 +21,11 @@ import {
   resolveMemoryDreamingConfig,
   resolveMemoryDreamingPluginConfig,
 } from "../memory-host-sdk/dreaming.js";
+import {
+  clearMemoryRerankers,
+  listRegisteredMemoryRerankerEntries,
+  restoreRegisteredMemoryRerankers,
+} from "../plugin-sdk/memory-core-host-engine-reranker.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import {
   clearDetachedTaskLifecycleRuntimeRegistration,
@@ -375,6 +380,7 @@ type CachedPluginState = {
   compactionProviders: ReturnType<typeof listRegisteredCompactionProviders>;
   embeddingProviders: ReturnType<typeof listRegisteredEmbeddingProviders>;
   memoryEmbeddingProviders: ReturnType<typeof listRegisteredMemoryEmbeddingProviders>;
+  memoryRerankers: ReturnType<typeof listRegisteredMemoryRerankerEntries>;
   memoryPromptSupplements: ReturnType<typeof listMemoryPromptSupplements>;
 };
 
@@ -435,6 +441,7 @@ export function clearActivatedPluginRuntimeState(): void {
   clearPluginInteractiveHandlers();
   clearEmbeddingProviders();
   clearMemoryEmbeddingProviders();
+  clearMemoryRerankers();
   clearMemoryPluginState();
 }
 
@@ -480,6 +487,7 @@ type PluginRegistrySnapshot = {
     agentToolResultMiddlewares: PluginRegistry["agentToolResultMiddlewares"];
     trustedToolPolicies: NonNullable<PluginRegistry["trustedToolPolicies"]>;
     memoryEmbeddingProviders: PluginRegistry["memoryEmbeddingProviders"];
+    memoryRerankers: PluginRegistry["memoryRerankers"];
     agentHarnesses: PluginRegistry["agentHarnesses"];
     httpRoutes: PluginRegistry["httpRoutes"];
     cliRegistrars: PluginRegistry["cliRegistrars"];
@@ -526,6 +534,7 @@ function snapshotPluginRegistry(registry: PluginRegistry): PluginRegistrySnapsho
       agentToolResultMiddlewares: [...registry.agentToolResultMiddlewares],
       trustedToolPolicies: [...(registry.trustedToolPolicies ?? [])],
       memoryEmbeddingProviders: [...registry.memoryEmbeddingProviders],
+      memoryRerankers: [...registry.memoryRerankers],
       agentHarnesses: [...registry.agentHarnesses],
       httpRoutes: [...registry.httpRoutes],
       cliRegistrars: [...registry.cliRegistrars],
@@ -571,6 +580,7 @@ function restorePluginRegistry(registry: PluginRegistry, snapshot: PluginRegistr
   registry.agentToolResultMiddlewares = snapshot.arrays.agentToolResultMiddlewares;
   registry.trustedToolPolicies = snapshot.arrays.trustedToolPolicies;
   registry.memoryEmbeddingProviders = snapshot.arrays.memoryEmbeddingProviders;
+  registry.memoryRerankers = snapshot.arrays.memoryRerankers;
   registry.agentHarnesses = snapshot.arrays.agentHarnesses;
   registry.httpRoutes = snapshot.arrays.httpRoutes;
   registry.cliRegistrars = snapshot.arrays.cliRegistrars;
@@ -1878,6 +1888,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         restorePluginInteractiveHandlers(cached.state.interactiveHandlers ?? []);
         restoreRegisteredEmbeddingProviders(cached.state.embeddingProviders);
         restoreRegisteredMemoryEmbeddingProviders(cached.state.memoryEmbeddingProviders);
+        restoreRegisteredMemoryRerankers(cached.state.memoryRerankers);
         restoreMemoryPluginState({
           capability: cached.state.memoryCapability,
           corpusSupplements: cached.state.memoryCorpusSupplements,
@@ -2850,6 +2861,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       const previousEmbeddingProviders = listRegisteredEmbeddingProviders();
       const previousMemoryCapability = getMemoryCapabilityRegistration();
       const previousMemoryEmbeddingProviders = listRegisteredMemoryEmbeddingProviders();
+      const previousMemoryRerankers = listRegisteredMemoryRerankerEntries();
       const previousMemoryCorpusSupplements = listMemoryCorpusSupplements();
       const previousMemoryPromptSupplements = listMemoryPromptSupplements();
 
@@ -2868,6 +2880,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           restoreDetachedTaskLifecycleRuntimeRegistration(previousDetachedTaskRuntimeRegistration);
           restoreRegisteredEmbeddingProviders(previousEmbeddingProviders);
           restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
+          restoreRegisteredMemoryRerankers(previousMemoryRerankers);
           restoreMemoryPluginState({
             capability: previousMemoryCapability,
             corpusSupplements: previousMemoryCorpusSupplements,
@@ -2884,6 +2897,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
         restoreDetachedTaskLifecycleRuntimeRegistration(previousDetachedTaskRuntimeRegistration);
         restoreRegisteredEmbeddingProviders(previousEmbeddingProviders);
         restoreRegisteredMemoryEmbeddingProviders(previousMemoryEmbeddingProviders);
+        restoreRegisteredMemoryRerankers(previousMemoryRerankers);
         restoreMemoryPluginState({
           capability: previousMemoryCapability,
           corpusSupplements: previousMemoryCorpusSupplements,
@@ -2964,6 +2978,7 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
           compactionProviders: listRegisteredCompactionProviders(),
           embeddingProviders: listRegisteredEmbeddingProviders(),
           memoryEmbeddingProviders: listRegisteredMemoryEmbeddingProviders(),
+          memoryRerankers: listRegisteredMemoryRerankerEntries(),
           memoryPromptSupplements: listMemoryPromptSupplements(),
         },
         onlyPluginIds,

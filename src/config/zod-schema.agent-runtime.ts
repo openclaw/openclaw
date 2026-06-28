@@ -956,10 +956,20 @@ export const MemorySearchSchema = z
             vectorWeight: z.number().min(0).max(1).optional(),
             textWeight: z.number().min(0).max(1).optional(),
             candidateMultiplier: z.number().int().positive().optional(),
-            mmr: z
+            rerank: z
               .object({
                 enabled: z.boolean().optional(),
-                lambda: z.number().min(0).max(1).optional(),
+                stages: z
+                  .array(
+                    z
+                      .object({
+                        provider: z.string(),
+                        topK: z.number().int().positive().optional(),
+                        lambda: z.number().min(0).max(1).optional(),
+                      })
+                      .strict(),
+                  )
+                  .optional(),
               })
               .strict()
               .optional(),

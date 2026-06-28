@@ -34,6 +34,7 @@ function createStubPluginRegistry(): PluginRegistry {
     codexAppServerExtensionFactories: [],
     agentToolResultMiddlewares: [],
     memoryEmbeddingProviders: [],
+    memoryRerankers: [],
     textTransforms: [],
     agentHarnesses: [],
     gatewayHandlers: {},

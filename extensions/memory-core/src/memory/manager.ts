@@ -12,6 +12,7 @@ import {
   type ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { extractKeywords } from "openclaw/plugin-sdk/memory-core-host-engine-qmd";
+import { getRegisteredMemoryReranker } from "openclaw/plugin-sdk/memory-core-host-engine-reranker";
 import {
   readMemoryFile,
   MEMORY_EMBEDDING_CACHE_TABLE,
@@ -37,7 +38,13 @@ import {
   type EmbeddingProviderResult,
   type EmbeddingProviderRuntime,
 } from "./embeddings.js";
-import { bm25RankToScore, buildFtsQuery, mergeHybridResults } from "./hybrid.js";
+import {
+  bm25RankToScore,
+  buildFtsQuery,
+  mergeHybridResults,
+  type RerankerAdapter,
+  type RerankStage,
+} from "./hybrid.js";
 import { awaitPendingManagerWork, startAsyncSearchSync } from "./manager-async-state.js";
 import { MEMORY_BATCH_FAILURE_LIMIT } from "./manager-batch-state.js";
 import {
@@ -77,6 +84,28 @@ const MEMORY_INDEX_MANAGER_CACHE_KEY = Symbol.for("openclaw.memoryIndexManagerCa
 export const EMBEDDING_PROBE_CACHE_TTL_MS = 30_000;
 const KEYWORD_FALLBACK_SEARCH_TERM_LIMIT = 6;
 const log = createSubsystemLogger("memory");
+
+/** Compact score distribution for debug logs: count plus highest/lowest score. */
+function summarizeScores(items: Array<{ score: number }>): {
+  count: number;
+  topScore: number | null;
+  bottomScore: number | null;
+} {
+  if (items.length === 0) {
+    return { count: 0, topScore: null, bottomScore: null };
+  }
+  let top = items[0].score;
+  let bottom = items[0].score;
+  for (const item of items) {
+    if (item.score > top) {
+      top = item.score;
+    }
+    if (item.score < bottom) {
+      bottom = item.score;
+    }
+  }
+  return { count: items.length, topScore: top, bottomScore: bottom };
+}
 type MemoryIndexManagerPurpose = "default" | "status" | "cli";
 type MemoryEmbeddingProviderRequirement = {
   mode: "fts-only" | "optional" | "required";
@@ -786,12 +815,23 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       keyword: keywordResults,
       vectorWeight: hybrid.vectorWeight,
       textWeight: hybrid.textWeight,
-      mmr: hybrid.mmr,
+      rerank: hybrid.rerank,
       temporalDecay: hybrid.temporalDecay,
+      query: cleaned,
     });
     const strict = merged.filter((entry) => entry.score >= minScore);
-    if (strict.length > 0 || keywordResults.length === 0) {
-      return strict.slice(0, maxResults);
+    if (strict.length > 0) {
+      // selectScoredResults with the default relaxed threshold yields the same
+      // strict slice while emitting score-distribution debug logs for the path
+      // that most often returns empty results.
+      return this.selectScoredResults(merged, maxResults, minScore);
+    }
+    if (keywordResults.length === 0) {
+      // FTS returned nothing and no vector candidates beat minScore. Return the
+      // best available vector hits (relaxedMinScore=0) rather than empty-handing
+      // the agent — the embedding model may produce scores below the threshold
+      // for relevant content depending on the provider's similarity scale.
+      return this.selectScoredResults(merged, maxResults, minScore, 0);
     }
 
     // Hybrid defaults can produce keyword-only matches below minScore after
@@ -820,10 +860,22 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     relaxedMinScore = minScore,
   ): T[] {
     const strict = results.filter((entry) => entry.score >= minScore);
-    if (strict.length > 0) {
-      return strict.slice(0, maxResults);
-    }
-    return results.filter((entry) => entry.score >= relaxedMinScore).slice(0, maxResults);
+    const usedRelaxed = strict.length === 0;
+    const selected = usedRelaxed
+      ? results.filter((entry) => entry.score >= relaxedMinScore).slice(0, maxResults)
+      : strict.slice(0, maxResults);
+    log.debug("select scored results", {
+      minScore,
+      relaxedMinScore,
+      maxResults,
+      inputCount: results.length,
+      strictCount: strict.length,
+      returnedCount: selected.length,
+      usedRelaxed,
+      inputScores: summarizeScores(results),
+      returnedScores: summarizeScores(selected),
+    });
+    return selected;
   }
 
   private hasIndexedContent(): boolean {
@@ -957,13 +1009,62 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     return [...seenIds.values()].toSorted((a, b) => b.score - a.score);
   }
 
-  private mergeHybridResults(params: {
+  private createReranker(
+    provider: string | undefined,
+    query: string | undefined,
+  ): RerankerAdapter | undefined {
+    if (!provider || !query) {
+      return undefined;
+    }
+    const plugin = getRegisteredMemoryReranker(provider);
+    if (!plugin) {
+      return undefined;
+    }
+    return async (items, lambda) => {
+      const result = await plugin.rerank({
+        query,
+        documents: items.map((item) => ({ id: item.id, content: item.content, score: item.score })),
+        limit: items.length,
+        lambda,
+      });
+      const contentMap = new Map(items.map((item) => [item.id, item.content]));
+      return result.map((r) => ({ id: r.id, score: r.score, content: contentMap.get(r.id) ?? "" }));
+    };
+  }
+
+  // Resolve configured pipeline stages to adapters, dropping stages whose plugin
+  // is not installed so reranking only runs across available rerankers.
+  private createRerankStages(
+    rerank:
+      | { enabled: boolean; stages: Array<{ provider: string; topK?: number; lambda?: number }> }
+      | undefined,
+    query: string | undefined,
+  ): RerankStage[] {
+    if (!rerank?.enabled || !query) {
+      return [];
+    }
+    const stages: RerankStage[] = [];
+    for (const stage of rerank.stages) {
+      const adapter = this.createReranker(stage.provider, query);
+      if (!adapter) {
+        continue;
+      }
+      stages.push({ adapter, topK: stage.topK, lambda: stage.lambda });
+    }
+    return stages;
+  }
+
+  private async mergeHybridResults(params: {
     vector: Array<MemorySearchResult & { id: string }>;
     keyword: Array<MemorySearchResult & { id: string; textScore: number }>;
     vectorWeight: number;
     textWeight: number;
-    mmr?: { enabled: boolean; lambda: number };
+    rerank?: {
+      enabled: boolean;
+      stages: Array<{ provider: string; topK?: number; lambda?: number }>;
+    };
     temporalDecay?: { enabled: boolean; halfLifeDays: number };
+    query?: string;
   }): Promise<MemorySearchResult[]> {
     return mergeHybridResults({
       vector: params.vector.map((r) => ({
@@ -986,7 +1087,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       })),
       vectorWeight: params.vectorWeight,
       textWeight: params.textWeight,
-      mmr: params.mmr,
+      rerank: {
+        enabled: params.rerank?.enabled ?? false,
+        stages: this.createRerankStages(params.rerank, params.query),
+      },
       temporalDecay: params.temporalDecay,
       workspaceDir: this.workspaceDir,
     }).then((entries) => entries.map((entry) => entry as MemorySearchResult));

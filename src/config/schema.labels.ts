@@ -507,8 +507,14 @@ export const FIELD_LABELS: Record<string, string> = {
   "agents.defaults.memorySearch.query.hybrid.textWeight": "Memory Search Text Weight",
   "agents.defaults.memorySearch.query.hybrid.candidateMultiplier":
     "Memory Search Hybrid Candidate Multiplier",
-  "agents.defaults.memorySearch.query.hybrid.mmr.enabled": "Memory Search MMR Re-ranking",
-  "agents.defaults.memorySearch.query.hybrid.mmr.lambda": "Memory Search MMR Lambda",
+  "agents.defaults.memorySearch.query.hybrid.rerank.enabled": "Memory Search Reranking",
+  "agents.defaults.memorySearch.query.hybrid.rerank.stages": "Memory Search Reranking Stages",
+  "agents.defaults.memorySearch.query.hybrid.rerank.stages[].provider":
+    "Memory Search Reranking Stage Plugin",
+  "agents.defaults.memorySearch.query.hybrid.rerank.stages[].topK":
+    "Memory Search Reranking Stage Top-K",
+  "agents.defaults.memorySearch.query.hybrid.rerank.stages[].lambda":
+    "Memory Search Reranking Stage Lambda",
   "agents.defaults.memorySearch.query.hybrid.temporalDecay.enabled": "Memory Search Temporal Decay",
   "agents.defaults.memorySearch.query.hybrid.temporalDecay.halfLifeDays":
     "Memory Search Temporal Decay Half-life (Days)",

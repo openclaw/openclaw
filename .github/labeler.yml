@@ -305,10 +305,21 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-core/**"
+"extensions: memory-external-reranker":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/memory-external-reranker/**"
+          - "docs/plugins/memory-external-reranker.md"
+          - "docs/plugins/reference/memory-external-reranker.md"
 "extensions: memory-lancedb":
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/memory-lancedb/**"
+"extensions: memory-mmr":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/memory-mmr/**"
+          - "docs/plugins/reference/memory-mmr.md"
 "extensions: memory-wiki":
   - changed-files:
       - any-glob-to-any-file:
