@@ -13,6 +13,7 @@ import {
   replaceConfigFile,
 } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { emitDiagnosticsTimelineEvent } from "../infra/diagnostics-timeline.js";
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString } from "../utils.js";
@@ -485,6 +486,99 @@ type MarketplaceEntryPayload = {
   };
 };
 
+type MarketplaceFeedTelemetryOptions = {
+  expectedSha256?: string;
+  feedProfile?: string;
+  feedUrl?: string;
+  offline?: boolean;
+};
+
+function classifyMarketplaceFeedFallback(error: string | undefined): string | undefined {
+  const text = error?.toLowerCase();
+  if (!text) {
+    return undefined;
+  }
+  if (text.includes("offline mode")) {
+    return "offline";
+  }
+  if (text.includes("checksum mismatch")) {
+    return "checksum_mismatch";
+  }
+  if (text.includes("schema")) {
+    return "schema";
+  }
+  if (/http\s+304/u.test(text)) {
+    return "not_modified";
+  }
+  if (/http\s+\d{3}/u.test(text)) {
+    return "http_error";
+  }
+  if (text.includes("timed out") || text.includes("timeout")) {
+    return "timeout";
+  }
+  return "error";
+}
+
+function emitMarketplaceFeedTelemetry(params: {
+  command: "entries" | "refresh";
+  entryCount?: number;
+  failedPinnedRefresh?: boolean;
+  opts: MarketplaceFeedTelemetryOptions;
+  config?: OpenClawConfig;
+  payload: MarketplaceRefreshPayload;
+}): void {
+  const attributes: Record<string, string | number | boolean | null> = {
+    command: params.command,
+    entries: params.entryCount ?? params.payload.entries,
+    source: params.payload.source,
+  };
+  if (params.opts.feedProfile?.trim()) {
+    attributes.feedProfileProvided = true;
+  }
+  if (params.opts.feedUrl?.trim()) {
+    attributes.feedUrlOverride = true;
+  }
+  if (params.opts.offline === true) {
+    attributes.offline = true;
+  }
+  if (params.opts.expectedSha256?.trim()) {
+    attributes.expectedSha256Provided = true;
+  }
+  if (params.payload.feed) {
+    attributes.feedIdPresent = true;
+    attributes.feedSequence = params.payload.feed.sequence;
+  }
+  if (params.payload.metadata) {
+    attributes.httpStatus = params.payload.metadata.status;
+    if (params.payload.metadata.checksum) {
+      attributes.payloadChecksumPresent = true;
+    }
+    attributes.hasEtag = Boolean(params.payload.metadata.etag);
+    attributes.hasLastModified = Boolean(params.payload.metadata.lastModified);
+  }
+  if (params.payload.snapshot) {
+    attributes.snapshotUsed = true;
+  }
+  const fallbackCategory = classifyMarketplaceFeedFallback(params.payload.error);
+  if (fallbackCategory) {
+    attributes.fallbackCategory = fallbackCategory;
+  }
+  if (params.failedPinnedRefresh === true) {
+    attributes.pinnedRefreshFailed = true;
+  }
+  emitDiagnosticsTimelineEvent(
+    {
+      type: "mark",
+      name: `plugins.marketplace.feed.${params.command}`,
+      phase: "plugin-marketplace",
+      attributes,
+    },
+    {
+      config: params.config,
+    },
+  );
+}
+
 function buildMarketplaceRefreshPayload(
   result: Awaited<
     ReturnType<
@@ -653,6 +747,13 @@ export async function runPluginMarketplaceEntriesCommand(
     return payload;
   });
 
+  emitMarketplaceFeedTelemetry({
+    command: "entries",
+    entryCount: entries.length,
+    opts,
+    config: cfg,
+    payload: summary,
+  });
   if (opts.json) {
     defaultRuntime.writeJson({ ...summary, entries, entryCount: entries.length });
     return;
@@ -708,6 +809,13 @@ export async function runPluginMarketplaceRefreshCommand(
   const failedPinnedRefresh = shouldFailPinnedMarketplaceRefresh({
     expectedSha256,
     source: payload.source,
+  });
+  emitMarketplaceFeedTelemetry({
+    command: "refresh",
+    failedPinnedRefresh,
+    opts,
+    config: cfg,
+    payload,
   });
 
   if (opts.json) {
