@@ -59,6 +59,7 @@ import { createFastTestModelSelectionState, createModelSelectionState } from "./
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { initSessionState } from "./session.js";
+import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
   resolveStoredModelOverride,
@@ -198,36 +199,6 @@ async function applyMediaUnderstandingIfNeeded(params: {
     );
     return false;
   }
-}
-
-async function stageRemoteInboundMediaBeforeUnderstandingIfNeeded(params: {
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  sessionKey?: string;
-  workspaceDir: string;
-}): Promise<boolean> {
-  if (
-    !params.sessionKey ||
-    params.ctx.MediaStaged ||
-    !normalizeOptionalString(params.ctx.MediaRemoteHost) ||
-    !hasInboundMedia(params.ctx)
-  ) {
-    return false;
-  }
-
-  const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
-  const result = await stageSandboxMedia({
-    ctx: params.ctx,
-    sessionCtx: params.ctx,
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    workspaceDir: params.workspaceDir,
-  });
-  if (result.staged.size > 0) {
-    params.ctx.MediaStaged = true;
-    return true;
-  }
-  return false;
 }
 
 async function applyLinkUnderstandingIfNeeded(params: {
@@ -440,7 +411,7 @@ export async function getReplyFromConfig(
     hasInboundMedia(finalized)
   ) {
     await traceGetReplyPhase("reply.stage_remote_media_pre_understanding", () =>
-      stageRemoteInboundMediaBeforeUnderstandingIfNeeded({
+      stageRemoteInboundMediaIfNeeded({
         ctx: finalized,
         cfg,
         sessionKey: agentSessionKey,
