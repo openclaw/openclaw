@@ -41,6 +41,7 @@ let compactEmbeddedAgentSessionDirect: typeof import("./compact.js").compactEmbe
 let compactEmbeddedAgentSession: typeof import("./compact.queued.js").compactEmbeddedAgentSession;
 let compactTesting: typeof import("./compact.js").testing;
 let onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
+let onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
 
 const TEST_SESSION_ID = "session-1";
 const TEST_SESSION_KEY = "agent:main:session-1";
@@ -190,6 +191,7 @@ beforeAll(async () => {
   compactEmbeddedAgentSession = loaded.compactEmbeddedAgentSession;
   compactTesting = loaded.testing;
   onSessionTranscriptUpdate = loaded.onSessionTranscriptUpdate;
+  onInternalSessionTranscriptUpdate = loaded.onInternalSessionTranscriptUpdate;
 });
 
 beforeEach(() => {
@@ -1180,7 +1182,7 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
   });
   it("emits a transcript update after successful compaction", async () => {
     const listener = vi.fn();
-    const cleanup = onSessionTranscriptUpdate(listener);
+    const cleanup = onInternalSessionTranscriptUpdate(listener);
 
     try {
       await compactTesting.runPostCompactionSideEffects({
@@ -1232,8 +1234,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       expect(listener).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenCalledWith({
         agentId: "main",
-        sessionFile: "/tmp/rotated-session.jsonl",
         sessionKey: TEST_SESSION_KEY,
+        sessionId: "rotated-session",
+        target: {
+          agentId: "main",
+          sessionId: "rotated-session",
+          sessionKey: TEST_SESSION_KEY,
+        },
       });
       expect(sync).toHaveBeenCalledTimes(1);
       expect(sync).toHaveBeenCalledWith({
@@ -1711,8 +1718,13 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
       expect(listener).toHaveBeenCalledTimes(1);
       expect(listener).toHaveBeenCalledWith({
         agentId: "main",
-        sessionFile: TEST_SESSION_FILE,
         sessionKey: TEST_SESSION_KEY,
+        sessionId: TEST_SESSION_ID,
+        target: {
+          agentId: "main",
+          sessionId: TEST_SESSION_ID,
+          sessionKey: TEST_SESSION_KEY,
+        },
       });
       expect(sync).toHaveBeenCalledWith({
         reason: "post-compaction",

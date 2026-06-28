@@ -5,7 +5,7 @@ import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { repairToolUseResultPairing } from "../../agents/session-transcript-repair.js";
 import * as transcriptEvents from "../../sessions/transcript-events.js";
-import type { SessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import type { InternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { resolveSessionTranscriptPathInDir } from "./paths.js";
 import {
@@ -73,7 +73,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
   type TranscriptRepairMessage = Parameters<typeof repairToolUseResultPairing>[0][number];
   type TranscriptUpdateEmitterSpy = {
     mock: {
-      calls: [string | SessionTranscriptUpdate][];
+      calls: [string | InternalSessionTranscriptUpdate][];
     };
   };
 
@@ -125,7 +125,9 @@ describe("appendAssistantMessageToSessionTranscript", () => {
     };
   }
 
-  function requireTranscriptUpdateCall(spy: TranscriptUpdateEmitterSpy): SessionTranscriptUpdate {
+  function requireTranscriptUpdateCall(
+    spy: TranscriptUpdateEmitterSpy,
+  ): InternalSessionTranscriptUpdate {
     const call = spy.mock.calls[0];
     if (!call) {
       throw new Error("expected transcript update event");

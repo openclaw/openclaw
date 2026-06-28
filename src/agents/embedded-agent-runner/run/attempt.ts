@@ -5168,9 +5168,9 @@ export async function runEmbeddedAttempt(
           }
 
           if (activeContextEngine && !beforeAgentFinalizeRevisionReason) {
-            // Context-engine afterTurn hooks may reconcile against the jsonl, so
-            // materialize the active turn before finalization reads from disk.
-            flushSessionManagerFile(activeSessionManager);
+            // Context-engine afterTurn hooks may reconcile against persisted
+            // transcript state, so materialize the active turn first.
+            flushSessionManagerTranscript(activeSessionManager);
           }
         });
 
