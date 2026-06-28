@@ -504,6 +504,24 @@ export function createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(
   };
 }
 
+async function resolveHostedCatalogSnapshotStore(params: {
+  snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore | null;
+  env?: NodeJS.ProcessEnv;
+  stateDir?: string;
+  stateDatabasePath?: string;
+}): Promise<HostedOfficialExternalPluginCatalogSnapshotStore | undefined> {
+  if (params.snapshotStore !== undefined) {
+    return params.snapshotStore ?? undefined;
+  }
+  const { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } =
+    await import("./official-external-plugin-catalog-snapshot-store.js");
+  return createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
+    ...(params.env ? { env: params.env } : {}),
+    ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+    ...(params.stateDatabasePath ? { stateDatabasePath: params.stateDatabasePath } : {}),
+  });
+}
+
 export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   feedUrl?: string;
   fetchImpl?: FetchLike;
@@ -513,7 +531,10 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   ifNoneMatch?: string;
   ifModifiedSince?: string;
   expectedSha256?: string;
-  snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore;
+  snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore | null;
+  env?: NodeJS.ProcessEnv;
+  stateDir?: string;
+  stateDatabasePath?: string;
   now?: () => Date;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
   let url: URL;
@@ -522,6 +543,12 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   } catch (err) {
     return bundledFallbackResult(err);
   }
+  const snapshotStore = await resolveHostedCatalogSnapshotStore({
+    snapshotStore: params?.snapshotStore,
+    env: params?.env,
+    stateDir: params?.stateDir,
+    stateDatabasePath: params?.stateDatabasePath,
+  });
   const headers = new Headers();
   const ifNoneMatch = normalizeOptionalString(params?.ifNoneMatch);
   const ifModifiedSince = normalizeOptionalString(params?.ifModifiedSince);
@@ -562,7 +589,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     if (response.status === 304) {
       return await snapshotOrBundledFallbackResult({
         error: "hosted catalog feed returned HTTP 304",
-        snapshotStore: params?.snapshotStore,
+        snapshotStore,
         url: url.href,
         metadata: base,
         expectedSha256,
@@ -573,7 +600,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     if (!response.ok) {
       return await snapshotOrBundledFallbackResult({
         error: `hosted catalog feed returned HTTP ${response.status}`,
-        snapshotStore: params?.snapshotStore,
+        snapshotStore,
         url: url.href,
         metadata: base,
         expectedSha256,
@@ -592,7 +619,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     if (expectedSha256 && expectedSha256 !== checksum) {
       return await snapshotOrBundledFallbackResult({
         error: `hosted catalog feed checksum mismatch: expected ${expectedSha256}`,
-        snapshotStore: params?.snapshotStore,
+        snapshotStore,
         url: url.href,
         metadata,
         expectedSha256,
@@ -604,7 +631,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     if (!isOfficialExternalPluginCatalogFeed(raw)) {
       return await snapshotOrBundledFallbackResult({
         error: "hosted catalog feed did not match a supported schema version",
-        snapshotStore: params?.snapshotStore,
+        snapshotStore,
         url: url.href,
         metadata,
         expectedSha256,
@@ -612,11 +639,11 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
         ifModifiedSince,
       });
     }
-    await params?.snapshotStore
+    await snapshotStore
       ?.write({
         body,
         metadata,
-        savedAt: (params.now?.() ?? new Date()).toISOString(),
+        savedAt: (params?.now?.() ?? new Date()).toISOString(),
       })
       .catch(() => undefined);
     return {
@@ -630,7 +657,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   } catch (err) {
     return await snapshotOrBundledFallbackResult({
       error: err,
-      snapshotStore: params?.snapshotStore,
+      snapshotStore,
       url: url.href,
       expectedSha256,
       ifNoneMatch,
