@@ -442,7 +442,7 @@ describe("runReplyAgent auto-compaction token update", () => {
     });
 
     // totalTokens should use lastCallUsage (55k), not accumulated (75k)
-    expect(stored[sessionKey].totalTokens).toBe(55_000);
+    expect(stored[sessionKey as keyof typeof stored]?.totalTokens).toBe(55_000);
   }, 180_000);
 
   it("keeps an unarmed preflight drain visible instead of dropping the reply", async () => {

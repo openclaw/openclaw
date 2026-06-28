@@ -417,6 +417,7 @@ export async function loadCompactHooksHarness(): Promise<{
   compactEmbeddedAgentSession: typeof import("./compact.queued.js").compactEmbeddedAgentSession;
   testing: typeof import("./compact.js").testing;
   onSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onSessionTranscriptUpdate;
+  onInternalSessionTranscriptUpdate: typeof import("../../sessions/transcript-events.js").onInternalSessionTranscriptUpdate;
 }> {
   resetCompactHooksHarnessMocks();
   vi.resetModules();
@@ -900,5 +901,6 @@ export async function loadCompactHooksHarness(): Promise<{
     ...compactModule,
     compactEmbeddedAgentSession: compactQueuedModule.compactEmbeddedAgentSession,
     onSessionTranscriptUpdate: transcriptEvents.onSessionTranscriptUpdate,
+    onInternalSessionTranscriptUpdate: transcriptEvents.onInternalSessionTranscriptUpdate,
   };
 }

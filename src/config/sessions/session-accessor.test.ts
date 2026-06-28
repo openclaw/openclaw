@@ -874,7 +874,7 @@ describe("session accessor seam", () => {
         },
       ],
       cleanupArchivedTranscripts: {
-        rules: [{ action: "delete", olderThanMs: 0 }],
+        rules: [{ reason: "deleted", olderThanMs: 0 }],
         nowMs: Date.now(),
       },
       captureArtifactCleanupError: true,
@@ -1196,13 +1196,11 @@ describe("session accessor seam", () => {
       updatedAt: 10,
     });
     const updates: Array<{
-      sessionFile: string | undefined;
       target: unknown;
       updatedAt: number | undefined;
     }> = [];
     const unsubscribe = onSessionTranscriptUpdate((update) => {
       updates.push({
-        sessionFile: update.sessionFile,
         target: update.target,
         updatedAt: loadSessionEntry(scope)?.updatedAt,
       });
@@ -1242,7 +1240,6 @@ describe("session accessor seam", () => {
     expect(loadSessionEntry(scope)?.updatedAt).toBeGreaterThanOrEqual(10);
     expect(updates).toEqual([
       {
-        sessionFile: result.sessionFile,
         target: {
           agentId: "main",
           sessionId: "session-lock-order",

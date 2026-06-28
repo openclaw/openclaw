@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
+import { onInternalSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   deleteSessionEntryLifecycle,
@@ -302,7 +302,7 @@ function recordTranscriptUpdateFiles(): { files: string[]; unsubscribe: () => vo
   const files: string[] = [];
   return {
     files,
-    unsubscribe: onSessionTranscriptUpdate((update) => {
+    unsubscribe: onInternalSessionTranscriptUpdate((update) => {
       if (update.sessionFile) {
         files.push(update.sessionFile);
       }
