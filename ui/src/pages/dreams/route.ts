@@ -9,9 +9,7 @@ import type { AppViewState } from "../../ui/app-view-state.ts";
 import {
   resolveChatAgentFilterId,
   resolveChatAgentFilterOptions,
-  resolvePreferredSessionForAgent,
 } from "../../ui/chat/session-controls.ts";
-import { switchChatSession } from "../chat/session-switch.ts";
 import { loadConfig, openConfigFile } from "../config/data.ts";
 import {
   backfillDreamDiary,
@@ -111,12 +109,13 @@ function renderDreamsPage(state: AppViewState) {
     state.configForm ?? (state.configSnapshot?.config as Record<string, unknown> | null);
   const dreamingOn =
     state.dreamingStatus?.enabled ?? resolveConfiguredDreaming(configValue).enabled;
-  const selectedAgentId = resolveChatAgentFilterId(state, state.sessionKey);
+  const selectedAgentId =
+    state.selectedAgentId ?? resolveChatAgentFilterId(state, state.sessionKey);
   const agentOptions = resolveChatAgentFilterOptions(state);
   const loading = state.dreamingStatusLoading || state.dreamingModeSaving;
   const refreshLoading = state.dreamingStatusLoading || state.dreamDiaryLoading;
   const syncSelectedAgent = () => {
-    const agentId = resolveChatAgentFilterId(state, state.sessionKey);
+    const agentId = state.selectedAgentId ?? resolveChatAgentFilterId(state, state.sessionKey);
     state.selectedAgentId = agentId;
     return agentId;
   };
@@ -241,7 +240,6 @@ function renderDreamsPage(state: AppViewState) {
       onRefresh: refresh,
       onSelectAgent: (agentId: string) => {
         state.selectedAgentId = agentId;
-        switchChatSession(state, resolvePreferredSessionForAgent(state, agentId));
         void loadDreamingStatus(state);
         void loadDreamDiary(state);
       },

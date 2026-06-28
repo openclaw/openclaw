@@ -4,8 +4,6 @@ import type { RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsHost } from "../../app/app-host.ts";
 import { definePage } from "../../router/index.ts";
 import { warnQueryToken } from "../../ui/app-settings.ts";
-import type { AppViewState } from "../../ui/app-view-state.ts";
-import { switchChatSession } from "../chat/session-switch.ts";
 import { loadOverview } from "./data.ts";
 import { renderOverview } from "./view.ts";
 
@@ -51,7 +49,13 @@ export const page = definePage({
         showGatewayPassword: state.overviewShowGatewayPassword,
         onSettingsChange: (next) => state.applySettings(next),
         onPasswordChange: (next) => (state.password = next),
-        onSessionKeyChange: (next) => switchChatSession(state, next),
+        onSessionKeyChange: (sessionKey) => {
+          state.applySettings({
+            ...state.settings,
+            sessionKey,
+            lastActiveSessionKey: sessionKey,
+          });
+        },
         onToggleGatewayTokenVisibility: () => {
           state.overviewShowGatewayToken = !state.overviewShowGatewayToken;
         },

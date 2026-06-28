@@ -7,6 +7,7 @@ import {
   appRouter,
   pathForRoute,
   resolveAppNotFound,
+  searchForSession,
   type ApplicationContext,
   type AppRouteModule,
   type RouteId,
@@ -35,7 +36,6 @@ import {
 } from "../lib/sessions/session-key.ts";
 import { normalizeOptionalString } from "../lib/string-coerce.ts";
 import { resolveAgentIdForSession } from "../pages/chat/chat-avatar.ts";
-import { resetChatStateForSessionSwitch, switchChatSession } from "../pages/chat/session-switch.ts";
 import { runUpdate } from "../pages/config/data.ts";
 import { resolveDashboardHeaderContext } from "./app-render.helpers.ts";
 import type { AppViewState } from "./app-view-state.ts";
@@ -160,7 +160,7 @@ export function renderApp(state: AppViewState, application: ApplicationContext) 
 function renderConnectedApp(
   context: {
     state: AppViewState;
-    navigate: (routeId: RouteId) => void;
+    navigate: ApplicationContext["navigate"];
   },
   application: ApplicationContext,
   routeView: RouterOutletSelection<RouteId, AppRouteModule, unknown>,
@@ -191,11 +191,14 @@ function renderConnectedApp(
   const navCollapsed = state.settings.navCollapsed && !navDrawerOpen;
   const basePath = state.basePath ?? "";
   const dashboardHeaderContext = resolveDashboardHeaderContext(state);
+  const navigateToChatSession = (sessionKey: string) => {
+    navigate("chat", { search: searchForSession(sessionKey) });
+  };
   const recentSessions = resolveSidebarRecentSessions(state).map((row) => ({
     key: row.key,
     label: resolveSessionDisplayName(row.key, row),
     meta: row.updatedAt ? formatRelativeTimestamp(row.updatedAt) : "n/a",
-    href: `${pathForRoute("chat", basePath)}?session=${encodeURIComponent(row.key)}`,
+    href: `${pathForRoute("chat", basePath)}${searchForSession(row.key)}`,
     active: row.key === state.sessionKey,
     hasActiveRun: Boolean(row.hasActiveRun),
   }));
@@ -290,11 +293,15 @@ function renderConnectedApp(
           .recentSessionsCollapsed=${state.settings.recentSessionsCollapsed}
           .newSessionDisabled=${newSessionDisabled}
           .newSessionTitle=${newSessionTitle}
-          .sessionSelector=${renderChatSessionSelect(state, switchChatSession, {
-            compact: navCollapsed,
-            sessionSwitcherOnly: true,
-            surface: "sidebar",
-          })}
+          .sessionSelector=${renderChatSessionSelect(
+            state,
+            (_state, sessionKey) => navigateToChatSession(sessionKey),
+            {
+              compact: navCollapsed,
+              sessionSwitcherOnly: true,
+              surface: "sidebar",
+            },
+          )}
           .themeMode=${state.themeMode}
           .onToggleCollapsed=${() => {
             if (navDrawerOpen) {
@@ -329,7 +336,8 @@ function renderConnectedApp(
                       | { sessionDefaults?: { mainSessionKey?: string } }
                       | undefined
                   )?.sessionDefaults?.mainSessionKey ?? "main";
-                resetChatStateForSessionSwitch(state, mainSessionKey);
+                navigateToChatSession(mainSessionKey);
+                return;
               }
               if (renderedRouteId !== undefined && renderedRouteId !== "chat") {
                 void state.loadAssistantIdentity();
@@ -338,10 +346,7 @@ function renderConnectedApp(
             navigate(routeId);
           }}
           .onRecentSession=${(session: { key: string }) => {
-            if (session.key !== state.sessionKey) {
-              switchChatSession(state, session.key);
-            }
-            navigate("chat");
+            navigateToChatSession(session.key);
           }}
           .onPreloadRoute=${application.preload}
           @theme-change=${(
