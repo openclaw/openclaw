@@ -5154,6 +5154,12 @@ export async function runEmbeddedAttempt(
               log.warn(`failed to persist prompt error entry: ${String(entryErr)}`);
             }
           }
+
+          if (activeContextEngine && !beforeAgentFinalizeRevisionReason) {
+            // Context-engine afterTurn hooks may reconcile against the jsonl, so
+            // materialize the active turn before finalization reads from disk.
+            flushSessionManagerFile(activeSessionManager);
+          }
         });
 
         // Let the active context engine run its post-turn lifecycle. These hooks
