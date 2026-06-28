@@ -1,0 +1,23 @@
+title: Docker Compose setup evidence
+
+scenario:
+  id: docker-compose-setup
+  surface: docker-podman-hosting
+  category: docker-podman-hosting.container-operations
+  coverage:
+    primary:
+      - docker.compose
+  objective: Link Docker Compose setup e2e coverage to Docker maturity accounting.
+  successCriteria:
+    - Docker Compose gateway and CLI service command shape stays in sync.
+    - Compose service env, token, auth-profile, timezone, and optional env-file defaults stay aligned.
+    - Container-side state, config, and workspace paths override host `.env` values.
+  docsRefs:
+    - docs/install/docker.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/docker-setup.e2e.test.ts
+  execution:
+    kind: vitest
+    path: src/docker-setup.e2e.test.ts
+    summary: Vitest e2e coverage for Docker Compose setup and mount/env contracts.
