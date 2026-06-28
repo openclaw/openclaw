@@ -47,9 +47,13 @@ import {
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import {
+  acquireCodexNativeHookRelayAdmission,
+  attachCodexNativeHookRelayAdmissionRelease,
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayDisabledConfig,
   CODEX_NATIVE_HOOK_RELAY_EVENTS,
+  type CodexNativeHookRelayAdmission,
+  type CodexNativeHookRelayMemoryGuardConfig,
 } from "./native-hook-relay.js";
 import {
   readCodexNotificationThreadId,
@@ -141,6 +145,7 @@ export async function runCodexAppServerSideQuestion(
       ttlMs?: number;
       gatewayTimeoutMs?: number;
       hookTimeoutSec?: number;
+      memoryGuard?: CodexNativeHookRelayMemoryGuardConfig;
     };
   } = {},
 ): Promise<AgentHarnessSideQuestionResult> {
@@ -154,6 +159,8 @@ export async function runCodexAppServerSideQuestion(
     );
   }
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
+  const nativeHookRelayMemoryGuard =
+    options.nativeHookRelay?.memoryGuard ?? pluginConfig.appServer?.nativeHookRelay?.memoryGuard;
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.cfg,
@@ -322,16 +329,16 @@ export async function runCodexAppServerSideQuestion(
           threadId: childThreadId,
           turnId,
           nativeHookRelay,
-	          execPolicy,
-	          execReviewerAgentId: sessionAgentId,
-	          internalExecAutoReview: modelScopedAppServer.approvalsReviewer === "user",
-	          autoApprove: shouldAutoApproveCodexAppServerApprovals({
-	            approvalPolicy,
-	            networkProxy: modelScopedAppServer.networkProxy,
-	            sandbox,
-	          }),
-	          signal: runAbortController.signal,
-	        });
+          execPolicy,
+          execReviewerAgentId: sessionAgentId,
+          internalExecAutoReview: modelScopedAppServer.approvalsReviewer === "user",
+          autoApprove: shouldAutoApproveCodexAppServerApprovals({
+            approvalPolicy,
+            networkProxy: modelScopedAppServer.networkProxy,
+            sandbox,
+          }),
+          signal: runAbortController.signal,
+        });
       }
       if (request.method !== "item/tool/call") {
         return undefined;
@@ -382,8 +389,13 @@ export async function runCodexAppServerSideQuestion(
       configuredEvents: options.nativeHookRelay?.events,
       approvalPolicy,
     });
-    nativeHookRelay = options.nativeHookRelay
-      ? registerCodexSideNativeHookRelay({
+    const admission = options.nativeHookRelay
+      ? acquireCodexNativeHookRelayAdmission(nativeHookRelayMemoryGuard)
+      : ({ allowed: true, activeRelays: 0 } satisfies CodexNativeHookRelayAdmission);
+    let nativeHookRelayDisabledByMemoryGuard = false;
+    if (options.nativeHookRelay && admission.allowed) {
+      try {
+        nativeHookRelay = registerCodexSideNativeHookRelay({
           options: options.nativeHookRelay,
           events: nativeHookRelayEvents,
           agentId: sessionAgentId,
@@ -403,8 +415,27 @@ export async function runCodexAppServerSideQuestion(
             SIDE_QUESTION_COMPLETION_TIMEOUT_MS,
           ),
           signal: runAbortController.signal,
-        })
-      : undefined;
+        });
+      } catch (error) {
+        admission.release?.();
+        throw error;
+      }
+      if (nativeHookRelay) {
+        nativeHookRelay = attachCodexNativeHookRelayAdmissionRelease(
+          nativeHookRelay,
+          admission.release,
+        );
+      } else {
+        admission.release?.();
+      }
+    } else if (!admission.allowed) {
+      nativeHookRelayDisabledByMemoryGuard = true;
+      logCodexSideNativeHookRelayMemoryGuardDecision({
+        params,
+        admission,
+        memoryGuard: nativeHookRelayMemoryGuard,
+      });
+    }
     const nativeHookRelayConfig = nativeHookRelay
       ? buildCodexNativeHookRelayConfig({
           relay: nativeHookRelay,
@@ -412,19 +443,19 @@ export async function runCodexAppServerSideQuestion(
           hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
           clearOmittedEvents: true,
         })
-      : options.nativeHookRelay?.enabled === false
+      : options.nativeHookRelay?.enabled === false || nativeHookRelayDisabledByMemoryGuard
         ? buildCodexNativeHookRelayDisabledConfig()
         : undefined;
     const runtimeThreadConfig = buildCodexRuntimeThreadConfig(webSearchPlan.threadConfig, {
       nativeCodeModeEnabled: nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled: appServer.codeModeOnly,
     });
-	    const threadConfig =
-	      mergeCodexThreadConfigs(
-	        nativeHookRelayConfig,
-	        runtimeThreadConfig,
-	        modelScopedAppServer.networkProxy?.configPatch,
-	      ) ?? runtimeThreadConfig;
+    const threadConfig =
+      mergeCodexThreadConfigs(
+        nativeHookRelayConfig,
+        runtimeThreadConfig,
+        modelScopedAppServer.networkProxy?.configPatch,
+      ) ?? runtimeThreadConfig;
     const forkResponse = assertCodexThreadForkResponse(
       await forkCodexSideThread(
         client,
@@ -436,7 +467,7 @@ export async function runCodexAppServerSideQuestion(
           cwd,
           approvalPolicy,
           approvalsReviewer: modelScopedAppServer.approvalsReviewer,
-	          ...(modelScopedAppServer.networkProxy ? {} : { sandbox }),
+          ...(modelScopedAppServer.networkProxy ? {} : { sandbox }),
           ...(serviceTier ? { serviceTier } : {}),
           config: threadConfig,
           developerInstructions: SIDE_DEVELOPER_INSTRUCTIONS,
@@ -567,6 +598,26 @@ function registerCodexSideNativeHookRelay(params: {
     command: {
       timeoutMs: params.options.gatewayTimeoutMs,
     },
+  });
+}
+
+function logCodexSideNativeHookRelayMemoryGuardDecision(params: {
+  params: AgentHarnessSideQuestionParams;
+  admission: Exclude<CodexNativeHookRelayAdmission, { allowed: true }>;
+  memoryGuard: CodexNativeHookRelayMemoryGuardConfig | undefined;
+}): void {
+  embeddedAgentLog.warn("codex side-question native hook relay disabled by memory guard", {
+    sessionId: params.params.sessionId,
+    sessionKey: params.params.sessionKey,
+    reason: params.admission.reason,
+    activeRelays: params.admission.activeRelays,
+    thresholdRelays: params.admission.thresholdRelays,
+    availableMemoryBytes: params.admission.availableMemoryBytes,
+    processRssBytes: params.admission.processRssBytes,
+    thresholdBytes: params.admission.thresholdBytes,
+    minAvailableMemoryMb: params.memoryGuard?.minAvailableMemoryMb,
+    maxProcessRssMb: params.memoryGuard?.maxProcessRssMb,
+    maxActiveRelays: params.memoryGuard?.maxActiveRelays,
   });
 }
 

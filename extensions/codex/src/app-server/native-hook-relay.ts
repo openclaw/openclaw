@@ -3,6 +3,7 @@
  * app-server tool events can still run OpenClaw policy and diagnostics.
  */
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import {
   registerNativeHookRelay,
   type EmbeddedRunAttemptParams,
@@ -33,6 +34,37 @@ const CODEX_NATIVE_HOOK_RELAY_COMMAND_MIN_PARENT_MARGIN_MS = 250;
 const CODEX_NATIVE_HOOK_RELAY_COMMAND_MAX_PARENT_MARGIN_MS = 1_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_GRACE_MS = 10_000;
 const CODEX_NATIVE_HOOK_RELAY_UNREGISTER_EXTRA_GRACE_MS = 5_000;
+const MB = 1024 * 1024;
+const CGROUP_MEMORY_CURRENT_PATH = "/sys/fs/cgroup/memory.current";
+const CGROUP_MEMORY_MAX_PATH = "/sys/fs/cgroup/memory.max";
+const PROC_MEMINFO_PATH = "/proc/meminfo";
+
+export type CodexNativeHookRelayMemoryGuardConfig = {
+  enabled?: boolean;
+  minAvailableMemoryMb?: number;
+  maxProcessRssMb?: number;
+  maxActiveRelays?: number;
+  getAvailableMemoryBytesForTests?: () => number | undefined;
+  memoryUsageForTests?: () => Pick<NodeJS.MemoryUsage, "rss">;
+};
+
+export type CodexNativeHookRelayAdmission =
+  | {
+      allowed: true;
+      activeRelays: number;
+      availableMemoryBytes?: number;
+      processRssBytes?: number;
+      release?: () => void;
+    }
+  | {
+      allowed: false;
+      reason: "available_memory" | "process_rss" | "max_active_relays";
+      activeRelays: number;
+      availableMemoryBytes?: number;
+      processRssBytes?: number;
+      thresholdBytes?: number;
+      thresholdRelays?: number;
+    };
 
 type CodexHookEventName = "PreToolUse" | "PostToolUse" | "PermissionRequest" | "Stop";
 
@@ -42,6 +74,7 @@ type PendingCodexNativeHookRelayUnregister = {
 };
 
 const pendingCodexNativeHookRelayUnregisters = new Set<PendingCodexNativeHookRelayUnregister>();
+let activeCodexNativeHookRelayAdmissions = 0;
 
 /** Defers relay unregister so late native hook subprocesses can still resolve. */
 export function scheduleCodexNativeHookRelayUnregister(params: {
@@ -101,6 +134,107 @@ export function clearPendingCodexNativeHookRelayUnregistersForTests(): void {
     clearTimeout(pending.timeout);
   }
   pendingCodexNativeHookRelayUnregisters.clear();
+}
+
+export function acquireCodexNativeHookRelayAdmission(
+  config: CodexNativeHookRelayMemoryGuardConfig | undefined,
+): CodexNativeHookRelayAdmission {
+  if (config?.enabled !== true) {
+    return { allowed: true, activeRelays: activeCodexNativeHookRelayAdmissions };
+  }
+  const activeRelays = activeCodexNativeHookRelayAdmissions;
+  const availableMemoryBytes =
+    config.getAvailableMemoryBytesForTests?.() ?? readAvailableMemoryBytes();
+  const minAvailableMemoryBytes = mbToBytes(config.minAvailableMemoryMb);
+  if (
+    minAvailableMemoryBytes !== undefined &&
+    availableMemoryBytes !== undefined &&
+    availableMemoryBytes < minAvailableMemoryBytes
+  ) {
+    return {
+      allowed: false,
+      reason: "available_memory",
+      activeRelays,
+      availableMemoryBytes,
+      thresholdBytes: minAvailableMemoryBytes,
+    };
+  }
+  const processRssBytes = (config.memoryUsageForTests?.() ?? process.memoryUsage()).rss;
+  const maxProcessRssBytes = mbToBytes(config.maxProcessRssMb);
+  if (
+    maxProcessRssBytes !== undefined &&
+    Number.isFinite(processRssBytes) &&
+    processRssBytes > maxProcessRssBytes
+  ) {
+    return {
+      allowed: false,
+      reason: "process_rss",
+      activeRelays,
+      availableMemoryBytes,
+      processRssBytes,
+      thresholdBytes: maxProcessRssBytes,
+    };
+  }
+  const maxActiveRelays = normalizePositiveInteger(config.maxActiveRelays);
+  if (maxActiveRelays !== undefined && activeRelays >= maxActiveRelays) {
+    return {
+      allowed: false,
+      reason: "max_active_relays",
+      activeRelays,
+      availableMemoryBytes,
+      processRssBytes,
+      thresholdRelays: maxActiveRelays,
+    };
+  }
+  if (maxActiveRelays === undefined) {
+    return { allowed: true, activeRelays, availableMemoryBytes, processRssBytes };
+  }
+  activeCodexNativeHookRelayAdmissions += 1;
+  let released = false;
+  return {
+    allowed: true,
+    activeRelays,
+    availableMemoryBytes,
+    processRssBytes,
+    release: () => {
+      if (released) {
+        return;
+      }
+      released = true;
+      activeCodexNativeHookRelayAdmissions = Math.max(0, activeCodexNativeHookRelayAdmissions - 1);
+    },
+  };
+}
+
+export function attachCodexNativeHookRelayAdmissionRelease(
+  relay: NativeHookRelayRegistrationHandle,
+  release: (() => void) | undefined,
+): NativeHookRelayRegistrationHandle {
+  if (!release) {
+    return relay;
+  }
+  let released = false;
+  const releaseOnce = () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    release();
+  };
+  return {
+    ...relay,
+    unregister: () => {
+      try {
+        relay.unregister();
+      } finally {
+        releaseOnce();
+      }
+    },
+  };
+}
+
+export function resetCodexNativeHookRelayAdmissionsForTests(): void {
+  activeCodexNativeHookRelayAdmissions = 0;
 }
 
 /** Registers an OpenClaw native hook relay for a Codex app-server turn. */
@@ -313,6 +447,69 @@ export function buildCodexNativeHookRelayDisabledConfig(): JsonObject {
 
 function normalizeHookTimeoutSec(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) && value > 0 ? Math.ceil(value) : 5;
+}
+
+function normalizePositiveInteger(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? Math.floor(value)
+    : undefined;
+}
+
+function mbToBytes(value: number | undefined): number | undefined {
+  const normalized = normalizePositiveInteger(value);
+  return normalized === undefined ? undefined : normalized * MB;
+}
+
+function readAvailableMemoryBytes(): number | undefined {
+  return readCgroupAvailableMemoryBytes() ?? readProcMemAvailableBytes();
+}
+
+function readCgroupAvailableMemoryBytes(): number | undefined {
+  const current = readUnsignedIntegerFile(CGROUP_MEMORY_CURRENT_PATH);
+  const max = readCgroupMaxFile(CGROUP_MEMORY_MAX_PATH);
+  if (current === undefined || max === undefined || max <= 0 || current < 0) {
+    return undefined;
+  }
+  return Math.max(0, max - current);
+}
+
+function readProcMemAvailableBytes(): number | undefined {
+  const content = readTextFile(PROC_MEMINFO_PATH);
+  if (!content) {
+    return undefined;
+  }
+  const match = /^MemAvailable:\s+(\d+)\s+kB$/imu.exec(content);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  const kib = Number(match[1]);
+  return Number.isFinite(kib) && kib >= 0 ? kib * 1024 : undefined;
+}
+
+function readCgroupMaxFile(filePath: string): number | undefined {
+  const value = readTextFile(filePath)?.trim();
+  if (!value || value === "max") {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function readUnsignedIntegerFile(filePath: string): number | undefined {
+  const value = readTextFile(filePath)?.trim();
+  if (!value) {
+    return undefined;
+  }
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+function readTextFile(filePath: string): string | undefined {
+  try {
+    return readFileSync(filePath, "utf8");
+  } catch {
+    return undefined;
+  }
 }
 
 export function resolveCodexNativeHookRelayCommandTimeoutMs(

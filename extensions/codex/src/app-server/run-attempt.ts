@@ -195,6 +195,8 @@ import {
   shouldEmitTranscriptToolProgress,
 } from "./event-projector.js";
 import {
+  acquireCodexNativeHookRelayAdmission,
+  attachCodexNativeHookRelayAdmissionRelease,
   buildCodexNativeHookRelayDisabledConfig,
   buildCodexNativeHookRelayConfig,
   buildCodexNativeHookRelayId,
@@ -205,7 +207,10 @@ import {
   resolveCodexNativeHookRelayEvents,
   resolveCodexNativeHookRelayTtlMs,
   resolveCodexNativeHookRelayUnregisterGraceMs,
+  resetCodexNativeHookRelayAdmissionsForTests,
   scheduleCodexNativeHookRelayUnregister,
+  type CodexNativeHookRelayAdmission,
+  type CodexNativeHookRelayMemoryGuardConfig,
 } from "./native-hook-relay.js";
 import { registerCodexNativeSubagentMonitor } from "./native-subagent-monitor.js";
 import { describeCodexNotificationCorrelation } from "./notification-correlation.js";
@@ -419,6 +424,7 @@ export async function runCodexAppServerAttempt(
       ttlMs?: number;
       gatewayTimeoutMs?: number;
       hookTimeoutSec?: number;
+      memoryGuard?: CodexNativeHookRelayMemoryGuardConfig;
     };
     turnCompletionIdleTimeoutMs?: number;
     turnAssistantCompletionIdleTimeoutMs?: number;
@@ -449,6 +455,8 @@ export async function runCodexAppServerAttempt(
   });
   const attemptClientFactory = options.clientFactory ?? defaultLeasedCodexAppServerClientFactory;
   const pluginConfig = readCodexPluginConfig(options.pluginConfig);
+  const nativeHookRelayMemoryGuard =
+    options.nativeHookRelay?.memoryGuard ?? pluginConfig.appServer?.nativeHookRelay?.memoryGuard;
   const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
@@ -1429,26 +1437,50 @@ export async function runCodexAppServerAttempt(
     decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
   ) => {
     nativeHookRelay?.unregister();
-    nativeHookRelay = createCodexNativeHookRelay({
-      options: options.nativeHookRelay,
-      generation:
-        decision.action === "resume" ? decision.binding.nativeHookRelayGeneration : undefined,
-      generationMismatchGraceMs:
-        decision.action === "resume" && !decision.binding.nativeHookRelayGeneration
-          ? CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS
-          : undefined,
-      events: nativeHookRelayEvents,
-      agentId: sessionAgentId,
-      sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
-      config: params.config,
-      runId: params.runId,
-      channelId: hookChannelId,
-      attemptTimeoutMs: params.timeoutMs,
-      startupTimeoutMs,
-      turnStartTimeoutMs: params.timeoutMs,
-      signal: runAbortController.signal,
-    });
+    const admission = acquireCodexNativeHookRelayAdmission(nativeHookRelayMemoryGuard);
+    let nativeHookRelayDisabledByMemoryGuard = false;
+    if (admission.allowed) {
+      try {
+        nativeHookRelay = createCodexNativeHookRelay({
+          options: options.nativeHookRelay,
+          generation:
+            decision.action === "resume" ? decision.binding.nativeHookRelayGeneration : undefined,
+          generationMismatchGraceMs:
+            decision.action === "resume" && !decision.binding.nativeHookRelayGeneration
+              ? CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS
+              : undefined,
+          events: nativeHookRelayEvents,
+          agentId: sessionAgentId,
+          sessionId: params.sessionId,
+          sessionKey: sandboxSessionKey,
+          config: params.config,
+          runId: params.runId,
+          channelId: hookChannelId,
+          attemptTimeoutMs: params.timeoutMs,
+          startupTimeoutMs,
+          turnStartTimeoutMs: params.timeoutMs,
+          signal: runAbortController.signal,
+        });
+      } catch (error) {
+        admission.release?.();
+        throw error;
+      }
+      if (nativeHookRelay) {
+        nativeHookRelay = attachCodexNativeHookRelayAdmissionRelease(
+          nativeHookRelay,
+          admission.release,
+        );
+      } else {
+        admission.release?.();
+      }
+    } else {
+      nativeHookRelayDisabledByMemoryGuard = true;
+      logCodexNativeHookRelayMemoryGuardDecision({
+        params,
+        admission,
+        memoryGuard: nativeHookRelayMemoryGuard,
+      });
+    }
     return {
       configPatch: nativeHookRelay
         ? buildCodexNativeHookRelayConfig({
@@ -1456,7 +1488,7 @@ export async function runCodexAppServerAttempt(
             events: nativeHookRelayEvents,
             hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
           })
-        : options.nativeHookRelay?.enabled === false
+        : options.nativeHookRelay?.enabled === false || nativeHookRelayDisabledByMemoryGuard
           ? buildCodexNativeHookRelayDisabledConfig()
           : undefined,
       nativeHookRelayGeneration: nativeHookRelay?.generation,
@@ -3457,6 +3489,27 @@ function handleApprovalRequest(params: {
   });
 }
 
+function logCodexNativeHookRelayMemoryGuardDecision(params: {
+  params: EmbeddedRunAttemptParams;
+  admission: Exclude<CodexNativeHookRelayAdmission, { allowed: true }>;
+  memoryGuard: CodexNativeHookRelayMemoryGuardConfig | undefined;
+}): void {
+  embeddedAgentLog.warn("codex native hook relay disabled by memory guard", {
+    runId: params.params.runId,
+    sessionId: params.params.sessionId,
+    sessionKey: params.params.sessionKey,
+    reason: params.admission.reason,
+    activeRelays: params.admission.activeRelays,
+    thresholdRelays: params.admission.thresholdRelays,
+    availableMemoryBytes: params.admission.availableMemoryBytes,
+    processRssBytes: params.admission.processRssBytes,
+    thresholdBytes: params.admission.thresholdBytes,
+    minAvailableMemoryMb: params.memoryGuard?.minAvailableMemoryMb,
+    maxProcessRssMb: params.memoryGuard?.maxProcessRssMb,
+    maxActiveRelays: params.memoryGuard?.maxActiveRelays,
+  });
+}
+
 function resolveCodexDynamicToolDirectNames(params: EmbeddedRunAttemptParams): string[] {
   if (params.sourceReplyDeliveryMode !== "message_tool_only") {
     return [];
@@ -3492,5 +3545,6 @@ export const testing = {
   flushPendingCodexNativeHookRelayUnregistersForTests,
   clearPendingCodexNativeHookRelayUnregistersForTests,
   resolveCodexNativeHookRelayUnregisterGraceMs,
+  resetCodexNativeHookRelayAdmissionsForTests,
 } as const;
 export { testing as __testing };

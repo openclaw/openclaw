@@ -105,6 +105,7 @@ Supported `appServer` fields:
 | `defaultWorkspaceDir`                         | current process directory                              | Workspace used by `/codex bind` when `--cwd` is omitted.                                                                                                                                                                                                                                                                                                                                        |
 | `serviceTier`                                 | unset                                                  | Optional Codex app-server service tier. `"priority"` enables fast-mode routing, `"flex"` requests flex processing, and `null` clears the override. Legacy `"fast"` is accepted as `"priority"`.                                                                                                                                                                                                 |
 | `networkProxy`                                | disabled                                               | Opt into Codex permissions-profile networking for app-server commands. OpenClaw defines the selected `permissions.<profile>.network` config and selects it with `default_permissions` instead of sending `sandbox`.                                                                                                                                                                             |
+| `nativeHookRelay.memoryGuard`                 | disabled                                               | Admission control for Codex native hook relay commands. When enabled, OpenClaw can clear native hook relay config for a turn under memory pressure or when too many guarded relays are already active.                                                                                                                                                                                          |
 | `experimental.sandboxExecServer`              | `false`                                                | Preview opt-in that registers an OpenClaw sandbox-backed Codex environment with Codex app-server 0.132.0 or newer so native Codex execution can run inside the active OpenClaw sandbox.                                                                                                                                                                                                         |
 
 `appServer.networkProxy` is explicit because it changes the Codex sandbox
@@ -143,6 +144,43 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 `networkProxy` uses workspace-style filesystem access for the generated
 permission profile. Codex managed network enforcement is sandboxed networking,
 so a full-access profile would not protect outbound traffic.
+
+`appServer.nativeHookRelay.memoryGuard` is an opt-in pressure valve for hosts
+where Codex native hook helper processes can create unacceptable memory
+pressure. When enabled, OpenClaw checks cgroup memory when available, falls
+back to `/proc/meminfo` `MemAvailable`, checks Gateway process RSS, and applies
+an in-process active relay cap before installing Codex native hook commands. If
+any configured threshold is exceeded, OpenClaw sends a clearing hook config for
+that turn instead of registering the relay.
+
+```json5
+{
+  plugins: {
+    entries: {
+      codex: {
+        config: {
+          appServer: {
+            nativeHookRelay: {
+              memoryGuard: {
+                enabled: true,
+                minAvailableMemoryMb: 1024,
+                maxProcessRssMb: 1536,
+                maxActiveRelays: 1,
+              },
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+When the guard disables relay config, Codex model calls can still run, but
+OpenClaw native hook behavior for Codex-owned native tools and finalization is
+not installed for that turn. Use this only as bounded admission control on
+memory-constrained hosts, and keep native tool policy requirements in mind when
+choosing thresholds.
 
 The plugin blocks older or unversioned app-server handshakes. Codex app-server
 must report stable version `0.125.0` or newer.
