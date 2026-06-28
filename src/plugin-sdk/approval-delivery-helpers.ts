@@ -154,8 +154,7 @@ function buildApproverRestrictedNativeApprovalCapability(
     }) => availabilityState(hasConfiguredApprovers({ cfg, accountId })),
     getExecInitiatingSurfaceState: resolveExecInitiatingSurfaceState,
     describeExecApprovalSetup: params.describeExecApprovalSetup,
-    describePluginApprovalSetup:
-      params.describePluginApprovalSetup ?? params.describeExecApprovalSetup,
+    describePluginApprovalSetup: params.describePluginApprovalSetup,
     delivery: {
       hasConfiguredDmRoute: ({ cfg }: { cfg: OpenClawConfig }) =>
         params.listAccountIds(cfg).some((accountId) => {
