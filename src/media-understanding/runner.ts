@@ -15,6 +15,9 @@ import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
+import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
+import { isMediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import {
   buildModelAliasIndex,
@@ -38,12 +41,12 @@ import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
 import { runExec } from "../process/exec.js";
-import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
-import { isMediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
-import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
 import { fileExists } from "./fs.js";
-import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
+import {
+  resolveOpenAiAudioAuthEndpointTrust,
+  resolveOpenAiAudioAuthModelApi,
+} from "./openai-audio-api.js";
 import { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
 import {
   buildMediaUnderstandingRegistry,
@@ -95,12 +98,24 @@ function resolveLiteralProviderApiKey(
   );
 }
 
+function resolveConfiguredProviderBaseUrl(
+  cfg: OpenClawConfig | undefined,
+  providerId: string,
+): string | undefined {
+  return (
+    normalizeNullableString(
+      findNormalizedProviderValue(cfg?.models?.providers, providerId)?.baseUrl,
+    ) ?? undefined
+  );
+}
+
 async function hasProviderAuthAvailable(params: {
   capability: MediaUnderstandingCapability;
   provider: string;
   cfg?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  baseUrl?: string;
 }): Promise<boolean> {
   // Literal config keys are cheap to detect; defer loading model-auth until
   // profile/env discovery is actually needed.
@@ -109,13 +124,27 @@ async function hasProviderAuthAvailable(params: {
   }
   cachedHasAvailableAuthForProvider ??= (await import("../agents/model-auth.js"))
     .hasAvailableAuthForProvider;
+  const modelApi = resolveOpenAiAudioAuthModelApi({
+    capability: params.capability,
+    providerId: params.provider,
+  });
+  const effectiveBaseUrl =
+    params.baseUrl ?? resolveConfiguredProviderBaseUrl(params.cfg, params.provider);
   return await cachedHasAvailableAuthForProvider({
     ...params,
-    modelApi: resolveOpenAiAudioAuthModelApi({
+    modelApi,
+    openAIAudioEndpointTrust: resolveOpenAiAudioAuthEndpointTrust({
       capability: params.capability,
       providerId: params.provider,
+      baseUrl: effectiveBaseUrl,
     }),
   });
+}
+
+function resolveCapabilityConfigBaseUrl(
+  config: MediaUnderstandingConfig | undefined,
+): string | undefined {
+  return normalizeNullableString(config?.baseUrl) ?? undefined;
 }
 
 function resolveConfiguredKeyProviderOrder(params: {
@@ -592,9 +621,11 @@ async function resolveKeyEntry(params: {
   workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
+  config?: MediaUnderstandingConfig;
   activeModel?: ActiveMediaModel;
 }): Promise<MediaUnderstandingModelConfig | null> {
   const { cfg, agentDir, workspaceDir, providerRegistry, capability } = params;
+  const configBaseUrl = resolveCapabilityConfigBaseUrl(params.config);
   const checkProvider = async (
     providerId: string,
     model?: string,
@@ -619,6 +650,7 @@ async function resolveKeyEntry(params: {
         cfg,
         agentDir,
         workspaceDir,
+        baseUrl: configBaseUrl,
       }))
     ) {
       return null;
@@ -759,6 +791,7 @@ async function resolveAutoEntries(params: {
   workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
+  config?: MediaUnderstandingConfig;
   activeModel?: ActiveMediaModel;
 }): Promise<MediaUnderstandingModelConfig[]> {
   if (params.capability === "image") {
@@ -858,6 +891,7 @@ async function resolveActiveModelEntry(params: {
   workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
+  config?: MediaUnderstandingConfig;
   activeModel?: ActiveMediaModel;
 }): Promise<MediaUnderstandingModelConfig | null> {
   const activeProviderRaw = params.activeModel?.provider?.trim();
@@ -887,6 +921,7 @@ async function resolveActiveModelEntry(params: {
     cfg: params.cfg,
     agentDir: params.agentDir,
     workspaceDir: params.workspaceDir,
+    baseUrl: resolveCapabilityConfigBaseUrl(params.config),
   });
   if (!hasAuth) {
     return null;
@@ -1119,6 +1154,7 @@ export async function runCapability(params: {
       workspaceDir: params.workspaceDir,
       providerRegistry: params.providerRegistry,
       capability,
+      config,
       activeModel: params.activeModel,
     });
   }
