@@ -2052,7 +2052,17 @@ export const dispatchTelegramMessage = async ({
                         return deliverPostFinalFollowUpText();
                       }
                       if (streamMode === "progress") {
-                        return deliverProgressModeFinalAnswer(answerPayload, finalText);
+                        const progressResult = await deliverProgressModeFinalAnswer(
+                          answerPayload,
+                          finalText,
+                        );
+                        // Progress mode latches the terminal-error delivery so a duplicate
+                        // final-error payload is suppressed by hasTerminalErrorDelivered() above;
+                        // without it progress-streaming users still receive two error replies.
+                        if (progressResult.kind !== "skipped") {
+                          markTerminalErrorDelivered(finalText);
+                        }
+                        return progressResult;
                       }
                       if (!(await rotateAnswerLaneAfterToolProgress())) {
                         await rotateAnswerLaneAfterQueuedBlocksSettle();

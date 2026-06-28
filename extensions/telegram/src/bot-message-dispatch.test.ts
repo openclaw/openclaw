@@ -4685,6 +4685,32 @@ describe("dispatchTelegramMessage draft streaming", () => {
     expectDeliveredReply(0, { text: "⚠️ The model timed out before producing a reply." });
   });
 
+  it("delivers only one terminal error reply in progress mode when the runner reports duplicate failures", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        { text: "⚠️ The model timed out before producing a reply.", isError: true },
+        { kind: "final" },
+      );
+      await dispatcherOptions.deliver(
+        {
+          text: "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
+          isError: true,
+        },
+        { kind: "final" },
+      );
+      return { queuedFinal: false, counts: { block: 0, final: 2, tool: 0 } };
+    });
+
+    await dispatchWithContext({
+      context: createContext({ ctxPayload: createDirectSessionPayload() }),
+      streamMode: "progress",
+      telegramCfg: { streaming: { mode: "progress" } },
+    });
+
+    expect(deliverReplies).toHaveBeenCalledTimes(1);
+    expectDeliveredReply(0, { text: "⚠️ The model timed out before producing a reply." });
+  });
+
   it("does not send visible error fallbacks for room events", async () => {
     const historyKey = "telegram:group:-100123";
     const groupHistories = new Map([
