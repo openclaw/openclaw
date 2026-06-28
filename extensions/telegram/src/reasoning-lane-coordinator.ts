@@ -94,7 +94,7 @@ export function splitTelegramReasoningText(
   const taggedReasoning = extractThinkingFromTaggedStreamOutsideCode(text);
   const strippedAnswer = stripReasoningTagsFromText(text, { mode: "strict", trim: "both" });
 
-  if (isReasoning === true) {
+  if (isReasoning) {
     return { reasoningText: formatReasoningMessage(taggedReasoning || strippedAnswer || text) };
   }
 

@@ -81,7 +81,7 @@ describe("statusSummaryRuntime configured model normalization", () => {
       }),
     ).toEqual({
       provider: "anthropic",
-      model: "opus-4.6",
+      model: "claude-opus-4-6",
     });
 
     expect(
@@ -91,7 +91,7 @@ describe("statusSummaryRuntime configured model normalization", () => {
       }),
     ).toEqual({
       provider: "anthropic",
-      model: "opus-4.6",
+      model: "claude-opus-4-6",
     });
 
     expect(normalizeProviderModelIdWithManifestMock).not.toHaveBeenCalled();
