@@ -1688,7 +1688,15 @@ async function runEmbeddedAgentInternal(
       const rateLimitProfileRotationLimit = resolveRateLimitProfileRotationLimit(params.config);
       let activeSessionId = params.sessionId;
       let activeSessionFile = params.sessionFile;
-      let activeSessionTarget: ContextEngineSessionTarget | undefined = params.sessionTarget;
+      let activeSessionTarget: ContextEngineSessionTarget | undefined =
+        buildContextEngineCompactionSessionTarget({
+          agentId: params.agentId ?? sessionAgentId,
+          config: params.config,
+          sessionFile: activeSessionFile,
+          sessionId: activeSessionId,
+          sessionKey: resolvedSessionKey,
+          sessionTarget: params.sessionTarget,
+        });
       const adoptActiveSessionId = (nextSessionId: string | undefined) => {
         if (!nextSessionId || nextSessionId === activeSessionId) {
           return;
