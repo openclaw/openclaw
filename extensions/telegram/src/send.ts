@@ -2176,3 +2176,44 @@ export async function sendVenueTelegram(
 
   return { messageId: String(messageId), chatId: resolvedChatId };
 }
+
+// ---------------------------------------------------------------------------
+// Video notes (round videos / circles)
+// ---------------------------------------------------------------------------
+
+type TelegramVideoNoteOpts = {
+  cfg: OpenClawConfig;
+  token?: string;
+  accountId?: string;
+  verbose?: boolean;
+  api?: TelegramApiOverride;
+  retry?: RetryConfig;
+  gatewayClientScopes?: readonly string[];
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  /** Message ID to reply to (for threading). */
+  replyToMessageId?: number;
+  /** Forum topic thread ID. */
+  messageThreadId?: number;
+  /** Send message silently (no notification). Defaults to false. */
+  silent?: boolean;
+};
+
+/**
+ * Send a round video note (видеокружок) to a Telegram chat.
+ * The video must be square and ≤60 seconds; Telegram crops and encodes it.
+ */
+export async function sendVideoNoteTelegram(
+  to: string,
+  mediaUrl: string,
+  opts: TelegramVideoNoteOpts,
+): Promise<{ messageId: string; chatId: string }> {
+  if (!mediaUrl?.trim()) {
+    throw new Error("mediaUrl is required for video note");
+  }
+  return sendMessageTelegram(to, "", {
+    ...opts,
+    mediaUrl: mediaUrl.trim(),
+    asVideoNote: true,
+  });
+}
