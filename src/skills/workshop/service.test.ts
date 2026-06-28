@@ -1,4 +1,31 @@
 // Workshop service tests cover skill workshop generation, storage, and validation behavior.
+
+import _fsSync from "node:fs";
+import _os from "node:os";
+import _path from "node:path";
+
+const directorySymlinkType = process.platform === "win32" ? "junction" : "dir";
+
+const canCreateDirectorySymlinks = (() => {
+  let probeDir;
+  try {
+    probeDir = _fsSync.mkdtempSync(_path.join(_os.tmpdir(), "openclaw-dir-symlink-probe-"));
+    const targetDir = _path.join(probeDir, "target");
+    const linkDir = _path.join(probeDir, "link");
+    _fsSync.mkdirSync(targetDir);
+    _fsSync.symlinkSync(targetDir, linkDir, directorySymlinkType);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    if (probeDir) {
+      try {
+        _fsSync.rmSync(probeDir, { recursive: true, force: true });
+      } catch {}
+    }
+  }
+})();
+
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -142,7 +169,7 @@ describe("skill workshop proposals", () => {
     expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("applied");
   });
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "applies updates through opted-in trusted workspace skills symlink targets",
     async () => {
       const workspaceDir = await makeWorkspace();
@@ -189,7 +216,7 @@ describe("skill workshop proposals", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "blocks trusted workspace skills symlink writes until workshop writes are enabled",
     async () => {
       const workspaceDir = await makeWorkspace();
@@ -222,7 +249,7 @@ describe("skill workshop proposals", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "validates support file targets against trusted symlink write roots",
     async () => {
       const workspaceDir = await makeWorkspace();
@@ -272,7 +299,7 @@ describe("skill workshop proposals", () => {
     },
   );
 
-  it.runIf(process.platform !== "win32")(
+  it.skipIf(!canCreateDirectorySymlinks)(
     "blocks untrusted workspace skills symlink targets before support files are written",
     async () => {
       const workspaceDir = await makeWorkspace();
