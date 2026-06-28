@@ -1414,7 +1414,8 @@ describe("session accessor file-backed seam", () => {
       .readdirSync(tempDir)
       .filter((file) => file.startsWith("previous-session.jsonl.reset."));
     expect(archivedPreviousTranscripts).toHaveLength(1);
-    const archivedPreviousTranscript = path.join(tempDir, archivedPreviousTranscripts[0]!);
+    const [archivedPreviousTranscriptName] = archivedPreviousTranscripts;
+    const archivedPreviousTranscript = path.join(tempDir, archivedPreviousTranscriptName);
     expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain(
       '"id":"previous-session"',
     );
