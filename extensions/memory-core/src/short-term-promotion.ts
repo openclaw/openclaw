@@ -1457,6 +1457,9 @@ export async function recordShortTermRecalls(params: {
       const recallDays = mergeRecentDistinct(recallDaysBase, todayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: normalizedPath, snippet });
 
+      const unchangedDedupeSignal = dedupeSignal && existing?.snippet === snippet;
+      const lastRecalledAt = unchangedDedupeSignal ? (existing?.lastRecalledAt ?? nowIso) : nowIso;
+
       store.entries[key] = {
         key,
         path: normalizedPath,
@@ -1470,7 +1473,7 @@ export async function recordShortTermRecalls(params: {
         totalScore,
         maxScore,
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
-        lastRecalledAt: nowIso,
+        lastRecalledAt,
         queryHashes,
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
@@ -1606,6 +1609,9 @@ export async function recordGroundedShortTermCandidates(params: {
       const recallDays = mergeRecentDistinct(recallDaysBase, dayBucket, MAX_RECALL_DAYS);
       const conceptTags = deriveConceptTags({ path: item.path, snippet: item.snippet });
 
+      const unchangedDedupeSignal = dedupeSignal && existing?.snippet === item.snippet;
+      const lastRecalledAt = unchangedDedupeSignal ? (existing?.lastRecalledAt ?? nowIso) : nowIso;
+
       store.entries[key] = {
         key,
         path: item.path,
@@ -1619,7 +1625,7 @@ export async function recordGroundedShortTermCandidates(params: {
         totalScore,
         maxScore,
         firstRecalledAt: existing?.firstRecalledAt ?? nowIso,
-        lastRecalledAt: nowIso,
+        lastRecalledAt,
         queryHashes,
         recallDays,
         conceptTags: conceptTags.length > 0 ? conceptTags : (existing?.conceptTags ?? []),
@@ -1765,6 +1771,32 @@ export async function readLightStagedKeys(params: {
     }
   }
   return keys;
+}
+
+export async function filterFreshLightDreamingEntries(params: {
+  workspaceDir: string;
+  entries: readonly ShortTermRecallEntry[];
+  nowMs?: number;
+}): Promise<ShortTermRecallEntry[]> {
+  const workspaceDir = params.workspaceDir.trim();
+  if (!workspaceDir || params.entries.length === 0) {
+    return [];
+  }
+  const nowMs = resolveMemoryCoreNowMs(params.nowMs);
+  const nowIso = resolveMemoryCoreTimestamp(nowMs);
+  const phaseSignals = await readPhaseSignalStore(workspaceDir, nowIso);
+  return params.entries.filter((entry) => {
+    const phaseSignal = phaseSignals.entries[entry.key];
+    if (!phaseSignal || phaseSignal.lightHits <= 0) {
+      return true;
+    }
+    const lastLightMs = parseStoreTimestampMs(phaseSignal.lastLightAt);
+    if (!Number.isFinite(lastLightMs)) {
+      return true;
+    }
+    const lastRecalledAtMs = parseStoreTimestampMs(entry.lastRecalledAt);
+    return Number.isFinite(lastRecalledAtMs) && lastRecalledAtMs > lastLightMs;
+  });
 }
 
 export async function rankShortTermPromotionCandidates(

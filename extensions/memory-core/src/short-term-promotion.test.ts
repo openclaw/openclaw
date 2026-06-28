@@ -580,6 +580,51 @@ describe("short-term promotion", () => {
     });
   });
 
+  it("keeps duplicate daily signals from refreshing recall freshness", async () => {
+    await withTempWorkspace(async (workspaceDir) => {
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_daily__:2026-04-03",
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-04-05",
+        nowMs: Date.parse("2026-04-05T10:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.62,
+            snippet: "Added primary issue extraction for pain notifications.",
+            source: "memory",
+          },
+        ],
+      });
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "__dreaming_daily__:2026-04-03",
+        signalType: "daily",
+        dedupeByQueryPerDay: true,
+        dayBucket: "2026-04-05",
+        nowMs: Date.parse("2026-04-05T11:00:00.000Z"),
+        results: [
+          {
+            path: "memory/2026-04-03.md",
+            startLine: 1,
+            endLine: 1,
+            score: 0.62,
+            snippet: "Added primary issue extraction for pain notifications.",
+            source: "memory",
+          },
+        ],
+      });
+
+      const [entry] = Object.values(await readRecallStoreEntries(workspaceDir));
+      expect(entry?.dailyCount).toBe(1);
+      expect(entry?.lastRecalledAt).toBe("2026-04-05T10:00:00.000Z");
+    });
+  });
+
   it("uses default thresholds for promotion", async () => {
     await withTempWorkspace(async (workspaceDir) => {
       await recordShortTermRecalls({
