@@ -156,6 +156,129 @@ function shouldMarkNonTerminalToolErrorWarning(lastToolError: ToolErrorSummary):
   return lastToolError.middlewareError === true;
 }
 
+function formatToolErrorWarningText(params: {
+  lastToolError: ToolErrorSummary;
+  includeDetails: boolean;
+  useMarkdown: boolean;
+}): string {
+  if (isExecLikeToolName(params.lastToolError.toolName)) {
+    const toolLabel = formatToolAggregate(params.lastToolError.toolName, undefined, {
+      markdown: params.useMarkdown,
+    });
+    const subject = formatExecLikeFailureSubject(params.lastToolError.meta, params.useMarkdown);
+    const conciseExitSuffix = params.includeDetails
+      ? ""
+      : formatConciseExecExitSuffix(params.lastToolError.error);
+    const errorSuffix =
+      params.includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
+    return subject
+      ? `⚠️ ${toolLabel} failed: ${subject}${conciseExitSuffix}${errorSuffix}`
+      : `⚠️ ${toolLabel} failed${conciseExitSuffix}${errorSuffix}`;
+  }
+
+  const toolSummary = formatToolAggregate(
+    params.lastToolError.toolName,
+    params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
+    { markdown: params.useMarkdown },
+  );
+  const errorSuffix =
+    params.includeDetails && params.lastToolError.error ? `: ${params.lastToolError.error}` : "";
+  return `⚠️ ${toolSummary} failed${errorSuffix}`;
+}
+
+function formatExecLikeFailureSubject(meta: string | undefined, markdown: boolean): string {
+  const normalized = normalizeOptionalString(meta);
+  if (!normalized) {
+    return "";
+  }
+
+  const { flags, body } = splitExecLikeFailureMeta(normalized);
+  if (!body) {
+    return flags.join(" · ");
+  }
+
+  const { text, suffix } = splitDisplayContextSuffix(body);
+  const literalCommand = extractLiteralExecCommand(text);
+  const subject = `${maybeWrapInlineCode(literalCommand ?? text, markdown)}${suffix}`;
+  return flags.length > 0 ? `${flags.join(" · ")} · ${subject}` : subject;
+}
+
+function splitExecLikeFailureMeta(meta: string): { flags: string[]; body: string } {
+  const flags: string[] = [];
+  const bodyParts: string[] = [];
+  for (const part of meta
+    .split(" · ")
+    .map((candidate) => candidate.trim())
+    .filter(Boolean)) {
+    if (part === "elevated" || part === "pty") {
+      flags.push(part);
+      continue;
+    }
+    bodyParts.push(part);
+  }
+  return { flags, body: bodyParts.join(" · ") };
+}
+
+function extractLiteralExecCommand(body: string): string | undefined {
+  const inlineCode = body.match(/(?:^|,\s*)`([^`]+)`$/u)?.[1];
+  if (inlineCode) {
+    return inlineCode;
+  }
+
+  const directRun = body.match(
+    /^(?:run )((?:python3?|ruby|php|git|npm|pnpm|yarn|bun|openclaw) .+)$/u,
+  );
+  if (directRun?.[1]) {
+    return directRun[1];
+  }
+
+  const nodeScript = body.match(/^run node script (.+)$/u);
+  if (nodeScript?.[1]) {
+    return `node ${nodeScript[1]}`;
+  }
+
+  return undefined;
+}
+
+function splitDisplayContextSuffix(value: string): { text: string; suffix: string } {
+  const match = /^(.*?)( \((?:agent|repo|workspace|sandbox)\))$/u.exec(value);
+  if (!match) {
+    return { text: value, suffix: "" };
+  }
+  return { text: match[1] ?? value, suffix: match[2] ?? "" };
+}
+
+function formatConciseExecExitSuffix(error: string | undefined): string {
+  const normalized = normalizeOptionalString(error);
+  const code = normalized?.match(
+    /\b(?:command\s+)?(?:failed\s+with\s+exit\s+code|exited\s+with\s+code|exit(?:ed)?\s+code|exit\s+status)\s+(-?\d+)\b/iu,
+  )?.[1];
+  return code ? ` (exit ${code})` : "";
+}
+
+function maybeWrapInlineCode(value: string, markdown: boolean): string {
+  if (!markdown) {
+    return value;
+  }
+  const delimiter = "`".repeat(longestBacktickRun(value) + 1);
+  const padding = value.startsWith("`") || value.endsWith("`") || value.includes("\n") ? " " : "";
+  return `${delimiter}${padding}${value}${padding}${delimiter}`;
+}
+
+function longestBacktickRun(value: string): number {
+  let longest = 0;
+  let current = 0;
+  for (const char of value) {
+    if (char === "`") {
+      current += 1;
+      longest = Math.max(longest, current);
+      continue;
+    }
+    current = 0;
+  }
+  return longest;
+}
+
 /**
  * Chooses whether a tool failure needs a separate user-visible warning and
  * whether to include raw details. Mutating failures are stricter because a
@@ -550,16 +673,11 @@ export function buildEmbeddedRunPayloads(params: {
     // Surface mutating failures unless the assistant explicitly acknowledged the failed action.
     // Otherwise, keep the previous behavior and only surface non-recoverable failures when no reply exists.
     if (warningPolicy.showWarning) {
-      const toolSummary = formatToolAggregate(
-        params.lastToolError.toolName,
-        params.lastToolError.meta ? [params.lastToolError.meta] : undefined,
-        { markdown: useMarkdown },
-      );
-      const errorSuffix =
-        warningPolicy.includeDetails && params.lastToolError.error
-          ? `: ${params.lastToolError.error}`
-          : "";
-      const warningText = `⚠️ ${toolSummary} failed${errorSuffix}`;
+      const warningText = formatToolErrorWarningText({
+        lastToolError: params.lastToolError,
+        includeDetails: warningPolicy.includeDetails,
+        useMarkdown,
+      });
       const normalizedWarning = normalizeTextForComparison(warningText);
       const duplicateWarning = normalizedWarning
         ? replyItems.some((item) => {

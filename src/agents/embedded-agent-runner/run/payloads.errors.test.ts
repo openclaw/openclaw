@@ -769,6 +769,41 @@ describe("buildEmbeddedRunPayloads", () => {
     expectSinglePayloadSummary(payloads, { text: warningText ?? "" });
   });
 
+  it("keeps exec failure labels outside markdown command text", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: "run python3 /path/to/daily-cost-audit.py",
+        error: "Command exited with code 1",
+        mutatingAction: true,
+      },
+      toolResultFormat: "markdown",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "⚠️ 🛠️ Exec failed: `python3 /path/to/daily-cost-audit.py` (exit 1)",
+      isError: true,
+    });
+    expect(payloads[0]?.text).not.toContain("`run python3");
+  });
+
+  it("keeps arbitrary exec cwd suffixes inside markdown command text", () => {
+    const payloads = buildPayloads({
+      lastToolError: {
+        toolName: "exec",
+        meta: "run python3 /tmp/audit.py (in /tmp/build @everyone)",
+        error: "Command exited with code 1",
+        mutatingAction: true,
+      },
+      toolResultFormat: "markdown",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py (in /tmp/build @everyone)` (exit 1)",
+      isError: true,
+    });
+  });
+
   it("wraps markdown-capable mutating tool warnings so mention-looking names stay inert", () => {
     const payloads = buildPayloads({
       lastToolError: {
@@ -781,7 +816,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ `show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt (workspace)` failed",
+      text: "⚠️ 🛠️ Bash failed: `show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt` (workspace)",
       isError: true,
     });
   });
