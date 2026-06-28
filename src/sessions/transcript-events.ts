@@ -15,7 +15,6 @@ type SessionTranscriptUpdateFields = {
   target?: SessionTranscriptUpdateTarget;
   sessionKey?: string;
   agentId?: string;
-  /** @deprecated Pre-SQLite compatibility mirror. Prefer `target.sessionId`. */
   sessionId?: string;
   message?: unknown;
   messageId?: string;
@@ -23,7 +22,9 @@ type SessionTranscriptUpdateFields = {
 };
 
 /** Normalized transcript update emitted after a session transcript changes. */
-export type SessionTranscriptUpdate = SessionTranscriptUpdateFields;
+export type SessionTranscriptUpdate = Omit<SessionTranscriptUpdateFields, "sessionFile"> & {
+  target: SessionTranscriptUpdateTarget;
+};
 
 /** Internal transcript update that may identify a transcript without a file path. */
 export type InternalSessionTranscriptUpdate = SessionTranscriptUpdateFields;
@@ -53,12 +54,15 @@ export function onInternalSessionTranscriptUpdate(
 }
 
 /** Emits a normalized transcript update to all registered listeners. */
-export function emitSessionTranscriptUpdate(update: SessionTranscriptUpdate): void {
+export function emitSessionTranscriptUpdate(update: InternalSessionTranscriptUpdate): void {
   const nextUpdate = normalizeSessionTranscriptUpdate(update, { allowIdentityOnly: true });
   if (!nextUpdate) {
     return;
   }
-  emitPublicSessionTranscriptUpdate(nextUpdate);
+  const publicUpdate = projectPublicSessionTranscriptUpdate(nextUpdate);
+  if (publicUpdate) {
+    emitPublicSessionTranscriptUpdate(publicUpdate);
+  }
   emitInternalTranscriptUpdate(nextUpdate);
 }
 
@@ -126,6 +130,24 @@ function emitInternalTranscriptUpdate(nextUpdate: InternalSessionTranscriptUpdat
       /* ignore */
     }
   }
+}
+
+function projectPublicSessionTranscriptUpdate(
+  update: InternalSessionTranscriptUpdate,
+): SessionTranscriptUpdate | undefined {
+  const target = update.target;
+  if (!target) {
+    return undefined;
+  }
+  return {
+    target,
+    ...(update.sessionKey ? { sessionKey: update.sessionKey } : {}),
+    ...(update.agentId ? { agentId: update.agentId } : {}),
+    ...(update.sessionId ? { sessionId: update.sessionId } : {}),
+    ...(update.message !== undefined ? { message: update.message } : {}),
+    ...(update.messageId ? { messageId: update.messageId } : {}),
+    ...(update.messageSeq !== undefined ? { messageSeq: update.messageSeq } : {}),
+  };
 }
 
 function normalizeUpdateTarget(update: {

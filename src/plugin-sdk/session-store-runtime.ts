@@ -234,11 +234,8 @@ export async function cleanupSessionLifecycleArtifacts(
   });
 }
 
-export { resolveSessionStoreEntry } from "../config/sessions/store-entry.js";
-export { resolveAndPersistSessionFile } from "../config/sessions/session-file.js";
-export { resolveSessionTranscriptPathInDir, resolveStorePath } from "../config/sessions/paths.js";
+export { resolveStorePath } from "../config/sessions/paths.js";
 export {
-  readLatestAssistantTextFromSessionTranscript,
   readRecentUserAssistantTextForSession,
   type SessionRecentConversationText,
 } from "../config/sessions/transcript.js";

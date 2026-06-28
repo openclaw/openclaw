@@ -143,7 +143,6 @@ export {
   clearSessionStoreCacheForTest,
   recordSessionMetaFromInbound,
   updateLastRoute,
-  resolveSessionStoreEntry,
 } from "../config/sessions/store.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";
 export { resolveStorePath } from "../config/sessions/paths.js";

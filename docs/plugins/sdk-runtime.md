@@ -166,7 +166,7 @@ two-party event loops that do not go through the shared inbound reply runner.
 
     For transcript reads and writes, import `openclaw/plugin-sdk/session-transcript-runtime` and use `resolveSessionTranscriptIdentity(...)`, `resolveSessionTranscriptTarget(...)`, `readSessionTranscriptEvents(...)`, `appendSessionTranscriptMessageByIdentity(...)`, `publishSessionTranscriptUpdateByIdentity(...)`, or `withSessionTranscriptWriteLock(...)` with `{ agentId, sessionKey, sessionId }`. These APIs let plugins identify a transcript, read its events, append messages, publish updates, and run related operations under the same transcript write lock without depending on active transcript file paths.
 
-    The legacy whole-store helpers are no longer exported from the plugin SDK. Use the scoped entry helpers for session metadata and the transcript identity helpers for active transcript operations. `resolveAndPersistSessionFile(...)` remains only as a deprecated compatibility helper for explicit legacy file resolution; archive/support workflows that need file artifacts should use their dedicated archive surfaces instead of active session runtime APIs.
+    The legacy whole-store and active transcript file helpers are no longer exported from the plugin SDK. Use the scoped entry helpers for session metadata and the transcript identity helpers for active transcript operations. Archive/support workflows that need file artifacts should use their dedicated archive surfaces instead of active session runtime APIs.
 
   </Accordion>
   <Accordion title="api.runtime.agent.defaults">
