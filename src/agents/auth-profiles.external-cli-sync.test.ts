@@ -538,6 +538,20 @@ describe("external cli oauth resolution", () => {
     expect(profiles).toStrictEqual([]);
   });
 
+  it("ignores Claude CLI apiKeyHelper credentials for OAuth profile sync", () => {
+    mocks.readClaudeCliCredentialsCached.mockReturnValue({
+      type: "api_key_helper",
+      provider: "anthropic",
+    });
+
+    const profiles = resolveExternalCliAuthProfiles(makeStore(), {
+      providerIds: ["claude-cli"],
+    });
+
+    expect(profiles).toStrictEqual([]);
+    expectReaderPolicyCall(mocks.readClaudeCliCredentialsCached);
+  });
+
   it("resolves fresher minimax external oauth profiles as runtime overlays", () => {
     mocks.readMiniMaxCliCredentialsCached.mockReturnValue(
       makeOAuthCredential({

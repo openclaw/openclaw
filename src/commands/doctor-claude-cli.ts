@@ -31,7 +31,8 @@ const CLAUDE_CLI_PROVIDER = "claude-cli";
 
 type ClaudeCliReadableCredential =
   | Pick<OAuthCredential, "type" | "expires">
-  | Pick<TokenCredential, "type" | "expires">;
+  | Pick<TokenCredential, "type" | "expires">
+  | { type: "api_key_helper" };
 
 type ClaudeCliDirHealth = "present" | "missing" | "not_directory" | "unreadable" | "readonly";
 
