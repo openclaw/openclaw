@@ -15,6 +15,7 @@ import {
   testing as beforeToolCallTesting,
 } from "./agent-tools.before-tool-call.js";
 import type { MessagingToolSend } from "./embedded-agent-messaging.types.js";
+import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
 import {
   handleToolExecutionEnd,
   handleToolExecutionStart,
@@ -1369,6 +1370,53 @@ describe("handleToolExecutionEnd timeout metadata", () => {
       toolName: "exec",
       timedOut: true,
     });
+  });
+
+  it("uses raw exec metadata for failed tool payload warnings", async () => {
+    const { ctx } = createTestContext();
+    ctx.params.toolProgressDetail = "raw";
+
+    await handleToolExecutionStart(
+      ctx as never,
+      {
+        type: "tool_execution_start",
+        toolName: "exec",
+        toolCallId: "tool-exec-raw-command",
+        args: { command: "python3 /tmp/audit.py" },
+      } as never,
+    );
+
+    await handleToolExecutionEnd(
+      ctx as never,
+      {
+        type: "tool_execution_end",
+        toolName: "exec",
+        toolCallId: "tool-exec-raw-command",
+        isError: true,
+        result: {
+          error: "Command exited with code 1",
+          content: [{ type: "text", text: "Command exited with code 1" }],
+          details: { status: "failed", exitCode: 1 },
+        },
+      } as never,
+    );
+
+    expectRecordFields(ctx.state.lastToolError, "last tool error", {
+      toolName: "exec",
+      meta: "run python3 /tmp/audit.py, `python3 /tmp/audit.py`",
+    });
+
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: [],
+      toolMetas: ctx.state.toolMetas,
+      lastAssistant: undefined,
+      lastToolError: ctx.state.lastToolError,
+      sessionKey: "agent:unit-session",
+      toolResultFormat: "markdown",
+      inlineToolResultsAllowed: false,
+    });
+
+    expect(payloads[0]?.text).toBe("⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py` (exit 1)");
   });
 
   it("records structured error codes for failed tool results", async () => {

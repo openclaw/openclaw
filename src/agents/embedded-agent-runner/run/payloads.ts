@@ -219,17 +219,35 @@ function splitExecLikeFailureMeta(meta: string): { flags: string[]; body: string
   return { flags, body: bodyParts.join(" · ") };
 }
 
+const SEMANTIC_RUN_SUMMARIES = new Set(["tests", "build", "lint", "script", "command"]);
+const LITERAL_RUN_SUMMARY_PREFIXES = new Set([
+  "python",
+  "python3",
+  "ruby",
+  "php",
+  "git",
+  "npm",
+  "pnpm",
+  "yarn",
+  "bun",
+  "openclaw",
+  "make",
+  "cargo",
+  "go",
+  "docker",
+  "npx",
+  "uv",
+  "poetry",
+  "pytest",
+  "vitest",
+  "jest",
+  "deno",
+]);
+
 function extractLiteralExecCommand(body: string): string | undefined {
-  const inlineCode = body.match(/(?:^|,\s*)`([^`]+)`$/u)?.[1];
+  const inlineCode = body.match(/(?:^|,\s*| · )`([^`]+)`$/u)?.[1];
   if (inlineCode) {
     return inlineCode;
-  }
-
-  const directRun = body.match(
-    /^(?:run )((?:python3?|ruby|php|git|npm|pnpm|yarn|bun|openclaw) .+)$/u,
-  );
-  if (directRun?.[1]) {
-    return directRun[1];
   }
 
   const nodeScript = body.match(/^run node script (.+)$/u);
@@ -237,7 +255,30 @@ function extractLiteralExecCommand(body: string): string | undefined {
     return `node ${nodeScript[1]}`;
   }
 
+  const runSubject = body.match(/^run (.+)$/u)?.[1];
+  if (runSubject && isKnownLiteralRunSummary(runSubject)) {
+    return runSubject;
+  }
+
   return undefined;
+}
+
+function isKnownLiteralRunSummary(subject: string): boolean {
+  if (
+    SEMANTIC_RUN_SUMMARIES.has(subject) ||
+    subject.includes("→") ||
+    subject.includes("->") ||
+    /^(?:node|python3?|ruby|php) inline script(?: \(heredoc\))?$/u.test(subject)
+  ) {
+    return false;
+  }
+  const match = subject.match(/^(\S+)\s+(.+)$/u);
+  const command = match?.[1];
+  const remainder = match?.[2];
+  if (!command || !remainder || remainder === "command") {
+    return false;
+  }
+  return LITERAL_RUN_SUMMARY_PREFIXES.has(command);
 }
 
 function splitDisplayContextSuffix(value: string): { text: string; suffix: string } {
