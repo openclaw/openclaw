@@ -194,6 +194,7 @@ export type ReadSessionMessagesPageOptions = {
   offset: number;
   maxMessages: number;
   allowResetArchiveFallback?: boolean;
+  resetArchiveOnly?: boolean;
 };
 
 export type ReadSessionMessagesAsyncOptions =
