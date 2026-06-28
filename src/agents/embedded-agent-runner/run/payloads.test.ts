@@ -473,8 +473,9 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
       verboseLevel: "off",
     });
 
+    // Framework verb "show" stays outside the backtick-wrapped failure subject (issue #97319).
     expectSingleToolErrorPayload(payloads, {
-      title: "show last 20 lines",
+      title: "last 20 lines",
       detail: "No such file or directory",
     });
   });
