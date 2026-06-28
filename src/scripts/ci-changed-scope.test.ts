@@ -16,6 +16,7 @@ const {
   detectChangedScope: (paths: string[]) => {
     runNode: boolean;
     runMacos: boolean;
+    runIosBuild: boolean;
     runAndroid: boolean;
     runWindows: boolean;
     runSkillsPython: boolean;
@@ -119,7 +120,11 @@ describe("parseArgs", () => {
 
   it("rejects missing CI diff refs", () => {
     expect(() => parseArgs(["--base", "--head", "HEAD"])).toThrow("--base requires a value");
+    expect(() => parseArgs(["--base", "-h", "--head", "HEAD"])).toThrow(
+      "--base requires a value",
+    );
     expect(() => parseArgs(["--head"])).toThrow("--head requires a value");
+    expect(() => parseArgs(["--head", "-h"])).toThrow("--head requires a value");
     expect(() => parseArgs(["--base", ""])).toThrow("--base requires a value");
   });
 });
@@ -129,6 +134,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope([])).toEqual({
       runNode: true,
       runMacos: true,
+      runIosBuild: true,
       runAndroid: true,
       runWindows: true,
       runSkillsPython: true,
@@ -141,6 +147,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["docs/ci.md", "README.md"])).toEqual({
       runNode: false,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -153,6 +160,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["src/config/defaults.ts"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -165,6 +173,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["apps/macos/Sources/Foo.swift"])).toEqual({
       runNode: false,
       runMacos: true,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -176,6 +185,17 @@ describe("detectChangedScope", () => {
     ).toEqual({
       runNode: false,
       runMacos: true,
+      runIosBuild: false,
+      runAndroid: false,
+      runWindows: false,
+      runSkillsPython: false,
+      runChangedSmoke: false,
+      runControlUiI18n: false,
+    });
+    expect(detectChangedScope(["apps/ios/Sources/RootTabs.swift"])).toEqual({
+      runNode: false,
+      runMacos: true,
+      runIosBuild: true,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -185,6 +205,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["apps/shared/OpenClawKit/Sources/Foo.swift"])).toEqual({
       runNode: false,
       runMacos: true,
+      runIosBuild: true,
       runAndroid: true,
       runWindows: false,
       runSkillsPython: false,
@@ -194,6 +215,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["apps/swabble/Sources/SwabbleKit/WakeWordGate.swift"])).toEqual({
       runNode: false,
       runMacos: true,
+      runIosBuild: true,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -203,6 +225,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["Swabble/Sources/SwabbleKit/WakeWordGate.swift"])).toEqual({
       runNode: false,
       runMacos: true,
+      runIosBuild: true,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -211,12 +234,34 @@ describe("detectChangedScope", () => {
     });
   });
 
-  it("does not force macOS for generated protocol model-only changes", () => {
+  it("enables the iOS build lane for iOS build helper changes", () => {
+    for (const helperPath of [
+      "scripts/ios-team-id.sh",
+      "scripts/ios-version.ts",
+      "scripts/lib/ios-version.ts",
+      "scripts/lib/npm-publish-plan.mjs",
+      "scripts/lib/version-script-args.ts",
+    ]) {
+      expect(detectChangedScope([helperPath])).toEqual({
+        runNode: true,
+        runMacos: false,
+        runIosBuild: true,
+        runAndroid: false,
+        runWindows: false,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: false,
+      });
+    }
+  });
+
+  it("runs the iOS build but not macOS for generated protocol model-only changes", () => {
     expect(
       detectChangedScope(["apps/shared/OpenClawKit/Sources/OpenClawProtocol/GatewayModels.swift"]),
     ).toEqual({
       runNode: false,
       runMacos: false,
+      runIosBuild: true,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -229,6 +274,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["README.md"])).toEqual({
       runNode: false,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -239,6 +285,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope([".crabbox.yaml"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -251,6 +298,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope([".github/labeler.yml"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -263,6 +311,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["skills/skill-creator/scripts/test_quick_validate.py"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: true,
@@ -275,6 +324,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["skills/pyproject.toml"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: true,
@@ -287,6 +337,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope([".github/workflows/ci.yml"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: true,
       runSkillsPython: false,
@@ -296,33 +347,53 @@ describe("detectChangedScope", () => {
   });
 
   it("runs macOS CI for macOS packaging scripts with Darwin-only tests", () => {
-    expect(detectChangedScope(["scripts/create-dmg.sh"])).toEqual({
-      runNode: true,
-      runMacos: true,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-    });
+    for (const changedPath of [
+      "scripts/codesign-mac-app.sh",
+      "scripts/create-dmg.sh",
+      "scripts/lib/plistbuddy.sh",
+      "scripts/notarize-mac-artifact.sh",
+      "scripts/package-mac-app.sh",
+      "scripts/package-mac-dist.sh",
+    ]) {
+      expect(detectChangedScope([changedPath])).toEqual({
+        runNode: true,
+        runMacos: true,
+        runIosBuild: false,
+        runAndroid: false,
+        runWindows: false,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: false,
+      });
+    }
   });
 
-  it("runs macOS CI for the Darwin-only DMG owner test", () => {
-    expect(detectChangedScope(["test/scripts/create-dmg.test.ts"])).toEqual({
-      runNode: true,
-      runMacos: true,
-      runAndroid: false,
-      runWindows: false,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-    });
+  it("runs macOS CI for Darwin-only mac packaging owner tests", () => {
+    for (const changedPath of [
+      "test/scripts/codesign-mac-app.test.ts",
+      "test/scripts/create-dmg.test.ts",
+      "test/scripts/notarize-mac-artifact.test.ts",
+      "test/scripts/package-mac-app.test.ts",
+      "test/scripts/package-mac-dist.test.ts",
+    ]) {
+      expect(detectChangedScope([changedPath])).toEqual({
+        runNode: true,
+        runMacos: true,
+        runIosBuild: false,
+        runAndroid: false,
+        runWindows: false,
+        runSkillsPython: false,
+        runChangedSmoke: false,
+        runControlUiI18n: false,
+      });
+    }
   });
 
   it("runs Windows only for Windows-relevant changes", () => {
     expect(detectChangedScope(["extensions/memory-lancedb/index.test.ts"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -332,6 +403,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["src/auto-reply/reply/streaming-directives.ts"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -341,6 +413,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["src/process/exec.ts"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: true,
       runSkillsPython: false,
@@ -350,6 +423,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["src/process/exec.windows.test.ts"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: true,
       runSkillsPython: false,
@@ -359,6 +433,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["src/shared/runtime-import.ts"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: true,
       runSkillsPython: false,
@@ -368,15 +443,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["src/shared/runtime-import.test.ts"])).toEqual({
       runNode: true,
       runMacos: false,
-      runAndroid: false,
-      runWindows: true,
-      runSkillsPython: false,
-      runChangedSmoke: false,
-      runControlUiI18n: false,
-    });
-    expect(detectChangedScope(["src/plugins/import-specifier.test.ts"])).toEqual({
-      runNode: true,
-      runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: true,
       runSkillsPython: false,
@@ -386,6 +453,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["scripts/npm-runner.mjs"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: true,
       runSkillsPython: false,
@@ -395,6 +463,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["scripts/lib/format-generated-module.mjs"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: true,
       runSkillsPython: false,
@@ -404,6 +473,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["test/scripts/format-generated-module.test.ts"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: true,
       runSkillsPython: false,
@@ -413,6 +483,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["scripts/install.ps1"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: true,
       runSkillsPython: false,
@@ -425,6 +496,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["scripts/install.sh"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -434,6 +506,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["scripts/install-cli.sh"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -443,6 +516,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope([bundledPluginFile("matrix", "package.json")])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -452,6 +526,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope([".github/workflows/install-smoke.yml"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -461,6 +536,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["scripts/e2e/qr-import-docker.sh"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -470,6 +546,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["scripts/e2e/gateway-network-docker.sh"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -479,6 +556,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["scripts/e2e/Dockerfile"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -488,6 +566,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["scripts/e2e/agents-delete-shared-workspace-docker.sh"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -497,6 +576,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["scripts/e2e/plugin-update-unchanged-docker.sh"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -506,6 +586,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["scripts/postinstall-bundled-plugins.mjs"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -515,6 +596,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["scripts/ci-changed-scope.mjs"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -527,6 +609,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["src/plugins/loader.ts"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -536,6 +619,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["src/plugin-sdk/provider-entry.ts"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -545,6 +629,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["packages/gateway-protocol/src/schema/messages.ts"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -554,6 +639,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["packages/gateway-client/src/client.ts"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -563,6 +649,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["src/channels/plugins/catalog.ts"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -572,6 +659,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope([bundledPluginFile("matrix", "index.ts")])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -627,6 +715,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["src/plugins/loader.test.ts"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -636,6 +725,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope([bundledPluginFile("matrix", "index.test.ts")])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -648,6 +738,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["ui/src/i18n/locales/en.ts"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -658,6 +749,7 @@ describe("detectChangedScope", () => {
     expect(detectChangedScope(["scripts/control-ui-i18n.ts"])).toEqual({
       runNode: true,
       runMacos: false,
+      runIosBuild: false,
       runAndroid: false,
       runWindows: false,
       runSkillsPython: false,
@@ -788,6 +880,7 @@ describe("detectChangedScope", () => {
     expect(parseGitHubOutput(fs.readFileSync(outputPath, "utf8"))).toEqual({
       run_node: "false",
       run_macos: "false",
+      run_ios_build: "false",
       run_android: "false",
       run_windows: "false",
       run_skills_python: "false",

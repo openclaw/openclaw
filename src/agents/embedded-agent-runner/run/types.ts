@@ -32,7 +32,15 @@ import type { PreemptiveCompactionRoute } from "./preemptive-compaction.types.js
 
 type EmbeddedRunAttemptBase = Omit<
   RunEmbeddedAgentParams,
-  "provider" | "model" | "authProfileId" | "authProfileIdSource" | "thinkLevel" | "lane" | "enqueue"
+  | "provider"
+  | "model"
+  | "authProfileId"
+  | "authProfileIdSource"
+  | "thinkLevel"
+  | "fastMode"
+  | "lane"
+  | "enqueue"
+  | "sessionFile"
 >;
 
 export type EmbeddedRunContextWindowInfo = {
@@ -41,7 +49,11 @@ export type EmbeddedRunContextWindowInfo = {
   source: "model" | "modelsConfig" | "agentContextTokens" | "default";
 };
 
+export type EmbeddedRunFastModeParam = boolean | (() => boolean | undefined);
+
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** Active file-backed artifact target resolved by the run/session target seam. */
+  sessionFile: string;
   initialReplayState?: EmbeddedRunReplayState;
   /** Pluggable context engine for ingest/assemble/compact lifecycle. */
   contextEngine?: ContextEngine;
@@ -73,6 +85,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   agentHarnessTaskRuntimeScope?: AgentHarnessTaskRuntimeScope;
   /** Live observer called after wrapped tool outcomes are recorded. */
   onToolOutcome?: ToolOutcomeObserver;
+  /** Signals that the attempt's own run-timeout watchdog is active. */
+  onAttemptTimeoutArmed?: () => void;
+  /** Signals that this attempt's timeout has fired and must unwind promptly. */
+  onAttemptTimeout?: (reason: Error) => void;
+  /** Signals an explicit cancellation through the active native run handle. */
+  onAttemptAbort?: () => void;
   /** Supplies run-global model-call ordering for parallel tool outcomes. */
   allocateToolOutcomeOrdinal?: (toolCallId?: string) => number;
   model: Model;
@@ -86,6 +104,9 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   toolAuthProfileStore?: AuthProfileStore;
   modelRegistry: ModelRegistry;
   thinkLevel: ThinkLevel;
+  fastMode?: EmbeddedRunFastModeParam;
+  /** True when this attempt is running the auto fast-mode policy. */
+  fastModeAuto?: boolean;
   beforeAgentStartResult?: PluginHookBeforeAgentStartResult;
   beforeAgentFinalizeRevisionAttempts?: number;
   maxBeforeAgentFinalizeRevisions?: number;

@@ -1,11 +1,11 @@
 // Routing session key tests cover route-derived session key behavior.
 import { describe, expect, it } from "vitest";
+import { resolveSessionStoreAgentId } from "../gateway/session-store-key.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import {
   getSubagentDepth,
   isCronSessionKey,
   parseThreadSessionSuffix,
-  resolveThreadParentSessionKey,
 } from "../sessions/session-key-utils.js";
 import {
   agentSessionKeysMatchByRequestKey,
@@ -133,13 +133,29 @@ describe("isCronSessionKey", () => {
 
 describe("deriveSessionChatTypeFromKey", () => {
   it.each([
+    { key: "agent:main:direct:user1", expected: "direct" },
     { key: "agent:main:discord:direct:user1", expected: "direct" },
     { key: "agent:main:telegram:group:g1", expected: "group" },
     { key: "agent:main:discord:channel:c1", expected: "channel" },
     { key: "agent:main:discord:guild-123:channel-456", expected: "channel" },
+    { key: "agent:main:channel:legacy-room", expected: "channel" },
+    { key: "agent:main:channel:!room:example.org", expected: "channel" },
+    { key: "agent:main:channel:direct:user", expected: "channel" },
+    { key: "agent:main:group:room:part", expected: "group" },
+    { key: "agent:main:group:dm:user", expected: "group" },
     { key: "agent:main:whatsapp:123@g.us", expected: "group" },
     { key: "agent:main:telegram:dm:123456", expected: "direct" },
     { key: "telegram:dm:123456", expected: "direct" },
+    { key: "agent:main:matrix:channel:!Room:example.org", expected: "channel" },
+    { key: "agent:main:matrix:channel:!room:[2001:db8::1]", expected: "channel" },
+    { key: "agent:voice:agent:other:matrix:channel:!room:example.org", expected: "unknown" },
+    { key: "agent:main:direct", expected: "unknown" },
+    { key: "agent:main:demo:acct:channel", expected: "unknown" },
+    { key: "agent:main:telegram:group:direct:user", expected: "unknown" },
+    { key: "agent:main:direct:group:room", expected: "unknown" },
+    { key: "agent:main:dm:account:group:room", expected: "unknown" },
+    { key: "agent:main:demo::channel:room", expected: "unknown" },
+    { key: "agent::demo:direct:user", expected: "unknown" },
     { key: "agent:main:main", expected: "unknown" },
     { key: "agent:main", expected: "unknown" },
     { key: "", expected: "unknown" },
@@ -147,7 +163,7 @@ describe("deriveSessionChatTypeFromKey", () => {
     expect(deriveSessionChatTypeFromKey(key)).toBe(expected);
   });
 
-  it("uses plugin-owned legacy chat-type hooks after generic token parsing", () => {
+  it("uses plugin-owned legacy chat-type hooks after canonical parsing", () => {
     expect(
       deriveSessionChatTypeFromKey("legacy-room:abc", [
         (sessionKey) => (sessionKey.startsWith("legacy-room:") ? "channel" : undefined),
@@ -167,11 +183,6 @@ describe("thread session suffix parsing", () => {
         "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
       threadId: undefined,
     });
-    expect(
-      resolveThreadParentSessionKey(
-        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
-      ),
-    ).toBeNull();
   });
 
   it("does not treat telegram :topic: as a generic thread suffix", () => {
@@ -179,7 +190,6 @@ describe("thread session suffix parsing", () => {
       baseSessionKey: "agent:main:telegram:group:-100123:topic:77",
       threadId: undefined,
     });
-    expect(resolveThreadParentSessionKey("agent:main:telegram:group:-100123:topic:77")).toBeNull();
   });
 
   it("parses mixed-case :thread: markers without lowercasing the stored key", () => {
@@ -205,6 +215,16 @@ describe("session key canonicalization", () => {
           agentId: "main",
           rest: "hook:webhook:42",
         }),
+    },
+    {
+      name: "preserves empty segments inside opaque agent-scoped tails",
+      run: () => {
+        expect(parseAgentSessionKey("agent:voice:room::part")).toEqual({
+          agentId: "voice",
+          rest: "room::part",
+        });
+        expect(resolveSessionStoreAgentId({}, "agent:voice:room::part")).toBe("voice");
+      },
     },
     {
       name: "does not double-prefix already-qualified agent keys",

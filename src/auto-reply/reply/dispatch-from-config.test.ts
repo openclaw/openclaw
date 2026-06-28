@@ -84,9 +84,13 @@ const hookMocks = vi.hoisted(() => ({
     hasHooks: vi.fn<(hookName?: string) => boolean>(() => false),
     runInboundClaim: vi.fn(async () => undefined),
     runInboundClaimForPlugin: vi.fn(async () => undefined),
-    runInboundClaimForPluginOutcome: vi.fn<() => Promise<PluginTargetedInboundClaimOutcome>>(
-      async () => ({ status: "no_handler" as const }),
-    ),
+    runInboundClaimForPluginOutcome: vi.fn<
+      (
+        pluginId?: string,
+        event?: unknown,
+        context?: unknown,
+      ) => Promise<PluginTargetedInboundClaimOutcome>
+    >(async () => ({ status: "no_handler" as const })),
     runMessageReceived: vi.fn(async () => {}),
     runBeforeDispatch: vi.fn<
       (eventValue: unknown, _ctx: unknown) => Promise<PluginHookBeforeDispatchResult | undefined>
@@ -223,6 +227,11 @@ const transcriptMocks = vi.hoisted(() => ({
 const replyMediaPathMocks = vi.hoisted(() => ({
   createReplyMediaPathNormalizer: vi.fn(
     (_params?: unknown) => async (payload: ReplyPayload) => payload,
+  ),
+}));
+const stageSandboxMediaMocks = vi.hoisted(() => ({
+  stageSandboxMedia: vi.fn<(params: unknown) => Promise<{ staged: Map<string, string> }>>(
+    async () => ({ staged: new Map() }),
   ),
 }));
 const runtimePluginMocks = vi.hoisted(() => ({
@@ -549,6 +558,9 @@ vi.mock("../../tts/tts.runtime.js", () => ({
 vi.mock("./reply-media-paths.runtime.js", () => ({
   createReplyMediaPathNormalizer: (params: unknown) =>
     replyMediaPathMocks.createReplyMediaPathNormalizer(params),
+}));
+vi.mock("./stage-sandbox-media.runtime.js", () => ({
+  stageSandboxMedia: (params: unknown) => stageSandboxMediaMocks.stageSandboxMedia(params),
 }));
 vi.mock("../../plugins/runtime-plugins.runtime.js", () => ({
   ensureRuntimePluginsLoaded: runtimePluginMocks.ensureRuntimePluginsLoaded,
@@ -1101,6 +1113,8 @@ describe("dispatchReplyFromConfig", () => {
     replyMediaPathMocks.createReplyMediaPathNormalizer.mockReturnValue(
       async (payload: ReplyPayload) => payload,
     );
+    stageSandboxMediaMocks.stageSandboxMedia.mockReset();
+    stageSandboxMediaMocks.stageSandboxMedia.mockResolvedValue({ staged: new Map() });
     runtimePluginMocks.ensureRuntimePluginsLoaded.mockClear();
   });
 
@@ -5269,6 +5283,7 @@ describe("dispatchReplyFromConfig", () => {
       Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
+      AccountId: "default",
       MessageSid: "msg-1",
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
@@ -5689,6 +5704,7 @@ describe("dispatchReplyFromConfig", () => {
       CommandBody: "hello",
       RawBody: "hello",
       Body: "hello",
+      AccountId: "default",
       MessageSid: "wa-msg-1",
       SessionKey: "agent:main:whatsapp:+15555550123",
       SuppressMessageReceivedHooks: true,
@@ -6228,6 +6244,242 @@ describe("dispatchReplyFromConfig", () => {
     expect(inboundClaimCall?.[2]?.pluginBinding?.data?.sessionFile).toBe("/tmp/session.jsonl");
     expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
+  });
+
+  it("stages remote iMessage media before plugin-bound inbound claim metadata reaches Codex", async () => {
+    setNoAbort();
+    const order: string[] = [];
+    const rawPath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
+    const stagedPath =
+      "/tmp/openclaw-proof/.openclaw/media/remote-cache/agent-main-imessage/photo.jpg";
+    stageSandboxMediaMocks.stageSandboxMedia.mockImplementationOnce(async (paramsUnknown) => {
+      order.push("stage");
+      const params = paramsUnknown as {
+        ctx: MsgContext;
+        sessionCtx: MsgContext;
+        sessionKey?: string;
+        workspaceDir?: string;
+        remoteMediaMode?: string;
+      };
+      expect(params.sessionKey).toBe("agent:main:imessage:direct:user");
+      expect(params.workspaceDir).toContain(".openclaw/workspace");
+      expect(params.remoteMediaMode).toBe("cache");
+      params.ctx.MediaPath = stagedPath;
+      params.ctx.MediaPaths = [stagedPath];
+      params.ctx.MediaUrl = stagedPath;
+      params.ctx.MediaUrls = [stagedPath];
+      params.sessionCtx.MediaPath = stagedPath;
+      params.sessionCtx.MediaPaths = [stagedPath];
+      params.sessionCtx.MediaUrl = stagedPath;
+      params.sessionCtx.MediaUrls = [stagedPath];
+      return { staged: new Map([[rawPath, stagedPath]]) };
+    });
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) =>
+        hookName === "inbound_claim" || hookName === "message_received") as () => boolean,
+    );
+    hookMocks.registry.plugins = [{ id: "openclaw-codex-app-server", status: "loaded" }];
+    hookMocks.runner.runInboundClaimForPluginOutcome.mockImplementationOnce(
+      async (_plugin, event) => {
+        order.push("claim");
+        const claimEvent = event as { metadata?: Record<string, unknown> };
+        expect(claimEvent.metadata?.mediaPath).toBe(stagedPath);
+        expect(claimEvent.metadata?.mediaPaths).toEqual([stagedPath]);
+        expect(claimEvent.metadata?.mediaUrl).toBe(stagedPath);
+        expect(claimEvent.metadata?.mediaUrls).toEqual([stagedPath]);
+        expect(claimEvent.metadata?.mediaPath).not.toBe(rawPath);
+        expect(claimEvent.metadata?.mediaPaths).not.toContain(rawPath);
+        return { status: "handled", result: { handled: true } };
+      },
+    );
+    sessionBindingMocks.resolveByConversation.mockReturnValue({
+      bindingId: "binding-imessage-codex-media",
+      targetSessionKey: "plugin-binding:codex:imessage",
+      targetKind: "session",
+      conversation: {
+        channel: "imessage",
+        accountId: "default",
+        conversationId: "chat:abc",
+      },
+      status: "active",
+      boundAt: 1710000000000,
+      metadata: {
+        pluginBindingOwner: "plugin",
+        pluginId: "openclaw-codex-app-server",
+        pluginRoot: "/plugins/openclaw-codex-app-server",
+        data: {
+          kind: "codex-app-server-session",
+          version: 1,
+          sessionFile: "/tmp/session.jsonl",
+          workspaceDir: "/workspace/openclaw",
+        },
+      },
+    } satisfies SessionBindingRecord);
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "imessage",
+      Surface: "imessage",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "imessage:chat:abc",
+      To: "imessage:chat:abc",
+      AccountId: "default",
+      SenderId: "user-9",
+      CommandAuthorized: true,
+      WasMentioned: false,
+      CommandBody: "what is this?",
+      RawBody: "what is this?",
+      Body: "what is this?",
+      MessageSid: "msg-claim-imessage-media",
+      SessionKey: "agent:main:imessage:direct:user",
+      MediaPath: rawPath,
+      MediaPaths: [rawPath],
+      MediaUrl: rawPath,
+      MediaUrls: [rawPath],
+      MediaType: "image/jpeg",
+      MediaTypes: ["image/jpeg"],
+      MediaRemoteHost: "user@gateway-host",
+    });
+    const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
+
+    const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(result).toEqual({ queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } });
+    expect(order).toEqual(["stage", "claim"]);
+    expect(ctx.MediaStaged).not.toBe(true);
+    expect(ctx.MediaPath).toBe(rawPath);
+    expect(ctx.MediaPaths).toEqual([rawPath]);
+    expect(stageSandboxMediaMocks.stageSandboxMedia).toHaveBeenCalledTimes(1);
+    expect(sessionBindingMocks.touch).toHaveBeenCalledWith("binding-imessage-codex-media");
+    expect(hookMocks.runner.runInboundClaim).not.toHaveBeenCalled();
+    expect(replyResolver).not.toHaveBeenCalled();
+  });
+
+  it("leaves ordinary non-plugin remote iMessage media for get-reply staging", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "reply_dispatch") as () => boolean,
+    );
+    const rawPath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "imessage",
+      Surface: "imessage",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "imessage:chat:ordinary",
+      To: "imessage:chat:ordinary",
+      AccountId: "default",
+      SenderId: "user-9",
+      CommandAuthorized: true,
+      WasMentioned: false,
+      CommandBody: "what is this?",
+      RawBody: "what is this?",
+      Body: "what is this?",
+      MessageSid: "msg-ordinary-imessage-media",
+      SessionKey: "agent:main:imessage:direct:user",
+      MediaPath: rawPath,
+      MediaPaths: [rawPath],
+      MediaUrl: rawPath,
+      MediaUrls: [rawPath],
+      MediaType: "image/jpeg",
+      MediaTypes: ["image/jpeg"],
+      MediaRemoteHost: "user@gateway-host",
+    });
+    const replyResolver = vi.fn(async (receivedCtx: MsgContext) => {
+      expect(receivedCtx.MediaStaged).not.toBe(true);
+      expect(receivedCtx.MediaPath).toBe(rawPath);
+      expect(receivedCtx.MediaPaths).toEqual([rawPath]);
+      return { text: "agent reply" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(stageSandboxMediaMocks.stageSandboxMedia).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
+    expect(ctx.MediaStaged).not.toBe(true);
+    expect(ctx.MediaPath).toBe(rawPath);
+    expect(ctx.MediaPaths).toEqual([rawPath]);
+  });
+
+  it("does not cache-stage remote iMessage media for message_received-only hooks", async () => {
+    setNoAbort();
+    hookMocks.runner.hasHooks.mockImplementation(
+      ((hookName?: string) => hookName === "message_received") as () => boolean,
+    );
+    const rawPath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
+    const cfg = emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "imessage",
+      Surface: "imessage",
+      OriginatingChannel: "imessage",
+      OriginatingTo: "imessage:chat:ordinary-hook",
+      To: "imessage:chat:ordinary-hook",
+      AccountId: "default",
+      SenderId: "user-9",
+      CommandAuthorized: true,
+      WasMentioned: false,
+      CommandBody: "what is this?",
+      RawBody: "what is this?",
+      Body: "what is this?",
+      MessageSid: "msg-ordinary-imessage-hook-media",
+      SessionKey: "agent:main:imessage:direct:user",
+      MediaPath: rawPath,
+      MediaPaths: [rawPath],
+      MediaUrl: rawPath,
+      MediaUrls: [rawPath],
+      MediaType: "image/jpeg",
+      MediaTypes: ["image/jpeg"],
+      MediaRemoteHost: "user@gateway-host",
+    });
+    const replyResolver = vi.fn(async (receivedCtx: MsgContext) => {
+      expect(receivedCtx.MediaStaged).not.toBe(true);
+      expect(receivedCtx.MediaPath).toBe(rawPath);
+      expect(receivedCtx.MediaPaths).toEqual([rawPath]);
+      return { text: "agent reply" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    const [event] = firstMockCall(hookMocks.runner.runMessageReceived, "message received hook") as
+      | [{ metadata?: Record<string, unknown> }]
+      | [];
+    expect(event?.metadata?.mediaPath).toBeUndefined();
+    expect(event?.metadata?.mediaPaths).toBeUndefined();
+    expect(event?.metadata?.mediaUrl).toBeUndefined();
+    expect(event?.metadata?.mediaUrls).toBeUndefined();
+    expect(event?.metadata?.mediaStagingPending).toBe(true);
+    expect(event?.metadata?.mediaRemoteHost).toBe("user@gateway-host");
+    expect(event?.metadata?.originalMediaPath).toBe(rawPath);
+    expect(event?.metadata?.originalMediaPaths).toEqual([rawPath]);
+    expect(event?.metadata?.originalMediaUrl).toBe(rawPath);
+    expect(event?.metadata?.originalMediaUrls).toEqual([rawPath]);
+    expect(event?.metadata?.originalMediaType).toBe("image/jpeg");
+    expect(event?.metadata?.originalMediaTypes).toEqual(["image/jpeg"]);
+    const internalHookCall = firstMockCall(
+      internalHookMocks.createInternalHookEvent,
+      "internal hook event",
+    ) as
+      | [
+          unknown,
+          unknown,
+          unknown,
+          {
+            metadata?: Record<string, unknown>;
+          },
+        ]
+      | undefined;
+    expect(internalHookCall?.[3]?.metadata?.mediaStagingPending).toBe(true);
+    expect(internalHookCall?.[3]?.metadata?.mediaRemoteHost).toBe("user@gateway-host");
+    expect(internalHookCall?.[3]?.metadata?.originalMediaPath).toBe(rawPath);
+    expect(internalHookCall?.[3]?.metadata?.originalMediaPaths).toEqual([rawPath]);
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    expect(stageSandboxMediaMocks.stageSandboxMedia).not.toHaveBeenCalled();
+    expect(ctx.MediaStaged).not.toBe(true);
+    expect(ctx.MediaPath).toBe(rawPath);
+    expect(ctx.MediaPaths).toEqual([rawPath]);
   });
 
   it("routes Discord thread plugin-owned bindings by raw thread id", async () => {
@@ -7038,6 +7290,7 @@ describe("dispatchReplyFromConfig", () => {
       Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
+      AccountId: "default",
       MessageSid: "msg-dup",
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
@@ -7063,6 +7316,7 @@ describe("dispatchReplyFromConfig", () => {
       Provider: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "whatsapp:+15555550123",
+      AccountId: "default",
       MessageSid: "msg-dup-trace",
     });
     const replyResolver = vi.fn(async () => ({ text: "hi" }) as ReplyPayload);
@@ -8986,6 +9240,184 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
     expect(dispatcher.sendBlockReply).not.toHaveBeenCalled();
+  });
+
+  it("delivers fast auto progress in message-tool-only mode without verbose progress", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.({
+        text: "💨Fast: auto-off(75s>=60s)",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      });
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+    const ctx = buildTestCtx({ SessionKey: "test:session", ChatType: "channel" });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        suppressDefaultToolProgressMessages: true,
+      },
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: "💨Fast: auto-off(75s>=60s)",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("suppresses fast auto progress when sendPolicy is deny", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "deny",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.({
+        text: "💨Fast: auto-off(75s>=60s)",
+        channelData: { openclawProgressKind: "fast-mode-auto" },
+      });
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ SessionKey: "test:session", ChatType: "channel" }),
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        suppressDefaultToolProgressMessages: true,
+      },
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("forwards fast auto progress callbacks without separate message delivery", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const onToolResult = vi.fn();
+    const payload = {
+      text: "💨Fast: auto-on",
+      channelData: { openclawProgressKind: "fast-mode-auto" },
+    } satisfies ReplyPayload;
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.(payload);
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+    const ctx = buildTestCtx({ SessionKey: "test:session", ChatType: "channel" });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        suppressDefaultToolProgressMessages: true,
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+        onToolResult,
+      },
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(onToolResult).toHaveBeenCalledWith(payload);
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("forwards suppressed tool progress callbacks in message-tool-only mode", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const onToolResult = vi.fn();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.({ text: "🛠️ Exec: ruby sleep proof" });
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+    const ctx = buildTestCtx({ SessionKey: "test:session", ChatType: "channel" });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        suppressDefaultToolProgressMessages: true,
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+        onToolResult,
+      },
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(onToolResult).toHaveBeenCalledWith({ text: "🛠️ Exec: ruby sleep proof" });
+    expect(dispatcher.sendToolResult).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+  });
+
+  it("delivers forced tool progress in message-tool-only mode without verbose progress", async () => {
+    setNoAbort();
+    sessionStoreMocks.currentEntry = {
+      sessionId: "s1",
+      updatedAt: 0,
+      sendPolicy: "allow",
+    };
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      await opts?.onToolResult?.({ text: "🛠️ Exec: ruby sleep proof" });
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    });
+    const ctx = buildTestCtx({ SessionKey: "test:session", ChatType: "channel" });
+
+    const result = await dispatchReplyFromConfig({
+      ctx,
+      cfg: emptyConfig,
+      dispatcher,
+      replyResolver,
+      replyOptions: {
+        sourceReplyDeliveryMode: "message_tool_only",
+        forceToolResultProgress: true,
+      },
+    });
+
+    expect(result.queuedFinal).toBe(false);
+    expect(result.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "🛠️ Exec: ruby sleep proof" }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("delivers verbose tool progress in message-tool-only mode", async () => {

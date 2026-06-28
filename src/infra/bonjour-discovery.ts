@@ -62,14 +62,6 @@ export function resolveGatewayDiscoveryEndpoint(
   };
 }
 
-export function pickResolvedGatewayHost(beacon: GatewayBonjourBeacon): string | null {
-  return resolveGatewayDiscoveryEndpoint(beacon)?.host ?? null;
-}
-
-export function pickResolvedGatewayPort(beacon: GatewayBonjourBeacon): number | null {
-  return resolveGatewayDiscoveryEndpoint(beacon)?.port ?? null;
-}
-
 type GatewayBonjourDiscoverOpts = {
   timeoutMs?: number;
   domains?: string[];

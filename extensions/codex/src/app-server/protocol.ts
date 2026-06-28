@@ -48,6 +48,9 @@ export type CodexInitializeResponse = {
   };
   protocolVersion?: string;
   userAgent?: string;
+  codexHome?: string;
+  platformFamily?: string;
+  platformOs?: string;
 };
 
 export type CodexUserInput =
@@ -572,6 +575,8 @@ type CodexAppServerRequestResultMap = {
   "account/read": CodexGetAccountResponse;
   "app/list": CodexAppsListResponse;
   "config/mcpServer/reload": JsonValue;
+  "config/read": JsonValue;
+  "config/value/write": JsonValue;
   "environment/add": JsonValue;
   "experimentalFeature/enablement/set": JsonValue;
   "feedback/upload": JsonValue;

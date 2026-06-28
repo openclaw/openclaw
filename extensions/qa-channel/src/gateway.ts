@@ -48,9 +48,10 @@ export async function startQaGatewayAccount(
     if (!(error instanceof Error) || error.name !== "AbortError") {
       throw error;
     }
+  } finally {
+    ctx.setStatus({
+      accountId: account.accountId,
+      running: false,
+    });
   }
-  ctx.setStatus({
-    accountId: account.accountId,
-    running: false,
-  });
 }

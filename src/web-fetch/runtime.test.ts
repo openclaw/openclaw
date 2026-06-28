@@ -179,6 +179,36 @@ describe("web fetch runtime", () => {
     });
   });
 
+  it("uses an explicitly configured keyless provider without an API key", () => {
+    const provider = createFirecrawlProvider({
+      requiresCredential: false,
+    });
+    resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
+
+    const resolved = resolveWebFetchDefinition({
+      config: {
+        tools: {
+          web: {
+            fetch: {
+              provider: "firecrawl",
+            },
+          },
+        },
+      } as OpenClawConfig,
+    });
+
+    expect(requireResolvedWebFetch(resolved).provider.id).toBe("firecrawl");
+  });
+
+  it("does not auto-detect a keyless provider without a credential", () => {
+    const provider = createFirecrawlProvider({
+      requiresCredential: false,
+    });
+    resolvePluginWebFetchProvidersMock.mockReturnValue([provider]);
+
+    expect(resolveWebFetchDefinition({ config: {} })).toBeNull();
+  });
+
   it("auto-detects providers from configured fallback credentials", () => {
     const provider = createFirecrawlProvider({
       getConfiguredCredentialFallback: (config) => {
@@ -274,7 +304,7 @@ describe("web fetch runtime", () => {
     expect(requireResolvedWebFetch(resolved).provider.id).toBe("firecrawl");
   });
 
-  it("keeps sandboxed web fetch on bundled providers even when runtime providers are preferred", () => {
+  it("keeps sandboxed web fetch on trusted providers even when runtime providers are preferred", () => {
     const bundled = createFirecrawlProvider({
       getConfiguredCredentialValue: () => "bundled-key",
     });
@@ -289,6 +319,11 @@ describe("web fetch runtime", () => {
     });
 
     expect(requireResolvedWebFetch(resolved).provider.id).toBe("firecrawl");
+    expect(resolvePluginWebFetchProvidersMock).toHaveBeenCalledWith({
+      config: {},
+      sandboxed: true,
+    });
+    expect(resolveRuntimeWebFetchProvidersMock).not.toHaveBeenCalled();
   });
 
   it("uses runtime providers for non-sandboxed web fetch when runtime providers are preferred", () => {

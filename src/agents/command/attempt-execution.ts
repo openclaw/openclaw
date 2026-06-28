@@ -2,6 +2,7 @@
  * Orchestrates one agent attempt across embedded, CLI, and ACP runtimes.
  */
 import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
 import { formatAcpErrorChain } from "../../acp/runtime/errors.js";
 import { normalizeReplyPayload } from "../../auto-reply/reply/normalize-reply.js";
@@ -96,6 +97,12 @@ const ACP_TRANSCRIPT_USAGE = {
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_PROVIDER_ID = "google";
 
+function shouldSuppressEmbeddedLiveStreamOutput(params: {
+  opts: AgentCommandOpts;
+}): boolean {
+  return params.opts.sessionEffects === "internal" && params.opts.deliver !== true;
+}
+
 type TranscriptUsage = {
   input?: number;
   output?: number;
@@ -126,6 +133,10 @@ type PersistTextTurnTranscriptParams = {
     usage?: TranscriptUsage;
   };
 };
+
+type PersistTextTurnTranscriptResult =
+  | { kind: "persisted"; sessionEntry: SessionEntry | undefined }
+  | { kind: "session-rebound"; sessionEntry: undefined };
 
 type HarnessAuthProfileSelection = {
   authProfileId?: string;
@@ -175,6 +186,10 @@ function resolveHarnessAuthProfileSelection(params: {
       authProfileProvider: profileAuth.provider ?? params.authProfileProvider,
       authProfileMode: profileAuth.mode,
     };
+  }
+
+  if (!params.allowHarnessAuthProfileForwarding) {
+    return { authProfileProvider: params.authProfileProvider };
   }
 
   const runtimeAuthPlan = buildAgentRuntimeAuthPlan({
@@ -285,11 +300,11 @@ function resolveTranscriptUsage(usage: PersistTextTurnTranscriptParams["assistan
 
 async function persistTextTurnTranscript(
   params: PersistTextTurnTranscriptParams,
-): Promise<SessionEntry | undefined> {
+): Promise<PersistTextTurnTranscriptResult> {
   const promptText = params.transcriptBody ?? params.body;
   const replyText = params.finalText;
   if (!promptText && !replyText) {
-    return params.sessionEntry;
+    return { kind: "persisted", sessionEntry: params.sessionEntry };
   }
 
   const messages = [];
@@ -356,9 +371,13 @@ async function persistTextTurnTranscript(
       publishWhen: "always",
       touchSessionEntry: true,
       updateMode: "file-only",
+      ...(params.sessionStore && params.storePath ? { expectedSessionId: params.sessionId } : {}),
     },
   );
-  return turn.sessionEntry;
+  if (turn.rejectedReason === "session-rebound") {
+    return { kind: "session-rebound", sessionEntry: undefined };
+  }
+  return { kind: "persisted", sessionEntry: turn.sessionEntry };
 }
 
 function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
@@ -391,7 +410,7 @@ export async function persistAcpTurnTranscript(params: {
   threadId?: string | number;
   sessionCwd: string;
   config: OpenClawConfig;
-}): Promise<SessionEntry | undefined> {
+}): Promise<PersistTextTurnTranscriptResult> {
   return await persistTextTurnTranscript({
     ...params,
     assistant: {
@@ -417,7 +436,7 @@ export async function persistCliTurnTranscript(params: {
   sessionCwd: string;
   config: OpenClawConfig;
   embeddedAssistantGapFill?: boolean;
-}): Promise<SessionEntry | undefined> {
+}): Promise<PersistTextTurnTranscriptResult> {
   const replyText = resolveCliTranscriptReplyText(params.result);
   const provider = params.result.meta.agentMeta?.provider?.trim() ?? "cli";
   const model = params.result.meta.agentMeta?.model?.trim() ?? "default";
@@ -462,7 +481,10 @@ export function runAgentAttempt(params: {
   body: string;
   isFallbackRetry: boolean;
   resolvedThinkLevel: ThinkLevel;
-  fastMode?: boolean;
+  fastMode?: FastMode;
+  fastModeStartedAtMs?: number;
+  fastModeAutoOnSeconds?: number;
+  isFinalFallbackAttempt?: boolean;
   timeoutMs: number;
   runTimeoutOverrideMs?: number;
   runId: string;
@@ -679,8 +701,11 @@ export function runAgentAttempt(params: {
         streamParams: params.opts.streamParams,
         messageProvider: params.opts.messageProvider ?? params.messageChannel,
         currentChannelId: params.runContext.currentChannelId,
+        chatId: params.runContext.chatId,
+        channelContext: params.runContext.channelContext,
         currentThreadTs: params.runContext.currentThreadTs,
         currentInboundAudio: params.runContext.currentInboundAudio,
+        approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
         agentAccountId: params.runContext.accountId,
         senderId: params.runContext.senderId,
         senderIsOwner: params.opts.senderIsOwner,
@@ -749,6 +774,8 @@ export function runAgentAttempt(params: {
     groupSpace: params.runContext.groupSpace,
     spawnedBy: params.spawnedBy,
     currentChannelId: params.runContext.currentChannelId,
+    chatId: params.runContext.chatId,
+    channelContext: params.runContext.channelContext,
     currentThreadTs: params.runContext.currentThreadTs,
     currentInboundAudio: params.runContext.currentInboundAudio,
     replyToMode: params.runContext.replyToMode,
@@ -773,12 +800,19 @@ export function runAgentAttempt(params: {
     authProfileIdSource: authProfileId ? harnessAuthSelection.authProfileIdSource : undefined,
     thinkLevel: params.resolvedThinkLevel,
     fastMode: params.fastMode,
+    fastModeStartedAtMs: params.fastModeStartedAtMs,
+    fastModeAutoOnSeconds: params.fastModeAutoOnSeconds,
+    isFinalFallbackAttempt: params.isFinalFallbackAttempt,
     verboseLevel: params.resolvedVerboseLevel,
     bashElevated: params.opts.bashElevated,
+    approvalReviewerDeviceId: params.opts.approvalReviewerDeviceId,
     timeoutMs: params.timeoutMs,
     runId: params.runId,
     lifecycleGeneration: params.lifecycleGeneration,
     lane: params.opts.lane,
+    // Hidden internal runs have no assistant-event consumer. Visible subagent
+    // lanes can still feed Control UI, session subscribers, and ACP parent relays.
+    suppressLiveStreamOutput: shouldSuppressEmbeddedLiveStreamOutput(params),
     abortSignal: params.opts.abortSignal,
     extraSystemPrompt: params.opts.extraSystemPrompt,
     bootstrapContextMode: params.opts.bootstrapContextMode,
@@ -973,9 +1007,6 @@ export function emitAcpLifecycleError(params: {
     },
   });
 }
-
-/** @deprecated use formatAcpErrorChain from src/acp/runtime/errors.ts */
-export const formatAcpLifecycleError = formatAcpErrorChain;
 
 export function emitAcpAssistantDelta(params: { runId: string; text: string; delta: string }) {
   emitAgentEvent({

@@ -637,6 +637,10 @@ export function assertToolSearchLaneResults(params: {
     `code lane did not bridge-call ${targetTool}`,
   );
   assert(
+    !code.providerPlannedTools.includes(targetTool),
+    `code lane exposed direct provider tool ${targetTool}`,
+  );
+  assert(
     normal.providerDeclaredToolCount > code.providerDeclaredToolCount,
     `expected Tool Search to expose fewer tools to provider: normal=${normal.providerDeclaredToolCount} code=${code.providerDeclaredToolCount}`,
   );
@@ -647,6 +651,10 @@ export function assertToolSearchLaneResults(params: {
   assert(
     code.sessionLogToolMentions.tool_search_code > 0 && code.sessionLogToolMentions[targetTool] > 0,
     "code lane session log did not record bridge and target tool mentions",
+  );
+  assert(
+    !normal.providerPlannedTools.includes("tool_search_code"),
+    "normal lane unexpectedly used Tool Search bridge",
   );
 }
 

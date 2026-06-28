@@ -176,7 +176,9 @@ function expectPrimarySkippedForReason(
 ) {
   expect(result.result).toBe("ok");
   expect(run).toHaveBeenCalledTimes(1);
-  expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5");
+  expect(run).toHaveBeenCalledWith("anthropic", "claude-haiku-3-5", {
+    isFinalFallbackAttempt: true,
+  });
   expect(result.attempts[0]?.reason).toBe(reason);
 }
 
@@ -192,6 +194,7 @@ function expectPrimaryProbeSuccess(
   expect(run).toHaveBeenCalledTimes(1);
   expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
     allowTransientCooldownProbe: true,
+    isFinalFallbackAttempt: false,
   });
 }
 
@@ -251,9 +254,11 @@ async function expectProbeFailureFallsBack({
   expect(run).toHaveBeenCalledTimes(2);
   expect(run).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
     allowTransientCooldownProbe: true,
+    isFinalFallbackAttempt: false,
   });
   expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
     allowTransientCooldownProbe: true,
+    isFinalFallbackAttempt: false,
   });
 }
 
@@ -529,8 +534,11 @@ describe("runWithModelFallback – probe logic", () => {
     expect(fallbackResult.result).toBe("fallback-ok");
     expect(fallbackRun).toHaveBeenNthCalledWith(1, "openai", "gpt-4.1-mini", {
       allowTransientCooldownProbe: true,
+      isFinalFallbackAttempt: false,
     });
-    expect(fallbackRun).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5");
+    expect(fallbackRun).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
+      isFinalFallbackAttempt: false,
+    });
 
     const decisionPayloads = logCapture.records
       .filter((record) => record.message === "model fallback decision")
@@ -690,9 +698,14 @@ describe("runWithModelFallback – probe logic", () => {
 
     expect(run).toHaveBeenNthCalledWith(1, "google", "gemini-3-flash-preview", {
       allowTransientCooldownProbe: true,
+      isFinalFallbackAttempt: false,
     });
-    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5");
-    expect(run).toHaveBeenNthCalledWith(3, "deepseek", "deepseek-chat");
+    expect(run).toHaveBeenNthCalledWith(2, "anthropic", "claude-haiku-3-5", {
+      isFinalFallbackAttempt: false,
+    });
+    expect(run).toHaveBeenNthCalledWith(3, "deepseek", "deepseek-chat", {
+      isFinalFallbackAttempt: true,
+    });
   });
 
   it("prunes stale probe throttle entries before checking eligibility", () => {
@@ -774,6 +787,7 @@ describe("runWithModelFallback – probe logic", () => {
     expect(run).toHaveBeenCalledTimes(1);
     expect(run).toHaveBeenCalledWith("openai", "gpt-4.1-mini", {
       allowTransientCooldownProbe: true,
+      isFinalFallbackAttempt: true,
     });
   });
 

@@ -80,10 +80,6 @@ class CodexThreadStartRequestError extends Error {
   }
 }
 
-export function isCodexThreadStartRequestError(error: unknown): boolean {
-  return error instanceof CodexThreadStartRequestError;
-}
-
 export type CodexThreadFinalConfigPatchDecision =
   | { action: "resume"; binding: CodexAppServerThreadBinding }
   | { action: "start" };
@@ -311,6 +307,7 @@ export async function startOrResumeThread(params: {
   mcpServersFingerprint?: string;
   mcpServersFingerprintEvaluated?: boolean;
   environmentSelection?: CodexTurnEnvironmentParams[];
+  appServerRuntimeFingerprint?: string;
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
   signal?: AbortSignal;
@@ -359,6 +356,21 @@ export async function startOrResumeThread(params: {
       config: params.params.config,
     }),
   );
+  if (
+    binding?.threadId &&
+    shouldRotateCodexAppServerBindingForRuntime({
+      connectionClass: params.appServer.connectionClass,
+      current: params.appServerRuntimeFingerprint,
+      binding: binding.appServerRuntimeFingerprint,
+    })
+  ) {
+    embeddedAgentLog.debug("codex app-server runtime identity changed; starting a new thread", {
+      threadId: binding.threadId,
+      connectionClass: params.appServer.connectionClass,
+    });
+    await clearCodexAppServerBinding(params.params.sessionFile);
+    binding = undefined;
+  }
   const startModelSelection = resolveCodexAppServerThreadModelSelection({
     provider: params.params.provider,
     model: params.params.modelId,
@@ -673,6 +685,7 @@ export async function startOrResumeThread(params: {
               nativeHookRelayGeneration:
                 finalConfigPatch.nativeHookRelayGeneration ??
                 resumeBinding.nativeHookRelayGeneration,
+              appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
               pluginAppsFingerprint: resumeBinding.pluginAppsFingerprint,
               pluginAppsInputFingerprint: resumeBinding.pluginAppsInputFingerprint,
               pluginAppPolicyContext: resumeBinding.pluginAppPolicyContext,
@@ -723,6 +736,7 @@ export async function startOrResumeThread(params: {
           networkProxyConfigFingerprint,
           nativeHookRelayGeneration:
             finalConfigPatch.nativeHookRelayGeneration ?? resumeBinding.nativeHookRelayGeneration,
+          appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
           pluginAppsFingerprint: resumeBinding.pluginAppsFingerprint,
           pluginAppsInputFingerprint: resumeBinding.pluginAppsInputFingerprint,
           pluginAppPolicyContext: resumeBinding.pluginAppPolicyContext,
@@ -824,6 +838,7 @@ export async function startOrResumeThread(params: {
           networkProxyProfileName: params.appServer.networkProxy?.profileName,
           networkProxyConfigFingerprint,
           nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
+          appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
           pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
           pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
           pluginAppPolicyContext: pluginThreadConfig?.policyContext,
@@ -874,6 +889,7 @@ export async function startOrResumeThread(params: {
     networkProxyProfileName: params.appServer.networkProxy?.profileName,
     networkProxyConfigFingerprint,
     nativeHookRelayGeneration: finalConfigPatch.nativeHookRelayGeneration,
+    appServerRuntimeFingerprint: params.appServerRuntimeFingerprint,
     pluginAppsFingerprint: pluginThreadConfig?.fingerprint,
     pluginAppsInputFingerprint: pluginThreadConfig?.inputFingerprint,
     pluginAppPolicyContext: pluginThreadConfig?.policyContext,
@@ -886,6 +902,20 @@ export async function startOrResumeThread(params: {
       ...(rotatedContextEngineBinding ? { rotatedContextEngineBinding } : {}),
     },
   };
+}
+
+export function shouldRotateCodexAppServerBindingForRuntime(params: {
+  connectionClass: CodexAppServerRuntimeOptions["connectionClass"];
+  current?: string;
+  binding?: string;
+}): boolean {
+  if (!params.current) {
+    return false;
+  }
+  if (params.binding === params.current) {
+    return false;
+  }
+  return params.connectionClass === "remote" || Boolean(params.binding);
 }
 
 function isTransientWebSearchRestriction(
@@ -1083,7 +1113,9 @@ export function buildThreadStartParams(
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
     ...codexThreadSandboxOrPermissions(options.appServer),
-    ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    ...(options.appServer.serviceTier !== undefined
+      ? { serviceTier: options.appServer.serviceTier }
+      : {}),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     serviceName: "OpenClaw",
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
@@ -1163,7 +1195,9 @@ export function buildThreadResumeParams(
     approvalPolicy: options.appServer.approvalPolicy,
     approvalsReviewer: options.appServer.approvalsReviewer,
     ...codexThreadSandboxOrPermissions(options.appServer),
-    ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    ...(options.appServer.serviceTier !== undefined
+      ? { serviceTier: options.appServer.serviceTier }
+      : {}),
     personality: CODEX_NATIVE_PERSONALITY_NONE,
     config: buildCodexRuntimeThreadConfigForRun(params, options.config, {
       nativeCodeModeEnabled: options.nativeCodeModeEnabled,
@@ -1398,7 +1432,9 @@ export function buildTurnStartParams(
         }),
     model: modelSelection.model,
     personality: CODEX_NATIVE_PERSONALITY_NONE,
-    ...(options.appServer.serviceTier ? { serviceTier: options.appServer.serviceTier } : {}),
+    ...(options.appServer.serviceTier !== undefined
+      ? { serviceTier: options.appServer.serviceTier }
+      : {}),
     effort: resolveReasoningEffort(params.thinkLevel, modelSelection.model),
     ...(options.environmentSelection ? { environments: options.environmentSelection } : {}),
     collaborationMode: buildTurnCollaborationMode(params, {

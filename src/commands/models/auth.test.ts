@@ -162,7 +162,7 @@ vi.mock("../onboard-helpers.js", () => ({
   openUrl: mocks.openUrl,
 }));
 
-vi.mock("../oauth-env.js", () => ({
+vi.mock("../../infra/remote-env.js", () => ({
   isRemoteEnvironment: mocks.isRemoteEnvironment,
 }));
 

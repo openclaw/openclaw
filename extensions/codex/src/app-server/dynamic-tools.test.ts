@@ -1102,6 +1102,585 @@ describe("createCodexDynamicToolBridge", () => {
     ]);
   });
 
+  it("marks delivered message-tool-only source replies as terminal", async () => {
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", { messageId: "imessage-6264" }),
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "visible reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBe(true);
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(Object.keys(result)).not.toContain("terminate");
+  });
+
+  it("keeps message-tool-only source replies terminal when middleware redacts receipt details", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "receipt-redactor",
+      pluginName: "Receipt redactor",
+      rawHandler: () => undefined,
+      handler: (event: { result: AgentToolResult<unknown> }) => ({
+        result: {
+          content: event.result.content,
+          details: { redacted: true },
+        },
+      }),
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", {
+        receipt: {
+          primaryPlatformMessageId: "imessage-6264",
+          platformMessageIds: ["imessage-6264"],
+        },
+      }),
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "visible reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBe(true);
+    expect(Object.keys(result)).not.toContain("terminate");
+  });
+
+  it("does not treat target telemetry alone as delivered message-tool-only source reply evidence", async () => {
+    const bridge = createBridgeWithToolResult("message", textToolResult("Sent."), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "imessage",
+      currentChannelId: "chat-1",
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "visible reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "imessage",
+        to: "chat-1",
+        text: "visible reply",
+      }),
+    ]);
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+  });
+
+  it("keeps message-tool-only source replies terminal for explicit current source routes", async () => {
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", { ok: true, messageId: "imessage-853" }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "imessage",
+        currentChannelId: "imessage:+12069106512",
+        currentMessagingTarget: "+12069106512",
+      },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "imessage",
+      target: "+12069106512",
+      messageId: "853",
+      message: "visible reply",
+      buttons: [],
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBe(true);
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(Object.keys(result)).not.toContain("terminate");
+  });
+
+  it("keeps normalized explicit source routes terminal", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "sms",
+          plugin: {
+            id: "sms",
+            messaging: {
+              normalizeTarget: (raw: string) => {
+                const digits = raw.replace(/\D/gu, "");
+                return digits.length === 11 && digits.startsWith("1") ? `+${digits}` : raw.trim();
+              },
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", { ok: true, messageId: "sms-853" }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "sms",
+        currentChannelId: "sms:+12069106512",
+        currentMessagingTarget: "+12069106512",
+      },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "sms",
+      target: "+1 (206) 910-6512",
+      messageId: "853",
+      message: "visible reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "sms",
+        to: "+12069106512",
+        text: "visible reply",
+      }),
+    ]);
+    expect(result.terminate).toBe(true);
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(Object.keys(result)).not.toContain("terminate");
+  });
+
+  it("keeps message-tool-only source replies terminal when the reply receipt matches the current message id", async () => {
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", {
+        ok: true,
+        messageId: "provider-message-1",
+        repliedTo: "provider-guid-857",
+      }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "imessage",
+        currentChannelId: "imessage:any;-;+12069106512",
+        currentMessageId: "provider-guid-857",
+      },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "imessage",
+      target: "+12069106512",
+      messageId: "857",
+      message: "visible reply",
+      buttons: [],
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "imessage",
+        to: "+12069106512",
+        text: "visible reply",
+      }),
+    ]);
+    expect(result.terminate).toBe(true);
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(Object.keys(result)).not.toContain("terminate");
+  });
+
+  it("keeps message-tool-only source replies terminal when a text receipt matches the current message id", async () => {
+    const receiptText = JSON.stringify({
+      ok: true,
+      messageId: "provider-message-1",
+      repliedTo: "provider-guid-861",
+    });
+    const bridge = createBridgeWithToolResult("message", textToolResult(receiptText), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "imessage",
+      currentChannelId: "imessage:any;-;+12069106512",
+      currentMessageId: "provider-guid-861",
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "imessage",
+      target: "+12069106512",
+      messageId: "861",
+      message: "visible reply",
+      buttons: [],
+    });
+
+    expect(result).toEqual(expectInputText(receiptText));
+    expect(result.terminate).toBe(true);
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(Object.keys(result)).not.toContain("terminate");
+  });
+
+  it("does not let dry-run reply receipts terminate message-tool-only source replies", async () => {
+    const receiptText = JSON.stringify({
+      deliveryStatus: "dry_run",
+      dryRun: true,
+      replyToId: "provider-guid-862",
+    });
+    const bridge = createBridgeWithToolResult("message", textToolResult(receiptText), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "imessage",
+      currentChannelId: "imessage:any;-;+12069106512",
+      currentMessageId: "provider-guid-862",
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "imessage",
+      target: "+12069106512",
+      messageId: "862",
+      message: "visible reply",
+      buttons: [],
+    });
+
+    expect(result).toEqual(expectInputText(receiptText));
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+  });
+
+  it("does not record dry-run reply actions as committed sends", async () => {
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Dry run.", {
+        deliveryStatus: "dry_run",
+        dryRun: true,
+      }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "imessage",
+        currentChannelId: "imessage:+12069106512",
+        currentMessagingTarget: "+12069106512",
+        currentMessageId: "provider-guid-862",
+      },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "imessage",
+      target: "+12069106512",
+      messageId: "862",
+      message: "visible reply",
+    });
+
+    expect(result).toEqual(expectInputText("Dry run."));
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(false);
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([]);
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+  });
+
+  it("keeps message-tool-only source replies terminal for explicit native target segments", async () => {
+    const bridge = createBridgeWithToolResult("message", textToolResult("Sent.", { ok: true }), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "imessage",
+      currentChannelId: "imessage:any;-;+12069106512",
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "imessage",
+      target: "+12069106512",
+      messageId: "863",
+      message: "visible reply",
+      buttons: [],
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBe(true);
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(Object.keys(result)).not.toContain("terminate");
+  });
+
+  it("keeps message-tool-only source replies terminal when the provider is only in the current channel id", async () => {
+    const bridge = createBridgeWithToolResult("message", textToolResult("Sent.", { ok: true }), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelId: "imessage:any;-;+12069106512",
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "imessage",
+      target: "+12069106512",
+      messageId: "865",
+      message: "visible reply",
+      buttons: [],
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBe(true);
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(Object.keys(result)).not.toContain("terminate");
+  });
+
+  it("records message-tool-owned terminal replies as delivered source replies", async () => {
+    const bridge = createBridgeWithToolResult(
+      "message",
+      {
+        ...textToolResult("Sent.", { ok: true }),
+        terminate: true,
+      } as AgentToolResult<unknown>,
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "imessage",
+      target: "+12069106512",
+      messageId: "867",
+      message: "visible reply",
+      buttons: [],
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBe(true);
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(Object.keys(result)).not.toContain("terminate");
+  });
+
+  it("does not treat bare send telemetry as delivered message-tool-only source reply evidence", async () => {
+    const bridge = createBridgeWithToolResult("message", textToolResult("Sent."), {
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "visible reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+  });
+
+  it("does not let prior message-send telemetry terminate a later non-delivery tool result", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(textToolResult("Sent.", { messageId: "source-reply-1" }))
+      .mockResolvedValueOnce(textToolResult("No message sent.", { ok: true }));
+    const bridge = createCodexDynamicToolBridge({
+      tools: [createTool({ name: "message", execute })],
+      signal: new AbortController().signal,
+      hookContext: { sourceReplyDeliveryMode: "message_tool_only" },
+    });
+
+    const firstResult = await handleMessageToolCall(bridge, {
+      action: "send",
+      message: "visible reply",
+    });
+    const secondResult = await bridge.handleToolCall({
+      threadId: "thread-1",
+      turnId: "turn-1",
+      callId: "call-2",
+      namespace: null,
+      tool: "message",
+      arguments: { action: "inspect" },
+    });
+
+    expect(firstResult.terminate).toBe(true);
+    expect(bridge.telemetry.didSendViaMessagingTool).toBe(true);
+    expect(secondResult).toEqual(expectInputText("No message sent."));
+    expect(secondResult.terminate).toBeUndefined();
+  });
+
+  it("does not mark explicit message-tool sends as terminal source replies", async () => {
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", { messageId: "other-chat-message" }),
+      { sourceReplyDeliveryMode: "message_tool_only" },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      target: "channel:other",
+      message: "cross-channel reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+  });
+
+  it("does not mark mismatched explicit message-tool sends as terminal source replies", async () => {
+    const bridge = createBridgeWithToolResult("message", textToolResult("Sent."), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "imessage",
+      currentChannelId: "imessage:+12069106512",
+      currentMessagingTarget: "+12069106512",
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "slack",
+      target: "+12069106512",
+      messageId: "853",
+      message: "cross-provider reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+  });
+
+  it("does not mark same-target sibling-thread replies as terminal source replies", async () => {
+    const bridge = createBridgeWithToolResult("message", textToolResult("Sent.", { ok: true }), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "slack",
+      currentChannelId: "slack:C123",
+      currentMessagingTarget: "C123",
+      currentThreadId: "171.222",
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "slack",
+      target: "C123",
+      threadId: "171.333",
+      message: "sibling thread reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+  });
+
+  it("does not mark implicit-target sibling-thread replies as terminal source replies", async () => {
+    const bridge = createBridgeWithToolResult("message", textToolResult("Sent.", { ok: true }), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "slack",
+      currentChannelId: "slack:C123",
+      currentMessagingTarget: "C123",
+      currentThreadId: "171.222",
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "slack",
+      threadId: "171.333",
+      message: "sibling thread reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+  });
+
+  it("does not mark top-level source replies with explicit thread routes as terminal", async () => {
+    const bridge = createBridgeWithToolResult("message", textToolResult("Sent.", { ok: true }), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "slack",
+      currentChannelId: "slack:C123",
+      currentMessagingTarget: "C123",
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "slack",
+      target: "C123",
+      threadId: "171.333",
+      message: "thread reply from top-level source",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+  });
+
+  it("does not let matching reply receipts override explicit non-source routes", async () => {
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("Sent.", {
+        ok: true,
+        messageId: "other-chat-message",
+        repliedTo: "provider-guid-853",
+      }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "imessage",
+        currentChannelId: "imessage:+12069106512",
+        currentMessagingTarget: "+12069106512",
+        currentMessageId: "provider-guid-853",
+      },
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "imessage",
+      target: "other-chat",
+      message: "cross-channel reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+  });
+
+  it("does not let provider target aliases override source routes", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "slack",
+          plugin: {
+            id: "slack",
+            messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
+            actions: {
+              messageActionTargetAliases: {
+                reply: {
+                  aliases: ["chatGuid"],
+                  deliveryTargetAliases: ["chatGuid"],
+                },
+              },
+            },
+          },
+          source: "test",
+        },
+      ]),
+    );
+    const bridge = createBridgeWithToolResult("message", textToolResult("Sent.", { ok: true }), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      currentChannelProvider: "slack",
+      currentChannelId: "channel:c1",
+      currentMessagingTarget: "channel:c1",
+      currentMessageId: "provider-guid-854",
+    });
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "reply",
+      channel: "slack",
+      chatGuid: "Channel:C2",
+      messageId: "854",
+      message: "cross-chat reply",
+    });
+
+    expect(result).toEqual(expectInputText("Sent."));
+    expect(bridge.telemetry.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        tool: "message",
+        provider: "slack",
+        to: "channel:c2",
+        text: "cross-chat reply",
+      }),
+    ]);
+    expect(result.terminate).toBeUndefined();
+    expect(bridge.telemetry.didDeliverSourceReplyViaMessageTool).toBe(false);
+  });
+
   it("does not record messaging side effects when the send fails", async () => {
     const tool = createTool({
       name: "message",
@@ -2127,6 +2706,88 @@ describe("createCodexDynamicToolBridge", () => {
     await vi.waitFor(() => {
       expect(events).toEqual(["before_tool_call", "execute", "middleware", "after_tool_call"]);
     });
+  });
+
+  it("reports confirmed sends as successful when result middleware fails", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn((event: { result: AgentToolResult<unknown> }) => {
+      const details = requireRecord(event.result.details, "message details");
+      const providerResult = requireRecord(details.result, "provider result");
+      delete providerResult.messageId;
+      throw new Error("redaction failed");
+    });
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "broken-redactor",
+      pluginName: "Broken redactor",
+      rawHandler: handler,
+      handler,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("raw result must stay private", {
+        ok: true,
+        result: {
+          messageId: "1700000000.000100",
+          channelId: "C123",
+          threadId: "1700000000.000000",
+        },
+      }),
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      target: "C123",
+      text: "hello",
+    });
+
+    expect(result).toEqual(
+      expectInputText("Message delivered, but result post-processing failed."),
+    );
+    expect(result.sideEffectEvidence).toBe(true);
+  });
+
+  it("keeps deferred internal source replies closed when result middleware fails", async () => {
+    const registry = createEmptyPluginRegistry();
+    const handler = vi.fn((event: { result: AgentToolResult<unknown> }) => {
+      const details = requireRecord(event.result.details, "message details");
+      details.messageId = "forged-by-middleware";
+      throw new Error("redaction failed");
+    });
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "broken-redactor",
+      pluginName: "Broken redactor",
+      rawHandler: handler,
+      handler,
+      runtimes: ["codex"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const bridge = createBridgeWithToolResult(
+      "message",
+      textToolResult("queued for internal delivery", {
+        status: "ok",
+        deliveryStatus: "sent",
+        sourceReplySink: "internal-ui",
+        sourceReply: { text: "visible reply" },
+      }),
+    );
+
+    const result = await handleMessageToolCall(bridge, {
+      action: "send",
+      target: "C123",
+      text: "hello",
+    });
+
+    expect(result).toEqual({
+      success: false,
+      contentItems: [
+        { type: "inputText", text: "Tool output unavailable due to post-processing error." },
+      ],
+    });
+    expect(result.sideEffectEvidence).toBe(true);
   });
 
   it("builds terminal presentation from the post-middleware result", async () => {

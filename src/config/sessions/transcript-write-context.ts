@@ -105,14 +105,6 @@ export function resolveOwnedSessionTranscriptWriteLockRunner(params: {
   return context.withSessionWriteLock;
 }
 
-export function hasOwnedSessionTranscriptWriteContext(params: {
-  sessionFile?: string;
-  sessionKey?: string;
-}): boolean {
-  const context = ownedTranscriptWriteContext.getStore();
-  return Boolean(context && contextMatches({ context, ...params }));
-}
-
 export function canAdvanceOwnedSessionEntryCache(params: {
   sessionFile?: string;
   sessionKey?: string;
