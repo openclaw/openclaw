@@ -770,7 +770,8 @@ export async function appendNarrativeEntry(params: {
 
 // ── Orchestrator ───────────────────────────────────────────────────────
 
-async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
+/** @internal Startup and narrative maintenance only; not a public extension API. */
+export async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
   const cfg = getRuntimeConfig();
   const agentsDir = path.join(resolveStateDir(), "agents");
   let agentEntries: Dirent[];
