@@ -289,6 +289,12 @@ async function processMessageWithPipeline(params: {
       kind: isGroup ? ("group" as const) : ("direct" as const),
       id: routePeerId,
     },
+    parentPeer: shouldUseThreadSession
+      ? {
+          kind: "direct" as const,
+          id: spaceId,
+        }
+      : null,
     runtime: core.channel,
     sessionStore: config.session?.store,
   });

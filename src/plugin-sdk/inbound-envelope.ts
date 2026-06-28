@@ -23,6 +23,7 @@ type InboundRouteResolveParams<TConfig, TPeer extends RoutePeerLike> = {
   channel: string;
   accountId: string;
   peer: TPeer;
+  parentPeer?: TPeer | null;
 };
 
 /** Create an envelope formatter bound to one resolved route and session store. */
@@ -67,6 +68,7 @@ export function resolveInboundRouteEnvelopeBuilder<
   channel: string;
   accountId: string;
   peer: TPeer;
+  parentPeer?: TPeer | null;
   resolveAgentRoute: (params: InboundRouteResolveParams<TConfig, TPeer>) => TRoute;
   sessionStore?: string;
   resolveStorePath: (store: string | undefined, opts: { agentId: string }) => string;
@@ -82,6 +84,7 @@ export function resolveInboundRouteEnvelopeBuilder<
     channel: params.channel,
     accountId: params.accountId,
     peer: params.peer,
+    ...(params.parentPeer ? { parentPeer: params.parentPeer } : {}),
   });
   const buildEnvelope = createInboundEnvelopeBuilder({
     cfg: params.cfg,
@@ -125,6 +128,7 @@ export function resolveInboundRouteEnvelopeBuilderWithRuntime<
   channel: string;
   accountId: string;
   peer: TPeer;
+  parentPeer?: TPeer | null;
   runtime: InboundRouteEnvelopeRuntime<TConfig, TEnvelope, TRoute, TPeer>;
   sessionStore?: string;
 }): {
@@ -136,6 +140,7 @@ export function resolveInboundRouteEnvelopeBuilderWithRuntime<
     channel: params.channel,
     accountId: params.accountId,
     peer: params.peer,
+    parentPeer: params.parentPeer,
     resolveAgentRoute: (routeParams) => params.runtime.routing.resolveAgentRoute(routeParams),
     sessionStore: params.sessionStore,
     resolveStorePath: params.runtime.session.resolveStorePath,

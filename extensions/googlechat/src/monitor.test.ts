@@ -1,6 +1,6 @@
 // Googlechat tests cover monitor plugin behavior.
 import { recordChannelBotPairLoopAndCheckSuppression } from "openclaw/plugin-sdk/channel-inbound";
-import { buildAgentSessionKey } from "openclaw/plugin-sdk/routing";
+import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import type { GoogleChatCoreRuntime, GoogleChatRuntimeEnv } from "./monitor-types.js";
@@ -411,38 +411,14 @@ describe("googlechat monitor direct messages", () => {
     expect(runTurn).toHaveBeenCalledOnce();
   });
 
-  it("uses a thread-specific DM session under default dmScope and replies in-thread when configured", async () => {
+  it("uses a thread-specific DM session while preserving original DM peer bindings", async () => {
     const runTurn = vi.fn();
     const buildContext = vi.fn((payload: unknown) => payload);
     const core = {
       logging: { shouldLogVerbose: () => false },
       channel: {
         routing: {
-          resolveAgentRoute: vi.fn(
-            ({
-              cfg,
-              channel,
-              accountId,
-              peer,
-            }: {
-              cfg: {
-                session?: { dmScope?: Parameters<typeof buildAgentSessionKey>[0]["dmScope"] };
-              };
-              channel: string;
-              accountId: string;
-              peer: Parameters<typeof buildAgentSessionKey>[0]["peer"];
-            }) => ({
-              agentId: "agent-1",
-              accountId,
-              sessionKey: buildAgentSessionKey({
-                agentId: "agent-1",
-                channel,
-                accountId,
-                peer,
-                dmScope: cfg.session?.dmScope,
-              }),
-            }),
-          ),
+          resolveAgentRoute: vi.fn(resolveAgentRoute),
         },
         session: {
           resolveStorePath: () => "/tmp/openclaw-googlechat-test",
@@ -492,29 +468,57 @@ describe("googlechat monitor direct messages", () => {
     await testing.processMessageWithPipeline({
       event,
       account,
-      config: {},
+      config: {
+        agents: { list: [{ id: "agent-1" }, { id: "bound-agent" }] },
+        bindings: [
+          {
+            agentId: "bound-agent",
+            match: {
+              channel: "googlechat",
+              accountId: "work",
+              peer: { kind: "direct", id: "spaces/DM" },
+            },
+          },
+        ],
+      },
       runtime,
       core,
       mediaMaxMb: 10,
     });
 
     expect(core.channel.routing.resolveAgentRoute).toHaveBeenCalledWith({
-      cfg: { session: { dmScope: "per-channel-peer" } },
+      cfg: expect.objectContaining({
+        bindings: [
+          {
+            agentId: "bound-agent",
+            match: {
+              channel: "googlechat",
+              accountId: "work",
+              peer: { kind: "direct", id: "spaces/DM" },
+            },
+          },
+        ],
+        session: { dmScope: "per-channel-peer" },
+      }),
       channel: "googlechat",
       accountId: "work",
       peer: {
         kind: "direct",
         id: "spaces/DM:thread:spaces/DM/threads/thread-1",
       },
+      parentPeer: {
+        kind: "direct",
+        id: "spaces/DM",
+      },
     });
 
     expect(buildContext).toHaveBeenCalledWith(
       expect.objectContaining({
         route: {
-          agentId: "agent-1",
+          agentId: "bound-agent",
           accountId: "work",
           routeSessionKey:
-            "agent:agent-1:googlechat:direct:spaces/dm:thread:spaces/dm/threads/thread-1",
+            "agent:bound-agent:googlechat:direct:spaces/dm:thread:spaces/dm/threads/thread-1",
         },
         reply: {
           to: "googlechat:spaces/DM",
