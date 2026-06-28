@@ -133,6 +133,7 @@ async function readBoundedResponseText(params: {
   try {
     for (;;) {
       const readPromise = reader.read();
+      let removeAbortListener: (() => void) | undefined;
       const abortPromise = new Promise<never>((_resolve, reject) => {
         const onAbort = () => {
           canceled = true;
@@ -144,13 +145,13 @@ async function readBoundedResponseText(params: {
           );
         };
         params.signal.addEventListener("abort", onAbort, { once: true });
-        readPromise.finally(() => params.signal.removeEventListener("abort", onAbort));
+        removeAbortListener = () => params.signal.removeEventListener("abort", onAbort);
       });
       const { done, value } = await Promise.race([
         readPromise,
         abortPromise,
         params.timeoutPromise,
-      ]);
+      ]).finally(() => removeAbortListener?.());
       if (done) {
         const tail = decoder.decode();
         if (tail) {
@@ -472,7 +473,7 @@ async function writeFakePlugin(params: {
       "  name: 'Tool Search E2E Fixture',",
       "  register(api) {",
       "    for (const spec of tools) {",
-      "      api.registerTool({",
+      '      api["registerTool"]({',
       "        name: spec.name,",
       "        label: spec.name,",
       "        description: spec.description,",
@@ -575,7 +576,7 @@ function applyLaneConfig(
           : []),
       ]),
     ],
-    toolSearch: params.lane === "code" ? true : false,
+    toolSearch: params.lane === "code",
   };
 
   const gateway = (cfg.gateway && typeof cfg.gateway === "object" ? cfg.gateway : {}) as Record<
@@ -705,11 +706,8 @@ export async function runToolSearchGatewayLane(params: {
     providerRequestCount: laneRequests.length,
     providerRawBytes: typeof lastRequest.raw === "string" ? lastRequest.raw.length : 0,
     providerSystemPromptChars: countSystemPromptChars(lastRequest.body),
-    providerInputSnippet: String(lastRequest.allInputText ?? lastRequest.prompt ?? "").slice(
-      0,
-      500,
-    ),
-    providerToolOutputSnippet: String(lastRequest.toolOutput ?? "").slice(0, 4_000),
+    providerInputSnippet: (lastRequest.allInputText ?? lastRequest.prompt ?? "").slice(0, 500),
+    providerToolOutputSnippet: (lastRequest.toolOutput ?? "").slice(0, 4_000),
     providerDeclaredToolCount: Array.isArray(lastRequest.body?.tools)
       ? lastRequest.body.tools.length
       : 0,
