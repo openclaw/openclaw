@@ -489,13 +489,13 @@ export function resolveMemorySearchConfig(
   // Override store path to shared store by directory hash.
   // All agents referencing the same workspace share one physical DB.
   // extraPaths are excluded from hash — they are an index scope, not a store identity.
-  resolved.sharedStorePath = resolved.store.databasePath;
+  resolved.store.sharedStorePath = resolved.store.databasePath;
   if (resolved.sources.includes("memory")) {
     const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
     const scopeHash = computeSharedScopeHash(workspaceDir);
     const sdir = resolveStateDir(process.env, os.homedir);
-    resolved.sharedStorePath = path.join(sdir, "memory", "shared-" + scopeHash + ".sqlite");
-    resolved.store.databasePath = resolved.sharedStorePath;
+    resolved.store.sharedStorePath = path.join(sdir, "memory", "shared-" + scopeHash + ".sqlite");
+    resolved.store.databasePath = resolved.store.sharedStorePath;
   }
   const multimodalActive = isMemoryMultimodalEnabled(resolved.multimodal);
   const multimodalProvider = getConfiguredMemoryEmbeddingProvider(resolved.provider, cfg);
