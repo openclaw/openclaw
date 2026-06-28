@@ -94,6 +94,51 @@ export function buildAssistantMessageWithZeroUsage(params: {
 // to a live stream-error turn (and the repair pass remains idempotent).
 export const STREAM_ERROR_FALLBACK_TEXT = "[assistant turn failed before producing content]";
 
+// Whitespace is the only plausible separator between repeated placeholder
+// occurrences. The placeholder itself contains internal spaces, so we compare
+// a whitespace-stripped copy of the input against a whitespace-stripped copy
+// of the constant — that turns "N copies with arbitrary whitespace between
+// them" into a clean integer-multiple check.
+const STREAM_ERROR_PLACEHOLDER_COMPACT = STREAM_ERROR_FALLBACK_TEXT.replace(/\s+/g, "");
+
+/**
+ * Detect text made up entirely of stream-error placeholder repetitions.
+ *
+ * When a primary model fails mid-stream the runtime records an assistant turn
+ * with the canonical sentinel as content. If a fallback model then runs in the
+ * same session, it can echo that sentinel back as its "completed" final reply
+ * — sometimes a single occurrence, sometimes dozens concatenated with
+ * whitespace. Because that fallback turn carries `stopReason: "stop"`, it is
+ * treated as a normal user-visible response and reaches durable delivery
+ * unless the dispatcher strips it. Exact-equality checks elsewhere (chat
+ * display, replay history, agent prompt builder) only catch the single-copy
+ * case; this helper also catches pure repetition so the fallback echo cannot
+ * leak to channels as visible chat.
+ *
+ * The matcher is deliberately conservative: text that mixes the placeholder
+ * with any other content (an apology, a partial recovery, a single literal
+ * mention) is left alone. Suppressing that would risk dropping real replies
+ * that happen to quote the sentinel.
+ */
+export function isStreamErrorPlaceholderOnlyText(text: string | undefined | null): boolean {
+  if (!text) {
+    return false;
+  }
+  const trimmed = text.trim();
+  if (!trimmed) {
+    return false;
+  }
+  if (trimmed === STREAM_ERROR_FALLBACK_TEXT) {
+    return true;
+  }
+  const compact = trimmed.replace(/\s+/g, "");
+  const placeholder = STREAM_ERROR_PLACEHOLDER_COMPACT;
+  if (compact.length < placeholder.length || compact.length % placeholder.length !== 0) {
+    return false;
+  }
+  return compact === placeholder.repeat(compact.length / placeholder.length);
+}
+
 export function buildStreamErrorAssistantMessage(params: {
   model: StreamModelDescriptor;
   errorMessage: string;

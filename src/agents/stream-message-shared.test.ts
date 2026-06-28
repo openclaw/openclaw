@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   STREAM_ERROR_FALLBACK_TEXT,
   buildStreamErrorAssistantMessage,
+  isStreamErrorPlaceholderOnlyText,
 } from "./stream-message-shared.js";
 
 const model = {
@@ -41,5 +42,48 @@ describe("buildStreamErrorAssistantMessage", () => {
     expect(message.content).toEqual([{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }]);
     // Original errorMessage is preserved verbatim for clients that surface it.
     expect(message.errorMessage).toBe("   ");
+  });
+});
+
+describe("isStreamErrorPlaceholderOnlyText", () => {
+  it("matches a single placeholder occurrence", () => {
+    expect(isStreamErrorPlaceholderOnlyText(STREAM_ERROR_FALLBACK_TEXT)).toBe(true);
+  });
+
+  it("matches a single placeholder with surrounding whitespace", () => {
+    expect(isStreamErrorPlaceholderOnlyText(`   ${STREAM_ERROR_FALLBACK_TEXT}\n`)).toBe(true);
+  });
+
+  it("matches many placeholder repetitions separated by newlines", () => {
+    // Mirrors the #97357 repro: fallback model echoed the sentinel 43 times.
+    const repeated = Array.from({ length: 43 }, () => STREAM_ERROR_FALLBACK_TEXT).join("\n");
+    expect(isStreamErrorPlaceholderOnlyText(repeated)).toBe(true);
+  });
+
+  it("matches placeholder repetitions separated by mixed whitespace", () => {
+    const repeated = `${STREAM_ERROR_FALLBACK_TEXT} \n  ${STREAM_ERROR_FALLBACK_TEXT}\t${STREAM_ERROR_FALLBACK_TEXT}`;
+    expect(isStreamErrorPlaceholderOnlyText(repeated)).toBe(true);
+  });
+
+  it("rejects undefined, empty, and whitespace-only text", () => {
+    expect(isStreamErrorPlaceholderOnlyText(undefined)).toBe(false);
+    expect(isStreamErrorPlaceholderOnlyText("")).toBe(false);
+    expect(isStreamErrorPlaceholderOnlyText("   \n\t")).toBe(false);
+  });
+
+  it("rejects text that merely mentions the placeholder", () => {
+    expect(isStreamErrorPlaceholderOnlyText(`I got: ${STREAM_ERROR_FALLBACK_TEXT}`)).toBe(false);
+  });
+
+  it("rejects text that mixes the placeholder with other content", () => {
+    // Even when the placeholder dominates, any non-placeholder content
+    // disqualifies the text — we never suppress a real recovery by mistake.
+    const mixed = `${STREAM_ERROR_FALLBACK_TEXT}\nSorry, let me try again.${STREAM_ERROR_FALLBACK_TEXT}`;
+    expect(isStreamErrorPlaceholderOnlyText(mixed)).toBe(false);
+  });
+
+  it("rejects unrelated text", () => {
+    expect(isStreamErrorPlaceholderOnlyText("HEARTBEAT_OK")).toBe(false);
+    expect(isStreamErrorPlaceholderOnlyText("[assistant turn failed]")).toBe(false);
   });
 });

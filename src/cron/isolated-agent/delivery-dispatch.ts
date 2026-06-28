@@ -1,6 +1,7 @@
 /** Dispatches isolated cron output to direct delivery, mirrors, and follow-up queues. */
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isStreamErrorPlaceholderOnlyText } from "../../agents/stream-message-shared.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import {
   isSilentReplyText,
@@ -67,6 +68,14 @@ function normalizeSilentReplyText(text: string | undefined): NormalizedSilentRep
     return { text, strippedTrailingSilentToken: false };
   }
   if (isSuppressedControlReplyText(text)) {
+    return { text: undefined, strippedTrailingSilentToken: false };
+  }
+  // A fallback model can echo the stream-error sentinel back as its "completed"
+  // reply (single copy or many). When that happens the fallback turn carries
+  // stopReason="stop" and would otherwise reach durable channel delivery as
+  // visible chat. Treat placeholder-only text the same as a control token and
+  // suppress it before outbound dispatch. See #97357.
+  if (isStreamErrorPlaceholderOnlyText(text)) {
     return { text: undefined, strippedTrailingSilentToken: false };
   }
 
