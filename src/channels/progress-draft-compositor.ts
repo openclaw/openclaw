@@ -481,15 +481,22 @@ function compactReasoningProgressDisplayLine(text: string, maxChars: number): st
   if (maxChars <= 1) {
     return "…";
   }
-  const head = chars
-    .slice(0, maxChars - 1)
+  // Reasoning streams keep growing across a turn (snapshot/cumulative providers
+  // resend the full thinking-so-far). Truncating from the head would pin the
+  // preview on the OLDEST thought and hide what the model is currently reasoning
+  // about, so the draft looks frozen/stale once it exceeds the line budget.
+  // Keep the TAIL instead, so the preview always reflects the latest thought.
+  const tail = chars
+    .slice(-(maxChars - 1))
     .join("")
-    .trimEnd();
-  const boundary = head.search(/\s+\S*$/u);
-  if (boundary > Math.floor(maxChars * 0.6)) {
-    return `${head.slice(0, boundary).trimEnd()}…`;
+    .trimStart();
+  const boundary = tail.search(/\s/u);
+  if (boundary >= 0 && boundary < Math.floor(maxChars * 0.4)) {
+    // Drop a leading partial word so the preview starts on a clean word boundary.
+    const aligned = tail.slice(boundary).trimStart();
+    return aligned ? `…${aligned}` : `…${tail}`;
   }
-  return `${head}…`;
+  return `…${tail}`;
 }
 
 function normalizeCommentaryProgressText(text: string): string {

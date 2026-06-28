@@ -2328,8 +2328,18 @@ export async function runAgentTurnWithFallback(params: {
                     await params.opts.onPartialReply({ text: textForTyping });
                   },
                   onReasoningText: async (text) => {
+                    // claude-cli forwards the full reasoning-so-far for the turn on
+                    // every thinking delta (src/agents/cli-output.ts accumulates
+                    // reasoningText and never resets it between thinking blocks). Mark
+                    // it as a snapshot so the progress compositor REPLACES the prior
+                    // reasoning instead of concatenating it into an ever-growing
+                    // run-on line — matching the Codex runtime, which already emits
+                    // reasoning with isReasoningSnapshot: true. Keep main's
+                    // requiresReasoningProgressOptIn gate so reasoning still respects
+                    // the per-channel progress opt-in.
                     await params.opts?.onReasoningStream?.({
                       text,
+                      isReasoningSnapshot: true,
                       requiresReasoningProgressOptIn: true,
                     });
                   },

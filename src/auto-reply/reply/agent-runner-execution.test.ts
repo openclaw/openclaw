@@ -3246,7 +3246,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(onPartialReply).not.toHaveBeenCalled();
   });
 
-  it("bridges CLI assistant agent events into onReasoningStream for live reasoning preview (opus-4-7 text_delta path)", async () => {
+  it("bridges CLI thinking agent events into onReasoningStream for live reasoning preview (opus-4-7 thinking_delta path)", async () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       result: await params.run("claude-cli", "claude-opus-4-7"),
@@ -3258,14 +3258,16 @@ describe("runAgentTurnWithFallback", () => {
       const realAgentEvents = await vi.importActual<typeof import("../../infra/agent-events.js")>(
         "../../infra/agent-events.js",
       );
+      // CLI reasoning streams on the dedicated "thinking" event (see
+      // createReasoningTextBridge); the assistant stream stays the answer source.
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
-        stream: "assistant",
+        stream: "thinking",
         data: { text: "Thinking", delta: "Thinking" },
       });
       realAgentEvents.emitAgentEvent({
         runId: params.runId,
-        stream: "assistant",
+        stream: "thinking",
         data: { text: "Thinking about it", delta: " about it" },
       });
       return { payloads: [{ text: "Thinking about it" }], meta: {} };
