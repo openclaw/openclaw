@@ -6,7 +6,9 @@ import { runHeartbeatOnce, type HeartbeatDeps } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
   type HeartbeatReplySpy,
+  readSessionStoreForTest,
   seedMainSessionStore,
+  seedSessionStore,
   withTempHeartbeatSandbox,
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
@@ -374,15 +376,14 @@ describe("runHeartbeatOnce ack handling", () => {
       });
 
       replySpy.mockImplementationOnce(async () => {
-        const raw = await fs.readFile(storePath, "utf-8");
-        const parsed = JSON.parse(raw) as Record<string, { updatedAt?: number } | undefined>;
-        if (parsed[sessionKey]) {
-          parsed[sessionKey] = {
-            ...parsed[sessionKey],
+        const parsed = readSessionStoreForTest(storePath);
+        const current = parsed[sessionKey];
+        if (current) {
+          await seedSessionStore(storePath, sessionKey, {
+            ...current,
             updatedAt: bumpedUpdatedAt,
-          };
+          });
         }
-        await fs.writeFile(storePath, JSON.stringify(parsed, null, 2));
         return { text: "" };
       });
 
@@ -394,10 +395,7 @@ describe("runHeartbeatOnce ack handling", () => {
         },
       });
 
-      const finalStore = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-        string,
-        { updatedAt?: number } | undefined
-      >;
+      const finalStore = readSessionStoreForTest<{ updatedAt?: number }>(storePath);
       expect(finalStore[sessionKey]?.updatedAt).toBe(bumpedUpdatedAt);
     });
   });
