@@ -7,6 +7,7 @@ import { waitForever } from "./cli/wait.js";
 import { loadConfig } from "./config/config.js";
 import { resolveStorePath } from "./config/sessions/paths.js";
 import { deriveSessionKey, resolveSessionKey } from "./config/sessions/session-key.js";
+import { loadSessionStore, saveSessionStore } from "./config/sessions/store.js";
 import type { ensureBinary as ensureBinaryRuntime } from "./infra/binaries.js";
 import {
   describePortOwner,
@@ -81,9 +82,11 @@ export {
   ensurePortAvailable,
   handlePortError,
   loadConfig,
+  loadSessionStore,
   normalizeE164,
   PortInUseError,
   resolveSessionKey,
   resolveStorePath,
+  saveSessionStore,
   waitForever,
 };
