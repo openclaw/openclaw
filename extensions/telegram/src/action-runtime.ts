@@ -914,10 +914,8 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
-    if (latitude == null) throw new Error("latitude is required");
-    if (longitude == null) throw new Error("longitude is required");
     const result = await telegramActionRuntime.sendLocationTelegram(
-      to ?? "",
+      to,
       { latitude, longitude, ...(horizontalAccuracy != null ? { horizontalAccuracy } : {}) },
       {
         cfg,
@@ -929,7 +927,7 @@ export async function handleTelegramAction(
         gatewayClientScopes: options?.gatewayClientScopes,
       },
     );
-    notifyVisibleOutboundSuccess(to ?? "", messageThreadId);
+    notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({ ok: true, messageId: result.messageId, chatId: result.chatId });
   }
 
@@ -953,15 +951,13 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
-    if (latitude == null) throw new Error("latitude is required");
-    if (longitude == null) throw new Error("longitude is required");
     const result = await telegramActionRuntime.sendVenueTelegram(
-      to ?? "",
+      to,
       {
         latitude,
         longitude,
-        title: title ?? "",
-        address: address ?? "",
+        title,
+        address,
         ...(foursquareId ? { foursquareId } : {}),
         ...(googlePlaceId ? { googlePlaceId } : {}),
       },
@@ -975,7 +971,7 @@ export async function handleTelegramAction(
         gatewayClientScopes: options?.gatewayClientScopes,
       },
     );
-    notifyVisibleOutboundSuccess(to ?? "", messageThreadId);
+    notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({ ok: true, messageId: result.messageId, chatId: result.chatId });
   }
 
@@ -987,7 +983,7 @@ export async function handleTelegramAction(
     const mediaUrl =
       readStringParam(params, "mediaUrl") ??
       readStringParam(params, "media") ??
-      readStringParam(params, "fileUrl", { required: true });
+      readStringParam(params, "fileUrl", { required: true, label: "mediaUrl" });
     const replyToMessageId = readTelegramReplyToMessageId(params);
     const messageThreadId = readTelegramThreadId(params);
     const silent = readBooleanParam(params, "silent");
@@ -997,7 +993,7 @@ export async function handleTelegramAction(
         "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
       );
     }
-    const result = await telegramActionRuntime.sendVideoNoteTelegram(to ?? "", mediaUrl ?? "", {
+    const result = await telegramActionRuntime.sendVideoNoteTelegram(to, mediaUrl, {
       cfg,
       token,
       accountId: accountId ?? undefined,
@@ -1008,7 +1004,7 @@ export async function handleTelegramAction(
       ...(options?.mediaLocalRoots ? { mediaLocalRoots: options.mediaLocalRoots } : {}),
       ...(options?.mediaReadFile ? { mediaReadFile: options.mediaReadFile } : {}),
     });
-    notifyVisibleOutboundSuccess(to ?? "", messageThreadId);
+    notifyVisibleOutboundSuccess(to, messageThreadId);
     return jsonResult({ ok: true, messageId: result.messageId, chatId: result.chatId });
   }
 
