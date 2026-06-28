@@ -79,4 +79,39 @@ describe("Anthropic OAuth token responses", () => {
       "Anthropic token refresh returned invalid token fields.",
     );
   });
+
+  it("caps oversized Anthropic OAuth responses at 16 MiB instead of buffering the full body", async () => {
+    // 18 MiB body in 1 MiB chunks exceeds the shared 16 MiB cap on
+    // readProviderTextResponse. The bounded reader must surface the cap
+    // with the per-surface label so logs can attribute the rejection to
+    // this call site, not github-copilot or chutes.
+    const CHUNK = 1024 * 1024;
+    const CHUNK_COUNT = 18;
+    let pulls = 0;
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pulls >= CHUNK_COUNT) {
+          controller.close();
+          return;
+        }
+        pulls += 1;
+        controller.enqueue(encoder.encode("{".repeat(CHUNK)));
+      },
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(stream, {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    await expect(refreshAnthropicToken("old-refresh-token")).rejects.toThrow(
+      "Anthropic OAuth token request: text response exceeds 16777216 bytes",
+    );
+  });
 });

@@ -6,6 +6,7 @@
  */
 
 import type { Server } from "node:http";
+import { readProviderTextResponse } from "../../../agents/provider-http-errors.js";
 import { toErrorObject } from "../../../infra/errors.js";
 import {
   generateOAuthState,
@@ -233,7 +234,9 @@ async function postJson(
     signal: buildOAuthRequestSignal({ signal: options.signal, timeoutMs }),
   });
 
-  const responseBody = await response.text();
+  // 16 MiB cap. A hostile or broken Anthropic OAuth endpoint cannot force
+  // the runtime to buffer an unbounded token-exchange body before parsing.
+  const responseBody = await readProviderTextResponse(response, "Anthropic OAuth token request");
 
   if (!response.ok) {
     throw new Error(
