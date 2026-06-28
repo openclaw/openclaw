@@ -163,6 +163,7 @@ export type ChatProps = {
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;
   showNewMessages?: boolean;
   onScrollToBottom?: () => void;
+  onAssistantAttachmentLoaded?: () => void;
   onRefresh: () => void;
   onToggleFocusMode?: () => void;
   getDraft?: () => string;
@@ -2282,6 +2283,7 @@ export function renderChat(props: ChatProps) {
                       expandedToolCards.get(toolCardId) ?? false,
                     onToggleToolExpanded: toggleToolCardExpanded,
                     onRequestUpdate: requestUpdate,
+                    onAssistantAttachmentLoaded: props.onAssistantAttachmentLoaded,
                     assistantName: props.assistantName,
                     assistantAvatar: assistantIdentity.avatar,
                     userName: props.userName ?? null,
