@@ -460,7 +460,7 @@ async function writeFakePlugin(params: {
     "utf8",
   );
   const pluginEntryUrl = pathToFileURL(
-    path.join(params.repoRoot, "src/plugin-sdk/plugin-entry.ts"),
+    path.join(params.repoRoot, "dist/plugin-sdk/plugin-entry.js"),
   ).href;
   await fs.writeFile(
     path.join(pluginDir, "index.js"),
