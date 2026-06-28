@@ -15,11 +15,15 @@ export type ReplyBackendKind = "embedded" | "cli";
 
 export type ReplyBackendCancelReason = "user_abort" | "restart" | "superseded";
 
+export type ReplyRunQueueMessageOptions = {
+  currentInboundAudio?: boolean;
+};
+
 export type ReplyBackendHandle = {
   readonly kind: ReplyBackendKind;
   cancel(reason?: ReplyBackendCancelReason): void;
   isStreaming(): boolean;
-  queueMessage?: (text: string) => Promise<void>;
+  queueMessage?: (text: string, options?: ReplyRunQueueMessageOptions) => Promise<void>;
   /**
    * Compatibility-only hook so legacy "abort compacting runs" paths can still
    * find embedded runs that are compacting during the main run phase.
@@ -58,8 +62,14 @@ export type ReplyOperation = {
   readonly resetTriggered: boolean;
   readonly phase: ReplyOperationPhase;
   readonly result: ReplyOperationResult | null;
+  /**
+   * Latched only after an active embedded run accepts a steered audio turn.
+   * Dispatch uses it for final inbound-auto TTS without persisting session state.
+   */
+  readonly currentInboundAudio: boolean;
   setPhase(next: "queued" | "preflight_compacting" | "memory_flushing" | "running"): void;
   updateSessionId(nextSessionId: string): void;
+  markSteeredInboundAudio(): void;
   attachBackend(handle: ReplyBackendHandle): void;
   detachBackend(handle: ReplyBackendHandle): void;
   /**
@@ -391,6 +401,7 @@ export function createReplyOperation(params: {
   let result: ReplyOperationResult | null = null;
   let stateCleared = false;
   let retainFailureUntilComplete = false;
+  let currentInboundAudio = false;
 
   const clearState = (
     afterClearBarrier?: PromiseLike<unknown>,
@@ -478,6 +489,9 @@ export function createReplyOperation(params: {
     get result() {
       return result;
     },
+    get currentInboundAudio() {
+      return currentInboundAudio;
+    },
     setPhase(next) {
       if (result) {
         return;
@@ -508,6 +522,9 @@ export function createReplyOperation(params: {
       replyRunState.activeKeysBySessionId.set(currentSessionId, sessionKey);
       registerWaitSessionId(sessionKey, currentSessionId);
       markReplyRunDiagnosticWorkStarted({ sessionKey, sessionId: currentSessionId });
+    },
+    markSteeredInboundAudio() {
+      currentInboundAudio = true;
     },
     attachBackend(handle) {
       if (result) {
@@ -704,7 +721,11 @@ export function isReplyRunStreamingForSessionId(sessionId: string): boolean {
   return getAttachedBackend(operation)?.isStreaming() ?? false;
 }
 
-export function queueReplyRunMessage(sessionId: string, text: string): boolean {
+export function queueReplyRunMessage(
+  sessionId: string,
+  text: string,
+  options?: ReplyRunQueueMessageOptions,
+): boolean {
   const operation = resolveReplyRunForCurrentSessionId(sessionId);
   const backend = operation ? getAttachedBackend(operation) : undefined;
   if (!operation || operation.phase !== "running" || !backend?.queueMessage) {
@@ -713,7 +734,7 @@ export function queueReplyRunMessage(sessionId: string, text: string): boolean {
   if (!backend.isStreaming()) {
     return false;
   }
-  void backend.queueMessage(text);
+  void backend.queueMessage(text, options);
   return true;
 }
 

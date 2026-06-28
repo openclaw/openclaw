@@ -1614,6 +1614,43 @@ describe("dispatchReplyFromConfig", () => {
     expect(replyResolver).toHaveBeenCalledTimes(1);
   });
 
+  it("uses steered inbound audio marked on the reply operation for final TTS", async () => {
+    setNoAbort();
+    ttsMocks.state.synthesizeFinalAudio = true;
+    const cfg = automaticDirectReplyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+      SessionKey: "agent:main:whatsapp:direct:chat-1",
+      BodyForAgent: "text turn",
+    });
+    const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
+      const operation = (
+        opts as
+          | {
+              replyOperation?: {
+                currentInboundAudio: boolean;
+                markSteeredInboundAudio(): void;
+              };
+            }
+          | undefined
+      )?.replyOperation;
+      expect(operation?.currentInboundAudio).toBe(false);
+      operation?.markSteeredInboundAudio();
+      return { text: "reply to steered audio" } satisfies ReplyPayload;
+    });
+
+    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+
+    const finalTtsCall = ttsMocks.maybeApplyTtsToPayload.mock.calls.find(
+      ([params]) => (params as { kind?: string }).kind === "final",
+    )?.[0] as { inboundAudio?: boolean } | undefined;
+    expect(finalTtsCall?.inboundAudio).toBe(true);
+    const finalPayload = firstFinalReplyPayload(dispatcher);
+    expect(finalPayload?.mediaUrl).toBe("https://example.com/tts-synth.opus");
+  });
+
   it("lets a different Slack DM routed thread reach reply resolution while another thread is active", async () => {
     setNoAbort();
     const sessionKey = "agent:main:slack:direct:U1";

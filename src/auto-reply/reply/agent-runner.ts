@@ -1284,6 +1284,7 @@ export async function runReplyAgent(params: {
       followupRun.prompt,
       {
         steeringMode: "all",
+        ...(followupRun.currentInboundAudio === true ? { currentInboundAudio: true } : {}),
         ...(resolvedQueue.debounceMs !== undefined ? { debounceMs: resolvedQueue.debounceMs } : {}),
       },
     );

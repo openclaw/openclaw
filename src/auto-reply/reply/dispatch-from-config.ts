@@ -1312,6 +1312,8 @@ export async function dispatchReplyFromConfig(
   let dispatchReplyOperation: ReplyOperation | undefined;
   let dispatchAbortOperation: ReplyOperation | undefined;
   let preDispatchAbortOperation: ReplyOperation | undefined;
+  const resolveFinalTtsInboundAudio = () =>
+    inboundAudio || dispatchReplyOperation?.currentInboundAudio === true;
   type DispatchReplyOperationAcquisition = { status: "ready" } | { status: "busy" };
   const ensureDispatchReplyOperation = async (
     phase: "pre_dispatch" | "dispatch",
@@ -2426,7 +2428,7 @@ export async function dispatchReplyFromConfig(
         cfg,
         channel: deliveryChannel,
         kind: "final",
-        inboundAudio,
+        inboundAudio: resolveFinalTtsInboundAudio(),
         ttsAuto: sessionTtsAuto,
         agentId: sessionAgentId,
         accountId: replyRoute.accountId,
@@ -3485,7 +3487,7 @@ export async function dispatchReplyFromConfig(
             cfg,
             channel: deliveryChannel,
             kind: "final",
-            inboundAudio,
+            inboundAudio: resolveFinalTtsInboundAudio(),
             ttsAuto: sessionTtsAuto,
             agentId: sessionAgentId,
             accountId: replyRoute.accountId,

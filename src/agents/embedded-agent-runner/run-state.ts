@@ -29,6 +29,7 @@ export type EmbeddedAgentQueueHandle = {
 
 export type EmbeddedAgentQueueMessageOptions = {
   steeringMode?: "all";
+  currentInboundAudio?: boolean;
   debounceMs?: number;
   deliveryTimeoutMs?: number;
   waitForTranscriptCommit?: boolean;

@@ -285,6 +285,26 @@ describe("embedded-agent runner run registry", () => {
     );
   });
 
+  it("passes current inbound audio only on accepted async queue delivery", async () => {
+    const queueMessage = vi.fn(async () => {});
+    setActiveEmbeddedRun("session-audio", {
+      ...createRunHandle(),
+      queueMessage,
+    });
+
+    const outcome = await queueEmbeddedAgentMessageWithOutcomeAsync(
+      "session-audio",
+      "continue from audio",
+      { steeringMode: "all", currentInboundAudio: true },
+    );
+
+    expect(outcome.queued).toBe(true);
+    expect(queueMessage).toHaveBeenCalledWith("continue from audio", {
+      steeringMode: "all",
+      currentInboundAudio: true,
+    });
+  });
+
   it("rejects transcript-commit waits for active handles without support", async () => {
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun("session-no-transcript-wait", {
@@ -342,7 +362,9 @@ describe("embedded-agent runner run registry", () => {
     });
     expect(outcome.enqueuedAtMs).toEqual(expect.any(Number));
     expect(outcome.deliveredAtMs).toBeUndefined();
-    expect(queueMessage).toHaveBeenCalledWith("completion from child");
+    expect(queueMessage).toHaveBeenCalledWith("completion from child", {
+      waitForTranscriptCommit: true,
+    });
   });
 
   it("force-clears an aborted run that does not drain", async () => {
@@ -588,5 +610,4 @@ describe("embedded-agent runner run registry", () => {
     clearActiveEmbeddedRun("session-snapshot", handle);
     expect(getActiveEmbeddedRunSnapshot("session-snapshot")).toBeUndefined();
   });
-
 });

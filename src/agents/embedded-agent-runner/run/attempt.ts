@@ -3724,6 +3724,9 @@ export async function runEmbeddedAttempt(
             activeSession.agent.steeringMode = options.steeringMode;
           }
           await steerActiveSessionWithOptionalDeliveryWait(activeSession, text, options);
+          if (options?.currentInboundAudio === true) {
+            params.replyOperation?.markSteeredInboundAudio();
+          }
         },
         isStreaming: () => activeSession.isStreaming,
         isCompacting: () => subscription.isCompacting(),

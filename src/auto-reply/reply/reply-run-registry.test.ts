@@ -109,6 +109,21 @@ describe("reply run registry", () => {
     ).toBeUndefined();
   });
 
+  it("tracks steered inbound audio as a false-by-default true-only operation fact", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-audio",
+      resetTriggered: false,
+    });
+
+    expect(operation.currentInboundAudio).toBe(false);
+
+    operation.markSteeredInboundAudio();
+    operation.markSteeredInboundAudio();
+
+    expect(operation.currentInboundAudio).toBe(true);
+  });
+
   it("clears queued operations immediately on user abort", () => {
     const operation = createReplyOperation({
       sessionKey: "agent:main:main",
@@ -472,7 +487,7 @@ describe("reply run registry", () => {
     operation.setPhase("running");
 
     expect(queueReplyRunMessage("session-running", "hello")).toBe(true);
-    expect(queueMessage).toHaveBeenCalledWith("hello");
+    expect(queueMessage).toHaveBeenCalledWith("hello", undefined);
   });
 
   it("aborts compacting runs through the registry compatibility helper", () => {
