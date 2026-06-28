@@ -258,9 +258,7 @@ function findClosestMismatchLines(
   currentContent: string,
   expectedLine: string,
 ): Array<{ lineNumber: number; text: string; score: number }> {
-  return normalizeToLF(currentContent)
-    .split("\n")
-    .slice(0, EDIT_MISMATCH_SCAN_LINE_LIMIT)
+  return collectNormalizedLines(currentContent, EDIT_MISMATCH_SCAN_LINE_LIMIT)
     .map((line, index) => ({
       lineNumber: index + 1,
       text: line,
@@ -269,6 +267,30 @@ function findClosestMismatchLines(
     .filter((candidate) => candidate.text.length > 0)
     .toSorted((a, b) => a.score - b.score || a.lineNumber - b.lineNumber)
     .slice(0, EDIT_MISMATCH_CANDIDATE_LIMIT);
+}
+
+function collectNormalizedLines(content: string, lineLimit: number): string[] {
+  const lines: string[] = [];
+  let lineStart = 0;
+
+  for (let index = 0; index < content.length && lines.length < lineLimit; index += 1) {
+    const char = content[index];
+    if (char !== "\n" && char !== "\r") {
+      continue;
+    }
+
+    lines.push(content.slice(lineStart, index));
+    if (char === "\r" && content[index + 1] === "\n") {
+      index += 1;
+    }
+    lineStart = index + 1;
+  }
+
+  if (lines.length < lineLimit) {
+    lines.push(content.slice(lineStart));
+  }
+
+  return lines;
 }
 
 function lineDistanceScore(expected: string, found: string): number {

@@ -134,6 +134,32 @@ describe("edit tool", () => {
     );
   });
 
+  it("does not scan mismatch candidates beyond the configured line limit", async () => {
+    const firstScannedLines = Array.from(
+      { length: 2000 },
+      (_value, index) => `const filler${index + 1} = ${index + 1};`,
+    );
+    const filePath = await createTempFile(
+      [...firstScannedLines, "const nearbyNeedle = 1;"].join("\n"),
+    );
+    const tool = createEditTool(tmpDir);
+
+    const message = await expectRejectedMessage(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "const nearbyNeedle = 2;", newText: "const nearbyNeedle = 3;" }],
+        },
+        undefined,
+      ),
+    );
+
+    expect(message).toContain("Closest candidate lines for oldText:");
+    expect(message).not.toContain("- line 2001:");
+    expect(message).not.toContain('found:    "const nearbyNeedle = 1;"');
+  });
+
   it("does not attach candidates from the wrong edit list for mixed no-op mismatches", async () => {
     const filePath = await createTempFile("const alpha = 1;\nconst beta = 2;\n");
     const tool = createEditTool(tmpDir);
