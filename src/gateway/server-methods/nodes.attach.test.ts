@@ -20,7 +20,11 @@ vi.mock("../../infra/node-pairing.js", async (importActual) => ({
 }));
 
 import { dispatchAttachMcpMessage } from "../attach-relay.js";
-import { resetAttachGrantsForTest, resolveAttachGrant } from "../mcp-grant-store.js";
+import {
+  mintAttachGrant,
+  resetAttachGrantsForTest,
+  resolveAttachGrant,
+} from "../mcp-grant-store.js";
 import { nodeHandlers } from "./nodes.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -40,7 +44,10 @@ const call = (
   } as unknown as GatewayRequestHandlerOptions);
 
 describe("node attach handlers (PR5 node conduit)", () => {
-  afterEach(() => resetAttachGrantsForTest());
+  afterEach(() => {
+    resetAttachGrantsForTest();
+    vi.clearAllMocks();
+  });
 
   it("node.attachGrant mints a MAIN-session grant when the node has the attach entitlement", async () => {
     const respond = vi.fn();
@@ -93,10 +100,42 @@ describe("node attach handlers (PR5 node conduit)", () => {
     });
   });
 
+  it("node.attachRelay rejects an old grant after attach is downgraded or unpaired", async () => {
+    const grant = mintAttachGrant({ sessionKey: "agent:main" });
+    for (const client of [
+      { connect: { device: { id: "node-ok" }, permissions: {} } },
+      { connect: { device: { id: "node-ok" }, permissions: { attach: false } } },
+      { connect: { device: { id: "node-missing" }, permissions: { attach: true } } },
+    ]) {
+      const respond = vi.fn();
+      await call(
+        "node.attachRelay",
+        { grantToken: grant.token, mcpMessage: { jsonrpc: "2.0", id: 1, method: "tools/list" } },
+        respond,
+        client,
+      );
+      expect(respond.mock.calls[0][0]).toBe(false);
+    }
+    expect(dispatchAttachMcpMessage).not.toHaveBeenCalled();
+  });
+
   it("node.attachHydrate rejects an unknown/expired grant before touching the session store", async () => {
     const respond = vi.fn();
     await call("node.attachHydrate", { grantToken: "nope" }, respond);
     expect(respond.mock.calls[0][0]).toBe(false);
+  });
+
+  it("node.attachHydrate rejects an old grant after attach is downgraded or unpaired", async () => {
+    const grant = mintAttachGrant({ sessionKey: "agent:main" });
+    for (const client of [
+      { connect: { device: { id: "node-ok" }, permissions: {} } },
+      { connect: { device: { id: "node-ok" }, permissions: { attach: false } } },
+      { connect: { device: { id: "node-missing" }, permissions: { attach: true } } },
+    ]) {
+      const respond = vi.fn();
+      await call("node.attachHydrate", { grantToken: grant.token }, respond, client);
+      expect(respond.mock.calls[0][0]).toBe(false);
+    }
   });
 
   it("node.attachRevoke revokes a node-minted grant by token, and rejects a missing token", async () => {

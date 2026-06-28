@@ -883,11 +883,39 @@ export async function waitForNodeReconnect(params: {
   return Boolean(params.context.nodeRegistry.get(params.nodeId));
 }
 
+async function callerHasLiveAttachEntitlement(client: unknown): Promise<boolean> {
+  const connect =
+    client && typeof client === "object"
+      ? (
+          client as {
+            connect?: {
+              device?: { id?: unknown };
+              client?: { id?: unknown };
+              permissions?: unknown;
+            };
+          }
+        ).connect
+      : undefined;
+  const nodeId = normalizeOptionalString(connect?.device?.id ?? connect?.client?.id) ?? "";
+  const livePermissions =
+    connect?.permissions &&
+    typeof connect.permissions === "object" &&
+    !Array.isArray(connect.permissions)
+      ? (connect.permissions as Record<string, unknown>)
+      : undefined;
+  if (!nodeId || livePermissions?.attach !== true) {
+    return false;
+  }
+  const { paired } = await listNodePairing();
+  const approved = paired.find((node) => node.nodeId === nodeId);
+  return approved?.permissions?.attach === true;
+}
+
 export const nodeHandlers: GatewayRequestHandlers = {
   // Conduit relay: a paired node forwards a harness's MCP JSON-RPC frame over its EXISTING gateway
   // link; the gateway dispatches it to the SAME scoped loopback tools as the gateway-host case via
   // the grant (no new gateway endpoint). Scope is bound to the grant's sessionKey, never the node.
-  "node.attachRelay": async ({ params, respond, context }) => {
+  "node.attachRelay": async ({ params, respond, client, context }) => {
     const grantToken = typeof params.grantToken === "string" ? params.grantToken : "";
     const message = params.mcpMessage;
     const isJsonRpc =
@@ -899,6 +927,14 @@ export const nodeHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "grantToken and a JSON-RPC mcpMessage are required"),
+      );
+      return;
+    }
+    if (!(await callerHasLiveAttachEntitlement(client))) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "node is not entitled to attach on this connection"),
       );
       return;
     }
@@ -918,17 +954,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
   // scoped/TTL'd/revocable (PR1), bound to the session not the node. Caller-chosen sessions + a
   // cross-agent entitlement map are a follow-up. The node uses the returned token with node.attachRelay.
   "node.attachGrant": async ({ params, respond, client, context }) => {
-    const nodeId =
-      normalizeOptionalString(client?.connect?.device?.id ?? client?.connect?.client?.id) ?? "";
-    const { paired } = await listNodePairing();
-    const approved = nodeId ? paired.find((node) => node.nodeId === nodeId) : undefined;
-    const livePermissions =
-      client?.connect?.permissions &&
-      typeof client.connect.permissions === "object" &&
-      !Array.isArray(client.connect.permissions)
-        ? (client.connect.permissions as Record<string, unknown>)
-        : undefined;
-    if (!approved?.permissions?.attach || livePermissions?.attach !== true) {
+    if (!(await callerHasLiveAttachEntitlement(client))) {
       respond(
         false,
         undefined,
@@ -967,7 +993,7 @@ export const nodeHandlers: GatewayRequestHandlers = {
   // Hydration source (PR7): return the gateway-OWNED conversation for the grant's session so the node
   // can materialize a local Claude transcript and `claude --resume` it — pick-up-anywhere. Same
   // assembly chat.history uses: the stored agent turns + the cli-session import, scoped to the grant.
-  "node.attachHydrate": async ({ params, respond, context }) => {
+  "node.attachHydrate": async ({ params, respond, client, context }) => {
     const grantToken = typeof params.grantToken === "string" ? params.grantToken : "";
     const grant = grantToken ? resolveAttachGrant(grantToken) : undefined;
     if (!grant) {
@@ -975,6 +1001,14 @@ export const nodeHandlers: GatewayRequestHandlers = {
         false,
         undefined,
         errorShape(ErrorCodes.INVALID_REQUEST, "unknown or expired attach grant"),
+      );
+      return;
+    }
+    if (!(await callerHasLiveAttachEntitlement(client))) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "node is not entitled to attach on this connection"),
       );
       return;
     }
