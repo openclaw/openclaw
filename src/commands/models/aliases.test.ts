@@ -229,7 +229,10 @@ describe("modelsAliasesListCommand <-> modelsAliasesRemoveCommand agreement", ()
       const removeRuntime = makeRuntime();
       const result = await modelsAliasesRemoveCommand(alias, removeRuntime).then(
         () => ({ ok: true as const }),
-        (err: Error) => ({ ok: false as const, message: err.message }),
+        (err: unknown) => ({
+          ok: false as const,
+          message: err instanceof Error ? err.message : String(err),
+        }),
       );
       if (result.ok) {
         // User-added: should have written the new config.
