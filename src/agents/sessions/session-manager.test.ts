@@ -244,6 +244,75 @@ describe("SessionManager.open", () => {
     );
   });
 
+  it("rewrites SQLite transcript rows when removing trailing entries", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-remove-trailing-session";
+    const sessionKey = "agent:main:dashboard:sqlite-remove-trailing";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+    const user = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "user-message",
+      message: { role: "user", content: "question" },
+    });
+    const baseAnswer = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "base-answer",
+      message: buildAssistantMessage("base answer"),
+      parentId: user.messageId,
+    });
+    const temporaryError = await appendTranscriptMessage(scope, {
+      cwd: dir,
+      eventId: "temporary-error",
+      message: buildAssistantMessage("temporary error"),
+      parentId: baseAnswer.messageId,
+    });
+
+    const sessionManager = SessionManager.open(marker, dir, dir);
+
+    expect(
+      sessionManager.removeTrailingEntries((entry) => entry.id === temporaryError.messageId),
+    ).toBe(1);
+    expect(sessionManager.getLeafId()).toBe(baseAnswer.messageId);
+    const replacementId = sessionManager.appendMessage(buildAssistantMessage("replacement answer"));
+
+    const records = await loadTranscriptEvents(scope);
+    expect(
+      records.map((record) =>
+        record && typeof record === "object" && "id" in record ? record.id : undefined,
+      ),
+    ).not.toContain(temporaryError.messageId);
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: replacementId,
+          message: expect.objectContaining({
+            content: [{ type: "text", text: "replacement answer" }],
+            role: "assistant",
+          }),
+          parentId: baseAnswer.messageId,
+          type: "message",
+        }),
+      ]),
+    );
+    await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+
   it("recovers a corrupted first-line header without truncating later messages", async () => {
     // A damaged header should be repairable without treating valid later
     // message entries as disposable transcript state.

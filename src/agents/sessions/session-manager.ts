@@ -23,6 +23,7 @@ import {
   appendTranscriptEventSync,
   appendTranscriptMessageSync,
   loadTranscriptEventsSync,
+  replaceTranscriptEventsSync,
   resolveTranscriptSessionKeyBySessionId,
 } from "../../config/sessions/session-accessor.js";
 import {
@@ -1976,11 +1977,27 @@ export class SessionManager {
     leafAppendParentId?: string | null;
     leafAppendMode?: "side";
   }): void {
-    if (!this.shouldPersist || !this.sessionFile) {
+    if (!this.shouldPersist) {
       return;
     }
     const leafAppendParentId =
       options?.leafAppendParentId === undefined ? this.appendParentId : options.leafAppendParentId;
+    if (this.sqlitePersistence) {
+      replaceTranscriptEventsSync(
+        {
+          agentId: this.sqlitePersistence.agentId,
+          sessionId: this.sqlitePersistence.sessionId,
+          sessionKey: this.sqlitePersistence.sessionKey,
+          storePath: this.sqlitePersistence.storePath,
+        },
+        this.getPersistedFileEntries(leafAppendParentId, options?.leafAppendMode),
+      );
+      this.flushed = true;
+      return;
+    }
+    if (!this.sessionFile) {
+      return;
+    }
     const content = this.writeFullFile(leafAppendParentId, options?.leafAppendMode);
     const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, content);
     this.sessionFileSnapshot = rememberedWrite.snapshot;

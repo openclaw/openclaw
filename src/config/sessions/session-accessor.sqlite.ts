@@ -1174,6 +1174,24 @@ export async function replaceSqliteTranscriptEvents(
   });
 }
 
+/** Fully replaces rows for one transcript synchronously for sync session runtimes. */
+export function replaceSqliteTranscriptEventsSync(
+  scope: SessionTranscriptAccessScope,
+  events: TranscriptEvent[],
+): boolean {
+  const resolved = resolveSqliteTranscriptScope(scope);
+  let replaced = false;
+  runOpenClawAgentWriteTransaction((database) => {
+    const fresh = readSessionEntryRow(database, resolved.sessionKey);
+    if (!fresh || fresh.entry.sessionId !== resolved.sessionId) {
+      return;
+    }
+    replaceSqliteTranscriptEventsInTransaction(database, resolved, events);
+    replaced = true;
+  }, toDatabaseOptions(resolved));
+  return replaced;
+}
+
 /** Imports one legacy session entry and its transcript rows for doctor migration. */
 export async function importSqliteSessionRows(
   params: SqliteSessionImportRowsParams,
