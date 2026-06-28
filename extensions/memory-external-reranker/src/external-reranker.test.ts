@@ -30,6 +30,7 @@ function makeTestConfig(
     {
       baseUrl: string;
       apiKey?: unknown;
+      timeoutSeconds?: number;
       request?: { allowPrivateNetwork?: boolean };
     }
   >,
@@ -98,6 +99,32 @@ describe("ExternalMmrReranker", () => {
         top_n: 10,
         model: "qwen3",
       });
+    });
+
+    it("uses provider timeoutSeconds when set", async () => {
+      const mock = mockOkGuard([{ index: 0, relevance_score: 0.9 }]);
+
+      const reranker = new ExternalMmrReranker(
+        { provider: "llamacpp", model: "qwen3" },
+        makeTestConfig({ llamacpp: { baseUrl: "https://api.example.com", timeoutSeconds: 120 } }),
+      );
+
+      await reranker.rerank({ query: "test", documents: sampleDocs, limit: 5 });
+
+      expect(guardCallOpts(mock).timeoutMs).toBe(120_000);
+    });
+
+    it("falls back to default timeout when provider timeoutSeconds is absent", async () => {
+      const mock = mockOkGuard([{ index: 0, relevance_score: 0.9 }]);
+
+      const reranker = new ExternalMmrReranker(
+        { provider: "llamacpp", model: "qwen3" },
+        makeTestConfig({ llamacpp: { baseUrl: "https://api.example.com" } }),
+      );
+
+      await reranker.rerank({ query: "test", documents: sampleDocs, limit: 5 });
+
+      expect(guardCallOpts(mock).timeoutMs).toBe(DEFAULT_EXTERNAL_RERANKER_TIMEOUT_MS);
     });
   });
 

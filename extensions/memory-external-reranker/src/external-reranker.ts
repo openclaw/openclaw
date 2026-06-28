@@ -145,7 +145,6 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
     const candidates = [this.cfg.model, ...(this.cfg.modelFallbacks ?? [])];
     const endpointPath = this.cfg.endpointPath ?? "/v1/rerank";
     const topN = this.cfg.topN ?? limit;
-    const requestTimeoutMs = resolveTimerTimeoutMs(DEFAULT_EXTERNAL_RERANKER_TIMEOUT_MS, 1);
 
     log.debug("external reranker start", {
       provider: providerId,
@@ -159,6 +158,15 @@ export class ExternalMmrReranker implements MemoryRerankerPlugin {
     if (!providerEntry) {
       throw new Error(`no models.providers entry for provider: ${providerId}`);
     }
+    const providerTimeoutMs =
+      typeof providerEntry.timeoutSeconds === "number" && providerEntry.timeoutSeconds > 0
+        ? Math.floor(providerEntry.timeoutSeconds * 1000)
+        : undefined;
+    // Use the provider-configured timeout when present; fall back to the 30s default.
+    const requestTimeoutMs = resolveTimerTimeoutMs(
+      providerTimeoutMs ?? DEFAULT_EXTERNAL_RERANKER_TIMEOUT_MS,
+      1,
+    );
     if (
       requiresRerankerPrivateNetworkOptIn(providerEntry.baseUrl) &&
       providerEntry.request?.allowPrivateNetwork !== true
