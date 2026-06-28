@@ -28,6 +28,7 @@ scenario:
     isolationReason: Mutates gateway plugin/tool-search config and restarts the QA gateway between direct and compact lanes.
     summary: Flow-backed gateway E2E for compact Tool Search bridge and plugin-owned tool invocation.
     config:
+      requiredProviderMode: mock-openai
       targetTool: fake_plugin_tool_17
       toolCount: 36
 
