@@ -27,10 +27,10 @@ function normalizeSpawnDepth(value: unknown): number | undefined {
   return undefined;
 }
 
-function readSessionStore(storePath: string): Record<string, SessionDepthEntry> {
+function readSessionStore(storePath: string, agentId: string): Record<string, SessionDepthEntry> {
   try {
     return Object.fromEntries(
-      listSessionEntries({ storePath, clone: false }).map(({ sessionKey, entry }) => [
+      listSessionEntries({ agentId, storePath, clone: false }).map(({ sessionKey, entry }) => [
         sessionKey,
         entry,
       ]),
@@ -103,7 +103,7 @@ function resolveEntryForSessionKey(params: {
     const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed.agentId });
     let store = params.cache.get(storePath);
     if (!store) {
-      store = readSessionStore(storePath);
+      store = readSessionStore(storePath, parsed.agentId);
       params.cache.set(storePath, store);
     }
     const entry = store[key] ?? findEntryBySessionId(store, params.sessionKey);
