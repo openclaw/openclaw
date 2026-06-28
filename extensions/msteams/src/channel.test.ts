@@ -303,6 +303,37 @@ describe("msteams config schema", () => {
     expect(res.success).toBe(true);
   });
 
+  it("rejects named Teams bot accounts with duplicate canonical account ids", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      webhook: { path: "/api/messages" },
+      accounts: {
+        "Support Bot": {
+          appId: "support-app-id",
+          appPassword: "support-secret",
+          webhook: { port: 3979 },
+        },
+        "support-bot": {
+          appId: "support-shadow-app-id",
+          appPassword: "support-shadow-secret",
+          webhook: { port: 3980 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ["accounts", "support-bot"],
+            message: expect.stringContaining('duplicate canonical account id "support-bot"'),
+          }),
+        ]),
+      );
+    }
+  });
+
   it("rejects named accounts that would inherit identity or port from root", () => {
     const res = MSTeamsConfigSchema.safeParse({
       appId: "primary-app-id",

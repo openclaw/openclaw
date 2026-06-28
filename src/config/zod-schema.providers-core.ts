@@ -3,6 +3,7 @@ import { isValidInboundPathRootPattern } from "@openclaw/media-core/inbound-path
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { isSafeScpRemoteHost } from "../infra/scp-host.js";
+import { normalizeAccountId } from "../routing/account-id.js";
 import {
   normalizeCommandDescription,
   normalizeSlashCommandName,
@@ -1729,6 +1730,22 @@ export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
       }
       appIds.set(normalized, path.join("."));
     };
+    const accountKeys = new Map<string, string>();
+    for (const accountId of Object.keys(value.accounts ?? {})) {
+      const canonicalAccountId = normalizeAccountId(accountId);
+      const existing = accountKeys.get(canonicalAccountId);
+      if (existing) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["accounts", accountId],
+          message:
+            `channels.msteams.accounts contains duplicate canonical account id "${canonicalAccountId}" ` +
+            `from "${existing}" and "${accountId}"`,
+        });
+        continue;
+      }
+      accountKeys.set(canonicalAccountId, accountId);
+    }
 
     requireOpenAllowFrom({
       policy: value.dmPolicy,
