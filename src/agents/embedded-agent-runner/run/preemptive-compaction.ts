@@ -258,28 +258,22 @@ function buildOpenAIToolBudgetPayload(
       modelCompat,
     );
     if (shape === "responses") {
-      const responseTool: Record<string, unknown> = {
+      return {
         type: "function",
         name: tool.name,
         description: tool.description,
         parameters,
+        ...(strict !== undefined ? { strict } : {}),
       };
-      if (strict !== undefined) {
-        responseTool.strict = strict;
-      }
-      return responseTool;
-    }
-    const completionsFunction: Record<string, unknown> = {
-      name: tool.name,
-      description: tool.description,
-      parameters,
-    };
-    if (strict !== undefined) {
-      completionsFunction.strict = strict;
     }
     return {
       type: "function",
-      function: completionsFunction,
+      function: {
+        name: tool.name,
+        description: tool.description,
+        parameters,
+        ...(strict !== undefined ? { strict } : {}),
+      },
     };
   });
 }
