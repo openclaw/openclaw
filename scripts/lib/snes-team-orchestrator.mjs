@@ -126,7 +126,9 @@ function extractJsonObject(text) {
   const raw = String(text ?? "");
   const start = raw.indexOf("{");
   const end = raw.lastIndexOf("}");
-  if (start < 0 || end < start) return null;
+  if (start < 0 || end < start) {
+    return null;
+  }
   try {
     return JSON.parse(raw.slice(start, end + 1));
   } catch {
@@ -683,7 +685,9 @@ function ensurePccV3State(projectDir, project) {
   };
   for (const [fileName, defaultValue] of Object.entries(defaults)) {
     const filePath = pccFile(projectDir, fileName);
-    if (!fs.existsSync(filePath)) writeJson(filePath, defaultValue);
+    if (!fs.existsSync(filePath)) {
+      writeJson(filePath, defaultValue);
+    }
   }
 }
 
@@ -698,39 +702,57 @@ export function loadPccProject({ project, root }) {
   );
   const missingFiles = PCC_STATE_FILES.filter((name) => !fs.existsSync(files[name]));
   const loaded = { ok: missingFiles.length === 0, projectDir, files, missingFiles };
-  if (fs.existsSync(files["project.intent.json"]))
+  if (fs.existsSync(files["project.intent.json"])) {
     loaded.intent = readJson(files["project.intent.json"]);
-  if (fs.existsSync(files["milestone-ledger.json"]))
+  }
+  if (fs.existsSync(files["milestone-ledger.json"])) {
     loaded.ledger = readJson(files["milestone-ledger.json"]);
-  if (fs.existsSync(files["dependency-dag.json"]))
+  }
+  if (fs.existsSync(files["dependency-dag.json"])) {
     loaded.dag = readJson(files["dependency-dag.json"]);
-  if (fs.existsSync(files["repair-queue.json"]))
+  }
+  if (fs.existsSync(files["repair-queue.json"])) {
     loaded.repairQueue = readJson(files["repair-queue.json"]);
-  if (fs.existsSync(files["approval-queue.json"]))
+  }
+  if (fs.existsSync(files["approval-queue.json"])) {
     loaded.approvalQueue = readJson(files["approval-queue.json"]);
-  if (fs.existsSync(files["run-control.json"]))
+  }
+  if (fs.existsSync(files["run-control.json"])) {
     loaded.runControl = readJson(files["run-control.json"]);
-  if (fs.existsSync(files["run-history.json"]))
+  }
+  if (fs.existsSync(files["run-history.json"])) {
     loaded.runHistory = readJson(files["run-history.json"]);
-  if (fs.existsSync(files["build-history.json"]))
+  }
+  if (fs.existsSync(files["build-history.json"])) {
     loaded.buildHistory = readJson(files["build-history.json"]);
-  if (fs.existsSync(files["worker-dispatch-log.json"]))
+  }
+  if (fs.existsSync(files["worker-dispatch-log.json"])) {
     loaded.workerDispatchLog = readJson(files["worker-dispatch-log.json"]);
-  if (fs.existsSync(files["worker-sandboxes.json"]))
+  }
+  if (fs.existsSync(files["worker-sandboxes.json"])) {
     loaded.workerSandboxes = readJson(files["worker-sandboxes.json"]);
-  if (fs.existsSync(files["patch-ledger.json"]))
+  }
+  if (fs.existsSync(files["patch-ledger.json"])) {
     loaded.patchLedger = readJson(files["patch-ledger.json"]);
-  if (fs.existsSync(files["artifact-cache.json"]))
+  }
+  if (fs.existsSync(files["artifact-cache.json"])) {
     loaded.artifactCache = readJson(files["artifact-cache.json"]);
-  if (fs.existsSync(files["reviewer-receipts.json"]))
+  }
+  if (fs.existsSync(files["reviewer-receipts.json"])) {
     loaded.reviewerReceipts = readJson(files["reviewer-receipts.json"]);
-  if (fs.existsSync(files["conflict-receipts.json"]))
+  }
+  if (fs.existsSync(files["conflict-receipts.json"])) {
     loaded.conflictReceipts = readJson(files["conflict-receipts.json"]);
-  if (fs.existsSync(files["telemetry.json"])) loaded.telemetry = readJson(files["telemetry.json"]);
-  if (fs.existsSync(files["dashboard-snapshot.json"]))
+  }
+  if (fs.existsSync(files["telemetry.json"])) {
+    loaded.telemetry = readJson(files["telemetry.json"]);
+  }
+  if (fs.existsSync(files["dashboard-snapshot.json"])) {
     loaded.dashboardSnapshot = readJson(files["dashboard-snapshot.json"]);
-  if (fs.existsSync(files["regression-benchmarks.json"]))
+  }
+  if (fs.existsSync(files["regression-benchmarks.json"])) {
     loaded.regressionBenchmarks = readJson(files["regression-benchmarks.json"]);
+  }
   return loaded;
 }
 
@@ -742,7 +764,9 @@ export function validateAssetIntentContract(intent) {
       errors.push(`missing-${field}`);
     }
   }
-  if (!Number.isInteger(intent?.frames) || intent.frames < 1) errors.push("invalid-frames");
+  if (!Number.isInteger(intent?.frames) || intent.frames < 1) {
+    errors.push("invalid-frames");
+  }
   if (
     !Number.isInteger(intent?.paletteLimit) ||
     intent.paletteLimit < 1 ||
@@ -750,10 +774,15 @@ export function validateAssetIntentContract(intent) {
   ) {
     errors.push("invalid-paletteLimit");
   }
-  if (!Array.isArray(intent?.mustShow) || intent.mustShow.length === 0)
+  if (!Array.isArray(intent?.mustShow) || intent.mustShow.length === 0) {
     errors.push("missing-mustShow");
-  if (!Array.isArray(intent?.mustNotShow)) errors.push("missing-mustNotShow");
-  if (!Array.isArray(intent?.animationBeats)) errors.push("missing-animationBeats");
+  }
+  if (!Array.isArray(intent?.mustNotShow)) {
+    errors.push("missing-mustNotShow");
+  }
+  if (!Array.isArray(intent?.animationBeats)) {
+    errors.push("missing-animationBeats");
+  }
   if (intent?.production === true && intent.runtimeProofRequired !== true) {
     errors.push("production-runtimeProofRequired-missing");
   }
@@ -789,18 +818,28 @@ export function validateMilestoneShape(milestone) {
     "completionPercent",
   ];
   for (const field of required) {
-    if (!(field in milestone)) errors.push(`missing-${field}`);
+    if (!(field in milestone)) {
+      errors.push(`missing-${field}`);
+    }
   }
-  if (!PCC_STATUSES.has(milestone.status)) errors.push("invalid-status");
-  if (!Array.isArray(milestone.dependsOn)) errors.push("dependsOn-not-array");
+  if (!PCC_STATUSES.has(milestone.status)) {
+    errors.push("invalid-status");
+  }
+  if (!Array.isArray(milestone.dependsOn)) {
+    errors.push("dependsOn-not-array");
+  }
   if (
     !Array.isArray(milestone.allowedWriteSurfaces) ||
     milestone.allowedWriteSurfaces.length === 0
   ) {
     errors.push("allowedWriteSurfaces-empty");
   }
-  if (!Array.isArray(milestone.requiredProof)) errors.push("requiredProof-not-array");
-  if (typeof milestone.completionPercent !== "number") errors.push("completionPercent-not-number");
+  if (!Array.isArray(milestone.requiredProof)) {
+    errors.push("requiredProof-not-array");
+  }
+  if (typeof milestone.completionPercent !== "number") {
+    errors.push("completionPercent-not-number");
+  }
   if (
     milestone.status === "pass" &&
     milestone.workerRole &&
@@ -813,19 +852,25 @@ export function validateMilestoneShape(milestone) {
 }
 
 export function missingProofForMilestone(milestone, projectDir) {
-  if (milestone.status !== "pass") return [];
+  if (milestone.status !== "pass") {
+    return [];
+  }
   const proof = milestone.proof ?? {};
   const missing = [];
   for (const entry of milestone.requiredProof ?? []) {
     const name = typeof entry === "string" ? entry : entry.name;
-    if (!name) continue;
+    if (!name) {
+      continue;
+    }
     const proofPath = proof[name];
     if (!proofPath) {
       missing.push(name);
       continue;
     }
     const resolved = path.isAbsolute(proofPath) ? proofPath : path.join(projectDir, proofPath);
-    if (!fs.existsSync(resolved)) missing.push(name);
+    if (!fs.existsSync(resolved)) {
+      missing.push(name);
+    }
   }
   if (
     milestone.humanApprovalRequired &&
@@ -854,7 +899,9 @@ export function validatePccProject({ project, root }) {
       fxpakWritePerformed: false,
     };
   }
-  for (const missing of loaded.missingFiles ?? []) errors.push(`missing-state-file:${missing}`);
+  for (const missing of loaded.missingFiles ?? []) {
+    errors.push(`missing-state-file:${missing}`);
+  }
   const ledger = loaded.ledger;
   if (!ledger || !Array.isArray(ledger.milestones)) {
     errors.push("missing-or-invalid-ledger");
@@ -864,7 +911,9 @@ export function validatePccProject({ project, root }) {
       for (const error of validateMilestoneShape(milestone)) {
         errors.push(`${milestone.milestoneId ?? "unknown"}:${error}`);
       }
-      if (ids.has(milestone.milestoneId)) errors.push(`${milestone.milestoneId}:duplicate-id`);
+      if (ids.has(milestone.milestoneId)) {
+        errors.push(`${milestone.milestoneId}:duplicate-id`);
+      }
       ids.add(milestone.milestoneId);
       for (const dep of milestone.dependsOn ?? []) {
         if (!ledger.milestones.some((entry) => entry.milestoneId === dep)) {
@@ -925,7 +974,9 @@ export function planParallelMilestones({ milestones, maxParallel = 4 }) {
     );
     if (!conflicts && batch.length < maxParallel) {
       batch.push(milestone.milestoneId);
-      for (const surface of milestone.allowedWriteSurfaces ?? []) surfaces.add(surface);
+      for (const surface of milestone.allowedWriteSurfaces ?? []) {
+        surfaces.add(surface);
+      }
     } else {
       serialized.push(milestone.milestoneId);
     }
@@ -1141,7 +1192,9 @@ export function listApprovals({ project, root }) {
     root,
     format: "openclaw-snes-pcc-approvals-v1",
   });
-  if (blocked) return blocked;
+  if (blocked) {
+    return blocked;
+  }
   const approvals = loaded.approvalQueue?.approvals ?? [];
   return {
     format: "openclaw-snes-pcc-approvals-v1",
@@ -1170,7 +1223,9 @@ export function requestApproval({
     root,
     format: "openclaw-snes-pcc-approval-request-v1",
   });
-  if (blocked) return blocked;
+  if (blocked) {
+    return blocked;
+  }
   if (!PCC_APPROVAL_TYPES.has(approvalType)) {
     return {
       format: "openclaw-snes-pcc-approval-request-v1",
@@ -1240,7 +1295,9 @@ export function setRunControl({ project, root, action }) {
     root,
     format: "openclaw-snes-pcc-run-control-update-v1",
   });
-  if (blocked) return blocked;
+  if (blocked) {
+    return blocked;
+  }
   const stateByAction = { pause: "paused", resume: "running", cancel: "cancelled" };
   const nextState = stateByAction[action];
   if (!nextState) {
@@ -1307,7 +1364,9 @@ export function exportWorkerPacket({ project, root, milestoneId, allowPassed = f
     root,
     format: "openclaw-snes-pcc-worker-packet-v1",
   });
-  if (blocked) return blocked;
+  if (blocked) {
+    return blocked;
+  }
   const milestone = loaded.ledger?.milestones?.find((entry) => entry.milestoneId === milestoneId);
   if (!milestone) {
     return {
@@ -1376,12 +1435,14 @@ function markMilestoneBlocked(loaded, milestone, blocker) {
 }
 
 export function runPccUntilBlocked({ project, root, maxMilestones = 10, maxMinutes = 480 }) {
-  const { loaded, blocked } = loadedOrBlocked({
+  const { blocked } = loadedOrBlocked({
     project,
     root,
     format: "openclaw-snes-pcc-run-v1",
   });
-  if (blocked) return blocked;
+  if (blocked) {
+    return blocked;
+  }
   const startedAt = nowIso();
   const completedMilestones = [];
   const blockedMilestones = [];
@@ -1435,7 +1496,9 @@ export function runPccUntilBlocked({ project, root, maxMilestones = 10, maxMinut
         risk: "subjective-production-quality-gate",
         requestedAction: "human-review-and-approve-before-pass",
       });
-      if (approval.approval?.id) approvalsRequested.push(approval.approval.id);
+      if (approval.approval?.id) {
+        approvalsRequested.push(approval.approval.id);
+      }
       markMilestoneBlocked(active, milestone, "approval-required:human-production-visual-approval");
       blockedMilestones.push(milestone.milestoneId);
       stopReason = "approval-required";
@@ -1497,8 +1560,12 @@ export function runPccUntilBlocked({ project, root, maxMilestones = 10, maxMinut
 }
 
 function safeRelativePccPath(relativePath) {
-  if (!relativePath || typeof relativePath !== "string") return null;
-  if (path.isAbsolute(relativePath) || relativePath.includes("..")) return null;
+  if (!relativePath || typeof relativePath !== "string") {
+    return null;
+  }
+  if (path.isAbsolute(relativePath) || relativePath.includes("..")) {
+    return null;
+  }
   return relativePath.replace(/^\/+/, "");
 }
 
@@ -1524,58 +1591,111 @@ function validateWorkerOutputObject({
   requiredProof = [],
 }) {
   const errors = [];
-  if (!output || typeof output !== "object" || Array.isArray(output))
+  if (!output || typeof output !== "object" || Array.isArray(output)) {
     errors.push("output-not-object");
-  if (output?.format !== "openclaw-snes-pcc-worker-output-v1") errors.push("invalid-format");
-  if (output?.status !== "pass") errors.push("status-not-pass");
-  if (output?.project !== project) errors.push("wrong-project");
-  if (output?.milestoneId !== milestoneId) errors.push("wrong-milestone");
-  if (dispatchId && output?.dispatchId !== dispatchId) errors.push("wrong-dispatch-id");
-  if (output?.patchType !== "receipt-only") errors.push("unsupported-patch-type");
-  if (output?.hostedGlmUsed !== false) errors.push("hosted-glm-rejected");
-  if (output?.gpt55Used !== false) errors.push("gpt55-rejected-for-routine-worker");
-  if (output?.commercialMaterialUsed === true) errors.push("commercial-material-rejected");
-  if (output?.fxpakWritePerformed === true) errors.push("fxpak-write-rejected");
-  if (output?.paidToolsUsed === true || output?.paidToolUsed === true)
+  }
+  if (output?.format !== "openclaw-snes-pcc-worker-output-v1") {
+    errors.push("invalid-format");
+  }
+  if (output?.status !== "pass") {
+    errors.push("status-not-pass");
+  }
+  if (output?.project !== project) {
+    errors.push("wrong-project");
+  }
+  if (output?.milestoneId !== milestoneId) {
+    errors.push("wrong-milestone");
+  }
+  if (dispatchId && output?.dispatchId !== dispatchId) {
+    errors.push("wrong-dispatch-id");
+  }
+  if (output?.patchType !== "receipt-only") {
+    errors.push("unsupported-patch-type");
+  }
+  if (output?.hostedGlmUsed !== false) {
+    errors.push("hosted-glm-rejected");
+  }
+  if (output?.gpt55Used !== false) {
+    errors.push("gpt55-rejected-for-routine-worker");
+  }
+  if (output?.commercialMaterialUsed === true) {
+    errors.push("commercial-material-rejected");
+  }
+  if (output?.fxpakWritePerformed === true) {
+    errors.push("fxpak-write-rejected");
+  }
+  if (output?.paidToolsUsed === true || output?.paidToolUsed === true) {
     errors.push("paid-tool-rejected");
-  if (!Array.isArray(output?.writes)) errors.push("writes-not-array");
-  if (!Array.isArray(output?.receipts)) errors.push("receipts-not-array");
-  if (!Array.isArray(output?.assumptions)) errors.push("assumptions-not-array");
-  if (!Array.isArray(output?.risks)) errors.push("risks-not-array");
-  if (typeof output?.playtestHypothesis !== "string" || !output.playtestHypothesis.trim())
+  }
+  if (!Array.isArray(output?.writes)) {
+    errors.push("writes-not-array");
+  }
+  if (!Array.isArray(output?.receipts)) {
+    errors.push("receipts-not-array");
+  }
+  if (!Array.isArray(output?.assumptions)) {
+    errors.push("assumptions-not-array");
+  }
+  if (!Array.isArray(output?.risks)) {
+    errors.push("risks-not-array");
+  }
+  if (typeof output?.playtestHypothesis !== "string" || !output.playtestHypothesis.trim()) {
     errors.push("missing-playtest-hypothesis");
+  }
 
   for (const write of Array.isArray(output?.writes) ? output.writes : []) {
     const writePath = write?.path ?? "";
-    if (pathLooksSecret(writePath)) errors.push(`secret-like-write:${writePath}`);
-    if (commercialMaterialIndicator(writePath))
+    if (pathLooksSecret(writePath)) {
+      errors.push(`secret-like-write:${writePath}`);
+    }
+    if (commercialMaterialIndicator(writePath)) {
       errors.push(`commercial-material-write:${writePath}`);
-    if (fxpakWriteIndicator(writePath)) errors.push(`fxpak-removable-write:${writePath}`);
-    if (!writeSurfaceMatches(writePath, allowedWriteSurfaces))
+    }
+    if (fxpakWriteIndicator(writePath)) {
+      errors.push(`fxpak-removable-write:${writePath}`);
+    }
+    if (!writeSurfaceMatches(writePath, allowedWriteSurfaces)) {
       errors.push(`write-surface-rejected:${writePath}`);
+    }
   }
-  if ((output?.writes ?? []).length > 0)
+  if ((output?.writes ?? []).length > 0) {
     errors.push("file-writes-not-supported-in-pcc-real-model-v1");
+  }
 
   const requiredProofNames = (requiredProof ?? [])
     .map((entry) => (typeof entry === "string" ? entry : entry?.name))
     .filter(Boolean);
   const proofNames = new Set();
   for (const receipt of Array.isArray(output?.receipts) ? output.receipts : []) {
-    if (!receipt?.proofName) errors.push("receipt-missing-proofName");
-    else proofNames.add(receipt.proofName);
+    if (!receipt?.proofName) {
+      errors.push("receipt-missing-proofName");
+    } else {
+      proofNames.add(receipt.proofName);
+    }
     const receiptPath = safeRelativePccPath(receipt?.path);
-    if (!receiptPath) errors.push(`unsafe-receipt-path:${receipt?.path ?? "missing"}`);
-    if (receiptPath && !receiptPath.startsWith("receipts/"))
+    if (!receiptPath) {
+      errors.push(`unsafe-receipt-path:${receipt?.path ?? "missing"}`);
+    }
+    if (receiptPath && !receiptPath.startsWith("receipts/")) {
       errors.push(`receipt-outside-receipts-dir:${receipt.path}`);
-    if (pathLooksSecret(receipt?.path ?? "")) errors.push(`secret-like-receipt:${receipt.path}`);
-    if (!receipt?.content || typeof receipt.content !== "object")
+    }
+    if (pathLooksSecret(receipt?.path ?? "")) {
+      errors.push(`secret-like-receipt:${receipt.path}`);
+    }
+    if (!receipt?.content || typeof receipt.content !== "object") {
       errors.push("receipt-missing-content");
-    if (receipt?.content?.hostedGlmUsed !== false) errors.push("receipt-hosted-glm-rejected");
-    if (receipt?.content?.gpt55Used !== false) errors.push("receipt-gpt55-rejected");
+    }
+    if (receipt?.content?.hostedGlmUsed !== false) {
+      errors.push("receipt-hosted-glm-rejected");
+    }
+    if (receipt?.content?.gpt55Used !== false) {
+      errors.push("receipt-gpt55-rejected");
+    }
   }
   for (const proofName of requiredProofNames) {
-    if (!proofNames.has(proofName)) errors.push(`missing-required-proof:${proofName}`);
+    if (!proofNames.has(proofName)) {
+      errors.push(`missing-required-proof:${proofName}`);
+    }
   }
   return {
     format: "openclaw-snes-pcc-worker-output-validation-v1",
@@ -1756,7 +1876,9 @@ export function modelHealth({ project, root, spawn = spawnSync, timeoutSeconds =
     root,
     format: "openclaw-snes-pcc-model-health-v1",
   });
-  if (blocked) return blocked;
+  if (blocked) {
+    return blocked;
+  }
   const listResult = spawn("ollama", ["list"], {
     encoding: "utf8",
     timeout: timeoutSeconds * 1000,
@@ -1942,7 +2064,7 @@ function selectLocalModelForRole(loaded, role) {
       const passes = relevant.filter((event) => event.status === "pass").length;
       return { model, score: 100 + passes * 5 - failures * 25, passes, failures };
     })
-    .sort((a, b) => b.score - a.score || a.model.localeCompare(b.model));
+    .toSorted((a, b) => b.score - a.score || a.model.localeCompare(b.model));
   return {
     format: "openclaw-snes-pcc-model-route-v1",
     role,
@@ -1998,10 +2120,13 @@ export function dispatchWorker({
     root,
     format: "openclaw-snes-pcc-worker-dispatch-v1",
   });
-  if (blocked) return blocked;
+  if (blocked) {
+    return blocked;
+  }
   const packet = exportWorkerPacket({ project, root, milestoneId, allowPassed: invokeLocalModels });
-  if (packet.status !== "pass")
+  if (packet.status !== "pass") {
     return { ...packet, format: "openclaw-snes-pcc-worker-dispatch-v1" };
+  }
   if (invokeLocalModels && (!localOnly || dryRun)) {
     return {
       format: "openclaw-snes-pcc-worker-dispatch-v1",
@@ -2156,11 +2281,13 @@ export function applyWorkerOutput({ project, root, workerOutputPath }) {
     root,
     format: "openclaw-snes-pcc-apply-worker-output-v1",
   });
-  if (blocked) return blocked;
+  if (blocked) {
+    return blocked;
+  }
   const resolved = path.isAbsolute(workerOutputPath)
     ? workerOutputPath
     : path.join(loaded.projectDir, workerOutputPath);
-  if (!fs.existsSync(resolved))
+  if (!fs.existsSync(resolved)) {
     return {
       format: "openclaw-snes-pcc-apply-worker-output-v1",
       status: "blocked",
@@ -2168,6 +2295,7 @@ export function applyWorkerOutput({ project, root, workerOutputPath }) {
       project,
       blocker: "worker-output-not-found",
     };
+  }
   let output;
   try {
     output = readJson(resolved);
@@ -2190,7 +2318,9 @@ export function applyWorkerOutput({ project, root, workerOutputPath }) {
     allowedWriteSurfaces: milestone?.allowedWriteSurfaces ?? [],
     requiredProof: milestone?.requiredProof ?? [],
   });
-  if (!milestone) validation.errors.push("milestone-not-found");
+  if (!milestone) {
+    validation.errors.push("milestone-not-found");
+  }
   if (!validation.ok || !milestone) {
     validation.status = "fail";
     validation.ok = false;
@@ -2208,7 +2338,7 @@ export function applyWorkerOutput({ project, root, workerOutputPath }) {
 
   for (const receipt of output.receipts ?? []) {
     const receiptPath = safeRelativePccPath(receipt.path);
-    if (!receiptPath)
+    if (!receiptPath) {
       return {
         format: "openclaw-snes-pcc-apply-worker-output-v1",
         status: "blocked",
@@ -2216,12 +2346,15 @@ export function applyWorkerOutput({ project, root, workerOutputPath }) {
         project,
         blocker: "unsafe-receipt-path",
       };
+    }
     writeJson(path.join(loaded.projectDir, receiptPath), receipt.content ?? { status: "pass" });
   }
   const ledgerDoc = loaded.ledger;
-  milestone.proof = { ...(milestone.proof ?? {}) };
+  milestone.proof = { ...milestone.proof };
   for (const receipt of output.receipts ?? []) {
-    if (receipt.proofName) milestone.proof[receipt.proofName] = receipt.path;
+    if (receipt.proofName) {
+      milestone.proof[receipt.proofName] = receipt.path;
+    }
   }
   milestone.status = "pass";
   milestone.completionPercent = 100;
@@ -2265,11 +2398,14 @@ export function applyWorkerOutput({ project, root, workerOutputPath }) {
 export function resolvePccConflicts({ patches = [] }) {
   const seenFiles = new Set();
   const conflicts = [];
-  for (const patch of patches)
+  for (const patch of patches) {
     for (const filePath of patch.files ?? []) {
-      if (seenFiles.has(filePath)) conflicts.push({ type: "same-file-conflict", filePath });
+      if (seenFiles.has(filePath)) {
+        conflicts.push({ type: "same-file-conflict", filePath });
+      }
       seenFiles.add(filePath);
     }
+  }
   return {
     format: "openclaw-snes-pcc-conflict-resolution-v1",
     status: conflicts.length ? "blocked" : "pass",
@@ -2291,7 +2427,9 @@ export function updateArtifactCache({
     root,
     format: "openclaw-snes-pcc-artifact-cache-update-v1",
   });
-  if (blocked) return blocked;
+  if (blocked) {
+    return blocked;
+  }
   const cache = loaded.artifactCache ?? {
     format: "openclaw-snes-pcc-artifact-cache-v1",
     entries: [],
@@ -2329,7 +2467,9 @@ export function createReviewerReceipt({
     root,
     format: "openclaw-snes-pcc-reviewer-receipt-v1",
   });
-  if (blocked) return blocked;
+  if (blocked) {
+    return blocked;
+  }
   const milestone = loaded.ledger?.milestones?.find((m) => m.milestoneId === milestoneId);
   const receipt = {
     id: `${milestoneId}-${reviewerRole}-${sha256Text(reasons.join("|")).slice(0, 8)}`,
@@ -2362,7 +2502,9 @@ export function compactMemoryCards({ project, root }) {
     root,
     format: "openclaw-snes-pcc-memory-compact-v1",
   });
-  if (blocked) return blocked;
+  if (blocked) {
+    return blocked;
+  }
   const cards =
     loaded.ledger?.milestones?.map((milestone) => ({
       id: `milestone-${milestone.milestoneId}`,
@@ -2392,7 +2534,9 @@ export function pccTelemetry({ project, root }) {
     root,
     format: "openclaw-snes-pcc-telemetry-report-v1",
   });
-  if (blocked) return blocked;
+  if (blocked) {
+    return blocked;
+  }
   const events = loaded.telemetry?.events ?? [];
   return {
     format: "openclaw-snes-pcc-telemetry-report-v1",
@@ -2413,7 +2557,9 @@ export function pccDashboardSnapshot({ project, root }) {
     root,
     format: "openclaw-snes-pcc-dashboard-snapshot-v1",
   });
-  if (blocked) return blocked;
+  if (blocked) {
+    return blocked;
+  }
   const status = pccStatus({ project, root });
   const approvals = listApprovals({ project, root });
   const snapshot = {
@@ -2440,7 +2586,9 @@ export function runRegressionBenchmark({ project, root }) {
     root,
     format: "openclaw-snes-pcc-regression-benchmark-v1",
   });
-  if (blocked) return blocked;
+  if (blocked) {
+    return blocked;
+  }
   const bench = loaded.regressionBenchmarks ?? {
     format: "openclaw-snes-pcc-regression-benchmarks-v1",
     prompts: [],
@@ -2476,7 +2624,7 @@ export function runLivePcc({
   spawn = spawnSync,
   timeoutSeconds = 120,
 }) {
-  if (!localOnly)
+  if (!localOnly) {
     return {
       format: "openclaw-snes-pcc-live-run-v1",
       status: "blocked",
@@ -2484,6 +2632,7 @@ export function runLivePcc({
       project,
       blocker: "only-local-live-worker-execution-approved",
     };
+  }
   const startedAt = Date.now();
   const completedMilestones = [];
   const dispatches = [];
@@ -2508,7 +2657,7 @@ export function runLivePcc({
       };
     }
     const loaded = loadPccProject({ project, root });
-    if (loaded.missingProject)
+    if (loaded.missingProject) {
       return {
         format: "openclaw-snes-pcc-live-run-v1",
         status: "blocked",
@@ -2516,6 +2665,7 @@ export function runLivePcc({
         project,
         blocker: "project-not-found",
       };
+    }
     const next = pccNext({ project, root, maxParallel });
     const candidateMilestones = next.parallelBatches?.[0] ?? [];
     const targetMilestone =
@@ -2583,7 +2733,7 @@ export function runLivePcc({
       timeoutSeconds,
     });
     dispatches.push(dispatch);
-    if (dispatch.status !== "pass")
+    if (dispatch.status !== "pass") {
       return {
         ...dispatch,
         format: "openclaw-snes-pcc-live-run-v1",
@@ -2591,13 +2741,14 @@ export function runLivePcc({
         dispatches,
         applications,
       };
+    }
     const apply = applyWorkerOutput({
       project,
       root,
       workerOutputPath: dispatch.dispatch.workerOutputPath,
     });
     applications.push(apply);
-    if (apply.status !== "pass")
+    if (apply.status !== "pass") {
       return {
         format: "openclaw-snes-pcc-live-run-v1",
         generatedAt: nowIso(),
@@ -2614,6 +2765,7 @@ export function runLivePcc({
         hostedGlmUsed: false,
         gpt55Used: false,
       };
+    }
     completedMilestones.push(targetMilestone);
   }
   return {
@@ -2636,7 +2788,9 @@ export function runLivePcc({
 
 export function recordLastKnownGood({ project, root, milestoneId, receipt }) {
   const loaded = loadPccProject({ project, root });
-  if (loaded.missingProject) throw new Error("project not found");
+  if (loaded.missingProject) {
+    throw new Error("project not found");
+  }
   const buildHistory = loaded.buildHistory ?? { builds: [] };
   const record = {
     milestoneId,
@@ -2671,8 +2825,9 @@ export function pccStatus({ project, root, initialized, note } = {}) {
   const milestones = loaded.ledger?.milestones ?? [];
   const total = milestones.length;
   const counts = Object.fromEntries([...PCC_STATUSES].map((status) => [status, 0]));
-  for (const milestone of milestones)
+  for (const milestone of milestones) {
     counts[milestone.status] = (counts[milestone.status] ?? 0) + 1;
+  }
   const next = planParallelMilestones({
     milestones,
     maxParallel: loaded.dag?.maxParallelWorkers ?? 4,
@@ -2704,33 +2859,62 @@ export function parseSnesTeamArgs(argv) {
   const args = { mode: "status", json: false, maxParallel: 4, maxMilestones: 10, maxMinutes: 480 };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
-    if (arg === "--") continue;
-    if (arg === "--help" || arg === "-h") args.help = true;
-    else if (arg === "--json") args.json = true;
-    else if (arg === "--dry-run") args.dryRun = true;
-    else if (arg === "--local-only") args.localOnly = true;
-    else if (arg === "--invoke-local-models") args.invokeLocalModels = true;
-    else if (arg === "--mode") args.mode = argv[++index];
-    else if (arg === "--project") args.project = argv[++index];
-    else if (arg === "--prompt") args.promptPath = argv[++index];
-    else if (arg === "--milestone") args.milestoneId = argv[++index];
-    else if (arg === "--failure-class") args.failureClass = argv[++index];
-    else if (arg === "--approval-type") args.approvalType = argv[++index];
-    else if (arg === "--reason") args.reason = argv[++index];
-    else if (arg === "--risk") args.risk = argv[++index];
-    else if (arg === "--requested-action") args.requestedAction = argv[++index];
-    else if (arg === "--root") args.root = argv[++index];
-    else if (arg === "--max-parallel") args.maxParallel = Number(argv[++index]);
-    else if (arg === "--max-workers") args.maxParallel = Number(argv[++index]);
-    else if (arg === "--max-milestones") args.maxMilestones = Number(argv[++index]);
-    else if (arg === "--max-minutes") args.maxMinutes = Number(argv[++index]);
-    else if (arg === "--model-timeout-seconds") args.modelTimeoutSeconds = Number(argv[++index]);
-    else if (arg === "--asset-intent") args.assetIntentPath = argv[++index];
-    else if (arg === "--worker-output") args.workerOutputPath = argv[++index];
-    else if (arg === "--cache-key") args.cacheKey = argv[++index];
-    else if (arg === "--input-sha") args.inputSha = argv[++index];
-    else if (arg === "--output-path") args.outputPath = argv[++index];
-    else throw new Error(`unknown argument: ${arg}`);
+    if (arg === "--") {
+      continue;
+    }
+    if (arg === "--help" || arg === "-h") {
+      args.help = true;
+    } else if (arg === "--json") {
+      args.json = true;
+    } else if (arg === "--dry-run") {
+      args.dryRun = true;
+    } else if (arg === "--local-only") {
+      args.localOnly = true;
+    } else if (arg === "--invoke-local-models") {
+      args.invokeLocalModels = true;
+    } else if (arg === "--mode") {
+      args.mode = argv[++index];
+    } else if (arg === "--project") {
+      args.project = argv[++index];
+    } else if (arg === "--prompt") {
+      args.promptPath = argv[++index];
+    } else if (arg === "--milestone") {
+      args.milestoneId = argv[++index];
+    } else if (arg === "--failure-class") {
+      args.failureClass = argv[++index];
+    } else if (arg === "--approval-type") {
+      args.approvalType = argv[++index];
+    } else if (arg === "--reason") {
+      args.reason = argv[++index];
+    } else if (arg === "--risk") {
+      args.risk = argv[++index];
+    } else if (arg === "--requested-action") {
+      args.requestedAction = argv[++index];
+    } else if (arg === "--root") {
+      args.root = argv[++index];
+    } else if (arg === "--max-parallel") {
+      args.maxParallel = Number(argv[++index]);
+    } else if (arg === "--max-workers") {
+      args.maxParallel = Number(argv[++index]);
+    } else if (arg === "--max-milestones") {
+      args.maxMilestones = Number(argv[++index]);
+    } else if (arg === "--max-minutes") {
+      args.maxMinutes = Number(argv[++index]);
+    } else if (arg === "--model-timeout-seconds") {
+      args.modelTimeoutSeconds = Number(argv[++index]);
+    } else if (arg === "--asset-intent") {
+      args.assetIntentPath = argv[++index];
+    } else if (arg === "--worker-output") {
+      args.workerOutputPath = argv[++index];
+    } else if (arg === "--cache-key") {
+      args.cacheKey = argv[++index];
+    } else if (arg === "--input-sha") {
+      args.inputSha = argv[++index];
+    } else if (arg === "--output-path") {
+      args.outputPath = argv[++index];
+    } else {
+      throw new Error(`unknown argument: ${arg}`);
+    }
   }
   return args;
 }
@@ -2745,37 +2929,49 @@ export function snesTeamHelp() {
 }
 
 export function runSnesTeam(args) {
-  if (args.help) return { status: "pass", ok: true, help: snesTeamHelp() };
+  if (args.help) {
+    return { status: "pass", ok: true, help: snesTeamHelp() };
+  }
   const mode = args.mode ?? "status";
   if (mode !== "asset-intent-validate" && !args.project) {
     return { format: PCC_FORMAT, status: "blocked", ok: false, blocker: "missing-project" };
   }
   try {
-    if (mode === "init")
+    if (mode === "init") {
       return initPccProject({
         project: args.project,
         promptPath: args.promptPath,
         root: args.root,
       });
-    if (mode === "status") return pccStatus({ project: args.project, root: args.root });
-    if (mode === "next")
+    }
+    if (mode === "status") {
+      return pccStatus({ project: args.project, root: args.root });
+    }
+    if (mode === "next") {
       return pccNext({ project: args.project, root: args.root, maxParallel: args.maxParallel });
-    if (mode === "validate") return validatePccProject({ project: args.project, root: args.root });
-    if (mode === "judge")
+    }
+    if (mode === "validate") {
+      return validatePccProject({ project: args.project, root: args.root });
+    }
+    if (mode === "judge") {
       return judgeMilestone({
         project: args.project,
         root: args.root,
         milestoneId: args.milestoneId,
       });
-    if (mode === "repair-plan")
+    }
+    if (mode === "repair-plan") {
       return createRepairPlan({
         project: args.project,
         root: args.root,
         milestoneId: args.milestoneId,
         failureClass: args.failureClass ?? "invalid-patch",
       });
-    if (mode === "approvals") return listApprovals({ project: args.project, root: args.root });
-    if (mode === "request-approval")
+    }
+    if (mode === "approvals") {
+      return listApprovals({ project: args.project, root: args.root });
+    }
+    if (mode === "request-approval") {
       return requestApproval({
         project: args.project,
         root: args.root,
@@ -2785,28 +2981,33 @@ export function runSnesTeam(args) {
         risk: args.risk,
         requestedAction: args.requestedAction,
       });
-    if (["pause", "resume", "cancel"].includes(mode))
+    }
+    if (["pause", "resume", "cancel"].includes(mode)) {
       return setRunControl({ project: args.project, root: args.root, action: mode });
-    if (mode === "run")
+    }
+    if (mode === "run") {
       return runPccUntilBlocked({
         project: args.project,
         root: args.root,
         maxMilestones: args.maxMilestones,
         maxMinutes: args.maxMinutes,
       });
-    if (mode === "worker-packet")
+    }
+    if (mode === "worker-packet") {
       return exportWorkerPacket({
         project: args.project,
         root: args.root,
         milestoneId: args.milestoneId,
       });
-    if (mode === "model-health")
+    }
+    if (mode === "model-health") {
       return modelHealth({
         project: args.project,
         root: args.root,
         timeoutSeconds: args.modelTimeoutSeconds ?? 45,
       });
-    if (mode === "dispatch-worker")
+    }
+    if (mode === "dispatch-worker") {
       return dispatchWorker({
         project: args.project,
         root: args.root,
@@ -2816,18 +3017,24 @@ export function runSnesTeam(args) {
         invokeLocalModels: args.invokeLocalModels,
         timeoutSeconds: args.modelTimeoutSeconds ?? 120,
       });
-    if (mode === "apply-worker-output")
+    }
+    if (mode === "apply-worker-output") {
       return applyWorkerOutput({
         project: args.project,
         root: args.root,
         workerOutputPath: args.workerOutputPath,
       });
-    if (mode === "telemetry") return pccTelemetry({ project: args.project, root: args.root });
-    if (mode === "dashboard-snapshot")
+    }
+    if (mode === "telemetry") {
+      return pccTelemetry({ project: args.project, root: args.root });
+    }
+    if (mode === "dashboard-snapshot") {
       return pccDashboardSnapshot({ project: args.project, root: args.root });
-    if (mode === "regression-benchmark")
+    }
+    if (mode === "regression-benchmark") {
       return runRegressionBenchmark({ project: args.project, root: args.root });
-    if (mode === "run-live" || mode === "resume-live")
+    }
+    if (mode === "run-live" || mode === "resume-live") {
       return runLivePcc({
         project: args.project,
         root: args.root,
@@ -2838,7 +3045,8 @@ export function runSnesTeam(args) {
         invokeLocalModels: args.invokeLocalModels,
         timeoutSeconds: args.modelTimeoutSeconds ?? 120,
       });
-    if (mode === "artifact-cache-update")
+    }
+    if (mode === "artifact-cache-update") {
       return updateArtifactCache({
         project: args.project,
         root: args.root,
@@ -2846,10 +3054,13 @@ export function runSnesTeam(args) {
         inputSha: args.inputSha,
         outputPath: args.outputPath,
       });
-    if (mode === "memory-compact")
+    }
+    if (mode === "memory-compact") {
       return compactMemoryCards({ project: args.project, root: args.root });
-    if (mode === "asset-intent-validate")
+    }
+    if (mode === "asset-intent-validate") {
       return validateAssetIntentContract(readJson(args.assetIntentPath));
+    }
     return { format: PCC_FORMAT, status: "blocked", ok: false, blocker: `unknown-mode:${mode}` };
   } catch (error) {
     return {

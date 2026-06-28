@@ -1,8 +1,8 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   applyWorkerOutput,
   compactMemoryCards,
@@ -34,9 +34,16 @@ import {
   validateWorkerOutput,
   validatePccProject,
 } from "../../scripts/lib/snes-team-orchestrator.mjs";
+import { createTempDirTracker } from "../helpers/temp-dir.ts";
+
+const tempDirs = createTempDirTracker();
+
+afterEach(() => {
+  tempDirs.cleanup();
+});
 
 function tempRoot() {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snes-pcc-"));
+  return tempDirs.make("openclaw-snes-pcc-");
 }
 
 function writePrompt(root: string, text = "Make a legal clean-room SNES platformer.") {
@@ -784,7 +791,18 @@ describe("SNES PCC team orchestrator", () => {
     const root = tempRoot();
     const project = "cli-demo";
     const promptPath = writePrompt(root);
-    const script = path.join(process.cwd(), "scripts/snes-team-orchestrator.mjs");
+    const script = path.join(root, "snes-team-cli.mjs");
+    const libraryUrl = pathToFileURL(
+      path.join(process.cwd(), "scripts/lib/snes-team-orchestrator.mjs"),
+    ).href;
+    fs.writeFileSync(
+      script,
+      `import { parseSnesTeamArgs, runSnesTeam } from ${JSON.stringify(libraryUrl)};
+const result = await runSnesTeam(parseSnesTeamArgs(process.argv.slice(2)));
+console.log(JSON.stringify(result));
+if (result.status !== "pass") process.exitCode = 1;
+`,
+    );
     const init = JSON.parse(
       execFileSync(
         process.execPath,
