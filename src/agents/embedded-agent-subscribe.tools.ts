@@ -288,17 +288,31 @@ function redactInlineDataUriValue(value: string): string {
   return `[inline data URI: ${value.length} chars]`;
 }
 
+function carriesBinaryData(record: Record<string, unknown>): boolean {
+  const type = normalizeOptionalLowercaseString(record.type);
+  if (type === "audio" || type === "image" || type === "base64") {
+    return true;
+  }
+  const mediaType = normalizeOptionalLowercaseString(record.media_type ?? record.mimeType);
+  return (
+    mediaType?.startsWith("image/") === true ||
+    mediaType?.startsWith("audio/") === true ||
+    mediaType?.startsWith("video/") === true ||
+    mediaType === "application/pdf"
+  );
+}
+
 function sanitizeStructuredToolResultValue(
   value: unknown,
   key = "",
-  parentType?: string,
+  parentCarriesBinaryData = false,
   seen = new WeakSet<object>(),
 ): unknown {
   if (typeof value === "string") {
     if (SENSITIVE_STRUCTURED_HEADER_FIELDS.has(key.toLowerCase())) {
       return "***";
     }
-    if (key === "blob" || (key === "data" && (parentType === "audio" || parentType === "image"))) {
+    if (key === "blob" || (key === "data" && parentCarriesBinaryData)) {
       return `[binary omitted: ${value.length} chars]`;
     }
     // Claude CLI result blocks carry replay-only ciphertext that is not useful display text.
@@ -319,14 +333,16 @@ function sanitizeStructuredToolResultValue(
   seen.add(value);
   if (Array.isArray(value)) {
     // Keep the owning key so arrays of credentials inherit the same redaction policy.
-    return value.map((item) => sanitizeStructuredToolResultValue(item, key, parentType, seen));
+    return value.map((item) =>
+      sanitizeStructuredToolResultValue(item, key, parentCarriesBinaryData, seen),
+    );
   }
   const record = value as Record<string, unknown>;
-  const type = readStringValue(record.type);
+  const hasBinaryData = carriesBinaryData(record);
   return Object.fromEntries(
     Object.entries(record).map(([childKey, child]) => [
       childKey,
-      sanitizeStructuredToolResultValue(child, childKey, type, seen),
+      sanitizeStructuredToolResultValue(child, childKey, hasBinaryData, seen),
     ]),
   );
 }
@@ -379,7 +395,7 @@ export function extractToolResultText(result: unknown): string | undefined {
     })
     .filter((value): value is string => Boolean(value));
   if (texts.length > 0) {
-    return texts.join("\n");
+    return truncateToolText(texts.join("\n"));
   }
   const structuredTexts: string[] = [];
   for (const item of content) {

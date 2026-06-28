@@ -454,6 +454,13 @@ describe("extractToolResultText", () => {
     expect(text).toBe("hello");
   });
 
+  it("caps top-level text arrays", () => {
+    const text = extractToolResultText([{ type: "text", text: "x".repeat(9000) }]);
+
+    expect(text).toContain("…(truncated)…");
+    expect(text?.length).toBeLessThanOrEqual(8020);
+  });
+
   it("redacts whole data URI values without rewriting ordinary data substrings", () => {
     const text = extractToolResultText({
       content: [
@@ -475,6 +482,14 @@ describe("extractToolResultText", () => {
       content: [
         { type: "audio", data: "audio-base64-secret", mimeType: "audio/mpeg" },
         {
+          type: "document",
+          source: {
+            type: "base64",
+            media_type: "application/pdf",
+            data: "document-base64-secret",
+          },
+        },
+        {
           type: "resource",
           apiKey: "sk-structured-secret-1234567890",
           resource: {
@@ -489,6 +504,7 @@ describe("extractToolResultText", () => {
     expect(text).toContain('"uri":"blob://result"');
     expect(text).toContain('"blob":"[binary omitted:');
     expect(text).not.toContain("audio-base64-secret");
+    expect(text).not.toContain("document-base64-secret");
     expect(text).not.toContain("resource-base64-secret");
     expect(text).not.toContain("sk-structured-secret-1234567890");
   });
