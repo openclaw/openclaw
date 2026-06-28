@@ -65,7 +65,10 @@ function truncateTemplateText(text: string, limit: number): string {
   return result;
 }
 
-function truncateOptionalTemplateText(value: string | undefined, limit: number): string | undefined {
+function truncateOptionalTemplateText(
+  value: string | undefined,
+  limit: number,
+): string | undefined {
   return value === undefined ? undefined : truncateTemplateText(value, limit);
 }
 
