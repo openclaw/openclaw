@@ -1,6 +1,6 @@
 import { html } from "lit";
 import { titleForRoute, subtitleForRoute } from "../../app-navigation.ts";
-import type { RouteRenderContext } from "../../app-routes.ts";
+import { searchForSession, type RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { definePage } from "../../router/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
@@ -8,7 +8,6 @@ import {
   resolveConfiguredCronModelSuggestions,
   sortLocaleStrings,
 } from "../../ui/views/agents-utils.ts";
-import { switchChatSession } from "../chat/session-switch.ts";
 import {
   DEFAULT_CRON_FORM,
   addCronJob,
@@ -277,8 +276,7 @@ function renderCronPage(
         await loadCronRuns(state, state.cronRunsScope === "all" ? null : state.cronRunsJobId);
       }),
       onNavigateToChat: (sessionKey) => {
-        switchChatSession(state, sessionKey);
-        navigate("chat");
+        navigate("chat", { search: searchForSession(sessionKey) });
       },
     })}
   `;

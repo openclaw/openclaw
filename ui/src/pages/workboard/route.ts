@@ -1,11 +1,10 @@
-import type { RouteRenderContext } from "../../app-routes.ts";
+import { searchForSession, type RouteRenderContext } from "../../app-routes.ts";
 import type { SettingsAppHost, SettingsHost } from "../../app/app-host.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { isPluginEnabledInConfigSnapshot } from "../../lib/plugin-activation.ts";
 import { definePage } from "../../router/index.ts";
 import type { AppViewState } from "../../ui/app-view-state.ts";
 import { loadAgents } from "../agents/data.ts";
-import { switchChatSession } from "../chat/session-switch.ts";
 import { loadConfig } from "../config/data.ts";
 import { loadWorkboard, stopWorkboardLifecycleRefresh, stopWorkboardPolling } from "./data.ts";
 
@@ -53,8 +52,7 @@ export const page = definePage({
           agentsList: state.agentsList,
           sessions: state.sessionsResult?.sessions ?? [],
           onOpenSession: (sessionKey) => {
-            switchChatSession(state, sessionKey);
-            navigate("chat");
+            navigate("chat", { search: searchForSession(sessionKey) });
           },
           onReloadConfig: () => void loadConfig(state, { discardPendingChanges: true }),
           onRequestUpdate: requestUpdate,

@@ -6,6 +6,7 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
+import { searchForSession } from "../../app-routes.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { filterSessionRows, scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
@@ -307,7 +308,7 @@ export class SessionsPage extends LitElement {
         agentId: this.sessionAgentId(sessionKey),
       });
       await this.loadSessions();
-      context.navigate("chat", { search: `?session=${encodeURIComponent(result.key)}` });
+      context.navigate("chat", { search: searchForSession(result.key) });
     } catch (error) {
       this.error = String(error);
     } finally {
@@ -440,7 +441,7 @@ export class SessionsPage extends LitElement {
       },
       onDeleteSelected: () => void this.deleteSelected(),
       onNavigateToChat: (sessionKey) =>
-        context.navigate("chat", { search: `?session=${encodeURIComponent(sessionKey)}` }),
+        context.navigate("chat", { search: searchForSession(sessionKey) }),
       onToggleCheckpointDetails: (sessionKey) => void this.toggleCheckpointDetails(sessionKey),
       onBranchFromCheckpoint: (sessionKey, checkpointId) =>
         void this.branchCheckpoint(sessionKey, checkpointId),

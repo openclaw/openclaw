@@ -12,7 +12,7 @@ import type {
   CronRunsStatusFilter,
   CronSortDir,
 } from "../../api/types.ts";
-import { pathForRoute } from "../../app-routes.ts";
+import { pathForRoute, searchForSession } from "../../app-routes.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -1882,7 +1882,7 @@ function renderRun(
 ) {
   const chatUrl =
     typeof entry.sessionKey === "string" && entry.sessionKey.trim().length > 0
-      ? `${pathForRoute("chat", basePath)}?session=${encodeURIComponent(entry.sessionKey)}`
+      ? `${pathForRoute("chat", basePath)}${searchForSession(entry.sessionKey)}`
       : null;
   const status = runStatusLabel(entry.status ?? "unknown");
   const delivery = runDeliveryLabel(entry.deliveryStatus ?? "not-requested");

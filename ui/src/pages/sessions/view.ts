@@ -9,7 +9,7 @@ import type {
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../../api/types.ts";
-import { pathForRoute } from "../../app-routes.ts";
+import { pathForRoute, searchForSession } from "../../app-routes.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/tooltip.ts";
 import { t } from "../../i18n/index.ts";
@@ -867,7 +867,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
   const captured = props.workboardSessionKeys?.has(row.key) === true;
   const captureBusy = props.workboardBusySessionKey === row.key;
   const chatUrl = canLink
-    ? `${pathForRoute("chat", props.basePath)}?session=${encodeURIComponent(row.key)}`
+    ? `${pathForRoute("chat", props.basePath)}${searchForSession(row.key)}`
     : null;
   const badgeClass =
     row.kind === "cron"
