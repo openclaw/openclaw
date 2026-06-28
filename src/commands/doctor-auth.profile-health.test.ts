@@ -15,7 +15,8 @@ const authProfileMocks = vi.hoisted(() => ({
       version: number;
       profiles: Record<
         string,
-        { type: "oauth"; provider: string; access: string; refresh: string; expires: number }
+        | { type: "oauth"; provider: string; access: string; refresh: string; expires: number }
+        | { type: "api_key"; provider: string; key: string }
       >;
     }
   >(() => {
@@ -27,12 +28,23 @@ const authProfileMocks = vi.hoisted(() => ({
   resolveProfileUnusableUntilForDisplay: vi.fn(),
 }));
 
+const providerRuntimeMocks = vi.hoisted(() => ({
+  buildProviderStaticAuthProfileDoctorHintWithPlugin: vi.fn(
+    async () => undefined as string | undefined,
+  ),
+}));
+
 vi.mock("../agents/auth-profiles.js", () => ({
   ensureAuthProfileStore: authProfileMocks.ensureAuthProfileStore,
   hasAnyAuthProfileStoreSource: authProfileMocks.hasAnyAuthProfileStoreSource,
   hasLocalAuthProfileStoreSource: authProfileMocks.hasLocalAuthProfileStoreSource,
   resolveApiKeyForProfile: authProfileMocks.resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay: authProfileMocks.resolveProfileUnusableUntilForDisplay,
+}));
+
+vi.mock("../plugins/provider-runtime.runtime.js", () => ({
+  buildProviderStaticAuthProfileDoctorHintWithPlugin:
+    providerRuntimeMocks.buildProviderStaticAuthProfileDoctorHintWithPlugin,
 }));
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: vi.fn() }));
@@ -54,6 +66,10 @@ describe("noteAuthProfileHealth", () => {
     authProfileMocks.hasLocalAuthProfileStoreSource.mockReturnValue(false);
     authProfileMocks.resolveApiKeyForProfile.mockReset();
     authProfileMocks.resolveProfileUnusableUntilForDisplay.mockReset();
+    providerRuntimeMocks.buildProviderStaticAuthProfileDoctorHintWithPlugin.mockReset();
+    providerRuntimeMocks.buildProviderStaticAuthProfileDoctorHintWithPlugin.mockResolvedValue(
+      undefined,
+    );
     noteMock.mockReset();
   });
 
@@ -81,6 +97,20 @@ describe("noteAuthProfileHealth", () => {
       },
     };
   }
+
+  function commandTextZaiStore() {
+    return {
+      version: 1,
+      profiles: {
+        "zai:default": {
+          type: "api_key" as const,
+          provider: "zai",
+          key: "openclaw onboard --auth-choice zai-coding-global",
+        },
+      },
+    };
+  }
+
   it("skips external auth profile resolution when no auth source exists", async () => {
     await noteAuthProfileHealth({
       cfg: { channels: { telegram: { enabled: true } } } as OpenClawConfig,
@@ -116,6 +146,49 @@ describe("noteAuthProfileHealth", () => {
     expect(authProfileMocks.ensureAuthProfileStore).toHaveBeenCalledWith(defaultDir, {
       allowKeychainPrompt: false,
     });
+  });
+
+  it("reports static API-key profile hints returned by the provider doctor hook", async () => {
+    const agentDir = path.join(tempDir, "main-agent");
+    authProfileMocks.hasAnyAuthProfileStoreSource.mockImplementation(
+      (targetDir) => targetDir === agentDir,
+    );
+    authProfileMocks.ensureAuthProfileStore.mockReturnValue(commandTextZaiStore());
+    providerRuntimeMocks.buildProviderStaticAuthProfileDoctorHintWithPlugin.mockResolvedValue(
+      "Z.AI auth profile zai:default contains an onboarding command instead of an API key. Re-authenticate with a real key: openclaw onboard --auth-choice zai-coding-global.",
+    );
+
+    await noteAuthProfileHealth({
+      cfg: {
+        agents: {
+          list: [{ id: "main", default: true, agentDir }],
+        },
+      } as OpenClawConfig,
+      prompter: {
+        confirmAutoFix: vi.fn(async () => false),
+      } as unknown as DoctorPrompter,
+      allowKeychainPrompt: false,
+    });
+
+    expect(
+      providerRuntimeMocks.buildProviderStaticAuthProfileDoctorHintWithPlugin,
+    ).toHaveBeenCalledWith({
+      provider: "zai",
+      context: {
+        config: {
+          agents: {
+            list: [{ id: "main", default: true, agentDir }],
+          },
+        },
+        store: commandTextZaiStore(),
+        provider: "zai",
+        profileId: "zai:default",
+      },
+    });
+    expect(noteMock).toHaveBeenCalledWith(
+      "- zai:default: static [invalid_api_key] - Z.AI auth profile zai:default contains an onboarding command instead of an API key. Re-authenticate with a real key: openclaw onboard --auth-choice zai-coding-global.",
+      "Model auth",
+    );
   });
 
   it("labels model auth diagnostics by agent when multiple agent auth stores are checked", async () => {

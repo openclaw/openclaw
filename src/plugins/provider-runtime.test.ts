@@ -51,6 +51,7 @@ const providerRuntimeWarnMock = vi.fn();
 
 let augmentModelCatalogWithProviderPlugins: typeof import("./provider-runtime.js").augmentModelCatalogWithProviderPlugins;
 let buildProviderAuthDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderAuthDoctorHintWithPlugin;
+let buildProviderStaticAuthProfileDoctorHintWithPlugin: typeof import("./provider-runtime.js").buildProviderStaticAuthProfileDoctorHintWithPlugin;
 let buildProviderMissingAuthMessageWithPlugin: typeof import("./provider-runtime.js").buildProviderMissingAuthMessageWithPlugin;
 let buildProviderUnknownModelHintWithPlugin: typeof import("./provider-runtime.js").buildProviderUnknownModelHintWithPlugin;
 let applyProviderNativeStreamingUsageCompatWithPlugin: typeof import("./provider-runtime.js").applyProviderNativeStreamingUsageCompatWithPlugin;
@@ -316,6 +317,7 @@ describe("provider-runtime", () => {
     ({
       augmentModelCatalogWithProviderPlugins,
       buildProviderAuthDoctorHintWithPlugin,
+      buildProviderStaticAuthProfileDoctorHintWithPlugin,
       buildProviderMissingAuthMessageWithPlugin,
       buildProviderUnknownModelHintWithPlugin,
       applyProviderNativeStreamingUsageCompatWithPlugin,
@@ -1977,6 +1979,8 @@ describe("provider-runtime", () => {
           resolveConfigApiKey: () => "DEMO_PROFILE",
           buildAuthDoctorHint: ({ provider, profileId }) =>
             provider === "demo" ? `Repair ${profileId}` : undefined,
+          buildStaticAuthProfileDoctorHint: ({ provider, profileId }) =>
+            provider === "demo" ? `Repair static ${profileId}` : undefined,
           prepareRuntimeAuth,
           resolveUsageAuth,
           fetchUsageSnapshot,
@@ -2292,6 +2296,17 @@ describe("provider-runtime", () => {
             }),
           }),
         expected: "Repair demo:default",
+      },
+      {
+        actual: () =>
+          buildProviderStaticAuthProfileDoctorHintWithPlugin({
+            provider: DEMO_PROVIDER_ID,
+            context: createDemoProviderContext({
+              profileId: "demo:default",
+              store: { version: 1, profiles: {} },
+            }),
+          }),
+        expected: "Repair static demo:default",
       },
     ]);
 

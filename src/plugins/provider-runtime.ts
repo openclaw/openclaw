@@ -746,6 +746,18 @@ export async function buildProviderAuthDoctorHintWithPlugin(params: {
   return await resolveProviderRuntimePlugin(params)?.buildAuthDoctorHint?.(params.context);
 }
 
+export async function buildProviderStaticAuthProfileDoctorHintWithPlugin(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+  context: ProviderAuthDoctorHintContext;
+}) {
+  return await resolveProviderRuntimePlugin(params)?.buildStaticAuthProfileDoctorHint?.(
+    params.context,
+  );
+}
+
 export function resolveProviderCacheTtlEligibility(params: {
   provider: string;
   config?: OpenClawConfig;

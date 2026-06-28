@@ -20,7 +20,10 @@ import {
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
-import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
+import {
+  formatAuthDoctorHint,
+  formatStaticAuthProfileDoctorIssueLines,
+} from "../agents/auth-profiles/doctor.js";
 import {
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
@@ -305,6 +308,10 @@ async function noteAuthProfileHealthForTarget(params: {
     warnAfterMs: DEFAULT_OAUTH_WARN_MS,
     allowKeychainPrompt: params.allowKeychainPrompt,
   });
+  const staticIssueLines = await formatStaticAuthProfileDoctorIssueLines({
+    cfg: params.cfg,
+    store,
+  });
 
   const findIssues = () =>
     summary.profiles.filter(
@@ -316,6 +323,9 @@ async function noteAuthProfileHealthForTarget(params: {
     );
 
   let issues = findIssues();
+  if (staticIssueLines.length > 0) {
+    note(staticIssueLines.join("\n"), noteTitle("Model auth"));
+  }
   if (issues.length === 0) {
     return;
   }

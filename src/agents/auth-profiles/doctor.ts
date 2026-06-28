@@ -5,7 +5,10 @@
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { buildProviderAuthDoctorHintWithPlugin } from "../../plugins/provider-runtime.runtime.js";
+import {
+  buildProviderAuthDoctorHintWithPlugin,
+  buildProviderStaticAuthProfileDoctorHintWithPlugin,
+} from "../../plugins/provider-runtime.runtime.js";
 import type { AuthProfileStore } from "./types.js";
 
 const QWEN_PORTAL_OAUTH_MIGRATION_HINT =
@@ -19,6 +22,36 @@ function hasLegacyQwenPortalOAuthProfile(store: AuthProfileStore, profileId?: st
     (profile) =>
       profile?.type === "oauth" && normalizeProviderId(profile.provider) === "qwen-portal",
   );
+}
+
+export async function formatStaticAuthProfileDoctorIssueLines(params: {
+  cfg?: OpenClawConfig;
+  store: AuthProfileStore;
+  profileId?: string;
+}): Promise<string[]> {
+  const profiles = params.profileId
+    ? [[params.profileId, params.store.profiles[params.profileId]] as const]
+    : Object.entries(params.store.profiles);
+  const lines: string[] = [];
+  for (const [profileId, profile] of profiles) {
+    if (profile?.type !== "api_key") {
+      continue;
+    }
+    const provider = normalizeProviderId(profile.provider);
+    const hint = await buildProviderStaticAuthProfileDoctorHintWithPlugin({
+      provider,
+      context: {
+        config: params.cfg,
+        store: params.store,
+        provider,
+        profileId,
+      },
+    });
+    if (typeof hint === "string" && hint.trim()) {
+      lines.push(`- ${profileId}: static [invalid_api_key] - ${hint}`);
+    }
+  }
+  return lines;
 }
 
 /** Formats provider-specific auth doctor guidance for a profile/store. */
@@ -35,7 +68,6 @@ export async function formatAuthDoctorHint(params: {
   ) {
     return QWEN_PORTAL_OAUTH_MIGRATION_HINT;
   }
-
   const pluginHint = await buildProviderAuthDoctorHintWithPlugin({
     provider: normalizedProvider,
     context: {

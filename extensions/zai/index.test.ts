@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
+import type { ProviderAuthMethod } from "openclaw/plugin-sdk/plugin-entry";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompletionsParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { describe, expect, it } from "vitest";
@@ -48,7 +49,83 @@ function expectModelFields(
   }
 }
 
+function requireZaiAuthMethod(provider: Awaited<ReturnType<typeof registerSingleProviderPlugin>>) {
+  const method = provider.auth.find(
+    (entry): entry is ProviderAuthMethod => entry.wizard?.choiceId === "zai-coding-global",
+  );
+  if (!method) {
+    throw new Error("Expected Z.AI coding-global auth method");
+  }
+  return method;
+}
+
 describe("zai provider plugin", () => {
+  it.each([
+    ["auth choice first", "openclaw onboard --auth-choice zai-coding-global"],
+    [
+      "documented non-interactive flags first",
+      "openclaw onboard --non-interactive --auth-choice zai-coding-global --zai-api-key $ZAI_API_KEY",
+    ],
+    [
+      "equals-form auth choice",
+      "openclaw onboard --non-interactive --auth-choice=zai-coding-global --zai-api-key $ZAI_API_KEY",
+    ],
+  ])(
+    "rejects onboarding command text before storing the default auth profile (%s)",
+    async (_caseName, command) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const method = requireZaiAuthMethod(provider);
+
+      await expect(
+        method.run({
+          config: {},
+          prompter: {
+            confirm: async () => false,
+            select: async (_params, fallback) => fallback,
+            text: async () => command,
+            note: async () => undefined,
+          },
+          runtime: { log: () => {}, error: () => {}, exit: () => {} },
+          isRemote: false,
+          openUrl: async () => undefined,
+          oauth: { createVpsAwareHandlers: () => ({}) as never },
+        }),
+      ).rejects.toThrow("Z.AI API key cannot be an OpenClaw onboarding command.");
+    },
+  );
+
+  it.each([
+    ["auth choice first", "openclaw onboard --auth-choice zai-coding-global"],
+    [
+      "documented non-interactive flags first",
+      "openclaw onboard --non-interactive --auth-choice zai-coding-global --zai-api-key $ZAI_API_KEY",
+    ],
+  ])(
+    "guides polluted Z.AI profiles through the provider auth doctor hook (%s)",
+    async (_caseName, command) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+
+      const hint = provider.buildStaticAuthProfileDoctorHint?.({
+        provider: "zai",
+        profileId: "zai:default",
+        store: {
+          version: 1,
+          profiles: {
+            "zai:default": {
+              type: "api_key",
+              provider: "zai",
+              key: command,
+            },
+          },
+        },
+      });
+
+      expect(hint).toBe(
+        "Z.AI auth profile zai:default contains an onboarding command instead of an API key. Re-authenticate with a real key: openclaw onboard --auth-choice zai-coding-global.",
+      );
+    },
+  );
+
   it("owns replay policy for OpenAI-compatible Z.ai transports", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
 

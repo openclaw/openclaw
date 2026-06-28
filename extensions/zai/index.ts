@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   definePluginEntry,
   type ProviderAuthContext,
+  type ProviderAuthDoctorHintContext,
   type ProviderAuthMethod,
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderResolveDynamicModelContext,
@@ -40,6 +41,8 @@ import { applyZaiConfig, applyZaiProviderConfig, resolveZaiModelId } from "./onb
 const PROVIDER_ID = "zai";
 const GLM5_TEMPLATE_MODEL_ID = "glm-4.7";
 const PROFILE_ID = "zai:default";
+const ZAI_ONBOARDING_COMMAND_PROFILE_HINT =
+  "Z.AI auth profile {profileId} contains an onboarding command instead of an API key. Re-authenticate with a real key: openclaw onboard --auth-choice zai-coding-global.";
 type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
 
 function resolveDeprecatedPiAgentAuthPath(env: NodeJS.ProcessEnv): string {
@@ -118,6 +121,38 @@ function resolveGlm5ForwardCompatModel(
 
 function isTrueParam(value: unknown): boolean {
   return value === true;
+}
+
+const OPENCLAW_ONBOARD_COMMAND_RE = /^openclaw\s+onboard(?:\s|$)/;
+const ZAI_ONBOARD_AUTH_CHOICE_RE = /(?:^|\s)--auth-choice(?:=|\s+)zai(?:[-\s]|$)/;
+
+function isZaiOnboardingCommandInput(value: string): boolean {
+  const input = value.trim();
+  return OPENCLAW_ONBOARD_COMMAND_RE.test(input) && ZAI_ONBOARD_AUTH_CHOICE_RE.test(input);
+}
+
+function rejectZaiOnboardingCommandInput(value: string): void {
+  if (isZaiOnboardingCommandInput(value)) {
+    throw new Error(
+      "Z.AI API key cannot be an OpenClaw onboarding command. Paste the API key value instead.",
+    );
+  }
+}
+
+function buildZaiStaticAuthProfileDoctorHint(
+  ctx: ProviderAuthDoctorHintContext,
+): string | undefined {
+  const profileId = ctx.profileId ?? PROFILE_ID;
+  const profile = ctx.store.profiles[profileId];
+  if (
+    profile?.type !== "api_key" ||
+    normalizeLowercaseStringOrEmpty(profile.provider) !== PROVIDER_ID ||
+    typeof profile.key !== "string" ||
+    !isZaiOnboardingCommandInput(profile.key)
+  ) {
+    return undefined;
+  }
+  return ZAI_ONBOARDING_COMMAND_PROFILE_HINT.replace("{profileId}", profileId);
 }
 
 function shouldPreserveZaiThinking(extraParams?: Record<string, unknown>): boolean {
@@ -240,6 +275,7 @@ async function runZaiApiKeyAuth(
       capturedMode = mode;
     },
   });
+  rejectZaiOnboardingCommandInput(apiKey);
   if (!capturedCredential) {
     throw new Error("Missing Z.AI API key.");
   }
@@ -283,6 +319,7 @@ async function runZaiApiKeyAuthNonInteractive(
   if (!resolved) {
     return null;
   }
+  rejectZaiOnboardingCommandInput(resolved.key);
   const detected = await detectZaiEndpoint({
     apiKey: resolved.key,
     ...(endpoint ? { endpoint } : {}),
@@ -434,6 +471,7 @@ export default definePluginEntry({
       },
       fetchUsageSnapshot: async (ctx) => await fetchZaiUsage(ctx.token, ctx.timeoutMs, ctx.fetchFn),
       isCacheTtlEligible: () => true,
+      buildStaticAuthProfileDoctorHint: (ctx) => buildZaiStaticAuthProfileDoctorHint(ctx),
     });
     api.registerMediaUnderstandingProvider(zaiMediaUnderstandingProvider);
   },

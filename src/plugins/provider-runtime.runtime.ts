@@ -7,6 +7,8 @@ type AugmentModelCatalogWithProviderPlugins =
   ProviderRuntimeModule["augmentModelCatalogWithProviderPlugins"];
 type BuildProviderAuthDoctorHintWithPlugin =
   ProviderRuntimeModule["buildProviderAuthDoctorHintWithPlugin"];
+type BuildProviderStaticAuthProfileDoctorHintWithPlugin =
+  ProviderRuntimeModule["buildProviderStaticAuthProfileDoctorHintWithPlugin"];
 type BuildProviderMissingAuthMessageWithPlugin =
   ProviderRuntimeModule["buildProviderMissingAuthMessageWithPlugin"];
 type FormatProviderAuthProfileApiKeyWithPlugin =
@@ -39,6 +41,14 @@ export async function buildProviderAuthDoctorHintWithPlugin(
 ): Promise<Awaited<ReturnType<BuildProviderAuthDoctorHintWithPlugin>>> {
   const runtime = await loadProviderRuntime();
   return runtime.buildProviderAuthDoctorHintWithPlugin(...args);
+}
+
+/** Lazily builds doctor hint text for static provider auth-profile problems. */
+export async function buildProviderStaticAuthProfileDoctorHintWithPlugin(
+  ...args: Parameters<BuildProviderStaticAuthProfileDoctorHintWithPlugin>
+): Promise<Awaited<ReturnType<BuildProviderStaticAuthProfileDoctorHintWithPlugin>>> {
+  const runtime = await loadProviderRuntime();
+  return runtime.buildProviderStaticAuthProfileDoctorHintWithPlugin(...args);
 }
 
 /** Lazily builds missing-auth messages with provider plugin context. */

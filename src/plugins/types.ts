@@ -1777,6 +1777,16 @@ export type ProviderPlugin = {
     ctx: ProviderAuthDoctorHintContext,
   ) => string | Promise<string | null | undefined> | null | undefined;
   /**
+   * Provider-owned static API-key auth-profile doctor hint.
+   *
+   * Return repair text only when this static API-key profile is known invalid
+   * for provider-specific reasons. OpenClaw renders returned text as a static
+   * auth-profile issue; OAuth migration guidance belongs in `buildAuthDoctorHint`.
+   */
+  buildStaticAuthProfileDoctorHint?: (
+    ctx: ProviderAuthDoctorHintContext,
+  ) => string | Promise<string | null | undefined> | null | undefined;
+  /**
    * Provider-owned config-backed auth resolution.
    *
    * Providers own any provider-specific fallback secret rules here so core
