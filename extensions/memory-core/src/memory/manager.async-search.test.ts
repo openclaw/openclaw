@@ -84,3 +84,45 @@ describe("memory search async sync", () => {
     expect(syncMock).not.toHaveBeenCalled();
   });
 });
+
+describe("awaitPendingManagerWork onError", () => {
+  it("calls onError when pendingSync rejects (#96766)", async () => {
+    const onError = vi.fn();
+    const error = new Error("SQLite lock timeout during sync");
+    await awaitPendingManagerWork({
+      pendingSync: Promise.reject(error),
+      onError,
+    });
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(error);
+  });
+
+  it("calls onError when pendingProviderInit rejects (#96766)", async () => {
+    const onError = vi.fn();
+    const error = new Error("disk full during provider init");
+    await awaitPendingManagerWork({
+      pendingProviderInit: Promise.reject(error),
+      onError,
+    });
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith(error);
+  });
+
+  it("does not throw when onError is omitted (backward compat)", async () => {
+    await expect(
+      awaitPendingManagerWork({
+        pendingSync: Promise.reject(new Error("should not throw")),
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it("calls onError for both rejections in the same invocation", async () => {
+    const onError = vi.fn();
+    await awaitPendingManagerWork({
+      pendingSync: Promise.reject(new Error("sync failed")),
+      pendingProviderInit: Promise.reject(new Error("init failed")),
+      onError,
+    });
+    expect(onError).toHaveBeenCalledTimes(2);
+  });
+});
