@@ -66,7 +66,10 @@ import {
 import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
 import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
 
-type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
+type Block = (TextContent | ThinkingContent | ToolCall) & {
+  index?: number;
+  partialJson?: string;
+};
 type BedrockEventSink = { push(event: AssistantMessageEvent): void };
 
 function usesClaudeFable5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
@@ -211,7 +214,9 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
         messages: convertMessages(context, model, cacheRetention),
         system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
         inferenceConfig: {
-          ...(options.maxTokens !== undefined && { maxTokens: options.maxTokens }),
+          ...(options.maxTokens !== undefined && {
+            maxTokens: options.maxTokens,
+          }),
           ...(options.temperature !== undefined &&
             !sendsAdaptiveThinking && { temperature: options.temperature }),
         },
@@ -221,7 +226,9 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
         ),
         additionalModelRequestFields,
         ...(fable5 ? { additionalModelResponseFieldPaths: ["/stop_details"] } : {}),
-        ...(options.requestMetadata !== undefined && { requestMetadata: options.requestMetadata }),
+        ...(options.requestMetadata !== undefined && {
+          requestMetadata: options.requestMetadata,
+        }),
       };
       const nextCommandInput = await options?.onPayload?.(commandInput, model);
       if (nextCommandInput !== undefined) {
@@ -229,14 +236,19 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
       }
       const command = new ConverseStreamCommand(commandInput);
 
-      const response = await client.send(command, { abortSignal: options.signal });
+      const response = await client.send(command, {
+        abortSignal: options.signal,
+      });
       if (response.$metadata.httpStatusCode !== undefined) {
         const responseHeaders: Record<string, string> = {};
         if (response.$metadata.requestId) {
           responseHeaders["x-amzn-requestid"] = response.$metadata.requestId;
         }
         await options?.onResponse?.(
-          { status: response.$metadata.httpStatusCode, headers: responseHeaders },
+          {
+            status: response.$metadata.httpStatusCode,
+            headers: responseHeaders,
+          },
           model,
         );
       }
@@ -346,12 +358,16 @@ function formatBedrockError(error: unknown): string {
   return message;
 }
 
-/** Stream a Bedrock Converse request from the generic OpenClaw stream options. */
-export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", SimpleStreamOptions> = (
-  model: Model<"bedrock-converse-stream">,
-  context: Context,
-  options?: SimpleStreamOptions,
-) => streamBedrock(model, context, resolveSimpleBedrockOptions(model, options));
+/** When the caller did not set an explicit maxTokens cap, use the
+ * model's resolved maxTokens instead of leaving it at the core default
+ * 4096.  This prevents adaptive-thinking and Fable 5 Bedrock requests
+ * from being hard-capped at 4096 output tokens (#97176). */
+function resolveModelBackedMaxTokens(
+  baseMaxTokens: number | undefined,
+  modelMaxTokens: number | undefined,
+): number | undefined {
+  return baseMaxTokens ?? modelMaxTokens;
+}
 
 function resolveSimpleBedrockOptions(
   model: Model<"bedrock-converse-stream">,
@@ -361,6 +377,7 @@ function resolveSimpleBedrockOptions(
   if (usesClaudeFable5BedrockContract(model)) {
     return {
       ...base,
+      maxTokens: resolveModelBackedMaxTokens(base.maxTokens, model.maxTokens),
       reasoning: options?.reasoning ?? "high",
       thinkingBudgets: options?.thinkingBudgets,
     } satisfies BedrockOptions;
@@ -380,6 +397,7 @@ function resolveSimpleBedrockOptions(
     if (supportsAdaptiveThinking(model)) {
       return {
         ...base,
+        maxTokens: resolveModelBackedMaxTokens(base.maxTokens, model.maxTokens),
         reasoning: options.reasoning,
         thinkingBudgets: options.thinkingBudgets,
       } satisfies BedrockOptions;
@@ -412,6 +430,13 @@ function resolveSimpleBedrockOptions(
   } satisfies BedrockOptions;
 }
 
+/** Stream a Bedrock Converse request from the generic OpenClaw stream options. */
+export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", SimpleStreamOptions> = (
+  model: Model<"bedrock-converse-stream">,
+  context: Context,
+  options?: SimpleStreamOptions,
+) => streamBedrock(model, context, resolveSimpleBedrockOptions(model, options));
+
 function handleContentBlockStart(
   event: ContentBlockStartEvent,
   blocks: Block[],
@@ -431,7 +456,11 @@ function handleContentBlockStart(
       index,
     };
     output.content.push(block);
-    stream.push({ type: "toolcall_start", contentIndex: blocks.length - 1, partial: output });
+    stream.push({
+      type: "toolcall_start",
+      contentIndex: blocks.length - 1,
+      partial: output,
+    });
   }
 }
 
@@ -449,7 +478,11 @@ function handleContentBlockDelta(
   if (delta?.text !== undefined) {
     // If no text block exists yet, create one, as `handleContentBlockStart` is not sent for text blocks
     if (!block) {
-      const newBlock: Block = { type: "text", text: "", index: contentBlockIndex };
+      const newBlock: Block = {
+        type: "text",
+        text: "",
+        index: contentBlockIndex,
+      };
       output.content.push(newBlock);
       index = blocks.length - 1;
       block = blocks[index];
@@ -457,7 +490,12 @@ function handleContentBlockDelta(
     }
     if (block.type === "text") {
       block.text += delta.text;
-      stream.push({ type: "text_delta", contentIndex: index, delta: delta.text, partial: output });
+      stream.push({
+        type: "text_delta",
+        contentIndex: index,
+        delta: delta.text,
+        partial: output,
+      });
     }
   } else if (delta?.toolUse && block?.type === "toolCall") {
     block.partialJson = (block.partialJson || "") + (delta.toolUse.input || "");
@@ -482,7 +520,11 @@ function handleContentBlockDelta(
       output.content.push(newBlock);
       thinkingIndex = blocks.length - 1;
       thinkingBlock = blocks[thinkingIndex];
-      stream.push({ type: "thinking_start", contentIndex: thinkingIndex, partial: output });
+      stream.push({
+        type: "thinking_start",
+        contentIndex: thinkingIndex,
+        partial: output,
+      });
     }
 
     if (thinkingBlock?.type === "thinking") {
@@ -533,7 +575,12 @@ function handleContentBlockStop(
 
   switch (block.type) {
     case "text":
-      stream.push({ type: "text_end", contentIndex: index, content: block.text, partial: output });
+      stream.push({
+        type: "text_end",
+        contentIndex: index,
+        content: block.text,
+        partial: output,
+      });
       break;
     case "thinking":
       stream.push({
@@ -548,7 +595,12 @@ function handleContentBlockStop(
       // Finalize in-place and strip the scratch buffer so replay only
       // carries parsed arguments.
       delete (block as Block).partialJson;
-      stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: output });
+      stream.push({
+        type: "toolcall_end",
+        contentIndex: index,
+        toolCall: block,
+        partial: output,
+      });
       break;
   }
 }
@@ -784,7 +836,11 @@ function convertMessages(
               break;
             case "toolCall":
               contentBlocks.push({
-                toolUse: { toolUseId: c.id, name: c.name, input: c.arguments as DocumentType },
+                toolUse: {
+                  toolUseId: c.id,
+                  name: c.name,
+                  input: c.arguments as DocumentType,
+                },
               });
               break;
             case "thinking": {
@@ -1035,8 +1091,13 @@ function buildAdditionalModelRequestFields(
       : (options.thinkingDisplay ?? "summarized");
     const result: Record<string, unknown> = supportsAdaptiveThinking(model)
       ? {
-          thinking: { type: "adaptive", ...(display !== undefined ? { display } : {}) },
-          output_config: { effort: mapThinkingLevelToEffort(model, options.reasoning) },
+          thinking: {
+            type: "adaptive",
+            ...(display !== undefined ? { display } : {}),
+          },
+          output_config: {
+            effort: mapThinkingLevelToEffort(model, options.reasoning),
+          },
         }
       : (() => {
           const defaultBudgets: Record<ThinkingLevel, number> = {
