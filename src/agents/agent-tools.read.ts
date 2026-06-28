@@ -14,7 +14,6 @@ import {
   root as fsRoot,
   FsSafeError,
 } from "../infra/fs-safe.js";
-import { expandHomePrefix, resolveOsHomeDir } from "../infra/home-dir.js";
 import { hasEncodedFileUrlSeparator, trySafeFileURLToPath } from "../infra/local-file-access.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
 import {
@@ -32,6 +31,12 @@ import {
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import {
+  buildSensitiveHostDenyMutations,
+  mkdirHostPathWithDenyMutations,
+  resolveHostToolPath,
+  writeHostFileWithDenyMutations,
+} from "./host-mutation-policy.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -834,6 +839,10 @@ type SandboxToolParams = {
   imageSanitization?: ImageSanitizationLimits;
 };
 
+type HostToolMutationOptions = {
+  workspaceOnly?: boolean;
+};
+
 /** Create a sandbox-backed read tool with OpenClaw result normalization. */
 export function createSandboxedReadTool(params: SandboxToolParams) {
   const base = createReadTool(params.root, {
@@ -862,7 +871,7 @@ export function createSandboxedEditTool(params: SandboxToolParams) {
 }
 
 /** Create a host workspace write tool using guarded filesystem operations. */
-export function createHostWorkspaceWriteTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceWriteTool(root: string, options?: HostToolMutationOptions) {
   const base = createWriteTool(root, {
     operations: createHostWriteOperations(root, options),
   }) as unknown as AnyAgentTool;
@@ -870,7 +879,7 @@ export function createHostWorkspaceWriteTool(root: string, options?: { workspace
 }
 
 /** Create a host workspace edit tool using guarded filesystem operations. */
-export function createHostWorkspaceEditTool(root: string, options?: { workspaceOnly?: boolean }) {
+export function createHostWorkspaceEditTool(root: string, options?: HostToolMutationOptions) {
   const base = createEditTool(root, {
     operations: createHostEditOperations(root, options),
   }) as unknown as AnyAgentTool;
@@ -966,19 +975,8 @@ async function assertSandboxFileExists(params: SandboxToolParams, absolutePath: 
   }
 }
 
-function expandTildeToOsHome(filePath: string): string {
-  const home = resolveOsHomeDir();
-  return home ? expandHomePrefix(filePath, { home }) : filePath;
-}
-
-function resolveHostPath(filePath: string): string {
-  return path.resolve(expandTildeToOsHome(filePath));
-}
-
 async function writeHostFile(absolutePath: string, content: string) {
-  const resolved = resolveHostPath(absolutePath);
-  await fs.mkdir(path.dirname(resolved), { recursive: true });
-  await fs.writeFile(resolved, content, "utf-8");
+  await writeHostFileWithDenyMutations(resolveHostToolPath(absolutePath), content);
 }
 
 async function statHostFile(absolutePath: string) {
@@ -1012,32 +1010,36 @@ async function writeWorkspaceFile(
   await (await rootPromise).write(relative, content, { mkdir: true });
 }
 
-function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostWriteOperations(root: string, options?: HostToolMutationOptions) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
-    // When workspaceOnly is false, allow writes anywhere on the host
+    // Host writes remain broad, but still honor the sensitive path deny policy.
     return {
       mkdir: async (dir: string) => {
-        const resolved = resolveHostPath(dir);
-        await fs.mkdir(resolved, { recursive: true });
+        await mkdirHostPathWithDenyMutations(resolveHostToolPath(dir));
       },
       writeFile: writeHostFile,
-      readFile: async (absolutePath: string) =>
-        fs.readFile(path.resolve(expandTildeToOsHome(absolutePath))),
-      statFile: (absolutePath: string) =>
-        statHostFile(path.resolve(expandTildeToOsHome(absolutePath))),
+      readFile: async (absolutePath: string) => fs.readFile(resolveHostToolPath(absolutePath)),
+      statFile: (absolutePath: string) => statHostFile(resolveHostToolPath(absolutePath)),
     } as const;
   }
 
-  // When workspaceOnly is true, enforce workspace boundary
-  const rootPromise = fsRoot(root);
+  // When workspaceOnly is true, enforce workspace boundary.
+  const rootPromise = fsRoot(root, {
+    denyMutations: buildSensitiveHostDenyMutations(),
+  });
   return {
     mkdir: async (dir: string) => {
       const relative = toRelativeWorkspacePath(root, dir, { allowRoot: true });
       const resolved = relative ? path.resolve(root, relative) : path.resolve(root);
       await assertSandboxPath({ filePath: resolved, cwd: root, root });
-      await fs.mkdir(resolved, { recursive: true });
+      const workspaceRoot = await rootPromise;
+      if (!relative) {
+        await workspaceRoot.ensureRoot();
+        return;
+      }
+      await workspaceRoot.mkdir(relative);
     },
     writeFile: (absolutePath: string, content: string) =>
       writeWorkspaceFile(root, rootPromise, absolutePath, content),
@@ -1052,24 +1054,26 @@ function createHostWriteOperations(root: string, options?: { workspaceOnly?: boo
   } as const;
 }
 
-function createHostEditOperations(root: string, options?: { workspaceOnly?: boolean }) {
+function createHostEditOperations(root: string, options?: HostToolMutationOptions) {
   const workspaceOnly = options?.workspaceOnly ?? false;
 
   if (!workspaceOnly) {
-    // When workspaceOnly is false, allow edits anywhere on the host
+    // Host edits remain broad, but still honor the sensitive path deny policy.
     return {
       readFile: async (absolutePath: string) => {
-        return await fs.readFile(resolveHostPath(absolutePath));
+        return await fs.readFile(resolveHostToolPath(absolutePath));
       },
       writeFile: writeHostFile,
       access: async (absolutePath: string) => {
-        await fs.access(resolveHostPath(absolutePath));
+        await fs.access(resolveHostToolPath(absolutePath));
       },
     } as const;
   }
 
-  // When workspaceOnly is true, enforce workspace boundary
-  const rootPromise = fsRoot(root);
+  // When workspaceOnly is true, enforce workspace boundary.
+  const rootPromise = fsRoot(root, {
+    denyMutations: buildSensitiveHostDenyMutations(),
+  });
   return {
     readFile: async (absolutePath: string) => {
       const relative = toRelativeWorkspacePath(root, absolutePath);

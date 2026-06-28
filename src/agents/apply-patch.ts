@@ -11,6 +11,12 @@ import { openRootFile, type RootFileOpenResult } from "../infra/boundary-file-re
 import { root as fsRoot } from "../infra/fs-safe.js";
 import { PATH_ALIAS_POLICIES, type PathAliasPolicy } from "../infra/path-alias-guards.js";
 import { applyUpdateHunk } from "./apply-patch-update.js";
+import {
+  buildSensitiveHostDenyMutations,
+  mkdirHostPathWithDenyMutations,
+  removeHostPathWithDenyMutations,
+  writeHostFileWithDenyMutations,
+} from "./host-mutation-policy.js";
 import { toRelativeSandboxPath, resolvePathFromInput } from "./path-policy.js";
 import type { AgentTool } from "./runtime/index.js";
 import { assertSandboxPath } from "./sandbox-paths.js";
@@ -98,7 +104,11 @@ const applyPatchSchema = Type.Object({
 
 /** Create the agent tool wrapper for applying patch-envelope input. */
 export function createApplyPatchTool(
-  options: { cwd?: string; sandbox?: SandboxApplyPatchConfig; workspaceOnly?: boolean } = {},
+  options: {
+    cwd?: string;
+    sandbox?: SandboxApplyPatchConfig;
+    workspaceOnly?: boolean;
+  } = {},
 ): AgentTool<typeof applyPatchSchema, ApplyPatchToolDetails> {
   const cwd = options.cwd ?? process.cwd();
   const sandbox = options.sandbox;
@@ -291,7 +301,11 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
     };
   }
   const workspaceOnly = options.workspaceOnly !== false;
-  const rootPromise = workspaceOnly ? fsRoot(options.cwd) : undefined;
+  const rootPromise = workspaceOnly
+    ? fsRoot(options.cwd, {
+        denyMutations: buildSensitiveHostDenyMutations(),
+      })
+    : undefined;
   return {
     readFile: async (filePath) => {
       if (!workspaceOnly) {
@@ -311,7 +325,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
     },
     writeFile: async (filePath, content) => {
       if (!workspaceOnly) {
-        await fs.writeFile(filePath, content, "utf8");
+        await writeHostFileWithDenyMutations(filePath, content);
         return;
       }
       const relative = toRelativeSandboxPath(options.cwd, filePath);
@@ -319,7 +333,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
     },
     remove: async (filePath) => {
       if (!workspaceOnly) {
-        await fs.rm(filePath);
+        await removeHostPathWithDenyMutations(filePath);
         return;
       }
       const relative = toRelativeSandboxPath(options.cwd, filePath);
@@ -327,7 +341,7 @@ function resolvePatchFileOps(options: ApplyPatchOptions): PatchFileOps {
     },
     mkdirp: async (dir) => {
       if (!workspaceOnly) {
-        await fs.mkdir(dir, { recursive: true });
+        await mkdirHostPathWithDenyMutations(dir);
         return;
       }
       const relative = toRelativeSandboxPath(options.cwd, dir, { allowRoot: true });

@@ -25,7 +25,12 @@ export {
 export { isPathInside } from "@openclaw/fs-safe/path";
 export { pathExists, pathExistsSync } from "@openclaw/fs-safe/advanced";
 export { movePathToTrash, type MovePathToTrashOptions } from "@openclaw/fs-safe/advanced";
-export { readLocalFileFromRoots, resolveLocalPathFromRootsSync } from "@openclaw/fs-safe/advanced";
+export {
+  readLocalFileFromRoots,
+  resolveLocalPathFromRootsSync,
+  sameFileIdentity,
+  type FileIdentityStat,
+} from "@openclaw/fs-safe/advanced";
 export {
   appendRegularFile,
   appendRegularFileSync,
@@ -40,6 +45,7 @@ export {
   readLocalFileSafely,
   resolveOpenedFileRealPathForHandle,
   root,
+  type DenyMutationPolicy,
   type OpenResult,
   type ReadResult,
   type Root,

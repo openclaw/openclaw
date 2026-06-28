@@ -502,6 +502,67 @@ describe("applyPatch", () => {
     });
   });
 
+  it("allows updating a non-sensitive symlink target when workspaceOnly is explicitly disabled", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir(async (dir) => {
+      const realFile = path.join(dir, "real.txt");
+      const linkFile = path.join(dir, "link.txt");
+      await fs.writeFile(realFile, "before\n", "utf8");
+      await fs.symlink(realFile, linkFile);
+
+      const patch = `*** Begin Patch
+*** Update File: ${linkFile}
+@@
+-before
++after
+*** End Patch`;
+
+      const result = await applyPatch(patch, { cwd: dir, workspaceOnly: false });
+
+      expect(result.summary.modified).toEqual(["link.txt"]);
+      await expect(fs.readFile(realFile, "utf8")).resolves.toBe("after\n");
+    });
+  });
+
+  it("allows updating a non-sensitive hardlink when workspaceOnly is explicitly disabled", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir(async (dir) => {
+      const realFile = path.join(dir, "hardlink-real.txt");
+      const alias = path.join(dir, "hardlink-alias.txt");
+      await fs.writeFile(realFile, "before\n", "utf8");
+      await fs.link(realFile, alias);
+      const patch = `*** Begin Patch
+*** Update File: ${alias}
+@@
+-before
++after
+*** End Patch`;
+
+      const result = await applyPatch(patch, { cwd: dir, workspaceOnly: false });
+
+      expect(result.summary.modified).toEqual(["hardlink-alias.txt"]);
+      await expect(fs.readFile(realFile, "utf8")).resolves.toBe("after\n");
+    });
+  });
+
+  it("denies privilege and login authority paths when workspaceOnly is explicitly disabled", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    await withTempDir(async (dir) => {
+      const target = "/etc/sudoers.d/openclaw-test";
+      const patch = buildAddFilePatch(target);
+
+      await expect(applyPatch(patch, { cwd: dir, workspaceOnly: false })).rejects.toThrow(
+        /denied-path|denied|mutation policy/i,
+      );
+    });
+  });
+
   it("keeps dot-dot-prefixed filenames inside cwd and reports relative paths", async () => {
     await withTempDir(async (dir) => {
       const patch = `*** Begin Patch
