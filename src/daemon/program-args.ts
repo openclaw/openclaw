@@ -211,6 +211,15 @@ export async function resolveOpenClawWrapperPath(
   return resolved;
 }
 
+// Managed services run unattended under sustained multi-agent load. Node's
+// default old-space ceiling (~min(host RAM/2, 4 GB)) lets the daemon OOM
+// crash-loop once cron/journal state grows, so pin a heap ceiling. It is a node
+// CLI flag rather than NODE_OPTIONS because NODE_OPTIONS is a host-env-security
+// blocked-everywhere key. Bun ignores --max-old-space-size (its own allocator),
+// so the flag is only injected for the Node runtime.
+const SERVICE_NODE_MAX_OLD_SPACE_MB = 8192;
+const NODE_SERVICE_HEAP_FLAG = `--max-old-space-size=${SERVICE_NODE_MAX_OLD_SPACE_MB}`;
+
 async function resolveCliProgramArguments(params: {
   args: string[];
   dev?: boolean;
@@ -231,7 +240,7 @@ async function resolveCliProgramArguments(params: {
       params.nodePath ?? (isNodeRuntime(execPath) ? execPath : await resolveNodePath());
     const cliEntrypointPath = await resolveCliEntrypointPathForService();
     return {
-      programArguments: [nodePath, cliEntrypointPath, ...params.args],
+      programArguments: [nodePath, NODE_SERVICE_HEAP_FLAG, cliEntrypointPath, ...params.args],
     };
   }
 
@@ -257,9 +266,10 @@ async function resolveCliProgramArguments(params: {
   if (!params.dev) {
     try {
       const cliEntrypointPath = await resolveCliEntrypointPathForService();
-      return {
-        programArguments: [execPath, cliEntrypointPath, ...params.args],
-      };
+      const programArguments = isNodeRuntime(execPath)
+        ? [execPath, NODE_SERVICE_HEAP_FLAG, cliEntrypointPath, ...params.args]
+        : [execPath, cliEntrypointPath, ...params.args];
+      return { programArguments };
     } catch (error) {
       // Non-Node runtimes may execute the CLI wrapper directly; Node needs the
       // built dist entrypoint so service restarts survive package layout.

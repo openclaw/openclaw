@@ -38,7 +38,9 @@ vi.mock("node:child_process", async () => {
   };
 });
 
-import { resolveGatewayProgramArguments } from "./program-args.js";
+import { buildLaunchAgentPlist } from "./launchd-plist.js";
+import { resolveGatewayProgramArguments, resolveNodeProgramArguments } from "./program-args.js";
+import { buildSystemdUnit } from "./systemd-unit.js";
 
 const originalArgv = [...process.argv];
 
@@ -61,6 +63,7 @@ describe("resolveGatewayProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       process.execPath,
+      "--max-old-space-size=8192",
       indexPath,
       "gateway",
       "--port",
@@ -84,6 +87,7 @@ describe("resolveGatewayProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       process.execPath,
+      "--max-old-space-size=8192",
       entryPath,
       "gateway",
       "--port",
@@ -107,6 +111,7 @@ describe("resolveGatewayProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       process.execPath,
+      "--max-old-space-size=8192",
       entryPath,
       "gateway",
       "--port",
@@ -130,10 +135,11 @@ describe("resolveGatewayProgramArguments", () => {
     const result = await resolveGatewayProgramArguments({ port: 18789 });
 
     // Should use the symlinked canonical index.js path, not the realpath-resolved versioned path
-    expect(result.programArguments[1]).toBe(
+    // (index [2] now: [node, --max-old-space-size, entrypoint, ...]).
+    expect(result.programArguments[2]).toBe(
       path.resolve("/Users/test/Library/pnpm/global/5/node_modules/openclaw/dist/index.js"),
     );
-    expect(result.programArguments[1]).not.toContain("@2026.1.21-2");
+    expect(result.programArguments[2]).not.toContain("@2026.1.21-2");
   });
 
   it("falls back to node_modules package dist when .bin path is not resolved", async () => {
@@ -152,6 +158,7 @@ describe("resolveGatewayProgramArguments", () => {
 
     expect(result.programArguments).toEqual([
       process.execPath,
+      "--max-old-space-size=8192",
       indexPath,
       "gateway",
       "--port",
@@ -241,5 +248,105 @@ describe("resolveGatewayProgramArguments", () => {
         wrapperPath,
       }),
     ).rejects.toThrow("OPENCLAW_WRAPPER must point to an executable file");
+  });
+
+  it("pins a Node heap ceiling as a CLI flag for the node runtime", async () => {
+    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
+    const indexPath = path.resolve("/opt/openclaw/dist/index.js");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveGatewayProgramArguments({
+      port: 18789,
+      runtime: "node",
+      nodePath: "/usr/bin/node",
+    });
+
+    // Heap flag must sit between the node binary and the script so V8 honors it.
+    expect(result.programArguments).toEqual([
+      "/usr/bin/node",
+      "--max-old-space-size=8192",
+      indexPath,
+      "gateway",
+      "--port",
+      "18789",
+    ]);
+  });
+
+  it("does not pass the Node heap flag to the bun runtime", async () => {
+    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
+    const indexPath = path.resolve("/opt/openclaw/dist/index.js");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+    childProcessMocks.execFileSync.mockReturnValue("/usr/local/bin/bun\n");
+
+    const result = await resolveGatewayProgramArguments({
+      port: 18789,
+      runtime: "bun",
+    });
+
+    expect(result.programArguments).toEqual([
+      "/usr/local/bin/bun",
+      indexPath,
+      "gateway",
+      "--port",
+      "18789",
+    ]);
+  });
+
+  it("pins a Node heap ceiling for node-service installs too", async () => {
+    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
+    const indexPath = path.resolve("/opt/openclaw/dist/index.js");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const result = await resolveNodeProgramArguments({
+      host: "127.0.0.1",
+      port: 18789,
+      runtime: "node",
+      nodePath: "/usr/bin/node",
+    });
+
+    expect(result.programArguments).toEqual([
+      "/usr/bin/node",
+      "--max-old-space-size=8192",
+      indexPath,
+      "node",
+      "run",
+      "--host",
+      "127.0.0.1",
+      "--port",
+      "18789",
+    ]);
+  });
+
+  it("carries the heap flag into the rendered systemd unit and launchd plist", async () => {
+    const entryPath = path.resolve("/opt/openclaw/dist/entry.js");
+    process.argv = ["node", entryPath];
+    fsMocks.realpath.mockResolvedValue(entryPath);
+    fsMocks.access.mockResolvedValue(undefined);
+
+    const { programArguments } = await resolveGatewayProgramArguments({
+      port: 18789,
+      runtime: "node",
+      nodePath: "/usr/bin/node",
+    });
+
+    // The reported OOM crash-loop is on the rendered service artifact, so prove
+    // the flag survives serialization on both managed-service platforms.
+    const unit = buildSystemdUnit({ description: "OpenClaw Gateway", programArguments });
+    expect(unit).toContain("ExecStart=");
+    expect(unit).toContain("--max-old-space-size=8192");
+
+    const plist = buildLaunchAgentPlist({
+      label: "ai.openclaw.gateway",
+      programArguments,
+      stdoutPath: "/tmp/out.log",
+      stderrPath: "/tmp/err.log",
+    });
+    expect(plist).toContain("<string>--max-old-space-size=8192</string>");
   });
 });
