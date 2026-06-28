@@ -254,6 +254,8 @@ export async function getStatusSummary(
     resolveContextTokensForModel,
     resolveSessionRuntimeLabel,
     resolveSessionModelRef,
+    resolveStatusModelComparisonLabel,
+    resolveStatusModelLookupRef,
     waitForContextWindowCacheLoad,
   } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? getRuntimeConfig();
@@ -399,29 +401,50 @@ export async function getStatusSummary(
         const configuredSessionModelLabel = `${configuredForSession.provider ?? DEFAULT_PROVIDER}/${configuredSessionModel}`;
         const resolvedModel = resolveSessionModelRef(cfg, entry, opts.agentIdOverride);
         const model = resolvedModel.model ?? configuredSessionModel ?? null;
+        const lookupModel =
+          resolveStatusModelLookupRef({
+            provider: resolvedModel.provider,
+            model,
+            defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
+          }) ?? resolvedModel;
+        const lookupModelId = lookupModel.model ?? model;
         const modelContext = await resolveStaticModelContext(
-          resolvedModel.provider,
-          model ?? undefined,
+          lookupModel.provider,
+          lookupModelId ?? undefined,
         );
         const selectedModelLabel =
           resolvedModel.provider && model ? `${resolvedModel.provider}/${model}` : model;
+        const configuredSessionModelComparisonLabel = resolveStatusModelComparisonLabel({
+          provider: configuredForSession.provider ?? DEFAULT_PROVIDER,
+          model: configuredSessionModel,
+          defaultProvider: DEFAULT_PROVIDER,
+        });
+        const selectedModelComparisonLabel = resolveStatusModelComparisonLabel({
+          provider: resolvedModel.provider,
+          model,
+          defaultProvider: configuredForSession.provider ?? DEFAULT_PROVIDER,
+        });
         const modelSelectionDiffers =
-          selectedModelLabel != null &&
-          selectedModelLabel !== configuredSessionModelLabel &&
-          !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredSessionModelLabel) &&
+          selectedModelComparisonLabel != null &&
+          configuredSessionModelComparisonLabel != null &&
+          selectedModelComparisonLabel !== configuredSessionModelComparisonLabel &&
+          !areRuntimeModelRefsEquivalent(
+            selectedModelComparisonLabel,
+            configuredSessionModelComparisonLabel,
+          ) &&
           hasUserPinnedModelSelection(entry);
         // Session rows show the live selected model but warn only for user-pinned differences.
         const contextTokens =
           resolveContextTokensForModel({
             cfg,
             sourceCfg: contextSourceConfig,
-            provider: resolvedModel.provider,
-            model,
+            provider: lookupModel.provider,
+            model: lookupModelId,
             ...modelContext,
             contextTokensOverride: resolveTrustedSessionContextTokens({
               entry,
-              provider: resolvedModel.provider,
-              model,
+              provider: lookupModel.provider,
+              model: lookupModelId,
             }),
             fallbackContextTokens: configContextTokens ?? undefined,
             allowAsyncLoad: false,
@@ -438,8 +461,8 @@ export async function getStatusSummary(
         const runtime = resolveSessionRuntimeLabel({
           cfg,
           entry,
-          provider: resolvedModel.provider,
-          model: model ?? "",
+          provider: lookupModel.provider,
+          model: lookupModelId ?? "",
           agentId,
           sessionKey: key,
         });
