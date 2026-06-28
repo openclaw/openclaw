@@ -89,11 +89,19 @@ describe("runNodeAttach (node conduit launcher)", () => {
   it("uses wss + the configured host/port when the node-host gateway uses TLS", async () => {
     vi.mocked(loadNodeHostConfig).mockResolvedValueOnce({
       nodeId: "n",
-      gateway: { tls: true, host: "gw.example", port: 8443 },
+      gateway: {
+        tls: true,
+        host: "gw.example",
+        port: 8443,
+        tlsFingerprint: "sha256:test-fingerprint",
+      },
     } as never);
     await runNodeAttach({ cwd: "/work", nowMs: 0 });
     expect(vi.mocked(GatewayClient)).toHaveBeenCalledWith(
-      expect.objectContaining({ url: "wss://gw.example:8443" }),
+      expect.objectContaining({
+        url: "wss://gw.example:8443",
+        tlsFingerprint: "sha256:test-fingerprint",
+      }),
     );
   });
 

@@ -77,6 +77,7 @@ export async function runNodeAttach(params: {
     role: "node",
     scopes: [],
     deviceIdentity: loadOrCreateDeviceIdentity(),
+    tlsFingerprint: gw.tlsFingerprint,
     onEvent: () => {},
     onConnectError: () => {},
     onClose: () => {},
