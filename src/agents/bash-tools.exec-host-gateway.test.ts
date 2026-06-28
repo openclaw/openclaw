@@ -18,6 +18,7 @@ import {
   planShellAuthorization,
   type ExecAuthorizationPlan,
 } from "../infra/exec-authorization-plan.js";
+import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
 import type { ExecApprovalFollowupTarget } from "./bash-tools.exec-host-shared.js";
 import type { ExecApprovalFollowupFactory } from "./bash-tools.exec-types.js";
 
@@ -696,13 +697,23 @@ describe("processGatewayAllowlist", () => {
       throw new Error(authorizationPlan.reason);
     }
     requiresExecApprovalMock.mockReturnValue(false);
+    const segmentSatisfiedBy: ["safeBins"] = ["safeBins"];
+    const expectedCommand = buildAuthorizedShellCommandFromPlan({
+      plan: authorizationPlan,
+      mode: "enforced",
+      segmentSatisfiedBy,
+    });
+    expect(expectedCommand.ok).toBe(true);
+    if (!expectedCommand.ok) {
+      throw new Error(expectedCommand.reason);
+    }
     evaluateShellAllowlistWithAuthorizationMock.mockReturnValue({
       allowlistMatches: [],
       analysisOk: true,
       allowlistSatisfied: true,
       segments: [{ raw: command, resolution: null, argv: ["head", "-c", "16"] }],
       segmentAllowlistEntries: [],
-      segmentSatisfiedBy: ["safeBins"],
+      segmentSatisfiedBy,
       authorizationPlan,
     });
     resolveExecHostApprovalContextMock.mockReturnValue({
@@ -718,7 +729,7 @@ describe("processGatewayAllowlist", () => {
     });
 
     expect(result).toEqual({
-      execCommandOverride: "/usr/bin/head -c 16",
+      execCommandOverride: expectedCommand.command,
     });
   });
 
