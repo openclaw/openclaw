@@ -54,6 +54,17 @@ const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
 // Token cache (keyed by domain + appId)
 const tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
+/**
+ * Drop the cached `tenant_access_token` for the given credentials so the next
+ * `getToken()` call fetches a fresh one. Used by the `requestFeishuApi`
+ * `onTokenInvalid` hook to recover from Feishu returning 99991663 /
+ * 99991664 (expired / revoked / clock-drifted token) without a manual
+ * gateway restart (issue #97287).
+ */
+export function invalidateStreamingTokenCache(creds: Credentials): void {
+  tokenCache.delete(`${creds.domain ?? "feishu"}|${creds.appId}`);
+}
+
 function resolveStreamingTokenExpiresAt(value: unknown, nowMs = Date.now()): number {
   const now = resolveDateTimestampMs(nowMs);
   if (typeof value === "number" && Number.isFinite(value) && value <= 0) {
@@ -311,6 +322,7 @@ export class FeishuStreamingSession {
             },
           }),
         "Send card failed",
+        { onTokenInvalid: () => invalidateStreamingTokenCache(this.creds) },
       );
     } else if (sendMode === "root_create") {
       // root_id is undeclared in the SDK types but accepted at runtime
@@ -324,6 +336,7 @@ export class FeishuStreamingSession {
             ),
           }),
         "Send card failed",
+        { onTokenInvalid: () => invalidateStreamingTokenCache(this.creds) },
       );
     } else {
       sendRes = await requestFeishuApi(
@@ -337,6 +350,7 @@ export class FeishuStreamingSession {
             },
           }),
         "Send card failed",
+        { onTokenInvalid: () => invalidateStreamingTokenCache(this.creds) },
       );
     }
     if (sendRes.code !== 0 || !sendRes.data?.message_id) {

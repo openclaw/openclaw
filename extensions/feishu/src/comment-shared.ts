@@ -94,6 +94,14 @@ export function createFeishuApiError(
 // 11232: tenant-level "create message service trigger rate limit" (100/min, 5/sec per app/bot).
 // Distinct from FEISHU_BACKOFF_CODES in typing.ts, which covers the reaction API (99991400+).
 const FEISHU_SEND_RATE_LIMIT_CODES = new Set([230020, 11232]);
+// 99991663: Invalid access token (expired, revoked, or clock drift).
+// 99991664: Access token missing. The plugin caches tenant_access_token in
+// streaming-card.ts:tokenCache and the Lark SDK has its own internal cache;
+// these codes surface when either cache holds a stale or empty token. A
+// single invalidation + retry recovers from clock drift or server-side
+// revocation without a manual `openclaw channels login` + gateway restart.
+// See issue #97287.
+const FEISHU_TOKEN_INVALID_CODES = new Set([99991663, 99991664]);
 const FEISHU_SEND_MAX_RETRIES = 2;
 const FEISHU_SEND_RETRY_BASE_MS = 500;
 
@@ -117,6 +125,22 @@ export function getFeishuSendRateLimitCode(error: unknown): number | undefined {
   const data = isRecord(response?.data) ? response.data : undefined;
   const code = data?.code;
   return typeof code === "number" && FEISHU_SEND_RATE_LIMIT_CODES.has(code) ? code : undefined;
+}
+
+/**
+ * Returns the Feishu token-invalid business code (99991663 or 99991664) when
+ * an AxiosError-shaped error carries it in `response.data.code`, or
+ * `undefined` otherwise. The caller should invalidate its token cache and let
+ * `requestFeishuApi` retry once. See issue #97287.
+ */
+export function getFeishuTokenInvalidCode(error: unknown): number | undefined {
+  if (!isRecord(error)) {
+    return undefined;
+  }
+  const response = isRecord(error.response) ? error.response : undefined;
+  const data = isRecord(response?.data) ? response.data : undefined;
+  const code = data?.code;
+  return typeof code === "number" && FEISHU_TOKEN_INVALID_CODES.has(code) ? code : undefined;
 }
 
 /**
@@ -144,10 +168,19 @@ export async function requestFeishuApi<T>(
     includeNestedErrorLogId?: boolean;
     /** Base delay per retry attempt in ms; multiplied by attempt index. @internal */
     retryDelayMs?: number;
+    /**
+     * Invoked once when Feishu returns a token-invalid code (99991663 /
+     * 99991664) so the caller can drop its cached `tenant_access_token`
+     * before the single retry. Without this hook the plugin cannot recover
+     * from clock drift or server-side revocation without a manual gateway
+     * restart (issue #97287).
+     */
+    onTokenInvalid?: () => void;
   } = {},
 ): Promise<T> {
   const retryDelayMs = options.retryDelayMs ?? FEISHU_SEND_RETRY_BASE_MS;
   let lastFulfilledRateLimit: { response: unknown; code: number } | undefined;
+  let didInvalidateToken = false;
   for (let attempt = 0; attempt <= FEISHU_SEND_MAX_RETRIES; attempt++) {
     if (attempt > 0) {
       // Linear backoff: delay grows with each attempt to give the rate-limit window time to reset.
@@ -172,6 +205,27 @@ export async function requestFeishuApi<T>(
       }
       return result;
     } catch (error) {
+      // Token-invalid path: when the caller supplied an `onTokenInvalid`
+      // hook, invoke it once and retry. Without a hook there is nothing to
+      // refresh between attempts, so the error falls through to the normal
+      // (non-retryable) path. Limiting to one invalidation per call means a
+      // permanently revoked app credential still surfaces its error.
+      const tokenInvalidCode = getFeishuTokenInvalidCode(error);
+      if (
+        tokenInvalidCode !== undefined &&
+        !didInvalidateToken &&
+        typeof options.onTokenInvalid === "function"
+      ) {
+        didInvalidateToken = true;
+        try {
+          options.onTokenInvalid();
+        } catch {
+          // Best-effort invalidation: a buggy hook must not swallow the
+          // original token-invalid error. We still retry once because the
+          // caller intended to refresh its cache.
+        }
+        continue;
+      }
       const isRetryable =
         attempt < FEISHU_SEND_MAX_RETRIES && getFeishuSendRateLimitCode(error) !== undefined;
       if (!isRetryable) {
