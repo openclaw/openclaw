@@ -2604,7 +2604,12 @@ export function resolveSessionTranscriptReadTarget(
   if (!agentId) {
     throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
   }
-  const storePath = resolveConcreteReadStorePath(scope.storePath);
+  const storePath =
+    resolveConcreteReadStorePath(scope.storePath) ??
+    resolveStorePath(getRuntimeConfig().session?.store, {
+      agentId,
+      env: scope.env,
+    });
   const resolvedStoreEntry =
     scope.sessionEntry || !scope.sessionKey
       ? undefined

@@ -19,10 +19,12 @@ export function resolveSqliteTargetFromSessionStorePath(
       ...(agentId ? { agentId } : {}),
     };
   }
-  if (path.basename(resolved) !== "sessions.json") {
-    return {};
-  }
   const sessionsDir = path.dirname(resolved);
+  if (path.basename(resolved) !== "sessions.json") {
+    return {
+      path: path.join(sessionsDir, "openclaw-agent.sqlite"),
+    };
+  }
   if (path.basename(sessionsDir) !== "sessions") {
     return {
       path: path.join(sessionsDir, "openclaw-agent.sqlite"),

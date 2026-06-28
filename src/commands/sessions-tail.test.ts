@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import { formatSqliteSessionFileMarker } from "../config/sessions/sqlite-marker.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -232,6 +233,31 @@ describe("sessionsTailCommand", () => {
     const output = runtimeOutput(runtime);
     expect(output).toContain("tool.result");
     expect(output).toContain("bash ok");
+    expect(output).not.toContain("No sessions found");
+  });
+
+  it("tails SQLite marker trajectory files from the store trajectory directory", async () => {
+    const runtime = makeRuntime();
+    await writeSessionEntry(sessionKey, {
+      sessionFile: formatSqliteSessionFileMarker({
+        agentId: "main",
+        sessionId: "session-one",
+        storePath,
+      }),
+    });
+    writeJsonl(path.join(tmpDir, "trajectory", "session-one.jsonl"), [
+      makeEvent({
+        type: "tool.result",
+        ts: "2026-05-18T12:04:21.000Z",
+        data: { name: "sqlite", success: true },
+      }),
+    ]);
+
+    await sessionsTailCommand({ store: storePath, sessionKey }, runtime);
+
+    const output = runtimeOutput(runtime);
+    expect(output).toContain("tool.result");
+    expect(output).toContain("sqlite ok");
     expect(output).not.toContain("No sessions found");
   });
 
