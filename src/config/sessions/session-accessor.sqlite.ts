@@ -1603,14 +1603,11 @@ function resolveSqliteAgentId(params: {
       `SQLite session store path belongs to agent ${params.storeAgentId}; requested agent ${scopedAgentId}.`,
     );
   }
-  if (params.useDefaultAgentForUnownedStore) {
-    return DEFAULT_AGENT_ID;
-  }
-  return (
+  const resolved =
     scopedAgentId ??
     params.storeAgentId ??
-    (params.sessionKey !== undefined ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined)
-  );
+    (params.sessionKey !== undefined ? resolveAgentIdFromSessionKey(params.sessionKey) : undefined);
+  return resolved ?? (params.useDefaultAgentForUnownedStore ? DEFAULT_AGENT_ID : undefined);
 }
 
 function resolveSqliteTranscriptArchiveDirectory(
