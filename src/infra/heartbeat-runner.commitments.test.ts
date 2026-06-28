@@ -1,3 +1,4 @@
+// Covers heartbeat commitment checks and runner scheduling behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -5,6 +6,8 @@ import { HEARTBEAT_TOKEN } from "../auto-reply/tokens.js";
 import { loadCommitmentStore, saveCommitmentStore } from "../commitments/store.js";
 import type { CommitmentRecord, CommitmentStoreFile } from "../commitments/types.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import {
   runHeartbeatOnce,
   setHeartbeatsEnabled,
@@ -18,18 +21,22 @@ installHeartbeatRunnerTestRuntime();
 
 describe("runHeartbeatOnce commitments", () => {
   const nowMs = Date.parse("2026-04-29T17:00:00.000Z");
+  const envSnapshot = captureEnv(["OPENCLAW_STATE_DIR"]);
 
   afterEach(() => {
     resetHeartbeatWakeStateForTests();
     setHeartbeatsEnabled(true);
     vi.useRealTimers();
     vi.unstubAllEnvs();
+    envSnapshot.restore();
+    resetHeartbeatEventsForTest();
   });
 
   function buildCommitment(params: {
     id: string;
     sessionKey: string;
     to: string;
+    dueWindow?: CommitmentRecord["dueWindow"];
     sourceUserText?: string;
     sourceAssistantText?: string;
   }): CommitmentRecord {
@@ -48,7 +55,7 @@ describe("runHeartbeatOnce commitments", () => {
       suggestedText: "How did the interview go?",
       dedupeKey: "interview:2026-04-28",
       confidence: 0.92,
-      dueWindow: {
+      dueWindow: params.dueWindow ?? {
         earliestMs: nowMs - 60_000,
         latestMs: nowMs + 60 * 60_000,
         timezone: "America/Los_Angeles",
@@ -76,13 +83,14 @@ describe("runHeartbeatOnce commitments", () => {
   async function setupCommitmentCase(params?: {
     replyText?: string;
     target?: "last" | "none";
+    dueWindow?: CommitmentRecord["dueWindow"];
     sourceUserText?: string;
     sourceAssistantText?: string;
     legacyRawSourceText?: boolean;
     visibleReplies?: "automatic" | "message_tool";
   }) {
     return await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+      setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
       const sessionKey = "agent:main:telegram:user-155462274";
       const cfg: OpenClawConfig = {
         agents: {
@@ -111,6 +119,7 @@ describe("runHeartbeatOnce commitments", () => {
             id: "cm_interview",
             sessionKey,
             to: "155462274",
+            dueWindow: params?.dueWindow,
             sourceUserText: params?.sourceUserText,
             sourceAssistantText: params?.sourceAssistantText,
           }),
@@ -172,7 +181,7 @@ describe("runHeartbeatOnce commitments", () => {
   it("keeps due heartbeat tasks tool-capable when commitments are also due", async () => {
     const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
       async ({ tmpDir, storePath, replySpy }) => {
-        vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+        setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
         const sessionKey = "agent:main:telegram:user-155462274";
         const cfg: OpenClawConfig = {
           agents: {
@@ -207,7 +216,7 @@ describe("runHeartbeatOnce commitments", () => {
           commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
         });
 
-        const sendTelegram = vi.fn().mockResolvedValue({
+        const sendTelegramResult = vi.fn().mockResolvedValue({
           messageId: "m1",
           chatId: "stale-target",
         });
@@ -227,21 +236,21 @@ describe("runHeartbeatOnce commitments", () => {
           },
         );
 
-        const result = await runHeartbeatOnce({
+        const resultResult = await runHeartbeatOnce({
           cfg,
           agentId: "main",
           sessionKey,
           deps: {
             getReplyFromConfig: replySpy,
-            telegram: sendTelegram,
+            telegram: sendTelegramResult,
             getQueueSize: () => 0,
             nowMs: () => nowMs,
           },
         });
 
         return {
-          result,
-          sendTelegram,
+          result: resultResult,
+          sendTelegram: sendTelegramResult,
           store: await loadCommitmentStore(),
         };
       },
@@ -259,7 +268,7 @@ describe("runHeartbeatOnce commitments", () => {
   it("does not deliver due commitments when heartbeat target is none", async () => {
     const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
       async ({ tmpDir, storePath, replySpy }) => {
-        vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+        setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
         const sessionKey = "agent:main:telegram:user-155462274";
         const cfg: OpenClawConfig = {
           agents: {
@@ -285,7 +294,7 @@ describe("runHeartbeatOnce commitments", () => {
           commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
         });
 
-        const sendTelegram = vi.fn().mockResolvedValue({
+        const sendTelegramValue = vi.fn().mockResolvedValue({
           messageId: "m1",
           chatId: "155462274",
         });
@@ -304,21 +313,21 @@ describe("runHeartbeatOnce commitments", () => {
           },
         );
 
-        const result = await runHeartbeatOnce({
+        const resultValue = await runHeartbeatOnce({
           cfg,
           agentId: "main",
           sessionKey,
           deps: {
             getReplyFromConfig: replySpy,
-            telegram: sendTelegram,
+            telegram: sendTelegramValue,
             getQueueSize: () => 0,
             nowMs: () => nowMs,
           },
         });
 
         return {
-          result,
-          sendTelegram,
+          result: resultValue,
+          sendTelegram: sendTelegramValue,
           store: await loadCommitmentStore(),
         };
       },
@@ -338,7 +347,7 @@ describe("runHeartbeatOnce commitments", () => {
     vi.setSystemTime(nowMs);
 
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath }) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+      setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
       const dueSessionKey = "agent:main:telegram:user-155462274";
       const cfg: OpenClawConfig = {
         agents: {
@@ -380,6 +389,113 @@ describe("runHeartbeatOnce commitments", () => {
 
   it("delivers due commitments to the original scope when heartbeat target is last", async () => {
     const { result, sendTelegram, store } = await setupCommitmentCase();
+
+    expect(result.status).toBe("ran");
+    expect(sendTelegram).toHaveBeenCalled();
+    expectCommitmentFields(store.commitments[0], {
+      id: "cm_interview",
+      status: "sent",
+      attempts: 1,
+      sentAtMs: nowMs,
+    });
+  });
+
+  it("does not mark suppressed commitment sends as delivered or duplicate-dismiss their retry", async () => {
+    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+      setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
+      const sessionKey = "agent:main:telegram:user-155462274";
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "last",
+            },
+          },
+        },
+        channels: { telegram: { allowFrom: ["*"] } },
+        session: { store: storePath },
+        commitments: { enabled: true },
+      };
+      await seedSessionStore(storePath, sessionKey, {
+        lastChannel: "telegram",
+        lastProvider: "telegram",
+        lastTo: "155462274",
+      });
+      await saveCommitmentStore(undefined, {
+        version: 1,
+        commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
+      });
+
+      const sendTelegram = vi.fn().mockResolvedValue({
+        messageId: "m2",
+        chatId: "155462274",
+      });
+      replySpy
+        .mockResolvedValueOnce({ text: "No channel reply." })
+        .mockResolvedValueOnce({ text: "How did the interview go?" });
+
+      const runOnce = async () =>
+        await runHeartbeatOnce({
+          cfg,
+          agentId: "main",
+          sessionKey,
+          deps: {
+            getReplyFromConfig: replySpy,
+            telegram: sendTelegram,
+            getQueueSize: () => 0,
+            nowMs: () => nowMs,
+          },
+        });
+
+      const first = await runOnce();
+
+      expect(first.status).toBe("ran");
+      expect(sendTelegram).not.toHaveBeenCalled();
+      let store = await loadCommitmentStore();
+      expectCommitmentFields(store.commitments[0], {
+        id: "cm_interview",
+        status: "pending",
+        attempts: 1,
+        lastAttemptAtMs: nowMs,
+      });
+      expect(store.commitments[0]?.sentAtMs).toBeUndefined();
+      const sessionStoreAfterSuppressed = JSON.parse(
+        await fs.readFile(storePath, "utf-8"),
+      ) as Record<string, { lastHeartbeatText?: string; lastHeartbeatSentAt?: number }>;
+      expect(sessionStoreAfterSuppressed[sessionKey]?.lastHeartbeatText).toBeUndefined();
+      expect(sessionStoreAfterSuppressed[sessionKey]?.lastHeartbeatSentAt).toBeUndefined();
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "skipped",
+        reason: "no_visible_payload",
+      });
+
+      const second = await runOnce();
+
+      expect(second.status).toBe("ran");
+      expect(sendTelegram).toHaveBeenCalledTimes(1);
+      store = await loadCommitmentStore();
+      expectCommitmentFields(store.commitments[0], {
+        id: "cm_interview",
+        status: "sent",
+        attempts: 2,
+        sentAtMs: nowMs,
+      });
+      expect(getLastHeartbeatEvent()).toMatchObject({
+        status: "sent",
+      });
+    });
+  });
+
+  it("tolerates Date-invalid commitment due timestamps in heartbeat prompts", async () => {
+    const { result, sendTelegram, store } = await setupCommitmentCase({
+      dueWindow: {
+        earliestMs: nowMs - 60_000,
+        latestMs: 8_700_000_000_000_000,
+        timezone: "UTC",
+      },
+    });
 
     expect(result.status).toBe("ran");
     expect(sendTelegram).toHaveBeenCalled();
@@ -446,7 +562,7 @@ describe("runHeartbeatOnce commitments", () => {
   it("appends HEARTBEAT.md directives to commitment prompt when tasks are configured but none are due", async () => {
     const { result, sendTelegram, store } = await withTempHeartbeatSandbox(
       async ({ tmpDir, storePath, replySpy }) => {
-        vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+        setTestEnvValue("OPENCLAW_STATE_DIR", tmpDir);
         const sessionKey = "agent:main:telegram:user-155462274";
         const cfg: OpenClawConfig = {
           agents: {
@@ -493,7 +609,7 @@ tasks:
           commitments: [buildCommitment({ id: "cm_interview", sessionKey, to: "155462274" })],
         });
 
-        const sendTelegram = vi.fn().mockResolvedValue({
+        const sendTelegramLocal = vi.fn().mockResolvedValue({
           messageId: "m1",
           chatId: "155462274",
         });
@@ -510,21 +626,21 @@ tasks:
           },
         );
 
-        const result = await runHeartbeatOnce({
+        const resultLocal = await runHeartbeatOnce({
           cfg,
           agentId: "main",
           sessionKey,
           deps: {
             getReplyFromConfig: replySpy,
-            telegram: sendTelegram,
+            telegram: sendTelegramLocal,
             getQueueSize: () => 0,
             nowMs: () => nowMs,
           },
         });
 
         return {
-          result,
-          sendTelegram,
+          result: resultLocal,
+          sendTelegram: sendTelegramLocal,
           store: await loadCommitmentStore(),
         };
       },

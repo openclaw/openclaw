@@ -1,12 +1,38 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+/** Builds compact prompt notes for inbound media attachments. */
+import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { getMediaDir } from "../media/store.js";
 import type { MsgContext } from "./templating.js";
+
+function stripDarwinPrivatePrefix(value: string): string {
+  return value.startsWith("/private/var/") ? value.slice("/private".length) : value;
+}
+
+function normalizeManagedInboundMediaRef(value: string): string {
+  if (!path.isAbsolute(value)) {
+    return value;
+  }
+  const mediaDir = stripDarwinPrivatePrefix(path.resolve(getMediaDir()));
+  const candidate = stripDarwinPrivatePrefix(path.resolve(value));
+  const inboundDir = path.join(mediaDir, "inbound");
+  const relativeToInbound = path.relative(inboundDir, candidate);
+  // Managed inbound media gets a stable URI so prompts do not leak host-specific temp paths.
+  if (
+    !relativeToInbound ||
+    relativeToInbound.startsWith("..") ||
+    path.isAbsolute(relativeToInbound)
+  ) {
+    return value;
+  }
+  return `media://inbound/${path.basename(candidate)}`;
+}
 
 function sanitizeInlineMediaNoteValue(value: string | undefined): string {
   const trimmed = value?.trim();
   if (!trimmed) {
     return "";
   }
-  return trimmed
+  return normalizeManagedInboundMediaRef(trimmed)
     .replace(/[\p{Cc}\]]+/gu, " ")
     .replace(/\s+/g, " ")
     .trim();
@@ -23,12 +49,15 @@ function formatMediaAttachedLine(params: {
     typeof params.index === "number" && typeof params.total === "number"
       ? `[media attached ${params.index}/${params.total}: `
       : "[media attached: ";
-  const path = sanitizeInlineMediaNoteValue(params.path);
+  const pathValue = sanitizeInlineMediaNoteValue(params.path);
   const typeRaw = sanitizeInlineMediaNoteValue(params.type);
   const typePart = typeRaw ? ` (${typeRaw})` : "";
   const urlRaw = sanitizeInlineMediaNoteValue(params.url);
-  const urlPart = urlRaw ? ` | ${urlRaw}` : "";
-  return `${prefix}${path}${typePart}${urlPart}]`;
+  // When the channel mirrors the local path into MediaUrl (Telegram album
+  // media is the canonical case), rendering ` | ${url}` adds no information
+  // and clutters the prompt with `path | path` duplication (issue #47587).
+  const urlPart = urlRaw && urlRaw !== pathValue ? ` | ${urlRaw}` : "";
+  return `${prefix}${pathValue}${typePart}${urlPart}]`;
 }
 
 // Common audio file extensions for transcription detection
@@ -47,11 +76,11 @@ const AUDIO_EXTENSIONS = new Set([
   ".oga",
 ]);
 
-function isAudioPath(path: string | undefined): boolean {
-  if (!path) {
+function isAudioPath(pathLocal: string | undefined): boolean {
+  if (!pathLocal) {
     return false;
   }
-  const lower = normalizeLowercaseStringOrEmpty(path);
+  const lower = normalizeLowercaseStringOrEmpty(pathLocal);
   for (const ext of AUDIO_EXTENSIONS) {
     if (lower.endsWith(ext)) {
       return true;
@@ -100,6 +129,7 @@ function collectTranscribedAudioAttachmentIndices(
   return transcribedAudioIndices;
 }
 
+/** Formats a prompt-visible media attachment note, omitting audio already represented by transcript. */
 export function buildInboundMediaNote(ctx: MsgContext): string | undefined {
   // Attachment indices follow MediaPaths/MediaUrls ordering as supplied by the channel.
   const pathsFromArray = Array.isArray(ctx.MediaPaths) ? ctx.MediaPaths : undefined;

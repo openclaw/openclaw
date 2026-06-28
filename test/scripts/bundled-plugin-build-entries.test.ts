@@ -1,3 +1,4 @@
+// Bundled Plugin Build Entries tests cover bundled plugin build entries script behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -6,6 +7,7 @@ import {
   listBundledPluginBuildEntries,
   listBundledPluginPackArtifacts,
 } from "../../scripts/lib/bundled-plugin-build-entries.mjs";
+import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 
 function expectNoPrefixMatches(values: string[], prefix: string) {
   expect(values.filter((value) => value.startsWith(prefix))).toEqual([]);
@@ -51,8 +53,6 @@ describe("bundled plugin build entries", () => {
         "extensions/image-generation-core/runtime-api.ts",
       "extensions/media-understanding-core/runtime-api":
         "extensions/media-understanding-core/runtime-api.ts",
-      "extensions/speech-core/api": "extensions/speech-core/api.ts",
-      "extensions/speech-core/runtime-api": "extensions/speech-core/runtime-api.ts",
     };
 
     expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
@@ -68,6 +68,69 @@ describe("bundled plugin build entries", () => {
     expect(pickEntries(entries, Object.keys(expectedEntries))).toStrictEqual(expectedEntries);
   });
 
+  it("filters bundled plugin build entries for bounded script lanes", () => {
+    const entries = listBundledPluginBuildEntries({
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "active-memory,acpx",
+      },
+    });
+    const entryKeys = Object.keys(entries);
+
+    expect(entryKeys).toEqual(expect.arrayContaining(["extensions/acpx/index"]));
+    expect(entryKeys.every((entry) => /^extensions\/(?:acpx|active-memory)\//u.test(entry))).toBe(
+      true,
+    );
+  });
+
+  it("rejects unknown bounded bundled plugin build ids", () => {
+    expect(() =>
+      listBundledPluginBuildEntries({
+        env: {
+          ...process.env,
+          OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS: "missing-plugin",
+        },
+      }),
+    ).toThrow(
+      "OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS references unknown bundled plugin id(s): missing-plugin",
+    );
+  });
+
+  it("keeps the Telegram ingress worker out of bundled plugin public-surface entries", () => {
+    const entries = listBundledPluginBuildEntries();
+
+    expect(entries["extensions/telegram/telegram-ingress-worker.runtime"]).toBeUndefined();
+  });
+
+  it("keeps top-level bundled plugin test helpers out of public-surface entries", () => {
+    const entries = listBundledPluginBuildEntries();
+
+    expect(entries["extensions/browser/test-support"]).toBeUndefined();
+    expect(entries["extensions/comfy/test-helpers"]).toBeUndefined();
+    expect(entries["extensions/minimax/provider-http.test-helpers"]).toBeUndefined();
+  });
+
+  it("discovers repo plugin build entries without directory scans", () => {
+    const payload = expectNoNodeFsScans<{
+      artifacts: number;
+      entries: number;
+    }>(
+      `
+        const build = await import("./scripts/lib/bundled-plugin-build-entries.mjs");
+        const entries = build.listBundledPluginBuildEntries();
+        const artifacts = build.listBundledPluginPackArtifacts();
+        return {
+          artifacts: artifacts.length,
+          entries: Object.keys(entries).length,
+        };
+      `,
+      { counters: ["readdirSync"] },
+    );
+
+    expect(payload.entries).toBeGreaterThan(0);
+    expect(payload.artifacts).toBeGreaterThan(0);
+  });
+
   it("packs runtime core support packages without requiring plugin manifests", () => {
     const artifacts = listBundledPluginPackArtifacts();
 
@@ -78,8 +141,6 @@ describe("bundled plugin build entries", () => {
     expect(artifacts).not.toContain(
       "dist/extensions/media-understanding-core/openclaw.plugin.json",
     );
-    expect(artifacts).toContain("dist/extensions/speech-core/runtime-api.js");
-    expect(artifacts).not.toContain("dist/extensions/speech-core/openclaw.plugin.json");
   });
 
   it("packs the Matrix packaged runtime shim", () => {
@@ -110,14 +171,32 @@ describe("bundled plugin build entries", () => {
     }
   });
 
-  it("keeps external-only Amazon providers out of bundled dist entries", () => {
+  it("keeps external-only providers out of bundled dist entries", () => {
     const entries = listBundledPluginBuildEntries();
     const artifacts = listBundledPluginPackArtifacts();
 
-    for (const pluginId of ["amazon-bedrock", "amazon-bedrock-mantle"]) {
+    for (const pluginId of ["amazon-bedrock", "amazon-bedrock-mantle", "anthropic-vertex"]) {
       expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
       expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
     }
+  });
+
+  it("keeps externalized runtime-dependency plugins out of bundled dist entries", () => {
+    const entries = listBundledPluginBuildEntries();
+    const artifacts = listBundledPluginPackArtifacts();
+
+    for (const pluginId of ["copilot", "openshell", "slack", "tokenjuice"]) {
+      expectNoPrefixMatches(Object.keys(entries), `extensions/${pluginId}/`);
+      expectNoPrefixMatches(artifacts, `dist/extensions/${pluginId}/`);
+    }
+  });
+
+  it("keeps Cohere bundled through the externalization transition", () => {
+    const artifacts = listBundledPluginPackArtifacts();
+
+    expect(artifacts).toContain("dist/extensions/cohere/index.js");
+    expect(artifacts).toContain("dist/extensions/cohere/openclaw.plugin.json");
+    expect(artifacts).toContain("dist/extensions/cohere/package.json");
   });
 
   it("keeps bundled channel secret contracts on packed top-level sidecars", () => {
@@ -147,6 +226,61 @@ describe("bundled plugin build entries", () => {
       expect(fs.readFileSync(secretApiPath, "utf8")).toContain("channelSecrets");
       expect(artifacts).toContain(`dist/extensions/${pluginId}/secret-contract-api.js`);
     }
+  });
+
+  it("keeps dedicated channel contract exports off broad contract-api sidecars", () => {
+    const duplicateExportMarkersByArtifact = {
+      "directory-contract-api.ts": [
+        "DirectoryContractPlugin",
+        "DirectoryGroupsFromConfig",
+        "DirectoryPeersFromConfig",
+      ],
+      "doctor-contract-api.ts": [
+        "legacyConfigRules",
+        "normalizeCompatibilityConfig",
+        "stateMigrations",
+      ],
+      "secret-contract-api.ts": [
+        "channelSecrets",
+        "collectRuntimeConfigAssignments",
+        "secretTargetRegistryEntries",
+      ],
+      "security-audit-contract-api.ts": ["SecurityAuditFindings"],
+      "security-contract-api.ts": [
+        "collectUnsupportedSecretRefConfigCandidates",
+        "unsupportedSecretRefSurfacePatterns",
+      ],
+      "session-binding-contract-api.ts": [
+        "ConversationBindingManager",
+        "ThreadBindingManager",
+        "ThreadBindingsForTests",
+        "setMatrixRuntime",
+      ],
+    } as const;
+    const offenders: string[] = [];
+
+    for (const dirent of fs.readdirSync("extensions", { withFileTypes: true })) {
+      if (!dirent.isDirectory()) {
+        continue;
+      }
+      const contractApiPath = path.join("extensions", dirent.name, "contract-api.ts");
+      if (!fs.existsSync(contractApiPath)) {
+        continue;
+      }
+      const contractApi = fs.readFileSync(contractApiPath, "utf8");
+      for (const [artifact, markers] of Object.entries(duplicateExportMarkersByArtifact)) {
+        if (!fs.existsSync(path.join("extensions", dirent.name, artifact))) {
+          continue;
+        }
+        for (const marker of markers) {
+          if (contractApi.includes(marker)) {
+            offenders.push(`${contractApiPath} duplicates ${artifact}: ${marker}`);
+          }
+        }
+      }
+    }
+
+    expect(offenders).toStrictEqual([]);
   });
 
   it("keeps bundled channel entry metadata on packed top-level sidecars", () => {

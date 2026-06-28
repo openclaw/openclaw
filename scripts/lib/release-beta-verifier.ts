@@ -1,8 +1,13 @@
+// Release Beta Verifier script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { readBoundedResponseText } from "./bounded-response.ts";
 import { collectClawHubPublishablePluginPackages } from "./plugin-clawhub-release.ts";
-import { collectPublishablePluginPackages } from "./plugin-npm-release.ts";
+import {
+  collectPublishablePluginPackages,
+  parsePluginReleaseSelection,
+} from "./plugin-npm-release.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -12,12 +17,21 @@ export type ReleaseVerifyBetaArgs = {
   distTag: string;
   repo: string;
   registry: string;
+  workflowRef?: string;
+  clawHubWorkflowRef?: string;
+  pluginSelection: string[];
+  evidenceOut?: string;
   skipPostpublish: boolean;
+  skipGitHubRelease: boolean;
+  skipClawHub: boolean;
   rerunFailedClawHub: boolean;
   workflowRuns: {
+    fullReleaseValidation?: string;
     openclawNpm?: string;
     pluginNpm?: string;
     pluginClawHub?: string;
+    pluginClawHubBootstrap?: string;
+    npmTelegram?: string;
   };
 };
 
@@ -25,6 +39,12 @@ export type NpmViewFields = {
   version?: string;
   distTagVersion?: string;
   integrity?: string;
+  tarball?: string;
+};
+
+type FetchWithRetryResult = {
+  response: Response;
+  signal: AbortSignal;
 };
 
 type WorkflowRunSummary = {
@@ -36,6 +56,12 @@ type WorkflowRunSummary = {
 
 const DEFAULT_REPO = "openclaw/openclaw";
 const DEFAULT_CLAWHUB_REGISTRY = "https://clawhub.ai";
+const CLAWHUB_REQUEST_TIMEOUT_MS = 20_000;
+const CLAWHUB_RESPONSE_BODY_MAX_BYTES = 1024 * 1024;
+// Trusted publish can finish before npm registry metadata converges. Keep the
+// verifier on the same release train instead of forcing a republish/correction.
+const NPM_VIEW_ATTEMPTS = 30;
+const NPM_VIEW_RETRY_MAX_DELAY_MS = 10_000;
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -67,6 +93,38 @@ function runCommandInherited(command: string, args: string[]): void {
   });
 }
 
+export async function runNpmViewWithRetry(
+  args: string[],
+  options: {
+    attempts?: number;
+    delay?: (delayMs: number) => Promise<void>;
+    run?: (args: string[]) => string;
+  } = {},
+): Promise<string> {
+  const attempts = options.attempts ?? NPM_VIEW_ATTEMPTS;
+  const delay =
+    options.delay ??
+    ((delayMs: number) =>
+      new Promise((resolveDelay) => {
+        setTimeout(resolveDelay, delayMs);
+      }));
+  const run = options.run ?? ((npmArgs: string[]) => runCommand("npm", npmArgs));
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return run([...args, "--prefer-online"]);
+    } catch (error) {
+      lastError = error;
+    }
+    if (attempt < attempts) {
+      await delay(Math.min(attempt * 1000, NPM_VIEW_RETRY_MAX_DELAY_MS));
+    }
+  }
+
+  throw lastError;
+}
+
 function parseJson(raw: string, label: string): unknown {
   try {
     return JSON.parse(raw) as unknown;
@@ -83,6 +141,7 @@ export function parseNpmViewFields(raw: string, distTag: string): NpmViewFields 
       version: readString(parsed[0]),
       distTagVersion: readString(parsed[1]),
       integrity: readString(parsed[2]),
+      tarball: readString(parsed[3]),
     };
   }
   if (!isRecord(parsed)) {
@@ -94,6 +153,7 @@ export function parseNpmViewFields(raw: string, distTag: string): NpmViewFields 
     version: readString(parsed.version),
     distTagVersion: readString(parsed[`dist-tags.${distTag}`]) ?? readString(distTags?.[distTag]),
     integrity: readString(parsed["dist.integrity"]) ?? readString(dist?.integrity),
+    tarball: readString(parsed["dist.tarball"]) ?? readString(dist?.tarball),
   };
 }
 
@@ -105,7 +165,7 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
   const version = values.shift();
   if (!version || version.startsWith("-")) {
     throw new Error(
-      "Usage: pnpm release:verify-beta -- <version> [--openclaw-npm-run ID] [--plugin-npm-run ID] [--plugin-clawhub-run ID]",
+      "Usage: pnpm release:verify-beta -- <version> [--workflow-ref REF] [--clawhub-workflow-ref REF] [--full-release-validation-run ID] [--openclaw-npm-run ID] [--plugin-npm-run ID] [--plugin-clawhub-run ID] [--plugin-clawhub-bootstrap-run ID] [--npm-telegram-run ID] [--skip-github-release] [--skip-clawhub]",
     );
   }
 
@@ -115,7 +175,13 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
     distTag: "beta",
     repo: DEFAULT_REPO,
     registry: DEFAULT_CLAWHUB_REGISTRY,
+    workflowRef: undefined,
+    clawHubWorkflowRef: undefined,
+    pluginSelection: [],
+    evidenceOut: undefined,
     skipPostpublish: false,
+    skipGitHubRelease: false,
+    skipClawHub: false,
     rerunFailedClawHub: false,
     workflowRuns: {},
   };
@@ -144,6 +210,24 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
       case "--registry":
         parsed.registry = next();
         break;
+      case "--workflow-ref":
+        parsed.workflowRef = next();
+        break;
+      case "--clawhub-workflow-ref":
+        parsed.clawHubWorkflowRef = next();
+        break;
+      case "--plugins":
+        parsed.pluginSelection = parsePluginReleaseSelection(next());
+        if (parsed.pluginSelection.length === 0) {
+          throw new Error("--plugins requires at least one plugin package name.");
+        }
+        break;
+      case "--evidence-out":
+        parsed.evidenceOut = next();
+        break;
+      case "--full-release-validation-run":
+        parsed.workflowRuns.fullReleaseValidation = next();
+        break;
       case "--openclaw-npm-run":
         parsed.workflowRuns.openclawNpm = next();
         break;
@@ -153,8 +237,20 @@ export function parseReleaseVerifyBetaArgs(argv: string[]): ReleaseVerifyBetaArg
       case "--plugin-clawhub-run":
         parsed.workflowRuns.pluginClawHub = next();
         break;
+      case "--plugin-clawhub-bootstrap-run":
+        parsed.workflowRuns.pluginClawHubBootstrap = next();
+        break;
+      case "--npm-telegram-run":
+        parsed.workflowRuns.npmTelegram = next();
+        break;
       case "--skip-postpublish":
         parsed.skipPostpublish = true;
+        break;
+      case "--skip-github-release":
+        parsed.skipGitHubRelease = true;
+        break;
+      case "--skip-clawhub":
+        parsed.skipClawHub = true;
         break;
       case "--rerun-failed-clawhub":
         parsed.rerunFailedClawHub = true;
@@ -171,46 +267,79 @@ async function fetchWithRetry(
   url: string,
   options: RequestInit,
   attempts: number,
-): Promise<Response> {
+): Promise<FetchWithRetryResult> {
   let lastError: unknown;
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
-      const response = await fetch(url, options);
+      const signal = AbortSignal.timeout(CLAWHUB_REQUEST_TIMEOUT_MS);
+      const response = await fetch(url, {
+        ...options,
+        signal,
+      });
       if (response.status !== 429 && response.status < 500) {
-        return response;
+        return { response, signal };
       }
+      await cancelResponseBody(response);
       lastError = new Error(`HTTP ${response.status}`);
     } catch (error) {
       lastError = error;
     }
     if (attempt < attempts) {
-      await new Promise((resolveDelay) => setTimeout(resolveDelay, attempt * 1000));
+      await new Promise((resolveDelay) => {
+        setTimeout(resolveDelay, attempt * 1000);
+      });
     }
   }
   const message = lastError instanceof Error ? lastError.message : String(lastError);
   throw new Error(`${url} did not return a stable response: ${message}`);
 }
 
+async function cancelResponseBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
+}
+
 async function fetchJsonWithRetry(url: string): Promise<unknown> {
-  const response = await fetchWithRetry(url, { headers: { accept: "application/json" } }, 5);
+  const { response, signal } = await fetchWithRetry(
+    url,
+    { headers: { accept: "application/json" } },
+    5,
+  );
   if (!response.ok) {
     throw new Error(`${url} returned HTTP ${response.status}.`);
   }
-  return response.json() as Promise<unknown>;
+  return await readBoundedJsonResponse(response, url, undefined, { signal });
 }
 
-async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"): Promise<number> {
-  const response = await fetchWithRetry(url, { method, redirect: "manual" }, 5);
-  return response.status;
+export async function readBoundedJsonResponse(
+  response: Response,
+  label: string,
+  maxBytes = CLAWHUB_RESPONSE_BODY_MAX_BYTES,
+  options: { signal?: AbortSignal } = {},
+): Promise<unknown> {
+  return parseJson(await readBoundedResponseText(response, label, maxBytes, options), label);
 }
 
-function verifyNpmPackage(packageName: string, version: string, distTag: string): void {
-  const raw = runCommand("npm", [
+export async function fetchStatusWithRetry(url: string, method: "GET" | "HEAD"): Promise<number> {
+  const { response } = await fetchWithRetry(url, { method, redirect: "manual" }, 5);
+  try {
+    return response.status;
+  } finally {
+    await cancelResponseBody(response);
+  }
+}
+
+async function verifyNpmPackage(
+  packageName: string,
+  version: string,
+  distTag: string,
+): Promise<NpmViewFields> {
+  const raw = await runNpmViewWithRetry([
     "view",
     `${packageName}@${version}`,
     "version",
     `dist-tags.${distTag}`,
     "dist.integrity",
+    "dist.tarball",
     "--json",
   ]);
   const fields = parseNpmViewFields(raw, distTag);
@@ -227,6 +356,10 @@ function verifyNpmPackage(packageName: string, version: string, distTag: string)
   if (fields.integrity === undefined) {
     throw new Error(`${packageName}: npm dist.integrity missing for ${version}.`);
   }
+  if (fields.tarball === undefined) {
+    throw new Error(`${packageName}: npm dist.tarball missing for ${version}.`);
+  }
+  return fields;
 }
 
 function readClawHubTags(detail: unknown): Record<string, string> {
@@ -305,6 +438,9 @@ function verifyWorkflowRun(params: {
   id: string;
   label: string;
   repo: string;
+  expectedWorkflowName: string;
+  expectedHeadBranch?: string;
+  allowedHeadBranches?: string[];
   rerunFailed: boolean;
 }): WorkflowRunSummary {
   const raw = runCommand("gh", [
@@ -314,11 +450,32 @@ function verifyWorkflowRun(params: {
     "--repo",
     params.repo,
     "--json",
-    "status,conclusion,url,createdAt,updatedAt,jobs",
+    "workflowName,headBranch,event,status,conclusion,url,createdAt,updatedAt,jobs",
   ]);
   const run = parseJson(raw, `gh run view ${params.id}`);
   if (!isRecord(run)) {
     throw new Error(`${params.label}: workflow run returned an unsupported JSON shape.`);
+  }
+  const workflowName = readString(run.workflowName);
+  if (workflowName !== params.expectedWorkflowName) {
+    throw new Error(
+      `${params.label}: run ${params.id} workflow is ${workflowName ?? "<missing>"}, expected ${params.expectedWorkflowName}.`,
+    );
+  }
+  const event = readString(run.event);
+  if (event !== "workflow_dispatch") {
+    throw new Error(
+      `${params.label}: run ${params.id} event is ${event ?? "<missing>"}, expected workflow_dispatch.`,
+    );
+  }
+  const headBranch = readString(run.headBranch);
+  const allowedHeadBranches =
+    params.allowedHeadBranches ??
+    (params.expectedHeadBranch !== undefined ? [params.expectedHeadBranch] : []);
+  if (allowedHeadBranches.length > 0 && !allowedHeadBranches.includes(headBranch ?? "")) {
+    throw new Error(
+      `${params.label}: run ${params.id} branch is ${headBranch ?? "<missing>"}, expected ${allowedHeadBranches.join(" or ")}.`,
+    );
   }
   const status = readString(run.status);
   const conclusion = readString(run.conclusion);
@@ -377,6 +534,21 @@ function formatDuration(seconds: number | undefined): string {
   return `${minutes}m${remainder.toString().padStart(2, "0")}s`;
 }
 
+function assertSelectedPackagesResolved(params: {
+  label: string;
+  selection: readonly string[];
+  packages: readonly { packageName: string }[];
+}): void {
+  if (params.selection.length === 0) {
+    return;
+  }
+  const resolved = new Set(params.packages.map((plugin) => plugin.packageName));
+  const missing = params.selection.filter((packageName) => !resolved.has(packageName));
+  if (missing.length > 0) {
+    throw new Error(`Unknown or non-publishable ${params.label} selection: ${missing.join(", ")}.`);
+  }
+}
+
 export async function verifyBetaRelease(
   args: ReleaseVerifyBetaArgs,
   options: { rootDir?: string } = {},
@@ -388,10 +560,14 @@ export async function verifyBetaRelease(
   }
 
   const lines: string[] = [];
-  const releaseUrl = verifyGitHubRelease(args);
-  lines.push(`GitHub release OK: ${releaseUrl}`);
+  const releaseUrl = args.skipGitHubRelease ? undefined : verifyGitHubRelease(args);
+  if (releaseUrl === undefined) {
+    lines.push("GitHub release skipped: final release page is created after verification");
+  } else {
+    lines.push(`GitHub release OK: ${releaseUrl}`);
+  }
 
-  verifyNpmPackage("openclaw", args.version, args.distTag);
+  const openclawNpm = await verifyNpmPackage("openclaw", args.version, args.distTag);
   lines.push(`openclaw npm OK: ${args.version} (${args.distTag})`);
 
   if (!args.skipPostpublish) {
@@ -404,41 +580,91 @@ export async function verifyBetaRelease(
     lines.push("openclaw postpublish verifier OK");
   }
 
-  const npmPlugins = collectPublishablePluginPackages(rootDir);
+  const npmPlugins = collectPublishablePluginPackages(rootDir, {
+    packageNames: args.pluginSelection.length > 0 ? args.pluginSelection : undefined,
+  });
+  assertSelectedPackagesResolved({
+    label: "npm plugin",
+    selection: args.pluginSelection,
+    packages: npmPlugins,
+  });
   for (const plugin of npmPlugins) {
-    verifyNpmPackage(plugin.packageName, args.version, args.distTag);
+    await verifyNpmPackage(plugin.packageName, args.version, args.distTag);
   }
   lines.push(`plugin npm OK: ${npmPlugins.length}`);
 
-  const clawHubPlugins = collectClawHubPublishablePluginPackages(rootDir);
-  for (const plugin of clawHubPlugins) {
-    await verifyClawHubPackage({
-      registry: args.registry,
-      packageName: plugin.packageName,
-      version: args.version,
-      distTag: args.distTag,
+  const clawHubPlugins = args.skipClawHub
+    ? []
+    : collectClawHubPublishablePluginPackages(rootDir, {
+        packageNames: args.pluginSelection.length > 0 ? args.pluginSelection : undefined,
+      });
+  if (args.skipClawHub) {
+    lines.push("ClawHub skipped");
+  } else {
+    assertSelectedPackagesResolved({
+      label: "ClawHub plugin",
+      selection: args.pluginSelection,
+      packages: clawHubPlugins,
     });
+    for (const plugin of clawHubPlugins) {
+      await verifyClawHubPackage({
+        registry: args.registry,
+        packageName: plugin.packageName,
+        version: args.version,
+        distTag: args.distTag,
+      });
+    }
+    lines.push(`ClawHub OK: ${clawHubPlugins.length}`);
   }
-  lines.push(`ClawHub OK: ${clawHubPlugins.length}`);
 
   const workflowRuns: WorkflowRunSummary[] = [];
+  if (args.workflowRuns.fullReleaseValidation !== undefined) {
+    workflowRuns.push(
+      verifyWorkflowRun({
+        id: args.workflowRuns.fullReleaseValidation,
+        label: "Full Release Validation",
+        repo: args.repo,
+        expectedWorkflowName: "Full Release Validation",
+        allowedHeadBranches: ["main", args.workflowRef],
+        rerunFailed: false,
+      }),
+    );
+  }
   if (args.workflowRuns.pluginNpm !== undefined) {
     workflowRuns.push(
       verifyWorkflowRun({
         id: args.workflowRuns.pluginNpm,
         label: "Plugin NPM Release",
         repo: args.repo,
+        expectedWorkflowName: "Plugin NPM Release",
+        expectedHeadBranch: args.workflowRef,
         rerunFailed: false,
       }),
     );
   }
   if (args.workflowRuns.pluginClawHub !== undefined) {
+    const clawHubWorkflowRef = args.clawHubWorkflowRef ?? args.workflowRef;
     workflowRuns.push(
       verifyWorkflowRun({
         id: args.workflowRuns.pluginClawHub,
         label: "Plugin ClawHub Release",
         repo: args.repo,
+        expectedWorkflowName: "Plugin ClawHub Release",
+        expectedHeadBranch: clawHubWorkflowRef,
         rerunFailed: args.rerunFailedClawHub,
+      }),
+    );
+  }
+  if (args.workflowRuns.pluginClawHubBootstrap !== undefined) {
+    const clawHubWorkflowRef = args.clawHubWorkflowRef ?? args.workflowRef;
+    workflowRuns.push(
+      verifyWorkflowRun({
+        id: args.workflowRuns.pluginClawHubBootstrap,
+        label: "Plugin ClawHub New",
+        repo: args.repo,
+        expectedWorkflowName: "Plugin ClawHub New",
+        expectedHeadBranch: clawHubWorkflowRef,
+        rerunFailed: false,
       }),
     );
   }
@@ -448,6 +674,20 @@ export async function verifyBetaRelease(
         id: args.workflowRuns.openclawNpm,
         label: "OpenClaw NPM Release",
         repo: args.repo,
+        expectedWorkflowName: "OpenClaw NPM Release",
+        expectedHeadBranch: args.workflowRef,
+        rerunFailed: false,
+      }),
+    );
+  }
+  if (args.workflowRuns.npmTelegram !== undefined) {
+    workflowRuns.push(
+      verifyWorkflowRun({
+        id: args.workflowRuns.npmTelegram,
+        label: "NPM Telegram Beta E2E",
+        repo: args.repo,
+        expectedWorkflowName: "NPM Telegram Beta E2E",
+        allowedHeadBranches: ["main", args.workflowRef],
         rerunFailed: false,
       }),
     );
@@ -456,6 +696,34 @@ export async function verifyBetaRelease(
     lines.push(
       `${run.label} OK: ${run.id} (${formatDuration(run.durationSeconds)})${run.url ? ` ${run.url}` : ""}`,
     );
+  }
+
+  if (args.evidenceOut !== undefined) {
+    const evidencePath = resolve(rootDir, args.evidenceOut);
+    mkdirSync(dirname(evidencePath), { recursive: true });
+    writeFileSync(
+      evidencePath,
+      `${JSON.stringify(
+        {
+          version: 1,
+          releaseVersion: args.version,
+          releaseTag: args.tag,
+          npmDistTag: args.distTag,
+          pluginSelection: args.pluginSelection,
+          openclawNpmIntegrity: openclawNpm.integrity,
+          openclawNpmTarball: openclawNpm.tarball,
+          npmRegistrySignaturesVerified: args.skipPostpublish ? null : true,
+          npmProvenanceAttestationMatched: args.skipPostpublish ? null : true,
+          githubReleaseUrl: releaseUrl ?? null,
+          pluginNpmPackageCount: npmPlugins.length,
+          clawHubPackageCount: clawHubPlugins.length,
+          workflowRuns,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    lines.push(`release evidence written: ${args.evidenceOut}`);
   }
 
   return lines;

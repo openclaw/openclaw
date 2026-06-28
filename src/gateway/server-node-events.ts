@@ -1,18 +1,24 @@
+// Gateway node event dispatcher.
+// Handles device/node-originated events and routes them to sessions/channels.
 import { randomUUID } from "node:crypto";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { updatePairedDeviceMetadata } from "../infra/device-pairing.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  resolveEventSessionKeyForPolicy,
+  resolveEventSessionRoutingPolicy,
+  scopedHeartbeatWakeOptionsForPolicy,
+} from "../infra/event-session-routing.js";
 import { updatePairedNodeMetadata } from "../infra/node-pairing.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
-import { resolveEventSessionKey } from "../routing/session-key.js";
 import {
   NODE_PRESENCE_ALIVE_EVENT,
   normalizeNodePresenceAliveReason,
 } from "../shared/node-presence.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import type { NodeEvent, NodeEventContext } from "./server-node-events-types.js";
 import {
   agentCommandFromIngress,
@@ -25,7 +31,6 @@ import {
   getRuntimeConfig,
   loadOrCreateDeviceIdentity,
   loadSessionEntry,
-  migrateAndPruneGatewaySessionStoreKey,
   normalizeChannelId,
   normalizeMainKey,
   normalizeRpcAttachmentsToChatAttachments,
@@ -38,9 +43,8 @@ import {
   resolveSessionAgentId,
   resolveSessionModelRef,
   sanitizeInboundSystemTags,
-  scopedHeartbeatWakeOptions,
   sendDurableMessageBatch,
-  updateSessionStore,
+  canonicalizeSessionEntryAliases,
 } from "./server-node-events.runtime.js";
 
 const MAX_EXEC_EVENT_OUTPUT_CHARS = 180;
@@ -63,8 +67,20 @@ export type NodeEventHandleResult = {
   reason?: string;
 };
 
+type NodeAgentCommandInput = Parameters<typeof agentCommandFromIngress>[0];
+
 function normalizeFiniteInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? Math.trunc(value) : null;
+}
+
+function dispatchNodeAgentCommand(
+  ctx: NodeEventContext,
+  nodeId: string,
+  input: NodeAgentCommandInput,
+): void {
+  void agentCommandFromIngress(input, defaultRuntime, ctx.deps).catch((err: unknown) => {
+    ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+  });
 }
 
 function resolveVoiceTranscriptFingerprint(obj: Record<string, unknown>, text: string): string {
@@ -102,6 +118,8 @@ function shouldDropDuplicateVoiceTranscript(params: {
   fingerprint: string;
   now: number;
 }): boolean {
+  // Voice providers can replay identical transcript fragments during reconnect.
+  // Keep only a bounded last fingerprint per session to avoid duplicate sends.
   const previous = recentVoiceTranscripts.get(params.sessionKey);
   if (
     previous &&
@@ -236,10 +254,9 @@ function compactNotificationEventText(raw: string) {
 type LoadedSessionEntry = ReturnType<typeof loadSessionEntry>;
 
 async function touchSessionStore(params: {
-  cfg: OpenClawConfig;
-  sessionKey: string;
   storePath: LoadedSessionEntry["storePath"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
+  storeKeys: LoadedSessionEntry["storeKeys"];
   entry: LoadedSessionEntry["entry"];
   sessionId: string;
   now: number;
@@ -248,14 +265,14 @@ async function touchSessionStore(params: {
   if (!storePath) {
     return;
   }
-  await updateSessionStore(storePath, (store) => {
-    const { primaryKey } = migrateAndPruneGatewaySessionStoreKey({
-      cfg: params.cfg,
-      key: params.sessionKey,
-      store,
-    });
-    store[primaryKey] = {
-      ...store[primaryKey],
+  await canonicalizeSessionEntryAliases({
+    storePath,
+    target: {
+      canonicalKey: params.canonicalKey,
+      storeKeys: params.storeKeys,
+    },
+    update: (entry) => ({
+      ...entry,
       sessionId: params.sessionId,
       updatedAt: params.now,
       thinkingLevel: params.entry?.thinkingLevel,
@@ -268,29 +285,27 @@ async function touchSessionStore(params: {
       lastTo: params.entry?.lastTo,
       lastAccountId: params.entry?.lastAccountId,
       lastThreadId: params.entry?.lastThreadId,
-    };
+    }),
   });
 }
 
 function queueSessionStoreTouch(params: {
   ctx: NodeEventContext;
-  cfg: OpenClawConfig;
-  sessionKey: string;
   storePath: LoadedSessionEntry["storePath"];
   canonicalKey: LoadedSessionEntry["canonicalKey"];
+  storeKeys: LoadedSessionEntry["storeKeys"];
   entry: LoadedSessionEntry["entry"];
   sessionId: string;
   now: number;
 }) {
   void touchSessionStore({
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
     storePath: params.storePath,
     canonicalKey: params.canonicalKey,
+    storeKeys: params.storeKeys,
     entry: params.entry,
     sessionId: params.sessionId,
     now: params.now,
-  }).catch((err) => {
+  }).catch((err: unknown) => {
     params.ctx.logGateway.warn("voice session-store update failed: " + formatForLog(err));
   });
 }
@@ -384,7 +399,7 @@ export const handleNodeEvent = async (
       const cfg = getRuntimeConfig();
       const rawMainKey = normalizeMainKey(cfg.session?.mainKey);
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : rawMainKey;
-      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
       const now = Date.now();
       const fingerprint = resolveVoiceTranscriptFingerprint(obj, text);
       if (shouldDropDuplicateVoiceTranscript({ sessionKey: canonicalKey, fingerprint, now })) {
@@ -393,10 +408,9 @@ export const handleNodeEvent = async (
       const sessionId = entry?.sessionId ?? randomUUID();
       queueSessionStoreTouch({
         ctx,
-        cfg,
-        sessionKey,
         storePath,
         canonicalKey,
+        storeKeys,
         entry,
         sessionId,
         now,
@@ -410,27 +424,20 @@ export const handleNodeEvent = async (
         clientRunId: `voice-${randomUUID()}`,
       });
 
-      void agentCommandFromIngress(
-        {
-          runId,
-          message: text,
-          sessionId,
-          sessionKey: canonicalKey,
-          thinking: "low",
-          deliver: false,
-          messageChannel: "node",
-          inputProvenance: {
-            kind: "external_user",
-            sourceChannel: "voice",
-            sourceTool: "gateway.voice.transcript",
-          },
-          senderIsOwner: false,
-          allowModelOverride: false,
+      dispatchNodeAgentCommand(ctx, nodeId, {
+        runId,
+        message: text,
+        sessionId,
+        sessionKey: canonicalKey,
+        thinking: "low",
+        deliver: false,
+        messageChannel: "node",
+        inputProvenance: {
+          kind: "external_user",
+          sourceChannel: "voice",
+          sourceTool: "gateway.voice.transcript",
         },
-        defaultRuntime,
-        ctx.deps,
-      ).catch((err) => {
-        ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+        allowModelOverride: false,
       });
       return undefined;
     }
@@ -457,7 +464,7 @@ export const handleNodeEvent = async (
         key?: string | null;
       };
 
-      let link: AgentDeepLink | null = null;
+      let link: AgentDeepLink | null;
       try {
         link = JSON.parse(evt.payloadJSON) as AgentDeepLink;
       } catch {
@@ -467,7 +474,7 @@ export const handleNodeEvent = async (
       const sessionKeyRaw = (link?.sessionKey ?? "").trim();
       const sessionKey = sessionKeyRaw.length > 0 ? sessionKeyRaw : `node-${nodeId}`;
       const cfg = getRuntimeConfig();
-      const { storePath, entry, canonicalKey } = loadSessionEntry(sessionKey);
+      const { storePath, entry, canonicalKey, storeKeys } = loadSessionEntry(sessionKey);
 
       let message = (link?.message ?? "").trim();
       const normalizedAttachments = normalizeRpcAttachmentsToChatAttachments(
@@ -540,7 +547,14 @@ export const handleNodeEvent = async (
 
       const now = Date.now();
       const sessionId = entry?.sessionId ?? randomUUID();
-      await touchSessionStore({ cfg, sessionKey, storePath, canonicalKey, entry, sessionId, now });
+      await touchSessionStore({
+        storePath,
+        canonicalKey,
+        storeKeys,
+        entry,
+        sessionId,
+        now,
+      });
 
       if (deliverRequested && (!channel || !to)) {
         const entryChannel =
@@ -572,7 +586,7 @@ export const handleNodeEvent = async (
           channel: deliveryChannel,
           to: deliveryTo,
           text: receiptText,
-        }).catch((err) => {
+        }).catch((err: unknown) => {
           ctx.logGateway.warn(`agent receipt failed node=${nodeId}: ${formatForLog(err)}`);
         });
       } else if (wantsReceipt) {
@@ -581,28 +595,21 @@ export const handleNodeEvent = async (
         );
       }
 
-      void agentCommandFromIngress(
-        {
-          runId: sessionId,
-          message,
-          images,
-          imageOrder,
-          sessionId,
-          sessionKey: canonicalKey,
-          thinking: link?.thinking ?? undefined,
-          deliver,
-          to: deliveryTo,
-          channel: deliveryChannel,
-          timeout:
-            typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
-          messageChannel: "node",
-          senderIsOwner: false,
-          allowModelOverride: false,
-        },
-        defaultRuntime,
-        ctx.deps,
-      ).catch((err) => {
-        ctx.logGateway.warn(`agent failed node=${nodeId}: ${formatForLog(err)}`);
+      dispatchNodeAgentCommand(ctx, nodeId, {
+        runId: sessionId,
+        message,
+        images,
+        imageOrder,
+        sessionId,
+        sessionKey: canonicalKey,
+        thinking: link?.thinking ?? undefined,
+        deliver,
+        to: deliveryTo,
+        channel: deliveryChannel,
+        timeout:
+          typeof link?.timeoutSeconds === "number" ? link.timeoutSeconds.toString() : undefined,
+        messageChannel: "node",
+        allowModelOverride: false,
       });
       return undefined;
     }
@@ -648,7 +655,6 @@ export const handleNodeEvent = async (
       const queued = enqueueSystemEvent(summary, {
         sessionKey,
         contextKey: `notification:${keyRaw}`,
-        trusted: false,
       });
       if (queued) {
         requestHeartbeat({
@@ -723,6 +729,9 @@ export const handleNodeEvent = async (
       if (obj.suppressNotifyOnExit === true) {
         return undefined;
       }
+      if (evt.event === "exec.denied") {
+        return undefined;
+      }
       const command = sanitizeInboundSystemTags(normalizeOptionalString(obj.command) ?? "");
       const exitCode =
         typeof obj.exitCode === "number" && Number.isFinite(obj.exitCode)
@@ -730,9 +739,17 @@ export const handleNodeEvent = async (
           : undefined;
       const timedOut = obj.timedOut === true;
       const output = sanitizeInboundSystemTags(normalizeOptionalString(obj.output) ?? "");
-      const reason = sanitizeInboundSystemTags(normalizeOptionalString(obj.reason) ?? "");
+      // Strip parens from the untrusted RAW reason before sanitizeInboundSystemTags
+      // runs: the `Exec denied (node=..., <reason>): cmd` wire format is parsed by
+      // matching the first balanced `(...)` and stray parens in user-supplied
+      // input would break the metadata/body boundary. We strip pre-sanitize so
+      // that legitimate `[System Message]` style tags can still be converted to
+      // `(System Message)` by sanitizeInboundSystemTags afterward.
+      const reason = sanitizeInboundSystemTags(
+        (normalizeOptionalString(obj.reason) ?? "").replace(/[()]/g, ""),
+      );
 
-      let text = "";
+      let text;
       if (evt.event === "exec.started") {
         text = `Exec started (node=${nodeId}${runId ? ` id=${runId}` : ""})`;
         if (command) {
@@ -766,17 +783,17 @@ export const handleNodeEvent = async (
         }
       }
 
+      const eventRouting = resolveEventSessionRoutingPolicy({ cfg, sessionKey });
       const queued = enqueueSystemEvent(text, {
-        sessionKey: resolveEventSessionKey(sessionKey, cfg.session?.mainKey, cfg.session?.scope),
+        sessionKey: resolveEventSessionKeyForPolicy(sessionKey, eventRouting),
         contextKey: runId ? `exec:${runId}` : "exec",
-        trusted: false,
       });
       if (queued) {
         // Scope wakes only for canonical agent sessions. Synthetic node-* fallback
         // keys should keep legacy unscoped behavior so enabled non-main heartbeat
         // agents still run when no explicit agent session is provided.
         requestHeartbeat(
-          scopedHeartbeatWakeOptions(
+          scopedHeartbeatWakeOptionsForPolicy(
             sessionKey,
             {
               source: "exec-event",
@@ -784,8 +801,7 @@ export const handleNodeEvent = async (
               reason: "exec-event",
               coalesceMs: 0,
             },
-            cfg.session?.mainKey,
-            cfg.session?.scope,
+            eventRouting,
           ),
         );
       }
@@ -818,6 +834,7 @@ export const handleNodeEvent = async (
             topic,
             environment,
             distribution: obj.distribution,
+            relayOrigin: obj.relayOrigin,
             tokenDebugSuffix: obj.tokenDebugSuffix,
           });
         } else {

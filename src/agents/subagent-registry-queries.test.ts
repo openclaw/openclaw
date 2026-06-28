@@ -1,3 +1,5 @@
+// Subagent registry query tests cover liveness, descendant counting, requester
+// lookup, and stale-row handling for in-memory run snapshots.
 import { describe, expect, it } from "vitest";
 import {
   countActiveRunsForSessionFromRuns,
@@ -10,7 +12,8 @@ import {
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
 } from "./subagent-registry-queries.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { STALE_UNENDED_SUBAGENT_RUN_MS } from "./subagent-run-liveness.js";
+
+const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 
 function makeRun(overrides: Partial<SubagentRunRecord>): SubagentRunRecord {
   const runId = overrides.runId ?? "run-default";
@@ -223,7 +226,7 @@ describe("subagent registry query regressions", () => {
   });
 
   it("regression nested parallel counting, traversal includes child and grandchildren pending states", () => {
-    // Regression guard: nested fan-out once under-counted grandchildren and announced too early.
+    // Nested fan-out once under-counted grandchildren and announced too early.
     const parentSessionKey = "agent:main:subagent:parent-nested";
     const middleSessionKey = `${parentSessionKey}:subagent:middle`;
     const runs = toRunMap([

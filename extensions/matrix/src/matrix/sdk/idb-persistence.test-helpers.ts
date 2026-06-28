@@ -1,3 +1,4 @@
+// Matrix helper module supports idb persistence helpers behavior.
 export async function clearAllIndexedDbState(params?: { databasePrefix?: string }): Promise<void> {
   const databases = await indexedDB.databases();
   const expectedPrefix = params?.databasePrefix ? `${params.databasePrefix}::` : null;
@@ -11,7 +12,11 @@ export async function clearAllIndexedDbState(params?: { databasePrefix?: string 
           new Promise<void>((resolve, reject) => {
             const req = indexedDB.deleteDatabase(name);
             req.addEventListener("success", () => resolve(), { once: true });
-            req.addEventListener("error", () => reject(req.error), { once: true });
+            req.addEventListener(
+              "error",
+              () => reject(toLintErrorObject(req.error, "Non-Error rejection")),
+              { once: true },
+            );
             req.addEventListener("blocked", () => resolve(), { once: true });
           }),
       ),
@@ -43,9 +48,17 @@ export async function seedDatabase(params: {
         db.close();
         resolve();
       });
-      tx.addEventListener("error", () => reject(tx.error), { once: true });
+      tx.addEventListener(
+        "error",
+        () => reject(toLintErrorObject(tx.error, "Non-Error rejection")),
+        { once: true },
+      );
     });
-    req.addEventListener("error", () => reject(req.error), { once: true });
+    req.addEventListener(
+      "error",
+      () => reject(toLintErrorObject(req.error, "Non-Error rejection")),
+      { once: true },
+    );
   });
 }
 
@@ -82,9 +95,35 @@ export async function readDatabaseRecords(params: {
         values = valuesReq.result;
         maybeResolve();
       });
-      keysReq.addEventListener("error", () => reject(keysReq.error), { once: true });
-      valuesReq.addEventListener("error", () => reject(valuesReq.error), { once: true });
+      keysReq.addEventListener(
+        "error",
+        () => reject(toLintErrorObject(keysReq.error, "Non-Error rejection")),
+        { once: true },
+      );
+      valuesReq.addEventListener(
+        "error",
+        () => reject(toLintErrorObject(valuesReq.error, "Non-Error rejection")),
+        { once: true },
+      );
     });
-    req.addEventListener("error", () => reject(req.error), { once: true });
+    req.addEventListener(
+      "error",
+      () => reject(toLintErrorObject(req.error, "Non-Error rejection")),
+      { once: true },
+    );
   });
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

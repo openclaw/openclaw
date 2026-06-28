@@ -1,13 +1,17 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Covers session binding adapter registration, generic current-conversation
+// fallback, capability errors, deduping, and duplicate graph teardown.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   pinActivePluginChannelRegistry,
   releasePinnedPluginChannelRegistry,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import {
-  __testing,
+  testing,
   getSessionBindingService,
   isSessionBindingError,
   registerSessionBindingAdapter,
@@ -21,6 +25,7 @@ type SessionBindingServiceModule = typeof import("./session-binding-service.js")
 
 const sessionBindingServiceModuleUrl = new URL("./session-binding-service.ts", import.meta.url)
   .href;
+const tempDirs = createTrackedTempDirs();
 
 function setMinimalCurrentConversationRegistry(): void {
   setActivePluginRegistry(
@@ -119,9 +124,26 @@ function expectConversationFields(value: unknown, fields: Record<string, unknown
 }
 
 describe("session binding service", () => {
-  beforeEach(() => {
-    __testing.resetSessionBindingAdaptersForTests();
+  let previousStateDir: string | undefined;
+  let testStateDir = "";
+
+  beforeEach(async () => {
+    previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    testStateDir = await tempDirs.make("openclaw-session-binding-");
+    process.env.OPENCLAW_STATE_DIR = testStateDir;
+    testing.resetSessionBindingAdaptersForTests();
     setMinimalCurrentConversationRegistry();
+  });
+
+  afterEach(async () => {
+    testing.resetSessionBindingAdaptersForTests();
+    closeOpenClawStateDatabaseForTest();
+    if (previousStateDir == null) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    await tempDirs.cleanup();
   });
 
   it("normalizes conversation refs and infers current placement", async () => {
@@ -215,13 +237,14 @@ describe("session binding service", () => {
         },
         placement: "child",
       })
-      .catch((error) => error);
+      .catch((error: unknown) => error);
 
     expect(isSessionBindingError(rejected)).toBe(true);
-    expectRecordFields(requireRecord(rejected, "session binding error"), {
+    const rejectedRecord = requireRecord(rejected, "session binding error");
+    expectRecordFields(rejectedRecord, {
       code: "BINDING_CAPABILITY_UNSUPPORTED",
     });
-    expectRecordFields(requireRecord(rejected.details, "session binding details"), {
+    expectRecordFields(requireRecord(rejectedRecord.details, "session binding details"), {
       placement: "child",
     });
   });
@@ -546,11 +569,11 @@ describe("session binding service", () => {
       resolveByConversation: () => null,
     };
 
-    first.__testing.resetSessionBindingAdaptersForTests();
+    first.testing.resetSessionBindingAdaptersForTests();
     first.registerSessionBindingAdapter(firstAdapter);
     second.registerSessionBindingAdapter(secondAdapter);
 
-    expect(second.__testing.getRegisteredAdapterKeys()).toEqual(["demo-binding:default"]);
+    expect(second.testing.getRegisteredAdapterKeys()).toEqual(["demo-binding:default"]);
 
     const secondBound = await second.getSessionBindingService().bind({
       targetSessionKey: "agent:main:subagent:child-1",
@@ -611,6 +634,6 @@ describe("session binding service", () => {
       "BINDING_ADAPTER_UNAVAILABLE",
     );
 
-    first.__testing.resetSessionBindingAdaptersForTests();
+    first.testing.resetSessionBindingAdaptersForTests();
   });
 });

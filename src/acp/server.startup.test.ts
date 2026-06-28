@@ -1,3 +1,4 @@
+/** Tests ACP server startup readiness, Gateway bootstrap, and shutdown wiring. */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type GatewayClientCallbacks = {
@@ -20,15 +21,21 @@ type GatewayClientOptions = GatewayClientCallbacks &
     caps?: string[];
     url?: string;
   };
+type MockAcpStream = {
+  writable: WritableStream<unknown>;
+  readable: ReadableStream<unknown>;
+};
 
 const mockState = vi.hoisted(() => ({
+  acpProtocolVersion: 1,
+  acpInputMessages: [] as unknown[],
   gateways: [] as MockGatewayClient[],
   gatewayAuth: [] as GatewayClientAuth[],
   gatewayOptions: [] as GatewayClientOptions[],
   agentSideConnectionCtor: vi.fn(),
   agentStart: vi.fn(),
   routeLogsToStderr: vi.fn(),
-  startProxy: vi.fn(async (_config: unknown) => null as unknown),
+  startProxy: vi.fn(async (_configForTest: unknown) => null as unknown),
   stopProxy: vi.fn(async (_handle: unknown) => {}),
   resolveGatewayClientBootstrap: vi.fn<ResolveGatewayClientBootstrap>(async (_params) => ({
     url: "ws://127.0.0.1:18789",
@@ -66,6 +73,9 @@ class MockGatewayClient {
 }
 
 vi.mock("@agentclientprotocol/sdk", () => ({
+  AGENT_METHODS: {
+    initialize: "initialize",
+  },
   AgentSideConnection: function AgentSideConnection(
     factory: (conn: unknown) => unknown,
     stream: unknown,
@@ -73,7 +83,18 @@ vi.mock("@agentclientprotocol/sdk", () => ({
     mockState.agentSideConnectionCtor(factory, stream);
     factory({});
   },
-  ndJsonStream: vi.fn(() => ({ type: "mock-stream" })),
+  PROTOCOL_VERSION: mockState.acpProtocolVersion,
+  ndJsonStream: vi.fn(() => ({
+    writable: new WritableStream(),
+    readable: new ReadableStream({
+      start(controller) {
+        for (const message of mockState.acpInputMessages) {
+          controller.enqueue(message);
+        }
+        controller.close();
+      },
+    }),
+  })),
 }));
 
 vi.mock("../config/config.js", () => {
@@ -200,6 +221,50 @@ describe("serveAcpGateway startup", () => {
     });
   }
 
+  function getCapturedAcpStream(): MockAcpStream {
+    const stream = mockState.agentSideConnectionCtor.mock.calls[0]?.[1];
+    if (
+      !stream ||
+      typeof stream !== "object" ||
+      !(stream as MockAcpStream).readable ||
+      !(stream as MockAcpStream).writable
+    ) {
+      throw new Error("Expected AgentSideConnection stream");
+    }
+    return stream as MockAcpStream;
+  }
+
+  async function readCapturedAcpMessages(): Promise<unknown[]> {
+    const reader = getCapturedAcpStream().readable.getReader();
+    const messages: unknown[] = [];
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          return messages;
+        }
+        messages.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+  }
+
+  async function captureAcpMessagesAfterStartup(inputMessages: unknown[]): Promise<unknown[]> {
+    mockState.acpInputMessages.push(...inputMessages);
+    const { signalHandlers, onceSpy } = captureProcessSignalHandlers();
+    const servePromise = serveAcpGateway({});
+
+    try {
+      await emitHelloAndWaitForAgentSideConnection();
+      return await readCapturedAcpMessages();
+    } finally {
+      signalHandlers.get("SIGINT")?.();
+      await servePromise;
+      onceSpy.mockRestore();
+    }
+  }
+
   async function stopServeWithSigint(
     signalHandlers: Map<NodeJS.Signals, () => void>,
     servePromise: Promise<void>,
@@ -213,6 +278,7 @@ describe("serveAcpGateway startup", () => {
   });
 
   beforeEach(async () => {
+    mockState.acpInputMessages.length = 0;
     mockState.gateways.length = 0;
     mockState.gatewayAuth.length = 0;
     mockState.gatewayOptions.length = 0;
@@ -395,5 +461,79 @@ describe("serveAcpGateway startup", () => {
     } finally {
       onceSpy.mockRestore();
     }
+  });
+
+  it("coerces MCP date-string initialize protocol versions", async () => {
+    const initializeRequest = {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        clientCapabilities: {},
+      },
+    };
+
+    await expect(captureAcpMessagesAfterStartup([initializeRequest])).resolves.toEqual([
+      {
+        ...initializeRequest,
+        params: {
+          ...initializeRequest.params,
+          protocolVersion: mockState.acpProtocolVersion,
+        },
+      },
+    ]);
+  });
+
+  it("coerces non-integer numeric initialize protocol versions", async () => {
+    const initializeRequest = {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: 1.5,
+        clientCapabilities: {},
+      },
+    };
+
+    await expect(captureAcpMessagesAfterStartup([initializeRequest])).resolves.toEqual([
+      {
+        ...initializeRequest,
+        params: {
+          ...initializeRequest.params,
+          protocolVersion: mockState.acpProtocolVersion,
+        },
+      },
+    ]);
+  });
+
+  it("passes uint16 numeric initialize protocol versions through unchanged", async () => {
+    const initializeRequest = {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: {
+        protocolVersion: 42,
+        clientCapabilities: {},
+      },
+    };
+
+    const [message] = await captureAcpMessagesAfterStartup([initializeRequest]);
+    expect(message).toBe(initializeRequest);
+  });
+
+  it("passes non-initialize JSON-RPC messages through unchanged", async () => {
+    const sessionRequest = {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "session/new",
+      params: {
+        protocolVersion: "2025-11-25",
+        cwd: "/tmp/openclaw",
+      },
+    };
+
+    const [message] = await captureAcpMessagesAfterStartup([sessionRequest]);
+    expect(message).toBe(sessionRequest);
   });
 });

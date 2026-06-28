@@ -18,9 +18,10 @@ export OPENCLAW_NO_ONBOARD=1
 export OPENCLAW_NO_PROMPT=1
 
 baseline="${OPENCLAW_UPDATE_CORRUPT_PLUGIN_BASELINE:-openclaw@latest}"
+update_timeout_seconds="$(openclaw_e2e_read_positive_int_env OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS 900)"
 echo "Installing baseline OpenClaw package: $baseline"
-if ! npm install -g --prefix /tmp/npm-prefix --omit=optional "$baseline" >/tmp/openclaw-update-corrupt-baseline-install.log 2>&1; then
-  cat /tmp/openclaw-update-corrupt-baseline-install.log >&2 || true
+if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix /tmp/npm-prefix --omit=optional "$baseline" >/tmp/openclaw-update-corrupt-baseline-install.log 2>&1; then
+  openclaw_e2e_print_log /tmp/openclaw-update-corrupt-baseline-install.log >&2
   exit 1
 fi
 
@@ -57,14 +58,22 @@ fi
 
 echo "Updating OpenClaw with corrupt plugin present..."
 set +e
-node "$entry" update --channel beta --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}" --yes --no-restart --json >/tmp/openclaw-update-corrupt-plugin.json 2>/tmp/openclaw-update-corrupt-plugin.err
+openclaw_e2e_maybe_timeout "${update_timeout_seconds}s" \
+  node "$entry" update \
+  --channel beta \
+  --tag "${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}" \
+  --yes \
+  --no-restart \
+  --json \
+  >/tmp/openclaw-update-corrupt-plugin.json \
+  2>/tmp/openclaw-update-corrupt-plugin.err
 update_status=$?
 set -e
 if [ "$update_status" -ne 0 ]; then
   if ! node scripts/e2e/lib/plugin-update/probe.mjs assert-legacy-post-update-plugin-failure /tmp/openclaw-update-corrupt-plugin.json; then
-    echo "openclaw update failed with corrupt plugin present" >&2
-    cat /tmp/openclaw-update-corrupt-plugin.err >&2 || true
-    cat /tmp/openclaw-update-corrupt-plugin.json >&2 || true
+    echo "openclaw update failed or timed out after ${update_timeout_seconds}s with corrupt plugin present" >&2
+    openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin.err >&2
+    openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin.json >&2
     exit "$update_status"
   fi
   echo "Legacy updater reported post-update plugin failure after installing the new core; verifying updated entrypoint..."
@@ -72,14 +81,20 @@ if [ "$update_status" -ne 0 ]; then
   OPENCLAW_UPDATE_POST_CORE=1 \
     OPENCLAW_UPDATE_POST_CORE_CHANNEL=beta \
     OPENCLAW_UPDATE_POST_CORE_RESULT_PATH=/tmp/openclaw-update-corrupt-plugin-post-core.json \
-    node "$entry" update --yes --no-restart --json >/tmp/openclaw-update-corrupt-plugin-post-core.stdout 2>/tmp/openclaw-update-corrupt-plugin-post-core.err
+    openclaw_e2e_maybe_timeout "${update_timeout_seconds}s" \
+    node "$entry" update \
+    --yes \
+    --no-restart \
+    --json \
+    >/tmp/openclaw-update-corrupt-plugin-post-core.stdout \
+    2>/tmp/openclaw-update-corrupt-plugin-post-core.err
   post_core_status=$?
   set -e
   if [ "$post_core_status" -ne 0 ]; then
-    echo "updated OpenClaw entry failed post-core plugin verification" >&2
-    cat /tmp/openclaw-update-corrupt-plugin-post-core.err >&2 || true
-    cat /tmp/openclaw-update-corrupt-plugin-post-core.stdout >&2 || true
-    cat /tmp/openclaw-update-corrupt-plugin-post-core.json >&2 || true
+    echo "updated OpenClaw entry failed or timed out after ${update_timeout_seconds}s during post-core plugin verification" >&2
+    openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin-post-core.err >&2
+    openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin-post-core.stdout >&2
+    openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin-post-core.json >&2
     exit "$post_core_status"
   fi
   node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-plugin-result /tmp/openclaw-update-corrupt-plugin-post-core.json demo-corrupt-plugin
@@ -88,8 +103,8 @@ fi
 
 if ! node scripts/e2e/lib/plugin-update/probe.mjs assert-corrupt-update /tmp/openclaw-update-corrupt-plugin.json demo-corrupt-plugin; then
   echo "corrupt update JSON payload:" >&2
-  cat /tmp/openclaw-update-corrupt-plugin.json >&2 || true
+  openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin.json >&2
   echo "corrupt update stderr:" >&2
-  cat /tmp/openclaw-update-corrupt-plugin.err >&2 || true
+  openclaw_e2e_print_log /tmp/openclaw-update-corrupt-plugin.err >&2
   exit 1
 fi

@@ -1,3 +1,4 @@
+// Removes installed plugins and updates plugin index records.
 import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -14,6 +15,7 @@ import {
   resolveDefaultPluginGitDir,
   resolveDefaultPluginNpmDir,
   resolvePluginInstallDir,
+  resolvePluginNpmProjectsDir,
 } from "./install-paths.js";
 import { relinkOpenClawPeerDependenciesInManagedNpmRoot } from "./plugin-peer-link.js";
 import { defaultSlotIdForKey } from "./slots.js";
@@ -211,8 +213,42 @@ function resolveNpmManagedInstall(params: {
       const packageName = resolveNpmPackageNameFromInstallPath({ installPath, nodeModulesRoot });
       return packageName ? { installPath, npmRoot, packageName } : null;
     }
+    const projectMatch = resolveNpmManagedProjectInstall({
+      installPath,
+      projectsDir: resolvePluginNpmProjectsDir(npmRoot),
+    });
+    if (projectMatch) {
+      return projectMatch;
+    }
   }
   return null;
+}
+
+function resolveNpmManagedProjectInstall(params: {
+  installPath: string;
+  projectsDir: string;
+}): { installPath: string; npmRoot: string; packageName: string } | null {
+  if (
+    !isPathInsideOrEqual(params.projectsDir, params.installPath) ||
+    resolveComparablePath(params.projectsDir) === resolveComparablePath(params.installPath)
+  ) {
+    return null;
+  }
+  const relativePath = path.relative(
+    path.resolve(params.projectsDir),
+    path.resolve(params.installPath),
+  );
+  const segments = relativePath.split(path.sep).filter(Boolean);
+  if (segments.length < 3 || segments[1] !== "node_modules") {
+    return null;
+  }
+  const npmRoot = path.join(params.projectsDir, segments[0] ?? "");
+  const nodeModulesRoot = path.join(npmRoot, "node_modules");
+  const packageName = resolveNpmPackageNameFromInstallPath({
+    installPath: params.installPath,
+    nodeModulesRoot,
+  });
+  return packageName ? { installPath: params.installPath, npmRoot, packageName } : null;
 }
 
 function resolveNpmPackageNameFromInstallPath(params: {
@@ -622,6 +658,7 @@ export async function applyPluginUninstallDirectoryRemoval(
         timeoutMs: 300_000,
         env: createSafeNpmInstallEnv(process.env, {
           legacyPeerDeps: true,
+          npmConfigCwd: removal.cleanup.npmRoot,
           packageLock: true,
           quiet: true,
         }),
@@ -660,6 +697,7 @@ export async function applyPluginUninstallDirectoryRemoval(
             timeoutMs: 300_000,
             env: createSafeNpmInstallEnv(process.env, {
               legacyPeerDeps: true,
+              npmConfigCwd: removal.cleanup.npmRoot,
               packageLock: true,
               quiet: true,
             }),

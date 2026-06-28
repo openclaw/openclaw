@@ -1,3 +1,5 @@
+// Control UI CSP tests keep script, style, media, image, font, and connection
+// directives tight while allowing the known runtime surfaces.
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { buildControlUiCspHeader, computeInlineScriptHashes } from "./control-ui-csp.js";
@@ -36,6 +38,12 @@ describe("buildControlUiCspHeader", () => {
     const csp = buildControlUiCspHeader();
     expect(csp).toContain("img-src 'self' data: blob:");
     expect(csp).not.toContain("img-src 'self' data: blob: https:");
+  });
+
+  it("allows same-origin and inline audio/video playback", () => {
+    const csp = buildControlUiCspHeader();
+    expect(csp).toContain("media-src 'self' data: blob:");
+    expect(csp).not.toContain("media-src 'self' data: blob: https:");
   });
 
   it("includes inline script hashes in script-src when provided", () => {

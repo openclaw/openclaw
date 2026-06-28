@@ -1,3 +1,5 @@
+// Verifies plain-text sanitization strips runtime scaffolding, tool-call blocks,
+// prompt-data wrappers, and conservative HTML markup.
 import { describe, expect, it } from "vitest";
 import { sanitizeForPlainText, stripInternalRuntimeScaffolding } from "./sanitize-text.js";
 
@@ -216,6 +218,19 @@ describe("stripInternalRuntimeScaffolding", () => {
     expect(stripInternalRuntimeScaffolding("what is <prompt-data>?")).toBe(
       "what is <prompt-data>?",
     );
+  });
+
+  it("strips Grok-style tool call text before outbound delivery", () => {
+    expect(
+      stripInternalRuntimeScaffolding(
+        [
+          "Before",
+          '[tool:read] {"path":"/app/skills/meme-maker/SKILL.md"}',
+          '[tool:message] {"action":"send","message":"[tool:read] {\\"path\\":\\"/app/skills/meme-maker/SKILL.md\\"}"}',
+          "After",
+        ].join("\n"),
+      ),
+    ).toBe("Before\nAfter");
   });
 
   it("removes stray standalone marker lines", () => {

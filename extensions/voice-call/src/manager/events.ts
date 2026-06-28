@@ -1,3 +1,4 @@
+// Voice Call plugin module implements events behavior.
 import crypto from "node:crypto";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { isAllowlistedCaller, normalizePhoneNumber } from "../allowlist.js";
@@ -9,7 +10,11 @@ import { findCall } from "./lookup.js";
 import { endCall } from "./outbound.js";
 import { addTranscriptEntry, transitionState } from "./state.js";
 import { persistCallRecord } from "./store.js";
-import { resolveTranscriptWaiter, startMaxDurationTimer } from "./timers.js";
+import {
+  ensureMaxDurationTimerForLiveCall,
+  resolveTranscriptWaiter,
+  startMaxDurationTimer,
+} from "./timers.js";
 
 type EventContext = Pick<
   CallManagerContext,
@@ -107,6 +112,32 @@ function createWebhookCall(params: {
   return callRecord;
 }
 
+function persistRejectedInboundCall(params: {
+  ctx: EventContext;
+  event: NormalizedEvent;
+  dedupeKey: string;
+  providerCallId: string;
+}): void {
+  const callId = params.event.callId || params.providerCallId;
+  const now = Date.now();
+  const rejectedCall: CallRecord = {
+    callId,
+    providerCallId: params.providerCallId,
+    provider: params.ctx.provider?.name || "twilio",
+    direction: "inbound",
+    state: "hangup-bot",
+    from: params.event.from || "unknown",
+    to: params.event.to || params.ctx.config.fromNumber || "unknown",
+    startedAt: params.event.timestamp || now,
+    endedAt: now,
+    endReason: "hangup-bot",
+    transcript: [],
+    processedEventIds: [params.dedupeKey],
+    metadata: { rejectionReason: "inbound-policy" },
+  };
+  persistCallRecord(params.ctx.storePath, rejectedCall);
+}
+
 export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
   const dedupeKey = event.dedupeKey || event.id;
   if (ctx.processedEventIds.has(dedupeKey)) {
@@ -143,6 +174,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       }
       ctx.rejectedProviderCallIds.add(pid);
       const callId = event.callId ?? pid;
+      persistRejectedInboundCall({ ctx, event, dedupeKey, providerCallId: pid });
       console.log(`[voice-call] Rejecting inbound call by policy: ${pid}`);
       void ctx.provider
         .hangupCall({
@@ -150,7 +182,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
           providerCallId: pid,
           reason: "hangup-bot",
         })
-        .catch((err) => {
+        .catch((err: unknown) => {
           ctx.rejectedProviderCallIds.delete(pid);
           const message = formatErrorMessage(err);
           console.warn(`[voice-call] Failed to reject inbound call ${pid}:`, message);
@@ -217,7 +249,7 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
                 }
               : {}),
           })
-          .catch((err) => {
+          .catch((err: unknown) => {
             const message = formatErrorMessage(err);
             console.warn(
               `[voice-call] Failed to answer inbound call ${call.providerCallId}:`,
@@ -249,6 +281,14 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
       break;
 
     case "call.speaking":
+      ensureMaxDurationTimerForLiveCall({
+        ctx,
+        call,
+        liveAt: event.timestamp,
+        onTimeout: async (callId) => {
+          await endCall(ctx, callId, { reason: "timeout" });
+        },
+      });
       transitionState(call, "speaking");
       break;
 
@@ -269,6 +309,14 @@ export function processEvent(ctx: EventContext, event: NormalizedEvent): void {
         }
         addTranscriptEntry(call, "user", event.transcript);
       }
+      ensureMaxDurationTimerForLiveCall({
+        ctx,
+        call,
+        liveAt: event.timestamp,
+        onTimeout: async (callId) => {
+          await endCall(ctx, callId, { reason: "timeout" });
+        },
+      });
       transitionState(call, "listening");
       break;
 

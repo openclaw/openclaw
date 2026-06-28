@@ -1,23 +1,27 @@
+/**
+ * Browser permission routes.
+ *
+ * Grants required and optional browser permissions for an origin, preferring
+ * Playwright context APIs when available and falling back to raw CDP.
+ */
+import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { SsrFPolicy } from "../../infra/net/ssrf.js";
 import { withCdpSocket } from "../cdp.helpers.js";
 import { getChromeWebSocketUrl } from "../chrome.js";
 import { getPwAiModule } from "../pw-ai-module.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import type { ProfileContext } from "../server-context.js";
+import { readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserRouteRegistrar } from "./types.js";
-import {
-  asyncBrowserRoute,
-  getProfileContext,
-  jsonError,
-  toNumber,
-  toStringOrEmpty,
-} from "./utils.js";
+import { asyncBrowserRoute, getProfileContext, jsonError, toStringOrEmpty } from "./utils.js";
 
 const permissionRouteDeps = {
   getPwAiModule,
 };
 
-export const __testing = {
+/** Test hook for replacing optional Playwright permission dependencies. */
+export const testing = {
   setDepsForTest(deps: { getPwAiModule?: typeof getPwAiModule } | null) {
     permissionRouteDeps.getPwAiModule = deps?.getPwAiModule ?? getPwAiModule;
   },
@@ -57,7 +61,7 @@ function readPermissions(raw: unknown): string[] | null {
   if (permissions.length !== raw.length) {
     return null;
   }
-  return [...new Set(permissions)];
+  return uniqueStrings(permissions);
 }
 
 async function grantPermissions(params: {
@@ -141,6 +145,7 @@ function toPlaywrightPermission(permission: string): string | undefined {
   }
 }
 
+/** Register permission grant endpoints on the browser control server. */
 export function registerBrowserPermissionRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -164,7 +169,12 @@ export function registerBrowserPermissionRoutes(
       }
       const optionalPermissions = readPermissions(body.optionalPermissions ?? []) ?? [];
       const targetId = toStringOrEmpty(body.targetId) || undefined;
-      const timeoutMs = Math.max(1_000, toNumber(body.timeoutMs) ?? 5_000);
+      let timeoutMs: number;
+      try {
+        timeoutMs = readRouteTimerTimeoutMs(body.timeoutMs, "timeoutMs", { minMs: 1_000 }) ?? 5_000;
+      } catch (err) {
+        return jsonError(res, 400, formatErrorMessage(err));
+      }
 
       try {
         await profileCtx.ensureBrowserAvailable();
@@ -193,3 +203,4 @@ export function registerBrowserPermissionRoutes(
     }),
   );
 }
+export { testing as __testing };

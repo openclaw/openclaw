@@ -1,5 +1,8 @@
+/** Doctor repair for main sessions accidentally occupied by synthetic heartbeat transcripts. */
 import fs from "node:fs";
 import path from "node:path";
+import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
+import type { note } from "../../packages/terminal-core/src/note.js";
 import { isHeartbeatOkResponse, isHeartbeatUserMessage } from "../auto-reply/heartbeat-filter.js";
 import { formatSessionArchiveTimestamp } from "../config/sessions/artifacts.js";
 import { resolveMainSessionKey } from "../config/sessions/main-session.js";
@@ -11,8 +14,6 @@ import { updateSessionStore } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
-import { asNullableObjectRecord } from "../shared/record-coerce.js";
-import type { note } from "../terminal/note.js";
 
 type DoctorPrompterLike = {
   confirmRuntimeRepair: (params: {
@@ -32,7 +33,7 @@ type TranscriptHeartbeatSummary = {
   heartbeatOkAssistantMessages: number;
 };
 
-export type HeartbeatMainSessionRepairCandidate = {
+type HeartbeatMainSessionRepairCandidate = {
   reason: "metadata" | "transcript";
   summary?: TranscriptHeartbeatSummary;
 };
@@ -120,6 +121,12 @@ function summarizeTranscriptHeartbeatMessages(
   return summary.inspectedMessages > 0 ? summary : null;
 }
 
+/**
+ * Detects main-session entries that are safe to archive because they only contain heartbeat turns.
+ *
+ * Metadata ownership is preferred, but transcript inspection catches older stores that lack the
+ * heartbeat isolation marker while still containing no human user messages.
+ */
 export function resolveHeartbeatMainSessionRepairCandidate(params: {
   entry: SessionEntry | undefined;
   transcriptPath?: string;
@@ -148,6 +155,7 @@ export function resolveHeartbeatMainSessionRepairCandidate(params: {
     summary.userMessages === summary.heartbeatUserMessages &&
     summary.nonHeartbeatUserMessages === 0
   ) {
+    // A human message must block repair; moving a real conversation would break resume semantics.
     return { reason: hasSyntheticHeartbeatOwnership ? "metadata" : "transcript", summary };
   }
   return null;
@@ -176,6 +184,7 @@ function resolveHeartbeatMainRecoveryKey(params: {
   return null;
 }
 
+/** Moves a poisoned main-session entry to a recovery key without overwriting existing entries. */
 export function moveHeartbeatMainSessionEntry(params: {
   store: Record<string, SessionEntry>;
   mainKey: string;
@@ -194,6 +203,7 @@ function resolveTuiLastSessionPath(stateDir: string): string {
   return path.join(stateDir, "tui", "last-session.json");
 }
 
+/** Removes TUI restore pointers that would reopen an archived heartbeat-owned main session. */
 export function clearTuiLastSessionPointers(params: {
   filePath: string;
   sessionKeys: ReadonlySet<string>;
@@ -233,6 +243,12 @@ export function clearTuiLastSessionPointers(params: {
   return removed;
 }
 
+/**
+ * Prompts to archive a heartbeat-owned main session and clears stale TUI restore state.
+ *
+ * The session store is rechecked inside the update transaction so concurrent session activity
+ * prevents moving a newly-human main session.
+ */
 export async function repairHeartbeatPoisonedMainSession(params: {
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;

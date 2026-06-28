@@ -1,11 +1,18 @@
+// Local notification command for paired nodes.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { randomIdempotencyKey } from "../../gateway/call.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import {
+  callGatewayCli,
+  nodesCallOpts,
+  parseOptionalNodePositiveInteger,
+  resolveNodeId,
+} from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
 
+/** Register node notification command. */
 export function registerNodesNotifyCommand(nodes: Command) {
   nodesCallOpts(
     nodes
@@ -26,9 +33,10 @@ export function registerNodesNotifyCommand(nodes: Command) {
           if (!title && !body) {
             throw new Error("missing --title or --body");
           }
-          const invokeTimeout = opts.invokeTimeout
-            ? Number.parseInt(opts.invokeTimeout, 10)
-            : undefined;
+          const invokeTimeout = parseOptionalNodePositiveInteger(
+            opts.invokeTimeout,
+            "--invoke-timeout",
+          );
           const invokeParams: Record<string, unknown> = {
             nodeId,
             command: "system.notify",

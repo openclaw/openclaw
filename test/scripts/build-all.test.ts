@@ -1,11 +1,19 @@
+// Build All tests cover build all script behavior.
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   BUILD_ALL_PROFILES,
+  BUILD_ALL_PROFILE_STEP_ENV,
   BUILD_ALL_STEPS,
+  buildAllUsage,
+  formatBuildAllDuration,
+  formatBuildAllTimingSummary,
+  parseBuildAllArgs,
   resolveBuildAllStepCacheState,
+  resolveBuildAllStepCacheStampState,
   resolveBuildAllStep,
   resolveBuildAllSteps,
   restoreBuildAllStepCacheOutputs,
@@ -29,7 +37,8 @@ function withBuildCacheFixture(
       label: string;
       cache: {
         inputs: string[];
-        outputs: string[];
+        outputs: Array<string | { path: string; extensions?: string[]; recursive?: boolean }>;
+        restore?: "always";
       };
     };
   }) => void,
@@ -62,24 +71,31 @@ function withBuildCacheFixture(
 describe("resolveBuildAllStep", () => {
   it("routes pnpm steps through the npm_execpath pnpm runner on Windows", () => {
     const step = getBuildAllStep("plugins:assets:build");
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-runner-"));
+    const npmExecPath = path.join(tempDir, "pnpm.cjs");
+    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
 
-    const result = resolveBuildAllStep(step, {
-      platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath: "C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs",
-      env: {},
-    });
-
-    expect(result).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs", "plugins:assets:build"],
-      options: {
-        stdio: "inherit",
+    try {
+      const result = resolveBuildAllStep(step, {
+        platform: "win32",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        npmExecPath,
         env: {},
-        shell: false,
-        windowsVerbatimArguments: undefined,
-      },
-    });
+      });
+
+      expect(result).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: [npmExecPath, "plugins:assets:build"],
+        options: {
+          stdio: "inherit",
+          env: {},
+          shell: false,
+          windowsVerbatimArguments: undefined,
+        },
+      });
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
   });
 
   it("keeps node steps on the current node binary", () => {
@@ -100,35 +116,116 @@ describe("resolveBuildAllStep", () => {
     });
   });
 
-  it("adds heap headroom for plugin-sdk dts on Windows", () => {
-    const step = getBuildAllStep("build:plugin-sdk:dts");
+  it("can route pnpm script steps through direct node entrypoints", () => {
+    const step = getBuildAllStep("plugins:assets:build");
 
     const result = resolveBuildAllStep(step, {
-      platform: "win32",
-      nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
-      npmExecPath: "C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs",
-      env: { FOO: "bar" },
+      nodeExecPath: "/custom/node",
+      env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
     });
 
     expect(result).toEqual({
-      command: "C:\\Program Files\\nodejs\\node.exe",
-      args: ["C:/Users/test/AppData/Local/pnpm/10.32.1/bin/pnpm.cjs", "build:plugin-sdk:dts"],
+      command: "/custom/node",
+      args: ["scripts/bundled-plugin-assets.mjs", "--phase", "build"],
       options: {
         stdio: "inherit",
-        env: {
-          FOO: "bar",
-          NODE_OPTIONS: "--max-old-space-size=4096",
-        },
-        shell: false,
-        windowsVerbatimArguments: undefined,
+        env: { OPENCLAW_BUILD_ALL_NO_PNPM: "1" },
       },
     });
+  });
+
+  it("adds heap headroom for plugin-sdk dts on Windows", () => {
+    const step = getBuildAllStep("build:plugin-sdk:dts");
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-pnpm-runner-"));
+    const npmExecPath = path.join(tempDir, "pnpm.cjs");
+    fs.writeFileSync(npmExecPath, "console.log('pnpm');\n");
+
+    try {
+      const result = resolveBuildAllStep(step, {
+        platform: "win32",
+        nodeExecPath: "C:\\Program Files\\nodejs\\node.exe",
+        npmExecPath,
+        env: { FOO: "bar" },
+      });
+
+      expect(result).toEqual({
+        command: "C:\\Program Files\\nodejs\\node.exe",
+        args: [npmExecPath, "build:plugin-sdk:dts"],
+        options: {
+          stdio: "inherit",
+          env: {
+            FOO: "bar",
+            NODE_OPTIONS: "--max-old-space-size=8192",
+          },
+          shell: false,
+          windowsVerbatimArguments: undefined,
+        },
+      });
+    } finally {
+      fs.rmSync(tempDir, { force: true, recursive: true });
+    }
+  });
+
+  it("keeps plugin-sdk dts cache metadata aligned with declaration inputs", () => {
+    const step = getBuildAllStep("build:plugin-sdk:dts");
+
+    expect(step.cache?.inputs).toEqual(expect.arrayContaining(["packages/memory-host-sdk/src"]));
+    expect(step.cache?.inputs).toEqual(expect.arrayContaining(["npm-shrinkwrap.json"]));
+    expect(step.cache?.outputs).toEqual(expect.arrayContaining(["dist/plugin-sdk/packages"]));
+  });
+
+  it("keeps export-html build output aligned with runtime template lookup", () => {
+    const step = getBuildAllStep("copy-export-html-templates");
+
+    expect(step.cache?.outputs).toEqual(["dist/export-html"]);
   });
 });
 
 describe("resolveBuildAllSteps", () => {
+  it("parses build-all CLI args before any build work", () => {
+    expect(parseBuildAllArgs([])).toEqual({ help: false, profile: "full" });
+    expect(parseBuildAllArgs(["cliStartup"])).toEqual({ help: false, profile: "cliStartup" });
+    expect(parseBuildAllArgs(["cliStartup", "--help"])).toEqual({
+      help: true,
+      profile: "cliStartup",
+    });
+    expect(() => parseBuildAllArgs(["cliStartup", "--bogus"])).toThrow("unknown argument: --bogus");
+    expect(() => parseBuildAllArgs(["wat"])).toThrow("Unknown build profile: wat");
+  });
+
+  it("prints CLI help without starting build steps", () => {
+    for (const args of [["--help"], ["cliStartup", "--help"]]) {
+      const result = spawnSync(process.execPath, ["scripts/build-all.mjs", ...args], {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      expect(result.stdout).toContain("Usage: node scripts/build-all.mjs [profile]");
+      expect(result.stdout).toContain("cliStartup");
+      expect(result.stdout).not.toContain("[build-all]");
+    }
+  });
+
+  it("rejects unknown CLI args without starting build steps", () => {
+    const result = spawnSync(process.execPath, ["scripts/build-all.mjs", "cliStartup", "--bogus"], {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    });
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("unknown argument: --bogus");
+    expect(result.stderr).toContain(buildAllUsage());
+    expect(result.stderr).not.toContain("[build-all]");
+    expect(result.stderr).not.toContain("at ");
+  });
+
   it("keeps the full profile aligned with the declared steps", () => {
-    expect(resolveBuildAllSteps("full")).toEqual(BUILD_ALL_STEPS);
+    expect(resolveBuildAllSteps("full").map((step) => step.label)).toEqual(
+      BUILD_ALL_STEPS.map((step) => step.label),
+    );
     expect(BUILD_ALL_PROFILES.full).toEqual(BUILD_ALL_STEPS.map((step) => step.label));
   });
 
@@ -146,14 +243,68 @@ describe("resolveBuildAllSteps", () => {
       "plugins:assets:copy",
       "copy-hook-metadata",
       "copy-export-html-templates",
+      "ui:build",
       "write-build-info",
       "write-cli-startup-metadata",
       "write-cli-compat",
     ]);
   });
 
+  it("skips bundled tsdown declarations for runtime-only profiles", () => {
+    for (const profile of ["ciArtifacts", "gatewayWatch", "qaRuntime", "cliStartup"]) {
+      const tsdown = resolveBuildAllSteps(profile).find((step) => step.label === "tsdown");
+      if (!tsdown) {
+        throw new Error(`Missing ${profile} tsdown step`);
+      }
+
+      expect(BUILD_ALL_PROFILE_STEP_ENV[profile].tsdown).toMatchObject({
+        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      });
+      expect(
+        resolveBuildAllStep(tsdown, { env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" } }).options.env,
+      ).toMatchObject({
+        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      });
+    }
+  });
+
+  it("preserves startup metadata only for profiles that regenerate it", () => {
+    for (const profile of ["full", "ciArtifacts", "cliStartup"]) {
+      const tsdown = resolveBuildAllSteps(profile).find((step) => step.label === "tsdown");
+      if (!tsdown) {
+        throw new Error(`Missing ${profile} tsdown step`);
+      }
+
+      expect(resolveBuildAllStep(tsdown, { env: {} }).options.env).toMatchObject({
+        OPENCLAW_PRESERVE_CLI_STARTUP_METADATA: "1",
+      });
+    }
+
+    for (const profile of ["gatewayWatch", "qaRuntime"]) {
+      const tsdown = resolveBuildAllSteps(profile).find((step) => step.label === "tsdown");
+      if (!tsdown) {
+        throw new Error(`Missing ${profile} tsdown step`);
+      }
+
+      expect(resolveBuildAllStep(tsdown, { env: {} }).options.env).not.toHaveProperty(
+        "OPENCLAW_PRESERVE_CLI_STARTUP_METADATA",
+      );
+    }
+  });
+
   it("uses a minimal built runtime profile for gateway watch regression", () => {
     expect(resolveBuildAllSteps("gatewayWatch").map((step) => step.label)).toEqual([
+      "tsdown",
+      "check-cli-bootstrap-imports",
+      "runtime-postbuild",
+      "build-stamp",
+      "runtime-postbuild-stamp",
+    ]);
+  });
+
+  it("uses a QA runtime profile with generated plugin assets but no startup metadata", () => {
+    expect(resolveBuildAllSteps("qaRuntime").map((step) => step.label)).toEqual([
+      "plugins:assets:build",
       "tsdown",
       "check-cli-bootstrap-imports",
       "runtime-postbuild",
@@ -174,6 +325,46 @@ describe("resolveBuildAllSteps", () => {
     ]);
   });
 
+  it("skips generated static plugin assets for minimal backend-only profiles", () => {
+    for (const profile of ["gatewayWatch", "cliStartup"]) {
+      const runtimePostbuild = resolveBuildAllSteps(profile).find(
+        (step) => step.label === "runtime-postbuild",
+      );
+      if (!runtimePostbuild) {
+        throw new Error(`Missing ${profile} runtime-postbuild step`);
+      }
+
+      expect(BUILD_ALL_PROFILE_STEP_ENV[profile]["runtime-postbuild"]).toEqual({
+        OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
+      });
+      expect(
+        resolveBuildAllStep(runtimePostbuild, {
+          env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "1" },
+        }).options.env,
+      ).toMatchObject({
+        OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0",
+      });
+    }
+  });
+
+  it("keeps generated static plugin assets enabled for the QA runtime profile", () => {
+    const runtimePostbuild = resolveBuildAllSteps("qaRuntime").find(
+      (step) => step.label === "runtime-postbuild",
+    );
+    if (!runtimePostbuild) {
+      throw new Error("Missing qaRuntime runtime-postbuild step");
+    }
+
+    expect(BUILD_ALL_PROFILE_STEP_ENV.qaRuntime["runtime-postbuild"]).toBeUndefined();
+    expect(
+      resolveBuildAllStep(runtimePostbuild, {
+        env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "1" },
+      }).options.env,
+    ).toMatchObject({
+      OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "1",
+    });
+  });
+
   it("writes the runtime postbuild stamp after the build stamp", () => {
     const labels = resolveBuildAllSteps("full").map((step) => step.label);
     expect(labels).toContain("runtime-postbuild");
@@ -184,9 +375,60 @@ describe("resolveBuildAllSteps", () => {
     );
   });
 
-  it("does not cache plugin-sdk entry shims over compiled JS", () => {
-    const step = getBuildAllStep("write-plugin-sdk-entry-dts");
+  it("includes ui:build in the full and ciArtifacts profiles after runtime postbuild", () => {
+    for (const profile of ["full", "ciArtifacts"]) {
+      const labels = resolveBuildAllSteps(profile).map((step) => step.label);
+      expect(labels).toContain("ui:build");
+      // Control UI bundling must run after tsdown clears dist so that
+      // dist/control-ui survives `pnpm build` without a second command.
+      expect(labels.indexOf("ui:build")).toBeGreaterThan(labels.indexOf("tsdown"));
+      expect(labels.indexOf("ui:build")).toBeGreaterThan(labels.indexOf("runtime-postbuild-stamp"));
+      // ui:build must run before write-build-info so the build manifest can
+      // see the final dist/control-ui assets.
+      expect(labels.indexOf("ui:build")).toBeLessThan(labels.indexOf("write-build-info"));
+    }
+  });
+
+  it("keeps ui:build out of minimal backend-only profiles", () => {
+    for (const profile of ["gatewayWatch", "qaRuntime", "cliStartup"]) {
+      const labels = resolveBuildAllSteps(profile).map((step) => step.label);
+      expect(labels).not.toContain("ui:build");
+    }
+  });
+
+  it("does not cache ui:build because Vite reads package.json, git HEAD, and env metadata", () => {
+    // ui/vite.config.ts derives the Control UI build ID from package.json,
+    // git HEAD, and OPENCLAW_CONTROL_UI_BUILD_ID env, so a file-input
+    // signature cannot exactly invalidate generated assets. Leaving this
+    // step uncached avoids restoring stale service-worker/app cache
+    // metadata after `tsdown` clears `dist`.
+    const step = getBuildAllStep("ui:build");
+    expect(step.kind).toBe("pnpm");
+    expect(step.pnpmArgs).toEqual(["ui:build"]);
     expect(step.cache).toBeUndefined();
+  });
+
+  it("caches plugin-sdk entry declarations without restoring compiled JS", () => {
+    const step = getBuildAllStep("write-plugin-sdk-entry-dts");
+    expect(step.cache?.env).toEqual(["OPENCLAW_BUILD_PRIVATE_QA"]);
+    expect(step.cache?.inputs).toEqual(
+      expect.arrayContaining([
+        "scripts/write-plugin-sdk-entry-dts.ts",
+        "scripts/lib/plugin-sdk-entrypoints.json",
+        "src/plugin-sdk",
+        "packages/model-catalog-core/src",
+      ]),
+    );
+    expect(step.cache?.outputs).toEqual(
+      expect.arrayContaining([
+        { path: "dist/plugin-sdk", extensions: [".d.ts"], recursive: false },
+        "dist/plugin-sdk/webhook-path.js",
+        "dist/plugin-sdk/.boundary-entry-shims.stamp",
+        "packages/plugin-sdk/dist/src/plugin-sdk/provider-entry.d.ts",
+      ]),
+    );
+    expect(step.cache?.outputs).not.toContain("dist/plugin-sdk");
+    expect(step.cache?.restore).toBe("always");
   });
 
   it("does not cache hook metadata over compiled hook handlers", () => {
@@ -196,6 +438,26 @@ describe("resolveBuildAllSteps", () => {
 
   it("rejects unknown build profiles", () => {
     expect(() => resolveBuildAllSteps("wat")).toThrow("Unknown build profile: wat");
+  });
+});
+
+describe("build-all timing output", () => {
+  it("formats short and long phase durations compactly", () => {
+    expect(formatBuildAllDuration(42.4)).toBe("42ms");
+    expect(formatBuildAllDuration(1234)).toBe("1.23s");
+    expect(formatBuildAllDuration(12345)).toBe("12.3s");
+  });
+
+  it("summarizes phases slowest first with total time and status", () => {
+    expect(
+      formatBuildAllTimingSummary([
+        { label: "tsdown", status: "ran", durationMs: 99000 },
+        { label: "plugins:assets:copy", status: "cached", durationMs: 12 },
+        { label: "build:plugin-sdk:dts", status: "ran", durationMs: 34567 },
+      ]),
+    ).toBe(
+      "[build-all] phase timings: total 133.6s; slowest tsdown 99.0s; build:plugin-sdk:dts 34.6s; plugins:assets:copy (cached) 12ms",
+    );
   });
 });
 
@@ -277,6 +539,49 @@ describe("resolveBuildAllStepCacheState", () => {
     });
   });
 
+  it("reuses the pre-run input signature when stamping successful cacheable steps", () => {
+    withBuildCacheFixture(({ rootDir, step }) => {
+      const cacheState = resolveBuildAllStepCacheState(step, { rootDir });
+      const readSpy = vi.spyOn(fs, "readFileSync");
+
+      try {
+        const stampState = resolveBuildAllStepCacheStampState(step, cacheState, { rootDir });
+        writeBuildAllStepCacheStamp(step, stampState, { rootDir });
+
+        expect(readSpy).not.toHaveBeenCalled();
+        expect(stampState.signature).toBe(cacheState.signature);
+        expect(stampState.relativeOutputFiles).toEqual(["dist/output.js"]);
+      } finally {
+        readSpy.mockRestore();
+      }
+    });
+  });
+
+  it("marks cacheable steps stale when a tracked env input changes", () => {
+    withBuildCacheFixture(({ rootDir, step }) => {
+      const envStep = {
+        ...step,
+        cache: {
+          ...step.cache,
+          env: ["OPENCLAW_BUILD_PRIVATE_QA"],
+        },
+      };
+      const cacheState = resolveBuildAllStepCacheState(envStep, {
+        rootDir,
+        env: { OPENCLAW_BUILD_PRIVATE_QA: "0" },
+      });
+      writeBuildAllStepCacheStamp(envStep, cacheState, { rootDir });
+
+      const stale = resolveBuildAllStepCacheState(envStep, {
+        rootDir,
+        env: { OPENCLAW_BUILD_PRIVATE_QA: "1" },
+      });
+      expect(stale.cacheable).toBe(true);
+      expect(stale.fresh).toBe(false);
+      expect(stale.reason).toBe("stale");
+    });
+  });
+
   it("restores cached outputs when generated files were removed", () => {
     withBuildCacheFixture(({ rootDir, outputPath, step }) => {
       const cacheState = resolveBuildAllStepCacheState(step, { rootDir });
@@ -315,6 +620,54 @@ describe("resolveBuildAllStepCacheState", () => {
       });
       expect(restoreBuildAllStepCacheOutputs(restorable, { rootDir })).toBe(true);
       expect(fs.readFileSync(outputPath, "utf8")).toBe("output");
+    });
+  });
+
+  it("restores cached outputs over existing outputs for always-restore steps", () => {
+    withBuildCacheFixture(({ rootDir, outputPath, step }) => {
+      const alwaysRestoreStep = {
+        ...step,
+        cache: {
+          ...step.cache,
+          restore: "always" as const,
+        },
+      };
+      const cacheState = resolveBuildAllStepCacheState(alwaysRestoreStep, { rootDir });
+      writeBuildAllStepCacheStamp(alwaysRestoreStep, cacheState, { rootDir });
+      fs.writeFileSync(outputPath, "overwritten by earlier build step");
+
+      const restorable = resolveBuildAllStepCacheState(alwaysRestoreStep, { rootDir });
+      expect(restorable.cacheable).toBe(true);
+      expect(restorable.fresh).toBe(true);
+      expect(restorable.reason).toBe("fresh-cache");
+      expect(restorable.outputFiles).toBe(1);
+      expect(restorable.restorable).toBe(true);
+      expect(restorable.relativeOutputFiles).toEqual(["dist/output.js"]);
+      expect(restorable.stampedOutputs).toEqual(["dist/output.js"]);
+
+      expect(restoreBuildAllStepCacheOutputs(restorable, { rootDir })).toBe(true);
+      expect(fs.readFileSync(outputPath, "utf8")).toBe("output");
+    });
+  });
+
+  it("can cache only direct directory files for generated flat outputs", () => {
+    withBuildCacheFixture(({ rootDir, step }) => {
+      const nestedPath = path.join(rootDir, "dist/nested/output.d.ts");
+      fs.mkdirSync(path.dirname(nestedPath), { recursive: true });
+      fs.writeFileSync(path.join(rootDir, "dist/output.js"), "ignored");
+      fs.writeFileSync(path.join(rootDir, "dist/output.d.ts"), "flat");
+      fs.writeFileSync(nestedPath, "nested");
+
+      const flatOnlyStep = {
+        ...step,
+        cache: {
+          ...step.cache,
+          outputs: [{ path: "dist", extensions: [".d.ts"], recursive: false }],
+        },
+      };
+
+      const cacheState = resolveBuildAllStepCacheState(flatOnlyStep, { rootDir });
+      expect(cacheState.relativeOutputFiles).toEqual(["dist/output.d.ts"]);
     });
   });
 });

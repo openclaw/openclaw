@@ -1,3 +1,6 @@
+// Matrix helper module supports handler helpers behavior.
+import type { PreparedInboundReply } from "openclaw/plugin-sdk/channel-inbound";
+import { finalizeInboundContext as finalizeCoreInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { vi, type Mock } from "vitest";
 import type { RuntimeEnv, RuntimeLogger } from "../../runtime-api.js";
 import type {
@@ -113,9 +116,7 @@ type MatrixHandlerTestHarness = {
   upsertPairingRequest: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
 };
 
-type MatrixRunPreparedInput = Parameters<
-  MatrixMonitorHandlerParams["core"]["channel"]["turn"]["runPrepared"]
->[0];
+type MatrixRunPreparedInput = PreparedInboundReply<unknown>;
 type MatrixRunPreparedMockFn = (turn: MatrixRunPreparedInput) => Promise<unknown>;
 type MatrixRunPreparedMock = Mock<MatrixRunPreparedMockFn>;
 
@@ -127,7 +128,13 @@ export function createMatrixHandlerTestHarness(
     options.upsertPairingRequest ?? vi.fn(async () => ({ code: "ABCDEFGH", created: false }));
   const resolveAgentRoute = options.resolveAgentRoute ?? vi.fn(() => DEFAULT_ROUTE);
   const recordInboundSession = options.recordInboundSession ?? vi.fn(async () => {});
-  const finalizeInboundContext = options.finalizeInboundContext ?? vi.fn((ctx) => ctx);
+  const finalizeInboundContext =
+    options.finalizeInboundContext ??
+    vi.fn((ctx: unknown) =>
+      ctx && typeof ctx === "object"
+        ? finalizeCoreInboundContext(ctx as Record<string, unknown>)
+        : ctx,
+    );
   const dispatchReplyFromConfig =
     options.dispatchReplyFromConfig ??
     (async () => ({
@@ -157,7 +164,9 @@ export function createMatrixHandlerTestHarness(
       };
     });
   const run = vi.fn(
-    async (params: Parameters<MatrixMonitorHandlerParams["core"]["channel"]["turn"]["run"]>[0]) => {
+    async (
+      params: Parameters<MatrixMonitorHandlerParams["core"]["channel"]["inbound"]["run"]>[0],
+    ) => {
       const input = await params.adapter.ingest(params.raw);
       if (!input) {
         return { admission: { kind: "drop" as const, reason: "ingest-null" }, dispatched: false };
@@ -251,9 +260,9 @@ export function createMatrixHandlerTestHarness(
               run: () => Promise<T>;
               onSettled?: () => void | Promise<void>;
             }) => {
-              const { dispatcher, run, onSettled } = params;
+              const { dispatcher, run: runLocal, onSettled } = params;
               try {
-                return await run();
+                return await runLocal();
               } finally {
                 dispatcher.markComplete?.();
                 try {
@@ -264,9 +273,8 @@ export function createMatrixHandlerTestHarness(
               }
             }),
         },
-        turn: {
+        inbound: {
           run,
-          runPrepared,
         },
         reactions: {
           shouldAckReaction: options.shouldAckReaction ?? (() => false),

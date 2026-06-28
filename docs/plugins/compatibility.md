@@ -112,6 +112,8 @@ Current compatibility records include:
 
 - legacy broad SDK imports such as `openclaw/plugin-sdk/compat`
 - legacy hook-only plugin shapes and `before_agent_start`
+- legacy `api.on("deactivate", ...)` cleanup hook names while plugins migrate to
+  `gateway_stop`
 - legacy `activate(api)` plugin entrypoints while plugins migrate to
   `register(api)`
 - legacy SDK aliases such as `openclaw/extension-api`,
@@ -126,8 +128,18 @@ Current compatibility records include:
 - legacy runtime aliases such as `api.runtime.taskFlow`,
   `api.runtime.subagent.getSession`, `api.runtime.stt`, and deprecated
   `api.runtime.config.loadConfig()` / `api.runtime.config.writeConfigFile(...)`
+- WhatsApp `WebInboundMessage` flat callback fields such as `body`, `chatId`,
+  `reply(...)`, and `mediaPath` while callback consumers migrate to the nested
+  `WebInboundCallbackMessage` `event`, `payload`, `quote`, `group`, and
+  `platform` contexts
+- WhatsApp `WebInboundMessage` top-level admission fields such as `from`,
+  `conversationId`, `accountId`, `accessControlPassed`, and `chatType` while
+  callback consumers migrate to the `admission` envelope
 - legacy memory-plugin split registration while memory plugins move to
   `registerMemoryCapability`
+- legacy memory-specific embedding provider registration while embedding
+  providers move to `api.registerEmbeddingProvider(...)` and
+  `contracts.embeddingProviders`
 - legacy channel SDK helpers for native message schemas, mention gating,
   inbound envelope formatting, and approval capability nesting
 - legacy channel route key and comparable-target helper aliases while plugins
@@ -154,6 +166,50 @@ Current compatibility records include:
 New plugin code should prefer the replacement listed in the registry and in the
 specific migration guide. Existing plugins can keep using a compatibility path
 until the docs, diagnostics, and release notes announce a removal window.
+
+### WhatsApp Inbound Callback Flat Aliases
+
+WhatsApp runtime callbacks deliver `WebInboundMessage`: the canonical nested
+`event`, `payload`, `quote`, `group`, and `platform` contexts plus deprecated
+flat aliases for the shipped callback fields. New callback code should read the
+nested contexts. Code that constructs clean nested callback messages can use
+`WebInboundCallbackMessage`; compatibility listeners that still inject old flat
+test or plugin messages should use `LegacyFlatWebInboundMessage` or
+`WebInboundMessageInput`.
+
+The flat aliases remain available until **2026-08-30**. That removal window
+applies only to flat alias access; the nested callback shape is the canonical
+runtime contract. The TypeScript `@deprecated` annotations on each flat alias
+name its exact nested replacement. Common examples:
+
+- `id`, `timestamp`, and `isBatched` move under `event`.
+- `body`, `mediaPath`, `mediaType`, `mediaFileName`, `mediaUrl`, `location`, and
+  `untrustedStructuredContext` move under `payload`.
+- `to`, `chatId`, sender/self fields, `sendComposing`, `reply(...)`, and
+  `sendMedia(...)` move under `platform`.
+- `replyTo*` fields move under `quote`, and group subject/participant/mention
+  fields move under `group`.
+
+`payload.untrustedStructuredContext` is extracted from inbound provider payloads.
+Plugins should inspect the `label`, `source`, and `type` before treating its
+`payload` as authoritative.
+
+### WhatsApp Inbound Admission Fields
+
+Accepted WhatsApp callback messages now carry `admission`, a public-safe
+envelope for the access-control decision that admitted the message. New callback
+code should read admission facts from `msg.admission` instead of the older
+top-level admission fields.
+
+The top-level fields remain available until **2026-08-30**. The TypeScript
+`@deprecated` annotations name each replacement:
+
+- `from` and `conversationId` move to `admission.conversation.id`.
+- `accountId` moves to `admission.accountId`.
+- `accessControlPassed` is a derived compatibility view of
+  `admission.ingress.decision === "allow"`; on messages that already carry
+  `admission`, writing the legacy boolean does not rewrite the ingress graph.
+- `chatType` moves to `admission.conversation.kind`.
 
 ## Release notes
 

@@ -1,4 +1,8 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+/**
+ * Process-control tool factory.
+ * Lists, polls, logs, writes to, sends keys to, pastes into, kills, clears,
+ * and removes background exec sessions.
+ */
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
 import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import { killProcessTree } from "../process/kill-tree.js";
@@ -27,9 +31,11 @@ import {
 } from "./bash-tools.shared.js";
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
 import { encodePaste } from "./pty-keys.js";
+import type { AgentToolResult } from "./runtime/index.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import type { AgentToolWithMeta } from "./tools/common.js";
 
+/** Defaults injected by tests, agent scopes, and scoped process registries. */
 export type ProcessToolDefaults = {
   cleanupMs?: number;
   hasCronTool?: boolean;
@@ -96,9 +102,9 @@ function resolvePollWaitMs(value: unknown) {
   if (typeof value === "number" && Number.isFinite(value)) {
     return Math.max(0, Math.min(MAX_POLL_WAIT_MS, Math.floor(value)));
   }
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value.trim(), 10);
-    if (Number.isFinite(parsed)) {
+  if (typeof value === "string" && /^[+-]?\d+$/.test(value.trim())) {
+    const parsed = Number(value.trim());
+    if (Number.isSafeInteger(parsed)) {
       return Math.max(0, Math.min(MAX_POLL_WAIT_MS, parsed));
     }
   }
@@ -149,8 +155,6 @@ async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void
     throw createAbortError(signal.reason);
   }
   await new Promise<void>((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let onAbort: (() => void) | undefined;
     const cleanup = () => {
       if (timer) {
         clearTimeout(timer);
@@ -163,16 +167,17 @@ async function sleepPollInterval(ms: number, signal?: AbortSignal): Promise<void
       cleanup();
       resolve();
     };
-    onAbort = () => {
+    const onAbort: (() => void) | undefined = () => {
       cleanup();
       reject(createAbortError(signal?.reason));
     };
-    timer = setTimeout(onResolve, ms);
+    const timer: ReturnType<typeof setTimeout> | undefined = setTimeout(onResolve, ms);
     timer.unref?.();
     signal?.addEventListener("abort", onAbort, { once: true });
   });
 }
 
+/** Build the process-control tool with optional cleanup, scope, and input-idle defaults. */
 export function createProcessTool(
   defaults?: ProcessToolDefaults,
 ): AgentToolWithMeta<typeof processSchema, unknown> {
@@ -372,14 +377,14 @@ export function createProcessTool(
       };
 
       const runningSessionResult = (
-        session: ProcessSession,
+        sessionLocal: ProcessSession,
         text: string,
       ): AgentToolResult<unknown> => ({
         content: [{ type: "text", text }],
         details: {
           status: "running",
           sessionId: params.sessionId,
-          name: deriveSessionName(session.command),
+          name: deriveSessionName(sessionLocal.command),
         },
       });
 
@@ -739,4 +744,5 @@ export function createProcessTool(
   };
 }
 
+/** Shared process-control tool instance used by the default Bash tool barrel. */
 export const processTool = createProcessTool();

@@ -1,11 +1,13 @@
+// TTS status config helpers resolve status output paths for speech generation.
 import path from "node:path";
-import type { OpenClawConfig } from "../config/types.js";
-import type { TtsAutoMode, TtsConfig, TtsProvider } from "../config/types.tts.js";
-import { tryReadJsonSync } from "../infra/json-files.js";
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import type { OpenClawConfig } from "../config/types.js";
+import type { TtsAutoMode, TtsConfig, TtsProvider } from "../config/types.tts.js";
+import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveConfigDir, resolveUserPath } from "../utils.js";
 import { normalizeTtsAutoMode } from "./tts-auto-mode.js";
 import { resolveEffectiveTtsConfig, type TtsConfigResolutionContext } from "./tts-config.js";
@@ -99,10 +101,6 @@ function resolveTtsAutoModeFromPrefs(prefs: TtsUserPrefs): TtsAutoMode | undefin
     return prefs.tts.enabled ? "always" : "off";
   }
   return undefined;
-}
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function normalizeStatusDetail(
@@ -200,7 +198,13 @@ function resolveStatusProviderDetails(raw: TtsConfig, provider: TtsProvider) {
   if (model) {
     details.model = model;
   }
-  const voice = firstStatusDetail(record, ["voice", "voiceId", "voiceName"]);
+  const voice = firstStatusDetail(record, [
+    "speakerVoice",
+    "speakerVoiceId",
+    "voice",
+    "voiceId",
+    "voiceName",
+  ]);
   if (voice) {
     details.voice = voice;
   }
@@ -236,7 +240,7 @@ export function resolveStatusTtsSnapshot(params: {
   }
 
   const persona =
-    prefs.tts && Object.prototype.hasOwnProperty.call(prefs.tts, "persona")
+    prefs.tts && Object.hasOwn(prefs.tts, "persona")
       ? normalizeTtsPersonaId(prefs.tts.persona)
       : normalizeTtsPersonaId(raw.persona);
   const provider =

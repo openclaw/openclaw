@@ -1,8 +1,9 @@
+// Vitest project config tests validate aggregate Vitest project wiring.
 import { afterEach, describe, expect, it } from "vitest";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
 import { createAgentsCoreVitestConfig } from "./vitest/vitest.agents-core.config.ts";
-import { createAgentsPiEmbeddedVitestConfig } from "./vitest/vitest.agents-pi-embedded.config.ts";
+import { createAgentsEmbeddedVitestConfig } from "./vitest/vitest.agents-embedded-agent.config.ts";
 import { createAgentsSupportVitestConfig } from "./vitest/vitest.agents-support.config.ts";
 import { createAgentsToolsVitestConfig } from "./vitest/vitest.agents-tools.config.ts";
 import { createAgentsVitestConfig } from "./vitest/vitest.agents.config.ts";
@@ -25,7 +26,10 @@ import {
   resolveSharedVitestWorkerConfig,
   sharedVitestConfig,
 } from "./vitest/vitest.shared.config.ts";
-import { createUiVitestConfig, unitUiIncludePatterns } from "./vitest/vitest.ui.config.ts";
+import { fullSuiteVitestShards } from "./vitest/vitest.test-shards.mjs";
+import { unitUiIncludePatterns } from "./vitest/vitest.ui-paths.mjs";
+import { createUiVitestConfig } from "./vitest/vitest.ui.config.ts";
+import { createUnitFastFakeTimersVitestConfig } from "./vitest/vitest.unit-fast-fake-timers.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 import unitUiConfig from "./vitest/vitest.unit-ui.config.ts";
 import { createUnitVitestConfig } from "./vitest/vitest.unit.config.ts";
@@ -58,6 +62,42 @@ describe("projects vitest config", () => {
     expect(requireTestConfig(baseConfig).projects).toEqual([...rootVitestProjects]);
   });
 
+  it("keeps root watch projects aligned with dedicated extension shard lanes", () => {
+    const extensionShard = fullSuiteVitestShards.find(
+      (shard) => shard.config === "test/vitest/vitest.full-extensions.config.ts",
+    );
+
+    expect(extensionShard?.projects).toEqual(
+      expect.arrayContaining([
+        "test/vitest/vitest.extension-browser.config.ts",
+        "test/vitest/vitest.extension-qa.config.ts",
+        "test/vitest/vitest.extension-media.config.ts",
+        "test/vitest/vitest.extension-misc.config.ts",
+      ]),
+    );
+    expect(rootVitestProjects).toEqual(
+      expect.arrayContaining([
+        "test/vitest/vitest.extension-browser.config.ts",
+        "test/vitest/vitest.extension-qa.config.ts",
+        "test/vitest/vitest.extension-media.config.ts",
+        "test/vitest/vitest.extension-misc.config.ts",
+      ]),
+    );
+  });
+
+  it("keeps root watch projects aligned with dedicated tooling shard lanes", () => {
+    const toolingShard = fullSuiteVitestShards.find(
+      (shard) => shard.config === "test/vitest/vitest.full-core-tooling.config.ts",
+    );
+
+    expect(toolingShard?.projects).toEqual(
+      expect.arrayContaining(["test/vitest/vitest.tooling-docker.config.ts"]),
+    );
+    expect(rootVitestProjects).toEqual(
+      expect.arrayContaining(["test/vitest/vitest.tooling-docker.config.ts"]),
+    );
+  });
+
   it("disables vite env-file loading for vitest lanes", () => {
     expect(baseConfig.envFile).toBe(false);
     expect(sharedVitestConfig.envFile).toBe(false);
@@ -67,11 +107,11 @@ describe("projects vitest config", () => {
     expect(createGatewayVitestConfig().test.pool).toBe("threads");
     expect(createAgentsVitestConfig().test.pool).toBe("threads");
     expect(createAgentsCoreVitestConfig().test.pool).toBe("threads");
-    expect(createAgentsPiEmbeddedVitestConfig().test.pool).toBe("threads");
+    expect(createAgentsEmbeddedVitestConfig().test.pool).toBe("threads");
     expect(createAgentsSupportVitestConfig().test.pool).toBe("threads");
     expect(createAgentsToolsVitestConfig().test.pool).toBe("threads");
     expect(createCommandsLightVitestConfig().test.pool).toBe("threads");
-    expect(createCommandsVitestConfig().test.pool).toBe("threads");
+    expect(createCommandsVitestConfig().test.pool).toBe("forks");
     expect(createPluginSdkLightVitestConfig().test.pool).toBe("threads");
     expect(createUnitFastVitestConfig().test.pool).toBe("threads");
     expect(createContractsVitestConfig(pluginContractPatterns).test.pool).toBe("threads");
@@ -198,6 +238,15 @@ describe("projects vitest config", () => {
     const config = createUnitFastVitestConfig();
     expect(config.test.isolate).toBe(false);
     expect(config.test.runner).toBeUndefined();
+  });
+
+  it("keeps fake-timer unit-fast files serial with the non-isolated runner", () => {
+    const config = createUnitFastFakeTimersVitestConfig();
+    expect(config.test.isolate).toBe(false);
+    expect(normalizeConfigPath(config.test.runner)).toBe("test/non-isolated-runner.ts");
+    expect(config.test.fileParallelism).toBe(false);
+    expect(config.test.maxWorkers).toBe(1);
+    expect(config.test.sequence).toMatchObject({ groupOrder: 1 });
   });
 
   it("keeps the bundled lane on thread workers with the non-isolated runner", () => {

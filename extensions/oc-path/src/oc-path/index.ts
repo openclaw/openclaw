@@ -3,7 +3,7 @@
  *
  * **Strategic frame**: workspace files are byte-stable and addressable
  * via the `oc://` scheme — the addressing scheme is universal across
- * file kinds (md / jsonc / jsonl). Encoding (parse/emit) is per-kind;
+ * file kinds (md / jsonc / jsonl / yaml). Encoding (parse/emit) is per-kind;
  * addressing (resolve/set) is universal.
  *
  * **Public verbs**:
@@ -24,26 +24,11 @@
  * @module @openclaw/oc-path
  */
 
-/**
- * SDK version this build of `@openclaw/oc-path` exposes. Bumped on
- * every breaking change to AST shape, OcPath syntax, or universal
- * verbs (`resolveOcPath`, `setOcPath`, `findOcPaths`, `parseXxx`,
- * `emitXxx`). Plugin packs that depend on the substrate declare the
- * version they were authored against and the host warns on mismatch.
- */
-export const SDK_VERSION = "0.1.0";
-
 // AST types
-export type {
-  AstBlock,
-  AstItem,
-  Diagnostic,
-  FrontmatterEntry,
-  ParseResult,
-  MdAst,
-} from "./ast.js";
+export type { AstBlock, AstItem, Diagnostic, FrontmatterEntry, ParseResult, MdAst } from "./ast.js";
 export type { JsoncAst, JsoncEntry, JsoncValue } from "./jsonc/ast.js";
 export type { JsonlAst, JsonlLine } from "./jsonl/ast.js";
+export type { YamlAst } from "./yaml/ast.js";
 
 // OcPath types + parser/formatter
 export type { OcPath, PathSegmentLayout, PositionalContainer, PredicateSpec } from "./oc-path.js";
@@ -53,6 +38,7 @@ export {
   MAX_SUB_SEGMENTS_PER_SLOT,
   MAX_TRAVERSAL_DEPTH,
   OcPathError,
+  POS_FIRST,
   POS_LAST,
   WILDCARD_RECURSIVE,
   WILDCARD_SINGLE,
@@ -70,7 +56,7 @@ export {
 
 // `evaluatePredicate`, `getPathLayout`, `parseOrdinalSeg`,
 // `parsePredicateSeg`, `parseUnionSeg`, `quoteSeg`, `unquoteSeg`,
-// `repackPath`, `resolvePositionalSeg`, `splitRespectingBrackets`
+// `resolvePositionalSeg`, `splitRespectingBrackets`
 // were exported from earlier prototypes. They're substrate-internal
 // helpers — used by `find.ts`, the per-kind resolvers, and the parser
 // itself, but not part of the upstream-portable public surface.
@@ -81,15 +67,19 @@ export {
 export { parseMd } from "./parse.js";
 export { parseJsonc } from "./jsonc/parse.js";
 export { parseJsonl } from "./jsonl/parse.js";
+export { parseYaml } from "./yaml/parse.js";
 export type { JsoncParseResult } from "./jsonc/parse.js";
 export type { JsonlParseResult } from "./jsonl/parse.js";
+export type { YamlParseResult } from "./yaml/parse.js";
 
 export type { EmitOptions } from "./emit.js";
-export { emitMd, markDirty } from "./emit.js";
+export { emitMd } from "./emit.js";
 export type { JsoncEmitOptions } from "./jsonc/emit.js";
 export { emitJsonc } from "./jsonc/emit.js";
 export type { JsonlEmitOptions } from "./jsonl/emit.js";
 export { emitJsonl } from "./jsonl/emit.js";
+export type { YamlEmitOptions } from "./yaml/emit.js";
+export { emitYaml } from "./yaml/emit.js";
 
 // Universal verbs — the only public resolve / set on the surface.
 export type {

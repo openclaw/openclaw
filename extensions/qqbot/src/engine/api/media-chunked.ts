@@ -36,6 +36,7 @@
 
 import * as crypto from "node:crypto";
 import type { FileHandle } from "node:fs/promises";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { MediaSource, OpenedLocalFile } from "../messaging/media-source.js";
 import { openLocalFile } from "../messaging/media-source.js";
@@ -139,6 +140,7 @@ const MAX_PART_FINISH_RETRY_TIMEOUT_MS = 10 * 60 * 1000;
 
 /** Per-part PUT timeout (5 minutes). Matches the low-bandwidth tolerance. */
 const PART_UPLOAD_TIMEOUT_MS = 300_000;
+const PART_UPLOAD_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 /**
  * Boundary used by `md5_10m` — first 10,002,432 bytes.
@@ -202,7 +204,8 @@ export class ChunkedMediaApi {
 
       // 3. Upload-cache fast path: the md5 hash is already a strong content
       // identifier, so we can short-circuit before even calling upload_prepare.
-      if (this.cache) {
+      const canUseUploadCache = opts.fileType !== MediaFileType.FILE;
+      if (this.cache && canUseUploadCache) {
         const cached = this.cache.get(hashes.md5, opts.scope, opts.targetId, opts.fileType);
         if (cached) {
           this.logger?.info?.(
@@ -293,7 +296,7 @@ export class ChunkedMediaApi {
       this.logger?.info?.(`${prefix} completed: file_uuid=${result.file_uuid} ttl=${result.ttl}s`);
 
       // 7. Populate the shared upload cache so subsequent sends skip re-uploading.
-      if (this.cache && result.file_info && result.ttl > 0) {
+      if (this.cache && canUseUploadCache && result.file_info && result.ttl > 0) {
         this.cache.set(
           hashes.md5,
           opts.scope,
@@ -408,19 +411,6 @@ export class ChunkedMediaApi {
       this.logger,
     );
   }
-}
-
-// ============ Legacy functional facade ============
-
-/**
- * @deprecated The chunked uploader is always implemented.
- *
- * Legacy feature flag. The chunked uploader is fully implemented, so this
- * returns `true`. Retained so that older call sites can be converted
- * progressively.
- */
-export function isChunkedUploadImplemented(): boolean {
-  return true;
 }
 
 // ============ Source resolution ============
@@ -581,7 +571,10 @@ async function putToPresignedUrl(
         const etag = response.headers.get("ETag") ?? "-";
 
         if (!response.ok) {
-          const body = await response.text().catch(() => "");
+          const body = await readResponseTextLimited(
+            response,
+            PART_UPLOAD_ERROR_BODY_LIMIT_BYTES,
+          ).catch(() => "");
           logger?.error?.(
             `${prefix} PUT part ${partIndex}/${totalParts}: HTTP ${response.status} ${response.statusText} (${elapsed}ms, requestId=${requestId}) body=${body.slice(0, 160)}`,
           );
@@ -640,5 +633,7 @@ async function runWithConcurrency(
 }
 
 function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }

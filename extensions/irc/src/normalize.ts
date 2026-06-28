@@ -1,3 +1,4 @@
+// Irc helper module supports normalize behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -61,10 +62,6 @@ export function normalizeIrcAllowEntry(raw: string): string {
   return value.trim();
 }
 
-export function normalizeIrcAllowlist(entries?: Array<string | number>): string[] {
-  return (entries ?? []).map((entry) => normalizeIrcAllowEntry(String(entry))).filter(Boolean);
-}
-
 export function buildIrcAllowlistCandidates(
   message: IrcInboundMessage,
   params?: { allowNameMatching?: boolean },
@@ -86,24 +83,4 @@ export function buildIrcAllowlistCandidates(
     candidates.add(`${nick}!${user}@${host}`);
   }
   return [...candidates];
-}
-
-export function resolveIrcAllowlistMatch(params: {
-  allowFrom: string[];
-  message: IrcInboundMessage;
-  allowNameMatching?: boolean;
-}): { allowed: boolean; source?: string } {
-  const allowFrom = new Set(params.allowFrom.map(normalizeLowercaseStringOrEmpty).filter(Boolean));
-  if (allowFrom.has("*")) {
-    return { allowed: true, source: "wildcard" };
-  }
-  const candidates = buildIrcAllowlistCandidates(params.message, {
-    allowNameMatching: params.allowNameMatching,
-  });
-  for (const candidate of candidates) {
-    if (allowFrom.has(candidate)) {
-      return { allowed: true, source: candidate };
-    }
-  }
-  return { allowed: false };
 }

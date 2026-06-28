@@ -1,11 +1,8 @@
+// Qa Matrix plugin module implements scenarios behavior.
 import {
-  MATRIX_QA_BOT_DM_ROOM_KEY,
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
   MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY,
-  MATRIX_QA_E2EE_ROOM_KEY,
   MATRIX_QA_MEDIA_ROOM_KEY,
-  MATRIX_QA_PROFILE_NAMES,
-  MATRIX_QA_MEMBERSHIP_ROOM_KEY,
   MATRIX_QA_SCENARIOS,
   MATRIX_QA_SECONDARY_ROOM_KEY,
   MATRIX_QA_STANDARD_SCENARIO_IDS,
@@ -13,16 +10,14 @@ import {
   buildMatrixQaTopologyForScenarios,
   findMatrixQaScenarios,
   resolveMatrixQaScenarioRoomId,
-  __matrixQaProfileTesting,
+  matrixQaProfileTesting,
 } from "./scenario-catalog.js";
 import {
   buildMatrixReplyArtifact,
   buildMatrixReplyDetails,
   buildMentionPrompt,
-  readMatrixQaSyncCursor,
   runMatrixQaCanary,
   runMatrixQaScenario,
-  writeMatrixQaSyncCursor,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime.js";
 import type { MatrixQaCanaryArtifact, MatrixQaScenarioArtifacts } from "./scenario-types.js";
@@ -39,14 +34,10 @@ export type { MatrixQaCanaryArtifact, MatrixQaScenarioArtifacts };
 
 export type { MatrixQaScenarioContext };
 
-export const __testing = {
-  MATRIX_QA_BOT_DM_ROOM_KEY,
+export const testing = {
   MATRIX_QA_DRIVER_DM_ROOM_KEY,
   MATRIX_QA_DRIVER_DM_SHARED_ROOM_KEY,
-  MATRIX_QA_E2EE_ROOM_KEY,
   MATRIX_QA_MEDIA_ROOM_KEY,
-  MATRIX_QA_MEMBERSHIP_ROOM_KEY,
-  MATRIX_QA_PROFILE_NAMES,
   MATRIX_QA_SECONDARY_ROOM_KEY,
   MATRIX_QA_STANDARD_SCENARIO_IDS,
   buildMatrixQaE2eeScenarioRoomKey,
@@ -55,9 +46,8 @@ export const __testing = {
   buildMatrixReplyArtifact,
   buildMentionPrompt,
   findMatrixQaScenarios,
-  getMatrixQaProfileScenarioIds: __matrixQaProfileTesting.getMatrixQaProfileScenarioIds,
-  normalizeMatrixQaProfile: __matrixQaProfileTesting.normalizeMatrixQaProfile,
-  readMatrixQaSyncCursor,
+  getMatrixQaProfileScenarioIds: matrixQaProfileTesting.getMatrixQaProfileScenarioIds,
+  normalizeMatrixQaProfile: matrixQaProfileTesting.normalizeMatrixQaProfile,
   resolveMatrixQaScenarioRoomId,
-  writeMatrixQaSyncCursor,
 };
+export { testing as __testing };

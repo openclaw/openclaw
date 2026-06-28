@@ -1,6 +1,7 @@
+// Slack tests cover channel type plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __resetSlackChannelTypeCacheForTest,
+  resetSlackChannelTypeCacheForTest,
   resolveSlackChannelType,
   resolveSlackConversationInfo,
 } from "./channel-type.js";
@@ -21,7 +22,7 @@ describe("resolveSlackChannelType", () => {
   beforeEach(() => {
     conversationsInfoMock.mockReset();
     conversationsOpenMock.mockReset();
-    __resetSlackChannelTypeCacheForTest();
+    resetSlackChannelTypeCacheForTest();
   });
 
   it("uses configured defaultAccount for omitted-account cache keys", async () => {

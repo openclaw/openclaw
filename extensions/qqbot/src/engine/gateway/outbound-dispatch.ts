@@ -10,10 +10,15 @@
  * Separated from gateway.ts for testability and to keep handleMessage thin.
  */
 
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "openclaw/plugin-sdk/reply-chunking";
 import type { FinalizedMsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import { createQQBotMarkdownChunker } from "../messaging/markdown-table-chunking.js";
 import {
   parseAndSendMediaTags,
   sendPlainReply,
+  sendTextOnlyReply,
+  TEXT_CHUNK_LIMIT,
   type DeliverDeps,
 } from "../messaging/outbound-deliver.js";
 import {
@@ -33,6 +38,7 @@ import {
 import { StreamingController, shouldUseOfficialC2cStream } from "../messaging/streaming-c2c.js";
 import { audioFileToSilkBase64 } from "../utils/audio.js";
 import type { InboundContext } from "./inbound-context.js";
+import { resolveResponseTimeoutMs } from "./response-timeout.js";
 import type {
   GatewayAccount,
   EngineLogger,
@@ -42,7 +48,12 @@ import type {
 
 // ============ Config ============
 
-const RESPONSE_TIMEOUT = 300_000;
+// Historical floor for the QQBot outbound response watchdog (5 min). The
+// effective wait budget is now derived from existing
+// `agents.defaults.timeoutSeconds` and `models.providers.<id>.timeoutSeconds`
+// via `resolveResponseTimeoutMs(cfg)` — see issue #85267, where a slow
+// local ollama/qwen3.5:27b turn was capped at 5 min despite a configured
+// 1800s provider timeout.
 const TOOL_ONLY_TIMEOUT = 60_000;
 const MAX_TOOL_RENEWALS = 3;
 const TOOL_MEDIA_SEND_TIMEOUT = 45_000;
@@ -61,7 +72,50 @@ type ReplyDeliverPayload = {
   mediaUrls?: string[];
   mediaUrl?: string;
   audioAsVoice?: boolean;
+  isError?: boolean;
 };
+
+function shouldDeliverToolProgressImmediately(
+  account: GatewayAccount,
+  useOfficialC2cStream: boolean,
+): boolean {
+  if (useOfficialC2cStream) {
+    return true;
+  }
+  const streaming = account.config?.streaming;
+  if (streaming === true) {
+    return true;
+  }
+  return typeof streaming === "object" && streaming !== null && streaming.mode !== "off";
+}
+
+function immediateToolProgressText(payload: ReplyDeliverPayload): string | undefined {
+  const text = (payload.text ?? "").trim();
+  if (!text || payload.isError || payload.audioAsVoice) {
+    return undefined;
+  }
+  if (payload.mediaUrl || payload.mediaUrls?.length) {
+    return undefined;
+  }
+  return text;
+}
+
+function hasReplyMedia(payload: ReplyDeliverPayload): boolean {
+  return Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+}
+
+function isSilentBlockReplyText(text: string): boolean {
+  return !text || text === "[SKIP]" || isSilentReplyPayloadText(text, SILENT_REPLY_TOKEN);
+}
+
+function blockReplyTextForDelivery(payload: ReplyDeliverPayload): string {
+  const text = payload.text ?? "";
+  return isSilentBlockReplyText(text.trim()) ? "" : text;
+}
+
+function isSilentBlockReply(payload: ReplyDeliverPayload): boolean {
+  return !hasReplyMedia(payload) && isSilentBlockReplyText((payload.text ?? "").trim());
+}
 
 // ============ dispatchOutbound ============
 
@@ -94,52 +148,82 @@ export async function dispatchOutbound(
   const sendErrorMessage = (errorText: string) => sendErrorToTarget(replyCtx, errorText);
 
   // ---- Build ctxPayload ----
-  const ctxPayload = buildCtxPayload(inbound, runtime, cfg);
+  const ctxPayload = await buildCtxPayload(inbound, runtime, cfg);
 
   // ---- Deliver state ----
   let hasResponse = false;
   let hasBlockResponse = false;
+  let hasVisibleBlockResponse = false;
   let toolDeliverCount = 0;
   const toolTexts: string[] = [];
   const toolMediaUrls: string[] = [];
   let toolFallbackSent = false;
   let toolRenewalCount = 0;
+  let skippedSilentBlockResponse = false;
   let timeoutId: ReturnType<typeof setTimeout> | null = null;
   let toolOnlyTimeoutId: ReturnType<typeof setTimeout> | null = null;
 
+  const markBlockResponse = (): void => {
+    hasBlockResponse = true;
+    inbound.typing.keepAlive?.stop();
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+    if (toolOnlyTimeoutId) {
+      clearTimeout(toolOnlyTimeoutId);
+      toolOnlyTimeoutId = null;
+    }
+  };
+
   // ---- Tool fallback ----
+  const sendToolMediaWithTimeout = async (
+    mediaUrl: string,
+    labels: { resultError: string; thrownError: string },
+  ): Promise<void> => {
+    const ac = new AbortController();
+    let mediaTimeoutId: ReturnType<typeof setTimeout> | null = null;
+    try {
+      const result = await Promise.race([
+        sendMedia({
+          to: qualifiedTarget,
+          text: "",
+          mediaUrl,
+          accountId: account.accountId,
+          replyToId: event.messageId,
+          account,
+        }).then((r) => {
+          if (ac.signal.aborted) {
+            return { channel: "qqbot", error: "suppressed" } as OutboundResult;
+          }
+          return r;
+        }),
+        new Promise<OutboundResult>((resolve) => {
+          mediaTimeoutId = setTimeout(() => {
+            ac.abort();
+            resolve({ channel: "qqbot", error: "timeout" });
+          }, TOOL_MEDIA_SEND_TIMEOUT);
+        }),
+      ]);
+      if (result.error) {
+        log?.error(`${labels.resultError}: ${result.error}`);
+      }
+    } catch (err) {
+      log?.error(`${labels.thrownError}: ${String(err)}`);
+    } finally {
+      if (mediaTimeoutId) {
+        clearTimeout(mediaTimeoutId);
+      }
+    }
+  };
+
   const sendToolFallback = async (): Promise<void> => {
     if (toolMediaUrls.length > 0) {
       for (const mediaUrl of toolMediaUrls) {
-        const ac = new AbortController();
-        try {
-          const result = await Promise.race([
-            sendMedia({
-              to: qualifiedTarget,
-              text: "",
-              mediaUrl,
-              accountId: account.accountId,
-              replyToId: event.messageId,
-              account,
-            }).then((r) => {
-              if (ac.signal.aborted) {
-                return { channel: "qqbot", error: "suppressed" } as OutboundResult;
-              }
-              return r;
-            }),
-            new Promise<OutboundResult>((resolve) =>
-              setTimeout(() => {
-                ac.abort();
-                resolve({ channel: "qqbot", error: "timeout" });
-              }, TOOL_MEDIA_SEND_TIMEOUT),
-            ),
-          ]);
-          if (result.error) {
-            log?.error(`Tool fallback error: ${result.error}`);
-          }
-        } catch (err) {
-          log?.error(`Tool fallback failed: ${String(err)}`);
-        }
+        await sendToolMediaWithTimeout(mediaUrl, {
+          resultError: "Tool fallback error",
+          thrownError: "Tool fallback failed",
+        });
       }
       return;
     }
@@ -148,16 +232,56 @@ export async function dispatchOutbound(
     }
   };
 
+  const hasPendingToolFallbackPayload = (): boolean =>
+    toolTexts.length > 0 || toolMediaUrls.length > 0;
+
+  const flushPendingToolDeliveriesOnce = async (): Promise<boolean> => {
+    if (toolFallbackSent || !hasPendingToolFallbackPayload()) {
+      return false;
+    }
+    await flushPendingToolDeliveries();
+    toolFallbackSent = true;
+    recordOutbound();
+    return true;
+  };
+
+  const renewToolOnlyFallback = (): boolean => {
+    if (toolFallbackSent) {
+      return false;
+    }
+    if (toolOnlyTimeoutId) {
+      if (toolRenewalCount >= MAX_TOOL_RENEWALS) {
+        return false;
+      }
+      clearTimeout(toolOnlyTimeoutId);
+      toolRenewalCount++;
+    }
+    toolOnlyTimeoutId = setTimeout(() => {
+      if (!hasBlockResponse && !toolFallbackSent && !skippedSilentBlockResponse) {
+        toolFallbackSent = true;
+        void sendToolFallback().catch(() => {});
+      }
+    }, TOOL_ONLY_TIMEOUT);
+    return true;
+  };
+
   // ---- Timeout promise ----
+  // #85267: derive watchdog from existing agent / provider timeout config so
+  // a longer configured ceiling (e.g. slow local ollama models) is not
+  // silently undercut by a plugin-local 5-minute cap.
+  const responseTimeoutMs = resolveResponseTimeoutMs(cfg);
   const timeoutPromise = new Promise<void>((_, reject) => {
     timeoutId = setTimeout(() => {
       if (!hasResponse) {
         reject(new Error("Response timeout"));
       }
-    }, RESPONSE_TIMEOUT);
+    }, responseTimeoutMs);
   });
 
   // ---- Deliver deps ----
+  const markdownChunker = createQQBotMarkdownChunker((text, limit) =>
+    runtime.channel.text.chunkMarkdownText(text, limit),
+  );
   const deliverDeps: DeliverDeps = {
     mediaSender: {
       sendPhoto: (target, imageUrl) => sendPhoto(target, imageUrl),
@@ -167,7 +291,35 @@ export async function dispatchOutbound(
       sendDocument: (target, filePath) => sendDocument(target, filePath),
       sendMedia: (opts) => sendMedia(opts),
     },
-    chunkText: (text, limit) => runtime.channel.text.chunkMarkdownText(text, limit),
+    chunkText: (text, limit) => markdownChunker.chunkText(text, limit),
+  };
+  const flushPendingMarkdownText = async (): Promise<void> => {
+    const pendingChunks = markdownChunker.flushPendingText(TEXT_CHUNK_LIMIT);
+    if (pendingChunks.length === 0) {
+      return;
+    }
+    const passthroughDeps: DeliverDeps = {
+      ...deliverDeps,
+      chunkText: (text) => [text],
+    };
+    for (const chunk of pendingChunks) {
+      await sendTextOnlyReply(
+        chunk,
+        {
+          type: event.type,
+          senderId: event.senderId,
+          messageId: event.messageId,
+          channelId: event.channelId,
+          groupOpenid: event.groupOpenid,
+          msgIdx: event.msgIdx,
+        },
+        { account, qualifiedTarget, log },
+        sendWithRetry,
+        () => undefined,
+        passthroughDeps,
+      );
+      recordOutbound();
+    }
   };
 
   const replyDeps: ReplyDispatcherDeps = {
@@ -175,6 +327,41 @@ export async function dispatchOutbound(
       textToSpeech: (params) => runtime.tts.textToSpeech(params),
       audioFileToSilkBase64: async (p) => (await audioFileToSilkBase64(p)) ?? undefined,
     },
+  };
+
+  const flushPendingToolDeliveries = async (): Promise<void> => {
+    if (toolMediaUrls.length > 0) {
+      const urlsToSend = [...toolMediaUrls];
+      toolMediaUrls.length = 0;
+      for (const mediaUrl of urlsToSend) {
+        await sendToolMediaWithTimeout(mediaUrl, {
+          resultError: "Tool media forward error",
+          thrownError: "Tool media forward failed",
+        });
+      }
+    }
+
+    if (toolTexts.length > 0) {
+      const textsToSend = [...toolTexts];
+      toolTexts.length = 0;
+      for (const text of textsToSend) {
+        await sendTextOnlyReply(
+          text,
+          {
+            type: event.type,
+            senderId: event.senderId,
+            messageId: event.messageId,
+            channelId: event.channelId,
+            groupOpenid: event.groupOpenid,
+            msgIdx: event.msgIdx,
+          },
+          { account, qualifiedTarget, log },
+          sendWithRetry,
+          () => undefined,
+          deliverDeps,
+        );
+      }
+    }
   };
 
   const recordOutbound = () =>
@@ -197,6 +384,10 @@ export async function dispatchOutbound(
         ? ("group" as const)
         : ("channel" as const);
   const useOfficialC2cStream = shouldUseOfficialC2cStream(account, targetType);
+  const deliverToolProgressImmediately = shouldDeliverToolProgressImmediately(
+    account,
+    useOfficialC2cStream,
+  );
   let streamingController: StreamingController | null = null;
   if (useOfficialC2cStream) {
     streamingController = new StreamingController({
@@ -225,7 +416,7 @@ export async function dispatchOutbound(
   const storePath = runtime.channel.session.resolveStorePath(cfgWithSession.session?.store, {
     agentId,
   });
-  const dispatchPromise = runtime.channel.turn.run({
+  const dispatchPromise = runtime.channel.inbound.run({
     channel: "qqbot",
     accountId: inbound.route.accountId,
     raw: inbound,
@@ -264,6 +455,29 @@ export async function dispatchOutbound(
                 if (info.kind === "tool") {
                   toolDeliverCount++;
                   const toolText = (payload.text ?? "").trim();
+                  const textOnlyProgress = immediateToolProgressText(payload);
+                  if (!hasBlockResponse && deliverToolProgressImmediately && textOnlyProgress) {
+                    if (toolOnlyTimeoutId || hasPendingToolFallbackPayload()) {
+                      renewToolOnlyFallback();
+                    }
+                    await sendTextOnlyReply(
+                      textOnlyProgress,
+                      {
+                        type: event.type,
+                        senderId: event.senderId,
+                        messageId: event.messageId,
+                        channelId: event.channelId,
+                        groupOpenid: event.groupOpenid,
+                        msgIdx: event.msgIdx,
+                      },
+                      { account, qualifiedTarget, log },
+                      sendWithRetry,
+                      () => undefined,
+                      deliverDeps,
+                    );
+                    recordOutbound();
+                    return;
+                  }
                   if (toolText) {
                     toolTexts.push(toolText);
                   }
@@ -294,36 +508,22 @@ export async function dispatchOutbound(
                   if (toolFallbackSent) {
                     return;
                   }
-                  if (toolOnlyTimeoutId) {
-                    if (toolRenewalCount < MAX_TOOL_RENEWALS) {
-                      clearTimeout(toolOnlyTimeoutId);
-                      toolRenewalCount++;
-                    } else {
-                      return;
-                    }
-                  }
-                  toolOnlyTimeoutId = setTimeout(async () => {
-                    if (!hasBlockResponse && !toolFallbackSent) {
-                      toolFallbackSent = true;
-                      try {
-                        await sendToolFallback();
-                      } catch {}
-                    }
-                  }, TOOL_ONLY_TIMEOUT);
+                  renewToolOnlyFallback();
                   return;
                 }
 
                 // ---- Block deliver ----
-                hasBlockResponse = true;
-                inbound.typing.keepAlive?.stop();
-                if (timeoutId) {
-                  clearTimeout(timeoutId);
-                  timeoutId = null;
+                markBlockResponse();
+
+                if (!streamingController && isSilentBlockReply(payload)) {
+                  if (!(await flushPendingToolDeliveriesOnce()) && event.type === "group") {
+                    log?.info(
+                      `Model decided to skip group message (${(payload.text ?? "").trim() || "empty reply"}) from ${event.senderId}`,
+                    );
+                  }
+                  return;
                 }
-                if (toolOnlyTimeoutId) {
-                  clearTimeout(toolOnlyTimeoutId);
-                  toolOnlyTimeoutId = null;
-                }
+                hasVisibleBlockResponse = true;
 
                 if (streamingController && !streamingController.isTerminalPhase) {
                   try {
@@ -363,7 +563,7 @@ export async function dispatchOutbound(
                   return undefined;
                 };
 
-                let replyText = payload.text ?? "";
+                let replyText = blockReplyTextForDelivery(payload);
                 const deliverEvent = {
                   type: event.type,
                   senderId: event.senderId,
@@ -447,6 +647,27 @@ export async function dispatchOutbound(
                   timeoutId = null;
                 }
               },
+              onSkip: (
+                _payload: ReplyDeliverPayload,
+                info: { kind: string; reason: "empty" | "silent" | "heartbeat" },
+              ) => {
+                if (
+                  !streamingController &&
+                  (info.kind === "block" || info.kind === "final") &&
+                  (info.reason === "silent" || info.reason === "empty")
+                ) {
+                  skippedSilentBlockResponse = true;
+                }
+              },
+              onFreshSettledDelivery: async () => {
+                if (skippedSilentBlockResponse && !hasVisibleBlockResponse) {
+                  markBlockResponse();
+                  if (await flushPendingToolDeliveriesOnce()) {
+                    return { visibleReplySent: true };
+                  }
+                }
+                return undefined;
+              },
             },
             replyOptions: {
               disableBlockStreaming: useOfficialC2cStream
@@ -482,16 +703,27 @@ export async function dispatchOutbound(
   } catch {
     if (timeoutId) {
       clearTimeout(timeoutId);
+      timeoutId = null;
     }
   } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
     if (toolOnlyTimeoutId) {
       clearTimeout(toolOnlyTimeoutId);
       toolOnlyTimeoutId = null;
     }
-    if (toolDeliverCount > 0 && !hasBlockResponse && !toolFallbackSent) {
+    if (
+      toolDeliverCount > 0 &&
+      !hasBlockResponse &&
+      !toolFallbackSent &&
+      !skippedSilentBlockResponse
+    ) {
       toolFallbackSent = true;
       await sendToolFallback();
     }
+    await flushPendingMarkdownText();
     if (streamingController && !streamingController.isTerminalPhase) {
       try {
         streamingController.markFullyComplete();
@@ -524,67 +756,91 @@ function resolveCommandSource(
   return "text";
 }
 
-function buildCtxPayload(
+async function buildCtxPayload(
   inbound: InboundContext,
   runtime: GatewayPluginRuntime,
   cfg: unknown,
-): FinalizedMsgContext {
+): Promise<FinalizedMsgContext> {
   const { event } = inbound;
   const commandSource = resolveCommandSource(inbound, runtime, cfg);
-  return runtime.channel.reply.finalizeInboundContext({
-    Body: inbound.body,
-    BodyForAgent: inbound.agentBody,
-    RawBody: event.content,
-    CommandBody: event.content,
-    From: inbound.fromAddress,
-    To: inbound.fromAddress,
-    SessionKey: inbound.route.sessionKey,
-    AccountId: inbound.route.accountId,
-    ChatType: inbound.isGroupChat ? "group" : "direct",
-    GroupSystemPrompt: inbound.groupSystemPrompt,
-    SenderId: event.senderId,
-    SenderName: event.senderName,
-    Provider: "qqbot",
-    Surface: "qqbot",
-    MessageSid: event.messageId,
-    Timestamp: new Date(event.timestamp).getTime(),
-    OriginatingChannel: "qqbot",
-    OriginatingTo: inbound.fromAddress,
-    QQChannelId: event.channelId,
-    QQGuildId: event.guildId,
-    QQGroupOpenid: event.groupOpenid,
-    QQVoiceAsrReferAvailable: inbound.hasAsrReferFallback,
-    QQVoiceTranscriptSources: inbound.voiceTranscriptSources,
-    QQVoiceAttachmentPaths: inbound.uniqueVoicePaths,
-    QQVoiceAttachmentUrls: inbound.uniqueVoiceUrls,
-    QQVoiceAsrReferTexts: inbound.uniqueVoiceAsrReferTexts,
-    QQVoiceInputStrategy: "prefer_audio_stt_then_asr_fallback",
-    CommandAuthorized: inbound.commandAuthorized,
-    ...(commandSource ? { CommandSource: commandSource } : {}),
-    ...(inbound.voiceMediaTypes.length > 0
+  const hasImageMedia = inbound.localMediaPaths.length > 0 || inbound.remoteMediaUrls.length > 0;
+  return buildChannelInboundEventContext({
+    finalize: runtime.channel.reply.finalizeInboundContext,
+    channel: "qqbot",
+    accountId: inbound.route.accountId,
+    messageId: event.messageId,
+    timestamp: new Date(event.timestamp).getTime(),
+    from: inbound.fromAddress,
+    sender: {
+      id: event.senderId,
+      name: event.senderName,
+    },
+    conversation: {
+      kind: inbound.isGroupChat ? "group" : "direct",
+      id: inbound.peerId,
+    },
+    route: {
+      agentId: inbound.route.agentId ?? "main",
+      routeSessionKey: inbound.route.sessionKey,
+      accountId: inbound.route.accountId,
+    },
+    reply: {
+      to: inbound.fromAddress,
+    },
+    message: {
+      body: inbound.body,
+      bodyForAgent: inbound.agentBody,
+      rawBody: event.content,
+      commandBody: event.content,
+    },
+    access: {
+      commands: {
+        authorized: inbound.commandAuthorized,
+      },
+    },
+    command: commandSource
       ? {
-          MediaTypes: inbound.voiceMediaTypes,
-          MediaType: inbound.voiceMediaTypes[0],
+          kind: "text-slash",
+          body: event.content,
+          authorized: inbound.commandAuthorized,
         }
-      : {}),
-    ...(inbound.localMediaPaths.length > 0
-      ? {
-          MediaPaths: inbound.localMediaPaths,
-          MediaPath: inbound.localMediaPaths[0],
-          MediaTypes: inbound.localMediaTypes,
-          MediaType: inbound.localMediaTypes[0],
-        }
-      : {}),
-    ...(inbound.remoteMediaUrls.length > 0
-      ? { MediaUrls: inbound.remoteMediaUrls, MediaUrl: inbound.remoteMediaUrls[0] }
-      : {}),
-    ...(inbound.replyTo
-      ? {
-          ReplyToId: inbound.replyTo.id,
-          ReplyToBody: inbound.replyTo.body,
-          ReplyToSender: inbound.replyTo.sender,
-          ReplyToIsQuote: inbound.replyTo.isQuote,
-        }
-      : {}),
-  }) as FinalizedMsgContext;
+      : undefined,
+    media: hasImageMedia
+      ? undefined
+      : inbound.voiceMediaTypes.map((contentType) => ({ contentType })),
+    supplemental: {
+      quote: inbound.replyTo
+        ? {
+            id: inbound.replyTo.id,
+            body: inbound.replyTo.body,
+            sender: inbound.replyTo.sender,
+            isQuote: inbound.replyTo.isQuote,
+          }
+        : undefined,
+      groupSystemPrompt: inbound.groupSystemPrompt,
+    },
+    extra: {
+      QQChannelId: event.channelId,
+      QQGuildId: event.guildId,
+      QQGroupOpenid: event.groupOpenid,
+      QQVoiceAsrReferAvailable: inbound.hasAsrReferFallback,
+      QQVoiceTranscriptSources: inbound.voiceTranscriptSources,
+      QQVoiceAttachmentPaths: inbound.uniqueVoicePaths,
+      QQVoiceAttachmentUrls: inbound.uniqueVoiceUrls,
+      QQVoiceAsrReferTexts: inbound.uniqueVoiceAsrReferTexts,
+      QQVoiceInputStrategy: "prefer_audio_stt_then_asr_fallback",
+      ...(commandSource ? { CommandSource: commandSource } : {}),
+      ...(inbound.localMediaPaths.length > 0
+        ? {
+            MediaPaths: inbound.localMediaPaths,
+            MediaPath: inbound.localMediaPaths[0],
+            MediaTypes: inbound.localMediaTypes,
+            MediaType: inbound.localMediaTypes[0],
+          }
+        : {}),
+      ...(inbound.remoteMediaUrls.length > 0
+        ? { MediaUrls: inbound.remoteMediaUrls, MediaUrl: inbound.remoteMediaUrls[0] }
+        : {}),
+    },
+  });
 }

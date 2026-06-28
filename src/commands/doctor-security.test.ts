@@ -1,3 +1,4 @@
+// Doctor security tests cover security audit checks, config findings, and repair output.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +9,7 @@ const note = vi.hoisted(() => vi.fn());
 const pluginRegistry = vi.hoisted(() => ({ list: [] as unknown[] }));
 const listReadOnlyChannelPluginsForConfigMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
 
@@ -332,6 +333,99 @@ describe("noteSecurityWarnings gateway exposure", () => {
     );
   });
 
+  it("warns when model provider API keys are stored as plaintext in config", async () => {
+    await noteSecurityWarnings({
+      models: {
+        providers: {
+          openai: {
+            apiKey: "sk-openai-plaintext",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const message = lastMessage();
+    expect(message).toContain("plaintext secret-bearing config fields");
+    expect(message).toContain("models.providers.openai.apiKey");
+    expect(message).toContain("openclaw secrets audit --check");
+  });
+
+  it("warns when sensitive model provider headers are stored as plaintext in config", async () => {
+    await noteSecurityWarnings({
+      models: {
+        providers: {
+          openai: {
+            headers: {
+              Authorization: "Bearer sk-header-plaintext",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const message = lastMessage();
+    expect(message).toContain("plaintext secret-bearing config fields");
+    expect(message).toContain("models.providers.openai.headers.Authorization");
+  });
+
+  it("does not warn when non-sensitive model provider headers are stored as plaintext in config", async () => {
+    await noteSecurityWarnings({
+      models: {
+        providers: {
+          openai: {
+            headers: {
+              "X-Proxy-Region": "us-west",
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const message = lastMessage();
+    expect(message).not.toContain("plaintext secret-bearing config fields");
+    expect(message).not.toContain("models.providers.openai.headers.X-Proxy-Region");
+  });
+
+  it("keeps request headers aligned with secrets audit plaintext checks", async () => {
+    await noteSecurityWarnings({
+      models: {
+        providers: {
+          openai: {
+            request: {
+              headers: {
+                "X-Proxy-Region": "us-west",
+              },
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const message = lastMessage();
+    expect(message).toContain("plaintext secret-bearing config fields");
+    expect(message).toContain("models.providers.openai.request.headers.X-Proxy-Region");
+  });
+
+  it("does not warn when model provider API keys are stored as SecretRefs", async () => {
+    await noteSecurityWarnings({
+      secrets: {
+        providers: {
+          default: { source: "env" },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            apiKey: "${OPENAI_API_KEY}",
+          },
+        },
+      },
+    } as unknown as OpenClawConfig);
+
+    const message = lastMessage();
+    expect(message).not.toContain("plaintext secret-bearing config fields");
+  });
+
   it("warns when tools.exec is broader than host exec defaults", async () => {
     await withExecApprovalsFile(
       {
@@ -358,6 +452,33 @@ describe("noteSecurityWarnings gateway exposure", () => {
     expect(message).toContain('security="full"');
     expect(message).toContain('defaults.security="allowlist"');
     expect(message).toContain("stricter side wins");
+  });
+
+  it("warns when normalized tools.exec mode is broader than host exec defaults", async () => {
+    await withExecApprovalsFile(
+      {
+        version: 1,
+        defaults: {
+          security: "allowlist",
+          ask: "on-miss",
+        },
+      },
+      async () => {
+        await noteSecurityWarnings({
+          tools: {
+            exec: {
+              mode: "full",
+            },
+          },
+        } as OpenClawConfig);
+      },
+    );
+
+    const message = lastMessage();
+    expect(message).toContain("tools.exec is broader than the host exec policy");
+    expect(message).toContain('tools.exec.mode="full"');
+    expect(message).toContain('defaults.security="allowlist"');
+    expect(message).not.toContain("OpenClaw default");
   });
 
   it("attributes broader host policy warnings to wildcard agent entries", async () => {

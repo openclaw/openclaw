@@ -1,17 +1,23 @@
+// Routing session key tests cover route-derived session key behavior.
 import { describe, expect, it } from "vitest";
+import { resolveSessionStoreAgentId } from "../gateway/session-store-key.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import {
   getSubagentDepth,
   isCronSessionKey,
   parseThreadSessionSuffix,
-  resolveThreadParentSessionKey,
 } from "../sessions/session-key-utils.js";
 import {
+  agentSessionKeysMatchByRequestKey,
+  buildAgentPeerSessionKey,
+  buildGroupHistoryKey,
   classifySessionKeyShape,
   isValidAgentId,
   parseAgentSessionKey,
   resolveEventSessionKey,
   scopedHeartbeatWakeOptions,
+  isUnscopedSessionKeySentinel,
+  scopeLegacySessionKeyToAgent,
   toAgentStoreSessionKey,
 } from "./session-key.js";
 
@@ -28,6 +34,55 @@ describe("classifySessionKeyShape", () => {
     { input: "subagent:worker", expected: "legacy_or_alias" },
   ] as const)("classifies %j as $expected", ({ input, expected }) => {
     expect(classifySessionKeyShape(input)).toBe(expected);
+  });
+});
+
+describe("scopeLegacySessionKeyToAgent", () => {
+  it("scopes legacy aliases to the requested agent", () => {
+    expect(scopeLegacySessionKeyToAgent({ agentId: "Ops", sessionKey: "Incident-42" })).toBe(
+      "agent:ops:incident-42",
+    );
+  });
+
+  it("honors configured main-key aliases when scoping legacy keys", () => {
+    expect(
+      scopeLegacySessionKeyToAgent({ agentId: "ops", sessionKey: "main", mainKey: "work" }),
+    ).toBe("agent:ops:work");
+  });
+
+  it("preserves already agent-prefixed keys", () => {
+    expect(
+      scopeLegacySessionKeyToAgent({
+        agentId: "ops",
+        sessionKey: "agent:main:incident-42",
+      }),
+    ).toBe("agent:main:incident-42");
+  });
+
+  it("scopes global and unknown legacy aliases to the requested agent", () => {
+    expect(scopeLegacySessionKeyToAgent({ agentId: "ops", sessionKey: "global" })).toBe(
+      "agent:ops:global",
+    );
+    expect(scopeLegacySessionKeyToAgent({ agentId: "ops", sessionKey: "UNKNOWN" })).toBe(
+      "agent:ops:unknown",
+    );
+  });
+});
+
+describe("isUnscopedSessionKeySentinel", () => {
+  it("recognizes literal global and unknown sentinels", () => {
+    expect(isUnscopedSessionKeySentinel("global")).toBe(true);
+    expect(isUnscopedSessionKeySentinel("UNKNOWN")).toBe(true);
+    expect(isUnscopedSessionKeySentinel("agent:ops:global")).toBe(false);
+    expect(isUnscopedSessionKeySentinel("incident-42")).toBe(false);
+  });
+});
+
+describe("agentSessionKeysMatchByRequestKey", () => {
+  it("matches canonical agent keys against their request-key aliases", () => {
+    expect(agentSessionKeysMatchByRequestKey("agent:main:main", "main")).toBe(true);
+    expect(agentSessionKeysMatchByRequestKey("agent:ops:incident-42", "incident-42")).toBe(true);
+    expect(agentSessionKeysMatchByRequestKey("agent:ops:incident-42", "main")).toBe(false);
   });
 });
 
@@ -75,11 +130,29 @@ describe("isCronSessionKey", () => {
 
 describe("deriveSessionChatTypeFromKey", () => {
   it.each([
+    { key: "agent:main:direct:user1", expected: "direct" },
     { key: "agent:main:discord:direct:user1", expected: "direct" },
     { key: "agent:main:telegram:group:g1", expected: "group" },
     { key: "agent:main:discord:channel:c1", expected: "channel" },
+    { key: "agent:main:discord:guild-123:channel-456", expected: "channel" },
+    { key: "agent:main:channel:legacy-room", expected: "channel" },
+    { key: "agent:main:channel:!room:example.org", expected: "channel" },
+    { key: "agent:main:channel:direct:user", expected: "channel" },
+    { key: "agent:main:group:room:part", expected: "group" },
+    { key: "agent:main:group:dm:user", expected: "group" },
+    { key: "agent:main:whatsapp:123@g.us", expected: "group" },
     { key: "agent:main:telegram:dm:123456", expected: "direct" },
     { key: "telegram:dm:123456", expected: "direct" },
+    { key: "agent:main:matrix:channel:!Room:example.org", expected: "channel" },
+    { key: "agent:main:matrix:channel:!room:[2001:db8::1]", expected: "channel" },
+    { key: "agent:voice:agent:other:matrix:channel:!room:example.org", expected: "unknown" },
+    { key: "agent:main:direct", expected: "unknown" },
+    { key: "agent:main:demo:acct:channel", expected: "unknown" },
+    { key: "agent:main:telegram:group:direct:user", expected: "unknown" },
+    { key: "agent:main:direct:group:room", expected: "unknown" },
+    { key: "agent:main:dm:account:group:room", expected: "unknown" },
+    { key: "agent:main:demo::channel:room", expected: "unknown" },
+    { key: "agent::demo:direct:user", expected: "unknown" },
     { key: "agent:main:main", expected: "unknown" },
     { key: "agent:main", expected: "unknown" },
     { key: "", expected: "unknown" },
@@ -87,7 +160,7 @@ describe("deriveSessionChatTypeFromKey", () => {
     expect(deriveSessionChatTypeFromKey(key)).toBe(expected);
   });
 
-  it("uses plugin-owned legacy chat-type hooks after generic token parsing", () => {
+  it("uses plugin-owned legacy chat-type hooks after canonical parsing", () => {
     expect(
       deriveSessionChatTypeFromKey("legacy-room:abc", [
         (sessionKey) => (sessionKey.startsWith("legacy-room:") ? "channel" : undefined),
@@ -107,11 +180,6 @@ describe("thread session suffix parsing", () => {
         "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
       threadId: undefined,
     });
-    expect(
-      resolveThreadParentSessionKey(
-        "agent:main:feishu:group:oc_group_chat:topic:om_topic_root:sender:ou_topic_user",
-      ),
-    ).toBeNull();
   });
 
   it("does not treat telegram :topic: as a generic thread suffix", () => {
@@ -119,7 +187,6 @@ describe("thread session suffix parsing", () => {
       baseSessionKey: "agent:main:telegram:group:-100123:topic:77",
       threadId: undefined,
     });
-    expect(resolveThreadParentSessionKey("agent:main:telegram:group:-100123:topic:77")).toBeNull();
   });
 
   it("parses mixed-case :thread: markers without lowercasing the stored key", () => {
@@ -147,6 +214,16 @@ describe("session key canonicalization", () => {
         }),
     },
     {
+      name: "preserves empty segments inside opaque agent-scoped tails",
+      run: () => {
+        expect(parseAgentSessionKey("agent:voice:room::part")).toEqual({
+          agentId: "voice",
+          rest: "room::part",
+        });
+        expect(resolveSessionStoreAgentId({}, "agent:voice:room::part")).toBe("voice");
+      },
+    },
+    {
       name: "does not double-prefix already-qualified agent keys",
       run: () =>
         expect(
@@ -155,6 +232,43 @@ describe("session key canonicalization", () => {
             requestKey: "agent:main:main",
           }),
         ).toBe("agent:main:main"),
+    },
+    {
+      name: "preserves Signal group ids while lowercasing structural tokens",
+      run: () => {
+        const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+        expect(parseAgentSessionKey(`Agent:Main:Signal:Group:${mixedGroupId}`)).toEqual({
+          agentId: "main",
+          rest: `signal:group:${mixedGroupId}`,
+        });
+        expect(
+          buildAgentPeerSessionKey({
+            agentId: "Main",
+            channel: "Signal",
+            peerKind: "group",
+            peerId: mixedGroupId,
+          }),
+        ).toBe(`agent:main:signal:group:${mixedGroupId}`);
+        expect(
+          buildGroupHistoryKey({
+            channel: "Signal",
+            peerKind: "group",
+            peerId: mixedGroupId,
+          }),
+        ).toBe(`signal:default:group:${mixedGroupId}`);
+      },
+    },
+    {
+      name: "keeps non-Signal opaque-looking group ids lowercase",
+      run: () =>
+        expect(
+          buildAgentPeerSessionKey({
+            agentId: "Main",
+            channel: "Telegram",
+            peerKind: "group",
+            peerId: "MiXeDGroup",
+          }),
+        ).toBe("agent:main:telegram:group:mixedgroup"),
     },
   ] as const)("$name", ({ run }) => {
     expectSessionKeyCanonicalizationCase({ run });

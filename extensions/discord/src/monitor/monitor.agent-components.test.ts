@@ -1,3 +1,4 @@
+// Discord tests cover monitor.agent components plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -140,7 +141,6 @@ describe("agent components", () => {
       {
         sessionKey: defaultDmSessionKey,
         contextKey: "discord:agent-button:dm-channel:hello:123456789",
-        trusted: false,
       },
     );
     if (params.expectPairingStoreRead) {
@@ -268,7 +268,6 @@ describe("agent components", () => {
       {
         sessionKey: defaultGroupDmSessionKey,
         contextKey: "discord:agent-button:group-dm-channel:hello:123456789",
-        trusted: false,
       },
     );
     expect(peekSystemEvents(defaultDmSessionKey)).toStrictEqual([]);
@@ -349,7 +348,6 @@ describe("agent components", () => {
       {
         sessionKey: defaultDmSessionKey,
         contextKey: "discord:agent-select:dm-channel:hello:123456789",
-        trusted: false,
       },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
@@ -373,7 +371,6 @@ describe("agent components", () => {
       {
         sessionKey: defaultDmSessionKey,
         contextKey: "discord:agent-button:dm-channel:hello_cid:123456789",
-        trusted: false,
       },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();
@@ -397,7 +394,6 @@ describe("agent components", () => {
       {
         sessionKey: defaultDmSessionKey,
         contextKey: "discord:agent-button:dm-channel:hello%2G:123456789",
-        trusted: false,
       },
     );
     expect(readAllowFromStoreMock).not.toHaveBeenCalled();

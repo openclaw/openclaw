@@ -1,6 +1,12 @@
+// CLI for reading and mutating exec approval allowlists locally, via gateway, or via node.
 import fs from "node:fs/promises";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import JSON5 from "json5";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
+import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { readBestEffortConfig, type OpenClawConfig } from "../config/config.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -15,11 +21,6 @@ import {
 } from "../infra/exec-approvals.js";
 import { formatTimeAgo } from "../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../runtime.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
-import { formatDocsLink } from "../terminal/links.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { isRich, theme } from "../terminal/theme.js";
 import { callGatewayFromCli } from "./gateway-rpc.js";
 import { nodesCallOpts, resolveNodeId } from "./nodes-cli/rpc.js";
 import type { NodesRpcOpts } from "./nodes-cli/types.js";
@@ -45,6 +46,7 @@ type EffectivePolicyReport = {
   note?: string;
 };
 const APPROVALS_GET_DEFAULT_TIMEOUT_MS = 60_000;
+const EXEC_APPROVALS_STDIN_MAX_BYTES = 1024 * 1024;
 
 type ExecApprovalsCliOpts = NodesRpcOpts & {
   node?: string;
@@ -54,12 +56,21 @@ type ExecApprovalsCliOpts = NodesRpcOpts & {
   agent?: string;
 };
 
-async function readStdin(): Promise<string> {
+async function readStdin(
+  stream: NodeJS.ReadableStream = process.stdin,
+  maxBytes = EXEC_APPROVALS_STDIN_MAX_BYTES,
+): Promise<string> {
   const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+  let total = 0;
+  for await (const chunk of stream) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    total += buffer.byteLength;
+    if (total > maxBytes) {
+      throw new Error(`Exec approvals stdin exceeds ${maxBytes} bytes.`);
+    }
+    chunks.push(buffer);
   }
-  return Buffer.concat(chunks).toString("utf8");
+  return Buffer.concat(chunks, total).toString("utf8");
 }
 
 async function resolveTargetNodeId(opts: ExecApprovalsCliOpts): Promise<string | null> {
@@ -132,6 +143,7 @@ async function loadWritableSnapshotTarget(opts: ExecApprovalsCliOpts): Promise<{
   targetLabel: string;
   baseHash: string;
 }> {
+  // Writes carry the base hash so gateway/node updates can reject stale snapshots.
   const { snapshot, nodeId, source } = await loadSnapshotTarget(opts);
   if (source === "local") {
     defaultRuntime.log(theme.muted("Writing local approvals."));
@@ -292,7 +304,7 @@ function renderApprovalsSnapshot(snapshot: ExecApprovalsSnapshot, targetLabel: s
     typeof defaults.autoAllowSkills === "boolean"
       ? `autoAllowSkills=${defaults.autoAllowSkills ? "on" : "off"}`
       : null,
-  ].filter(Boolean) as string[];
+  ].filter((part): part is string => part != null);
   const agents = file.agents ?? {};
   const allowlistRows: Array<{ Target: string; Agent: string; Pattern: string; LastUsed: string }> =
     [];
@@ -620,3 +632,7 @@ export function registerExecApprovalsCli(program: Command) {
 
   applyParentDefaultHelpAction(approvals);
 }
+
+export const testing = {
+  readStdin,
+};

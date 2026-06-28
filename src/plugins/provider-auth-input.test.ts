@@ -1,10 +1,13 @@
+// Covers provider auth input collection and credential handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import {
   ensureApiKeyFromEnvOrPrompt,
   ensureApiKeyFromOptionEnvOrPrompt,
   maybeApplyApiKeyFromOption,
+  normalizeApiKeyInput,
   normalizeTokenProviderInput,
+  validateApiKeyInput,
 } from "./provider-auth-input.js";
 
 const acceptAnyApiKeyInput = () => undefined;
@@ -228,6 +231,29 @@ describe("normalizeTokenProviderInput", () => {
   });
 });
 
+describe("normalizeApiKeyInput", () => {
+  it("strips shell syntax, pasted line breaks, and non-header-safe artifacts", () => {
+    expect(normalizeApiKeyInput("export OPENAI_API_KEY='sk-\r\nabc│';")).toBe("sk-abc");
+  });
+
+  it("preserves ordinary interior spaces in bearer-style values", () => {
+    expect(normalizeApiKeyInput('TOKEN="Bearer demo token"')).toBe("Bearer demo token");
+  });
+});
+
+describe("validateApiKeyInput", () => {
+  it.each([
+    "openclaw onboard --auth-choice zai-coding-global",
+    "openclaw onboard --auth-choice=zai-coding-global",
+    "openclaw onboard --non-interactive --auth-choice zai-coding-global --zai-api-key $ZAI_API_KEY",
+    "openclaw onboard --non-interactive --auth-choice=zai-coding-global --zai-api-key $ZAI_API_KEY",
+  ])("rejects pasted OpenClaw onboarding command %p", (value) => {
+    expect(validateApiKeyInput(value)).toBe(
+      "Paste the API key value, not an OpenClaw onboarding command.",
+    );
+  });
+});
+
 describe("maybeApplyApiKeyFromOption", () => {
   it.each(["demo-provider", "  DeMo-PrOvIdEr  "])(
     "stores normalized token when provider %p matches",
@@ -251,6 +277,23 @@ describe("maybeApplyApiKeyFromOption", () => {
     });
 
     expect(result).toBeUndefined();
+    expect(setCredential).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed command-shaped option keys before storing them", async () => {
+    const setCredential = vi.fn(async () => undefined);
+
+    await expect(
+      maybeApplyApiKeyFromOption({
+        token:
+          "openclaw onboard --non-interactive --auth-choice=zai-coding-global --zai-api-key $ZAI_API_KEY",
+        tokenProvider: "zai",
+        expectedProviders: ["zai"],
+        normalize: normalizeApiKeyInput,
+        validate: validateApiKeyInput,
+        setCredential,
+      }),
+    ).rejects.toThrow("Paste the API key value, not an OpenClaw onboarding command.");
     expect(setCredential).not.toHaveBeenCalled();
   });
 });
@@ -378,12 +421,24 @@ describe("ensureApiKeyFromEnvOrPrompt", () => {
     expect(result).toBe("env-key");
     expectMinimaxEnvRefCredentialStored(setCredential);
     expect(note).toHaveBeenCalledWith(
-      [
+      expect.stringContaining(
         "Could not validate provider reference filemain:/providers/minimax/apiKey.",
-        "secrets.providers.filemain.path is not readable: /tmp/does-not-exist-secrets.json | ENOENT: no such file or directory, lstat '/tmp/does-not-exist-secrets.json' | secrets.providers.filemain.path is not readable: /tmp/does-not-exist-secrets.json | ENOENT: no such file or directory, lstat '/tmp/does-not-exist-secrets.json'",
-        "Check your provider configuration and try again.",
-      ].join("\n"),
+      ),
       "Reference check failed",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "secrets.providers.filemain.path is not readable: /tmp/does-not-exist-secrets.json",
+      ),
+      "Reference check failed",
+    );
+    expect(note).toHaveBeenCalledWith(
+      expect.stringContaining("Check your provider configuration and try again."),
+      "Reference check failed",
+    );
+    expect(note).toHaveBeenCalledWith(
+      "Validated environment variable MINIMAX_API_KEY. OpenClaw will store a reference, not the key value.",
+      "Reference validated",
     );
   });
 

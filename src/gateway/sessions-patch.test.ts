@@ -1,4 +1,7 @@
+// Session patch tests cover model/provider edits, subagent patching, provider
+// aliases, model catalog validation, and rejected invalid patch payloads.
 import { afterEach, describe, expect, test } from "vitest";
+import { resetProviderAuthAliasMapCacheForTest } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -8,6 +11,11 @@ import { applySessionsPatchToStore } from "./sessions-patch.js";
 const SUBAGENT_MODEL = "synthetic/hf:moonshotai/Kimi-K2.5";
 const KIMI_SUBAGENT_KEY = "agent:kimi:subagent:child";
 const MAIN_SESSION_KEY = "agent:main:main";
+const ANTHROPIC_SONNET_MODEL = "anthropic/claude-sonnet-4-6";
+const ANTHROPIC_SONNET_ID = "claude-sonnet-4-6";
+const ANTHROPIC_OPUS_ID = "claude-opus-4-6";
+const OPENAI_GPT_MODEL = "openai/gpt-5.4";
+const OPENAI_GPT_ID = "gpt-5.4";
 const EMPTY_CFG = {} as OpenClawConfig;
 
 type ApplySessionsPatchArgs = Parameters<typeof applySessionsPatchToStore>[0];
@@ -17,12 +25,14 @@ async function runPatch(params: {
   store?: Record<string, SessionEntry>;
   cfg?: OpenClawConfig;
   storeKey?: string;
+  agentId?: string;
   loadGatewayModelCatalog?: ApplySessionsPatchArgs["loadGatewayModelCatalog"];
 }) {
   return applySessionsPatchToStore({
     cfg: params.cfg ?? EMPTY_CFG,
     store: params.store ?? {},
     storeKey: params.storeKey ?? MAIN_SESSION_KEY,
+    agentId: params.agentId,
     patch: params.patch,
     loadGatewayModelCatalog: params.loadGatewayModelCatalog,
   });
@@ -49,6 +59,100 @@ function expectPatchError(
   expect(result.error.message).toContain(message);
 }
 
+function mainStoreEntry(overrides: Partial<SessionEntry>): Record<string, SessionEntry> {
+  return {
+    [MAIN_SESSION_KEY]: {
+      sessionId: "sess",
+      updatedAt: 1,
+      ...overrides,
+    } as SessionEntry,
+  };
+}
+
+function mainAuthOverrideStore(overrides: Partial<SessionEntry>): Record<string, SessionEntry> {
+  return mainStoreEntry({
+    providerOverride: "anthropic",
+    modelOverride: ANTHROPIC_OPUS_ID,
+    authProfileOverrideSource: "user",
+    ...overrides,
+  });
+}
+
+function catalogEntry(ref: string, name?: string) {
+  const separator = ref.indexOf("/");
+  if (separator < 0) {
+    throw new Error(`model ref must include provider: ${ref}`);
+  }
+  const id = ref.slice(separator + 1);
+  return {
+    provider: ref.slice(0, separator),
+    id,
+    name: name ?? id,
+  };
+}
+
+function loadCatalog(...refs: string[]): ApplySessionsPatchArgs["loadGatewayModelCatalog"] {
+  return async () => refs.map((ref) => catalogEntry(ref));
+}
+
+function expectModelSelection(
+  entry: SessionEntry,
+  providerOverride: string | undefined,
+  modelOverride: string | undefined,
+) {
+  expect(entry.providerOverride).toBe(providerOverride);
+  expect(entry.modelOverride).toBe(modelOverride);
+}
+
+async function applyMainModelPatch(params: {
+  store?: Record<string, SessionEntry>;
+  cfg?: OpenClawConfig;
+  model: string | null;
+  catalogRefs?: string[];
+}) {
+  return expectPatchOk(
+    await runPatch({
+      store: params.store,
+      cfg: params.cfg,
+      patch: { key: MAIN_SESSION_KEY, model: params.model },
+      loadGatewayModelCatalog:
+        params.catalogRefs === undefined ? undefined : loadCatalog(...params.catalogRefs),
+    }),
+  );
+}
+
+async function expectProviderChangeClearsAuthOverride(store: Record<string, SessionEntry>) {
+  const entry = await applyMainModelPatch({
+    store,
+    model: OPENAI_GPT_MODEL,
+    catalogRefs: [OPENAI_GPT_MODEL],
+  });
+  expectModelSelection(entry, "openai", OPENAI_GPT_ID);
+  expectAuthOverride(entry, { profile: undefined });
+}
+
+function expectAuthOverride(
+  entry: SessionEntry,
+  expected: {
+    profile: string | undefined;
+    source?: string;
+    compactionCount?: number;
+  },
+) {
+  expect(entry.authProfileOverride).toBe(expected.profile);
+  if (expected.profile === undefined) {
+    expect(entry.authProfileOverrideSource).toBeUndefined();
+    expect(entry.authProfileOverrideCompactionCount).toBeUndefined();
+    return;
+  }
+  expect(entry.authProfileOverrideSource).toBe(expected.source ?? "user");
+  if (expected.compactionCount === undefined) {
+    expect(entry.authProfileOverrideCompactionCount).toBeUndefined();
+  } else {
+    expect(entry.authProfileOverrideCompactionCount).toBe(expected.compactionCount);
+  }
+}
+
 async function applySubagentModelPatch(cfg: OpenClawConfig) {
   return expectPatchOk(
     await runPatch({
@@ -59,7 +163,7 @@ async function applySubagentModelPatch(cfg: OpenClawConfig) {
         model: SUBAGENT_MODEL,
       },
       loadGatewayModelCatalog: async () => [
-        { provider: "anthropic", id: "claude-sonnet-4-6", name: "sonnet" },
+        { provider: "anthropic", id: ANTHROPIC_SONNET_ID, name: "sonnet" },
         { provider: "synthetic", id: "hf:moonshotai/Kimi-K2.5", name: "kimi" },
       ],
     }),
@@ -97,9 +201,9 @@ function createAllowlistedAnthropicModelCfg(): OpenClawConfig {
   return {
     agents: {
       defaults: {
-        model: { primary: "openai/gpt-5.4" },
+        model: { primary: OPENAI_GPT_MODEL },
         models: {
-          "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
+          [ANTHROPIC_SONNET_MODEL]: { alias: "sonnet" },
         },
       },
     },
@@ -108,6 +212,7 @@ function createAllowlistedAnthropicModelCfg(): OpenClawConfig {
 
 describe("gateway sessions patch", () => {
   afterEach(() => {
+    resetProviderAuthAliasMapCacheForTest();
     resetPluginRuntimeStateForTest();
   });
 
@@ -131,6 +236,30 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.thinkingLevel).toBeUndefined();
+  });
+
+  test("persists responseUsage=off (does not clear)", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        patch: { key: MAIN_SESSION_KEY, responseUsage: "off" },
+      }),
+    );
+    // Explicit off must persist so a configured messages.responseUsage default
+    // cannot re-enable the footer the user turned off.
+    expect(entry.responseUsage).toBe("off");
+  });
+
+  test("clears responseUsage when patch sets null", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: { responseUsage: "tokens" } as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, responseUsage: null },
+      }),
+    );
+    expect(entry.responseUsage).toBeUndefined();
   });
 
   test("persists reasoningLevel=off (does not clear)", async () => {
@@ -173,10 +302,39 @@ describe("gateway sessions patch", () => {
     expect(entry.fastMode).toBe(true);
   });
 
-  test("clears fastMode when patch sets null", async () => {
+  test("recreates partial rows without dropping session settings", async () => {
     const store: Record<string, SessionEntry> = {
-      [MAIN_SESSION_KEY]: { fastMode: true } as SessionEntry,
+      [MAIN_SESSION_KEY]: {
+        updatedAt: 1,
+        sessionFile: "stale.jsonl",
+        label: "Stale Session",
+        sendPolicy: "deny",
+        modelOverride: OPENAI_GPT_ID,
+        responseUsage: "tokens",
+        parentSessionKey: "agent:main:main",
+      } as SessionEntry,
     };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, fastMode: true },
+      }),
+    );
+
+    expect(entry.sessionId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    expect(entry.sessionFile).toBeUndefined();
+    expect(entry.label).toBeUndefined();
+    expect(entry.sendPolicy).toBe("deny");
+    expect(entry.modelOverride).toBe(OPENAI_GPT_ID);
+    expect(entry.responseUsage).toBe("tokens");
+    expect(entry.parentSessionKey).toBe("agent:main:main");
+    expect(entry.fastMode).toBe(true);
+  });
+
+  test("clears fastMode when patch sets null", async () => {
+    const store = mainStoreEntry({ fastMode: true });
     const entry = expectPatchOk(
       await runPatch({
         store,
@@ -184,6 +342,20 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.fastMode).toBeUndefined();
+  });
+
+  test("sets fastMode to auto", async () => {
+    const store: Record<string, SessionEntry> = {
+      [MAIN_SESSION_KEY]: {} as SessionEntry,
+    };
+    const entry = expectPatchOk(
+      await runPatch({
+        store,
+        patch: { key: MAIN_SESSION_KEY, fastMode: "auto" },
+      }),
+    );
+
+    expect(entry.fastMode).toBe("auto");
   });
 
   test("persists verboseLevel=full", async () => {
@@ -240,80 +412,130 @@ describe("gateway sessions patch", () => {
     expectPatchError(result, "invalid elevatedLevel");
   });
 
-  test("clears auth overrides when model patch changes", async () => {
-    const store: Record<string, SessionEntry> = {
-      "agent:main:main": {
-        sessionId: "sess",
-        updatedAt: 1,
-        providerOverride: "anthropic",
-        modelOverride: "claude-opus-4-6",
-        authProfileOverride: "anthropic:default",
-        authProfileOverrideSource: "user",
-        authProfileOverrideCompactionCount: 3,
-      } as SessionEntry,
-    };
-    const entry = expectPatchOk(
-      await runPatch({
-        store,
-        patch: { key: MAIN_SESSION_KEY, model: "anthropic/claude-sonnet-4-6" },
-        loadGatewayModelCatalog: async () => [
-          { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
-        ],
+  test("preserves same-provider auth overrides when model patch changes", async () => {
+    const store = mainAuthOverrideStore({
+      authProfileOverride: "anthropic:default",
+      authProfileOverrideCompactionCount: 3,
+    });
+    const entry = await applyMainModelPatch({
+      store,
+      model: ANTHROPIC_SONNET_MODEL,
+      catalogRefs: [ANTHROPIC_SONNET_MODEL],
+    });
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+    expectAuthOverride(entry, { profile: "anthropic:default", compactionCount: 3 });
+  });
+
+  test("preserves auth overrides for provider-auth aliases when model patch changes", async () => {
+    const store = mainStoreEntry({
+      sessionId: "sess-alias",
+      providerOverride: "byteplus",
+      modelOverride: "seedance-1-0-lite-t2v-250428",
+      authProfileOverride: "byteplus:work",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 2,
+    });
+    const entry = await applyMainModelPatch({
+      store,
+      model: "byteplus-plan/ark-code-latest",
+      catalogRefs: ["byteplus-plan/ark-code-latest"],
+    });
+    expectModelSelection(entry, "byteplus-plan", "ark-code-latest");
+    expectAuthOverride(entry, { profile: "byteplus:work", compactionCount: 2 });
+  });
+
+  test("preserves unprefixed auth overrides when existing provider matches model patch", async () => {
+    const store = mainAuthOverrideStore({
+      sessionId: "sess-unprefixed-same-provider",
+      authProfileOverride: "work",
+      authProfileOverrideCompactionCount: 4,
+    });
+    const entry = await applyMainModelPatch({
+      store,
+      model: ANTHROPIC_SONNET_MODEL,
+      catalogRefs: [ANTHROPIC_SONNET_MODEL],
+    });
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+    expectAuthOverride(entry, { profile: "work", compactionCount: 4 });
+  });
+
+  test("preserves unprefixed auth overrides when existing provider is the default", async () => {
+    const store = mainStoreEntry({
+      sessionId: "sess-unprefixed-default-provider",
+      authProfileOverride: "work",
+      authProfileOverrideSource: "user",
+      authProfileOverrideCompactionCount: 4,
+    });
+    const entry = await applyMainModelPatch({
+      cfg: {
+        agents: {
+          defaults: {
+            model: { primary: `anthropic/${ANTHROPIC_OPUS_ID}` },
+          },
+        },
+      } as OpenClawConfig,
+      store,
+      model: ANTHROPIC_SONNET_MODEL,
+      catalogRefs: [ANTHROPIC_SONNET_MODEL],
+    });
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+    expectAuthOverride(entry, { profile: "work", compactionCount: 4 });
+  });
+
+  test("clears unprefixed auth overrides when model patch changes provider", async () => {
+    await expectProviderChangeClearsAuthOverride(
+      mainAuthOverrideStore({
+        sessionId: "sess-unprefixed-provider-change",
+        authProfileOverride: "work",
+        authProfileOverrideCompactionCount: 4,
       }),
     );
-    expect(entry.providerOverride).toBe("anthropic");
-    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
-    expect(entry.authProfileOverride).toBeUndefined();
-    expect(entry.authProfileOverrideSource).toBeUndefined();
-    expect(entry.authProfileOverrideCompactionCount).toBeUndefined();
+  });
+
+  test("clears provider-prefixed auth overrides when model patch changes provider", async () => {
+    await expectProviderChangeClearsAuthOverride(
+      mainAuthOverrideStore({
+        sessionId: "sess-provider-change",
+        authProfileOverride: "anthropic:default",
+        authProfileOverrideCompactionCount: 3,
+      }),
+    );
   });
 
   test("marks explicit model patches as pending live model switches", async () => {
-    const store: Record<string, SessionEntry> = {
-      [MAIN_SESSION_KEY]: {
-        sessionId: "sess-live",
-        updatedAt: 1,
-        providerOverride: "openai",
-        modelOverride: "gpt-5.4",
-      } as SessionEntry,
-    };
-    const entry = expectPatchOk(
-      await runPatch({
-        store,
-        cfg: createAllowlistedAnthropicModelCfg(),
-        patch: { key: MAIN_SESSION_KEY, model: "anthropic/claude-sonnet-4-6" },
-        loadGatewayModelCatalog: async () => [
-          { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
-          { provider: "anthropic", id: "claude-sonnet-4-6", name: "claude-sonnet-4-6" },
-        ],
-      }),
-    );
+    const store = mainStoreEntry({
+      sessionId: "sess-live",
+      providerOverride: "openai",
+      modelOverride: OPENAI_GPT_ID,
+    });
+    const entry = await applyMainModelPatch({
+      store,
+      cfg: createAllowlistedAnthropicModelCfg(),
+      model: ANTHROPIC_SONNET_MODEL,
+      catalogRefs: [OPENAI_GPT_MODEL, ANTHROPIC_SONNET_MODEL],
+    });
 
-    expect(entry.providerOverride).toBe("anthropic");
-    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
     expect(entry.liveModelSwitchPending).toBe(true);
   });
 
-  test("marks model reset patches as pending live model switches", async () => {
-    const store: Record<string, SessionEntry> = {
-      [MAIN_SESSION_KEY]: {
-        sessionId: "sess-live-reset",
-        updatedAt: 1,
-        providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4-6",
-      } as SessionEntry,
-    };
-    const entry = expectPatchOk(
-      await runPatch({
-        store,
-        cfg: createAllowlistedAnthropicModelCfg(),
-        patch: { key: MAIN_SESSION_KEY, model: null },
-      }),
-    );
+  test("clears pending live model switches for model reset patches", async () => {
+    const store = mainStoreEntry({
+      sessionId: "sess-live-reset",
+      providerOverride: "anthropic",
+      modelOverride: ANTHROPIC_SONNET_ID,
+      modelOverrideSource: "user",
+      liveModelSwitchPending: true,
+    });
+    const entry = await applyMainModelPatch({
+      store,
+      cfg: createAllowlistedAnthropicModelCfg(),
+      model: null,
+    });
 
-    expect(entry.providerOverride).toBeUndefined();
-    expect(entry.modelOverride).toBeUndefined();
-    expect(entry.liveModelSwitchPending).toBe(true);
+    expectModelSelection(entry, undefined, undefined);
+    expect(entry.modelOverrideSource).toBeUndefined();
+    expect(entry.liveModelSwitchPending).toBeUndefined();
   });
 
   test.each([
@@ -335,12 +557,11 @@ describe("gateway sessions patch", () => {
     const entry = expectPatchOk(
       await runPatch({
         cfg: createAllowlistedAnthropicModelCfg(),
-        patch: { key: MAIN_SESSION_KEY, model: "anthropic/claude-sonnet-4-6" },
+        patch: { key: MAIN_SESSION_KEY, model: ANTHROPIC_SONNET_MODEL },
         loadGatewayModelCatalog: async () => catalog,
       }),
     );
-    expect(entry.providerOverride).toBe("anthropic");
-    expect(entry.modelOverride).toBe("claude-sonnet-4-6");
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
   });
 
   test("sets spawnDepth for subagent sessions", async () => {
@@ -429,13 +650,44 @@ describe("gateway sessions patch", () => {
     expect(entry.thinkingLevel).toBe("xhigh");
   });
 
+  test("validates global patches against the selected agent", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            list: [
+              {
+                id: "main",
+                default: true,
+                model: { primary: "gmn/gpt-5.4" },
+              },
+              {
+                id: "work",
+                model: { primary: "openai/gpt-5.5" },
+              },
+            ],
+          },
+        } as OpenClawConfig,
+        storeKey: "global",
+        agentId: "work",
+        patch: {
+          key: "global",
+          thinkingLevel: "xhigh",
+        },
+        loadGatewayModelCatalog: async () => [],
+      }),
+    );
+
+    expect(entry.thinkingLevel).toBe("xhigh");
+  });
+
   test("accepts xhigh thinking patches from bundled startup-lazy provider policy without catalog", async () => {
     const entry = expectPatchOk(
       await runPatch({
         cfg: {
           agents: {
             defaults: {
-              model: { primary: "openai-codex/gpt-5.5" },
+              model: { primary: "openai/gpt-5.5" },
             },
           },
         } as OpenClawConfig,
@@ -597,7 +849,7 @@ describe("gateway sessions patch", () => {
 
   test("allows target agent own model for subagent session even when missing from global allowlist", async () => {
     const cfg = makeKimiSubagentCfg({
-      agentPrimaryModel: "synthetic/hf:moonshotai/Kimi-K2.5",
+      agentPrimaryModel: SUBAGENT_MODEL,
     });
 
     const entry = await applySubagentModelPatch(cfg);
@@ -608,13 +860,12 @@ describe("gateway sessions patch", () => {
 
   test("allows target agent subagents.model for subagent session even when missing from global allowlist", async () => {
     const cfg = makeKimiSubagentCfg({
-      agentPrimaryModel: "anthropic/claude-sonnet-4-6",
+      agentPrimaryModel: ANTHROPIC_SONNET_MODEL,
       agentSubagentModel: SUBAGENT_MODEL,
     });
 
     const entry = await applySubagentModelPatch(cfg);
-    expect(entry.providerOverride).toBe("synthetic");
-    expect(entry.modelOverride).toBe("hf:moonshotai/Kimi-K2.5");
+    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.5");
   });
 
   test("allows global defaults.subagents.model for subagent session even when missing from global allowlist", async () => {
@@ -623,7 +874,81 @@ describe("gateway sessions patch", () => {
     });
 
     const entry = await applySubagentModelPatch(cfg);
-    expect(entry.providerOverride).toBe("synthetic");
-    expect(entry.modelOverride).toBe("hf:moonshotai/Kimi-K2.5");
+    expectModelSelection(entry, "synthetic", "hf:moonshotai/Kimi-K2.5");
+  });
+
+  test("persists trailing @profile suffix as authProfileOverride on model patch", async () => {
+    const entry = await applyMainModelPatch({
+      cfg: createAllowlistedAnthropicModelCfg(),
+      model: `${ANTHROPIC_SONNET_MODEL}@myprofile`,
+      catalogRefs: [ANTHROPIC_SONNET_MODEL],
+    });
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+    expectAuthOverride(entry, { profile: "myprofile" });
+    expect(entry.liveModelSwitchPending).toBe(true);
+  });
+
+  test("marks same-model @profile patches as pending live model switches", async () => {
+    const store = mainStoreEntry({
+      sessionId: "sess-live-profile-only",
+      providerOverride: "anthropic",
+      modelOverride: ANTHROPIC_SONNET_ID,
+      authProfileOverride: "oldprofile",
+      authProfileOverrideSource: "user",
+    });
+    const entry = await applyMainModelPatch({
+      store,
+      cfg: createAllowlistedAnthropicModelCfg(),
+      model: `${ANTHROPIC_SONNET_MODEL}@newprofile`,
+      catalogRefs: [ANTHROPIC_SONNET_MODEL],
+    });
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+    expectAuthOverride(entry, { profile: "newprofile" });
+    expect(entry.liveModelSwitchPending).toBe(true);
+  });
+
+  test("does not set authProfileOverride when profile suffix is missing", async () => {
+    const entry = await applyMainModelPatch({
+      cfg: createAllowlistedAnthropicModelCfg(),
+      model: ANTHROPIC_SONNET_MODEL,
+      catalogRefs: [ANTHROPIC_SONNET_MODEL],
+    });
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+    expectAuthOverride(entry, { profile: undefined });
+  });
+
+  test("persists full provider:profile authProfileOverride on model patch", async () => {
+    const entry = await applyMainModelPatch({
+      cfg: createAllowlistedAnthropicModelCfg(),
+      model: `${ANTHROPIC_SONNET_MODEL}@openai:user@example.com`,
+      catalogRefs: [ANTHROPIC_SONNET_MODEL],
+    });
+    expectModelSelection(entry, "anthropic", ANTHROPIC_SONNET_ID);
+    expectAuthOverride(entry, { profile: "openai:user@example.com" });
+  });
+
+  test("resolves bare allowlisted model ids before persisting @profile suffix", async () => {
+    const entry = expectPatchOk(
+      await runPatch({
+        cfg: {
+          agents: {
+            defaults: {
+              model: { primary: "openai/gpt-5.4" },
+              models: {
+                "opencode-go/kimi-k2.6": {},
+              },
+            },
+          },
+        } as OpenClawConfig,
+        patch: { key: MAIN_SESSION_KEY, model: "kimi-k2.6@work" },
+        loadGatewayModelCatalog: async () => [
+          { provider: "openai", id: "gpt-5.4", name: "gpt-5.4" },
+          { provider: "opencode-go", id: "kimi-k2.6", name: "kimi-k2.6" },
+        ],
+      }),
+    );
+    expect(entry.providerOverride).toBe("opencode-go");
+    expect(entry.modelOverride).toBe("kimi-k2.6");
+    expect(entry.authProfileOverride).toBe("work");
   });
 });

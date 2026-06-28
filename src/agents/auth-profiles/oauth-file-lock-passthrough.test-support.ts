@@ -1,3 +1,8 @@
+/**
+ * Passthrough file-lock mocks for OAuth tests.
+ * Avoids real interprocess locking so store operations remain deterministic in
+ * single-process Vitest cases.
+ */
 import { vi } from "vitest";
 
 vi.mock("../../infra/file-lock.js", () => ({

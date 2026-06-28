@@ -1,3 +1,7 @@
+/**
+ * Prepares isolated Codex and Claude ACP wrapper commands for ACPX. The bridge
+ * copies safe auth/config state into plugin-owned homes and redacts diagnostics.
+ */
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -6,11 +10,16 @@ import path from "node:path";
 import { readJsonFileWithFallback } from "openclaw/plugin-sdk/json-store";
 import {
   extractTrustedCodexProjectPaths,
-  renderIsolatedCodexProjectTrustConfig,
+  renderIsolatedCodexConfig,
 } from "./codex-trust-config.js";
+import { quoteCommandPart, splitCommandParts } from "./command-line.js";
 import { resolveAcpxPluginRoot } from "./config.js";
 import type { ResolvedAcpxPluginConfig } from "./config.js";
-import { OPENCLAW_ACPX_LEASE_ID_ARG, OPENCLAW_GATEWAY_INSTANCE_ID_ARG } from "./process-lease.js";
+import {
+  OPENCLAW_ACPX_LEASE_ID_ARG,
+  OPENCLAW_ACPX_LEASE_ID_ENV,
+  OPENCLAW_GATEWAY_INSTANCE_ID_ARG,
+} from "./process-lease.js";
 
 const CODEX_ACP_PACKAGE = "@zed-industries/codex-acp";
 const CODEX_ACP_BIN = "codex-acp";
@@ -40,57 +49,6 @@ function readManifestDependencyVersion(packageName: string): string {
 
 const CODEX_ACP_PACKAGE_VERSION = readManifestDependencyVersion(CODEX_ACP_PACKAGE);
 const CLAUDE_ACP_PACKAGE_VERSION = readManifestDependencyVersion(CLAUDE_ACP_PACKAGE);
-
-function quoteCommandPart(value: string): string {
-  return JSON.stringify(value);
-}
-
-function splitCommandParts(value: string): string[] {
-  const parts: string[] = [];
-  let current = "";
-  let quote: "'" | '"' | null = null;
-  let escaping = false;
-
-  for (const ch of value) {
-    if (escaping) {
-      current += ch;
-      escaping = false;
-      continue;
-    }
-    if (ch === "\\" && quote !== "'") {
-      escaping = true;
-      continue;
-    }
-    if (quote) {
-      if (ch === quote) {
-        quote = null;
-      } else {
-        current += ch;
-      }
-      continue;
-    }
-    if (ch === "'" || ch === '"') {
-      quote = ch;
-      continue;
-    }
-    if (/\s/.test(ch)) {
-      if (current) {
-        parts.push(current);
-        current = "";
-      }
-      continue;
-    }
-    current += ch;
-  }
-
-  if (escaping) {
-    current += "\\";
-  }
-  if (current) {
-    parts.push(current);
-  }
-  return parts;
-}
 
 function basename(value: string): string {
   return value.split(/[\\/]/).pop() ?? value;
@@ -148,24 +106,265 @@ async function resolveInstalledClaudeAcpBinPath(): Promise<string | undefined> {
   return await resolveInstalledAcpPackageBinPath(CLAUDE_ACP_PACKAGE, CLAUDE_ACP_BIN);
 }
 
+type DiagnosticRedactionRuleSpec = {
+  source: string;
+  flags: string;
+  replacement: string;
+};
+
+const DIAGNOSTIC_REDACTION_RULES: DiagnosticRedactionRuleSpec[] = [
+  {
+    source: String.raw`(authorization\s*[:=]\s*bearer\s+)[^\s'"<>]+`,
+    flags: "gi",
+    replacement: "$1[REDACTED]",
+  },
+  {
+    source: String.raw`((?:api[_-]?key|apiKey|access[_-]?token|refresh[_-]?token|client[_-]?secret|token|secret|password|passwd|credential)\s*[:=]\s*)[^\s'"<>]+`,
+    flags: "gi",
+    replacement: "$1[REDACTED]",
+  },
+  {
+    source: String.raw`("(?:apiKey|token|secret|password|passwd|accessToken|refreshToken)"\s*:\s*")[^"]+`,
+    flags: "g",
+    replacement: "$1[REDACTED]",
+  },
+  {
+    source: String.raw`(["']?(?:api[-_]?key|apiKey|access[-_]?token|accessToken|refresh[-_]?token|refreshToken|id[-_]?token|idToken|auth[-_]?token|authToken|client[-_]?secret|clientSecret|app[-_]?secret|appSecret|token|secret|password|passwd|credential)["']?\s*[:=]\s*["']?)[^"',}\s<>]+`,
+    flags: "gi",
+    replacement: "$1[REDACTED]",
+  },
+  {
+    source: String.raw`([?&](?:access[-_]?token|auth[-_]?token|refresh[-_]?token|api[-_]?key|client[-_]?secret|token|key|secret|password|pass|passwd|auth|signature)=)[^&\s'"<>]+`,
+    flags: "gi",
+    replacement: "$1[REDACTED]",
+  },
+  {
+    source: String.raw`(--(?:api[-_]?key|token|secret|password|passwd)\s+)[^\s'"]+`,
+    flags: "gi",
+    replacement: "$1[REDACTED]",
+  },
+  {
+    source:
+      String.raw`-----BEGIN [A-Z ]*PRI` +
+      String.raw`VATE KEY-----[\s\S]+?-----END [A-Z ]*PRI` +
+      String.raw`VATE KEY-----`,
+    flags: "g",
+    replacement: "[REDACTED_PRIVATE_KEY]",
+  },
+  {
+    source: String.raw`\b(sk-[A-Za-z0-9_-]{8,})\b`,
+    flags: "g",
+    replacement: "[REDACTED_OPENAI_KEY]",
+  },
+  {
+    source: String.raw`\b(gh[pousr]_[A-Za-z0-9_]{20,})\b`,
+    flags: "g",
+    replacement: "[REDACTED_GITHUB_TOKEN]",
+  },
+  {
+    source: String.raw`\b(github_pat_[A-Za-z0-9_]{20,})\b`,
+    flags: "g",
+    replacement: "[REDACTED_GITHUB_TOKEN]",
+  },
+  {
+    source: String.raw`\b(xox[baprs]-[A-Za-z0-9-]{10,})\b`,
+    flags: "g",
+    replacement: "[REDACTED_SLACK_TOKEN]",
+  },
+  {
+    source: String.raw`\b(gsk_[A-Za-z0-9_-]{10,})\b`,
+    flags: "g",
+    replacement: "[REDACTED_API_KEY]",
+  },
+  {
+    source: String.raw`\b(AIza[0-9A-Za-z\-_]{20,})\b`,
+    flags: "g",
+    replacement: "[REDACTED_GOOGLE_KEY]",
+  },
+  {
+    source: String.raw`\b(ya29\.[0-9A-Za-z_\-./+=]{10,})\b`,
+    flags: "g",
+    replacement: "[REDACTED_GOOGLE_TOKEN]",
+  },
+  {
+    source: String.raw`\b(eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,})\b`,
+    flags: "g",
+    replacement: "[REDACTED_JWT]",
+  },
+  {
+    source: String.raw`\b(pplx-[A-Za-z0-9_-]{10,})\b`,
+    flags: "g",
+    replacement: "[REDACTED_API_KEY]",
+  },
+  {
+    source: String.raw`\b(npm_[A-Za-z0-9]{10,})\b`,
+    flags: "g",
+    replacement: "[REDACTED_NPM_TOKEN]",
+  },
+  {
+    source: String.raw`\b(LTAI[A-Za-z0-9]{10,})\b`,
+    flags: "g",
+    replacement: "[REDACTED_ACCESS_KEY]",
+  },
+  { source: String.raw`\b(hf_[A-Za-z0-9]{10,})\b`, flags: "g", replacement: "[REDACTED_API_KEY]" },
+  {
+    source: String.raw`\bbot(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
+    flags: "g",
+    replacement: "bot[REDACTED_TELEGRAM_TOKEN]",
+  },
+  {
+    source: String.raw`\b(\d{6,}:[A-Za-z0-9_-]{20,})\b`,
+    flags: "g",
+    replacement: "[REDACTED_TELEGRAM_TOKEN]",
+  },
+];
+
+function renderDiagnosticRedactionRuleSpecs(): string {
+  return JSON.stringify(DIAGNOSTIC_REDACTION_RULES);
+}
+
 function buildAdapterWrapperScript(params: {
   displayName: string;
   packageSpec: string;
   binName: string;
   installedBinPath?: string;
   envSetup: string;
+  stderrLogFileNamePrefix?: string;
 }): string {
   return `#!/usr/bin/env node
-import { existsSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 ${params.envSetup}
+const stderrLogFileNamePrefix = ${params.stderrLogFileNamePrefix ? JSON.stringify(params.stderrLogFileNamePrefix) : "undefined"};
+const stderrLogMaxChars = 256 * 1024;
+
 const openClawWrapperArgs = new Set([
   ${quoteCommandPart(OPENCLAW_ACPX_LEASE_ID_ARG)},
   ${quoteCommandPart(OPENCLAW_GATEWAY_INSTANCE_ID_ARG)},
 ]);
+
+function readOpenClawWrapperArg(args, name) {
+  const index = args.indexOf(name);
+  if (index < 0) {
+    return undefined;
+  }
+  const value = args[index + 1];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function safeDiagnosticFilePart(value) {
+  const sanitized = String(value || "").replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 120);
+  return sanitized || "pid-" + process.pid;
+}
+
+function resolveStderrLogPath(args) {
+  if (!stderrLogFileNamePrefix) {
+    return undefined;
+  }
+  const leaseId =
+    process.env[${JSON.stringify(OPENCLAW_ACPX_LEASE_ID_ENV)}] ||
+    readOpenClawWrapperArg(args, ${quoteCommandPart(OPENCLAW_ACPX_LEASE_ID_ARG)}) ||
+    "pid-" + process.pid;
+  const fileName = stderrLogFileNamePrefix + "." + safeDiagnosticFilePart(leaseId) + ".log";
+  return fileURLToPath(new URL("./" + fileName, import.meta.url));
+}
+
+const diagnosticRedactionRules = ${renderDiagnosticRedactionRuleSpecs()}.map((rule) => [
+  new RegExp(rule.source, rule.flags),
+  rule.replacement,
+]);
+
+function redactDiagnosticText(text) {
+  let redacted = text;
+  for (const [pattern, replacement] of diagnosticRedactionRules) {
+    redacted = redacted.replace(pattern, replacement);
+  }
+  return redacted;
+}
+
+let pendingStderrLogText = "";
+const stderrPrivateKeyEndPattern = /-----END [A-Z ]*PRIVATE KEY-----/;
+
+function hasUnclosedPrivateKeyBlock(text) {
+  let lastBeginIndex = -1;
+  for (const match of text.matchAll(/-----BEGIN [A-Z ]*PRIVATE KEY-----/g)) {
+    lastBeginIndex = match.index ?? lastBeginIndex;
+  }
+  if (lastBeginIndex === -1) {
+    return -1;
+  }
+  return stderrPrivateKeyEndPattern.test(text.slice(lastBeginIndex)) ? -1 : lastBeginIndex;
+}
+
+function writeRedactedStderrLog(text) {
+  if (!stderrLogPath) {
+    return;
+  }
+  if (!text) {
+    return;
+  }
+  try {
+    appendFileSync(stderrLogPath, redactDiagnosticText(text), "utf8");
+    const current = readFileSync(stderrLogPath, "utf8");
+    if (current.length > stderrLogMaxChars) {
+      writeFileSync(stderrLogPath, current.slice(-stderrLogMaxChars), "utf8");
+    }
+  } catch {
+    // Stderr capture is diagnostic-only; never break the ACP adapter.
+  }
+}
+
+function redactIncompletePrivateKeyTail(text) {
+  const unclosedPrivateKeyStart = hasUnclosedPrivateKeyBlock(text);
+  if (unclosedPrivateKeyStart === -1) {
+    return text;
+  }
+  return text.slice(0, unclosedPrivateKeyStart) + "[REDACTED_PRIVATE_KEY]";
+}
+
+function flushFinalizedStderrLogText() {
+  const lastLineBreak = pendingStderrLogText.lastIndexOf("\\n");
+  if (lastLineBreak === -1) {
+    if (pendingStderrLogText.length > stderrLogMaxChars) {
+      pendingStderrLogText = pendingStderrLogText.slice(-stderrLogMaxChars);
+    }
+    return;
+  }
+  let flushEnd = lastLineBreak + 1;
+  const unclosedPrivateKeyStart = hasUnclosedPrivateKeyBlock(
+    pendingStderrLogText.slice(0, flushEnd),
+  );
+  if (unclosedPrivateKeyStart !== -1) {
+    flushEnd = unclosedPrivateKeyStart;
+  }
+  if (flushEnd <= 0) {
+    if (pendingStderrLogText.length > stderrLogMaxChars) {
+      pendingStderrLogText = pendingStderrLogText.slice(-stderrLogMaxChars);
+    }
+    return;
+  }
+  const finalizedText = pendingStderrLogText.slice(0, flushEnd);
+  pendingStderrLogText = pendingStderrLogText.slice(flushEnd);
+  writeRedactedStderrLog(finalizedText);
+}
+
+function appendStderrLog(chunk) {
+  const text = typeof chunk === "string" ? chunk : chunk.toString("utf8");
+  if (!text) {
+    return;
+  }
+  pendingStderrLogText += text;
+  flushFinalizedStderrLogText();
+}
+
+function finishStderrLog() {
+  const text = redactIncompletePrivateKeyTail(pendingStderrLogText);
+  pendingStderrLogText = "";
+  writeRedactedStderrLog(text);
+}
 
 function stripOpenClawWrapperArgs(args) {
   const stripped = [];
@@ -180,7 +379,18 @@ function stripOpenClawWrapperArgs(args) {
   return stripped;
 }
 
-const configuredArgs = stripOpenClawWrapperArgs(process.argv.slice(2));
+const rawConfiguredArgs = process.argv.slice(2);
+const stderrLogPath = resolveStderrLogPath(rawConfiguredArgs);
+
+try {
+  if (stderrLogPath) {
+    writeFileSync(stderrLogPath, "", "utf8");
+  }
+} catch {
+  // Stderr capture is diagnostic-only; never break the ACP adapter.
+}
+
+const configuredArgs = stripOpenClawWrapperArgs(rawConfiguredArgs);
 
 function resolveNpmCliPath() {
   const candidate = path.resolve(
@@ -224,12 +434,18 @@ if (!command) {
 const child = spawn(command, args, {
   detached: process.platform !== "win32",
   env,
-  stdio: "inherit",
+  stdio: ["inherit", "inherit", "pipe"],
   windowsHide: true,
+});
+
+child.stderr?.on("data", (chunk) => {
+  appendStderrLog(chunk);
+  process.stderr.write(chunk);
 });
 
 let forceKillTimer;
 let orphanCleanupStarted = false;
+let childExitCode = 1;
 
 function killChildTree(signal, options = {}) {
   if (!child.pid || (!options.force && child.killed)) {
@@ -259,7 +475,13 @@ const parentWatcher =
   process.platform === "win32"
     ? undefined
     : setInterval(() => {
-        if (process.ppid === originalParentPid || process.ppid !== 1) {
+        // Orphan detection: parent PID changed means our original parent died.
+        // The new parent could be PID 1 (init) on bare-metal hosts, OR a
+        // systemd user-session manager, OR a container init, OR a session
+        // leader — depending on environment. Previously this only triggered
+        // on PPID == 1, which missed all systemd-managed deployments and
+        // leaked codex-acp adapter trees on every gateway restart.
+        if (process.ppid === originalParentPid) {
           return;
         }
         if (orphanCleanupStarted) {
@@ -274,7 +496,7 @@ const parentWatcher =
         // a forced fallback signal after SIGTERM.
         forceKillTimer = setTimeout(() => {
           killChildTree("SIGKILL", { force: true });
-          process.exit(1);
+          childExitCode = 1;
         }, 1_500);
       }, 1_000);
 parentWatcher?.unref?.();
@@ -295,9 +517,15 @@ child.on("exit", (code, signal) => {
     clearTimeout(forceKillTimer);
   }
   if (code !== null) {
-    process.exit(code);
+    childExitCode = code;
+    return;
   }
-  process.exit(signal ? 1 : 0);
+  childExitCode = signal ? 1 : 0;
+});
+
+child.on("close", () => {
+  finishStderrLog();
+  process.exit(childExitCode);
 });
 `;
 }
@@ -308,7 +536,37 @@ function buildCodexAcpWrapperScript(installedBinPath?: string): string {
     packageSpec: `${CODEX_ACP_PACKAGE}@${CODEX_ACP_PACKAGE_VERSION}`,
     binName: CODEX_ACP_BIN,
     installedBinPath,
+    stderrLogFileNamePrefix: "codex-acp-wrapper.stderr",
     envSetup: `const codexHome = fileURLToPath(new URL("./codex-home/", import.meta.url));
+const codexAuthPath = fileURLToPath(new URL("./codex-home/auth.json", import.meta.url));
+const codexApiKey = (process.env.CODEX_API_KEY || process.env.OPENAI_API_KEY || "").trim();
+let shouldWriteCodexApiKeyAuth = false;
+if (codexApiKey) {
+  if (!existsSync(codexAuthPath)) {
+    shouldWriteCodexApiKeyAuth = true;
+  } else {
+    try {
+      const existingCodexAuth = JSON.parse(readFileSync(codexAuthPath, "utf8"));
+      shouldWriteCodexApiKeyAuth =
+        !existingCodexAuth ||
+        typeof existingCodexAuth !== "object" ||
+        typeof existingCodexAuth.OPENAI_API_KEY === "string";
+    } catch {
+      shouldWriteCodexApiKeyAuth = true;
+    }
+  }
+}
+if (shouldWriteCodexApiKeyAuth) {
+  writeFileSync(
+    codexAuthPath,
+    JSON.stringify({
+      OPENAI_API_KEY: codexApiKey,
+      tokens: null,
+      last_refresh: null,
+    }) + "\\n",
+    { mode: 0o600 },
+  );
+}
 const env = {
   ...process.env,
   CODEX_HOME: codexHome,
@@ -354,7 +612,10 @@ async function prepareIsolatedCodexHome(params: {
   await fs.mkdir(codexHome, { recursive: true });
   await fs.writeFile(
     path.join(codexHome, "config.toml"),
-    renderIsolatedCodexProjectTrustConfig(trustedProjectPaths),
+    renderIsolatedCodexConfig({
+      sourceConfigToml: sourceConfig,
+      projectPaths: trustedProjectPaths,
+    }),
     "utf8",
   );
   return codexHome;
@@ -473,6 +734,7 @@ function buildClaudeAcpWrapperCommand(wrapperPath: string, configuredCommand?: s
   return configuredCommand?.trim() || buildWrapperCommand(wrapperPath);
 }
 
+/** Prepare ACPX agent commands and isolated auth homes for Codex/Claude adapters. */
 export async function prepareAcpxCodexAuthConfig(params: {
   pluginConfig: ResolvedAcpxPluginConfig;
   stateDir: string;

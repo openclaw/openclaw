@@ -1,3 +1,4 @@
+// Covers exec command resolution and allowlist paths.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -10,8 +11,11 @@ import {
   resolveCommandResolution,
   resolveCommandResolutionFromArgv,
   resolveAllowlistCandidatePath,
+  resolveApprovalAuditTrustPath,
   resolveExecutionTargetCandidatePath,
+  resolveExecutionTargetTrustPath,
   resolvePolicyTargetCandidatePath,
+  resolvePolicyTargetTrustPath,
 } from "./exec-approvals.js";
 
 function buildNestedEnvShellCommand(params: {
@@ -186,6 +190,32 @@ describe("exec-command-resolution", () => {
     expect(timeResolution?.execution.executableName).toBe(fixture.exeName);
   });
 
+  it("keeps file-writing dispatch wrappers on the policy boundary", () => {
+    const timeResolution = resolveCommandResolutionFromArgv([
+      "/usr/bin/time",
+      "-o",
+      "/tmp/time.log",
+      "-a",
+      "-f",
+      "payload",
+      "git",
+      "status",
+    ]);
+    expect(timeResolution?.policyBlocked).toBe(true);
+    expect(timeResolution?.blockedWrapper).toBe("time");
+    expect(timeResolution?.execution.rawExecutable).toBe("/usr/bin/time");
+
+    const scriptResolution = resolveCommandResolutionFromArgv(
+      ["script", "/tmp/session.log", "git", "status"],
+      undefined,
+      undefined,
+      "darwin",
+    );
+    expect(scriptResolution?.policyBlocked).toBe(true);
+    expect(scriptResolution?.blockedWrapper).toBe("script");
+    expect(scriptResolution?.execution.rawExecutable).toBe("script");
+  });
+
   it("keeps shell multiplexer wrappers as a separate policy target", () => {
     if (process.platform === "win32") {
       return;
@@ -203,6 +233,35 @@ describe("exec-command-resolution", () => {
     expect(resolution?.policy.resolvedPath).toBe(busybox);
     expect(resolvePolicyTargetCandidatePath(resolution ?? null, dir)).toBe(busybox);
     expect(resolution?.execution.executableName.toLowerCase()).toContain("sh");
+  });
+
+  it("exposes canonical trust paths separately from display candidate paths", () => {
+    const resolution = {
+      execution: {
+        rawExecutable: "rg",
+        resolvedPath: "/opt/homebrew/bin/rg",
+        resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+        executableName: "rg",
+      },
+      policy: {
+        rawExecutable: "rg",
+        resolvedPath: "/opt/homebrew/bin/rg",
+        resolvedRealPath: "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+        executableName: "rg",
+      },
+    };
+
+    expect(resolveExecutionTargetCandidatePath(resolution)).toBe("/opt/homebrew/bin/rg");
+    expect(resolveExecutionTargetTrustPath(resolution)).toBe(
+      "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+    );
+    expect(resolvePolicyTargetCandidatePath(resolution)).toBe("/opt/homebrew/bin/rg");
+    expect(resolvePolicyTargetTrustPath(resolution)).toBe(
+      "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+    );
+    expect(resolveApprovalAuditTrustPath(resolution)).toBe(
+      "/opt/homebrew/Cellar/ripgrep/14.1.1/bin/rg",
+    );
   });
 
   it("does not satisfy inner-shell allowlists when invoked through busybox wrappers", () => {

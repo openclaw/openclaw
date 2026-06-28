@@ -115,7 +115,7 @@ Voice-call credentials accept SecretRefs. `plugins.entries.voice-call.config.twi
               responseSystemPrompt: "You are a concise baseball card specialist.",
               tts: {
                 providers: {
-                  openai: { voice: "alloy" },
+                  openai: { speakerVoice: "alloy" },
                 },
               },
             },
@@ -211,6 +211,18 @@ each carrier call should start with fresh context, for example reception,
 booking, IVR, or Google Meet bridge flows where the same phone number may
 represent different meetings.
 
+Voice Call stores generated session keys under the configured agent namespace
+(`agent:<agentId>:voice:*`) so call memory survives Gateway session-key
+canonicalization after restarts. Raw explicit integration keys use the same
+agent namespace. A canonical `agent:<configuredAgentId>:*` key keeps that owner,
+and its main aliases honor core `session.mainKey` and global scope. Foreign or
+malformed `agent:*` input is scoped as an opaque key under the configured agent;
+`global` and `unknown` remain global sentinels. Gateway startup promotes older
+raw keys in default or `{agentId}`-templated stores where the path proves one
+owner. In fixed custom stores, ambiguous legacy rows remain untouched because
+they do not contain enough information to choose an owner; new calls use
+canonical agent-scoped history.
+
 ## Realtime voice conversations
 
 `realtime` selects a full-duplex realtime voice provider for live call
@@ -230,7 +242,7 @@ Current runtime behaviour:
 - Provider-owned raw config lives under `realtime.providers.<providerId>`.
 - Voice Call exposes the shared `openclaw_agent_consult` realtime tool by default. The realtime model can call it when the caller asks for deeper reasoning, current information, or normal OpenClaw tools.
 - `realtime.consultPolicy` optionally adds guidance for when the realtime model should call `openclaw_agent_consult`.
-- `realtime.agentContext.enabled` is default-off. When enabled, Voice Call injects a bounded agent identity, system prompt override, and selected workspace-file capsule into the realtime provider instructions at session setup.
+- `realtime.agentContext.enabled` is default-off. When enabled, Voice Call injects a bounded agent identity and selected workspace-file capsule into the realtime provider instructions at session setup.
 - `realtime.fastContext.enabled` is default-off. When enabled, Voice Call first searches indexed memory/session context for the consult question and returns those snippets to the realtime model within `realtime.fastContext.timeoutMs` before falling back to the full consult agent only if `realtime.fastContext.fallbackToConsult` is true.
 - If `realtime.provider` points at an unregistered provider, or no realtime voice provider is registered at all, Voice Call logs a warning and skips realtime media instead of failing the whole plugin.
 - Consult session keys reuse the stored call session when available, then fall back to the configured `sessionScope` (`per-phone` by default, or `per-call` for isolated calls).
@@ -278,7 +290,6 @@ for tool work, current information, memory lookups, or workspace state.
               enabled: true,
               maxChars: 6000,
               includeIdentity: true,
-              includeSystemPrompt: true,
               includeWorkspaceFiles: true,
               files: ["SOUL.md", "IDENTITY.md", "USER.md"],
             },
@@ -323,7 +334,7 @@ for tool work, current information, memory lookups, or workspace state.
                   google: {
                     apiKey: "${GEMINI_API_KEY}",
                     model: "gemini-2.5-flash-native-audio-preview-12-2025",
-                    voice: "Kore",
+                    speakerVoice: "Kore",
                     silenceDurationMs: 500,
                     startSensitivity: "high",
                   },
@@ -456,7 +467,7 @@ speech on calls. You can override it under the plugin config with the
     provider: "elevenlabs",
     providers: {
       elevenlabs: {
-        voiceId: "pMsXgVXv3BLzUgSXRplE",
+        speakerVoiceId: "pMsXgVXv3BLzUgSXRplE",
         modelId: "eleven_multilingual_v2",
       },
     },
@@ -487,7 +498,7 @@ Behavior notes:
     tts: {
       provider: "openai",
       providers: {
-        openai: { voice: "alloy" },
+        openai: { speakerVoice: "alloy" },
       },
     },
   },
@@ -506,7 +517,7 @@ Behavior notes:
             providers: {
               elevenlabs: {
                 apiKey: "elevenlabs_key",
-                voiceId: "pMsXgVXv3BLzUgSXRplE",
+                speakerVoiceId: "pMsXgVXv3BLzUgSXRplE",
                 modelId: "eleven_multilingual_v2",
               },
             },
@@ -529,7 +540,7 @@ Behavior notes:
             providers: {
               openai: {
                 model: "gpt-4o-mini-tts",
-                voice: "marin",
+                speakerVoice: "marin",
               },
             },
           },
@@ -600,7 +611,7 @@ you can usually override only the provider voice:
   tts: {
     provider: "openai",
     providers: {
-      openai: { voice: "coral" },
+      openai: { speakerVoice: "coral" },
     },
   },
   numbers: {
@@ -609,7 +620,7 @@ you can usually override only the provider voice:
       responseSystemPrompt: "You are a concise baseball card specialist.",
       tts: {
         providers: {
-          openai: { voice: "alloy" },
+          openai: { speakerVoice: "alloy" },
         },
       },
     },
@@ -760,7 +771,7 @@ Tool name: `voice_call`.
 | `end_call`      | `callId`                                   |
 | `get_status`    | `callId`                                   |
 
-This repo ships a matching skill doc at `skills/voice-call/SKILL.md`.
+The voice-call plugin ships a matching agent skill.
 
 ## Gateway RPC
 

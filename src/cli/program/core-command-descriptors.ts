@@ -1,6 +1,8 @@
+// Core root-command descriptor catalog used for help placeholders and lazy registration.
 import { defineCommandDescriptorCatalog } from "./command-descriptor-utils.js";
 import type { NamedCommandDescriptor } from "./command-group-descriptors.js";
 
+/** Descriptor shape for root commands owned by the core CLI. */
 export type CoreCliCommandDescriptor = NamedCommandDescriptor;
 
 const coreCliCommandCatalog = defineCommandDescriptorCatalog([
@@ -69,6 +71,12 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
     name: "mcp",
     description: "Manage OpenClaw MCP config and channel bridge",
     hasSubcommands: true,
+    parentDefaultHelp: true,
+  },
+  {
+    name: "transcripts",
+    description: "Inspect stored transcripts",
+    hasSubcommands: true,
   },
   {
     name: "agent",
@@ -107,16 +115,25 @@ const coreCliCommandCatalog = defineCommandDescriptorCatalog([
   },
 ] as const satisfies ReadonlyArray<CoreCliCommandDescriptor>);
 
+/** Static root-command descriptors for the core CLI surface. */
 export const CORE_CLI_COMMAND_DESCRIPTORS = coreCliCommandCatalog.descriptors;
 
+/** Return core root-command descriptors in help/registration order. */
 export function getCoreCliCommandDescriptors(): ReadonlyArray<CoreCliCommandDescriptor> {
   return coreCliCommandCatalog.getDescriptors();
 }
 
+/** Return names for all core root commands. */
 export function getCoreCliCommandNames(): string[] {
   return coreCliCommandCatalog.getNames();
 }
 
+/** Return core root commands that own child subcommands. */
 export function getCoreCliCommandsWithSubcommands(): string[] {
   return coreCliCommandCatalog.getCommandsWithSubcommands();
+}
+
+/** Return core root commands whose parent action should default to help. */
+export function getCoreCliParentDefaultHelpCommands(): string[] {
+  return coreCliCommandCatalog.getParentDefaultHelpCommands();
 }

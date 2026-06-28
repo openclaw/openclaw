@@ -1,9 +1,11 @@
+// Low-level CLI argv helpers for root options, help/version detection, and command paths.
 import { isBunRuntime, isNodeRuntime } from "../daemon/runtime-binary.js";
 import {
   consumeRootOptionToken,
   FLAG_TERMINATOR,
   isValueToken,
 } from "../infra/cli-root-options.js";
+import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
 import { CORE_CLI_COMMAND_DESCRIPTORS } from "./program/core-command-descriptors.js";
 import { SUB_CLI_DESCRIPTORS } from "./program/subcli-descriptors.js";
 
@@ -63,7 +65,7 @@ export function isHelpOrVersionInvocation(argv: string[]): boolean {
     }
     const [primary] = positionals;
     // Positional `help` may be a command argument for known leaf commands.
-    // Unknown roots are treated as plugin command namespaces.
+    // Unknown roots stay help-compatible because plugins may register namespaces later.
     if (!primary || !KNOWN_ROOT_COMMANDS.has(primary)) {
       return true;
     }
@@ -76,11 +78,7 @@ export function isHelpOrVersionInvocation(argv: string[]): boolean {
 }
 
 function parsePositiveInt(value: string): number | undefined {
-  const parsed = Number.parseInt(value, 10);
-  if (Number.isNaN(parsed) || parsed <= 0) {
-    return undefined;
-  }
-  return parsed;
+  return parseStrictPositiveInteger(value);
 }
 
 export function hasFlag(argv: string[], name: string): boolean {
@@ -117,7 +115,7 @@ export function hasRootVersionAlias(argv: string[]): boolean {
       continue;
     }
     if (arg.startsWith("-")) {
-      continue;
+      return false;
     }
     return false;
   }
@@ -165,8 +163,240 @@ export function isRootHelpInvocation(argv: string[]): boolean {
   return isRootInvocationForFlags(argv, HELP_FLAGS);
 }
 
+type HelpNormalizationPositional = { value: string; index: number };
+
+type HelpNormalizationScanResult =
+  | {
+      ok: true;
+      positionals: HelpNormalizationPositional[];
+      rootOptions: string[];
+      helpFlagIndex: number | null;
+    }
+  | { ok: false };
+
+function scanHelpNormalizationArgv(argv: string[]): HelpNormalizationScanResult {
+  const positionals: HelpNormalizationPositional[] = [];
+  const rootOptions: string[] = [];
+  let helpFlagIndex: number | null = null;
+
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      break;
+    }
+    const consumed = consumeRootOptionToken(argv, index);
+    if (consumed > 0) {
+      rootOptions.push(...argv.slice(index, index + consumed));
+      index += consumed - 1;
+      continue;
+    }
+    if (HELP_FLAGS.has(arg)) {
+      helpFlagIndex = index;
+      continue;
+    }
+    if (arg.startsWith("-")) {
+      return { ok: false };
+    }
+    positionals.push({ value: arg, index });
+  }
+
+  return { ok: true, positionals, rootOptions, helpFlagIndex };
+}
+
+export function normalizeGeneratedHelpCommandArgv(argv: string[]): string[] {
+  const scan = scanHelpNormalizationArgv(argv);
+  if (!scan.ok) {
+    return argv;
+  }
+  const { positionals, rootOptions, helpFlagIndex } = scan;
+  const [primary, secondary, target] = positionals;
+  if (
+    !primary ||
+    secondary?.value !== "help" ||
+    (KNOWN_ROOT_COMMANDS.has(primary.value) && !ROOT_COMMANDS_WITH_SUBCOMMANDS.has(primary.value))
+  ) {
+    return argv;
+  }
+
+  if (positionals.length === 2 && helpFlagIndex === secondary.index + 1) {
+    return argv.toSpliced(helpFlagIndex, 1);
+  }
+
+  if (
+    !target ||
+    positionals.length !== 3 ||
+    (helpFlagIndex !== null && helpFlagIndex !== target.index + 1)
+  ) {
+    return argv;
+  }
+
+  return [argv[0], argv[1], ...rootOptions, primary.value, target.value, "--help"];
+}
+
+export function normalizeRootHelpTargetArgv(argv: string[]): string[] {
+  const scan = scanHelpNormalizationArgv(argv);
+  if (!scan.ok) {
+    return argv;
+  }
+  const { positionals, rootOptions, helpFlagIndex } = scan;
+
+  const [help, target] = positionals;
+  if (
+    help?.value !== "help" ||
+    !target ||
+    (helpFlagIndex !== null && helpFlagIndex !== positionals.at(-1)!.index + 1)
+  ) {
+    return argv;
+  }
+
+  const targetPath = positionals.slice(1).map((positional) => positional.value);
+  return [argv[0], argv[1], ...rootOptions, ...targetPath, "--help"];
+}
+
+export type NormalizeRootNoColorArgvOptions = {
+  shouldPreserveNoColor?: (params: {
+    remainingArgs: readonly string[];
+    noColorIndex: number;
+  }) => boolean;
+};
+
+export type NormalizeRootLogLevelArgvOptions = {
+  shouldPreserveLogLevel?: (params: {
+    remainingArgs: readonly string[];
+    logLevelIndex: number;
+    consumed: number;
+  }) => boolean;
+};
+
+function isPossibleCommandOptionValue(
+  remainingArgs: readonly string[],
+  optionIndex: number,
+): boolean {
+  const previous = remainingArgs[optionIndex - 1];
+  if (!previous?.startsWith("-") || previous === FLAG_TERMINATOR) {
+    return false;
+  }
+  return !previous.includes("=");
+}
+
+function consumeRootLogLevelToken(args: readonly string[], index: number): number {
+  const arg = args[index];
+  if (!arg || arg === FLAG_TERMINATOR) {
+    return 0;
+  }
+  if (arg.startsWith("--log-level=")) {
+    return arg.slice("--log-level=".length).trim() ? 1 : 0;
+  }
+  if (arg === "--log-level") {
+    return isValueToken(args[index + 1]) ? 2 : 0;
+  }
+  return 0;
+}
+
+function splitRootOptionPrefix(argv: string[]): {
+  prefix: string[];
+  rootPrefix: string[];
+  remainingArgs: string[];
+} {
+  const prefix = argv.slice(0, 2);
+  const args = argv.slice(2);
+  let rootPrefixEnd = 0;
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === FLAG_TERMINATOR) {
+      break;
+    }
+    const consumed = consumeRootOptionToken(args, index);
+    if (consumed <= 0) {
+      break;
+    }
+    rootPrefixEnd = index + consumed;
+    index += consumed - 1;
+  }
+  return {
+    prefix,
+    rootPrefix: args.slice(0, rootPrefixEnd),
+    remainingArgs: args.slice(rootPrefixEnd),
+  };
+}
+
+export function normalizeRootNoColorArgv(
+  argv: string[],
+  options: NormalizeRootNoColorArgvOptions = {},
+): string[] {
+  const { prefix, rootPrefix, remainingArgs } = splitRootOptionPrefix(argv);
+  const movedNoColorArgs: string[] = [];
+  const nextArgs: string[] = [];
+  for (let index = 0; index < remainingArgs.length; index += 1) {
+    const arg = remainingArgs[index];
+    if (arg === FLAG_TERMINATOR) {
+      nextArgs.push(...remainingArgs.slice(index));
+      break;
+    }
+    if (arg === "--no-color") {
+      // Commander can treat dash-prefixed tokens as command option values.
+      // Early callers stay conservative; final Commander parse can pass metadata.
+      const shouldPreserve =
+        options.shouldPreserveNoColor?.({ remainingArgs, noColorIndex: index }) ??
+        isPossibleCommandOptionValue(remainingArgs, index);
+      if (shouldPreserve) {
+        nextArgs.push(arg);
+        continue;
+      }
+      movedNoColorArgs.push(arg);
+      continue;
+    }
+    nextArgs.push(arg);
+  }
+
+  if (movedNoColorArgs.length === 0) {
+    return argv;
+  }
+  return [...prefix, ...rootPrefix, ...movedNoColorArgs, ...nextArgs];
+}
+
+export function normalizeRootLogLevelArgv(
+  argv: string[],
+  options: NormalizeRootLogLevelArgvOptions = {},
+): string[] {
+  const { prefix, rootPrefix, remainingArgs } = splitRootOptionPrefix(argv);
+  const movedLogLevelArgs: string[] = [];
+  const nextArgs: string[] = [];
+  for (let index = 0; index < remainingArgs.length; index += 1) {
+    const arg = remainingArgs[index];
+    if (arg === FLAG_TERMINATOR) {
+      nextArgs.push(...remainingArgs.slice(index));
+      break;
+    }
+    const consumed = consumeRootLogLevelToken(remainingArgs, index);
+    if (consumed > 0) {
+      const shouldPreserve =
+        options.shouldPreserveLogLevel?.({
+          remainingArgs,
+          logLevelIndex: index,
+          consumed,
+        }) ?? isPossibleCommandOptionValue(remainingArgs, index);
+      const tokens = remainingArgs.slice(index, index + consumed);
+      if (shouldPreserve) {
+        nextArgs.push(...tokens);
+      } else {
+        movedLogLevelArgs.push(...tokens);
+      }
+      index += consumed - 1;
+      continue;
+    }
+    nextArgs.push(arg);
+  }
+
+  if (movedLogLevelArgs.length === 0) {
+    return argv;
+  }
+  return [...prefix, ...rootPrefix, ...movedLogLevelArgs, ...nextArgs];
+}
+
 export function getFlagValue(argv: string[], name: string): string | null | undefined {
   const args = argv.slice(2);
+  let value: string | undefined;
   for (let i = 0; i < args.length; i += 1) {
     const arg = args[i];
     if (arg === FLAG_TERMINATOR) {
@@ -174,14 +404,22 @@ export function getFlagValue(argv: string[], name: string): string | null | unde
     }
     if (arg === name) {
       const next = args[i + 1];
-      return isValueToken(next) ? next : null;
+      if (!isValueToken(next)) {
+        return null;
+      }
+      value = next;
+      i += 1;
+      continue;
     }
     if (arg.startsWith(`${name}=`)) {
-      const value = arg.slice(name.length + 1);
-      return value ? value : null;
+      const assigned = arg.slice(name.length + 1);
+      if (!assigned) {
+        return null;
+      }
+      value = assigned;
     }
   }
-  return undefined;
+  return value;
 }
 
 export function getVerboseFlag(argv: string[], options?: { includeDebug?: boolean }): boolean {
@@ -199,11 +437,9 @@ export function getPositiveIntFlagValue(argv: string[], name: string): number | 
   if (raw === null || raw === undefined) {
     return raw;
   }
-  return parsePositiveInt(raw);
-}
-
-export function getCommandPath(argv: string[], depth = 2): string[] {
-  return getCommandPathInternal(argv, depth, { skipRootOptions: false });
+  // Keep absent distinct from present-but-invalid so route-first callers can
+  // defer invalid input to Commander instead of silently applying defaults.
+  return parsePositiveInt(raw) ?? null;
 }
 
 export function getCommandPathWithRootOptions(argv: string[], depth = 2): string[] {
@@ -365,7 +601,7 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
     return true;
   }
   const [primary, secondary] = path;
-  if (primary === "health" || primary === "status" || primary === "sessions") {
+  if (primary === "health" || primary === "sessions") {
     return false;
   }
   if (primary === "update" && secondary === "status") {
@@ -374,15 +610,5 @@ export function shouldMigrateStateFromPath(path: string[]): boolean {
   if (primary === "config" && (secondary === "get" || secondary === "unset")) {
     return false;
   }
-  if (primary === "models" && (secondary === "list" || secondary === "status")) {
-    return false;
-  }
-  if (primary === "agent") {
-    return false;
-  }
   return true;
-}
-
-export function shouldMigrateState(argv: string[]): boolean {
-  return shouldMigrateStateFromPath(getCommandPath(argv, 2));
 }

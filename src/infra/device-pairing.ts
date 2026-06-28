@@ -1,4 +1,6 @@
+// Manages device pairing requests, approvals, and token issuance.
 import { randomUUID } from "node:crypto";
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeDeviceAuthScopes } from "../shared/device-auth.js";
 import {
   resolveBootstrapProfileScopesForRole,
@@ -22,6 +24,7 @@ import {
 } from "./pairing-files.js";
 import { generatePairingToken, verifyPairingToken } from "./pairing-token.js";
 
+/** Pending device pairing request awaiting owner approval. */
 export type DevicePairingPendingRequest = {
   requestId: string;
   deviceId: string;
@@ -40,16 +43,22 @@ export type DevicePairingPendingRequest = {
   ts: number;
 };
 
+/** Bearer token issued to one paired device role. */
 export type DeviceAuthToken = {
   token: string;
   role: string;
   scopes: string[];
+  issuer?: {
+    kind: "shared-gateway-auth";
+    generation: string;
+  };
   createdAtMs: number;
   rotatedAtMs?: number;
   revokedAtMs?: number;
   lastUsedAtMs?: number;
 };
 
+/** Redacted token metadata safe for list/status responses. */
 export type DeviceAuthTokenSummary = {
   role: string;
   scopes: string[];
@@ -59,22 +68,26 @@ export type DeviceAuthTokenSummary = {
   lastUsedAtMs?: number;
 };
 
+/** Deny reasons returned when rotating an existing paired-device token. */
 export type RotateDeviceTokenDenyReason =
   | "unknown-device-or-role"
   | "missing-approved-scope-baseline"
   | "scope-outside-approved-baseline"
   | "caller-missing-scope";
 
+/** Token rotation result with the replacement token entry on success. */
 export type RotateDeviceTokenResult =
   | { ok: true; entry: DeviceAuthToken }
   | { ok: false; reason: RotateDeviceTokenDenyReason; scope?: string };
 
 export type RevokeDeviceTokenDenyReason = "unknown-device-or-role" | "caller-missing-scope";
 
+/** Token revocation result with the revoked entry on success. */
 export type RevokeDeviceTokenResult =
   | { ok: true; entry: DeviceAuthToken }
   | { ok: false; reason: RevokeDeviceTokenDenyReason; scope?: string };
 
+/** Persisted approved device record, including durable approval and active role tokens. */
 export type PairedDevice = {
   deviceId: string;
   publicKey: string;
@@ -95,16 +108,31 @@ export type PairedDevice = {
   lastSeenReason?: string;
 };
 
+/** Metadata fields a device may refresh without changing approval or token state. */
 export type PairedDeviceMetadataPatch = Pick<
   PairedDevice,
-  "displayName" | "clientId" | "clientMode" | "remoteIp" | "lastSeenAtMs" | "lastSeenReason"
+  | "displayName"
+  | "platform"
+  | "clientId"
+  | "clientMode"
+  | "remoteIp"
+  | "lastSeenAtMs"
+  | "lastSeenReason"
 >;
 
+/** Paired-device access metadata refreshed when an existing device reconnects. */
+export type DevicePairingAccessMetadata = Pick<
+  PairedDevice,
+  "displayName" | "remoteIp" | "lastSeenAtMs" | "lastSeenReason"
+>;
+
+/** Combined pending/paired view returned by pairing list APIs. */
 export type DevicePairingList = {
   pending: DevicePairingPendingRequest[];
   paired: PairedDevice[];
 };
 
+/** Authorization failure categories for owner approval and bootstrap approval flows. */
 export type DevicePairingForbiddenReason =
   | "caller-scopes-required"
   | "caller-missing-scope"
@@ -112,6 +140,7 @@ export type DevicePairingForbiddenReason =
   | "bootstrap-role-not-allowed"
   | "bootstrap-scope-not-allowed";
 
+/** Structured forbidden result with the missing/disallowed role or scope when known. */
 export type DevicePairingForbiddenResult = {
   status: "forbidden";
   reason: DevicePairingForbiddenReason;
@@ -119,6 +148,7 @@ export type DevicePairingForbiddenResult = {
   role?: string;
 };
 
+/** Pairing approval outcome: approved, forbidden with reason, or request not found. */
 export type ApproveDevicePairingResult =
   | { status: "approved"; requestId: string; device: PairedDevice }
   | DevicePairingForbiddenResult
@@ -132,9 +162,13 @@ type DevicePairingStateFile = {
 const PENDING_TTL_MS = 5 * 60 * 1000;
 const OPERATOR_ROLE = "operator";
 const OPERATOR_SCOPE_PREFIX = "operator.";
+const SHARED_GATEWAY_AUTH_ISSUER_KIND = "shared-gateway-auth";
+const BROWSER_DEVICE_CLIENT_IDS = new Set(["openclaw-control-ui", "webchat-ui"]);
+const BROWSER_DEVICE_CLIENT_MODE = "webchat";
 
 const withLock = createAsyncLock();
 
+/** Format a device-pairing authorization failure for CLI/API callers. */
 export function formatDevicePairingForbiddenMessage(result: DevicePairingForbiddenResult): string {
   switch (result.reason) {
     case "caller-scopes-required":
@@ -199,21 +233,8 @@ function normalizeRole(role: string | undefined): string | null {
 function mergeRoles(...items: Array<string | string[] | undefined>): string[] | undefined {
   const roles = new Set<string>();
   for (const item of items) {
-    if (!item) {
-      continue;
-    }
-    if (Array.isArray(item)) {
-      for (const role of item) {
-        const trimmed = role.trim();
-        if (trimmed) {
-          roles.add(trimmed);
-        }
-      }
-    } else {
-      const trimmed = item.trim();
-      if (trimmed) {
-        roles.add(trimmed);
-      }
+    for (const role of normalizeUniqueSingleOrTrimmedStringList(item)) {
+      roles.add(role);
     }
   }
   if (roles.size === 0) {
@@ -235,6 +256,7 @@ function listActiveTokenRoles(
   );
 }
 
+/** List the durable roles an owner approved for a paired device record. */
 export function listApprovedPairedDeviceRoles(
   device: Pick<PairedDevice, "role" | "roles">,
 ): string[] {
@@ -243,6 +265,7 @@ export function listApprovedPairedDeviceRoles(
   return mergeRoles(device.roles, device.role) ?? [];
 }
 
+/** List active-token roles, bounded by the durable approved pairing roles. */
 export function listEffectivePairedDeviceRoles(
   device: Pick<PairedDevice, "role" | "roles" | "tokens">,
 ): string[] {
@@ -258,6 +281,7 @@ export function listEffectivePairedDeviceRoles(
   return [];
 }
 
+/** Return whether a paired device currently has an active token for one role. */
 export function hasEffectivePairedDeviceRole(
   device: Pick<PairedDevice, "role" | "roles" | "tokens">,
   role: string,
@@ -273,15 +297,12 @@ function mergeScopes(...items: Array<string[] | undefined>): string[] | undefine
   const scopes = new Set<string>();
   let sawExplicitScopeList = false;
   for (const item of items) {
-    if (!item) {
+    if (!Array.isArray(item)) {
       continue;
     }
     sawExplicitScopeList = true;
-    for (const scope of item) {
-      const trimmed = scope.trim();
-      if (trimmed) {
-        scopes.add(trimmed);
-      }
+    for (const scope of normalizeUniqueSingleOrTrimmedStringList(item)) {
+      scopes.add(scope);
     }
   }
   if (scopes.size === 0) {
@@ -404,10 +425,31 @@ function cloneDeviceTokens(device: PairedDevice): Record<string, DeviceAuthToken
   return device.tokens ? { ...device.tokens } : {};
 }
 
+function isBrowserRelatedPairedDevice(device: Pick<PairedDevice, "clientId" | "clientMode">) {
+  const clientMode = device.clientMode?.trim().toLowerCase();
+  if (clientMode === BROWSER_DEVICE_CLIENT_MODE) {
+    return true;
+  }
+  const clientId = device.clientId?.trim().toLowerCase();
+  return clientId ? BROWSER_DEVICE_CLIENT_IDS.has(clientId) : false;
+}
+
+function deviceTokenIssuerMatches(
+  entry: DeviceAuthToken,
+  issuer: DeviceAuthToken["issuer"] | undefined,
+): boolean {
+  if (!issuer) {
+    return !entry.issuer;
+  }
+  return entry.issuer?.kind === issuer.kind && entry.issuer.generation === issuer.generation;
+}
+
 function buildDeviceAuthToken(params: {
   role: string;
   scopes: string[];
+  issuer?: DeviceAuthToken["issuer"];
   existing?: DeviceAuthToken;
+  preserveExistingIssuer?: boolean;
   now: number;
   rotatedAtMs?: number;
 }): DeviceAuthToken {
@@ -415,10 +457,41 @@ function buildDeviceAuthToken(params: {
     token: newToken(),
     role: params.role,
     scopes: params.scopes,
+    issuer: params.issuer ?? (params.preserveExistingIssuer ? params.existing?.issuer : undefined),
     createdAtMs: params.existing?.createdAtMs ?? params.now,
     rotatedAtMs: params.rotatedAtMs,
     revokedAtMs: undefined,
     lastUsedAtMs: params.existing?.lastUsedAtMs,
+  };
+}
+
+function buildApprovedPairedDevice(params: {
+  pending: DevicePairingPendingRequest;
+  existing: PairedDevice | undefined;
+  roles: string[] | undefined;
+  approvedScopes: string[] | undefined;
+  tokens: Record<string, DeviceAuthToken>;
+  now: number;
+  accessMetadata?: DevicePairingAccessMetadata;
+}): PairedDevice {
+  return {
+    deviceId: params.pending.deviceId,
+    publicKey: params.pending.publicKey,
+    displayName: params.accessMetadata?.displayName ?? params.pending.displayName,
+    platform: params.pending.platform,
+    deviceFamily: params.pending.deviceFamily,
+    clientId: params.pending.clientId,
+    clientMode: params.pending.clientMode,
+    role: params.pending.role,
+    roles: params.roles,
+    scopes: params.approvedScopes,
+    approvedScopes: params.approvedScopes,
+    remoteIp: params.accessMetadata?.remoteIp ?? params.pending.remoteIp,
+    tokens: params.tokens,
+    createdAtMs: params.existing?.createdAtMs ?? params.now,
+    approvedAtMs: params.now,
+    lastSeenAtMs: params.accessMetadata?.lastSeenAtMs ?? params.existing?.lastSeenAtMs,
+    lastSeenReason: params.accessMetadata?.lastSeenReason ?? params.existing?.lastSeenReason,
   };
 }
 
@@ -431,24 +504,11 @@ function resolveRoleScopedDeviceTokenScopes(role: string, scopes: string[] | und
 }
 
 function preserveRoleScopedApprovalScopes(role: string, scopes: string[] | undefined): string[] {
-  if (!Array.isArray(scopes)) {
-    return [];
-  }
-  const out = new Set<string>();
-  for (const scope of scopes) {
-    const trimmed = scope.trim();
-    if (!trimmed) {
-      continue;
-    }
-    const belongsToRole =
-      role === OPERATOR_ROLE
-        ? trimmed.startsWith(OPERATOR_SCOPE_PREFIX)
-        : !trimmed.startsWith(OPERATOR_SCOPE_PREFIX);
-    if (belongsToRole) {
-      out.add(trimmed);
-    }
-  }
-  return [...out];
+  return normalizeUniqueSingleOrTrimmedStringList(scopes).filter((scope) =>
+    role === OPERATOR_ROLE
+      ? scope.startsWith(OPERATOR_SCOPE_PREFIX)
+      : !scope.startsWith(OPERATOR_SCOPE_PREFIX),
+  );
 }
 
 function resolveApprovedTokenScopes(params: {
@@ -517,6 +577,7 @@ export async function listDevicePairing(baseDir?: string): Promise<DevicePairing
   return { pending, paired };
 }
 
+/** Return one paired device by normalized device id. */
 export async function getPairedDevice(
   deviceId: string,
   baseDir?: string,
@@ -525,6 +586,7 @@ export async function getPairedDevice(
   return state.pairedByDeviceId[normalizeDeviceId(deviceId)] ?? null;
 }
 
+/** Return one pending pairing request by request id. */
 export async function getPendingDevicePairing(
   requestId: string,
   baseDir?: string,
@@ -533,6 +595,7 @@ export async function getPendingDevicePairing(
   return state.pendingById[requestId] ?? null;
 }
 
+/** Create or refresh a pending device pairing request for owner approval. */
 export async function requestDevicePairing(
   req: Omit<DevicePairingPendingRequest, "requestId" | "ts" | "isRepair">,
   baseDir?: string,
@@ -591,18 +654,21 @@ export async function requestDevicePairing(
   });
 }
 
+/** Approve a pending request with optional caller-scope checks for operator grants. */
 export async function approveDevicePairing(
   requestId: string,
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
 export async function approveDevicePairing(
   requestId: string,
-  options: { callerScopes?: readonly string[] },
+  options: { callerScopes?: readonly string[]; accessMetadata?: DevicePairingAccessMetadata },
   baseDir?: string,
 ): Promise<ApproveDevicePairingResult>;
 export async function approveDevicePairing(
   requestId: string,
-  optionsOrBaseDir?: { callerScopes?: readonly string[] } | string,
+  optionsOrBaseDir?:
+    | { callerScopes?: readonly string[]; accessMetadata?: DevicePairingAccessMetadata }
+    | string,
   maybeBaseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
   const options =
@@ -684,23 +750,15 @@ export async function approveDevicePairing(
         lastUsedAtMs: existingToken?.lastUsedAtMs,
       };
     }
-    const device: PairedDevice = {
-      deviceId: pending.deviceId,
-      publicKey: pending.publicKey,
-      displayName: pending.displayName,
-      platform: pending.platform,
-      deviceFamily: pending.deviceFamily,
-      clientId: pending.clientId,
-      clientMode: pending.clientMode,
-      role: pending.role,
+    const device = buildApprovedPairedDevice({
+      pending,
+      existing,
       roles,
-      scopes: approvedScopes,
       approvedScopes,
-      remoteIp: pending.remoteIp,
       tokens,
-      createdAtMs: existing?.createdAtMs ?? now,
-      approvedAtMs: now,
-    };
+      now,
+      accessMetadata: options?.accessMetadata,
+    });
     delete state.pendingById[requestId];
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, baseDir, "both");
@@ -708,11 +766,29 @@ export async function approveDevicePairing(
   });
 }
 
+/** Approve a pending request through a bounded bootstrap profile handoff. */
 export async function approveBootstrapDevicePairing(
   requestId: string,
   bootstrapProfile: DeviceBootstrapProfile,
   baseDir?: string,
+): Promise<ApproveDevicePairingResult>;
+export async function approveBootstrapDevicePairing(
+  requestId: string,
+  bootstrapProfile: DeviceBootstrapProfile,
+  options: { accessMetadata?: DevicePairingAccessMetadata },
+  baseDir?: string,
+): Promise<ApproveDevicePairingResult>;
+export async function approveBootstrapDevicePairing(
+  requestId: string,
+  bootstrapProfile: DeviceBootstrapProfile,
+  optionsOrBaseDir?: { accessMetadata?: DevicePairingAccessMetadata } | string,
+  maybeBaseDir?: string,
 ): Promise<ApproveDevicePairingResult> {
+  const options =
+    typeof optionsOrBaseDir === "string" || optionsOrBaseDir === undefined
+      ? undefined
+      : optionsOrBaseDir;
+  const baseDir = typeof optionsOrBaseDir === "string" ? optionsOrBaseDir : maybeBaseDir;
   const approvedRoles = mergeRoles(bootstrapProfile.roles) ?? [];
   const approvedScopes = resolveBootstrapProfileScopesForRoles(
     approvedRoles,
@@ -773,23 +849,15 @@ export async function approveBootstrapDevicePairing(
       });
     }
 
-    const device: PairedDevice = {
-      deviceId: pending.deviceId,
-      publicKey: pending.publicKey,
-      displayName: pending.displayName,
-      platform: pending.platform,
-      deviceFamily: pending.deviceFamily,
-      clientId: pending.clientId,
-      clientMode: pending.clientMode,
-      role: pending.role,
+    const device = buildApprovedPairedDevice({
+      pending,
+      existing,
       roles,
-      scopes: nextApprovedScopes,
       approvedScopes: nextApprovedScopes,
-      remoteIp: pending.remoteIp,
       tokens,
-      createdAtMs: existing?.createdAtMs ?? now,
-      approvedAtMs: now,
-    };
+      now,
+      accessMetadata: options?.accessMetadata,
+    });
     delete state.pendingById[requestId];
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, baseDir, "both");
@@ -797,6 +865,7 @@ export async function approveBootstrapDevicePairing(
   });
 }
 
+/** Reject a pending request and revoke matching bootstrap tokens for that device. */
 export async function rejectDevicePairing(
   requestId: string,
   baseDir?: string,
@@ -818,6 +887,7 @@ export async function rejectDevicePairing(
   });
 }
 
+/** Remove a paired device and any pending repair requests for the same device id. */
 export async function removePairedDevice(
   deviceId: string,
   baseDir?: string,
@@ -839,6 +909,85 @@ export async function removePairedDevice(
   });
 }
 
+/** Remove one approved paired-device role while preserving unrelated role tokens. */
+export async function removePairedDeviceRole(params: {
+  deviceId: string;
+  role: string;
+  baseDir?: string;
+}): Promise<{ deviceId: string; role: string; removedDevice: boolean } | null> {
+  return await withLock(async () => {
+    const state = await loadState(params.baseDir);
+    const normalizedDeviceId = normalizeDeviceId(params.deviceId);
+    const role = normalizeRole(params.role);
+    const device = state.pairedByDeviceId[normalizedDeviceId];
+    if (!device || !role || !listApprovedPairedDeviceRoles(device).includes(role)) {
+      return null;
+    }
+
+    const tokens = cloneDeviceTokens(device);
+    delete tokens[role];
+    const remainingRoles = listApprovedPairedDeviceRoles(device).filter((entry) => entry !== role);
+    if (remainingRoles.length === 0) {
+      for (const [requestId, pending] of Object.entries(state.pendingById)) {
+        if (pending.deviceId === normalizedDeviceId) {
+          delete state.pendingById[requestId];
+        }
+      }
+      delete state.pairedByDeviceId[normalizedDeviceId];
+      await persistState(state, params.baseDir, "both");
+      return { deviceId: normalizedDeviceId, role, removedDevice: true };
+    }
+
+    for (const [requestId, pending] of Object.entries(state.pendingById)) {
+      if (pending.deviceId !== normalizedDeviceId) {
+        continue;
+      }
+      const pendingRoles = resolveRequestedRoles(pending);
+      if (!pendingRoles.includes(role)) {
+        continue;
+      }
+      const nextPendingRoles = pendingRoles.filter((entry) => entry !== role);
+      if (nextPendingRoles.length === 0) {
+        delete state.pendingById[requestId];
+        continue;
+      }
+      const pendingScopes = Array.isArray(pending.scopes)
+        ? mergeScopes(
+            ...nextPendingRoles.map((entry) =>
+              preserveRoleScopedApprovalScopes(entry, pending.scopes),
+            ),
+          )
+        : undefined;
+      state.pendingById[requestId] = {
+        ...pending,
+        role: nextPendingRoles[0],
+        roles: nextPendingRoles,
+        scopes: pendingScopes,
+      };
+    }
+
+    const scopeBaseline = device.approvedScopes ?? device.scopes;
+    const preservedScopes = Array.isArray(scopeBaseline)
+      ? mergeScopes(
+          ...remainingRoles.map((entry) => preserveRoleScopedApprovalScopes(entry, scopeBaseline)),
+        )
+      : undefined;
+    const next: PairedDevice = {
+      ...device,
+      role: remainingRoles[0],
+      roles: remainingRoles,
+      ...(preservedScopes !== undefined
+        ? { scopes: preservedScopes, approvedScopes: preservedScopes }
+        : {}),
+      tokens: Object.keys(tokens).length > 0 ? tokens : undefined,
+    };
+    state.pairedByDeviceId[normalizedDeviceId] = next;
+    await persistState(state, params.baseDir, "both");
+    return { deviceId: normalizedDeviceId, role, removedDevice: false };
+  });
+}
+
+/** Update non-auth metadata for a paired device presence/status refresh. */
 export async function updatePairedDeviceMetadata(
   deviceId: string,
   patch: Partial<PairedDeviceMetadataPatch>,
@@ -854,6 +1003,9 @@ export async function updatePairedDeviceMetadata(
     const next = { ...existing };
     if ("displayName" in patch) {
       next.displayName = patch.displayName;
+    }
+    if ("platform" in patch) {
+      next.platform = patch.platform;
     }
     if ("clientId" in patch) {
       next.clientId = patch.clientId;
@@ -876,6 +1028,7 @@ export async function updatePairedDeviceMetadata(
   });
 }
 
+/** Summarize token metadata without exposing bearer token strings. */
 export function summarizeDeviceTokens(
   tokens: Record<string, DeviceAuthToken> | undefined,
 ): DeviceAuthTokenSummary[] | undefined {
@@ -895,13 +1048,15 @@ export function summarizeDeviceTokens(
   return summaries.length > 0 ? summaries : undefined;
 }
 
+/** Verify a device role token, scope it to the approval baseline, and mark last use. */
 export async function verifyDeviceToken(params: {
   deviceId: string;
   token: string;
   role: string;
   scopes: string[];
+  requiredSharedGatewaySessionGeneration?: string;
   baseDir?: string;
-}): Promise<{ ok: boolean; reason?: string }> {
+}): Promise<{ ok: boolean; reason?: string; issuer?: DeviceAuthToken["issuer"] }> {
   return await withLock(async () => {
     const state = await loadState(params.baseDir);
     const device = getPairedDeviceFromState(state, params.deviceId);
@@ -922,6 +1077,19 @@ export async function verifyDeviceToken(params: {
     if (!verifyPairingToken(params.token, entry.token)) {
       return { ok: false, reason: "token-mismatch" };
     }
+    if (
+      entry.issuer?.kind === SHARED_GATEWAY_AUTH_ISSUER_KIND &&
+      entry.issuer.generation !== params.requiredSharedGatewaySessionGeneration
+    ) {
+      return { ok: false, reason: "issuer-generation-stale" };
+    }
+    if (
+      !entry.issuer &&
+      params.requiredSharedGatewaySessionGeneration !== undefined &&
+      isBrowserRelatedPairedDevice(device)
+    ) {
+      return { ok: false, reason: "legacy-browser-token" };
+    }
     const approvedScopes = resolveApprovedDeviceScopeBaseline(device);
     if (
       !scopesWithinApprovedDeviceBaseline({
@@ -936,19 +1104,24 @@ export async function verifyDeviceToken(params: {
     if (!roleScopesAllow({ role, requestedScopes, allowedScopes: entry.scopes })) {
       return { ok: false, reason: "scope-mismatch" };
     }
-    entry.lastUsedAtMs = Date.now();
+    const now = Date.now();
+    entry.lastUsedAtMs = now;
     device.tokens ??= {};
     device.tokens[role] = entry;
+    device.lastSeenAtMs = now;
+    device.lastSeenReason = "device-token-auth";
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, params.baseDir, "paired");
-    return { ok: true };
+    return entry.issuer ? { ok: true, issuer: entry.issuer } : { ok: true };
   });
 }
 
+/** Return a reusable token for a role or issue one within the approved scope baseline. */
 export async function ensureDeviceToken(params: {
   deviceId: string;
   role: string;
   scopes: string[];
+  issuer?: DeviceAuthToken["issuer"];
   baseDir?: string;
 }): Promise<DeviceAuthToken | null> {
   return await withLock(async () => {
@@ -979,8 +1152,10 @@ export async function ensureDeviceToken(params: {
         scopes: existing.scopes,
         approvedScopes,
       });
+      const issuerAllowsReuse = deviceTokenIssuerMatches(existing, params.issuer);
       if (
         existingWithinApproved &&
+        issuerAllowsReuse &&
         roleScopesAllow({ role, requestedScopes, allowedScopes: existing.scopes })
       ) {
         return existing;
@@ -990,6 +1165,7 @@ export async function ensureDeviceToken(params: {
     const next = buildDeviceAuthToken({
       role,
       scopes: requestedScopes,
+      issuer: params.issuer,
       existing,
       now,
       rotatedAtMs: existing ? now : undefined,
@@ -1030,6 +1206,7 @@ function resolveDeviceTokenUpdateContext(params: {
   return { device, role, tokens, existing };
 }
 
+/** Rotate a role token inside the device's approved scope baseline. */
 export async function rotateDeviceToken(params: {
   deviceId: string;
   role: string;
@@ -1079,6 +1256,7 @@ export async function rotateDeviceToken(params: {
       role,
       scopes: requestedScopes,
       existing,
+      preserveExistingIssuer: true,
       now,
       rotatedAtMs: now,
     });
@@ -1090,6 +1268,7 @@ export async function rotateDeviceToken(params: {
   });
 }
 
+/** Revoke one active role token after optional caller-scope authorization. */
 export async function revokeDeviceToken(params: {
   deviceId: string;
   role: string;
@@ -1126,18 +1305,5 @@ export async function revokeDeviceToken(params: {
     state.pairedByDeviceId[device.deviceId] = device;
     await persistState(state, params.baseDir, "paired");
     return { ok: true, entry };
-  });
-}
-
-export async function clearDevicePairing(deviceId: string, baseDir?: string): Promise<boolean> {
-  return await withLock(async () => {
-    const state = await loadState(baseDir);
-    const normalizedId = normalizeDeviceId(deviceId);
-    if (!state.pairedByDeviceId[normalizedId]) {
-      return false;
-    }
-    delete state.pairedByDeviceId[normalizedId];
-    await persistState(state, baseDir, "paired");
-    return true;
   });
 }

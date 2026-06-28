@@ -1,3 +1,4 @@
+// Discord tests cover config schema plugin behavior.
 import { describe, expect, it } from "vitest";
 import { DiscordConfigSchema } from "../config-api.js";
 
@@ -74,6 +75,32 @@ describe("discord config schema", () => {
     const cfg = expectValidDiscordConfig({ historyLimit: 3 });
 
     expect(cfg.historyLimit).toBe(3);
+  });
+
+  it("accepts suppressEmbeds at top-level and account scope", () => {
+    const cfg = expectValidDiscordConfig({
+      suppressEmbeds: true,
+      accounts: {
+        noisy: {
+          suppressEmbeds: false,
+        },
+      },
+    });
+
+    expect(cfg.suppressEmbeds).toBe(true);
+    expect(cfg.accounts?.noisy?.suppressEmbeds).toBe(false);
+  });
+
+  it("rejects unknown preview config keys", () => {
+    const issues = expectInvalidDiscordConfig({
+      streaming: {
+        preview: {
+          unknownPreviewFlag: true,
+        },
+      },
+    });
+
+    expect(issues[0]?.path.join(".")).toBe("streaming.preview");
   });
 
   it("accepts Discord application IDs at top-level and account scope", () => {
@@ -167,13 +194,19 @@ describe("discord config schema", () => {
     const cfg = expectValidDiscordConfig({
       voice: {
         mode: "agent-proxy",
-        model: "openai-codex/gpt-5.5",
+        model: "openai/gpt-5.5",
+        followUsersEnabled: true,
+        followUsers: ["58398277829140480"],
         realtime: {
           provider: "openai",
           model: "gpt-realtime-2",
-          voice: "cedar",
+          speakerVoice: "cedar",
+          speakerVoiceId: "voice-123",
           toolPolicy: "safe-read-only",
           consultPolicy: "always",
+          requireWakeName: true,
+          wakeNames: ["Molty"],
+          bootstrapContextFiles: ["IDENTITY.md", "USER.md", "SOUL.md"],
           bargeIn: true,
           minBargeInAudioEndMs: 500,
           providers: {
@@ -187,12 +220,22 @@ describe("discord config schema", () => {
     });
 
     expect(cfg.voice?.mode).toBe("agent-proxy");
-    expect(cfg.voice?.model).toBe("openai-codex/gpt-5.5");
+    expect(cfg.voice?.model).toBe("openai/gpt-5.5");
+    expect(cfg.voice?.followUsersEnabled).toBe(true);
+    expect(cfg.voice?.followUsers).toEqual(["58398277829140480"]);
     expect(cfg.voice?.realtime?.provider).toBe("openai");
     expect(cfg.voice?.realtime?.model).toBe("gpt-realtime-2");
-    expect(cfg.voice?.realtime?.voice).toBe("cedar");
+    expect(cfg.voice?.realtime?.speakerVoice).toBe("cedar");
+    expect(cfg.voice?.realtime?.speakerVoiceId).toBe("voice-123");
     expect(cfg.voice?.realtime?.toolPolicy).toBe("safe-read-only");
     expect(cfg.voice?.realtime?.consultPolicy).toBe("always");
+    expect(cfg.voice?.realtime?.requireWakeName).toBe(true);
+    expect(cfg.voice?.realtime?.wakeNames).toEqual(["Molty"]);
+    expect(cfg.voice?.realtime?.bootstrapContextFiles).toEqual([
+      "IDENTITY.md",
+      "USER.md",
+      "SOUL.md",
+    ]);
     expect(cfg.voice?.realtime?.bargeIn).toBe(true);
     expect(cfg.voice?.realtime?.minBargeInAudioEndMs).toBe(500);
   });
@@ -203,10 +246,15 @@ describe("discord config schema", () => {
       { mode: "talk-buffer" },
       { mode: "bidi", realtime: { toolPolicy: "dangerous" } },
       { mode: "agent-proxy", realtime: { consultPolicy: "substantive" } },
+      { mode: "bidi", realtime: { bootstrapContextFiles: ["AGENTS.md"] } },
+      { mode: "agent-proxy", realtime: { wakeNames: [] } },
+      { mode: "agent-proxy", realtime: { wakeNames: [""] } },
+      { mode: "agent-proxy", realtime: { wakeNames: ["Claw Bot Helper"] } },
       { mode: "agent-proxy", realtime: { debounceMs: 10_001 } },
       { mode: "agent-proxy", realtime: { minBargeInAudioEndMs: -1 } },
       { mode: "agent-proxy", realtime: { minBargeInAudioEndMs: 10_001 } },
       { agentSession: { mode: "target" } },
+      { followUsers: [""] },
     ]) {
       expectInvalidDiscordConfig({ voice });
     }
@@ -284,6 +332,15 @@ describe("discord config schema", () => {
     expect(cfg.execApprovals?.approvers).toEqual(["555"]);
   });
 
+  it.each([true, false, "auto"] as const)("accepts execApprovals.enabled=%s", (enabled) => {
+    const cfg = expectValidDiscordConfig({ execApprovals: { enabled } });
+    expect(cfg.execApprovals?.enabled).toBe(enabled);
+  });
+
+  it("rejects execApprovals.enabled with other string values", () => {
+    expectInvalidDiscordConfig({ execApprovals: { enabled: "on" } });
+  });
+
   it("rejects numeric IDs that are not valid non-negative safe integers", () => {
     const cases = [106232522769186816, -1, 123.45];
     for (const id of cases) {
@@ -351,6 +408,35 @@ describe("discord config schema", () => {
     });
 
     expect(res.success).toBe(true);
+  });
+
+  it("accepts agentComponents.ttlMs at channel and account scope", () => {
+    const res = DiscordConfigSchema.safeParse({
+      agentComponents: {
+        ttlMs: 86_400_000,
+      },
+      accounts: {
+        work: {
+          agentComponents: {
+            ttlMs: 120_000,
+          },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects invalid agentComponents.ttlMs values", () => {
+    for (const ttlMs of [0, -1, 1.5, 86_400_001]) {
+      const res = DiscordConfigSchema.safeParse({
+        agentComponents: {
+          ttlMs,
+        },
+      });
+
+      expect(res.success).toBe(false);
+    }
   });
 
   it("accepts agentComponents.enabled at account scope", () => {

@@ -1,5 +1,28 @@
-import type { MessagePresentation } from "openclaw/plugin-sdk/interactive-runtime";
+// Msteams plugin module implements presentation behavior.
+import {
+  adaptMessagePresentationForChannel,
+  resolveMessagePresentationControlValue,
+  type MessagePresentation,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { ChannelOutboundAdapter } from "../runtime-api.js";
+
+export const MSTEAMS_PRESENTATION_CAPABILITIES = {
+  supported: true,
+  buttons: true,
+  selects: false,
+  context: true,
+  divider: true,
+  limits: {
+    actions: {
+      supportsStyles: false,
+      supportsDisabled: false,
+    },
+    text: {
+      markdownDialect: "markdown",
+    },
+  },
+} satisfies ChannelOutboundAdapter["presentationCapabilities"];
 
 export function buildMSTeamsPresentationCard(params: {
   presentation: MessagePresentation;
@@ -14,7 +37,10 @@ export function buildMSTeamsPresentationCard(params: {
       wrap: true,
     });
   }
-  const { presentation } = params;
+  const presentation = adaptMessagePresentationForChannel({
+    presentation: params.presentation,
+    capabilities: MSTEAMS_PRESENTATION_CAPABILITIES,
+  });
   if (presentation.title) {
     body.push({
       type: "TextBlock",
@@ -41,19 +67,21 @@ export function buildMSTeamsPresentationCard(params: {
     }
     if (block.type === "buttons") {
       for (const button of block.buttons) {
-        if (button.url) {
+        const targetUrl = button.url ?? button.webApp?.url ?? button.web_app?.url;
+        if (targetUrl) {
           actions.push({
             type: "Action.OpenUrl",
             title: button.label,
-            url: button.url,
+            url: targetUrl,
           });
           continue;
         }
-        if (button.value) {
+        const value = resolveMessagePresentationControlValue(button);
+        if (value) {
           actions.push({
             type: "Action.Submit",
             title: button.label,
-            data: { value: button.value, label: button.label },
+            data: button.action?.type === "command" ? value : { value, label: button.label },
           });
         }
       }

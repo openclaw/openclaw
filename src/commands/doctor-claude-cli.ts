@@ -1,6 +1,11 @@
+/** Doctor health note for Claude CLI binary, auth, and workspace/project directories. */
 import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  resolvePrimaryStringValue,
+} from "@openclaw/normalization-core/string-coerce";
+import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
 import {
   listAgentIds,
@@ -16,20 +21,13 @@ import type {
   TokenCredential,
 } from "../agents/auth-profiles/types.js";
 import { readClaudeCliCredentialsCached } from "../agents/cli-credentials.js";
+import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveExecutablePath } from "../infra/executable-path.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-  resolvePrimaryStringValue,
-} from "../shared/string-coerce.js";
-import { note } from "../terminal/note.js";
 import { shortenHomePath } from "../utils.js";
 
 const CLAUDE_CLI_PROVIDER = "claude-cli";
-const CLAUDE_PROJECTS_DIRNAME = path.join(".claude", "projects");
-const MAX_SANITIZED_PROJECT_LENGTH = 200;
 
 type ClaudeCliReadableCredential =
   | Pick<OAuthCredential, "type" | "expires">
@@ -61,44 +59,6 @@ function resolveClaudeCliCommand(cfg: OpenClawConfig): string {
     }
   }
   return "claude";
-}
-
-function simpleHash36(input: string): string {
-  let hash = 0;
-  for (let index = 0; index < input.length; index += 1) {
-    hash = (hash * 31 + input.charCodeAt(index)) >>> 0;
-  }
-  return hash.toString(36);
-}
-
-function sanitizeClaudeCliProjectKey(workspaceDir: string): string {
-  const sanitized = workspaceDir.replace(/[^a-zA-Z0-9]/g, "-");
-  if (sanitized.length <= MAX_SANITIZED_PROJECT_LENGTH) {
-    return sanitized;
-  }
-  return `${sanitized.slice(0, MAX_SANITIZED_PROJECT_LENGTH)}-${simpleHash36(workspaceDir)}`;
-}
-
-function canonicalizeWorkspaceDir(workspaceDir: string): string {
-  const resolved = path.resolve(workspaceDir).normalize("NFC");
-  try {
-    return fs.realpathSync.native(resolved).normalize("NFC");
-  } catch {
-    return resolved;
-  }
-}
-
-export function resolveClaudeCliProjectDirForWorkspace(params: {
-  workspaceDir: string;
-  homeDir?: string;
-}): string {
-  const homeDir = normalizeOptionalString(params.homeDir) || process.env.HOME || os.homedir();
-  const canonicalWorkspaceDir = canonicalizeWorkspaceDir(params.workspaceDir);
-  return path.join(
-    homeDir,
-    CLAUDE_PROJECTS_DIRNAME,
-    sanitizeClaudeCliProjectKey(canonicalWorkspaceDir),
-  );
 }
 
 function probeDirectoryHealth(dirPath: string): ClaudeCliDirHealth {
@@ -232,6 +192,12 @@ function resolveClaudeCliWorkspaceTargets(params: {
     });
 }
 
+/**
+ * Emits Claude CLI health diagnostics for every agent currently routed through the CLI backend.
+ *
+ * The optional deps let tests inject auth stores, PATH resolution, and workspace roots without
+ * touching the user's real Claude credentials or filesystem.
+ */
 export function noteClaudeCliHealth(
   cfg: OpenClawConfig,
   deps?: {

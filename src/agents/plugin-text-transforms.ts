@@ -1,8 +1,17 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { streamSimple, type AssistantMessageEvent } from "@earendil-works/pi-ai";
+/**
+ * Plugin-defined text replacement transforms for stream boundaries.
+ *
+ * Provider and CLI plugins can rewrite prompt/event text without owning the transport implementation.
+ */
+import type { AssistantMessageEvent } from "../llm/types.js";
 import type { PluginTextReplacement, PluginTextTransforms } from "../plugins/cli-backend.types.js";
+import type { StreamFn } from "./runtime/index.js";
+import type { MutableAssistantMessageEventStream } from "./stream-compat.js";
 import { createStreamIteratorWrapper } from "./stream-iterator-wrapper.js";
 
+// Applies plugin-defined text replacement transforms to stream input/output.
+// Used by provider/CLI plugins that need compatibility rewrites at boundaries.
+/** Merge multiple plugin text-transform sets. */
 export function mergePluginTextTransforms(
   ...transforms: Array<PluginTextTransforms | undefined>
 ): PluginTextTransforms | undefined {
@@ -17,6 +26,7 @@ export function mergePluginTextTransforms(
   };
 }
 
+/** Apply sequential plugin text replacements to one string. */
 export function applyPluginTextReplacements(
   text: string,
   replacements?: PluginTextReplacement[],
@@ -69,7 +79,8 @@ function transformMessageText(message: unknown, replacements?: PluginTextReplace
   return next;
 }
 
-export function transformStreamContextText(
+/** Apply input text replacements to a stream context. */
+function transformStreamContextText(
   context: Parameters<StreamFn>[1],
   replacements?: PluginTextReplacement[],
   options?: { systemPrompt?: boolean },
@@ -116,15 +127,17 @@ function transformAssistantEventText(
 }
 
 function wrapStreamTextTransforms(
-  stream: ReturnType<typeof streamSimple>,
+  stream: MutableAssistantMessageEventStream,
   replacements?: PluginTextReplacement[],
-): ReturnType<typeof streamSimple> {
+): MutableAssistantMessageEventStream {
   if (!replacements || replacements.length === 0) {
     return stream;
   }
   const originalResult = stream.result.bind(stream);
   stream.result = async () => transformMessageText(await originalResult(), replacements) as never;
 
+  // Wrap async iteration so streamed deltas and the final result receive the
+  // same output replacement policy.
   const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
   (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
     function () {
@@ -145,6 +158,7 @@ function wrapStreamTextTransforms(
   return stream;
 }
 
+/** Wrap a stream function with plugin input/output text transforms. */
 export function wrapStreamFnTextTransforms(params: {
   streamFn: StreamFn;
   input?: PluginTextReplacement[];

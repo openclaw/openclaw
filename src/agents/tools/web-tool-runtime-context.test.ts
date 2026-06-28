@@ -1,3 +1,5 @@
+// Web tool runtime-context tests cover late-bound config snapshots and
+// plugin-owner lookups for search/fetch provider selection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveWebFetchToolRuntimeContext,
@@ -6,7 +8,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   getActiveRuntimeWebToolsMetadata: vi.fn(),
-  getActiveSecretsRuntimeSnapshot: vi.fn(),
+  getActiveSecretsRuntimeConfigSnapshot: vi.fn(),
   resolveManifestContractOwnerPluginId: vi.fn(),
 }));
 
@@ -18,11 +20,13 @@ vi.mock("../../secrets/runtime-web-tools-state.js", () => ({
   getActiveRuntimeWebToolsMetadata: mocks.getActiveRuntimeWebToolsMetadata,
 }));
 
-vi.mock("../../secrets/runtime.js", () => ({
-  getActiveSecretsRuntimeSnapshot: mocks.getActiveSecretsRuntimeSnapshot,
+vi.mock("../../secrets/runtime-state.js", () => ({
+  getActiveSecretsRuntimeConfigSnapshot: mocks.getActiveSecretsRuntimeConfigSnapshot,
 }));
 
 function latestOwnerLookupParams(): Record<string, unknown> {
+  // Owner lookups are the evidence for whether runtime providers stay enabled
+  // or a configured plugin takes over the tool call.
   const params = mocks.resolveManifestContractOwnerPluginId.mock.calls.at(-1)?.[0];
   if (!params || typeof params !== "object") {
     throw new Error("expected owner lookup params");
@@ -34,8 +38,8 @@ describe("web tool runtime context", () => {
   beforeEach(() => {
     mocks.getActiveRuntimeWebToolsMetadata.mockReset();
     mocks.getActiveRuntimeWebToolsMetadata.mockReturnValue(null);
-    mocks.getActiveSecretsRuntimeSnapshot.mockReset();
-    mocks.getActiveSecretsRuntimeSnapshot.mockReturnValue(null);
+    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReset();
+    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue(null);
     mocks.resolveManifestContractOwnerPluginId.mockReset();
     mocks.resolveManifestContractOwnerPluginId.mockReturnValue(undefined);
   });
@@ -44,7 +48,7 @@ describe("web tool runtime context", () => {
     const runtimeConfig = {
       tools: { web: { search: { provider: "perplexity" } } },
     };
-    mocks.getActiveSecretsRuntimeSnapshot.mockReturnValue({ config: runtimeConfig });
+    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({ config: runtimeConfig });
     mocks.getActiveRuntimeWebToolsMetadata.mockReturnValue({
       search: {
         providerConfigured: "perplexity",
@@ -74,11 +78,8 @@ describe("web tool runtime context", () => {
 
     expect(resolved.config).toBe(runtimeConfig);
     expect(resolved.runtimeWebSearch?.selectedProvider).toBe("perplexity");
-    const ownerLookup = latestOwnerLookupParams();
-    expect(ownerLookup.contract).toBe("webSearchProviders");
-    expect(ownerLookup.value).toBe("perplexity");
-    expect(ownerLookup.origin).toBe("bundled");
-    expect(ownerLookup.config).toBe(runtimeConfig);
+    expect(resolved.preferRuntimeProviders).toBe(true);
+    expect(mocks.resolveManifestContractOwnerPluginId).not.toHaveBeenCalled();
   });
 
   it("falls back to captured search config and runtime metadata when active globals are missing", async () => {
@@ -100,25 +101,30 @@ describe("web tool runtime context", () => {
 
     expect(resolved.config).toBe(capturedConfig);
     expect(resolved.runtimeWebSearch?.selectedProvider).toBe("brave");
-    const ownerLookup = latestOwnerLookupParams();
-    expect(ownerLookup.contract).toBe("webSearchProviders");
-    expect(ownerLookup.value).toBe("brave");
-    expect(ownerLookup.origin).toBe("bundled");
-    expect(ownerLookup.config).toBe(capturedConfig);
+    expect(resolved.preferRuntimeProviders).toBe(true);
+    expect(mocks.resolveManifestContractOwnerPluginId).not.toHaveBeenCalled();
   });
 
-  it("uses configured provider ids when runtime metadata is absent", () => {
-    resolveWebSearchToolRuntimeContext({
+  it("keeps search runtime discovery enabled when runtime metadata is absent", () => {
+    const resolved = resolveWebSearchToolRuntimeContext({
       config: { tools: { web: { search: { provider: "Brave" } } } },
     });
 
-    const ownerLookup = latestOwnerLookupParams();
-    expect(ownerLookup.contract).toBe("webSearchProviders");
-    expect(ownerLookup.value).toBe("brave");
-    expect(ownerLookup.origin).toBe("bundled");
-    expect(ownerLookup.config).toEqual({
-      tools: { web: { search: { provider: "Brave" } } },
+    expect(resolved.preferRuntimeProviders).toBe(true);
+    expect(mocks.resolveManifestContractOwnerPluginId).not.toHaveBeenCalled();
+  });
+
+  it("keeps search runtime discovery enabled for manifest-owned configured providers", async () => {
+    mocks.resolveManifestContractOwnerPluginId.mockReturnValue("brave");
+    const { resolveWebSearchToolRuntimeContext: resolveWebSearchToolRuntimeContextLocal } =
+      await import("./web-tool-runtime-context.js");
+
+    const resolved = resolveWebSearchToolRuntimeContextLocal({
+      config: { tools: { web: { search: { provider: "brave" } } } },
     });
+
+    expect(resolved.preferRuntimeProviders).toBe(true);
+    expect(mocks.resolveManifestContractOwnerPluginId).not.toHaveBeenCalled();
   });
 
   it("keeps runtime providers disabled for bundled fetch owners", async () => {

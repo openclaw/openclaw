@@ -1,3 +1,4 @@
+// Status-all diagnosis tests cover port checks, restart logs, config issues, and safe diagnostic output.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgressReporter } from "../../cli/progress.js";
 
@@ -9,6 +10,9 @@ type GatewayLogPaths = {
 
 const restartLogMocks = vi.hoisted(() => ({
   resolveGatewayLogPaths: vi.fn<() => GatewayLogPaths>(() => {
+    throw new Error("skip log tail");
+  }),
+  resolveGatewaySupervisorLogPaths: vi.fn<() => GatewayLogPaths>(() => {
     throw new Error("skip log tail");
   }),
   resolveGatewayRestartLogPath: vi.fn<() => string>(() => "/tmp/gateway-restart.log"),
@@ -25,6 +29,7 @@ const gatewayMocks = vi.hoisted(() => ({
 
 vi.mock("../../daemon/restart-logs.js", () => ({
   resolveGatewayLogPaths: restartLogMocks.resolveGatewayLogPaths,
+  resolveGatewaySupervisorLogPaths: restartLogMocks.resolveGatewaySupervisorLogPaths,
   resolveGatewayRestartLogPath: restartLogMocks.resolveGatewayRestartLogPath,
 }));
 
@@ -76,6 +81,7 @@ function createBaseParams(
     pluginCompatibility: [],
     channelsStatus: null,
     channelIssues: [],
+    deliveryDiagnostics: null,
     gatewayReachable: false,
     health: null,
     nodeOnlyGateway: null,
@@ -85,6 +91,9 @@ function createBaseParams(
 describe("status-all diagnosis port checks", () => {
   beforeEach(() => {
     restartLogMocks.resolveGatewayLogPaths.mockImplementation(() => {
+      throw new Error("skip log tail");
+    });
+    restartLogMocks.resolveGatewaySupervisorLogPaths.mockImplementation(() => {
       throw new Error("skip log tail");
     });
     restartLogMocks.resolveGatewayRestartLogPath.mockReturnValue("/tmp/gateway-restart.log");
@@ -141,7 +150,196 @@ describe("status-all diagnosis port checks", () => {
 
     const output = params.lines.join("\n");
     expect(output).toContain("! Port 18789");
+    expect(output).toContain("2 OpenClaw gateway processes appear to be listening on port 18789");
     expect(output).toContain("Port 18789 is already in use.");
+  });
+
+  it("adds direct update restart guidance for failed update sentinels", async () => {
+    const params = createBaseParams([]);
+    params.sentinel = {
+      payload: {
+        kind: "update",
+        status: "error",
+        ts: Date.now() - 60_000,
+        stats: {
+          mode: "npm",
+          reason: "managed-service-handoff-failed",
+          steps: [],
+        },
+      },
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain(
+      "Update restart: failed · managed-service-handoff-failed · run openclaw gateway status --deep",
+    );
+    expect(output).toContain("Update restart failed; run openclaw gateway status --deep.");
+    expect(output).toContain(
+      "If the service is down, run openclaw gateway restart or openclaw gateway install --force.",
+    );
+  });
+
+  it("adds direct update restart guidance for pending update sentinels", async () => {
+    const params = createBaseParams([]);
+    params.sentinel = {
+      payload: {
+        kind: "update",
+        status: "skipped",
+        ts: Date.now() - 60_000,
+        stats: {
+          mode: "npm",
+          reason: "restart-health-pending",
+          steps: [],
+        },
+      },
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain(
+      "Update restart: restart pending health verification · run openclaw gateway status --deep",
+    );
+    expect(output).toContain(
+      "Update restart is still pending; run openclaw update status --json for handoff state.",
+    );
+  });
+
+  it("emits a soft warning when no agent sessions were active in the last 30m", async () => {
+    const params = createBaseParams([]);
+    params.agentStatus = {
+      totalSessions: 2,
+      agents: [
+        { id: "main", lastActiveAgeMs: 31 * 60_000 },
+        { id: "worker", lastActiveAgeMs: null },
+      ],
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("! Agent activity: 0 active in 30m · 2 sessions");
+    expect(output).toContain("verify inbound dispatch and turn creation");
+  });
+
+  it("keeps agent activity healthy when a session was recently updated", async () => {
+    const params = createBaseParams([]);
+    params.agentStatus = {
+      totalSessions: 2,
+      agents: [
+        { id: "main", lastActiveAgeMs: 5 * 60_000 },
+        { id: "worker", lastActiveAgeMs: 45 * 60_000 },
+      ],
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain("✓ Agent activity: 1 active in 30m · 2 sessions");
+    expect(output).not.toContain("verify inbound dispatch and turn creation");
+  });
+
+  it("summarizes inbound delivery telemetry proof counters", async () => {
+    const params = createBaseParams([]);
+    params.gatewayReachable = true;
+    params.deliveryDiagnostics = {
+      summary: {
+        byType: {
+          "message.received": 2,
+          "message.dispatch.started": 2,
+          "message.dispatch.completed": 2,
+          "session.turn.created": 2,
+          "message.processed": 2,
+        },
+      },
+      events: [{ type: "session.turn.created", ts: Date.now() - 60_000 }],
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain(
+      "✓ Inbound delivery telemetry: received 2 · dispatch 2/2 · turns 2 · processed 2",
+    );
+    expect(output).toContain("latest delivery event:");
+  });
+
+  it("keeps handled terminal delivery paths healthy without dispatch starts", async () => {
+    const params = createBaseParams([]);
+    params.gatewayReachable = true;
+    params.deliveryDiagnostics = {
+      summary: {
+        byType: {
+          "message.received": 1,
+          "message.dispatch.started": 0,
+          "message.dispatch.completed": 0,
+          "session.turn.created": 0,
+          "message.processed": 1,
+        },
+      },
+      events: [{ type: "message.processed", ts: Date.now() - 30_000 }],
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain(
+      "✓ Inbound delivery telemetry: received 1 · dispatch 0/0 · turns 0 · processed 1",
+    );
+    expect(output).not.toContain("Messages were received, but no gateway dispatch started");
+  });
+
+  it("keeps handled terminal dispatches healthy without agent turns", async () => {
+    const params = createBaseParams([]);
+    params.gatewayReachable = true;
+    params.deliveryDiagnostics = {
+      summary: {
+        byType: {
+          "message.received": 1,
+          "message.dispatch.started": 1,
+          "message.dispatch.completed": 1,
+          "session.turn.created": 0,
+          "message.processed": 1,
+        },
+      },
+      events: [{ type: "message.processed", ts: Date.now() - 30_000 }],
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain(
+      "✓ Inbound delivery telemetry: received 1 · dispatch 1/1 · turns 0 · processed 1",
+    );
+    expect(output).not.toContain("Gateway dispatch started, but no agent turn was created");
+  });
+
+  it("warns when received messages never reach agent turn creation", async () => {
+    const params = createBaseParams([]);
+    params.gatewayReachable = true;
+    params.deliveryDiagnostics = {
+      summary: {
+        byType: {
+          "message.received": 3,
+          "message.dispatch.started": 3,
+          "message.dispatch.completed": 1,
+          "session.turn.created": 0,
+          "message.processed": 1,
+        },
+      },
+      events: [{ type: "message.dispatch.started", ts: Date.now() - 120_000 }],
+    };
+
+    await appendStatusAllDiagnosis(params);
+
+    const output = params.lines.join("\n");
+    expect(output).toContain(
+      "! Inbound delivery telemetry: received 3 · dispatch 3/1 · turns 0 · processed 1",
+    );
+    expect(output).toContain("Gateway dispatch started, but no agent turn was created");
+    expect(output).toContain("Multiple gateway dispatches have not completed yet");
   });
 
   it("avoids unreachable gateway diagnosis in node-only mode", async () => {
@@ -163,6 +361,7 @@ describe("status-all diagnosis port checks", () => {
         "Inspect the remote gateway host for live channel and health details.",
       ].join("\n"),
     };
+    params.gatewayReachable = true;
 
     await appendStatusAllDiagnosis(params);
 
@@ -173,16 +372,17 @@ describe("status-all diagnosis port checks", () => {
     );
     expect(output).not.toContain("Channel issues skipped (gateway unreachable)");
     expect(output).not.toContain("Gateway health:");
+    expect(output).not.toContain("Inbound delivery telemetry: unavailable");
   });
 
   it("does not read or display stale stderr tails on Darwin", async () => {
     const originalPlatform = process.platform;
     Object.defineProperty(process, "platform", { value: "darwin" });
     try {
-      restartLogMocks.resolveGatewayLogPaths.mockReturnValue({
-        logDir: "/tmp/openclaw/logs",
-        stdoutPath: "/tmp/openclaw/logs/gateway.log",
-        stderrPath: "/tmp/openclaw/logs/gateway.err.log",
+      restartLogMocks.resolveGatewaySupervisorLogPaths.mockReturnValue({
+        logDir: "/Users/test/Library/Logs/openclaw",
+        stdoutPath: "/Users/test/Library/Logs/openclaw/gateway.log",
+        stderrPath: "/Users/test/Library/Logs/openclaw/gateway.err.log",
       });
       restartLogMocks.resolveGatewayRestartLogPath.mockReturnValue(
         "/tmp/openclaw/logs/gateway-restart.log",
@@ -202,10 +402,10 @@ describe("status-all diagnosis port checks", () => {
 
       const output = params.lines.join("\n");
       expect(gatewayMocks.readFileTailLines).not.toHaveBeenCalledWith(
-        "/tmp/openclaw/logs/gateway.err.log",
+        "/Users/test/Library/Logs/openclaw/gateway.err.log",
         40,
       );
-      expect(output).toContain("# stdout: /tmp/openclaw/logs/gateway.log");
+      expect(output).toContain("# stdout: /Users/test/Library/Logs/openclaw/gateway.log");
       expect(output).toContain("gateway stdout current");
       expect(output).not.toContain("# stderr:");
       expect(output).not.toContain("failed to bind gateway socket stale");

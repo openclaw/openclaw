@@ -1,132 +1,252 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash } from "node:crypto";
+// Codex plugin module implements run attempt behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
   assembleHarnessContextEngine,
+  assertContextEngineHostSupport,
   bootstrapHarnessContextEngine,
   buildHarnessContextEngineRuntimeContext,
   buildHarnessContextEngineRuntimeContextFromUsage,
-  buildEmbeddedAttemptToolRunContext,
+  CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
   clearActiveEmbeddedRun,
   embeddedAgentLog,
   emitAgentEvent as emitGlobalAgentEvent,
   finalizeHarnessContextEngineTurn,
+  FAST_MODE_AUTO_PROGRESS_KIND,
+  formatFastModeAutoProgressText,
   formatErrorMessage,
+  getAgentHarnessHookRunner,
+  getBeforeToolCallPolicyDiagnosticState,
   isActiveHarnessContextEngine,
-  isSubagentSessionKey,
   loadCodexBundleMcpThreadConfig,
-  normalizeAgentRuntimeTools,
-  resolveAttemptSpawnWorkspaceDir,
   resolveAgentHarnessBeforePromptBuildResult,
-  resolveModelAuthMode,
+  resolveContextEngineOwnerPluginId,
   resolveSandboxContext,
   resolveSessionAgentIds,
   resolveUserPath,
-  runAgentHarnessAgentEndHook,
+  awaitAgentEndSideEffects,
+  runAgentEndSideEffects,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
   runHarnessContextEngineMaintenance,
-  registerNativeHookRelay,
-  resolveBootstrapContextForRun,
+  resolveFastModeForElapsed,
   setActiveEmbeddedRun,
   supportsModelTools,
   runAgentCleanupStep,
-  type AgentMessage,
+  type FastModeAutoProgressState,
   type EmbeddedRunAttemptParams,
   type EmbeddedRunAttemptResult,
-  type EmbeddedContextFile,
   type NativeHookRelayEvent,
   type NativeHookRelayRegistrationHandle,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { markAuthProfileBlockedUntil, resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
+import {
+  createDiagnosticTraceContextFromActiveScope,
+  emitTrustedDiagnosticEvent,
+  freezeDiagnosticTraceContext,
+  onInternalDiagnosticEvent,
+  resolveDiagnosticModelContentCapturePolicy,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
+import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
-import { defaultCodexAppInventoryCache } from "./app-inventory-cache.js";
+import {
+  resolveCodexAppServerForModelProvider,
+  resolveCodexAppServerForOpenClawToolPolicy,
+} from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
+import {
+  CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
+  CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+  interruptCodexTurnBestEffort,
+  retireCodexAppServerClientAfterTimedOutTurn,
+  unsubscribeCodexThreadBestEffort,
+} from "./attempt-client-cleanup.js";
+import {
+  buildCodexOpenClawPromptContext,
+  buildCodexSystemPromptReport,
+  buildCodexWorkspaceBootstrapContext,
+  getCodexWorkspaceMemoryToolNames,
+  prependCodexOpenClawPromptContext,
+  readContextEngineThreadBootstrapProjection,
+  readMirroredSessionHistoryMessages,
+  renderCodexSkillsCollaborationInstructions,
+  resolveCodexDeliveryHintPreservedInputRange,
+  resolveContextEngineBootstrapProjectionDecision,
+} from "./attempt-context.js";
+import {
+  classifyCodexModelCallFailureKind,
+  createCodexModelCallDiagnosticEmitter,
+  utf8JsonByteLength,
+} from "./attempt-diagnostics.js";
+import {
+  applyCodexTurnNotificationState,
+  isTerminalCodexTurnNotificationForTurn,
+  reportCodexExecutionNotification,
+} from "./attempt-notification-state.js";
+import {
+  isCodexNotificationOutsideActiveRun,
+  isCurrentApprovalTurnRequestParams,
+  isCurrentThreadOptionalTurnRequestParams,
+  isCurrentThreadTurnRequestParams,
+  isNativeResponseStreamDeltaNotification,
+  isRawFunctionToolOutputCompletionNotification,
+  isTerminalTurnStatus,
+  readCodexNotificationItem,
+  readRawResponseToolCallId,
+} from "./attempt-notifications.js";
+import {
+  buildCodexAppServerPromptTimeoutOutcome,
+  buildCodexTurnStartFailureResult,
+  collectTerminalAssistantText,
+  isInvalidCodexImagePayloadError,
+  resolveCodexAppServerReplayBlockedReason,
+} from "./attempt-results.js";
+import { startCodexAttemptThread } from "./attempt-startup.js";
+import { createCodexSteeringQueue, type CodexSteeringQueueOptions } from "./attempt-steering.js";
+import {
+  resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs,
+  resolveCodexStartupTimeoutMs,
+  resolveCodexTurnAssistantCompletionIdleTimeoutMs,
+  resolveCodexTurnCompletionIdleTimeoutMs,
+  resolveCodexTurnTerminalIdleTimeoutMs,
+  withCodexStartupTimeout,
+} from "./attempt-timeouts.js";
+import {
+  createCodexAttemptTurnWatchController,
+  type CodexAttemptTurnWatchTimeoutKind,
+} from "./attempt-turn-watches.js";
 import {
   refreshCodexAppServerAuthTokens,
   resolveCodexAppServerAuthAccountCacheKey,
-  resolveCodexAppServerEnvApiKeyCacheKey,
+  resolveCodexAppServerFallbackApiKeyCacheKey,
+  resolveCodexAppServerHomeDir,
   resolveCodexAppServerAuthProfileId,
   resolveCodexAppServerAuthProfileIdForAgent,
 } from "./auth-bridge.js";
-import { CODEX_CONTROL_METHODS } from "./capabilities.js";
 import {
-  defaultCodexAppServerClientFactory,
+  defaultLeasedCodexAppServerClientFactory,
   type CodexAppServerClientFactory,
 } from "./client-factory.js";
 import {
+  CodexAppServerRpcError,
   isCodexAppServerApprovalRequest,
-  isCodexAppServerConnectionClosedError,
   type CodexAppServerClient,
 } from "./client.js";
-import { ensureCodexComputerUse } from "./computer-use.js";
 import {
+  isCodexAppServerApprovalPolicyAllowedByRequirements,
+  isCodexSandboxExecServerEnabled,
   readCodexPluginConfig,
-  resolveCodexPluginsPolicy,
+  resolveCodexComputerUseConfig,
   resolveCodexAppServerRuntimeOptions,
-  withMcpElicitationsApprovalPolicy,
+  resolveCodexModelBackedReviewerPolicyContext,
+  resolveOpenClawExecPolicyForCodexAppServer,
+  shouldAutoApproveCodexAppServerApprovals,
   type CodexAppServerRuntimeOptions,
-  type CodexPluginConfig,
+  type OpenClawExecPolicyForCodexAppServer,
 } from "./config.js";
 import {
+  type CodexProjectedContextRange,
+  fitCodexProjectedContextForTurnStart,
   projectContextEngineAssemblyForCodex,
   resolveCodexContextEngineProjectionMaxChars,
   resolveCodexContextEngineProjectionReserveTokens,
 } from "./context-engine-projection.js";
-import { filterCodexDynamicTools, normalizeCodexDynamicToolName } from "./dynamic-tool-profile.js";
-import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
+import {
+  buildDynamicTools,
+  createCodexDynamicToolBuildStageTracker,
+  filterCodexDynamicToolsForAllowlist,
+  formatCodexDynamicToolBuildStageSummary,
+  includeForcedCodexDynamicToolAllow,
+  resolveCodexAppServerHookChannelId,
+  resolveCodexMessageToolProvider,
+  resolveOpenClawCodingToolsSessionKeys,
+  resetOpenClawCodingToolsFactoryForTests,
+  setOpenClawCodingToolsFactoryForTests,
+  shouldEnableCodexAppServerNativeToolSurface,
+  shouldForceMessageTool,
+  shouldWarnCodexDynamicToolBuildStageSummary,
+} from "./dynamic-tool-build.js";
+import {
+  emitDynamicToolErrorDiagnostic,
+  emitDynamicToolStartedDiagnostic,
+  emitDynamicToolTerminalDiagnostic,
+} from "./dynamic-tool-diagnostics.js";
+import {
+  handleDynamicToolCallWithTimeout,
+  hasPendingDynamicToolTerminalDiagnostic,
+  isDynamicToolTerminalDiagnosticEvent,
+  isMatchingDynamicToolTerminalDiagnostic,
+  resolveDynamicToolCallTimeoutMs,
+  resolveTerminalDynamicToolBatchAction,
+  shouldBlockTerminalReleaseForNonTerminalDynamicToolResult,
+  shouldReleaseTurnAfterTerminalDynamicTool,
+  toCodexDynamicToolProgressResponse,
+  toCodexDynamicToolProtocolResponse,
+} from "./dynamic-tool-execution.js";
+import {
+  filterCodexDynamicTools,
+  resolveCodexDynamicToolsLoadingForModel,
+  resolveCodexDynamicToolsLoadingForRuntime,
+} from "./dynamic-tool-profile.js";
+import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { handleCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
-import { CodexAppServerEventProjector } from "./event-projector.js";
+import {
+  CodexAppServerEventProjector,
+  shouldEmitTranscriptToolProgress,
+} from "./event-projector.js";
 import {
   buildCodexNativeHookRelayDisabledConfig,
   buildCodexNativeHookRelayConfig,
-  CODEX_NATIVE_HOOK_RELAY_EVENTS,
+  buildCodexNativeHookRelayId,
+  clearPendingCodexNativeHookRelayUnregistersForTests,
+  CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS,
+  createCodexNativeHookRelay,
+  flushPendingCodexNativeHookRelayUnregistersForTests,
+  resolveCodexNativeHookRelayEvents,
+  resolveCodexNativeHookRelayTtlMs,
+  resolveCodexNativeHookRelayUnregisterGraceMs,
+  scheduleCodexNativeHookRelayUnregister,
 } from "./native-hook-relay.js";
-import { buildCodexPluginAppCacheKey } from "./plugin-app-cache-key.js";
-import {
-  buildCodexPluginThreadConfig,
-  buildCodexPluginThreadConfigInputFingerprint,
-  mergeCodexThreadConfigs,
-  shouldBuildCodexPluginThreadConfig,
-} from "./plugin-thread-config.js";
+import { registerCodexNativeSubagentMonitor } from "./native-subagent-monitor.js";
+import { describeCodexNotificationCorrelation } from "./notification-correlation.js";
+import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import {
   assertCodexTurnStartResponse,
   readCodexDynamicToolCallParams,
 } from "./protocol-validators.js";
 import {
-  type CodexUserInput,
+  flattenCodexDynamicToolFunctions,
   isJsonObject,
+  type CodexSandboxPolicy,
+  type CodexTurnEnvironmentParams,
   type CodexServerNotification,
-  type CodexDynamicToolSpec,
   type CodexDynamicToolCallParams,
   type CodexDynamicToolCallResponse,
-  type CodexThreadItem,
   type CodexTurnStartResponse,
   type JsonObject,
   type JsonValue,
 } from "./protocol.js";
-import { readRecentCodexRateLimits, rememberCodexRateLimits } from "./rate-limit-cache.js";
-import {
-  formatCodexUsageLimitErrorMessage,
-  resolveCodexUsageLimitResetAtMs,
-  shouldRefreshCodexRateLimitsForUsageLimitMessage,
-} from "./rate-limits.js";
+import { resolveCodexProviderWebSearchSupport } from "./provider-capabilities.js";
+import { releaseCodexSandboxExecServerEnvironment } from "./sandbox-exec-server.js";
 import {
   clearCodexAppServerBinding,
+  clearCodexAppServerBindingForThread,
+  isCodexAppServerNativeAuthProfile,
   readCodexAppServerBinding,
+  writeCodexAppServerBinding,
   type CodexAppServerThreadBinding,
 } from "./session-binding.js";
-import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
-import { clearSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
+import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
+import { rotateOversizedCodexAppServerStartupBinding } from "./startup-binding.js";
 import {
-  areCodexDynamicToolFingerprintsCompatible,
   buildDeveloperInstructions,
+  buildContextEngineBinding,
+  buildTurnCollaborationMode,
   buildTurnStartParams,
   codexDynamicToolsFingerprint,
-  startOrResumeThread,
+  resolveCodexAppServerThreadModelSelection,
   type CodexAppServerThreadLifecycleBinding,
+  type CodexContextEngineThreadBootstrapProjection,
 } from "./thread-lifecycle.js";
 import {
   inferCodexDynamicToolMeta,
@@ -140,60 +260,77 @@ import {
   recordCodexTrajectoryCompletion,
   recordCodexTrajectoryContext,
 } from "./trajectory.js";
-import { mirrorCodexAppServerTranscript } from "./transcript-mirror.js";
+import {
+  buildCodexUserPromptMessage,
+  createCodexAppServerUserMessagePersistenceNotifier,
+  mirrorPromptAtTurnStartBestEffort,
+  mirrorTranscriptBestEffort,
+} from "./transcript-mirror.js";
+import {
+  formatCodexTurnStartUsageLimitError,
+  markCodexAuthProfileBlockedFromRateLimits,
+  refreshCodexUsageLimitPromptError,
+} from "./usage-limit-error.js";
 import { createCodexUserInputBridge } from "./user-input-bridge.js";
-import { filterToolsForVisionInputs } from "./vision-tools.js";
+import { resolveCodexWebSearchPlan } from "./web-search.js";
 
-const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 30_000;
-const CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS = 600_000;
-const CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS = 60_000;
-const CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS = 3;
-const CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS = 100;
-const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
-const CODEX_USAGE_LIMIT_RATE_LIMIT_REFRESH_TIMEOUT_MS = 5_000;
-const CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS = 60_000;
-const CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS = 10_000;
-const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
-const CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS = 30 * 60_000;
-const CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS = 5 * 60_000;
-const CODEX_STEER_ALL_DEBOUNCE_MS = 500;
-const LOG_FIELD_MAX_LENGTH = 160;
-const CODEX_NATIVE_PROJECT_DOC_BASENAMES = new Set(["agents.md"]);
-const CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS =
-  CODEX_NATIVE_HOOK_RELAY_EVENTS.filter((event) => event !== "permission_request");
-const CODEX_BOOTSTRAP_CONTEXT_ORDER = new Map<string, number>([
-  ["soul.md", 10],
-  ["identity.md", 20],
-  ["user.md", 30],
-  ["tools.md", 40],
-  ["bootstrap.md", 50],
-  ["memory.md", 60],
-  ["heartbeat.md", 70],
-]);
+const CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS = 60_000;
+const CODEX_APP_SERVER_PROJECTED_CHARS_PER_TOKEN = 4;
+const CODEX_APP_SERVER_ACTIVE_NATIVE_TURN_WAIT_TIMEOUT_MS = 30_000;
+const ensuredCodexWorkspaceDirs = new Set<string>();
 
-type OpenClawCodingToolsOptions = NonNullable<
-  Parameters<(typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"]>[0]
->;
-type OpenClawCodingToolsFactory =
-  (typeof import("openclaw/plugin-sdk/agent-harness"))["createOpenClawCodingTools"];
-type CodexBootstrapContext = Awaited<ReturnType<typeof resolveBootstrapContextForRun>>;
-type CodexBootstrapFile = CodexBootstrapContext["bootstrapFiles"][number];
-type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["systemPromptReport"]>;
-type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
-type CodexWorkspaceBootstrapContext = CodexBootstrapContext & { instructions?: string };
-
-const testClientFactoryStorage = new AsyncLocalStorage<CodexAppServerClientFactory | undefined>();
-const clientFactory = defaultCodexAppServerClientFactory;
-let openClawCodingToolsFactoryForTests: OpenClawCodingToolsFactory | undefined;
-
-function resolveCodexAppServerClientFactory(): CodexAppServerClientFactory {
-  return testClientFactoryStorage.getStore() ?? clientFactory;
+function withCodexAppServerFastModeServiceTier(
+  appServer: CodexAppServerRuntimeOptions,
+  params: EmbeddedRunAttemptParams,
+): CodexAppServerRuntimeOptions {
+  const fastMode = typeof params.fastMode === "function" ? params.fastMode() : params.fastMode;
+  const serviceTier =
+    fastMode === undefined ? appServer.serviceTier : fastMode ? "priority" : undefined;
+  if (serviceTier === appServer.serviceTier) {
+    return appServer;
+  }
+  if (serviceTier) {
+    return { ...appServer, serviceTier };
+  }
+  return { ...appServer, serviceTier: null };
 }
 
-function emitCodexAppServerEvent(
+function estimateCodexAppServerProjectedTurnTokens(params: {
+  prompt: string;
+  developerInstructions?: string;
+}): number {
+  const inputChars = params.prompt.length + (params.developerInstructions?.length ?? 0);
+  return Math.max(1, Math.ceil(inputChars / CODEX_APP_SERVER_PROJECTED_CHARS_PER_TOKEN));
+}
+
+async function ensureCodexWorkspaceDirOnce(workspaceDir: string): Promise<void> {
+  const normalized = path.resolve(workspaceDir);
+  if (ensuredCodexWorkspaceDirs.has(normalized)) {
+    try {
+      const stat = await fs.stat(normalized);
+      if (stat.isDirectory()) {
+        return;
+      }
+    } catch (error) {
+      const code =
+        typeof error === "object" && error ? (error as { code?: unknown }).code : undefined;
+      if (code !== "ENOENT") {
+        throw error;
+      }
+    }
+    ensuredCodexWorkspaceDirs.delete(normalized);
+  }
+  // Codex attempts re-enter the same workspace repeatedly; caching successful
+  // mkdirs avoids repeated fs work while still recovering if cleanup prunes
+  // the directory between attempts.
+  await fs.mkdir(normalized, { recursive: true });
+  ensuredCodexWorkspaceDirs.add(normalized);
+}
+
+async function emitCodexAppServerEvent(
   params: EmbeddedRunAttemptParams,
   event: Parameters<NonNullable<EmbeddedRunAttemptParams["onAgentEvent"]>>[0],
-): void {
+): Promise<void> {
   try {
     emitGlobalAgentEvent({
       runId: params.runId,
@@ -205,10 +342,7 @@ function emitCodexAppServerEvent(
     embeddedAgentLog.debug("codex app-server global agent event emit failed", { error });
   }
   try {
-    const maybePromise = params.onAgentEvent?.(event);
-    void Promise.resolve(maybePromise).catch((error: unknown) => {
-      embeddedAgentLog.debug("codex app-server agent event handler rejected", { error });
-    });
+    await params.onAgentEvent?.(event);
   } catch (error) {
     // Event consumers are observational; they must not abort or strand the
     // canonical app-server turn lifecycle.
@@ -216,216 +350,62 @@ function emitCodexAppServerEvent(
   }
 }
 
-function collectTerminalAssistantText(result: EmbeddedRunAttemptResult): string {
-  return result.assistantTexts.join("\n\n").trim();
+function toTranscriptToolResult(response: CodexDynamicToolCallResponse): Record<string, unknown> {
+  const sanitized = sanitizeCodexToolResponse(response);
+  const contentItems = Array.isArray(sanitized.contentItems) ? sanitized.contentItems : [];
+  const result: Record<string, unknown> = {
+    ...sanitized,
+    // Progress events are UI/transcript-facing; map only sanitized content so
+    // event redaction cannot be bypassed by raw dynamic tool output.
+    content: contentItems.map(toTranscriptToolResultContentItem),
+  };
+  delete result.contentItems;
+  delete result.success;
+  return result;
 }
 
-type CodexSteeringQueueOptions = {
-  debounceMs?: number;
-};
-
-type DynamicToolTimeoutDetails = {
-  responseMessage: string;
-  consoleMessage: string;
-  meta: Record<string, unknown>;
-};
-
-function normalizeLogField(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
+function toTranscriptToolResultContentItem(item: unknown): Record<string, unknown> {
+  if (!item || typeof item !== "object") {
+    return { type: "text", text: "" };
   }
-  const normalized = value
-    .replaceAll(String.fromCharCode(27), " ")
-    .replaceAll("\r", " ")
-    .replaceAll("\n", " ")
-    .replaceAll("\t", " ")
-    .trim();
-  if (!normalized) {
-    return undefined;
+  const record = item as Record<string, unknown>;
+  if (record.type === "inputText") {
+    return { type: "text", text: typeof record.text === "string" ? record.text : "" };
   }
-  return normalized.length > LOG_FIELD_MAX_LENGTH
-    ? `${normalized.slice(0, LOG_FIELD_MAX_LENGTH - 3)}...`
-    : normalized;
-}
-
-function readNumericTimeoutMs(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.max(0, Math.floor(value));
+  if (record.type === "inputImage") {
+    return typeof record.imageUrl === "string"
+      ? { type: "image", url: record.imageUrl }
+      : { type: "text", text: formatUnsupportedCodexDynamicToolOutput(record.type) };
   }
-  if (typeof value === "string") {
-    const parsed = Number.parseInt(value.trim(), 10);
-    if (Number.isFinite(parsed)) {
-      return Math.max(0, Math.floor(parsed));
-    }
+  return { type: "text", text: formatUnsupportedCodexDynamicToolOutput(record.type) };
+}
+
+function formatUnsupportedCodexDynamicToolOutput(type: unknown): string {
+  const rawType = typeof type === "string" ? type.replace(/\s+/g, " ").trim() : "";
+  const label = rawType ? rawType.slice(0, 80) : "unknown";
+  const suffix = rawType.length > 80 ? "..." : "";
+  return `[Unsupported Codex dynamic tool output: ${label}${suffix}]`;
+}
+
+type CodexAgentEndHookParams = Parameters<typeof runAgentEndSideEffects>[0];
+
+function shouldAwaitCodexAgentEndHook(params: EmbeddedRunAttemptParams): boolean {
+  return !params.messageChannel && !params.messageProvider;
+}
+
+async function runCodexAgentEndHook(
+  params: EmbeddedRunAttemptParams,
+  hookParams: CodexAgentEndHookParams,
+): Promise<void> {
+  const sideEffectParams = {
+    ...hookParams,
+    ctx: { ...hookParams.ctx, config: params.config },
+  };
+  if (shouldAwaitCodexAgentEndHook(params)) {
+    await awaitAgentEndSideEffects(sideEffectParams);
+    return;
   }
-  return undefined;
-}
-
-function formatDynamicToolTimeoutDetails(params: {
-  call: CodexDynamicToolCallParams;
-  timeoutMs: number;
-}): DynamicToolTimeoutDetails {
-  const tool = normalizeLogField(params.call.tool) ?? "unknown";
-  const baseMeta: Record<string, unknown> = {
-    tool: params.call.tool,
-    toolCallId: params.call.callId,
-    threadId: params.call.threadId,
-    turnId: params.call.turnId,
-    timeoutMs: params.timeoutMs,
-    timeoutKind: "codex_dynamic_tool_rpc",
-  };
-
-  if (tool !== "process" || !isJsonObject(params.call.arguments)) {
-    return {
-      responseMessage: `OpenClaw dynamic tool call timed out after ${params.timeoutMs}ms while running tool ${tool}.`,
-      consoleMessage: `codex dynamic tool timeout: tool=${tool} toolTimeoutMs=${params.timeoutMs}; per-tool-call watchdog, not session idle`,
-      meta: baseMeta,
-    };
-  }
-
-  const action = normalizeLogField(params.call.arguments.action);
-  const sessionId = normalizeLogField(params.call.arguments.sessionId);
-  const requestedTimeoutMs = readNumericTimeoutMs(params.call.arguments.timeout);
-  const actionPart = action ? ` action=${action}` : "";
-  const sessionPart = sessionId ? ` sessionId=${sessionId}` : "";
-  const requestedPart =
-    requestedTimeoutMs === undefined ? "" : ` requestedWaitMs=${requestedTimeoutMs}`;
-  const retryHint =
-    action === "poll"
-      ? "; repeated lines usually mean process-poll retry churn, not model progress"
-      : "";
-  const responseTarget =
-    action || sessionId
-      ? ` while waiting for process${actionPart}${sessionPart}`
-      : " while waiting for the process tool";
-
-  return {
-    responseMessage: `OpenClaw dynamic tool call timed out after ${params.timeoutMs}ms${responseTarget}. This is a tool RPC timeout, not a session idle timeout.`,
-    consoleMessage: `codex process tool timeout:${actionPart}${sessionPart} toolTimeoutMs=${params.timeoutMs}${requestedPart}; per-tool-call watchdog, not session idle${retryHint}`,
-    meta: {
-      ...baseMeta,
-      processAction: action,
-      processSessionId: sessionId,
-      processRequestedTimeoutMs: requestedTimeoutMs,
-    },
-  };
-}
-
-function createCodexSteeringQueue(params: {
-  client: CodexAppServerClient;
-  threadId: string;
-  turnId: string;
-  answerPendingUserInput: (text: string) => boolean;
-  signal: AbortSignal;
-}) {
-  type PendingSteerText = {
-    text: string;
-    resolve: () => void;
-    reject: (error: unknown) => void;
-  };
-  let batchedTexts: PendingSteerText[] = [];
-  let batchTimer: NodeJS.Timeout | undefined;
-  let sendChain: Promise<void> = Promise.resolve();
-
-  const clearBatchTimer = () => {
-    if (batchTimer) {
-      clearTimeout(batchTimer);
-      batchTimer = undefined;
-    }
-  };
-
-  const sendTexts = async (texts: string[]) => {
-    if (texts.length === 0) {
-      return;
-    }
-    if (params.signal.aborted) {
-      throw new Error("codex app-server steering queue aborted");
-    }
-    await params.client.request("turn/steer", {
-      threadId: params.threadId,
-      expectedTurnId: params.turnId,
-      input: texts.map(toCodexTextInput),
-    });
-  };
-
-  const enqueueSend = (texts: string[]) => {
-    const send = sendChain.then(() => sendTexts(texts));
-    sendChain = send.catch((error: unknown) => {
-      embeddedAgentLog.debug("codex app-server queued steer failed", { error });
-    });
-    return send;
-  };
-
-  const flushBatch = () => {
-    clearBatchTimer();
-    const items = batchedTexts;
-    batchedTexts = [];
-    const send = enqueueSend(items.map((item) => item.text));
-    void send.then(
-      () => {
-        for (const item of items) {
-          item.resolve();
-        }
-      },
-      (error: unknown) => {
-        for (const item of items) {
-          item.reject(error);
-        }
-      },
-    );
-    return send;
-  };
-
-  return {
-    async queue(text: string, options?: CodexSteeringQueueOptions) {
-      if (params.answerPendingUserInput(text)) {
-        return;
-      }
-      return await new Promise<void>((resolve, reject) => {
-        batchedTexts.push({ text, resolve, reject });
-        clearBatchTimer();
-        const debounceMs = normalizeCodexSteerDebounceMs(options?.debounceMs);
-        batchTimer = setTimeout(() => {
-          batchTimer = undefined;
-          void flushBatch().catch(() => undefined);
-        }, debounceMs);
-      });
-    },
-    async flushPending() {
-      await flushBatch().catch(() => undefined);
-    },
-    cancel() {
-      clearBatchTimer();
-      const items = batchedTexts;
-      batchedTexts = [];
-      for (const item of items) {
-        item.reject(new Error("codex app-server steering queue cancelled"));
-      }
-    },
-  };
-}
-
-function normalizeCodexSteerDebounceMs(value: number | undefined): number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? Math.floor(value)
-    : CODEX_STEER_ALL_DEBOUNCE_MS;
-}
-
-function toCodexTextInput(text: string): CodexUserInput {
-  return { type: "text", text, text_elements: [] };
-}
-
-function restrictCodexAppServerSandboxForOpenClawSandbox(
-  appServer: CodexAppServerRuntimeOptions,
-  sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>,
-): CodexAppServerRuntimeOptions {
-  if (!sandbox?.enabled || appServer.sandbox !== "danger-full-access") {
-    return appServer;
-  }
-  return {
-    ...appServer,
-    sandbox: "workspace-write",
-  };
+  runAgentEndSideEffects(sideEffectParams);
 }
 
 export async function runCodexAppServerAttempt(
@@ -442,56 +422,76 @@ export async function runCodexAppServerAttempt(
     };
     turnCompletionIdleTimeoutMs?: number;
     turnAssistantCompletionIdleTimeoutMs?: number;
+    postToolRawAssistantCompletionIdleTimeoutMs?: number;
     turnTerminalIdleTimeoutMs?: number;
+    clientFactory?: CodexAppServerClientFactory;
   } = {},
 ): Promise<EmbeddedRunAttemptResult> {
   const attemptStartedAt = Date.now();
-  const attemptClientFactory = resolveCodexAppServerClientFactory();
-  const pluginConfig = readCodexPluginConfig(options.pluginConfig);
-  const configuredAppServer = resolveCodexAppServerRuntimeOptions({ pluginConfig });
-  const resolvedWorkspace = resolveUserPath(params.workspaceDir);
-  await fs.mkdir(resolvedWorkspace, { recursive: true });
-  const sandboxSessionKey =
-    params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
-  const sandbox = await resolveSandboxContext({
-    config: params.config,
-    sessionKey: sandboxSessionKey,
-    workspaceDir: resolvedWorkspace,
-  });
-  const effectiveWorkspace = sandbox?.enabled
-    ? sandbox.workspaceAccess === "rw"
-      ? resolvedWorkspace
-      : sandbox.workspaceDir
-    : resolvedWorkspace;
-  await fs.mkdir(effectiveWorkspace, { recursive: true });
-  const appServer = restrictCodexAppServerSandboxForOpenClawSandbox(configuredAppServer, sandbox);
-  let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
-  const nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
-    configuredEvents: options.nativeHookRelay?.events,
-    appServer,
-  });
-
-  const runAbortController = new AbortController();
-  const abortFromUpstream = () => {
-    runAbortController.abort(params.abortSignal?.reason ?? "upstream_abort");
+  const profilerEnabled = isCodexAppServerProfilerEnabled(params.config);
+  const codexModelCallTrace = freezeDiagnosticTraceContext(
+    createDiagnosticTraceContextFromActiveScope(),
+  );
+  const codexModelContentCapture = resolveDiagnosticModelContentCapturePolicy(params.config);
+  const codexModelCallId = `${params.runId}:codex-model:1`;
+  const fastModeAutoStartedAtMs =
+    typeof params.fastModeStartedAtMs === "number" && Number.isFinite(params.fastModeStartedAtMs)
+      ? params.fastModeStartedAtMs
+      : undefined;
+  const fastModeAutoProgressState: FastModeAutoProgressState = params.fastModeAutoProgressState ?? {
+    offAnnounced: false,
+    resetAnnounced: false,
   };
-  if (params.abortSignal?.aborted) {
-    abortFromUpstream();
-  } else {
-    params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
-  }
-
+  // Startup phase timings are profiler-gated because this function runs before
+  // every Codex turn; normal production should not do timing bookkeeping here.
+  const preDynamicStartupStages = createCodexDynamicToolBuildStageTracker({
+    enabled: profilerEnabled,
+  });
+  const attemptClientFactory = options.clientFactory ?? defaultLeasedCodexAppServerClientFactory;
+  const pluginConfig = readCodexPluginConfig(options.pluginConfig);
+  const computerUseConfig = resolveCodexComputerUseConfig({ pluginConfig });
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: params.sessionKey,
     config: params.config,
     agentId: params.agentId,
   });
+  const beforeToolCallPolicy = getBeforeToolCallPolicyDiagnosticState();
+  preDynamicStartupStages.mark("config");
+  const resolvedWorkspace = resolveUserPath(params.workspaceDir);
+  await ensureCodexWorkspaceDirOnce(resolvedWorkspace);
+  preDynamicStartupStages.mark("workspace");
+  const sandboxSessionKey =
+    params.sandboxSessionKey?.trim() || params.sessionKey?.trim() || params.sessionId;
+  const contextSessionKey = params.sessionKey?.trim() || sandboxSessionKey;
+  const sandbox = await resolveSandboxContext({
+    config: params.config,
+    sessionKey: sandboxSessionKey,
+    workspaceDir: resolvedWorkspace,
+  });
+  preDynamicStartupStages.mark("sandbox");
+  const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
+    execOverrides: params.execOverrides,
+    approvals: loadExecApprovals(),
+    config: params.config,
+    agentId: sessionAgentId,
+  });
   const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, sessionAgentId);
-  const startupBinding = await readCodexAppServerBinding(params.sessionFile);
+  preDynamicStartupStages.mark("session-agent");
+  const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
+    ? params.contextEngine
+    : undefined;
+  const isInactiveThreadBootstrapBinding = (binding: CodexAppServerThreadBinding | undefined) =>
+    !activeContextEngine && binding?.contextEngine?.projection?.mode === "thread_bootstrap";
+  let startupBinding = await readCodexAppServerBinding(params.sessionFile);
+  preDynamicStartupStages.mark("read-binding");
+  const startupBindingAuthProfileId = startupBinding?.authProfileId;
+  const initialStartupBindingHadInactiveThreadBootstrap =
+    isInactiveThreadBootstrapBinding(startupBinding);
   const startupAuthProfileCandidate =
     params.runtimePlan?.auth.forwardedAuthProfileId ??
     params.authProfileId ??
-    startupBinding?.authProfileId;
+    startupBinding?.authProfileId ??
+    startupBindingAuthProfileId;
   const startupAuthProfileId = params.authProfileStore
     ? resolveCodexAppServerAuthProfileId({
         authProfileId: startupAuthProfileCandidate,
@@ -503,11 +503,157 @@ export async function runCodexAppServerAttempt(
         agentDir,
         config: params.config,
       });
+  let reviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
+    provider: params.provider,
+    model: params.modelId,
+    bindingModelProvider: startupBinding?.modelProvider,
+    bindingModel: startupBinding?.model,
+    nativeAuthProfile: isCodexAppServerNativeAuthProfile({
+      authProfileId: startupAuthProfileId,
+      authProfileStore: params.authProfileStore,
+      agentDir,
+      config: params.config,
+    }),
+  });
+  preDynamicStartupStages.mark("auth-profile");
+  let configuredAppServer = resolveCodexAppServerRuntimeOptions({
+    pluginConfig,
+    execPolicy,
+    modelProvider: reviewerPolicyContext.modelProvider,
+    model: reviewerPolicyContext.model,
+    config: params.config,
+    agentDir,
+    openClawSandboxActive: sandbox?.enabled === true,
+  });
+  const effectiveWorkspace = sandbox?.enabled
+    ? sandbox.workspaceAccess === "rw"
+      ? resolvedWorkspace
+      : sandbox.workspaceDir
+    : resolvedWorkspace;
+  const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;
+  if (sandbox?.enabled && requestedCwd && requestedCwd !== resolvedWorkspace) {
+    throw new Error(
+      "cwd override is not supported for sandboxed Codex app-server runs; omit cwd or use the agent workspace as cwd",
+    );
+  }
+  const effectiveCwd = sandbox?.enabled ? effectiveWorkspace : (requestedCwd ?? effectiveWorkspace);
+  await ensureCodexWorkspaceDirOnce(effectiveWorkspace);
+  preDynamicStartupStages.mark("effective-workspace");
+  let policyAppServer = resolveCodexAppServerForOpenClawToolPolicy({
+    appServer: configuredAppServer,
+    pluginConfig,
+    env: process.env,
+    shouldPromote:
+      beforeToolCallPolicy.hasBeforeToolCallHook ||
+      beforeToolCallPolicy.trustedToolPolicies.length > 0,
+    execPolicy,
+    canUseUntrustedApprovalPolicy:
+      configuredAppServer.start.transport !== "stdio" ||
+      isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted"),
+  });
+  let appServer = resolveCodexAppServerForModelProvider({
+    appServer: policyAppServer,
+    provider: reviewerPolicyContext.modelProvider,
+    model: reviewerPolicyContext.model,
+    config: params.config,
+    env: process.env,
+    agentDir,
+  });
+  if (configuredAppServer.approvalPolicy === "never" && appServer.approvalPolicy === "untrusted") {
+    embeddedAgentLog.info("codex app-server approval policy promoted for OpenClaw tool policy", {
+      from: "never",
+      to: "untrusted",
+      beforeToolCallHook: beforeToolCallPolicy.hasBeforeToolCallHook,
+      trustedToolPolicies: beforeToolCallPolicy.trustedToolPolicies,
+    });
+  }
+  preDynamicStartupStages.mark("app-server-policy");
+  let pluginAppServer: CodexAppServerRuntimeOptions = appServer;
+  let nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
+    configuredEvents: options.nativeHookRelay?.events,
+    appServer,
+  });
+  preDynamicStartupStages.mark("native-hook-relay");
+
+  const runAbortController = new AbortController();
+  const abortFromUpstream = () => {
+    runAbortController.abort(params.abortSignal?.reason ?? "upstream_abort");
+  };
+  if (params.abortSignal?.aborted) {
+    abortFromUpstream();
+  } else {
+    params.abortSignal?.addEventListener("abort", abortFromUpstream, { once: true });
+  }
+
+  startupBinding = await rotateOversizedCodexAppServerStartupBinding({
+    binding: startupBinding,
+    sessionFile: params.sessionFile,
+    agentDir,
+    codexHome: appServer.start.env?.CODEX_HOME,
+    config: params.config,
+    contextEngineActive: Boolean(activeContextEngine),
+  });
+  const initialInactiveThreadBootstrapBindingForcedFreshStart =
+    initialStartupBindingHadInactiveThreadBootstrap && !startupBinding?.threadId;
+  preDynamicStartupStages.mark("rotate-binding");
+  reviewerPolicyContext = resolveCodexModelBackedReviewerPolicyContext({
+    provider: params.provider,
+    model: params.modelId,
+    bindingModelProvider: startupBinding?.modelProvider,
+    bindingModel: startupBinding?.model,
+    nativeAuthProfile: isCodexAppServerNativeAuthProfile({
+      authProfileId: startupAuthProfileId,
+      authProfileStore: params.authProfileStore,
+      agentDir,
+      config: params.config,
+    }),
+  });
+  configuredAppServer = resolveCodexAppServerRuntimeOptions({
+    pluginConfig,
+    execPolicy,
+    modelProvider: reviewerPolicyContext.modelProvider,
+    model: reviewerPolicyContext.model,
+    config: params.config,
+    agentDir,
+    openClawSandboxActive: sandbox?.enabled === true,
+  });
+  policyAppServer = resolveCodexAppServerForOpenClawToolPolicy({
+    appServer: configuredAppServer,
+    pluginConfig,
+    env: process.env,
+    shouldPromote:
+      beforeToolCallPolicy.hasBeforeToolCallHook ||
+      beforeToolCallPolicy.trustedToolPolicies.length > 0,
+    execPolicy,
+    canUseUntrustedApprovalPolicy:
+      configuredAppServer.start.transport !== "stdio" ||
+      isCodexAppServerApprovalPolicyAllowedByRequirements("untrusted"),
+  });
+  appServer = resolveCodexAppServerForModelProvider({
+    appServer: policyAppServer,
+    provider: reviewerPolicyContext.modelProvider,
+    model: reviewerPolicyContext.model,
+    config: params.config,
+    env: process.env,
+    agentDir,
+  });
+  pluginAppServer = appServer;
+  nativeHookRelayEvents = resolveCodexNativeHookRelayEvents({
+    configuredEvents: options.nativeHookRelay?.events,
+    appServer,
+  });
   const runtimeParams = {
     ...params,
-    sessionKey: sandboxSessionKey,
+    sessionKey: contextSessionKey,
     ...(startupAuthProfileId ? { authProfileId: startupAuthProfileId } : {}),
   };
+  const activeSessionId = params.sessionId;
+  const activeSessionFile = params.sessionFile;
+  const buildActiveRunAttemptParams = (): EmbeddedRunAttemptParams => ({
+    ...runtimeParams,
+    sessionId: activeSessionId,
+    sessionFile: activeSessionFile,
+  });
   const startupAuthAccountCacheKey = await resolveCodexAppServerAuthAccountCacheKey({
     authProfileId: startupAuthProfileId,
     authProfileStore: params.authProfileStore,
@@ -516,9 +662,10 @@ export async function runCodexAppServerAttempt(
   });
   const startupEnvApiKeyCacheKey = startupAuthProfileId
     ? undefined
-    : resolveCodexAppServerEnvApiKeyCacheKey({
+    : resolveCodexAppServerFallbackApiKeyCacheKey({
         startOptions: appServer.start,
       });
+  preDynamicStartupStages.mark("auth-cache");
   const bundleMcpThreadConfig = await loadCodexBundleMcpThreadConfig({
     workspaceDir: effectiveWorkspace,
     cfg: params.config,
@@ -526,41 +673,207 @@ export async function runCodexAppServerAttempt(
     disableTools: params.disableTools,
     toolsAllow: params.toolsAllow,
   });
+  preDynamicStartupStages.mark("bundle-mcp");
+  const sandboxExecServerEnabled = isCodexSandboxExecServerEnabled(pluginConfig);
+  const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(params, sandbox, {
+    agentId: sessionAgentId,
+    runtimeSessionKey: sandboxSessionKey,
+    sandboxExecServerEnabled,
+  });
+  preDynamicStartupStages.mark("native-tool-surface");
+  const nativeProviderWebSearchSupport =
+    resolveCodexWebSearchPlan({
+      config: params.config,
+      disableTools: params.disableTools,
+      nativeToolSurfaceEnabled,
+    }).kind === "native-hosted"
+      ? await resolveCodexProviderWebSearchSupport({
+          clientFactory: attemptClientFactory,
+          appServer,
+          authProfileId: startupAuthProfileId,
+          agentDir,
+          config: params.config,
+          modelProviderOverride: resolveCodexAppServerThreadModelSelection({
+            provider: params.provider,
+            model: params.modelId,
+            binding: startupBinding,
+            authProfileId: startupAuthProfileId,
+            authProfileStore: params.authProfileStore,
+            agentDir,
+            config: params.config,
+          }).modelProvider,
+          signal: runAbortController.signal,
+        })
+      : "unsupported";
+  preDynamicStartupStages.mark("provider-capabilities");
   for (const diagnostic of bundleMcpThreadConfig.diagnostics) {
     embeddedAgentLog.warn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
   }
-  const activeContextEngine = isActiveHarnessContextEngine(params.contextEngine)
-    ? params.contextEngine
-    : undefined;
+  if (activeContextEngine) {
+    assertContextEngineHostSupport({
+      contextEngine: activeContextEngine,
+      operation: "agent-run",
+      host: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+    });
+  }
+  const hookChannelId = resolveCodexAppServerHookChannelId(params, sandboxSessionKey);
+  preDynamicStartupStages.mark("context-engine-support");
+  const preDynamicSummary = preDynamicStartupStages.snapshot();
+  if (shouldWarnCodexDynamicToolBuildStageSummary(preDynamicSummary)) {
+    embeddedAgentLog.warn(
+      `codex app-server pre-dynamic startup timings runId=${params.runId} sessionId=${params.sessionId} totalMs=${preDynamicSummary.totalMs} stages=${formatCodexDynamicToolBuildStageSummary(preDynamicSummary)}`,
+      {
+        runId: params.runId,
+        sessionId: params.sessionId,
+        totalMs: preDynamicSummary.totalMs,
+        stages: preDynamicSummary.stages,
+        hasStartupBinding: Boolean(startupBinding?.threadId),
+        startupAuthProfileId: startupAuthProfileId ?? null,
+        bundleMcpDiagnosticCount: bundleMcpThreadConfig.diagnostics.length,
+        nativeToolSurfaceEnabled,
+      },
+    );
+  }
   let yieldDetected = false;
+  const toolOutcomeOrdinals = new Map<string, number>();
+  const suppressedDynamicToolOutcomeOrdinals = new Set<number>();
+  const onCodexToolOutcome = params.onToolOutcome
+    ? (observation: Parameters<NonNullable<typeof params.onToolOutcome>>[0]) => {
+        if (
+          observation.toolCallOrdinal !== undefined &&
+          suppressedDynamicToolOutcomeOrdinals.has(observation.toolCallOrdinal)
+        ) {
+          return;
+        }
+        params.onToolOutcome?.(observation);
+      }
+    : undefined;
+  const baseAllocateToolOutcomeOrdinal = params.allocateToolOutcomeOrdinal;
+  const allocateCodexToolOutcomeOrdinal = baseAllocateToolOutcomeOrdinal
+    ? (toolCallId?: string): number => {
+        const reservedOrdinal = toolCallId ? toolOutcomeOrdinals.get(toolCallId) : undefined;
+        if (reservedOrdinal !== undefined) {
+          return reservedOrdinal;
+        }
+        const ordinal = baseAllocateToolOutcomeOrdinal(toolCallId);
+        if (toolCallId) {
+          toolOutcomeOrdinals.set(toolCallId, ordinal);
+        }
+        return ordinal;
+      }
+    : undefined;
+  const dynamicToolParams =
+    allocateCodexToolOutcomeOrdinal || onCodexToolOutcome
+      ? {
+          ...params,
+          ...(allocateCodexToolOutcomeOrdinal
+            ? { allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal }
+            : {}),
+          ...(onCodexToolOutcome ? { onToolOutcome: onCodexToolOutcome } : {}),
+        }
+      : params;
+  let persistentWebSearchAllowed: boolean | undefined;
+  let webSearchAllowed = false;
   const tools = await buildDynamicTools({
-    params,
+    params: dynamicToolParams,
     resolvedWorkspace,
     effectiveWorkspace,
+    effectiveCwd,
     sandboxSessionKey,
     sandbox,
+    nativeToolSurfaceEnabled,
+    nativeProviderWebSearchSupport,
     runAbortController,
     sessionAgentId,
     pluginConfig,
+    profilerEnabled,
     onYieldDetected: () => {
       yieldDetected = true;
+    },
+    onCodexAppServerEvent: (event) => {
+      void emitCodexAppServerEvent(params, event);
+    },
+    onPersistentWebSearchPolicyResolved: (allowed) => {
+      persistentWebSearchAllowed = allowed;
+    },
+    onWebSearchPolicyResolved: (allowed) => {
+      webSearchAllowed = allowed;
+    },
+  });
+  const registeredTools = await buildDynamicTools({
+    params: dynamicToolParams,
+    resolvedWorkspace,
+    effectiveWorkspace,
+    effectiveCwd,
+    sandboxSessionKey,
+    sandbox,
+    nativeToolSurfaceEnabled,
+    nativeProviderWebSearchSupport,
+    runAbortController,
+    sessionAgentId,
+    pluginConfig,
+    profilerEnabled,
+    forceHeartbeatTool: true,
+    ignoreDisableMessageTool: true,
+    ignoreRuntimePlan: true,
+    onYieldDetected: () => {
+      yieldDetected = true;
+    },
+    onCodexAppServerEvent: (event) => {
+      void emitCodexAppServerEvent(params, event);
     },
   });
   const toolBridge = createCodexDynamicToolBridge({
     tools,
+    registeredTools,
     signal: runAbortController.signal,
-    loading: pluginConfig.codexDynamicToolsLoading ?? "searchable",
-    directToolNames: shouldForceMessageTool(params) ? ["message"] : [],
+    loading: resolveCodexDynamicToolsLoadingForRuntime(pluginConfig, params.modelId, {
+      connectionClass: appServer.connectionClass,
+    }),
+    directToolNames: resolveCodexDynamicToolDirectNames(params),
     hookContext: {
       agentId: sessionAgentId,
       config: params.config,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       runId: params.runId,
+      channelId: hookChannelId,
+      currentChannelProvider: resolveCodexMessageToolProvider(params),
+      currentChannelId: params.currentChannelId,
+      currentMessagingTarget: params.currentMessagingTarget,
+      currentMessageId: params.currentMessageId,
+      currentThreadId: params.currentThreadTs,
+      replyToMode: params.replyToMode,
+      hasRepliedRef: params.hasRepliedRef,
+      sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+      onToolOutcome: onCodexToolOutcome,
+      allocateToolOutcomeOrdinal: allocateCodexToolOutcomeOrdinal,
     },
   });
-  const hadSessionFile = await pathExists(params.sessionFile);
-  let historyMessages = (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? [];
+  const hadSessionFile = await pathExists(activeSessionFile);
+  const activeTranscriptTarget = {
+    agentId: sessionAgentId,
+    sessionFile: activeSessionFile,
+    sessionId: activeSessionId,
+    sessionKey: contextSessionKey,
+  };
+  let historyMessages =
+    !activeContextEngine && initialStartupBindingHadInactiveThreadBootstrap
+      ? []
+      : ((await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ?? []);
+  const hookContextWindowFields = {
+    ...(params.contextWindowInfo?.tokens
+      ? { contextTokenBudget: params.contextWindowInfo.tokens }
+      : params.contextTokenBudget
+        ? { contextTokenBudget: params.contextTokenBudget }
+        : {}),
+    ...(params.contextWindowInfo?.source
+      ? { contextWindowSource: params.contextWindowInfo.source }
+      : {}),
+    ...(params.contextWindowInfo?.referenceTokens
+      ? { contextWindowReferenceTokens: params.contextWindowInfo.referenceTokens }
+      : {}),
+  };
   const hookContext = {
     runId: params.runId,
     agentId: sessionAgentId,
@@ -569,128 +882,544 @@ export async function runCodexAppServerAttempt(
     workspaceDir: params.workspaceDir,
     messageProvider: params.messageProvider ?? undefined,
     trigger: params.trigger,
-    channelId: params.messageChannel ?? params.messageProvider ?? undefined,
+    channelId: hookChannelId,
+    ...hookContextWindowFields,
   };
+  const hookRunner = getAgentHarnessHookRunner();
+  const activeContextEnginePluginId = activeContextEngine
+    ? resolveContextEngineOwnerPluginId(activeContextEngine)
+    : undefined;
+  const buildActiveContextEngineRuntimeContext = () =>
+    buildHarnessContextEngineRuntimeContext({
+      attempt: buildActiveRunAttemptParams(),
+      workspaceDir: effectiveWorkspace,
+      cwd: effectiveCwd,
+      agentDir,
+      activeAgentId: sessionAgentId,
+      contextEnginePluginId: activeContextEnginePluginId,
+      tokenBudget: params.contextTokenBudget,
+    });
   if (activeContextEngine) {
     await bootstrapHarnessContextEngine({
       hadSessionFile,
       contextEngine: activeContextEngine,
-      sessionId: params.sessionId,
-      sessionKey: sandboxSessionKey,
-      sessionFile: params.sessionFile,
-      runtimeContext: buildHarnessContextEngineRuntimeContext({
-        attempt: runtimeParams,
-        workspaceDir: effectiveWorkspace,
-        agentDir,
-        tokenBudget: params.contextTokenBudget,
-      }),
+      sessionId: activeSessionId,
+      sessionKey: contextSessionKey,
+      sessionFile: activeSessionFile,
+      runtimeContext: buildActiveContextEngineRuntimeContext(),
+      contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+      providerId: params.provider,
+      requestedModelId: params.requestedModelId,
+      modelId: params.modelId,
+      fallbackReason: params.fallbackReason,
+      degradedReason: params.degradedReason,
       runMaintenance: runHarnessContextEngineMaintenance,
       config: params.config,
       warn: (message) => embeddedAgentLog.warn(message),
     });
     historyMessages =
-      (await readMirroredSessionHistoryMessages(params.sessionFile)) ?? historyMessages;
+      (await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ?? historyMessages;
   }
-  const baseDeveloperInstructions = buildDeveloperInstructions(params);
-  // Build the workspace bootstrap block before finalizing developer
-  // instructions so persona files (SOUL.md, IDENTITY.md, ...) reach Codex
-  // through the explicit `developerInstructions` field.
+  const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params,
     resolvedWorkspace,
     effectiveWorkspace,
-    sessionKey: sandboxSessionKey,
+    sessionKey: contextSessionKey,
     sessionAgentId,
+    memoryToolNames,
   });
-  const workspaceBootstrapInstructions = workspaceBootstrapContext.instructions;
-  let promptText = params.prompt;
-  let developerInstructions = joinPresentSections(
-    baseDeveloperInstructions,
-    workspaceBootstrapInstructions,
+  const baseDeveloperInstructions = joinPresentSections(
+    buildDeveloperInstructions(params, {
+      dynamicTools: toolBridge.availableSpecs,
+    }),
+    workspaceBootstrapContext.developerInstructions,
   );
+  const openClawPromptContext = buildCodexOpenClawPromptContext({
+    params,
+    workspacePromptContext: workspaceBootstrapContext.promptContext,
+  });
+  const skillsCollaborationInstructions = renderCodexSkillsCollaborationInstructions({
+    attempt: params,
+    skillsPrompt: params.skillsSnapshot?.prompt,
+  });
+  let promptText = params.prompt;
+  let promptContextRange: CodexProjectedContextRange | undefined;
+  let developerInstructions = baseDeveloperInstructions;
   let prePromptMessageCount = historyMessages.length;
+  const codexContextProjectionMaxChars = resolveCodexContextEngineProjectionMaxChars({
+    contextTokenBudget: params.contextTokenBudget,
+    reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
+      config: params.config,
+    }),
+  });
+  let contextEngineProjection: CodexContextEngineThreadBootstrapProjection | undefined;
+  let precomputedStaleBindingContinuityProjectionApplied = false;
+  let staleBindingContinuityForcedFreshStart = false;
+  let inactiveThreadBootstrapBindingForcedFreshStart =
+    initialInactiveThreadBootstrapBindingForcedFreshStart;
+  const applyFreshThreadContinuityProjection = () => {
+    const projection = projectContextEngineAssemblyForCodex({
+      assembledMessages: historyMessages,
+      originalHistoryMessages: historyMessages,
+      prompt: params.prompt,
+      maxRenderedContextChars: codexContextProjectionMaxChars,
+    });
+    promptText = projection.promptText;
+    promptContextRange = projection.promptContextRange;
+    prePromptMessageCount = projection.prePromptMessageCount;
+  };
+  const applyActiveContextEngineProjection = async (
+    decisionStartupBinding: CodexAppServerThreadBinding | undefined,
+  ) => {
+    if (!activeContextEngine) {
+      return;
+    }
+    const assembled = await assembleHarnessContextEngine({
+      contextEngine: activeContextEngine,
+      sessionId: activeSessionId,
+      sessionKey: contextSessionKey,
+      messages: historyMessages,
+      tokenBudget: params.contextTokenBudget,
+      availableTools: new Set(
+        flattenCodexDynamicToolFunctions(toolBridge.availableSpecs)
+          .map((tool) => tool.name)
+          .filter(isNonEmptyString),
+      ),
+      citationsMode: params.config?.memory?.citations,
+      modelId: params.modelId,
+      contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+      providerId: params.provider,
+      requestedModelId: params.requestedModelId,
+      fallbackReason: params.fallbackReason,
+      degradedReason: params.degradedReason,
+      prompt: params.prompt,
+    });
+    if (!assembled) {
+      throw new Error("context engine assemble returned no result");
+    }
+    contextEngineProjection = readContextEngineThreadBootstrapProjection(
+      assembled.contextProjection,
+    );
+    const projection = projectContextEngineAssemblyForCodex({
+      assembledMessages: assembled.messages,
+      originalHistoryMessages: historyMessages,
+      prompt: params.prompt,
+      systemPromptAddition: assembled.systemPromptAddition,
+      maxRenderedContextChars: codexContextProjectionMaxChars,
+      toolPayloadMode: contextEngineProjection ? "preserve" : "elide",
+    });
+    const projectionDecision = contextEngineProjection
+      ? resolveContextEngineBootstrapProjectionDecision({
+          startupBinding: decisionStartupBinding,
+          expectedBinding: buildContextEngineBinding(
+            buildActiveRunAttemptParams(),
+            contextEngineProjection,
+          ),
+          projection: contextEngineProjection,
+          dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
+        })
+      : { project: true, reason: "per-turn-projection" };
+    embeddedAgentLog.info("codex app-server context-engine projection decision", {
+      sessionId: params.sessionId,
+      sessionKey: contextSessionKey,
+      engineId: activeContextEngine.info.id,
+      mode: contextEngineProjection?.mode ?? assembled.contextProjection?.mode ?? "per_turn",
+      epoch: contextEngineProjection?.epoch,
+      fingerprint: contextEngineProjection?.fingerprint,
+      previousThreadId: decisionStartupBinding?.threadId,
+      previousEpoch: decisionStartupBinding?.contextEngine?.projection?.epoch,
+      previousFingerprint: decisionStartupBinding?.contextEngine?.projection?.fingerprint,
+      projected: projectionDecision.project,
+      reason: projectionDecision.reason,
+      assembledMessages: assembled.messages.length,
+      originalHistoryMessages: historyMessages.length,
+      projectedPromptChars: projection.promptText.length,
+      developerInstructionAdditionChars: projection.developerInstructionAddition?.length ?? 0,
+    });
+    promptText = projectionDecision.project ? projection.promptText : params.prompt;
+    promptContextRange = projectionDecision.project ? projection.promptContextRange : undefined;
+    developerInstructions = joinPresentSections(
+      baseDeveloperInstructions,
+      projection.developerInstructionAddition,
+    );
+    prePromptMessageCount = projection.prePromptMessageCount;
+  };
   if (activeContextEngine) {
     try {
-      const assembled = await assembleHarnessContextEngine({
-        contextEngine: activeContextEngine,
-        sessionId: params.sessionId,
-        sessionKey: sandboxSessionKey,
-        messages: historyMessages,
-        tokenBudget: params.contextTokenBudget,
-        availableTools: new Set(toolBridge.specs.map((tool) => tool.name).filter(isNonEmptyString)),
-        citationsMode: params.config?.memory?.citations,
-        modelId: params.modelId,
-        prompt: params.prompt,
-      });
-      if (!assembled) {
-        throw new Error("context engine assemble returned no result");
-      }
-      const projection = projectContextEngineAssemblyForCodex({
-        assembledMessages: assembled.messages,
-        originalHistoryMessages: historyMessages,
-        prompt: params.prompt,
-        systemPromptAddition: assembled.systemPromptAddition,
-        maxRenderedContextChars: resolveCodexContextEngineProjectionMaxChars({
-          contextTokenBudget: params.contextTokenBudget,
-          reserveTokens: resolveCodexContextEngineProjectionReserveTokens({
-            config: params.config,
-          }),
-        }),
-      });
-      promptText = projection.promptText;
-      developerInstructions = joinPresentSections(
-        baseDeveloperInstructions,
-        workspaceBootstrapInstructions,
-        projection.developerInstructionAddition,
+      await applyActiveContextEngineProjection(
+        !nativeToolSurfaceEnabled ? undefined : startupBinding,
       );
-      prePromptMessageCount = projection.prePromptMessageCount;
     } catch (assembleErr) {
       embeddedAgentLog.warn("context engine assemble failed; using Codex baseline prompt", {
         error: formatErrorMessage(assembleErr),
       });
     }
-  } else if (
-    shouldProjectMirroredHistoryForCodexStart({
-      startupBinding,
-      dynamicToolsFingerprint: codexDynamicToolsFingerprint(toolBridge.specs),
-      historyMessages,
-    })
-  ) {
+  }
+  // Codex app-server threads own conversation continuity. The mirrored
+  // OpenClaw transcript is persistence/search state. Context-engine output is
+  // rendered into the prompt/developer instructions, not parallel history.
+  const codexModelInputHistoryMessages: typeof historyMessages = [];
+  const buildPromptFromCurrentInputs = () =>
+    resolveAgentHarnessBeforePromptBuildResult({
+      prompt: prependCurrentInboundContext(promptText, params.currentInboundContext),
+      developerInstructions,
+      messages: codexModelInputHistoryMessages,
+      ctx: hookContext,
+      ...("beforeAgentStartResult" in params
+        ? { beforeAgentStartResult: params.beforeAgentStartResult }
+        : {}),
+    });
+  const resolveShiftedPromptInputRange = (
+    prompt: string,
+    promptInputRange: { start: number; end: number } | undefined,
+    turnPromptText: string,
+  ): CodexProjectedContextRange | undefined => {
+    if (
+      !promptInputRange ||
+      promptInputRange.start < 0 ||
+      promptInputRange.end < promptInputRange.start ||
+      promptInputRange.end > prompt.length ||
+      !turnPromptText.endsWith(prompt)
+    ) {
+      return undefined;
+    }
+    const turnPromptOffset = turnPromptText.length - prompt.length;
+    return {
+      start: turnPromptOffset + promptInputRange.start,
+      end: turnPromptOffset + promptInputRange.end,
+    };
+  };
+  const resolveShiftedPromptContextRange = (
+    prompt: string,
+    promptInputRange: { start: number; end: number } | undefined,
+    turnPromptText: string,
+  ):
+    | {
+        contextRange: CodexProjectedContextRange;
+        requestRange: CodexProjectedContextRange;
+      }
+    | undefined => {
+    // promptInputRange ends before hook appendContext. Measure from the
+    // immutable projected prompt instead of the hook-expanded prompt so that
+    // the suffix remains available for bounded fitting as newer context.
+    const promptTextInputOffset = promptInputRange
+      ? promptInputRange.end - promptText.length
+      : undefined;
+    if (
+      !promptContextRange ||
+      !promptInputRange ||
+      promptTextInputOffset === undefined ||
+      promptInputRange.start < 0 ||
+      promptInputRange.end < promptInputRange.start ||
+      promptInputRange.end > prompt.length ||
+      promptTextInputOffset < promptInputRange.start ||
+      prompt.slice(promptTextInputOffset, promptInputRange.end) !== promptText ||
+      !turnPromptText.endsWith(prompt)
+    ) {
+      return undefined;
+    }
+    // A hook can append the full projected prompt as newer transient context.
+    // Fit that suffix so truncation retains its latest context rather than the
+    // earlier input span. The exact input range still covers prepend-only hooks.
+    const promptTextOffset = prompt.endsWith(promptText)
+      ? prompt.length - promptText.length
+      : promptTextInputOffset;
+    if (promptTextOffset < 0) {
+      return undefined;
+    }
+    const turnPromptOffset = turnPromptText.length - prompt.length + promptTextOffset;
+    const contextRange = {
+      start: turnPromptOffset + promptContextRange.start,
+      end: turnPromptOffset + promptContextRange.end,
+    };
+    return {
+      contextRange,
+      requestRange: {
+        start: contextRange.end,
+        end: turnPromptOffset + promptText.length,
+      },
+    };
+  };
+  let promptBuild = await buildPromptFromCurrentInputs();
+  const decorateCodexTurnPromptText = (promptBuildResult: {
+    prompt: string;
+    promptInputRange?: { start: number; end: number };
+  }) => {
+    const turnPromptText = prependCodexOpenClawPromptContext(
+      promptBuildResult.prompt,
+      openClawPromptContext,
+      {
+        preservePromptWithoutContext:
+          params.bootstrapContextMode === "lightweight" &&
+          params.bootstrapContextRunKind === "cron",
+      },
+    );
+    const projectedRanges = resolveShiftedPromptContextRange(
+      promptBuildResult.prompt,
+      promptBuildResult.promptInputRange,
+      turnPromptText,
+    );
+    const preservedRange =
+      resolveShiftedPromptInputRange(
+        promptBuildResult.prompt,
+        promptBuildResult.promptInputRange,
+        turnPromptText,
+      ) ??
+      resolveCodexDeliveryHintPreservedInputRange({
+        prompt: promptBuildResult.prompt,
+        promptInputRange: promptBuildResult.promptInputRange,
+        decoratedPrompt: turnPromptText,
+      });
+    return fitCodexProjectedContextForTurnStart({
+      promptText: turnPromptText,
+      contextRange: projectedRanges?.contextRange,
+      requestRange: projectedRanges?.requestRange,
+      preservedRange,
+    });
+  };
+  let codexTurnPromptText = decorateCodexTurnPromptText(promptBuild);
+  const buildCodexTurnCollaborationDeveloperInstructions = () =>
+    buildTurnCollaborationMode(params, {
+      turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
+      skillsCollaborationInstructions,
+      memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
+      heartbeatCollaborationInstructions:
+        workspaceBootstrapContext.heartbeatCollaborationInstructions,
+    }).settings.developer_instructions ?? undefined;
+  const buildRenderedCodexDeveloperInstructions = () =>
+    joinPresentSections(
+      promptBuild.developerInstructions,
+      buildCodexTurnCollaborationDeveloperInstructions(),
+    );
+  const rebuildCodexPromptBuildFromCurrentProjection = async () => {
+    promptBuild = await buildPromptFromCurrentInputs();
+    codexTurnPromptText = decorateCodexTurnPromptText(promptBuild);
+  };
+  const rebuildCodexTurnPromptTextFromCurrentProjection = async () => {
+    const nextPromptBuild = await buildPromptFromCurrentInputs();
+    // Native Codex thread instructions are fixed once thread/start or
+    // thread/resume completes; recovery continuity after that is turn input.
+    promptBuild = {
+      ...promptBuild,
+      prompt: nextPromptBuild.prompt,
+      promptInputRange: nextPromptBuild.promptInputRange,
+    };
+    codexTurnPromptText = decorateCodexTurnPromptText(nextPromptBuild);
+  };
+  const selectNewerVisibleHistoryAfterBinding = (binding: CodexAppServerThreadBinding) => {
+    const bindingUpdatedAt = Date.parse(binding.updatedAt);
+    if (!Number.isFinite(bindingUpdatedAt)) {
+      return [];
+    }
+    return historyMessages.filter((message) => {
+      if (message.role !== "user" && message.role !== "assistant") {
+        return false;
+      }
+      const record = message as unknown as Record<string, unknown>;
+      const idempotencyKey = record.idempotencyKey;
+      if (typeof idempotencyKey === "string" && idempotencyKey.startsWith("codex-app-server:")) {
+        return false;
+      }
+      const meta = record["__openclaw"];
+      const mirrorIdentity =
+        meta && typeof meta === "object" && !Array.isArray(meta)
+          ? (meta as Record<string, unknown>).mirrorIdentity
+          : undefined;
+      if (typeof mirrorIdentity === "string" && mirrorIdentity.startsWith("codex-app-server:")) {
+        return false;
+      }
+      const timestamp =
+        typeof message.timestamp === "number"
+          ? message.timestamp
+          : typeof message.timestamp === "string"
+            ? Date.parse(message.timestamp)
+            : Number.NaN;
+      return Number.isFinite(timestamp) && timestamp > bindingUpdatedAt;
+    });
+  };
+  const applyResumeStaleBindingContinuityProjection = (binding: CodexAppServerThreadBinding) => {
+    const newerVisibleMessages = selectNewerVisibleHistoryAfterBinding(binding);
+    if (newerVisibleMessages.length === 0) {
+      return false;
+    }
     const projection = projectContextEngineAssemblyForCodex({
-      assembledMessages: historyMessages,
+      assembledMessages: newerVisibleMessages,
       originalHistoryMessages: historyMessages,
       prompt: params.prompt,
+      maxRenderedContextChars: codexContextProjectionMaxChars,
     });
     promptText = projection.promptText;
+    promptContextRange = projection.promptContextRange;
     prePromptMessageCount = projection.prePromptMessageCount;
+    return true;
+  };
+  const precomputeNoContextEngineStaleBindingProjection = (
+    binding: CodexAppServerThreadBinding | undefined,
+  ) => {
+    precomputedStaleBindingContinuityProjectionApplied = false;
+    staleBindingContinuityForcedFreshStart = false;
+    if (activeContextEngine || !binding?.threadId) {
+      return false;
+    }
+    if (isInactiveThreadBootstrapBinding(binding)) {
+      inactiveThreadBootstrapBindingForcedFreshStart = true;
+      return false;
+    }
+    const projected = applyResumeStaleBindingContinuityProjection(binding);
+    precomputedStaleBindingContinuityProjectionApplied = projected;
+    return projected;
+  };
+  const applyNoContextEngineContinuityProjection = (
+    action: "started" | "resumed",
+    binding?: CodexAppServerThreadBinding,
+  ) => {
+    if (activeContextEngine || !historyMessages.some((message) => message.role === "user")) {
+      return false;
+    }
+    if (action === "resumed" && precomputedStaleBindingContinuityProjectionApplied) {
+      return true;
+    }
+    if (action === "started" && staleBindingContinuityForcedFreshStart) {
+      return true;
+    }
+    if (action === "started" && inactiveThreadBootstrapBindingForcedFreshStart) {
+      // A retired thread-bootstrap context engine already forced Codex onto a
+      // clean native thread; without that engine active, mirrored history would
+      // re-inject stale bootstrap context as a new user turn.
+      return false;
+    }
+    if (action === "resumed" && binding) {
+      return applyResumeStaleBindingContinuityProjection(binding);
+    }
+    if (action === "started") {
+      applyFreshThreadContinuityProjection();
+      return true;
+    }
+    return false;
+  };
+  if (precomputeNoContextEngineStaleBindingProjection(startupBinding)) {
+    await rebuildCodexPromptBuildFromCurrentProjection();
   }
-  promptText = prependCurrentTurnContext(promptText, params.currentTurnContext);
-  const promptBuild = await resolveAgentHarnessBeforePromptBuildResult({
-    prompt: promptText,
-    developerInstructions,
-    messages: historyMessages,
-    ctx: hookContext,
-  });
+  const rotateStartupBindingForProjectedTurn = async () => {
+    if (!startupBinding?.threadId) {
+      return;
+    }
+    const previousThreadId = startupBinding.threadId;
+    const hadInactiveThreadBootstrapBinding = isInactiveThreadBootstrapBinding(startupBinding);
+    const projectedTurnTokens = estimateCodexAppServerProjectedTurnTokens({
+      prompt: codexTurnPromptText,
+      developerInstructions: buildRenderedCodexDeveloperInstructions(),
+    });
+    startupBinding = await rotateOversizedCodexAppServerStartupBinding({
+      binding: startupBinding,
+      sessionFile: params.sessionFile,
+      agentDir,
+      codexHome: appServer.start.env?.CODEX_HOME,
+      config: params.config,
+      contextEngineActive: Boolean(activeContextEngine),
+      projectedTurnTokens,
+    });
+    if (startupBinding?.threadId) {
+      return;
+    }
+    inactiveThreadBootstrapBindingForcedFreshStart = hadInactiveThreadBootstrapBinding;
+    staleBindingContinuityForcedFreshStart =
+      precomputedStaleBindingContinuityProjectionApplied &&
+      !inactiveThreadBootstrapBindingForcedFreshStart;
+    if (staleBindingContinuityForcedFreshStart) {
+      // Once the native thread id is discarded, Codex no longer owns the
+      // pre-binding history; rebuild from the mirrored transcript.
+      applyFreshThreadContinuityProjection();
+    }
+    if (activeContextEngine) {
+      contextEngineProjection = undefined;
+      try {
+        await applyActiveContextEngineProjection(undefined);
+      } catch (assembleErr) {
+        embeddedAgentLog.warn("context engine assemble failed; using Codex baseline prompt", {
+          error: formatErrorMessage(assembleErr),
+        });
+      }
+    }
+    await rebuildCodexPromptBuildFromCurrentProjection();
+    embeddedAgentLog.info("codex app-server rebuilt turn prompt after native thread rotation", {
+      sessionId: params.sessionId,
+      sessionKey: contextSessionKey,
+      previousThreadId,
+      promptChars: codexTurnPromptText.length,
+      developerInstructionChars: buildRenderedCodexDeveloperInstructions()?.length ?? 0,
+    });
+  };
+  await rotateStartupBindingForProjectedTurn();
   const systemPromptReport = buildCodexSystemPromptReport({
     attempt: params,
-    sessionKey: sandboxSessionKey,
+    sessionKey: contextSessionKey,
     workspaceDir: effectiveWorkspace,
-    developerInstructions: promptBuild.developerInstructions,
+    developerInstructions: buildRenderedCodexDeveloperInstructions(),
     workspaceBootstrapContext,
-    tools: toolBridge.specs,
+    skillsPrompt: skillsCollaborationInstructions ? (params.skillsSnapshot?.prompt ?? "") : "",
+    tools: toolBridge.availableSpecs,
   });
   const trajectoryRecorder = createCodexTrajectoryRecorder({
     attempt: params,
-    cwd: effectiveWorkspace,
-    developerInstructions: promptBuild.developerInstructions,
-    prompt: promptBuild.prompt,
-    tools: toolBridge.specs,
+    cwd: effectiveCwd,
+    developerInstructions: buildRenderedCodexDeveloperInstructions(),
+    prompt: codexTurnPromptText,
+    tools: toolBridge.availableSpecs,
   });
   let client: CodexAppServerClient;
   let thread: CodexAppServerThreadLifecycleBinding;
   let trajectoryEndRecorded = false;
+  const markTrajectoryEndRecorded = () => {
+    trajectoryEndRecorded = true;
+  };
   let nativeHookRelay: NativeHookRelayRegistrationHandle | undefined;
-  let startupClientForCleanup: CodexAppServerClient | undefined;
+  let releaseSharedClientLease: (() => void) | undefined;
+  let sharedCodexClientRetiredForOneShotCleanup = false;
+  const releaseSharedClientLeaseOnce = () => {
+    const release = releaseSharedClientLease;
+    if (!release) {
+      return;
+    }
+    releaseSharedClientLease = undefined;
+    release();
+  };
+  const retireSharedCodexClientForOneShotCleanup = async () => {
+    if (params.cleanupBundleMcpOnRunEnd !== true) {
+      return;
+    }
+    if (sharedCodexClientRetiredForOneShotCleanup) {
+      return;
+    }
+    sharedCodexClientRetiredForOneShotCleanup = true;
+    const retired = retireSharedCodexAppServerClientIfCurrent(client);
+    embeddedAgentLog.info("codex app-server one-shot cleanup retired shared client", {
+      runId: params.runId,
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      activeLeases: retired?.activeLeases ?? null,
+      closed: retired?.closed ?? false,
+      matchedSharedClient: Boolean(retired),
+    });
+    if (retired?.closed) {
+      await client.closeAndWait({ exitTimeoutMs: 2_000, forceKillDelayMs: 250 });
+    }
+  };
+  const releaseSharedClientLeaseAndRetireOneShotClient = async () => {
+    releaseSharedClientLeaseOnce();
+    await retireSharedCodexClientForOneShotCleanup();
+  };
+  let sandboxExecEnvironmentAcquired = false;
+  const releaseSandboxExecEnvironment = async () => {
+    if (sandboxExecEnvironmentAcquired) {
+      sandboxExecEnvironmentAcquired = false;
+      await releaseCodexSandboxExecServerEnvironment(sandbox);
+    }
+  };
+  let codexEnvironmentSelection: CodexTurnEnvironmentParams[] | undefined;
+  let codexExecutionCwd = effectiveCwd;
+  let codexSandboxPolicy: CodexSandboxPolicy | undefined;
   let restartContextEngineCodexThread:
     | (() => Promise<CodexAppServerThreadLifecycleBinding>)
     | undefined;
@@ -698,202 +1427,132 @@ export async function runCodexAppServerAttempt(
     timeoutMs: params.timeoutMs,
     timeoutFloorMs: options.startupTimeoutFloorMs,
   });
-  try {
-    emitCodexAppServerEvent(params, {
-      stream: "codex_app_server.lifecycle",
-      data: { phase: "startup" },
-    });
+  const buildNativeHookRelayFinalConfigPatch = (
+    decision: { action: "resume"; binding: CodexAppServerThreadBinding } | { action: "start" },
+  ) => {
+    nativeHookRelay?.unregister();
     nativeHookRelay = createCodexNativeHookRelay({
       options: options.nativeHookRelay,
+      generation:
+        decision.action === "resume" ? decision.binding.nativeHookRelayGeneration : undefined,
+      generationMismatchGraceMs:
+        decision.action === "resume" && !decision.binding.nativeHookRelayGeneration
+          ? CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS
+          : undefined,
       events: nativeHookRelayEvents,
       agentId: sessionAgentId,
       sessionId: params.sessionId,
       sessionKey: sandboxSessionKey,
       config: params.config,
       runId: params.runId,
+      channelId: hookChannelId,
       attemptTimeoutMs: params.timeoutMs,
       startupTimeoutMs,
       turnStartTimeoutMs: params.timeoutMs,
       signal: runAbortController.signal,
     });
-    const nativeHookRelayConfig = nativeHookRelay
-      ? buildCodexNativeHookRelayConfig({
-          relay: nativeHookRelay,
-          events: nativeHookRelayEvents,
-          hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
-        })
-      : options.nativeHookRelay?.enabled === false
-        ? buildCodexNativeHookRelayDisabledConfig()
-        : undefined;
-    const threadConfig = mergeCodexThreadConfigs(
-      nativeHookRelayConfig,
-      bundleMcpThreadConfig?.configPatch as JsonObject | undefined,
-    );
-    const pluginThreadConfigEnabled = shouldBuildCodexPluginThreadConfig(pluginConfig);
-    const pluginAppCacheKey = buildCodexPluginAppCacheKey({
-      appServer,
-      agentDir,
-      authProfileId: startupAuthProfileId,
-      accountId: startupAuthAccountCacheKey,
-      envApiKeyFingerprint: startupEnvApiKeyCacheKey,
+    return {
+      configPatch: nativeHookRelay
+        ? buildCodexNativeHookRelayConfig({
+            relay: nativeHookRelay,
+            events: nativeHookRelayEvents,
+            hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+          })
+        : options.nativeHookRelay?.enabled === false
+          ? buildCodexNativeHookRelayDisabledConfig()
+          : undefined,
+      nativeHookRelayGeneration: nativeHookRelay?.generation,
+    };
+  };
+  try {
+    void emitCodexAppServerEvent(params, {
+      stream: "codex_app_server.lifecycle",
+      data: { phase: "startup" },
     });
-    const pluginThreadConfigInputFingerprint = pluginThreadConfigEnabled
-      ? buildCodexPluginThreadConfigInputFingerprint({
-          pluginConfig,
-          appCacheKey: pluginAppCacheKey,
-        })
-      : undefined;
-    const resolvedPluginPolicy = pluginThreadConfigEnabled
-      ? resolveCodexPluginsPolicy(pluginConfig)
-      : undefined;
-    const enabledPluginConfigKeys = resolvedPluginPolicy
-      ? resolvedPluginPolicy.pluginPolicies
-          .filter((plugin) => plugin.enabled)
-          .map((plugin) => plugin.configKey)
-          .toSorted()
-      : undefined;
-    pluginAppServer =
-      resolvedPluginPolicy?.enabled === true
-        ? {
-            ...appServer,
-            approvalPolicy: withMcpElicitationsApprovalPolicy(appServer.approvalPolicy),
-          }
-        : appServer;
-    ({ client, thread } = await withCodexStartupTimeout({
-      timeoutMs: startupTimeoutMs,
+    const attemptAppServer = withCodexAppServerFastModeServiceTier(appServer, params);
+    pluginAppServer = attemptAppServer;
+    const startupResult = await startCodexAttemptThread({
+      attemptClientFactory,
+      appServer: attemptAppServer,
+      pluginConfig,
+      computerUseConfig,
+      startupAuthProfileId,
+      startupAuthAccountCacheKey,
+      startupEnvApiKeyCacheKey,
+      agentDir,
+      config: params.config,
+      buildAttemptParams: buildActiveRunAttemptParams,
+      sessionAgentId,
+      effectiveWorkspace,
+      effectiveCwd,
+      dynamicTools: toolBridge.specs,
+      persistentWebSearchAllowed,
+      webSearchAllowed,
+      developerInstructions: promptBuild.developerInstructions,
+      buildFinalConfigPatch: buildNativeHookRelayFinalConfigPatch,
+      bundleMcpThreadConfig,
+      nativeToolSurfaceEnabled,
+      nativeProviderWebSearchSupport,
+      sandboxExecServerEnabled,
+      sandbox,
+      contextEngineProjection,
+      startupTimeoutMs,
       signal: runAbortController.signal,
-      operation: async () => {
-        let attemptedClient: CodexAppServerClient | undefined;
-        const startupAttempt = async () => {
-          const startupClient = await attemptClientFactory(
-            appServer.start,
-            startupAuthProfileId,
-            agentDir,
-            params.config,
-          );
-          attemptedClient = startupClient;
-          startupClientForCleanup = startupClient;
-          await ensureCodexComputerUse({
-            client: startupClient,
-            pluginConfig: options.pluginConfig,
-            timeoutMs: appServer.requestTimeoutMs,
-            signal: runAbortController.signal,
-          });
-          const threadLifecycleParams = {
-            client: startupClient,
-            params: runtimeParams,
-            cwd: effectiveWorkspace,
-            dynamicTools: toolBridge.specs,
-            appServer: pluginAppServer,
-            developerInstructions: promptBuild.developerInstructions,
-            config: threadConfig,
-            mcpServersFingerprint: bundleMcpThreadConfig.fingerprint,
-            mcpServersFingerprintEvaluated: bundleMcpThreadConfig.evaluated,
-            pluginThreadConfig: pluginThreadConfigEnabled
-              ? {
-                  enabled: true,
-                  inputFingerprint: pluginThreadConfigInputFingerprint,
-                  enabledPluginConfigKeys,
-                  build: () =>
-                    buildCodexPluginThreadConfig({
-                      pluginConfig,
-                      request: (method, requestParams) =>
-                        startupClient.request(method, requestParams, {
-                          timeoutMs: appServer.requestTimeoutMs,
-                          signal: runAbortController.signal,
-                        }),
-                      appCache: defaultCodexAppInventoryCache,
-                      appCacheKey: pluginAppCacheKey,
-                    }),
-                }
-              : undefined,
-          } satisfies Parameters<typeof startOrResumeThread>[0];
-          restartContextEngineCodexThread = () => startOrResumeThread(threadLifecycleParams);
-          const startupThread = await startOrResumeThread(threadLifecycleParams);
-          return { client: startupClient, thread: startupThread };
-        };
-        for (
-          let attempt = 1;
-          attempt <= CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS;
-          attempt += 1
-        ) {
-          try {
-            return await startupAttempt();
-          } catch (error) {
-            if (
-              runAbortController.signal.aborted ||
-              !isCodexAppServerConnectionClosedError(error)
-            ) {
-              throw error;
-            }
-            const failedClient = attemptedClient;
-            const clearedSharedClient = clearSharedCodexAppServerClientIfCurrent(failedClient);
-            if (startupClientForCleanup === failedClient) {
-              startupClientForCleanup = undefined;
-            }
-            attemptedClient = undefined;
-            if (attempt >= CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS) {
-              embeddedAgentLog.warn(
-                "codex app-server connection closed during startup; retries exhausted",
-                {
-                  attempt,
-                  maxAttempts: CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS,
-                  clearedSharedClient,
-                  error: formatErrorMessage(error),
-                },
-              );
-              throw error;
-            }
-            embeddedAgentLog.warn(
-              "codex app-server connection closed during startup; restarting app-server and retrying",
-              {
-                attempt,
-                nextAttempt: attempt + 1,
-                maxAttempts: CODEX_APP_SERVER_STARTUP_CONNECTION_CLOSE_MAX_ATTEMPTS,
-                clearedSharedClient,
-                error: formatErrorMessage(error),
-              },
-            );
-          }
-        }
-        throw new Error("codex app-server startup retry loop exited unexpectedly");
+      onStartupTimeout: () => {
+        runAbortController.abort("codex_startup_timeout");
       },
-    }));
-    startupClientForCleanup = undefined;
-    emitCodexAppServerEvent(params, {
+      spawnedBy: params.spawnedBy,
+    });
+    client = startupResult.client;
+    thread = startupResult.thread;
+    pluginAppServer = startupResult.pluginAppServer;
+    sandboxExecEnvironmentAcquired = Boolean(startupResult.sandboxEnvironment);
+    codexEnvironmentSelection = startupResult.environmentSelection;
+    codexExecutionCwd = startupResult.executionCwd;
+    codexSandboxPolicy = startupResult.sandboxPolicy;
+    releaseSharedClientLease = startupResult.releaseSharedClientLease;
+    restartContextEngineCodexThread = startupResult.restartContextEngineCodexThread;
+    void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "thread_ready", threadId: thread.threadId },
     });
   } catch (error) {
     nativeHookRelay?.unregister();
-    clearSharedCodexAppServerClientIfCurrent(startupClientForCleanup);
+    await releaseSandboxExecEnvironment();
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
     throw error;
+  }
+  if (applyNoContextEngineContinuityProjection(thread.lifecycle.action, thread)) {
+    await rebuildCodexTurnPromptTextFromCurrentProjection();
   }
   trajectoryRecorder?.recordEvent("session.started", {
     sessionFile: params.sessionFile,
     threadId: thread.threadId,
     authProfileId: startupAuthProfileId,
     workspaceDir: effectiveWorkspace,
-    toolCount: toolBridge.specs.length,
+    toolCount: flattenCodexDynamicToolFunctions(toolBridge.specs).length,
   });
   recordCodexTrajectoryContext(trajectoryRecorder, {
     attempt: params,
-    cwd: effectiveWorkspace,
-    developerInstructions: promptBuild.developerInstructions,
-    prompt: promptBuild.prompt,
-    tools: toolBridge.specs,
+    cwd: effectiveCwd,
+    developerInstructions: buildRenderedCodexDeveloperInstructions(),
+    prompt: codexTurnPromptText,
+    tools: toolBridge.availableSpecs,
   });
-
-  let projector: CodexAppServerEventProjector | undefined;
-  let turnId: string | undefined;
   const pendingNotifications: CodexServerNotification[] = [];
-  let userInputBridge: ReturnType<typeof createCodexUserInputBridge> | undefined;
-  let steeringQueue: ReturnType<typeof createCodexSteeringQueue> | undefined;
   let completed = false;
+  let terminalTurnNotificationQueued = false;
   let timedOut = false;
   let turnCompletionIdleTimedOut = false;
+  let turnWatchTimeoutKind: CodexAttemptTurnWatchTimeoutKind | undefined;
+  let turnWatchTimeoutIdleMs: number | undefined;
+  let turnWatchTimeoutMs: number | undefined;
+  let turnWatchTimeoutLastActivityReason: string | undefined;
+  let turnWatchTimeoutDetails: Record<string, unknown> | undefined;
   let turnCompletionIdleTimeoutMessage: string | undefined;
+  let clientClosedPromptError: string | undefined;
+  let clientClosedAbort = false;
+  let shouldDelayNativeHookRelayUnregister = false;
   let lifecycleStarted = false;
   let lifecycleTerminalEmitted = false;
   let resolveCompletion: (() => void) | undefined;
@@ -907,257 +1566,199 @@ export async function runCodexAppServerAttempt(
   const turnAssistantCompletionIdleTimeoutMs = resolveCodexTurnAssistantCompletionIdleTimeoutMs(
     options.turnAssistantCompletionIdleTimeoutMs,
   );
+  const postToolRawAssistantCompletionIdleTimeoutMs =
+    resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs(
+      options.postToolRawAssistantCompletionIdleTimeoutMs ??
+        appServer.postToolRawAssistantCompletionIdleTimeoutMs,
+      turnAssistantCompletionIdleTimeoutMs,
+    );
   const turnTerminalIdleTimeoutMs = resolveCodexTurnTerminalIdleTimeoutMs(
     options.turnTerminalIdleTimeoutMs,
   );
-  let turnCompletionIdleTimer: ReturnType<typeof setTimeout> | undefined;
-  let turnCompletionIdleWatchArmed = false;
-  let turnCompletionIdleWatchPinnedByTerminalError = false;
-  let turnAssistantCompletionIdleTimer: ReturnType<typeof setTimeout> | undefined;
-  let turnAssistantCompletionIdleWatchArmed = false;
-  let turnAssistantCompletionLastActivityAt = Date.now();
-  let turnAssistantCompletionLastActivityDetails: Record<string, unknown> | undefined;
-  let turnTerminalIdleTimer: ReturnType<typeof setTimeout> | undefined;
-  let turnTerminalIdleWatchArmed = false;
-  let turnCompletionLastActivityAt = Date.now();
-  let turnCompletionLastActivityReason = "startup";
-  let turnCompletionLastActivityDetails: Record<string, unknown> | undefined;
+  const turnAttemptIdleTimeoutMs = Math.max(100, Math.floor(params.timeoutMs));
+  let nativeHookRelayLastRenewedAt = 0;
   let activeAppServerTurnRequests = 0;
+  const pendingOpenClawDynamicToolCompletionIds = new Set<string>();
   const activeTurnItemIds = new Set<string>();
+  const activeCompletionBlockerItemIds = new Set<string>();
+  let turnCrossedToolHandoff = false;
+  let pendingTerminalDynamicToolRelease:
+    | {
+        call: CodexDynamicToolCallParams;
+        response: CodexDynamicToolCallResponse;
+        durationMs: number;
+      }
+    | undefined;
+  let terminalDynamicToolReleaseCheckScheduled = false;
+  let currentTurnHadNonTerminalDynamicToolResult = false;
+  const turnIdRef: { current?: string } = {};
+  const projectorRef: { current?: CodexAppServerEventProjector } = {};
+  const userInputBridgeRef: {
+    current?: ReturnType<typeof createCodexUserInputBridge>;
+  } = {};
+  const steeringQueueRef: {
+    current?: ReturnType<typeof createCodexSteeringQueue>;
+  } = {};
 
-  const clearTurnCompletionIdleTimer = () => {
-    if (turnCompletionIdleTimer) {
-      clearTimeout(turnCompletionIdleTimer);
-      turnCompletionIdleTimer = undefined;
-    }
-  };
-
-  const clearTurnTerminalIdleTimer = () => {
-    if (turnTerminalIdleTimer) {
-      clearTimeout(turnTerminalIdleTimer);
-      turnTerminalIdleTimer = undefined;
-    }
-  };
-
-  const clearTurnAssistantCompletionIdleTimer = () => {
-    if (turnAssistantCompletionIdleTimer) {
-      clearTimeout(turnAssistantCompletionIdleTimer);
-      turnAssistantCompletionIdleTimer = undefined;
-    }
-  };
-
-  const fireTurnAssistantCompletionIdleRelease = () => {
-    if (completed || runAbortController.signal.aborted || !turnAssistantCompletionIdleWatchArmed) {
+  const renewNativeHookRelayForTurnProgress = () => {
+    if (!nativeHookRelay || options.nativeHookRelay?.ttlMs !== undefined) {
       return;
     }
-    if (activeAppServerTurnRequests > 0 || activeTurnItemIds.size > 0) {
-      scheduleTurnAssistantCompletionIdleWatch();
+    const now = Date.now();
+    const renewsRecently =
+      now - nativeHookRelayLastRenewedAt < CODEX_NATIVE_HOOK_RELAY_RENEW_INTERVAL_MS;
+    const expiresSoon = now >= nativeHookRelay.expiresAtMs - CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS;
+    if (renewsRecently && !expiresSoon) {
       return;
     }
-    const idleMs = Math.max(0, Date.now() - turnAssistantCompletionLastActivityAt);
-    if (idleMs < turnAssistantCompletionIdleTimeoutMs) {
-      scheduleTurnAssistantCompletionIdleWatch();
-      return;
-    }
-    turnAssistantCompletionIdleWatchArmed = false;
-    clearTurnCompletionIdleTimer();
-    clearTurnTerminalIdleTimer();
-    trajectoryRecorder?.recordEvent("turn.assistant_completion_idle_release", {
-      threadId: thread.threadId,
-      turnId,
-      idleMs,
-      timeoutMs: turnAssistantCompletionIdleTimeoutMs,
-      ...turnAssistantCompletionLastActivityDetails,
-    });
-    embeddedAgentLog.warn(
-      "codex app-server turn released after completed assistant item without terminal event",
-      {
-        threadId: thread.threadId,
-        turnId,
-        idleMs,
-        timeoutMs: turnAssistantCompletionIdleTimeoutMs,
-        ...turnAssistantCompletionLastActivityDetails,
-      },
+    nativeHookRelayLastRenewedAt = now;
+    nativeHookRelay.renew(
+      resolveCodexNativeHookRelayTtlMs({
+        explicitTtlMs: undefined,
+        attemptTimeoutMs: turnAttemptIdleTimeoutMs,
+        startupTimeoutMs,
+        turnStartTimeoutMs: params.timeoutMs,
+      }),
     );
-    if (turnId) {
-      interruptCodexTurnBestEffort(client, {
-        threadId: thread.threadId,
-        turnId,
-        timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
+  };
+
+  const turnWatches = createCodexAttemptTurnWatchController({
+    threadId: thread.threadId,
+    signal: runAbortController.signal,
+    getTurnId: () => turnIdRef.current,
+    isCompleted: () => completed,
+    isTerminalTurnNotificationQueued: () => terminalTurnNotificationQueued,
+    getActiveAppServerTurnRequests: () => activeAppServerTurnRequests,
+    getActiveTurnItemCount: () => activeTurnItemIds.size,
+    getActiveCompletionBlockerItemCount: () => activeCompletionBlockerItemIds.size,
+    turnCompletionIdleTimeoutMs,
+    turnAssistantCompletionIdleTimeoutMs,
+    turnAttemptIdleTimeoutMs,
+    turnTerminalIdleTimeoutMs,
+    interruptTimeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
+    onInterruptTurn: (input) => interruptCodexTurnBestEffort(client, input),
+    onTimeout: (timeout) => {
+      timedOut = true;
+      turnCompletionIdleTimedOut = true;
+      turnWatchTimeoutKind = timeout.kind;
+      turnWatchTimeoutIdleMs = timeout.idleMs;
+      turnWatchTimeoutMs = timeout.timeoutMs;
+      turnWatchTimeoutLastActivityReason = timeout.lastActivityReason;
+      turnWatchTimeoutDetails = timeout.details;
+      turnCompletionIdleTimeoutMessage =
+        "codex app-server turn idle timed out waiting for turn/completed";
+    },
+    onMarkTimedOut: () => projectorRef.current?.markTimedOut(),
+    onAbort: (reason) => runAbortController.abort(reason),
+    onCompleted: () => {
+      completed = true;
+    },
+    onResolveCompletion: () => resolveCompletion?.(),
+    onRecordEvent: (name, fields) => trajectoryRecorder?.recordEvent(name, fields),
+    onAttemptProgress: (reason) => {
+      renewNativeHookRelayForTurnProgress();
+      params.onRunProgress?.({
+        reason,
+        provider: params.provider,
+        model: params.modelId,
+        backend: "codex-app-server",
       });
+    },
+    onProgressDiagnostic: (reason) => {
+      emitTrustedDiagnosticEvent({
+        type: "run.progress",
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        reason: `codex_app_server:${reason}`,
+      });
+    },
+  });
+
+  const releaseTurnAfterTerminalDynamicTool = (paramsValue: {
+    call: CodexDynamicToolCallParams;
+    response: CodexDynamicToolCallResponse;
+    durationMs: number;
+  }) => {
+    if (
+      !shouldReleaseTurnAfterTerminalDynamicTool({
+        completed,
+        aborted: runAbortController.signal.aborted,
+        responseSuccess: paramsValue.response.success,
+        currentTurnHadNonTerminalDynamicToolResult,
+        activeAppServerTurnRequests,
+        activeTurnItemIdsCount: activeTurnItemIds.size,
+        pendingOpenClawDynamicToolCompletionIdsCount: pendingOpenClawDynamicToolCompletionIds.size,
+      })
+    ) {
+      return;
     }
+    pendingTerminalDynamicToolRelease = undefined;
+    trajectoryRecorder?.recordEvent("turn.dynamic_tool_terminal_release", {
+      threadId: paramsValue.call.threadId,
+      turnId: paramsValue.call.turnId,
+      toolCallId: paramsValue.call.callId,
+      name: paramsValue.call.tool,
+      durationMs: paramsValue.durationMs,
+    });
+    embeddedAgentLog.info("codex app-server turn released after terminal dynamic tool result", {
+      threadId: paramsValue.call.threadId,
+      turnId: paramsValue.call.turnId,
+      toolCallId: paramsValue.call.callId,
+      tool: paramsValue.call.tool,
+      durationMs: paramsValue.durationMs,
+    });
+    interruptCodexTurnBestEffort(client, {
+      threadId: paramsValue.call.threadId,
+      turnId: paramsValue.call.turnId,
+      timeoutMs: CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS,
+    });
     completed = true;
+    turnWatches.clearCompletionIdleTimer();
+    turnWatches.clearAssistantCompletionIdleTimer();
+    turnWatches.clearTerminalIdleTimer();
     resolveCompletion?.();
   };
 
-  const fireTurnCompletionIdleTimeout = () => {
+  const scheduleTerminalDynamicToolReleaseCheck = () => {
     if (
-      completed ||
-      runAbortController.signal.aborted ||
-      !turnCompletionIdleWatchArmed ||
-      activeAppServerTurnRequests > 0
+      terminalDynamicToolReleaseCheckScheduled ||
+      (!pendingTerminalDynamicToolRelease && !currentTurnHadNonTerminalDynamicToolResult)
     ) {
       return;
     }
-    const idleMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
-    if (idleMs < turnCompletionIdleTimeoutMs) {
-      scheduleTurnCompletionIdleWatch();
-      return;
-    }
-    timedOut = true;
-    turnCompletionIdleTimedOut = true;
-    turnCompletionIdleTimeoutMessage =
-      "codex app-server turn idle timed out waiting for turn/completed";
-    projector?.markTimedOut();
-    trajectoryRecorder?.recordEvent("turn.completion_idle_timeout", {
-      threadId: thread.threadId,
-      turnId,
-      idleMs,
-      timeoutMs: turnCompletionIdleTimeoutMs,
-      lastActivityReason: turnCompletionLastActivityReason,
-      ...turnCompletionLastActivityDetails,
+    // Let the JSON-RPC tool-call response flush before interrupting the turn.
+    terminalDynamicToolReleaseCheckScheduled = true;
+    const immediate = setImmediate(() => {
+      terminalDynamicToolReleaseCheckScheduled = false;
+      const action = resolveTerminalDynamicToolBatchAction({
+        activeAppServerTurnRequests,
+        activeTurnItemIdsCount: activeTurnItemIds.size,
+        pendingOpenClawDynamicToolCompletionIdsCount: pendingOpenClawDynamicToolCompletionIds.size,
+        currentTurnHadNonTerminalDynamicToolResult,
+        hasPendingTerminalDynamicToolRelease: pendingTerminalDynamicToolRelease !== undefined,
+      });
+      if (action === "release-pending-terminal" && pendingTerminalDynamicToolRelease) {
+        releaseTurnAfterTerminalDynamicTool(pendingTerminalDynamicToolRelease);
+      } else if (action === "clear-nonterminal-batch") {
+        pendingTerminalDynamicToolRelease = undefined;
+        currentTurnHadNonTerminalDynamicToolResult = false;
+      }
     });
-    embeddedAgentLog.warn("codex app-server turn idle timed out waiting for completion", {
-      threadId: thread.threadId,
-      turnId,
-      idleMs,
-      timeoutMs: turnCompletionIdleTimeoutMs,
-      lastActivityReason: turnCompletionLastActivityReason,
-      ...turnCompletionLastActivityDetails,
-    });
-    runAbortController.abort("turn_completion_idle_timeout");
+    immediate.unref?.();
   };
 
-  const fireTurnTerminalIdleTimeout = () => {
-    if (
-      completed ||
-      runAbortController.signal.aborted ||
-      !turnTerminalIdleWatchArmed ||
-      activeAppServerTurnRequests > 0
-    ) {
-      return;
-    }
-    const idleMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
-    if (idleMs < turnTerminalIdleTimeoutMs) {
-      scheduleTurnTerminalIdleWatch();
-      return;
-    }
-    timedOut = true;
-    turnCompletionIdleTimedOut = true;
-    turnCompletionIdleTimeoutMessage =
-      "codex app-server turn idle timed out waiting for turn/completed";
-    projector?.markTimedOut();
-    trajectoryRecorder?.recordEvent("turn.terminal_idle_timeout", {
-      threadId: thread.threadId,
-      turnId,
-      idleMs,
-      timeoutMs: turnTerminalIdleTimeoutMs,
-      lastActivityReason: turnCompletionLastActivityReason,
-      ...turnCompletionLastActivityDetails,
-    });
-    embeddedAgentLog.warn("codex app-server turn idle timed out waiting for terminal event", {
-      threadId: thread.threadId,
-      turnId,
-      idleMs,
-      timeoutMs: turnTerminalIdleTimeoutMs,
-      lastActivityReason: turnCompletionLastActivityReason,
-      ...turnCompletionLastActivityDetails,
-    });
-    runAbortController.abort("turn_terminal_idle_timeout");
-  };
-
-  function scheduleTurnCompletionIdleWatch() {
-    clearTurnCompletionIdleTimer();
-    if (
-      completed ||
-      runAbortController.signal.aborted ||
-      !turnCompletionIdleWatchArmed ||
-      activeAppServerTurnRequests > 0
-    ) {
-      return;
-    }
-    const elapsedMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
-    const delayMs = Math.max(1, turnCompletionIdleTimeoutMs - elapsedMs);
-    turnCompletionIdleTimer = setTimeout(fireTurnCompletionIdleTimeout, delayMs);
-    turnCompletionIdleTimer.unref?.();
-  }
-
-  function scheduleTurnAssistantCompletionIdleWatch() {
-    clearTurnAssistantCompletionIdleTimer();
-    if (completed || runAbortController.signal.aborted || !turnAssistantCompletionIdleWatchArmed) {
-      return;
-    }
-    const elapsedMs = Math.max(0, Date.now() - turnAssistantCompletionLastActivityAt);
-    const delayMs = Math.max(1, turnAssistantCompletionIdleTimeoutMs - elapsedMs);
-    turnAssistantCompletionIdleTimer = setTimeout(fireTurnAssistantCompletionIdleRelease, delayMs);
-    turnAssistantCompletionIdleTimer.unref?.();
-  }
-
-  function scheduleTurnTerminalIdleWatch() {
-    clearTurnTerminalIdleTimer();
-    if (
-      completed ||
-      runAbortController.signal.aborted ||
-      !turnTerminalIdleWatchArmed ||
-      activeAppServerTurnRequests > 0
-    ) {
-      return;
-    }
-    const elapsedMs = Math.max(0, Date.now() - turnCompletionLastActivityAt);
-    const delayMs = Math.max(1, turnTerminalIdleTimeoutMs - elapsedMs);
-    turnTerminalIdleTimer = setTimeout(fireTurnTerminalIdleTimeout, delayMs);
-    turnTerminalIdleTimer.unref?.();
-  }
-
-  const touchTurnCompletionActivity = (
-    reason: string,
-    options?: { arm?: boolean; details?: Record<string, unknown> },
-  ) => {
-    turnCompletionLastActivityAt = Date.now();
-    turnCompletionLastActivityReason = reason;
-    turnCompletionLastActivityDetails = options?.details;
-    emitTrustedDiagnosticEvent({
-      type: "run.progress",
-      runId: params.runId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      reason: `codex_app_server:${reason}`,
-    });
-    if (options?.arm) {
-      turnCompletionIdleWatchArmed = true;
-      turnCompletionIdleWatchPinnedByTerminalError = false;
-    }
-    scheduleTurnCompletionIdleWatch();
-    scheduleTurnTerminalIdleWatch();
-  };
-
-  const disarmTurnCompletionIdleWatch = () => {
-    turnCompletionIdleWatchArmed = false;
-    turnCompletionIdleWatchPinnedByTerminalError = false;
-    clearTurnCompletionIdleTimer();
-  };
-
-  const disarmTurnAssistantCompletionIdleWatch = () => {
-    turnAssistantCompletionIdleWatchArmed = false;
-    turnAssistantCompletionLastActivityDetails = undefined;
-    clearTurnAssistantCompletionIdleTimer();
-  };
-
-  const armTurnAssistantCompletionIdleWatch = (details?: Record<string, unknown>) => {
-    turnAssistantCompletionIdleWatchArmed = true;
-    turnAssistantCompletionLastActivityAt = Date.now();
-    turnAssistantCompletionLastActivityDetails = details;
-    scheduleTurnAssistantCompletionIdleWatch();
-  };
-
-  const armTurnCompletionIdleWatch = (options?: { pinnedByTerminalError?: boolean }) => {
-    turnCompletionIdleWatchArmed = true;
-    turnCompletionIdleWatchPinnedByTerminalError = options?.pinnedByTerminalError === true;
-    scheduleTurnCompletionIdleWatch();
+  const scheduleTurnReleaseAfterTerminalDynamicTool = (paramsLocal: {
+    call: CodexDynamicToolCallParams;
+    response: CodexDynamicToolCallResponse;
+    durationMs: number;
+  }) => {
+    pendingTerminalDynamicToolRelease = paramsLocal;
+    scheduleTerminalDynamicToolReleaseCheck();
   };
 
   const emitLifecycleStart = () => {
-    emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(params, {
       stream: "lifecycle",
       data: { phase: "start", startedAt: attemptStartedAt },
     });
@@ -1168,12 +1769,15 @@ export async function runCodexAppServerAttempt(
     if (!lifecycleStarted || lifecycleTerminalEmitted) {
       return;
     }
-    emitCodexAppServerEvent(params, {
+    void emitCodexAppServerEvent(params, {
       stream: "lifecycle",
       data: {
         startedAt: attemptStartedAt,
         endedAt: Date.now(),
         ...data,
+        ...((params.deferTerminalLifecycle ?? params.deferTerminalLifecycleEnd)
+          ? { phase: "finishing" }
+          : {}),
       },
     });
     lifecycleTerminalEmitted = true;
@@ -1195,118 +1799,279 @@ export async function runCodexAppServerAttempt(
       ...info,
     });
   };
-  const reportCodexExecutionNotification = (notification: CodexServerNotification) => {
-    if (notification.method === "turn/started") {
-      emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
-      return;
-    }
-    if (notification.method === "item/agentMessage/delta") {
-      emitExecutionPhaseOnce("assistant_output_started", { phase: "assistant_output_started" });
-      return;
-    }
-    if (notification.method !== "item/started") {
-      return;
-    }
-    const item = readCodexNotificationItem(notification.params);
-    const tool = item ? codexExecutionToolName(item) : undefined;
-    if (!item || !tool) {
-      return;
-    }
-    emitExecutionPhaseOnce(`tool:${item.id}`, {
-      phase: "tool_execution_started",
-      tool,
-      itemId: item.id,
+  const reportExecutionNotification = (notification: CodexServerNotification) => {
+    reportCodexExecutionNotification({
+      notification,
+      emitExecutionPhaseOnce,
     });
   };
+  const emitFastModeAutoProgress = async (payload: {
+    enabled: boolean;
+    elapsedSeconds: number;
+    fastAutoOnSeconds?: number;
+  }): Promise<void> => {
+    const summary = formatFastModeAutoProgressText(payload);
+    await emitCodexAppServerEvent(params, {
+      stream: "item",
+      data: {
+        kind: "status",
+        title: "Fast",
+        phase: "update",
+        summary,
+      },
+    });
+    try {
+      await params.onToolResult?.({
+        text: summary,
+        channelData: { openclawProgressKind: FAST_MODE_AUTO_PROGRESS_KIND },
+      });
+    } catch (error) {
+      embeddedAgentLog.debug("codex app-server fast mode auto progress delivery failed", {
+        error,
+      });
+    }
+  };
+  const maybeAnnounceFastModeAutoOff = async (): Promise<void> => {
+    if (
+      params.fastModeAuto !== true ||
+      fastModeAutoStartedAtMs === undefined ||
+      fastModeAutoProgressState.offAnnounced
+    ) {
+      return;
+    }
+    const next = resolveFastModeForElapsed({
+      mode: "auto",
+      startedAtMs: fastModeAutoStartedAtMs,
+      fastAutoOnSeconds: params.fastModeAutoOnSeconds,
+    });
+    if (next.enabled) {
+      return;
+    }
+    fastModeAutoProgressState.offAnnounced = true;
+    await emitFastModeAutoProgress(next);
+  };
+  const maybeEmitFastModeAutoReset = async (): Promise<void> => {
+    if (
+      params.fastModeAuto !== true ||
+      !fastModeAutoProgressState.offAnnounced ||
+      fastModeAutoProgressState.resetAnnounced
+    ) {
+      return;
+    }
+    fastModeAutoProgressState.resetAnnounced = true;
+    await emitFastModeAutoProgress({
+      enabled: true,
+      elapsedSeconds: 0,
+      fastAutoOnSeconds: params.fastModeAutoOnSeconds,
+    });
+  };
+  const maybeEmitFastModeAutoResetBestEffort = async (): Promise<void> => {
+    try {
+      await maybeEmitFastModeAutoReset();
+    } catch (error) {
+      embeddedAgentLog.warn(
+        `codex app-server fast mode auto reset progress failed: ${formatErrorMessage(error)}`,
+      );
+    }
+  };
+
+  const isTerminalTurnNotificationForTurn = (
+    notification: CodexServerNotification,
+    notificationTurnId: string,
+  ): boolean =>
+    isTerminalCodexTurnNotificationForTurn({
+      notification,
+      threadId: thread.threadId,
+      turnId: notificationTurnId,
+      currentPromptTexts: [codexTurnPromptText],
+    });
 
   const handleNotification = async (notification: CodexServerNotification) => {
+    const projector = projectorRef.current;
+    const turnId = turnIdRef.current;
+    const userInputBridge = userInputBridgeRef.current;
+    const steeringQueue = steeringQueueRef.current;
     userInputBridge?.handleNotification(notification);
     if (!projector || !turnId) {
       pendingNotifications.push(notification);
       return;
     }
-    const isCurrentTurnNotification = isTurnNotification(
-      notification.params,
-      thread.threadId,
+    const notificationState = applyCodexTurnNotificationState({
+      notification,
+      threadId: thread.threadId,
       turnId,
-    );
-    const isTurnCompletion = notification.method === "turn/completed" && isCurrentTurnNotification;
-    if (isCurrentTurnNotification) {
-      touchTurnCompletionActivity(`notification:${notification.method}`, {
-        details: describeNotificationActivity(notification),
-      });
-      reportCodexExecutionNotification(notification);
-    }
-    if (isCurrentTurnNotification) {
-      updateActiveTurnItemIds(notification, activeTurnItemIds);
-    }
-    const unblockedAssistantCompletionRelease =
-      isCurrentTurnNotification &&
-      turnAssistantCompletionIdleWatchArmed &&
-      notification.method === "item/completed" &&
-      activeTurnItemIds.size === 0;
-    if (isCurrentTurnNotification && notification.method === "error") {
-      if (isRetryableErrorNotification(notification.params)) {
-        disarmTurnCompletionIdleWatch();
-      } else {
-        armTurnCompletionIdleWatch({ pinnedByTerminalError: true });
-      }
-      disarmTurnAssistantCompletionIdleWatch();
-    } else if (isTurnCompletion) {
-      disarmTurnAssistantCompletionIdleWatch();
-    } else if (isCurrentTurnNotification && isCompletedAssistantNotification(notification)) {
-      armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
-    } else if (unblockedAssistantCompletionRelease) {
-      armTurnAssistantCompletionIdleWatch(describeNotificationActivity(notification));
-    } else if (
-      isCurrentTurnNotification &&
-      shouldDisarmAssistantCompletionIdleWatch(notification)
-    ) {
-      disarmTurnAssistantCompletionIdleWatch();
-    }
-    if (
-      turnCompletionIdleWatchArmed &&
-      !turnCompletionIdleWatchPinnedByTerminalError &&
-      notification.method !== "turn/completed" &&
-      isCurrentTurnNotification
-    ) {
-      // The short completion-idle watchdog only guards the blind gap after
-      // OpenClaw hands a turn-scoped request result back to Codex. Once Codex
-      // sends another current-turn notification, the app-server is alive again;
-      // the longer terminal watchdog remains the stuck-turn backstop.
-      disarmTurnCompletionIdleWatch();
-    }
+      currentPromptTexts: [codexTurnPromptText],
+      turnWatches,
+      activeTurnItemIds,
+      activeCompletionBlockerItemIds,
+      activeAppServerTurnRequests,
+      pendingOpenClawDynamicToolCompletionIds,
+      turnCrossedToolHandoff,
+      postToolRawAssistantCompletionIdleTimeoutMs,
+      onScheduleTerminalDynamicToolReleaseCheck: scheduleTerminalDynamicToolReleaseCheck,
+      onReportExecutionNotification: reportExecutionNotification,
+    });
+    turnCrossedToolHandoff = notificationState.turnCrossedToolHandoff;
     // Determine terminal-turn status before invoking the projector so a throw
     // inside projector.handleNotification still releases the session lane.
     // See openclaw/openclaw#67996.
-    const isTurnAbortMarker =
-      isCurrentTurnNotification &&
-      isCodexTurnAbortMarkerNotification(notification, { currentPromptText: promptBuild.prompt });
-    const isTurnTerminal = isTurnCompletion || isTurnAbortMarker;
+    if (notificationState.isTurnTerminal) {
+      terminalTurnNotificationQueued = true;
+    }
     try {
+      await waitForCodexNotificationDispatchTurn();
       await projector.handleNotification(notification);
+      if (
+        notificationState.isCurrentTurnNotification &&
+        activeTurnItemIds.size === 0 &&
+        isRawFunctionToolOutputCompletionNotification(notification)
+      ) {
+        await maybeAnnounceFastModeAutoOff();
+      }
     } catch (error) {
       embeddedAgentLog.debug("codex app-server projector notification threw", {
         method: notification.method,
         error,
       });
     } finally {
-      if (isTurnTerminal) {
-        if (isTurnAbortMarker) {
+      if (notificationState.isTurnTerminal) {
+        if (notificationState.isTurnAbortMarker) {
           projector.markAborted();
         }
         if (!timedOut && !runAbortController.signal.aborted) {
           await steeringQueue?.flushPending();
         }
         completed = true;
-        clearTurnCompletionIdleTimer();
-        clearTurnAssistantCompletionIdleTimer();
-        clearTurnTerminalIdleTimer();
+        turnWatches.clearCompletionIdleTimer();
+        turnWatches.clearAssistantCompletionIdleTimer();
+        turnWatches.clearTerminalIdleTimer();
         resolveCompletion?.();
       }
     }
   };
+  let activeNativeTurnCompletionWaiter:
+    | { matches: (notification: CodexServerNotification) => boolean; resolve: () => void }
+    | undefined;
+  const waitForActiveNativeTurnCompletion = async (
+    turnIds?: readonly string[],
+  ): Promise<boolean> => {
+    const turnIdSet = turnIds?.length ? new Set(turnIds) : undefined;
+    const matchesCompletion = (notification: CodexServerNotification) =>
+      isCodexThreadTurnCompletedNotification(notification, thread.threadId, turnIdSet);
+    if (pendingNotifications.some((notification) => matchesCompletion(notification))) {
+      return true;
+    }
+    return await new Promise<boolean>((resolve) => {
+      let settled = false;
+      const timeoutRef: { current?: ReturnType<typeof setTimeout> } = {};
+      const finish = (completedNativeTurn: boolean) => {
+        if (settled) {
+          return;
+        }
+        settled = true;
+        if (timeoutRef.current) {
+          clearTimeout(timeoutRef.current);
+        }
+        runAbortController.signal.removeEventListener("abort", abortListener);
+        if (activeNativeTurnCompletionWaiter?.resolve === finishComplete) {
+          activeNativeTurnCompletionWaiter = undefined;
+        }
+        resolve(completedNativeTurn);
+      };
+      const finishComplete = () => finish(true);
+      const abortListener = () => finish(false);
+      timeoutRef.current = setTimeout(
+        () => finish(false),
+        Math.min(appServer.requestTimeoutMs, CODEX_APP_SERVER_ACTIVE_NATIVE_TURN_WAIT_TIMEOUT_MS),
+      );
+      activeNativeTurnCompletionWaiter = {
+        matches: matchesCompletion,
+        resolve: finishComplete,
+      };
+      runAbortController.signal.addEventListener("abort", abortListener, { once: true });
+    });
+  };
   const enqueueNotification = (notification: CodexServerNotification): Promise<void> => {
+    const projector = projectorRef.current;
+    const turnId = turnIdRef.current;
+    const userInputBridge = userInputBridgeRef.current;
+    const correlation = describeCodexNotificationCorrelation(notification, {
+      threadId: thread.threadId,
+      ...(turnId ? { turnId } : {}),
+    });
+    embeddedAgentLog.trace("codex app-server raw notification received", correlation);
+    if (notification.method === "turn/completed" && correlation.matchesActiveTurn === false) {
+      if (correlation.matchesActiveThread) {
+        embeddedAgentLog.warn(
+          "codex app-server turn/completed did not match active turn",
+          correlation,
+        );
+      } else {
+        embeddedAgentLog.debug(
+          "codex app-server turn/completed ignored for other subscribed thread",
+          correlation,
+        );
+      }
+    }
+    if (notification.method === "turn/completed" && correlation.matchesActiveThread) {
+      if (activeNativeTurnCompletionWaiter?.matches(notification)) {
+        activeNativeTurnCompletionWaiter.resolve();
+      }
+    }
+    if (isCodexNotificationOutsideActiveRun(correlation)) {
+      return Promise.resolve();
+    }
+    if (!projector || !turnId) {
+      userInputBridge?.handleNotification(notification);
+      pendingNotifications.push(notification);
+      return Promise.resolve();
+    }
+    if (isTerminalTurnNotificationForTurn(notification, turnId)) {
+      terminalTurnNotificationQueued = true;
+    }
+    // Touch idle-watch timestamps at receive time, not just after queued
+    // projection.  A queued terminal event should suppress short false-idle
+    // guards, while the full attempt watchdog still releases a wedged queue.
+    const isNativeResponseStreamDelta = isNativeResponseStreamDeltaNotification(notification);
+    const nativeResponseStreamDeltaMatchesActiveTurn =
+      isNativeResponseStreamDelta &&
+      (correlation.matchesActiveTurn === true ||
+        (isUnscopedCodexNotification(correlation) &&
+          canAttributeUnscopedNativeResponseDeltaToThisTurn(client)));
+    const notificationMatchesActiveTurn =
+      correlation.matchesActiveTurn === true ||
+      (!isNativeResponseStreamDelta && correlation.matchesActiveTurn !== false) ||
+      nativeResponseStreamDeltaMatchesActiveTurn;
+    if (correlation.matchesActiveTurn === true) {
+      const modelToolCallId = readRawResponseToolCallId(notification);
+      if (modelToolCallId) {
+        // Raw response items arrive in model order before Codex schedules tool
+        // futures, so later lifecycle races reuse this authoritative position.
+        allocateCodexToolOutcomeOrdinal?.(modelToolCallId);
+      }
+      const nativeItem = readCodexNotificationItem(notification.params);
+      if (nativeItem?.type === "webSearch") {
+        // Upstream omits the raw web-search id. Its lifecycle still follows the
+        // model stream, so reserve synchronously before queued projection.
+        projector.recordNativeToolOutcome(nativeItem);
+      }
+    }
+    if (notificationMatchesActiveTurn) {
+      // If Codex app-server exposes raw response deltas, treat them as activity
+      // only when scoped to this turn or attributable to a single lease.
+      turnWatches.noteNotificationReceived(
+        notification.method,
+        isNativeResponseStreamDelta
+          ? {
+              attemptProgress: true,
+              ...(turnCrossedToolHandoff
+                ? { attemptTimeoutMs: postToolRawAssistantCompletionIdleTimeoutMs }
+                : {}),
+              details: { lastNotificationMethod: notification.method },
+            }
+          : undefined,
+      );
+    }
     notificationQueue = notificationQueue.then(
       () => handleNotification(notification),
       () => handleNotification(notification),
@@ -1314,13 +2079,34 @@ export async function runCodexAppServerAttempt(
     return notificationQueue;
   };
 
+  const nativeSubagentCodexHome =
+    appServer.start.transport === "stdio"
+      ? (appServer.start.env?.CODEX_HOME ?? resolveCodexAppServerHomeDir(agentDir))
+      : undefined;
+  registerCodexNativeSubagentMonitor({
+    client,
+    parentThreadId: thread.threadId,
+    requesterSessionKey: params.sessionKey,
+    taskRuntimeScope: params.agentHarnessTaskRuntimeScope,
+    agentId: params.agentId,
+    codexHome: nativeSubagentCodexHome,
+  });
   const notificationCleanup = client.addNotificationHandler(enqueueNotification);
   const requestCleanup = client.addRequestHandler(async (request) => {
-    activeAppServerTurnRequests += 1;
-    clearTurnCompletionIdleTimer();
-    disarmTurnAssistantCompletionIdleWatch();
-    touchTurnCompletionActivity(`request:${request.method}`);
+    const turnId = turnIdRef.current;
+    const userInputBridge = userInputBridgeRef.current;
+    const projector = projectorRef.current;
     let armCompletionWatchOnResponse = false;
+    let requestCountsAsTurnActivity = false;
+    const markCurrentTurnRequestProgress = () => {
+      activeAppServerTurnRequests += 1;
+      turnWatches.clearCompletionIdleTimer();
+      turnWatches.disarmAssistantCompletionIdleWatch();
+      requestCountsAsTurnActivity = true;
+      turnWatches.touchActivity(`request:${request.method}:start`, {
+        attemptProgress: true,
+      });
+    };
     try {
       if (request.method === "account/chatgptAuthTokens/refresh") {
         return refreshCodexAppServerAuthTokens({
@@ -1333,18 +2119,27 @@ export async function runCodexAppServerAttempt(
         return undefined;
       }
       if (request.method === "mcpServer/elicitation/request") {
-        armCompletionWatchOnResponse = true;
-        return handleCodexAppServerElicitationRequest({
+        if (isCurrentThreadOptionalTurnRequestParams(request.params, thread.threadId, turnId)) {
+          armCompletionWatchOnResponse = true;
+          markCurrentTurnRequestProgress();
+        }
+        return await handleCodexAppServerElicitationRequest({
           requestParams: request.params,
           paramsForRun: params,
           threadId: thread.threadId,
           turnId,
           pluginAppPolicyContext: thread.pluginAppPolicyContext,
+          ...(computerUseConfig.enabled
+            ? { computerUseMcpServerName: computerUseConfig.mcpServerName }
+            : {}),
           signal: runAbortController.signal,
         });
       }
       if (request.method === "item/tool/requestUserInput") {
-        armCompletionWatchOnResponse = true;
+        if (isCurrentThreadTurnRequestParams(request.params, thread.threadId, turnId)) {
+          armCompletionWatchOnResponse = true;
+          markCurrentTurnRequestProgress();
+        }
         return userInputBridge?.handleRequest({
           id: request.id,
           params: request.params,
@@ -1352,13 +2147,21 @@ export async function runCodexAppServerAttempt(
       }
       if (request.method !== "item/tool/call") {
         if (isCodexAppServerApprovalRequest(request.method)) {
-          armCompletionWatchOnResponse = true;
+          if (isCurrentApprovalTurnRequestParams(request.params, thread.threadId, turnId)) {
+            armCompletionWatchOnResponse = true;
+            markCurrentTurnRequestProgress();
+          }
           return handleApprovalRequest({
             method: request.method,
             params: request.params,
             paramsForRun: params,
             threadId: thread.threadId,
             turnId,
+            nativeHookRelay,
+            execPolicy,
+            execReviewerAgentId: sessionAgentId,
+            internalExecAutoReview: appServer.approvalsReviewer === "user",
+            autoApprove: shouldAutoApproveCodexAppServerApprovals(appServer),
             signal: runAbortController.signal,
           });
         }
@@ -1368,7 +2171,11 @@ export async function runCodexAppServerAttempt(
       if (!call || call.threadId !== thread.threadId || call.turnId !== turnId) {
         return undefined;
       }
+      const toolCallOrdinal = allocateCodexToolOutcomeOrdinal?.(call.callId);
       armCompletionWatchOnResponse = true;
+      markCurrentTurnRequestProgress();
+      turnCrossedToolHandoff = true;
+      pendingOpenClawDynamicToolCompletionIds.add(call.callId);
       trajectoryRecorder?.recordEvent("tool.call", {
         threadId: call.threadId,
         turnId: call.turnId,
@@ -1386,125 +2193,357 @@ export async function runCodexAppServerAttempt(
         tool: call.tool,
         toolCallId: call.callId,
       });
+      emitDynamicToolStartedDiagnostic({
+        call,
+        runId: params.runId,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      });
       const toolProgressDetailMode = resolveCodexToolProgressDetailMode(params.toolProgressDetail);
       const toolMeta = inferCodexDynamicToolMeta(call, toolProgressDetailMode);
       const toolArgs = sanitizeCodexToolArguments(call.arguments);
-      emitCodexAppServerEvent(params, {
-        stream: "tool",
-        data: {
-          phase: "start",
-          name: call.tool,
-          toolCallId: call.callId,
-          ...(toolMeta ? { meta: toolMeta } : {}),
-          ...(toolArgs ? { args: toolArgs } : {}),
-        },
-      });
+      const shouldEmitDynamicToolProgress = shouldEmitTranscriptToolProgress(call.tool, toolArgs);
+      if (shouldEmitDynamicToolProgress) {
+        void emitCodexAppServerEvent(params, {
+          stream: "tool",
+          data: {
+            phase: "start",
+            name: call.tool,
+            toolCallId: call.callId,
+            ...(toolMeta ? { meta: toolMeta } : {}),
+            ...(toolArgs ? { args: toolArgs } : {}),
+          },
+        });
+      }
       const dynamicToolTimeoutMs = resolveDynamicToolCallTimeoutMs({
         call,
         config: params.config,
       });
-      const response = await handleDynamicToolCallWithTimeout({
-        call,
-        toolBridge,
-        signal: runAbortController.signal,
-        timeoutMs: dynamicToolTimeoutMs,
-        onTimeout: () => {
-          trajectoryRecorder?.recordEvent("tool.timeout", {
-            threadId: call.threadId,
-            turnId: call.turnId,
-            toolCallId: call.callId,
-            name: call.tool,
-            timeoutMs: dynamicToolTimeoutMs,
+      const toolStartedAt = Date.now();
+      let terminalDiagnosticObserved = false;
+      const unsubscribeToolDiagnosticObserver = onInternalDiagnosticEvent((event) => {
+        if (isDynamicToolTerminalDiagnosticEvent(event)) {
+          if (
+            isMatchingDynamicToolTerminalDiagnostic({
+              event,
+              call,
+              runId: params.runId,
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+            })
+          ) {
+            terminalDiagnosticObserved = true;
+          }
+        }
+      });
+      try {
+        const response = await handleDynamicToolCallWithTimeout({
+          call,
+          toolBridge,
+          signal: runAbortController.signal,
+          timeoutMs: dynamicToolTimeoutMs,
+          toolCallOrdinal,
+          onAgentToolResult: params.onAgentToolResult,
+          onFallbackSelected: () => {
+            if (toolCallOrdinal !== undefined) {
+              suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
+            }
+          },
+          onTimeout: () => {
+            trajectoryRecorder?.recordEvent("tool.timeout", {
+              threadId: call.threadId,
+              turnId: call.turnId,
+              toolCallId: call.callId,
+              name: call.tool,
+              timeoutMs: dynamicToolTimeoutMs,
+            });
+          },
+        });
+        const protocolResponse = toCodexDynamicToolProtocolResponse(response);
+        if (!protocolResponse.success && toolCallOrdinal !== undefined) {
+          // The underlying tool may ignore cancellation and finish after the
+          // timeout response. Its late presentation must not replace this failure.
+          suppressedDynamicToolOutcomeOrdinals.add(toolCallOrdinal);
+          params.onToolOutcome?.({
+            toolName: call.tool,
+            argsHash: "",
+            resultHash: "",
+            toolCallOrdinal,
+            terminalPresentation: undefined,
+            presentationOnly: true,
           });
-        },
-      });
-      trajectoryRecorder?.recordEvent("tool.result", {
-        threadId: call.threadId,
-        turnId: call.turnId,
-        toolCallId: call.callId,
-        name: call.tool,
-        success: response.success,
-        contentItems: response.contentItems,
-      });
-      projector?.recordDynamicToolResult({
-        callId: call.callId,
-        tool: call.tool,
-        success: response.success,
-        contentItems: response.contentItems,
-      });
-      emitCodexAppServerEvent(params, {
-        stream: "tool",
-        data: {
-          phase: "result",
-          name: call.tool,
+        }
+        const toolDurationMs = Math.max(0, Date.now() - toolStartedAt);
+        trajectoryRecorder?.recordEvent("tool.result", {
+          threadId: call.threadId,
+          turnId: call.turnId,
           toolCallId: call.callId,
-          ...(toolMeta ? { meta: toolMeta } : {}),
-          isError: !response.success,
-          result: sanitizeCodexToolResponse(response),
-        },
-      });
-      return response as JsonValue;
+          name: call.tool,
+          success: protocolResponse.success,
+          contentItems: protocolResponse.contentItems,
+        });
+        projector?.recordDynamicToolResult({
+          callId: call.callId,
+          tool: call.tool,
+          asyncStarted: response.asyncStarted === true,
+          success: protocolResponse.success,
+          terminalType:
+            response.diagnosticTerminalType ?? (protocolResponse.success ? "completed" : "error"),
+          sideEffectEvidence: response.sideEffectEvidence === true,
+          contentItems: protocolResponse.contentItems,
+        });
+        if (shouldEmitDynamicToolProgress) {
+          const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
+          void emitCodexAppServerEvent(params, {
+            stream: "tool",
+            data: {
+              phase: "result",
+              name: call.tool,
+              toolCallId: call.callId,
+              ...(toolMeta ? { meta: toolMeta } : {}),
+              isError: !protocolResponse.success,
+              result: toTranscriptToolResult(progressResponse),
+            },
+          });
+        }
+        if (
+          !terminalDiagnosticObserved &&
+          !hasPendingDynamicToolTerminalDiagnostic({
+            call,
+            runId: params.runId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+          })
+        ) {
+          emitDynamicToolTerminalDiagnostic({
+            response,
+            call,
+            runId: params.runId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            durationMs: toolDurationMs,
+          });
+        }
+        pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
+        if (response.terminate === true) {
+          scheduleTurnReleaseAfterTerminalDynamicTool({
+            call,
+            response,
+            durationMs: toolDurationMs,
+          });
+        } else if (!shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(response)) {
+          scheduleTerminalDynamicToolReleaseCheck();
+        } else {
+          currentTurnHadNonTerminalDynamicToolResult = true;
+          pendingTerminalDynamicToolRelease = undefined;
+        }
+        return protocolResponse as JsonValue;
+      } catch (error) {
+        pendingOpenClawDynamicToolCompletionIds.delete(call.callId);
+        if (
+          !terminalDiagnosticObserved &&
+          !hasPendingDynamicToolTerminalDiagnostic({
+            call,
+            runId: params.runId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+          })
+        ) {
+          emitDynamicToolErrorDiagnostic({
+            call,
+            runId: params.runId,
+            sessionId: params.sessionId,
+            sessionKey: params.sessionKey,
+            durationMs: Math.max(0, Date.now() - toolStartedAt),
+          });
+        }
+        throw error;
+      } finally {
+        toolOutcomeOrdinals.delete(call.callId);
+        unsubscribeToolDiagnosticObserver();
+      }
     } finally {
-      activeAppServerTurnRequests = Math.max(0, activeAppServerTurnRequests - 1);
-      touchTurnCompletionActivity(`request:${request.method}:response`, {
-        arm: armCompletionWatchOnResponse,
-      });
+      if (requestCountsAsTurnActivity) {
+        activeAppServerTurnRequests = Math.max(0, activeAppServerTurnRequests - 1);
+        const postToolContinuationTimeoutMs =
+          request.method === "item/tool/call" && turnCrossedToolHandoff
+            ? postToolRawAssistantCompletionIdleTimeoutMs
+            : undefined;
+        turnWatches.touchActivity(`request:${request.method}:response`, {
+          arm: armCompletionWatchOnResponse,
+          attemptProgress: true,
+          ...(postToolContinuationTimeoutMs !== undefined
+            ? { attemptTimeoutMs: postToolContinuationTimeoutMs }
+            : {}),
+        });
+        if (armCompletionWatchOnResponse && postToolContinuationTimeoutMs !== undefined) {
+          turnWatches.armCompletionIdleWatch({ timeoutMs: postToolContinuationTimeoutMs });
+        }
+        scheduleTerminalDynamicToolReleaseCheck();
+      } else {
+        turnWatches.scheduleProgressWatches();
+      }
     }
   });
 
-  const llmInputEvent = {
+  const buildLlmInputEvent = () => ({
     runId: params.runId,
     sessionId: params.sessionId,
     provider: params.provider,
     model: params.modelId,
-    systemPrompt: promptBuild.developerInstructions,
-    prompt: promptBuild.prompt,
-    historyMessages,
+    systemPrompt: buildRenderedCodexDeveloperInstructions(),
+    prompt: codexTurnPromptText,
+    historyMessages: codexModelInputHistoryMessages,
     imagesCount: params.images?.length ?? 0,
-  };
-  const turnStartFailureMessages = [
-    ...historyMessages,
-    {
-      role: "user" as const,
-      content: promptBuild.prompt,
-      timestamp: Date.now(),
-    },
+    tools,
+  });
+  const buildCodexModelInputMessages = () => [
+    ...codexModelInputHistoryMessages,
+    buildCodexUserPromptMessage({ ...params, prompt: codexTurnPromptText }),
   ];
+  const codexModelCallBaseFields = {
+    runId: params.runId,
+    callId: codexModelCallId,
+    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
+    sessionId: params.sessionId,
+    provider: params.provider,
+    model: params.modelId,
+    api: params.model.api,
+    transport: appServer.start.transport,
+    ...hookContextWindowFields,
+    trace: codexModelCallTrace,
+  };
+  const codexModelCallDiagnostics = createCodexModelCallDiagnosticEmitter({
+    baseFields: codexModelCallBaseFields,
+    capture: codexModelContentCapture,
+    tools,
+    buildInputMessages: buildCodexModelInputMessages,
+    buildSystemPrompt: buildRenderedCodexDeveloperInstructions,
+    onErrorDiagnostic: (error) => {
+      embeddedAgentLog.debug("codex app-server model call diagnostic ended with error", {
+        error: formatErrorMessage(error),
+      });
+    },
+  });
 
   let turn: CodexTurnStartResponse | undefined;
-  const startCodexTurn = async (): Promise<CodexTurnStartResponse> =>
-    assertCodexTurnStartResponse(
-      await client.request(
-        "turn/start",
-        buildTurnStartParams(params, {
-          threadId: thread.threadId,
-          cwd: effectiveWorkspace,
-          appServer: pluginAppServer,
-          promptText: promptBuild.prompt,
-        }),
-        { timeoutMs: params.timeoutMs, signal: runAbortController.signal },
-      ),
+  const throwIfTurnStartAcceptedAfterAbort = () => {
+    if (!runAbortController.signal.aborted) {
+      return;
+    }
+    const reason = runAbortController.signal.reason;
+    if (reason instanceof Error) {
+      throw reason;
+    }
+    const error = new Error(
+      typeof reason === "string" && reason.length > 0
+        ? reason
+        : "codex app-server turn start aborted before acceptance",
     );
-  try {
-    runAgentHarnessLlmInputHook({
-      event: llmInputEvent,
-      ctx: hookContext,
+    error.name = "AbortError";
+    throw error;
+  };
+  const startCodexTurn = async (): Promise<CodexTurnStartResponse> => {
+    const turnAppServer = withCodexAppServerFastModeServiceTier(pluginAppServer, params);
+    pluginAppServer = turnAppServer;
+    const turnStartParams = buildTurnStartParams(params, {
+      threadId: thread.threadId,
+      cwd: codexExecutionCwd,
+      appServer: turnAppServer,
+      promptText: codexTurnPromptText,
+      sandboxPolicy: codexSandboxPolicy,
+      environmentSelection: codexEnvironmentSelection,
+      model: thread.model,
+      modelProvider: thread.modelProvider,
+      turnScopedDeveloperInstructions: workspaceBootstrapContext.turnScopedDeveloperInstructions,
+      skillsCollaborationInstructions,
+      memoryCollaborationInstructions: workspaceBootstrapContext.memoryCollaborationInstructions,
+      heartbeatCollaborationInstructions:
+        workspaceBootstrapContext.heartbeatCollaborationInstructions,
     });
-    emitCodexAppServerEvent(params, {
+    codexModelCallDiagnostics.setRequestPayloadBytes(utf8JsonByteLength(turnStartParams));
+    const startedTurn = assertCodexTurnStartResponse(
+      await client.request("turn/start", turnStartParams, {
+        timeoutMs: params.timeoutMs,
+        signal: runAbortController.signal,
+      }),
+    );
+    throwIfTurnStartAcceptedAfterAbort();
+    return startedTurn;
+  };
+  const activeNativeTurnIds =
+    thread.lifecycle.action === "resumed" ? (thread.lifecycle.activeTurnIds ?? []) : [];
+  if (activeNativeTurnIds.length > 0) {
+    // A resumed Codex thread can already be running a native compact/review turn.
+    // Starting an OpenClaw turn before that native turn completes can wedge the
+    // accepted turn behind a completion event we intentionally ignore.
+    embeddedAgentLog.info(
+      "codex app-server resumed thread has active native turn; waiting before turn/start",
+      { threadId: thread.threadId, activeTurnIds: activeNativeTurnIds },
+    );
+    void emitCodexAppServerEvent(params, {
+      stream: "codex_app_server.lifecycle",
+      data: {
+        phase: "turn_start_waiting_for_native_turn",
+        threadId: thread.threadId,
+        activeTurnIds: activeNativeTurnIds,
+      },
+    });
+    const nativeTurnCompleted = await waitForActiveNativeTurnCompletion(activeNativeTurnIds);
+    if (!nativeTurnCompleted && !runAbortController.signal.aborted) {
+      embeddedAgentLog.warn(
+        "codex app-server active native turn did not complete before turn/start wait timed out",
+        { threadId: thread.threadId, activeTurnIds: activeNativeTurnIds },
+      );
+    }
+  }
+  try {
+    codexModelCallDiagnostics.emitStarted();
+    runAgentHarnessLlmInputHook({
+      event: buildLlmInputEvent(),
+      ctx: hookContext,
+      hookRunner,
+    });
+    void emitCodexAppServerEvent(params, {
       stream: "codex_app_server.lifecycle",
       data: { phase: "turn_starting", threadId: thread.threadId },
     });
     turn = await startCodexTurn();
   } catch (error) {
     let turnStartError = error;
+    if (isCodexActiveCompactTurnError(turnStartError)) {
+      // Codex native compaction returns before its compact turn finishes. If
+      // the next OpenClaw turn collides with that compact turn, wait for the
+      // terminal notification and retry once instead of surfacing drift.
+      embeddedAgentLog.info(
+        "codex app-server turn/start blocked by active compact turn; waiting to retry",
+        { threadId: thread.threadId },
+      );
+      const compactTurnCompleted = await waitForActiveNativeTurnCompletion();
+      if (compactTurnCompleted && !runAbortController.signal.aborted) {
+        void emitCodexAppServerEvent(params, {
+          stream: "codex_app_server.lifecycle",
+          data: { phase: "turn_start_retry_after_compact", threadId: thread.threadId },
+        });
+        try {
+          turn = await startCodexTurn();
+        } catch (retryError) {
+          turnStartError = retryError;
+        }
+      }
+    }
     if (
-      shouldRetryContextEngineTurnOnFreshCodexThread({
+      turn === undefined &&
+      shouldUseFreshCodexThreadAfterContextEngineOverflow({
         error: turnStartError,
         contextEngineActive: Boolean(activeContextEngine),
         thread,
       }) &&
       restartContextEngineCodexThread
     ) {
+      // Do not try to pre-compact or summarize through OpenClaw here. Codex owns
+      // automatic compaction; OpenClaw may only discard a stale projection thread
+      // and let Codex start cleanly.
       embeddedAgentLog.warn(
         "codex app-server context-engine turn overflowed on resume; retrying with fresh thread",
         {
@@ -1512,16 +2551,70 @@ export async function runCodexAppServerAttempt(
           error: formatErrorMessage(turnStartError),
         },
       );
-      await clearCodexAppServerBinding(params.sessionFile);
-      thread = await restartContextEngineCodexThread();
-      emitCodexAppServerEvent(params, {
-        stream: "codex_app_server.lifecycle",
-        data: { phase: "thread_ready_retry", threadId: thread.threadId },
-      });
       try {
-        turn = await startCodexTurn();
-      } catch (retryError) {
-        turnStartError = retryError;
+        const preRetrySessionFile = activeSessionFile;
+        const clearedPreRetryBinding = await clearCodexAppServerBindingForThread(
+          preRetrySessionFile,
+          thread.threadId,
+        );
+        const clearedActiveBinding =
+          activeSessionFile !== preRetrySessionFile
+            ? await clearCodexAppServerBindingForThread(activeSessionFile, thread.threadId)
+            : false;
+        if (!clearedPreRetryBinding && !clearedActiveBinding) {
+          embeddedAgentLog.warn(
+            "codex app-server preserved newer context-engine binding after resume overflow; skipping fresh retry",
+            {
+              threadId: thread.threadId,
+              error: formatErrorMessage(turnStartError),
+            },
+          );
+        } else {
+          thread = await restartContextEngineCodexThread();
+          // The fresh retry thread was not bootstrapped with the
+          // context-engine projection. Clear the stale projection from
+          // the saved binding so the next run will re-project instead
+          // of assuming the old epoch is still in the thread.
+          {
+            const retryBinding = await readCodexAppServerBinding(activeSessionFile);
+            if (
+              retryBinding &&
+              retryBinding.threadId === thread.threadId &&
+              retryBinding.contextEngine?.projection
+            ) {
+              const {
+                schemaVersion: _schemaVersion,
+                sessionFile: _boundSessionFile,
+                updatedAt: _updatedAt,
+                ...bindingForWrite
+              } = retryBinding;
+              await writeCodexAppServerBinding(activeSessionFile, {
+                ...bindingForWrite,
+                contextEngine: bindingForWrite.contextEngine
+                  ? { ...bindingForWrite.contextEngine, projection: undefined }
+                  : undefined,
+              });
+              embeddedAgentLog.info(
+                "codex app-server cleared stale context-engine projection after overflow retry",
+                {
+                  threadId: thread.threadId,
+                  previousEpoch: retryBinding.contextEngine.projection.epoch,
+                },
+              );
+            }
+          }
+          void emitCodexAppServerEvent(params, {
+            stream: "codex_app_server.lifecycle",
+            data: { phase: "thread_ready_retry", threadId: thread.threadId },
+          });
+          try {
+            turn = await startCodexTurn();
+          } catch (retryError) {
+            turnStartError = retryError;
+          }
+        }
+      } catch (retrySetupError) {
+        turnStartError = retrySetupError;
       }
     }
     if (turn === undefined) {
@@ -1533,7 +2626,14 @@ export async function runCodexAppServerAttempt(
         signal: runAbortController.signal,
       });
       const turnStartErrorMessage = usageLimitError?.message ?? formatErrorMessage(turnStartError);
-      emitCodexAppServerEvent(params, {
+      if (isInvalidCodexImagePayloadError(turnStartErrorMessage)) {
+        await clearCodexBindingAfterInvalidImagePayload(activeSessionFile, {
+          phase: "turn_start",
+          threadId: thread.threadId,
+          error: turnStartErrorMessage,
+        });
+      }
+      void emitCodexAppServerEvent(params, {
         stream: "codex_app_server.lifecycle",
         data: { phase: "turn_start_failed", error: turnStartErrorMessage },
       });
@@ -1544,13 +2644,14 @@ export async function runCodexAppServerAttempt(
         aborted: runAbortController.signal.aborted,
         promptError: turnStartErrorMessage,
       });
-      trajectoryEndRecorded = true;
+      markTrajectoryEndRecorded();
       runAgentHarnessLlmOutputHook({
         event: {
           runId: params.runId,
           sessionId: params.sessionId,
           provider: params.provider,
           model: params.modelId,
+          ...hookContextWindowFields,
           resolvedRef:
             params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
           ...(params.runtimePlan?.observability.harnessId
@@ -1559,8 +2660,26 @@ export async function runCodexAppServerAttempt(
           assistantTexts: [],
         },
         ctx: hookContext,
+        hookRunner,
       });
-      runAgentHarnessAgentEndHook({
+      const turnStartFailureKind = classifyCodexModelCallFailureKind({
+        error: turnStartError,
+        timedOut,
+        turnCompletionIdleTimedOut,
+        runAborted: runAbortController.signal.aborted,
+        abortReason: runAbortController.signal.reason,
+        clientClosedAbort,
+        formatError: formatErrorMessage,
+      });
+      codexModelCallDiagnostics.emitError(
+        turnStartErrorMessage,
+        turnStartFailureKind ? { failureKind: turnStartFailureKind } : {},
+      );
+      const turnStartFailureMessages = [
+        ...historyMessages,
+        buildCodexUserPromptMessage({ ...params, prompt: codexTurnPromptText }),
+      ];
+      await runCodexAgentEndHook(params, {
         event: {
           messages: turnStartFailureMessages,
           success: false,
@@ -1568,10 +2687,18 @@ export async function runCodexAppServerAttempt(
           durationMs: Date.now() - attemptStartedAt,
         },
         ctx: hookContext,
+        hookRunner,
       });
+      if (!timedOut) {
+        await unsubscribeCodexThreadBestEffort(client, {
+          threadId: thread.threadId,
+          timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+        });
+      }
       notificationCleanup();
       requestCleanup();
       nativeHookRelay?.unregister();
+      await releaseSandboxExecEnvironment();
       await runAgentCleanupStep({
         runId: params.runId,
         sessionId: params.sessionId,
@@ -1582,29 +2709,35 @@ export async function runCodexAppServerAttempt(
         },
       });
       params.abortSignal?.removeEventListener("abort", abortFromUpstream);
+      await releaseSharedClientLeaseAndRetireOneShotClient();
       if (usageLimitError) {
         await markCodexAuthProfileBlockedFromRateLimits({
           params,
           authProfileId: startupAuthProfileId,
           rateLimits: usageLimitError.rateLimitsForProfile,
         });
-        return buildCodexTurnStartFailureResult({
-          params,
-          message: usageLimitError.message,
-          messagesSnapshot: turnStartFailureMessages,
-          systemPromptReport,
-        });
+        return {
+          ...buildCodexTurnStartFailureResult({
+            params,
+            message: usageLimitError.message,
+            messagesSnapshot: turnStartFailureMessages,
+            systemPromptReport,
+          }),
+        };
       }
       throw turnStartError;
     }
   }
   if (!turn) {
+    await releaseSharedClientLeaseAndRetireOneShotClient();
     throw new Error("codex app-server turn/start failed without an error");
   }
-  turnId = turn.turn.id;
+  turnIdRef.current = turn.turn.id;
   const activeTurnId = turn.turn.id;
+  let assistantStreamEventEmitted = false;
+  let assistantStreamNeedsTerminalSnapshot = false;
   emitExecutionPhaseOnce("turn_accepted", { phase: "turn_accepted" });
-  userInputBridge = createCodexUserInputBridge({
+  userInputBridgeRef.current = createCodexUserInputBridge({
     paramsForRun: params,
     threadId: thread.threadId,
     turnId: activeTurnId,
@@ -1613,15 +2746,70 @@ export async function runCodexAppServerAttempt(
   trajectoryRecorder?.recordEvent("prompt.submitted", {
     threadId: thread.threadId,
     turnId: activeTurnId,
-    prompt: promptBuild.prompt,
+    prompt: codexTurnPromptText,
     imagesCount: params.images?.length ?? 0,
   });
-  projector = new CodexAppServerEventProjector(params, thread.threadId, activeTurnId, {
-    nativePostToolUseRelayEnabled:
-      nativeHookRelay?.allowedEvents.includes("post_tool_use") === true,
+  projectorRef.current = new CodexAppServerEventProjector(
+    {
+      ...dynamicToolParams,
+      onAgentEvent: (event) => {
+        if (event.stream === "assistant" && typeof event.data.delta === "string") {
+          assistantStreamEventEmitted = true;
+          assistantStreamNeedsTerminalSnapshot ||= event.data.replaceable === true;
+        }
+        return dynamicToolParams.onAgentEvent?.(event);
+      },
+    },
+    thread.threadId,
+    activeTurnId,
+    {
+      nativePostToolUseRelayEnabled:
+        nativeHookRelay?.allowedEvents.includes("post_tool_use") === true &&
+        nativeHookRelay.shouldRelayEvent("post_tool_use"),
+      trajectoryRecorder,
+      onNativeToolResultRecorded: maybeAnnounceFastModeAutoOff,
+    },
+  );
+  if (
+    isTerminalTurnStatus(turn.turn.status) ||
+    pendingNotifications.some((notification) =>
+      isTerminalTurnNotificationForTurn(notification, activeTurnId),
+    )
+  ) {
+    terminalTurnNotificationQueued = true;
+  }
+  const closeCleanup: (() => void) | undefined = (
+    client as {
+      addCloseHandler?: (handler: (client: CodexAppServerClient) => void) => () => void;
+    }
+  ).addCloseHandler?.(() => {
+    if (completed || terminalTurnNotificationQueued || runAbortController.signal.aborted) {
+      return;
+    }
+    clientClosedPromptError = "codex app-server client closed before turn completed";
+    trajectoryRecorder?.recordEvent("turn.client_closed", {
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+    });
+    embeddedAgentLog.warn("codex app-server client closed before turn completed", {
+      threadId: thread.threadId,
+      turnId: activeTurnId,
+    });
+    clientClosedAbort = true;
+    runAbortController.abort("client_closed");
+    completed = true;
+    turnWatches.clearAllTimers();
+    resolveCompletion?.();
   });
   emitLifecycleStart();
-  const activeProjector = projector;
+  const activeProjector = projectorRef.current;
+  if (!activeProjector) {
+    throw new Error("codex app-server projector was not initialized");
+  }
+  turnWatches.armTerminalIdleWatch();
+  turnWatches.touchActivity("turn:start", { arm: true });
+  turnWatches.armAttemptIdleWatch();
+  turnWatches.touchActivity("turn:start", { attemptProgress: true });
   for (const notification of pendingNotifications.splice(0)) {
     await enqueueNotification(notification);
   }
@@ -1640,46 +2828,53 @@ export async function runCodexAppServerAttempt(
     client,
     threadId: thread.threadId,
     turnId: activeTurnId,
-    answerPendingUserInput: (text) => userInputBridge?.handleQueuedMessage(text) ?? false,
+    answerPendingUserInput: (text) =>
+      userInputBridgeRef.current?.handleQueuedMessage(text) ?? false,
     signal: runAbortController.signal,
   });
-  steeringQueue = activeSteeringQueue;
+  steeringQueueRef.current = activeSteeringQueue;
   const handle = {
     kind: "embedded" as const,
-    queueMessage: async (text: string, options?: CodexSteeringQueueOptions) =>
-      activeSteeringQueue.queue(text, options),
-    isStreaming: () => !completed,
-    isCompacting: () => projector?.isCompacting() ?? false,
+    queueMessage: async (text: string, optionsLocal?: CodexSteeringQueueOptions) =>
+      activeSteeringQueue.queue(text, optionsLocal),
+    isStreaming: () => !completed && !runAbortController.signal.aborted,
+    isCompacting: () => projectorRef.current?.isCompacting() ?? false,
+    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
     cancel: () => runAbortController.abort("cancelled"),
     abort: () => runAbortController.abort("aborted"),
   };
   setActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
-  turnTerminalIdleWatchArmed = true;
-  touchTurnCompletionActivity("turn:start");
-
-  const timeout = setTimeout(
-    () => {
-      timedOut = true;
-      projector?.markTimedOut();
-      runAbortController.abort("timeout");
-    },
-    Math.max(100, params.timeoutMs),
-  );
+  const notifyUserMessagePersisted = createCodexAppServerUserMessagePersistenceNotifier(params);
+  void mirrorPromptAtTurnStartBestEffort({
+    params,
+    agentId: sessionAgentId,
+    notifyUserMessagePersisted,
+    sessionKey: sandboxSessionKey,
+    cwd: effectiveCwd,
+    threadId: thread.threadId,
+    turnId: activeTurnId,
+  });
 
   const abortListener = () => {
     const shouldRetireClient = timedOut;
+    if (shouldRetireClient) {
+      void (async () => {
+        // Timed-out native turns cannot be safely resumed on the same thread.
+        await clearCodexAppServerBindingForThread(activeSessionFile, thread.threadId);
+        await retireCodexAppServerClientAfterTimedOutTurn(client, {
+          threadId: thread.threadId,
+          turnId: activeTurnId,
+          reason: String(runAbortController.signal.reason ?? "timeout"),
+        });
+      })().finally(() => {
+        resolveCompletion?.();
+      });
+      return;
+    }
     interruptCodexTurnBestEffort(client, {
       threadId: thread.threadId,
       turnId: activeTurnId,
-      timeoutMs: shouldRetireClient ? CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS : undefined,
     });
-    if (shouldRetireClient) {
-      retireCodexAppServerClientAfterTimedOutTurn(client, {
-        threadId: thread.threadId,
-        turnId: activeTurnId,
-        reason: String(runAbortController.signal.reason ?? "timeout"),
-      });
-    }
     resolveCompletion?.();
   };
   runAbortController.signal.addEventListener("abort", abortListener, { once: true });
@@ -1689,32 +2884,121 @@ export async function runCodexAppServerAttempt(
 
   try {
     await completion;
+    // Timeout completion can win while a received notification is still being
+    // projected, for example while persisting raw image-generation media. Wait
+    // for already-queued projection work so the final result includes artifacts
+    // from the notification that triggered the idle watchdog.
+    await notificationQueue;
     const result = activeProjector.buildResult(toolBridge.telemetry, { yieldDetected });
-    const finalAborted = result.aborted || runAbortController.signal.aborted;
-    let finalPromptError = turnCompletionIdleTimedOut
-      ? turnCompletionIdleTimeoutMessage
-      : timedOut
-        ? "codex app-server attempt timed out"
-        : result.promptError;
+    const finalAborted =
+      result.aborted || (runAbortController.signal.aborted && !clientClosedAbort);
+    const canUseCompletedAssistantTextAfterClientClose =
+      activeProjector.hasCompletedTerminalAssistantText() &&
+      activeAppServerTurnRequests === 0 &&
+      activeTurnItemIds.size === 0 &&
+      pendingOpenClawDynamicToolCompletionIds.size === 0;
+    const clientClosedPromptErrorForFinal =
+      clientClosedPromptError && canUseCompletedAssistantTextAfterClientClose
+        ? undefined
+        : clientClosedPromptError;
+    let finalPromptError =
+      clientClosedPromptErrorForFinal ??
+      (turnCompletionIdleTimedOut
+        ? turnCompletionIdleTimeoutMessage
+        : timedOut
+          ? "codex app-server attempt timed out"
+          : result.promptError);
     const finalPromptErrorMessage =
       typeof finalPromptError === "string"
         ? finalPromptError
         : finalPromptError
           ? formatErrorMessage(finalPromptError)
           : undefined;
-    if (shouldRefreshCodexRateLimitsForUsageLimitMessage(finalPromptErrorMessage)) {
-      finalPromptError = await refreshCodexUsageLimitErrorMessage({
-        client,
-        source: {
-          message: finalPromptErrorMessage,
-          codexErrorInfo: "usageLimitExceeded",
-          rateLimits: readRecentCodexRateLimits(),
-        },
-        timeoutMs: appServer.requestTimeoutMs,
-        signal: runAbortController.signal,
+    if (isInvalidCodexImagePayloadError(finalPromptErrorMessage)) {
+      await clearCodexBindingAfterInvalidImagePayload(activeSessionFile, {
+        phase: "turn_completed",
+        threadId: thread.threadId,
+        turnId: activeTurnId,
+        error: finalPromptErrorMessage,
       });
     }
-    const finalPromptErrorSource = timedOut ? "prompt" : result.promptErrorSource;
+    if (
+      shouldUseFreshCodexThreadAfterContextEngineOverflow({
+        error: finalPromptError,
+        contextEngineActive: Boolean(activeContextEngine),
+        thread,
+      })
+    ) {
+      embeddedAgentLog.warn(
+        "codex app-server context-engine turn overflowed after resume; clearing thread binding for recovery",
+        {
+          threadId: thread.threadId,
+          turnId: activeTurnId,
+          error: finalPromptErrorMessage,
+        },
+      );
+      const preClearSessionFile = activeSessionFile;
+      await clearCodexAppServerBindingForThread(preClearSessionFile, thread.threadId);
+      if (activeSessionFile !== preClearSessionFile) {
+        await clearCodexAppServerBindingForThread(activeSessionFile, thread.threadId);
+      }
+    }
+    const refreshedUsageLimitPromptError = await refreshCodexUsageLimitPromptError({
+      client,
+      message: finalPromptErrorMessage,
+      timeoutMs: appServer.requestTimeoutMs,
+      signal: runAbortController.signal,
+    });
+    if (refreshedUsageLimitPromptError) {
+      finalPromptError = refreshedUsageLimitPromptError;
+    }
+    const finalPromptErrorSource =
+      timedOut || clientClosedPromptErrorForFinal ? "prompt" : result.promptErrorSource;
+    const codexAppServerFailureKind = clientClosedPromptErrorForFinal
+      ? "client_closed_before_turn_completed"
+      : turnCompletionIdleTimedOut
+        ? "turn_completion_idle_timeout"
+        : undefined;
+    const codexAppServerReplayBlockedReason = codexAppServerFailureKind
+      ? resolveCodexAppServerReplayBlockedReason(result)
+      : undefined;
+    const promptTimeoutOutcome = buildCodexAppServerPromptTimeoutOutcome({
+      result,
+      turnCompletionIdleTimedOut,
+      turnWatchTimeoutKind,
+    });
+    const codexAppServerFailureDiagnostics =
+      codexAppServerFailureKind === "turn_completion_idle_timeout" &&
+      turnWatchTimeoutKind === "completion"
+        ? buildCodexAppServerTimeoutDiagnostics({
+            idleMs: turnWatchTimeoutIdleMs,
+            timeoutMs: turnWatchTimeoutMs,
+            lastActivityReason: turnWatchTimeoutLastActivityReason,
+            details: turnWatchTimeoutDetails,
+          })
+        : undefined;
+    const modelCallFailureKind =
+      classifyCodexModelCallFailureKind({
+        error: finalPromptError,
+        timedOut,
+        turnCompletionIdleTimedOut,
+        runAborted: runAbortController.signal.aborted,
+        abortReason: runAbortController.signal.reason,
+        clientClosedAbort,
+        formatError: formatErrorMessage,
+      }) ?? (finalAborted ? "aborted" : undefined);
+    if (modelCallFailureKind) {
+      codexModelCallDiagnostics.emitError(
+        finalPromptError ?? "codex app-server attempt interrupted",
+        {
+          failureKind: modelCallFailureKind,
+        },
+      );
+    } else if (finalPromptError) {
+      codexModelCallDiagnostics.emitError(finalPromptError);
+    } else {
+      codexModelCallDiagnostics.emitCompleted(result);
+    }
     recordCodexTrajectoryCompletion(trajectoryRecorder, {
       attempt: params,
       result,
@@ -1731,18 +3015,25 @@ export async function runCodexAppServerAttempt(
       yieldDetected,
       promptError: normalizeCodexTrajectoryError(finalPromptError),
     });
-    trajectoryEndRecorded = true;
+    markTrajectoryEndRecorded();
     await mirrorTranscriptBestEffort({
       params,
       agentId: sessionAgentId,
+      notifyUserMessagePersisted,
       result,
-      sessionKey: sandboxSessionKey,
+      sessionKey: contextSessionKey,
+      cwd: effectiveCwd,
       threadId: thread.threadId,
       turnId: activeTurnId,
     });
     const terminalAssistantText = collectTerminalAssistantText(result);
-    if (terminalAssistantText && !finalAborted && !finalPromptError) {
-      emitCodexAppServerEvent(params, {
+    if (
+      terminalAssistantText &&
+      (!assistantStreamEventEmitted || assistantStreamNeedsTerminalSnapshot) &&
+      !finalAborted &&
+      !finalPromptError
+    ) {
+      void emitCodexAppServerEvent(params, {
         stream: "assistant",
         data: { text: terminalAssistantText },
       });
@@ -1759,31 +3050,43 @@ export async function runCodexAppServerAttempt(
       });
     }
     if (activeContextEngine) {
+      const activeContextEnginePluginIdLocal =
+        resolveContextEngineOwnerPluginId(activeContextEngine);
       const finalMessages =
-        (await readMirroredSessionHistoryMessages(params.sessionFile)) ??
+        (await readMirroredSessionHistoryMessages(activeTranscriptTarget)) ??
         historyMessages.concat(result.messagesSnapshot);
       await finalizeHarnessContextEngineTurn({
         contextEngine: activeContextEngine,
         promptError: Boolean(finalPromptError),
         aborted: finalAborted,
         yieldAborted: Boolean(result.yieldDetected),
-        sessionIdUsed: params.sessionId,
-        sessionKey: sandboxSessionKey,
-        sessionFile: params.sessionFile,
+        sessionIdUsed: activeSessionId,
+        sessionKey: contextSessionKey,
+        sessionFile: activeSessionFile,
         messagesSnapshot: finalMessages,
         prePromptMessageCount,
         tokenBudget: params.contextTokenBudget,
         runtimeContext: buildHarnessContextEngineRuntimeContextFromUsage({
-          attempt: runtimeParams,
+          attempt: buildActiveRunAttemptParams(),
           workspaceDir: effectiveWorkspace,
+          cwd: effectiveCwd,
           agentDir,
+          activeAgentId: sessionAgentId,
+          contextEnginePluginId: activeContextEnginePluginIdLocal,
           tokenBudget: params.contextTokenBudget,
           lastCallUsage: result.attemptUsage,
           promptCache: result.promptCache,
         }),
+        contextEngineHostSupport: CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+        providerId: params.provider,
+        requestedModelId: params.requestedModelId,
+        modelId: params.modelId,
+        fallbackReason: params.fallbackReason,
+        degradedReason: params.degradedReason,
         runMaintenance: runHarnessContextEngineMaintenance,
         config: params.config,
         warn: (message) => embeddedAgentLog.warn(message),
+        isHeartbeat: params.bootstrapContextRunKind === "heartbeat",
       });
     }
     runAgentHarnessLlmOutputHook({
@@ -1792,6 +3095,7 @@ export async function runCodexAppServerAttempt(
         sessionId: params.sessionId,
         provider: params.provider,
         model: params.modelId,
+        ...hookContextWindowFields,
         resolvedRef:
           params.runtimePlan?.observability.resolvedRef ?? `${params.provider}/${params.modelId}`,
         ...(params.runtimePlan?.observability.harnessId
@@ -1802,8 +3106,9 @@ export async function runCodexAppServerAttempt(
         ...(result.attemptUsage ? { usage: result.attemptUsage } : {}),
       },
       ctx: hookContext,
+      hookRunner,
     });
-    runAgentHarnessAgentEndHook({
+    await runCodexAgentEndHook(params, {
       event: {
         messages: result.messagesSnapshot,
         success: !finalAborted && !finalPromptError,
@@ -1811,27 +3116,75 @@ export async function runCodexAppServerAttempt(
         durationMs: Date.now() - attemptStartedAt,
       },
       ctx: hookContext,
+      hookRunner,
     });
+    const completedTurnStatus = activeProjector.getCompletedTurnStatus();
+    shouldDelayNativeHookRelayUnregister =
+      completedTurnStatus === "completed" &&
+      !timedOut &&
+      !runAbortController.signal.aborted &&
+      !finalAborted &&
+      !finalPromptError;
+    if (shouldDelayNativeHookRelayUnregister) {
+      await markCodexAppServerBindingCoveredThroughTurn({
+        sessionFile: params.sessionFile,
+        threadId: thread.threadId,
+        authProfileStore: params.authProfileStore,
+        agentDir: params.agentDir,
+        config: params.config,
+      });
+    }
     return {
       ...result,
       timedOut,
       aborted: finalAborted,
       promptError: finalPromptError,
       promptErrorSource: finalPromptErrorSource,
+      ...(codexAppServerFailureKind
+        ? {
+            codexAppServerFailure: {
+              kind: codexAppServerFailureKind,
+              ...(codexAppServerFailureKind === "turn_completion_idle_timeout" &&
+              turnWatchTimeoutKind
+                ? { turnWatchTimeoutKind }
+                : {}),
+              transport: appServer.start.transport,
+              threadId: thread.threadId,
+              turnId: activeTurnId,
+              replaySafe: codexAppServerReplayBlockedReason === undefined,
+              ...(codexAppServerReplayBlockedReason
+                ? { replayBlockedReason: codexAppServerReplayBlockedReason }
+                : {}),
+              ...(codexAppServerFailureDiagnostics
+                ? { diagnostics: codexAppServerFailureDiagnostics }
+                : {}),
+            },
+          }
+        : {}),
+      ...(promptTimeoutOutcome ? { promptTimeoutOutcome } : {}),
       systemPromptReport,
     };
   } finally {
+    if (params.isFinalFallbackAttempt !== false) {
+      await maybeEmitFastModeAutoResetBestEffort();
+    }
+    codexModelCallDiagnostics.emitError(
+      "codex app-server run completed without model-call terminal event",
+    );
     emitLifecycleTerminal({
       phase: "error",
       error: "codex app-server run completed without lifecycle terminal event",
     });
     if (trajectoryRecorder && !trajectoryEndRecorded) {
       trajectoryRecorder.recordEvent("session.ended", {
-        status: timedOut || runAbortController.signal.aborted ? "interrupted" : "cleanup",
+        status:
+          timedOut || (runAbortController.signal.aborted && !clientClosedAbort)
+            ? "interrupted"
+            : "cleanup",
         threadId: thread.threadId,
         turnId: activeTurnId,
         timedOut,
-        aborted: runAbortController.signal.aborted,
+        aborted: runAbortController.signal.aborted && !clientClosedAbort,
       });
     }
     await runAgentCleanupStep({
@@ -1844,591 +3197,39 @@ export async function runCodexAppServerAttempt(
       },
     });
     if (!timedOut && !runAbortController.signal.aborted) {
-      await steeringQueue?.flushPending();
+      await steeringQueueRef.current?.flushPending();
     }
-    userInputBridge?.cancelPending();
-    clearTimeout(timeout);
-    clearTurnCompletionIdleTimer();
-    clearTurnAssistantCompletionIdleTimer();
-    clearTurnTerminalIdleTimer();
+    if (!timedOut) {
+      await unsubscribeCodexThreadBestEffort(client, {
+        threadId: thread.threadId,
+        timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
+      });
+    }
+    userInputBridgeRef.current?.cancelPending();
+    turnWatches.clearAllTimers();
     notificationCleanup();
     requestCleanup();
-    nativeHookRelay?.unregister();
+    closeCleanup?.();
+    await releaseSharedClientLeaseAndRetireOneShotClient();
+    if (nativeHookRelay) {
+      if (shouldDelayNativeHookRelayUnregister) {
+        // Codex hook subprocesses can outlive a completed app-server turn by a
+        // few seconds. Keep the relay available briefly so late
+        // nativeHook.invoke RPCs can still reach before_tool_call enforcement.
+        scheduleCodexNativeHookRelayUnregister({
+          relay: nativeHookRelay,
+          hookTimeoutSec: options.nativeHookRelay?.hookTimeoutSec,
+        });
+      } else {
+        nativeHookRelay.unregister();
+      }
+    }
+    await releaseSandboxExecEnvironment();
     runAbortController.signal.removeEventListener("abort", abortListener);
     params.abortSignal?.removeEventListener("abort", abortFromUpstream);
-    steeringQueue?.cancel();
+    steeringQueueRef.current?.cancel();
     clearActiveEmbeddedRun(params.sessionId, handle, params.sessionKey);
   }
-}
-
-async function markCodexAuthProfileBlockedFromRateLimits(params: {
-  params: EmbeddedRunAttemptParams;
-  authProfileId?: string;
-  rateLimits?: JsonValue;
-}): Promise<void> {
-  const authProfileId = params.authProfileId?.trim();
-  if (!authProfileId || !params.params.authProfileStore) {
-    return;
-  }
-  const blockedUntil = resolveCodexUsageLimitResetAtMs(params.rateLimits);
-  if (!blockedUntil) {
-    return;
-  }
-  try {
-    await markAuthProfileBlockedUntil({
-      store: params.params.authProfileStore,
-      profileId: authProfileId,
-      blockedUntil,
-      source: "codex_rate_limits",
-      agentDir: params.params.agentDir,
-      runId: params.params.runId,
-      modelId: params.params.modelId,
-    });
-  } catch (error) {
-    embeddedAgentLog.debug("failed to mark Codex auth profile blocked from app-server limits", {
-      authProfileId,
-      error: formatErrorMessage(error),
-    });
-  }
-}
-
-function buildCodexTurnStartFailureResult(params: {
-  params: EmbeddedRunAttemptParams;
-  message: string;
-  messagesSnapshot: AgentMessage[];
-  systemPromptReport: ReturnType<typeof buildCodexSystemPromptReport>;
-}): EmbeddedRunAttemptResult {
-  return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    promptError: params.message,
-    promptErrorSource: "prompt",
-    sessionIdUsed: params.params.sessionId,
-    messagesSnapshot: params.messagesSnapshot,
-    assistantTexts: [],
-    toolMetas: [],
-    lastAssistant: undefined,
-    didSendViaMessagingTool: false,
-    messagingToolSentTexts: [],
-    messagingToolSentMediaUrls: [],
-    messagingToolSentTargets: [],
-    messagingToolSourceReplyPayloads: [],
-    cloudCodeAssistFormatError: false,
-    replayMetadata: {
-      hadPotentialSideEffects: false,
-      replaySafe: true,
-    },
-    itemLifecycle: {
-      startedCount: 0,
-      completedCount: 0,
-      activeCount: 0,
-    },
-    systemPromptReport: params.systemPromptReport,
-  };
-}
-
-async function handleDynamicToolCallWithTimeout(params: {
-  call: CodexDynamicToolCallParams;
-  toolBridge: Pick<CodexDynamicToolBridge, "handleToolCall">;
-  signal: AbortSignal;
-  timeoutMs: number;
-  onTimeout?: () => void;
-}): Promise<CodexDynamicToolCallResponse> {
-  if (params.signal.aborted) {
-    return failedDynamicToolResponse("OpenClaw dynamic tool call aborted before execution.");
-  }
-
-  const controller = new AbortController();
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
-  let resolveAbort: ((response: CodexDynamicToolCallResponse) => void) | undefined;
-  const abortFromRun = () => {
-    const message = "OpenClaw dynamic tool call aborted.";
-    controller.abort(params.signal.reason ?? new Error(message));
-    resolveAbort?.(failedDynamicToolResponse(message));
-  };
-  const abortPromise = new Promise<CodexDynamicToolCallResponse>((resolve) => {
-    resolveAbort = resolve;
-  });
-  const timeoutPromise = new Promise<CodexDynamicToolCallResponse>((resolve) => {
-    const timeoutMs = clampDynamicToolTimeoutMs(params.timeoutMs);
-    timeout = setTimeout(() => {
-      timedOut = true;
-      const timeoutDetails = formatDynamicToolTimeoutDetails({ call: params.call, timeoutMs });
-      controller.abort(new Error(timeoutDetails.responseMessage));
-      params.onTimeout?.();
-      embeddedAgentLog.warn("codex dynamic tool call timed out", {
-        ...timeoutDetails.meta,
-        consoleMessage: timeoutDetails.consoleMessage,
-      });
-      resolve(failedDynamicToolResponse(timeoutDetails.responseMessage));
-    }, timeoutMs);
-    timeout.unref?.();
-  });
-
-  try {
-    params.signal.addEventListener("abort", abortFromRun, { once: true });
-    if (params.signal.aborted) {
-      abortFromRun();
-    }
-    return await Promise.race([
-      params.toolBridge.handleToolCall(params.call, { signal: controller.signal }),
-      abortPromise,
-      timeoutPromise,
-    ]);
-  } catch (error) {
-    return failedDynamicToolResponse(error instanceof Error ? error.message : String(error));
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-    params.signal.removeEventListener("abort", abortFromRun);
-    resolveAbort = undefined;
-    if (!timedOut && !controller.signal.aborted) {
-      controller.abort(new Error("OpenClaw dynamic tool call finished."));
-    }
-  }
-}
-
-function failedDynamicToolResponse(message: string): CodexDynamicToolCallResponse {
-  return {
-    success: false,
-    contentItems: [{ type: "inputText", text: message }],
-  };
-}
-
-function resolveDynamicToolCallTimeoutMs(params: {
-  call: CodexDynamicToolCallParams;
-  config: EmbeddedRunAttemptParams["config"];
-}): number {
-  return clampDynamicToolTimeoutMs(
-    readDynamicToolCallTimeoutMs(params.call.arguments) ??
-      readConfiguredDynamicToolTimeoutMs(params.call.tool, params.config) ??
-      CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
-  );
-}
-
-function readDynamicToolCallTimeoutMs(value: JsonValue | undefined): number | undefined {
-  if (!isJsonObject(value)) {
-    return undefined;
-  }
-  return readPositiveFiniteTimeoutMs(value.timeoutMs);
-}
-
-function readConfiguredDynamicToolTimeoutMs(
-  toolName: string,
-  config: EmbeddedRunAttemptParams["config"],
-): number | undefined {
-  if (toolName === "image_generate") {
-    const imageGenerationModel = config?.agents?.defaults?.imageGenerationModel;
-    if (!imageGenerationModel || typeof imageGenerationModel !== "object") {
-      return undefined;
-    }
-    return readPositiveFiniteTimeoutMs(imageGenerationModel.timeoutMs);
-  }
-
-  if (toolName === "image") {
-    return (
-      readTimeoutSecondsAsMs(config?.tools?.media?.image?.timeoutSeconds) ??
-      CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS
-    );
-  }
-
-  return undefined;
-}
-
-function readTimeoutSecondsAsMs(value: unknown): number | undefined {
-  const seconds = readPositiveFiniteTimeoutMs(value);
-  return seconds === undefined ? undefined : seconds * 1000;
-}
-
-function readPositiveFiniteTimeoutMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
-}
-
-function clampDynamicToolTimeoutMs(timeoutMs: number): number {
-  return Math.max(1, Math.min(CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS, Math.floor(timeoutMs)));
-}
-
-function createCodexNativeHookRelay(params: {
-  options:
-    | {
-        enabled?: boolean;
-        ttlMs?: number;
-        gatewayTimeoutMs?: number;
-      }
-    | undefined;
-  events: readonly NativeHookRelayEvent[];
-  agentId: string | undefined;
-  sessionId: string;
-  sessionKey: string | undefined;
-  config: EmbeddedRunAttemptParams["config"];
-  runId: string;
-  attemptTimeoutMs: number;
-  startupTimeoutMs: number;
-  turnStartTimeoutMs: number;
-  signal: AbortSignal;
-}): NativeHookRelayRegistrationHandle | undefined {
-  if (params.options?.enabled === false) {
-    return undefined;
-  }
-  return registerNativeHookRelay({
-    provider: "codex",
-    relayId: buildCodexNativeHookRelayId({
-      agentId: params.agentId,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-    }),
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    sessionId: params.sessionId,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-    ...(params.config ? { config: params.config } : {}),
-    runId: params.runId,
-    allowedEvents: params.events,
-    ttlMs: resolveCodexNativeHookRelayTtlMs({
-      explicitTtlMs: params.options?.ttlMs,
-      attemptTimeoutMs: params.attemptTimeoutMs,
-      startupTimeoutMs: params.startupTimeoutMs,
-      turnStartTimeoutMs: params.turnStartTimeoutMs,
-    }),
-    signal: params.signal,
-    command: {
-      timeoutMs: params.options?.gatewayTimeoutMs,
-    },
-  });
-}
-
-function resolveCodexNativeHookRelayEvents(params: {
-  configuredEvents?: readonly NativeHookRelayEvent[];
-  appServer: Pick<CodexAppServerRuntimeOptions, "approvalPolicy">;
-}): readonly NativeHookRelayEvent[] {
-  if (params.configuredEvents?.length) {
-    return params.configuredEvents;
-  }
-  // Codex emits PermissionRequest before the app-server approval reviewer has
-  // resolved the command. In native approval modes, let Codex's app-server
-  // approval bridge own the real escalation instead of surfacing a stale
-  // pre-guardian OpenClaw plugin approval prompt.
-  return params.appServer.approvalPolicy === "never"
-    ? CODEX_NATIVE_HOOK_RELAY_EVENTS
-    : CODEX_NATIVE_HOOK_RELAY_EVENTS_WITH_APP_SERVER_APPROVALS;
-}
-
-function resolveCodexNativeHookRelayTtlMs(params: {
-  explicitTtlMs: number | undefined;
-  attemptTimeoutMs: number;
-  startupTimeoutMs: number;
-  turnStartTimeoutMs: number;
-}): number {
-  if (params.explicitTtlMs !== undefined) {
-    return params.explicitTtlMs;
-  }
-  const relayBudgetMs =
-    params.attemptTimeoutMs +
-    params.startupTimeoutMs +
-    params.turnStartTimeoutMs +
-    CODEX_NATIVE_HOOK_RELAY_TTL_GRACE_MS;
-  return Math.max(CODEX_NATIVE_HOOK_RELAY_MIN_TTL_MS, Math.floor(relayBudgetMs));
-}
-
-function buildCodexNativeHookRelayId(params: {
-  agentId: string | undefined;
-  sessionId: string;
-  sessionKey: string | undefined;
-}): string {
-  const hash = createHash("sha256");
-  hash.update("openclaw:codex:native-hook-relay:v1");
-  hash.update("\0");
-  hash.update(params.agentId?.trim() || "");
-  hash.update("\0");
-  hash.update(params.sessionKey?.trim() || params.sessionId);
-  return `codex-${hash.digest("hex").slice(0, 40)}`;
-}
-
-function interruptCodexTurnBestEffort(
-  client: CodexAppServerClient,
-  params: {
-    threadId: string;
-    turnId: string;
-    timeoutMs?: number;
-  },
-): void {
-  const requestOptions =
-    params.timeoutMs && Number.isFinite(params.timeoutMs) && params.timeoutMs > 0
-      ? { timeoutMs: params.timeoutMs }
-      : undefined;
-  const requestParams = { threadId: params.threadId, turnId: params.turnId };
-  try {
-    const interrupt = requestOptions
-      ? client.request("turn/interrupt", requestParams, requestOptions)
-      : client.request("turn/interrupt", requestParams);
-    void Promise.resolve(interrupt).catch((error: unknown) => {
-      embeddedAgentLog.debug("codex app-server turn interrupt failed during abort", { error });
-    });
-  } catch (error) {
-    embeddedAgentLog.debug("codex app-server turn interrupt failed during abort", { error });
-  }
-}
-
-function retireCodexAppServerClientAfterTimedOutTurn(
-  client: CodexAppServerClient,
-  params: {
-    threadId: string;
-    turnId: string;
-    reason: string;
-  },
-): void {
-  const clearedSharedClient = clearSharedCodexAppServerClientIfCurrent(client);
-  if (!clearedSharedClient) {
-    const close = (client as { close?: () => void }).close;
-    if (typeof close === "function") {
-      close.call(client);
-    }
-  }
-  embeddedAgentLog.warn("codex app-server client retired after timed-out turn", {
-    threadId: params.threadId,
-    turnId: params.turnId,
-    reason: params.reason,
-    clearedSharedClient,
-  });
-}
-
-type DynamicToolBuildParams = {
-  params: EmbeddedRunAttemptParams;
-  resolvedWorkspace: string;
-  effectiveWorkspace: string;
-  sandboxSessionKey: string;
-  sandbox: Awaited<ReturnType<typeof resolveSandboxContext>>;
-  runAbortController: AbortController;
-  sessionAgentId: string;
-  pluginConfig: CodexPluginConfig;
-  onYieldDetected: () => void;
-};
-
-function resolveOpenClawCodingToolsSessionKeys(
-  params: EmbeddedRunAttemptParams,
-  sandboxSessionKey: string,
-): Pick<OpenClawCodingToolsOptions, "sessionKey" | "runSessionKey"> {
-  return {
-    sessionKey: sandboxSessionKey,
-    runSessionKey:
-      params.sessionKey && params.sessionKey !== sandboxSessionKey ? params.sessionKey : undefined,
-  };
-}
-
-async function buildDynamicTools(input: DynamicToolBuildParams) {
-  const { params } = input;
-  if (params.disableTools || !supportsModelTools(params.model)) {
-    return [];
-  }
-  const modelHasVision = params.model.input?.includes("image") ?? false;
-  const agentDir = params.agentDir ?? resolveAgentDir(params.config ?? {}, input.sessionAgentId);
-  const createOpenClawCodingTools =
-    openClawCodingToolsFactoryForTests ??
-    (await import("openclaw/plugin-sdk/agent-harness")).createOpenClawCodingTools;
-  const sessionKeys = resolveOpenClawCodingToolsSessionKeys(params, input.sandboxSessionKey);
-  const allTools = createOpenClawCodingTools({
-    agentId: input.sessionAgentId,
-    ...buildEmbeddedAttemptToolRunContext(params),
-    exec: {
-      ...params.execOverrides,
-      elevated: params.bashElevated,
-    },
-    sandbox: input.sandbox,
-    messageProvider: params.messageChannel ?? params.messageProvider,
-    agentAccountId: params.agentAccountId,
-    messageTo: params.messageTo,
-    messageThreadId: params.messageThreadId,
-    groupId: params.groupId,
-    groupChannel: params.groupChannel,
-    groupSpace: params.groupSpace,
-    spawnedBy: params.spawnedBy,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-    senderIsOwner: params.senderIsOwner,
-    allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
-    ...sessionKeys,
-    sessionId: params.sessionId,
-    runId: params.runId,
-    agentDir,
-    workspaceDir: input.effectiveWorkspace,
-    spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
-      sandbox: input.sandbox,
-      resolvedWorkspace: input.resolvedWorkspace,
-    }),
-    config: params.config,
-    authProfileStore: params.authProfileStore,
-    abortSignal: input.runAbortController.signal,
-    modelProvider: params.model.provider,
-    modelId: params.modelId,
-    modelCompat:
-      params.model.compat && typeof params.model.compat === "object"
-        ? (params.model.compat as OpenClawCodingToolsOptions["modelCompat"])
-        : undefined,
-    modelApi: params.model.api,
-    modelContextWindowTokens: params.model.contextWindow,
-    modelAuthMode: resolveModelAuthMode(params.model.provider, params.config, undefined, {
-      workspaceDir: input.effectiveWorkspace,
-    }),
-    suppressManagedWebSearch: false,
-    currentChannelId: params.currentChannelId,
-    currentThreadTs: params.currentThreadTs,
-    currentMessageId: params.currentMessageId,
-    replyToMode: params.replyToMode,
-    hasRepliedRef: params.hasRepliedRef,
-    modelHasVision,
-    requireExplicitMessageTarget:
-      params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey),
-    sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
-    disableMessageTool: params.disableMessageTool,
-    forceMessageTool: shouldForceMessageTool(params),
-    enableHeartbeatTool: params.trigger === "heartbeat",
-    forceHeartbeatTool: params.trigger === "heartbeat",
-    onYield: (message) => {
-      input.onYieldDetected();
-      emitCodexAppServerEvent(params, {
-        stream: "codex_app_server.tool",
-        data: { name: "sessions_yield", message },
-      });
-      input.runAbortController.abort("sessions_yield");
-    },
-  });
-  const codexFilteredTools = filterCodexDynamicTools(allTools, input.pluginConfig);
-  const visionFilteredTools = filterToolsForVisionInputs(codexFilteredTools, {
-    modelHasVision,
-    hasInboundImages: (params.images?.length ?? 0) > 0,
-  });
-  const filteredTools = filterCodexDynamicToolsForAllowlist(visionFilteredTools, params.toolsAllow);
-  return normalizeAgentRuntimeTools({
-    runtimePlan: params.runtimePlan,
-    tools: filteredTools,
-    provider: params.provider,
-    config: params.config,
-    workspaceDir: input.effectiveWorkspace,
-    env: process.env,
-    modelId: params.modelId,
-    modelApi: params.model.api,
-    model: params.model,
-  });
-}
-
-function filterCodexDynamicToolsForAllowlist<T extends { name: string }>(
-  tools: T[],
-  toolsAllow?: string[],
-): T[] {
-  if (!toolsAllow || toolsAllow.length === 0) {
-    return tools;
-  }
-  const allowSet = new Set(
-    toolsAllow.map((name) => normalizeCodexDynamicToolName(name)).filter(Boolean),
-  );
-  return tools.filter((tool) => allowSet.has(normalizeCodexDynamicToolName(tool.name)));
-}
-
-function shouldForceMessageTool(params: EmbeddedRunAttemptParams): boolean {
-  return params.sourceReplyDeliveryMode === "message_tool_only";
-}
-
-function shouldProjectMirroredHistoryForCodexStart(params: {
-  startupBinding: CodexAppServerThreadBinding | undefined;
-  dynamicToolsFingerprint: string;
-  historyMessages: AgentMessage[];
-}): boolean {
-  if (!params.historyMessages.some((message) => message.role === "user")) {
-    return false;
-  }
-  if (!params.startupBinding?.threadId) {
-    return true;
-  }
-  return !areCodexDynamicToolFingerprintsCompatible({
-    previous: params.startupBinding.dynamicToolsFingerprint,
-    next: params.dynamicToolsFingerprint,
-  });
-}
-
-async function withCodexStartupTimeout<T>(params: {
-  timeoutMs: number;
-  signal: AbortSignal;
-  operation: () => Promise<T>;
-}): Promise<T> {
-  if (params.signal.aborted) {
-    throw new Error("codex app-server startup aborted");
-  }
-  let timeout: NodeJS.Timeout | undefined;
-  let abortCleanup: (() => void) | undefined;
-  try {
-    return await Promise.race([
-      params.operation(),
-      new Promise<never>((_, reject) => {
-        const rejectOnce = (error: Error) => {
-          if (timeout) {
-            clearTimeout(timeout);
-            timeout = undefined;
-          }
-          reject(error);
-        };
-        timeout = setTimeout(() => {
-          rejectOnce(new Error("codex app-server startup timed out"));
-        }, params.timeoutMs);
-        const abortListener = () => rejectOnce(new Error("codex app-server startup aborted"));
-        params.signal.addEventListener("abort", abortListener, { once: true });
-        abortCleanup = () => params.signal.removeEventListener("abort", abortListener);
-      }),
-    ]);
-  } finally {
-    if (timeout) {
-      clearTimeout(timeout);
-    }
-    abortCleanup?.();
-  }
-}
-
-function resolveCodexStartupTimeoutMs(params: {
-  timeoutMs: number;
-  timeoutFloorMs?: number;
-}): number {
-  return Math.max(
-    params.timeoutFloorMs ?? CODEX_APP_SERVER_STARTUP_TIMEOUT_FLOOR_MS,
-    params.timeoutMs,
-  );
-}
-
-function resolveCodexTurnCompletionIdleTimeoutMs(value: number | undefined): number {
-  if (value === undefined) {
-    return CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS;
-  }
-  if (!Number.isFinite(value)) {
-    return CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS;
-  }
-  return Math.max(1, Math.floor(value));
-}
-
-function resolveCodexTurnAssistantCompletionIdleTimeoutMs(value: number | undefined): number {
-  if (value === undefined) {
-    return CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS;
-  }
-  if (!Number.isFinite(value)) {
-    return CODEX_TURN_ASSISTANT_COMPLETION_IDLE_TIMEOUT_MS;
-  }
-  return Math.max(1, Math.floor(value));
-}
-
-function resolveCodexTurnTerminalIdleTimeoutMs(value: number | undefined): number {
-  if (value === undefined) {
-    return CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS;
-  }
-  if (!Number.isFinite(value)) {
-    return CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS;
-  }
-  return Math.max(1, Math.floor(value));
 }
 
 function readDynamicToolCallParams(
@@ -2437,690 +3238,74 @@ function readDynamicToolCallParams(
   return readCodexDynamicToolCallParams(value);
 }
 
-type CodexUsageLimitErrorSource = {
-  message?: string | null;
-  codexErrorInfo?: JsonValue | null;
-  rateLimits?: JsonValue;
-  rateLimitsTrustedForProfile?: boolean;
-};
-
-type CodexUsageLimitErrorResult = {
-  message: string;
-  rateLimitsForProfile?: JsonValue;
-};
-
-async function formatCodexTurnStartUsageLimitError(params: {
-  client: CodexAppServerClient;
-  error: unknown;
-  pendingNotifications: CodexServerNotification[];
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}): Promise<CodexUsageLimitErrorResult | undefined> {
-  return refreshCodexUsageLimitError({
-    client: params.client,
-    source: readCodexTurnStartUsageLimitErrorSource(params.error, params.pendingNotifications),
-    timeoutMs: params.timeoutMs,
-    signal: params.signal,
-  });
-}
-
-async function refreshCodexUsageLimitErrorMessage(params: {
-  client: CodexAppServerClient;
-  source: CodexUsageLimitErrorSource;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}): Promise<string | undefined> {
-  return (
-    await refreshCodexUsageLimitError({
-      client: params.client,
-      source: params.source,
-      timeoutMs: params.timeoutMs,
-      signal: params.signal,
-    })
-  )?.message;
-}
-
-async function refreshCodexUsageLimitError(params: {
-  client: CodexAppServerClient;
-  source: CodexUsageLimitErrorSource;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}): Promise<CodexUsageLimitErrorResult | undefined> {
-  const initialMessage = formatCodexUsageLimitErrorMessage(params.source);
-  if (!shouldRefreshCodexRateLimitsForUsageLimitMessage(initialMessage)) {
-    return initialMessage
-      ? {
-          message: initialMessage,
-          ...(params.source.rateLimitsTrustedForProfile
-            ? { rateLimitsForProfile: params.source.rateLimits }
-            : {}),
-        }
-      : undefined;
-  }
-  const rateLimits = await readCodexRateLimitsFromAppServerForUsageLimitError({
-    client: params.client,
-    timeoutMs: params.timeoutMs,
-    signal: params.signal,
-  });
-  if (!rateLimits) {
-    return initialMessage
-      ? {
-          message: initialMessage,
-          ...(params.source.rateLimitsTrustedForProfile
-            ? { rateLimitsForProfile: params.source.rateLimits }
-            : {}),
-        }
-      : undefined;
-  }
-  const refreshedMessage = formatCodexUsageLimitErrorMessage({
-    message: params.source.message,
-    codexErrorInfo: params.source.codexErrorInfo,
-    rateLimits,
-  });
-  const message = refreshedMessage ?? initialMessage;
-  return message ? { message, rateLimitsForProfile: rateLimits } : undefined;
-}
-
-async function readCodexRateLimitsFromAppServerForUsageLimitError(params: {
-  client: CodexAppServerClient;
-  timeoutMs?: number;
-  signal?: AbortSignal;
-}): Promise<JsonValue | undefined> {
-  if (params.signal?.aborted) {
-    return undefined;
-  }
-  try {
-    const rateLimits = await params.client.request(CODEX_CONTROL_METHODS.rateLimits, undefined, {
-      timeoutMs: resolveCodexUsageLimitRateLimitRefreshTimeoutMs(params.timeoutMs),
-      signal: params.signal,
-    });
-    rememberCodexRateLimits(rateLimits);
-    return rateLimits;
-  } catch (error) {
-    embeddedAgentLog.debug("codex app-server rate-limit refresh failed after usage-limit error", {
-      error: formatErrorMessage(error),
-    });
-    return undefined;
-  }
-}
-
-function resolveCodexUsageLimitRateLimitRefreshTimeoutMs(timeoutMs: number | undefined): number {
-  if (timeoutMs === undefined || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return CODEX_USAGE_LIMIT_RATE_LIMIT_REFRESH_TIMEOUT_MS;
-  }
-  return Math.max(100, Math.min(timeoutMs, CODEX_USAGE_LIMIT_RATE_LIMIT_REFRESH_TIMEOUT_MS));
-}
-
-function readCodexTurnStartUsageLimitErrorSource(
-  error: unknown,
-  pendingNotifications: CodexServerNotification[],
-): CodexUsageLimitErrorSource {
-  const notificationError = readLatestCodexErrorNotification(pendingNotifications);
-  const notificationRateLimits = readLatestRateLimitNotificationPayload(pendingNotifications);
-  const errorPayload = readCodexErrorPayload(error);
-  const rateLimits =
-    notificationRateLimits ?? errorPayload.rateLimits ?? readRecentCodexRateLimits();
-  return {
-    message: notificationError?.message ?? errorPayload.message ?? formatErrorMessage(error),
-    codexErrorInfo: notificationError?.codexErrorInfo ?? errorPayload.codexErrorInfo,
-    rateLimits,
-    rateLimitsTrustedForProfile:
-      notificationRateLimits !== undefined || errorPayload.rateLimits !== undefined,
-  };
-}
-
-function readLatestRateLimitNotificationPayload(
-  notifications: CodexServerNotification[],
-): JsonValue | undefined {
-  for (let index = notifications.length - 1; index >= 0; index -= 1) {
-    const notification = notifications[index];
-    if (notification?.method === "account/rateLimits/updated") {
-      rememberCodexRateLimits(notification.params);
-      return notification.params;
-    }
-  }
-  return undefined;
-}
-
-function readLatestCodexErrorNotification(
-  notifications: CodexServerNotification[],
-): { message?: string; codexErrorInfo?: JsonValue | null } | undefined {
-  for (let index = notifications.length - 1; index >= 0; index -= 1) {
-    const notification = notifications[index];
-    if (notification?.method !== "error" || !isJsonObject(notification.params)) {
-      continue;
-    }
-    const error = notification.params.error;
-    if (!isJsonObject(error)) {
-      continue;
-    }
-    return {
-      message: readString(error, "message"),
-      codexErrorInfo: error.codexErrorInfo,
-    };
-  }
-  return undefined;
-}
-
-function readCodexErrorPayload(error: unknown): {
-  message?: string;
-  codexErrorInfo?: JsonValue | null;
-  rateLimits?: JsonValue;
-} {
-  const message = error instanceof Error ? error.message : undefined;
-  if (!error || typeof error !== "object" || !("data" in error)) {
-    return { message };
-  }
-  const data = (error as { data?: unknown }).data as JsonValue | undefined;
-  if (!isJsonObject(data)) {
-    return { message };
-  }
-  const nestedError = isJsonObject(data.error) ? data.error : data;
-  const rateLimits = nestedError.rateLimits ?? data.rateLimits;
-  if (rateLimits !== undefined) {
-    rememberCodexRateLimits(rateLimits);
-  }
-  return {
-    message: readString(nestedError, "message") ?? message,
-    codexErrorInfo: nestedError.codexErrorInfo,
-    rateLimits,
-  };
-}
-
-function describeNotificationActivity(
-  notification: CodexServerNotification,
-): Record<string, unknown> | undefined {
-  if (!isJsonObject(notification.params)) {
-    return { lastNotificationMethod: notification.method };
-  }
-  if (notification.method !== "rawResponseItem/completed") {
-    return { lastNotificationMethod: notification.method };
-  }
-  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
-  if (!item) {
-    return { lastNotificationMethod: notification.method };
-  }
-  return {
-    lastNotificationMethod: notification.method,
-    lastNotificationItemId: readString(item, "id"),
-    lastNotificationItemType: readString(item, "type"),
-    lastNotificationItemRole: readString(item, "role"),
-    lastAssistantTextPreview: readRawAssistantTextPreview(item),
-  };
-}
-
-function updateActiveTurnItemIds(
-  notification: CodexServerNotification,
-  activeItemIds: Set<string>,
-): void {
-  if (notification.method !== "item/started" && notification.method !== "item/completed") {
-    return;
-  }
-  const itemId = readNotificationItemId(notification);
-  if (!itemId) {
-    return;
-  }
-  if (notification.method === "item/started") {
-    activeItemIds.add(itemId);
-    return;
-  }
-  activeItemIds.delete(itemId);
-}
-
-function isCompletedAssistantNotification(notification: CodexServerNotification): boolean {
-  if (!isJsonObject(notification.params)) {
-    return false;
-  }
-  if (notification.method !== "item/completed") {
-    return false;
-  }
-  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
-  return Boolean(
-    item &&
-    readString(item, "type") === "agentMessage" &&
-    readString(item, "phase") !== "commentary",
-  );
-}
-
-function shouldDisarmAssistantCompletionIdleWatch(notification: CodexServerNotification): boolean {
-  if (!isJsonObject(notification.params)) {
-    return false;
-  }
-  if (notification.method === "item/started") {
-    return true;
-  }
-  if (notification.method === "item/agentMessage/delta") {
-    return true;
-  }
-  return false;
-}
-
-function readNotificationItemId(notification: CodexServerNotification): string | undefined {
-  if (!isJsonObject(notification.params)) {
-    return undefined;
-  }
-  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
-  return (
-    (item ? readString(item, "id") : undefined) ??
-    readString(notification.params, "itemId") ??
-    readString(notification.params, "id")
-  );
-}
-
-function readRawAssistantTextPreview(item: JsonObject): string | undefined {
-  if (readString(item, "role") !== "assistant" || !Array.isArray(item.content)) {
-    return undefined;
-  }
-  const text = item.content
-    .flatMap((content) => {
-      if (!isJsonObject(content)) {
-        return [];
-      }
-      const contentText = readString(content, "text");
-      return contentText ? [contentText] : [];
-    })
-    .join("\n")
-    .trim();
-  if (!text) {
-    return undefined;
-  }
-  return text.length > 240 ? `${text.slice(0, 237)}...` : text;
-}
-
-function isTurnNotification(
-  value: JsonValue | undefined,
-  threadId: string,
-  turnId: string,
-): boolean {
-  if (!isJsonObject(value)) {
-    return false;
-  }
-  return readString(value, "threadId") === threadId && readNotificationTurnId(value) === turnId;
-}
-
-function isRetryableErrorNotification(value: JsonValue | undefined): boolean {
-  if (!isJsonObject(value)) {
-    return false;
-  }
-  return readBoolean(value, "willRetry") === true || readBoolean(value, "will_retry") === true;
-}
-
-function isTerminalTurnStatus(status: string | undefined): boolean {
-  return status === "completed" || status === "interrupted" || status === "failed";
-}
-
-function readNotificationTurnId(record: JsonObject): string | undefined {
-  return readString(record, "turnId") ?? readNestedTurnId(record);
-}
-
-function readNestedTurnId(record: JsonObject): string | undefined {
-  const turn = record.turn;
-  return isJsonObject(turn) ? readString(turn, "id") : undefined;
-}
-
-const CODEX_TURN_ABORT_MARKER_START = "<turn_aborted>";
-const CODEX_TURN_ABORT_MARKER_END = "</turn_aborted>";
-const CODEX_INTERRUPTED_USER_GUIDANCE =
-  "The user interrupted the previous turn on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
-const CODEX_INTERRUPTED_DEVELOPER_GUIDANCE =
-  "The previous turn was interrupted on purpose. Any running unified exec processes may still be running in the background. If any tools/commands were aborted, they may have partially executed.";
-
-function isCodexTurnAbortMarkerNotification(
-  notification: CodexServerNotification,
-  options: { currentPromptText?: string } = {},
-): boolean {
-  if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
-    return false;
-  }
-  const item = notification.params.item;
-  const role = isJsonObject(item) ? readString(item, "role") : undefined;
-  if (!isJsonObject(item) || (role !== "user" && role !== "developer")) {
-    return false;
-  }
-  const text = extractRawResponseItemText(item).trim();
-  if (role === "user" && text === options.currentPromptText?.trim()) {
-    return false;
-  }
-  const markerBody = readCodexTurnAbortMarkerBody(text);
-  return (
-    markerBody === CODEX_INTERRUPTED_USER_GUIDANCE ||
-    markerBody === CODEX_INTERRUPTED_DEVELOPER_GUIDANCE
-  );
-}
-
-function readCodexTurnAbortMarkerBody(text: string): string | undefined {
-  if (
-    !text.startsWith(CODEX_TURN_ABORT_MARKER_START) ||
-    !text.endsWith(CODEX_TURN_ABORT_MARKER_END)
-  ) {
-    return undefined;
-  }
-  return text
-    .slice(CODEX_TURN_ABORT_MARKER_START.length, -CODEX_TURN_ABORT_MARKER_END.length)
-    .trim();
-}
-
-function extractRawResponseItemText(item: JsonObject): string {
-  const content = item.content;
-  if (!Array.isArray(content)) {
-    return "";
-  }
-  return content
-    .flatMap((entry) => {
-      if (!isJsonObject(entry)) {
-        return [];
-      }
-      const type = readString(entry, "type");
-      if (type !== "input_text" && type !== "text") {
-        return [];
-      }
-      const text = readString(entry, "text");
-      return text ? [text] : [];
-    })
-    .join("");
-}
-
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
-}
-
-function readBoolean(record: JsonObject, key: string): boolean | undefined {
-  const value = record[key];
-  return typeof value === "boolean" ? value : undefined;
-}
-
-async function readMirroredSessionHistoryMessages(
+async function clearCodexBindingAfterInvalidImagePayload(
   sessionFile: string,
-): Promise<AgentMessage[] | undefined> {
-  const messages = await readCodexMirroredSessionHistoryMessages(sessionFile);
-  if (!messages) {
-    embeddedAgentLog.warn("failed to read mirrored session history for codex harness hooks", {
-      sessionFile,
-    });
-  }
-  return messages;
-}
-
-async function buildCodexWorkspaceBootstrapContext(params: {
-  params: EmbeddedRunAttemptParams;
-  resolvedWorkspace: string;
-  effectiveWorkspace: string;
-  sessionKey: string;
-  sessionAgentId: string;
-}): Promise<CodexWorkspaceBootstrapContext> {
-  try {
-    const bootstrapContext = await resolveBootstrapContextForRun({
-      workspaceDir: params.resolvedWorkspace,
-      config: params.params.config,
-      sessionKey: params.sessionKey,
-      sessionId: params.params.sessionId,
-      agentId: params.params.agentId ?? params.sessionAgentId,
-      warn: (message) => embeddedAgentLog.warn(message),
-      contextMode: params.params.bootstrapContextMode,
-      runKind: params.params.bootstrapContextRunKind,
-    });
-    const contextFiles = bootstrapContext.contextFiles.map((file) =>
-      remapCodexContextFilePath({
-        file,
-        sourceWorkspaceDir: params.resolvedWorkspace,
-        targetWorkspaceDir: params.effectiveWorkspace,
-      }),
+  fields: { phase: string; threadId?: string; turnId?: string; error?: string },
+): Promise<void> {
+  const currentBinding = await readCodexAppServerBinding(sessionFile);
+  if (fields.threadId && currentBinding && currentBinding.threadId !== fields.threadId) {
+    embeddedAgentLog.warn(
+      "codex app-server image payload error detected for unbound thread; preserving thread binding",
+      { ...fields, boundThreadId: currentBinding.threadId },
     );
-    return {
-      ...bootstrapContext,
-      contextFiles,
-      instructions: renderCodexWorkspaceBootstrapInstructions(contextFiles),
-    };
-  } catch (error) {
-    embeddedAgentLog.warn("failed to load codex workspace bootstrap instructions", { error });
-    return { bootstrapFiles: [], contextFiles: [] };
+    return;
   }
-}
-
-function buildCodexSystemPromptReport(params: {
-  attempt: EmbeddedRunAttemptParams;
-  sessionKey: string;
-  workspaceDir: string;
-  developerInstructions: string;
-  workspaceBootstrapContext: CodexWorkspaceBootstrapContext;
-  tools: CodexDynamicToolSpec[];
-}): CodexSystemPromptReport {
-  const toolEntries = params.tools.map(buildCodexToolReportEntry);
-  const schemaChars = toolEntries.reduce((sum, tool) => sum + tool.schemaChars, 0);
-  const projectContextChars = params.workspaceBootstrapContext.instructions?.length ?? 0;
-  const bootstrapMaxChars = readPositiveNumber(
-    params.attempt.config?.agents?.defaults?.bootstrapMaxChars,
+  embeddedAgentLog.warn(
+    "codex app-server image payload error detected; clearing thread binding",
+    fields,
   );
-  const bootstrapTotalMaxChars = readPositiveNumber(
-    params.attempt.config?.agents?.defaults?.bootstrapTotalMaxChars,
-  );
-  return {
-    source: "run",
-    generatedAt: Date.now(),
-    sessionId: params.attempt.sessionId,
-    sessionKey: params.sessionKey,
-    provider: params.attempt.provider,
-    model: params.attempt.modelId,
-    workspaceDir: params.workspaceDir,
-    ...(bootstrapMaxChars ? { bootstrapMaxChars } : {}),
-    ...(bootstrapTotalMaxChars ? { bootstrapTotalMaxChars } : {}),
-    systemPrompt: {
-      chars: params.developerInstructions.length,
-      projectContextChars,
-      nonProjectContextChars: Math.max(
-        0,
-        params.developerInstructions.length - projectContextChars,
-      ),
-    },
-    injectedWorkspaceFiles: buildCodexBootstrapInjectionStats({
-      bootstrapFiles: params.workspaceBootstrapContext.bootstrapFiles,
-      injectedFiles: params.workspaceBootstrapContext.contextFiles,
-    }),
-    skills: {
-      promptChars: 0,
-      entries: [],
-    },
-    tools: {
-      listChars: 0,
-      schemaChars,
-      entries: toolEntries,
-    },
-  };
+  await clearCodexAppServerBinding(sessionFile);
 }
 
-function buildCodexToolReportEntry(tool: CodexDynamicToolSpec): CodexToolReportEntry {
-  const summary = tool.description.trim();
-  if (tool.deferLoading === true) {
-    return {
-      name: tool.name,
-      summaryChars: summary.length,
-      schemaChars: 0,
-      propertiesCount: null,
-    };
-  }
-  return {
-    name: tool.name,
-    summaryChars: summary.length,
-    ...buildCodexToolSchemaStats(tool.inputSchema),
-  };
-}
-
-function buildCodexToolSchemaStats(
-  schema: JsonValue,
-): Pick<CodexToolReportEntry, "schemaChars" | "propertiesCount"> {
-  const schemaChars = (() => {
-    try {
-      return JSON.stringify(schema).length;
-    } catch {
-      return 0;
-    }
-  })();
-  const properties =
-    isJsonObject(schema) && isJsonObject(schema.properties) ? schema.properties : null;
-  return {
-    schemaChars,
-    propertiesCount: properties ? Object.keys(properties).length : null,
-  };
-}
-
-function buildCodexBootstrapInjectionStats(params: {
-  bootstrapFiles: CodexBootstrapFile[];
-  injectedFiles: EmbeddedContextFile[];
-}): CodexSystemPromptReport["injectedWorkspaceFiles"] {
-  const injectedByPath = new Map<string, string>();
-  const injectedByBaseName = new Map<string, string>();
-  for (const file of params.injectedFiles) {
-    const pathValue = readNonEmptyString(file.path);
-    if (!pathValue) {
-      continue;
-    }
-    if (!injectedByPath.has(pathValue)) {
-      injectedByPath.set(pathValue, file.content);
-    }
-    const baseName = path.posix.basename(pathValue.replaceAll("\\", "/"));
-    if (!injectedByBaseName.has(baseName)) {
-      injectedByBaseName.set(baseName, file.content);
-    }
-  }
-  return params.bootstrapFiles.map((file) => {
-    const pathValue = readNonEmptyString(file.path) ?? file.name;
-    const rawChars = file.missing ? 0 : (file.content ?? "").trimEnd().length;
-    const injected =
-      injectedByPath.get(pathValue) ??
-      injectedByPath.get(file.name) ??
-      injectedByBaseName.get(file.name);
-    const injectedChars = injected?.length ?? 0;
-    return {
-      name: file.name,
-      path: pathValue,
-      missing: file.missing,
-      rawChars,
-      injectedChars,
-      truncated: !file.missing && injectedChars < rawChars,
-    };
-  });
-}
-
-function readPositiveNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
-}
-
-function readNonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
-}
-
-function renderCodexWorkspaceBootstrapInstructions(
-  contextFiles: EmbeddedContextFile[],
-): string | undefined {
-  const files = contextFiles
-    .filter((file) => {
-      const baseName = getCodexContextFileBasename(file.path);
-      return baseName && !CODEX_NATIVE_PROJECT_DOC_BASENAMES.has(baseName);
-    })
-    .toSorted(compareCodexContextFiles);
-  if (files.length === 0) {
-    return undefined;
-  }
-  const hasSoulFile = files.some((file) => getCodexContextFileBasename(file.path) === "soul.md");
-  const lines = [
-    "OpenClaw loaded these user-editable workspace files. Treat them as project/user context. Codex loads AGENTS.md natively, so AGENTS.md is not repeated here.",
-    "",
-    "# Project Context",
-    "",
-    "The following project context files have been loaded:",
-  ];
-  if (hasSoulFile) {
-    lines.push("SOUL.md: persona/tone. Follow it unless higher-priority instructions override.");
-  }
-  lines.push("");
-  for (const file of files) {
-    lines.push(`## ${file.path}`, "", file.content, "");
-  }
-  return lines.join("\n").trim();
-}
-
-function remapCodexContextFilePath(params: {
-  file: EmbeddedContextFile;
-  sourceWorkspaceDir: string;
-  targetWorkspaceDir: string;
-}): EmbeddedContextFile {
-  const relativePath = path.relative(params.sourceWorkspaceDir, params.file.path);
-  if (
-    !relativePath ||
-    relativePath === ".." ||
-    relativePath.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relativePath) ||
-    params.sourceWorkspaceDir === params.targetWorkspaceDir
-  ) {
-    return params.file;
-  }
-  return {
-    ...params.file,
-    path: path.join(params.targetWorkspaceDir, relativePath),
-  };
-}
-
-function compareCodexContextFiles(left: EmbeddedContextFile, right: EmbeddedContextFile): number {
-  const leftPath = normalizeCodexContextFilePath(left.path);
-  const rightPath = normalizeCodexContextFilePath(right.path);
-  const leftBase = getCodexContextFileBasename(left.path);
-  const rightBase = getCodexContextFileBasename(right.path);
-  const leftOrder = CODEX_BOOTSTRAP_CONTEXT_ORDER.get(leftBase) ?? Number.MAX_SAFE_INTEGER;
-  const rightOrder = CODEX_BOOTSTRAP_CONTEXT_ORDER.get(rightBase) ?? Number.MAX_SAFE_INTEGER;
-  if (leftOrder !== rightOrder) {
-    return leftOrder - rightOrder;
-  }
-  if (leftBase !== rightBase) {
-    return leftBase.localeCompare(rightBase);
-  }
-  return leftPath.localeCompare(rightPath);
-}
-
-function normalizeCodexContextFilePath(filePath: string): string {
-  return filePath.trim().replaceAll("\\", "/").toLowerCase();
-}
-
-function getCodexContextFileBasename(filePath: string): string {
-  return normalizeCodexContextFilePath(filePath).split("/").pop() ?? "";
-}
-
-async function mirrorTranscriptBestEffort(params: {
-  params: EmbeddedRunAttemptParams;
-  agentId?: string;
-  result: EmbeddedRunAttemptResult;
-  sessionKey?: string;
+async function markCodexAppServerBindingCoveredThroughTurn(params: {
+  sessionFile: string;
   threadId: string;
-  turnId: string;
+  authProfileStore: EmbeddedRunAttemptParams["authProfileStore"];
+  agentDir?: string;
+  config?: EmbeddedRunAttemptParams["config"];
 }): Promise<void> {
-  try {
-    await mirrorCodexAppServerTranscript({
-      sessionFile: params.params.sessionFile,
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      messages: params.result.messagesSnapshot,
-      // Scope is thread-stable. Each entry in `messagesSnapshot` is tagged
-      // with a per-turn `attachCodexMirrorIdentity` value carrying its own
-      // turnId, so distinct turns produce distinct dedupe keys via the
-      // identity (not via the scope). Dropping `turnId` from the scope
-      // here is what lets a re-emitted prior-turn entry — which still
-      // carries its original `${turnId}:${kind}` identity — collide with
-      // its existing on-disk key and be a true no-op.
-      idempotencyScope: `codex-app-server:${params.threadId}`,
-      config: params.params.config,
-    });
-  } catch (error) {
-    embeddedAgentLog.warn("failed to mirror codex app-server transcript", { error });
+  const currentBinding = await readCodexAppServerBinding(params.sessionFile, {
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
+  if (!currentBinding || currentBinding.threadId !== params.threadId) {
+    return;
   }
+  const {
+    schemaVersion: _schemaVersion,
+    sessionFile: _boundSessionFile,
+    updatedAt: _updatedAt,
+    ...bindingForWrite
+  } = currentBinding;
+  await writeCodexAppServerBinding(params.sessionFile, bindingForWrite, {
+    authProfileStore: params.authProfileStore,
+    agentDir: params.agentDir,
+    config: params.config,
+  });
 }
 
 function isNonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-function shouldRetryContextEngineTurnOnFreshCodexThread(params: {
+function canAttributeUnscopedNativeResponseDeltaToThisTurn(client: CodexAppServerClient): boolean {
+  const activeLeases = client.getActiveSharedLeaseCountForUnscopedNotifications?.();
+  return activeLeases === undefined || activeLeases <= 1;
+}
+
+function isUnscopedCodexNotification(
+  correlation: ReturnType<typeof describeCodexNotificationCorrelation>,
+): boolean {
+  return (
+    !correlation.threadId &&
+    !correlation.turnId &&
+    !correlation.nestedTurnThreadId &&
+    !correlation.nestedTurnId
+  );
+}
+
+function shouldUseFreshCodexThreadAfterContextEngineOverflow(params: {
   error: unknown;
   contextEngineActive: boolean;
   thread: CodexAppServerThreadLifecycleBinding;
@@ -3142,46 +3327,108 @@ function isCodexContextWindowError(error: unknown): boolean {
   );
 }
 
-function readCodexNotificationItem(params: JsonValue | undefined): CodexThreadItem | undefined {
-  if (!isJsonObject(params) || !isJsonObject(params.item)) {
-    return undefined;
+function isCodexActiveCompactTurnError(error: unknown): boolean {
+  if (!(error instanceof CodexAppServerRpcError)) {
+    return false;
   }
-  const item = params.item;
-  return typeof item.id === "string" && typeof item.type === "string"
-    ? (item as CodexThreadItem)
+  const data = isJsonObject(error.data) ? error.data : undefined;
+  const codexErrorInfo = isJsonObject(data?.codexErrorInfo) ? data.codexErrorInfo : undefined;
+  const activeTurn = isJsonObject(codexErrorInfo?.activeTurnNotSteerable)
+    ? codexErrorInfo.activeTurnNotSteerable
     : undefined;
+  return activeTurn?.turnKind === "compact";
 }
 
-function codexExecutionToolName(item: CodexThreadItem): string | undefined {
-  if (item.type === "dynamicToolCall" && typeof item.tool === "string") {
-    return item.tool;
+function isCodexThreadTurnCompletedNotification(
+  notification: CodexServerNotification,
+  threadId: string,
+  turnIds?: ReadonlySet<string>,
+): boolean {
+  if (notification.method !== "turn/completed") {
+    return false;
   }
-  if (item.type === "mcpToolCall" && typeof item.tool === "string") {
-    const server = typeof item.server === "string" && item.server ? item.server : undefined;
-    return server ? `${server}.${item.tool}` : item.tool;
+  const correlation = describeCodexNotificationCorrelation(notification, { threadId });
+  if (!correlation.matchesActiveThread) {
+    return false;
   }
-  if (item.type === "commandExecution") {
-    return "bash";
-  }
-  if (item.type === "fileChange") {
-    return "apply_patch";
-  }
-  if (item.type === "webSearch") {
-    return "web_search";
-  }
-  return undefined;
+  const turnId = correlation.turnId ?? correlation.nestedTurnId;
+  return !turnIds || (turnId !== undefined && turnIds.has(turnId));
 }
 
 function joinPresentSections(...sections: Array<string | undefined>): string {
   return sections.filter((section): section is string => Boolean(section?.trim())).join("\n\n");
 }
 
-function prependCurrentTurnContext(
+function prependCurrentInboundContext(
   prompt: string,
-  context: EmbeddedRunAttemptParams["currentTurnContext"],
+  context: EmbeddedRunAttemptParams["currentInboundContext"],
 ): string {
   const text = context?.text.trim();
   return text ? [text, prompt].filter(Boolean).join("\n\n") : prompt;
+}
+
+function waitForCodexNotificationDispatchTurn(): Promise<void> {
+  return new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+function buildCodexAppServerTimeoutDiagnostics(params: {
+  idleMs?: number;
+  timeoutMs?: number;
+  lastActivityReason?: string;
+  details?: Record<string, unknown>;
+}): NonNullable<EmbeddedRunAttemptResult["codexAppServerFailure"]>["diagnostics"] {
+  const readString = (key: string) => {
+    const value = params.details?.[key];
+    return typeof value === "string" && value.trim() ? value : undefined;
+  };
+  const readNumber = (key: string) => {
+    const value = params.details?.[key];
+    return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  };
+  const readBoolean = (key: string) => {
+    const value = params.details?.[key];
+    return typeof value === "boolean" ? value : undefined;
+  };
+  return {
+    ...(params.idleMs !== undefined ? { idleMs: params.idleMs } : {}),
+    ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+    ...(params.lastActivityReason ? { lastActivityReason: params.lastActivityReason } : {}),
+    ...(readString("lastNotificationMethod")
+      ? { lastNotificationMethod: readString("lastNotificationMethod") }
+      : {}),
+    ...(readString("lastNotificationItemId")
+      ? { lastNotificationItemId: readString("lastNotificationItemId") }
+      : {}),
+    ...(readString("lastNotificationItemType")
+      ? { lastNotificationItemType: readString("lastNotificationItemType") }
+      : {}),
+    ...(readString("lastNotificationItemRole")
+      ? { lastNotificationItemRole: readString("lastNotificationItemRole") }
+      : {}),
+    ...(readString("lastAssistantTextPreview")
+      ? { lastAssistantTextPreview: readString("lastAssistantTextPreview") }
+      : {}),
+    ...(readNumber("activeAppServerTurnRequests") !== undefined
+      ? { activeAppServerTurnRequests: readNumber("activeAppServerTurnRequests") }
+      : {}),
+    ...(readNumber("activeTurnItemCount") !== undefined
+      ? { activeTurnItemCount: readNumber("activeTurnItemCount") }
+      : {}),
+    ...(readBoolean("terminalTurnNotificationQueued") !== undefined
+      ? { terminalTurnNotificationQueued: readBoolean("terminalTurnNotificationQueued") }
+      : {}),
+    ...(readBoolean("completionIdleWatchArmed") !== undefined
+      ? { completionIdleWatchArmed: readBoolean("completionIdleWatchArmed") }
+      : {}),
+    ...(readBoolean("assistantCompletionIdleWatchArmed") !== undefined
+      ? { assistantCompletionIdleWatchArmed: readBoolean("assistantCompletionIdleWatchArmed") }
+      : {}),
+    ...(readBoolean("terminalIdleWatchArmed") !== undefined
+      ? { terminalIdleWatchArmed: readBoolean("terminalIdleWatchArmed") }
+      : {}),
+  };
 }
 
 function handleApprovalRequest(params: {
@@ -3190,6 +3437,11 @@ function handleApprovalRequest(params: {
   paramsForRun: EmbeddedRunAttemptParams;
   threadId: string;
   turnId: string;
+  nativeHookRelay?: NativeHookRelayRegistrationHandle;
+  execPolicy?: Pick<OpenClawExecPolicyForCodexAppServer, "mode">;
+  execReviewerAgentId?: string;
+  internalExecAutoReview?: boolean;
+  autoApprove?: boolean;
   signal?: AbortSignal;
 }): Promise<JsonValue | undefined> {
   return handleCodexAppServerApprovalRequest({
@@ -3198,38 +3450,49 @@ function handleApprovalRequest(params: {
     paramsForRun: params.paramsForRun,
     threadId: params.threadId,
     turnId: params.turnId,
+    nativeHookRelay: params.nativeHookRelay,
+    execPolicy: params.execPolicy,
+    execReviewerAgentId: params.execReviewerAgentId,
+    internalExecAutoReview: params.internalExecAutoReview,
+    autoApprove: params.autoApprove,
     signal: params.signal,
   });
 }
 
-export const __testing = {
-  CODEX_DYNAMIC_TOOL_TIMEOUT_MS,
-  CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS,
-  CODEX_DYNAMIC_IMAGE_TOOL_TIMEOUT_MS,
-  CODEX_TURN_COMPLETION_IDLE_TIMEOUT_MS,
-  CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS,
-  createCodexSteeringQueue,
+function resolveCodexDynamicToolDirectNames(params: EmbeddedRunAttemptParams): string[] {
+  if (params.sourceReplyDeliveryMode !== "message_tool_only") {
+    return [];
+  }
+  return ["message"];
+}
+
+export const testing = {
   buildCodexNativeHookRelayId,
+  buildDeveloperInstructions,
   filterCodexDynamicTools,
   buildDynamicTools,
   filterCodexDynamicToolsForAllowlist,
-  filterToolsForVisionInputs,
-  handleDynamicToolCallWithTimeout,
-  remapCodexContextFilePath,
-  resolveDynamicToolCallTimeoutMs,
-  restrictCodexAppServerSandboxForOpenClawSandbox,
+  includeForcedCodexDynamicToolAllow,
+  resolveCodexDynamicToolsLoadingForModel,
+  resolveCodexAppServerHookChannelId,
+  buildCodexAppServerPromptTimeoutOutcome,
   resolveOpenClawCodingToolsSessionKeys,
+  shouldEnableCodexAppServerNativeToolSurface,
   shouldForceMessageTool,
-  setOpenClawCodingToolsFactoryForTests(factory: OpenClawCodingToolsFactory): void {
-    openClawCodingToolsFactoryForTests = factory;
+  resolveCodexDynamicToolDirectNames,
+  hasPendingDynamicToolTerminalDiagnostic,
+  toTranscriptToolResultForTests: toTranscriptToolResult,
+  withCodexStartupTimeout,
+  setOpenClawCodingToolsFactoryForTests,
+  resetOpenClawCodingToolsFactoryForTests,
+  async ensureCodexWorkspaceDirOnceForTests(workspaceDir: string): Promise<void> {
+    await ensureCodexWorkspaceDirOnce(workspaceDir);
   },
-  resetOpenClawCodingToolsFactoryForTests(): void {
-    openClawCodingToolsFactoryForTests = undefined;
+  resetEnsuredCodexWorkspaceDirsForTests(): void {
+    ensuredCodexWorkspaceDirs.clear();
   },
-  setCodexAppServerClientFactoryForTests(factory: CodexAppServerClientFactory): void {
-    testClientFactoryStorage.enterWith(factory);
-  },
-  resetCodexAppServerClientFactoryForTests(): void {
-    testClientFactoryStorage.enterWith(undefined);
-  },
+  flushPendingCodexNativeHookRelayUnregistersForTests,
+  clearPendingCodexNativeHookRelayUnregistersForTests,
+  resolveCodexNativeHookRelayUnregisterGraceMs,
 } as const;
+export { testing as __testing };

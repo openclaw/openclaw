@@ -1,3 +1,4 @@
+// Mattermost tests cover model picker plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -136,6 +137,37 @@ describe("Mattermost model picker", () => {
     expect(parseMattermostModelPickerContext({ action: "select" })).toBeNull();
   });
 
+  it("does not coerce partial page strings in signed picker contexts", () => {
+    expect(
+      parseMattermostModelPickerContext({
+        oc_model_picker: true,
+        action: "list",
+        ownerUserId: "user-1",
+        provider: "openai",
+        page: "+02",
+      }),
+    ).toEqual({
+      action: "list",
+      ownerUserId: "user-1",
+      provider: "openai",
+      page: 2,
+    });
+    expect(
+      parseMattermostModelPickerContext({
+        oc_model_picker: true,
+        action: "list",
+        ownerUserId: "user-1",
+        provider: "openai",
+        page: "2next",
+      }),
+    ).toEqual({
+      action: "list",
+      ownerUserId: "user-1",
+      provider: "openai",
+      page: 1,
+    });
+  });
+
   it("falls back to the routed agent default model when no override is stored", () => {
     const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "mm-model-picker-"));
     try {
@@ -178,6 +210,68 @@ describe("Mattermost model picker", () => {
           data: providerData,
         }),
       ).toBe("openai/gpt-5");
+    } finally {
+      fs.rmSync(testDir, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves current and parent model overrides from targeted session entries", () => {
+    const testDir = fs.mkdtempSync(path.join(os.tmpdir(), "mm-model-picker-"));
+    try {
+      const storePath = path.join(testDir, "{agentId}.json");
+      const supportStorePath = path.join(testDir, "support.json");
+      const parentSessionKey = "agent:support:mattermost:default:channel-1";
+      const childSessionKey = "agent:support:mattermost:default:child-with-explicit-parent";
+      const directSessionKey = "agent:support:mattermost:default:direct-1";
+      fs.writeFileSync(
+        supportStorePath,
+        JSON.stringify(
+          {
+            [parentSessionKey]: {
+              providerOverride: "anthropic",
+              modelOverride: "claude-sonnet-4-5",
+              sessionId: "parent-session",
+            },
+            [childSessionKey]: {
+              parentSessionKey,
+              sessionId: "child-session",
+            },
+            [directSessionKey]: {
+              providerOverride: "openai",
+              modelOverride: "gpt-5",
+              sessionId: "direct-session",
+            },
+          },
+          null,
+          2,
+        ),
+      );
+      const cfg: OpenClawConfig = {
+        session: {
+          store: storePath,
+        },
+      };
+
+      expect(
+        resolveMattermostModelPickerCurrentModel({
+          cfg,
+          route: {
+            agentId: "support",
+            sessionKey: directSessionKey,
+          },
+          data,
+        }),
+      ).toBe("openai/gpt-5");
+      expect(
+        resolveMattermostModelPickerCurrentModel({
+          cfg,
+          route: {
+            agentId: "support",
+            sessionKey: childSessionKey,
+          },
+          data,
+        }),
+      ).toBe("anthropic/claude-sonnet-4-5");
     } finally {
       fs.rmSync(testDir, { recursive: true, force: true });
     }

@@ -1,3 +1,4 @@
+// Memory Core tests cover manager.mistral provider plugin behavior.
 import type {
   OpenClawConfig,
   ResolvedMemorySearchConfig,
@@ -14,6 +15,7 @@ const DEFAULT_OLLAMA_EMBEDDING_MODEL = "nomic-embed-text";
 const DEFAULT_LMSTUDIO_EMBEDDING_MODEL = "text-embedding-nomic-embed-text-v1.5";
 
 vi.mock("./embeddings.js", () => ({
+  resolveEmbeddingProviderIndexIdentity: () => undefined,
   resolveEmbeddingProviderFallbackModel: (providerId: string, fallbackSourceModel: string) =>
     providerId === "ollama"
       ? DEFAULT_OLLAMA_EMBEDDING_MODEL
@@ -80,6 +82,7 @@ describe("memory manager mistral provider wiring", () => {
 
     const state = resolveMemoryProviderState({
       provider: mistralProvider,
+      requestedProvider: "mistral",
       runtime: mistralRuntime,
       fallbackFrom: undefined,
       fallbackReason: undefined,
@@ -102,6 +105,7 @@ describe("memory manager mistral provider wiring", () => {
     const mistralProvider = createProvider("mistral");
     const current = resolveMemoryProviderState({
       provider: createProvider("openai"),
+      requestedProvider: "openai",
       runtime: openAiRuntime,
       fallbackFrom: undefined,
       fallbackReason: undefined,
@@ -122,6 +126,30 @@ describe("memory manager mistral provider wiring", () => {
     expect(fallbackState.fallbackReason).toBe("forced test");
     expect(fallbackState.provider).toBe(mistralProvider);
     expect(fallbackState.providerRuntime).toBe(mistralRuntime);
+  });
+
+  it("clears provider unavailable reason after fallback activation", () => {
+    const fallbackState = applyMemoryFallbackProviderState({
+      current: resolveMemoryProviderState({
+        provider: null,
+        requestedProvider: "local",
+        fallbackFrom: undefined,
+        fallbackReason: undefined,
+        providerUnavailableReason: "Local embeddings degraded: worker crashed",
+        runtime: undefined,
+      }),
+      fallbackFrom: "local",
+      reason: "worker crashed",
+      result: {
+        provider: createProvider("openai"),
+        runtime: {
+          id: "openai",
+          cacheKeyData: { provider: "openai", model: "text-embedding-3-small" },
+        },
+      },
+    });
+
+    expect(fallbackState.providerUnavailableReason).toBeUndefined();
   });
 
   it("uses default ollama model when activating ollama fallback", () => {

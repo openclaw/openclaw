@@ -1,3 +1,4 @@
+// Covers provider auth choice selection for plugin-owned providers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,12 +11,17 @@ vi.mock("../commands/codex-runtime-plugin-install.js", () => ({
   ensureCodexRuntimePluginForModelSelection,
 }));
 
+const ensureCopilotRuntimePluginForModelSelection = vi.hoisted(() => vi.fn());
+vi.mock("../commands/copilot-runtime-plugin-install.js", () => ({
+  ensureCopilotRuntimePluginForModelSelection,
+}));
+
 const offerPostInstallMigrations = vi.hoisted(() => vi.fn());
 vi.mock("../wizard/setup.post-install-migration.js", () => ({
   offerPostInstallMigrations,
 }));
 
-const { __testing, applyAuthChoicePluginProvider } = await import("./provider-auth-choice.js");
+const { testing, applyAuthChoicePluginProvider } = await import("./provider-auth-choice.js");
 
 function buildProvider(): ProviderPlugin {
   return {
@@ -38,15 +44,23 @@ function buildProvider(): ProviderPlugin {
 
 describe("applyAuthChoicePluginProvider", () => {
   beforeEach(() => {
-    __testing.resetDepsForTest();
+    testing.resetDepsForTest();
     ensureCodexRuntimePluginForModelSelection.mockReset();
+    ensureCopilotRuntimePluginForModelSelection.mockReset();
+    ensureCopilotRuntimePluginForModelSelection.mockImplementation(
+      async ({ cfg }: { cfg: OpenClawConfig }) => ({
+        cfg,
+        required: false,
+        installed: false,
+      }),
+    );
     offerPostInstallMigrations.mockReset();
   });
 
   it("returns post-install Codex migration config when setting an OpenAI default model", async () => {
     const provider = buildProvider();
     const runProviderModelSelectedHook = vi.fn(async () => undefined);
-    __testing.setDepsForTest({
+    testing.setDepsForTest({
       loadPluginProviderRuntime: async () =>
         ({
           resolvePluginProviders: () => [provider],

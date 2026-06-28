@@ -1,3 +1,9 @@
+/**
+ * Provider API-key rotation wrapper.
+ * Runs provider calls across configured keys on rate-limit failures and keeps
+ * same-key transient retries separate from key rotation.
+ */
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
@@ -25,19 +31,10 @@ type ExecuteWithApiKeyRotationOptions<T> = {
 };
 
 function dedupeApiKeys(raw: string[]): string[] {
-  const seen = new Set<string>();
-  const keys: string[] = [];
-  for (const value of raw) {
-    const apiKey = value.trim();
-    if (!apiKey || seen.has(apiKey)) {
-      continue;
-    }
-    seen.add(apiKey);
-    keys.push(apiKey);
-  }
-  return keys;
+  return normalizeUniqueStringEntries(raw);
 }
 
+/** Collect primary and live-discovered provider keys in stable de-duped order. */
 export function collectProviderApiKeysForExecution(params: {
   provider: string;
   primaryApiKey?: string;
@@ -46,6 +43,10 @@ export function collectProviderApiKeysForExecution(params: {
   return dedupeApiKeys([primaryApiKey?.trim() ?? "", ...collectProviderApiKeys(provider)]);
 }
 
+/**
+ * Execute a provider operation with key rotation and optional same-key transient
+ * retries.
+ */
 export async function executeWithApiKeyRotation<T>(
   params: ExecuteWithApiKeyRotationOptions<T>,
 ): Promise<T> {
@@ -70,6 +71,8 @@ export async function executeWithApiKeyRotation<T>(
           : isApiKeyRateLimitError(message);
 
         if (rotateKey) {
+          // A rotation signal consumes the current key and moves to the next key
+          // without running same-key transient retry logic.
           if (apiKeyIndex + 1 >= keys.length) {
             break;
           }
@@ -93,6 +96,8 @@ export async function executeWithApiKeyRotation<T>(
         }
 
         const delayMs = resolveTransientProviderDelayMs(transientRetry, attemptNumber);
+        // Same-key transient retries are bounded by provider policy and keep the
+        // current key stable so auth rotation only handles key-specific failures.
         const sleep = transientRetry.sleep ?? sleepWithAbort;
         await sleep(delayMs, transientRetry.signal);
       }
@@ -102,5 +107,21 @@ export async function executeWithApiKeyRotation<T>(
   if (lastError === undefined) {
     throw new Error(`Failed to run API request for ${params.provider}.`);
   }
-  throw lastError;
+  throw toLintErrorObject(lastError, "Non-Error thrown");
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  // Preserve thrown object properties for callers/tests while still satisfying
+  // Error-only throw lint expectations.
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

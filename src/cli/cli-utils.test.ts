@@ -1,5 +1,7 @@
+// CLI utility tests cover shared command helpers, option parsing, and output formatting.
 import { Command } from "commander";
 import { describe, expect, it, vi } from "vitest";
+import { runCommandWithRuntime } from "./cli-utils.js";
 import { registerDnsCli } from "./dns-cli.js";
 import { parseByteSize } from "./parse-bytes.js";
 import { parseDurationMs } from "./parse-duration.js";
@@ -10,7 +12,7 @@ import {
 import { waitForever } from "./wait.js";
 
 describe("waitForever", () => {
-  it("creates an unref'ed interval and returns a pending promise", () => {
+  it("keeps the event loop alive (ref'd interval) and returns a pending promise", () => {
     const unref = vi.fn();
     const interval = { unref } as unknown as ReturnType<typeof setInterval>;
     const setIntervalSpy = vi.spyOn(global, "setInterval").mockReturnValue(interval);
@@ -20,11 +22,42 @@ describe("waitForever", () => {
       const [callback, delay] = setIntervalSpy.mock.calls[0] ?? [];
       expect(typeof callback).toBe("function");
       expect(delay).toBe(1_000_000);
-      expect(unref).toHaveBeenCalledTimes(1);
+      // Regression guard for the previous `.unref()` bug: an unref'd interval
+      // does NOT keep the event loop alive, so `await waitForever()` would
+      // exit immediately with code 13 ("unsettled top-level await"). The
+      // function must NOT unref the interval.
+      expect(unref).not.toHaveBeenCalled();
       expect(promise).toBeInstanceOf(Promise);
     } finally {
       setIntervalSpy.mockRestore();
     }
+  });
+});
+
+describe("runCommandWithRuntime", () => {
+  it("surfaces cause chains and error codes through the default runtime", async () => {
+    const messages: string[] = [];
+    const exits: number[] = [];
+    const cause = Object.assign(new Error("invalid onRequestStart method"), {
+      code: "UND_ERR_INVALID_ARG",
+    });
+    const fetchError = Object.assign(new TypeError("fetch failed"), { cause });
+
+    await runCommandWithRuntime(
+      {
+        error: (message) => messages.push(message),
+        exit: (code) => exits.push(code),
+      },
+      async () => {
+        throw fetchError;
+      },
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toContain("TypeError: fetch failed");
+    expect(messages[0]).toContain("invalid onRequestStart method");
+    expect(messages[0]).toContain("UND_ERR_INVALID_ARG");
+    expect(exits).toEqual([1]);
   });
 });
 
@@ -87,6 +120,25 @@ describe("dns cli", () => {
       log.mockRestore();
     }
   });
+
+  it.each(["foo/bar", "../../x", "evil\nrecords"])(
+    "rejects invalid --domain %j with explicit DNS-name diagnostic",
+    async (domain) => {
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      try {
+        const program = new Command();
+        registerDnsCli(program);
+        await expect(
+          program.parseAsync(["dns", "setup", "--domain", domain], { from: "user" }),
+        ).rejects.toThrow("wide-area discovery domain must be a valid DNS name");
+        const output = log.mock.calls.map((call) => call.join(" ")).join("\\n");
+        expect(output).not.toContain("No wide-area domain configured");
+        expect(output).not.toContain("DNS setup");
+      } finally {
+        log.mockRestore();
+      }
+    },
+  );
 });
 
 describe("parseByteSize", () => {
@@ -126,5 +178,10 @@ describe("parseDurationMs", () => {
   it("rejects invalid composite strings", () => {
     expect(() => parseDurationMs("1h30")).toThrow(/Invalid duration/);
     expect(() => parseDurationMs("1h-30m")).toThrow(/Invalid duration/);
+  });
+
+  it("rejects unsafe millisecond results", () => {
+    expect(() => parseDurationMs("9007199254740993ms")).toThrow(/Invalid duration/);
+    expect(() => parseDurationMs("9007199254740990ms10ms")).toThrow(/Invalid duration/);
   });
 });

@@ -1,3 +1,4 @@
+/** Covers synthetic and external auth provider refs from manifests and active registries. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type SyntheticAuthRegistrySnapshotResult = {
@@ -46,6 +47,7 @@ vi.mock("./manifest-registry-installed.js", () => ({
 
 import {
   resolveRuntimeExternalAuthProviderRefs,
+  resolveRuntimeSyntheticAuthProviderRefState,
   resolveRuntimeSyntheticAuthProviderRefs,
 } from "./synthetic-auth.runtime.js";
 
@@ -82,6 +84,34 @@ describe("synthetic auth runtime refs", () => {
       "remote-provider",
     ]);
     expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({});
+  });
+
+  it("loads manifest synthetic auth refs with the current runtime scope", () => {
+    const config = { plugins: { allow: ["external-local"] } };
+    const env = { OPENCLAW_HOME: "/tmp/openclaw-home" };
+    pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata.mockReturnValue({
+      source: "persisted",
+      snapshot: {
+        plugins: [{ syntheticAuthRefs: ["external-local"] }],
+      },
+      diagnostics: [],
+    });
+
+    expect(
+      resolveRuntimeSyntheticAuthProviderRefState({
+        config: config as never,
+        workspaceDir: "/tmp/workspace",
+        env,
+      }),
+    ).toEqual({
+      refs: ["external-local"],
+      complete: true,
+    });
+    expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).toHaveBeenCalledWith({
+      config,
+      workspaceDir: "/tmp/workspace",
+      env,
+    });
   });
 
   it("uses persisted registry external auth provider refs before the runtime registry exists", () => {
@@ -122,6 +152,10 @@ describe("synthetic auth runtime refs", () => {
     });
 
     expect(resolveRuntimeSyntheticAuthProviderRefs()).toStrictEqual([]);
+    expect(resolveRuntimeSyntheticAuthProviderRefState()).toStrictEqual({
+      refs: [],
+      complete: false,
+    });
   });
 
   it("does not derive the registry just to resolve external auth refs", () => {
@@ -132,6 +166,38 @@ describe("synthetic auth runtime refs", () => {
     });
 
     expect(resolveRuntimeExternalAuthProviderRefs()).toStrictEqual([]);
+    expect(pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a provided index with registry diagnostics as validated synthetic auth", () => {
+    const index = {
+      plugins: [{ syntheticAuthRefs: ["local-provider"] }],
+    };
+
+    expect(
+      resolveRuntimeSyntheticAuthProviderRefs({
+        index: index as unknown as NonNullable<
+          Parameters<typeof resolveRuntimeSyntheticAuthProviderRefs>[0]
+        >["index"],
+        registryDiagnostics: [{ code: "persisted-registry-missing" }],
+      }),
+    ).toStrictEqual([]);
+    expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
+  });
+
+  it("does not treat a provided index with registry diagnostics as validated external auth", () => {
+    const index = {
+      plugins: [{ syntheticAuthRefs: [] }],
+    };
+
+    expect(
+      resolveRuntimeExternalAuthProviderRefs({
+        index: index as unknown as NonNullable<
+          Parameters<typeof resolveRuntimeExternalAuthProviderRefs>[0]
+        >["index"],
+        registryDiagnostics: [{ code: "persisted-registry-missing" }],
+      }),
+    ).toStrictEqual([]);
     expect(pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex).not.toHaveBeenCalled();
   });
 
@@ -161,6 +227,7 @@ describe("synthetic auth runtime refs", () => {
         ],
         plugins: [
           {
+            syntheticAuthRefs: ["manifest-provider"],
             contracts: {
               externalAuthProviders: ["manifest-provider"],
             },
@@ -169,7 +236,15 @@ describe("synthetic auth runtime refs", () => {
       },
     });
 
-    expect(resolveRuntimeSyntheticAuthProviderRefs()).toEqual(["runtime-provider", "runtime-cli"]);
+    expect(resolveRuntimeSyntheticAuthProviderRefs()).toEqual([
+      "manifest-provider",
+      "runtime-provider",
+      "runtime-cli",
+    ]);
+    expect(resolveRuntimeSyntheticAuthProviderRefState()).toEqual({
+      refs: ["manifest-provider", "runtime-provider", "runtime-cli"],
+      complete: true,
+    });
     expect(pluginRegistryMocks.loadPluginRegistrySnapshotWithMetadata).not.toHaveBeenCalled();
   });
 
@@ -195,7 +270,7 @@ describe("synthetic auth runtime refs", () => {
           {
             backend: {
               id: "runtime-cli",
-              resolveExternalOAuthProfiles: () => [],
+              resolveExternalAuthProfiles: () => [],
             },
           },
         ],

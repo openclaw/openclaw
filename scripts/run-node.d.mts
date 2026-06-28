@@ -47,9 +47,14 @@ export function runNodeMain(params?: {
   fs?: unknown;
   stderr?: { write: (value: string) => void };
   process?: NodeJS.Process;
+  signalProcess?: (pid: number, signal?: NodeJS.Signals | number) => boolean | void;
   execPath?: string;
   cwd?: string;
   args?: string[];
   env?: NodeJS.ProcessEnv;
+  runRuntimePostBuild?: (params?: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+  }) => void | Promise<void>;
   platform?: NodeJS.Platform;
 }): Promise<number>;

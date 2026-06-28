@@ -1,5 +1,6 @@
+// HTTP endpoint adapter for invoking gateway tools from OpenAI-compatible clients.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -14,6 +15,7 @@ import { invokeGatewayTool, type ToolsInvokeInput } from "./tools-invoke-shared.
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
 
+/** Handle `/tools/invoke` requests and return false when another HTTP route should handle them. */
 export async function handleToolsInvokeHttpRequest(
   req: IncomingMessage,
   res: ServerResponse,
@@ -73,20 +75,15 @@ export async function handleToolsInvokeHttpRequest(
   const accountId = normalizeOptionalString(getHeader(req, "x-openclaw-account-id"));
   const agentTo = normalizeOptionalString(getHeader(req, "x-openclaw-message-to"));
   const agentThreadId = normalizeOptionalString(getHeader(req, "x-openclaw-thread-id"));
-  // Owner semantics intentionally follow the same shared-secret HTTP contract
-  // on this direct tool surface; SECURITY.md documents this as designed-as-is.
-  // Computed before resolveGatewayScopedTools so the message tool is created
-  // with the correct owner context and channel-action gates (e.g. Matrix set-profile)
-  // work correctly for both owner and non-owner callers.
   const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
   const outcome = await invokeGatewayTool({
     cfg,
     input: body,
-    senderIsOwner,
     messageChannel: messageChannel ?? undefined,
     accountId,
     agentTo,
     agentThreadId,
+    senderIsOwner,
     toolCallIdPrefix: "http",
   });
   if (outcome.ok) {

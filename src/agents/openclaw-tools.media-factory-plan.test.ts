@@ -1,31 +1,37 @@
+// Verifies optional media/PDF tool factory planning from plugin metadata and auth.
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setBundledPluginsDirOverrideForTest } from "../plugins/bundled-dir.js";
 import {
   clearCurrentPluginMetadataSnapshot,
+  getCurrentPluginMetadataSnapshot,
   setCurrentPluginMetadataSnapshot,
 } from "../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
 import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveOptionalMediaToolFactoryPlan } from "./openclaw-tools.media-factory-plan.js";
 import { DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY } from "./tool-policy.js";
+import { loadCapabilityMetadataSnapshot } from "./tools/manifest-capability-availability.js";
 import * as pdfModelConfigModule from "./tools/pdf-tool.model-config.js";
 
 type CreateOpenClawToolsOptions = Parameters<
   typeof import("./openclaw-tools.js").createOpenClawTools
 >[0];
+let createOpenClawToolsForTestModule: typeof import("./openclaw-tools.js").createOpenClawTools;
+let legacyComfyToolNames: string[];
 
 async function createOpenClawToolsForTest(options?: CreateOpenClawToolsOptions) {
-  const { createOpenClawTools } = await import("./openclaw-tools.js");
-  return createOpenClawTools(options);
+  return createOpenClawToolsForTestModule(options);
 }
 
 function createAuthStore(providers: string[] = []): AuthProfileStore {
+  // Auth facts are provider-key based; profile ids only need deterministic defaults.
   return {
     version: 1,
     profiles: Object.fromEntries(
@@ -112,6 +118,7 @@ function installSnapshot(
     .map((plugin) => plugin.id),
   workspaceDir?: string,
 ) {
+  // Builds the current plugin metadata snapshot used by factory planning.
   const snapshot = {
     policyHash: resolveInstalledPluginIndexPolicyHash(config),
     ...(workspaceDir ? { workspaceDir } : {}),
@@ -155,12 +162,36 @@ function installSnapshot(
 }
 
 describe("optional media tool factory planning", () => {
+  beforeAll(async () => {
+    ({ createOpenClawTools: createOpenClawToolsForTestModule } =
+      await import("./openclaw-tools.js"));
+
+    const config = legacyModelProviderConfig({
+      workflow: { "1": { inputs: {} } },
+      promptNodeId: "1",
+    });
+    setBundledPluginsDirOverrideForTest(path.join(process.cwd(), "extensions"));
+    legacyComfyToolNames = (
+      await createOpenClawToolsForTest({
+        config,
+        authProfileStore: createAuthStore(),
+        pluginToolAllowlist: ["image_generate", "video_generate", "music_generate"],
+      })
+    ).map((tool) => tool.name);
+    clearCurrentPluginMetadataSnapshot();
+    resetPluginRuntimeStateForTest();
+    clearSecretsRuntimeSnapshot();
+    setBundledPluginsDirOverrideForTest(undefined);
+  });
+
   beforeEach(() => {
+    resetPluginRuntimeStateForTest();
     clearSecretsRuntimeSnapshot();
   });
 
   afterEach(() => {
     clearCurrentPluginMetadataSnapshot();
+    resetPluginRuntimeStateForTest();
     clearSecretsRuntimeSnapshot();
     setBundledPluginsDirOverrideForTest(undefined);
     vi.unstubAllEnvs();
@@ -202,6 +233,45 @@ describe("optional media tool factory planning", () => {
       musicGenerate: false,
       pdf: false,
     });
+  });
+
+  it("does not plan media factories from workspace-scoped metadata without workspace context", () => {
+    // Workspace snapshots are process-local facts and must not leak to unrelated runs.
+    const config: OpenClawConfig = {};
+    setBundledPluginsDirOverrideForTest("/nonexistent/bundled/plugins");
+    installSnapshot(
+      config,
+      [
+        createPlugin({
+          id: "image-owner",
+          contracts: { imageGenerationProviders: ["image-owner"] },
+          setupProviders: [{ id: "image-owner", envVars: ["IMAGE_OWNER_API_KEY"] }],
+        }),
+      ],
+      undefined,
+      "/workspace/a",
+    );
+    expect(getCurrentPluginMetadataSnapshot({ config })).toBeUndefined();
+    expect(
+      getCurrentPluginMetadataSnapshot({ config, workspaceDir: "/workspace/a" }),
+    ).toBeDefined();
+    expect(
+      loadCapabilityMetadataSnapshot({ config }).plugins.map((plugin) => plugin.id),
+    ).not.toContain("image-owner");
+
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        authStore: createAuthStore(["image-owner"]),
+      }).imageGenerate,
+    ).toBe(false);
+    expect(
+      resolveOptionalMediaToolFactoryPlan({
+        config,
+        workspaceDir: "/workspace/a",
+        authStore: createAuthStore(["image-owner"]),
+      }).imageGenerate,
+    ).toBe(true);
   });
 
   it("keeps explicit model configs on the factory path", () => {
@@ -545,13 +615,13 @@ describe("optional media tool factory planning", () => {
         contracts: { imageGenerationProviders: ["openai"] },
         imageGenerationProviderMetadata: {
           openai: {
-            aliases: ["openai-codex"],
+            aliases: ["openai"],
             authSignals: [
               {
                 provider: "openai",
               },
               {
-                provider: "openai-codex",
+                provider: "openai",
                 providerBaseUrl: {
                   provider: "openai",
                   defaultBaseUrl: "https://api.openai.com/v1",
@@ -567,7 +637,7 @@ describe("optional media tool factory planning", () => {
 
     const plan = resolveOptionalMediaToolFactoryPlan({
       config,
-      authStore: createAuthStore(["openai-codex"]),
+      authStore: createAuthStore(["openai"]),
     });
     expect(plan.imageGenerate).toBe(true);
     installSnapshot(config, plugins, undefined, process.cwd());
@@ -576,7 +646,7 @@ describe("optional media tool factory planning", () => {
         await createOpenClawToolsForTest({
           config,
           workspaceDir: process.cwd(),
-          authProfileStore: createAuthStore(["openai-codex"]),
+          authProfileStore: createAuthStore(["openai"]),
           pluginToolAllowlist: ["image_generate"],
         })
       ).map((tool) => tool.name),
@@ -852,19 +922,27 @@ describe("optional media tool factory planning", () => {
 
   it("does not register the image tool without cheap vision availability evidence", async () => {
     const config: OpenClawConfig = {};
-    installSnapshot(config, [
-      createPlugin({
-        id: "media-owner",
-        contracts: { mediaUnderstandingProviders: ["media-owner"] },
-        setupProviders: [{ id: "media-owner", envVars: ["MEDIA_OWNER_API_KEY"] }],
-      }),
-    ]);
+    const workspaceDir = "/tmp/openclaw-workspace";
+    vi.stubEnv("MEDIA_OWNER_API_KEY", "");
+    installSnapshot(
+      config,
+      [
+        createPlugin({
+          id: "media-owner",
+          contracts: { mediaUnderstandingProviders: ["media-owner"] },
+          setupProviders: [{ id: "media-owner", envVars: ["MEDIA_OWNER_API_KEY"] }],
+        }),
+      ],
+      undefined,
+      workspaceDir,
+    );
 
     expect(
       (
         await createOpenClawToolsForTest({
           config,
           agentDir: "/tmp/openclaw-agent",
+          workspaceDir,
           authProfileStore: createAuthStore(),
           disablePluginTools: true,
         })
@@ -879,6 +957,7 @@ describe("optional media tool factory planning", () => {
         workflow: { "1": { inputs: {} } },
         promptNodeId: "1",
       }),
+      expectedToolNames: () => legacyComfyToolNames,
     },
     {
       name: "plugin cloud API key config",
@@ -896,6 +975,7 @@ describe("optional media tool factory planning", () => {
           },
         },
       } satisfies OpenClawConfig,
+      expectedToolNames: undefined,
     },
     {
       name: "legacy cloud API key config",
@@ -905,19 +985,20 @@ describe("optional media tool factory planning", () => {
         workflow: { "1": { inputs: {} } },
         promptNodeId: "1",
       }),
+      expectedToolNames: undefined,
     },
   ])(
     "registers generation tools from Comfy $name without a current metadata snapshot",
-    async ({ config }) => {
-      setBundledPluginsDirOverrideForTest(path.join(process.cwd(), "extensions"));
-
-      const toolNames = (
-        await createOpenClawToolsForTest({
-          config,
-          authProfileStore: createAuthStore(),
-          pluginToolAllowlist: ["image_generate", "video_generate", "music_generate"],
-        })
-      ).map((tool) => tool.name);
+    async ({ config, expectedToolNames }) => {
+      const toolNames = expectedToolNames
+        ? expectedToolNames()
+        : (
+            await createOpenClawToolsForTest({
+              config,
+              authProfileStore: createAuthStore(),
+              pluginToolAllowlist: ["image_generate", "video_generate", "music_generate"],
+            })
+          ).map((tool) => tool.name);
 
       expect(toolNames).toContain("image_generate");
       expect(toolNames).toContain("video_generate");
@@ -942,10 +1023,10 @@ describe("optional media tool factory planning", () => {
         contracts: { imageGenerationProviders: ["openai"] },
         imageGenerationProviderMetadata: {
           openai: {
-            aliases: ["openai-codex"],
+            aliases: ["openai"],
             authSignals: [
               {
-                provider: "openai-codex",
+                provider: "openai",
                 providerBaseUrl: {
                   provider: "openai",
                   defaultBaseUrl: "https://api.openai.com/v1",
@@ -960,7 +1041,7 @@ describe("optional media tool factory planning", () => {
 
     const plan = resolveOptionalMediaToolFactoryPlan({
       config,
-      authStore: createAuthStore(["openai-codex"]),
+      authStore: createAuthStore(["openai"]),
     });
     expect(plan.imageGenerate).toBe(false);
   });

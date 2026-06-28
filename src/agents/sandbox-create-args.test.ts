@@ -1,3 +1,4 @@
+// Verifies Docker create arguments for sandbox hardening and configured passthrough.
 import { describe, expect, it } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
 import { buildSandboxCreateArgs } from "./sandbox/docker.js";
@@ -8,6 +9,7 @@ describe("buildSandboxCreateArgs", () => {
     overrides: Partial<SandboxDockerConfig> = {},
     binds?: string[],
   ): SandboxDockerConfig {
+    // Baseline config keeps each Docker argument case focused on one override.
     return {
       image: "openclaw-sandbox:bookworm-slim",
       containerPrefix: "openclaw-sbx-",
@@ -39,6 +41,7 @@ describe("buildSandboxCreateArgs", () => {
   }
 
   function valuesForFlag(args: string[], flag: string): string[] {
+    // Docker flags are positional, so collect repeated flag values for assertions.
     const values: string[] = [];
     for (let i = 0; i < args.length; i += 1) {
       if (args[i] === flag) {
@@ -120,10 +123,51 @@ describe("buildSandboxCreateArgs", () => {
     expectFlagValues(args, "--ulimit", ["nofile=1024:2048", "nproc=128", "core=0"]);
   });
 
-  it("preserves the OpenClaw exec marker when strict env sanitization is enabled", () => {
+  it("omits non-finite numeric Docker resource flags", () => {
+    const cfg = createSandboxConfig({
+      pidsLimit: Number.POSITIVE_INFINITY,
+      cpus: Number.NaN,
+      ulimits: {
+        nofile: {
+          soft: Number.NaN,
+          hard: Number.POSITIVE_INFINITY,
+        },
+        fsize: Number.NaN,
+        core: Number.POSITIVE_INFINITY,
+        nproc: {
+          soft: Number.NEGATIVE_INFINITY,
+          hard: 1024,
+        },
+      },
+    });
+
+    const args = buildSandboxCreateArgs({
+      name: "openclaw-sbx-non-finite-limits",
+      cfg,
+      scopeKey: "main",
+      createdAtMs: 1700000000000,
+    });
+
+    expect(args).not.toContain("--pids-limit");
+    expect(args).not.toContain("--cpus");
+    expectFlagValues(args, "--ulimit", ["nproc=1024"]);
+    expect(valuesForFlag(args, "--ulimit")).not.toContain("nofile=NaN:Infinity");
+    expect(valuesForFlag(args, "--ulimit")).not.toContain("fsize=NaN");
+    expect(valuesForFlag(args, "--ulimit")).not.toContain("core=Infinity");
+  });
+
+  it("passes explicit configured sandbox env through even when names look sensitive", () => {
     const cfg = createSandboxConfig({
       env: {
-        NODE_ENV: "test",
+        ANTHROPIC_ADMIN_KEY: "dummy-anthropic-admin-key",
+        GEMINI_API_KEY: "dummy-gemini-api-key",
+        GOOGLE_CLIENT_ID: "dummy-google-client-id",
+        GOOGLE_CLIENT_SECRET: "dummy-google-client-secret",
+        HIMALAYA_CONFIG: "dummy-himalaya-config",
+        HIMALAYA_PASSWORD: "dummy-himalaya-password",
+        OURA_CLIENT_ID: "dummy-oura-client-id",
+        OURA_CLIENT_SECRET: "dummy-oura-client-secret",
+        RESEND_API_KEY: "dummy-resend-api-key",
       },
     });
 
@@ -132,12 +176,20 @@ describe("buildSandboxCreateArgs", () => {
       cfg,
       scopeKey: "main",
       createdAtMs: 1700000000000,
-      envSanitizationOptions: {
-        strictMode: true,
-      },
     });
 
-    expectFlagValues(args, "--env", ["NODE_ENV=test", `OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE}`]);
+    expectFlagValues(args, "--env", [
+      "ANTHROPIC_ADMIN_KEY=dummy-anthropic-admin-key",
+      "GEMINI_API_KEY=dummy-gemini-api-key",
+      "GOOGLE_CLIENT_ID=dummy-google-client-id",
+      "GOOGLE_CLIENT_SECRET=dummy-google-client-secret",
+      "HIMALAYA_CONFIG=dummy-himalaya-config",
+      "HIMALAYA_PASSWORD=dummy-himalaya-password",
+      "OURA_CLIENT_ID=dummy-oura-client-id",
+      "OURA_CLIENT_SECRET=dummy-oura-client-secret",
+      "RESEND_API_KEY=dummy-resend-api-key",
+      `OPENCLAW_CLI=${OPENCLAW_CLI_ENV_VALUE}`,
+    ]);
   });
 
   it("emits Docker GPU passthrough as a separate argument", () => {
@@ -200,6 +252,12 @@ describe("buildSandboxCreateArgs", () => {
       containerName: "openclaw-sbx-dangerous-parent",
       cfg: createSandboxConfig({}, ["/run:/run"]),
       expected: /blocked path/,
+    },
+    {
+      name: "bind source covering Docker socket directory",
+      containerName: "openclaw-sbx-covers-docker-socket-dir",
+      cfg: createSandboxConfig({}, ["/var:/var"]),
+      expected: /covers blocked path/,
     },
     {
       name: "network host mode",

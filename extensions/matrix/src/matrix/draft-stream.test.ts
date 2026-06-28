@@ -1,3 +1,4 @@
+// Matrix tests cover draft stream plugin behavior.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 
@@ -202,6 +203,7 @@ describe("createMatrixDraftStream", () => {
       .mockImplementation((text: string) => (text ? [text] : []));
     convertMarkdownTablesMock.mockReset().mockImplementation((text: string) => text);
     sendModuleMocks.editMessageMatrix.mockClear();
+    sendModuleMocks.sendSingleTextMessageMatrix.mockClear();
   });
 
   afterEach(() => {
@@ -220,6 +222,11 @@ describe("createMatrixDraftStream", () => {
 
     expect(sendMessageMock).toHaveBeenCalledTimes(1);
     expect(sentContentAt(0).msgtype).toBe("m.text");
+    expect(sendModuleMocks.sendSingleTextMessageMatrix.mock.calls[0]?.[2]).toMatchObject({
+      includeMentions: false,
+      live: true,
+      msgtype: "m.text",
+    });
     expect(stream.eventId()).toBe("$evt1");
   });
 

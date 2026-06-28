@@ -1,3 +1,4 @@
+// Imessage plugin module implements parse notification behavior.
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { stripImessageLengthPrefixedUtf8Text } from "./strip-imsg-length-prefixed-text.js";
 import type { IMessagePayload } from "./types.js";
@@ -65,6 +66,7 @@ export function parseIMessageNotification(raw: unknown): IMessagePayload | null 
     !isOptionalNumber(message.chat_id) ||
     !isOptionalString(message.sender) ||
     !isOptionalString(message.destination_caller_id) ||
+    !isOptionalString(message.balloon_bundle_id) ||
     !isOptionalBoolean(message.is_from_me) ||
     !isOptionalString(message.text) ||
     !isOptionalStringOrNumber(message.reply_to_id) ||

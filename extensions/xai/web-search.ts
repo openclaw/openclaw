@@ -1,10 +1,10 @@
-import {
-  createWebSearchProviderContractFields,
-  type WebSearchProviderPlugin,
-  type WebSearchProviderSetupContext,
+// Xai plugin module implements web search behavior.
+import type {
+  WebSearchProviderPlugin,
+  WebSearchProviderSetupContext,
 } from "openclaw/plugin-sdk/provider-web-search-config-contract";
+import { buildXaiWebSearchProviderBase } from "./web-search-provider-shared.js";
 
-const XAI_CREDENTIAL_PATH = "plugins.entries.xai.config.webSearch.apiKey";
 type XaiWebSearchProviderRuntime = typeof import("./src/web-search-provider.runtime.js");
 
 let xaiWebSearchProviderRuntimePromise: Promise<XaiWebSearchProviderRuntime> | undefined;
@@ -37,22 +37,7 @@ async function runXaiSearchProviderSetup(
 
 export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
   return {
-    id: "grok",
-    label: "Grok (xAI)",
-    hint: "Requires xAI API key · xAI web-grounded responses",
-    onboardingScopes: ["text-inference"],
-    credentialLabel: "xAI API key",
-    envVars: ["XAI_API_KEY"],
-    placeholder: "xai-...",
-    signupUrl: "https://console.x.ai/",
-    docsUrl: "https://docs.openclaw.ai/tools/web",
-    autoDetectOrder: 30,
-    credentialPath: XAI_CREDENTIAL_PATH,
-    ...createWebSearchProviderContractFields({
-      credentialPath: XAI_CREDENTIAL_PATH,
-      searchCredential: { type: "scoped", scopeId: "grok" },
-      configuredCredential: { pluginId: "xai" },
-    }),
+    ...buildXaiWebSearchProviderBase(),
     runSetup: runXaiSearchProviderSetup,
     createTool: (ctx) => ({
       description:

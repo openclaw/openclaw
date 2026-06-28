@@ -1,7 +1,8 @@
+// Coordinates native approval delivery routing and notices.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
 import type {
   ChannelApprovalNativeDeliveryPlan,
   ChannelApprovalNativePlannedTarget,
@@ -266,6 +267,7 @@ function resolveApprovalRouteNotice(params: {
   };
 }
 
+/** Returns whether a native approval runtime is active for the requested channel/account scope. */
 export function hasActiveApprovalNativeRouteRuntime(params: {
   approvalKind: ChannelApprovalKind;
   channel?: string | null;
@@ -299,6 +301,7 @@ async function maybeFinalizeApprovalRouteNotice(approvalId: string): Promise<voi
   }
 
   entry.finalized = true;
+  // Only runtimes observed with the request can block finalization; later runtimes must not delay it.
   const reports = Array.from(entry.reports.values());
   const notice = resolveApprovalRouteNotice({
     approvalKind: entry.approvalKind,
@@ -324,6 +327,7 @@ async function maybeFinalizeApprovalRouteNotice(approvalId: string): Promise<voi
   }
 }
 
+/** Tracks native approval deliveries and sends origin-chat notices after all observed runtimes report. */
 export function createApprovalNativeRouteReporter(params: {
   handledKinds: ReadonlySet<ChannelApprovalKind>;
   channel?: string;
@@ -396,13 +400,13 @@ export function createApprovalNativeRouteReporter(params: {
       });
       registered = true;
     },
-    async reportSkipped(params: {
+    async reportSkipped(paramsValue: {
       approvalKind: ChannelApprovalKind;
       request: ApprovalRequest;
     }): Promise<void> {
       await report({
-        approvalKind: params.approvalKind,
-        request: params.request,
+        approvalKind: paramsValue.approvalKind,
+        request: paramsValue.request,
         deliveryPlan: {
           targets: [],
           originTarget: null,
@@ -411,13 +415,13 @@ export function createApprovalNativeRouteReporter(params: {
         deliveredTargets: [],
       });
     },
-    async reportDelivery(params: {
+    async reportDelivery(paramsLocal: {
       approvalKind: ChannelApprovalKind;
       request: ApprovalRequest;
       deliveryPlan: ChannelApprovalNativeDeliveryPlan;
       deliveredTargets: readonly ChannelApprovalNativePlannedTarget[];
     }): Promise<void> {
-      await report(params);
+      await report(paramsLocal);
     },
     async stop(): Promise<void> {
       if (!registered) {
@@ -437,6 +441,7 @@ export function createApprovalNativeRouteReporter(params: {
   };
 }
 
+/** Clears in-memory native approval route coordination state between tests. */
 export function clearApprovalNativeRouteStateForTest(): void {
   for (const approvalId of Array.from(pendingApprovalRouteNotices.keys())) {
     clearPendingApprovalRouteNotice(approvalId);

@@ -1,4 +1,6 @@
+// Duckduckgo tests cover ddg search provider plugin behavior.
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 import { createDuckDuckGoWebSearchProvider as createDuckDuckGoWebSearchContractProvider } from "../web-search-contract-api.js";
 import { DEFAULT_DDG_SAFE_SEARCH, resolveDdgRegion, resolveDdgSafeSearch } from "./config.js";
 
@@ -12,7 +14,7 @@ vi.mock("./ddg-client.js", () => ({
 
 describe("duckduckgo web search provider", () => {
   let createDuckDuckGoWebSearchProvider: typeof import("./ddg-search-provider.js").createDuckDuckGoWebSearchProvider;
-  let ddgClientTesting: typeof import("./ddg-client.js").__testing;
+  let ddgClientTesting: typeof import("./ddg-client.js").testing;
 
   afterAll(() => {
     vi.doUnmock("./ddg-client.js");
@@ -21,7 +23,7 @@ describe("duckduckgo web search provider", () => {
 
   beforeAll(async () => {
     ({ createDuckDuckGoWebSearchProvider } = await import("./ddg-search-provider.js"));
-    ({ __testing: ddgClientTesting } =
+    ({ testing: ddgClientTesting } =
       await vi.importActual<typeof import("./ddg-client.js")>("./ddg-client.js"));
     await import("../index.js");
   });
@@ -83,6 +85,42 @@ describe("duckduckgo web search provider", () => {
       region: "us-en",
       safeSearch: "off",
     });
+  });
+
+  it("rejects fractional and out-of-range counts before searching", async () => {
+    const provider = createDuckDuckGoWebSearchProvider();
+    const tool = provider.createTool({
+      config: { test: true },
+    } as never);
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+
+    await expect(tool.execute({ query: "openclaw docs", count: 4.5 })).rejects.toThrow(
+      "count must be an integer from 1 to 10.",
+    );
+    await expect(tool.execute({ query: "openclaw docs", count: 11 })).rejects.toThrow(
+      "count must be an integer from 1 to 10.",
+    );
+    expect(runDuckDuckGoSearch).not.toHaveBeenCalled();
+  });
+
+  it("bounds successful DuckDuckGo HTML bodies without using response.text()", async () => {
+    const streamed = createStreamingResponse({
+      chunkCount: 32,
+      chunkSize: 1024 * 1024,
+      text: "x",
+      headers: { "Content-Type": "text/html" },
+    });
+    const textSpy = vi.spyOn(streamed.response, "text").mockRejectedValue(new Error("unbounded"));
+
+    await expect(ddgClientTesting.readDuckDuckGoHtmlResponse(streamed.response)).rejects.toThrow(
+      "DuckDuckGo search: text response exceeds 16777216 bytes",
+    );
+
+    expect(streamed.getReadCount()).toBeLessThan(32);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
   });
 
   it("reads region from plugin config and normalizes empty values away", () => {
@@ -165,6 +203,31 @@ describe("duckduckgo web search provider", () => {
     expect(ddgClientTesting.decodeHtmlEntities("Fish &amp; Chips&nbsp;&hellip; &#39;ok&#39;")).toBe(
       "Fish & Chips ... 'ok'",
     );
+  });
+
+  it("leaves out-of-range numeric html entities intact instead of throwing", () => {
+    expect(() => ddgClientTesting.decodeHtmlEntities("Result &#99999999; end")).not.toThrow();
+    expect(ddgClientTesting.decodeHtmlEntities("Result &#99999999; end")).toBe(
+      "Result &#99999999; end",
+    );
+    expect(ddgClientTesting.decodeHtmlEntities("Hex &#x110000; tail")).toBe("Hex &#x110000; tail");
+    // Surrogate-range entities would decode to lone UTF-16 surrogates; keep them intact.
+    expect(ddgClientTesting.decodeHtmlEntities("Bad &#55296; end")).toBe("Bad &#55296; end");
+    expect(ddgClientTesting.decodeHtmlEntities("Bad &#xD800; end")).toBe("Bad &#xD800; end");
+    expect(ddgClientTesting.decodeHtmlEntities("Bad &#xDFFF; end")).toBe("Bad &#xDFFF; end");
+    // A valid supplementary-plane entity still decodes.
+    expect(ddgClientTesting.decodeHtmlEntities("Smile &#128512;")).toBe("Smile 😀");
+  });
+
+  it("does not double-decode escaped entities (decodes &amp; last)", () => {
+    // A result whose text literally shows "&lt;" arrives double-encoded as
+    // "&amp;lt;". Decoding &amp; first would re-decode it into "<", corrupting
+    // the snippet; &amp; must be decoded last.
+    expect(ddgClientTesting.decodeHtmlEntities("How to escape &amp;lt; in HTML")).toBe(
+      "How to escape &lt; in HTML",
+    );
+    expect(ddgClientTesting.decodeHtmlEntities("a&amp;#39;b")).toBe("a&#39;b");
+    expect(ddgClientTesting.decodeHtmlEntities("a&#x26;amp;b")).toBe("a&amp;b");
   });
 
   it("parses results when href appears before class", () => {

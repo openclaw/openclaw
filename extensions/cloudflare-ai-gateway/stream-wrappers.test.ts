@@ -1,7 +1,8 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
+// Cloudflare Ai Gateway tests cover stream wrappers plugin behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   createCloudflareAiGatewayAnthropicThinkingPrefillWrapper,
   wrapCloudflareAiGatewayProviderStream,
 } from "./stream-wrappers.js";
@@ -155,6 +156,6 @@ describe("wrapCloudflareAiGatewayProviderStream", () => {
   });
 
   it("treats missing model API as the plugin's default Anthropic Messages route", () => {
-    expect(__testing.shouldPatchAnthropicMessagesPayload({} as never)).toBe(true);
+    expect(testing.shouldPatchAnthropicMessagesPayload({} as never)).toBe(true);
   });
 });

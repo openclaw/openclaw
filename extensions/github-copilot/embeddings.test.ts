@@ -1,3 +1,4 @@
+// Github Copilot tests cover embeddings plugin behavior.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const resolveFirstGithubTokenMock = vi.hoisted(() => vi.fn());
@@ -46,19 +47,44 @@ function buildModelsResponse(models: Array<{ id: string; supported_endpoints?: u
   return { data: models };
 }
 
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
 function mockDiscoveryResponse(spec: {
   ok: boolean;
   status?: number;
   json?: unknown;
   text?: string;
 }) {
+  const status = spec.status ?? (spec.ok ? 200 : 500);
+  const response =
+    spec.json !== undefined
+      ? new Response(JSON.stringify(spec.json), {
+          status,
+          headers: { "Content-Type": "application/json" },
+        })
+      : new Response(spec.text ?? "", { status });
   fetchWithSsrFGuardMock.mockImplementationOnce(async () => ({
-    response: {
-      ok: spec.ok,
-      status: spec.status ?? (spec.ok ? 200 : 500),
-      json: async () => spec.json,
-      text: async () => spec.text ?? "",
-    },
+    response,
     release: vi.fn(async () => {}),
   }));
 }
@@ -115,6 +141,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.unstubAllGlobals();
     resolveConfiguredSecretInputStringMock.mockReset();
     resolveFirstGithubTokenMock.mockReset();
     resolveCopilotApiTokenMock.mockReset();
@@ -204,20 +231,73 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
 
   it("wraps invalid discovery JSON as a setup error", async () => {
     fetchWithSsrFGuardMock.mockImplementationOnce(async () => ({
-      response: {
-        ok: true,
+      response: new Response("not-valid-json{{{", {
         status: 200,
-        json: async () => {
-          throw new SyntaxError("bad json");
-        },
-        text: async () => "",
-      },
+        headers: { "Content-Type": "application/json" },
+      }),
       release: vi.fn(async () => {}),
     }));
 
     await expect(
       githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions()),
-    ).rejects.toThrow("GitHub Copilot model discovery returned invalid JSON");
+    ).rejects.toThrow("github-copilot.model-discovery: malformed JSON response");
+  });
+
+  it("bounds model discovery error bodies", async () => {
+    const tracked = cancelTrackedResponse(`${"discovery denied ".repeat(1024)}tail`, {
+      status: 503,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    fetchWithSsrFGuardMock.mockImplementationOnce(async () => ({
+      response: tracked.response,
+      release: vi.fn(async () => {}),
+    }));
+
+    let caught: Error | undefined;
+    try {
+      await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("GitHub Copilot model discovery HTTP 503");
+    expect(caught?.message).toContain("discovery denied");
+    expect(caught?.message).not.toContain("tail");
+    expect(caught?.message.length).toBeLessThan(8_300);
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it("bounds embeddings error bodies", async () => {
+    mockDiscoveryResponse({
+      ok: true,
+      json: buildModelsResponse([
+        { id: "text-embedding-3-small", supported_endpoints: ["/v1/embeddings"] },
+      ]),
+    });
+    const tracked = cancelTrackedResponse(`${"embedding denied ".repeat(1024)}tail`, {
+      status: 429,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    const fetchImpl = vi.fn(async () => tracked.response);
+    vi.stubGlobal("fetch", fetchImpl);
+    const result = await githubCopilotMemoryEmbeddingProviderAdapter.create(defaultCreateOptions());
+
+    let caught: Error | undefined;
+    try {
+      await result.provider?.embedQuery("hello");
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("GitHub Copilot embeddings HTTP 429");
+    expect(caught?.message).toContain("embedding denied");
+    expect(caught?.message).not.toContain("tail");
+    expect(caught?.message.length).toBeLessThan(8_300);
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
   });
 
   it("honors remote overrides when creating the provider", async () => {
@@ -244,6 +324,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
 
     const discoveryCall = firstDiscoveryRequest();
     expect(discoveryCall.url).toBe("https://proxy.example/v1/models");
+    expect(discoveryCall.init.headers["Accept-Encoding"]).toBe("identity");
     expect(discoveryCall.init.headers["X-Proxy-Token"]).toBe("proxy");
   });
 
@@ -278,7 +359,7 @@ describe("githubCopilotMemoryEmbeddingProviderAdapter", () => {
     ).toBe(true);
     expect(
       shouldContinueAutoSelection(
-        new Error("GitHub Copilot model discovery returned invalid JSON"),
+        new Error("github-copilot.model-discovery: malformed JSON response"),
       ),
     ).toBe(true);
     expect(shouldContinueAutoSelection(new Error("Network timeout"))).toBe(false);

@@ -46,49 +46,42 @@ See [Active Memory](/concepts/active-memory) for the activation model, plugin-ow
 
 ## Provider selection
 
-| Key        | Type      | Default          | Description                                                                                                                                                                                                                        |
-| ---------- | --------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `provider` | `string`  | auto-detected    | Embedding adapter ID such as `bedrock`, `deepinfra`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, or `voyage`; may also be a configured `models.providers.<id>` whose `api` points at one of those adapters |
-| `model`    | `string`  | provider default | Embedding model name                                                                                                                                                                                                               |
-| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                                                                                                                                         |
-| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                                                                                                                                    |
+| Key        | Type      | Default          | Description                                                                                                                                                                                                                                                                                 |
+| ---------- | --------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `provider` | `string`  | `"openai"`       | Embedding adapter ID such as `bedrock`, `deepinfra`, `gemini`, `github-copilot`, `local`, `mistral`, `ollama`, `openai`, `openai-compatible`, or `voyage`; may also be a configured `models.providers.<id>` whose `api` points at a memory embedding adapter or OpenAI-compatible model API |
+| `model`    | `string`  | provider default | Embedding model name                                                                                                                                                                                                                                                                        |
+| `fallback` | `string`  | `"none"`         | Fallback adapter ID when the primary fails                                                                                                                                                                                                                                                  |
+| `enabled`  | `boolean` | `true`           | Enable or disable memory search                                                                                                                                                                                                                                                             |
 
-### Auto-detection order
+When `provider` is not set, OpenClaw uses OpenAI embeddings. Set `provider`
+explicitly to use Gemini, Voyage, Mistral, DeepInfra, Bedrock, GitHub Copilot,
+Ollama, a local GGUF model, or an OpenAI-compatible `/v1/embeddings` endpoint.
+Legacy configs that still say `provider: "auto"` resolve to `openai`.
 
-When `provider` is not set, OpenClaw selects the first available:
+<Warning>
+Changing the embedding provider, model, provider settings, sources, scope,
+chunking, or tokenizer can make the existing SQLite vector index incompatible.
+OpenClaw pauses vector search and reports an index identity warning instead of
+automatically re-embedding everything. Rebuild when you are ready with
+`openclaw memory status --index --agent <id>` or
+`openclaw memory index --force --agent <id>`.
+</Warning>
 
-<Steps>
-  <Step title="local">
-    Selected if `memorySearch.local.modelPath` is configured and the file exists.
-  </Step>
-  <Step title="github-copilot">
-    Selected if a GitHub Copilot token can be resolved (env var or auth profile).
-  </Step>
-  <Step title="openai">
-    Selected if an OpenAI key can be resolved.
-  </Step>
-  <Step title="gemini">
-    Selected if a Gemini key can be resolved.
-  </Step>
-  <Step title="voyage">
-    Selected if a Voyage key can be resolved.
-  </Step>
-  <Step title="mistral">
-    Selected if a Mistral key can be resolved.
-  </Step>
-  <Step title="deepinfra">
-    Selected if a DeepInfra key can be resolved.
-  </Step>
-  <Step title="bedrock">
-    Selected if the AWS SDK credential chain resolves (instance role, access keys, profile, SSO, web identity, or shared config).
-  </Step>
-</Steps>
+When `provider` is unset, legacy `provider: "auto"` is present, or
+`provider: "none"` intentionally selects FTS-only mode, memory recall can still
+use lexical FTS ranking when embeddings are unavailable.
 
-`ollama` is supported but not auto-detected (set it explicitly).
+Explicit non-local providers fail closed. If you set `memorySearch.provider` to
+a concrete remote-backed provider such as OpenAI, Gemini, Voyage, Mistral,
+Bedrock, GitHub Copilot, DeepInfra, Ollama, LM Studio, or an OpenAI-compatible
+custom provider, and that provider is unavailable at runtime, `memory_search`
+returns an unavailable result instead of silently using FTS-only recall. Fix the
+provider/auth configuration, switch to a reachable provider, or set
+`provider: "none"` if you want deliberate FTS-only recall.
 
 ### Custom provider ids
 
-`memorySearch.provider` can point at a custom `models.providers.<id>` entry. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
+`memorySearch.provider` can point at a custom `models.providers.<id>` entry for memory-specific provider adapters such as `ollama`, or for OpenAI-compatible model APIs such as `openai-responses` / `openai-completions`. OpenClaw resolves that provider's `api` owner for the embedding adapter while preserving the custom provider id for endpoint, auth, and model-prefix handling. This lets multi-GPU or multi-host setups dedicate memory embeddings to a specific local endpoint:
 
 ```json5
 {
@@ -136,7 +129,8 @@ Codex OAuth covers chat/completions only and does not satisfy embedding requests
 
 ## Remote endpoint config
 
-For custom OpenAI-compatible endpoints or overriding provider defaults:
+Use `provider: "openai-compatible"` for a generic OpenAI-compatible
+`/v1/embeddings` server that should not inherit global OpenAI chat credentials.
 
 <ParamField path="remote.baseUrl" type="string">
   Custom API base URL.
@@ -153,7 +147,7 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
   agents: {
     defaults: {
       memorySearch: {
-        provider: "openai",
+        provider: "openai-compatible",
         model: "text-embedding-3-small",
         remote: {
           baseUrl: "https://api.example.com/v1/",
@@ -177,7 +171,8 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
     | `outputDimensionality` | `number` | `3072`                 | For Embedding 2: 768, 1536, or 3072        |
 
     <Warning>
-    Changing model or `outputDimensionality` triggers an automatic full reindex.
+    Changing model or `outputDimensionality` changes the index identity. OpenClaw
+    pauses vector search until you explicitly rebuild the memory index.
     </Warning>
 
   </Accordion>
@@ -195,10 +190,10 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
       agents: {
         defaults: {
           memorySearch: {
-            provider: "openai",
+            provider: "openai-compatible",
             remote: {
               baseUrl: "https://embeddings.example/v1",
-              apiKey: "env:EMBEDDINGS_API_KEY",
+              apiKey: "${EMBEDDINGS_API_KEY}",
             },
             model: "asymmetric-embedder",
             queryInputType: "query",
@@ -279,13 +274,14 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
     ```
 
   </Accordion>
-  <Accordion title="Local (GGUF + node-llama-cpp)">
+  <Accordion title="Local (GGUF + llama.cpp)">
     | Key                   | Type               | Default                | Description                                                                                                                                                                                                                                                                                                          |
     | --------------------- | ------------------ | ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
     | `local.modelPath`     | `string`           | auto-downloaded        | Path to GGUF model file                                                                                                                                                                                                                                                                                              |
     | `local.modelCacheDir` | `string`           | node-llama-cpp default | Cache dir for downloaded models                                                                                                                                                                                                                                                                                      |
     | `local.contextSize`   | `number \| "auto"` | `4096`                 | Context window size for the embedding context. 4096 covers typical chunks (128–512 tokens) while bounding non-weight VRAM. Lower to 1024–2048 on constrained hosts. `"auto"` uses the model's trained maximum — not recommended for 8B+ models (Qwen3-Embedding-8B: 40 960 tokens → ~32 GB VRAM vs ~8.8 GB at 4096). |
 
+    Install the official llama.cpp provider first: `openclaw plugins install @openclaw/llama-cpp-provider`.
     Default model: `embeddinggemma-300m-qat-Q8_0.gguf` (~0.6 GB, auto-downloaded). Source checkouts still require native build approval: `pnpm approve-builds` then `pnpm rebuild node-llama-cpp`.
 
     Use the standalone CLI to verify the same provider path the Gateway uses:
@@ -295,7 +291,7 @@ For custom OpenAI-compatible endpoints or overriding provider defaults:
     openclaw memory index --force --agent main
     ```
 
-    If `provider` is `auto`, `local` is selected only when `local.modelPath` points to an existing local file. `hf:` and HTTP(S) model references can still be used explicitly with `provider: "local"`, but they do not make `auto` select local before the model is available on disk.
+    Set `provider: "local"` explicitly for local GGUF embeddings. `hf:` and HTTP(S) model references are supported for explicit local configs, but they do not change the default provider.
 
   </Accordion>
 </AccordionGroup>
@@ -408,7 +404,7 @@ Supported formats: `.jpg`, `.jpeg`, `.png`, `.webp`, `.gif`, `.heic`, `.heif` (i
 
 | Key                | Type      | Default | Description                      |
 | ------------------ | --------- | ------- | -------------------------------- |
-| `cache.enabled`    | `boolean` | `false` | Cache chunk embeddings in SQLite |
+| `cache.enabled`    | `boolean` | `true`  | Cache chunk embeddings in SQLite |
 | `cache.maxEntries` | `number`  | `50000` | Max cached embeddings            |
 
 Prevents re-embedding unchanged text during reindex or transcript updates.
@@ -449,6 +445,66 @@ Index session transcripts and surface them via `memory_search`:
 Session indexing is opt-in and runs asynchronously. Results can be slightly stale. Session logs live on disk, so treat filesystem access as the trust boundary.
 </Warning>
 
+Session transcript hits also obey
+[`tools.sessions.visibility`](/gateway/config-tools#toolssessions). The default
+`tree` visibility only exposes the current session and sessions it spawned. To
+recall an unrelated same-agent gateway-dispatched session from a different
+session, such as a DM, intentionally widen visibility to `agent` (or `all` only
+when cross-agent recall is also required and agent-to-agent policy allows it).
+
+The examples below place these settings under `agents.defaults`. You can also
+apply equivalent `memorySearch` settings in a per-agent override when only one
+agent should index and search session transcripts.
+
+For same-agent gateway-to-DM recall:
+
+<Tabs>
+  <Tab title="Builtin backend">
+    ```json5
+    {
+      agents: {
+        defaults: {
+          memorySearch: {
+            experimental: { sessionMemory: true },
+            sources: ["memory", "sessions"],
+          },
+        },
+      },
+      tools: {
+        sessions: { visibility: "agent" },
+      },
+    }
+    ```
+  </Tab>
+  <Tab title="QMD backend">
+    ```json5
+    {
+      agents: {
+        defaults: {
+          memorySearch: {
+            experimental: { sessionMemory: true },
+            sources: ["memory", "sessions"],
+          },
+        },
+      },
+      memory: {
+        backend: "qmd",
+        qmd: {
+          sessions: { enabled: true },
+        },
+      },
+      tools: {
+        sessions: { visibility: "agent" },
+      },
+    }
+    ```
+  </Tab>
+</Tabs>
+
+When using QMD, `agents.defaults.memorySearch.experimental.sessionMemory` and
+`sources: ["sessions"]` do not by themselves export transcripts into QMD. Set
+`memory.qmd.sessions.enabled: true` as well.
+
 ---
 
 ## SQLite vector acceleration (sqlite-vec)
@@ -464,10 +520,12 @@ When sqlite-vec is unavailable, OpenClaw falls back to in-process cosine similar
 
 ## Index storage
 
-| Key                   | Type     | Default                               | Description                                 |
-| --------------------- | -------- | ------------------------------------- | ------------------------------------------- |
-| `store.path`          | `string` | `~/.openclaw/memory/{agentId}.sqlite` | Index location (supports `{agentId}` token) |
-| `store.fts.tokenizer` | `string` | `unicode61`                           | FTS5 tokenizer (`unicode61` or `trigram`)   |
+Built-in memory indexes live in each agent's OpenClaw SQLite database at
+`agents/<agentId>/agent/openclaw-agent.sqlite`.
+
+| Key                   | Type     | Default     | Description                               |
+| --------------------- | -------- | ----------- | ----------------------------------------- |
+| `store.fts.tokenizer` | `string` | `unicode61` | FTS5 tokenizer (`unicode61` or `trigram`) |
 
 ---
 
@@ -479,13 +537,16 @@ Set `memory.backend = "qmd"` to enable. All QMD settings live under `memory.qmd`
 | ------------------------ | --------- | -------- | ------------------------------------------------------------------------------------- |
 | `command`                | `string`  | `qmd`    | QMD executable path; set an absolute path when service `PATH` differs from your shell |
 | `searchMode`             | `string`  | `search` | Search command: `search`, `vsearch`, `query`                                          |
+| `rerank`                 | `boolean` | --       | Set to `false` with `searchMode: "query"` and QMD 2.1+ to skip QMD reranking          |
 | `includeDefaultMemory`   | `boolean` | `true`   | Auto-index `MEMORY.md` + `memory/**/*.md`                                             |
 | `paths[]`                | `array`   | --       | Extra paths: `{ name, path, pattern? }`                                               |
-| `sessions.enabled`       | `boolean` | `false`  | Index session transcripts                                                             |
+| `sessions.enabled`       | `boolean` | `false`  | Export session transcripts into QMD                                                   |
 | `sessions.retentionDays` | `number`  | --       | Transcript retention                                                                  |
 | `sessions.exportDir`     | `string`  | --       | Export directory                                                                      |
 
 `searchMode: "search"` is lexical/BM25-only. OpenClaw does not run semantic vector readiness probes or QMD embedding maintenance for that mode, including during `memory status --deep`; `vsearch` and `query` continue to require QMD vector readiness and embeddings.
+
+`rerank: false` only changes QMD `query` mode and requires QMD 2.1 or newer. In direct CLI mode OpenClaw passes `--no-rerank`; in mcporter-backed MCP mode it passes `rerank: false` to QMD's unified query tool. Leave it unset to use QMD's default query reranking behavior.
 
 OpenClaw prefers current QMD collection and MCP query shapes, but keeps older QMD releases working by trying compatible collection pattern flags and older MCP tool names when needed. When QMD advertises support for multiple collection filters, same-source collections are searched with one QMD process; older QMD builds keep the per-collection compatibility path. Same-source means durable memory collections are grouped together, while session transcript collections remain a separate group so source diversification still has both inputs.
 
@@ -499,8 +560,8 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
     | ------------------------- | --------- | ------- | ------------------------------------- |
     | `update.interval`         | `string`  | `5m`    | Refresh interval                      |
     | `update.debounceMs`       | `number`  | `15000` | Debounce file changes                 |
-    | `update.onBoot`           | `boolean` | `true`  | Refresh when the long-lived QMD manager opens; also gates opt-in startup refresh |
-    | `update.startup`          | `string`  | `off`   | Optional gateway-start refresh: `off`, `idle`, or `immediate` |
+    | `update.onBoot`           | `boolean` | `true`  | Refresh when the long-lived QMD manager opens; set false to skip the immediate boot update |
+    | `update.startup`          | `string`  | `off`   | Optional gateway-start QMD initialization: `off`, `idle`, or `immediate` |
     | `update.startupDelayMs`   | `number`  | `120000` | Delay before `startup: "idle"` refresh runs |
     | `update.waitForBootSync`  | `boolean` | `false` | Block manager opening until its initial refresh completes |
     | `update.embedInterval`    | `string`  | --      | Separate embed cadence                |
@@ -549,7 +610,7 @@ QMD model overrides stay on the QMD side, not OpenClaw config. If you need to ov
   </Accordion>
 </AccordionGroup>
 
-QMD boot refreshes use a one-shot subprocess path during gateway startup. The long-lived QMD manager still owns the regular file watcher and interval timers when memory search is opened for interactive use.
+When gateway-start QMD initialization is enabled, OpenClaw starts QMD only for eligible agents. If `update.onBoot` is true and no interval/embed maintenance is configured, startup uses a one-shot manager for the boot refresh and closes it. If an update or embed interval is configured, startup opens the long-lived QMD manager so it can own the watcher and interval timers; `update.onBoot: false` skips only the immediate boot refresh.
 
 ### Full QMD example
 
@@ -584,11 +645,12 @@ For conceptual behavior and slash commands, see [Dreaming](/concepts/dreaming).
 
 ### User settings
 
-| Key         | Type      | Default       | Description                                       |
-| ----------- | --------- | ------------- | ------------------------------------------------- |
-| `enabled`   | `boolean` | `false`       | Enable or disable dreaming entirely               |
-| `frequency` | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep |
-| `model`     | `string`  | default model | Optional Dream Diary subagent model override      |
+| Key                                    | Type      | Default       | Description                                                                                                                      |
+| -------------------------------------- | --------- | ------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `enabled`                              | `boolean` | `false`       | Enable or disable dreaming entirely                                                                                              |
+| `frequency`                            | `string`  | `0 3 * * *`   | Optional cron cadence for the full dreaming sweep                                                                                |
+| `model`                                | `string`  | default model | Optional Dream Diary subagent model override                                                                                     |
+| `phases.deep.maxPromotedSnippetTokens` | `number`  | `160`         | Maximum estimated tokens kept from each short-term recall snippet promoted into `MEMORY.md`; provenance metadata remains visible |
 
 ### Example
 

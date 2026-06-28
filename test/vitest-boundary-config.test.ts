@@ -1,9 +1,7 @@
+// Vitest boundary config tests validate boundary test configuration.
 import { describe, expect, it } from "vitest";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
-import {
-  createBoundaryVitestConfig,
-  loadBoundaryIncludePatternsFromEnv,
-} from "./vitest/vitest.boundary.config.ts";
+import { createBoundaryVitestConfig } from "./vitest/vitest.boundary.config.ts";
 import { boundaryTestFiles } from "./vitest/vitest.unit-paths.mjs";
 
 function requireTestConfig(config: ReturnType<typeof createBoundaryVitestConfig>) {
@@ -12,12 +10,6 @@ function requireTestConfig(config: ReturnType<typeof createBoundaryVitestConfig>
   }
   return config.test;
 }
-
-describe("loadBoundaryIncludePatternsFromEnv", () => {
-  it("returns null when no include file is configured", () => {
-    expect(loadBoundaryIncludePatternsFromEnv({})).toBeNull();
-  });
-});
 
 describe("boundary vitest config", () => {
   it("keeps boundary suites on the non-isolated runner with shared test bootstrap", () => {
@@ -40,6 +32,19 @@ describe("boundary vitest config", () => {
     const testConfig = requireTestConfig(config);
 
     expect(testConfig.include).toEqual(["src/infra/openclaw-root.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("lets unrelated root Vitest projects skip when CLI filters match no boundary files", () => {
+    const config = createBoundaryVitestConfig({}, [
+      "node",
+      "vitest",
+      "run",
+      "src/config/channel-configured.test.ts",
+    ]);
+    const testConfig = requireTestConfig(config);
+
+    expect(testConfig.include).toEqual([]);
     expect(testConfig.passWithNoTests).toBe(true);
   });
 });

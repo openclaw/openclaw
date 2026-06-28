@@ -1,3 +1,11 @@
+// Gateway model-pricing refresh and normalization.
+// Fetches, normalizes, and schedules cached pricing for model usage estimates.
+import type { ModelCatalogCost } from "@openclaw/model-catalog-core/model-catalog-types";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+import {
+  normalizeOptionalString,
+  resolvePrimaryStringValue,
+} from "../../packages/normalization-core/src/string-coerce.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   buildModelAliasIndex,
@@ -11,7 +19,7 @@ import { resolvePluginWebSearchConfig } from "../config/plugin-web-search-config
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { planManifestModelCatalogRows, type ModelCatalogCost } from "../model-catalog/index.js";
+import { planManifestModelCatalogRows } from "../model-catalog/index.js";
 import { isInstalledPluginEnabled } from "../plugins/installed-plugin-index.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type {
@@ -19,10 +27,12 @@ import type {
   PluginManifestModelPricingProvider,
   PluginManifestModelPricingSource,
 } from "../plugins/manifest.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  clearLoadPluginMetadataSnapshotMemo,
+  resolvePluginMetadataSnapshot,
+} from "../plugins/plugin-metadata-snapshot.js";
 import type { PluginMetadataRegistryView } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { PluginRegistrySnapshot } from "../plugins/plugin-registry.js";
-import { normalizeOptionalString, resolvePrimaryStringValue } from "../shared/string-coerce.js";
 import {
   clearGatewayModelPricingCacheState,
   clearGatewayModelPricingFailures,
@@ -142,6 +152,21 @@ function parseNumberString(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function parsePricingContentLength(value: string | null): number | null {
+  if (value === null) {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!/^\d+$/.test(trimmed)) {
+    throw new Error(`invalid content-length header: ${value}`);
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`invalid content-length header: ${value}`);
+  }
+  return parsed;
+}
+
 function formatTimeoutSeconds(timeoutMs: number): string {
   const seconds = timeoutMs / 1000;
   return Number.isInteger(seconds) ? `${seconds}s` : `${seconds.toFixed(1)}s`;
@@ -161,6 +186,8 @@ function isTimeoutError(error: unknown): boolean {
 }
 
 function createPricingFetchSignal(signal: AbortSignal | undefined): AbortSignal {
+  // Pricing fetches are background refreshes; bound them so startup/reload
+  // cannot leave an unbounded network request alive.
   const timeoutSignal = AbortSignal.timeout(FETCH_TIMEOUT_MS);
   return signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
 }
@@ -249,23 +276,55 @@ function toCachedModelPricing(
   };
 }
 
+async function cancelUnreadResponseBody(response: Response | undefined): Promise<void> {
+  if (response?.bodyUsed !== true) {
+    await response?.body?.cancel().catch(() => undefined);
+  }
+}
+
 async function readPricingJsonObject(
   response: Response,
   source: string,
 ): Promise<Record<string, unknown>> {
-  const contentLength = parseNumberString(response.headers.get("content-length"));
+  const contentLength = parsePricingContentLength(response.headers.get("content-length"));
   if (contentLength !== null && contentLength > MAX_PRICING_CATALOG_BYTES) {
     throw new Error(`${source} pricing response too large: ${contentLength} bytes`);
   }
-  const buffer = await response.arrayBuffer();
-  if (buffer.byteLength > MAX_PRICING_CATALOG_BYTES) {
-    throw new Error(`${source} pricing response too large: ${buffer.byteLength} bytes`);
+  const buffer = await readResponseWithLimit(response, MAX_PRICING_CATALOG_BYTES, {
+    onOverflow: ({ size }) => new Error(`${source} pricing response too large: ${size} bytes`),
+  });
+  let payload: unknown;
+  try {
+    payload = JSON.parse(buffer.toString("utf8")) as unknown;
+  } catch {
+    throw new Error(`${source} pricing response is malformed JSON`);
   }
-  const payload = JSON.parse(Buffer.from(buffer).toString("utf8")) as unknown;
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     throw new Error(`${source} pricing response is not a JSON object`);
   }
   return payload as Record<string, unknown>;
+}
+
+async function fetchPricingJsonObject(params: {
+  fetchImpl: typeof fetch;
+  url: string;
+  source: string;
+  failureLabel: string;
+  signal?: AbortSignal;
+}): Promise<Record<string, unknown>> {
+  let response: Response | undefined;
+  try {
+    response = await params.fetchImpl(params.url, {
+      headers: { Accept: "application/json" },
+      signal: createPricingFetchSignal(params.signal),
+    });
+    if (!response.ok) {
+      throw new Error(`${params.failureLabel}: HTTP ${response.status}`);
+    }
+    return await readPricingJsonObject(response, params.source);
+  } finally {
+    await cancelUnreadResponseBody(response);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -352,14 +411,13 @@ async function fetchLiteLLMPricingCatalog(
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
 ): Promise<LiteLLMPricingCatalog> {
-  const response = await fetchImpl(LITELLM_PRICING_URL, {
-    headers: { Accept: "application/json" },
-    signal: createPricingFetchSignal(signal),
+  const payload = await fetchPricingJsonObject({
+    fetchImpl,
+    url: LITELLM_PRICING_URL,
+    source: "LiteLLM",
+    failureLabel: "LiteLLM pricing fetch failed",
+    signal,
   });
-  if (!response.ok) {
-    throw new Error(`LiteLLM pricing fetch failed: HTTP ${response.status}`);
-  }
-  const payload = await readPricingJsonObject(response, "LiteLLM");
   const catalog: LiteLLMPricingCatalog = new Map();
   for (const [key, value] of Object.entries(payload)) {
     if (!value || typeof value !== "object") {
@@ -454,10 +512,12 @@ function resolveModelPricingManifestMetadata(params: {
       activeRegistry: emptyRegistry,
     };
   }
-  const snapshot = loadPluginMetadataSnapshot({
+  const env = params.env ?? process.env;
+  const snapshot = resolvePluginMetadataSnapshot({
     config: params.config,
-    env: params.env ?? process.env,
+    env,
     ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    allowWorkspaceScopedCurrent: params.workspaceDir === undefined,
   });
   return {
     allRegistry: snapshot.manifestRegistry,
@@ -892,6 +952,12 @@ export function collectConfiguredModelPricingRefs(
     ...normalizationParams,
   });
   addModelListLike({
+    value: config.agents?.defaults?.subagents?.model,
+    aliasIndex,
+    refs,
+    ...normalizationParams,
+  });
+  addModelListLike({
     value: config.agents?.defaults?.imageModel,
     aliasIndex,
     refs,
@@ -911,12 +977,6 @@ export function collectConfiguredModelPricingRefs(
   });
   addResolvedModelRef({
     raw: config.agents?.defaults?.heartbeat?.model,
-    aliasIndex,
-    refs,
-    ...normalizationParams,
-  });
-  addModelListLike({
-    value: config.tools?.subagents?.model,
     aliasIndex,
     refs,
     ...normalizationParams,
@@ -1026,14 +1086,13 @@ async function fetchOpenRouterPricingCatalog(
   fetchImpl: typeof fetch,
   signal?: AbortSignal,
 ): Promise<Map<string, OpenRouterPricingEntry>> {
-  const response = await fetchImpl(OPENROUTER_MODELS_URL, {
-    headers: { Accept: "application/json" },
-    signal: createPricingFetchSignal(signal),
+  const payload = await fetchPricingJsonObject({
+    fetchImpl,
+    url: OPENROUTER_MODELS_URL,
+    source: "OpenRouter",
+    failureLabel: "OpenRouter /models failed",
+    signal,
   });
-  if (!response.ok) {
-    throw new Error(`OpenRouter /models failed: HTTP ${response.status}`);
-  }
-  const payload = await readPricingJsonObject(response, "OpenRouter");
   const entries = Array.isArray(payload.data) ? payload.data : [];
   const catalog = new Map<string, OpenRouterPricingEntry>();
   for (const entry of entries) {
@@ -1387,8 +1446,9 @@ export function startGatewayModelPricingRefresh(
   };
 }
 
-export function __resetGatewayModelPricingCacheForTest(): void {
+export function resetGatewayModelPricingCacheForTest(): void {
   clearGatewayModelPricingCacheState();
+  clearLoadPluginMetadataSnapshotMemo();
   clearRefreshTimer();
   inFlightRefresh = null;
 }

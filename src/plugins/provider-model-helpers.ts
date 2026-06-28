@@ -1,8 +1,11 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+// Normalizes provider model metadata from plugin manifests and hooks.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { normalizeModelCompat } from "./provider-model-compat.js";
 import type { ProviderRuntimeModel } from "./provider-runtime-model.types.js";
 import type { ProviderResolveDynamicModelContext } from "./types.js";
 
+/** True when an id matches a normalized exact value or value prefix. */
 export function matchesExactOrPrefix(id: string, values: readonly string[]): boolean {
   const normalizedId = normalizeLowercaseStringOrEmpty(id);
   return values.some((value) => {
@@ -11,6 +14,7 @@ export function matchesExactOrPrefix(id: string, values: readonly string[]): boo
   });
 }
 
+/** Clones the first available template model and patches it for a dynamic model id. */
 export function cloneFirstTemplateModel(params: {
   providerId: string;
   modelId: string;
@@ -19,7 +23,7 @@ export function cloneFirstTemplateModel(params: {
   patch?: Partial<ProviderRuntimeModel>;
 }): ProviderRuntimeModel | undefined {
   const trimmedModelId = params.modelId.trim();
-  for (const templateId of [...new Set(params.templateIds)].filter(Boolean)) {
+  for (const templateId of uniqueStrings(params.templateIds).filter(Boolean)) {
     const template = params.ctx.modelRegistry.find(
       params.providerId,
       templateId,

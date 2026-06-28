@@ -1,3 +1,4 @@
+// Gmail setup utility tests cover setup file generation and config handling.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -204,5 +205,48 @@ describe("ensureTailscaleEndpoint", () => {
     expect(message).toContain("returned invalid JSON");
     expect(message).toContain("stdout: not-json");
     expect(message).toContain("code=0");
+  });
+
+  it("passes abort signal to tailscale status and serve commands", async () => {
+    const abortController = new AbortController();
+    runCommandWithTimeoutMock
+      .mockResolvedValueOnce({
+        stdout: JSON.stringify({ Self: { DNSName: "host.tailnet.ts.net." } }),
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+      })
+      .mockResolvedValueOnce({
+        stdout: "",
+        stderr: "",
+        code: 0,
+        signal: null,
+        killed: false,
+      });
+
+    await ensureTailscaleEndpoint({
+      mode: "serve",
+      path: "/gmail-pubsub",
+      port: 8788,
+      signal: abortController.signal,
+    });
+
+    expect(runCommandWithTimeoutMock).toHaveBeenNthCalledWith(
+      1,
+      ["tailscale", "status", "--json"],
+      {
+        timeoutMs: 30_000,
+        signal: abortController.signal,
+      },
+    );
+    expect(runCommandWithTimeoutMock).toHaveBeenNthCalledWith(
+      2,
+      ["tailscale", "serve", "--bg", "--set-path", "/gmail-pubsub", "--yes", "8788"],
+      {
+        timeoutMs: 30_000,
+        signal: abortController.signal,
+      },
+    );
   });
 });

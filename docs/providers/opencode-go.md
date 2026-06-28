@@ -18,7 +18,7 @@ provider id `opencode-go` so upstream per-model routing stays correct.
 
 ## Built-in catalog
 
-OpenClaw sources most Go catalog rows from the bundled pi model registry and
+OpenClaw sources most Go catalog rows from the bundled OpenClaw model registry and
 supplements current upstream rows while the registry catches up. Run
 `openclaw models list --provider opencode-go` for the current model list.
 
@@ -28,8 +28,10 @@ The provider includes:
 | ------------------------------- | --------------------- |
 | `opencode-go/glm-5`             | GLM-5                 |
 | `opencode-go/glm-5.1`           | GLM-5.1               |
+| `opencode-go/glm-5.2`           | GLM-5.2               |
 | `opencode-go/kimi-k2.5`         | Kimi K2.5             |
 | `opencode-go/kimi-k2.6`         | Kimi K2.6 (3x limits) |
+| `opencode-go/kimi-k2.7-code`    | Kimi K2.7 Code        |
 | `opencode-go/deepseek-v4-pro`   | DeepSeek V4 Pro       |
 | `opencode-go/deepseek-v4-flash` | DeepSeek V4 Flash     |
 | `opencode-go/mimo-v2-omni`      | MiMo V2 Omni          |
@@ -38,6 +40,8 @@ The provider includes:
 | `opencode-go/minimax-m2.7`      | MiniMax M2.7          |
 | `opencode-go/qwen3.5-plus`      | Qwen3.5 Plus          |
 | `opencode-go/qwen3.6-plus`      | Qwen3.6 Plus          |
+
+GLM-5.2 uses a 1M-token context window and supports up to 131K output tokens.
 
 ## Getting started
 

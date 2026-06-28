@@ -1,3 +1,4 @@
+// Covers provider install catalog entries from plugin metadata.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type LoadOpenClawProviderIndex =
@@ -7,6 +8,10 @@ type ResolveManifestProviderAuthChoices =
   typeof import("./provider-auth-choices.js").resolveManifestProviderAuthChoices;
 type ListOfficialExternalProviderCatalogEntries =
   typeof import("./official-external-plugin-catalog.js").listOfficialExternalProviderCatalogEntries;
+type PluginInstallSourceInfo = import("./install-source-info.js").PluginInstallSourceInfo;
+type InstalledPluginInstallRecordInfo =
+  import("./installed-plugin-index.js").InstalledPluginInstallRecordInfo;
+type InstalledPluginIndexRecord = import("./installed-plugin-index.js").InstalledPluginIndexRecord;
 
 const loadOpenClawProviderIndex = vi.hoisted(() =>
   vi.fn<LoadOpenClawProviderIndex>(() => ({ version: 1, providers: {} })),
@@ -59,9 +64,73 @@ vi.mock("./official-external-plugin-catalog.js", async () => {
 });
 
 import {
+  resolveDeprecatedProviderInstallCatalogEntry,
   resolveProviderInstallCatalogEntries,
   resolveProviderInstallCatalogEntry,
 } from "./provider-install-catalog.js";
+
+function registrySnapshot(
+  overrides: {
+    installRecords?: Record<string, InstalledPluginInstallRecordInfo>;
+    plugins?: InstalledPluginIndexRecord[];
+  } = {},
+) {
+  return {
+    version: 1 as const,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1 as const,
+    policyHash: "test",
+    generatedAtMs: 0,
+    installRecords: overrides.installRecords ?? {},
+    plugins: overrides.plugins ?? [],
+    diagnostics: [],
+  };
+}
+
+function vllmPluginWithPackageInstall(): InstalledPluginIndexRecord {
+  return {
+    pluginId: "vllm",
+    origin: "global",
+    manifestPath: "/Users/test/.openclaw/plugins/vllm/openclaw.plugin.json",
+    manifestHash: "hash",
+    rootDir: "/Users/test/.openclaw/plugins/vllm",
+    enabled: true,
+    startup: {
+      sidecar: false,
+      memory: false,
+      deferConfiguredChannelFullLoadUntilAfterListen: false,
+      agentHarnesses: [],
+    },
+    compat: [],
+    packageName: "@openclaw/vllm",
+    packageInstall: {
+      npm: {
+        spec: "@openclaw/vllm-fork@1.0.0",
+        packageName: "@openclaw/vllm-fork",
+        selector: "1.0.0",
+        selectorKind: "exact-version",
+        exactVersion: true,
+        expectedIntegrity: "sha512-old",
+        pinState: "exact-with-integrity",
+      },
+      warnings: [],
+    },
+  };
+}
+
+function mockVllmAuthChoice() {
+  resolveManifestProviderAuthChoices.mockReturnValue([
+    {
+      pluginId: "vllm",
+      providerId: "vllm",
+      methodId: "server",
+      choiceId: "vllm",
+      choiceLabel: "vLLM",
+      groupLabel: "vLLM",
+    },
+  ]);
+}
 
 describe("provider install catalog", () => {
   beforeEach(() => {
@@ -177,63 +246,20 @@ describe("provider install catalog", () => {
   });
 
   it("prefers durable install records over package-authored install intent", () => {
-    loadPluginRegistrySnapshot.mockReturnValue({
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 0,
-      installRecords: {
-        vllm: {
-          source: "npm",
-          spec: "@openclaw/vllm",
-          resolvedSpec: "@openclaw/vllm@2.0.0",
-          integrity: "sha512-vllm",
-        },
-      },
-      plugins: [
-        {
-          pluginId: "vllm",
-          origin: "global",
-          manifestPath: "/Users/test/.openclaw/plugins/vllm/openclaw.plugin.json",
-          manifestHash: "hash",
-          rootDir: "/Users/test/.openclaw/plugins/vllm",
-          enabled: true,
-          startup: {
-            sidecar: false,
-            memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
-            agentHarnesses: [],
-          },
-          compat: [],
-          packageName: "@openclaw/vllm",
-          packageInstall: {
-            npm: {
-              spec: "@openclaw/vllm-fork@1.0.0",
-              packageName: "@openclaw/vllm-fork",
-              selector: "1.0.0",
-              selectorKind: "exact-version",
-              exactVersion: true,
-              expectedIntegrity: "sha512-old",
-              pinState: "exact-with-integrity",
-            },
-            warnings: [],
+    loadPluginRegistrySnapshot.mockReturnValue(
+      registrySnapshot({
+        installRecords: {
+          vllm: {
+            source: "npm",
+            spec: "@openclaw/vllm",
+            resolvedSpec: "@openclaw/vllm@2.0.0",
+            integrity: "sha512-vllm",
           },
         },
-      ],
-      diagnostics: [],
-    });
-    resolveManifestProviderAuthChoices.mockReturnValue([
-      {
-        pluginId: "vllm",
-        providerId: "vllm",
-        methodId: "server",
-        choiceId: "vllm",
-        choiceLabel: "vLLM",
-        groupLabel: "vLLM",
-      },
-    ]);
+        plugins: [vllmPluginWithPackageInstall()],
+      }),
+    );
+    mockVllmAuthChoice();
 
     expect(resolveProviderInstallCatalogEntry("vllm")).toEqual({
       pluginId: "vllm",
@@ -266,63 +292,20 @@ describe("provider install catalog", () => {
   });
 
   it("preserves durable ClawHub install records for provider setup reinstall hints", () => {
-    loadPluginRegistrySnapshot.mockReturnValue({
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test",
-      generatedAtMs: 0,
-      installRecords: {
-        vllm: {
-          source: "clawhub",
-          spec: "clawhub:openclaw/vllm@2026.5.2",
-          integrity: "sha256-clawpack",
-          clawhubPackage: "openclaw/vllm",
-        },
-      },
-      plugins: [
-        {
-          pluginId: "vllm",
-          origin: "global",
-          manifestPath: "/Users/test/.openclaw/plugins/vllm/openclaw.plugin.json",
-          manifestHash: "hash",
-          rootDir: "/Users/test/.openclaw/plugins/vllm",
-          enabled: true,
-          startup: {
-            sidecar: false,
-            memory: false,
-            deferConfiguredChannelFullLoadUntilAfterListen: false,
-            agentHarnesses: [],
-          },
-          compat: [],
-          packageName: "@openclaw/vllm",
-          packageInstall: {
-            npm: {
-              spec: "@openclaw/vllm-fork@1.0.0",
-              packageName: "@openclaw/vllm-fork",
-              selector: "1.0.0",
-              selectorKind: "exact-version",
-              exactVersion: true,
-              expectedIntegrity: "sha512-old",
-              pinState: "exact-with-integrity",
-            },
-            warnings: [],
+    loadPluginRegistrySnapshot.mockReturnValue(
+      registrySnapshot({
+        installRecords: {
+          vllm: {
+            source: "clawhub",
+            spec: "clawhub:openclaw/vllm@2026.5.2",
+            integrity: "sha256-clawpack",
+            clawhubPackage: "openclaw/vllm",
           },
         },
-      ],
-      diagnostics: [],
-    });
-    resolveManifestProviderAuthChoices.mockReturnValue([
-      {
-        pluginId: "vllm",
-        providerId: "vllm",
-        methodId: "server",
-        choiceId: "vllm",
-        choiceLabel: "vLLM",
-        groupLabel: "vLLM",
-      },
-    ]);
+        plugins: [vllmPluginWithPackageInstall()],
+      }),
+    );
+    mockVllmAuthChoice();
 
     expect(resolveProviderInstallCatalogEntry("vllm")).toEqual({
       pluginId: "vllm",
@@ -398,6 +381,59 @@ describe("provider install catalog", () => {
         methodId: "api-key",
         choiceId: "demo-provider-api-key",
         choiceLabel: "Demo Provider API key",
+      },
+    ]);
+
+    expect(resolveProviderInstallCatalogEntries()).toStrictEqual([]);
+  });
+
+  it("ignores malformed persisted package install metadata", () => {
+    loadPluginRegistrySnapshot.mockReturnValue({
+      version: 1,
+      hostContractVersion: "test",
+      compatRegistryVersion: "test",
+      migrationVersion: 1,
+      policyHash: "test",
+      generatedAtMs: 0,
+      installRecords: {},
+      plugins: [
+        {
+          pluginId: "openai",
+          origin: "bundled",
+          manifestPath: "/repo/extensions/openai/openclaw.plugin.json",
+          manifestHash: "hash",
+          rootDir: "/repo/extensions/openai",
+          enabled: true,
+          startup: {
+            sidecar: false,
+            memory: false,
+            deferConfiguredChannelFullLoadUntilAfterListen: false,
+            agentHarnesses: [],
+          },
+          compat: [],
+          packageName: "@openclaw/openai",
+          packageInstall: {
+            defaultChoice: "npm",
+            npm: {
+              spec: 12,
+              packageName: "@openclaw/openai",
+              selectorKind: "exact-version",
+              exactVersion: true,
+              pinState: "exact-with-integrity",
+            },
+            warnings: [],
+          } as unknown as PluginInstallSourceInfo,
+        },
+      ],
+      diagnostics: [],
+    });
+    resolveManifestProviderAuthChoices.mockReturnValue([
+      {
+        pluginId: "openai",
+        providerId: "openai",
+        methodId: "api-key",
+        choiceId: "openai-api-key",
+        choiceLabel: "OpenAI API key",
       },
     ]);
 
@@ -582,6 +618,79 @@ describe("provider install catalog", () => {
         },
         warnings: ["npm-spec-floating", "npm-spec-missing-integrity"],
       },
+    });
+  });
+
+  it("preserves official external provider aliases for configured-plugin repair", () => {
+    listOfficialExternalProviderCatalogEntries.mockReturnValue([
+      {
+        name: "@openclaw/gmi-provider",
+        source: "official",
+        kind: "provider",
+        openclaw: {
+          plugin: { id: "gmi", label: "GMI Cloud" },
+          providers: [
+            {
+              id: "gmi",
+              aliases: ["gmi-cloud", "gmicloud"],
+              name: "GMI Cloud",
+              authChoices: [
+                {
+                  method: "api-key",
+                  choiceId: "gmi-api-key",
+                  choiceLabel: "GMI Cloud API key",
+                },
+              ],
+            },
+          ],
+          install: {
+            npmSpec: "@openclaw/gmi-provider",
+            defaultChoice: "npm",
+          },
+        },
+      },
+    ]);
+
+    expect(resolveProviderInstallCatalogEntry("gmi-api-key")).toMatchObject({
+      pluginId: "gmi",
+      providerId: "gmi",
+      providerAliases: ["gmi-cloud", "gmicloud"],
+    });
+  });
+
+  it("resolves deprecated official external auth choices before their plugin is installed", () => {
+    listOfficialExternalProviderCatalogEntries.mockReturnValue([
+      {
+        name: "@openclaw/qwen-provider",
+        source: "official",
+        kind: "provider",
+        openclaw: {
+          plugin: { id: "qwen", label: "Qwen Cloud" },
+          providers: [
+            {
+              id: "qwen",
+              name: "Qwen Cloud",
+              authChoices: [
+                {
+                  method: "api-key",
+                  choiceId: "qwen-api-key",
+                  deprecatedChoiceIds: ["modelstudio-api-key"],
+                  choiceLabel: "Qwen Cloud API key",
+                },
+              ],
+            },
+          ],
+          install: {
+            npmSpec: "@openclaw/qwen-provider",
+            defaultChoice: "npm",
+          },
+        },
+      },
+    ]);
+
+    expect(resolveDeprecatedProviderInstallCatalogEntry("modelstudio-api-key")).toMatchObject({
+      pluginId: "qwen",
+      choiceId: "qwen-api-key",
     });
   });
 

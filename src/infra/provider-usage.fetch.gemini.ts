@@ -1,5 +1,11 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import { buildUsageHttpErrorSnapshot, fetchJson } from "./provider-usage.fetch.shared.js";
+// Fetches Gemini provider usage windows.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  buildUsageHttpErrorSnapshot,
+  discardUsageResponseBody,
+  fetchJson,
+  readUsageJson,
+} from "./provider-usage.fetch.shared.js";
 import { clampPercent, PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
@@ -32,13 +38,18 @@ export async function fetchGeminiUsage(
   );
 
   if (!res.ok) {
+    await discardUsageResponseBody(res);
     return buildUsageHttpErrorSnapshot({
       provider,
       status: res.status,
     });
   }
 
-  const data = (await res.json()) as GeminiUsageResponse;
+  const parsed = await readUsageJson(provider, res);
+  if (!parsed.ok) {
+    return parsed.snapshot;
+  }
+  const data = parsed.data as GeminiUsageResponse;
   const quotas: Record<string, number> = {};
 
   for (const bucket of data.buckets || []) {

@@ -1,3 +1,4 @@
+// Canvas tests cover server plugin behavior.
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import os from "node:os";
@@ -29,6 +30,7 @@ type CapturedResponse = {
   status: number;
   headers: Record<string, number | string | string[]>;
   body: string;
+  bodyBytes: Buffer;
 };
 
 type HttpRequestHandler = (
@@ -73,6 +75,7 @@ async function captureHttpResponse(
     status: 200,
     headers: {},
     body: "",
+    bodyBytes: Buffer.alloc(0),
   };
   const res = {
     statusCode: 200,
@@ -84,7 +87,8 @@ async function captureHttpResponse(
     },
     end(chunk?: string | Buffer) {
       response.status = this.statusCode;
-      response.body = Buffer.isBuffer(chunk) ? chunk.toString("utf8") : (chunk ?? "");
+      response.bodyBytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk ?? "");
+      response.body = response.bodyBytes.toString("utf8");
       return this;
     },
   };
@@ -104,9 +108,13 @@ async function captureHandlerResponse(
   return await captureHttpResponse(handler.handleHttpRequest, url, method);
 }
 
-async function captureA2uiResponse(url: string, method = "GET"): Promise<CapturedResponse> {
-  const { handleA2uiHttpRequest } = await import("./a2ui.js");
-  return await captureHttpResponse(handleA2uiHttpRequest, url, method);
+async function captureA2uiFixtureResponse(
+  rootDir: string,
+  url: string,
+  method = "GET",
+): Promise<CapturedResponse> {
+  const { createA2uiHttpRequestHandler } = await import("./a2ui.js");
+  return await captureHttpResponse(createA2uiHttpRequestHandler({ rootDir }), url, method);
 }
 
 describe("canvas host", () => {
@@ -116,6 +124,7 @@ describe("canvas host", () => {
   };
   let createCanvasHostHandler: typeof import("./server.js").createCanvasHostHandler;
   let startCanvasHost: typeof import("./server.js").startCanvasHost;
+  let canvasLiveReloadMaxInboundMessageBytes = 0;
   let WebSocketServerClass: typeof import("ws").WebSocketServer;
   let watcherState: ReturnType<typeof createMockWatcherState>;
   let fixtureRoot = "";
@@ -158,7 +167,10 @@ describe("canvas host", () => {
       };
     });
     vi.resetModules();
-    ({ createCanvasHostHandler, startCanvasHost } = await import("./server.js"));
+    const serverModule = await import("./server.js");
+    ({ createCanvasHostHandler, startCanvasHost } = serverModule);
+    canvasLiveReloadMaxInboundMessageBytes =
+      serverModule.CANVAS_LIVE_RELOAD_MAX_INBOUND_MESSAGE_BYTES;
     const wsModule = await vi.importActual<typeof import("ws")>("ws");
     WebSocketServerClass = wsModule.WebSocketServer;
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-canvas-fixtures-"));
@@ -212,6 +224,68 @@ describe("canvas host", () => {
 
       const wsResponse = await captureHandlerResponse(handler, CANVAS_WS_PATH);
       expect(wsResponse.status).toBe(404);
+    } finally {
+      await handler.close();
+    }
+  });
+
+  it("caps live reload WebSocket inbound payloads", async () => {
+    const dir = await createCaseDir();
+    const constructorOptions: unknown[] = [];
+    let connectionHandler: ((socket: TrackingWebSocket) => void) | undefined;
+    class CapturingWebSocketServer {
+      on(event: string, cb: (socket: TrackingWebSocket) => void) {
+        if (event === "connection") {
+          connectionHandler = cb;
+        }
+        return this;
+      }
+
+      close(cb?: () => void) {
+        cb?.();
+      }
+
+      constructor(options: unknown) {
+        constructorOptions.push(options);
+      }
+    }
+
+    const handler = await createTestCanvasHostHandler(dir, {
+      webSocketServerClass:
+        CapturingWebSocketServer as unknown as typeof import("ws").WebSocketServer,
+    });
+
+    try {
+      expect(constructorOptions[0]).toMatchObject({
+        noServer: true,
+        maxPayload: canvasLiveReloadMaxInboundMessageBytes,
+      });
+      const socketHandlers: string[] = [];
+      const socket: TrackingWebSocket = {
+        sent: [],
+        on: (event) => {
+          socketHandlers.push(event);
+          return socket;
+        },
+        send: vi.fn(),
+      };
+      expect(connectionHandler).toBeDefined();
+      connectionHandler?.(socket);
+      expect(socketHandlers).toEqual(expect.arrayContaining(["error", "close"]));
+    } finally {
+      await handler.close();
+    }
+  });
+
+  it("falls back to the default mount when the configured base path is malformed", async () => {
+    const dir = await createCaseDir();
+    await fs.writeFile(path.join(dir, "index.html"), "<html><body>fallback</body></html>", "utf8");
+    const handler = await createTestCanvasHostHandler(dir, { basePath: "/%E0%A4%A" });
+
+    try {
+      const response = await captureHandlerResponse(handler, `${CANVAS_HOST_PATH}/`);
+      expect(response.status).toBe(200);
+      expect(response.body).toContain("fallback");
     } finally {
       await handler.close();
     }
@@ -360,7 +434,7 @@ describe("canvas host", () => {
       }
 
       await fs.writeFile(index, "<html><body>v2</body></html>", "utf8");
-      watcher.__emit("all", "change", index);
+      watcher["__emit"]("all", "change", index);
       await reloadSent;
       expect(ws.sent[0]).toBe("reload");
     } finally {
@@ -369,50 +443,56 @@ describe("canvas host", () => {
   });
 
   it("serves A2UI scaffold and blocks traversal/symlink escapes", async () => {
-    const a2uiRoot = path.resolve(process.cwd(), "extensions/canvas/src/host/a2ui");
-    const bundlePath = path.join(a2uiRoot, "a2ui.bundle.js");
+    const a2uiRoot = await createCaseDir();
+    const nestedAssetDir = path.join(a2uiRoot, "assets", "demo");
     const linkName = `test-link-${Date.now()}-${Math.random().toString(16).slice(2)}.txt`;
     const linkPath = path.join(a2uiRoot, linkName);
-    let createdBundle = false;
-    let createdLink = false;
 
-    try {
-      await fs.stat(bundlePath);
-    } catch {
-      await fs.writeFile(bundlePath, "window.openclawA2UI = {};", "utf8");
-      createdBundle = true;
-    }
-
+    await fs.mkdir(nestedAssetDir, { recursive: true });
+    await fs.writeFile(
+      path.join(a2uiRoot, "index.html"),
+      `<openclaw-a2ui-host></openclaw-a2ui-host>
+<script>openclawCanvasA2UIAction</script>`,
+      "utf8",
+    );
+    await fs.writeFile(path.join(a2uiRoot, "a2ui.bundle.js"), "window.openclawA2UI = {};", "utf8");
+    await fs.writeFile(path.join(nestedAssetDir, "sample.txt"), "nested asset", "utf8");
     await fs.symlink(path.join(process.cwd(), "package.json"), linkPath);
-    createdLink = true;
 
     try {
-      const res = await captureA2uiResponse(`${A2UI_PATH}/`);
+      const res = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/`);
       const html = res.body;
       expect(res.status).toBe(200);
       expect(html).toContain("openclaw-a2ui-host");
       expect(html).toContain("openclawCanvasA2UIAction");
 
-      const bundleRes = await captureA2uiResponse(`${A2UI_PATH}/a2ui.bundle.js`);
+      const bundleRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/a2ui.bundle.js`);
       const js = bundleRes.body;
       expect(bundleRes.status).toBe(200);
       expect(js).toContain("openclawA2UI");
-      const traversalRes = await captureA2uiResponse(`${A2UI_PATH}/%2e%2e%2fpackage.json`);
+
+      const assetRes = await captureA2uiFixtureResponse(
+        a2uiRoot,
+        `${A2UI_PATH}/assets/demo/sample.txt`,
+      );
+      expect(assetRes.status).toBe(200);
+      expect(assetRes.headers["content-type"]).toBe("text/plain");
+      expect(assetRes.body).toBe("nested asset");
+
+      const traversalRes = await captureA2uiFixtureResponse(
+        a2uiRoot,
+        `${A2UI_PATH}/%2e%2e%2fpackage.json`,
+      );
       expect(traversalRes.status).toBe(404);
       expect(traversalRes.body).toBe("not found");
-      const malformedRes = await captureA2uiResponse(`${A2UI_PATH}/%E0%A4%A`);
+      const malformedRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/%E0%A4%A`);
       expect(malformedRes.status).toBe(404);
       expect(malformedRes.body).toBe("not found");
-      const symlinkRes = await captureA2uiResponse(`${A2UI_PATH}/${linkName}`);
+      const symlinkRes = await captureA2uiFixtureResponse(a2uiRoot, `${A2UI_PATH}/${linkName}`);
       expect(symlinkRes.status).toBe(404);
       expect(symlinkRes.body).toBe("not found");
     } finally {
-      if (createdLink) {
-        await fs.rm(linkPath, { force: true });
-      }
-      if (createdBundle) {
-        await fs.rm(bundlePath, { force: true });
-      }
+      await fs.rm(linkPath, { force: true });
     }
   });
 });

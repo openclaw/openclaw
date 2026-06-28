@@ -1,22 +1,24 @@
+// Coordinates parsed reply directives before get-reply executes commands or agents.
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
 import { type ModelAliasIndex, resolveModelRefFromString } from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
-import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
+import type { SkillCommandSpec } from "../../skills/types.js";
 import { shouldHandleTextCommands } from "../commands-text-routing.js";
 import type { MsgContext, TemplateContext } from "../templating.js";
 import {
   normalizeThinkLevel,
   type ElevatedLevel,
+  type FastMode,
   type ReasoningLevel,
   type ThinkLevel,
   type VerboseLevel,
@@ -50,7 +52,9 @@ type AgentDefaults = NonNullable<OpenClawConfig["agents"]>["defaults"];
 const commandsRegistryLoader = createLazyImportLoader(
   () => import("../commands-registry.runtime.js"),
 );
-const skillCommandsLoader = createLazyImportLoader(() => import("../skill-commands.runtime.js"));
+const skillCommandsLoader = createLazyImportLoader(
+  () => import("../../skills/discovery/chat-commands.runtime.js"),
+);
 
 function loadCommandsRegistry() {
   return commandsRegistryLoader.load();
@@ -102,7 +106,7 @@ function resolveDirectiveCommandText(params: { ctx: MsgContext; sessionCtx: Temp
   };
 }
 
-export type ReplyDirectiveContinuation = {
+type ReplyDirectiveContinuation = {
   commandSource: string;
   command: ReturnType<typeof buildCommandContext>;
   allowTextCommands: boolean;
@@ -115,7 +119,10 @@ export type ReplyDirectiveContinuation = {
   elevatedFailures: Array<{ gate: string; key: string }>;
   defaultActivation: ReturnType<typeof defaultGroupActivation>;
   resolvedThinkLevel: ThinkLevel | undefined;
-  resolvedFastMode: boolean;
+  resolvedFastMode: FastMode;
+  resolvedFastModeAutoOnSeconds: number;
+  resolvedFastModeOverride: boolean;
+  resolvedFastModeAutoOnSecondsOverride: boolean;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
   resolvedElevatedLevel: ElevatedLevel;
@@ -142,7 +149,7 @@ export type ReplyDirectiveContinuation = {
   };
 };
 
-export type ReplyDirectiveResult =
+type ReplyDirectiveResult =
   | { kind: "reply"; reply: ReplyPayload | ReplyPayload[] | undefined }
   | { kind: "continue"; result: ReplyDirectiveContinuation };
 
@@ -171,6 +178,8 @@ export async function resolveReplyDirectives(params: {
   aliasIndex: ModelAliasIndex;
   provider: string;
   model: string;
+  hasOneTurnModelOverride?: boolean;
+  skipStoredModelOverride?: boolean;
   hasResolvedHeartbeatModelOverride: boolean;
   typing: TypingController;
   opts?: GetReplyOptions;
@@ -200,6 +209,8 @@ export async function resolveReplyDirectives(params: {
     primaryModel,
     provider: initialProvider,
     model: initialModel,
+    hasOneTurnModelOverride,
+    skipStoredModelOverride,
     hasResolvedHeartbeatModelOverride,
     typing,
     opts,
@@ -433,16 +444,6 @@ export async function resolveReplyDirectives(params: {
     : (targetSessionEntry?.thinkingLevel as ThinkLevel | undefined);
   const resolvedThinkLevel =
     normalizeThinkLevel(opts?.thinkingLevelOverride) ?? directives.thinkLevel ?? sessionThinkLevel;
-  const resolvedFastMode =
-    opts?.fastModeOverride ??
-    directives.fastMode ??
-    resolveFastModeState({
-      cfg,
-      provider,
-      model,
-      agentId,
-      sessionEntry: directives.clearFastMode ? undefined : targetSessionEntry,
-    }).enabled;
 
   const resolvedVerboseLevel =
     directives.verboseLevel ??
@@ -535,6 +536,8 @@ export async function resolveReplyDirectives(params: {
         provider,
         model,
         hasModelDirective: directives.hasModelDirective,
+        hasOneTurnModelOverride,
+        skipStoredModelOverride,
         hasResolvedHeartbeatModelOverride,
         isHeartbeat: opts?.isHeartbeat === true,
       });
@@ -579,6 +582,8 @@ export async function resolveReplyDirectives(params: {
         agentCfg,
         provider,
         model,
+        modelContextWindow: modelState.modelContextWindow,
+        modelContextTokens: modelState.modelContextTokens,
       });
 
   const initialModelLabel = `${provider}/${model}`;
@@ -636,6 +641,20 @@ export async function resolveReplyDirectives(params: {
   model = applyResult.model;
   contextTokens = applyResult.contextTokens;
   const { directiveAck, perMessageQueueMode, perMessageQueueOptions } = applyResult;
+  const resolvedFastModeState = resolveFastModeState({
+    cfg,
+    provider,
+    model,
+    agentId,
+    sessionEntry: directives.clearFastMode ? undefined : targetSessionEntry,
+  });
+  const resolvedFastMode =
+    opts?.fastModeOverride ?? directives.fastMode ?? resolvedFastModeState.mode;
+  const resolvedFastModeAutoOnSeconds =
+    opts?.fastModeAutoOnSecondsOverride ?? resolvedFastModeState.fastAutoOnSeconds;
+  const resolvedFastModeOverride =
+    opts?.fastModeOverride !== undefined || directives.fastMode !== undefined;
+  const resolvedFastModeAutoOnSecondsOverride = opts?.fastModeAutoOnSecondsOverride !== undefined;
   const execOverrides = resolveReplyExecOverrides({
     directives,
     sessionEntry: targetSessionEntry,
@@ -658,6 +677,9 @@ export async function resolveReplyDirectives(params: {
       defaultActivation,
       resolvedThinkLevel: resolvedThinkLevelWithDefault,
       resolvedFastMode,
+      resolvedFastModeAutoOnSeconds,
+      resolvedFastModeOverride,
+      resolvedFastModeAutoOnSecondsOverride,
       resolvedVerboseLevel,
       resolvedReasoningLevel,
       resolvedElevatedLevel,

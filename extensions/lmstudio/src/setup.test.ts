@@ -1,3 +1,4 @@
+// Lmstudio tests cover setup plugin behavior.
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
@@ -11,6 +12,8 @@ import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
+  LMSTUDIO_DEFAULT_INFERENCE_BASE_URL,
+  LMSTUDIO_DOCKER_HOST_INFERENCE_BASE_URL,
   LMSTUDIO_LOCAL_API_KEY_PLACEHOLDER,
 } from "./defaults.js";
 import {
@@ -177,6 +180,54 @@ function createQueuedWizardPrompterHarness(textValues: string[]): {
     }),
   };
   return { prompter, note, text };
+}
+
+function createMethodBoundWizardPrompterHarness(textValues: string[]): {
+  prompter: WizardPrompter;
+  note: ReturnType<typeof vi.fn>;
+  text: ReturnType<typeof vi.fn>;
+} {
+  const queue = [...textValues];
+  const note = vi.fn(async (_message: string, _title?: string) => {});
+  const text = vi.fn(async () => queue.shift() ?? "");
+
+  class MethodBoundWizardPrompter implements WizardPrompter {
+    async intro() {}
+    async outro() {}
+    async note(message: string, title?: string) {
+      await this.recordNote(message, title);
+    }
+    async select<T>(params: { options: Array<{ value: T }> }) {
+      const firstOption = params.options[0];
+      if (!firstOption) {
+        throw new Error("select called without options");
+      }
+      return firstOption.value;
+    }
+    async multiselect() {
+      return [];
+    }
+    async text() {
+      return await this.readText();
+    }
+    async confirm() {
+      return false;
+    }
+    progress() {
+      return {
+        update: () => {},
+        stop: () => {},
+      };
+    }
+    private async readText() {
+      return await text();
+    }
+    private async recordNote(message: string, title?: string) {
+      await note(message, title);
+    }
+  }
+
+  return { prompter: new MethodBoundWizardPrompter(), note, text };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -702,11 +753,17 @@ describe("lmstudio setup", () => {
     const ctx = buildNonInteractiveContext({
       customModelId: "missing-model",
     });
+    const dockerSetup = ["1", "true", "yes", "on"].includes(
+      process.env.OPENCLAW_DOCKER_SETUP?.trim().toLowerCase() ?? "",
+    );
+    const expectedBaseUrl = dockerSetup
+      ? LMSTUDIO_DOCKER_HOST_INFERENCE_BASE_URL
+      : LMSTUDIO_DEFAULT_INFERENCE_BASE_URL;
 
     await expect(configureLmstudioNonInteractive(ctx)).resolves.toBeNull();
 
     expect(ctx.runtime.error).toHaveBeenCalledWith(
-      "LM Studio model missing-model was not found at http://localhost:1234/v1.\nAvailable models: qwen3-8b-instruct",
+      `LM Studio model missing-model was not found at ${expectedBaseUrl}.\nAvailable models: qwen3-8b-instruct`,
     );
     expect(ctx.runtime.exit).toHaveBeenCalledWith(1);
     expect(configureSelfHostedNonInteractiveMock).not.toHaveBeenCalled();
@@ -787,6 +844,43 @@ describe("lmstudio setup", () => {
       contextTokens: 4096,
       maxTokens: 4096,
     });
+  });
+
+  it("interactive setup preserves gateway wizard prompter method binding", async () => {
+    const { prompter, text } = createMethodBoundWizardPrompterHarness([
+      "http://localhost:1234/api/v1/",
+      "lmstudio-test-key",
+      "4096",
+    ]);
+
+    const result = await promptAndConfigureLmstudioInteractive({
+      config: buildConfig(),
+      prompter,
+    });
+
+    expect(text).toHaveBeenCalledTimes(3);
+    expect(result.defaultModel).toBe("lmstudio/qwen3-8b-instruct");
+  });
+
+  it("interactive setup preserves gateway wizard note binding on discovery failure", async () => {
+    fetchLmstudioModelsMock.mockResolvedValueOnce({ reachable: false, models: [] });
+    const { prompter, note, text } = createMethodBoundWizardPrompterHarness([
+      "http://localhost:1234/api/v1/",
+      "lmstudio-test-key",
+    ]);
+
+    await expect(
+      promptAndConfigureLmstudioInteractive({
+        config: buildConfig(),
+        prompter,
+      }),
+    ).rejects.toThrow("LM Studio not reachable");
+
+    expect(text).toHaveBeenCalledTimes(2);
+    expect(note).toHaveBeenCalledWith(
+      "LM Studio could not be reached at http://localhost:1234/v1.\nStart LM Studio (or run lms server start) and re-run setup.",
+      "LM Studio",
+    );
   });
 
   it("interactive setup accepts a blank API key for unauthenticated local LM Studio", async () => {
@@ -1134,6 +1228,20 @@ describe("lmstudio setup", () => {
       },
     },
     {
+      name: "ignores unresolved apiKey template when Authorization header is configured",
+      providerPatch: {
+        apiKey: "${LMSTUDIO_API_KEY}",
+        headers: {
+          Authorization: "Bearer custom-token",
+        },
+      },
+      expectedProviderPatch: {
+        headers: {
+          Authorization: "Bearer custom-token",
+        },
+      },
+    },
+    {
       name: "still injects lmstudio-local when only non-auth headers are configured",
       providerPatch: {
         headers: {
@@ -1333,6 +1441,38 @@ describe("lmstudio setup", () => {
             },
           },
         } as OpenClawConfig,
+      }),
+    );
+
+    expect(discoverLmstudioModelsMock).toHaveBeenCalledWith({
+      baseUrl: "http://localhost:1234/v1",
+      apiKey: "resolved-discovery-key",
+      headers: undefined,
+      quiet: false,
+    });
+  });
+
+  it("discoverLmstudioProvider ignores an unresolved apiKey template when discoveryApiKey is resolved", async () => {
+    discoverLmstudioModelsMock.mockResolvedValueOnce([
+      createModel("qwen3-8b-instruct", "Qwen3 8B"),
+    ]);
+
+    await discoverLmstudioProvider(
+      buildDiscoveryContext({
+        discoveryApiKey: "resolved-discovery-key",
+        config: {
+          models: {
+            providers: {
+              lmstudio: {
+                baseUrl: "http://localhost:1234/v1",
+                api: "openai-completions",
+                apiKey: "${LMSTUDIO_API_KEY}",
+                models: [],
+              },
+            },
+          },
+        } as OpenClawConfig,
+        env: {},
       }),
     );
 

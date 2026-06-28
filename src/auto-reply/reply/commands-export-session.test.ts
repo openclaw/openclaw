@@ -1,3 +1,4 @@
+// Tests session export command packaging, filesystem writes, and prompt bundle capture.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -15,12 +16,14 @@ const hoisted = await vi.hoisted(async () => {
       sandboxRuntime: { sandboxed: false, mode: "off" },
     })),
     writeFileMock: vi.fn(
-      async (_filePath: string, _data: string, _encoding?: BufferEncoding) => undefined,
+      async (_filePath: string, _dataValue: string, _encoding?: BufferEncoding) => undefined,
     ),
     mkdirMock: vi.fn(async (_filePath: string, _options?: { recursive?: boolean }) => undefined),
     accessMock: vi.fn(async (_filePath: string) => undefined),
     pathExistsMock: vi.fn(async (_filePath: string) => true),
+    migrateSessionEntriesMock: vi.fn((_entries: unknown[]) => undefined),
     exportHtmlTemplateContents: new Map<string, string>(),
+    sessionTranscriptContent: "",
   };
 });
 
@@ -42,6 +45,14 @@ vi.mock("../../infra/fs-safe.js", () => ({
   pathExists: hoisted.pathExistsMock,
 }));
 
+vi.mock("../../agents/sessions/session-manager.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../agents/sessions/session-manager.js")>();
+  return {
+    ...actual,
+    migrateSessionEntries: hoisted.migrateSessionEntriesMock,
+  };
+});
+
 vi.mock("node:fs", async () => {
   const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
   const mockedFs = {
@@ -55,7 +66,7 @@ vi.mock("node:fs", async () => {
       if (filePath.includes("/export-html/")) {
         return actual.readFileSync(filePath, "utf8");
       }
-      return "";
+      return actual.readFileSync(filePath, "utf8");
     }),
   };
   return {
@@ -73,7 +84,7 @@ vi.mock("node:fs/promises", async () => {
     writeFile: hoisted.writeFileMock,
     readFile: vi.fn(async (filePath: string, encoding?: BufferEncoding) => {
       if (filePath === "/tmp/target-store/session.jsonl") {
-        return "";
+        return hoisted.sessionTranscriptContent;
       }
       for (const [suffix, contents] of hoisted.exportHtmlTemplateContents) {
         if (filePath.endsWith(suffix)) {
@@ -182,6 +193,7 @@ describe("buildExportSessionReply", () => {
     hoisted.accessMock.mockResolvedValue(undefined);
     hoisted.pathExistsMock.mockResolvedValue(true);
     hoisted.exportHtmlTemplateContents.clear();
+    hoisted.sessionTranscriptContent = "";
   });
 
   it("resolves store and transcript paths from the target session agent", async () => {
@@ -253,12 +265,201 @@ describe("buildExportSessionReply", () => {
           header: null,
           entries: [],
           leafId: null,
+          hasLeafControl: false,
           systemPrompt: "system prompt",
           tools: [],
         }),
       ).toString("base64"),
     );
     expect(html).toContain('const base64 = document.getElementById("session-data").textContent;');
+  });
+
+  it("exports the active target selected by a terminal leaf control", async () => {
+    const entries = [
+      {
+        type: "message",
+        id: "active-tail",
+        parentId: null,
+        timestamp: "2026-06-15T00:00:01.000Z",
+        message: { role: "assistant", content: "active" },
+      },
+      {
+        type: "message",
+        id: "inactive-tail",
+        parentId: "active-tail",
+        timestamp: "2026-06-15T00:00:02.000Z",
+        message: { role: "assistant", content: "side delivery" },
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "inactive-tail",
+        timestamp: "2026-06-15T00:00:03.000Z",
+        targetId: "active-tail",
+      },
+    ];
+    hoisted.sessionTranscriptContent = entries.map((entry) => JSON.stringify(entry)).join("\n");
+
+    await buildExportSessionReply(makeParams());
+
+    expect(writtenHtml()).toContain(
+      Buffer.from(
+        JSON.stringify({
+          header: null,
+          entries: [entries[0], entries[1], { ...entries[2], parentId: "active-tail" }],
+          leafId: "active-tail",
+          hasLeafControl: true,
+          systemPrompt: "system prompt",
+          tools: [],
+        }),
+      ).toString("base64"),
+    );
+  });
+
+  it("normalizes a leaf control parent before exporting its active descendant", async () => {
+    const rawEntries = [
+      {
+        type: "message",
+        id: "active-tail",
+        parentId: null,
+        timestamp: "2026-06-15T00:00:01.000Z",
+        message: { role: "assistant", content: "active" },
+      },
+      {
+        type: "message",
+        id: "inactive-tail",
+        parentId: "active-tail",
+        timestamp: "2026-06-15T00:00:02.000Z",
+        message: { role: "assistant", content: "side delivery" },
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "inactive-tail",
+        timestamp: "2026-06-15T00:00:03.000Z",
+        targetId: "active-tail",
+      },
+      {
+        type: "message",
+        id: "replacement",
+        parentId: "active-leaf",
+        timestamp: "2026-06-15T00:00:04.000Z",
+        message: { role: "assistant", content: "replacement" },
+      },
+    ];
+    hoisted.sessionTranscriptContent = rawEntries.map((entry) => JSON.stringify(entry)).join("\n");
+
+    await buildExportSessionReply(makeParams());
+
+    expect(writtenHtml()).toContain(
+      Buffer.from(
+        JSON.stringify({
+          header: null,
+          entries: [
+            rawEntries[0],
+            rawEntries[1],
+            { ...rawEntries[2], parentId: "active-tail" },
+            { ...rawEntries[3], parentId: "active-tail" },
+          ],
+          leafId: "replacement",
+          hasLeafControl: true,
+          systemPrompt: "system prompt",
+          tools: [],
+        }),
+      ).toString("base64"),
+    );
+  });
+
+  it("normalizes parentless history addressed by a leaf control", async () => {
+    const rawEntries = [
+      {
+        type: "message",
+        id: "active-root",
+        timestamp: "2026-06-15T00:00:01.000Z",
+        message: { role: "user", content: "root" },
+      },
+      {
+        type: "message",
+        id: "active-tail",
+        timestamp: "2026-06-15T00:00:02.000Z",
+        message: { role: "assistant", content: "active" },
+      },
+      {
+        type: "message",
+        id: "inactive-tail",
+        parentId: "active-tail",
+        timestamp: "2026-06-15T00:00:03.000Z",
+        message: { role: "assistant", content: "side delivery" },
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "inactive-tail",
+        timestamp: "2026-06-15T00:00:04.000Z",
+        targetId: "active-tail",
+      },
+    ];
+    hoisted.sessionTranscriptContent = rawEntries.map((entry) => JSON.stringify(entry)).join("\n");
+
+    await buildExportSessionReply(makeParams());
+
+    expect(writtenHtml()).toContain(
+      Buffer.from(
+        JSON.stringify({
+          header: null,
+          entries: [
+            { ...rawEntries[0], parentId: null },
+            { ...rawEntries[1], parentId: "active-root" },
+            rawEntries[2],
+            { ...rawEntries[3], parentId: "active-tail" },
+          ],
+          leafId: "active-tail",
+          hasLeafControl: true,
+          systemPrompt: "system prompt",
+          tools: [],
+        }),
+      ).toString("base64"),
+    );
+  });
+
+  it("preserves an explicitly empty branch selected by a terminal leaf control", async () => {
+    const entries = [
+      {
+        type: "message",
+        id: "inactive-tail",
+        parentId: null,
+        timestamp: "2026-06-15T00:00:01.000Z",
+        message: { role: "assistant", content: "inactive" },
+      },
+      {
+        type: "leaf",
+        id: "empty-leaf",
+        parentId: "inactive-tail",
+        timestamp: "2026-06-15T00:00:02.000Z",
+        targetId: null,
+      },
+      {
+        type: "metadata",
+        id: "opaque-after-leaf",
+        parentId: "inactive-tail",
+      },
+    ];
+    hoisted.sessionTranscriptContent = entries.map((entry) => JSON.stringify(entry)).join("\n");
+
+    await buildExportSessionReply(makeParams());
+
+    expect(writtenHtml()).toContain(
+      Buffer.from(
+        JSON.stringify({
+          header: null,
+          entries: [entries[0], { ...entries[1], parentId: null }, entries[2]],
+          leafId: null,
+          hasLeafControl: true,
+          systemPrompt: "system prompt",
+          tools: [],
+        }),
+      ).toString("base64"),
+    );
   });
 
   it("suffixes colliding default export filenames instead of overwriting", async () => {
@@ -312,5 +513,41 @@ describe("buildExportSessionReply", () => {
     expect(html).toContain("const marker = '$&$1';");
     expect(html).toContain("const markedMarker = '$&$1';");
     expect(html).toContain("const highlightMarker = '$&$1';");
+  });
+
+  it("reports malformed transcript rows without leaking parser details", async () => {
+    hoisted.sessionTranscriptContent = [
+      JSON.stringify({ type: "session", version: 3, id: "session-1" }),
+      '{"type":"message",',
+      JSON.stringify({
+        type: "message",
+        id: "entry-1",
+        timestamp: "2026-05-16T00:00:00.000Z",
+        message: { role: "user", content: "valid user" },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "entry-2",
+        timestamp: "2026-05-16T00:00:01.000Z",
+        message: { content: "missing role" },
+      }),
+      JSON.stringify({
+        type: "message",
+        id: "entry-3",
+        timestamp: "2026-05-16T00:00:02.000Z",
+        message: { role: "assistant", content: "valid assistant" },
+      }),
+    ].join("\n");
+
+    const reply = await buildExportSessionReply(makeParams());
+
+    expect(reply.text).toContain("📊 Entries: 2");
+    expect(reply.text).toContain(
+      "⚠️ Skipped 1 malformed transcript row that was not valid JSON. rows 2",
+    );
+    expect(reply.text).toContain(
+      "⚠️ Skipped 1 malformed transcript row that was not a session entry. rows 4",
+    );
+    expect(reply.text).not.toMatch(/Unexpected|SyntaxError|position/i);
   });
 });

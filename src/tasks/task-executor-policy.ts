@@ -1,6 +1,8 @@
+// Decides task executor delivery, terminal update, and follow-up message policy.
 import type { TaskEventRecord, TaskRecord, TaskStatus } from "./task-registry.types.js";
 import { formatTaskStatusTitleText, sanitizeTaskStatusText } from "./task-status.js";
 
+/** Returns whether a task status is terminal for delivery and retention policy. */
 export function isTerminalTaskStatus(status: TaskStatus): boolean {
   return (
     status === "succeeded" ||
@@ -26,7 +28,10 @@ function resolveTaskRunLabel(task: TaskRecord): string {
   return task.runId ? ` (run ${task.runId.slice(0, 8)})` : "";
 }
 
-export function formatTaskTerminalMessage(task: TaskRecord): string {
+export function formatTaskTerminalMessage(
+  task: TaskRecord,
+  options: { surface?: "direct" | "parent_session" } = {},
+): string {
   const title = resolveTaskDisplayTitle(task);
   const runLabel = resolveTaskRunLabel(task);
   const summary = sanitizeTaskStatusText(task.terminalSummary, {
@@ -37,6 +42,12 @@ export function formatTaskTerminalMessage(task: TaskRecord): string {
       return summary
         ? `Background task blocked: ${title}${runLabel}. ${summary}`
         : `Background task blocked: ${title}${runLabel}.`;
+    }
+    if (options.surface === "parent_session") {
+      const reviewNext = "Next: parent will review/verify before calling it done.";
+      return summary
+        ? `Background task ready for review: ${title}${runLabel}. ${summary} ${reviewNext}`
+        : `Background task ready for review: ${title}${runLabel}. ${reviewNext}`;
     }
     return summary
       ? `Background task done: ${title}${runLabel}. ${summary}`
@@ -60,6 +71,15 @@ export function formatTaskTerminalMessage(task: TaskRecord): string {
     : fallbackSummary
       ? `Background task failed: ${title}${runLabel}. ${fallbackSummary}`
       : `Background task failed: ${title}${runLabel}.`;
+}
+
+export function shouldUseParentReviewTaskTerminalMessage(task: TaskRecord): boolean {
+  return (
+    task.runtime === "acp" &&
+    task.status === "succeeded" &&
+    task.terminalOutcome !== "blocked" &&
+    Boolean(task.childSessionKey?.trim())
+  );
 }
 
 export function formatTaskBlockedFollowupMessage(task: TaskRecord): string | null {

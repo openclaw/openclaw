@@ -1,7 +1,8 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
+// Lmstudio tests cover stream plugin behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
+import { resetLmstudioPreloadCooldownForTest, wrapLmstudioInferencePreload } from "./stream.js";
 
 const ensureLmstudioModelLoadedMock = vi.hoisted(() => vi.fn());
 const resolveLmstudioProviderHeadersMock = vi.hoisted(() =>
@@ -89,6 +90,18 @@ function expectBaseStreamModelFields(baseStream: StreamFn, fields: Record<string
   expect(call[2]).toBeUndefined();
 }
 
+function expectBaseStreamCallModelFields(
+  baseStream: StreamFn,
+  callIndex: number,
+  fields: Record<string, unknown>,
+) {
+  const call = (baseStream as unknown as { mock: { calls: unknown[][] } }).mock.calls[callIndex];
+  if (!call) {
+    throw new Error(`expected base stream call ${callIndex}`);
+  }
+  expectRecordFields(requireRecord(call[0], "base stream model"), fields);
+}
+
 async function collectEvents(stream: ReturnType<StreamFn>): Promise<StreamEvent[]> {
   const resolved = stream instanceof Promise ? await stream : stream;
   const events: StreamEvent[] = [];
@@ -124,7 +137,7 @@ function buildEventStreamFn(events: unknown[]): StreamFn {
 
 function createWrappedLmstudioStream(
   baseStream: StreamFn,
-  params?: { baseUrl?: string },
+  params?: { baseUrl?: string; thinkingLevel?: string },
 ): StreamFn {
   return wrapLmstudioInferencePreload({
     provider: "lmstudio",
@@ -140,8 +153,26 @@ function createWrappedLmstudioStream(
       },
     },
     streamFn: baseStream,
+    thinkingLevel: params?.thinkingLevel,
   } as never);
 }
+
+function buildPayloadStreamFn(payload: Record<string, unknown>): StreamFn {
+  return vi.fn((model, _context, options) => {
+    const stream = createAssistantMessageEventStream();
+    queueMicrotask(() => {
+      options?.onPayload?.(payload, model);
+      stream.push({ type: "done", reason: "stop", message: {} as never });
+      stream.end();
+    });
+    return stream;
+  });
+}
+
+const BINARY_REASONING_COMPAT = {
+  supportedReasoningEfforts: ["none", "minimal", "low", "medium", "high", "xhigh"],
+  reasoningEffortMap: { off: "none", none: "none", adaptive: "xhigh", max: "xhigh" },
+};
 
 function runWrappedLmstudioStream(
   wrapped: StreamFn,
@@ -163,7 +194,7 @@ function runWrappedLmstudioStream(
 
 describe("lmstudio stream wrapper", () => {
   beforeEach(() => {
-    __resetLmstudioPreloadCooldownForTest();
+    resetLmstudioPreloadCooldownForTest();
   });
 
   afterEach(() => {
@@ -173,7 +204,7 @@ describe("lmstudio stream wrapper", () => {
     resolveLmstudioRuntimeApiKeyMock.mockReset();
     resolveLmstudioProviderHeadersMock.mockResolvedValue(undefined);
     resolveLmstudioRuntimeApiKeyMock.mockResolvedValue(undefined);
-    __resetLmstudioPreloadCooldownForTest();
+    resetLmstudioPreloadCooldownForTest();
   });
 
   it("preloads LM Studio model before inference using model context window", async () => {
@@ -199,6 +230,25 @@ describe("lmstudio stream wrapper", () => {
     });
   });
 
+  it("streams with the canonical model key returned by preload", async () => {
+    ensureLmstudioModelLoadedMock.mockResolvedValueOnce("gemma-4-e4b-it-ultra-uncensored-heretic");
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const variantKey = "gemma-4-e4b-it-ultra-uncensored-heretic@q4_k_m";
+    const stream = runWrappedLmstudioStream(wrapped, { id: `lmstudio/${variantKey}` });
+    const events = await collectEvents(stream);
+
+    expectSingleDoneEvent(events);
+    expectEnsureLoadedFields({
+      modelKey: variantKey,
+      baseUrl: "http://localhost:1234/v1",
+    });
+    expectBaseStreamModelFields(baseStream, {
+      provider: "lmstudio",
+      id: "gemma-4-e4b-it-ultra-uncensored-heretic",
+    });
+  });
+
   it("prefers model contextTokens over contextWindow for preload requests", async () => {
     const baseStream = buildDoneStreamFn();
     const wrapped = createWrappedLmstudioStream(baseStream, {
@@ -217,6 +267,32 @@ describe("lmstudio stream wrapper", () => {
       baseUrl: "http://lmstudio.internal:1234/v1",
       modelKey: "qwen3-8b-instruct",
       requestedContextLength: 64000,
+      apiKey: "lmstudio-token",
+      ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
+    });
+  });
+
+  it("omits malformed preload context lengths", async () => {
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream, {
+      baseUrl: "http://lmstudio.internal:1234/v1",
+    });
+    const stream = runWrappedLmstudioStream(
+      wrapped,
+      {
+        contextTokens: 64000.5,
+        contextWindow: Number.POSITIVE_INFINITY,
+      },
+      { apiKey: "lmstudio-token" },
+    );
+    const events = await collectEvents(stream);
+
+    expectSingleDoneEvent(events);
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
+    expectEnsureLoadedFields({
+      baseUrl: "http://lmstudio.internal:1234/v1",
+      modelKey: "qwen3-8b-instruct",
+      requestedContextLength: undefined,
       apiKey: "lmstudio-token",
       ssrfPolicy: { allowedHostnames: ["lmstudio.internal"] },
     });
@@ -253,6 +329,57 @@ describe("lmstudio stream wrapper", () => {
     const events = await collectEvents(stream);
     expectSingleDoneEvent(events);
     expect(baseStream).toHaveBeenCalledTimes(1);
+  });
+
+  it("streams with the canonical model key when preload fails after discovery", async () => {
+    ensureLmstudioModelLoadedMock.mockRejectedValueOnce(
+      Object.assign(new Error("load failed"), {
+        resolvedModelKey: "gemma-4-e4b-it-ultra-uncensored-heretic",
+      }),
+    );
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const stream = runWrappedLmstudioStream(wrapped, {
+      id: "lmstudio/gemma-4-e4b-it-ultra-uncensored-heretic@q4_k_m",
+    });
+    const events = await collectEvents(stream);
+
+    expectSingleDoneEvent(events);
+    expect(baseStream).toHaveBeenCalledTimes(1);
+    expectBaseStreamModelFields(baseStream, {
+      provider: "lmstudio",
+      id: "gemma-4-e4b-it-ultra-uncensored-heretic",
+    });
+  });
+
+  it("reuses the canonical model key while preload failure cooldown is active", async () => {
+    const canonicalKey = "gemma-4-e4b-it-ultra-uncensored-heretic";
+    const variantModel = {
+      id: `lmstudio/${canonicalKey}@q4_k_m`,
+    };
+    ensureLmstudioModelLoadedMock.mockRejectedValueOnce(
+      Object.assign(new Error("load failed"), {
+        resolvedModelKey: canonicalKey,
+      }),
+    );
+    const baseStream = buildDoneStreamFn();
+    const wrapped = createWrappedLmstudioStream(baseStream);
+
+    const firstEvents = await collectEvents(runWrappedLmstudioStream(wrapped, variantModel));
+    const secondEvents = await collectEvents(runWrappedLmstudioStream(wrapped, variantModel));
+
+    expectSingleDoneEvent(firstEvents);
+    expectSingleDoneEvent(secondEvents);
+    expect(ensureLmstudioModelLoadedMock).toHaveBeenCalledTimes(1);
+    expect(baseStream).toHaveBeenCalledTimes(2);
+    expectBaseStreamCallModelFields(baseStream, 0, {
+      provider: "lmstudio",
+      id: canonicalKey,
+    });
+    expectBaseStreamCallModelFields(baseStream, 1, {
+      provider: "lmstudio",
+      id: canonicalKey,
+    });
   });
 
   it("skips native model preload when provider params disable it", async () => {
@@ -654,5 +781,70 @@ describe("lmstudio stream wrapper", () => {
         delta: rawToolText,
       },
     );
+  });
+
+  it("rewrites reasoning_effort to the disabled effort when thinking is off", async () => {
+    const payload: Record<string, unknown> = {
+      model: "qwen3-8b-instruct",
+      reasoning_effort: "high",
+    };
+    const baseStream = buildPayloadStreamFn(payload);
+    const wrapped = createWrappedLmstudioStream(baseStream, { thinkingLevel: "off" });
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, { compat: BINARY_REASONING_COMPAT }),
+    );
+
+    expectSingleDoneEvent(events);
+    expect(payload.reasoning_effort).toBe("none");
+  });
+
+  it("drops reasoning_effort on thinking off when the model has no disabled effort", async () => {
+    const payload: Record<string, unknown> = {
+      model: "qwen3-8b-instruct",
+      reasoning_effort: "high",
+    };
+    const baseStream = buildPayloadStreamFn(payload);
+    const wrapped = createWrappedLmstudioStream(baseStream, { thinkingLevel: "off" });
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, {
+        compat: {
+          supportedReasoningEfforts: ["minimal", "low", "medium", "high", "xhigh"],
+          reasoningEffortMap: { adaptive: "xhigh", max: "xhigh" },
+        },
+      }),
+    );
+
+    expectSingleDoneEvent(events);
+    expect("reasoning_effort" in payload).toBe(false);
+  });
+
+  it("keeps reasoning_effort untouched for enabled thinking levels", async () => {
+    const payload: Record<string, unknown> = {
+      model: "qwen3-8b-instruct",
+      reasoning_effort: "high",
+    };
+    const baseStream = buildPayloadStreamFn(payload);
+    const wrapped = createWrappedLmstudioStream(baseStream, { thinkingLevel: "high" });
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, { compat: BINARY_REASONING_COMPAT }),
+    );
+
+    expectSingleDoneEvent(events);
+    expect(payload.reasoning_effort).toBe("high");
+  });
+
+  it("keeps reasoning_effort untouched without a thinking level", async () => {
+    const payload: Record<string, unknown> = {
+      model: "qwen3-8b-instruct",
+      reasoning_effort: "high",
+    };
+    const baseStream = buildPayloadStreamFn(payload);
+    const wrapped = createWrappedLmstudioStream(baseStream);
+    const events = await collectEvents(
+      runWrappedLmstudioStream(wrapped, { compat: BINARY_REASONING_COMPAT }),
+    );
+
+    expectSingleDoneEvent(events);
+    expect(payload.reasoning_effort).toBe("high");
   });
 });

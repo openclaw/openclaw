@@ -1,3 +1,8 @@
+/** Resolves bundled document extractor providers from enabled manifest contracts. */
+import {
+  normalizeStringEntries,
+  sortUniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEnabledBundledManifestContractPlugins } from "./bundled-manifest-contract-plugins.js";
 import { loadBundledDocumentExtractorEntriesFromDir } from "./document-extractor-public-artifacts.js";
@@ -27,18 +32,15 @@ function resolveExplicitAllowedDocumentExtractorPluginIds(params: {
     params.onlyPluginIds && params.onlyPluginIds.length > 0 ? new Set(params.onlyPluginIds) : null;
   const deniedPluginIds = new Set(params.config?.plugins?.deny ?? []);
   const entries = params.config?.plugins?.entries ?? {};
-  return [
-    ...new Set(
-      allow
-        .map((pluginId) => pluginId.trim())
-        .filter(Boolean)
-        .filter((pluginId) => !onlyPluginIdSet || onlyPluginIdSet.has(pluginId))
-        .filter((pluginId) => !deniedPluginIds.has(pluginId))
-        .filter((pluginId) => entries[pluginId]?.enabled !== false),
-    ),
-  ].toSorted((left, right) => left.localeCompare(right));
+  return sortUniqueStrings(
+    normalizeStringEntries(allow)
+      .filter((pluginId) => !onlyPluginIdSet || onlyPluginIdSet.has(pluginId))
+      .filter((pluginId) => !deniedPluginIds.has(pluginId))
+      .filter((pluginId) => entries[pluginId]?.enabled !== false),
+  );
 }
 
+/** Returns enabled document extractors in deterministic auto-detect order. */
 export function resolvePluginDocumentExtractors(params?: {
   config?: OpenClawConfig;
   workspaceDir?: string;
@@ -60,8 +62,7 @@ export function resolvePluginDocumentExtractors(params?: {
       onlyPluginIds: params?.onlyPluginIds,
       contract: "documentExtractors",
       compatMode: {
-        allowlist: false,
-        enablement: "allowlist",
+        enablement: "always",
         vitest: true,
       },
     }).map((plugin) => plugin.id);

@@ -1,3 +1,4 @@
+// Every-job firing tests cover repeated schedule execution semantics.
 import { describe, expect, it, vi } from "vitest";
 import { CronService } from "./service.js";
 import {
@@ -12,6 +13,10 @@ const noopLogger = createNoopLogger();
 const { makeStorePath } = createCronStoreHarness();
 installCronTestHooks({ logger: noopLogger });
 
+function expectCronRunSessionKey(value: unknown, jobId: string) {
+  expect(value).toMatch(new RegExp(`^agent:main:cron:${jobId}:run:\\d+$`));
+}
+
 describe("CronService interval/cron jobs fire on time", () => {
   const runLateTimerAndLoadJob = async ({
     cron,
@@ -25,8 +30,9 @@ describe("CronService interval/cron jobs fire on time", () => {
     firstDueAt: number;
   }) => {
     vi.setSystemTime(new Date(firstDueAt + 5));
+    const finishedRun = finished.waitForOk(jobId);
     await vi.runOnlyPendingTimersAsync();
-    await finished.waitForOk(jobId);
+    await finishedRun;
     const jobs = await cron.list({ includeDisabled: true });
     return jobs.find((current) => current.id === jobId);
   };
@@ -34,6 +40,7 @@ describe("CronService interval/cron jobs fire on time", () => {
   const expectMainSystemEvent = (
     enqueueSystemEvent: ReturnType<typeof vi.fn>,
     expectedText: string,
+    jobId: string,
   ) => {
     const matchingCall = enqueueSystemEvent.mock.calls.find(([text]) => text === expectedText);
     if (!matchingCall) {
@@ -41,7 +48,7 @@ describe("CronService interval/cron jobs fire on time", () => {
     }
     const options = matchingCall[1] as Record<string, unknown>;
     expect(options.agentId).toBeUndefined();
-    expect(options.sessionKey).toBeUndefined();
+    expectCronRunSessionKey(options.sessionKey, jobId);
     expect(typeof options.contextKey).toBe("string");
     expect(String(options.contextKey).startsWith("cron:")).toBe(true);
   };
@@ -85,7 +92,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       jobId: job.id,
       firstDueAt,
     });
-    expectMainSystemEvent(enqueueSystemEvent, "tick");
+    expectMainSystemEvent(enqueueSystemEvent, "tick", job.id);
     expect(updated?.state.lastStatus).toBe("ok");
     // nextRunAtMs must advance by at least one full interval past the due time.
     expect(updated?.state.nextRunAtMs).toBeGreaterThanOrEqual(firstDueAt + 10_000);
@@ -122,7 +129,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       jobId: job.id,
       firstDueAt,
     });
-    expectMainSystemEvent(enqueueSystemEvent, "cron-tick");
+    expectMainSystemEvent(enqueueSystemEvent, "cron-tick", job.id);
     expect(updated?.state.lastStatus).toBe("ok");
     // nextRunAtMs should be the next whole-minute boundary (60s later).
     expect(updated?.state.nextRunAtMs).toBe(firstDueAt + 60_000);
@@ -131,7 +138,7 @@ describe("CronService interval/cron jobs fire on time", () => {
     await store.cleanup();
   });
 
-  it("keeps legacy every jobs due while minute cron jobs recompute schedules", async () => {
+  it("keeps every jobs due while minute cron jobs recompute schedules", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
     const requestHeartbeat = vi.fn();
@@ -141,8 +148,8 @@ describe("CronService interval/cron jobs fire on time", () => {
       storePath: store.storePath,
       jobs: [
         {
-          id: "legacy-every",
-          name: "legacy every",
+          id: "loaded-every",
+          name: "loaded every",
           enabled: true,
           createdAtMs: nowMs,
           updatedAtMs: nowMs,
@@ -177,7 +184,7 @@ describe("CronService interval/cron jobs fire on time", () => {
     });
 
     await cron.start();
-    // Perf: a few recomputation cycles are enough to catch legacy "every" drift.
+    // Perf: a few recomputation cycles are enough to catch "every" drift.
     for (let minute = 1; minute <= 3; minute++) {
       vi.setSystemTime(new Date(nowMs + minute * 60_000));
       const minuteRun = await cron.run("minute-cron", "force");
@@ -186,7 +193,7 @@ describe("CronService interval/cron jobs fire on time", () => {
 
     // "every" cadence is 2m; verify it stays due at the 6-minute boundary.
     vi.setSystemTime(new Date(nowMs + 6 * 60_000));
-    const sfRun = await cron.run("legacy-every", "due");
+    const sfRun = await cron.run("loaded-every", "due");
     expect(sfRun).toEqual({ ok: true, ran: true });
 
     const sfRuns = countMainSystemEvents(enqueueSystemEvent, "sf-tick");
@@ -195,7 +202,7 @@ describe("CronService interval/cron jobs fire on time", () => {
     expect(sfRuns).toBeGreaterThan(0);
 
     const jobs = await cron.list({ includeDisabled: true });
-    const sfJob = jobs.find((job) => job.id === "legacy-every");
+    const sfJob = jobs.find((job) => job.id === "loaded-every");
     expect(sfJob?.state.lastStatus).toBe("ok");
     expect(sfJob?.schedule.kind).toBe("every");
     expect(sfJob?.state.nextRunAtMs).toBe(nowMs + 8 * 60_000);

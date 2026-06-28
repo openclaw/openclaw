@@ -1,5 +1,7 @@
+// Sandbox env sanitizer tests cover credential filtering for inherited and
+// explicitly configured sandbox environment variables.
 import { describe, expect, it } from "vitest";
-import { sanitizeEnvVars } from "./sanitize-env-vars.js";
+import { sanitizeEnvVars, sanitizeExplicitSandboxEnvVars } from "./sanitize-env-vars.js";
 
 describe("sanitizeEnvVars", () => {
   it("keeps normal env vars and blocks obvious credentials", () => {
@@ -64,5 +66,34 @@ describe("sanitizeEnvVars", () => {
 
     expect(result.allowed).toEqual({ NODE_ENV: "test" });
     expect(result.blocked).toStrictEqual([]);
+  });
+
+  it("allows explicit configured sandbox env names that look like credentials", () => {
+    // Explicit sandbox env config is operator intent; value validation still
+    // runs, but name-based credential blocking does not.
+    const result = sanitizeExplicitSandboxEnvVars({
+      GEMINI_API_KEY: "dummy-gemini-api-key",
+      GOOGLE_CLIENT_SECRET: "dummy-google-client-secret",
+      HIMALAYA_PASSWORD: "dummy-himalaya-password",
+      RESEND_API_KEY: "dummy-resend-api-key",
+    });
+
+    expect(result.allowed).toEqual({
+      GEMINI_API_KEY: "dummy-gemini-api-key",
+      GOOGLE_CLIENT_SECRET: "dummy-google-client-secret",
+      HIMALAYA_PASSWORD: "dummy-himalaya-password",
+      RESEND_API_KEY: "dummy-resend-api-key",
+    });
+    expect(result.blocked).toStrictEqual([]);
+  });
+
+  it("still blocks invalid explicit configured sandbox env values", () => {
+    const result = sanitizeExplicitSandboxEnvVars({
+      SAFE_SECRET: "ok",
+      NULL_SECRET: "a\0b",
+    });
+
+    expect(result.allowed).toEqual({ SAFE_SECRET: "ok" });
+    expect(result.blocked).toStrictEqual(["NULL_SECRET"]);
   });
 });

@@ -1,12 +1,13 @@
+/** Builds minimal, portable environment blocks for managed daemon services. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isNodeVersionManagerRuntime,
   resolveLinuxSystemCaBundle,
 } from "../bootstrap/node-extra-ca-certs.js";
 import { resolveNodeStartupTlsEnvironment } from "../bootstrap/node-startup-env.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import { VERSION } from "../version.js";
 import {
   GATEWAY_SERVICE_KIND,
@@ -65,6 +66,8 @@ export const SERVICE_PROXY_ENV_KEYS = [
 function readServiceProxyEnvironment(
   env: Record<string, string | undefined>,
 ): Record<string, string | undefined> {
+  // Service env intentionally preserves only the canonical OpenClaw proxy knob;
+  // generic shell proxy vars are audited but not frozen into services.
   const proxyUrl = normalizeOptionalString(env.OPENCLAW_PROXY_URL);
   return proxyUrl ? { OPENCLAW_PROXY_URL: proxyUrl } : {};
 }
@@ -90,6 +93,8 @@ function realpathServicePathDir(dir: string): string | undefined {
 function realpathExistingServicePathDir(dir: string): string | undefined {
   const parts: string[] = [];
   let current = dir;
+  // Resolve the nearest existing ancestor so future-created bin dirs can still
+  // be compared against the install workspace realpath.
   while (current && current !== path.posix.dirname(current)) {
     const realCurrent = realpathServicePathDir(current);
     if (realCurrent) {
@@ -333,6 +338,8 @@ function resolveLinuxUserBinDirs(
 export function getMinimalServicePathParts(options: MinimalServicePathOptions = {}): string[] {
   const platform = options.platform ?? process.platform;
   if (platform === "win32") {
+    // Windows scheduled tasks inherit PATH from the task host; generated cmd
+    // launchers should not freeze install-time PATH snapshots.
     return [];
   }
 
@@ -391,6 +398,14 @@ export function buildMinimalServicePath(options: BuildServicePathOptions = {}): 
   return getMinimalServicePathPartsFromEnv({ ...options, env }).join(path.posix.delimiter);
 }
 
+function resolveGatewaySystemdUnitEnv(env: Record<string, string | undefined>): string {
+  const override = normalizeOptionalString(env.OPENCLAW_SYSTEMD_UNIT);
+  if (override) {
+    return override.endsWith(".service") ? override : `${override}.service`;
+  }
+  return `${resolveGatewaySystemdServiceName(env.OPENCLAW_PROFILE)}.service`;
+}
+
 export function buildServiceEnvironment(params: {
   env: Record<string, string | undefined>;
   port: number;
@@ -411,7 +426,7 @@ export function buildServiceEnvironment(params: {
   const wrapperPath = normalizeOptionalString(env.OPENCLAW_WRAPPER);
   const resolvedLaunchdLabel =
     launchdLabel || (platform === "darwin" ? resolveGatewayLaunchAgentLabel(profile) : undefined);
-  const systemdUnit = `${resolveGatewaySystemdServiceName(profile)}.service`;
+  const systemdUnit = resolveGatewaySystemdUnitEnv(env);
   return {
     ...buildCommonServiceEnvironment(env, sharedEnv),
     OPENCLAW_PROFILE: profile,
@@ -420,6 +435,7 @@ export function buildServiceEnvironment(params: {
     OPENCLAW_LAUNCHD_LABEL: resolvedLaunchdLabel,
     OPENCLAW_SYSTEMD_UNIT: systemdUnit,
     OPENCLAW_WINDOWS_TASK_NAME: resolveGatewayWindowsTaskName(profile),
+    OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
     OPENCLAW_SERVICE_MARKER: GATEWAY_SERVICE_MARKER,
     OPENCLAW_SERVICE_KIND: GATEWAY_SERVICE_KIND,
     OPENCLAW_SERVICE_VERSION: VERSION,
@@ -449,6 +465,7 @@ export function buildNodeServiceEnvironment(params: {
     OPENCLAW_LAUNCHD_LABEL: resolveNodeLaunchAgentLabel(),
     OPENCLAW_SYSTEMD_UNIT: resolveNodeSystemdServiceName(),
     OPENCLAW_WINDOWS_TASK_NAME: resolveNodeWindowsTaskName(),
+    OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1",
     OPENCLAW_TASK_SCRIPT_NAME: NODE_WINDOWS_TASK_SCRIPT_NAME,
     OPENCLAW_LOG_PREFIX: "node",
     OPENCLAW_SERVICE_MARKER: NODE_SERVICE_MARKER,

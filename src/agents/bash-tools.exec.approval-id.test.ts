@@ -1,9 +1,15 @@
+/**
+ * Exec approval id routing tests.
+ * Covers approval registration ids, follow-up idempotency, and approved
+ * node/gateway invocation behavior.
+ */
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { sendMessage } from "../infra/outbound/message.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { buildSystemRunPreparePayload } from "../test-utils/system-run-prepare-payload.js";
 import { createExecTool } from "./bash-tools.exec.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -29,22 +35,37 @@ vi.mock("../infra/outbound/message.js", () => ({
 }));
 
 vi.mock("../utils/message-channel.js", () => {
+  const INTERNAL_MESSAGE_CHANNEL = "webchat";
+  const NATIVE_APPROVAL_CHANNELS = new Set([
+    "webchat",
+    "discord",
+    "googlechat",
+    "imessage",
+    "matrix",
+    "qqbot",
+    "signal",
+    "slack",
+    "telegram",
+    "whatsapp",
+  ]);
   const normalizeMessageChannel = (raw?: string | null) => {
     const normalized = raw?.trim().toLowerCase();
     if (!normalized) {
       return undefined;
     }
-    if (normalized === "web" || normalized === "webchat") {
-      return "internal";
+    if (normalized === "web") {
+      return INTERNAL_MESSAGE_CHANNEL;
     }
     return normalized;
   };
   const isGatewayMessageChannel = (value: string) => Boolean(normalizeMessageChannel(value));
   return {
-    INTERNAL_MESSAGE_CHANNEL: "internal",
+    INTERNAL_MESSAGE_CHANNEL,
+    isNativeApprovalChannel: (value?: string | null) =>
+      typeof value === "string" && NATIVE_APPROVAL_CHANNELS.has(value),
     isDeliverableMessageChannel: (value: string) => {
       const channel = normalizeMessageChannel(value);
-      return Boolean(channel && channel !== "internal" && channel !== "tui");
+      return Boolean(channel && channel !== INTERNAL_MESSAGE_CHANNEL && channel !== "tui");
     },
     isGatewayMessageChannel,
     normalizeMessageChannel,
@@ -92,12 +113,12 @@ vi.mock("../infra/exec-approval-surface.js", () => ({
       kind: "enabled",
       channel,
       channelLabel:
-        channel === "tui" ? "terminal UI" : channel === "internal" ? "Web UI" : "this platform",
+        channel === "tui" ? "terminal UI" : channel === "webchat" ? "Web UI" : "this platform",
       accountId: params.accountId ?? undefined,
     };
   },
   supportsNativeExecApprovalClient: (channel?: string | null) =>
-    !channel || channel === "internal" || channel === "tui",
+    !channel || channel === "webchat" || channel === "tui",
 }));
 
 vi.mock("../infra/shell-env.js", () => ({
@@ -163,7 +184,6 @@ vi.mock("../process/supervisor/index.js", () => {
       },
       cancel: vi.fn(),
       cancelScope: vi.fn(),
-      reconcileOrphans: vi.fn(),
       getRecord: vi.fn(),
     }),
   };
@@ -384,10 +404,7 @@ function expectRecordFields(
 }
 
 describe("exec approvals", () => {
-  let previousHome: string | undefined;
-  let previousUserProfile: string | undefined;
-  let previousBundledPluginsDir: string | undefined;
-  let previousDisableBundledPlugins: string | undefined;
+  let envSnapshot: ReturnType<typeof captureEnv> | undefined;
   let tempRoot = "";
   let tempCaseIndex = 0;
 
@@ -396,43 +413,27 @@ describe("exec approvals", () => {
   });
 
   beforeEach(async () => {
-    previousHome = process.env.HOME;
-    previousUserProfile = process.env.USERPROFILE;
-    previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    previousDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+    envSnapshot = captureEnv([
+      "HOME",
+      "USERPROFILE",
+      "OPENCLAW_BUNDLED_PLUGINS_DIR",
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+    ]);
     const tempDir = path.join(tempRoot, `case-${++tempCaseIndex}`);
     await fs.mkdir(tempDir, { recursive: true });
-    process.env.HOME = tempDir;
+    setTestEnvValue("HOME", tempDir);
     // Windows uses USERPROFILE for os.homedir()
-    process.env.USERPROFILE = tempDir;
-    delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = "1";
+    setTestEnvValue("USERPROFILE", tempDir);
+    deleteTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR");
+    setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
     vi.mocked(callGatewayTool).mockReset();
     vi.mocked(sendMessage).mockClear();
   });
 
   afterEach(() => {
     vi.clearAllMocks();
-    if (previousHome === undefined) {
-      delete process.env.HOME;
-    } else {
-      process.env.HOME = previousHome;
-    }
-    if (previousUserProfile === undefined) {
-      delete process.env.USERPROFILE;
-    } else {
-      process.env.USERPROFILE = previousUserProfile;
-    }
-    if (previousBundledPluginsDir === undefined) {
-      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    } else {
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = previousBundledPluginsDir;
-    }
-    if (previousDisableBundledPlugins === undefined) {
-      delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
-    } else {
-      process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = previousDisableBundledPlugins;
-    }
+    envSnapshot?.restore();
+    envSnapshot = undefined;
   });
 
   afterAll(async () => {
@@ -975,7 +976,7 @@ describe("exec approvals", () => {
     );
   });
 
-  it("continues the original agent session after approved gateway exec completes with an external route", async () => {
+  it("continues the original agent session after approved gateway exec completes with a non-native external route", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
 
     mockAcceptedApprovalFlow({
@@ -988,15 +989,15 @@ describe("exec approvals", () => {
       host: "gateway",
       ask: "always",
       approvalRunningNoticeMs: 0,
-      sessionKey: "agent:main:discord:channel:123",
+      sessionKey: "agent:main:feishu:channel:123",
       elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
-      messageProvider: "discord",
+      messageProvider: "feishu",
       currentChannelId: "123",
       accountId: "default",
       currentThreadTs: "456",
     });
 
-    const result = await tool.execute("call-gw-followup-discord", {
+    const result = await tool.execute("call-gw-followup-feishu", {
       command: "echo ok",
       workdir: process.cwd(),
     });
@@ -1004,10 +1005,10 @@ describe("exec approvals", () => {
     expect(result.details.status).toBe("approval-pending");
     await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
     expectRecordFields(agentCalls[0], {
-      sessionKey: "agent:main:discord:channel:123",
+      sessionKey: "agent:main:feishu:channel:123",
       deliver: true,
       bestEffortDeliver: true,
-      channel: "discord",
+      channel: "feishu",
       to: "123",
       accountId: "default",
       threadId: "456",
@@ -1020,7 +1021,7 @@ describe("exec approvals", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("auto-continues the same Discord session after approval resolves without a second user turn", async () => {
+  it("waits inline for native Discord approval and resumes the same session without a second user turn", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
     let resolveDecision: ((value: { decision: string }) => void) | undefined;
     const decisionPromise = new Promise<{ decision: string }>((resolve) => {
@@ -1053,35 +1054,58 @@ describe("exec approvals", () => {
       currentThreadTs: "456",
     });
 
-    const result = await tool.execute("call-gw-followup-discord-delayed", {
+    let settled = false;
+    const resultPromise = tool.execute("call-gw-followup-discord-delayed", {
       command: "printf delayed-ok",
       workdir: process.cwd(),
     });
+    void resultPromise.then(() => {
+      settled = true;
+    });
 
-    expect(result.details.status).toBe("approval-pending");
+    await Promise.resolve();
+    expect(settled).toBe(false);
     expect(agentCalls).toHaveLength(0);
 
     resolveDecision?.({ decision: "allow-once" });
 
-    await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
-    expectRecordFields(agentCalls[0], {
-      sessionKey: "agent:main:discord:channel:123",
-      deliver: true,
-      bestEffortDeliver: true,
-      channel: "discord",
-      to: "123",
-      accountId: "default",
-      threadId: "456",
-    });
-    expect(typeof agentCalls[0]?.message).toBe("string");
-    expect(agentCalls[0]?.message).toContain(
-      "If the task requires more steps, continue from this result before replying to the user.",
-    );
-    expect(agentCalls[0]?.message).toContain("delayed-ok");
+    const result = await resultPromise;
+
+    expect(result.details.status).toBe("completed");
+    expect(getResultText(result)).toContain("delayed-ok");
+    expect(agentCalls).toHaveLength(0);
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
-  it("executes approved commands and emits a session-only followup in webchat-only mode", async () => {
+  it("waits for native webchat approval and returns approved gateway output as a foreground result", async () => {
+    const agentCalls: Array<Record<string, unknown>> = [];
+
+    mockAcceptedApprovalFlow({
+      onAgent: (params) => {
+        agentCalls.push(params);
+      },
+    });
+
+    const tool = createExecTool({
+      host: "gateway",
+      ask: "always",
+      approvalRunningNoticeMs: 0,
+      sessionKey: "agent:main:main",
+      elevated: { enabled: true, allowed: true, defaultLevel: "ask" },
+      messageProvider: "webchat",
+    });
+
+    const result = await tool.execute("call-gw-native-webchat", {
+      command: "printf webchat-ok",
+      workdir: process.cwd(),
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect(getResultText(result)).toContain("webchat-ok");
+    expect(agentCalls).toHaveLength(0);
+  });
+
+  it("keeps approved internal commands asynchronous without a webchat turn source", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
 
     mockAcceptedApprovalFlow({
@@ -1113,7 +1137,7 @@ describe("exec approvals", () => {
     expect(agentCalls[0]?.message).toContain("webchat-ok");
   });
 
-  it("uses a deny-specific followup prompt so prior output is not reused", async () => {
+  it("routes denied approval status through the originating session", async () => {
     const agentCalls: Array<Record<string, unknown>> = [];
 
     vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
@@ -1144,15 +1168,19 @@ describe("exec approvals", () => {
     });
 
     expect(result.details.status).toBe("approval-pending");
+    const approvalId = (result.details as { approvalId?: string }).approvalId;
+    expect(typeof approvalId).toBe("string");
     await expect.poll(() => agentCalls.length, { timeout: 3000, interval: 1 }).toBe(1);
-    expect(typeof agentCalls[0]?.message).toBe("string");
+    expectRecordFields(agentCalls[0], {
+      sessionKey: "agent:main:main",
+      deliver: false,
+      idempotencyKey: `exec-approval-followup:${approvalId}`,
+    });
     expect(agentCalls[0]?.message).toContain("An async command did not run.");
     expect(agentCalls[0]?.message).toContain(
-      "Do not mention, summarize, or reuse output from any earlier run in this session.",
+      `Exec denied (gateway id=${approvalId}, user-denied): echo ok`,
     );
-    expect(agentCalls[0]?.message).not.toContain(
-      "An async command the user already approved has completed.",
-    );
+    expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("requires a separate approval for each elevated command after allow-once", async () => {
@@ -1228,28 +1256,25 @@ describe("exec approvals", () => {
     expect(calls).toContain("exec.approval.request");
   });
 
-  it("runs a skill wrapper chain without prompting when the wrapper is allowlisted", async () => {
+  it("runs a direct skill wrapper command without prompting when the wrapper is allowlisted", async () => {
     if (process.platform === "win32") {
       return;
     }
     const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-wrapper-"));
     try {
-      const skillDir = path.join(tempDir, ".openclaw", "skills", "gog");
-      const skillPath = path.join(skillDir, "SKILL.md");
       const binDir = path.join(tempDir, "bin");
       const wrapperPath = path.join(binDir, "gog-wrapper");
-      await fs.mkdir(skillDir, { recursive: true });
       await fs.mkdir(binDir, { recursive: true });
-      await fs.writeFile(skillPath, "# gog skill\n");
       await fs.writeFile(wrapperPath, "#!/bin/sh\necho '{\"events\":[]}'\n");
       await fs.chmod(wrapperPath, 0o755);
+      const trustedWrapperPath = await fs.realpath(wrapperPath);
 
       await writeExecApprovalsConfig({
         version: 1,
         defaults: { security: "allowlist", ask: "off", askFallback: "deny" },
         agents: {
           main: {
-            allowlist: [{ pattern: wrapperPath }],
+            allowlist: [{ pattern: trustedWrapperPath }],
           },
         },
       });
@@ -1265,13 +1290,72 @@ describe("exec approvals", () => {
       });
 
       const result = await tool.execute("call-skill-wrapper", {
-        command: `cat ${JSON.stringify(skillPath)} && printf '\\n---CMD---\\n' && ${JSON.stringify(wrapperPath)} calendar events primary --today --json`,
+        command: `${JSON.stringify(wrapperPath)} calendar events primary --today --json`,
         workdir: tempDir,
       });
 
       expect(result.details.status).toBe("completed");
       expect(getResultText(result)).toContain('{"events":[]}');
       expect(calls).not.toContain("exec.approval.request");
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires approval for the legacy skill display prelude even when the wrapper is allowlisted", async () => {
+    if (process.platform === "win32") {
+      return;
+    }
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-prelude-"));
+    try {
+      const skillDir = path.join(tempDir, ".openclaw", "skills", "gog");
+      const skillPath = path.join(skillDir, "SKILL.md");
+      const binDir = path.join(tempDir, "bin");
+      const wrapperPath = path.join(binDir, "gog-wrapper");
+      await fs.mkdir(skillDir, { recursive: true });
+      await fs.mkdir(binDir, { recursive: true });
+      await fs.writeFile(skillPath, "# gog skill\n");
+      await fs.writeFile(wrapperPath, "#!/bin/sh\necho '{\"events\":[]}'\n");
+      await fs.chmod(wrapperPath, 0o755);
+      const trustedWrapperPath = await fs.realpath(wrapperPath);
+
+      await writeExecApprovalsConfig({
+        version: 1,
+        defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
+        agents: {
+          main: {
+            allowlist: [{ pattern: trustedWrapperPath }],
+          },
+        },
+      });
+
+      const calls: string[] = [];
+      vi.mocked(callGatewayTool).mockImplementation(async (method, _opts, params) => {
+        calls.push(method);
+        if (method === "exec.approval.request") {
+          return acceptedApprovalResponse(params);
+        }
+        if (method === "exec.approval.waitDecision") {
+          return { decision: "deny" };
+        }
+        return { ok: true };
+      });
+
+      const tool = createExecTool({
+        host: "gateway",
+        ask: "on-miss",
+        security: "allowlist",
+        approvalRunningNoticeMs: 0,
+      });
+
+      const command = `cat ${JSON.stringify(skillPath)} && printf '\\n---CMD---\\n' && ${JSON.stringify(wrapperPath)} calendar events primary --today --json`;
+      const result = await tool.execute("call-skill-prelude", {
+        command,
+        workdir: tempDir,
+      });
+
+      expectPendingCommandText(result, command);
+      expect(calls).toContain("exec.approval.request");
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }

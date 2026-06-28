@@ -1,10 +1,16 @@
+/**
+ * Bundled channel catalog reader.
+ *
+ * Loads channel metadata from generated package catalogs and bundled plugin package manifests.
+ */
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 type ChannelCatalogEntryLike = {
   openclaw?: {
@@ -24,10 +30,14 @@ const officialCatalogFileCache = new Map<string, ChannelCatalogEntryLike[] | nul
 const bundledPackageCatalogCache = new Map<string, ChannelCatalogEntryLike[] | null>();
 
 function listPackageRoots(): string[] {
-  return [
-    resolveOpenClawPackageRootSync({ cwd: process.cwd() }),
-    resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
-  ].filter((entry, index, all): entry is string => Boolean(entry) && all.indexOf(entry) === index);
+  // Source checkouts and packaged installs can resolve OpenClaw from different roots; scan both
+  // once so channel metadata works in dev, linked packages, and published CLI layouts.
+  return uniqueStrings(
+    [
+      resolveOpenClawPackageRootSync({ cwd: process.cwd() }),
+      resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url }),
+    ].filter((entry): entry is string => Boolean(entry)),
+  );
 }
 
 function readBundledExtensionCatalogEntriesSync(): ChannelCatalogEntryLike[] {
@@ -116,17 +126,26 @@ function toBundledChannelEntry(
   };
 }
 
+/**
+ * Lists bundled channel catalog entries from package manifests and generated catalog files.
+ */
 export function listBundledChannelCatalogEntries(): BundledChannelCatalogEntry[] {
   const entries = new Map<string, BundledChannelCatalogEntry>();
-  for (const entry of readOfficialCatalogFileSync()
-    .map((entry) => toBundledChannelEntry(entry))
-    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry))) {
-    entries.set(entry.id, entry);
+  for (const entry of readBundledExtensionCatalogEntriesSync()) {
+    const channelEntry = toBundledChannelEntry(entry);
+    if (channelEntry) {
+      entries.set(channelEntry.id, channelEntry);
+    }
   }
-  for (const entry of readBundledExtensionCatalogEntriesSync()
-    .map((entry) => toBundledChannelEntry(entry))
-    .filter((entry): entry is BundledChannelCatalogEntry => Boolean(entry))) {
-    entries.set(entry.id, entry);
+  for (const entry of readOfficialCatalogFileSync()) {
+    const channelEntry = toBundledChannelEntry(entry);
+    if (channelEntry) {
+      // Package manifests win over the generated catalog when both describe the same id.
+      entries.set(channelEntry.id, entries.get(channelEntry.id) ?? channelEntry);
+    }
+  }
+  if (entries.size === 0) {
+    return [];
   }
   return Array.from(entries.values()).toSorted(
     (left, right) => left.order - right.order || left.id.localeCompare(right.id),

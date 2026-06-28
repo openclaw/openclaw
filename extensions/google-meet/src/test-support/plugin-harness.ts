@@ -1,3 +1,4 @@
+// Google Meet plugin module implements plugin harness behavior.
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { vi } from "vitest";
@@ -68,6 +69,7 @@ export function setupGoogleMeetPlugin(
   const tools: unknown[] = [];
   const cliRegistrations: unknown[] = [];
   const nodeHostCommands: unknown[] = [];
+  const nodeInvokePolicies: unknown[] = [];
   const nodesList = vi.fn(
     async () =>
       options.nodesListResult ?? {
@@ -164,6 +166,7 @@ export function setupGoogleMeetPlugin(
     },
     registerCli: (_registrar: unknown, opts: unknown) => cliRegistrations.push(opts),
     registerNodeHostCommand: (command: unknown) => nodeHostCommands.push(command),
+    registerNodeInvokePolicy: (policy: unknown) => nodeInvokePolicies.push(policy),
   });
   const originalPlatform = process.platform;
   Object.defineProperty(process, "platform", {
@@ -183,6 +186,7 @@ export function setupGoogleMeetPlugin(
     nodesList,
     nodesInvoke,
     nodeHostCommands,
+    nodeInvokePolicies,
   };
 }
 

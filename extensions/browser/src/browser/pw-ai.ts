@@ -1,3 +1,9 @@
+/**
+ * Playwright-backed browser helper barrel.
+ *
+ * Re-exports session and action helpers used by browser routes when Playwright
+ * is available for managed or CDP-backed profiles.
+ */
 import { markPwAiLoaded } from "./pw-ai-state.js";
 
 markPwAiLoaded();
@@ -10,9 +16,16 @@ export {
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   focusPageByTargetIdViaPlaywright,
+  createObservedDialogAbortSignalForPage,
+  getObservedBrowserStateForPage,
+  getObservedBrowserStateViaPlaywright,
   getPageForTargetId,
+  isBrowserObservedDialogBlockedError,
   listPagesViaPlaywright,
+  markObservedDialogsHandledRemotelyForPage,
   refLocator,
+  respondToObservedDialogOnPage,
+  respondToObservedDialogViaPlaywright,
 } from "./pw-session.js";
 
 export {

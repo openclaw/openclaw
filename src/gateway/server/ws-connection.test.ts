@@ -1,7 +1,14 @@
-import { EventEmitter } from "node:events";
+// Gateway WebSocket connection tests cover handshake auth, shared sessions, and message-handler attachment.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WebSocketServer } from "ws";
 import type { ResolvedGatewayAuth } from "../auth.js";
+import { MAX_BUFFERED_BYTES } from "../server-constants.js";
+import {
+  attachGatewayWsForTest,
+  createGatewayWsTestRequestContext,
+  createGatewayWsTestSocket,
+  createResolvedGatewayTokenAuth,
+  type GatewayWsTestSocket,
+} from "./ws-connection.test-helpers.js";
 
 const { attachGatewayWsMessageHandlerMock, broadcastPresenceSnapshotMock, upsertPresenceMock } =
   vi.hoisted(() => ({
@@ -23,23 +30,6 @@ vi.mock("./presence-events.js", () => ({
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import { resolveSharedGatewaySessionGeneration } from "./ws-shared-generation.js";
 
-function createLogger() {
-  return {
-    debug: vi.fn(),
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  };
-}
-
-function createResolvedAuth(token: string): ResolvedGatewayAuth {
-  return {
-    mode: "token",
-    allowTailscale: false,
-    token,
-  };
-}
-
 async function waitForLazyMessageHandler() {
   await vi.dynamicImportSettled();
 }
@@ -48,86 +38,28 @@ function firstAttachedHandlerParams(): unknown {
   return attachGatewayWsMessageHandlerMock.mock.calls[0]?.[0];
 }
 
-type TestSocket = EventEmitter & {
-  _socket: {
-    remoteAddress: string;
-    remotePort: number;
-    localAddress: string;
-    localPort: number;
-  };
-  send: ReturnType<typeof vi.fn>;
-  ping?: ReturnType<typeof vi.fn>;
-  close: ReturnType<typeof vi.fn>;
-};
-
-function createTestSocket(params: { ping?: boolean } = {}): TestSocket {
-  return Object.assign(new EventEmitter(), {
-    _socket: {
-      remoteAddress: "127.0.0.1",
-      remotePort: 1234,
-      localAddress: "127.0.0.1",
-      localPort: 5678,
-    },
-    send: vi.fn(),
-    ...(params.ping ? { ping: vi.fn() } : {}),
-    close: vi.fn(),
-  });
-}
-
 async function connectTestWs(
   params: {
     host?: string;
     headers?: Record<string, string>;
-    socket?: TestSocket;
+    socket?: GatewayWsTestSocket;
     clients?: Set<unknown>;
     options?: Partial<Parameters<typeof attachGatewayWsConnectionHandler>[0]>;
   } = {},
 ) {
-  const listeners = new Map<string, (...args: unknown[]) => void>();
-  const wss = {
-    on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
-      listeners.set(event, handler);
-    }),
-  } as unknown as WebSocketServer;
-  const socket = params.socket ?? createTestSocket();
-  const upgradeReq = {
-    headers: { host: params.host ?? "127.0.0.1:19001", ...params.headers },
-    socket: { localAddress: "127.0.0.1" },
-  };
-  const clients = params.clients ?? new Set<unknown>();
-
-  attachGatewayWsConnectionHandler({
-    wss,
-    clients: clients as never,
-    preauthConnectionBudget: { release: vi.fn() } as never,
-    port: 19001,
-    resolvedAuth: createResolvedAuth("token"),
-    preauthHandshakeTimeoutMs: 60_000,
-    gatewayMethods: [],
-    events: [],
-    refreshHealthSnapshot: vi.fn(async () => ({}) as never),
-    logGateway: createLogger() as never,
-    logHealth: createLogger() as never,
-    logWsControl: createLogger() as never,
-    extraHandlers: {},
-    broadcast: vi.fn(),
-    buildRequestContext: () =>
-      ({
-        unsubscribeAllSessionEvents: vi.fn(),
-        nodeRegistry: { unregister: vi.fn() },
-        nodeUnsubscribeAll: vi.fn(),
-      }) as never,
-    ...params.options,
+  const connected = attachGatewayWsForTest({
+    attach: attachGatewayWsConnectionHandler,
+    clients: params.clients,
+    headers: params.headers,
+    host: params.host,
+    options: params.options,
+    socket: params.socket,
   });
-
-  const onConnection = listeners.get("connection");
-  expect(onConnection).toBeTypeOf("function");
-  onConnection?.(socket, upgradeReq);
   await waitForLazyMessageHandler();
 
   return {
-    clients,
-    socket,
+    clients: connected.clients,
+    socket: connected.socket,
     passed: firstAttachedHandlerParams(),
   };
 }
@@ -144,7 +76,7 @@ describe("attachGatewayWsConnectionHandler", () => {
   });
 
   it("threads current auth getters into the handshake handler instead of a stale snapshot", async () => {
-    const initialAuth = createResolvedAuth("token-before");
+    const initialAuth = createResolvedGatewayTokenAuth("token-before");
     let currentAuth = initialAuth;
 
     const { passed } = await connectTestWs({
@@ -160,7 +92,7 @@ describe("attachGatewayWsConnectionHandler", () => {
       getRequiredSharedGatewaySessionGeneration?: () => string | undefined;
     };
 
-    currentAuth = createResolvedAuth("token-after");
+    currentAuth = createResolvedGatewayTokenAuth("token-after");
 
     expect(handlerParams.getResolvedAuth().token).toBe("token-after");
     expect(handlerParams.getRequiredSharedGatewaySessionGeneration?.()).toBe(
@@ -228,7 +160,7 @@ describe("attachGatewayWsConnectionHandler", () => {
 
   it("sends protocol pings until the connection closes", async () => {
     vi.useFakeTimers();
-    const socket = createTestSocket({ ping: true });
+    const socket = createGatewayWsTestSocket({ ping: true });
     const { passed } = await connectTestWs({ socket });
     const handlerParams = passed as {
       setClient: (client: unknown) => boolean;
@@ -250,54 +182,31 @@ describe("attachGatewayWsConnectionHandler", () => {
     expect(socket.ping).toHaveBeenCalledTimes(1);
   });
 
-  it("skips node presence disconnects for stale reconnected sockets", async () => {
-    const listeners = new Map<string, (...args: unknown[]) => void>();
-    const unregister = vi.fn(() => null);
-    const wss = {
-      on: vi.fn((event: string, handler: (...args: unknown[]) => void) => {
-        listeners.set(event, handler);
-      }),
-    } as unknown as WebSocketServer;
-    const socket = Object.assign(new EventEmitter(), {
-      _socket: {
-        remoteAddress: "127.0.0.1",
-        remotePort: 1234,
-        localAddress: "127.0.0.1",
-        localPort: 5678,
-      },
-      send: vi.fn(),
-      close: vi.fn(),
-    });
-    const upgradeReq = {
-      headers: { host: "127.0.0.1:19001" },
-      socket: { localAddress: "127.0.0.1" },
+  it("closes slow consumers before writing direct response frames", async () => {
+    const socket = createGatewayWsTestSocket();
+    const { passed } = await connectTestWs({ socket });
+    const handlerParams = passed as {
+      send: (frame: unknown) => void;
     };
+    socket.send.mockClear();
+    socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
 
-    attachGatewayWsConnectionHandler({
-      wss,
-      clients: new Set(),
-      preauthConnectionBudget: { release: vi.fn() } as never,
-      port: 19001,
-      resolvedAuth: createResolvedAuth("token"),
-      gatewayMethods: [],
-      events: [],
-      refreshHealthSnapshot: vi.fn(),
-      logGateway: createLogger() as never,
-      logHealth: createLogger() as never,
-      logWsControl: createLogger() as never,
-      extraHandlers: {},
-      broadcast: vi.fn(),
-      buildRequestContext: () =>
-        ({
-          unsubscribeAllSessionEvents: vi.fn(),
-          nodeRegistry: { unregister },
-          nodeUnsubscribeAll: vi.fn(),
-        }) as never,
+    handlerParams.send({ type: "res", id: "req-slow", ok: true, payload: { ok: true } });
+
+    expect(socket.send).not.toHaveBeenCalled();
+    expect(socket.close).toHaveBeenCalledWith(1008, "slow consumer");
+  });
+
+  it("skips node presence disconnects for stale reconnected sockets", async () => {
+    const unregister = vi.fn(() => null);
+    const { socket } = attachGatewayWsForTest({
+      attach: attachGatewayWsConnectionHandler,
+      options: {
+        refreshHealthSnapshot: vi.fn(),
+        buildRequestContext: () =>
+          createGatewayWsTestRequestContext({ nodeRegistry: { unregister } }) as never,
+      },
     });
-
-    const onConnection = listeners.get("connection");
-    expect(onConnection).toBeTypeOf("function");
-    onConnection?.(socket, upgradeReq);
     await waitForLazyMessageHandler();
 
     const passed = firstAttachedHandlerParams() as {

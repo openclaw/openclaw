@@ -1,13 +1,20 @@
+/** Applies directive-only command state changes without running the agent. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentDir, resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { renderExecTargetLabel } from "../../agents/bash-tools.exec-runtime.js";
 import { resolveExecDefaults } from "../../agents/exec-defaults.js";
-import { resolveFastModeState } from "../../agents/fast-mode.js";
+import {
+  formatFastModeCommandOptions,
+  formatFastModeCurrentStatus,
+  formatFastModeValue,
+  resolveFastModeState,
+} from "../../agents/fast-mode.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox.js";
-import { updateSessionStore } from "../../config/sessions.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { applyModelOverrideToSessionEntry } from "../../sessions/model-overrides.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 import {
   formatThinkingLevels,
   isThinkingLevelSupported,
@@ -19,8 +26,7 @@ import { maybeHandleModelDirectiveInfo } from "./directive-handling.model.js";
 import type { HandleDirectiveOnlyParams } from "./directive-handling.params.js";
 import { maybeHandleQueueDirective } from "./directive-handling.queue-validation.js";
 import {
-  canPersistInternalExecDirective,
-  canPersistInternalVerboseDirective,
+  canPersistSessionDirectiveDefaults,
   formatDirectiveAck,
   formatElevatedRuntimeHint,
   formatElevatedUnavailableText,
@@ -34,6 +40,7 @@ import type { ElevatedLevel, ReasoningLevel, ThinkLevel } from "./directives.js"
 import { refreshQueuedFollowupSession } from "./queue.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 
+/** Handles inline directives that can be acknowledged without a model turn. */
 export async function handleDirectiveOnly(
   params: HandleDirectiveOnlyParams,
 ): Promise<ReplyPayload | undefined> {
@@ -81,15 +88,19 @@ export async function handleDirectiveOnly(
     }),
   }).sandboxed;
   const shouldHintDirectRuntime = directives.hasElevatedDirective && !runtimeIsSandboxed;
-  const allowInternalExecPersistence = canPersistInternalExecDirective({
+  const allowInternalExecPersistence = canPersistSessionDirectiveDefaults({
     messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
+    commandAuthorized: params.commandAuthorized,
+    senderIsOwner: params.senderIsOwner,
   });
-  const allowInternalVerbosePersistence = canPersistInternalVerboseDirective({
+  const allowInternalVerbosePersistence = canPersistSessionDirectiveDefaults({
     messageProvider: params.messageProvider,
     surface: params.surface,
     gatewayClientScopes: params.gatewayClientScopes,
+    commandAuthorized: params.commandAuthorized,
+    senderIsOwner: params.senderIsOwner,
   });
 
   const modelInfo = await maybeHandleModelDirectiveInfo({
@@ -146,8 +157,8 @@ export async function handleDirectiveOnly(
   });
   const effectiveFastMode =
     directives.fastMode ??
-    (directives.clearFastMode ? fastModeState.enabled : currentFastMode) ??
-    fastModeState.enabled;
+    (directives.clearFastMode ? fastModeState.mode : currentFastMode) ??
+    fastModeState.mode;
   const effectiveFastModeSource =
     directives.fastMode !== undefined ? "session" : fastModeState.source;
 
@@ -197,21 +208,25 @@ export async function handleDirectiveOnly(
       !directives.rawFastMode ||
       normalizeLowercaseStringOrEmpty(directives.rawFastMode) === "status"
     ) {
-      const sourceSuffix =
-        effectiveFastModeSource === "config"
-          ? " (config)"
-          : effectiveFastModeSource === "default"
-            ? " (default)"
-            : "";
+      const statusText = formatFastModeCurrentStatus({
+        mode: effectiveFastMode,
+        source: effectiveFastModeSource,
+        fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
+      });
+      if (normalizeLowercaseStringOrEmpty(directives.rawFastMode) === "status") {
+        return { text: statusText };
+      }
       return {
         text: withOptions(
-          `Current fast mode: ${effectiveFastMode ? "on" : "off"}${sourceSuffix}.`,
-          "status, on, off, default",
+          statusText,
+          formatFastModeCommandOptions({
+            fastAutoOnSeconds: fastModeState.fastAutoOnSeconds,
+          }),
         ),
       };
     }
     return {
-      text: `Unrecognized fast mode "${directives.rawFastMode}". Valid levels: status, on, off, default.`,
+      text: `Unrecognized fast mode "${directives.rawFastMode}". Valid levels: on, off, auto, default, status.`,
     };
   }
   if (directives.hasReasoningDirective && !directives.reasoningLevel) {
@@ -376,7 +391,7 @@ export async function handleDirectiveOnly(
     (directives.hasFastDirective &&
       directives.fastMode !== undefined &&
       directives.fastMode !== currentFastMode) ||
-    (directives.clearFastMode && currentFastMode !== fastModeState.enabled);
+    (directives.clearFastMode && currentFastMode !== fastModeState.mode);
   let reasoningChanged =
     directives.hasReasoningDirective && directives.reasoningLevel !== undefined;
   if (shouldPersistSessionEntry) {
@@ -470,11 +485,19 @@ export async function handleDirectiveOnly(
     sessionEntry.updatedAt = Date.now();
     sessionStore[sessionKey] = sessionEntry;
     if (storePath) {
-      await updateSessionStore(storePath, (store) => {
-        store[sessionKey] = sessionEntry;
-      });
+      await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
     }
     if (modelSelection && modelSelectionUpdated && sessionKey) {
+      triggerSessionPatchHook({
+        cfg: params.cfg,
+        sessionEntry,
+        sessionKey,
+        patch: {
+          key: sessionKey,
+          model:
+            directives.rawModelDirective ?? `${modelSelection.provider}/${modelSelection.model}`,
+        },
+      });
       // `/model` should retarget queued/future work without interrupting the
       // active run. Refresh queued followups so they pick up the persisted
       // selection once the current turn finishes.
@@ -525,9 +548,11 @@ export async function handleDirectiveOnly(
     parts.push(formatDirectiveAck("Fast mode reset to default."));
   } else if (directives.hasFastDirective && directives.fastMode !== undefined) {
     parts.push(
-      directives.fastMode
-        ? formatDirectiveAck("Fast mode enabled.")
-        : formatDirectiveAck("Fast mode disabled."),
+      directives.fastMode === "auto"
+        ? formatDirectiveAck("Fast mode set to auto.")
+        : directives.fastMode
+          ? formatDirectiveAck("Fast mode enabled.")
+          : formatDirectiveAck("Fast mode disabled."),
     );
   }
   if (directives.hasVerboseDirective && directives.verboseLevel) {
@@ -566,7 +591,7 @@ export async function handleDirectiveOnly(
       directives.reasoningLevel === "off"
         ? formatDirectiveAck("Reasoning visibility disabled.")
         : directives.reasoningLevel === "stream"
-          ? formatDirectiveAck("Reasoning stream enabled (Telegram only).")
+          ? formatDirectiveAck("Reasoning stream enabled.")
           : formatDirectiveAck("Reasoning visibility enabled."),
     );
   }
@@ -639,10 +664,14 @@ export async function handleDirectiveOnly(
     parts.push(formatDirectiveAck(`Queue drop set to ${directives.dropPolicy}.`));
   }
   if (fastModeChanged) {
-    const nextFastMode = directives.clearFastMode ? fastModeState.enabled : sessionEntry.fastMode;
-    enqueueSystemEvent(`Fast mode ${nextFastMode ? "enabled" : "disabled"}.`, {
+    const nextFastMode = directives.clearFastMode ? fastModeState.mode : sessionEntry.fastMode;
+    const nextFastModeText =
+      nextFastMode === "auto"
+        ? "Fast mode set to auto."
+        : `Fast mode ${nextFastMode ? "enabled" : "disabled"}.`;
+    enqueueSystemEvent(nextFastModeText, {
       sessionKey,
-      contextKey: `fast:${nextFastMode ? "on" : "off"}`,
+      contextKey: `fast:${formatFastModeValue(nextFastMode)}`,
     });
   }
   const ack = parts.join(" ").trim();

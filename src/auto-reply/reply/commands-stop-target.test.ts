@@ -1,3 +1,4 @@
+// Tests stop command target resolution across active sessions and channel routes.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import {
@@ -12,15 +13,18 @@ import { handleStopCommand } from "./commands-session-abort.js";
 import "./commands-session-abort.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 
-const abortEmbeddedPiRunMock = vi.hoisted(() => vi.fn());
+const abortEmbeddedAgentRunMock = vi.hoisted(() => vi.fn());
 const createInternalHookEventMock = vi.hoisted(() => vi.fn(() => ({})));
 const persistAbortTargetEntryMock = vi.hoisted(() => vi.fn(async () => true));
-const replyRunAbortMock = vi.hoisted(() => vi.fn());
+const resolveCommandSessionEntryForKeyMock = vi.hoisted(() =>
+  vi.fn(() => ({ entry: undefined, key: undefined })),
+);
 const resolveSessionIdMock = vi.hoisted(() => vi.fn(() => undefined));
 const stopSubagentsForRequesterMock = vi.hoisted(() => vi.fn(() => ({ stopped: 0 })));
+const abortSessionRunTargetMock = vi.hoisted(() => vi.fn());
 
-vi.mock("../../agents/pi-embedded.js", () => ({
-  abortEmbeddedPiRun: abortEmbeddedPiRunMock,
+vi.mock("../../agents/embedded-agent.js", () => ({
+  abortEmbeddedAgentRun: abortEmbeddedAgentRunMock,
 }));
 
 vi.mock("../../globals.js", () => ({
@@ -38,20 +42,20 @@ vi.mock("./abort-cutoff.js", () => ({
 }));
 
 vi.mock("./abort.js", () => ({
+  abortSessionRunTarget: abortSessionRunTargetMock,
   formatAbortReplyText: vi.fn(() => "⚙️ Agent was aborted."),
   isAbortTrigger: vi.fn(() => false),
-  resolveSessionEntryForKey: vi.fn(() => ({ entry: undefined, key: undefined })),
   setAbortMemory: vi.fn(),
   stopSubagentsForRequester: stopSubagentsForRequesterMock,
 }));
 
 vi.mock("./commands-session-store.js", () => ({
   persistAbortTargetEntry: persistAbortTargetEntryMock,
+  resolveCommandSessionEntryForKey: resolveCommandSessionEntryForKeyMock,
 }));
 
 vi.mock("./reply-run-registry.js", () => ({
   replyRunRegistry: {
-    abort: replyRunAbortMock,
     resolveSessionId: resolveSessionIdMock,
   },
 }));
@@ -152,8 +156,11 @@ describe("handleStopCommand target fallback", () => {
       shouldContinue: false,
       reply: { text: "⚙️ Agent was aborted." },
     });
-    expect(replyRunAbortMock).toHaveBeenCalledWith("agent:target:telegram:direct:123");
-    expect(abortEmbeddedPiRunMock).not.toHaveBeenCalledWith("wrapper-session-id");
+    expect(abortSessionRunTargetMock).toHaveBeenCalledWith({
+      key: "agent:target:telegram:direct:123",
+      sessionId: undefined,
+    });
+    expect(abortEmbeddedAgentRunMock).not.toHaveBeenCalledWith("wrapper-session-id");
     const [[persistAbortTargetParams]] = persistAbortTargetEntryMock.mock.calls as unknown as Array<
       [
         {
@@ -223,7 +230,7 @@ describe("handleStopCommand target fallback", () => {
       shouldContinue: false,
       reply: { text: "You are not authorized to use this command." },
     });
-    expect(replyRunAbortMock).not.toHaveBeenCalled();
+    expect(abortSessionRunTargetMock).not.toHaveBeenCalled();
     expect(persistAbortTargetEntryMock).not.toHaveBeenCalled();
     expect(createInternalHookEventMock).not.toHaveBeenCalled();
     expect(stopSubagentsForRequesterMock).not.toHaveBeenCalled();

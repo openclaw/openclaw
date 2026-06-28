@@ -1,3 +1,4 @@
+// Ios Pin Version script supports OpenClaw repository automation.
 import path from "node:path";
 import {
   normalizePinnedIosVersion,
@@ -24,7 +25,7 @@ export type PinIosVersionResult = {
 
 function usage(): string {
   return [
-    "Usage: node --import tsx scripts/ios-pin-version.ts (--from-gateway | --version <YYYY.M.D>) [--no-sync] [--root dir]",
+    "Usage: node --import tsx scripts/ios-pin-version.ts (--from-gateway | --version <YYYY.M.PATCH>) [--no-sync] [--root dir]",
     "",
     "Examples:",
     "  node --import tsx scripts/ios-pin-version.ts --from-gateway",
@@ -46,7 +47,7 @@ export function parseArgs(argv: string[]): CliOptions {
         break;
       }
       case "--version": {
-        explicitVersion = argv[index + 1] ?? null;
+        explicitVersion = readOptionValue(argv, index, "--version");
         index += 1;
         break;
       }
@@ -55,10 +56,7 @@ export function parseArgs(argv: string[]): CliOptions {
         break;
       }
       case "--root": {
-        const value = argv[index + 1];
-        if (!value) {
-          throw new Error("Missing value for --root.");
-        }
+        const value = readOptionValue(argv, index, "--root");
         rootDir = path.resolve(value);
         index += 1;
         break;
@@ -75,7 +73,7 @@ export function parseArgs(argv: string[]): CliOptions {
   }
 
   if (fromGateway === (explicitVersion !== null)) {
-    throw new Error("Choose exactly one of --from-gateway or --version <YYYY.M.D>.");
+    throw new Error("Choose exactly one of --from-gateway or --version <YYYY.M.PATCH>.");
   }
 
   if (explicitVersion !== null && !explicitVersion.trim()) {
@@ -85,9 +83,17 @@ export function parseArgs(argv: string[]): CliOptions {
   return { explicitVersion, fromGateway, rootDir, sync };
 }
 
+function readOptionValue(argv: string[], index: number, flag: string): string {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("-")) {
+    throw new Error(`Missing value for ${flag}.`);
+  }
+  return value;
+}
+
 export function pinIosVersion(params: CliOptions): PinIosVersionResult {
   const rootDir = path.resolve(params.rootDir);
-  let previousVersion: string | null = null;
+  let previousVersion: string | null;
   try {
     previousVersion = resolveIosVersion(rootDir).canonicalVersion;
   } catch {

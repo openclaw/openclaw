@@ -1,3 +1,4 @@
+// Qa Channel API module exposes the plugin public contract.
 export type {
   ChannelMessageActionAdapter,
   ChannelMessageActionName,
@@ -20,4 +21,4 @@ export {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 export { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";

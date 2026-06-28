@@ -1,18 +1,14 @@
+// Whatsapp tests cover auto reply.web auto reply.last route plugin behavior.
 import "./test-helpers.js";
-import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-envelope";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createAcceptedWhatsAppSendResult,
-  installWebAutoReplyUnitTestHooks,
-  makeSessionStore,
-} from "./auto-reply.test-harness.js";
+import { installWebAutoReplyUnitTestHooks, makeSessionStore } from "./auto-reply.test-harness.js";
+import { buildMentionConfig } from "./auto-reply/mentions.js";
+import { createEchoTracker } from "./auto-reply/monitor/echo.js";
+import { createWebOnMessageHandler } from "./auto-reply/monitor/on-message.js";
+import { createTestWebInboundMessage } from "./inbound/test-message.test-helper.js";
 
 const updateLastRouteInBackgroundMock = vi.hoisted(() => vi.fn());
-let awaitBackgroundTasks: typeof import("./auto-reply/monitor/last-route.js").awaitBackgroundTasks;
-let buildMentionConfig: typeof import("./auto-reply/mentions.js").buildMentionConfig;
-let createEchoTracker: typeof import("./auto-reply/monitor/echo.js").createEchoTracker;
-let createWebOnMessageHandler: typeof import("./auto-reply/monitor/on-message.js").createWebOnMessageHandler;
 
 vi.mock("./auto-reply/monitor/last-route.js", async () => {
   const actual = await vi.importActual<typeof import("./auto-reply/monitor/last-route.js")>(
@@ -78,35 +74,39 @@ function buildInboundMessage(params: {
   senderName?: string;
   selfE164?: string;
 }) {
-  return {
-    id: params.id,
-    from: params.from,
-    conversationId: params.conversationId,
-    to: params.to ?? "+2000",
-    body: params.body ?? "hello",
-    timestamp: params.timestamp,
-    chatType: params.chatType,
-    chatId: params.chatId,
-    accountId: params.accountId ?? "default",
-    senderE164: params.senderE164,
-    senderName: params.senderName,
-    selfE164: params.selfE164,
-    sendComposing: vi.fn().mockResolvedValue(undefined),
-    reply: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("text", "r1")),
-    sendMedia: vi.fn().mockResolvedValue(createAcceptedWhatsAppSendResult("media", "m1")),
-  };
+  return createTestWebInboundMessage({
+    event: {
+      id: params.id,
+      timestamp: params.timestamp,
+    },
+    payload: {
+      body: params.body ?? "hello",
+    },
+    platform: {
+      chatJid: params.chatId,
+      recipientJid: params.to ?? "+2000",
+      senderE164: params.senderE164,
+      senderName: params.senderName,
+      selfE164: params.selfE164,
+    },
+    admission: {
+      accountId: params.accountId ?? "default",
+      conversation: {
+        kind: params.chatType,
+        id: params.conversationId,
+      },
+      sender: {
+        id: params.senderE164 ?? params.from,
+      },
+    },
+  });
 }
 
 describe("web auto-reply last-route", () => {
   installWebAutoReplyUnitTestHooks();
 
-  beforeEach(async () => {
-    vi.resetModules();
+  beforeEach(() => {
     updateLastRouteInBackgroundMock.mockClear();
-    ({ awaitBackgroundTasks } = await import("./auto-reply/monitor/last-route.js"));
-    ({ buildMentionConfig } = await import("./auto-reply/mentions.js"));
-    ({ createEchoTracker } = await import("./auto-reply/monitor/echo.js"));
-    ({ createWebOnMessageHandler } = await import("./auto-reply/monitor/on-message.js"));
   });
 
   it("updates last-route for direct chats without senderE164", async () => {
@@ -133,7 +133,8 @@ describe("web auto-reply last-route", () => {
       }),
     );
 
-    await awaitBackgroundTasks(backgroundTasks);
+    await Promise.allSettled(backgroundTasks);
+    backgroundTasks.clear();
 
     expect(updateLastRouteInBackgroundMock).toHaveBeenCalledTimes(1);
     const updateParams = updateLastRouteInBackgroundMock.mock.calls.at(0)?.[0] as
@@ -156,50 +157,23 @@ describe("web auto-reply last-route", () => {
       to: "+1000",
       accountId: "default",
     });
-    const body = formatInboundEnvelope({
-      channel: "WhatsApp",
-      from: "+1000",
-      timestamp: now,
-      body: "hello",
-      chatType: "direct",
-      sender: {
-        e164: "+1000",
-        id: "+1000",
-      },
-    });
-    expect(ctx).toEqual({
+    expect(ctx).toMatchObject({
       From: "+1000",
       To: "+2000",
       SessionKey: mainSessionKey,
       AccountId: "default",
       ChatType: "direct",
-      CommandAuthorized: undefined,
       ConversationLabel: "+1000",
       GroupMembers: "+1000",
-      GroupSubject: undefined,
-      GroupSystemPrompt: undefined,
-      InboundHistory: undefined,
-      MediaPath: undefined,
-      MediaTranscribedIndexes: undefined,
-      MediaType: undefined,
-      MediaUrl: undefined,
       MessageSid: "m1",
       Provider: "whatsapp",
       Surface: "whatsapp",
       OriginatingChannel: "whatsapp",
       OriginatingTo: "+1000",
-      ReplyThreading: undefined,
-      ReplyToBody: undefined,
-      ReplyToId: undefined,
-      ReplyToSender: undefined,
       SenderE164: "+1000",
       SenderId: "+1000",
-      SenderName: undefined,
-      Transcript: undefined,
-      UntrustedStructuredContext: undefined,
-      WasMentioned: undefined,
       RawBody: "hello",
-      Body: body,
+      Body: expect.stringMatching(/^\[WhatsApp \+1000 .+\] \+1000: hello$/u),
       BodyForAgent: "hello",
       CommandBody: "hello",
       Timestamp: now,
@@ -228,6 +202,7 @@ describe("web auto-reply last-route", () => {
         conversationId: "123@g.us",
         chatType: "group",
         chatId: "123@g.us",
+        body: "hello +2000",
         timestamp: now,
         accountId: "work",
         senderE164: "+1000",
@@ -236,7 +211,8 @@ describe("web auto-reply last-route", () => {
       }),
     );
 
-    await awaitBackgroundTasks(backgroundTasks);
+    await Promise.allSettled(backgroundTasks);
+    backgroundTasks.clear();
 
     expect(updateLastRouteInBackgroundMock).toHaveBeenCalledTimes(1);
     const updateParams = updateLastRouteInBackgroundMock.mock.calls.at(0)?.[0] as

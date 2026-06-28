@@ -28,7 +28,8 @@ export const DEFAULT_RESOURCE_LIMITS = {
   "live:gemini": 4,
   "live:opencode": 4,
   "live:openai": 1,
-  npm: 10,
+  "live:telegram": 1,
+  npm: 5,
   service: 7,
 };
 export const DEFAULT_TAIL_PARALLELISM = 10;
@@ -74,8 +75,10 @@ function sanitizeLaneNameSuffix(value) {
 
 const UPGRADE_SURVIVOR_SCENARIOS = [
   "base",
+  "acpx-openclaw-tools-bridge",
   "feishu-channel",
   "bootstrap-persona",
+  "channel-post-core-restore",
   "plugin-deps-cleanup",
   "configured-plugin-installs",
   "stale-source-plugin-shadow",
@@ -102,7 +105,7 @@ export function normalizeUpgradeSurvivorBaselineSpec(raw) {
     throw new Error(
       `invalid published upgrade survivor baseline: ${JSON.stringify(
         value,
-      )}. Expected openclaw@latest, openclaw@beta, openclaw@alpha, or openclaw@YYYY.M.D.`,
+      )}. Expected openclaw@latest, openclaw@beta, openclaw@alpha, or openclaw@YYYY.M.PATCH.`,
     );
   }
   return spec;
@@ -162,12 +165,12 @@ function parsePublishedReleaseVersion(spec) {
   return {
     year: Number(match[1]),
     month: Number(match[2]),
-    day: Number(match[3]),
+    patch: Number(match[3]),
   };
 }
 
 function comparePublishedReleaseVersion(a, b) {
-  return a.year - b.year || a.month - b.month || a.day - b.day;
+  return a.year - b.year || a.month - b.month || a.patch - b.patch;
 }
 
 function supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec) {
@@ -178,7 +181,18 @@ function supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec) {
   if (!version) {
     return true;
   }
-  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, day: 23 }) >= 0;
+  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 23 }) >= 0;
+}
+
+function supportsUpgradeSurvivorAcpToolsBridge(baselineSpec) {
+  if (!baselineSpec) {
+    return true;
+  }
+  const version = parsePublishedReleaseVersion(baselineSpec);
+  if (!version) {
+    return true;
+  }
+  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 22 }) >= 0;
 }
 
 function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScenarios = "") {
@@ -197,8 +211,10 @@ function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScen
       matrixScenarios
         .filter(
           (scenario) =>
-            scenario !== "plugin-deps-cleanup" ||
-            supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec),
+            (scenario !== "plugin-deps-cleanup" ||
+              supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec)) &&
+            (scenario !== "acpx-openclaw-tools-bridge" ||
+              supportsUpgradeSurvivorAcpToolsBridge(baselineSpec)),
         )
         .map((scenario) => {
           const suffixParts = [
@@ -289,7 +305,7 @@ export function laneWeight(poolLane) {
 }
 
 export function laneResources(poolLane) {
-  return ["docker", ...(poolLane.resources ?? [])];
+  return [...new Set(["docker", ...(poolLane.resources ?? [])])];
 }
 
 export function laneSummary(poolLane) {
@@ -324,6 +340,7 @@ export function findLaneByName(name) {
 }
 
 function laneCredentialRequirements(poolLane) {
+  const resources = laneResources(poolLane);
   const credentials = [];
   if (poolLane.name === "install-e2e-openai") {
     credentials.push("openai");
@@ -331,14 +348,26 @@ function laneCredentialRequirements(poolLane) {
   if (poolLane.name === "install-e2e-anthropic") {
     credentials.push("anthropic");
   }
-  if (
-    poolLane.name === "openwebui" ||
-    poolLane.name === "openai-chat-tools" ||
-    poolLane.name === "openai-web-search-minimal" ||
-    poolLane.name === "live-codex-npm-plugin" ||
-    poolLane.name === "live-plugin-tool"
-  ) {
+  if (resources.includes("live:openai")) {
     credentials.push("openai");
+  }
+  if (resources.includes("live:codex")) {
+    credentials.push("codex");
+  }
+  if (resources.includes("live:claude")) {
+    credentials.push("anthropic");
+  }
+  if (resources.includes("live:droid")) {
+    credentials.push("factory");
+  }
+  if (resources.includes("live:gemini")) {
+    credentials.push("gemini");
+  }
+  if (resources.includes("live:opencode")) {
+    credentials.push("opencode");
+  }
+  if (resources.includes("live:telegram")) {
+    credentials.push("telegram");
   }
   return credentials;
 }
@@ -448,7 +477,7 @@ export function resolveDockerE2ePlan(options) {
   const configuredLanes = selectedLanes
     ? selectedLanes
     : releaseLanes
-      ? releaseLanes
+      ? applyLiveMode(releaseLanes, options.liveMode)
       : options.liveMode === "only"
         ? applyLiveMode([...retriedMainLanes, ...retriedTailLanes], options.liveMode)
         : applyLiveMode(retriedMainLanes, options.liveMode);

@@ -114,21 +114,23 @@ observation-only.
 
 - `model_call_started` / `model_call_ended` - observe sanitized provider/model call metadata, timing, outcome, and bounded request-id hashes without prompt or response content
 - `llm_input` - observe provider input (system prompt, prompt, history)
-- `llm_output` - observe provider output
+- `llm_output` - observe provider output, usage, and the resolved `contextTokenBudget` when available
 
 **Tools**
 
 - **`before_tool_call`** - rewrite tool params, block execution, or require approval
 - `after_tool_call` - observe tool results, errors, and duration
+- `resolve_exec_env` - contribute plugin-owned environment variables to `exec`
 - **`tool_result_persist`** - rewrite the assistant message produced from a tool result
 - **`before_message_write`** - inspect or block an in-progress message write (rare)
 
 **Messages and delivery**
 
 - **`inbound_claim`** - claim an inbound message before agent routing (synthetic replies)
-- `message_received` - observe inbound content, sender, thread, and metadata
-- **`message_sending`** - rewrite outbound content or cancel delivery
-- `message_sent` - observe outbound delivery success or failure
+- `message_received` — observe inbound content, sender, thread, and metadata
+- **`message_sending`** — rewrite outbound content or cancel delivery
+- **`reply_payload_sending`** — mutate or cancel normalized reply payloads before delivery
+- `message_sent` — observe outbound delivery success or failure
 - **`before_dispatch`** - inspect or rewrite an outbound dispatch before channel handoff
 - **`reply_dispatch`** - participate in the final reply-dispatch pipeline
 
@@ -140,13 +142,19 @@ observation-only.
 
 **Subagents**
 
-- `subagent_spawning` / `subagent_delivery_target` / `subagent_spawned` / `subagent_ended` - coordinate subagent routing and completion delivery
+- `subagent_spawned` / `subagent_ended` - observe subagent launch and completion.
+- `subagent_delivery_target` - compatibility hook for completion delivery when no core session binding can project a route.
+- `subagent_spawning` - deprecated compatibility hook. Core now prepares `thread: true` subagent bindings through channel session-binding adapters before `subagent_spawned` fires.
+- `subagent_spawned` includes `resolvedModel` and `resolvedProvider` when OpenClaw has resolved the child session's native model before launch.
+- `subagent_ended` carries `targetSessionKey` (identity — this matches `subagent_spawned.childSessionKey`), `targetKind` (`"subagent"` or `"acp"`), `reason`, optional `outcome` (`"ok"`, `"error"`, `"timeout"`, `"killed"`, `"reset"`, or `"deleted"`), optional `error`, `runId`, `endedAt`, `accountId`, and `sendFarewell`. It does **not** include `agentId` or `childSessionKey`; use `targetSessionKey` to correlate with the corresponding `subagent_spawned` event.
 
 **Lifecycle**
 
 - `gateway_start` / `gateway_stop` - start or stop plugin-owned services with the Gateway
+- `deactivate` - deprecated compatibility alias for `gateway_stop`; use `gateway_stop` in new plugins
 - `cron_changed` - observe gateway-owned cron lifecycle changes (added, updated, removed, started, finished, scheduled)
-- **`before_install`** - inspect skill or plugin install scans and optionally block
+- **`before_install`** - inspect staged skill or plugin install material from a loaded
+  plugin runtime
 
 ## Debug runtime hooks
 
@@ -166,6 +174,11 @@ file.
 
 - `event.toolName`
 - `event.params`
+- optional `event.toolKind` and `event.toolInputKind`, host-authoritative
+  discriminators for tools that intentionally share names; for example, outer
+  code-mode `exec` calls use `toolKind: "code_mode_exec"` and
+  include `toolInputKind: "javascript" | "typescript"` when the input language
+  is known
 - optional `event.derivedPaths`, containing best-effort host-derived target path
   hints for well-known tool envelopes such as `apply_patch`; when present,
   these paths may be incomplete or may over-approximate what the tool will
@@ -173,7 +186,8 @@ file.
 - optional `event.runId`
 - optional `event.toolCallId`
 - context fields such as `ctx.agentId`, `ctx.sessionKey`, `ctx.sessionId`,
-  `ctx.runId`, `ctx.jobId` (set on cron-driven runs), and diagnostic `ctx.trace`
+  `ctx.runId`, `ctx.jobId` (set on cron-driven runs), `ctx.toolKind`,
+  `ctx.toolInputKind`, and diagnostic `ctx.trace`
 
 It can return:
 
@@ -188,6 +202,7 @@ type BeforeToolCallResult = {
     severity?: "info" | "warning" | "critical";
     timeoutMs?: number;
     timeoutBehavior?: "allow" | "deny";
+    allowedDecisions?: Array<"allow-once" | "allow-always" | "deny">;
     pluginId?: string;
     onResolution?: (
       decision: "allow-once" | "allow-always" | "deny" | "timeout" | "cancelled",
@@ -203,17 +218,50 @@ Hook guard behavior for typed lifecycle hooks:
 - `params` rewrites the tool parameters for execution.
 - `requireApproval` pauses the agent run and asks the user through plugin
   approvals. The `/approve` command can approve both exec and plugin approvals.
+  In Codex app-server report-mode native `PreToolUse` relays, this is deferred
+  to the matching app-server approval request; see [Codex harness runtime](/plugins/codex-harness-runtime#hook-boundaries).
 - A lower-priority `block: true` can still block after a higher-priority hook
   requested approval.
 - `onResolution` receives the resolved approval decision - `allow-once`,
   `allow-always`, `deny`, `timeout`, or `cancelled`.
 
-Bundled plugins that need host-level policy can register trusted tool policies
-with `api.registerTrustedToolPolicy(...)`. These run before ordinary
-`before_tool_call` hooks and before external plugin decisions. Use them only
+See [Plugin permission requests](/plugins/plugin-permission-requests) for
+approval routing, decision behavior, and when to use `requireApproval` instead
+of optional tools or exec approvals.
+
+Plugins that need host-level policy can register trusted tool policies with
+`api.registerTrustedToolPolicy(...)`. These run before ordinary
+`before_tool_call` hooks and before normal hook decisions. Bundled trusted
+policies run first; installed-plugin trusted policies run next in plugin-load
+order; ordinary `before_tool_call` hooks run after them. Bundled plugins keep
+the existing trusted-policy path. Installed plugins must be explicitly enabled
+and declare every policy id in `contracts.trustedToolPolicies`; undeclared ids
+are rejected before registration. Policy ids are scoped to the registering
+plugin, so different plugins may reuse the same local id. Use this tier only
 for host-trusted gates such as workspace policy, budget enforcement, or
-reserved workflow safety. External plugins should use normal `before_tool_call`
-hooks.
+reserved workflow safety.
+
+### Exec environment hook
+
+`resolve_exec_env` lets plugins contribute environment variables to `exec`
+tool invocations after the base exec environment is built and before the
+command runs. It receives:
+
+- `event.sessionKey`
+- `event.toolName`, currently always `"exec"`
+- `event.host`, one of `"gateway"`, `"sandbox"`, or `"node"`
+- context fields such as `ctx.agentId`, `ctx.sessionKey`,
+  `ctx.messageProvider`, and `ctx.channelId`
+
+Return a `Record<string, string>` to merge into the exec environment. Handlers
+run in priority order, and later hook results override earlier hook results for
+the same key.
+
+Hook output is filtered through the host exec environment key policy before it
+is merged. Invalid keys, `PATH`, and dangerous host override keys such as
+`LD_*`, `DYLD_*`, `NODE_OPTIONS`, proxy variables, and TLS override variables
+are dropped. The filtered plugin env is included in gateway approval/audit
+metadata and forwarded to node-host execution requests.
 
 ### Tool result persistence
 
@@ -271,23 +319,75 @@ Cron-driven runs also expose `ctx.jobId` (the originating cron job id) so
 plugin hooks can scope metrics, side effects, or state to a specific scheduled
 job.
 
-For channel-originated runs, `ctx.messageProvider` is the provider surface such
-as `discord` or `telegram`, while `ctx.channelId` is the conversation target
-identifier when OpenClaw can derive one from the session key or delivery
-metadata.
+For channel-originated runs, `ctx.channel` and `ctx.messageProvider` identify
+the provider surface such as `discord` or `telegram`, while `ctx.channelId` is
+the conversation target identifier when OpenClaw can derive one from the session
+key or delivery metadata.
 
-`agent_end` is an observation hook and runs fire-and-forget after the turn. The
-hook runner applies a 30 second timeout so a wedged plugin or embedding
-endpoint cannot leave the hook promise pending forever. A timeout is logged and
-OpenClaw continues; it does not cancel plugin-owned network work unless the
-plugin also uses its own abort signal.
+When sender identity is available, agent hook contexts also include:
+
+- `ctx.senderId` — channel-scoped sender ID (e.g. Feishu `open_id`, Discord
+  user ID). Populated when the run originates from a user message with known
+  sender metadata.
+- `ctx.chatId` — transport-native conversation identifier (e.g. Feishu
+  `chat_id`, Telegram `chat_id`). Populated when the originating channel
+  provides a native conversation ID.
+- `ctx.channelContext.sender.id` — the same sender ID as `ctx.senderId`, under a
+  channel-owned object that plugins can extend with channel-specific fields.
+- `ctx.channelContext.chat.id` — the same conversation ID as `ctx.chatId`, under a
+  channel-owned object that plugins can extend with channel-specific fields.
+
+Core only defines the nested `id` fields. Channel plugins that pass richer
+sender or chat metadata through the inbound helper can augment
+`PluginHookChannelSenderContext` or `PluginHookChannelChatContext` from
+`openclaw/plugin-sdk/channel-inbound`:
+
+```ts
+declare module "openclaw/plugin-sdk/channel-inbound" {
+  interface PluginHookChannelSenderContext {
+    unionId?: string;
+    userId?: string;
+  }
+}
+```
+
+Channel plugins pass those fields through the inbound SDK helper:
+
+```ts
+buildChannelInboundEventContext({
+  // ...
+  channelContext: {
+    sender: { id: senderOpenId, unionId, userId },
+    chat: { id: chatId },
+  },
+});
+```
+
+These fields are optional and absent for system-originated runs (heartbeat,
+cron, exec-event).
+
+`ctx.senderExternalId` remains as a deprecated source-compatibility field for
+older plugins. Core does not populate it; new channel-specific sender identities
+should live under `ctx.channelContext.sender` through module augmentation.
+
+`agent_end` is an observation hook. Gateway and persistent harness paths run it
+fire-and-forget after the turn, while short-lived one-shot CLI paths wait for the
+hook promise before process cleanup so trusted plugins can flush terminal
+observability or capture state. The hook runner applies a 30 second timeout so a
+wedged plugin or embedding endpoint cannot leave the hook promise pending
+forever. A timeout is logged and OpenClaw continues; it does not cancel
+plugin-owned network work unless the plugin also uses its own abort signal.
 
 Use `model_call_started` and `model_call_ended` for provider-call telemetry
 that should not receive raw prompts, history, responses, headers, request
 bodies, or provider request IDs. These hooks include stable metadata such as
 `runId`, `callId`, `provider`, `model`, optional `api`/`transport`, terminal
 `durationMs`/`outcome`, and `upstreamRequestIdHash` when OpenClaw can derive a
-bounded provider request-id hash.
+bounded provider request-id hash. When the runtime has resolved context-window
+metadata, the hook event and context also include `contextTokenBudget`, the
+effective token budget after model/config/agent caps, plus
+`contextWindowSource` and `contextWindowReferenceTokens` when a lower cap was
+applied.
 
 `before_agent_finalize` runs only when a harness is about to accept a natural
 final assistant answer. It is not the `/stop` cancellation path and does not
@@ -364,6 +464,8 @@ Use message hooks for channel-level routing and delivery policy:
 - `message_received`: observe inbound content, sender, `threadId`, `messageId`,
   `senderId`, optional run/session correlation, and metadata.
 - `message_sending`: rewrite `content` or return `{ cancel: true }`.
+- `reply_payload_sending`: rewrite normalized `ReplyPayload` objects (including
+  `presentation`, `delivery`, media refs, and text) or return `{ cancel: true }`.
 - `message_sent`: observe final success or failure.
 
 For audio-only TTS replies, `content` may contain the hidden spoken transcript
@@ -371,10 +473,17 @@ even when the channel payload has no visible text/caption. Rewriting that
 `content` updates the hook-visible transcript only; it is not rendered as a
 media caption.
 
+`reply_payload_sending` events may include `usageState`, a best-effort live
+per-turn model/usage/context snapshot. Durable delivery, recovered replay, and
+replies without exact run correlation omit it.
+
 Message hook contexts expose stable correlation fields when available:
 `ctx.sessionKey`, `ctx.runId`, `ctx.messageId`, `ctx.senderId`, `ctx.trace`,
-`ctx.traceId`, `ctx.spanId`, `ctx.parentSpanId`, and `ctx.callDepth`. Prefer
-these first-class fields before reading legacy metadata.
+`ctx.traceId`, `ctx.spanId`, `ctx.parentSpanId`, and `ctx.callDepth`. Inbound
+and `before_dispatch` contexts also expose reply metadata when the channel has
+visibility-filtered quoted message data: `replyToId`, `replyToIdFull`,
+`replyToBody`, `replyToSender`, and `replyToIsQuote`. Prefer these first-class
+fields before reading legacy metadata.
 
 Prefer typed `threadId` and `replyToId` fields before using channel-specific
 metadata.
@@ -385,6 +494,13 @@ Decision rules:
 - `message_sending` with `cancel: false` is treated as no decision.
 - Rewritten `content` continues to lower-priority hooks unless a later hook
   cancels delivery.
+- `reply_payload_sending` runs after payload normalization and before channel
+  delivery, including replies routed back to the originating channel. Handlers
+  run sequentially and each handler sees the latest payload produced by
+  higher-priority handlers.
+- `reply_payload_sending` payloads do not expose runtime trust markers such as
+  `trustedLocalMedia`; plugins can edit payload shape but cannot grant local
+  media trust.
 - `message_sending` can return `cancelReason` and bounded `metadata` with a
   cancellation. New message lifecycle APIs expose this as a suppressed delivery
   outcome with reason `cancelled_by_message_sending_hook`; legacy direct
@@ -394,11 +510,22 @@ Decision rules:
 
 ## Install hooks
 
-`before_install` runs after the built-in scan for skill and plugin installs.
-Return additional findings or `{ block: true, blockReason }` to stop the
-install.
+Use `security.installPolicy` for operator-owned allow/block decisions. That
+policy runs from OpenClaw config, covers CLI install and update paths, and fails
+closed when enabled but unavailable.
+
+`before_install` is a plugin-runtime lifecycle hook. It runs after
+`security.installPolicy` only in the OpenClaw process where plugin hooks have
+already been loaded, such as Gateway-backed install flows. It is useful for
+plugin-owned observations, warnings, and compatibility checks, but it is not the
+primary enterprise or host security boundary for installs. The `builtinScan`
+field remains in the event payload for compatibility, but OpenClaw no longer
+runs built-in install-time dangerous-code blocking, so it is an empty `ok`
+result. Return additional findings or `{ block: true, blockReason }` to stop the
+install in that process.
 
 `block: true` is terminal. `block: false` is treated as no decision.
+Handler failures block the install fail-closed.
 
 ## Gateway lifecycle
 
@@ -433,6 +560,12 @@ before the next major release:
 - **`before_agent_start`** remains for compatibility. New plugins should use
   `before_model_resolve` and `before_prompt_build` instead of the combined
   phase.
+- **`subagent_spawning`** remains for compatibility with older plugins, but
+  new plugins should not return thread routing from it. Core prepares
+  `thread: true` subagent bindings through channel session-binding adapters
+  before `subagent_spawned` fires.
+- **`deactivate`** remains as a deprecated cleanup compatibility alias until
+  after 2026-08-16. New plugins should use `gateway_stop`.
 - **`onResolution` in `before_tool_call`** now uses the typed
   `PluginApprovalResolution` union (`allow-once` / `allow-always` / `deny` /
   `timeout` / `cancelled`) instead of a free-form `string`.

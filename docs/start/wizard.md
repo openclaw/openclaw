@@ -7,14 +7,35 @@ title: "Onboarding (CLI)"
 sidebarTitle: "Onboarding: CLI"
 ---
 
-CLI onboarding is the **recommended** way to set up OpenClaw on macOS,
-Linux, or Windows (via WSL2; strongly recommended).
+CLI onboarding is the **recommended** terminal setup path for OpenClaw on
+macOS, Linux, or Windows. Windows desktop users can also start with
+[Windows Hub](/platforms/windows).
 It configures a local Gateway or a remote Gateway connection, plus channels, skills,
 and workspace defaults in one guided flow.
 
 ```bash
 openclaw onboard
 ```
+
+QuickStart is usually only a few minutes, but full onboarding can take longer
+when provider sign-in, channel pairing, daemon install, network downloads,
+skills, or optional plugins need extra setup. The wizard shows this timeline up
+front, and optional steps can be skipped and revisited later with
+`openclaw configure`.
+
+## Locale
+
+The CLI wizard localizes fixed onboarding copy. It resolves locale from
+`OPENCLAW_LOCALE`, then `LC_ALL`, then `LC_MESSAGES`, then `LANG`, and falls
+back to English. Supported wizard locales are `en`, `zh-CN`, and `zh-TW`.
+
+```bash
+OPENCLAW_LOCALE=zh-CN openclaw onboard
+```
+
+Names and stable identifiers stay literal: `OpenClaw`, `Gateway`, `Tailscale`,
+commands, config keys, URLs, provider IDs, model IDs, and plugin/channel labels
+are not translated.
 
 <Info>
 Fastest first chat: open the Control UI (no channel setup needed). Run
@@ -77,7 +98,7 @@ Onboarding starts with **QuickStart** (defaults) vs **Advanced** (full control).
 3. **Gateway** — Port, bind address, auth mode, Tailscale exposure.
    In interactive token mode, choose default plaintext token storage or opt into SecretRef.
    Non-interactive token SecretRef path: `--gateway-token-ref-env <ENV_VAR>`.
-4. **Channels** — built-in and bundled chat channels such as iMessage, Discord, Feishu, Google Chat, Mattermost, Microsoft Teams, QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.
+4. **Channels** — built-in and official plugin chat channels such as iMessage, Discord, Feishu, Google Chat, Mattermost, Microsoft Teams, QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.
 5. **Daemon** — Installs a LaunchAgent (macOS), systemd user unit (Linux/WSL2), or native Windows Scheduled Task with per-user Startup-folder fallback.
    If token auth requires a token and `gateway.auth.token` is SecretRef-managed, daemon install validates it but does not persist the resolved token into supervisor service environment metadata.
    If token auth requires a token and the configured token SecretRef is unresolved, daemon install is blocked with actionable guidance.

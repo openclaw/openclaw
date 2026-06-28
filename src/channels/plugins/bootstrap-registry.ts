@@ -1,4 +1,9 @@
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
+/**
+ * Bundled channel bootstrap registry.
+ *
+ * Provides channel plugin metadata before the full runtime registry is installed.
+ */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listBundledChannelPluginIdsForRoot } from "./bundled-ids.js";
 import { resolveBundledChannelRootScope } from "./bundled-root.js";
 import {
@@ -24,6 +29,8 @@ function mergePluginSection<T>(
     typeof runtimeValue === "object" &&
     typeof setupValue === "object"
   ) {
+    // Setup artifacts can add lightweight setup/docs/secrets fields on top of
+    // runtime artifacts; undefined setup values should not erase runtime data.
     const merged = {
       ...(runtimeValue as Record<string, unknown>),
     };
@@ -59,20 +66,17 @@ function mergeBootstrapPlugin(
   } as ChannelPlugin;
 }
 
+/**
+ * Lists bundled channel ids visible to bootstrap for the current root scope.
+ */
 export function listBootstrapChannelPluginIds(): readonly string[] {
   const rootScope = resolveBundledChannelRootScope();
   return listBundledChannelPluginIdsForRoot(rootScope.cacheKey);
 }
 
-export function* iterateBootstrapChannelPlugins(): IterableIterator<ChannelPlugin> {
-  for (const id of listBootstrapChannelPluginIds()) {
-    const plugin = getBootstrapChannelPlugin(id);
-    if (plugin) {
-      yield plugin;
-    }
-  }
-}
-
+/**
+ * Loads a bundled channel plugin for bootstrap, merging runtime and setup artifacts.
+ */
 export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefined {
   const resolvedId = resolveBootstrapChannelId(id);
   if (!resolvedId) {
@@ -84,6 +88,8 @@ export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefi
     runtimePlugin = getBundledChannelPlugin(resolvedId);
     setupPlugin = getBundledChannelSetupPlugin(resolvedId);
   } catch {
+    // Bootstrap discovery treats broken/missing bundled channel artifacts as
+    // absent so install/doctor flows can continue scanning other channels.
     return undefined;
   }
   const merged =
@@ -93,6 +99,9 @@ export function getBootstrapChannelPlugin(id: ChannelId): ChannelPlugin | undefi
   return merged;
 }
 
+/**
+ * Loads bootstrap secret metadata from bundled runtime and setup artifacts.
+ */
 export function getBootstrapChannelSecrets(id: ChannelId): ChannelPlugin["secrets"] | undefined {
   const resolvedId = resolveBootstrapChannelId(id);
   if (!resolvedId) {

@@ -1,8 +1,9 @@
-import type { ConnectParams } from "../../protocol/index.js";
+// WebSocket connect policy resolves Control UI pairing bypasses and missing-device identity decisions.
+import type { ConnectParams } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayRole } from "../../role-policy.js";
 import { roleCanSkipDeviceIdentity } from "../../role-policy.js";
 
-export type ControlUiAuthPolicy = {
+type ControlUiAuthPolicy = {
   isControlUi: boolean;
   allowInsecureAuthConfigured: boolean;
   dangerouslyDisableDeviceAuth: boolean;
@@ -76,7 +77,7 @@ export function isTrustedProxyControlUiOperatorAuth(params: {
   );
 }
 
-export type MissingDeviceIdentityDecision =
+type MissingDeviceIdentityDecision =
   | { kind: "allow" }
   | { kind: "reject-control-ui-insecure-auth" }
   | { kind: "reject-unauthorized" }

@@ -1,37 +1,45 @@
+// Control UI module implements app render behavior.
 import { html, nothing } from "lit";
 import { t } from "../i18n/index.ts";
 import {
-  CHAT_SESSIONS_ACTIVE_MINUTES,
-  CHAT_SESSIONS_REFRESH_LIMIT,
+  createChatSessionsLoadOverrides,
+  flushChatQueueAfterIdleSessionReconciliation,
   refreshChat,
   refreshChatAvatar,
+  scopedAgentParamsForSession,
+  scopedAgentListParamsForSession,
 } from "./app-chat.ts";
 import { syncUrlWithSessionKey } from "./app-settings.ts";
 import type { AppViewState } from "./app-view-state.ts";
+import { persistChatComposerState, restoreChatComposerState } from "./chat/composer-persistence.ts";
 import { reconcileChatRunLifecycle } from "./chat/run-lifecycle.ts";
 import {
-  isCronSessionKey,
-  parseSessionKey,
   renderChatSessionSelect as renderChatSessionSelectBase,
-  resolveSessionDisplayName,
+  renderChatModelSelect,
+  renderChatQuotaPill,
+  resetChatSessionPickerState,
   resolveSessionOptionGroups,
 } from "./chat/session-controls.ts";
+import { cacheChatMessages, readChatMessagesFromCache } from "./chat/session-message-cache.ts";
 import { refreshSlashCommands } from "./chat/slash-commands.ts";
 import { resolveControlUiAuthToken } from "./control-ui-auth.ts";
-import { ChatState, loadChatHistory } from "./controllers/chat.ts";
-import { createSessionAndRefresh, loadSessions } from "./controllers/sessions.ts";
-import { icons } from "./icons.ts";
-import { iconForTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import { loadChatHistory } from "./controllers/chat.ts";
+import type { ChatState } from "./controllers/chat.ts";
 import {
+  createSessionAndRefresh,
+  loadSessions,
+  syncSelectedSessionMessageSubscription,
+} from "./controllers/sessions.ts";
+import { icons } from "./icons.ts";
+import { iconForTab, isSettingsTab, pathForTab, titleForTab, type Tab } from "./navigation.ts";
+import { isCronSessionKey, parseSessionKey, resolveSessionDisplayName } from "./session-display.ts";
+import {
+  isSessionKeyTiedToAgent,
   normalizeAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "./session-key.ts";
-import {
-  CHAT_AUTO_SCROLL_MODES,
-  normalizeChatAutoScrollMode,
-  type ChatAutoScrollMode,
-} from "./storage.ts";
+import { normalizeChatAutoScrollMode, type ChatAutoScrollMode } from "./storage.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "./string-coerce.ts";
 import type { ThemeMode } from "./theme.ts";
 import type { SessionsListResult } from "./types.ts";
@@ -121,7 +129,7 @@ function saveChatQueueForSession(state: AppViewState, sessionKey: string) {
     state.chatQueueBySession = { ...queueBySession };
     return;
   }
-  if (Object.prototype.hasOwnProperty.call(queueBySession, sessionKey)) {
+  if (Object.hasOwn(queueBySession, sessionKey)) {
     delete queueBySession[sessionKey];
     state.chatQueueBySession = { ...queueBySession };
   }
@@ -131,26 +139,56 @@ function restoreChatQueueForSession(state: AppViewState, sessionKey: string): Ch
   return [...(state.chatQueueBySession?.[sessionKey] ?? [])];
 }
 
+function chatMessageCacheForState(state: AppViewState) {
+  return (state.chatMessagesBySession ??= new Map());
+}
+
+function saveChatMessagesForSession(state: AppViewState, sessionKey: string) {
+  cacheChatMessages(chatMessageCacheForState(state), state, { sessionKey }, state.chatMessages);
+}
+
+function restoreChatMessagesForSession(state: AppViewState, sessionKey: string): unknown[] {
+  return readChatMessagesFromCache(chatMessageCacheForState(state), state, { sessionKey });
+}
+
 function resetChatStateForSessionSwitch(state: AppViewState, sessionKey: string) {
   const host = state as unknown as SessionSwitchHost;
   const previousSessionKey = state.sessionKey;
+  persistChatComposerState(state, previousSessionKey);
   saveChatQueueForSession(state, previousSessionKey);
+  saveChatMessagesForSession(state, previousSessionKey);
   state.sessionKey = sessionKey;
-  (state as unknown as { currentSessionId?: string | null }).currentSessionId = null;
+  if (previousSessionKey !== sessionKey) {
+    resetChatSessionPickerState(state);
+  }
+  const chatSessionState = state as unknown as {
+    currentSessionId?: string | null;
+    reconnectResumeSessionId?: string | null;
+  };
+  chatSessionState.currentSessionId = null;
+  chatSessionState.reconnectResumeSessionId = null;
   state.chatMessage = "";
   state.chatAttachments = [];
-  state.chatMessages = [];
+  state.chatMessages = restoreChatMessagesForSession(state, sessionKey);
   state.chatToolMessages = [];
+  state.activityEntries = [];
+  state.activityExpandedIds = new Set();
+  state.activityAtBottom = true;
   state.chatStreamSegments = [];
   state.chatThinkingLevel = null;
+  state.chatVerboseLevel = null;
   state.chatStream = null;
   state.chatSideResult = null;
   state.lastError = null;
+  state.chatError = null;
   state.chatAvatarUrl = null;
   state.chatAvatarSource = null;
   state.chatAvatarStatus = null;
   state.chatAvatarReason = null;
+  state.realtimeTalkTranscript = null;
+  state.resetRealtimeTalkConversation?.();
   state.chatQueue = restoreChatQueueForSession(state, sessionKey);
+  restoreChatComposerState(state);
   host.resetChatInputHistoryNavigation();
   host.chatStreamStartedAt = null;
   reconcileChatRunLifecycle(state as unknown as Parameters<typeof reconcileChatRunLifecycle>[0], {
@@ -187,7 +225,7 @@ const NEW_CHAT_CREATE_FAILED_MESSAGE =
 
 export function renderTab(state: AppViewState, tab: Tab, opts?: { collapsed?: boolean }) {
   const href = pathForTab(tab, state.basePath);
-  const isActive = state.tab === tab;
+  const isActive = tab === "config" ? isSettingsTab(state.tab) : state.tab === tab;
   const collapsed = opts?.collapsed ?? state.settings.navCollapsed;
   return html`
     <a
@@ -263,7 +301,7 @@ function renderCronFilterIcon(hiddenCount: number) {
 }
 
 export function renderChatSessionSelect(state: AppViewState) {
-  return renderChatSessionSelectBase(state, switchChatSession);
+  return renderChatSessionSelectBase(state, switchChatSession, { surface: "desktop" });
 }
 
 function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
@@ -278,37 +316,45 @@ function chatAutoScrollLabel(mode: ChatAutoScrollMode) {
   return t("chat.autoScrollNearBottom");
 }
 
-function renderChatAutoScrollSelect(state: AppViewState) {
+function nextChatAutoScrollMode(mode: ChatAutoScrollMode): ChatAutoScrollMode {
+  switch (mode) {
+    case "near-bottom":
+      return "always";
+    case "always":
+      return "off";
+    case "off":
+      return "near-bottom";
+  }
+  return "near-bottom";
+}
+
+function renderChatAutoScrollToggle(state: AppViewState, options: { labelled?: boolean } = {}) {
   const mode = normalizeChatAutoScrollMode(state.settings.chatAutoScroll);
-  const label = t("chat.autoScrollMode");
+  const label = `${t("chat.autoScrollMode")}: ${chatAutoScrollLabel(mode)}`;
+  const active = mode !== "off";
   return html`
-    <label class="field chat-controls__autoscroll" title=${label}>
-      <span class="agent-chat__sr-only">${label}</span>
-      <select
-        class="chat-controls__autoscroll-select"
-        data-chat-auto-scroll-select="true"
-        aria-label=${label}
-        title=${label}
-        .value=${mode}
-        @change=${(event: Event) => {
-          const nextMode = normalizeChatAutoScrollMode(
-            (event.currentTarget as HTMLSelectElement | null)?.value,
-          );
-          state.applySettings({
-            ...state.settings,
-            chatAutoScroll: nextMode,
-          });
-        }}
-      >
-        ${CHAT_AUTO_SCROLL_MODES.map(
-          (option) => html`
-            <option value=${option} ?selected=${option === mode}>
-              ${chatAutoScrollLabel(option)}
-            </option>
-          `,
-        )}
-      </select>
-    </label>
+    <button
+      class="btn btn--sm btn--icon ${options.labelled ? "chat-settings-action" : ""} ${active
+        ? "active"
+        : ""}"
+      data-chat-auto-scroll-toggle="true"
+      data-chat-auto-scroll-mode=${mode}
+      data-tooltip=${label}
+      aria-label=${label}
+      aria-pressed=${active}
+      title=${label}
+      @click=${() => {
+        state.applySettings({
+          ...state.settings,
+          chatAutoScroll: nextChatAutoScrollMode(mode),
+        });
+      }}
+    >
+      ${icons.scrollText}
+      ${options.labelled
+        ? html`<span class="chat-settings-action__text">${t("chat.autoScrollMode")}</span>`
+        : ""}
+    </button>
   `;
 }
 
@@ -316,29 +362,26 @@ export function renderChatControls(state: AppViewState) {
   const hideCron = state.sessionsHideCron ?? true;
   const hiddenCronCount = hideCron ? countHiddenCronSessions(state, state.sessionsResult) : 0;
   const disableThinkingToggle = state.onboarding;
-  const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
-  const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
-  const refreshLabel = t("chat.refreshTitle");
   const thinkingLabel = disableThinkingToggle
     ? t("chat.onboardingDisabled")
     : t("chat.thinkingToggle");
   const toolCallsLabel = disableThinkingToggle
     ? t("chat.onboardingDisabled")
     : t("chat.toolCallsToggle");
-  const focusLabel = disableFocusToggle ? t("chat.onboardingDisabled") : t("chat.focusToggle");
+  const refreshDisabled =
+    !state.connected ||
+    state.chatManualRefreshInFlight ||
+    state.chatLoading ||
+    state.chatSending ||
+    state.chatStream !== null ||
+    Boolean(state.chatRunId);
   const cronLabel = hideCron
     ? hiddenCronCount > 0
       ? t("chat.showCronSessionsHidden", { count: String(hiddenCronCount) })
       : t("chat.showCronSessions")
     : t("chat.hideCronSessions");
-  const refreshDisabled =
-    !state.connected ||
-    state.chatLoading ||
-    state.chatSending ||
-    Boolean(state.chatRunId) ||
-    state.chatStream !== null;
   const toolCallsIcon = html`
     <svg
       width="18"
@@ -355,122 +398,126 @@ export function renderChatControls(state: AppViewState) {
       ></path>
     </svg>
   `;
-  const refreshIcon = html`
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path>
-      <path d="M21 3v5h-5"></path>
-    </svg>
-  `;
-  const focusIcon = html`
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <path d="M4 7V4h3"></path>
-      <path d="M20 7V4h-3"></path>
-      <path d="M4 17v3h3"></path>
-      <path d="M20 17v3h-3"></path>
-      <circle cx="12" cy="12" r="3"></circle>
-    </svg>
-  `;
+  const settingsOpen = state.chatMobileControlsOpen;
+  const settingsLabel = t("chat.settings");
+  const settingsTitle = t("chat.settings");
+
   return html`
-    <div class="chat-controls">
+    <div
+      class="chat-composer-model-control"
+      @click=${() => {
+        if (state.chatMobileControlsOpen) {
+          state.setChatMobileControlsOpen(false);
+        }
+      }}
+    >
+      ${renderChatModelSelect(state)}
+    </div>
+    ${renderChatQuotaPill(state)}
+    <div class="chat-settings-popover-wrapper">
       <button
-        class="btn btn--sm btn--icon"
-        ?disabled=${refreshDisabled}
-        @click=${() => handleChatManualRefresh(state as unknown as ChatRefreshHost)}
-        title=${refreshLabel}
-        aria-label=${refreshLabel}
-        data-tooltip=${refreshLabel}
-      >
-        ${refreshIcon}
-      </button>
-      <span class="chat-controls__separator">|</span>
-      ${renderChatAutoScrollSelect(state)}
-      <button
-        class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
-        ?disabled=${disableThinkingToggle}
-        @click=${() => {
-          if (disableThinkingToggle) {
-            return;
-          }
-          state.applySettings({
-            ...state.settings,
-            chatShowThinking: !state.settings.chatShowThinking,
+        class="chat-settings-chip ${settingsOpen ? "chat-settings-chip--open" : ""}"
+        type="button"
+        title=${settingsTitle}
+        aria-label=${settingsTitle}
+        aria-expanded=${settingsOpen}
+        aria-controls="chat-composer-settings-popover"
+        @click=${(e: Event) => {
+          e.stopPropagation();
+          (e.currentTarget as HTMLElement)
+            .closest(".agent-chat__composer-controls")
+            ?.querySelectorAll("details.chat-controls__inline-select[open]")
+            .forEach((details) => details.removeAttribute("open"));
+          state.setChatMobileControlsOpen(!settingsOpen, {
+            trigger: e.currentTarget as HTMLElement,
           });
         }}
-        aria-pressed=${showThinking}
-        title=${thinkingLabel}
-        aria-label=${thinkingLabel}
-        data-tooltip=${thinkingLabel}
       >
-        ${icons.brain}
+        <span class="chat-settings-chip__icon">${icons.settings}</span>
+        <span class="chat-settings-chip__text">${settingsLabel}</span>
+        <span class="chat-settings-chip__chevron">${icons.chevronDown}</span>
       </button>
-      <button
-        class="btn btn--sm btn--icon ${showToolCalls ? "active" : ""}"
-        ?disabled=${disableThinkingToggle}
-        @click=${() => {
-          if (disableThinkingToggle) {
-            return;
-          }
-          state.applySettings({
-            ...state.settings,
-            chatShowToolCalls: !state.settings.chatShowToolCalls,
-          });
-        }}
-        aria-pressed=${showToolCalls}
-        title=${toolCallsLabel}
-        aria-label=${toolCallsLabel}
-        data-tooltip=${toolCallsLabel}
+      <div
+        id="chat-composer-settings-popover"
+        class="chat-settings-popover ${settingsOpen ? "chat-settings-popover--open" : ""}"
+        role="dialog"
+        aria-label=${settingsTitle}
       >
-        ${toolCallsIcon}
-      </button>
-      <button
-        class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
-        ?disabled=${disableFocusToggle}
-        @click=${() => {
-          if (disableFocusToggle) {
-            return;
-          }
-          state.applySettings({
-            ...state.settings,
-            chatFocusMode: !state.settings.chatFocusMode,
-          });
-        }}
-        aria-pressed=${focusActive}
-        title=${focusLabel}
-        aria-label=${focusLabel}
-        data-tooltip=${focusLabel}
-      >
-        ${focusIcon}
-      </button>
-      <button
-        class="btn btn--sm btn--icon ${hideCron ? "active" : ""}"
-        @click=${() => {
-          state.sessionsHideCron = !hideCron;
-        }}
-        aria-pressed=${hideCron}
-        title=${cronLabel}
-        aria-label=${cronLabel}
-        data-tooltip=${cronLabel}
-      >
-        ${renderCronFilterIcon(hiddenCronCount)}
-      </button>
+        <div class="chat-settings-popover__section">
+          <span class="chat-settings-popover__label">${settingsLabel}</span>
+          <div class="chat-settings-popover__toggles">
+            <button
+              class="btn btn--sm btn--icon chat-settings-action"
+              ?disabled=${refreshDisabled}
+              @click=${() => {
+                if (!refreshDisabled) {
+                  void handleChatManualRefresh(state as ChatRefreshHost);
+                }
+              }}
+              title=${t("common.refresh")}
+              aria-label=${t("common.refresh")}
+              data-tooltip=${t("common.refresh")}
+            >
+              ${icons.refresh}
+              <span class="chat-settings-action__text">${t("common.refresh")}</span>
+            </button>
+            ${renderChatAutoScrollToggle(state, { labelled: true })}
+            <button
+              class="btn btn--sm btn--icon chat-settings-action ${showThinking ? "active" : ""}"
+              ?disabled=${disableThinkingToggle}
+              @click=${() => {
+                if (disableThinkingToggle) {
+                  return;
+                }
+                state.applySettings({
+                  ...state.settings,
+                  chatShowThinking: !state.settings.chatShowThinking,
+                });
+              }}
+              aria-pressed=${showThinking}
+              title=${thinkingLabel}
+              aria-label=${thinkingLabel}
+              data-tooltip=${thinkingLabel}
+            >
+              ${icons.brain}
+              <span class="chat-settings-action__text">${t("cron.form.thinking")}</span>
+            </button>
+            <button
+              class="btn btn--sm btn--icon chat-settings-action ${showToolCalls ? "active" : ""}"
+              ?disabled=${disableThinkingToggle}
+              @click=${() => {
+                if (disableThinkingToggle) {
+                  return;
+                }
+                state.applySettings({
+                  ...state.settings,
+                  chatShowToolCalls: !state.settings.chatShowToolCalls,
+                });
+              }}
+              aria-pressed=${showToolCalls}
+              title=${toolCallsLabel}
+              aria-label=${toolCallsLabel}
+              data-tooltip=${toolCallsLabel}
+            >
+              ${toolCallsIcon}
+              <span class="chat-settings-action__text">${t("agents.tabs.tools")}</span>
+            </button>
+            <button
+              class="btn btn--sm btn--icon chat-settings-action ${hideCron ? "active" : ""}"
+              @click=${() => {
+                state.sessionsHideCron = !hideCron;
+              }}
+              aria-pressed=${hideCron}
+              title=${cronLabel}
+              aria-label=${cronLabel}
+              data-tooltip=${cronLabel}
+            >
+              ${renderCronFilterIcon(hiddenCronCount)}
+              <span class="chat-settings-action__text">${t("cron.jobList.history")}</span>
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   `;
 }
@@ -484,10 +531,8 @@ export function renderChatMobileToggle(state: AppViewState) {
   const controlsDropdownId = "chat-mobile-controls-dropdown";
   const mobileControlsOpen = state.chatMobileControlsOpen;
   const disableThinkingToggle = state.onboarding;
-  const disableFocusToggle = state.onboarding;
   const showThinking = state.onboarding ? false : state.settings.chatShowThinking;
   const showToolCalls = state.onboarding ? true : state.settings.chatShowToolCalls;
-  const focusActive = state.onboarding ? true : state.settings.chatFocusMode;
   const hideCron = state.sessionsHideCron ?? true;
   const hiddenCronCount = hideCron ? countHiddenCronSessions(state, state.sessionsResult) : 0;
   const toolCallsIcon = html`
@@ -504,24 +549,6 @@ export function renderChatMobileToggle(state: AppViewState) {
       <path
         d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"
       ></path>
-    </svg>
-  `;
-  const focusIcon = html`
-    <svg
-      width="18"
-      height="18"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
-      <path d="M4 7V4h3"></path>
-      <path d="M20 7V4h-3"></path>
-      <path d="M4 17v3h3"></path>
-      <path d="M20 17v3h-3"></path>
-      <circle cx="12" cy="12" r="3"></circle>
     </svg>
   `;
 
@@ -564,9 +591,9 @@ export function renderChatMobileToggle(state: AppViewState) {
         }}
       >
         <div class="chat-controls">
-          ${renderChatSessionSelectBase(state, switchChatSession)}
+          ${renderChatSessionSelectBase(state, switchChatSession, { surface: "mobile" })}
           <div class="chat-controls__thinking">
-            ${renderChatAutoScrollSelect(state)}
+            ${renderChatAutoScrollToggle(state)}
             <button
               class="btn btn--sm btn--icon ${showThinking ? "active" : ""}"
               ?disabled=${disableThinkingToggle}
@@ -600,22 +627,6 @@ export function renderChatMobileToggle(state: AppViewState) {
               ${toolCallsIcon}
             </button>
             <button
-              class="btn btn--sm btn--icon ${focusActive ? "active" : ""}"
-              ?disabled=${disableFocusToggle}
-              @click=${() => {
-                if (!disableFocusToggle) {
-                  state.applySettings({
-                    ...state.settings,
-                    chatFocusMode: !state.settings.chatFocusMode,
-                  });
-                }
-              }}
-              aria-pressed=${focusActive}
-              title=${t("chat.focusToggle")}
-            >
-              ${focusIcon}
-            </button>
-            <button
               class="btn btn--sm btn--icon ${hideCron ? "active" : ""}"
               @click=${() => {
                 state.sessionsHideCron = !hideCron;
@@ -636,9 +647,16 @@ export function renderChatMobileToggle(state: AppViewState) {
   `;
 }
 
-export function switchChatSession(state: AppViewState, nextSessionKey: string) {
+function switchChatSessionInternal(
+  state: AppViewState,
+  nextSessionKey: string,
+  opts?: { awaitInitialLoad?: boolean },
+): Promise<void> | undefined {
   const previousSessionKey = state.sessionKey;
-  const nextSessionRow = state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey);
+  const previousSessionsResult = state.sessionsResult;
+  const nextSessionRow =
+    state.sessionsResult?.sessions.find((row) => row.key === nextSessionKey) ??
+    state.chatSessionPickerResult?.sessions.find((row) => row.key === nextSessionKey);
   const nextSessionLabel = resolveSessionDisplayName(nextSessionKey, nextSessionRow);
   resetChatStateForSessionSwitch(state, nextSessionKey);
   if (previousSessionKey !== nextSessionKey) {
@@ -655,60 +673,107 @@ export function switchChatSession(state: AppViewState, nextSessionKey: string) {
     nextSessionKey,
     true,
   );
-  void loadChatHistory(state as unknown as ChatState);
-  void refreshSessionOptions(state);
+  const subscriptionSync = syncSelectedSessionMessageSubscription(
+    state as unknown as AppViewState & { chatSessionMessageSubscriptionKey?: string | null },
+  );
+  const historyLoad = loadChatHistory(state as unknown as ChatState);
+  const sessionsRefresh = refreshSessionOptions(state);
+  flushChatQueueAfterIdleSessionReconciliation(
+    state as unknown as Parameters<typeof flushChatQueueAfterIdleSessionReconciliation>[0],
+    nextSessionKey,
+    historyLoad,
+    sessionsRefresh,
+    previousSessionsResult,
+  );
+  if (opts?.awaitInitialLoad) {
+    void sessionsRefresh;
+    return Promise.allSettled([subscriptionSync, historyLoad]).then(() => undefined);
+  }
+  void subscriptionSync;
+  void historyLoad;
+  void sessionsRefresh;
+  return undefined;
+}
+
+export function switchChatSession(state: AppViewState, nextSessionKey: string): void {
+  void switchChatSessionInternal(state, nextSessionKey);
+}
+
+export function switchChatSessionAndWait(
+  state: AppViewState,
+  nextSessionKey: string,
+): Promise<void> {
+  return (
+    switchChatSessionInternal(state, nextSessionKey, { awaitInitialLoad: true }) ??
+    Promise.resolve()
+  );
+}
+
+export function dismissRealtimeTalkError(state: AppViewState) {
+  if (state.realtimeTalkStatus !== "error") {
+    return;
+  }
+  const talkHost = state as unknown as {
+    realtimeTalkSession?: { stop(): void } | null;
+  };
+  talkHost.realtimeTalkSession?.stop();
+  talkHost.realtimeTalkSession = null;
+  state.realtimeTalkActive = false;
+  state.realtimeTalkStatus = "idle";
+  state.realtimeTalkDetail = null;
+  state.realtimeTalkTranscript = null;
+  state.resetRealtimeTalkConversation?.();
 }
 
 export function dismissChatError(state: AppViewState) {
   state.lastError = null;
   state.lastErrorCode = null;
-  if (state.realtimeTalkStatus === "error") {
-    const talkHost = state as unknown as {
-      realtimeTalkSession?: { stop(): void } | null;
-    };
-    talkHost.realtimeTalkSession?.stop();
-    talkHost.realtimeTalkSession = null;
-    state.realtimeTalkActive = false;
-    state.realtimeTalkStatus = "idle";
-    state.realtimeTalkDetail = null;
-    state.realtimeTalkTranscript = null;
-  }
+  state.chatError = null;
 }
 
-export async function createChatSession(state: AppViewState) {
+export type CreateChatSessionIntent = { source: "user" };
+
+export async function createChatSession(
+  state: AppViewState,
+  intent?: CreateChatSessionIntent,
+): Promise<boolean> {
+  if (intent?.source !== "user") {
+    return false;
+  }
   if (!state.client || !state.connected) {
-    return;
+    return false;
   }
   if (!canSwitchToNewChatSession(state)) {
     state.lastError = NEW_CHAT_ACTIVE_RUN_MESSAGE;
-    return;
+    state.chatError = state.lastError;
+    return false;
   }
   if (state.sessionsLoading) {
     state.lastError = NEW_CHAT_SESSIONS_LOADING_MESSAGE;
-    return;
+    state.chatError = state.lastError;
+    return false;
   }
 
   state.lastError = null;
+  state.chatError = null;
   const previousSessionKey = state.sessionKey;
-  const parentSessionKey = state.sessionsResult?.sessions.some(
-    (row) => row.key === previousSessionKey,
-  )
-    ? previousSessionKey
-    : undefined;
+  const normalizedPreviousSessionKey = normalizeOptionalString(previousSessionKey);
+  const parentSessionKey =
+    normalizeLowercaseStringOrEmpty(normalizedPreviousSessionKey) === "unknown"
+      ? undefined
+      : normalizedPreviousSessionKey;
   const nextSessionKey = await createSessionAndRefresh(
     state as unknown as Parameters<typeof createSessionAndRefresh>[0],
     {
-      agentId: resolveAgentIdFromSessionKey(previousSessionKey),
+      agentId:
+        scopedAgentParamsForSession(state, previousSessionKey).agentId ??
+        resolveAgentIdFromSessionKey(previousSessionKey),
       parentSessionKey,
       emitCommandHooks: parentSessionKey !== undefined ? true : undefined,
     },
     {
-      activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-      limit: CHAT_SESSIONS_REFRESH_LIMIT,
-      includeGlobal: true,
-      includeUnknown: true,
-      showArchived: state.sessionsShowArchived,
-      agentId: resolveAgentIdFromSessionKey(previousSessionKey),
+      ...createChatSessionsLoadOverrides(state),
+      ...scopedAgentListParamsForSession(state, previousSessionKey),
     },
   );
   if (
@@ -722,8 +787,9 @@ export async function createChatSession(state: AppViewState) {
         (state.sessionsLoading
           ? NEW_CHAT_SESSIONS_LOADING_MESSAGE
           : NEW_CHAT_CREATE_FAILED_MESSAGE);
+      state.chatError = state.lastError;
     }
-    return;
+    return false;
   }
 
   const preservedDraft = state.chatMessage;
@@ -731,16 +797,13 @@ export async function createChatSession(state: AppViewState) {
   switchChatSession(state, nextSessionKey);
   state.chatMessage = preservedDraft;
   state.chatAttachments = preservedAttachments;
+  return true;
 }
 
 async function refreshSessionOptions(state: AppViewState) {
   await loadSessions(state as unknown as Parameters<typeof loadSessions>[0], {
-    activeMinutes: CHAT_SESSIONS_ACTIVE_MINUTES,
-    limit: CHAT_SESSIONS_REFRESH_LIMIT,
-    includeGlobal: true,
-    includeUnknown: true,
-    showArchived: state.sessionsShowArchived,
-    agentId: parseAgentSessionKey(state.sessionKey)?.agentId,
+    ...createChatSessionsLoadOverrides(state),
+    ...scopedAgentListParamsForSession(state, state.sessionKey),
   });
 }
 
@@ -753,16 +816,12 @@ function countHiddenCronSessions(state: AppViewState, sessions: SessionsListResu
     parseAgentSessionKey(state.sessionKey)?.agentId ?? state.agentsList?.defaultId ?? "main",
   );
   const defaultAgentId = normalizeAgentId(state.agentsList?.defaultId ?? "main");
-  const isTiedToActiveAgent = (key: string) => {
-    const parsed = parseAgentSessionKey(key);
-    if (parsed) {
-      return normalizeAgentId(parsed.agentId) === activeAgentId;
-    }
-    return activeAgentId === defaultAgentId;
-  };
 
   return sessions.sessions.filter(
-    (s) => isCronSessionKey(s.key) && s.key !== state.sessionKey && isTiedToActiveAgent(s.key),
+    (s) =>
+      isCronSessionKey(s.key) &&
+      s.key !== state.sessionKey &&
+      isSessionKeyTiedToAgent(s.key, activeAgentId, defaultAgentId),
   ).length;
 }
 
@@ -794,6 +853,8 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
   return html`
     <div class="topbar-theme-mode" role="group" aria-label=${t("common.colorMode")}>
       ${THEME_MODE_OPTIONS.map((opt) => {
+        // Group aria-label already says "Color mode"; per-button label only needs
+        // the differentiating mode name (System/Light/Dark).
         const label = t(opt.labelKey);
         return html`
           <button
@@ -802,7 +863,8 @@ export function renderTopbarThemeModeToggle(state: AppViewState) {
               ? "topbar-theme-mode__btn--active"
               : ""}"
             title=${label}
-            aria-label=${t("common.colorModeOption", { mode: label })}
+            aria-label=${label}
+            data-tooltip=${label}
             aria-pressed=${opt.id === state.themeMode}
             @click=${(e: Event) => applyMode(opt.id, e)}
           >

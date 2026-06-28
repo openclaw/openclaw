@@ -1,4 +1,8 @@
-import { describe, expect, it, vi } from "vitest";
+// Configured model list tests cover listing models from configured providers.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
   configFingerprint: "models-list-configured-test-empty-plugin-metadata",
@@ -16,6 +20,10 @@ vi.mock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
 }));
 
 import { resolveConfiguredEntries } from "./list.configured.js";
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 describe("resolveConfiguredEntries", () => {
   it("parses configured models without loading provider-runtime normalization", () => {
@@ -72,5 +80,102 @@ describe("resolveConfiguredEntries", () => {
     expect(entries.map((entry) => entry.key)).toEqual(["kilocode/google/gemini-3.1-pro-preview"]);
     expect(entries[0]?.aliases).toEqual(["Kilo Gemini"]);
     expect(entries[0]?.tags).toEqual(new Set(["default", "configured"]));
+  });
+  it("treats provider wildcard defaults as selectors, not configured model rows", () => {
+    const { entries } = resolveConfiguredEntries({
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          models: {
+            "openai/*": {},
+            "openai/gpt-5.5": { alias: "Primary" },
+          },
+        },
+      },
+      models: { providers: {} },
+    });
+
+    expect(entries.map((entry) => entry.key)).toEqual(["openai/gpt-5.5"]);
+    expect(entries[0]?.aliases).toEqual(["Primary"]);
+    expect(entries[0]?.tags).toEqual(new Set(["default", "configured"]));
+  });
+
+  it("canonicalizes manifest-owned provider aliases in configured rows", () => {
+    vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", path.resolve("extensions"));
+
+    const { entries } = resolveConfiguredEntries({
+      agents: {
+        defaults: {
+          model: { primary: "z.ai/glm-4.7" },
+          models: {
+            "z.ai/glm-4.7": { alias: "GLM" },
+          },
+        },
+      },
+      models: { providers: {} },
+    });
+
+    expect(entries.map((entry) => entry.key)).toEqual(["zai/glm-4.7"]);
+    expect(entries[0]?.aliases).toEqual(["GLM"]);
+    expect(entries[0]?.tags).toEqual(new Set(["default", "configured"]));
+  });
+
+  it("recovers bundled source aliases when stale dist metadata omits them", () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-model-alias-source-"));
+    try {
+      const distPluginRoot = path.join(root, "dist", "extensions", "zai");
+      const sourcePluginRoot = path.join(root, "extensions", "zai");
+      fs.mkdirSync(distPluginRoot, { recursive: true });
+      fs.mkdirSync(sourcePluginRoot, { recursive: true });
+      fs.writeFileSync(
+        path.join(sourcePluginRoot, "openclaw.plugin.json"),
+        JSON.stringify({
+          id: "zai",
+          configSchema: { type: "object" },
+          providers: ["zai"],
+          modelCatalog: {
+            aliases: {
+              "z.ai": { provider: "zai" },
+            },
+          },
+        }),
+        "utf8",
+      );
+
+      const { entries } = resolveConfiguredEntries(
+        {
+          agents: {
+            defaults: {
+              model: { primary: "z.ai/glm-4.7" },
+            },
+          },
+          models: { providers: {} },
+        },
+        {
+          manifestRegistry: {
+            diagnostics: [],
+            plugins: [
+              {
+                id: "zai",
+                origin: "bundled",
+                rootDir: distPluginRoot,
+                source: path.join(distPluginRoot, "index.js"),
+                providers: ["zai"],
+                channels: [],
+                cliBackends: [],
+                skills: [],
+                hooks: [],
+                modelCatalog: { providers: {}, discovery: { zai: "static" } },
+                manifestPath: path.join(distPluginRoot, "openclaw.plugin.json"),
+              },
+            ],
+          },
+        },
+      );
+
+      expect(entries.map((entry) => entry.key)).toEqual(["zai/glm-4.7"]);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
   });
 });

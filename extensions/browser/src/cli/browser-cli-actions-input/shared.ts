@@ -1,3 +1,6 @@
+/**
+ * Shared helpers for Browser CLI action subcommands.
+ */
 import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { callBrowserRequest, type BrowserParentOpts } from "../browser-cli-shared.js";
@@ -14,6 +17,18 @@ type BrowserActionContext = {
   profile: string | undefined;
 };
 
+const BROWSER_ACTION_TIMEOUT_SLACK_MS = 5000;
+const DEFAULT_BROWSER_ACTION_TIMEOUT_MS = 20000;
+
+/** Adds gateway slack to a Browser action timeout so route work can finish cleanly. */
+export function withBrowserActionTimeoutSlack(timeoutMs: number | undefined): number {
+  return (
+    Math.max(1, Math.floor(timeoutMs ?? DEFAULT_BROWSER_ACTION_TIMEOUT_MS)) +
+    BROWSER_ACTION_TIMEOUT_SLACK_MS
+  );
+}
+
+/** Resolves inherited Browser action context from a commander command. */
 export function resolveBrowserActionContext(
   cmd: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -23,6 +38,7 @@ export function resolveBrowserActionContext(
   return { parent, profile };
 }
 
+/** Calls the Browser /act route for one CLI action body. */
 export async function callBrowserAct<T = unknown>(params: {
   parent: BrowserParentOpts;
   profile?: string;
@@ -37,10 +53,11 @@ export async function callBrowserAct<T = unknown>(params: {
       query: params.profile ? { profile: params.profile } : undefined,
       body: params.body,
     },
-    { timeoutMs: params.timeoutMs ?? 20000 },
+    { timeoutMs: withBrowserActionTimeoutSlack(params.timeoutMs) },
   );
 }
 
+/** Writes Browser action output as JSON or a terse success message. */
 export function logBrowserActionResult(
   parent: BrowserParentOpts,
   result: unknown,
@@ -53,6 +70,7 @@ export function logBrowserActionResult(
   defaultRuntime.log(successMessage);
 }
 
+/** Requires and trims an element ref, exiting through the CLI runtime on failure. */
 export function requireRef(ref: string | undefined) {
   const refValue = typeof ref === "string" ? ref.trim() : "";
   if (!refValue) {
@@ -67,6 +85,7 @@ async function readFile(path: string): Promise<string> {
   return await fs.readFile(path, "utf8");
 }
 
+/** Reads and validates JSON form-field descriptors from inline text or a file. */
 export async function readFields(opts: {
   fields?: string;
   fieldsFile?: string;

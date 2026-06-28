@@ -1,3 +1,4 @@
+// Whatsapp API module exposes the plugin public contract.
 export {
   getActiveWebListener,
   resolveWebAccountId,
@@ -26,8 +27,8 @@ export {
   resolveWebCredsBackupPath,
   resolveWebCredsPath,
   restoreCredsFromBackupIfNeeded,
-  WA_WEB_AUTH_DIR,
   webAuthExists,
+  WA_WEB_AUTH_DIR,
   WHATSAPP_AUTH_UNSTABLE_CODE,
   WhatsAppAuthUnstableError,
   type WhatsAppWebAuthState,
@@ -49,8 +50,12 @@ export {
   extractText,
   monitorWebInbox,
   resetWebInboundDedupe,
+  type LegacyFlatWebInboundMessage,
+  type WebInboundCallbackMessage,
   type WebInboundMessage,
+  type WebInboundMessageInput,
   type WebListenerCloseReason,
+  type WhatsAppInboundAdmission,
 } from "./src/inbound.js";
 export { loginWeb } from "./src/login.js";
 export {

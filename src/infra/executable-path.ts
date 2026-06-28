@@ -1,6 +1,7 @@
+// Resolves executable paths from PATH and platform-specific install locations.
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expandHomePrefix } from "./home-dir.js";
 
 function isDriveLessWindowsRootedPath(value: string): boolean {
@@ -25,7 +26,7 @@ export function resolveExecutablePathCandidate(
     return expanded;
   }
   if (path.isAbsolute(expanded)) {
-    return expanded;
+    return path.resolve(expanded);
   }
   const base = options?.cwd && options.cwd.trim() ? options.cwd.trim() : process.cwd();
   return path.resolve(base, expanded);

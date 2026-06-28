@@ -54,7 +54,7 @@ Type `/compact` in any chat to force a compaction. Add instructions to guide the
 /compact Focus on the API design decisions
 ```
 
-When `agents.defaults.compaction.keepRecentTokens` is set, manual compaction honors that Pi cut-point and keeps the recent tail in rebuilt context. Without an explicit keep budget, manual compaction behaves as a hard checkpoint and continues from the new summary alone.
+When `agents.defaults.compaction.keepRecentTokens` is set, manual compaction honors that OpenClaw cut-point and keeps the recent tail in rebuilt context. Without an explicit keep budget, manual compaction behaves as a hard checkpoint and continues from the new summary alone.
 
 ## Configuration
 
@@ -62,7 +62,7 @@ Configure compaction under `agents.defaults.compaction` in your `openclaw.json`.
 
 ### Using a different model
 
-By default, compaction uses the agent's primary model. Set `agents.defaults.compaction.model` to delegate summarization to a more capable or specialized model. The override accepts any `provider/model-id` string:
+By default, compaction uses the agent's primary model. Set `agents.defaults.compaction.model` to delegate summarization to a more capable or specialized model. The override accepts a `provider/model-id` string or a bare alias configured under `agents.defaults.models`:
 
 ```json
 {
@@ -75,6 +75,8 @@ By default, compaction uses the agent's primary model. Set `agents.defaults.comp
   }
 }
 ```
+
+Bare configured aliases resolve to their canonical provider and model before compaction starts. If a bare value matches both an alias and a configured literal model ID, the literal model ID wins. An unmatched bare value remains a model ID on the active provider.
 
 This works with local models too, for example a second Ollama model dedicated to summarization:
 
@@ -106,14 +108,14 @@ The byte guard requires `truncateAfterCompaction: true`. Without transcript rota
 
 ### Successor transcripts
 
-When `agents.defaults.compaction.truncateAfterCompaction` is enabled, OpenClaw does not rewrite the existing transcript in place. It creates a new active successor transcript from the compaction summary, preserved state, and unsummarized tail, then keeps the previous JSONL as the archived checkpoint source.
+When `agents.defaults.compaction.truncateAfterCompaction` is enabled, OpenClaw does not rewrite the existing transcript in place. It creates a new active successor transcript from the compaction summary, preserved state, and unsummarized tail, then records checkpoint metadata that points branch/restore flows at that compacted successor.
 Successor transcripts also drop exact duplicate long user turns that arrive
 inside a short retry window, so channel retry storms are not carried into the
 next active transcript after compaction.
 
-Pre-compaction checkpoints are retained only while they stay below OpenClaw's
-checkpoint size cap; oversized active transcripts still compact, but OpenClaw
-skips the large debug snapshot instead of doubling disk usage.
+OpenClaw no longer writes separate `.checkpoint.*.jsonl` copies for new
+compactions. Existing legacy checkpoint files can still be used while referenced
+and are pruned by normal session cleanup.
 
 ### Compaction notices
 

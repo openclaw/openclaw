@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements scenario types behavior.
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 
 export type MatrixQaReplyArtifact = {
@@ -54,6 +55,7 @@ export type MatrixQaScenarioArtifacts = {
   editEventId?: string;
   editedToken?: string;
   expectedNoReplyWindowMs?: number;
+  expectedMarker?: string;
   firstDriverEventId?: string;
   firstReply?: MatrixQaReplyArtifact;
   firstToken?: string;
@@ -128,6 +130,7 @@ export type MatrixQaScenarioArtifacts = {
   deletedBackupVersion?: string | null;
   faultedEndpoint?: string;
   faultHitCount?: number;
+  faultProxyBaseUrl?: string;
   faultRuleId?: string;
   historyEventId?: string;
   observerRecoveryDeviceId?: string;
@@ -165,6 +168,9 @@ export type MatrixQaScenarioArtifacts = {
   gatewayUserId?: string;
   secondEncryptionChanged?: boolean;
   setupSuccess?: boolean;
+  stateAfterFaultHitCount?: number;
+  stateAfterFaultRuleId?: string;
+  strippedSyncStateAfterParam?: boolean;
   verificationBootstrapAttempted?: boolean;
   verificationBootstrapSuccess?: boolean;
   gatewayReply?: MatrixQaReplyArtifact;

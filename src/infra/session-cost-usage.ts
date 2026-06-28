@@ -1,6 +1,9 @@
+// Persists and formats per-session cost and usage records.
 import fs from "node:fs";
 import path from "node:path";
 import readline from "node:readline";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { normalizeUsage } from "../agents/usage.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
@@ -19,8 +22,7 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stripEnvelope, stripMessageIdHints } from "../shared/chat-envelope.js";
-import { asFiniteNumber } from "../shared/number-coercion.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
+import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
 import {
   estimateUsageCost,
@@ -29,6 +31,11 @@ import {
 } from "../utils/usage-format.js";
 import { formatErrorMessage } from "./errors.js";
 import { replaceFileAtomic } from "./replace-file.js";
+import {
+  addCostUsageTotals as addTotals,
+  cloneCostUsageTotals as cloneTotals,
+  createEmptyCostUsageTotals as emptyTotals,
+} from "./session-cost-usage-totals.js";
 import type {
   CostBreakdown,
   CostUsageTotals,
@@ -67,31 +74,30 @@ export type {
   UsageCacheStatus,
 } from "./session-cost-usage.types.js";
 
-const emptyTotals = (): CostUsageTotals => ({
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-});
-
-const USAGE_COST_CACHE_VERSION = 2;
+// Bump when the *meaning* of cached totals changes (not just their inputs), so durable
+// caches written by older builds are rebuilt instead of served stale. Bumped to 4:
+// unpriced (unknown) zero-cost usage now counts toward missingCostEntries, so a warm
+// cache from a pre-change build would otherwise keep reporting the old complete-$0 totals.
+const USAGE_COST_CACHE_VERSION = 4;
 const USAGE_COST_CACHE_FILE = ".usage-cost-cache.json";
 const USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS = 10_000;
+const USAGE_COST_CACHE_TEMP_FILE_GRACE_MS = USAGE_COST_CACHE_LOCK_WRITE_GRACE_MS;
+const USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY = 32;
+// Checkpoint policy for refreshCostUsageCache: bound the cost of full cache
+// serialization when scanning thousands of session files. Smaller of the two
+// limits triggers the next durable write.
+const USAGE_COST_CACHE_CHECKPOINT_FILES = 256;
+const USAGE_COST_CACHE_CHECKPOINT_INTERVAL_MS = 5_000;
 const logger = createSubsystemLogger("usage-cost-cache");
 
 type UsageCostRefreshState = {
   agentId?: string;
+  cachePath: string;
   config?: OpenClawConfig;
   fullRefreshRequested: boolean;
   pendingSessionFiles: Set<string>;
   running: boolean;
+  sessionsDir: string;
   timer?: ReturnType<typeof setTimeout>;
 };
 
@@ -99,7 +105,23 @@ type UsageCostRefreshResult = "refreshed" | "busy";
 
 const usageCostRefreshes = new Map<string, UsageCostRefreshState>();
 
-type UsageCostCachedUsageEntry = CostUsageTotals & { timestamp: number };
+type UsageCostCachedUsageEntry = CostUsageTotals & {
+  timestamp: number;
+  provider?: string;
+  model?: string;
+};
+
+type UsageCostCachedTranscriptEntry = {
+  timestamp?: number;
+  role?: "user" | "assistant";
+  durationMs?: number;
+  provider?: string;
+  model?: string;
+  stopReason?: string;
+  toolNames: string[];
+  toolResultCounts: { total: number; errors: number };
+  usageTotals?: CostUsageTotals;
+};
 
 type UsageCostCacheFileEntry = {
   filePath: string;
@@ -110,6 +132,7 @@ type UsageCostCacheFileEntry = {
   parsedRecords: number;
   countedRecords: number;
   usageEntries: UsageCostCachedUsageEntry[];
+  transcriptEntries?: UsageCostCachedTranscriptEntry[];
   totals: CostUsageTotals;
   sessionId?: string;
   sessionSummary?: SessionCostSummary;
@@ -137,34 +160,6 @@ type UsageCostCacheLockReadResult =
   | { state: "missing" }
   | { state: "valid"; lock: UsageCostCacheLock }
   | { state: "malformed"; mtimeMs: number };
-
-const cloneTotals = (totals: CostUsageTotals): CostUsageTotals => ({
-  input: totals.input,
-  output: totals.output,
-  cacheRead: totals.cacheRead,
-  cacheWrite: totals.cacheWrite,
-  totalTokens: totals.totalTokens,
-  totalCost: totals.totalCost,
-  inputCost: totals.inputCost,
-  outputCost: totals.outputCost,
-  cacheReadCost: totals.cacheReadCost,
-  cacheWriteCost: totals.cacheWriteCost,
-  missingCostEntries: totals.missingCostEntries,
-});
-
-const addTotals = (target: CostUsageTotals, source: CostUsageTotals): void => {
-  target.input += source.input;
-  target.output += source.output;
-  target.cacheRead += source.cacheRead;
-  target.cacheWrite += source.cacheWrite;
-  target.totalTokens += source.totalTokens;
-  target.totalCost += source.totalCost;
-  target.inputCost += source.inputCost;
-  target.outputCost += source.outputCost;
-  target.cacheReadCost += source.cacheReadCost;
-  target.cacheWriteCost += source.cacheWriteCost;
-  target.missingCostEntries += source.missingCostEntries;
-};
 
 function resolveUsageCostPricingFingerprint(config?: OpenClawConfig): string {
   return resolveModelCostConfigFingerprint(config);
@@ -345,24 +340,63 @@ async function writeUsageCostCache(cachePath: string, cache: UsageCostCacheFile)
   });
 }
 
+function isUsageCostCacheTempFileName(name: string): boolean {
+  if (!name.endsWith(".tmp") || name.startsWith(`${USAGE_COST_CACHE_FILE}.lock.`)) {
+    return false;
+  }
+  return name.startsWith(".usage-cost-cache.") || name.startsWith(`${USAGE_COST_CACHE_FILE}.`);
+}
+
+async function cleanupStaleUsageCostCacheTempFiles(cachePath: string): Promise<void> {
+  const dir = path.dirname(cachePath);
+  const cutoffMs = Date.now() - USAGE_COST_CACHE_TEMP_FILE_GRACE_MS;
+  const entries = await fs.promises.readdir(dir, { withFileTypes: true }).catch(() => []);
+  await Promise.all(
+    entries.map(async (entry) => {
+      if (!entry.isFile() || !isUsageCostCacheTempFileName(entry.name)) {
+        return;
+      }
+      const tempPath = path.join(dir, entry.name);
+      const stats = await fs.promises.stat(tempPath).catch(() => null);
+      if (!stats || stats.mtimeMs > cutoffMs) {
+        return;
+      }
+      await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);
+    }),
+  );
+}
+
+async function listUsageCountedTranscriptFileStats(
+  agentId?: string,
+  params?: { minMtimeMs?: number; sessionsDir?: string },
+): Promise<UsageCostTranscriptFile[]> {
+  const sessionsDir = params?.sessionsDir ?? resolveSessionTranscriptsDirForAgent(agentId);
+  const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+  const tasks = entries
+    .filter((entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name))
+    .map((entry) => async (): Promise<UsageCostTranscriptFile | undefined> => {
+      const filePath = path.join(sessionsDir, entry.name);
+      const stats = await fs.promises.stat(filePath).catch(() => null);
+      if (!stats) {
+        return undefined;
+      }
+      if (params?.minMtimeMs !== undefined && stats.mtimeMs < params.minMtimeMs) {
+        return undefined;
+      }
+      return { filePath, size: stats.size, mtimeMs: stats.mtimeMs };
+    });
+  const { results } = await runTasksWithConcurrency({
+    tasks,
+    limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
+  });
+  return results.filter((file): file is UsageCostTranscriptFile => Boolean(file));
+}
+
 async function listUsageCountedTranscriptFiles(
   agentId?: string,
+  params?: { sessionsDir?: string },
 ): Promise<UsageCostTranscriptFile[]> {
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(agentId);
-  const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
-  const files = await Promise.all(
-    entries
-      .filter((entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name))
-      .map(async (entry) => {
-        const filePath = path.join(sessionsDir, entry.name);
-        const stats = await fs.promises.stat(filePath).catch(() => null);
-        if (!stats) {
-          return undefined;
-        }
-        return { filePath, size: stats.size, mtimeMs: stats.mtimeMs };
-      }),
-  );
-  return files.filter((file): file is UsageCostTranscriptFile => Boolean(file));
+  return await listUsageCountedTranscriptFileStats(agentId, params);
 }
 
 function isUsageCostCacheEntryFresh(params: {
@@ -520,6 +554,288 @@ function isSessionSummaryContainedInRange(
     (summary.firstActivity === undefined || summary.firstActivity >= startMs) &&
     (summary.lastActivity === undefined || summary.lastActivity <= endMs)
   );
+}
+
+function buildSessionCostSummaryFromCacheEntry(params: {
+  entry: UsageCostCacheFileEntry;
+  sessionId?: string;
+  sessionFile: string;
+  startMs: number;
+  endMs: number;
+}): SessionCostSummary | null {
+  if (!params.entry.transcriptEntries) {
+    return null;
+  }
+  const totals = emptyTotals();
+  const activityDatesSet = new Set<string>();
+  const dailyMap = new Map<string, { tokens: number; cost: number }>();
+  const dailyMessageMap = new Map<string, SessionDailyMessageCounts>();
+  const utcQuarterHourMessageMap = new Map<string, SessionUtcQuarterHourMessageCounts>();
+  const utcQuarterHourTokenMap = new Map<string, SessionUtcQuarterHourTokenUsage>();
+  const dailyLatencyMap = new Map<string, number[]>();
+  const dailyModelUsageMap = new Map<string, SessionDailyModelUsage>();
+  const messageCounts: SessionMessageCounts = {
+    total: 0,
+    user: 0,
+    assistant: 0,
+    toolCalls: 0,
+    toolResults: 0,
+    errors: 0,
+  };
+  const toolUsageMap = new Map<string, number>();
+  const modelUsageMap = new Map<string, SessionModelUsage>();
+  const errorStopReasons = new Set(["error", "aborted", "timeout"]);
+  const latencyValues: number[] = [];
+  let firstActivity: number | undefined;
+  let lastActivity: number | undefined;
+  let lastUserTimestamp: number | undefined;
+  const maxLatencyMs = 12 * 60 * 60 * 1000;
+
+  for (const entry of params.entry.transcriptEntries) {
+    const ts = entry.timestamp;
+    if (ts !== undefined && ts < params.startMs) {
+      continue;
+    }
+    if (ts !== undefined && ts > params.endMs) {
+      continue;
+    }
+
+    if (ts !== undefined) {
+      firstActivity = firstActivity === undefined ? ts : Math.min(firstActivity, ts);
+      lastActivity = lastActivity === undefined ? ts : Math.max(lastActivity, ts);
+    }
+
+    if (entry.role === "user") {
+      messageCounts.user += 1;
+      messageCounts.total += 1;
+      if (ts !== undefined) {
+        lastUserTimestamp = ts;
+      }
+    }
+    if (entry.role === "assistant") {
+      messageCounts.assistant += 1;
+      messageCounts.total += 1;
+      if (ts !== undefined) {
+        const latencyMs =
+          entry.durationMs ??
+          (lastUserTimestamp !== undefined ? Math.max(0, ts - lastUserTimestamp) : undefined);
+        if (latencyMs !== undefined && Number.isFinite(latencyMs) && latencyMs <= maxLatencyMs) {
+          latencyValues.push(latencyMs);
+          const dayKey = formatDayKey(new Date(ts));
+          const dailyLatencies = dailyLatencyMap.get(dayKey) ?? [];
+          dailyLatencies.push(latencyMs);
+          dailyLatencyMap.set(dayKey, dailyLatencies);
+        }
+      }
+    }
+
+    if (entry.toolNames.length > 0) {
+      messageCounts.toolCalls += entry.toolNames.length;
+      for (const name of entry.toolNames) {
+        toolUsageMap.set(name, (toolUsageMap.get(name) ?? 0) + 1);
+      }
+    }
+
+    if (entry.toolResultCounts.total > 0) {
+      messageCounts.toolResults += entry.toolResultCounts.total;
+      messageCounts.errors += entry.toolResultCounts.errors;
+    }
+
+    if (entry.stopReason && errorStopReasons.has(entry.stopReason)) {
+      messageCounts.errors += 1;
+    }
+
+    if (ts !== undefined) {
+      const date = new Date(ts);
+      const dayKey = formatDayKey(date);
+      activityDatesSet.add(dayKey);
+      const daily = dailyMessageMap.get(dayKey) ?? {
+        date: dayKey,
+        total: 0,
+        user: 0,
+        assistant: 0,
+        toolCalls: 0,
+        toolResults: 0,
+        errors: 0,
+      };
+      daily.total += entry.role === "user" || entry.role === "assistant" ? 1 : 0;
+      if (entry.role === "user") {
+        daily.user += 1;
+      } else if (entry.role === "assistant") {
+        daily.assistant += 1;
+      }
+      daily.toolCalls += entry.toolNames.length;
+      daily.toolResults += entry.toolResultCounts.total;
+      daily.errors += entry.toolResultCounts.errors;
+      if (entry.stopReason && errorStopReasons.has(entry.stopReason)) {
+        daily.errors += 1;
+      }
+      dailyMessageMap.set(dayKey, daily);
+
+      const quarterBucket = getUtcQuarterHourBucketKey(date);
+      const utcQuarterHour = utcQuarterHourMessageMap.get(quarterBucket.key) ?? {
+        date: quarterBucket.date,
+        quarterIndex: quarterBucket.quarterIndex,
+        total: 0,
+        user: 0,
+        assistant: 0,
+        toolCalls: 0,
+        toolResults: 0,
+        errors: 0,
+      };
+      utcQuarterHour.total += entry.role === "user" || entry.role === "assistant" ? 1 : 0;
+      if (entry.role === "user") {
+        utcQuarterHour.user += 1;
+      } else if (entry.role === "assistant") {
+        utcQuarterHour.assistant += 1;
+      }
+      utcQuarterHour.toolCalls += entry.toolNames.length;
+      utcQuarterHour.toolResults += entry.toolResultCounts.total;
+      utcQuarterHour.errors += entry.toolResultCounts.errors;
+      if (entry.stopReason && errorStopReasons.has(entry.stopReason)) {
+        utcQuarterHour.errors += 1;
+      }
+      utcQuarterHourMessageMap.set(quarterBucket.key, utcQuarterHour);
+    }
+
+    const usageTotals = entry.usageTotals;
+    if (!usageTotals) {
+      continue;
+    }
+
+    addTotals(totals, usageTotals);
+    if (ts !== undefined) {
+      const date = new Date(ts);
+      const dayKey = formatDayKey(date);
+      const componentTokens =
+        usageTotals.input + usageTotals.output + usageTotals.cacheRead + usageTotals.cacheWrite;
+      const existingDaily = dailyMap.get(dayKey) ?? { tokens: 0, cost: 0 };
+      existingDaily.tokens += componentTokens;
+      existingDaily.cost += usageTotals.totalCost;
+      dailyMap.set(dayKey, existingDaily);
+
+      const quarterBucket = getUtcQuarterHourBucketKey(date);
+      const utcQuarterHourToken = utcQuarterHourTokenMap.get(quarterBucket.key) ?? {
+        date: quarterBucket.date,
+        quarterIndex: quarterBucket.quarterIndex,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        totalCost: 0,
+      };
+      utcQuarterHourToken.input += usageTotals.input;
+      utcQuarterHourToken.output += usageTotals.output;
+      utcQuarterHourToken.cacheRead += usageTotals.cacheRead;
+      utcQuarterHourToken.cacheWrite += usageTotals.cacheWrite;
+      utcQuarterHourToken.totalTokens += usageTotals.totalTokens;
+      utcQuarterHourToken.totalCost += usageTotals.totalCost;
+      utcQuarterHourTokenMap.set(quarterBucket.key, utcQuarterHourToken);
+
+      if (entry.provider || entry.model) {
+        const dailyModelKey = `${dayKey}::${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+        const dailyModel =
+          dailyModelUsageMap.get(dailyModelKey) ??
+          ({
+            date: dayKey,
+            provider: entry.provider,
+            model: entry.model,
+            tokens: 0,
+            cost: 0,
+            count: 0,
+          } as SessionDailyModelUsage);
+        dailyModel.tokens += componentTokens;
+        dailyModel.cost += usageTotals.totalCost;
+        dailyModel.count += 1;
+        dailyModelUsageMap.set(dailyModelKey, dailyModel);
+      }
+    }
+
+    if (entry.provider || entry.model) {
+      const modelKey = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+      const modelUsage =
+        modelUsageMap.get(modelKey) ??
+        ({
+          provider: entry.provider,
+          model: entry.model,
+          count: 0,
+          totals: emptyTotals(),
+        } as SessionModelUsage);
+      modelUsage.count += 1;
+      addTotals(modelUsage.totals, usageTotals);
+      modelUsageMap.set(modelKey, modelUsage);
+    }
+  }
+
+  const dailyBreakdown: SessionDailyUsage[] = Array.from(dailyMap.entries())
+    .map(([date, data]) => ({ date, tokens: data.tokens, cost: data.cost }))
+    .toSorted((a, b) => a.date.localeCompare(b.date));
+  const dailyMessageCounts: SessionDailyMessageCounts[] = Array.from(
+    dailyMessageMap.values(),
+  ).toSorted((a, b) => a.date.localeCompare(b.date));
+  const utcQuarterHourMessageCounts: SessionUtcQuarterHourMessageCounts[] = Array.from(
+    utcQuarterHourMessageMap.values(),
+  ).toSorted((a, b) => a.date.localeCompare(b.date) || a.quarterIndex - b.quarterIndex);
+  const utcQuarterHourTokenUsage = Array.from(utcQuarterHourTokenMap.values()).toSorted(
+    (a, b) => a.date.localeCompare(b.date) || a.quarterIndex - b.quarterIndex,
+  );
+  const dailyLatency: SessionDailyLatency[] = Array.from(dailyLatencyMap.entries())
+    .map(([date, values]) => {
+      const stats = computeLatencyStats(values);
+      if (!stats) {
+        return null;
+      }
+      return Object.assign({ date }, stats);
+    })
+    .filter((entry): entry is SessionDailyLatency => Boolean(entry))
+    .toSorted((a, b) => a.date.localeCompare(b.date));
+  const dailyModelUsage = Array.from(dailyModelUsageMap.values()).toSorted(
+    (a, b) => a.date.localeCompare(b.date) || b.cost - a.cost,
+  );
+  const toolUsage: SessionToolUsage | undefined = toolUsageMap.size
+    ? {
+        totalCalls: Array.from(toolUsageMap.values()).reduce((sum, count) => sum + count, 0),
+        uniqueTools: toolUsageMap.size,
+        tools: Array.from(toolUsageMap.entries())
+          .map(([name, count]) => ({ name, count }))
+          .toSorted((a, b) => b.count - a.count),
+      }
+    : undefined;
+  const modelUsage = Array.from(modelUsageMap.values()).toSorted((a, b) => {
+    const costDiff = (b.totals?.totalCost ?? 0) - (a.totals?.totalCost ?? 0);
+    if (costDiff !== 0) {
+      return costDiff;
+    }
+    return (b.totals?.totalTokens ?? 0) - (a.totals?.totalTokens ?? 0);
+  });
+
+  return {
+    sessionId: params.sessionId,
+    sessionFile: params.sessionFile,
+    firstActivity,
+    lastActivity,
+    durationMs:
+      firstActivity !== undefined && lastActivity !== undefined
+        ? Math.max(0, lastActivity - firstActivity)
+        : undefined,
+    activityDates: Array.from(activityDatesSet).toSorted(),
+    dailyBreakdown,
+    dailyMessageCounts,
+    utcQuarterHourMessageCounts: utcQuarterHourMessageCounts.length
+      ? utcQuarterHourMessageCounts
+      : undefined,
+    utcQuarterHourTokenUsage: utcQuarterHourTokenUsage.length
+      ? utcQuarterHourTokenUsage
+      : undefined,
+    dailyLatency: dailyLatency.length ? dailyLatency : undefined,
+    dailyModelUsage: dailyModelUsage.length ? dailyModelUsage : undefined,
+    messageCounts,
+    toolUsage,
+    modelUsage: modelUsage.length ? modelUsage : undefined,
+    latency: computeLatencyStats(latencyValues),
+    ...totals,
+  };
 }
 
 const extractCostBreakdown = (usageRaw?: UsageLike | null): CostBreakdown | undefined => {
@@ -714,6 +1030,40 @@ const applyCostTotal = (totals: CostUsageTotals, costTotal: number | undefined) 
   totals.totalCost += costTotal;
 };
 
+// A resolved cost config only counts as "known" pricing when it carries at least one
+// positive per-token rate (or tiered pricing). An all-zero config is indistinguishable
+// from "pricing unknown": e.g. codex models ship cost {input:0,output:0,...} in the
+// generated models.json because the Codex backend exposes no per-token price. Treating
+// such a config as a real $0 makes usage-cost report confident zero spend, which
+// silently blinds every budget/spike safeguard that keys off totalCost.
+const isModelPricingKnown = (cost: ReturnType<typeof resolveModelCostConfig>): boolean => {
+  if (!cost) {
+    return false;
+  }
+  if (cost.tieredPricing && cost.tieredPricing.length > 0) {
+    return true;
+  }
+  return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
+};
+
+type UsageCostResolver = (params: {
+  provider?: string;
+  model?: string;
+}) => ReturnType<typeof resolveModelCostConfig>;
+
+function createUsageCostResolver(config?: OpenClawConfig): UsageCostResolver {
+  const cache = new Map<string, ReturnType<typeof resolveModelCostConfig>>();
+  return ({ provider, model }) => {
+    const key = `${provider ?? ""}\0${model ?? ""}`;
+    if (cache.has(key)) {
+      return cache.get(key);
+    }
+    const cost = resolveModelCostConfig({ provider, model, config });
+    cache.set(key, cost);
+    return cost;
+  };
+}
+
 async function canReadJsonlFromOffset(filePath: string, startOffset: number): Promise<boolean> {
   if (startOffset <= 0) {
     return true;
@@ -773,10 +1123,12 @@ async function* readJsonlRecords(
 async function scanTranscriptFile(params: {
   filePath: string;
   config?: OpenClawConfig;
+  resolveCost?: UsageCostResolver;
   startOffset?: number;
   endOffset?: number;
   onEntry: (entry: ParsedTranscriptEntry) => void;
 }): Promise<void> {
+  const resolveCost = params.resolveCost ?? createUsageCostResolver(params.config);
   for await (const parsed of readJsonlRecords(
     params.filePath,
     params.startOffset,
@@ -788,10 +1140,9 @@ async function scanTranscriptFile(params: {
     }
 
     if (entry.usage) {
-      const cost = resolveModelCostConfig({
+      const cost = resolveCost({
         provider: entry.provider,
         model: entry.model,
-        config: params.config,
       });
       if (cost?.tieredPricing && cost.tieredPricing.length > 0) {
         // When tiered pricing is configured, always recompute to override
@@ -799,6 +1150,20 @@ async function scanTranscriptFile(params: {
         // Clear costBreakdown so downstream aggregation uses the recomputed total
         // instead of the stale flat-rate breakdown from the transport layer.
         entry.costTotal = estimateUsageCost({ usage: entry.usage, cost });
+        entry.costBreakdown = undefined;
+      } else if (
+        !isModelPricingKnown(cost) &&
+        (entry.costTotal === undefined || entry.costTotal === 0) &&
+        computeUsageTokenTotals(entry.usage).totalTokens > 0
+      ) {
+        // Pricing for this model is unknown: it has no positive per-token rate and no
+        // trustworthy recorded cost. The transport either recorded nothing or a
+        // fabricated $0 derived from an all-zero/default catalog entry. Surface this
+        // token-burning turn as a missing-cost entry instead of recording a confident
+        // $0, so budget and spike safeguards that read totalCost are not left blind to
+        // it. A turn carrying a real positive recorded cost is preserved by the guard
+        // above.
+        entry.costTotal = undefined;
         entry.costBreakdown = undefined;
       } else if (entry.costTotal === undefined) {
         // Fill in missing cost estimates.
@@ -813,6 +1178,7 @@ async function scanTranscriptFile(params: {
 async function scanUsageFile(params: {
   filePath: string;
   config?: OpenClawConfig;
+  resolveCost?: UsageCostResolver;
   startOffset?: number;
   endOffset?: number;
   onEntry: (entry: ParsedUsageEntry) => void;
@@ -820,6 +1186,7 @@ async function scanUsageFile(params: {
   await scanTranscriptFile({
     filePath: params.filePath,
     config: params.config,
+    resolveCost: params.resolveCost,
     startOffset: params.startOffset,
     endOffset: params.endOffset,
     onEntry: (entry) => {
@@ -927,32 +1294,17 @@ export async function loadCostUsageSummary(params?: {
 
   const dailyMap = new Map<string, CostUsageTotals>();
   const totals = emptyTotals();
+  const resolveCost = createUsageCostResolver(params?.config);
 
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
-  const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
-  const files = (
-    await Promise.all(
-      entries
-        .filter((entry) => entry.isFile() && isUsageCountedSessionTranscriptFileName(entry.name))
-        .map(async (entry) => {
-          const filePath = path.join(sessionsDir, entry.name);
-          const stats = await fs.promises.stat(filePath).catch(() => null);
-          if (!stats) {
-            return null;
-          }
-          // Include file if it was modified after our start time
-          if (stats.mtimeMs < sinceTime) {
-            return null;
-          }
-          return filePath;
-        }),
-    )
-  ).filter((filePath): filePath is string => Boolean(filePath));
+  const files = await listUsageCountedTranscriptFileStats(params?.agentId, {
+    minMtimeMs: sinceTime,
+  });
 
-  for (const filePath of files) {
+  for (const file of files) {
     await scanUsageFile({
-      filePath,
+      filePath: file.filePath,
       config: params?.config,
+      resolveCost,
       onEntry: (entry) => {
         const ts = entry.timestamp?.getTime();
         if (!ts || ts < sinceTime || ts > untilTime) {
@@ -996,11 +1348,12 @@ export async function loadCostUsageSummary(params?: {
 async function scanUsageFileForCache(params: {
   file: UsageCostTranscriptFile;
   config?: OpenClawConfig;
+  resolveCost?: UsageCostResolver;
   previous?: UsageCostCacheFileEntry;
   includeSessionSummary?: boolean;
 }): Promise<UsageCostCacheFileEntry> {
   const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
-  const appendOnlyPrevious =
+  const appendOnlyPreviousCandidate =
     params.previous &&
     params.previous.filePath === params.file.filePath &&
     params.previous.size > 0 &&
@@ -1009,8 +1362,17 @@ async function scanUsageFileForCache(params: {
     params.previous.mtimeMs <= params.file.mtimeMs
       ? params.previous
       : undefined;
+  const appendOnlyPrevious =
+    appendOnlyPreviousCandidate &&
+    (!params.includeSessionSummary || appendOnlyPreviousCandidate.transcriptEntries)
+      ? appendOnlyPreviousCandidate
+      : undefined;
   const totals = emptyTotals();
   const usageEntries: UsageCostCachedUsageEntry[] = [];
+  const shouldTrackTranscriptEntries =
+    params.includeSessionSummary || Boolean(appendOnlyPrevious?.transcriptEntries);
+  const transcriptEntries: UsageCostCachedTranscriptEntry[] | undefined =
+    shouldTrackTranscriptEntries ? [] : undefined;
   let parsedRecords = 0;
   let countedRecords = 0;
   const startOffset =
@@ -1019,40 +1381,83 @@ async function scanUsageFileForCache(params: {
       ? appendOnlyPrevious.size
       : undefined;
 
-  await scanUsageFile({
+  await scanTranscriptFile({
     filePath: params.file.filePath,
     config: params.config,
+    resolveCost: params.resolveCost,
     startOffset,
     endOffset: params.file.size,
     onEntry: (entry) => {
-      parsedRecords += 1;
       const ts = entry.timestamp?.getTime();
-      if (!ts) {
-        return;
+      let entryTotals: CostUsageTotals | undefined;
+      if (entry.usage) {
+        parsedRecords += 1;
+        entryTotals = emptyTotals();
+        applyUsageTotals(entryTotals, entry.usage);
+        if (entry.costBreakdown?.total !== undefined) {
+          applyCostBreakdown(entryTotals, entry.costBreakdown);
+        } else {
+          applyCostTotal(entryTotals, entry.costTotal);
+        }
+        addTotals(totals, entryTotals);
+        if (ts !== undefined) {
+          countedRecords += 1;
+          usageEntries.push({
+            timestamp: ts,
+            provider: entry.provider,
+            model: entry.model,
+            ...entryTotals,
+          });
+        }
       }
-      countedRecords += 1;
-      const entryTotals = emptyTotals();
-      applyUsageTotals(entryTotals, entry.usage);
-      if (entry.costBreakdown?.total !== undefined) {
-        applyCostBreakdown(entryTotals, entry.costBreakdown);
-      } else {
-        applyCostTotal(entryTotals, entry.costTotal);
-      }
-      usageEntries.push(Object.assign({ timestamp: ts }, entryTotals));
 
-      addTotals(totals, entryTotals);
+      transcriptEntries?.push({
+        timestamp: ts,
+        role: entry.role,
+        durationMs: entry.durationMs,
+        provider: entry.provider,
+        model: entry.model,
+        stopReason: entry.stopReason,
+        toolNames: entry.toolNames,
+        toolResultCounts: entry.toolResultCounts,
+        usageTotals: entryTotals ? cloneTotals(entryTotals) : undefined,
+      });
     },
   });
 
   const sessionId =
     parseUsageCountedSessionIdFromFileName(path.basename(params.file.filePath)) ?? undefined;
-  const sessionSummary = params.includeSessionSummary
-    ? ((await loadSessionCostSummary({
-        sessionId,
-        sessionFile: params.file.filePath,
-        config: params.config,
-      })) ?? undefined)
+  const combinedTranscriptEntries = shouldTrackTranscriptEntries
+    ? [
+        ...((appendOnlyPrevious && startOffset !== undefined
+          ? appendOnlyPrevious.transcriptEntries
+          : undefined) ?? []),
+        ...(transcriptEntries ?? []),
+      ]
     : undefined;
+  const sessionSummary =
+    combinedTranscriptEntries &&
+    (params.includeSessionSummary || appendOnlyPrevious?.sessionSummary)
+      ? (buildSessionCostSummaryFromCacheEntry({
+          entry: {
+            filePath: params.file.filePath,
+            size: params.file.size,
+            mtimeMs: params.file.mtimeMs,
+            pricingFingerprint,
+            scannedAt: Date.now(),
+            parsedRecords,
+            countedRecords,
+            usageEntries,
+            transcriptEntries: combinedTranscriptEntries,
+            totals,
+            sessionId,
+          },
+          sessionId,
+          sessionFile: params.file.filePath,
+          startMs: Number.NEGATIVE_INFINITY,
+          endMs: Number.POSITIVE_INFINITY,
+        }) ?? undefined)
+      : undefined;
 
   if (appendOnlyPrevious && startOffset !== undefined) {
     const previousTotals = cloneTotals(appendOnlyPrevious.totals);
@@ -1066,6 +1471,7 @@ async function scanUsageFileForCache(params: {
       parsedRecords: appendOnlyPrevious.parsedRecords + parsedRecords,
       countedRecords: appendOnlyPrevious.countedRecords + countedRecords,
       usageEntries: [...appendOnlyPrevious.usageEntries, ...usageEntries],
+      transcriptEntries: combinedTranscriptEntries,
       totals: previousTotals,
       sessionSummary,
     };
@@ -1080,28 +1486,34 @@ async function scanUsageFileForCache(params: {
     parsedRecords,
     countedRecords,
     usageEntries,
+    transcriptEntries: combinedTranscriptEntries,
     totals,
     sessionId,
     sessionSummary,
   };
 }
 
-export async function refreshCostUsageCache(params?: {
+async function refreshCostUsageCacheForPath(params?: {
   config?: OpenClawConfig;
   agentId?: string;
+  cachePath?: string;
   maxFiles?: number;
+  sessionsDir?: string;
   sessionFiles?: string[];
   startMs?: number;
 }): Promise<UsageCostRefreshResult> {
-  const cachePath = resolveUsageCostCachePath(params?.agentId);
+  const cachePath = params?.cachePath ?? resolveUsageCostCachePath(params?.agentId);
   const lock = await acquireUsageCostCacheRefreshLock(cachePath);
   if (!lock.acquired) {
     return "busy";
   }
   try {
+    await cleanupStaleUsageCostCacheTempFiles(cachePath);
     const pricingFingerprint = resolveUsageCostPricingFingerprint(params?.config);
     const cache = await readUsageCostCache(cachePath);
-    const files = await listUsageCountedTranscriptFiles(params?.agentId);
+    const files = await listUsageCountedTranscriptFiles(params?.agentId, {
+      sessionsDir: params?.sessionsDir,
+    });
     const sessionSummaryFiles = new Set(params?.sessionFiles ?? []);
     const refreshStartMs = params?.startMs;
     const refreshFiles =
@@ -1111,9 +1523,11 @@ export async function refreshCostUsageCache(params?: {
           ? files
           : files.filter((file) => file.mtimeMs >= refreshStartMs);
     const livePaths = new Set(files.map((file) => file.filePath));
+    let cacheMutated = false;
     for (const filePath of Object.keys(cache.files)) {
       if (!livePaths.has(filePath)) {
         delete cache.files[filePath];
+        cacheMutated = true;
       }
     }
 
@@ -1133,24 +1547,56 @@ export async function refreshCostUsageCache(params?: {
         return aSession - bSession || a.size - b.size || a.filePath.localeCompare(b.filePath);
       })
       .slice(0, maxFiles);
+    const resolveCost = createUsageCostResolver(params?.config);
 
+    // Throttle full cache rewrites: writing a 100MB+ JSON cache after every
+    // single scanned session balloons CPU/IO into O(N * cacheSize). Instead,
+    // checkpoint at most once every USAGE_COST_CACHE_CHECKPOINT_INTERVAL_MS
+    // (or every USAGE_COST_CACHE_CHECKPOINT_FILES files) so an interrupted
+    // refresh still makes durable forward progress while a normal refresh of
+    // thousands of files only pays the serialization cost a handful of times.
+    let dirtyCount = 0;
+    let lastCheckpointMs = Date.now();
     for (const file of staleFiles) {
       cache.files[file.filePath] = await scanUsageFileForCache({
         file,
         config: params?.config,
+        resolveCost,
         previous: cache.files[file.filePath],
         includeSessionSummary: sessionSummaryFiles.has(file.filePath),
       });
+      dirtyCount += 1;
+      cacheMutated = true;
+      const now = Date.now();
+      if (
+        dirtyCount >= USAGE_COST_CACHE_CHECKPOINT_FILES ||
+        now - lastCheckpointMs >= USAGE_COST_CACHE_CHECKPOINT_INTERVAL_MS
+      ) {
+        cache.updatedAt = now;
+        await writeUsageCostCache(cachePath, cache);
+        dirtyCount = 0;
+        lastCheckpointMs = Date.now();
+      }
+    }
+
+    if (cacheMutated || dirtyCount > 0) {
       cache.updatedAt = Date.now();
       await writeUsageCostCache(cachePath, cache);
     }
-
-    cache.updatedAt = Date.now();
-    await writeUsageCostCache(cachePath, cache);
     return "refreshed";
   } finally {
     await lock.release();
   }
+}
+
+export async function refreshCostUsageCache(params?: {
+  config?: OpenClawConfig;
+  agentId?: string;
+  maxFiles?: number;
+  sessionFiles?: string[];
+  startMs?: number;
+}): Promise<UsageCostRefreshResult> {
+  return await refreshCostUsageCacheForPath(params);
 }
 
 export async function loadCostUsageSummaryFromCache(params: {
@@ -1209,7 +1655,7 @@ export async function loadCostUsageSummaryFromCache(params: {
     startMs: params.startMs,
     endMs: params.endMs,
     pricingFingerprint,
-    refreshing: usageCostRefreshes.has(params.agentId ?? "main") || refreshRunning,
+    refreshing: usageCostRefreshes.has(cachePath) || refreshRunning,
   });
 }
 
@@ -1242,6 +1688,7 @@ export async function loadSessionCostSummaryFromCache(params: {
       pricingFingerprint,
       requireSessionSummary: true,
     });
+  let refreshRequested = false;
   if (params.requestRefresh !== false && stale) {
     if (params.refreshMode === "sync-when-empty") {
       const result = await refreshCostUsageCache({
@@ -1272,6 +1719,7 @@ export async function loadSessionCostSummaryFromCache(params: {
           agentId: params.agentId,
           sessionFiles: [params.sessionFile],
         });
+        refreshRequested = true;
       }
     } else {
       requestCostUsageCacheRefresh({
@@ -1279,9 +1727,11 @@ export async function loadSessionCostSummaryFromCache(params: {
         agentId: params.agentId,
         sessionFiles: [params.sessionFile],
       });
+      refreshRequested = true;
     }
   }
-  const refreshRunning = await isUsageCostCacheRefreshRunning(cachePath);
+  const refreshRunning =
+    usageCostRefreshes.has(cachePath) || (await isUsageCostCacheRefreshRunning(cachePath));
   let summary = stale ? null : (entry?.sessionSummary ?? null);
   if (!summary && params.refreshMode === "sync-when-empty") {
     summary = await loadSessionCostSummary({
@@ -1300,23 +1750,129 @@ export async function loadSessionCostSummaryFromCache(params: {
     params.endMs !== undefined &&
     !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs)
   ) {
-    summary = await loadSessionCostSummary({
-      sessionId: params.sessionId,
-      sessionEntry: params.sessionEntry,
-      sessionFile: params.sessionFile,
-      config: params.config,
-      agentId: params.agentId,
-      startMs: params.startMs,
-      endMs: params.endMs,
-    });
+    summary = entry
+      ? buildSessionCostSummaryFromCacheEntry({
+          entry,
+          sessionId: params.sessionId,
+          sessionFile: params.sessionFile,
+          startMs: params.startMs,
+          endMs: params.endMs,
+        })
+      : params.refreshMode === "sync-when-empty"
+        ? await loadSessionCostSummary({
+            sessionId: params.sessionId,
+            sessionEntry: params.sessionEntry,
+            sessionFile: params.sessionFile,
+            config: params.config,
+            agentId: params.agentId,
+            startMs: params.startMs,
+            endMs: params.endMs,
+          })
+        : null;
   }
   return {
     summary,
     cacheStatus: {
-      status: stale ? (refreshRunning ? "refreshing" : summary ? "partial" : "stale") : "fresh",
+      status: stale
+        ? refreshRunning || refreshRequested
+          ? "refreshing"
+          : summary
+            ? "partial"
+            : "stale"
+        : "fresh",
       cachedFiles: stale ? 0 : 1,
       pendingFiles: stale ? 1 : 0,
       staleFiles: stale ? 1 : 0,
+      refreshedAt: cache.updatedAt || undefined,
+    },
+  };
+}
+
+export async function loadSessionCostSummariesFromCache(params: {
+  sessions: Array<{ sessionId?: string; sessionFile: string }>;
+  config?: OpenClawConfig;
+  agentId?: string;
+  startMs?: number;
+  endMs?: number;
+  requestRefresh?: boolean;
+}): Promise<{ summaries: Array<SessionCostSummary | null>; cacheStatus: UsageCacheStatus }> {
+  const cachePath = resolveUsageCostCachePath(params.agentId);
+  const pricingFingerprint = resolveUsageCostPricingFingerprint(params.config);
+  const statTasks = params.sessions.map(
+    (session) => async () => await fs.promises.stat(session.sessionFile).catch(() => null),
+  );
+  const statsPromise = runTasksWithConcurrency({
+    tasks: statTasks,
+    limit: USAGE_COST_TRANSCRIPT_STAT_CONCURRENCY,
+  }).then(({ results }) => results);
+  const [cache, stats, refreshRunning] = await Promise.all([
+    readUsageCostCache(cachePath),
+    statsPromise,
+    isUsageCostCacheRefreshRunning(cachePath),
+  ]);
+  const staleFiles = new Set<string>();
+  let cachedFiles = 0;
+  const summaries = params.sessions.map((session, index) => {
+    const stat = stats[index];
+    const file = stat
+      ? { filePath: session.sessionFile, size: stat.size, mtimeMs: stat.mtimeMs }
+      : undefined;
+    const entry = cache.files[session.sessionFile];
+    const stale =
+      !file ||
+      !isUsageCostCacheEntryFresh({
+        entry,
+        file,
+        pricingFingerprint,
+        requireSessionSummary: true,
+      });
+    if (stale) {
+      staleFiles.add(session.sessionFile);
+      return null;
+    }
+    cachedFiles += 1;
+    const summary = entry?.sessionSummary ?? null;
+    if (
+      summary &&
+      params.startMs !== undefined &&
+      params.endMs !== undefined &&
+      !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs)
+    ) {
+      return entry
+        ? buildSessionCostSummaryFromCacheEntry({
+            entry,
+            sessionId: session.sessionId,
+            sessionFile: session.sessionFile,
+            startMs: params.startMs,
+            endMs: params.endMs,
+          })
+        : null;
+    }
+    return summary;
+  });
+  const refreshRequested = params.requestRefresh !== false && staleFiles.size > 0;
+  if (refreshRequested) {
+    requestCostUsageCacheRefresh({
+      config: params.config,
+      agentId: params.agentId,
+      sessionFiles: [...staleFiles],
+    });
+  }
+  const staleFileCount = staleFiles.size;
+  return {
+    summaries,
+    cacheStatus: {
+      status:
+        staleFileCount === 0
+          ? "fresh"
+          : refreshRunning || refreshRequested
+            ? "refreshing"
+            : cachedFiles > 0
+              ? "partial"
+              : "stale",
+      cachedFiles,
+      pendingFiles: staleFileCount,
+      staleFiles: staleFileCount,
       refreshedAt: cache.updatedAt || undefined,
     },
   };
@@ -1327,8 +1883,8 @@ export function requestCostUsageCacheRefresh(params?: {
   agentId?: string;
   sessionFiles?: string[];
 }): void {
-  const agentId = params?.agentId ?? "main";
-  const existing = usageCostRefreshes.get(agentId);
+  const cachePath = resolveUsageCostCachePath(params?.agentId);
+  const existing = usageCostRefreshes.get(cachePath);
   if (existing) {
     mergeUsageCostRefreshRequest(existing, params);
     return;
@@ -1336,14 +1892,16 @@ export function requestCostUsageCacheRefresh(params?: {
 
   const state: UsageCostRefreshState = {
     agentId: params?.agentId,
+    cachePath,
     config: params?.config,
     fullRefreshRequested: false,
     pendingSessionFiles: new Set(),
     running: false,
+    sessionsDir: path.dirname(cachePath),
   };
   mergeUsageCostRefreshRequest(state, params);
-  usageCostRefreshes.set(agentId, state);
-  scheduleUsageCostRefresh(agentId, state);
+  usageCostRefreshes.set(cachePath, state);
+  scheduleUsageCostRefresh(cachePath, state);
 }
 
 function mergeUsageCostRefreshRequest(
@@ -1370,7 +1928,7 @@ function mergeUsageCostRefreshRequest(
 }
 
 function scheduleUsageCostRefresh(
-  agentId: string,
+  refreshKey: string,
   state: UsageCostRefreshState,
   delayMs = 0,
 ): void {
@@ -1379,14 +1937,14 @@ function scheduleUsageCostRefresh(
   }
   const timer = setTimeout(() => {
     state.timer = undefined;
-    void runQueuedUsageCostRefresh(agentId, state);
+    void runQueuedUsageCostRefresh(refreshKey, state);
   }, delayMs);
   timer.unref?.();
   state.timer = timer;
 }
 
 async function runQueuedUsageCostRefresh(
-  agentId: string,
+  refreshKey: string,
   state: UsageCostRefreshState,
 ): Promise<void> {
   state.running = true;
@@ -1399,9 +1957,11 @@ async function runQueuedUsageCostRefresh(
         state.pendingSessionFiles.clear();
       }
       state.fullRefreshRequested = false;
-      const result = await refreshCostUsageCache({
+      const result = await refreshCostUsageCacheForPath({
+        cachePath: state.cachePath,
         config: state.config,
         agentId: state.agentId,
+        sessionsDir: state.sessionsDir,
         sessionFiles: fullRefreshRequested ? undefined : sessionFiles,
       });
       if (result === "busy") {
@@ -1421,9 +1981,9 @@ async function runQueuedUsageCostRefresh(
   } finally {
     state.running = false;
     if (state.fullRefreshRequested || state.pendingSessionFiles.size > 0) {
-      scheduleUsageCostRefresh(agentId, state, retryDelayMs);
+      scheduleUsageCostRefresh(refreshKey, state, retryDelayMs);
     } else {
-      usageCostRefreshes.delete(agentId);
+      usageCostRefreshes.delete(refreshKey);
     }
   }
 }
@@ -1438,33 +1998,22 @@ export async function discoverAllSessions(params?: {
   endMs?: number;
   includeFirstUserMessage?: boolean;
 }): Promise<DiscoveredSession[]> {
-  const sessionsDir = resolveSessionTranscriptsDirForAgent(params?.agentId);
-  const entries = await fs.promises.readdir(sessionsDir, { withFileTypes: true }).catch(() => []);
+  const files = await listUsageCountedTranscriptFileStats(params?.agentId, {
+    minMtimeMs: params?.startMs,
+  });
 
   const discovered = new Map<string, DiscoveredSession>();
 
-  for (const entry of entries) {
-    if (!entry.isFile() || !isUsageCountedSessionTranscriptFileName(entry.name)) {
-      continue;
-    }
-
-    const filePath = path.join(sessionsDir, entry.name);
-    const stats = await fs.promises.stat(filePath).catch(() => null);
-    if (!stats) {
-      continue;
-    }
-
-    // Filter by date range if provided
-    if (params?.startMs && stats.mtimeMs < params.startMs) {
-      continue;
-    }
+  for (const file of files) {
     // Do not exclude by endMs: a session can have activity in range even if it continued later.
+    const filePath = file.filePath;
+    const fileName = path.basename(filePath);
 
-    const sessionId = parseUsageCountedSessionIdFromFileName(entry.name);
+    const sessionId = parseUsageCountedSessionIdFromFileName(fileName);
     if (!sessionId) {
       continue;
     }
-    const isPrimaryTranscript = isPrimarySessionTranscriptFileName(entry.name);
+    const isPrimaryTranscript = isPrimarySessionTranscriptFileName(fileName);
 
     // Try to read first user message for label extraction
     let firstUserMessage: string | undefined;
@@ -1510,13 +2059,13 @@ export async function discoverAllSessions(params?: {
     const shouldReplace =
       !existing ||
       (isPrimaryTranscript && !existingIsPrimary) ||
-      (isPrimaryTranscript === existingIsPrimary && stats.mtimeMs >= existing.mtime);
+      (isPrimaryTranscript === existingIsPrimary && file.mtimeMs >= existing.mtime);
 
     if (shouldReplace) {
       discovered.set(sessionId, {
         sessionId,
         sessionFile: filePath,
-        mtime: stats.mtimeMs,
+        mtime: file.mtimeMs,
         firstUserMessage: firstUserMessage ?? existing?.firstUserMessage,
       });
       continue;
@@ -1570,10 +2119,12 @@ export async function loadSessionCostSummary(params: {
   const latencyValues: number[] = [];
   let lastUserTimestamp: number | undefined;
   const MAX_LATENCY_MS = 12 * 60 * 60 * 1000;
+  const resolveCost = createUsageCostResolver(params.config);
 
   await scanTranscriptFile({
     filePath: sessionFile,
     config: params.config,
+    resolveCost,
     onEntry: (entry) => {
       const ts = entry.timestamp?.getTime();
 
@@ -1604,18 +2155,20 @@ export async function loadSessionCostSummary(params: {
       if (entry.role === "assistant") {
         messageCounts.assistant += 1;
         messageCounts.total += 1;
-        const ts = entry.timestamp?.getTime();
-        if (ts !== undefined) {
+        const tsLocal = entry.timestamp?.getTime();
+        if (tsLocal !== undefined) {
           const latencyMs =
             entry.durationMs ??
-            (lastUserTimestamp !== undefined ? Math.max(0, ts - lastUserTimestamp) : undefined);
+            (lastUserTimestamp !== undefined
+              ? Math.max(0, tsLocal - lastUserTimestamp)
+              : undefined);
           if (
             latencyMs !== undefined &&
             Number.isFinite(latencyMs) &&
             latencyMs <= MAX_LATENCY_MS
           ) {
             latencyValues.push(latencyMs);
-            const dayKey = formatDayKey(entry.timestamp ?? new Date(ts));
+            const dayKey = formatDayKey(entry.timestamp ?? new Date(tsLocal));
             const dailyLatencies = dailyLatencyMap.get(dayKey) ?? [];
             dailyLatencies.push(latencyMs);
             dailyLatencyMap.set(dayKey, dailyLatencies);
@@ -1856,13 +2409,21 @@ export async function loadSessionUsageTimeSeries(params: {
     return null;
   }
 
+  if (params.maxPoints !== undefined && params.maxPoints !== null) {
+    if (!Number.isFinite(params.maxPoints) || params.maxPoints <= 0) {
+      return { sessionId: params.sessionId, points: [] };
+    }
+  }
+
   const points: SessionUsageTimePoint[] = [];
   let cumulativeTokens = 0;
   let cumulativeCost = 0;
+  const resolveCost = createUsageCostResolver(params.config);
 
   await scanUsageFile({
     filePath: sessionFile,
     config: params.config,
+    resolveCost,
     onEntry: (entry) => {
       const ts = entry.timestamp?.getTime();
       if (!ts) {
@@ -1958,7 +2519,15 @@ export async function loadSessionLogs(params: {
   }
 
   const logs: SessionLogEntry[] = [];
+  if (params.limit !== undefined && params.limit !== null) {
+    if (!Number.isFinite(params.limit) || params.limit <= 0) {
+      return [];
+    }
+  }
   const limit = params.limit ?? 50;
+  const boundedLimit = Number.isInteger(limit);
+  const retentionLimit = limit * 2;
+  const resolveCost = createUsageCostResolver(params.config);
 
   for await (const parsed of readJsonlRecords(sessionFile)) {
     try {
@@ -2073,10 +2642,9 @@ export async function loadSessionLogs(params: {
           if (breakdown?.total !== undefined) {
             cost = breakdown.total;
           } else {
-            const costConfig = resolveModelCostConfig({
+            const costConfig = resolveCost({
               provider: message.provider as string | undefined,
               model: message.model as string | undefined,
-              config: params.config,
             });
             cost = estimateUsageCost({ usage, cost: costConfig });
           }
@@ -2090,15 +2658,25 @@ export async function loadSessionLogs(params: {
         tokens,
         cost,
       });
+      // Timestamps can arrive out of order, so keep a bounded sorted window instead
+      // of relying on transcript append order or retaining the whole file.
+      if (boundedLimit && logs.length > retentionLimit) {
+        logs.sort((a, b) => a.timestamp - b.timestamp);
+        logs.splice(0, logs.length - limit);
+      }
     } catch {
       // Ignore malformed lines
     }
   }
 
   // Sort by timestamp and limit
-  const sortedLogs = logs.toSorted((a, b) => a.timestamp - b.timestamp);
+  if (boundedLimit) {
+    logs.sort((a, b) => a.timestamp - b.timestamp);
+    return logs.length > limit ? logs.slice(-limit) : logs;
+  }
 
   // Return most recent logs
+  const sortedLogs = logs.toSorted((a, b) => a.timestamp - b.timestamp);
   if (sortedLogs.length > limit) {
     return sortedLogs.slice(-limit);
   }

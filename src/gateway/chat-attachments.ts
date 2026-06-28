@@ -1,12 +1,14 @@
+// Gateway chat attachment parser.
+// Normalizes image attachments, offloads large media, and reports unsupported payloads.
+import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
+import { extensionForMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { estimateBase64DecodedBytes } from "../media/base64.js";
-import { MAX_IMAGE_BYTES } from "../media/constants.js";
-import { extensionForMime, mimeTypeFromFilePath } from "../media/mime.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
-import { normalizeOptionalLowercaseString } from "../shared/string-coerce.js";
 
 export type ChatAttachment = {
   type?: string;
@@ -58,6 +60,7 @@ const TEXT_ONLY_OFFLOAD_LIMIT = 10;
 
 export const DEFAULT_CHAT_ATTACHMENT_MAX_MB = 20;
 
+/** Resolve the maximum decoded attachment size accepted for chat image inputs. */
 export function resolveChatAttachmentMaxBytes(cfg: OpenClawConfig): number {
   const configured = cfg.agents?.defaults?.mediaMaxMb;
   const mb =
@@ -107,11 +110,40 @@ function isGenericContainerMime(mime?: string): boolean {
   return mime === "application/zip" || mime === "application/octet-stream";
 }
 
-function shouldIgnoreProvidedImageMime(params: {
+function shouldIgnoreImageMimeHint(params: { sniffedMime?: string; hintedMime?: string }): boolean {
+  return isGenericContainerMime(params.sniffedMime) && isImageMime(params.hintedMime);
+}
+
+function isSpecificMime(mime?: string): boolean {
+  return Boolean(mime && !isGenericContainerMime(mime));
+}
+
+function resolveAttachmentMime(params: {
   sniffedMime?: string;
   providedMime?: string;
-}): boolean {
-  return isGenericContainerMime(params.sniffedMime) && isImageMime(params.providedMime);
+  labelMime?: string;
+}): string {
+  const trustedProvidedMime = shouldIgnoreImageMimeHint({
+    sniffedMime: params.sniffedMime,
+    hintedMime: params.providedMime,
+  })
+    ? undefined
+    : params.providedMime;
+  const trustedLabelMime = shouldIgnoreImageMimeHint({
+    sniffedMime: params.sniffedMime,
+    hintedMime: params.labelMime,
+  })
+    ? undefined
+    : params.labelMime;
+  return (
+    (isSpecificMime(params.sniffedMime) && params.sniffedMime) ||
+    (isSpecificMime(trustedProvidedMime) && trustedProvidedMime) ||
+    (isSpecificMime(trustedLabelMime) && trustedLabelMime) ||
+    params.sniffedMime ||
+    trustedProvidedMime ||
+    trustedLabelMime ||
+    "application/octet-stream"
+  );
 }
 
 function isValidBase64(value: string): boolean {
@@ -190,22 +222,6 @@ function normalizeAttachment(
   return { label, mime, base64 };
 }
 
-function validateAttachmentBase64OrThrow(
-  normalized: NormalizedAttachment,
-  opts: { maxBytes: number },
-): number {
-  if (!isValidBase64(normalized.base64)) {
-    throw new Error(`attachment ${normalized.label}: invalid base64 content`);
-  }
-  const sizeBytes = estimateBase64DecodedBytes(normalized.base64);
-  if (sizeBytes <= 0 || sizeBytes > opts.maxBytes) {
-    throw new Error(
-      `attachment ${normalized.label}: exceeds size limit (${sizeBytes} > ${opts.maxBytes} bytes)`,
-    );
-  }
-  return sizeBytes;
-}
-
 export async function parseMessageWithAttachments(
   message: string,
   attachments: ChatAttachment[] | undefined,
@@ -264,24 +280,12 @@ export async function parseMessageWithAttachments(
       const providedMime = normalizeMime(mime);
       const sniffedMime = normalizeMime(await sniffMimeFromBase64(b64));
       const labelMime = normalizeMime(mimeTypeFromFilePath(label));
-      const trustedProvidedMime = shouldIgnoreProvidedImageMime({ sniffedMime, providedMime })
-        ? undefined
-        : providedMime;
 
       // Prefer specific MIME signals over generic container types. OOXML
       // documents (docx/xlsx/pptx) sniff as application/zip; without this
       // priority the agent would receive a `.zip` instead of the specific
       // Office document the caller declared.
-      const finalMime =
-        (sniffedMime && !isGenericContainerMime(sniffedMime) && sniffedMime) ||
-        (trustedProvidedMime &&
-          !isGenericContainerMime(trustedProvidedMime) &&
-          trustedProvidedMime) ||
-        (labelMime && !isGenericContainerMime(labelMime) && labelMime) ||
-        sniffedMime ||
-        trustedProvidedMime ||
-        labelMime ||
-        "application/octet-stream";
+      const finalMime = resolveAttachmentMime({ sniffedMime, providedMime, labelMime });
 
       if (
         sniffedMime &&
@@ -409,45 +413,4 @@ export async function parseMessageWithAttachments(
     imageOrder,
     offloadedRefs,
   };
-}
-
-/**
- * @deprecated Use parseMessageWithAttachments instead.
- * This function converts images to markdown data URLs which Claude API cannot process as images.
- */
-export function buildMessageWithAttachments(
-  message: string,
-  attachments: ChatAttachment[] | undefined,
-  opts?: { maxBytes?: number },
-): string {
-  const maxBytes = opts?.maxBytes ?? 2_000_000;
-
-  if (!attachments || attachments.length === 0) {
-    return message;
-  }
-
-  const blocks: string[] = [];
-
-  for (const [idx, att] of attachments.entries()) {
-    if (!att) {
-      continue;
-    }
-
-    const normalized = normalizeAttachment(att, idx, {
-      stripDataUrlPrefix: false,
-      requireImageMime: true,
-    });
-    validateAttachmentBase64OrThrow(normalized, { maxBytes });
-
-    const { base64, label, mime } = normalized;
-    const safeLabel = label.replace(/\s+/g, "_");
-    blocks.push(`![${safeLabel}](data:${mime};base64,${base64})`);
-  }
-
-  if (blocks.length === 0) {
-    return message;
-  }
-
-  const separator = message.trim().length > 0 ? "\n\n" : "";
-  return `${message}${separator}${blocks.join("\n\n")}`;
 }

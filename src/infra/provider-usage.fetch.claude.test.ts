@@ -1,3 +1,4 @@
+// Tests Claude provider usage fetch normalization and error handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createProviderUsageFetch,
@@ -125,6 +126,15 @@ describe("fetchClaudeUsage", () => {
 
     const result = await fetchClaudeUsage("token", 5000, mockFetch);
     expect(result.error).toBe("HTTP 502");
+    expect(result.windows).toHaveLength(0);
+  });
+
+  it("returns a stable error for malformed successful oauth usage JSON", async () => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, "{not json"));
+
+    const result = await fetchClaudeUsage("token", 5000, mockFetch);
+
+    expect(result.error).toBe("Malformed usage response");
     expect(result.windows).toHaveLength(0);
   });
 

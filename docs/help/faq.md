@@ -175,14 +175,39 @@ lives on the [First-run FAQ](/help/faq-first-run).
     Yes. Add extra directories via `skills.load.extraDirs` in `~/.openclaw/openclaw.json` (lowest precedence). Default precedence is `<workspace>/skills` → `<workspace>/.agents/skills` → `~/.agents/skills` → `~/.openclaw/skills` → bundled → `skills.load.extraDirs`. `clawhub` installs into `./skills` by default, which OpenClaw treats as `<workspace>/skills` on the next session. If the skill should only be visible to certain agents, pair that with `agents.defaults.skills` or `agents.list[].skills`.
   </Accordion>
 
-  <Accordion title="How can I use different models for different tasks?">
+  <Accordion title="How can I use different models or settings for different tasks?">
     Today the supported patterns are:
 
     - **Cron jobs**: isolated jobs can set a `model` override per job.
-    - **Sub-agents**: route tasks to separate agents with different default models.
+    - **Agents**: route tasks to separate agents with different default models, thinking levels, and stream params.
     - **On-demand switch**: use `/model` to switch the current session model at any time.
 
-    See [Cron jobs](/automation/cron-jobs), [Multi-Agent Routing](/concepts/multi-agent), and [Slash commands](/tools/slash-commands).
+    For example, use the same model with different per-agent settings:
+
+    ```json5
+    {
+      agents: {
+        list: [
+          {
+            id: "coder",
+            model: "xiaomi/mimo-v2.5-pro",
+            thinkingDefault: "high",
+            params: { temperature: 0.1 },
+          },
+          {
+            id: "chat",
+            model: "xiaomi/mimo-v2.5-pro",
+            thinkingDefault: "off",
+            params: { temperature: 0.8 },
+          },
+        ],
+      },
+    }
+    ```
+
+    Put shared per-model defaults in `agents.defaults.models["provider/model"].params`, then put agent-specific overrides in flat `agents.list[].params`. Do not define separate nested `agents.list[].models["provider/model"].params` entries for the same model; `agents.list[].models` is for per-agent model catalog and runtime overrides.
+
+    See [Cron jobs](/automation/cron-jobs), [Multi-Agent Routing](/concepts/multi-agent), [Configuration](/gateway/config-agents), and [Slash commands](/tools/slash-commands).
 
   </Accordion>
 
@@ -229,7 +254,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - If neither a bound route nor a usable stored route exists, direct delivery can fail and the result falls back to queued session delivery instead of posting immediately to chat.
     - Invalid or stale targets can still force queue fallback or final delivery failure.
     - If the child's last visible assistant reply is the exact silent token `NO_REPLY` / `no_reply`, or exactly `ANNOUNCE_SKIP`, OpenClaw intentionally suppresses the announce instead of posting stale earlier progress.
-    - If the child timed out after only tool calls, the announce can collapse that into a short partial-progress summary instead of replaying raw tool output.
+    - Tool/toolResult output is not promoted into child result text; the result is the child's latest visible assistant reply.
 
     Debug:
 
@@ -321,19 +346,22 @@ lives on the [First-run FAQ](/help/faq-first-run).
     ```bash
     openclaw skills search "calendar"
     openclaw skills search --limit 20
-    openclaw skills install <skill-slug>
-    openclaw skills install <skill-slug> --version <version>
-    openclaw skills install <skill-slug> --force
+    openclaw skills install @owner/<skill-slug>
+    openclaw skills install @owner/<skill-slug> --version <version>
+    openclaw skills install @owner/<skill-slug> --force
+    openclaw skills install @owner/<skill-slug> --global
     openclaw skills update --all
+    openclaw skills update --all --global
     openclaw skills list --eligible
     openclaw skills check
     ```
 
     Native `openclaw skills install` writes into the active workspace `skills/`
-    directory. Install the separate `clawhub` CLI only if you want to publish or
-    sync your own skills. For shared installs across agents, put the skill under
-    `~/.openclaw/skills` and use `agents.defaults.skills` or
-    `agents.list[].skills` if you want to narrow which agents can see it.
+    directory by default. Add `--global` to install into the shared managed
+    skills directory for all local agents. Install the separate `clawhub` CLI
+    only if you want to publish or sync your own skills. Use
+    `agents.defaults.skills` or `agents.list[].skills` if you want to narrow
+    which agents can see shared skills.
 
   </Accordion>
 
@@ -405,11 +433,11 @@ lives on the [First-run FAQ](/help/faq-first-run).
     Install skills:
 
     ```bash
-    openclaw skills install <skill-slug>
+    openclaw skills install @owner/<skill-slug>
     openclaw skills update --all
     ```
 
-    Native installs land in the active workspace `skills/` directory. For shared skills across agents, place them in `~/.openclaw/skills/<name>/SKILL.md`. If only some agents should see a shared install, configure `agents.defaults.skills` or `agents.list[].skills`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills), [Skills config](/tools/skills-config), and [ClawHub](/clawhub).
+    Native installs land in the active workspace `skills/` directory. For shared skills across all local agents, use `openclaw skills install @owner/<skill-slug> --global` (or place them manually in `~/.openclaw/skills/<name>/SKILL.md`). If only some agents should see a shared install, configure `agents.defaults.skills` or `agents.list[].skills`. Some skills expect binaries installed via Homebrew; on Linux that means Linuxbrew (see the Homebrew Linux FAQ entry above). See [Skills](/tools/skills), [Skills config](/tools/skills-config), and [ClawHub](/tools/clawhub).
 
   </Accordion>
 
@@ -451,7 +479,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     include system packages, Homebrew, or bundled browsers. For a fuller setup:
 
     - Persist `/home/node` with `OPENCLAW_HOME_VOLUME` so caches survive.
-    - Bake system deps into the image with `OPENCLAW_DOCKER_APT_PACKAGES`.
+    - Bake system deps into the image with `OPENCLAW_IMAGE_APT_PACKAGES`.
     - Install Playwright browsers via the bundled CLI:
       `node /app/node_modules/playwright-core/cli.js install chromium`
     - Set `PLAYWRIGHT_BROWSERS_PATH` and ensure the path is persisted.
@@ -520,20 +548,17 @@ lives on the [First-run FAQ](/help/faq-first-run).
     Codex CLI login)** does not help for semantic memory search. OpenAI embeddings
     still need a real API key (`OPENAI_API_KEY` or `models.providers.openai.apiKey`).
 
-    If you don't set a provider explicitly, OpenClaw auto-selects a provider when it
-    can resolve an API key (auth profiles, `models.providers.*.apiKey`, or env vars).
-    It prefers OpenAI if an OpenAI key resolves, otherwise Gemini if a Gemini key
-    resolves, then Voyage, then Mistral. If no remote key is available, memory
-    search stays disabled until you configure it. If you have a local model path
-    configured and present, OpenClaw
-    prefers `local`. Ollama is supported when you explicitly set
-    `memorySearch.provider = "ollama"`.
+    If you don't set a provider explicitly, OpenClaw uses OpenAI embeddings. Legacy
+    configs that still say `memorySearch.provider = "auto"` resolve to OpenAI too.
+    If no OpenAI API key is available, semantic memory search stays unavailable
+    until you configure a key or choose another provider explicitly.
 
     If you'd rather stay local, set `memorySearch.provider = "local"` (and optionally
     `memorySearch.fallback = "none"`). If you want Gemini embeddings, set
     `memorySearch.provider = "gemini"` and provide `GEMINI_API_KEY` (or
-    `memorySearch.remote.apiKey`). We support **OpenAI, Gemini, Voyage, Mistral, Ollama, or local** embedding
-    models - see [Memory](/concepts/memory) for the setup details.
+    `memorySearch.remote.apiKey`). We support **OpenAI, OpenAI-compatible, Gemini,
+    Voyage, Mistral, Bedrock, Ollama, LM Studio, GitHub Copilot, DeepInfra, or local**
+    embedding models - see [Memory](/concepts/memory) for the setup details.
 
   </Accordion>
 </AccordionGroup>
@@ -603,6 +628,48 @@ lives on the [First-run FAQ](/help/faq-first-run).
     AGENTS.md or MEMORY.md** rather than relying on chat history.
 
     See [Agent workspace](/concepts/agent-workspace) and [Memory](/concepts/memory).
+
+  </Accordion>
+
+  <Accordion title="Can I make SOUL.md bigger?">
+    Yes. `SOUL.md` is one of the workspace bootstrap files injected into the
+    agent context. The default per-file injection limit is `20000` characters,
+    and the total bootstrap budget across files is `60000` characters.
+
+    Change the shared defaults in your OpenClaw config:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          bootstrapMaxChars: 50000,
+          bootstrapTotalMaxChars: 300000,
+        },
+      },
+    }
+    ```
+
+    Or override one agent:
+
+    ```json5
+    {
+      agents: {
+        list: [
+          {
+            id: "main",
+            bootstrapMaxChars: 50000,
+            bootstrapTotalMaxChars: 300000,
+          },
+        ],
+      },
+    }
+    ```
+
+    Use `/context` to check raw vs injected sizes and whether truncation happened.
+    Keep `SOUL.md` focused on voice, stance, and personality; put operating rules
+    in `AGENTS.md` and durable facts in memory.
+
+    See [Context](/concepts/context) and [Agent config](/gateway/config-agents).
 
   </Accordion>
 
@@ -733,7 +800,8 @@ lives on the [First-run FAQ](/help/faq-first-run).
     `web_fetch` works without an API key. `web_search` depends on your selected
     provider:
 
-    - API-backed providers such as Brave, Exa, Firecrawl, Gemini, Grok, Kimi, MiniMax Search, Perplexity, and Tavily require their normal API key setup.
+    - API-backed providers such as Brave, Exa, Firecrawl, Gemini, Kimi, MiniMax Search, Perplexity, and Tavily require their normal API key setup.
+    - Grok can reuse xAI OAuth from model auth, or fall back to `XAI_API_KEY` / plugin web-search config.
     - Ollama Web Search is key-free, but it uses your configured Ollama host and requires `ollama signin`.
     - DuckDuckGo is key-free, but it is an unofficial HTML-based integration.
     - SearXNG is key-free/self-hosted; configure `SEARXNG_BASE_URL` or `plugins.entries.searxng.config.webSearch.baseUrl`.
@@ -745,7 +813,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - Exa: `EXA_API_KEY`
     - Firecrawl: `FIRECRAWL_API_KEY`
     - Gemini: `GEMINI_API_KEY`
-    - Grok: `XAI_API_KEY`
+    - Grok: xAI OAuth, `XAI_API_KEY`
     - Kimi: `KIMI_API_KEY` or `MOONSHOT_API_KEY`
     - MiniMax Search: `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, or `MINIMAX_API_KEY`
     - Perplexity: `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY`
@@ -789,7 +857,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
 
     - If you use allowlists, add `web_search`/`web_fetch`/`x_search` or `group:web`.
     - `web_fetch` is enabled by default (unless explicitly disabled).
-    - If `tools.web.fetch.provider` is omitted, OpenClaw auto-detects the first ready fetch fallback provider from available credentials. Today the bundled provider is Firecrawl.
+    - If `tools.web.fetch.provider` is omitted, OpenClaw auto-detects the first ready fetch fallback provider from available credentials. The official Firecrawl plugin provides that fallback.
     - Daemons read env vars from `~/.openclaw/.env` (or the service environment).
 
     Docs: [Web tools](/tools/web).
@@ -823,7 +891,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - Use `openclaw configure` for interactive edits.
     - Use `config.schema.lookup` first when you are not sure about an exact path or field shape; it returns a shallow schema node plus immediate child summaries for drill-down.
     - Use `config.patch` for partial RPC edits; keep `config.apply` for full-config replacement only.
-    - If you are using the owner-only `gateway` tool from an agent run, it will still reject writes to `tools.exec.ask` / `tools.exec.security` (including legacy `tools.bash.*` aliases that normalize to the same protected exec paths).
+    - If you are using the agent-facing `gateway` tool from an agent run, it will still reject writes to `tools.exec.ask` / `tools.exec.security` (including legacy `tools.bash.*` aliases that normalize to the same protected exec paths).
 
     Docs: [Config](/cli/config), [Configure](/cli/configure), [Gateway troubleshooting](/gateway/troubleshooting#gateway-rejected-invalid-config), [Doctor](/gateway/doctor).
 
@@ -999,7 +1067,7 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - `config.get`: fetch the current snapshot + hash
     - `config.patch`: safe partial update (preferred for most RPC edits); hot-reloads when possible and restarts when required
     - `config.apply`: validate + replace the full config; hot-reloads when possible and restarts when required
-    - The owner-only `gateway` runtime tool still refuses to rewrite `tools.exec.ask` / `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the same protected exec paths
+    - The agent-facing `gateway` runtime tool still refuses to rewrite `tools.exec.ask` / `tools.exec.security`; legacy `tools.bash.*` aliases normalize to the same protected exec paths
 
   </Accordion>
 
@@ -1084,6 +1152,9 @@ lives on the [First-run FAQ](/help/faq-first-run).
     - a global fallback `.env` from `~/.openclaw/.env` (aka `$OPENCLAW_STATE_DIR/.env`)
 
     Neither `.env` file overrides existing env vars.
+    Provider credential variables are an exception for workspace `.env`: keys such as
+    `GEMINI_API_KEY`, `XAI_API_KEY`, or `MISTRAL_API_KEY` are ignored from workspace
+    `.env` and should live in the process environment, `~/.openclaw/.env`, or config `env`.
 
     You can also define inline env vars in config (applied only if missing from the process env):
 
@@ -1279,8 +1350,9 @@ lives on the [First-run FAQ](/help/faq-first-run).
     }
     ```
 
-    If `HEARTBEAT.md` exists but is effectively empty (only blank lines and markdown
-    headers like `# Heading`), OpenClaw skips the heartbeat run to save API calls.
+    If `HEARTBEAT.md` exists but is effectively empty (only blank lines,
+    Markdown/HTML comments, Markdown headings like `# Heading`, fence markers,
+    or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls.
     If the file is missing, the heartbeat still runs and the model decides what to do.
 
     Per-agent overrides use `agents.list[].heartbeat`. Docs: [Heartbeat](/gateway/heartbeat).
@@ -1560,7 +1632,7 @@ lives on the [Models FAQ](/help/faq-models).
 
     Service/supervisor logs (when the gateway runs via launchd/systemd):
 
-    - macOS: `$OPENCLAW_STATE_DIR/logs/gateway.log` and `gateway.err.log` (default: `~/.openclaw/logs/...`; profiles use `~/.openclaw-<profile>/logs/...`)
+    - macOS launchd stdout: `~/Library/Logs/openclaw/gateway.log` (profiles use `gateway-<profile>.log`; stderr is suppressed)
     - Linux: `journalctl --user -u openclaw-gateway[-<profile>].service -n 200 --no-pager`
     - Windows: `schtasks /Query /TN "OpenClaw Gateway (<profile>)" /V /FO LIST`
 
@@ -1581,9 +1653,14 @@ lives on the [Models FAQ](/help/faq-models).
   </Accordion>
 
   <Accordion title="I closed my terminal on Windows - how do I restart OpenClaw?">
-    There are **two Windows install modes**:
+    There are **three Windows install modes**:
 
-    **1) WSL2 (recommended):** the Gateway runs inside Linux.
+    **1) Windows Hub local setup:** the native app manages a local app-owned WSL Gateway.
+
+    Open **OpenClaw Companion** from the Start menu or tray, then use
+    **Gateway Setup** or the Connections tab.
+
+    **2) Manual WSL2 Gateway:** the Gateway runs inside Linux.
 
     Open PowerShell, enter WSL, then restart:
 
@@ -1599,7 +1676,7 @@ lives on the [Models FAQ](/help/faq-models).
     openclaw gateway run
     ```
 
-    **2) Native Windows (not recommended):** the Gateway runs directly in Windows.
+    **3) Native Windows CLI/Gateway:** the Gateway runs directly in Windows.
 
     Open PowerShell and run:
 
@@ -1614,7 +1691,7 @@ lives on the [Models FAQ](/help/faq-models).
     openclaw gateway run
     ```
 
-    Docs: [Windows (WSL2)](/platforms/windows), [Gateway service runbook](/gateway).
+    Docs: [Windows](/platforms/windows), [Gateway service runbook](/gateway).
 
   </Accordion>
 
@@ -1733,7 +1810,7 @@ lives on the [Models FAQ](/help/faq-models).
 
 <AccordionGroup>
   <Accordion title="My skill generated an image/PDF, but nothing was sent">
-    Outbound attachments from the agent must include a `MEDIA:<path-or-url>` line (on its own line). See [OpenClaw assistant setup](/start/openclaw) and [Agent send](/tools/agent-send).
+    Outbound attachments from the agent must use structured media fields such as `media`, `mediaUrl`, `path`, or `filePath`. See [OpenClaw assistant setup](/start/openclaw) and [Agent send](/tools/agent-send).
 
     CLI sending:
 
@@ -1746,7 +1823,7 @@ lives on the [Models FAQ](/help/faq-models).
     - The target channel supports outbound media and isn't blocked by allowlists.
     - The file is within the provider's size limits (images are resized to max 2048px).
     - `tools.fs.workspaceOnly=true` keeps local-path sends limited to workspace, temp/media-store, and sandbox-validated files.
-    - `tools.fs.workspaceOnly=false` lets `MEDIA:` send host-local files the agent can already read, but only for media plus safe document types (images, audio, video, PDF, and Office docs). Plain text and secret-like files are still blocked.
+    - `tools.fs.workspaceOnly=false` lets structured local media sends use host-local files the agent can already read, but only for media plus safe document types (images, audio, video, PDF, Office docs, and validated text documents such as Markdown/MD, TXT, JSON, YAML, and YML). This is not a secret scanner: an agent-readable `secret.txt` or `config.json` can be attached when the extension and content validation match. Keep sensitive files outside agent-readable paths, or keep `tools.fs.workspaceOnly=true` for stricter local-path sends.
 
     See [Images](/nodes/images).
 
@@ -1786,6 +1863,72 @@ lives on the [Models FAQ](/help/faq-models).
     - sandboxing and strict tool allowlists
 
     Details: [Security](/gateway/security).
+
+  </Accordion>
+
+  <Accordion title="Is OpenClaw less safe because it uses TypeScript/Node instead of Rust/WASM?">
+    Language and runtime matter, but they are not the main risk for a personal
+    agent. The practical OpenClaw risks are gateway exposure, who can message the
+    bot, prompt injection, tool scope, credential handling, browser access, exec
+    access, and third-party skill or plugin trust.
+
+    Rust and WASM can provide stronger isolation for some classes of code, but
+    they do not solve prompt injection, bad allowlists, public gateway exposure,
+    overbroad tools, or a browser profile that is already logged in to sensitive
+    accounts. Treat those as the primary controls:
+
+    - keep the Gateway private or authenticated
+    - use pairing and allowlists for DMs and groups
+    - deny or sandbox risky tools for untrusted inputs
+    - install only trusted plugins and skills
+    - run `openclaw security audit --deep` after config changes
+
+    Details: [Security](/gateway/security), [Sandboxing](/gateway/sandboxing).
+
+  </Accordion>
+
+  <Accordion title="I saw reports about exposed OpenClaw instances. What should I check?">
+    First check your actual deployment:
+
+    ```bash
+    openclaw security audit --deep
+    openclaw gateway status
+    ```
+
+    A safer baseline is:
+
+    - Gateway bound to `loopback`, or exposed only through authenticated private
+      access such as a tailnet, SSH tunnel, token/password auth, or a correctly
+      configured trusted proxy
+    - DMs in `pairing` or `allowlist` mode
+    - groups allowlisted and mention-gated unless every member is trusted
+    - high-risk tools (`exec`, `browser`, `gateway`, `cron`) denied or tightly
+      scoped for agents that read untrusted content
+    - sandboxing enabled where tool execution needs a smaller blast radius
+
+    Public binds without auth, open DMs/groups with tools, and exposed browser
+    control are the findings to fix first. Details:
+    [Security audit checklist](/gateway/security#security-audit-checklist).
+
+  </Accordion>
+
+  <Accordion title="Are ClawHub skills and third-party plugins safe to install?">
+    Treat third-party skills and plugins as code you are choosing to trust.
+    ClawHub skill pages expose scan state before install, but scans are not a
+    complete security boundary. OpenClaw does not run built-in local
+    dangerous-code blocking during plugin or skill install/update flows; use
+    operator-owned `security.installPolicy` for local allow/block decisions.
+
+    Safer pattern:
+
+    - prefer trusted authors and pinned versions
+    - read the skill or plugin before enabling it
+    - keep plugin and skill allowlists narrow
+    - run untrusted-input workflows in a sandbox with minimal tools
+    - avoid giving third-party code broad filesystem, exec, browser, or secret access
+
+    Details: [Skills](/tools/skills), [Plugins](/tools/plugin),
+    [Security](/gateway/security).
 
   </Accordion>
 

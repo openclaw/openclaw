@@ -1,4 +1,13 @@
+/**
+ * Sandbox browser container lifecycle.
+ *
+ * Starts or reuses Chrome/noVNC containers, exposes authenticated CDP/observer URLs, and tracks browser registry state.
+ */
 import crypto from "node:crypto";
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { deriveDefaultBrowserCdpPortRange } from "../../config/port-defaults.js";
 import { isSameSsrFPolicy, type SsrFPolicy } from "../../infra/net/ssrf.js";
 import {
@@ -14,10 +23,6 @@ import {
   type ResolvedBrowserConfig,
 } from "../../plugin-sdk/browser-profiles.js";
 import { defaultRuntime } from "../../runtime.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../../shared/string-coerce.js";
 import { BROWSER_BRIDGES } from "./browser-bridges.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig } from "./config.js";
@@ -35,6 +40,7 @@ import {
   readDockerContainerEnvVar,
   readDockerContainerLabel,
   readDockerPort,
+  resolveDockerEnvPolicyEpoch,
 } from "./docker.js";
 import {
   buildNoVncObserverTokenUrl,
@@ -49,7 +55,13 @@ import { resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
 import { isToolAllowed } from "./tool-policy.js";
 import type { SandboxBrowserContext, SandboxConfig } from "./types.js";
 import { validateNetworkMode } from "./validate-sandbox-security.js";
-import { appendWorkspaceMountArgs, SANDBOX_MOUNT_FORMAT_VERSION } from "./workspace-mounts.js";
+import {
+  appendReadOnlyWorkspaceSkillMountArgs,
+  appendWorkspaceMountArgs,
+  formatReadOnlyWorkspaceSkillMountHashState,
+  resolveReadOnlyWorkspaceSkillMounts,
+  SANDBOX_MOUNT_FORMAT_VERSION,
+} from "./workspace-mounts.js";
 
 const HOT_BROWSER_WINDOW_MS = 5 * 60 * 1000;
 const CDP_SOURCE_RANGE_ENV_KEY = "OPENCLAW_BROWSER_CDP_SOURCE_RANGE";
@@ -96,7 +108,9 @@ async function waitForSandboxCdp(params: {
     if (remainingMs <= 0) {
       break;
     }
-    await new Promise((r) => setTimeout(r, Math.min(150, remainingMs)));
+    await new Promise((r) => {
+      setTimeout(r, Math.min(150, remainingMs));
+    });
   }
   return false;
 }
@@ -204,6 +218,7 @@ export async function ensureSandboxBrowser(params: {
   scopeKey: string;
   workspaceDir: string;
   agentWorkspaceDir: string;
+  skillsWorkspaceDir?: string;
   cfg: SandboxConfig;
   evaluateEnabled?: boolean;
   bridgeAuth?: { token?: string; password?: string };
@@ -226,8 +241,16 @@ export async function ensureSandboxBrowser(params: {
     docker: params.cfg.docker,
     browser: { ...params.cfg.browser, image: browserImage },
   });
+  const readOnlyWorkspaceSkillMounts = resolveReadOnlyWorkspaceSkillMounts({
+    workspaceDir: params.workspaceDir,
+    agentWorkspaceDir: params.agentWorkspaceDir,
+    skillsWorkspaceDir: params.skillsWorkspaceDir,
+    workdir: params.cfg.docker.workdir,
+    workspaceAccess: params.cfg.workspaceAccess,
+  });
   const expectedHash = computeSandboxBrowserConfigHash({
     docker: browserDockerCfg,
+    dockerEnvPolicyEpoch: resolveDockerEnvPolicyEpoch(browserDockerCfg.env),
     browser: {
       cdpPort: params.cfg.browser.cdpPort,
       vncPort: params.cfg.browser.vncPort,
@@ -242,6 +265,9 @@ export async function ensureSandboxBrowser(params: {
     workspaceDir: params.workspaceDir,
     agentWorkspaceDir: params.agentWorkspaceDir,
     mountFormatVersion: SANDBOX_MOUNT_FORMAT_VERSION,
+    readOnlyWorkspaceSkillMounts: formatReadOnlyWorkspaceSkillMountHashState(
+      readOnlyWorkspaceSkillMounts,
+    ),
   });
 
   const now = Date.now();
@@ -330,14 +356,21 @@ export async function ensureSandboxBrowser(params: {
       args,
       workspaceDir: params.workspaceDir,
       agentWorkspaceDir: params.agentWorkspaceDir,
+      skillsWorkspaceDir: params.skillsWorkspaceDir,
       workdir: params.cfg.docker.workdir,
       workspaceAccess: params.cfg.workspaceAccess,
+      readOnlyWorkspaceSkillMounts,
+      includeReadOnlyWorkspaceSkillMounts: false,
     });
     if (browserDockerCfg.binds?.length) {
       for (const bind of browserDockerCfg.binds) {
         args.push("-v", bind);
       }
     }
+    appendReadOnlyWorkspaceSkillMountArgs({
+      args,
+      readOnlyWorkspaceSkillMounts,
+    });
     args.push("-p", `127.0.0.1::${params.cfg.browser.cdpPort}`);
     if (noVncEnabled) {
       args.push("-p", `127.0.0.1::${params.cfg.browser.noVncPort}`);

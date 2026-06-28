@@ -1,5 +1,8 @@
 {
   "id": "matrix",
+  "name": "Matrix",
+  "description": "OpenClaw Matrix channel plugin for rooms and direct messages.",
+  "icon": "https://cdn.simpleicons.org/matrix",
   "commandAliases": [{ "name": "matrix" }],
   "activation": {
     "onStartup": false,

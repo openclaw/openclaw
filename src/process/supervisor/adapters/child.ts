@@ -1,9 +1,16 @@
+// Child process adapter wraps spawned child processes for the supervisor.
 import type { ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process";
+import { toErrorObject } from "../../../infra/errors.js";
 import { createWindowsOutputDecoder } from "../../../infra/windows-encoding.js";
-import { killProcessTree } from "../../kill-tree.js";
+import { signalProcessTree } from "../../kill-tree.js";
 import { prepareOomScoreAdjustedSpawn } from "../../linux-oom-score.js";
 import { spawnWithFallback } from "../../spawn-utils.js";
-import { resolveWindowsCommandShim } from "../../windows-command.js";
+import {
+  buildWindowsCmdExeCommandLine,
+  isWindowsBatchCommand,
+  resolveTrustedWindowsCmdExe,
+  resolveWindowsCommandShim,
+} from "../../windows-command.js";
 import type { ManagedRunStdin, SpawnProcessAdapter } from "../types.js";
 import { toStringEnv } from "./env.js";
 
@@ -15,6 +22,27 @@ function resolveCommand(command: string): string {
     command,
     cmdCommands: ["npm", "pnpm", "yarn", "npx"],
   });
+}
+
+function resolveChildInvocation(params: { argv: string[]; windowsVerbatimArguments?: boolean }): {
+  args: string[];
+  command: string;
+  windowsVerbatimArguments?: boolean;
+} {
+  const resolvedCommand = resolveCommand(params.argv[0] ?? "");
+  const args = params.argv.slice(1);
+  if (!isWindowsBatchCommand(resolvedCommand)) {
+    return {
+      command: resolvedCommand,
+      args,
+      windowsVerbatimArguments: params.windowsVerbatimArguments,
+    };
+  }
+  return {
+    command: resolveTrustedWindowsCmdExe(),
+    args: ["/d", "/s", "/c", buildWindowsCmdExeCommandLine(resolvedCommand, args)],
+    windowsVerbatimArguments: true,
+  };
 }
 
 export type ChildAdapter = SpawnProcessAdapter<NodeJS.Signals | null>;
@@ -31,10 +59,12 @@ export async function createChildAdapter(params: {
   input?: string;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
 }): Promise<ChildAdapter> {
-  const resolvedArgv = [...params.argv];
-  resolvedArgv[0] = resolveCommand(resolvedArgv[0] ?? "");
+  const invocation = resolveChildInvocation({
+    argv: params.argv,
+    windowsVerbatimArguments: params.windowsVerbatimArguments,
+  });
   const baseEnv = params.env ? toStringEnv(params.env) : undefined;
-  const preparedSpawn = prepareOomScoreAdjustedSpawn(resolvedArgv[0] ?? "", resolvedArgv.slice(1), {
+  const preparedSpawn = prepareOomScoreAdjustedSpawn(invocation.command, invocation.args, {
     env: baseEnv,
   });
 
@@ -51,7 +81,7 @@ export async function createChildAdapter(params: {
     stdio: ["pipe", "pipe", "pipe"],
     detached: useDetached,
     windowsHide: true,
-    windowsVerbatimArguments: params.windowsVerbatimArguments,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   };
   if (stdinMode === "inherit") {
     options.stdio = ["inherit", "pipe", "pipe"];
@@ -325,7 +355,7 @@ export async function createChildAdapter(params: {
       return waitResult;
     }
     if (waitError !== undefined) {
-      throw waitError;
+      throw toErrorObject(waitError, "Non-Error thrown");
     }
     if (!waitPromise) {
       waitPromise = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
@@ -343,7 +373,7 @@ export async function createChildAdapter(params: {
             const error = waitError;
             resolveWait = null;
             rejectWait = null;
-            reject(error);
+            reject(toErrorObject(error, "Non-Error rejection"));
           }
         },
       );
@@ -357,14 +387,17 @@ export async function createChildAdapter(params: {
   // gateway's process group regardless of intent, so the kill must avoid
   // group-kill. (#71662 follow-up — caught by Greptile review)
   const childIsDetached = useDetached && !spawned.usedFallback;
+  const signalProcessTreeForChild = (pid: number, signal: "SIGTERM" | "SIGKILL") => {
+    signalProcessTree(pid, signal, { detached: childIsDetached });
+  };
   const kill = (signal?: NodeJS.Signals) => {
     const pid = child.pid ?? undefined;
     if (signal === undefined || signal === "SIGKILL") {
       if (pid) {
         // Pass through whether the child is actually detached. Without this,
-        // `killProcessTree` group-kills via `-pid` and takes out the gateway's
+        // `signalProcessTree` group-kills via `-pid` and takes out the gateway's
         // own process group along with the child. (#71662)
-        killProcessTree(pid, { detached: childIsDetached });
+        signalProcessTreeForChild(pid, "SIGKILL");
       }
       try {
         child.kill("SIGKILL");
@@ -372,6 +405,10 @@ export async function createChildAdapter(params: {
         // ignore kill errors
       }
       scheduleForceKillWaitFallback("SIGKILL");
+      return;
+    }
+    if (signal === "SIGTERM" && pid) {
+      signalProcessTreeForChild(pid, "SIGTERM");
       return;
     }
     try {

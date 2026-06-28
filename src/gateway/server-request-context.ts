@@ -1,3 +1,5 @@
+// Gateway request context factory.
+// Wires live runtime state into method handlers and client management helpers.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext, GatewayClient } from "./server-methods/types.js";
@@ -6,9 +8,11 @@ import { disconnectAllSharedGatewayAuthClients } from "./server-shared-auth-gene
 type GatewayRequestContextClient = GatewayClient & {
   socket: { close: (code: number, reason: string) => void };
   usesSharedGatewayAuth?: boolean;
+  invalidated?: boolean;
+  invalidatedReason?: string;
 };
 
-type GatewayRequestContextParams = {
+export type GatewayRequestContextParams = {
   deps: GatewayRequestContext["deps"];
   runtimeState: Pick<GatewayServerLiveState, "cronState">;
   getRuntimeConfig: GatewayRequestContext["getRuntimeConfig"];
@@ -41,6 +45,7 @@ type GatewayRequestContextParams = {
   chatDeltaLastBroadcastText: GatewayRequestContext["chatDeltaLastBroadcastText"];
   agentDeltaSentAt: GatewayRequestContext["agentDeltaSentAt"];
   bufferedAgentEvents: GatewayRequestContext["bufferedAgentEvents"];
+  clearChatRunState: GatewayRequestContext["clearChatRunState"];
   addChatRun: GatewayRequestContext["addChatRun"];
   removeChatRun: GatewayRequestContext["removeChatRun"];
   subscribeSessionEvents: GatewayRequestContext["subscribeSessionEvents"];
@@ -68,6 +73,11 @@ type GatewayRequestContextParams = {
 export function createGatewayRequestContext(
   params: GatewayRequestContextParams,
 ): GatewayRequestContext {
+  const hasApprovalScope = (gatewayClient: GatewayClient): boolean => {
+    const scopes = Array.isArray(gatewayClient.connect.scopes) ? gatewayClient.connect.scopes : [];
+    return scopes.includes("operator.admin") || scopes.includes("operator.approvals");
+  };
+
   return {
     deps: params.deps,
     // Keep cron reads live so config hot reload can swap cron/store state without rebuilding
@@ -101,14 +111,45 @@ export function createGatewayRequestContext(
         if (excludeConnId && gatewayClient.connId === excludeConnId) {
           continue;
         }
-        const scopes = Array.isArray(gatewayClient.connect.scopes)
-          ? gatewayClient.connect.scopes
-          : [];
-        if (scopes.includes("operator.admin") || scopes.includes("operator.approvals")) {
+        if (hasApprovalScope(gatewayClient)) {
           return true;
         }
       }
       return false;
+    },
+    getApprovalClientConnIds: (opts = {}) => {
+      const connIds = new Set<string>();
+      for (const gatewayClient of params.clients) {
+        if (!gatewayClient.connId) {
+          continue;
+        }
+        if (opts.excludeConnId && gatewayClient.connId === opts.excludeConnId) {
+          continue;
+        }
+        if (!hasApprovalScope(gatewayClient)) {
+          continue;
+        }
+        if (opts.filter && !opts.filter(gatewayClient, opts.record)) {
+          continue;
+        }
+        connIds.add(gatewayClient.connId);
+      }
+      return connIds;
+    },
+    invalidateClientsForDevice: (deviceId: string, opts?: { role?: string; reason?: string }) => {
+      const reason = opts?.reason ?? "device-invalidated";
+      for (const gatewayClient of params.clients) {
+        if (gatewayClient.connect.device?.id !== deviceId) {
+          continue;
+        }
+        if (opts?.role && gatewayClient.connect.role !== opts.role) {
+          continue;
+        }
+        // Marking is separate from socket close so already-buffered requests
+        // fail authorization even if transport teardown has not completed.
+        gatewayClient.invalidated = true;
+        gatewayClient.invalidatedReason = reason;
+      }
     },
     disconnectClientsForDevice: (deviceId: string, opts?: { role?: string }) => {
       for (const gatewayClient of params.clients) {
@@ -118,6 +159,11 @@ export function createGatewayRequestContext(
         if (opts?.role && gatewayClient.connect.role !== opts.role) {
           continue;
         }
+        // Mark before closing so any RPCs already pipelined in the WS buffer
+        // are rejected at the per-request dispatch check, regardless of
+        // whether socket.close() takes effect synchronously.
+        gatewayClient.invalidated = true;
+        gatewayClient.invalidatedReason ??= "device-removed";
         try {
           gatewayClient.socket.close(4001, "device removed");
         } catch {
@@ -140,6 +186,7 @@ export function createGatewayRequestContext(
     chatDeltaLastBroadcastText: params.chatDeltaLastBroadcastText,
     agentDeltaSentAt: params.agentDeltaSentAt,
     bufferedAgentEvents: params.bufferedAgentEvents,
+    clearChatRunState: params.clearChatRunState,
     addChatRun: params.addChatRun,
     removeChatRun: params.removeChatRun,
     subscribeSessionEvents: params.subscribeSessionEvents,

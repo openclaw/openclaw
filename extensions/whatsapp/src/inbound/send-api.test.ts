@@ -1,13 +1,19 @@
+// Whatsapp tests cover send api plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { AnyMessageContent, MiscMessageGenerationOptions, WAMessage } from "baileys";
-import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-message";
+import { listMessageReceiptPlatformIds } from "openclaw/plugin-sdk/channel-outbound";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveWhatsAppOutboundMentions } from "./outbound-mentions.js";
 import { createWebSendApi } from "./send-api.js";
+import type { WhatsAppSendResult } from "./send-result.js";
 
 const recordChannelActivity = vi.hoisted(() => vi.fn());
+const imageOps = vi.hoisted(() => ({
+  getImageMetadata: vi.fn(),
+  resizeToJpeg: vi.fn(),
+}));
 
 vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   const actual = await vi.importActual<
@@ -16,6 +22,17 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   return {
     ...actual,
     recordChannelActivity: (...args: unknown[]) => recordChannelActivity(...args),
+  };
+});
+
+vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
+    "openclaw/plugin-sdk/media-runtime",
+  );
+  return {
+    ...actual,
+    getImageMetadata: imageOps.getImageMetadata,
+    resizeToJpeg: imageOps.resizeToJpeg,
   };
 });
 
@@ -53,6 +70,8 @@ describe("createWebSendApi", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    imageOps.getImageMetadata.mockResolvedValue(null);
+    imageOps.resizeToJpeg.mockRejectedValue(new Error("unexpected thumbnail generation"));
     api = createWebSendApi({
       sock: { sendMessage, sendPresenceUpdate },
       defaultAccountId: "main",
@@ -87,10 +106,7 @@ describe("createWebSendApi", () => {
     expectRecordFields(requireSendContent(callIndex), fields);
   }
 
-  function expectSendResultFields(
-    result: Awaited<ReturnType<typeof api.sendMessage | typeof api.sendReaction>>,
-    fields: Record<string, unknown>,
-  ) {
+  function expectSendResultFields(result: WhatsAppSendResult, fields: Record<string, unknown>) {
     expectRecordFields(requireRecord(result, "send result"), fields);
   }
 
@@ -111,15 +127,87 @@ describe("createWebSendApi", () => {
     });
   });
 
-  it("falls back to default document filename when fileName is absent", async () => {
+  it("falls back to a MIME-aware document filename when fileName is absent", async () => {
     const payload = Buffer.from("pdf");
     await api.sendMessage("+1555", "doc", payload, "application/pdf");
     expectFirstSendJid("1555@s.whatsapp.net");
     expectSendContentFields(0, {
       document: payload,
-      fileName: "file",
+      fileName: "file.pdf",
       caption: "doc",
       mimetype: "application/pdf",
+    });
+  });
+
+  it("uses MIME mappings for text document filename fallbacks", async () => {
+    const payload = Buffer.from("a,b\n1,2\n");
+    await api.sendMessage("+1555", "doc", payload, "text/csv");
+
+    expectSendContentFields(0, {
+      document: payload,
+      fileName: "file.csv",
+      caption: "doc",
+      mimetype: "text/csv",
+    });
+  });
+
+  it("keeps the plain default document filename when MIME has no extension mapping", async () => {
+    const payload = Buffer.from("unknown");
+    await api.sendMessage("+1555", "doc", payload, "application/x-custom");
+
+    expectSendContentFields(0, {
+      document: payload,
+      fileName: "file",
+      caption: "doc",
+      mimetype: "application/x-custom",
+    });
+  });
+
+  it("sends visual media as document when sendOptions.asDocument is true", async () => {
+    const payload = Buffer.from("img");
+    await api.sendMessage("+1555", "promo", payload, "image/png", {
+      asDocument: true,
+      fileName: "promo.png",
+    });
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        document: payload,
+        fileName: "promo.png",
+        caption: "promo",
+        mimetype: "image/png",
+      }),
+    );
+  });
+
+  it("uses MIME-aware filename fallback for forced visual documents", async () => {
+    const payload = Buffer.from("img");
+    await api.sendMessage("+1555", "promo", payload, "image/png", {
+      asDocument: true,
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith(
+      "1555@s.whatsapp.net",
+      expect.objectContaining({
+        document: payload,
+        fileName: "file.png",
+        caption: "promo",
+        mimetype: "image/png",
+      }),
+    );
+  });
+
+  it("does not force audio media onto the document branch", async () => {
+    const payload = Buffer.from("aud");
+    await api.sendMessage("+1555", "voice", payload, "audio/ogg", {
+      asDocument: true,
+      fileName: "voice.ogg",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
+      audio: payload,
+      ptt: true,
+      mimetype: "audio/ogg",
     });
   });
 
@@ -136,6 +224,72 @@ describe("createWebSendApi", () => {
       channel: "whatsapp",
       accountId: "main",
       direction: "outbound",
+    });
+  });
+
+  it("sends structured contact messages through the canonical send path", async () => {
+    const res = await api.sendContact("+1555", {
+      displayName: "QA Contact",
+      vcard: "BEGIN:VCARD\nFN:QA Contact\nEND:VCARD",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
+      contacts: {
+        displayName: "QA Contact",
+        contacts: [
+          {
+            displayName: "QA Contact",
+            vcard: "BEGIN:VCARD\nFN:QA Contact\nEND:VCARD",
+          },
+        ],
+      },
+    });
+    expectSendResultFields(res, {
+      kind: "contact",
+      messageId: "msg-1",
+      providerAccepted: true,
+    });
+    expect(recordChannelActivity).toHaveBeenCalledWith({
+      channel: "whatsapp",
+      accountId: "main",
+      direction: "outbound",
+    });
+  });
+
+  it("sends structured location messages through the canonical send path", async () => {
+    const res = await api.sendLocation("+1555", {
+      degreesLatitude: 37.7749,
+      degreesLongitude: -122.4194,
+      name: "QA Location",
+    });
+
+    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
+      location: {
+        address: undefined,
+        degreesLatitude: 37.7749,
+        degreesLongitude: -122.4194,
+        name: "QA Location",
+      },
+    });
+    expectSendResultFields(res, {
+      kind: "location",
+      messageId: "msg-1",
+      providerAccepted: true,
+    });
+  });
+
+  it("sends structured sticker messages through the canonical send path", async () => {
+    const payload = Buffer.from("webp");
+    const res = await api.sendSticker("+1555", payload);
+
+    expect(sendMessage).toHaveBeenCalledWith("1555@s.whatsapp.net", {
+      sticker: payload,
+      mimetype: "image/webp",
+    });
+    expectSendResultFields(res, {
+      kind: "sticker",
+      messageId: "msg-1",
+      providerAccepted: true,
     });
   });
 
@@ -175,6 +329,30 @@ describe("createWebSendApi", () => {
     });
   });
 
+  it("prepopulates image thumbnails and dimensions before Baileys media upload", async () => {
+    const payload = Buffer.from("img");
+    const thumbnail = Buffer.from("thumb");
+    imageOps.getImageMetadata.mockResolvedValueOnce({ width: 640, height: 480 });
+    imageOps.resizeToJpeg.mockResolvedValueOnce(thumbnail);
+
+    await api.sendMessage("+1555", "cap", payload, "image/png");
+
+    expect(imageOps.resizeToJpeg).toHaveBeenCalledWith({
+      buffer: payload,
+      maxSide: 32,
+      quality: 50,
+      withoutEnlargement: true,
+    });
+    expectSendContentFields(0, {
+      image: payload,
+      caption: "cap",
+      mimetype: "image/png",
+      jpegThumbnail: thumbnail.toString("base64"),
+      width: 640,
+      height: 480,
+    });
+  });
+
   it("adds native mention metadata to group media captions", async () => {
     api = createWebSendApi({
       sock: { sendMessage, sendPresenceUpdate },
@@ -196,6 +374,39 @@ describe("createWebSendApi", () => {
       caption: "cap @15551234567",
       mimetype: "image/jpeg",
       mentions: ["15551234567@s.whatsapp.net"],
+    });
+  });
+
+  it("uses resolved mention caption text for forced-document media", async () => {
+    api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      resolveOutboundMentions: ({ jid, text }) =>
+        resolveWhatsAppOutboundMentions({
+          chatJid: jid,
+          text,
+          participants: [
+            {
+              id: "277038292303944:4@lid",
+              phoneNumber: "5511976136970@s.whatsapp.net",
+            },
+          ],
+        }),
+    });
+    const payload = Buffer.from("img");
+
+    await api.sendMessage("120363000000000000@g.us", "cap @+5511976136970", payload, "image/jpeg", {
+      asDocument: true,
+      fileName: "promo.jpg",
+    });
+
+    expectFirstSendJid("120363000000000000@g.us");
+    expectSendContentFields(0, {
+      document: payload,
+      fileName: "promo.jpg",
+      caption: "cap @277038292303944",
+      mimetype: "image/jpeg",
+      mentions: ["277038292303944@lid"],
     });
   });
 
@@ -450,6 +661,28 @@ describe("createWebSendApi LID resolution (issue #67378)", () => {
       "send poll payload",
     );
     expect("poll" in payload).toBe(true);
+  });
+
+  it("resolves PN to LID for sendReaction", async () => {
+    const api = createWebSendApi({
+      sock: { sendMessage, sendPresenceUpdate },
+      defaultAccountId: "main",
+      authDir,
+    });
+    await api.sendReaction("+15555550000", "msg-2", "1️⃣", true);
+    expect(requireMockArg(sendMessage, 0, 0, "send reaction")).toBe("987654@lid");
+    const payload = requireRecord(
+      requireMockArg(sendMessage, 0, 1, "send reaction"),
+      "send reaction payload",
+    );
+    const react = requireRecord(payload.react, "reaction content");
+    expect(react.text).toBe("1️⃣");
+    expect(requireRecord(react.key, "reaction key")).toMatchObject({
+      remoteJid: "987654@lid",
+      id: "msg-2",
+      fromMe: true,
+    });
+    expect(requireRecord(react.key, "reaction key").participant).toBeUndefined();
   });
 
   it("resolves PN to LID for sendComposingTo presence", async () => {

@@ -1,3 +1,4 @@
+// Covers channel-configured checks from bootstrap and plugin metadata.
 import { describe, expect, it, vi } from "vitest";
 import { isChannelConfigured } from "./channel-configured.js";
 
@@ -42,6 +43,38 @@ describe("isChannelConfigured", () => {
         {},
       ),
     ).toBe(true);
+  });
+
+  it("treats explicit enabled channel config as configured state", () => {
+    expect(
+      isChannelConfigured(
+        {
+          channels: {
+            "openclaw-weixin": {
+              enabled: true,
+            },
+          },
+        },
+        "openclaw-weixin",
+        {},
+      ),
+    ).toBe(true);
+  });
+
+  it("does not treat disabled channel config as configured state", () => {
+    expect(
+      isChannelConfigured(
+        {
+          channels: {
+            "openclaw-weixin": {
+              enabled: false,
+            },
+          },
+        },
+        "openclaw-weixin",
+        {},
+      ),
+    ).toBe(false);
   });
 
   it("does not treat persisted Matrix credentials as configured channel state", () => {

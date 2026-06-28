@@ -1,10 +1,12 @@
 #!/usr/bin/env node
+// Routes UI package commands through the repo's Node/pnpm wrappers.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { buildCmdExeCommandLine } from "./windows-cmd-helpers.mjs";
+import { resolvePnpmRunner } from "./pnpm-runner.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repoRoot = path.resolve(here, "..");
@@ -17,42 +19,9 @@ function usage() {
   process.stderr.write("Usage: node scripts/ui.js <install|dev|build|test> [...args]\n");
 }
 
-function which(cmd) {
-  try {
-    const key = process.platform === "win32" ? "Path" : "PATH";
-    const paths = (process.env[key] ?? process.env.PATH ?? "")
-      .split(path.delimiter)
-      .filter(Boolean);
-    const extensions =
-      process.platform === "win32"
-        ? (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";").filter(Boolean)
-        : [""];
-    for (const entry of paths) {
-      for (const ext of extensions) {
-        const candidate = path.join(entry, process.platform === "win32" ? `${cmd}${ext}` : cmd);
-        try {
-          if (fs.existsSync(candidate)) {
-            return candidate;
-          }
-        } catch {
-          // ignore
-        }
-      }
-    }
-  } catch {
-    // ignore
-  }
-  return null;
-}
-
-function resolveRunner() {
-  const pnpm = which("pnpm");
-  if (pnpm) {
-    return { cmd: pnpm, kind: "pnpm" };
-  }
-  return null;
-}
-
+/**
+ * Returns whether Windows needs cmd.exe for a command shim.
+ */
 export function shouldUseCmdExeForCommand(cmd, platform = process.platform) {
   if (platform !== "win32") {
     return false;
@@ -61,9 +30,11 @@ export function shouldUseCmdExeForCommand(cmd, platform = process.platform) {
   return WINDOWS_CMD_EXE_EXTENSIONS.has(extension);
 }
 
+/**
+ * Builds the spawn call for a UI command, including Windows cmd.exe wrapping.
+ */
 export function resolveSpawnCall(cmd, args, envOverride, params = {}) {
   const platform = params.platform ?? process.platform;
-  const comSpec = params.comSpec ?? process.env.ComSpec ?? "cmd.exe";
   const options = {
     cwd: params.cwd ?? uiDir,
     stdio: "inherit",
@@ -72,6 +43,7 @@ export function resolveSpawnCall(cmd, args, envOverride, params = {}) {
   };
 
   if (shouldUseCmdExeForCommand(cmd, platform)) {
+    const comSpec = params.comSpec ?? resolveWindowsCmdExePath(options.env);
     return {
       command: comSpec,
       args: ["/d", "/s", "/c", buildCmdExeCommandLine(cmd, args)],
@@ -89,44 +61,211 @@ export function resolveSpawnCall(cmd, args, envOverride, params = {}) {
   };
 }
 
-function run(cmd, args) {
-  const { command, args: spawnArgs, options } = resolveSpawnCall(cmd, args);
+/**
+ * Builds the pnpm-backed spawn call for UI package scripts.
+ */
+export function resolvePnpmSpawnCall(pnpmArgs, envOverride, params = {}) {
+  const env = envOverride ?? process.env;
+  const platform = params.platform ?? process.platform;
+  const cwd = params.cwd ?? uiDir;
+  const runner = resolvePnpmRunner({
+    cwd,
+    env,
+    pnpmArgs,
+    nodeExecPath: params.nodeExecPath ?? process.execPath,
+    npmExecPath: params.npmExecPath ?? env.npm_execpath,
+    comSpec: params.comSpec,
+    platform,
+  });
+  return {
+    command: runner.command,
+    args: runner.args,
+    options: {
+      cwd,
+      stdio: "inherit",
+      env,
+      shell: runner.shell,
+      windowsVerbatimArguments: runner.windowsVerbatimArguments,
+    },
+  };
+}
+
+function runSpawnCall(spawnCall, label) {
+  const { command, args: spawnArgs, options } = spawnCall;
   let child;
   try {
     child = spawn(command, spawnArgs, options);
   } catch (err) {
-    console.error(`Failed to launch ${cmd}:`, err);
+    console.error(`Failed to launch ${label}:`, err);
     process.exit(1);
     return;
   }
 
+  let forwardedSignal = null;
+  let forwardedSignalPids = [];
+  let forceKillTimer = null;
+  let forwardedSignalDrainTimer = null;
+  const clearForwardedSignalTimers = () => {
+    if (forceKillTimer) {
+      clearTimeout(forceKillTimer);
+      forceKillTimer = null;
+    }
+    if (forwardedSignalDrainTimer) {
+      clearInterval(forwardedSignalDrainTimer);
+      forwardedSignalDrainTimer = null;
+    }
+  };
+  const finishForwardedSignal = () => {
+    cleanupSignalHandlers();
+    process.kill(process.pid, forwardedSignal);
+  };
+  const waitForForwardedSignalChildren = () => {
+    if (!forwardedSignal || processTreeIsAlive(forwardedSignalPids)) {
+      return;
+    }
+    finishForwardedSignal();
+  };
+  // Keep UI dev children in the foreground process group for native TTY
+  // resize/job-control behavior. Forward wrapper shutdown signals to the
+  // captured child tree instead of using a detached process group.
+  const forwardedSignals = ["SIGTERM", "SIGHUP"];
+  const signalHandlers = new Map(
+    forwardedSignals.map((signal) => [
+      signal,
+      () => {
+        if (!forwardedSignal) {
+          forwardedSignal = signal;
+          forwardedSignalPids = collectChildProcessTreePids(child);
+          signalProcessTree(child, signal, forwardedSignalPids);
+          forwardedSignalDrainTimer = setInterval(waitForForwardedSignalChildren, 25);
+          forceKillTimer = setTimeout(() => {
+            signalProcessTree(child, "SIGKILL", forwardedSignalPids);
+          }, 5_000);
+          forceKillTimer.unref?.();
+        }
+      },
+    ]),
+  );
+  const cleanupSignalHandlers = () => {
+    for (const [signal, handler] of signalHandlers) {
+      process.off(signal, handler);
+    }
+    clearForwardedSignalTimers();
+  };
+  for (const [signal, handler] of signalHandlers) {
+    process.on(signal, handler);
+  }
+
   child.on("error", (err) => {
-    console.error(`Failed to launch ${cmd}:`, err);
+    cleanupSignalHandlers();
+    console.error(`Failed to launch ${label}:`, err);
     process.exit(1);
   });
-  child.on("exit", (code) => {
+  child.on("exit", (code, signal) => {
+    if (forwardedSignal) {
+      waitForForwardedSignalChildren();
+      return;
+    }
+    cleanupSignalHandlers();
+    if (signal) {
+      process.kill(process.pid, signal);
+      return;
+    }
     if (code !== 0) {
       process.exit(code ?? 1);
     }
   });
 }
 
-function runSync(cmd, args, envOverride) {
-  const { command, args: spawnArgs, options } = resolveSpawnCall(cmd, args, envOverride);
+function collectChildProcessTreePids(child) {
+  if (process.platform === "win32" || typeof child.pid !== "number") {
+    return typeof child.pid === "number" ? [child.pid] : [];
+  }
+  const ps = spawnSync("ps", ["-axo", "pid=,ppid="], { encoding: "utf8" });
+  if (ps.status !== 0) {
+    return [child.pid];
+  }
+  const childrenByParent = new Map();
+  for (const line of ps.stdout.split("\n")) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)$/u);
+    if (!match) {
+      continue;
+    }
+    const pid = Number(match[1]);
+    const ppid = Number(match[2]);
+    const siblings = childrenByParent.get(ppid) ?? [];
+    siblings.push(pid);
+    childrenByParent.set(ppid, siblings);
+  }
+  const pids = [child.pid];
+  for (const parentPid of pids) {
+    for (const pid of childrenByParent.get(parentPid) ?? []) {
+      pids.push(pid);
+    }
+  }
+  return [...new Set(pids)];
+}
+
+function processTreeIsAlive(pids) {
+  return pids.some((pid) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      return error?.code === "EPERM";
+    }
+  });
+}
+
+function signalProcessTree(child, signal, pids) {
+  if (process.platform === "win32") {
+    child.kill(signal);
+    return;
+  }
+  if (pids.length === 0) {
+    child.kill(signal);
+    return;
+  }
+  for (const pid of pids.toReversed()) {
+    try {
+      process.kill(pid, signal);
+    } catch (error) {
+      if (error?.code !== "ESRCH") {
+        throw error;
+      }
+    }
+  }
+}
+
+function run(cmd, args) {
+  runSpawnCall(resolveSpawnCall(cmd, args), cmd);
+}
+
+function runPnpm(args, envOverride) {
+  runSpawnCall(resolvePnpmSpawnCall(args, envOverride), "pnpm");
+}
+
+function runSpawnCallSync(spawnCall, label) {
+  const { command, args: spawnArgs, options } = spawnCall;
   let result;
   try {
     result = spawnSync(command, spawnArgs, options);
   } catch (err) {
-    console.error(`Failed to launch ${cmd}:`, err);
+    console.error(`Failed to launch ${label}:`, err);
     process.exit(1);
     return;
   }
   if (result.signal) {
-    process.exit(1);
+    process.kill(process.pid, result.signal);
+    return;
   }
   if ((result.status ?? 1) !== 0) {
     process.exit(result.status ?? 1);
   }
+}
+
+function runPnpmSync(args, envOverride) {
+  runSpawnCallSync(resolvePnpmSpawnCall(args, envOverride), "pnpm");
 }
 
 function depsInstalled(kind) {
@@ -168,36 +307,54 @@ export function main(argv = process.argv.slice(2)) {
     process.exit(2);
   }
 
-  const runner = resolveRunner();
-  if (!runner) {
-    process.stderr.write("Missing UI runner: install pnpm, then retry.\n");
-    process.exit(1);
-  }
-
   const script = resolveScriptAction(action);
   if (action !== "install" && !script) {
     usage();
     process.exit(2);
   }
 
+  if (process.env.OPENCLAW_BUILD_ALL_NO_PNPM === "1" && action === "build") {
+    run(process.execPath, [path.join(repoRoot, "node_modules/vite/bin/vite.js"), "build", ...rest]);
+    return;
+  }
+
   if (action === "install") {
-    run(runner.cmd, ["install", ...rest]);
+    runPnpm(["install", ...rest]);
     return;
   }
 
   if (!depsInstalled(action === "test" ? "test" : "build")) {
     const installEnv = process.env;
     const installArgs = ["install"];
-    runSync(runner.cmd, installArgs, installEnv);
+    runPnpmSync(installArgs, installEnv);
   }
 
-  run(runner.cmd, ["run", script, ...rest]);
+  runPnpm(["run", script, ...rest]);
 }
 
-const isDirectExecution = (() => {
-  const entry = process.argv[1];
-  return Boolean(entry && path.resolve(entry) === fileURLToPath(import.meta.url));
-})();
+export function resolveDirectExecutionPath(entry, realpath = fs.realpathSync.native) {
+  const resolved = path.resolve(entry);
+  try {
+    return realpath(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
+export function isDirectScriptExecution(
+  entry = process.argv[1],
+  scriptPath = fileURLToPath(import.meta.url),
+  realpath = fs.realpathSync.native,
+) {
+  if (!entry) {
+    return false;
+  }
+  return (
+    resolveDirectExecutionPath(entry, realpath) === resolveDirectExecutionPath(scriptPath, realpath)
+  );
+}
+
+const isDirectExecution = isDirectScriptExecution();
 
 if (isDirectExecution) {
   main();

@@ -1,3 +1,4 @@
+// Discord plugin module implements listeners.reactions behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -501,7 +502,6 @@ async function handleDiscordReactionEvent(
       enqueueSystemEvent(text, {
         sessionKey: route.sessionKey,
         contextKey,
-        trusted: false,
       });
     };
     const shouldNotifyReaction = (options: {

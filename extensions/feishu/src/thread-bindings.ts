@@ -1,3 +1,4 @@
+// Feishu plugin module implements thread bindings behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   resolveThreadBindingIdleTimeoutMsForChannel,
@@ -163,7 +164,7 @@ export function createFeishuThreadBindingManager(params: {
       if (!normalizedConversationId || !normalizedTargetSessionKey) {
         return null;
       }
-      const existing = getState().bindingsByAccountConversation.get(
+      const existingLocal = getState().bindingsByAccountConversation.get(
         resolveBindingKey({ accountId, conversationId: normalizedConversationId }),
       );
       const now = Date.now();
@@ -171,29 +172,29 @@ export function createFeishuThreadBindingManager(params: {
         accountId,
         conversationId: normalizedConversationId,
         parentConversationId:
-          normalizeOptionalString(parentConversationId) ?? existing?.parentConversationId,
+          normalizeOptionalString(parentConversationId) ?? existingLocal?.parentConversationId,
         deliveryTo:
           typeof metadata?.deliveryTo === "string" && metadata.deliveryTo.trim()
             ? metadata.deliveryTo.trim()
-            : existing?.deliveryTo,
+            : existingLocal?.deliveryTo,
         deliveryThreadId:
           typeof metadata?.deliveryThreadId === "string" && metadata.deliveryThreadId.trim()
             ? metadata.deliveryThreadId.trim()
-            : existing?.deliveryThreadId,
+            : existingLocal?.deliveryThreadId,
         targetKind: toFeishuTargetKind(targetKind),
         targetSessionKey: normalizedTargetSessionKey,
         agentId:
           typeof metadata?.agentId === "string" && metadata.agentId.trim()
             ? metadata.agentId.trim()
-            : (existing?.agentId ?? resolveAgentIdFromSessionKey(normalizedTargetSessionKey)),
+            : (existingLocal?.agentId ?? resolveAgentIdFromSessionKey(normalizedTargetSessionKey)),
         label:
           typeof metadata?.label === "string" && metadata.label.trim()
             ? metadata.label.trim()
-            : existing?.label,
+            : existingLocal?.label,
         boundBy:
           typeof metadata?.boundBy === "string" && metadata.boundBy.trim()
             ? metadata.boundBy.trim()
-            : existing?.boundBy,
+            : existingLocal?.boundBy,
         boundAt: now,
         lastActivityAt: now,
       };
@@ -319,7 +320,7 @@ export function getFeishuThreadBindingManager(
   return getState().managersByAccountId.get(normalizeAccountId(accountId)) ?? null;
 }
 
-export const __testing = {
+export const testing = {
   resetFeishuThreadBindingsForTests() {
     for (const manager of getState().managersByAccountId.values()) {
       manager.stop();
@@ -328,3 +329,4 @@ export const __testing = {
     getState().bindingsByAccountConversation.clear();
   },
 };
+export { testing as __testing };

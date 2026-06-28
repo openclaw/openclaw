@@ -1,3 +1,4 @@
+// Feishu tests cover card ux launcher plugin behavior.
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterAll, describe, expect, it, vi, beforeEach } from "vitest";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
@@ -86,6 +87,25 @@ describe("feishu quick-action launcher", () => {
     expect(sendArgs?.accountId).toBe("main");
     expectSentCardHasP2pAction(sendCardFeishuMock);
     expectFirstSentCardUsesFillWidthOnly(sendCardFeishuMock);
+  });
+
+  it("does not send launcher cards when expiry would exceed a valid Date", async () => {
+    const runtime: RuntimeEnv = createRuntimeEnv();
+
+    const handled = await maybeHandleFeishuQuickActionMenu({
+      cfg,
+      eventKey: "quick-actions",
+      operatorOpenId: "u123",
+      accountId: "main",
+      runtime,
+      now: 8_640_000_000_000_000,
+    });
+
+    expect(handled).toBe(false);
+    expect(sendCardFeishuMock).not.toHaveBeenCalled();
+    expect(runtime.log).toHaveBeenCalledWith(
+      "feishu[main]: failed to open quick-action launcher for u123: invalid expiry clock",
+    );
   });
 
   it("falls back to legacy menu handling when launcher send fails", async () => {

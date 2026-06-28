@@ -1,17 +1,23 @@
+// Qa Matrix plugin module implements runtime behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runner-runtime";
-import type { QaReportCheck } from "../../report.js";
-import { renderQaMarkdownReport } from "../../report.js";
-import { type QaProviderModeInput } from "../../run-config.js";
+import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import {
-  appendLiveLaneIssue,
-  buildLiveLaneArtifactsError,
-} from "../../shared/live-lane-helpers.js";
+  parseStrictPositiveInteger,
+  resolveTimerTimeoutMs,
+} from "openclaw/plugin-sdk/number-runtime";
+import { loadQaRuntimeModule } from "openclaw/plugin-sdk/qa-runner-runtime";
+import {
+  appendQaLiveLaneIssue as appendLiveLaneIssue,
+  buildQaLiveLaneArtifactsError as buildLiveLaneArtifactsError,
+  renderQaMarkdownReport,
+  type QaReportCheck,
+} from "openclaw/plugin-sdk/qa-runtime";
+import { normalizeQaProviderMode, type QaProviderModeInput } from "../../run-config.js";
 import { buildMatrixQaObservedEventsArtifact } from "../../substrate/artifacts.js";
 import { provisionMatrixQaRoom, type MatrixQaProvisionResult } from "../../substrate/client.js";
 import {
@@ -23,7 +29,8 @@ import {
 } from "../../substrate/config.js";
 import type { MatrixQaObservedEvent } from "../../substrate/events.js";
 import { startMatrixQaHarness } from "../../substrate/harness.runtime.js";
-import { resolveMatrixQaModels } from "./model-selection.js";
+import { createLiveTransportQaRunId } from "../../shared/live-transport-artifacts.js";
+import { resolveMatrixQaModels, type ResolvedMatrixQaModels } from "./model-selection.js";
 import type { MatrixQaSyncStreams } from "./scenario-runtime-shared.js";
 import {
   MATRIX_QA_SCENARIOS,
@@ -47,19 +54,37 @@ type MatrixQaGatewayChild = {
   ) => Promise<void>;
   restart(): Promise<void>;
   runtimeEnv?: NodeJS.ProcessEnv;
+  workspaceDir: string;
 };
 
 const DEFAULT_MATRIX_QA_RUN_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_MATRIX_QA_CLEANUP_TIMEOUT_MS = 90_000;
 const DEFAULT_MATRIX_QA_CANARY_TIMEOUT_MS = 45_000;
+const MATRIX_QA_GATEWAY_STDERR_LOG = "gateway.stderr.log";
+const MATRIX_QA_GATEWAY_DEBUG_MAX_LINES = 6;
+const MATRIX_QA_GATEWAY_DEBUG_MAX_LINE_CHARS = 700;
 
 type MatrixQaLiveLaneGatewayHarness = {
   gateway: MatrixQaGatewayChild;
   stop(opts?: { keepTemp?: boolean; preserveToDir?: string }): Promise<void>;
 };
 
-function buildMatrixQaGatewayConfigKey(overrides?: MatrixQaConfigOverrides) {
-  return JSON.stringify(overrides ?? null);
+function buildMatrixQaGatewayConfigKey(params: {
+  models?: ResolvedMatrixQaModels;
+  overrides?: MatrixQaConfigOverrides;
+  providerModeKey?: string;
+}) {
+  return JSON.stringify({
+    models: params.models
+      ? {
+          alternateModel: params.models.alternateModel,
+          primaryModel: params.models.primaryModel,
+          providerMode: params.models.providerMode,
+        }
+      : undefined,
+    overrides: params.overrides ?? null,
+    providerModeKey: params.providerModeKey,
+  });
 }
 
 const MATRIX_QA_EXECUTION_TAIL_SCENARIO_IDS = new Set(["matrix-e2ee-wrong-account-recovery-key"]);
@@ -75,6 +100,11 @@ type MatrixQaScenarioResult = {
 type MatrixQaScheduledScenario = {
   originalIndex: number;
   scenario: (typeof MATRIX_QA_SCENARIOS)[number];
+};
+
+type MatrixQaGatewaySelection = {
+  overrides?: MatrixQaConfigOverrides;
+  providerMode?: QaProviderModeInput;
 };
 
 type MatrixQaScenarioConfigEntry = MatrixQaSummary["config"]["scenarios"][number];
@@ -170,16 +200,50 @@ function writeMatrixQaProgress(message: string) {
   process.stderr.write(`[matrix-qa] ${message}\n`);
 }
 
+function isMatrixQaGatewayDebugRelevantLine(line: string) {
+  return /\b(?:auth|authorization|unauthorized|forbidden|missing|error|fail(?:ed|ure)?|exception|provider|api[-_ ]?key|token|denied|rejected|timeout)\b/iu.test(
+    line,
+  );
+}
+
+function trimMatrixQaGatewayDebugLine(line: string) {
+  const redacted = redactSensitiveText(line.trim());
+  return redacted.length > MATRIX_QA_GATEWAY_DEBUG_MAX_LINE_CHARS
+    ? `${redacted.slice(0, MATRIX_QA_GATEWAY_DEBUG_MAX_LINE_CHARS)}...`
+    : redacted;
+}
+
+function summarizeMatrixQaGatewayStderrLog(stderrText: string) {
+  const lines = stderrText.split(/\r?\n/u).map(trimMatrixQaGatewayDebugLine).filter(Boolean);
+  if (lines.length === 0) {
+    return undefined;
+  }
+
+  const relevantLines = lines.filter(isMatrixQaGatewayDebugRelevantLine);
+  const selectedLines = (relevantLines.length > 0 ? relevantLines : lines).slice(
+    -MATRIX_QA_GATEWAY_DEBUG_MAX_LINES,
+  );
+  return ["gateway stderr tail:", ...selectedLines.map((line) => `- ${line}`)].join("\n");
+}
+
+async function readMatrixQaGatewayDebugSummary(debugDirPath: string) {
+  const stderrText = await fs
+    .readFile(path.join(debugDirPath, MATRIX_QA_GATEWAY_STDERR_LOG), "utf8")
+    .catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return "";
+      }
+      throw error;
+    });
+  return summarizeMatrixQaGatewayStderrLog(stderrText);
+}
+
 function parsePositiveMatrixQaEnvMs(name: string, fallback: number) {
   const raw = process.env[name];
   if (raw === undefined) {
     return fallback;
   }
-  const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed < 1) {
-    return fallback;
-  }
-  return Math.floor(parsed);
+  return resolveTimerTimeoutMs(parseStrictPositiveInteger(raw), fallback);
 }
 
 function createMatrixQaRunDeadline() {
@@ -200,8 +264,17 @@ function resolveMatrixQaCanaryTimeoutMs() {
   );
 }
 
-function remainingMatrixQaRunMs(deadline: { deadlineMs: number }) {
-  return Math.max(1, deadline.deadlineMs - Date.now());
+function remainingMatrixQaRunMs(
+  deadline: { deadlineMs: number; timeoutMs: number },
+  label: string,
+) {
+  const remainingMs = Math.floor(deadline.deadlineMs - Date.now());
+  if (!Number.isFinite(deadline.deadlineMs) || remainingMs <= 0) {
+    throw new Error(
+      `${label} not started because Matrix QA run timed out after ${formatMatrixQaDurationMs(deadline.timeoutMs)}`,
+    );
+  }
+  return remainingMs;
 }
 
 async function withMatrixQaTimeout<T>(
@@ -231,7 +304,7 @@ async function withMatrixQaRunDeadline<T>(
   label: string,
   task: () => Promise<T>,
 ) {
-  return await withMatrixQaTimeout(label, remainingMatrixQaRunMs(deadline), task);
+  return await withMatrixQaTimeout(label, remainingMatrixQaRunMs(deadline, label), task);
 }
 
 async function cleanupMatrixQaResource(params: {
@@ -287,16 +360,20 @@ function buildMatrixQaScenarioConfigEntry(params: {
     ...params.gatewayConfigParams,
     overrides: params.scenario.configOverrides,
   });
+  const providerSummary = params.scenario.providerMode
+    ? `providerMode=${params.scenario.providerMode}`
+    : undefined;
+  const configSummary =
+    params.scenario.configOverrides === undefined
+      ? undefined
+      : summarizeMatrixQaConfigSnapshot(snapshot);
   return {
     entry: {
       config: snapshot,
       id: params.scenario.id,
       title: params.scenario.title,
     },
-    summary:
-      params.scenario.configOverrides === undefined
-        ? undefined
-        : summarizeMatrixQaConfigSnapshot(snapshot),
+    summary: [providerSummary, configSummary].filter(Boolean).join(", ") || undefined,
   };
 }
 
@@ -335,7 +412,10 @@ function scheduleMatrixQaScenariosInCatalogOrder(
       tailEntries.push(entry);
       continue;
     }
-    const key = buildMatrixQaGatewayConfigKey(entry.scenario.configOverrides);
+    const key = buildMatrixQaGatewayConfigKey({
+      overrides: entry.scenario.configOverrides,
+      providerModeKey: entry.scenario.providerMode ?? "suite",
+    });
     const existingIndex = groupIndexes.get(key);
     if (existingIndex !== undefined) {
       groupedEntries[existingIndex]?.push(entry);
@@ -346,6 +426,38 @@ function scheduleMatrixQaScenariosInCatalogOrder(
   }
 
   return [...groupedEntries.flat(), ...tailEntries];
+}
+
+function selectMatrixQaCanaryProviderMode(
+  scheduledScenarios: readonly MatrixQaScheduledScenario[],
+): QaProviderModeInput | undefined {
+  let selectedProviderMode: QaProviderModeInput | undefined;
+  for (const { scenario } of scheduledScenarios) {
+    if (!scenario.providerMode) {
+      return undefined;
+    }
+    if (!selectedProviderMode) {
+      selectedProviderMode = scenario.providerMode;
+      continue;
+    }
+    if (scenario.providerMode !== selectedProviderMode) {
+      return undefined;
+    }
+  }
+  return selectedProviderMode;
+}
+
+function resolveMatrixQaGatewayModels(params: {
+  defaultModels: ResolvedMatrixQaModels;
+  providerMode?: QaProviderModeInput;
+}): ResolvedMatrixQaModels {
+  if (!params.providerMode) {
+    return params.defaultModels;
+  }
+  const providerMode = normalizeQaProviderMode(params.providerMode);
+  return providerMode === params.defaultModels.providerMode
+    ? params.defaultModels
+    : resolveMatrixQaModels({ providerMode });
 }
 
 function getMatrixQaScenarioRestartReadyTimeoutMs(scenario: { timeoutMs: number }): number {
@@ -434,13 +546,16 @@ async function waitForMatrixChannelReady(
   const pollMs = opts?.pollMs ?? 500;
   const timeoutMs = opts?.timeoutMs ?? 60_000;
   const startedAt = Date.now();
+  const deadlineMs = startedAt + timeoutMs;
   let lastAccounts: unknown;
-  while (Date.now() - startedAt < timeoutMs) {
+  while (Date.now() < deadlineMs) {
+    const remainingMs = Math.max(1, deadlineMs - Date.now());
+    const statusTimeoutMs = Math.min(5_000, remainingMs);
     try {
       const payload = (await gateway.call(
         "channels.status",
-        { probe: false, timeoutMs: 2_000 },
-        { timeoutMs: 5_000 },
+        { probe: false, timeoutMs: Math.min(2_000, statusTimeoutMs) },
+        { timeoutMs: statusTimeoutMs },
       )) as {
         channelAccounts?: Record<
           string,
@@ -462,7 +577,7 @@ async function waitForMatrixChannelReady(
     } catch {
       // retry
     }
-    await sleep(pollMs);
+    await sleep(Math.min(pollMs, Math.max(1, deadlineMs - Date.now())));
   }
   throw new Error(
     `matrix account "${accountId}" did not become ready; last matrix accounts: ${JSON.stringify(
@@ -474,6 +589,7 @@ async function waitForMatrixChannelReady(
 async function patchMatrixQaGatewayConfig(params: {
   gateway: MatrixQaGatewayChild;
   patch: Record<string, unknown>;
+  replacePaths?: string[];
   restartDelayMs?: number;
 }) {
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -489,6 +605,7 @@ async function patchMatrixQaGatewayConfig(params: {
         {
           raw: JSON.stringify(params.patch, null, 2),
           baseHash: snapshot.hash,
+          ...(params.replacePaths?.length ? { replacePaths: params.replacePaths } : {}),
           restartDelayMs: params.restartDelayMs ?? 0,
         },
         { timeoutMs: 60_000 },
@@ -505,6 +622,13 @@ async function patchMatrixQaGatewayConfig(params: {
 
 function isMatrixQaStaleConfigPatchError(error: unknown) {
   return formatErrorMessage(error).toLowerCase().includes("config changed since last load");
+}
+
+function resolveMatrixQaOutputDir(params: { outputDir?: string; repoRoot: string }) {
+  return (
+    params.outputDir ??
+    path.join(params.repoRoot, ".artifacts", "qa-e2e", `matrix-${createLiveTransportQaRunId()}`)
+  );
 }
 
 async function startMatrixQaLiveLaneGateway(params: {
@@ -541,16 +665,15 @@ export async function runMatrixQaLive(params: {
   alternateModel?: string;
 }): Promise<MatrixQaRunResult> {
   const repoRoot = path.resolve(params.repoRoot ?? process.cwd());
-  const outputDir =
-    params.outputDir ??
-    path.join(repoRoot, ".artifacts", "qa-e2e", `matrix-${Date.now().toString(36)}`);
+  const outputDir = resolveMatrixQaOutputDir({ outputDir: params.outputDir, repoRoot });
   await fs.mkdir(outputDir, { recursive: true });
 
-  const { providerMode, primaryModel, alternateModel } = resolveMatrixQaModels({
+  const defaultModels = resolveMatrixQaModels({
     providerMode: params.providerMode,
     primaryModel: params.primaryModel,
     alternateModel: params.alternateModel,
   });
+  const { providerMode } = defaultModels;
   const sutAccountId = params.sutAccountId?.trim() || "sut";
   const scenarios = findMatrixQaScenarios(params.scenarioIds, params.profile);
   const runSuffix = randomUUID().slice(0, 8);
@@ -632,7 +755,7 @@ export async function runMatrixQaLive(params: {
   const syncState: { driver?: string; observer?: string } = {};
   const syncStreams: MatrixQaSyncStreams = {};
   let canaryMs: number | undefined;
-  let initialGatewayBootMs = 0;
+  let initialGatewayBootMs;
   let scenarioGatewayBootMs = 0;
   let scenarioRestartGatewayMs = 0;
   let scenarioTransportInterruptMs = 0;
@@ -655,8 +778,16 @@ export async function runMatrixQaLive(params: {
   const scheduledScenarios = scheduleMatrixQaScenariosInCatalogOrder(scenarios);
 
   try {
-    const ensureGatewayHarness = async (overrides?: MatrixQaConfigOverrides) => {
-      const nextKey = buildMatrixQaGatewayConfigKey(overrides);
+    const ensureGatewayHarness = async (selection: MatrixQaGatewaySelection = {}) => {
+      const models = resolveMatrixQaGatewayModels({
+        defaultModels,
+        providerMode: selection.providerMode,
+      });
+      const overrides = selection.overrides;
+      const nextKey = buildMatrixQaGatewayConfigKey({
+        models,
+        overrides,
+      });
       if (gatewayHarness && gatewayHarnessKey === nextKey) {
         return {
           durationMs: 0,
@@ -681,9 +812,9 @@ export async function runMatrixQaLive(params: {
               createGatewayConfig: () => ({}),
             },
             transportBaseUrl: "http://127.0.0.1:43123",
-            providerMode,
-            primaryModel,
-            alternateModel,
+            providerMode: models.providerMode,
+            primaryModel: models.primaryModel,
+            alternateModel: models.alternateModel,
             fastMode: params.fastMode,
             controlUiEnabled: false,
             mutateConfig: (cfg) =>
@@ -706,7 +837,9 @@ export async function runMatrixQaLive(params: {
     };
 
     {
-      const ensured = await ensureGatewayHarness();
+      const ensured = await ensureGatewayHarness({
+        providerMode: selectMatrixQaCanaryProviderMode(scheduledScenarios),
+      });
       gatewayHarness = ensured.harness;
       initialGatewayBootMs = ensured.durationMs;
     }
@@ -768,7 +901,10 @@ export async function runMatrixQaLive(params: {
         let transportInterruptMs = 0;
         try {
           writeMatrixQaProgress(`scenario start ${scenario.id}`);
-          const scenarioGateway = await ensureGatewayHarness(scenario.configOverrides);
+          const scenarioGateway = await ensureGatewayHarness({
+            overrides: scenario.configOverrides,
+            providerMode: scenario.providerMode,
+          });
           gatewayBootMs = scenarioGateway.durationMs;
           scenarioGatewayBootMs += gatewayBootMs;
           const measuredScenario = await measureMatrixQaStep(() =>
@@ -801,8 +937,9 @@ export async function runMatrixQaLive(params: {
                 observerUserId: provisioning.observer.userId,
                 gatewayRuntimeEnv: scenarioGateway.harness.gateway.runtimeEnv,
                 gatewayStateDir: scenarioGateway.harness.gateway.runtimeEnv?.OPENCLAW_STATE_DIR,
-                gatewayCall: async (method, params, opts) =>
-                  await scenarioGateway.harness.gateway.call(method, params ?? {}, opts),
+                gatewayWorkspaceDir: scenarioGateway.harness.gateway.workspaceDir,
+                gatewayCall: async (method, paramsLocal, opts) =>
+                  await scenarioGateway.harness.gateway.call(method, paramsLocal ?? {}, opts),
                 outputDir,
                 registrationToken: harness.registrationToken,
                 restartGateway: async () => {
@@ -886,6 +1023,7 @@ export async function runMatrixQaLive(params: {
                   await patchMatrixQaGatewayConfig({
                     gateway: scenarioGateway.harness.gateway,
                     patch,
+                    replacePaths: opts?.replacePaths,
                     restartDelayMs: opts?.restartDelayMs,
                   });
                 },
@@ -981,11 +1119,16 @@ export async function runMatrixQaLive(params: {
       details: cleanupErrors.join("\n"),
     });
   }
+  const gatewayDebugSummary = preservedGatewayDebugDirPath
+    ? await readMatrixQaGatewayDebugSummary(preservedGatewayDebugDirPath)
+    : undefined;
   if (preservedGatewayDebugDirPath) {
     checks.push({
       name: "Matrix gateway debug logs",
       status: "pass",
-      details: `preserved at: ${preservedGatewayDebugDirPath}`,
+      details: [`preserved at: ${preservedGatewayDebugDirPath}`, gatewayDebugSummary]
+        .filter(Boolean)
+        .join("\n"),
     });
   }
 
@@ -1099,6 +1242,7 @@ export async function runMatrixQaLive(params: {
         details: [
           ...failedChecks.map((check) => `check ${check.name}: ${check.details ?? "failed"}`),
           ...failedScenarios.map((scenario) => `scenario ${scenario.id}: ${scenario.details}`),
+          ...(gatewayDebugSummary ? [`gateway debug: ${gatewayDebugSummary}`] : []),
           ...cleanupErrors.map((error) => `cleanup: ${error}`),
         ],
         artifacts: artifactPaths,
@@ -1124,10 +1268,12 @@ export async function runMatrixQaLive(params: {
   };
 }
 
-export const __testing = {
+export const testing = {
   buildMatrixQaSummary,
   getMatrixQaScenarioRestartReadyTimeoutMs,
   scheduleMatrixQaScenariosInCatalogOrder,
+  selectMatrixQaCanaryProviderMode,
+  resolveMatrixQaGatewayModels,
   MATRIX_QA_SCENARIOS,
   buildMatrixQaConfig,
   buildMatrixQaConfigSnapshot,
@@ -1135,9 +1281,14 @@ export const __testing = {
   findMatrixQaScenarios,
   isMatrixAccountReady,
   patchMatrixQaGatewayConfig,
+  remainingMatrixQaRunMs,
+  resolveMatrixQaOutputDir,
   resolveMatrixQaCanaryTimeoutMs,
   resolveMatrixQaModels,
   shouldWriteMatrixQaProgress,
+  summarizeMatrixQaGatewayStderrLog,
   summarizeMatrixQaConfigSnapshot,
   waitForMatrixChannelReady,
+  withMatrixQaRunDeadline,
 };
+export { testing as __testing };

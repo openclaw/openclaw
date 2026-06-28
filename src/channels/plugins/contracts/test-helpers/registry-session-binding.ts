@@ -1,3 +1,8 @@
+/**
+ * Session binding contract registry fixtures.
+ *
+ * Builds bundled channel binding contract entries and hermetic plugin-state stores.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";
@@ -8,6 +13,11 @@ import {
   type SessionBindingRecord,
 } from "../../../../infra/outbound/session-binding-service.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../../infra/tmp-openclaw-dir.js";
+import type { OpenKeyedStoreOptions } from "../../../../plugin-sdk/plugin-state-runtime.js";
+import {
+  createPluginStateKeyedStoreForTests,
+  resetPluginStateStoreForTests,
+} from "../../../../plugin-sdk/plugin-state-test-runtime.js";
 import { setActivePluginRegistry } from "../../../../plugins/runtime.js";
 import { createTestRegistry } from "../../../../test-utils/channel-plugins.js";
 import { createChannelConversationBindingManager } from "../../conversation-bindings.js";
@@ -26,6 +36,7 @@ type SessionBindingContractEntry = {
   bindAndResolve: () => Promise<SessionBindingRecord>;
   unbindAndVerify: (binding: SessionBindingRecord) => Promise<void>;
   cleanup: () => Promise<void> | void;
+  preload?: () => Promise<void> | void;
   beforeEach?: () => Promise<void> | void;
 };
 const contractApiPromises = new Map<string, Promise<Record<string, unknown>>>();
@@ -45,7 +56,7 @@ async function getContractApi<T extends Record<string, unknown>>(pluginId: strin
   if (existing) {
     return (await existing) as T;
   }
-  const next = importBundledChannelContractArtifact<T>(pluginId, "contract-api");
+  const next = importBundledChannelContractArtifact<T>(pluginId, "session-binding-contract-api");
   contractApiPromises.set(pluginId, next);
   return await next;
 }
@@ -94,6 +105,7 @@ function expectClearedSessionBinding(params: {
 }
 
 function resetMatrixSessionBindingStateDir() {
+  resetPluginStateStoreForTests();
   fs.rmSync(matrixSessionBindingStateDir, { recursive: true, force: true });
   fs.mkdirSync(matrixSessionBindingStateDir, { recursive: true });
 }
@@ -104,6 +116,8 @@ async function createContractMatrixThreadBindingManager() {
     await getContractApi<MatrixContractApi>("matrix");
   setMatrixRuntime({
     state: {
+      openKeyedStore: (options: OpenKeyedStoreOptions) =>
+        createPluginStateKeyedStoreForTests("matrix", options),
       resolveStateDir: () => matrixSessionBindingStateDir,
     },
   } as never);
@@ -243,6 +257,9 @@ const sessionBindingContractEntries: Record<
   Omit<SessionBindingContractEntry, "id">
 > = {
   discord: {
+    preload: async () => {
+      await getContractApi<DiscordContractApi>("discord");
+    },
     beforeEach: prepareDiscordSessionBindingContract,
     expectedCapabilities: {
       adapterAvailable: true,
@@ -304,6 +321,9 @@ const sessionBindingContractEntries: Record<
     },
   },
   feishu: {
+    preload: async () => {
+      await getContractApi<FeishuContractApi>("feishu");
+    },
     beforeEach: prepareFeishuSessionBindingContract,
     expectedCapabilities: {
       adapterAvailable: true,
@@ -365,6 +385,9 @@ const sessionBindingContractEntries: Record<
     },
   },
   imessage: {
+    preload: async () => {
+      await getContractApi<IMessageContractApi>("imessage");
+    },
     beforeEach: prepareIMessageSessionBindingContract,
     expectedCapabilities: {
       adapterAvailable: true,
@@ -428,6 +451,9 @@ const sessionBindingContractEntries: Record<
     },
   },
   matrix: {
+    preload: async () => {
+      await getContractApi<MatrixContractApi>("matrix");
+    },
     beforeEach: prepareMatrixSessionBindingContract,
     expectedCapabilities: {
       adapterAvailable: true,
@@ -479,6 +505,9 @@ const sessionBindingContractEntries: Record<
     },
   },
   telegram: {
+    preload: async () => {
+      await getContractApi<TelegramContractApi>("telegram");
+    },
     beforeEach: prepareTelegramSessionBindingContract,
     expectedCapabilities: {
       adapterAvailable: true,

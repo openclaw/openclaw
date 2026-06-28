@@ -1,5 +1,7 @@
+// Vitest shared config wires the shared test shard.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import acpCorePackageJson from "../../packages/acp-core/package.json" with { type: "json" };
 import { pluginSdkSubpaths } from "../../scripts/lib/plugin-sdk-entries.mjs";
 import privateLocalOnlyPluginSdkSubpaths from "../../scripts/lib/plugin-sdk-private-local-only-subpaths.json" with { type: "json" };
 import {
@@ -82,6 +84,29 @@ function hasWorkerOverride(env: Record<string, string | undefined>): boolean {
   return Boolean((env.OPENCLAW_VITEST_MAX_WORKERS ?? env.OPENCLAW_TEST_WORKERS)?.trim());
 }
 
+function sourcePackageAlias(packageId: string, subpath?: string) {
+  return {
+    find: `@openclaw/${packageId}${subpath ? `/${subpath}` : ""}`,
+    replacement: path.join(
+      repoRoot,
+      "packages",
+      packageId,
+      "src",
+      ...(subpath ? subpath.split("/") : ["index"]).map((part, index, parts) =>
+        index === parts.length - 1 ? `${part}.ts` : part,
+      ),
+    ),
+  };
+}
+
+function sourcePackageAliasesFromExports(packageId: string, exports: Record<string, unknown>) {
+  return Object.keys(exports)
+    .map((exportKey) => (exportKey === "." ? undefined : exportKey.slice(2)))
+    .filter((subpath) => subpath === undefined || (subpath && !subpath.includes("..")))
+    .toSorted((a, b) => (a ?? "").localeCompare(b ?? ""))
+    .map((subpath) => sourcePackageAlias(packageId, subpath));
+}
+
 export function resolveSharedVitestWorkerConfig(params: {
   env?: Record<string, string | undefined>;
   isCI?: boolean;
@@ -114,6 +139,10 @@ const workerConfig = resolveSharedVitestWorkerConfig({
   isWindows,
   localScheduling,
 });
+const dependencyModuleDirectories = ["/node_modules/", "/openclaw-pnpm-node-modules/"];
+const dependencyExternalPatterns = [
+  /\/openclaw-pnpm-node-modules\/(?!.*\/?vite\w*\/dist\/client\/env\.mjs$).*\.(?:cjs\.js|mjs)$/u,
+];
 const sourcePluginSdkSubpaths = [
   ...new Set([...pluginSdkSubpaths, ...privateLocalOnlyPluginSdkSubpaths]),
 ].toSorted((left, right) => left.localeCompare(right));
@@ -131,6 +160,19 @@ export const sharedVitestConfig = {
   envFile: false,
   resolve: {
     alias: [
+      {
+        find: "discord-api-types/v10",
+        replacement: path.join(repoRoot, "test", "vitest", "discord-api-types-v10-runtime.ts"),
+      },
+      {
+        find: "discord-api-types/payloads/v10",
+        replacement: path.join(
+          repoRoot,
+          "test",
+          "vitest",
+          "discord-api-types-payloads-v10-runtime.ts",
+        ),
+      },
       {
         find: "openclaw/extension-api",
         replacement: path.join(repoRoot, "src", "extensionAPI.ts"),
@@ -151,6 +193,220 @@ export const sharedVitestConfig = {
         find: "@openclaw/whatsapp/api.js",
         replacement: path.join(repoRoot, "extensions", "whatsapp", "api.ts"),
       },
+      {
+        find: "@openclaw/gateway-client/readiness",
+        replacement: path.join(repoRoot, "packages", "gateway-client", "src", "readiness.ts"),
+      },
+      {
+        find: "@openclaw/gateway-client/timeouts",
+        replacement: path.join(repoRoot, "packages", "gateway-client", "src", "timeouts.ts"),
+      },
+      {
+        find: "@openclaw/gateway-client",
+        replacement: path.join(repoRoot, "packages", "gateway-client", "src", "index.ts"),
+      },
+      {
+        find: "@openclaw/gateway-protocol/client-info",
+        replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "client-info.ts"),
+      },
+      {
+        find: "@openclaw/gateway-protocol/connect-error-details",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "connect-error-details.ts",
+        ),
+      },
+      {
+        find: "@openclaw/gateway-protocol/schema",
+        replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "schema.ts"),
+      },
+      {
+        find: "@openclaw/gateway-protocol/startup-unavailable",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "startup-unavailable.ts",
+        ),
+      },
+      {
+        find: "@openclaw/gateway-protocol/version",
+        replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "version.ts"),
+      },
+      {
+        find: "@openclaw/gateway-protocol",
+        replacement: path.join(repoRoot, "packages", "gateway-protocol", "src", "index.ts"),
+      },
+      {
+        find: "@openclaw/llm-core/diagnostics",
+        replacement: path.join(repoRoot, "packages", "llm-core", "src", "utils", "diagnostics.ts"),
+      },
+      {
+        find: "@openclaw/llm-core/event-stream",
+        replacement: path.join(repoRoot, "packages", "llm-core", "src", "utils", "event-stream.ts"),
+      },
+      {
+        find: "@openclaw/llm-core/validation",
+        replacement: path.join(repoRoot, "packages", "llm-core", "src", "validation.ts"),
+      },
+      {
+        find: "@openclaw/llm-core",
+        replacement: path.join(repoRoot, "packages", "llm-core", "src", "index.ts"),
+      },
+      {
+        find: "@openclaw/model-catalog-core/configured-model-refs",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "model-catalog-core",
+          "src",
+          "configured-model-refs.ts",
+        ),
+      },
+      {
+        find: "@openclaw/model-catalog-core/model-catalog-refs",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "model-catalog-core",
+          "src",
+          "model-catalog-refs.ts",
+        ),
+      },
+      {
+        find: "@openclaw/model-catalog-core/model-catalog-normalize",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "model-catalog-core",
+          "src",
+          "model-catalog-normalize.ts",
+        ),
+      },
+      {
+        find: "@openclaw/model-catalog-core/model-catalog-types",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "model-catalog-core",
+          "src",
+          "model-catalog-types.ts",
+        ),
+      },
+      {
+        find: "@openclaw/model-catalog-core/provider-id",
+        replacement: path.join(repoRoot, "packages", "model-catalog-core", "src", "provider-id.ts"),
+      },
+      {
+        find: "@openclaw/model-catalog-core/provider-model-id-normalization",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "model-catalog-core",
+          "src",
+          "provider-model-id-normalization.ts",
+        ),
+      },
+      {
+        find: "@openclaw/model-catalog-core/provider-model-id-normalize",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "model-catalog-core",
+          "src",
+          "provider-model-id-normalize.ts",
+        ),
+      },
+      {
+        find: "@openclaw/model-catalog-core",
+        replacement: path.join(repoRoot, "packages", "model-catalog-core", "src", "index.ts"),
+      },
+      {
+        find: "@openclaw/net-policy/ip",
+        replacement: path.join(repoRoot, "packages", "net-policy", "src", "ip.ts"),
+      },
+      {
+        find: "@openclaw/net-policy/ipv4",
+        replacement: path.join(repoRoot, "packages", "net-policy", "src", "ipv4.ts"),
+      },
+      {
+        find: "@openclaw/net-policy/redact-sensitive-url",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "net-policy",
+          "src",
+          "redact-sensitive-url.ts",
+        ),
+      },
+      {
+        find: "@openclaw/net-policy/url-userinfo",
+        replacement: path.join(repoRoot, "packages", "net-policy", "src", "url-userinfo.ts"),
+      },
+      {
+        find: "@openclaw/net-policy",
+        replacement: path.join(repoRoot, "packages", "net-policy", "src", "index.ts"),
+      },
+      {
+        find: "@openclaw/normalization-core/number-coercion",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "number-coercion.ts",
+        ),
+      },
+      {
+        find: "@openclaw/normalization-core/record-coerce",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "record-coerce.ts",
+        ),
+      },
+      {
+        find: "@openclaw/normalization-core/string-coerce",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "string-coerce.ts",
+        ),
+      },
+      {
+        find: "@openclaw/normalization-core/string-normalization",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "normalization-core",
+          "src",
+          "string-normalization.ts",
+        ),
+      },
+      {
+        find: "@openclaw/normalization-core",
+        replacement: path.join(repoRoot, "packages", "normalization-core", "src", "index.ts"),
+      },
+      sourcePackageAlias("media-core", "base64"),
+      sourcePackageAlias("media-core", "constants"),
+      sourcePackageAlias("media-core", "content-length"),
+      sourcePackageAlias("media-core", "file-name"),
+      sourcePackageAlias("media-core", "inbound-path-policy"),
+      sourcePackageAlias("media-core", "inline-image-data-url"),
+      sourcePackageAlias("media-core", "media-source-url"),
+      sourcePackageAlias("media-core", "mime"),
+      sourcePackageAlias("media-core", "read-byte-stream-with-limit"),
+      sourcePackageAlias("media-core", "read-response-with-limit"),
+      sourcePackageAlias("media-core"),
+      ...sourcePackageAliasesFromExports("acp-core", acpCorePackageJson.exports),
       ...sourcePluginSdkSubpaths.map((subpath) => ({
         find: `openclaw/plugin-sdk/${subpath}`,
         replacement: path.join(repoRoot, "src", "plugin-sdk", `${subpath}.ts`),
@@ -176,6 +432,14 @@ export const sharedVitestConfig = {
     runner: nonIsolatedRunnerPath,
     maxWorkers: workerConfig.maxWorkers,
     fileParallelism: workerConfig.fileParallelism,
+    deps: {
+      moduleDirectories: dependencyModuleDirectories,
+    },
+    server: {
+      deps: {
+        external: dependencyExternalPatterns,
+      },
+    },
     forceRerunTriggers: [
       "package.json",
       "pnpm-lock.yaml",
@@ -186,7 +450,7 @@ export const sharedVitestConfig = {
       "test/vitest/vitest.channel-paths.mjs",
       "test/vitest/vitest.agents-paths.mjs",
       "test/vitest/vitest.agents-core.config.ts",
-      "test/vitest/vitest.agents-pi-embedded.config.ts",
+      "test/vitest/vitest.agents-embedded-agent.config.ts",
       "test/vitest/vitest.agents-support.config.ts",
       "test/vitest/vitest.agents-tools.config.ts",
       "test/vitest/vitest.channels.config.ts",
@@ -212,6 +476,10 @@ export const sharedVitestConfig = {
       "test/vitest/vitest.extension-diffs-paths.mjs",
       "test/vitest/vitest.extension-diffs.config.ts",
       "test/vitest/vitest.extension-discord.config.ts",
+      "test/vitest/vitest.extension-active-memory-paths.mjs",
+      "test/vitest/vitest.extension-active-memory.config.ts",
+      "test/vitest/vitest.extension-codex-paths.mjs",
+      "test/vitest/vitest.extension-codex.config.ts",
       "test/vitest/vitest.extension-feishu-paths.mjs",
       "test/vitest/vitest.extension-feishu.config.ts",
       "test/vitest/vitest.extension-imessage.config.ts",
@@ -241,10 +509,12 @@ export const sharedVitestConfig = {
       "test/vitest/vitest.media-understanding.config.ts",
       "test/vitest/vitest.performance-config.ts",
       "test/vitest/vitest.unit-fast.config.ts",
+      "test/vitest/vitest.unit-fast-fake-timers.config.ts",
       "test/vitest/vitest.unit-fast-paths.mjs",
       "test/vitest/vitest.scoped-config.ts",
       "test/vitest/vitest.shared-core.config.ts",
       "test/vitest/vitest.shared.config.ts",
+      "test/vitest/vitest.tooling-isolated.config.ts",
       "test/vitest/vitest.tooling.config.ts",
       "test/vitest/vitest.tui.config.ts",
       "test/vitest/vitest.ui.config.ts",
@@ -345,21 +615,16 @@ export const sharedVitestConfig = {
         "src/providers/**",
         "src/secrets/**",
         "src/agents/model-scan.ts",
-        "src/agents/pi-embedded-runner.ts",
+        "src/agents/embedded-agent-runner.ts",
         "src/agents/sandbox-paths.ts",
         "src/agents/sandbox.ts",
-        "src/agents/skills-install.ts",
-        "src/agents/pi-tool-definition-adapter.ts",
+        "src/agents/agent-tool-definition-adapter.ts",
         "src/agents/tools/discord-actions*.ts",
-        "src/agents/tools/slack-actions.ts",
         "src/infra/state-migrations.ts",
-        "src/infra/skills-remote.ts",
         "src/infra/update-check.ts",
         "src/infra/ports-inspect.ts",
         "src/infra/outbound/outbound-session.ts",
-        "src/memory/batch-gemini.ts",
         "src/gateway/control-ui.ts",
-        "src/gateway/server-bridge.ts",
         "src/gateway/server-channels.ts",
         "src/gateway/server-methods/config.ts",
         "src/gateway/server-methods/send.ts",
@@ -368,7 +633,6 @@ export const sharedVitestConfig = {
         "src/gateway/server-methods/web.ts",
         "src/gateway/server-methods/wizard.ts",
         "src/gateway/call.ts",
-        "src/process/tau-rpc.ts",
         "src/process/exec.ts",
         "src/tui/**",
         "src/wizard/**",
@@ -376,7 +640,7 @@ export const sharedVitestConfig = {
         "src/webchat/**",
         "src/gateway/server.ts",
         "src/gateway/client.ts",
-        "src/gateway/protocol/**",
+        "packages/gateway-protocol/src/**",
         "src/infra/tailscale.ts",
       ],
     },

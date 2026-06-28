@@ -1,9 +1,17 @@
+// One-shot main job tests cover disabling cron jobs after a single run.
 import { describe, expect, it, vi } from "vitest";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   type HeartbeatRunResult,
 } from "../infra/heartbeat-wake.js";
+import {
+  consumeSelectedSystemEventEntries,
+  drainSystemEventEntries,
+  enqueueSystemEventEntry,
+  peekSystemEventEntries,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
 import type { CronEvent, CronServiceDeps } from "./service.js";
 import { CronService } from "./service.js";
 import {
@@ -18,6 +26,10 @@ installCronTestHooks({ logger: noopLogger });
 const { makeStorePath } = createCronStoreHarness({
   prefix: "openclaw-cron-runs-one-shot-",
 });
+
+function expectCronRunSessionKey(value: unknown, jobId: string) {
+  expect(value).toMatch(new RegExp(`^agent:main:cron:${jobId}:run:\\d+$`));
+}
 
 function createCronEventHarness() {
   const events: CronEvent[] = [];
@@ -55,6 +67,8 @@ type CronHarnessOptions = {
   runIsolatedAgentJob?: CronServiceDeps["runIsolatedAgentJob"];
   runHeartbeatOnce?: NonNullable<CronServiceDeps["runHeartbeatOnce"]>;
   nowMs?: () => number;
+  cronConfig?: CronServiceDeps["cronConfig"];
+  useRemovableSystemEventQueue?: boolean;
   wakeNowHeartbeatBusyMaxWaitMs?: number;
   wakeNowHeartbeatBusyRetryDelayMs?: number;
   withEvents?: boolean;
@@ -62,7 +76,25 @@ type CronHarnessOptions = {
 
 async function createCronHarness(options: CronHarnessOptions = {}) {
   const store = await makeStorePath();
-  const enqueueSystemEvent = vi.fn();
+  const enqueueSystemEvent = options.useRemovableSystemEventQueue
+    ? vi.fn((text: string, opts?: Parameters<CronServiceDeps["enqueueSystemEvent"]>[1]) => {
+        if (!opts?.sessionKey) {
+          throw new Error("test removable queue requires a sessionKey");
+        }
+        const event = enqueueSystemEventEntry(text, {
+          sessionKey: opts.sessionKey,
+          contextKey: opts.contextKey,
+          deliveryContext: opts.deliveryContext,
+        });
+        return event
+          ? {
+              accepted: true,
+              remove: () =>
+                consumeSelectedSystemEventEntries(opts.sessionKey as string, [event]).length > 0,
+            }
+          : { accepted: false };
+      })
+    : vi.fn();
   const requestHeartbeat = vi.fn();
   const events = options.withEvents === false ? undefined : createCronEventHarness();
 
@@ -71,6 +103,7 @@ async function createCronHarness(options: CronHarnessOptions = {}) {
     cronEnabled: true,
     log: noopLogger,
     ...(options.nowMs ? { nowMs: options.nowMs } : {}),
+    ...(options.cronConfig ? { cronConfig: options.cronConfig } : {}),
     ...(options.wakeNowHeartbeatBusyMaxWaitMs !== undefined
       ? { wakeNowHeartbeatBusyMaxWaitMs: options.wakeNowHeartbeatBusyMaxWaitMs }
       : {}),
@@ -202,33 +235,52 @@ async function addMainOneShotHelloJob(
 
 function expectMainSystemEventPosted(
   enqueueSystemEvent: ReturnType<typeof vi.fn>,
-  params: { text: string; jobId: string; sessionKey?: string },
+  params: { text: string; jobId: string },
 ) {
-  expect(enqueueSystemEvent).toHaveBeenCalledWith(params.text, {
+  const matchingCall = enqueueSystemEvent.mock.calls.find(([text]) => text === params.text);
+  if (!matchingCall) {
+    throw new Error(`missing system event ${params.text}`);
+  }
+  const options = matchingCall[1] as Record<string, unknown>;
+  expect(options).toMatchObject({
     agentId: undefined,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     contextKey: `cron:${params.jobId}`,
   });
+  expectCronRunSessionKey(options.sessionKey, params.jobId);
 }
 
 function expectQueuedCronHeartbeat(
   requestHeartbeat: ReturnType<typeof vi.fn>,
-  params: { jobId: string; sessionKey?: string },
+  params: { jobId: string },
 ) {
-  expect(requestHeartbeat).toHaveBeenCalledWith({
+  const request = requestHeartbeat.mock.calls[0]?.[0] as Record<string, unknown> | undefined;
+  expect(request).toMatchObject({
     source: "cron",
     intent: "immediate",
     reason: `cron:${params.jobId}`,
     agentId: undefined,
-    ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     heartbeat: { target: "last" },
   });
+  expectCronRunSessionKey(request?.sessionKey, params.jobId);
+}
+
+function getPostedSystemEventSessionKeys(enqueueSystemEvent: ReturnType<typeof vi.fn>) {
+  return enqueueSystemEvent.mock.calls
+    .map(([, options]) => (options as { sessionKey?: string } | undefined)?.sessionKey)
+    .filter((sessionKey): sessionKey is string => Boolean(sessionKey));
+}
+
+function expectNoQueuedEvents(sessionKeys: readonly string[]) {
+  for (const sessionKey of sessionKeys) {
+    expect(peekSystemEventEntries(sessionKey)).toHaveLength(0);
+  }
 }
 
 async function stopCronAndCleanup(cron: CronService, store: { cleanup: () => Promise<void> }) {
   await cron.status();
   cron.stop();
   await store.cleanup();
+  resetSystemEventsForTest();
 }
 
 function createStartedCronService(
@@ -403,7 +455,7 @@ describe("CronService", () => {
     await cron.run(job.id, "force");
 
     expect(runHeartbeatOnce).toHaveBeenCalled();
-    expectQueuedCronHeartbeat(requestHeartbeat, { jobId: job.id, sessionKey });
+    expectQueuedCronHeartbeat(requestHeartbeat, { jobId: job.id });
     expect(job.state.lastStatus).toBe("ok");
     expect(job.state.lastError).toBeUndefined();
 
@@ -430,11 +482,106 @@ describe("CronService", () => {
     await cron.run(job.id, "force");
 
     expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
-    expectQueuedCronHeartbeat(requestHeartbeat, { jobId: job.id, sessionKey });
+    expectQueuedCronHeartbeat(requestHeartbeat, { jobId: job.id });
     expect(job.state.lastStatus).toBe("ok");
     expect(job.state.lastError).toBeUndefined();
 
     await cron.list({ includeDisabled: true });
+    await stopCronAndCleanup(cron, store);
+  });
+
+  it("retries disabled one-shot main wakes without leaving failed-attempt system events", async () => {
+    resetSystemEventsForTest();
+    const atMs = Date.parse("2025-12-13T00:00:02.000Z");
+    let now = atMs;
+    const consumedTexts: string[] = [];
+    const runHeartbeatOnce = vi.fn(
+      async (opts?: Parameters<NonNullable<CronServiceDeps["runHeartbeatOnce"]>>[0]) => {
+        if (runHeartbeatOnce.mock.calls.length < 3) {
+          return { status: "skipped" as const, reason: "disabled" };
+        }
+        const sessionKey = opts?.sessionKey;
+        if (sessionKey) {
+          consumedTexts.push(...drainSystemEventEntries(sessionKey).map((event) => event.text));
+        }
+        return { status: "ran" as const, durationMs: 1 };
+      },
+    );
+    const { store, cron, enqueueSystemEvent, requestHeartbeat } = await createCronHarness({
+      runHeartbeatOnce,
+      nowMs: () => now,
+      useRemovableSystemEventQueue: true,
+      withEvents: false,
+    });
+    const job = await addMainOneShotHelloJob(cron, {
+      atMs,
+      name: "one-shot disabled heartbeat retries cleanly",
+    });
+
+    await cron.run(job.id, "due");
+    let jobs = await cron.list({ includeDisabled: true });
+    let updated = jobs.find((j) => j.id === job.id);
+    expect(updated?.enabled).toBe(true);
+    expect(updated?.state.lastStatus).toBe("skipped");
+    expect(updated?.state.lastError).toBe("disabled");
+    expect(updated?.state.consecutiveSkipped).toBe(1);
+    expect(updated?.state.nextRunAtMs).toBe(atMs + 30_000);
+    expectNoQueuedEvents(getPostedSystemEventSessionKeys(enqueueSystemEvent));
+
+    now = updated?.state.nextRunAtMs ?? now;
+    await cron.run(job.id, "due");
+    jobs = await cron.list({ includeDisabled: true });
+    updated = jobs.find((j) => j.id === job.id);
+    expect(updated?.enabled).toBe(true);
+    expect(updated?.state.consecutiveSkipped).toBe(2);
+    expect(updated?.state.nextRunAtMs).toBe(atMs + 90_000);
+    expectNoQueuedEvents(getPostedSystemEventSessionKeys(enqueueSystemEvent));
+
+    now = updated?.state.nextRunAtMs ?? now;
+    await cron.run(job.id, "due");
+
+    jobs = await cron.list({ includeDisabled: true });
+    expect(jobs.find((j) => j.id === job.id)).toBeUndefined();
+    expect(runHeartbeatOnce).toHaveBeenCalledTimes(3);
+    expect(requestHeartbeat).not.toHaveBeenCalled();
+    expect(consumedTexts).toEqual(["hello"]);
+    expectNoQueuedEvents(getPostedSystemEventSessionKeys(enqueueSystemEvent));
+
+    await stopCronAndCleanup(cron, store);
+  });
+
+  it("disables exhausted disabled-heartbeat one-shots without leaving queued events", async () => {
+    resetSystemEventsForTest();
+    const atMs = Date.parse("2025-12-13T00:00:02.000Z");
+    const runHeartbeatOnce = vi.fn(async () => ({
+      status: "skipped" as const,
+      reason: "disabled",
+    }));
+    const { store, cron, enqueueSystemEvent, requestHeartbeat } = await createCronHarness({
+      runHeartbeatOnce,
+      nowMs: () => atMs,
+      cronConfig: { retry: { maxAttempts: 0, backoffMs: [30_000] } },
+      useRemovableSystemEventQueue: true,
+      withEvents: false,
+    });
+    const job = await addMainOneShotHelloJob(cron, {
+      atMs,
+      name: "one-shot disabled heartbeat exhausted",
+    });
+
+    await cron.run(job.id, "due");
+
+    const jobs = await cron.list({ includeDisabled: true });
+    const updated = jobs.find((j) => j.id === job.id);
+    expect(updated?.enabled).toBe(false);
+    expect(updated?.state.lastStatus).toBe("skipped");
+    expect(updated?.state.lastError).toBe("disabled");
+    expect(updated?.state.consecutiveSkipped).toBe(1);
+    expect(updated?.state.nextRunAtMs).toBeUndefined();
+    expect(runHeartbeatOnce).toHaveBeenCalledTimes(1);
+    expect(requestHeartbeat).not.toHaveBeenCalled();
+    expectNoQueuedEvents(getPostedSystemEventSessionKeys(enqueueSystemEvent));
+
     await stopCronAndCleanup(cron, store);
   });
 

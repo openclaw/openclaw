@@ -1,9 +1,11 @@
+// Test environment helpers install process env defaults for tests.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import JSON5 from "json5";
+import { deleteTestEnvValue, setTestEnvValue } from "../src/test-utils/env.js";
 
 type RestoreEntry = { key: string; value: string | undefined };
 
@@ -43,9 +45,9 @@ function isTruthyEnvValue(value: string | undefined): boolean {
 function restoreEnv(entries: RestoreEntry[]): void {
   for (const { key, value } of entries) {
     if (value === undefined) {
-      delete process.env[key];
+      deleteTestEnvValue(key);
     } else {
-      process.env[key] = value;
+      setTestEnvValue(key, value);
     }
   }
 }
@@ -89,7 +91,7 @@ function loadProfileEnv(homeDir = os.homedir()): void {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(key) || (process.env[key] ?? "") !== "") {
       return false;
     }
-    process.env[key] = entry.slice(idx + 1);
+    setTestEnvValue(key, entry.slice(idx + 1));
     return true;
   };
   const countAppliedEntries = (entries: Iterable<string>) => {
@@ -174,7 +176,6 @@ function resolveRestoreEntries(): RestoreEntry[] {
     { key: "OPENCLAW_CANVAS_HOST_PORT", value: process.env.OPENCLAW_CANVAS_HOST_PORT },
     { key: "OPENCLAW_TEST_HOME", value: process.env.OPENCLAW_TEST_HOME },
     { key: "OPENCLAW_AGENT_DIR", value: process.env.OPENCLAW_AGENT_DIR },
-    { key: "PI_CODING_AGENT_DIR", value: process.env.PI_CODING_AGENT_DIR },
     { key: "TELEGRAM_BOT_TOKEN", value: process.env.TELEGRAM_BOT_TOKEN },
     { key: "DISCORD_BOT_TOKEN", value: process.env.DISCORD_BOT_TOKEN },
     { key: "SLACK_BOT_TOKEN", value: process.env.SLACK_BOT_TOKEN },
@@ -193,46 +194,45 @@ function createIsolatedTestHome(restore: RestoreEntry[]): {
 } {
   const tempHome = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-test-home-"));
 
-  process.env.HOME = tempHome;
-  process.env.USERPROFILE = tempHome;
-  process.env.OPENCLAW_TEST_HOME = tempHome;
-  process.env.OPENCLAW_TEST_FAST = "1";
-  process.env.OPENCLAW_STRICT_FAST_REPLY_CONFIG = "1";
-  delete process.env.OPENCLAW_ALLOW_SLOW_REPLY_TESTS;
+  setTestEnvValue("HOME", tempHome);
+  setTestEnvValue("USERPROFILE", tempHome);
+  setTestEnvValue("OPENCLAW_TEST_HOME", tempHome);
+  setTestEnvValue("OPENCLAW_TEST_FAST", "1");
+  setTestEnvValue("OPENCLAW_STRICT_FAST_REPLY_CONFIG", "1");
+  deleteTestEnvValue("OPENCLAW_ALLOW_SLOW_REPLY_TESTS");
 
   // Ensure test runs never touch the developer's real config/state, even if they have overrides set.
-  delete process.env.OPENCLAW_CONFIG_PATH;
+  deleteTestEnvValue("OPENCLAW_CONFIG_PATH");
   // Prefer deriving state dir from HOME so nested tests that change HOME also isolate correctly.
-  delete process.env.OPENCLAW_STATE_DIR;
-  delete process.env.OPENCLAW_AGENT_DIR;
-  delete process.env.PI_CODING_AGENT_DIR;
+  deleteTestEnvValue("OPENCLAW_STATE_DIR");
+  deleteTestEnvValue("OPENCLAW_AGENT_DIR");
   // Prefer test-controlled ports over developer overrides (avoid port collisions across tests/workers).
-  delete process.env.OPENCLAW_GATEWAY_PORT;
-  delete process.env.OPENCLAW_BRIDGE_ENABLED;
-  delete process.env.OPENCLAW_BRIDGE_HOST;
-  delete process.env.OPENCLAW_BRIDGE_PORT;
-  delete process.env.OPENCLAW_CANVAS_HOST_PORT;
+  deleteTestEnvValue("OPENCLAW_GATEWAY_PORT");
+  deleteTestEnvValue("OPENCLAW_BRIDGE_ENABLED");
+  deleteTestEnvValue("OPENCLAW_BRIDGE_HOST");
+  deleteTestEnvValue("OPENCLAW_BRIDGE_PORT");
+  deleteTestEnvValue("OPENCLAW_CANVAS_HOST_PORT");
   // Avoid leaking real GitHub/Copilot tokens into non-live test runs.
-  delete process.env.TELEGRAM_BOT_TOKEN;
-  delete process.env.DISCORD_BOT_TOKEN;
-  delete process.env.SLACK_BOT_TOKEN;
-  delete process.env.SLACK_APP_TOKEN;
-  delete process.env.SLACK_USER_TOKEN;
-  delete process.env.COPILOT_GITHUB_TOKEN;
-  delete process.env.GH_TOKEN;
-  delete process.env.GITHUB_TOKEN;
+  deleteTestEnvValue("TELEGRAM_BOT_TOKEN");
+  deleteTestEnvValue("DISCORD_BOT_TOKEN");
+  deleteTestEnvValue("SLACK_BOT_TOKEN");
+  deleteTestEnvValue("SLACK_APP_TOKEN");
+  deleteTestEnvValue("SLACK_USER_TOKEN");
+  deleteTestEnvValue("COPILOT_GITHUB_TOKEN");
+  deleteTestEnvValue("GH_TOKEN");
+  deleteTestEnvValue("GITHUB_TOKEN");
   // Avoid leaking local dev tooling flags into tests (e.g. --inspect).
-  delete process.env.NODE_OPTIONS;
+  deleteTestEnvValue("NODE_OPTIONS");
 
   // Windows: prefer the default state dir so auth/profile tests match real paths.
   if (process.platform === "win32") {
-    process.env.OPENCLAW_STATE_DIR = path.join(tempHome, ".openclaw");
+    setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempHome, ".openclaw"));
   }
 
-  process.env.XDG_CONFIG_HOME = path.join(tempHome, ".config");
-  process.env.XDG_DATA_HOME = path.join(tempHome, ".local", "share");
-  process.env.XDG_STATE_HOME = path.join(tempHome, ".local", "state");
-  process.env.XDG_CACHE_HOME = path.join(tempHome, ".cache");
+  setTestEnvValue("XDG_CONFIG_HOME", path.join(tempHome, ".config"));
+  setTestEnvValue("XDG_DATA_HOME", path.join(tempHome, ".local", "share"));
+  setTestEnvValue("XDG_STATE_HOME", path.join(tempHome, ".local", "state"));
+  setTestEnvValue("XDG_CACHE_HOME", path.join(tempHome, ".cache"));
 
   const cleanup = () => {
     restoreEnv(restore);
@@ -305,6 +305,7 @@ function sanitizeLiveConfig(raw: string): string {
         defaults?: Record<string, unknown>;
         list?: Array<Record<string, unknown>>;
       };
+      diagnostics?: Record<string, unknown>;
     } = JSON5.parse(raw);
 
     if (!parsed || typeof parsed !== "object") {
@@ -326,6 +327,10 @@ function sanitizeLiveConfig(raw: string): string {
         delete nextEntry.agentDir;
         return nextEntry;
       });
+    }
+
+    if (parsed.diagnostics && typeof parsed.diagnostics === "object") {
+      delete parsed.diagnostics.memoryPressureSnapshot;
     }
 
     if (!isTruthyEnvValue(process.env.OPENCLAW_LIVE_TEST_NORMALIZE_CONFIG)) {

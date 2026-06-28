@@ -1,8 +1,10 @@
+// Helpers for recording npm plugin installs with optional exact-version pinning metadata.
 import {
   buildNpmResolutionFields,
   type NpmSpecResolution as NpmResolutionMetadata,
 } from "../infra/install-source-utils.js";
 
+/** Choose the install-record spec for an npm package, optionally pinning to the resolved version. */
 export function resolvePinnedNpmSpec(params: {
   rawSpec: string;
   pin: boolean;
@@ -24,17 +26,7 @@ export function resolvePinnedNpmSpec(params: {
   };
 }
 
-export function mapNpmResolutionMetadata(resolution?: NpmResolutionMetadata): {
-  resolvedName?: string;
-  resolvedVersion?: string;
-  resolvedSpec?: string;
-  integrity?: string;
-  shasum?: string;
-  resolvedAt?: string;
-} {
-  return buildNpmResolutionFields(resolution);
-}
-
+/** Build the npm section of a plugin install record. */
 export function buildNpmInstallRecordFields(params: {
   spec: string;
   installPath: string;
@@ -61,6 +53,7 @@ export function buildNpmInstallRecordFields(params: {
   };
 }
 
+/** Resolve and log npm pinning decisions before constructing the persisted install record. */
 export function resolvePinnedNpmInstallRecord(params: {
   rawSpec: string;
   pin: boolean;
@@ -84,6 +77,7 @@ export function resolvePinnedNpmInstallRecord(params: {
   });
 }
 
+/** CLI adapter for npm install-record pinning with styled warning output. */
 export function resolvePinnedNpmInstallRecordForCli(
   rawSpec: string,
   pin: boolean,
@@ -104,6 +98,7 @@ export function resolvePinnedNpmInstallRecordForCli(
   });
 }
 
+/** Emit any user-facing notice or warning from npm pin resolution. */
 export function logPinnedNpmSpecMessages(
   pinInfo: { pinWarning?: string; pinNotice?: string },
   log: (message: string) => void,

@@ -1,3 +1,4 @@
+// Telegram tests cover dm access plugin behavior.
 import type { createChannelPairingChallengeIssuer } from "openclaw/plugin-sdk/channel-pairing";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -31,7 +32,7 @@ vi.mock("./api-logging.js", () => ({
   withTelegramApiErrorLogging: withTelegramApiErrorLoggingMock,
 }));
 
-import type { Message } from "@grammyjs/types";
+import type { Message } from "grammy/types";
 import { normalizeAllowFrom } from "./bot-access.js";
 let enforceTelegramDmAccess: typeof import("./dm-access.js").enforceTelegramDmAccess;
 

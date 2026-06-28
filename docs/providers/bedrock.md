@@ -6,7 +6,7 @@ read_when:
 title: "Amazon Bedrock"
 ---
 
-OpenClaw can use **Amazon Bedrock** models via pi-ai's **Bedrock Converse**
+OpenClaw can use **Amazon Bedrock** models via its **Bedrock Converse**
 streaming provider. Bedrock auth uses the **AWS SDK default credential chain**,
 not an API key.
 
@@ -28,7 +28,7 @@ Choose your preferred auth method and follow the setup steps.
     <Steps>
       <Step title="Set AWS credentials on the gateway host">
         ```bash
-        export AWS_ACCESS_KEY_ID="AKIA..."
+        export AWS_ACCESS_KEY_ID="EXAMPLE_AWS_ACCESS_KEY_ID"
         export AWS_SECRET_ACCESS_KEY="..."
         export AWS_REGION="us-east-1"
         # Optional:
@@ -310,6 +310,25 @@ openclaw models list
     the request options object and the `inferenceConfig` payload field.
   </Accordion>
 
+  <Accordion title="Claude Fable 5">
+    Use `amazon-bedrock/anthropic.claude-fable-5` in `us-east-1`, or the
+    regional inference ids such as `us.anthropic.claude-fable-5`.
+    OpenClaw applies Fable's 1M context window, 128K output limit, always-on
+    adaptive thinking, and supported effort mapping. `/think off` and
+    `/think minimal` map to `low`; unsupported temperature and forced tool
+    choice controls are omitted. Streaming output is held until Bedrock
+    returns a terminal status so mid-stream refusals do not expose partial text.
+    Fable supports only the standard service tier; OpenClaw ignores configured
+    `flex`, `priority`, and `reserved` tiers for this model.
+
+    AWS requires an explicit `provider_data_share` data-retention opt-in before
+    Fable is available. Prompts and completions are shared with Anthropic and
+    retained for up to 30 days for trust and safety. Review and configure
+    [Bedrock data retention](https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html)
+    before enabling the model.
+
+  </Accordion>
+
   <Accordion title="Guardrails">
     You can apply [Amazon Bedrock Guardrails](https://docs.aws.amazon.com/bedrock/latest/userguide/guardrails.html)
     to all Bedrock model invocations by adding a `guardrail` object to the
@@ -369,8 +388,8 @@ openclaw models list
 
     Bedrock embeddings use the same AWS SDK credential chain as inference (instance
     roles, SSO, access keys, shared config, and web identity). No API key is
-    needed. When `provider` is `"auto"`, Bedrock is auto-detected if that
-    credential chain resolves successfully.
+    needed. Set `memorySearch.provider: "bedrock"` explicitly to use Bedrock
+    embeddings.
 
     Supported embedding models include Amazon Titan Embed (v1, v2), Amazon Nova
     Embed, Cohere Embed (v3, v4), and TwelveLabs Marengo. See

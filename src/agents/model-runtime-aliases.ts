@@ -1,121 +1,133 @@
+/**
+ * Resolves CLI runtime aliases to provider/model auth labels and execution ids.
+ */
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { normalizeStaticProviderModelId } from "./model-ref-shared.js";
+import {
+  isCliRuntimeModelBackendForProvider,
+  listCliRuntimeModelBackendBindings,
+  listCliRuntimeProviderIds,
+  resolveCliRuntimeCanonicalProvider,
+  resolveCliRuntimeModelBackendBinding,
+} from "./cli-backends.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
-import { normalizeProviderId } from "./provider-id.js";
+import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
 
-type LegacyRuntimeModelProviderAlias = {
-  /** Legacy provider id that encoded the runtime in the model ref. */
-  legacyProvider: string;
-  /** Canonical provider id that should own model selection. */
-  provider: string;
-  /** Runtime/backend id that preserves the old execution behavior. */
-  runtime: string;
-  /** True when the runtime is a CLI backend rather than an embedded harness. */
-  cli: boolean;
-};
-
-const LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES = [
-  { legacyProvider: "codex", provider: "openai", runtime: "codex", cli: false },
-  { legacyProvider: "codex-cli", provider: "openai", runtime: "codex-cli", cli: true },
-  { legacyProvider: "claude-cli", provider: "anthropic", runtime: "claude-cli", cli: true },
-  {
-    legacyProvider: "google-gemini-cli",
-    provider: "google",
-    runtime: "google-gemini-cli",
-    cli: true,
-  },
-] as const satisfies readonly LegacyRuntimeModelProviderAlias[];
-
-const LEGACY_ALIAS_BY_PROVIDER = new Map(
-  LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES.map((entry) => [
-    normalizeProviderId(entry.legacyProvider),
-    entry,
-  ]),
-);
-
-const CLI_RUNTIME_BY_PROVIDER = new Map(
-  LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES.filter((entry) => entry.cli).map((entry) => [
-    `${normalizeProviderId(entry.provider)}:${normalizeProviderId(entry.runtime)}`,
-    entry,
-  ]),
-);
-
-const CLI_RUNTIME_ALIASES = new Set(
-  LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES.filter((entry) => entry.cli).map((entry) =>
-    normalizeProviderId(entry.runtime),
-  ),
-);
-
-export function listLegacyRuntimeModelProviderAliases(): readonly LegacyRuntimeModelProviderAlias[] {
-  return LEGACY_RUNTIME_MODEL_PROVIDER_ALIASES;
-}
-
-function resolveLegacyRuntimeModelProviderAlias(
+/** True for CLI runtime provider ids such as `claude-cli` and `google-gemini-cli`. */
+export function isCliRuntimeProvider(
   provider: string,
-): LegacyRuntimeModelProviderAlias | undefined {
-  return LEGACY_ALIAS_BY_PROVIDER.get(normalizeProviderId(provider));
-}
-
-export function migrateLegacyRuntimeModelRef(raw: string): {
-  ref: string;
-  legacyProvider: string;
-  provider: string;
-  model: string;
-  runtime: string;
-  cli: boolean;
-} | null {
-  const trimmed = raw.trim();
-  const slash = trimmed.indexOf("/");
-  if (slash <= 0 || slash >= trimmed.length - 1) {
-    return null;
-  }
-  const alias = resolveLegacyRuntimeModelProviderAlias(trimmed.slice(0, slash));
-  if (!alias) {
-    return null;
-  }
-  const rawModel = trimmed.slice(slash + 1).trim();
-  const model = normalizeStaticProviderModelId(alias.provider, rawModel);
-  if (!model) {
-    return null;
-  }
-  return {
-    ref: `${alias.provider}/${model}`,
-    legacyProvider: alias.legacyProvider,
-    provider: alias.provider,
-    model,
-    runtime: alias.runtime,
-    cli: alias.cli,
-  };
-}
-
-export function isLegacyRuntimeModelProvider(provider: string): boolean {
-  return Boolean(resolveLegacyRuntimeModelProviderAlias(provider));
+  params: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv; includeSetupRegistry?: boolean } = {},
+): boolean {
+  const normalized = normalizeProviderId(provider);
+  return listCliRuntimeProviderIds({
+    config: params.config,
+    env: params.env,
+    includeSetupRegistry:
+      params.includeSetupRegistry ?? (params.config !== undefined || params.env !== undefined),
+  }).includes(normalized);
 }
 
 export function isCliRuntimeAlias(runtime: string | undefined): boolean {
-  const normalized = runtime?.trim();
-  return normalized ? CLI_RUNTIME_ALIASES.has(normalizeProviderId(normalized)) : false;
+  const normalized = normalizeProviderId(runtime ?? "");
+  return normalized
+    ? listCliRuntimeModelBackendBindings().some((binding) => binding.runtime === normalized)
+    : false;
 }
 
-function canonicalizeRuntimeAliasProvider(provider: string): string {
-  return resolveLegacyRuntimeModelProviderAlias(provider)?.provider ?? provider;
+export function isCliRuntimeAliasForProvider(params: {
+  runtime: string | undefined;
+  provider: string | undefined;
+  cfg?: OpenClawConfig;
+}): boolean {
+  return isCliRuntimeModelBackendForProvider({
+    provider: params.provider,
+    runtime: params.runtime,
+    config: params.cfg,
+  });
 }
 
-function normalizeRuntimeModelRefForComparison(raw: string): string {
+type RuntimeAliasComparisonOptions = {
+  config?: OpenClawConfig;
+  env?: NodeJS.ProcessEnv;
+  includeSetupRegistry?: boolean;
+};
+
+function canonicalizeRuntimeAliasProvider(
+  provider: string,
+  options: RuntimeAliasComparisonOptions = {},
+): string {
+  return (
+    resolveCliRuntimeCanonicalProvider({
+      runtime: provider,
+      config: options.config,
+      env: options.env,
+      includeSetupRegistry:
+        options.includeSetupRegistry ?? (options.config !== undefined || options.env !== undefined),
+    }) ?? provider
+  );
+}
+
+function normalizeRuntimeModelRefForComparison(
+  raw: string,
+  options: RuntimeAliasComparisonOptions = {},
+): string {
   const trimmed = raw.trim();
   const slash = trimmed.indexOf("/");
   if (slash <= 0 || slash >= trimmed.length - 1) {
-    return normalizeProviderId(canonicalizeRuntimeAliasProvider(trimmed));
+    return normalizeProviderId(canonicalizeRuntimeAliasProvider(trimmed, options));
   }
   const provider = trimmed.slice(0, slash).trim();
   const model = trimmed.slice(slash + 1).trim();
-  const canonicalProvider = normalizeProviderId(canonicalizeRuntimeAliasProvider(provider));
+  const canonicalProvider = normalizeProviderId(
+    canonicalizeRuntimeAliasProvider(provider, options),
+  );
   return model ? `${canonicalProvider}/${model}` : canonicalProvider;
 }
 
-export function areRuntimeModelRefsEquivalent(left: string, right: string): boolean {
+function normalizeRuntimeModelRefWithoutAlias(raw: string): string {
+  const trimmed = raw.trim();
+  const slash = trimmed.indexOf("/");
+  if (slash <= 0 || slash >= trimmed.length - 1) {
+    return normalizeProviderId(trimmed);
+  }
+  const provider = trimmed.slice(0, slash).trim();
+  const model = trimmed.slice(slash + 1).trim();
+  const normalizedProvider = normalizeProviderId(provider);
+  return model ? `${normalizedProvider}/${model}` : normalizedProvider;
+}
+
+export function areRuntimeModelRefsEquivalent(
+  left: string,
+  right: string,
+  options: RuntimeAliasComparisonOptions = {},
+): boolean {
+  if (normalizeRuntimeModelRefWithoutAlias(left) === normalizeRuntimeModelRefWithoutAlias(right)) {
+    return true;
+  }
   return (
-    normalizeRuntimeModelRefForComparison(left) === normalizeRuntimeModelRefForComparison(right)
+    normalizeRuntimeModelRefForComparison(left, options) ===
+    normalizeRuntimeModelRefForComparison(right, options)
+  );
+}
+
+export function shouldPreferActiveRuntimeAliasAuthLabel(params: {
+  runtimeAliasModelEquivalent: boolean;
+  selectedAuthLabel?: string;
+  activeAuthLabel?: string;
+}): boolean {
+  if (!params.runtimeAliasModelEquivalent) {
+    return false;
+  }
+  const selectedAuth = normalizeOptionalLowercaseString(params.selectedAuthLabel);
+  const activeAuth = normalizeOptionalLowercaseString(params.activeAuthLabel);
+  if (!activeAuth || activeAuth === "unknown") {
+    return false;
+  }
+  return (
+    selectedAuth === "unknown" ||
+    (Boolean(selectedAuth?.startsWith("api-key")) &&
+      (activeAuth.startsWith("oauth") || activeAuth.startsWith("token")))
   );
 }
 
@@ -124,13 +136,97 @@ function resolveConfiguredRuntime(params: {
   provider: string;
   agentId?: string;
   modelId?: string;
-}): string | undefined {
-  return resolveModelRuntimePolicy({
+}): { runtime?: string; matchedProvider?: string } {
+  const policy = resolveModelRuntimePolicy({
     config: params.cfg,
     provider: params.provider,
     modelId: params.modelId,
     agentId: params.agentId,
-  }).policy?.id?.trim();
+  });
+  return {
+    runtime: policy.policy?.id?.trim() || undefined,
+    matchedProvider: policy.matchedProvider,
+  };
+}
+
+function resolveProfileRuntimeAlias(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  profileId: string;
+}): string | undefined {
+  const profile = params.cfg?.auth?.profiles?.[params.profileId];
+  if (!profile?.provider) {
+    return undefined;
+  }
+  const provider = normalizeProviderId(params.provider);
+  const profileProvider = normalizeProviderId(profile.provider);
+  if (!provider || !profileProvider) {
+    return undefined;
+  }
+  const providerAuthKey = resolveProviderIdForAuth(provider, { config: params.cfg });
+  const profileAuthKey = resolveProviderIdForAuth(profileProvider, { config: params.cfg });
+  if (providerAuthKey !== profileAuthKey) {
+    return undefined;
+  }
+  if (profileProvider === provider) {
+    return undefined;
+  }
+  return resolveCliRuntimeModelBackendBinding({
+    config: params.cfg,
+    provider,
+    runtime: profileProvider,
+  })?.runtime;
+}
+
+function resolveCliRuntimeFromAuthProfile(params: {
+  cfg?: OpenClawConfig;
+  provider: string;
+  authProfileId?: string;
+}): string | undefined {
+  if (!params.cfg?.auth?.profiles) {
+    return undefined;
+  }
+  if (params.authProfileId?.trim()) {
+    return resolveProfileRuntimeAlias({
+      cfg: params.cfg,
+      provider: params.provider,
+      profileId: params.authProfileId.trim(),
+    });
+  }
+
+  const provider = normalizeProviderId(params.provider);
+  const providerAuthKey = resolveProviderIdForAuth(provider, { config: params.cfg });
+  const orderedProfileIds = [
+    ...(params.cfg.auth.order?.[providerAuthKey] ?? []),
+    ...(providerAuthKey === provider ? [] : (params.cfg.auth.order?.[provider] ?? [])),
+  ];
+  for (const profileId of orderedProfileIds) {
+    const profile = params.cfg.auth.profiles[profileId];
+    if (!profile?.provider) {
+      continue;
+    }
+    const profileAuthKey = resolveProviderIdForAuth(profile.provider, { config: params.cfg });
+    if (profileAuthKey !== providerAuthKey) {
+      continue;
+    }
+    return resolveProfileRuntimeAlias({ cfg: params.cfg, provider, profileId });
+  }
+
+  const compatibleProfileIds = Object.entries(params.cfg.auth.profiles)
+    .filter(([, profile]) => {
+      if (!profile?.provider) {
+        return false;
+      }
+      return resolveProviderIdForAuth(profile.provider, { config: params.cfg }) === providerAuthKey;
+    })
+    .map(([profileId]) => profileId);
+  if (compatibleProfileIds.length !== 1) {
+    return undefined;
+  }
+  const [profileId] = compatibleProfileIds;
+  return profileId
+    ? resolveProfileRuntimeAlias({ cfg: params.cfg, provider, profileId })
+    : undefined;
 }
 
 export function resolveCliRuntimeExecutionProvider(params: {
@@ -138,11 +234,23 @@ export function resolveCliRuntimeExecutionProvider(params: {
   cfg?: OpenClawConfig;
   agentId?: string;
   modelId?: string;
+  authProfileId?: string;
 }): string | undefined {
   const provider = normalizeProviderId(params.provider);
-  const runtime = resolveConfiguredRuntime({ ...params, provider });
-  if (!runtime || runtime === "auto" || runtime === "pi") {
+  const { runtime, matchedProvider } = resolveConfiguredRuntime({ ...params, provider });
+  if (runtime === "openclaw") {
     return undefined;
   }
-  return CLI_RUNTIME_BY_PROVIDER.get(`${provider}:${runtime}`)?.runtime;
+  if (!runtime || runtime === "auto") {
+    return resolveCliRuntimeFromAuthProfile({ ...params, provider });
+  }
+  const effectiveProvider = provider || normalizeProviderId(matchedProvider ?? "");
+  if (!effectiveProvider) {
+    return undefined;
+  }
+  return resolveCliRuntimeModelBackendBinding({
+    config: params.cfg,
+    provider: effectiveProvider,
+    runtime,
+  })?.runtime;
 }

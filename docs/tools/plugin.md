@@ -27,7 +27,7 @@ Before installing a plugin, make sure you have:
 - network access to the selected source, such as ClawHub, npm, or a git host
 - any plugin-specific credentials, config keys, or operating-system tools named
   by that plugin's setup docs
-- permission to restart the Gateway that serves your channels
+- permission for the Gateway that serves your channels to reload or restart
 
 ## Quick start
 
@@ -40,7 +40,9 @@ Before installing a plugin, make sure you have:
     ```
 
     ClawHub is the primary discovery surface for community plugins. During the
-    launch cutover, ordinary bare package specs still install from npm. Use an
+    launch cutover, ordinary bare package specs still install from npm unless
+    they match an official plugin id. Raw `@openclaw/*` package specs that match
+    bundled plugins use the bundled copy from the current OpenClaw build. Use an
     explicit prefix when you need one source.
 
   </Step>
@@ -82,15 +84,20 @@ Before installing a plugin, make sure you have:
 
   </Step>
 
-  <Step title="Restart the Gateway">
+  <Step title="Let the Gateway reload">
+    Installing, updating, or uninstalling plugin code requires a Gateway
+    restart. When a managed Gateway is already running with config reload
+    enabled, OpenClaw detects the changed plugin install record and restarts the
+    Gateway automatically. If the Gateway is not managed or reload is disabled,
+    restart it yourself:
+
     ```bash
     openclaw gateway restart
     ```
 
-    Installing, updating, or uninstalling plugin code requires a Gateway
-    restart. Enable and disable operations update config and refresh the cold
-    registry, but a restart is still the clearest verification path for live
-    runtime surfaces.
+    Enable and disable operations update config and refresh the cold registry.
+    A runtime inspect is still the clearest verification path for live runtime
+    surfaces.
 
   </Step>
 
@@ -121,10 +128,35 @@ Before installing a plugin, make sure you have:
 Bare package specs have special compatibility behavior. If the bare name matches
 a bundled plugin id, OpenClaw uses that bundled source. If it matches an
 official external plugin id, OpenClaw uses the official package catalog. Other
-ordinary bare package specs install through npm during the launch cutover. Use
-`clawhub:`, `npm:`, `git:`, or `npm-pack:` when you need deterministic source
-selection. See [`openclaw plugins`](/cli/plugins#install) for the full command
-contract.
+ordinary bare package specs install through npm during the launch cutover. Raw
+`@openclaw/*` package specs that match bundled plugins also resolve to the
+bundled copy before npm fallback. Use `npm:@openclaw/<plugin>@<version>` when
+you deliberately want the external npm package instead of the image-owned
+bundled copy. Use `clawhub:`, `npm:`, `git:`, or `npm-pack:` when you need
+deterministic source selection. See [`openclaw plugins`](/cli/plugins#install)
+for the full command contract.
+
+For npm installs, unpinned package specs and `@latest` choose the newest stable
+package that advertises compatibility with this OpenClaw build. If npm's
+current latest release declares a newer `openclaw.compat.pluginApi` or
+`openclaw.install.minHostVersion`, OpenClaw scans older stable package versions
+and installs the newest one that fits. Exact versions and explicit channel tags
+such as `@beta` stay pinned to the selected package and fail when incompatible.
+
+### Operator install policy
+
+Configure `security.installPolicy` to run a trusted local policy command before
+plugin install or update proceeds. The policy receives metadata plus the staged
+source path and can allow or block the install. It covers CLI and Gateway-backed
+plugin install/update paths. Plugin `before_install` hooks run later only in
+OpenClaw processes where plugin hooks are loaded, so use `security.installPolicy`
+for operator-owned install decisions. The deprecated
+`--dangerously-force-unsafe-install` flag is accepted for compatibility but does
+not bypass install policy or OpenClaw's built-in plugin dependency denylist.
+
+See [Skills config](/tools/skills-config#operator-install-policy-securityinstallpolicy)
+for the shared `security.installPolicy` exec schema used by both skills and
+plugins.
 
 ### Configure plugin policy
 
@@ -155,7 +187,9 @@ Key policy rules:
   allowlist stay unavailable, even when `tools.allow` includes `"*"`.
 - `plugins.entries.<id>.enabled: false` disables one plugin while preserving its
   config.
-- `plugins.load.paths` adds explicit local plugin files or directories.
+- `plugins.load.paths` adds explicit local plugin files or directories. Managed
+  `plugins install` local paths must be plugin directories or archives; use
+  `plugins.load.paths` for standalone plugin files.
 - Workspace-origin plugins are disabled by default; explicitly enable or
   allowlist them before using local workspace code.
 - Bundled plugins follow their built-in default-on/default-off metadata unless
@@ -169,9 +203,22 @@ Key policy rules:
   surfaces, such as a provider/model ref, channel config, CLI backend, or agent
   harness runtime.
 - OpenAI-family Codex routing keeps provider and runtime plugin boundaries
-  separate: `openai-codex/*` is legacy OpenAI-provider config, while the bundled
+  separate: legacy Codex model refs are legacy config repaired by doctor, while the bundled
   `codex` plugin owns Codex app-server runtime for canonical `openai/*` agent
   refs, explicit `agentRuntime.id: "codex"`, and legacy `codex/*` refs.
+
+When `plugins.allow` is unset and non-bundled plugins are auto-discovered from
+the workspace or global plugin roots, startup logs
+`plugins.allow is empty; discovered non-bundled plugins may auto-load: ...`.
+The warning includes discovered plugin ids and, for short lists, a minimal
+`plugins.allow` snippet. Run
+[`openclaw plugins list --enabled --verbose`](/cli/plugins#list) or
+[`openclaw plugins inspect <id>`](/cli/plugins#inspect) with the listed plugin
+id before copying trusted plugins into `openclaw.json`. The same trust-pinning
+guidance applies when diagnostics say a plugin loaded
+`without install/load-path provenance`: inspect that plugin id, then pin the
+trusted id in `plugins.allow` or reinstall from a trusted source so OpenClaw
+records install provenance.
 
 Run `openclaw doctor` or `openclaw doctor --fix` when config validation reports
 stale plugin ids, allowlist/tool mismatches, or legacy bundled plugin paths.
@@ -190,6 +237,30 @@ Both formats appear in `openclaw plugins list`, `openclaw plugins inspect`,
 [Plugin bundles](/plugins/bundles) for the bundle compatibility boundary and
 [Building plugins](/plugins/building-plugins) for native plugin authoring.
 
+## Plugin hooks
+
+Plugins can register hooks at runtime, but there are two different APIs with
+different jobs.
+
+- Use typed hooks via `api.on(...)` for runtime lifecycle hooks. This is the
+  preferred surface for middleware, policy, message rewriting, prompt shaping,
+  and tool control.
+- Use `api.registerHook(...)` only when you want to participate in the internal
+  hook system described in [Hooks](/automation/hooks). This is mainly for coarse
+  command/lifecycle side effects and compatibility with existing HOOK-style
+  automation.
+
+Quick rule:
+
+- If the handler needs priority, merge semantics, or block/cancel behavior, use
+  typed plugin hooks.
+- If the handler just reacts to `command:new`, `command:reset`, `message:sent`,
+  or similar coarse events, `api.registerHook(...)` is fine.
+
+Plugin-managed internal hooks show up in `openclaw hooks list` with
+`plugin:<id>`. You cannot enable or disable them through `openclaw hooks`;
+enable or disable the plugin instead.
+
 ## Verify the active Gateway
 
 `openclaw plugins list` and plain `openclaw plugins inspect` read cold config,
@@ -204,9 +275,10 @@ openclaw plugins inspect <plugin-id> --runtime --json
 openclaw gateway restart
 ```
 
-On VPS or container installs, make sure the process you restart is the actual
-`openclaw gateway run` child that serves your channels, not only a wrapper or
-supervisor.
+Managed Gateways restart automatically after plugin install, update, and
+uninstall changes that alter plugin source. On VPS or container installs, make
+sure any manual restart targets the actual `openclaw gateway run` child that
+serves your channels, not only a wrapper or supervisor.
 
 ## Troubleshooting
 

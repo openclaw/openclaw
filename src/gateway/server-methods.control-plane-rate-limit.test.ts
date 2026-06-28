@@ -1,12 +1,15 @@
+/**
+ * Tests control-plane rate limiting for gateway method dispatch.
+ */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isRetryableGatewayStartupUnavailableError } from "../../packages/gateway-protocol/src/startup-unavailable.js";
 import {
-  __testing as controlPlaneRateLimitTesting,
+  testing as controlPlaneRateLimitTesting,
   resolveControlPlaneRateLimitKey,
 } from "./control-plane-rate-limit.js";
-import { isRetryableGatewayStartupUnavailableError } from "./protocol/startup-unavailable.js";
+import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./methods/core-descriptors.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
-import { STARTUP_UNAVAILABLE_GATEWAY_METHODS } from "./server-startup-unavailable-methods.js";
 
 const noWebchat = () => false;
 
@@ -39,7 +42,7 @@ describe("gateway control-plane write rate limit", () => {
       client: {
         id: "openclaw-control-ui",
         version: "1.0.0",
-        platform: "darwin",
+        platform: "macos",
         mode: "ui",
       },
       minProtocol: 1,

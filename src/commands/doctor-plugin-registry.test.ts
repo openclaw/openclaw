@@ -1,18 +1,27 @@
+// Doctor plugin registry tests cover plugin registry checks and repair diagnostics.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { note } from "../../packages/terminal-core/src/note.js";
 import type { PluginCandidate } from "../plugins/discovery.js";
+import { resolvePluginNpmProjectDir } from "../plugins/install-paths.js";
 import {
   readPersistedInstalledPluginIndex,
+  resolveInstalledPluginIndexStorePath,
   writePersistedInstalledPluginIndex,
 } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndex } from "../plugins/installed-plugin-index.js";
+import { markRetainedManagedNpmInstall } from "../plugins/managed-npm-retention.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
-import { note } from "../terminal/note.js";
-import { maybeRepairPluginRegistryState } from "./doctor-plugin-registry.js";
+import {
+  detectPluginRegistryHealthIssues,
+  maybeRepairPluginRegistryState,
+  pluginRegistryIssueToHealthFinding,
+  pluginRegistryIssueToRepairEffect,
+} from "./doctor-plugin-registry.js";
 import { DISABLE_PLUGIN_REGISTRY_MIGRATION_ENV } from "./doctor/shared/plugin-registry-migration.js";
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: vi.fn(),
 }));
 
@@ -117,8 +126,12 @@ function createManagedNpmPlugin(params: {
   peerDependencies?: Record<string, string>;
   packageLock?: boolean;
 }) {
-  const npmRoot = path.join(params.stateDir, "npm");
-  const packageDir = path.join(npmRoot, "node_modules", params.packageName);
+  const npmBaseDir = path.join(params.stateDir, "npm");
+  const npmRoot = resolvePluginNpmProjectDir({
+    npmDir: npmBaseDir,
+    packageName: params.packageName,
+  });
+  const packageDir = path.join(npmRoot, "node_modules", ...params.packageName.split("/"));
   fs.mkdirSync(packageDir, { recursive: true });
   fs.writeFileSync(
     path.join(npmRoot, "package.json"),
@@ -222,6 +235,23 @@ function createCurrentIndexWithNpmRecord(params: {
   };
 }
 
+function createCurrentIndexWithPathRecord(params: {
+  pluginId: string;
+  installPath: string;
+  version?: string;
+}): InstalledPluginIndex {
+  return {
+    ...createCurrentIndex(),
+    installRecords: {
+      [params.pluginId]: {
+        source: "path",
+        installPath: params.installPath,
+        ...(params.version ? { version: params.version } : {}),
+      },
+    },
+  };
+}
+
 function expectedPluginIndexRecord(params: {
   rootDir: string;
   pluginId: string;
@@ -247,14 +277,171 @@ function expectedPluginIndexRecord(params: {
     startup: {
       sidecar: false,
       memory: false,
+      configPaths: [],
       deferConfiguredChannelFullLoadUntilAfterListen: false,
       agentHarnesses: [],
+    },
+    contributions: {
+      channels: [],
+      channelConfigs: [],
+      providers: [params.pluginId],
+      modelCatalogProviders: [],
+      modelSupportPrefixes: [],
+      modelSupportPatterns: [],
+      autoEnableProviderIds: [],
+      commandAliases: [],
+      contracts: {},
     },
     compat: [],
   };
 }
 
 describe("maybeRepairPluginRegistryState", () => {
+  it("maps missing plugin registry state to a structured finding and dry-run effect", async () => {
+    const stateDir = makeTempDir();
+    const registryPath = resolveInstalledPluginIndexStorePath({ stateDir });
+
+    const [issue] = await detectPluginRegistryHealthIssues({
+      stateDir,
+      env: hermeticEnv(),
+      config: {},
+      prompter: { shouldRepair: false },
+    });
+
+    expect(issue).toEqual({
+      kind: "registry-missing-or-stale",
+      path: registryPath,
+    });
+    expect(pluginRegistryIssueToHealthFinding(issue)).toMatchObject({
+      checkId: "core/doctor/plugin-registry",
+      severity: "warning",
+      path: registryPath,
+      fixHint: "Run `openclaw doctor --fix` to rebuild the plugin registry from enabled plugins.",
+    });
+    expect(pluginRegistryIssueToRepairEffect(issue)).toEqual({
+      kind: "state",
+      action: "would-rebuild-plugin-registry",
+      target: registryPath,
+      dryRunSafe: false,
+    });
+  });
+
+  it("maps stale managed npm bundled plugin shadows to structured findings", async () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled", "google-meet");
+    fs.mkdirSync(bundledDir, { recursive: true });
+    const managed = createManagedNpmPlugin({
+      stateDir,
+      id: "google-meet",
+      packageName: "@openclaw/google-meet",
+      version: "2026.5.2",
+    });
+    await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
+
+    const issues = await detectPluginRegistryHealthIssues({
+      stateDir,
+      candidates: [
+        createBundledCandidate({
+          rootDir: bundledDir,
+          id: "google-meet",
+          packageName: "@openclaw/google-meet",
+          version: "2026.5.3",
+        }),
+      ],
+      env: hermeticEnv(),
+      config: {
+        plugins: {
+          allow: ["google-meet"],
+          entries: {
+            "google-meet": {
+              enabled: true,
+              config: {},
+            },
+          },
+        },
+      },
+      prompter: { shouldRepair: false },
+    });
+
+    const staleIssue = issues.find((issue) => issue.kind === "stale-managed-npm-bundled-plugin");
+    expect(staleIssue).toMatchObject({
+      kind: "stale-managed-npm-bundled-plugin",
+      pluginId: "google-meet",
+      packageName: "@openclaw/google-meet",
+      packageDir: managed.packageDir,
+      version: "2026.5.2",
+    });
+    expect(pluginRegistryIssueToHealthFinding(staleIssue!)).toMatchObject({
+      checkId: "core/doctor/plugin-registry",
+      severity: "warning",
+      path: managed.packageDir,
+      target: "google-meet",
+    });
+    expect(pluginRegistryIssueToRepairEffect(staleIssue!)).toEqual({
+      kind: "package",
+      action: "would-remove-stale-managed-npm-bundled-plugin",
+      target: managed.packageDir,
+      dryRunSafe: false,
+    });
+  });
+
+  it("maps stale local bundled install records to structured findings", async () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "current", "dist", "extensions", "discord");
+    const staleDir = path.join(stateDir, "old-checkout", "dist", "extensions", "discord");
+    fs.mkdirSync(bundledDir, { recursive: true });
+    fs.mkdirSync(staleDir, { recursive: true });
+    createCandidate(staleDir, "discord");
+    await writePersistedInstalledPluginIndex(
+      createCurrentIndexWithPathRecord({
+        pluginId: "discord",
+        installPath: staleDir,
+        version: "2026.5.4-beta.3",
+      }),
+      { stateDir },
+    );
+
+    const issues = await detectPluginRegistryHealthIssues({
+      stateDir,
+      candidates: [
+        createBundledCandidate({
+          rootDir: bundledDir,
+          id: "discord",
+          packageName: "@openclaw/discord",
+          version: "2026.5.20-beta.1",
+        }),
+      ],
+      env: hermeticEnv(),
+      config: {
+        plugins: {
+          allow: ["discord"],
+          entries: {
+            discord: {
+              enabled: true,
+              config: {},
+            },
+          },
+        },
+      },
+      prompter: { shouldRepair: false },
+    });
+
+    const staleIssue = issues.find(
+      (issue) => issue.kind === "stale-local-bundled-plugin-install-record",
+    );
+    expect(staleIssue).toEqual({
+      kind: "stale-local-bundled-plugin-install-record",
+      pluginId: "discord",
+      stalePath: staleDir,
+    });
+    expect(pluginRegistryIssueToHealthFinding(staleIssue!)).toMatchObject({
+      checkId: "core/doctor/plugin-registry",
+      severity: "warning",
+      path: staleDir,
+      target: "discord",
+    });
+  });
+
   it("refreshes an existing registry during repair", async () => {
     const stateDir = makeTempDir();
     const pluginDir = path.join(stateDir, "plugins", "demo");
@@ -301,7 +488,7 @@ describe("maybeRepairPluginRegistryState", () => {
     const stateDir = makeTempDir();
     const bundledDir = path.join(stateDir, "bundled", "google-meet");
     fs.mkdirSync(bundledDir, { recursive: true });
-    createManagedNpmPlugin({
+    const managed = createManagedNpmPlugin({
       stateDir,
       id: "google-meet",
       packageName: "@openclaw/google-meet",
@@ -338,16 +525,14 @@ describe("maybeRepairPluginRegistryState", () => {
       "Managed npm plugin packages shadow bundled plugins",
     );
     expect(vi.mocked(note).mock.calls.join("\n")).toContain("@openclaw/google-meet@2026.5.2");
-    expect(
-      fs.existsSync(path.join(stateDir, "npm", "node_modules", "@openclaw", "google-meet")),
-    ).toBe(true);
+    expect(fs.existsSync(managed.packageDir)).toBe(true);
   });
 
   it("removes stale managed npm packages that shadow bundled plugins during repair", async () => {
     const stateDir = makeTempDir();
     const bundledDir = path.join(stateDir, "bundled", "google-meet");
     fs.mkdirSync(bundledDir, { recursive: true });
-    createManagedNpmPlugin({
+    const managed = createManagedNpmPlugin({
       stateDir,
       id: "google-meet",
       packageName: "@openclaw/google-meet",
@@ -380,11 +565,9 @@ describe("maybeRepairPluginRegistryState", () => {
       prompter: { shouldRepair: true },
     });
 
+    expect(fs.existsSync(managed.packageDir)).toBe(false);
     expect(
-      fs.existsSync(path.join(stateDir, "npm", "node_modules", "@openclaw", "google-meet")),
-    ).toBe(false);
-    expect(
-      JSON.parse(fs.readFileSync(path.join(stateDir, "npm", "package.json"), "utf8")),
+      JSON.parse(fs.readFileSync(path.join(managed.npmRoot, "package.json"), "utf8")),
     ).not.toHaveProperty("dependencies");
     const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
     expect(persisted.refreshReason).toBe("migration");
@@ -398,6 +581,55 @@ describe("maybeRepairPluginRegistryState", () => {
       }),
     ]);
     expect(vi.mocked(note).mock.calls.join("\n")).toContain(
+      "Removed stale managed npm plugin package",
+    );
+  });
+
+  it("does not remove retained managed npm packages during stale bundled repair", async () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "bundled", "google-meet");
+    fs.mkdirSync(bundledDir, { recursive: true });
+    const managed = createManagedNpmPlugin({
+      stateDir,
+      id: "google-meet",
+      packageName: "@openclaw/google-meet",
+      version: "2026.5.2",
+    });
+    await markRetainedManagedNpmInstall({
+      packageDir: managed.packageDir,
+      pluginId: "google-meet",
+      retainedAt: "2026-04-25T00:00:00.000Z",
+      reason: "test-retained-generation",
+    });
+    await writePersistedInstalledPluginIndex(createCurrentIndex(), { stateDir });
+
+    await maybeRepairPluginRegistryState({
+      stateDir,
+      candidates: [
+        createBundledCandidate({
+          rootDir: bundledDir,
+          id: "google-meet",
+          packageName: "@openclaw/google-meet",
+          version: "2026.5.3",
+        }),
+      ],
+      env: hermeticEnv(),
+      config: {
+        plugins: {
+          allow: ["google-meet"],
+          entries: {
+            "google-meet": {
+              enabled: true,
+              config: {},
+            },
+          },
+        },
+      },
+      prompter: { shouldRepair: true },
+    });
+
+    expect(fs.existsSync(managed.packageDir)).toBe(true);
+    expect(vi.mocked(note).mock.calls.join("\n")).not.toContain(
       "Removed stale managed npm plugin package",
     );
   });
@@ -462,11 +694,118 @@ describe("maybeRepairPluginRegistryState", () => {
     ]);
   });
 
+  it("warns about stale local bundled plugin install records that shadow bundled plugins", async () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "current", "dist", "extensions", "discord");
+    const staleDir = path.join(stateDir, "old-checkout", "dist", "extensions", "discord");
+    fs.mkdirSync(bundledDir, { recursive: true });
+    fs.mkdirSync(staleDir, { recursive: true });
+    createCandidate(staleDir, "discord");
+    await writePersistedInstalledPluginIndex(
+      createCurrentIndexWithPathRecord({
+        pluginId: "discord",
+        installPath: staleDir,
+        version: "2026.5.4-beta.3",
+      }),
+      { stateDir },
+    );
+
+    await maybeRepairPluginRegistryState({
+      stateDir,
+      candidates: [
+        createBundledCandidate({
+          rootDir: bundledDir,
+          id: "discord",
+          packageName: "@openclaw/discord",
+          version: "2026.5.20-beta.1",
+        }),
+      ],
+      env: hermeticEnv(),
+      config: {
+        plugins: {
+          allow: ["discord"],
+          entries: {
+            discord: {
+              enabled: true,
+              config: {},
+            },
+          },
+        },
+      },
+      prompter: { shouldRepair: false },
+    });
+
+    const notes = vi.mocked(note).mock.calls.join("\n");
+    expect(notes).toContain("Local bundled plugin install records shadow bundled plugins");
+    expect(notes).toContain("discord");
+    expect(notes).toContain(staleDir);
+    const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
+    expect(persisted.installRecords).toHaveProperty("discord");
+  });
+
+  it("removes stale local bundled plugin install records during repair", async () => {
+    const stateDir = makeTempDir();
+    const bundledDir = path.join(stateDir, "current", "dist", "extensions", "discord");
+    const staleDir = path.join(stateDir, "old-checkout", "dist", "extensions", "discord");
+    fs.mkdirSync(bundledDir, { recursive: true });
+    fs.mkdirSync(staleDir, { recursive: true });
+    createCandidate(staleDir, "discord");
+    await writePersistedInstalledPluginIndex(
+      createCurrentIndexWithPathRecord({
+        pluginId: "discord",
+        installPath: staleDir,
+        version: "2026.5.4-beta.3",
+      }),
+      { stateDir },
+    );
+
+    await maybeRepairPluginRegistryState({
+      stateDir,
+      candidates: [
+        createBundledCandidate({
+          rootDir: bundledDir,
+          id: "discord",
+          packageName: "@openclaw/discord",
+          version: "2026.5.20-beta.1",
+        }),
+      ],
+      env: hermeticEnv(),
+      config: {
+        plugins: {
+          allow: ["discord"],
+          entries: {
+            discord: {
+              enabled: true,
+              config: {},
+            },
+          },
+        },
+      },
+      prompter: { shouldRepair: true },
+    });
+
+    const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
+    expect(persisted.installRecords).toStrictEqual({});
+    expect(persisted.refreshReason).toBe("migration");
+    expect(persisted.plugins).toStrictEqual([
+      expectedPluginIndexRecord({
+        pluginId: "discord",
+        rootDir: bundledDir,
+        origin: "bundled",
+        packageName: "@openclaw/discord",
+        packageVersion: "2026.5.20-beta.1",
+      }),
+    ]);
+    expect(vi.mocked(note).mock.calls.join("\n")).toContain(
+      "Removed stale local bundled plugin install record",
+    );
+  });
+
   it("removes stale managed npm packages from the package lock during repair", async () => {
     const stateDir = makeTempDir();
     const bundledDir = path.join(stateDir, "bundled", "google-meet");
     fs.mkdirSync(bundledDir, { recursive: true });
-    createManagedNpmPlugin({
+    const managed = createManagedNpmPlugin({
       stateDir,
       id: "google-meet",
       packageName: "@openclaw/google-meet",
@@ -501,7 +840,7 @@ describe("maybeRepairPluginRegistryState", () => {
     });
 
     const packageLock = JSON.parse(
-      fs.readFileSync(path.join(stateDir, "npm", "package-lock.json"), "utf8"),
+      fs.readFileSync(path.join(managed.npmRoot, "package-lock.json"), "utf8"),
     );
     expect(packageLock.packages[""].dependencies).toEqual({ "other-plugin": "1.0.0" });
     expect(packageLock.packages).not.toHaveProperty("node_modules/@openclaw/google-meet");

@@ -1,3 +1,4 @@
+// Qa Lab API module exposes the plugin public contract.
 import type * as NodeFs from "node:fs/promises";
 import type * as NodePath from "node:path";
 import type { QaTransportState } from "./qa-transport.js";
@@ -60,11 +61,17 @@ export type QaScenarioRuntimeDeps = {
   readEffectiveTools: QaScenarioRuntimeFunction;
   readSkillStatus: QaScenarioRuntimeFunction;
   readRawQaSessionStore: QaScenarioRuntimeFunction;
+  readGatewayLogs: QaScenarioRuntimeFunction;
+  markGatewayLogCursor: QaScenarioRuntimeFunction;
+  scanGatewayLogSentinels: QaScenarioRuntimeFunction;
+  assertNoGatewayLogSentinels: QaScenarioRuntimeFunction;
+  readSessionTranscriptSummary: QaScenarioRuntimeFunction;
   runQaCli: QaScenarioRuntimeFunction;
   extractMediaPathFromText: QaScenarioRuntimeFunction;
   resolveGeneratedImagePath: QaScenarioRuntimeFunction;
   startAgentRun: QaScenarioRuntimeFunction;
   waitForAgentRun: QaScenarioRuntimeFunction;
+  waitForAgentHistoryReply: QaScenarioRuntimeFunction;
   listCronJobs: QaScenarioRuntimeFunction;
   findManagedDreamingCronJob: QaScenarioRuntimeFunction;
   waitForCronRunCompletion: QaScenarioRuntimeFunction;
@@ -76,9 +83,12 @@ export type QaScenarioRuntimeDeps = {
   runAgentPrompt: QaScenarioRuntimeFunction;
   ensureImageGenerationConfigured: QaScenarioRuntimeFunction;
   handleQaAction: QaScenarioRuntimeFunction;
+  runRuntimeToolFixture: QaScenarioRuntimeFunction;
   extractQaToolPayload: QaScenarioRuntimeFunction;
   formatMemoryDreamingDay: QaScenarioRuntimeFunction;
   resolveSessionTranscriptsDirForAgent: QaScenarioRuntimeFunction;
+  activeMemoryToggleKey: QaScenarioRuntimeFunction;
+  setActiveMemorySessionDisabled: QaScenarioRuntimeFunction;
   buildAgentSessionKey: QaScenarioRuntimeFunction;
   normalizeLowercaseStringOrEmpty: QaScenarioRuntimeFunction;
   formatErrorMessage: QaScenarioRuntimeFunction;
@@ -89,7 +99,7 @@ export type QaScenarioRuntimeDeps = {
   hasDiscoveryLabels: QaScenarioRuntimeFunction;
   reportsDiscoveryScopeLeak: QaScenarioRuntimeFunction;
   reportsMissingDiscoveryFiles: QaScenarioRuntimeFunction;
-  hasModelSwitchContinuityEvidence: QaScenarioRuntimeFunction;
+  hasModelSwitchContinuitySignal: QaScenarioRuntimeFunction;
 };
 
 export type QaScenarioRuntimeConstants = {
@@ -145,11 +155,17 @@ type QaScenarioRuntimeApi<
   readEffectiveTools: TDeps["readEffectiveTools"];
   readSkillStatus: TDeps["readSkillStatus"];
   readRawQaSessionStore: TDeps["readRawQaSessionStore"];
+  readGatewayLogs: TDeps["readGatewayLogs"];
+  markGatewayLogCursor: TDeps["markGatewayLogCursor"];
+  scanGatewayLogSentinels: TDeps["scanGatewayLogSentinels"];
+  assertNoGatewayLogSentinels: TDeps["assertNoGatewayLogSentinels"];
+  readSessionTranscriptSummary: TDeps["readSessionTranscriptSummary"];
   runQaCli: TDeps["runQaCli"];
   extractMediaPathFromText: TDeps["extractMediaPathFromText"];
   resolveGeneratedImagePath: TDeps["resolveGeneratedImagePath"];
   startAgentRun: TDeps["startAgentRun"];
   waitForAgentRun: TDeps["waitForAgentRun"];
+  waitForAgentHistoryReply: TDeps["waitForAgentHistoryReply"];
   listCronJobs: TDeps["listCronJobs"];
   findManagedDreamingCronJob: TDeps["findManagedDreamingCronJob"];
   waitForCronRunCompletion: TDeps["waitForCronRunCompletion"];
@@ -161,9 +177,12 @@ type QaScenarioRuntimeApi<
   runAgentPrompt: TDeps["runAgentPrompt"];
   ensureImageGenerationConfigured: TDeps["ensureImageGenerationConfigured"];
   handleQaAction: TDeps["handleQaAction"];
+  runRuntimeToolFixture: TDeps["runRuntimeToolFixture"];
   extractQaToolPayload: TDeps["extractQaToolPayload"];
   formatMemoryDreamingDay: TDeps["formatMemoryDreamingDay"];
   resolveSessionTranscriptsDirForAgent: TDeps["resolveSessionTranscriptsDirForAgent"];
+  activeMemoryToggleKey: TDeps["activeMemoryToggleKey"];
+  setActiveMemorySessionDisabled: TDeps["setActiveMemorySessionDisabled"];
   buildAgentSessionKey: TDeps["buildAgentSessionKey"];
   normalizeLowercaseStringOrEmpty: TDeps["normalizeLowercaseStringOrEmpty"];
   formatErrorMessage: TDeps["formatErrorMessage"];
@@ -174,7 +193,7 @@ type QaScenarioRuntimeApi<
   hasDiscoveryLabels: TDeps["hasDiscoveryLabels"];
   reportsDiscoveryScopeLeak: TDeps["reportsDiscoveryScopeLeak"];
   reportsMissingDiscoveryFiles: TDeps["reportsMissingDiscoveryFiles"];
-  hasModelSwitchContinuityEvidence: TDeps["hasModelSwitchContinuityEvidence"];
+  hasModelSwitchContinuitySignal: TDeps["hasModelSwitchContinuitySignal"];
   imageUnderstandingPngBase64: string;
   imageUnderstandingLargePngBase64: string;
   imageUnderstandingValidPngBase64: string;
@@ -245,11 +264,17 @@ export function createQaScenarioRuntimeApi<
     readEffectiveTools: params.deps.readEffectiveTools,
     readSkillStatus: params.deps.readSkillStatus,
     readRawQaSessionStore: params.deps.readRawQaSessionStore,
+    readGatewayLogs: params.deps.readGatewayLogs,
+    markGatewayLogCursor: params.deps.markGatewayLogCursor,
+    scanGatewayLogSentinels: params.deps.scanGatewayLogSentinels,
+    assertNoGatewayLogSentinels: params.deps.assertNoGatewayLogSentinels,
+    readSessionTranscriptSummary: params.deps.readSessionTranscriptSummary,
     runQaCli: params.deps.runQaCli,
     extractMediaPathFromText: params.deps.extractMediaPathFromText,
     resolveGeneratedImagePath: params.deps.resolveGeneratedImagePath,
     startAgentRun: params.deps.startAgentRun,
     waitForAgentRun: params.deps.waitForAgentRun,
+    waitForAgentHistoryReply: params.deps.waitForAgentHistoryReply,
     listCronJobs: params.deps.listCronJobs,
     findManagedDreamingCronJob: params.deps.findManagedDreamingCronJob,
     waitForCronRunCompletion: params.deps.waitForCronRunCompletion,
@@ -261,9 +286,12 @@ export function createQaScenarioRuntimeApi<
     runAgentPrompt: params.deps.runAgentPrompt,
     ensureImageGenerationConfigured: params.deps.ensureImageGenerationConfigured,
     handleQaAction: params.deps.handleQaAction,
+    runRuntimeToolFixture: params.deps.runRuntimeToolFixture,
     extractQaToolPayload: params.deps.extractQaToolPayload,
     formatMemoryDreamingDay: params.deps.formatMemoryDreamingDay,
     resolveSessionTranscriptsDirForAgent: params.deps.resolveSessionTranscriptsDirForAgent,
+    activeMemoryToggleKey: params.deps.activeMemoryToggleKey,
+    setActiveMemorySessionDisabled: params.deps.setActiveMemorySessionDisabled,
     buildAgentSessionKey: params.deps.buildAgentSessionKey,
     normalizeLowercaseStringOrEmpty: params.deps.normalizeLowercaseStringOrEmpty,
     formatErrorMessage: params.deps.formatErrorMessage,
@@ -274,7 +302,7 @@ export function createQaScenarioRuntimeApi<
     hasDiscoveryLabels: params.deps.hasDiscoveryLabels,
     reportsDiscoveryScopeLeak: params.deps.reportsDiscoveryScopeLeak,
     reportsMissingDiscoveryFiles: params.deps.reportsMissingDiscoveryFiles,
-    hasModelSwitchContinuityEvidence: params.deps.hasModelSwitchContinuityEvidence,
+    hasModelSwitchContinuitySignal: params.deps.hasModelSwitchContinuitySignal,
     imageUnderstandingPngBase64: params.constants.imageUnderstandingPngBase64,
     imageUnderstandingLargePngBase64: params.constants.imageUnderstandingLargePngBase64,
     imageUnderstandingValidPngBase64: params.constants.imageUnderstandingValidPngBase64,

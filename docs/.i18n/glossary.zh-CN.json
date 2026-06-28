@@ -4,6 +4,14 @@
     "target": "OpenClaw"
   },
   {
+    "source": "macOS platform notes",
+    "target": "macOS 平台说明"
+  },
+  {
+    "source": "Logging",
+    "target": "日志"
+  },
+  {
     "source": "iMessage",
     "target": "iMessage"
   },
@@ -46,14 +54,6 @@
   {
     "source": "Mantis",
     "target": "Mantis"
-  },
-  {
-    "source": "OpenClaw App SDK",
-    "target": "OpenClaw 应用 SDK"
-  },
-  {
-    "source": "OpenClaw App SDK API design",
-    "target": "OpenClaw 应用 SDK API 设计"
   },
   {
     "source": "Message lifecycle refactor",
@@ -101,11 +101,15 @@
   },
   {
     "source": "Status",
-    "target": "Status"
+    "target": "状态"
   },
   {
     "source": "Gateway",
     "target": "Gateway 网关"
+  },
+  {
+    "source": "Gateway health",
+    "target": "Gateway 健康"
   },
   {
     "source": "Gateway RPC reference",
@@ -130,6 +134,10 @@
   {
     "source": "Agent Runtimes",
     "target": "Agent Runtimes"
+  },
+  {
+    "source": "Code mode",
+    "target": "代码模式"
   },
   {
     "source": "Codex harness",
@@ -158,6 +166,26 @@
   {
     "source": "Agent harness plugins",
     "target": "Agent harness plugins"
+  },
+  {
+    "source": "Agent harness plugins (SDK reference)",
+    "target": "Agent harness plugins (SDK reference)"
+  },
+  {
+    "source": "Copilot SDK harness",
+    "target": "Copilot SDK harness"
+  },
+  {
+    "source": "Copilot plugin",
+    "target": "Copilot plugin"
+  },
+  {
+    "source": "GitHub Copilot agent runtime",
+    "target": "GitHub Copilot agent runtime"
+  },
+  {
+    "source": "copilot",
+    "target": "copilot"
   },
   {
     "source": "Agent loop",
@@ -228,8 +256,64 @@
     "target": "Feishu"
   },
   {
+    "source": "ClickClack",
+    "target": "ClickClack"
+  },
+  {
+    "source": "IRC",
+    "target": "IRC"
+  },
+  {
+    "source": "LINE",
+    "target": "LINE"
+  },
+  {
+    "source": "Nextcloud Talk",
+    "target": "Nextcloud Talk"
+  },
+  {
+    "source": "Nostr",
+    "target": "Nostr"
+  },
+  {
+    "source": "QQ bot",
+    "target": "QQ Bot"
+  },
+  {
+    "source": "SMS",
+    "target": "SMS"
+  },
+  {
+    "source": "Synology Chat",
+    "target": "Synology Chat"
+  },
+  {
+    "source": "Tlon",
+    "target": "Tlon"
+  },
+  {
+    "source": "Twitch",
+    "target": "Twitch"
+  },
+  {
+    "source": "Twilio",
+    "target": "Twilio"
+  },
+  {
     "source": "Yuanbao",
     "target": "腾讯元宝"
+  },
+  {
+    "source": "Zalo",
+    "target": "Zalo"
+  },
+  {
+    "source": "Zalo Personal",
+    "target": "Zalo Personal"
+  },
+  {
+    "source": "Zalo personal",
+    "target": "Zalo Personal"
   },
   {
     "source": "WeChat",
@@ -528,6 +612,10 @@
     "target": "QQ Bot"
   },
   {
+    "source": "QQBot",
+    "target": "QQ Bot"
+  },
+  {
     "source": "Release Policy",
     "target": "发布策略"
   },
@@ -644,6 +732,18 @@
     "target": "插件 SDK"
   },
   {
+    "source": "Tool plugins",
+    "target": "工具插件"
+  },
+  {
+    "source": "Plugin SDK subpaths",
+    "target": "插件 SDK 子路径"
+  },
+  {
+    "source": "Plugins CLI",
+    "target": "插件 CLI"
+  },
+  {
     "source": "Plugins",
     "target": "插件"
   },
@@ -682,6 +782,14 @@
   {
     "source": "OC Path plugin",
     "target": "OC Path 插件"
+  },
+  {
+    "source": "Parallel plugin",
+    "target": "Parallel 插件"
+  },
+  {
+    "source": "Parallel search",
+    "target": "Parallel 搜索"
   },
   {
     "source": "CLI reference",
@@ -836,6 +944,14 @@
     "target": "Matrix QA"
   },
   {
+    "source": "Maturity scorecard",
+    "target": "成熟度评分卡"
+  },
+  {
+    "source": "Maturity taxonomy",
+    "target": "成熟度分类法"
+  },
+  {
     "source": "Matrix presentation metadata",
     "target": "Matrix 呈现元数据"
   },
@@ -956,6 +1072,10 @@
     "target": "工具搜索"
   },
   {
+    "source": "Code execution",
+    "target": "代码执行"
+  },
+  {
     "source": "Tools and plugins",
     "target": "工具和插件"
   },
@@ -972,7 +1092,119 @@
     "target": "ACP Agents 设置"
   },
   {
+    "source": "Policy CLI",
+    "target": "Policy CLI"
+  },
+  {
+    "source": "Doctor lint mode",
+    "target": "Doctor lint mode"
+  },
+  {
     "source": "ds4 (local DeepSeek V4)",
     "target": "ds4（本地 DeepSeek V4）"
+  },
+  {
+    "source": "Dynamic Agent Creation",
+    "target": "动态 Agent 创建"
+  },
+  {
+    "source": "dynamic agent creation",
+    "target": "动态 Agent 创建"
+  },
+  {
+    "source": "multi-user isolation",
+    "target": "多用户隔离"
+  },
+  {
+    "source": "workspaceTemplate",
+    "target": "工作空间模板"
+  },
+  {
+    "source": "agentDirTemplate",
+    "target": "Agent 目录模板"
+  },
+  {
+    "source": "Per-user agent isolation",
+    "target": "每用户 Agent 隔离"
+  },
+  {
+    "source": "Gateway exposure runbook",
+    "target": "Gateway 暴露运行手册"
+  },
+  {
+    "source": "Meeting Notes CLI",
+    "target": "Meeting Notes CLI"
+  },
+  {
+    "source": "Discord voice",
+    "target": "Discord 语音"
+  },
+  {
+    "source": "Plugin management",
+    "target": "插件管理"
+  },
+  {
+    "source": "Plugin architecture",
+    "target": "插件架构"
+  },
+  {
+    "source": "Agent runtime architecture",
+    "target": "Agent runtime architecture"
+  },
+  {
+    "source": "OpenClaw agent runtime workflow",
+    "target": "OpenClaw agent runtime workflow"
+  },
+  {
+    "source": "OpenClaw agent runtime architecture",
+    "target": "OpenClaw agent runtime architecture"
+  },
+  {
+    "source": "Install and Configure Plugins",
+    "target": "安装和配置插件"
+  },
+  {
+    "source": "Building Plugins",
+    "target": "Building Plugins"
+  },
+  {
+    "source": "Plugin Manifest",
+    "target": "Plugin Manifest"
+  },
+  {
+    "source": "Workboard plugin",
+    "target": "Workboard 插件"
+  },
+  {
+    "source": "workboard",
+    "target": "workboard"
+  },
+  {
+    "source": "Control UI",
+    "target": "Control UI"
+  },
+  {
+    "source": "Models CLI",
+    "target": "模型 CLI"
+  },
+  {
+    "source": "Z.AI (GLM)",
+    "target": "Z.AI (GLM)"
+  },
+  {
+    "source": "Cohere",
+    "target": "Cohere"
+  },
+  {
+    "source": "Cohere plugin",
+    "target": "Cohere 插件"
+  },
+  {
+    "source": "cohere",
+    "target": "cohere"
+  },
+  {
+    "source": "Zalo ClawBot",
+    "target": "Zalo ClawBot"
   }
 ]

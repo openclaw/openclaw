@@ -1,3 +1,4 @@
+// Discord tests cover shared plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDiscordPluginBase, discordConfigAdapter } from "./shared.js";
@@ -63,7 +64,7 @@ describe("createDiscordPluginBase", () => {
     expect(plugin.config.isEnabled?.(workAccount, cfg)).toBe(true);
   });
 
-  it("describes unresolved SecretRef tokens without marking them startup-configured", () => {
+  it("describes unresolved SecretRef tokens as startup-configured so startup reports the resolver error", () => {
     const plugin = createDiscordPluginBase({ setup: {} as never });
     const cfg = {
       channels: {
@@ -79,8 +80,8 @@ describe("createDiscordPluginBase", () => {
     expect(account.token).toBe("");
     expect(account.tokenSource).toBe("config");
     expect(account.tokenStatus).toBe("configured_unavailable");
-    expect(plugin.config.isConfigured?.(account, cfg)).toBe(false);
-    expect(described?.configured).toBe(false);
+    expect(plugin.config.isConfigured?.(account, cfg)).toBe(true);
+    expect(described?.configured).toBe(true);
     expect(described?.tokenStatus).toBe("configured_unavailable");
   });
 });

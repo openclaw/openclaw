@@ -1,3 +1,5 @@
+// Media-understanding apply tests cover attachment transcription/description,
+// local binary probing, file text extraction, and context mutation.
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -27,6 +29,7 @@ const hasAvailableAuthForProviderMock = vi.hoisted(() =>
 );
 const readRemoteMediaBufferMock = vi.hoisted(() => vi.fn());
 const runFfmpegMock = vi.hoisted(() => vi.fn());
+const convertHeicToJpegMock = vi.hoisted(() => vi.fn());
 const runExecMock = vi.hoisted(() => vi.fn());
 
 let applyMediaUnderstanding: typeof import("./apply.js").applyMediaUnderstanding;
@@ -34,9 +37,11 @@ let clearMediaUnderstandingBinaryCacheForTests: typeof import("./runner.js").cle
 const mockedResolveApiKey = resolveApiKeyForProviderMock;
 const mockedReadRemoteMediaBuffer = readRemoteMediaBufferMock;
 const mockedRunFfmpeg = runFfmpegMock;
+const mockedConvertHeicToJpeg = convertHeicToJpegMock;
 const mockedRunExec = runExecMock;
 
 const TEMP_MEDIA_PREFIX = "openclaw-media-";
+const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
 let suiteTempMediaRootDir = "";
 let tempMediaDirCounter = 0;
 let sharedTempMediaCacheDir = "";
@@ -158,9 +163,11 @@ function createMediaDisabledConfigWithAllowedMimes(allowedMimes: string[]): Open
 }
 
 async function createTempMediaFile(params: { fileName: string; content: Buffer | string }) {
+  // Many tests reuse identical fixture buffers; cache by content hash to keep
+  // setup cheap while each case still gets a stable local path.
   const normalizedContent =
     typeof params.content === "string" ? Buffer.from(params.content) : params.content;
-  const contentHash = crypto.createHash("sha1").update(normalizedContent).digest("hex");
+  const contentHash = crypto.createHash("sha256").update(normalizedContent).digest("hex");
   const cacheKey = `${params.fileName}:${contentHash}`;
   const cachedPath = tempMediaFileCache.get(cacheKey);
   if (cachedPath) {
@@ -193,8 +200,8 @@ async function withMediaAutoDetectEnv<T>(
       GROQ_API_KEY: undefined,
       DEEPGRAM_API_KEY: undefined,
       GEMINI_API_KEY: undefined,
+      OPENCLAW_ANTIGRAVITY_CLI: undefined,
       OPENCLAW_AGENT_DIR: undefined,
-      PI_CODING_AGENT_DIR: undefined,
       ...env,
     },
     run,
@@ -269,20 +276,28 @@ describe("applyMediaUnderstanding", () => {
     vi.doMock("../agents/model-auth.js", () => ({
       resolveApiKeyForProvider: resolveApiKeyForProviderMock,
       hasAvailableAuthForProvider: hasAvailableAuthForProviderMock,
+      isProviderAuthError: (err: unknown, code?: string) =>
+        err instanceof Error &&
+        "code" in err &&
+        (code === undefined || (err as { code?: unknown }).code === code),
       requireApiKey: (auth: { apiKey?: string; mode?: string }, provider: string) => {
         if (auth?.apiKey) {
           return auth.apiKey;
         }
-        throw new Error(
+        const err = new Error(
           `No API key resolved for provider "${provider}" (auth mode: ${auth?.mode}).`,
         );
+        (err as { code?: string; provider?: string }).code = "missing-api-key";
+        (err as { code?: string; provider?: string }).provider = provider;
+        throw err;
       },
     }));
     vi.doMock("../media/fetch.js", () => ({
       readRemoteMediaBuffer: readRemoteMediaBufferMock,
     }));
-    vi.doMock("../media/ffmpeg-exec.js", () => ({
+    vi.doMock("../media/media-services.js", () => ({
       runFfmpeg: runFfmpegMock,
+      convertHeicToJpeg: convertHeicToJpegMock,
     }));
     vi.doMock("../process/exec.js", () => ({
       runExec: runExecMock,
@@ -335,6 +350,8 @@ describe("applyMediaUnderstanding", () => {
     hasAvailableAuthForProviderMock.mockClear();
     mockedReadRemoteMediaBuffer.mockClear();
     mockedRunFfmpeg.mockReset();
+    mockedConvertHeicToJpeg.mockReset();
+    mockedConvertHeicToJpeg.mockResolvedValue(Buffer.from("jpeg-normalized"));
     mockedRunExec.mockReset();
     mockedReadRemoteMediaBuffer.mockResolvedValue({
       buffer: createSafeAudioFixtureBuffer(2048),
@@ -353,6 +370,20 @@ describe("applyMediaUnderstanding", () => {
     tempMediaFileCache.clear();
   });
 
+  it("uses SHA-256 content hashes for cached media fixtures", async () => {
+    const mediaPath = await createTempMediaFile({
+      fileName: "fixture.txt",
+      content: "cached fixture",
+    });
+    const cachedPath = await createTempMediaFile({
+      fileName: "fixture.txt",
+      content: "cached fixture",
+    });
+
+    expect(cachedPath).toBe(mediaPath);
+    expect(path.basename(path.dirname(mediaPath))).toMatch(SHA256_HEX_PATTERN);
+  });
+
   it("sets Transcript and replaces Body when audio transcription succeeds", async () => {
     const ctx = await createAudioCtx();
     const result = await applyMediaUnderstanding({
@@ -360,7 +391,6 @@ describe("applyMediaUnderstanding", () => {
       cfg: createGroqAudioConfig(),
       providers: createGroqProviders(),
     });
-
     expect(result.appliedAudio).toBe(true);
     expectTranscriptApplied({
       ctx,
@@ -771,6 +801,37 @@ describe("applyMediaUnderstanding", () => {
     expectCliRunOptions(options);
   });
 
+  it("skips auto-detected sherpa audio when structured output has empty text", async () => {
+    clearMediaUnderstandingBinaryCacheForTests();
+    const binDir = await createTempMediaDir();
+    const modelDir = await createTempMediaDir();
+    await createMockExecutable(binDir, "sherpa-onnx-offline");
+    await fs.writeFile(path.join(modelDir, "tokens.txt"), "a");
+    await fs.writeFile(path.join(modelDir, "encoder.onnx"), "a");
+    await fs.writeFile(path.join(modelDir, "decoder.onnx"), "a");
+    await fs.writeFile(path.join(modelDir, "joiner.onnx"), "a");
+
+    const emptySherpaJson =
+      '{"lang":"","emotion":"","event":"","text":"","timestamps":[],"durations":[],"tokens":[],"ys_log_probs":[],"words":[]}';
+    const { ctx, cfg } = await setupAudioAutoDetectCase(emptySherpaJson);
+
+    await withMediaAutoDetectEnv(
+      {
+        PATH: binDir,
+        SHERPA_ONNX_MODEL_DIR: modelDir,
+      },
+      async () => {
+        const result = await applyMediaUnderstanding({ ctx, cfg });
+        expect(result.appliedAudio).toBe(false);
+      },
+    );
+
+    expect(ctx.Transcript).toBeUndefined();
+    expect(ctx.Body).toBe("<media:audio>");
+    const [command] = getRunExecCall();
+    expect(command).toBe("sherpa-onnx-offline");
+  });
+
   it("auto-detects whisper-cli when sherpa is unavailable", async () => {
     clearMediaUnderstandingBinaryCacheForTests();
     const binDir = await createTempMediaDir();
@@ -846,12 +907,21 @@ describe("applyMediaUnderstanding", () => {
 
     expect(ctx.Transcript).toBe("whisper cpp ogg ok");
     const ffmpegArgs = getRunFfmpegArgs();
-    expect(ffmpegArgs).toHaveLength(10);
+    expect(ffmpegArgs).toHaveLength(12);
     expect(ffmpegArgs.slice(0, 2)).toEqual(["-y", "-i"]);
     expect(String(ffmpegArgs[2]).endsWith("telegram-voice.ogg")).toBe(true);
-    expect(ffmpegArgs.slice(3, 9)).toEqual(["-ac", "1", "-ar", "16000", "-c:a", "pcm_s16le"]);
-    expect(String(ffmpegArgs[9])).toContain("telegram-voice.wav");
-    expect(String(ffmpegArgs[9]).endsWith(".part")).toBe(true);
+    expect(ffmpegArgs.slice(3, 11)).toEqual([
+      "-ac",
+      "1",
+      "-ar",
+      "16000",
+      "-c:a",
+      "pcm_s16le",
+      "-f",
+      "wav",
+    ]);
+    expect(String(ffmpegArgs[11])).toContain("telegram-voice.wav");
+    expect(String(ffmpegArgs[11]).endsWith(".part")).toBe(true);
 
     const [command, args, options] = getRunExecCall();
     expect(command).toBe("whisper-cli");
@@ -883,7 +953,6 @@ describe("applyMediaUnderstanding", () => {
       {
         PATH: emptyBinDir,
         OPENCLAW_AGENT_DIR: isolatedAgentDir,
-        PI_CODING_AGENT_DIR: isolatedAgentDir,
       },
       async () => {
         const result = await applyMediaUnderstanding({ ctx, cfg });
@@ -894,6 +963,92 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Transcript).toBeUndefined();
     expect(ctx.Body).toBe("<media:audio>");
     expect(mockedRunExec).not.toHaveBeenCalled();
+  });
+
+  it("does not probe Gemini CLI during media auto-detect", async () => {
+    clearMediaUnderstandingBinaryCacheForTests();
+    const binDir = await createTempMediaDir();
+    const isolatedAgentDir = await createTempMediaDir();
+    await createMockExecutable(binDir, "gemini");
+    const ctx = await createAudioCtx({
+      fileName: "sample.wav",
+      mediaType: "audio/wav",
+      content: createSafeAudioFixtureBuffer(2048),
+    });
+    const cfg: OpenClawConfig = { tools: { media: { audio: {} } } };
+    mockedResolveApiKey.mockResolvedValue({
+      source: "none",
+      mode: "api-key",
+    });
+
+    await withMediaAutoDetectEnv(
+      {
+        PATH: binDir,
+        OPENCLAW_AGENT_DIR: isolatedAgentDir,
+      },
+      async () => {
+        const result = await applyMediaUnderstanding({ ctx, cfg });
+        expect(result.appliedAudio).toBe(false);
+      },
+    );
+
+    expect(ctx.Transcript).toBeUndefined();
+    expect(ctx.Body).toBe("<media:audio>");
+    expect(mockedRunExec).not.toHaveBeenCalled();
+  });
+
+  it("uses Antigravity CLI as the last auto image fallback", async () => {
+    clearMediaUnderstandingBinaryCacheForTests();
+    const binDir = await createTempMediaDir();
+    await createMockExecutable(binDir, "agy");
+    const imagePath = await createTempMediaFile({
+      fileName: "photo.jpg",
+      content: "image-bytes",
+    });
+    const ctx: MsgContext = {
+      Body: "<media:image>",
+      MediaPath: imagePath,
+      MediaType: "image/jpeg",
+    };
+    const cfg: OpenClawConfig = { tools: { media: { image: {} } } };
+    mockedResolveApiKey.mockResolvedValue({
+      source: "none",
+      mode: "api-key",
+    });
+    mockedRunExec.mockImplementation(async (_command, args) => {
+      if (Array.isArray(args) && args.includes("--help")) {
+        return { stdout: "--print\n--add-dir\n--sandbox\n", stderr: "" };
+      }
+      return { stdout: "antigravity image description\n", stderr: "" };
+    });
+
+    await withMediaAutoDetectEnv({ PATH: binDir }, async () => {
+      const result = await applyMediaUnderstanding({ ctx, cfg });
+      expect(result.appliedImage).toBe(true);
+    });
+
+    expect(ctx.Body).toBe("[Image]\nDescription:\nantigravity image description");
+    expect(mockedRunExec).toHaveBeenCalledTimes(2);
+    const realImagePath = await fs.realpath(imagePath);
+    const [_probeCommand, _probeArgs, probeOptions] = getRunExecCall(0);
+    expect(probeOptions).toEqual({
+      timeoutMs: 3000,
+      cwd: expect.stringContaining("openclaw-antigravity-probe-"),
+    });
+    const [command, args, options] = getRunExecCall(1);
+    expect(command).toBe(path.join(binDir, "agy"));
+    expect(args).toEqual([
+      "--sandbox",
+      "--add-dir",
+      path.dirname(realImagePath),
+      "--print",
+      expect.stringContaining(realImagePath),
+    ]);
+    expect(options).toEqual({
+      timeoutMs: 60_000,
+      maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+      cwd: path.dirname(realImagePath),
+    });
   });
 
   it("uses CLI image understanding and preserves caption for commands", async () => {
@@ -980,6 +1135,103 @@ describe("applyMediaUnderstanding", () => {
 
     expect(result.appliedImage).toBe(true);
     expect(ctx.Body).toBe("[Image]\nDescription:\nshared description");
+  });
+
+  it("uses media workspace for staged files and agent workspace for provider resolution", async () => {
+    const mediaWorkspaceDir = await createTempMediaDir();
+    const relativeImagePath = path.join("media", "inbound", "workspace.jpg");
+    const imagePath = path.join(mediaWorkspaceDir, relativeImagePath);
+    await fs.mkdir(path.dirname(imagePath), { recursive: true });
+    await fs.writeFile(imagePath, "image-bytes");
+    const describeImage = vi.fn(async () => ({ text: "workspace image" }));
+    const ctx: MsgContext = {
+      Body: "<media:image>",
+      MediaPath: relativeImagePath,
+      MediaType: "image/jpeg",
+      MediaWorkspaceDir: mediaWorkspaceDir,
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          image: {
+            enabled: true,
+            models: [{ provider: "openai", model: "gpt-5.4" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+      providers: {
+        openai: {
+          id: "openai",
+          capabilities: ["image"],
+          describeImage,
+        },
+      },
+    });
+
+    expect(result.appliedImage).toBe(true);
+    expect(describeImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentDir: "/tmp/openclaw-agent",
+        workspaceDir: "/tmp/openclaw-workspace",
+        fileName: "workspace.jpg",
+        provider: "openai",
+        model: "gpt-5.4",
+      }),
+    );
+  });
+
+  it("normalizes HEIC images before tools.media.image provider execution", async () => {
+    const imagePath = await createTempMediaFile({
+      fileName: "photo.heic",
+      content: "heic-source",
+    });
+    const describeImage = vi.fn(async () => ({ text: "normalized image" }));
+    const ctx: MsgContext = {
+      Body: "<media:image>",
+      MediaPath: imagePath,
+      MediaType: "image/heic",
+    };
+    const cfg: OpenClawConfig = {
+      tools: {
+        media: {
+          image: {
+            enabled: true,
+            models: [{ provider: "openai", model: "gpt-5.4" }],
+          },
+        },
+      },
+    };
+
+    const result = await applyMediaUnderstanding({
+      ctx,
+      cfg,
+      agentDir: "/tmp/openclaw-agent",
+      providers: {
+        openai: {
+          id: "openai",
+          capabilities: ["image"],
+          describeImage,
+        },
+      },
+    });
+
+    expect(result.appliedImage).toBe(true);
+    expect(mockedConvertHeicToJpeg).toHaveBeenCalledWith(Buffer.from("heic-source"));
+    expect(describeImage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        buffer: Buffer.from("jpeg-normalized"),
+        fileName: "photo.heic",
+        mime: "image/jpeg",
+      }),
+    );
+    expect(ctx.Body).toBe("[Image]\nDescription:\nnormalized image");
   });
 
   it("uses active model when enabled and models are missing", async () => {
@@ -1462,6 +1714,28 @@ describe("applyMediaUnderstanding", () => {
 
     expect(result.appliedFile).toBe(true);
     expect(ctx.Body).toContain("hello from utf16 text");
+  });
+
+  it("extracts inbound files above the 5MB OpenResponses default up to the managed-media cap", async () => {
+    // #90096: inbound extraction sizes to the agent media cap (default 20MB),
+    // not the OpenResponses input_file default (5MB). A ~6MB managed document
+    // would previously be skipped at the 5MB cap, leaving locked-down agents
+    // with only an attachment marker; it must now reach the prompt as text.
+    const marker = "LARGE-DOC-MARKER";
+    const largeText = `${marker} `.repeat(360_000); // ~6MB, above the old 5MB cap
+    const filePath = await createTempMediaFile({
+      fileName: "large-report.txt",
+      content: largeText,
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:document>",
+      mediaPath: filePath,
+      mediaType: "text/plain",
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain(marker);
   });
 
   it("does not reclassify PDF attachments as text/plain", async () => {

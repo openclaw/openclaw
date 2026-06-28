@@ -2,4 +2,5 @@
 // Keep model/vendor-specific protocol code in the plugin that registers the harness.
 
 export * from "./agent-harness-runtime.js";
-export { createOpenClawCodingTools } from "../agents/pi-tools.js";
+export { createOpenClawCodingTools } from "../agents/agent-tools.js";
+export { resolveWebSearchToolPolicy } from "../agents/web-search-tool-policy.js";

@@ -1,3 +1,4 @@
+// Telegram plugin module implements shared behavior.
 import { resolveNormalizedAccountEntry } from "openclaw/plugin-sdk/account-core";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { formatAllowFromLowercase } from "openclaw/plugin-sdk/allow-from";
@@ -91,7 +92,7 @@ function isBlockedByMultiBotGuard(cfg: OpenClawConfig, accountId: string): boole
   }
   const accounts = cfg.channels?.telegram?.accounts;
   const hasConfiguredAccounts =
-    !!accounts &&
+    Boolean(accounts) &&
     typeof accounts === "object" &&
     !Array.isArray(accounts) &&
     Object.keys(accounts).length > 0;
@@ -245,7 +246,7 @@ export function createTelegramPluginBase(params: {
           name: account.name,
           enabled: account.enabled,
           configured:
-            !!inspected.token?.trim() &&
+            Boolean(inspected.token?.trim()) &&
             !findTelegramTokenOwnerAccountId({ cfg, accountId: account.accountId }),
           tokenSource: inspected.tokenSource,
         };

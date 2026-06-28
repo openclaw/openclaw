@@ -1,9 +1,9 @@
+/** Handles /mcp commands for showing and mutating configured MCP servers. */
 import {
   listConfiguredMcpServers,
   setConfiguredMcpServer,
   unsetConfiguredMcpServer,
 } from "../../config/mcp-config.js";
-import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   rejectNonOwnerCommand,
   rejectUnauthorizedCommand,
@@ -17,6 +17,7 @@ function renderJsonBlock(label: string, value: unknown): string {
   return `${label}\n\`\`\`json\n${JSON.stringify(value, null, 2)}\n\`\`\``;
 }
 
+/** Command handler for /mcp show/set/unset operations. */
 export const handleMcpCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -29,9 +30,7 @@ export const handleMcpCommand: CommandHandler = async (params, allowTextCommands
   if (unauthorized) {
     return unauthorized;
   }
-  const allowInternalReadOnlyShow =
-    mcpCommand.action === "show" && isInternalMessageChannel(params.command.channel);
-  const nonOwner = allowInternalReadOnlyShow ? null : rejectNonOwnerCommand(params, "/mcp");
+  const nonOwner = rejectNonOwnerCommand(params, "/mcp");
   if (nonOwner) {
     return nonOwner;
   }

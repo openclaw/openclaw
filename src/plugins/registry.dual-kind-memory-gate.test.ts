@@ -1,3 +1,4 @@
+/** Verifies memory provider registration keeps text and binary embedding kinds isolated. */
 import {
   createPluginRegistryFixture,
   registerTestPlugin,
@@ -6,14 +7,14 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 import { clearMemoryEmbeddingProviders } from "./memory-embedding-providers.js";
 import {
-  _resetMemoryPluginState,
+  clearMemoryPluginState,
   getMemoryCapabilityRegistration,
   getMemoryRuntime,
 } from "./memory-state.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
 afterEach(() => {
-  _resetMemoryPluginState();
+  clearMemoryPluginState();
   clearMemoryEmbeddingProviders();
 });
 

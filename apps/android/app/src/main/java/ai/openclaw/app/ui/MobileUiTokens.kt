@@ -11,10 +11,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 
-// ---------------------------------------------------------------------------
-// MobileColors – semantic color tokens with light + dark variants
-// ---------------------------------------------------------------------------
-
 internal data class MobileColors(
   val surface: Color,
   val surfaceStrong: Color,
@@ -45,27 +41,27 @@ internal data class MobileColors(
 
 internal fun lightMobileColors() =
   MobileColors(
-    surface = Color(0xFFF6F7FA),
-    surfaceStrong = Color(0xFFECEEF3),
+    surface = Color(0xFFFAFBFC),
+    surfaceStrong = Color(0xFFEFF3F8),
     cardSurface = Color(0xFFFFFFFF),
-    border = Color(0xFFE5E7EC),
-    borderStrong = Color(0xFFD6DAE2),
-    text = Color(0xFF17181C),
-    textSecondary = Color(0xFF5D6472),
-    textTertiary = Color(0xFF99A0AE),
-    accent = Color(0xFF1D5DD8),
-    accentSoft = Color(0xFFECF3FF),
-    accentBorderStrong = Color(0xFF184DAF),
-    success = Color(0xFF2F8C5A),
-    successSoft = Color(0xFFEEF9F3),
-    warning = Color(0xFFC8841A),
-    warningSoft = Color(0xFFFFF8EC),
-    danger = Color(0xFFD04B4B),
-    dangerSoft = Color(0xFFFFF2F2),
-    codeBg = Color(0xFF15171B),
-    codeText = Color(0xFFE8EAEE),
-    codeBorder = Color(0xFF2B2E35),
-    codeAccent = Color(0xFF3FC97A),
+    border = Color(0xFFDDE3EC),
+    borderStrong = Color(0xFFC7D0DC),
+    text = Color(0xFF16181D),
+    textSecondary = Color(0xFF505B6A),
+    textTertiary = Color(0xFF8E98A7),
+    accent = Color(0xFF1B5ACB),
+    accentSoft = Color(0xFFEAF2FF),
+    accentBorderStrong = Color(0xFF174CA9),
+    success = Color(0xFF287F52),
+    successSoft = Color(0xFFEAF7F0),
+    warning = Color(0xFFAF7418),
+    warningSoft = Color(0xFFFFF4DF),
+    danger = Color(0xFFC94343),
+    dangerSoft = Color(0xFFFFECEC),
+    codeBg = Color(0xFFEFF3F8),
+    codeText = Color(0xFF172033),
+    codeBorder = Color(0xFFD7DDE7),
+    codeAccent = Color(0xFF287F52),
     chipBorderConnected = Color(0xFFCFEBD8),
     chipBorderConnecting = Color(0xFFD5E2FA),
     chipBorderWarning = Color(0xFFEED8B8),
@@ -101,6 +97,8 @@ internal fun darkMobileColors() =
     chipBorderError = Color(0xFF3E1E1E),
   )
 
+// Defaulting to light tokens keeps previews/tests usable when a screen forgets to
+// provide the app theme; production roots override this composition local.
 internal val LocalMobileColors = staticCompositionLocalOf { lightMobileColors() }
 
 internal object MobileColorsAccessor {
@@ -108,12 +106,8 @@ internal object MobileColorsAccessor {
     @Composable get() = LocalMobileColors.current
 }
 
-// ---------------------------------------------------------------------------
-// Backward-compatible top-level accessors (composable getters)
-// ---------------------------------------------------------------------------
-// These allow existing call sites to keep using `mobileSurface`, `mobileText`, etc.
-// without converting every file at once. Each resolves to the themed value.
-
+// Keep these accessors while screens migrate to `MobileColorsAccessor.current`.
+// Each getter must stay composable so callers always read the active theme.
 internal val mobileSurface: Color @Composable get() = LocalMobileColors.current.surface
 internal val mobileSurfaceStrong: Color @Composable get() = LocalMobileColors.current.surfaceStrong
 internal val mobileCardSurface: Color @Composable get() = LocalMobileColors.current.cardSurface
@@ -136,7 +130,8 @@ internal val mobileCodeText: Color @Composable get() = LocalMobileColors.current
 internal val mobileCodeBorder: Color @Composable get() = LocalMobileColors.current.codeBorder
 internal val mobileCodeAccent: Color @Composable get() = LocalMobileColors.current.codeAccent
 
-// Background gradient – light fades white→gray, dark fades near-black→dark-gray
+// Build the page backdrop from semantic surfaces so light/dark palettes keep
+// their contrast relationship without duplicating raw color stops.
 internal val mobileBackgroundGradient: Brush
   @Composable get() {
     val colors = LocalMobileColors.current
@@ -148,10 +143,6 @@ internal val mobileBackgroundGradient: Brush
       ),
     )
   }
-
-// ---------------------------------------------------------------------------
-// Typography tokens (theme-independent)
-// ---------------------------------------------------------------------------
 
 internal val mobileFontFamily =
   FontFamily(

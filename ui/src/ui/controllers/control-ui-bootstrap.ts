@@ -1,3 +1,4 @@
+// Control UI controller manages control ui bootstrap gateway state.
 import {
   CONTROL_UI_BOOTSTRAP_CONFIG_PATH,
   type ControlUiBootstrapConfig,
@@ -5,6 +6,7 @@ import {
 } from "../../../../src/gateway/control-ui-contract.js";
 import { normalizeAssistantIdentity } from "../assistant-identity.ts";
 import { resolveControlUiAuthCandidates } from "../control-ui-auth.ts";
+import { setUiTimeFormatPreference } from "../format.ts";
 import { normalizeBasePath } from "../navigation.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../session-key.ts";
 import { loadLocalAssistantIdentity } from "../storage.ts";
@@ -44,7 +46,7 @@ function resolveBootstrapAgentId(value: string | null | undefined): string | nul
 }
 
 function applyLocalAssistantAvatarOverride(state: ControlUiBootstrapState) {
-  const localAvatar = loadLocalAssistantIdentity().avatar;
+  const localAvatar = loadLocalAssistantIdentity({ agentId: resolveActiveAgentId(state) }).avatar;
   if (!localAvatar) {
     return;
   }
@@ -117,7 +119,6 @@ export async function loadControlUiBootstrapConfig(
         state.assistantAvatarReason = normalized.avatarReason ?? null;
         state.assistantAgentId = normalized.agentId ?? null;
       }
-      // Local override always wins — same pattern as the user avatar.
       applyLocalAssistantAvatarOverride(state);
     }
     state.serverVersion = parsed.serverVersion ?? null;
@@ -135,6 +136,7 @@ export async function loadControlUiBootstrapConfig(
       typeof parsed.chatMessageMaxWidth === "string" && parsed.chatMessageMaxWidth.trim()
         ? parsed.chatMessageMaxWidth
         : null;
+    setUiTimeFormatPreference(parsed.timeFormat);
   } catch {
     // Ignore bootstrap failures; UI will update identity after connecting.
   }

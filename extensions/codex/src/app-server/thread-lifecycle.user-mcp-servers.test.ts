@@ -1,10 +1,11 @@
+// Codex tests cover thread lifecycle.user mcp servers plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexAppServerRuntimeOptions } from "./config.js";
-import { writeCodexAppServerBinding } from "./session-binding.js";
+import { readCodexAppServerBinding, writeCodexAppServerBinding } from "./session-binding.js";
 import { startOrResumeThread } from "./thread-lifecycle.js";
 
 function threadStartResult(threadId = "thread-1"): Record<string, unknown> {
@@ -54,6 +55,7 @@ function createAppServerOptions(): CodexAppServerRuntimeOptions {
       args: ["app-server"],
       headers: {},
     },
+    codeModeOnly: false,
     requestTimeoutMs: 60_000,
     turnCompletionIdleTimeoutMs: 60_000,
     approvalPolicy: "never",
@@ -135,6 +137,56 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     });
   });
 
+  it("projects only Codex user MCP servers scoped to the current agent", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, {
+        mcp: {
+          servers: {
+            atlas: {
+              transport: "streamable-http",
+              url: "https://atlas.example.com/mcp",
+              codex: {
+                agents: ["atlas"],
+                defaultToolsApprovalMode: "approve",
+              },
+            },
+            apolo: {
+              transport: "streamable-http",
+              url: "https://apolo.example.com/mcp",
+              codex: {
+                agents: ["apolo"],
+                defaultToolsApprovalMode: "approve",
+              },
+            },
+          },
+        },
+      } as unknown as EmbeddedRunAttemptParams["config"]),
+      agentId: "atlas",
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+    });
+
+    const startCall = request.mock.calls.find(([method]) => method === "thread/start");
+    const startParams = startCall?.[1] as { config?: { mcp_servers?: Record<string, unknown> } };
+    expect(startParams?.config?.mcp_servers).toStrictEqual({
+      atlas: {
+        url: "https://atlas.example.com/mcp",
+        default_tools_approval_mode: "approve",
+      },
+    });
+  });
+
   it("omits mcp_servers from the start config when cfg has no user MCP servers", async () => {
     const sessionFile = path.join(tempDir, "session.jsonl");
     const workspaceDir = path.join(tempDir, "workspace");
@@ -151,6 +203,41 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createAppServerOptions(),
+    });
+
+    const startCall = request.mock.calls.find(([method]) => method === "thread/start");
+    const startParams = startCall?.[1] as { config?: { mcp_servers?: Record<string, unknown> } };
+    expect(startParams?.config?.mcp_servers).toBeUndefined();
+  });
+
+  it("omits user MCP servers when runtime policy disables native tool surfaces", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult();
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, {
+        mcp: {
+          servers: {
+            notes: {
+              transport: "stdio",
+              command: "node",
+              args: ["/opt/notes-mcp/dist/index.js"],
+            },
+          },
+        },
+      } as unknown as EmbeddedRunAttemptParams["config"]),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
     });
 
     const startCall = request.mock.calls.find(([method]) => method === "thread/start");
@@ -203,6 +290,185 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     expect(startParams.config!.mcp_servers).toMatchObject({
       notes: { command: "node", args: ["/opt/notes-mcp/dist/index.js"] },
     });
+  });
+
+  it("does not resume an existing native thread when runtime policy disables native tools", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-native",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+    });
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-restricted");
+      }
+      if (method === "thread/resume") {
+        return threadResumeResult("thread-native");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    const startParams = request.mock.calls[0]?.[1] as {
+      environments?: unknown[];
+      config?: {
+        "features.code_mode"?: boolean;
+        "features.code_mode_only"?: boolean;
+        mcp_servers?: Record<string, unknown>;
+      };
+    };
+    expect(startParams?.environments).toEqual([]);
+    expect(startParams?.config?.["features.code_mode"]).toBe(false);
+    expect(startParams?.config?.["features.code_mode_only"]).toBe(false);
+    expect(startParams?.config?.mcp_servers).toBeUndefined();
+    const preservedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(preservedBinding?.threadId).toBe("thread-native");
+  });
+
+  it("preserves MCP-mismatched bindings across transient native-tool-disabled turns", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-native",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+      mcpServersFingerprint: "mcp-v1",
+    });
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-restricted");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+      mcpServersFingerprint: undefined,
+      mcpServersFingerprintEvaluated: true,
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    const startParams = request.mock.calls[0]?.[1] as {
+      config?: {
+        "features.code_mode"?: boolean;
+        mcp_servers?: Record<string, unknown>;
+      };
+    };
+    expect(startParams?.config?.["features.code_mode"]).toBe(false);
+    expect(startParams?.config?.mcp_servers).toBeUndefined();
+    const preservedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(preservedBinding?.threadId).toBe("thread-native");
+    expect(preservedBinding?.mcpServersFingerprint).toBe("mcp-v1");
+  });
+
+  it("preserves MCP-mismatched bindings when provider web-search support is unknown", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-native",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+      webSearchThreadConfigFingerprint: "web-search-v1",
+      mcpServersFingerprint: "mcp-v1",
+    });
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-fallback");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+      mcpServersFingerprint: undefined,
+      mcpServersFingerprintEvaluated: true,
+      nativeProviderWebSearchSupport: "unknown",
+      userMcpServersEnabled: false,
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    const preservedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(preservedBinding?.threadId).toBe("thread-native");
+    expect(preservedBinding?.mcpServersFingerprint).toBe("mcp-v1");
+  });
+
+  it("starts a new thread without user MCP servers when runtime policy disables them", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    const config = {
+      mcp: {
+        servers: {
+          notes: {
+            transport: "stdio",
+            command: "node",
+            args: ["/opt/notes-mcp/dist/index.js"],
+          },
+        },
+      },
+    } as unknown as EmbeddedRunAttemptParams["config"];
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-started");
+      }
+      if (method === "thread/resume") {
+        return threadResumeResult("thread-existing");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, config),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+    });
+
+    request.mockClear();
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir, config),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    const startParams = request.mock.calls[0]?.[1] as {
+      config?: { mcp_servers?: Record<string, unknown> };
+    };
+    expect(startParams?.config?.mcp_servers).toBeUndefined();
   });
 
   it("resends user MCP config when resuming a thread with the matching fingerprint", async () => {

@@ -1,3 +1,4 @@
+// Discord plugin module implements send.shared behavior.
 import { PollLayoutType } from "discord-api-types/payloads/v10";
 import type { RESTAPIPoll } from "discord-api-types/rest/v10";
 import type { APIChannel } from "discord-api-types/v10";
@@ -14,6 +15,7 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import type { ChunkMode } from "openclaw/plugin-sdk/reply-chunking";
 import { resolveTextChunksWithFallback } from "openclaw/plugin-sdk/reply-payload";
 import type { RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { chunkDiscordTextWithMode } from "./chunk.js";
 import { createDiscordClient, resolveDiscordRest, type DiscordClientOpts } from "./client.js";
@@ -39,9 +41,11 @@ type DiscordRequest = RetryRunner;
 export {
   buildDiscordMessagePayload,
   buildDiscordMessageRequest,
+  resolveDiscordMessageFlags,
   resolveDiscordSendComponents,
   resolveDiscordSendEmbeds,
   stripUndefinedFields,
+  SUPPRESS_EMBEDS_FLAG,
   SUPPRESS_NOTIFICATIONS_FLAG,
   type DiscordSendComponentFactory,
   type DiscordSendComponents,
@@ -49,9 +53,9 @@ export {
 } from "./send.message-request.js";
 import {
   buildDiscordMessageRequest,
+  resolveDiscordMessageFlags,
   resolveDiscordSendComponents,
   resolveDiscordSendEmbeds,
-  SUPPRESS_NOTIFICATIONS_FLAG,
   type DiscordSendComponents,
   type DiscordSendEmbeds,
 } from "./send.message-request.js";
@@ -78,7 +82,7 @@ function normalizeReactionEmoji(raw: string) {
 }
 
 function normalizeStickerIds(raw: string[]) {
-  const ids = raw.map((entry) => entry.trim()).filter(Boolean);
+  const ids = normalizeStringEntries(raw);
   if (ids.length === 0) {
     throw new Error("At least one sticker id is required");
   }
@@ -301,12 +305,12 @@ async function sendDiscordText(
   embeds?: DiscordSendEmbeds,
   chunkMode?: ChunkMode,
   silent?: boolean,
+  suppressEmbeds?: boolean,
   maxChars?: number,
 ) {
   if (!text.trim()) {
     throw new Error("Message must be non-empty for Discord sends");
   }
-  const flags = silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
   const chunks = buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode, maxChars });
   const sendChunk = async (chunk: string, isFirst: boolean) => {
     const chunkComponents = resolveDiscordSendComponents({
@@ -315,6 +319,10 @@ async function sendDiscordText(
       isFirst,
     });
     const chunkEmbeds = resolveDiscordSendEmbeds({ embeds, isFirst });
+    const flags = resolveDiscordMessageFlags({
+      silent,
+      suppressEmbeds: suppressEmbeds && !chunkEmbeds?.length,
+    });
     const body = buildDiscordMessageRequest({
       text: chunk,
       components: chunkComponents,
@@ -362,6 +370,7 @@ async function sendDiscordMedia(
   embeds?: DiscordSendEmbeds,
   chunkMode?: ChunkMode,
   silent?: boolean,
+  suppressEmbeds?: boolean,
   maxChars?: number,
 ) {
   const media = await loadWebMedia(
@@ -378,7 +387,6 @@ async function sendDiscordMedia(
     ? buildDiscordTextChunks(text, { maxLinesPerMessage, chunkMode, maxChars })
     : [];
   const caption = chunks[0] ?? "";
-  const flags = silent ? SUPPRESS_NOTIFICATIONS_FLAG : undefined;
   const fileData = toDiscordFileBlob(media.buffer);
   const captionComponents = resolveDiscordSendComponents({
     components,
@@ -386,6 +394,10 @@ async function sendDiscordMedia(
     isFirst: true,
   });
   const captionEmbeds = resolveDiscordSendEmbeds({ embeds, isFirst: true });
+  const flags = resolveDiscordMessageFlags({
+    silent,
+    suppressEmbeds: suppressEmbeds && !captionEmbeds?.length,
+  });
   const body = buildDiscordMessageRequest({
     text: caption,
     components: captionComponents,
@@ -419,6 +431,7 @@ async function sendDiscordMedia(
       undefined,
       chunkMode,
       silent,
+      suppressEmbeds,
       maxChars,
     );
     for (const id of followup.platformMessageIds) {

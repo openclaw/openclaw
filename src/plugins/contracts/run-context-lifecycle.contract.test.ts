@@ -1,3 +1,4 @@
+// Run context lifecycle contract tests cover plugin run context setup and cleanup.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -9,7 +10,6 @@ import { loadSessionStore, updateSessionStore } from "../../config/sessions.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../../infra/agent-events.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
-import { PLUGIN_HOST_CLEANUP_TIMEOUT_MS } from "../host-hook-cleanup-timeout.js";
 import { runPluginHostCleanup } from "../host-hook-cleanup.js";
 import {
   clearPluginHostRuntimeState,
@@ -25,8 +25,12 @@ import { setActivePluginRegistry } from "../runtime.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
 
+const PLUGIN_HOST_CLEANUP_TIMEOUT_MS = 5_000;
+
 async function waitForPluginEventHandlers(): Promise<void> {
-  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 }
 
 function expectNoCleanupFailures(result: Awaited<ReturnType<typeof runPluginHostCleanup>>): void {
@@ -249,7 +253,7 @@ describe("plugin run context lifecycle", () => {
         api.registerAgentEventSubscription({
           id: "delayed",
           streams: ["tool"],
-          async handle(_event, ctx) {
+          async handle(eventValue, ctx) {
             ctx.setRunContext("before-terminal", { visible: true });
             await new Promise<void>((resolve) => {
               releaseToolHandler = resolve;
@@ -754,7 +758,7 @@ describe("plugin run context lifecycle", () => {
   it("rejects hung cleanup hooks with a bounded timeout", async () => {
     vi.useFakeTimers();
     const cleanup = vi.fn(async () => {
-      await new Promise(() => undefined);
+      await new Promise(() => {});
     });
     registerPluginSessionSchedulerJob({
       pluginId: "hung-cleanup-plugin",
@@ -794,17 +798,17 @@ describe("plugin run context lifecycle", () => {
         api.registerSessionExtension({
           namespace: "state",
           description: "hangs during cleanup",
-          cleanup: () => new Promise(() => undefined),
+          cleanup: () => new Promise(() => {}),
         });
         api.registerRuntimeLifecycle({
           id: "runtime-cleanup",
-          cleanup: () => new Promise(() => undefined),
+          cleanup: () => new Promise(() => {}),
         });
         api.registerSessionSchedulerJob({
           id: "scheduler-cleanup",
           sessionKey: "agent:main:main",
           kind: "monitor",
-          cleanup: () => new Promise(() => undefined),
+          cleanup: () => new Promise(() => {}),
         });
       },
     });

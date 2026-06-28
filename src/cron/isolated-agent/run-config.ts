@@ -1,3 +1,4 @@
+/** Builds isolated cron runner config from global defaults plus agent overrides. */
 import type { resolveAgentConfig } from "../../agents/agent-scope.js";
 import type { AgentDefaultsConfig } from "../../config/types.js";
 
@@ -32,6 +33,7 @@ function mergeCronAgentModelOverride(params: {
   return nextDefaults;
 }
 
+/** Builds the agent defaults snapshot used by isolated cron runs. */
 export function buildCronAgentDefaultsConfig(params: {
   defaults?: AgentDefaultsConfig;
   agentConfigOverride?: ResolvedAgentConfig;

@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Watches dev source paths and restarts scripts/run-node.mjs when relevant
+// files change.
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
@@ -14,6 +16,7 @@ const WATCH_RESTARTABLE_CHILD_SIGNALS = new Set(["SIGTERM"]);
 const WATCH_IGNORED_PATH_SEGMENTS = new Set([".git", "dist", "node_modules"]);
 const WATCH_LOCK_WAIT_MS = 5_000;
 const WATCH_LOCK_POLL_MS = 100;
+const WATCH_SHUTDOWN_KILL_GRACE_MS = 5_000;
 const WATCH_LOCK_DIR = path.join(".local", "watch-node");
 const AUTO_DOCTOR_DISABLE_VALUES = new Set(["0", "false", "no", "off"]);
 
@@ -92,11 +95,15 @@ const isProcessAlive = (pid, signalProcess) => {
   return true;
 };
 
-const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const sleep = (ms) =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 
 const createWatchLockKey = (cwd, args) =>
   createHash("sha256").update(cwd).update("\0").update(args.join("\0")).digest("hex").slice(0, 12);
 
+/** Resolves the lock path that prevents duplicate watch-node loops. */
 export const resolveWatchLockPath = (cwd, args = []) =>
   path.join(cwd, WATCH_LOCK_DIR, `${createWatchLockKey(cwd, args)}.json`);
 
@@ -254,6 +261,9 @@ const releaseWatchLock = (lockHandle) => {
  *   watchPaths?: string[];
  * }} [params]
  */
+/**
+ * Runs the watch loop and restarts the child process on relevant changes.
+ */
 export async function runWatchMain(params = {}) {
   const deps = {
     spawn: params.spawn ?? spawn,
@@ -272,6 +282,7 @@ export async function runWatchMain(params = {}) {
 
   const childEnv = { ...deps.env };
   const watchSession = `${deps.now()}-${deps.process.pid}`;
+  const useChildProcessGroup = process.platform !== "win32" && deps.process.stdin?.isTTY !== true;
   childEnv.OPENCLAW_WATCH_MODE = "1";
   childEnv.OPENCLAW_WATCH_SESSION = watchSession;
   // The watcher owns process restarts; keep SIGUSR1/config reloads in-process
@@ -289,14 +300,47 @@ export async function runWatchMain(params = {}) {
     let watcher = null;
     let lockHandle = null;
     let autoDoctorAttempted = false;
-    let onSigInt;
-    let onSigTerm;
+    let shutdownExitCode = null;
+    let shutdownKillTimer = null;
+
+    const signalWatchProcess = (child, signal) => {
+      if (!child || typeof child.kill !== "function") {
+        return;
+      }
+      if (useChildProcessGroup && typeof child.pid === "number") {
+        try {
+          deps.signalProcess(-child.pid, signal);
+          return;
+        } catch (error) {
+          if (error?.code === "ESRCH" || error?.code === "EPERM") {
+            return;
+          }
+        }
+      }
+      child.kill(signal);
+    };
+
+    const forceKillWatchProcessGroup = (child) => {
+      if (!useChildProcessGroup || typeof child?.pid !== "number") {
+        return;
+      }
+      try {
+        deps.signalProcess(-child.pid, "SIGKILL");
+      } catch (error) {
+        if (error?.code !== "ESRCH" && error?.code !== "EPERM") {
+          throw error;
+        }
+      }
+    };
 
     const settle = (code) => {
       if (settled) {
         return;
       }
       settled = true;
+      if (shutdownKillTimer) {
+        clearTimeout(shutdownKillTimer);
+      }
       if (onSigInt) {
         deps.process.off("SIGINT", onSigInt);
       }
@@ -308,9 +352,34 @@ export async function runWatchMain(params = {}) {
       resolve(code);
     };
 
+    const requestShutdown = (code) => {
+      shuttingDown = true;
+      shutdownExitCode = code;
+      if (!watchProcess || typeof watchProcess.kill !== "function") {
+        settle(code);
+        return;
+      }
+      const shutdownProcess = watchProcess;
+      signalWatchProcess(shutdownProcess, WATCH_RESTART_SIGNAL);
+      shutdownKillTimer ??= setTimeout(() => {
+        shutdownKillTimer = null;
+        signalWatchProcess(shutdownProcess, "SIGKILL");
+      }, WATCH_SHUTDOWN_KILL_GRACE_MS);
+    };
+
+    const settleIfShuttingDown = (exitedProcess) => {
+      if (!shuttingDown || shutdownExitCode === null) {
+        return false;
+      }
+      forceKillWatchProcessGroup(exitedProcess);
+      settle(shutdownExitCode);
+      return true;
+    };
+
     const startRunner = () => {
       watchProcess = deps.spawn(deps.process.execPath, buildRunnerArgs(deps.args), {
         cwd: deps.cwd,
+        detached: useChildProcessGroup,
         env: childEnv,
         stdio: "inherit",
       });
@@ -320,11 +389,16 @@ export async function runWatchMain(params = {}) {
         settle(1);
       });
       watchProcess.on("exit", (exitCode, exitSignal) => {
+        const exitedProcess = watchProcess;
         watchProcess = null;
-        if (shuttingDown) {
+        if (settled) {
+          return;
+        }
+        if (settleIfShuttingDown(exitedProcess)) {
           return;
         }
         if (restartRequested || shouldRestartAfterChildExit(exitCode, exitSignal)) {
+          forceKillWatchProcessGroup(exitedProcess);
           restartRequested = false;
           startRunner();
           return;
@@ -338,11 +412,7 @@ export async function runWatchMain(params = {}) {
     };
 
     const handleWatcherError = () => {
-      shuttingDown = true;
-      if (watchProcess && typeof watchProcess.kill === "function") {
-        watchProcess.kill(WATCH_RESTART_SIGNAL);
-      }
-      settle(1);
+      requestShutdown(1);
     };
 
     const rejectWatcherStartupError = (err) => {
@@ -352,7 +422,7 @@ export async function runWatchMain(params = {}) {
       settled = true;
       shuttingDown = true;
       if (watchProcess && typeof watchProcess.kill === "function") {
-        watchProcess.kill(WATCH_RESTART_SIGNAL);
+        signalWatchProcess(watchProcess, WATCH_RESTART_SIGNAL);
       }
       releaseWatchLock(lockHandle);
       watcher?.close?.().catch?.(() => {});
@@ -362,7 +432,7 @@ export async function runWatchMain(params = {}) {
       if (onSigTerm) {
         deps.process.off("SIGTERM", onSigTerm);
       }
-      reject(err);
+      reject(toLintErrorObject(err, "Non-Error rejection"));
     };
 
     const resolveCreateWatcher = async () => {
@@ -385,6 +455,7 @@ export async function runWatchMain(params = {}) {
       );
       watchProcess = deps.spawn(deps.process.execPath, buildDoctorRunnerArgs(), {
         cwd: deps.cwd,
+        detached: useChildProcessGroup,
         env: childEnv,
         stdio: "inherit",
       });
@@ -394,8 +465,12 @@ export async function runWatchMain(params = {}) {
         settle(1);
       });
       watchProcess.on("exit", (exitCode, exitSignal) => {
+        const exitedProcess = watchProcess;
         watchProcess = null;
-        if (shuttingDown) {
+        if (settled) {
+          return;
+        }
+        if (settleIfShuttingDown(exitedProcess)) {
           return;
         }
         if (exitCode === 0 && !exitSignal) {
@@ -421,7 +496,7 @@ export async function runWatchMain(params = {}) {
       }
       restartRequested = true;
       if (typeof watchProcess.kill === "function") {
-        watchProcess.kill(WATCH_RESTART_SIGNAL);
+        signalWatchProcess(watchProcess, WATCH_RESTART_SIGNAL);
       }
     };
 
@@ -448,19 +523,11 @@ export async function runWatchMain(params = {}) {
       void resolveCreateWatcher().then(attachWatcher).catch(rejectWatcherStartupError);
     };
 
-    onSigInt = () => {
-      shuttingDown = true;
-      if (watchProcess && typeof watchProcess.kill === "function") {
-        watchProcess.kill(WATCH_RESTART_SIGNAL);
-      }
-      settle(130);
+    const onSigInt = () => {
+      requestShutdown(130);
     };
-    onSigTerm = () => {
-      shuttingDown = true;
-      if (watchProcess && typeof watchProcess.kill === "function") {
-        watchProcess.kill(WATCH_RESTART_SIGNAL);
-      }
-      settle(143);
+    const onSigTerm = () => {
+      requestShutdown(143);
     };
 
     deps.process.on("SIGINT", onSigInt);
@@ -483,20 +550,38 @@ export async function runWatchMain(params = {}) {
         startRunner();
         startWatcher();
       })
-      .catch((error) => {
-        logWatcher(`Failed to acquire watcher lock: ${error?.message ?? "unknown error"}`, deps);
-        settle(1);
-      });
+      .catch(
+        /** @param {unknown} error */ (error) => {
+          logWatcher(`Failed to acquire watcher lock: ${error?.message ?? "unknown error"}`, deps);
+          settle(1);
+        },
+      );
   });
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   void runWatchMain()
     .then((code) => process.exit(code))
-    .catch((err) => {
-      if (!isInvalidPackageConfigError(err)) {
-        console.error(err);
-      }
-      process.exit(1);
-    });
+    .catch(
+      /** @param {unknown} err */ (err) => {
+        if (!isInvalidPackageConfigError(err)) {
+          console.error(err);
+        }
+        process.exit(1);
+      },
+    );
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

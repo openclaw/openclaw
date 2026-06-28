@@ -1,21 +1,35 @@
+/**
+ * Builds auth forwarding decisions for prepared runtime plans. Provider aliases
+ * and harness auth owners are resolved before session auth profiles can be
+ * safely forwarded.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { shouldRouteOpenAIPiThroughCodexAuthProvider } from "../openai-codex-routing.js";
-import { normalizeEmbeddedAgentRuntime } from "../pi-embedded-runner/runtime.js";
-import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { normalizePluginsConfig } from "../../plugins/config-state.js";
+import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+import {
+  type ProviderAuthAliasLookupParams,
+  resolveProviderIdForAuth,
+} from "../provider-auth-aliases.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
-const CODEX_HARNESS_AUTH_PROVIDER = "openai-codex";
-const OPENAI_PROVIDER = "openai";
+const CODEX_HARNESS_AUTH_PROVIDER = "openai";
+// Empty metadata disables plugin alias lookups without changing the downstream
+// resolver contract, matching the "plugins disabled" runtime-plan state.
+const EMPTY_PROVIDER_AUTH_ALIAS_METADATA = {
+  plugins: [],
+} satisfies NonNullable<ProviderAuthAliasLookupParams["metadataSnapshot"]>;
 
 function resolveHarnessAuthProvider(params: {
   harnessId?: string;
   harnessRuntime?: string;
 }): string | undefined {
-  const harnessId = normalizeEmbeddedAgentRuntime(params.harnessId);
-  const runtime = normalizeEmbeddedAgentRuntime(params.harnessRuntime);
+  const harnessId = normalizeOptionalAgentRuntimeId(params.harnessId);
+  const runtime = normalizeOptionalAgentRuntimeId(params.harnessRuntime);
   return harnessId === "codex" || runtime === "codex" ? CODEX_HARNESS_AUTH_PROVIDER : undefined;
 }
 
+/** Builds the auth forwarding plan for one resolved agent runtime. */
 export function buildAgentRuntimeAuthPlan(params: {
   provider: string;
   authProfileProvider?: string;
@@ -24,13 +38,22 @@ export function buildAgentRuntimeAuthPlan(params: {
   sessionAuthProfileCandidateIds?: string[];
   config?: OpenClawConfig;
   workspaceDir?: string;
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
+  providerAuthAliasesEnabled?: boolean;
   harnessId?: string;
   harnessRuntime?: string;
   allowHarnessAuthProfileForwarding?: boolean;
 }): AgentRuntimeAuthPlan {
+  const providerAuthAliasesEnabled =
+    params.providerAuthAliasesEnabled ??
+    (params.config ? normalizePluginsConfig(params.config.plugins).enabled : true);
+  const metadataSnapshot =
+    params.metadataSnapshot ??
+    (providerAuthAliasesEnabled ? undefined : EMPTY_PROVIDER_AUTH_ALIAS_METADATA);
   const aliasLookupParams = {
     config: params.config,
     workspaceDir: params.workspaceDir,
+    ...(metadataSnapshot ? { metadataSnapshot } : {}),
   };
   const providerForAuth = resolveProviderIdForAuth(params.provider, aliasLookupParams);
   const authProfileProviderForAuth = resolveProviderIdForAuth(
@@ -44,24 +67,13 @@ export function buildAgentRuntimeAuthPlan(params: {
   const harnessCanForwardProfile =
     params.allowHarnessAuthProfileForwarding !== false &&
     harnessProviderForAuth &&
-    (harnessProviderForAuth === authProfileProviderForAuth ||
-      (harnessProviderForAuth === CODEX_HARNESS_AUTH_PROVIDER &&
-        authProfileProviderForAuth === OPENAI_PROVIDER &&
-        params.authProfileMode === "api_key"));
-  const openAIPiCanForwardCodexProfile = shouldRouteOpenAIPiThroughCodexAuthProvider({
-    provider: providerForAuth,
-    harnessRuntime: params.harnessRuntime,
-    agentHarnessId: params.harnessId,
-    authProfileProvider: authProfileProviderForAuth,
-    authProfileId: params.sessionAuthProfileId,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-  });
+    harnessProviderForAuth === authProfileProviderForAuth;
   const providerCanForwardProfile =
     !harnessProviderForAuth && providerForAuth === authProfileProviderForAuth;
-  const canForwardProfile =
-    providerCanForwardProfile || harnessCanForwardProfile || openAIPiCanForwardCodexProfile;
+  const canForwardProfile = providerCanForwardProfile || harnessCanForwardProfile;
 
+  // Forward only when the selected provider/harness resolves to the same auth
+  // owner as the stored session profile; otherwise the runtime must choose auth.
   return {
     providerForAuth,
     authProfileProviderForAuth,

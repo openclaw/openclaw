@@ -1,10 +1,14 @@
-import type { ReactionType, ReactionTypeEmoji } from "@grammyjs/types";
+// Telegram plugin module implements send behavior.
 import * as grammy from "grammy";
 import { type ApiClientOptions, Bot, HttpError } from "grammy";
+import type { ReactionType, ReactionTypeEmoji } from "grammy/types";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import { isDiagnosticFlagEnabled } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { formatUncaughtError } from "openclaw/plugin-sdk/error-runtime";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
+import { parseStrictInteger } from "openclaw/plugin-sdk/number-runtime";
+import { resolveChunkMode, resolveTextChunkLimit } from "openclaw/plugin-sdk/reply-chunking";
 import { createTelegramRetryRunner, type RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import { createSubsystemLogger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -16,8 +20,13 @@ import { normalizeTelegramApiRoot } from "./api-root.js";
 import { buildTypingThreadParams } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
 import { splitTelegramCaption } from "./caption.js";
-import { resolveTelegramFetch } from "./fetch.js";
-import { renderTelegramHtmlText, splitTelegramHtmlChunks } from "./format.js";
+import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
+import { resolveTelegramTransport } from "./fetch.js";
+import {
+  renderTelegramHtmlText,
+  splitTelegramHtmlChunks,
+  telegramHtmlToPlainTextFallback,
+} from "./format.js";
 import { buildInlineKeyboard } from "./inline-keyboard.js";
 import {
   isRecoverableTelegramNetworkError,
@@ -25,11 +34,22 @@ import {
   isTelegramRateLimitError,
   isTelegramServerError,
 } from "./network-errors.js";
+import { recordOutboundMessageForPromptContext } from "./outbound-message-context.js";
 import { makeProxyFetch } from "./proxy.js";
 import {
   buildTelegramThreadReplyParams,
   resolveTelegramSendThreadSpec,
 } from "./reply-parameters.js";
+import {
+  buildTelegramRichMessage,
+  getTelegramRichRawApi,
+  splitTelegramRichMessageTextChunks,
+  TELEGRAM_RICH_TEXT_LIMIT,
+  toTelegramRichMessageContextParams,
+  type TelegramEditRichMessageTextParams,
+  type TelegramRichMessageContextParams,
+  type TelegramRichTextChunk,
+} from "./rich-message.js";
 import {
   buildOutboundMediaLoadOptions,
   getImageMetadata,
@@ -60,6 +80,7 @@ export type TelegramApiOverride = Partial<TelegramApi>;
 type TelegramSendMessageParams = Parameters<TelegramApi["sendMessage"]>[2];
 type TelegramSendPollParams = Parameters<TelegramApi["sendPoll"]>[3];
 type TelegramEditMessageTextParams = Parameters<TelegramApi["editMessageText"]>[3];
+type TelegramEditMessageCaptionParams = Parameters<TelegramApi["editMessageCaption"]>[2];
 type TelegramCreateForumTopicParams = NonNullable<Parameters<TelegramApi["createForumTopic"]>[2]>;
 type TelegramThreadScopedParams = {
   message_thread_id?: number;
@@ -81,7 +102,7 @@ type TelegramSendOpts = {
   api?: TelegramApiOverride;
   retry?: RetryConfig;
   textMode?: "markdown" | "html";
-  plainText?: string;
+  tableMode?: MarkdownTableMode;
   /** Send audio as voice message instead of audio file. Defaults to false. */
   asVoice?: boolean;
   /** Send video as video note instead of regular video. Defaults to false. */
@@ -107,7 +128,24 @@ type TelegramSendResult = {
 
 type TelegramMessageLike = {
   message_id?: number;
-  chat?: { id?: string | number };
+  chat?: { id?: string | number; type?: string; title?: string; username?: string };
+  date?: number;
+  from?: { id?: number; is_bot?: boolean; first_name?: string; username?: string };
+  text?: string;
+  caption?: string;
+  message_thread_id?: number;
+};
+
+type TelegramOutboundSuccessLogParams = {
+  accountId: string;
+  chatId: string;
+  messageId: string;
+  operation: string;
+  deliveryKind?: string;
+  messageThreadId?: number;
+  replyToMessageId?: number;
+  silent?: boolean;
+  chunkCount?: number;
 };
 
 type TelegramReactionOpts = {
@@ -118,6 +156,7 @@ type TelegramReactionOpts = {
   remove?: boolean;
   verbose?: boolean;
   retry?: RetryConfig;
+  gatewayClientScopes?: readonly string[];
 };
 
 type TelegramTypingOpts = {
@@ -140,14 +179,40 @@ function resolveTelegramMessageIdOrThrow(
   throw new Error(`Telegram ${context} returned no message_id`);
 }
 
+// Pull a chunk end back off a UTF-16 surrogate pair so neither chunk carries a
+// lone surrogate that re-encodes to U+FFFD. Mirrors the guard in
+// bot/native-quote.ts `truncateUtf16Safe`; shared by both plain-text splitters.
+//
+// `start` is the beginning of the current chunk — the return value is
+// guaranteed to be > start, so callers that loop on `start = end` always
+// advance. When clamping would land on `start` (i.e. the surrogate pair begins
+// exactly at `start`), we emit both surrogates together (end = start + 2)
+// rather than emitting a lone surrogate or stalling.
+function surrogateSafeChunkEnd(text: string, end: number, start: number): number {
+  const high = text.charCodeAt(end - 1);
+  const low = text.charCodeAt(end);
+  const splitsPair = end > 0 && high >= 0xd800 && high <= 0xdbff && low >= 0xdc00 && low <= 0xdfff;
+  if (!splitsPair) {
+    return end;
+  }
+  const clamped = end - 1;
+  // Guard: never return an index that would stall the loop. If clamped equals
+  // start the surrogate pair's high unit is the very first char of this chunk;
+  // emit both surrogates together instead of splitting or stalling.
+  return clamped > start ? clamped : start + 2;
+}
+
 function splitTelegramPlainTextChunks(text: string, limit: number): string[] {
   if (!text) {
     return [];
   }
   const normalizedLimit = Math.max(1, Math.floor(limit));
   const chunks: string[] = [];
-  for (let start = 0; start < text.length; start += normalizedLimit) {
-    chunks.push(text.slice(start, start + normalizedLimit));
+  let start = 0;
+  while (start < text.length) {
+    const end = surrogateSafeChunkEnd(text, start + normalizedLimit, start);
+    chunks.push(text.slice(start, end));
+    start = end;
   }
   return chunks;
 }
@@ -170,16 +235,49 @@ function splitTelegramPlainTextFallback(text: string, chunkCount: number, limit:
       remainingChunks === 1
         ? remainingChars
         : Math.min(normalizedLimit, Math.ceil(remainingChars / remainingChunks));
-    chunks.push(text.slice(offset, offset + nextChunkLength));
-    offset += nextChunkLength;
+    const end = surrogateSafeChunkEnd(text, offset + nextChunkLength, offset);
+    chunks.push(text.slice(offset, end));
+    offset = end;
   }
   return chunks;
 }
 
+// Test-only handle: the plain-text splitter is internal, but its surrogate-safe
+// chunk boundary needs direct behavior coverage.
+export function splitTelegramPlainTextChunksForTests(text: string, limit: number): string[] {
+  return splitTelegramPlainTextChunks(text, limit);
+}
+
+function logTelegramOutboundSendOk(params: TelegramOutboundSuccessLogParams): void {
+  const parts = [
+    "telegram outbound send ok",
+    `accountId=${params.accountId}`,
+    `chatId=${params.chatId}`,
+    `messageId=${params.messageId}`,
+    `operation=${params.operation}`,
+  ];
+  if (params.deliveryKind) {
+    parts.push(`deliveryKind=${params.deliveryKind}`);
+  }
+  if (typeof params.messageThreadId === "number") {
+    parts.push(`threadId=${params.messageThreadId}`);
+  }
+  if (typeof params.replyToMessageId === "number") {
+    parts.push(`replyToMessageId=${params.replyToMessageId}`);
+  }
+  if (params.silent === true) {
+    parts.push("silent=true");
+  }
+  if (typeof params.chunkCount === "number") {
+    parts.push(`chunkCount=${params.chunkCount}`);
+  }
+  sendLogger.info(parts.join(" "));
+}
+
 const PARSE_ERR_RE = /can't parse entities|parse entities|find end of the entity/i;
-const THREAD_NOT_FOUND_RE = /400:\s*Bad Request:\s*message thread not found/i;
 const MESSAGE_NOT_MODIFIED_RE =
   /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
+const MESSAGE_HAS_NO_TEXT_RE = /400:\s*Bad Request:\s*there is no text in the message to edit/i;
 const MESSAGE_DELETE_NOOP_RE =
   /message to delete not found|message can't be deleted|MESSAGE_ID_INVALID|MESSAGE_DELETE_FORBIDDEN/i;
 const CHAT_NOT_FOUND_RE = /400: Bad Request: chat not found/i;
@@ -187,12 +285,6 @@ const sendLogger = createSubsystemLogger("telegram/send");
 const diagLogger = createSubsystemLogger("telegram/diagnostic");
 const telegramClientOptionsCache = new Map<string, ApiClientOptions | undefined>();
 const MAX_TELEGRAM_CLIENT_OPTIONS_CACHE_SIZE = 64;
-
-function asTelegramClientFetch(
-  fetchImpl: typeof globalThis.fetch,
-): NonNullable<ApiClientOptions["fetch"]> {
-  return fetchImpl as unknown as NonNullable<ApiClientOptions["fetch"]>;
-}
 
 export function resetTelegramClientOptionsCacheForTests(): void {
   telegramClientOptionsCache.clear();
@@ -269,8 +361,13 @@ function resolveTelegramClientOptions(
   const proxyFetch = proxyUrl ? makeProxyFetch(proxyUrl) : undefined;
   const apiRoot = normalizeOptionalString(account.config.apiRoot);
   const normalizedApiRoot = apiRoot ? normalizeTelegramApiRoot(apiRoot) : undefined;
-  const fetchImpl = resolveTelegramFetch(proxyFetch, {
+  const transport = resolveTelegramTransport(proxyFetch, {
     network: account.config.network,
+  });
+  const fetchImpl = createTelegramClientFetch({
+    fetchImpl: asTelegramClientFetch(transport.fetch),
+    timeoutSeconds,
+    transport,
   });
   const clientOptions =
     fetchImpl || timeoutSeconds || normalizedApiRoot
@@ -348,6 +445,7 @@ async function resolveAndPersistChatId(params: {
     resolvedChatId: chatId,
     verbose: params.verbose,
     gatewayClientScopes: params.gatewayClientScopes,
+    ...(params.gatewayClientScopes === undefined ? { trustedInternalWriteback: true } : {}),
   });
   return chatId;
 }
@@ -361,46 +459,24 @@ function normalizeMessageId(raw: string | number): number {
     if (!value) {
       throw new Error("Message id is required for Telegram actions");
     }
-    const parsed = Number.parseInt(value, 10);
-    if (Number.isFinite(parsed)) {
+    const parsed = parseStrictInteger(value);
+    if (parsed !== undefined) {
       return parsed;
     }
   }
   throw new Error("Message id is required for Telegram actions");
 }
 
-function isTelegramThreadNotFoundError(err: unknown): boolean {
-  return THREAD_NOT_FOUND_RE.test(formatErrorMessage(err));
-}
-
 function isTelegramMessageNotModifiedError(err: unknown): boolean {
   return MESSAGE_NOT_MODIFIED_RE.test(formatErrorMessage(err));
 }
 
+function isTelegramMessageHasNoTextError(err: unknown): boolean {
+  return MESSAGE_HAS_NO_TEXT_RE.test(formatErrorMessage(err));
+}
+
 function isTelegramMessageDeleteNoopError(err: unknown): boolean {
   return MESSAGE_DELETE_NOOP_RE.test(formatErrorMessage(err));
-}
-
-function hasMessageThreadIdParam(params?: TelegramThreadScopedParams): boolean {
-  if (!params) {
-    return false;
-  }
-  const value = params.message_thread_id;
-  if (typeof value === "number") {
-    return Number.isFinite(value);
-  }
-  return false;
-}
-
-function removeMessageThreadIdParam<TParams extends TelegramThreadScopedParams | undefined>(
-  params: TParams,
-): TParams {
-  if (!params || !hasMessageThreadIdParam(params)) {
-    return params;
-  }
-  const next = { ...params };
-  delete next.message_thread_id;
-  return (Object.keys(next).length > 0 ? next : undefined) as TParams;
 }
 
 function isTelegramHtmlParseError(err: unknown): boolean {
@@ -498,7 +574,7 @@ function createTelegramRequestWithDiag(params: {
             fn: runRequest,
             ...(options?.shouldLog ? { shouldLog: options.shouldLog } : {}),
           });
-    return call.catch((err) => {
+    return call.catch((err: unknown) => {
       logHttpError(label ?? "request", err);
       throw err;
     });
@@ -532,45 +608,13 @@ function wrapTelegramChatNotFoundError(err: unknown, params: { chatId: string; i
   );
 }
 
-async function withTelegramThreadFallback<
-  T,
-  TParams extends TelegramThreadScopedParams | undefined,
->(
-  params: TParams,
-  label: string,
-  verbose: boolean | undefined,
-  allowThreadlessRetry: boolean,
-  attempt: (effectiveParams: TParams, effectiveLabel: string) => Promise<T>,
-): Promise<T> {
-  try {
-    return await attempt(params, label);
-  } catch (err) {
-    // Do not widen this fallback to cover "chat not found".
-    // chat-not-found is routing/auth/membership/token; stripping thread IDs hides root cause.
-    if (
-      !allowThreadlessRetry ||
-      !hasMessageThreadIdParam(params) ||
-      !isTelegramThreadNotFoundError(err)
-    ) {
-      throw err;
-    }
-    if (verbose) {
-      sendLogger.warn(
-        `telegram ${label} failed with message_thread_id, retrying without thread: ${formatErrorMessage(err)}`,
-      );
-    }
-    const retriedParams = removeMessageThreadIdParam(params);
-    return await attempt(retriedParams, `${label}-threadless`);
-  }
-}
-
 function createRequestWithChatNotFound(params: {
   requestWithDiag: TelegramRequestWithDiag;
   chatId: string;
   input: string;
 }) {
   return async <T>(fn: () => Promise<T>, label: string) =>
-    params.requestWithDiag(fn, label).catch((err) => {
+    params.requestWithDiag(fn, label).catch((err: unknown) => {
       throw wrapTelegramChatNotFoundError(err, {
         chatId: params.chatId,
         input: params.input,
@@ -627,7 +671,9 @@ export async function sendMessageTelegram(
     replyQuoteText: opts.quoteText,
     useReplyIdAsQuoteSource: true,
   });
+  const richThreadParams = toTelegramRichMessageContextParams(threadParams);
   const hasThreadParams = Object.keys(threadParams).length > 0;
+  const hasRichThreadParams = Object.keys(richThreadParams).length > 0;
   const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({
     cfg,
     account,
@@ -641,13 +687,16 @@ export async function sendMessageTelegram(
   });
 
   const textMode = opts.textMode ?? "markdown";
-  const tableMode = resolveMarkdownTableMode({
-    cfg,
-    channel: "telegram",
-    accountId: account.accountId,
-  });
+  const useRichMessages = account.config.richMessages === true;
+  const tableMode =
+    opts.tableMode ??
+    resolveMarkdownTableMode({
+      cfg,
+      channel: "telegram",
+      accountId: account.accountId,
+      supportsBlockTables: useRichMessages,
+    });
   const renderHtmlText = (value: string) => renderTelegramHtmlText(value, { textMode, tableMode });
-
   // Resolve link preview setting from config (default: enabled).
   const linkPreviewEnabled = account.config.linkPreview ?? true;
   const linkPreviewOptions = linkPreviewEnabled ? undefined : { is_disabled: true };
@@ -661,49 +710,40 @@ export async function sendMessageTelegram(
     chunk: TelegramTextChunk,
     params?: TelegramSendMessageParams,
   ) => {
-    return await withTelegramThreadFallback(
-      params,
-      "message",
-      opts.verbose,
-      target.chatType !== "direct",
-      async (effectiveParams, label) => {
-        const baseParams = effectiveParams ? { ...effectiveParams } : {};
-        if (linkPreviewOptions) {
-          baseParams.link_preview_options = linkPreviewOptions;
-        }
-        const plainParams: TelegramSendMessageParams = {
-          ...baseParams,
-          ...(opts.silent === true ? { disable_notification: true } : {}),
-        };
-        const hasPlainParams = Object.keys(plainParams).length > 0;
-        const requestPlain = (retryLabel: string) =>
-          requestWithChatNotFound(
-            () =>
-              hasPlainParams
-                ? api.sendMessage(chatId, chunk.plainText, plainParams)
-                : api.sendMessage(chatId, chunk.plainText),
-            retryLabel,
-          );
-        if (!chunk.htmlText) {
-          return await requestPlain(label);
-        }
-        const htmlText = chunk.htmlText;
-        const htmlParams: TelegramSendMessageParams = {
-          parse_mode: "HTML" as const,
-          ...plainParams,
-        };
-        return await withTelegramHtmlParseFallback({
-          label,
+    const baseParams = params ? { ...params } : {};
+    if (linkPreviewOptions) {
+      baseParams.link_preview_options = linkPreviewOptions;
+    }
+    const plainParams: TelegramSendMessageParams = {
+      ...baseParams,
+      ...(opts.silent === true ? { disable_notification: true } : {}),
+    };
+    const hasPlainParams = Object.keys(plainParams).length > 0;
+    const requestPlain = (label: string) =>
+      requestWithChatNotFound(
+        () =>
+          hasPlainParams
+            ? api.sendMessage(chatId, chunk.plainText, plainParams)
+            : api.sendMessage(chatId, chunk.plainText),
+        label,
+      );
+    const result = !chunk.htmlText
+      ? await requestPlain("message")
+      : await withTelegramHtmlParseFallback({
+          label: "message",
           verbose: opts.verbose,
-          requestHtml: (retryLabel) =>
+          requestHtml: (label) =>
             requestWithChatNotFound(
-              () => api.sendMessage(chatId, htmlText, htmlParams),
-              retryLabel,
+              () =>
+                api.sendMessage(chatId, chunk.htmlText ?? chunk.plainText, {
+                  parse_mode: "HTML" as const,
+                  ...plainParams,
+                }),
+              label,
             ),
           requestPlain,
         });
-      },
-    );
+    return { result, acceptedParams: params };
   };
 
   const buildTextParams = (isLastChunk: boolean) =>
@@ -714,29 +754,68 @@ export async function sendMessageTelegram(
         }
       : undefined;
 
+  const buildRichTextParams = (isLastChunk: boolean) =>
+    hasRichThreadParams || (isLastChunk && replyMarkup)
+      ? {
+          ...richThreadParams,
+          ...(isLastChunk && replyMarkup ? { reply_markup: replyMarkup } : {}),
+        }
+      : undefined;
+
   const sendTelegramTextChunks = async (
     chunks: TelegramTextChunk[],
     context: string,
   ): Promise<{ messageId: string; chatId: string }> => {
     let lastMessageId = "";
     let lastChatId = chatId;
+    let lastAcceptedParams: TelegramThreadScopedParams | undefined;
+    let sentChunkCount = 0;
     for (let index = 0; index < chunks.length; index += 1) {
       const chunk = chunks[index];
       if (!chunk) {
         continue;
       }
-      const res = await sendTelegramTextChunk(chunk, buildTextParams(index === chunks.length - 1));
+      const { result: res, acceptedParams } = await sendTelegramTextChunk(
+        chunk,
+        buildTextParams(index === chunks.length - 1),
+      );
       const messageId = resolveTelegramMessageIdOrThrow(res, context);
       recordSentMessage(chatId, messageId, cfg);
+      await recordOutboundMessageForPromptContext({
+        cfg,
+        account,
+        chatId,
+        message: res,
+        messageId,
+        text: chunk.plainText,
+        ...(acceptedParams?.message_thread_id !== undefined
+          ? { messageThreadId: acceptedParams.message_thread_id }
+          : {}),
+      });
       lastMessageId = String(messageId);
       lastChatId = String(res?.chat?.id ?? chatId);
+      lastAcceptedParams = acceptedParams;
+      sentChunkCount += 1;
+    }
+    if (lastMessageId) {
+      logTelegramOutboundSendOk({
+        accountId: account.accountId,
+        chatId: lastChatId,
+        messageId: lastMessageId,
+        operation: "sendMessage",
+        deliveryKind: "text",
+        messageThreadId: lastAcceptedParams?.message_thread_id,
+        replyToMessageId: opts.replyToMessageId,
+        silent: opts.silent,
+        chunkCount: sentChunkCount,
+      });
     }
     return { messageId: lastMessageId, chatId: lastChatId };
   };
 
   const buildChunkedTextPlan = (rawText: string, context: string): TelegramTextChunk[] => {
     const htmlText = renderHtmlText(rawText);
-    const fallbackText = opts.plainText ?? rawText;
+    const fallbackText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : rawText;
     let htmlChunks: string[];
     try {
       htmlChunks = splitTelegramHtmlChunks(htmlText, 4000);
@@ -756,14 +835,95 @@ export async function sendMessageTelegram(
       return fixedPlainTextChunks.map((plainText) => ({ plainText }));
     }
     const plainTextChunks = splitTelegramPlainTextFallback(fallbackText, htmlChunks.length, 4000);
-    return htmlChunks.map((htmlText, index) => ({
-      htmlText,
-      plainText: plainTextChunks[index] ?? htmlText,
+    return htmlChunks.map((htmlTextLocal, index) => ({
+      htmlText: htmlTextLocal,
+      plainText: plainTextChunks[index] ?? htmlTextLocal,
     }));
   };
 
   const sendChunkedText = async (rawText: string, context: string) =>
-    await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
+    useRichMessages
+      ? await sendTelegramRichTextChunks(buildRichTextPlan(rawText), context)
+      : await sendTelegramTextChunks(buildChunkedTextPlan(rawText, context), context);
+
+  const buildRichTextPlan = (rawText: string): TelegramRichTextChunk[] => {
+    const textLimit = Math.min(
+      resolveTextChunkLimit(cfg, "telegram", account.accountId, {
+        fallbackLimit: TELEGRAM_RICH_TEXT_LIMIT,
+      }),
+      TELEGRAM_RICH_TEXT_LIMIT,
+    );
+    return splitTelegramRichMessageTextChunks({
+      text: rawText,
+      textLimit,
+      textMode,
+      chunkMode: resolveChunkMode(cfg, "telegram", account.accountId),
+      tableMode,
+      skipEntityDetection: account.config.linkPreview === false,
+    });
+  };
+
+  const sendTelegramRichTextChunks = async (
+    chunks: TelegramRichTextChunk[],
+    context: string,
+  ): Promise<{ messageId: string; chatId: string }> => {
+    const richRawApi = getTelegramRichRawApi(api);
+    let lastMessageId = "";
+    let lastChatId = chatId;
+    let lastAcceptedParams: TelegramRichMessageContextParams | undefined;
+    let sentChunkCount = 0;
+    for (let index = 0; index < chunks.length; index += 1) {
+      const chunk = chunks[index];
+      if (!chunk) {
+        continue;
+      }
+      const acceptedParams = buildRichTextParams(index === chunks.length - 1);
+      const result = await requestWithChatNotFound(
+        () =>
+          richRawApi.sendRichMessage({
+            chat_id: chatId,
+            rich_message: buildTelegramRichMessage(chunk.text, chunk.textMode, {
+              skipEntityDetection: account.config.linkPreview === false,
+              tableMode,
+            }),
+            ...acceptedParams,
+            ...(opts.silent === true ? { disable_notification: true } : {}),
+          }),
+        "richMessage",
+      );
+      const messageId = resolveTelegramMessageIdOrThrow(result, context);
+      recordSentMessage(chatId, messageId, cfg);
+      await recordOutboundMessageForPromptContext({
+        cfg,
+        account,
+        chatId,
+        message: result,
+        messageId,
+        text: chunk.plainText,
+        ...(acceptedParams?.message_thread_id !== undefined
+          ? { messageThreadId: acceptedParams.message_thread_id }
+          : {}),
+      });
+      lastMessageId = String(messageId);
+      lastChatId = String(result?.chat?.id ?? chatId);
+      lastAcceptedParams = acceptedParams;
+      sentChunkCount += 1;
+    }
+    if (lastMessageId) {
+      logTelegramOutboundSendOk({
+        accountId: account.accountId,
+        chatId: lastChatId,
+        messageId: lastMessageId,
+        operation: "sendRichMessage",
+        deliveryKind: "text",
+        messageThreadId: lastAcceptedParams?.message_thread_id,
+        replyToMessageId: opts.replyToMessageId,
+        silent: opts.silent,
+        chunkCount: sentChunkCount,
+      });
+    }
+    return { messageId: lastMessageId, chatId: lastChatId };
+  };
 
   async function shouldSendTelegramImageAsPhoto(buffer: Buffer): Promise<boolean> {
     try {
@@ -860,15 +1020,7 @@ export async function sendMessageTelegram(
       sender: (
         effectiveParams: TelegramThreadScopedParams | undefined,
       ) => Promise<TelegramMessageLike>,
-    ) =>
-      await withTelegramThreadFallback(
-        mediaParams,
-        label,
-        opts.verbose,
-        target.chatType !== "direct",
-        async (effectiveParams, retryLabel) =>
-          requestWithChatNotFound(() => sender(effectiveParams), retryLabel),
-      );
+    ) => await requestWithChatNotFound(() => sender(mediaParams), label);
 
     const mediaSender = (() => {
       if (isGif && deliveryKind !== "document") {
@@ -960,6 +1112,30 @@ export async function sendMessageTelegram(
     const mediaMessageId = resolveTelegramMessageIdOrThrow(result, "media send");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
     recordSentMessage(chatId, mediaMessageId, cfg);
+    await recordOutboundMessageForPromptContext({
+      cfg,
+      account,
+      chatId,
+      message: result,
+      messageId: mediaMessageId,
+      ...(caption ? { text: caption } : {}),
+      ...(mediaParams.message_thread_id !== undefined
+        ? { messageThreadId: mediaParams.message_thread_id }
+        : {}),
+    });
+    logTelegramOutboundSendOk({
+      accountId: account.accountId,
+      chatId: resolvedChatId,
+      messageId: String(mediaMessageId),
+      operation: `send${mediaSender.label
+        .split("_")
+        .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+        .join("")}`,
+      deliveryKind: mediaSender.label,
+      messageThreadId: mediaParams.message_thread_id,
+      replyToMessageId: opts.replyToMessageId,
+      silent: opts.silent,
+    });
     recordChannelActivity({
       channel: "telegram",
       accountId: account.accountId,
@@ -1035,6 +1211,7 @@ export async function reactMessageTelegram(
     lookupTarget: rawTarget,
     persistTarget: rawTarget,
     verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
   });
   const messageId = normalizeMessageId(messageIdInput);
   const requestWithDiag = createTelegramRequestWithDiag({
@@ -1042,7 +1219,7 @@ export async function reactMessageTelegram(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "react" }),
   });
   const remove = opts.remove === true;
   const trimmedEmoji = emoji.trim();
@@ -1075,6 +1252,7 @@ type TelegramDeleteOpts = {
   verbose?: boolean;
   api?: TelegramApiOverride;
   retry?: RetryConfig;
+  gatewayClientScopes?: readonly string[];
 };
 
 export async function deleteMessageTelegram(
@@ -1090,6 +1268,7 @@ export async function deleteMessageTelegram(
     lookupTarget: rawTarget,
     persistTarget: rawTarget,
     verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
   });
   const messageId = normalizeMessageId(messageIdInput);
   const requestWithDiag = createTelegramRequestWithDiag({
@@ -1097,7 +1276,7 @@ export async function deleteMessageTelegram(
     account,
     retry: opts.retry,
     verbose: opts.verbose,
-    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "send" }),
+    shouldRetry: (err) => isRecoverableTelegramNetworkError(err, { context: "delete" }),
   });
   try {
     await requestWithDiag(() => api.deleteMessage(chatId, messageId), "deleteMessage", {
@@ -1131,6 +1310,7 @@ export async function pinMessageTelegram(
     lookupTarget: rawTarget,
     persistTarget: rawTarget,
     verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
   });
   const messageId = normalizeMessageId(messageIdInput);
   const requestWithDiag = createTelegramRequestWithDiag({
@@ -1163,6 +1343,7 @@ export async function unpinMessageTelegram(
     lookupTarget: rawTarget,
     persistTarget: rawTarget,
     verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
   });
   const messageId = messageIdInput === undefined ? undefined : normalizeMessageId(messageIdInput);
   const requestWithDiag = createTelegramRequestWithDiag({
@@ -1224,6 +1405,7 @@ export async function editForumTopicTelegram(
     lookupTarget: target.chatId,
     persistTarget: rawTarget,
     verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
   });
   const messageThreadId = normalizeMessageId(messageThreadIdInput);
   const requestWithDiag = createTelegramRequestWithDiag({
@@ -1274,11 +1456,14 @@ type TelegramEditOpts = {
   verbose?: boolean;
   api?: TelegramApiOverride;
   retry?: RetryConfig;
+  gatewayClientScopes?: readonly string[];
   textMode?: "markdown" | "html";
   /** Controls whether link previews are shown in the edited message. */
   linkPreview?: boolean;
   /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
   buttons?: TelegramInlineButtons;
+  /** Use Telegram's media-caption edit endpoint, or fall back to it when text edits target media. */
+  editMode?: "text" | "caption" | "auto";
   /** Resolved runtime config from the command or gateway boundary. */
   cfg: OpenClawConfig;
 };
@@ -1289,6 +1474,7 @@ type TelegramEditReplyMarkupOpts = {
   verbose?: boolean;
   api?: TelegramApiOverride;
   retry?: RetryConfig;
+  gatewayClientScopes?: readonly string[];
   /** Inline keyboard buttons (reply markup). Pass empty array to remove buttons. */
   buttons?: TelegramInlineButtons;
   /** Resolved runtime config from the command or gateway boundary. */
@@ -1312,6 +1498,7 @@ export async function editMessageReplyMarkupTelegram(
     lookupTarget: rawTarget,
     persistTarget: rawTarget,
     verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
   });
   const messageId = normalizeMessageId(messageIdInput);
   const requestWithDiag = createTelegramRequestWithDiag({
@@ -1355,6 +1542,7 @@ export async function editMessageTelegram(
     lookupTarget: rawTarget,
     persistTarget: rawTarget,
     verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
   });
   const messageId = normalizeMessageId(messageIdInput);
   const requestWithDiag = createTelegramRequestWithDiag({
@@ -1373,12 +1561,22 @@ export async function editMessageTelegram(
   ) => requestWithDiag(fn, label, shouldLog ? { shouldLog } : undefined);
 
   const textMode = opts.textMode ?? "markdown";
+  const useRichMessages = account.config.richMessages === true;
   const tableMode = resolveMarkdownTableMode({
     cfg,
     channel: "telegram",
     accountId: account.accountId,
+    supportsBlockTables: useRichMessages,
   });
   const htmlText = renderTelegramHtmlText(text, { textMode, tableMode });
+  const plainText = textMode === "html" ? telegramHtmlToPlainTextFallback(htmlText) : text;
+  const richRawApi = useRichMessages ? getTelegramRichRawApi(api) : undefined;
+  const richMessage = useRichMessages
+    ? buildTelegramRichMessage(text, textMode, {
+        skipEntityDetection: opts.linkPreview === false,
+        tableMode,
+      })
+    : undefined;
 
   // Reply markup semantics:
   // - buttons === undefined → don't send reply_markup (keep existing)
@@ -1388,43 +1586,106 @@ export async function editMessageTelegram(
   const builtKeyboard = shouldTouchButtons ? buildInlineKeyboard(opts.buttons) : undefined;
   const replyMarkup = shouldTouchButtons ? (builtKeyboard ?? { inline_keyboard: [] }) : undefined;
 
-  const editParams: TelegramEditMessageTextParams = {
+  const textEditParams: TelegramEditMessageTextParams = {
     parse_mode: "HTML",
   };
   if (opts.linkPreview === false) {
-    editParams.link_preview_options = { is_disabled: true };
+    textEditParams.link_preview_options = { is_disabled: true };
   }
   if (replyMarkup !== undefined) {
-    editParams.reply_markup = replyMarkup;
+    textEditParams.reply_markup = replyMarkup;
   }
-  const plainParams: TelegramEditMessageTextParams = {};
+  const plainTextParams: TelegramEditMessageTextParams = {};
   if (opts.linkPreview === false) {
-    plainParams.link_preview_options = { is_disabled: true };
+    plainTextParams.link_preview_options = { is_disabled: true };
   }
   if (replyMarkup !== undefined) {
-    plainParams.reply_markup = replyMarkup;
+    plainTextParams.reply_markup = replyMarkup;
+  }
+  const captionEditParams: TelegramEditMessageCaptionParams = {
+    caption: htmlText,
+    parse_mode: "HTML",
+  };
+  if (replyMarkup !== undefined) {
+    captionEditParams.reply_markup = replyMarkup;
+  }
+  const plainCaptionParams: TelegramEditMessageCaptionParams = {
+    caption: plainText,
+  };
+  if (replyMarkup !== undefined) {
+    plainCaptionParams.reply_markup = replyMarkup;
   }
 
-  try {
-    await withTelegramHtmlParseFallback({
+  const performTextEdit = () => {
+    if (richRawApi && richMessage) {
+      const richEditParams: Pick<TelegramEditRichMessageTextParams, "reply_markup"> =
+        replyMarkup === undefined ? {} : { reply_markup: replyMarkup };
+      return requestWithEditShouldLog(
+        () =>
+          richRawApi.editMessageText({
+            chat_id: chatId,
+            message_id: messageId,
+            rich_message: richMessage,
+            ...richEditParams,
+          }),
+        "editMessage",
+        (err) => !isTelegramMessageNotModifiedError(err),
+      );
+    }
+    return withTelegramHtmlParseFallback({
       label: "editMessage",
       verbose: opts.verbose,
       requestHtml: (retryLabel) =>
         requestWithEditShouldLog(
-          () => api.editMessageText(chatId, messageId, htmlText, editParams),
+          () => api.editMessageText(chatId, messageId, htmlText, textEditParams),
           retryLabel,
           (err) => !isTelegramMessageNotModifiedError(err),
         ),
       requestPlain: (retryLabel) =>
         requestWithEditShouldLog(
           () =>
-            Object.keys(plainParams).length > 0
-              ? api.editMessageText(chatId, messageId, text, plainParams)
-              : api.editMessageText(chatId, messageId, text),
+            Object.keys(plainTextParams).length > 0
+              ? api.editMessageText(chatId, messageId, plainText, plainTextParams)
+              : api.editMessageText(chatId, messageId, plainText),
           retryLabel,
           (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
         ),
     });
+  };
+
+  const performCaptionEdit = () =>
+    withTelegramHtmlParseFallback({
+      label: "editMessageCaption",
+      verbose: opts.verbose,
+      requestHtml: (retryLabel) =>
+        requestWithEditShouldLog(
+          () => api.editMessageCaption(chatId, messageId, captionEditParams),
+          retryLabel,
+          (err) => !isTelegramMessageNotModifiedError(err),
+        ),
+      requestPlain: (retryLabel) =>
+        requestWithEditShouldLog(
+          () => api.editMessageCaption(chatId, messageId, plainCaptionParams),
+          retryLabel,
+          (plainErr) => !isTelegramMessageNotModifiedError(plainErr),
+        ),
+    });
+
+  try {
+    const editMode = opts.editMode ?? "text";
+    if (editMode === "caption") {
+      await performCaptionEdit();
+    } else {
+      try {
+        await performTextEdit();
+      } catch (err) {
+        if (editMode === "auto" && isTelegramMessageHasNoTextError(err)) {
+          await performCaptionEdit();
+        } else {
+          throw err;
+        }
+      }
+    }
   } catch (err) {
     if (isTelegramMessageNotModifiedError(err)) {
       // no-op: Telegram reports message content unchanged, treat as success
@@ -1457,6 +1718,7 @@ type TelegramStickerOpts = {
   verbose?: boolean;
   api?: TelegramApiOverride;
   retry?: RetryConfig;
+  gatewayClientScopes?: readonly string[];
   /** Message ID to reply to (for threading) */
   replyToMessageId?: number;
   /** Forum topic thread ID (for forum supergroups) */
@@ -1486,6 +1748,7 @@ export async function sendStickerTelegram(
     lookupTarget: target.chatId,
     persistTarget: to,
     verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
   });
 
   const threadParams = buildTelegramThreadReplyParams({
@@ -1513,13 +1776,9 @@ export async function sendStickerTelegram(
 
   const stickerParams = hasThreadParams ? threadParams : undefined;
 
-  const result = await withTelegramThreadFallback(
-    stickerParams,
+  const result = await requestWithChatNotFound(
+    () => api.sendSticker(chatId, fileId.trim(), stickerParams),
     "sticker",
-    opts.verbose,
-    target.chatType !== "direct",
-    async (effectiveParams, label) =>
-      requestWithChatNotFound(() => api.sendSticker(chatId, fileId.trim(), effectiveParams), label),
   );
 
   const messageId = resolveTelegramMessageIdOrThrow(result, "sticker send");
@@ -1621,16 +1880,9 @@ export async function sendPollTelegram(
     ...(opts.silent === true ? { disable_notification: true } : {}),
   };
 
-  const result = await withTelegramThreadFallback(
-    pollParams,
+  const result = await requestWithChatNotFound(
+    () => api.sendPoll(chatId, normalizedPoll.question, pollOptions, pollParams),
     "poll",
-    opts.verbose,
-    target.chatType !== "direct",
-    async (effectiveParams, label) =>
-      requestWithChatNotFound(
-        () => api.sendPoll(chatId, normalizedPoll.question, pollOptions, effectiveParams),
-        label,
-      ),
   );
 
   const messageId = resolveTelegramMessageIdOrThrow(result, "poll send");
@@ -1658,6 +1910,7 @@ type TelegramCreateForumTopicOpts = {
   api?: TelegramApiOverride;
   verbose?: boolean;
   retry?: RetryConfig;
+  gatewayClientScopes?: readonly string[];
   /** Icon color for the topic (must be one of 0x6FB9F0, 0xFFD67E, 0xCB86DB, 0x8EEE98, 0xFF93B2, 0xFB6F5F). */
   iconColor?: TelegramCreateForumTopicParams["icon_color"];
   /** Custom emoji ID for the topic icon. */
@@ -1701,6 +1954,7 @@ export async function createForumTopicTelegram(
     lookupTarget: target.chatId,
     persistTarget: chatId,
     verbose: opts.verbose,
+    gatewayClientScopes: opts.gatewayClientScopes,
   });
 
   const requestWithDiag = createTelegramNonIdempotentRequestWithDiag({

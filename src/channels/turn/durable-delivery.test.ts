@@ -1,3 +1,4 @@
+// Durable delivery tests cover persisted channel turn delivery attempts and recovery.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -21,6 +22,7 @@ vi.mock("../message/send.js", async (importOriginal) => {
   };
 });
 
+import type { FinalizedMsgContext } from "../../auto-reply/templating.js";
 import {
   deliverInboundReplyWithMessageSendContext,
   resolveDurableInboundReplyToId,
@@ -32,11 +34,24 @@ type SendDurableMessageBatchRequest = {
   to?: string;
   threadId?: string | number | null;
   durability?: string;
+  gatewayClientScopes?: readonly string[];
 };
 
 type DeliverySupportRequest = {
   requirements?: Record<string, boolean>;
 };
+
+function ctxPayload(overrides: Partial<FinalizedMsgContext>): FinalizedMsgContext {
+  return {
+    CommandAuthorized: true,
+    CommandTurn: {
+      kind: "normal" as const,
+      source: "message" as const,
+      authorized: false as const,
+    },
+    ...overrides,
+  };
+}
 
 function latestSendDurableMessageBatchRequest(): SendDurableMessageBatchRequest {
   const calls = mocks.sendDurableMessageBatch.mock.calls;
@@ -77,11 +92,10 @@ describe("durable inbound reply delivery", () => {
       resolveDurableInboundReplyToId({
         replyToId: null,
         payload: { text: "plain reply" },
-        ctxPayload: {
-          CommandAuthorized: true,
+        ctxPayload: ctxPayload({
           ReplyToIdFull: "context-full-reply",
           ReplyToId: "context-reply",
-        },
+        }),
       }),
     ).toBeNull();
   });
@@ -90,22 +104,20 @@ describe("durable inbound reply delivery", () => {
     expect(
       resolveDurableInboundReplyToId({
         payload: { text: "payload reply", replyToId: "payload-reply" },
-        ctxPayload: {
-          CommandAuthorized: true,
+        ctxPayload: ctxPayload({
           ReplyToIdFull: "context-full-reply",
           ReplyToId: "context-reply",
-        },
+        }),
       }),
     ).toBe("payload-reply");
 
     expect(
       resolveDurableInboundReplyToId({
         payload: { text: "context reply" },
-        ctxPayload: {
-          CommandAuthorized: true,
+        ctxPayload: ctxPayload({
           ReplyToIdFull: "context-full-reply",
           ReplyToId: "context-reply",
-        },
+        }),
       }),
     ).toBe("context-full-reply");
   });
@@ -118,11 +130,10 @@ describe("durable inbound reply delivery", () => {
       info: { kind: "final" },
       payload: { text: "plain reply" },
       threadId: null,
-      ctxPayload: {
-        CommandAuthorized: true,
+      ctxPayload: ctxPayload({
         OriginatingTo: "chat-1",
         MessageThreadId: "context-thread",
-      },
+      }),
     });
 
     expect(mocks.sendDurableMessageBatch).toHaveBeenCalledTimes(1);
@@ -132,6 +143,7 @@ describe("durable inbound reply delivery", () => {
     expect(request.to).toBe("chat-1");
     expect(request.threadId).toBeNull();
     expect(request.durability).toBe("best_effort");
+    expect(request.gatewayClientScopes).toEqual([]);
   });
 
   it("does not require unknown-send reconciliation for the default best-effort final path", async () => {
@@ -141,10 +153,9 @@ describe("durable inbound reply delivery", () => {
       agentId: "main",
       info: { kind: "final" },
       payload: { text: "final" },
-      ctxPayload: {
-        CommandAuthorized: true,
+      ctxPayload: ctxPayload({
         OriginatingTo: "chat-1",
-      },
+      }),
     });
 
     expect(mocks.resolveOutboundDurableFinalDeliverySupport).toHaveBeenCalledTimes(1);
@@ -167,10 +178,9 @@ describe("durable inbound reply delivery", () => {
         text: true,
         reconcileUnknownSend: true,
       },
-      ctxPayload: {
-        CommandAuthorized: true,
+      ctxPayload: ctxPayload({
         OriginatingTo: "chat-1",
-      },
+      }),
     });
 
     expect(mocks.resolveOutboundDurableFinalDeliverySupport).toHaveBeenCalledTimes(1);
@@ -203,12 +213,12 @@ describe("durable inbound reply delivery", () => {
       agentId: "main",
       info: { kind: "final" },
       payload: { text: "final" },
-      ctxPayload: {
-        CommandAuthorized: true,
+      ctxPayload: ctxPayload({
         OriginatingTo: "chat-1",
-      },
+      }),
     });
 
-    expect(result).toEqual({ status: "failed", error });
+    expect(result).toEqual({ status: "failed", error, sentBeforeError: true });
+    expect(error).toMatchObject({ sentBeforeError: true, visibleReplySent: true });
   });
 });

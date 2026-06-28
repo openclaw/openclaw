@@ -1,3 +1,4 @@
+/** Tests command-control detection and authorization trigger heuristics. */
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -347,7 +348,6 @@ describe("resolveCommandAuthorization", () => {
         OriginatingChannel: "telegram",
         From: "owner-123",
         To: "owner-123",
-        ForceSenderIsOwnerFalse: true,
       } as MsgContext,
       cfg,
       commandAuthorized: true,
@@ -1109,7 +1109,10 @@ describe("control command parsing", () => {
     expect(hasControlCommand("/commands:")).toBe(true);
     expect(hasControlCommand("commands")).toBe(false);
     expect(hasControlCommand("/status")).toBe(true);
+    expect(hasControlCommand("/STATUS")).toBe(true);
     expect(hasControlCommand("/status:")).toBe(true);
+    expect(hasControlCommand("/status plugins")).toBe(true);
+    expect(hasControlCommand("/STATUS plugins")).toBe(true);
     expect(hasControlCommand("status")).toBe(false);
     expect(hasControlCommand("usage")).toBe(false);
 
@@ -1120,6 +1123,7 @@ describe("control command parsing", () => {
       }
     }
     expect(hasControlCommand("/compact")).toBe(true);
+    expect(hasControlCommand("/COMPACT keep CaseSensitivePath")).toBe(true);
     expect(hasControlCommand("/compact:")).toBe(true);
     expect(hasControlCommand("compact")).toBe(false);
   });
@@ -1132,7 +1136,7 @@ describe("control command parsing", () => {
 
   it("requires commands to be the full message", () => {
     expect(hasControlCommand("hello /status")).toBe(false);
-    expect(hasControlCommand("/status please")).toBe(false);
+    expect(hasControlCommand("/status please")).toBe(true);
     expect(hasControlCommand("prefix /send on")).toBe(false);
     expect(hasControlCommand("/send on")).toBe(true);
   });

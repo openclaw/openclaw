@@ -1,5 +1,10 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { streamSimple } from "@earendil-works/pi-ai";
+// Kimi Coding plugin module implements stream behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
+import {
+  streamSimple,
+  type AssistantMessage,
+  type AssistantMessageEvent,
+} from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -18,6 +23,9 @@ type KimiToolCallBlock = {
 };
 
 type KimiThinkingType = "enabled" | "disabled";
+interface MutableAssistantMessageEventStream extends AsyncIterable<AssistantMessageEvent> {
+  result: () => Promise<AssistantMessage>;
+}
 type KimiThinkingConfig = {
   type: KimiThinkingType;
   budget_tokens?: number;
@@ -73,6 +81,39 @@ function ensureKimiAnthropicMaxTokens(
   );
   const current = normalizeKimiAnthropicMaxTokens(payloadObj.max_tokens);
   payloadObj.max_tokens = current === undefined ? required : Math.max(current, required);
+}
+
+function messageHasOpenAIToolCalls(message: Record<string, unknown>): boolean {
+  return Array.isArray(message.tool_calls) && message.tool_calls.length > 0;
+}
+
+function ensureKimiOpenAIReasoningContent(payloadObj: Record<string, unknown>): void {
+  if (!Array.isArray(payloadObj.messages)) {
+    return;
+  }
+  for (const message of payloadObj.messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+    const record = message as Record<string, unknown>;
+    if (record.role !== "assistant" || !messageHasOpenAIToolCalls(record)) {
+      continue;
+    }
+    if (!("reasoning_content" in record)) {
+      record.reasoning_content = "";
+    }
+  }
+}
+
+function stripKimiOpenAIReasoningContent(payloadObj: Record<string, unknown>): void {
+  if (!Array.isArray(payloadObj.messages)) {
+    return;
+  }
+  for (const message of payloadObj.messages) {
+    if (message && typeof message === "object") {
+      delete (message as Record<string, unknown>).reasoning_content;
+    }
+  }
 }
 
 function normalizeKimiThinkingType(value: unknown): KimiThinkingType | undefined {
@@ -269,39 +310,54 @@ function rewriteKimiTaggedToolCallsInMessage(message: unknown): void {
   }
 }
 
-function wrapStreamMessageObjects(
-  stream: ReturnType<typeof streamSimple>,
+function transformKimiStreamEvent(
+  value: unknown,
   transformMessage: (message: unknown) => void,
-): ReturnType<typeof streamSimple> {
-  const originalResult = stream.result.bind(stream);
-  stream.result = async () => {
-    const message = await originalResult();
+): void {
+  const event =
+    value && typeof value === "object"
+      ? (value as { partial?: unknown; message?: unknown })
+      : undefined;
+  if (!event) {
+    return;
+  }
+  for (const message of [event.partial, event.message]) {
     transformMessage(message);
-    return message;
-  };
+  }
+}
 
-  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
-  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
-    function () {
-      const iterator = originalAsyncIterator();
-      return {
-        async next() {
-          const result = await iterator.next();
-          if (!result.done && result.value && typeof result.value === "object") {
-            const event = result.value as { partial?: unknown; message?: unknown };
-            transformMessage(event.partial);
-            transformMessage(event.message);
-          }
-          return result;
-        },
-        async return(value?: unknown) {
-          return iterator.return?.(value) ?? { done: true as const, value: undefined };
-        },
-        async throw(error?: unknown) {
-          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
-        },
-      };
+function wrapStreamMessageObjects(
+  stream: MutableAssistantMessageEventStream,
+  transformMessage: (message: unknown) => void,
+): MutableAssistantMessageEventStream {
+  const readFinalMessage = stream.result.bind(stream);
+  Object.assign(stream, {
+    async result() {
+      const message = await readFinalMessage();
+      transformMessage(message);
+      return message;
+    },
+  });
+
+  const createIterator = stream[Symbol.asyncIterator].bind(stream);
+  stream[Symbol.asyncIterator] = () => {
+    const iterator = createIterator();
+    return {
+      async next() {
+        const step = await iterator.next();
+        if (!step.done) {
+          transformKimiStreamEvent(step.value, transformMessage);
+        }
+        return step;
+      },
+      async return(value?: unknown) {
+        return iterator.return?.(value) ?? { done: true as const, value: undefined };
+      },
+      async throw(error?: unknown) {
+        return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+      },
     };
+  };
   return stream;
 }
 
@@ -331,11 +387,57 @@ export function createKimiThinkingWrapper(
         model.api === "anthropic-messages" ? { ...normalized } : { type: normalized.type };
       if (model.api === "anthropic-messages") {
         ensureKimiAnthropicMaxTokens(payloadObj, normalized);
+      } else if (normalized.type === "enabled") {
+        ensureKimiOpenAIReasoningContent(payloadObj);
+      } else {
+        stripKimiOpenAIReasoningContent(payloadObj);
       }
       delete payloadObj.reasoning;
       delete payloadObj.reasoning_effort;
       delete payloadObj.reasoningEffort;
+      stripAnthropicCacheControlMarkers(payloadObj);
     });
+}
+
+function stripContentBlockCacheControl(block: unknown): void {
+  if (!block || typeof block !== "object") {
+    return;
+  }
+
+  const record = block as Record<string, unknown>;
+  delete record.cache_control;
+
+  if (record.type === "tool_result" && Array.isArray(record.content)) {
+    for (const nestedBlock of record.content) {
+      stripContentBlockCacheControl(nestedBlock);
+    }
+  }
+}
+
+function stripContentArrayCacheControl(value: unknown): void {
+  if (!Array.isArray(value)) {
+    return;
+  }
+
+  for (const block of value) {
+    stripContentBlockCacheControl(block);
+  }
+}
+
+function stripAnthropicCacheControlMarkers(payloadObj: Record<string, unknown>): void {
+  stripContentArrayCacheControl(payloadObj.system);
+
+  if (!Array.isArray(payloadObj.messages)) {
+    return;
+  }
+
+  for (const message of payloadObj.messages) {
+    if (!message || typeof message !== "object") {
+      continue;
+    }
+
+    stripContentArrayCacheControl((message as Record<string, unknown>).content);
+  }
 }
 
 export function wrapKimiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn {

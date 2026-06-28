@@ -162,6 +162,7 @@ public actor GatewayNodeSession {
         let clientId = options.clientId.trimmingCharacters(in: .whitespacesAndNewlines)
         let clientMode = options.clientMode.trimmingCharacters(in: .whitespacesAndNewlines)
         let clientDisplayName = (options.clientDisplayName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let deviceIdentityProfile = options.deviceIdentityProfile.rawValue
         let includeDeviceIdentity = options.includeDeviceIdentity ? "1" : "0"
         let permissions = options.permissions
             .map { key, value in
@@ -179,6 +180,7 @@ public actor GatewayNodeSession {
             clientId,
             clientMode,
             clientDisplayName,
+            deviceIdentityProfile,
             includeDeviceIdentity,
             permissions,
         ].joined(separator: "|")
@@ -309,6 +311,17 @@ public actor GatewayNodeSession {
         } catch {
             self.logger.error("node event failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    public func send(method: String, paramsJSON: String?) async throws {
+        guard let channel = self.channel else {
+            throw NSError(domain: "Gateway", code: 11, userInfo: [
+                NSLocalizedDescriptionKey: "not connected",
+            ])
+        }
+
+        let params = try self.decodeParamsJSON(paramsJSON)
+        try await channel.send(method: method, params: params)
     }
 
     public func request(method: String, paramsJSON: String?, timeoutSeconds: Int = 15) async throws -> Data {
@@ -457,7 +470,8 @@ public actor GatewayNodeSession {
             let req = BridgeInvokeRequest(
                 id: request.id,
                 command: request.command,
-                paramsJSON: request.paramsJSON)
+                paramsJSON: request.paramsJSON,
+                nodeId: request.nodeId)
             self.logger.info("node invoke executing id=\(request.id, privacy: .public)")
             let response = await Self.invokeWithTimeout(
                 request: req,

@@ -1,5 +1,6 @@
+// Telegram plugin module implements channel.setup behavior.
 import type { ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
-import { type ResolvedTelegramAccount } from "./accounts.js";
+import type { ResolvedTelegramAccount } from "./accounts.js";
 import type { TelegramProbe } from "./probe.js";
 import { telegramSetupAdapter } from "./setup-core.js";
 import { telegramSetupWizard } from "./setup-surface.js";
@@ -12,7 +13,6 @@ export const telegramSetupPlugin: ChannelPlugin<ResolvedTelegramAccount, Telegra
     setup: telegramSetupAdapter,
   }),
   lifecycle: {
-    detectLegacyStateMigrations: ({ cfg, env }) =>
-      detectTelegramLegacyStateMigrations({ cfg, env }),
+    detectLegacyStateMigrations: (params) => detectTelegramLegacyStateMigrations(params),
   },
 };

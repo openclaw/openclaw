@@ -173,9 +173,11 @@ endpoint and model ID:
 ```
 
 If `api` is omitted on a custom provider with a `baseUrl`, OpenClaw defaults to
-`openai-completions`. Loopback endpoints such as `127.0.0.1` are trusted
-automatically; LAN, tailnet, and private DNS endpoints still need
-`request.allowPrivateNetwork: true`.
+`openai-completions`. Custom/local provider entries trust their exact configured
+`baseUrl` origin for guarded model requests, including loopback, LAN, tailnet,
+and private DNS hosts. Requests to other private origins still need
+`request.allowPrivateNetwork: true`; metadata/link-local origins remain blocked
+without explicit opt-in. Set it to `false` to opt out of exact-origin trust.
 
 The `models.providers.<id>.models[].id` value is provider-local. Do not
 include the provider prefix there. For example, an MLX server started with
@@ -196,7 +198,8 @@ Keep `models.mode: "merge"` so hosted models stay available as fallbacks.
 Use `models.providers.<id>.timeoutSeconds` for slow local or remote model
 servers before raising `agents.defaults.timeoutSeconds`. The provider timeout
 applies only to model HTTP requests, including connect, headers, body streaming,
-and the total guarded-fetch abort.
+and the total guarded-fetch abort. If the agent or run timeout is lower, raise
+that ceiling too because provider timeouts cannot extend the whole agent run.
 
 <Note>
 For custom OpenAI-compatible providers, persisting a non-secret local marker such as `apiKey: "ollama-local"` is accepted when `baseUrl` resolves to loopback, a private LAN, `.local`, or a bare hostname. OpenClaw treats it as a valid local credential instead of reporting a missing key. Use a real value for any provider that accepts a public hostname.
@@ -312,7 +315,7 @@ If the model loads cleanly but full agent turns misbehave, work top-down — con
    openclaw infer model run --gateway --model <provider/model> --prompt "Reply with exactly: pong" --json
    ```
 
-3. **Try lean mode.** If both probes pass but real agent turns fail with malformed tool calls or oversized prompts, enable `agents.defaults.experimental.localModelLean: true`. It drops the three heaviest default tools (`browser`, `cron`, `message`) so the prompt shape is smaller and less brittle. See [Experimental Features → Local model lean mode](/concepts/experimental-features#local-model-lean-mode) for the full explanation, when to use it, and how to confirm it is on.
+3. **Try lean mode.** If both probes pass but real agent turns fail with malformed tool calls or oversized prompts, enable `agents.defaults.experimental.localModelLean: true`. It drops the three heaviest default tools (`browser`, `cron`, `message`) and defaults larger tool catalogs behind structured Tool Search controls, except for runs that must keep direct `message` delivery semantics. See [Experimental Features → Local model lean mode](/concepts/experimental-features#local-model-lean-mode) for the full explanation, when to use it, and how to confirm it is on.
 
 4. **Disable tools entirely as a last resort.** If lean mode is not enough, set `models.providers.<provider>.models[].compat.supportsTools: false` for that model entry. The agent will then operate without tool calls on that model.
 

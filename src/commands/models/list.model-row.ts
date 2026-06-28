@@ -1,7 +1,9 @@
+/** Converts registry/catalog models into printable model-list rows. */
 import { modelKey } from "../../agents/model-ref-shared.js";
 import { isLocalBaseUrl } from "./list.local-url.js";
 import type { ModelRow } from "./list.types.js";
 
+/** Minimal model shape needed to render a model-list row. */
 export type ListRowModel = {
   id: string;
   name: string;
@@ -12,8 +14,10 @@ export type ListRowModel = {
   contextTokens?: number | null;
 };
 
+/** Provider-auth predicate used when model-level availability is unavailable. */
 export type ModelAuthAvailabilityResolver = (provider: string) => boolean;
 
+/** Builds a display row, preserving configured tags and alias metadata. */
 export function toModelRow(params: {
   model?: ListRowModel;
   key: string;
@@ -46,8 +50,10 @@ export function toModelRow(params: {
 
   const input = model.input.join("+") || "text";
   const local = isLocalBaseUrl(model.baseUrl ?? "");
-  const modelIsAvailable = availableKeys?.has(modelKey(model.provider, model.id)) ?? false;
-  // Prefer model-level registry availability when present.
+  const modelIsAvailable =
+    local || (availableKeys?.has(modelKey(model.provider, model.id)) ?? false);
+  // Local provider rows use their baseUrl as the auth marker.
+  // Otherwise prefer model-level registry availability when present.
   // Fall back to provider-level auth heuristics only if registry availability isn't available,
   // or if the caller marks this as a synthetic/forward-compat model that won't appear in getAvailable().
   const available =

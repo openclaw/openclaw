@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+// Qa Lab tests cover bus state plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 
 describe("qa-bus state", () => {
@@ -91,6 +93,29 @@ describe("qa-bus state", () => {
     ).rejects.toThrow("qa-bus wait timeout");
   });
 
+  it("caps oversized wait timers", async () => {
+    vi.useFakeTimers();
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      const state = createQaBusState();
+      const pendingMessage = state.waitFor({
+        kind: "message-text",
+        textIncludes: "missing",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+      const pendingCursor = state.waitForCursorAdvance(0, Number.MAX_SAFE_INTEGER);
+
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      expect(timeoutSpy).toHaveBeenCalledTimes(2);
+
+      pendingMessage.catch(() => undefined);
+      pendingCursor.catch(() => undefined);
+    } finally {
+      timeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps account-scoped cursor waits blocked on unrelated account traffic", async () => {
     const state = createQaBusState();
     const pending = state.waitForCursorAdvance(0, 500, (snapshot) => {
@@ -106,7 +131,9 @@ describe("qa-bus state", () => {
 
     const beforeMatch = await Promise.race([
       pending.then(() => "resolved"),
-      new Promise((resolve) => setTimeout(() => resolve("still-waiting"), 20)),
+      new Promise((resolve) => {
+        setTimeout(() => resolve("still-waiting"), 20);
+      }),
     ]);
     expect(beforeMatch).toBe("still-waiting");
 
@@ -169,5 +196,46 @@ describe("qa-bus state", () => {
       query: "dashboard",
     });
     expect(byAltText.map((message) => message.id)).toContain(outbound.id);
+  });
+
+  it("preserves sanitized tool-call traces on bus messages", () => {
+    const state = createQaBusState();
+
+    const outbound = state.addOutboundMessage({
+      to: "dm:alice",
+      text: "used a tool",
+      toolCalls: [
+        {
+          name: "exec",
+          arguments: {
+            command: "pwd",
+            apiToken: "secret-token",
+          },
+        },
+      ],
+    });
+
+    const readback = state.readMessage({ messageId: outbound.id });
+    expect(readback.toolCalls).toEqual([
+      {
+        name: "exec",
+        arguments: {
+          command: "[redacted]",
+          apiToken: "[redacted]",
+        },
+      },
+    ]);
+    expect(state.searchMessages({ query: "exec" }).map((message) => message.id)).toContain(
+      outbound.id,
+    );
+
+    const readbackArguments = readback.toolCalls?.[0]?.arguments;
+    if (!readbackArguments) {
+      throw new Error("expected tool-call arguments");
+    }
+    readbackArguments.command = "mutated";
+    expect(state.readMessage({ messageId: outbound.id }).toolCalls?.[0]?.arguments?.command).toBe(
+      "[redacted]",
+    );
   });
 });

@@ -1,3 +1,4 @@
+// Line plugin module implements bot handlers behavior.
 import type { webhook } from "@line/bot-sdk";
 import { buildMentionRegexes, matchesMentionPatterns } from "openclaw/plugin-sdk/channel-inbound";
 import { resolveStableChannelMessageIngress } from "openclaw/plugin-sdk/channel-ingress-runtime";
@@ -12,8 +13,7 @@ import {
 import { createClaimableDedupe, type ClaimableDedupe } from "openclaw/plugin-sdk/persistent-dedupe";
 import {
   DEFAULT_GROUP_HISTORY_LIMIT,
-  clearHistoryEntriesIfEnabled,
-  recordPendingHistoryEntryIfEnabled,
+  createChannelHistoryWindow,
   type HistoryEntry,
 } from "openclaw/plugin-sdk/reply-history";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -450,8 +450,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     const historyKey = groupId ?? roomId;
     const senderId = sourceInfo.userId ?? "unknown";
     if (historyKey && context.groupHistories) {
-      recordPendingHistoryEntryIfEnabled({
-        historyMap: context.groupHistories,
+      createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
         historyKey,
         limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
         entry: {
@@ -503,8 +502,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
   if (isGroup && context.groupHistories) {
     const historyKey = groupId ?? roomId;
     if (historyKey && context.groupHistories.has(historyKey)) {
-      clearHistoryEntriesIfEnabled({
-        historyMap: context.groupHistories,
+      createChannelHistoryWindow({ historyMap: context.groupHistories }).clear({
         historyKey,
         limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
       });
@@ -618,6 +616,20 @@ export async function handleLineWebhookEvents(
     }
   }
   if (firstError) {
-    throw firstError;
+    throw toLintErrorObject(firstError, "Non-Error thrown");
   }
+}
+
+function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
 }

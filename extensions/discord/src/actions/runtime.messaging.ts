@@ -1,4 +1,5 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+// Discord plugin module implements runtime.messaging behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { ActionGate, DiscordActionConfig, OpenClawConfig } from "../runtime-api.js";
 import { handleDiscordMessageManagementAction } from "./runtime.messaging.messages.js";
 import { handleDiscordReactionMessagingAction } from "./runtime.messaging.reactions.js";

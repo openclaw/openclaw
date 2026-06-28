@@ -1,5 +1,7 @@
+// Slack plugin module implements draft stream behavior.
+import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
-import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-lifecycle";
+import { createDraftStreamLoop } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { deleteSlackMessage, editSlackMessage } from "./actions.js";
 import { formatSlackError } from "./errors.js";
@@ -37,6 +39,7 @@ export function createSlackDraftStream(params: {
   maxChars?: number;
   throttleMs?: number;
   resolveThreadTs?: () => string | undefined;
+  metadata?: MessageMetadata;
   onMessageSent?: () => void;
   log?: (message: string) => void;
   warn?: (message: string) => void;
@@ -95,6 +98,7 @@ export function createSlackDraftStream(params: {
         accountId: params.accountId,
         threadTs: params.resolveThreadTs?.(),
         identity: params.identity,
+        ...(params.metadata ? { metadata: params.metadata } : {}),
         ...(blocks ? { blocks } : {}),
       });
       streamChannelId = sent.channelId || streamChannelId;

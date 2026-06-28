@@ -1,3 +1,4 @@
+// Channel outbound send tests cover CLI send runtime handoff to channel outbound adapters.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -87,6 +88,28 @@ describe("createChannelOutboundRuntimeSend", () => {
     expect(params.to).toBe("+15551234567");
     expect(params.text).toBe("hello");
     expect(params.accountId).toBe("default");
+  });
+
+  it("preserves rendered html formatting through lazy text sends", async () => {
+    const sendText = vi.fn(async () => ({ channel: "telegram", messageId: "tg-1" }));
+    mocks.loadChannelOutboundAdapter.mockResolvedValue({
+      sendText,
+    });
+
+    const { createChannelOutboundRuntimeSend } = await import("./channel-outbound-send.js");
+    const runtimeSend = createChannelOutboundRuntimeSend({
+      channelId: "telegram" as never,
+      unavailableMessage: "unavailable",
+    });
+    const opts = {
+      cfg: {},
+      textMode: "html" as const,
+    };
+
+    await runtimeSend.sendMessage("12345", '<a href="https://example.com">Example</a>', opts);
+
+    const params = expectSingleCallParams(sendText);
+    expect(params.formatting).toEqual({ parseMode: "HTML" });
   });
 
   it("routes block sends through payload delivery", async () => {

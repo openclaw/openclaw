@@ -1,14 +1,15 @@
+// Next-run regression tests cover unresolved next-run state after service updates.
 import { describe, expect, it, vi } from "vitest";
 import {
   createDefaultIsolatedRunner,
   createIsolatedRegressionJob,
   noopLogger,
   setupCronRegressionFixtures,
-  writeCronJobs,
 } from "../../test/helpers/cron/service-regression-fixtures.js";
 import * as schedule from "./schedule.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.js";
+import { saveCronStore } from "./store.js";
 
 const issue66019Fixtures = setupCronRegressionFixtures({ prefix: "cron-66019-" });
 
@@ -72,7 +73,7 @@ describe("#66019 unresolved next-run repro", () => {
       id: "cron-66019-minimal-success",
       scheduledAt,
     });
-    await writeCronJobs(store.storePath, [cronJob]);
+    await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
 
     const runIsolatedAgentJob = createDefaultIsolatedRunner();
     const nextRunSpy = vi.spyOn(schedule, "computeNextRunAtMs").mockReturnValue(undefined);
@@ -107,7 +108,7 @@ describe("#66019 unresolved next-run repro", () => {
       id: "cron-66019-minimal-error",
       scheduledAt,
     });
-    await writeCronJobs(store.storePath, [cronJob]);
+    await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
 
     const runIsolatedAgentJob = vi.fn().mockResolvedValue({
       status: "error",
@@ -145,7 +146,7 @@ describe("#66019 unresolved next-run repro", () => {
       id: "cron-66019-error-backoff-floor",
       scheduledAt,
     });
-    await writeCronJobs(store.storePath, [cronJob]);
+    await saveCronStore(store.storePath, { version: 1, jobs: [cronJob] });
 
     const runIsolatedAgentJob = vi.fn().mockResolvedValue({
       status: "error",

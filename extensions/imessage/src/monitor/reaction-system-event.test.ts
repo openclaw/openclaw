@@ -1,3 +1,4 @@
+// Imessage tests cover reaction system event plugin behavior.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -33,7 +34,6 @@ describe("enqueueIMessageReactionSystemEvent", () => {
       {
         sessionKey: "agent:main:main",
         contextKey: "imessage:reaction:added:3:lobster-reply-guid:+15555550123:👎",
-        trusted: false,
       },
     );
     expect(runtime.log).toHaveBeenCalledWith(

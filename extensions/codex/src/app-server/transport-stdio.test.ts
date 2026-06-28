@@ -1,3 +1,4 @@
+// Codex tests cover transport stdio plugin behavior.
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -87,6 +88,21 @@ describe("resolveCodexAppServerSpawnInvocation", () => {
       shell: undefined,
       windowsHide: true,
     });
+  });
+
+  it("rejects Windows Codex app-server commands that include inline script arguments", () => {
+    expect(() =>
+      resolveCodexAppServerSpawnInvocation(
+        startOptions(
+          "node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
+        ),
+        {
+          platform: "win32",
+          env: {},
+          execPath: "C:\\node\\node.exe",
+        },
+      ),
+    ).toThrow("Windows spawn command must be an executable path only");
   });
 });
 

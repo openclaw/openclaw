@@ -1,6 +1,7 @@
+// Telegram helper module supports account config behavior.
 import {
   normalizeAccountId,
-  resolveAccountEntry,
+  resolveNormalizedAccountEntry,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/account-core";
 import type { TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -49,7 +50,11 @@ export function resolveTelegramAccountConfig(
   accountId: string,
 ): TelegramAccountConfig | undefined {
   const normalized = normalizeAccountId(accountId);
-  return resolveAccountEntry(cfg.channels?.telegram?.accounts, normalized);
+  return resolveNormalizedAccountEntry(
+    cfg.channels?.telegram?.accounts,
+    normalized,
+    normalizeAccountId,
+  );
 }
 
 export function mergeTelegramAccountConfig(
@@ -85,6 +90,10 @@ export function mergeTelegramAccountConfig(
     baseAllowFrom: base.allowFrom,
     accountAllowFrom: account.allowFrom,
   });
+  const capabilities =
+    Array.isArray(account.capabilities) && account.capabilities.length === 0
+      ? base.capabilities
+      : (account.capabilities ?? base.capabilities);
 
-  return { ...base, ...account, allowFrom, groups };
+  return { ...base, ...account, allowFrom, capabilities, groups };
 }

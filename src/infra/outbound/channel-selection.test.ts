@@ -1,3 +1,5 @@
+// Covers message channel selection from explicit input, tool context fallback,
+// configured accounts, and missing official external plugin repair hints.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -50,14 +52,14 @@ vi.mock("../../plugins/official-external-plugin-repair-hints.js", () => ({
 type ChannelSelectionModule = typeof import("./channel-selection.js");
 type RuntimeModule = typeof import("../../runtime.js");
 
-let __testing: ChannelSelectionModule["__testing"];
+let testing: ChannelSelectionModule["testing"];
 let listConfiguredMessageChannels: ChannelSelectionModule["listConfiguredMessageChannels"];
 let resolveMessageChannelSelection: ChannelSelectionModule["resolveMessageChannelSelection"];
 let runtimeModule: RuntimeModule;
 
 beforeAll(async () => {
   runtimeModule = await import("../../runtime.js");
-  ({ __testing, listConfiguredMessageChannels, resolveMessageChannelSelection } =
+  ({ testing, listConfiguredMessageChannels, resolveMessageChannelSelection } =
     await import("./channel-selection.js"));
 });
 
@@ -97,7 +99,7 @@ describe("listConfiguredMessageChannels", () => {
     mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) => ({
       id: channel,
     }));
-    __testing.resetLoggedChannelSelectionErrors();
+    testing.resetLoggedChannelSelectionErrors();
     errorSpy.mockClear();
   });
 
@@ -243,6 +245,36 @@ describe("resolveMessageChannelSelection", () => {
     const setupResult = setup?.();
     await expect(expectResolvedSelection(params)).resolves.toEqual(expected);
     verify?.(setupResult as never);
+  });
+
+  it("allows bootstrap while checking explicit and fallback channels", async () => {
+    const cfg = {} as never;
+    mocks.resolveOutboundChannelPlugin.mockImplementation(({ channel }: { channel: string }) =>
+      channel === "beta" ? { id: "beta" } : undefined,
+    );
+
+    await expect(
+      expectResolvedSelection({
+        cfg,
+        channel: "alpha",
+        fallbackChannel: "beta",
+      }),
+    ).resolves.toEqual({
+      channel: "beta",
+      configured: [],
+      source: "tool-context-fallback",
+    });
+
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenNthCalledWith(1, {
+      channel: "alpha",
+      cfg,
+      allowBootstrap: true,
+    });
+    expect(mocks.resolveOutboundChannelPlugin).toHaveBeenNthCalledWith(2, {
+      channel: "beta",
+      cfg,
+      allowBootstrap: true,
+    });
   });
 
   it.each([

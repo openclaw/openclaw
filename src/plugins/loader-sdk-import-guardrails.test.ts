@@ -1,3 +1,4 @@
+// Verifies loader guardrails for plugin SDK import boundaries.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -7,8 +8,8 @@ const ALLOWED_PLUGIN_SDK_FIXTURE_IMPORTS = new Set([
   'src/plugins/loader.test.ts:configSchema: (require("openclaw/plugin-sdk").emptyPluginConfigSchema)(),',
   'src/plugins/loader.test.ts:const { onDiagnosticEvent } = require("openclaw/plugin-sdk");',
   // Intentional jiti alias regression test.
-  'src/plugins/loader.git-path-regression.test.ts:`import { resolveOutboundSendDep } from "openclaw/plugin-sdk/outbound-send-deps";',
-  'src/plugins/loader.git-path-regression.test.ts:          "openclaw/plugin-sdk/outbound-send-deps": ${JSON.stringify(copiedChannelRuntimeShim)},',
+  'src/plugins/loader.git-path-regression.test.ts:`import { resolveOutboundSendDep } from "openclaw/plugin-sdk/channel-outbound";',
+  'src/plugins/loader.git-path-regression.test.ts:          "openclaw/plugin-sdk/channel-outbound": ${JSON.stringify(copiedChannelRuntimeShim)},',
   // Intentional packaged bundled-plugin SDK alias regression tests.
   'src/plugins/loader.test.ts:`import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";`,',
 ]);

@@ -40,9 +40,45 @@ Docker is **optional**. Use it only if you want a containerized gateway or to va
     ./scripts/docker/setup.sh
     ```
 
-    Pre-built images are published at the
+    Pre-built images are published first to the
     [GitHub Container Registry](https://github.com/openclaw/openclaw/pkgs/container/openclaw).
-    Common tags: `main`, `latest`, `<version>` (e.g. `2026.2.26`).
+    GHCR is the primary registry for release automation, pinned deployments,
+    and provenance checks. The same release workflow also publishes an official
+    Docker Hub mirror at `openclaw/openclaw` for hosts that prefer Docker Hub:
+
+    ```bash
+    export OPENCLAW_IMAGE="openclaw/openclaw:latest"
+    ./scripts/docker/setup.sh
+    ```
+
+    Use `ghcr.io/openclaw/openclaw` or `openclaw/openclaw`. Avoid community
+    Docker Hub mirrors because OpenClaw does not control their release timing,
+    rebuilds, or retention policy. Common official tags: `main`, `latest`,
+    `<version>` (e.g. `2026.2.26`), and beta versions such as
+    `2026.2.26-beta.1`. Beta tags do not move `latest` or `main`.
+
+  </Step>
+
+  <Step title="Airgapped rerun">
+    On offline hosts, transfer and load the image first:
+
+    ```bash
+    docker load -i openclaw-image.tar
+    export OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest"
+    ./scripts/docker/setup.sh --offline
+    ```
+
+    `--offline` verifies that `OPENCLAW_IMAGE` already exists locally, disables
+    implicit Compose pulls and builds, then runs the normal setup flow such as
+    `.env` synchronization, permission fixes, onboarding, gateway config sync,
+    and Compose startup.
+
+    If `OPENCLAW_SANDBOX=1`, offline setup also checks the configured default
+    and active per-agent sandbox images on the daemon behind
+    `OPENCLAW_DOCKER_SOCKET`. Docker-backed browser images must also carry the
+    current OpenClaw browser contract label. When a required image is missing or
+    incompatible, setup exits without changing sandbox configuration instead of
+    reporting success with an unusable sandbox.
 
   </Step>
 
@@ -109,7 +145,9 @@ docker compose up -d openclaw-gateway
 <Note>
 Run `docker compose` from the repo root. If you enabled `OPENCLAW_EXTRA_MOUNTS`
 or `OPENCLAW_HOME_VOLUME`, the setup script writes `docker-compose.extra.yml`;
-include it with `-f docker-compose.yml -f docker-compose.extra.yml`.
+include it after any standard override file, for example
+`-f docker-compose.yml -f docker-compose.override.yml -f docker-compose.extra.yml`
+when both override files exist.
 </Note>
 
 <Note>
@@ -123,24 +161,35 @@ and setup-time config writes through `openclaw-gateway` with
 
 The setup script accepts these optional environment variables:
 
-| Variable                                   | Purpose                                                         |
-| ------------------------------------------ | --------------------------------------------------------------- |
-| `OPENCLAW_IMAGE`                           | Use a remote image instead of building locally                  |
-| `OPENCLAW_DOCKER_APT_PACKAGES`             | Install extra apt packages during build (space-separated)       |
-| `OPENCLAW_EXTENSIONS`                      | Include selected bundled plugin helpers at build time           |
-| `OPENCLAW_EXTRA_MOUNTS`                    | Extra host bind mounts (comma-separated `source:target[:opts]`) |
-| `OPENCLAW_HOME_VOLUME`                     | Persist `/home/node` in a named Docker volume                   |
-| `OPENCLAW_SANDBOX`                         | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)          |
-| `OPENCLAW_SKIP_ONBOARDING`                 | Skip the interactive onboarding step (`1`, `true`, `yes`, `on`) |
-| `OPENCLAW_DOCKER_SOCKET`                   | Override Docker socket path                                     |
-| `OPENCLAW_DISABLE_BONJOUR`                 | Disable Bonjour/mDNS advertising (defaults to `1` for Docker)   |
-| `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS` | Disable bundled plugin source bind-mount overlays               |
-| `OTEL_EXPORTER_OTLP_ENDPOINT`              | Shared OTLP/HTTP collector endpoint for OpenTelemetry export    |
-| `OTEL_EXPORTER_OTLP_*_ENDPOINT`            | Signal-specific OTLP endpoints for traces, metrics, or logs     |
-| `OTEL_EXPORTER_OTLP_PROTOCOL`              | OTLP protocol override. Only `http/protobuf` is supported today |
-| `OTEL_SERVICE_NAME`                        | Service name used for OpenTelemetry resources                   |
-| `OTEL_SEMCONV_STABILITY_OPT_IN`            | Opt in to latest experimental GenAI semantic attributes         |
-| `OPENCLAW_OTEL_PRELOADED`                  | Skip starting a second OpenTelemetry SDK when one is preloaded  |
+| Variable                                   | Purpose                                                               |
+| ------------------------------------------ | --------------------------------------------------------------------- |
+| `OPENCLAW_IMAGE`                           | Use a remote image instead of building locally                        |
+| `OPENCLAW_IMAGE_APT_PACKAGES`              | Install extra apt packages during build (space-separated)             |
+| `OPENCLAW_IMAGE_PIP_PACKAGES`              | Install extra Python packages during build (space-separated)          |
+| `OPENCLAW_EXTENSIONS`                      | Pre-install plugin dependencies at build time (space-separated names) |
+| `OPENCLAW_EXTRA_MOUNTS`                    | Extra host bind mounts (comma-separated `source:target[:opts]`)       |
+| `OPENCLAW_HOME_VOLUME`                     | Persist `/home/node` in a named Docker volume                         |
+| `OPENCLAW_SANDBOX`                         | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)                |
+| `OPENCLAW_SKIP_ONBOARDING`                 | Skip the interactive onboarding step (`1`, `true`, `yes`, `on`)       |
+| `OPENCLAW_DOCKER_SOCKET`                   | Override Docker socket path                                           |
+| `OPENCLAW_DISABLE_BONJOUR`                 | Disable Bonjour/mDNS advertising (defaults to `1` for Docker)         |
+| `OPENCLAW_DISABLE_BUNDLED_SOURCE_OVERLAYS` | Disable bundled plugin source bind-mount overlays                     |
+| `OTEL_EXPORTER_OTLP_ENDPOINT`              | Shared OTLP/HTTP collector endpoint for OpenTelemetry export          |
+| `OTEL_EXPORTER_OTLP_*_ENDPOINT`            | Signal-specific OTLP endpoints for traces, metrics, or logs           |
+| `OTEL_EXPORTER_OTLP_PROTOCOL`              | OTLP protocol override. Only `http/protobuf` is supported today       |
+| `OTEL_SERVICE_NAME`                        | Service name used for OpenTelemetry resources                         |
+| `OTEL_SEMCONV_STABILITY_OPT_IN`            | Opt in to latest experimental GenAI semantic attributes               |
+| `OPENCLAW_OTEL_PRELOADED`                  | Skip starting a second OpenTelemetry SDK when one is preloaded        |
+
+The official Docker image does not ship Homebrew. During onboarding, OpenClaw
+hides brew-only skill dependency installers when it is running in a Linux
+container without `brew`; those dependencies must be provided by a custom image
+or installed manually. For dependencies available from Debian packages, use
+`OPENCLAW_IMAGE_APT_PACKAGES` during image build. The legacy
+`OPENCLAW_DOCKER_APT_PACKAGES` name is still accepted.
+For Python dependencies, use `OPENCLAW_IMAGE_PIP_PACKAGES`. This runs
+`python3 -m pip install --break-system-packages` during the image build, so pin
+package versions and use only package indexes you trust.
 
 Maintainers can test bundled plugin source against a packaged image by mounting
 one plugin source directory over its packaged source path, for example
@@ -243,6 +292,100 @@ If you use your own Compose file or `docker run` command, add the same host
 mapping yourself, for example
 `--add-host=host.docker.internal:host-gateway`.
 
+### Claude CLI backend in Docker
+
+The official OpenClaw Docker image does not pre-install Claude Code. Install and
+log in to Claude Code inside the container user that runs OpenClaw, then persist
+that container home so image upgrades do not erase the binary or Claude auth
+state.
+
+For new Docker installs, enable a persistent `/home/node` volume before running
+setup:
+
+```bash
+export OPENCLAW_IMAGE="ghcr.io/openclaw/openclaw:latest"
+export OPENCLAW_HOME_VOLUME="openclaw_home"
+./scripts/docker/setup.sh
+```
+
+For an existing Docker install, stop the stack first and reload the current
+Docker `.env` values before rerunning setup. The setup script does not read
+`.env` on its own; it rewrites `.env` from the current shell and defaults. For
+the generated `.env`, run:
+
+```bash
+set -a
+. ./.env
+set +a
+export OPENCLAW_HOME_VOLUME="${OPENCLAW_HOME_VOLUME:-openclaw_home}"
+./scripts/docker/setup.sh
+```
+
+If your `.env` contains values your shell cannot source, manually re-export the
+existing values you rely on first, such as `OPENCLAW_IMAGE`, ports, bind mode,
+custom paths, `OPENCLAW_EXTRA_MOUNTS`, sandbox, and skip-onboarding settings.
+The generated overlay mounts the home volume for both `openclaw-gateway` and
+`openclaw-cli`.
+
+Run the remaining commands with the generated Compose overlay so both services
+mount the persisted home. If your setup also uses `docker-compose.override.yml`,
+include it before `docker-compose.extra.yml`.
+
+Install Claude Code in that persisted home:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
+  --entrypoint sh openclaw-cli -lc \
+  'curl -fsSL https://claude.ai/install.sh | bash'
+```
+
+The native installer writes the `claude` binary under
+`/home/node/.local/bin/claude`. Tell OpenClaw to use that container path:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
+  openclaw-cli config set \
+  agents.defaults.cliBackends.claude-cli.command \
+  /home/node/.local/bin/claude
+```
+
+Log in and verify from inside the same persisted container home:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
+  --entrypoint /home/node/.local/bin/claude openclaw-cli auth login
+docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
+  --entrypoint /home/node/.local/bin/claude openclaw-cli auth status --text
+docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
+  openclaw-cli models auth login \
+  --provider anthropic --method cli --set-default
+docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
+  openclaw-cli models list --provider anthropic
+```
+
+After that, you can use the bundled `claude-cli` backend:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.extra.yml run --rm \
+  openclaw-cli agent \
+  --agent main \
+  --model claude-cli/claude-sonnet-4-6 \
+  --message "Say hello from Docker Claude CLI"
+```
+
+`OPENCLAW_HOME_VOLUME` persists the native Claude Code install under
+`/home/node/.local/bin` and `/home/node/.local/share/claude`, plus Claude Code
+settings and auth state under `/home/node/.claude` and `/home/node/.claude.json`.
+Persisting only `/home/node/.openclaw` is not enough for Claude CLI reuse. If
+you use `OPENCLAW_EXTRA_MOUNTS` instead of a home volume, mount all of those
+Claude paths into both Docker services.
+
+<Note>
+For shared production automation or predictable Anthropic billing, prefer the
+Anthropic API-key path. Claude CLI reuse follows Claude Code's installed
+version, account login, billing, and update behavior.
+</Note>
+
 ### Bonjour / mDNS
 
 Docker bridge networking usually does not forward Bonjour/mDNS multicast
@@ -283,8 +426,8 @@ replacement. Gateway startup does not generate bundled-plugin dependency trees.
 For full persistence details on VM deployments, see
 [Docker VM Runtime - What persists where](/install/docker-vm-runtime#what-persists-where).
 
-**Disk growth hotspots:** watch `media/`, session JSONL files,
-`cron/runs/*.jsonl`, installed plugin package roots, and rolling file logs
+**Disk growth hotspots:** watch `media/`, session JSONL files, the shared
+SQLite state database, installed plugin package roots, and rolling file logs
 under `/tmp/openclaw/`.
 
 ### Shell helpers (optional)
@@ -415,14 +558,15 @@ See [ClawDock](/install/clawdock) for the full helper guide.
     full-featured container:
 
     1. **Persist `/home/node`**: `export OPENCLAW_HOME_VOLUME="openclaw_home"`
-    2. **Bake system deps**: `export OPENCLAW_DOCKER_APT_PACKAGES="git curl jq"`
-    3. **Bake Playwright Chromium**: `export OPENCLAW_INSTALL_BROWSER=1`
-    4. **Or install Playwright browsers into a persisted volume**:
+    2. **Bake system deps**: `export OPENCLAW_IMAGE_APT_PACKAGES="git curl jq"`
+    3. **Bake Python deps**: `export OPENCLAW_IMAGE_PIP_PACKAGES="requests==2.32.5 humanize==4.14.0"`
+    4. **Bake Playwright Chromium**: `export OPENCLAW_INSTALL_BROWSER=1`
+    5. **Or install Playwright browsers into a persisted volume**:
        ```bash
        docker compose run --rm openclaw-cli \
          node /app/node_modules/playwright-core/cli.js install chromium
        ```
-    5. **Persist browser downloads**: use `OPENCLAW_HOME_VOLUME` or
+    6. **Persist browser downloads**: use `OPENCLAW_HOME_VOLUME` or
        `OPENCLAW_EXTRA_MOUNTS`. OpenClaw auto-detects the Docker image's
        Playwright-managed Chromium on Linux.
 

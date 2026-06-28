@@ -1,9 +1,11 @@
+// Telegram plugin module implements network errors behavior.
 import {
   collectErrorGraphCandidates,
   extractErrorCode,
   formatErrorMessage,
   readErrorName,
 } from "openclaw/plugin-sdk/error-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const TELEGRAM_NETWORK_ORIGIN = Symbol("openclaw.telegram.network-origin");
@@ -12,6 +14,7 @@ const RECOVERABLE_ERROR_CODES = new Set([
   "ECONNRESET",
   "ECONNREFUSED",
   "EPIPE",
+  "ENETDOWN",
   "ETIMEDOUT",
   "ESOCKETTIMEDOUT",
   "ENETUNREACH",
@@ -41,6 +44,7 @@ const PRE_CONNECT_ERROR_CODES = new Set([
   "ECONNREFUSED", // Server actively refused the connection (never reached Telegram)
   "ENOTFOUND", // DNS resolution failed (never sent)
   "EAI_AGAIN", // Transient DNS failure (never sent)
+  "ENETDOWN", // Local network interface is down before connect completes (never sent)
   "ENETUNREACH", // No route to host (never sent)
   "EHOSTUNREACH", // Host unreachable (never sent)
 ]);
@@ -103,7 +107,47 @@ function getErrorCode(err: unknown): string | undefined {
   return undefined;
 }
 
-export type TelegramNetworkErrorContext = "polling" | "send" | "webhook" | "unknown";
+function getNumericHttpStatus(err: unknown): number | undefined {
+  if (!err || typeof err !== "object") {
+    return undefined;
+  }
+  const candidate = err as { error_code?: unknown; status?: unknown; statusCode?: unknown };
+  for (const value of [candidate.error_code, candidate.status, candidate.statusCode]) {
+    if (typeof value === "number" && Number.isFinite(value)) {
+      return value;
+    }
+    if (typeof value === "string") {
+      const trimmed = value.trim();
+      if (/^\d+$/.test(trimmed)) {
+        return parseStrictNonNegativeInteger(trimmed);
+      }
+    }
+  }
+  return undefined;
+}
+
+export function isTelegramMisdirectedRequestError(err: unknown): boolean {
+  for (const candidate of collectTelegramErrorCandidates(err)) {
+    const code = normalizeCode(getErrorCode(candidate));
+    if (code === "421" || getNumericHttpStatus(candidate) === 421) {
+      return true;
+    }
+
+    const message = normalizeLowercaseStringOrEmpty(formatErrorMessage(candidate));
+    if (/\b421\b/.test(message) && message.includes("misdirected request")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+export type TelegramNetworkErrorContext =
+  | "polling"
+  | "send"
+  | "webhook"
+  | "delete"
+  | "react"
+  | "unknown";
 export type TelegramNetworkErrorOrigin = {
   method?: string | null;
   url?: string | null;
@@ -162,6 +206,9 @@ export function isSafeToRetrySendError(err: unknown): boolean {
   if (!err) {
     return false;
   }
+  if (isTelegramMisdirectedRequestError(err)) {
+    return true;
+  }
   for (const candidate of collectTelegramErrorCandidates(err)) {
     const code = normalizeCode(getErrorCode(candidate));
     if (code && PRE_CONNECT_ERROR_CODES.has(code)) {
@@ -184,7 +231,8 @@ function hasTelegramErrorCode(err: unknown, matches: (code: number) => boolean):
   return false;
 }
 
-function hasTelegramRetryAfter(err: unknown): boolean {
+/** Reads Telegram's flood-control retry_after hint (in ms) from any error nesting shape. */
+export function readTelegramRetryAfterMs(err: unknown): number | undefined {
   for (const candidate of collectTelegramErrorCandidates(err)) {
     if (!candidate || typeof candidate !== "object") {
       continue;
@@ -209,10 +257,10 @@ function hasTelegramRetryAfter(err: unknown): boolean {
                 ?.retry_after
             : undefined;
     if (typeof retryAfter === "number" && Number.isFinite(retryAfter)) {
-      return true;
+      return retryAfter * 1000;
     }
   }
-  return false;
+  return undefined;
 }
 
 /** Returns true for HTTP 5xx server errors (error may have been processed). */
@@ -223,8 +271,30 @@ export function isTelegramServerError(err: unknown): boolean {
 export function isTelegramRateLimitError(err: unknown): boolean {
   return (
     hasTelegramErrorCode(err, (code) => code === 429) ||
-    (hasTelegramRetryAfter(err) && /(?:^|\b)429\b|too many requests/i.test(formatErrorMessage(err)))
+    (readTelegramRetryAfterMs(err) !== undefined &&
+      /(?:^|\b)429\b|too many requests/i.test(formatErrorMessage(err)))
   );
+}
+
+const MESSAGE_NOT_MODIFIED_RE =
+  /400:\s*Bad Request:\s*message is not modified|MESSAGE_NOT_MODIFIED/i;
+const MESSAGE_HAS_NO_TEXT_RE = /400:\s*Bad Request:\s*there is no text in the message to edit/i;
+const EDIT_TARGET_MISSING_RE =
+  /400:\s*Bad Request:\s*message to edit not found|400:\s*Bad Request:\s*message can't be edited|MESSAGE_ID_INVALID/i;
+
+/** True when Telegram rejected an edit because the content is unchanged; the message already shows the requested text. */
+export function isTelegramMessageNotModifiedError(err: unknown): boolean {
+  return MESSAGE_NOT_MODIFIED_RE.test(formatErrorMessage(err));
+}
+
+/** True when the edit target has no text body (e.g. media message needing a caption edit). */
+export function isTelegramMessageHasNoTextError(err: unknown): boolean {
+  return MESSAGE_HAS_NO_TEXT_RE.test(formatErrorMessage(err));
+}
+
+/** True when the edit target is gone or locked (deleted message, invalid id); retrying the same edit cannot succeed. */
+export function isTelegramEditTargetMissingError(err: unknown): boolean {
+  return EDIT_TARGET_MISSING_RE.test(formatErrorMessage(err));
 }
 
 /** Returns true for HTTP 4xx client errors (Telegram explicitly rejected, not applied). */

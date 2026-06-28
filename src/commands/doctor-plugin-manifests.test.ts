@@ -1,3 +1,4 @@
+// Doctor plugin manifest tests cover manifest validation, missing installs, and repair guidance.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -128,6 +129,42 @@ describe("doctor plugin manifest legacy contract repair", () => {
     ]);
   });
 
+  it("collects legacy top-level plugin tool keys for migration", () => {
+    const pluginsRoot = makeTrustedBundledPluginsDir();
+    const root = path.join(pluginsRoot, "cortex");
+    fs.mkdirSync(root, { recursive: true });
+    writePackageJson(root);
+    writeManifest(root, {
+      id: "cortex",
+      tools: ["cortex_search", "cortex_remember"],
+      configSchema: { type: "object" },
+    });
+
+    const migrations = collectLegacyPluginManifestContractMigrations({
+      config: configWithPluginLoadPath(pluginsRoot),
+      env: {
+        ...process.env,
+      },
+      manifestRoots: [pluginsRoot],
+    });
+
+    const manifestPath = path.join(root, "openclaw.plugin.json");
+    expect(migrations).toStrictEqual([
+      {
+        changeLines: [`- ${manifestPath}: moved tools to contracts.tools`],
+        manifestPath,
+        nextRaw: {
+          id: "cortex",
+          contracts: {
+            tools: ["cortex_search", "cortex_remember"],
+          },
+          configSchema: { type: "object" },
+        },
+        pluginId: "cortex",
+      },
+    ]);
+  });
+
   it("rewrites legacy top-level capability keys into contracts", async () => {
     const pluginsRoot = makeTrustedBundledPluginsDir();
     const root = path.join(pluginsRoot, "openai");
@@ -166,6 +203,41 @@ describe("doctor plugin manifest legacy contract repair", () => {
       speechProviders: ["openai"],
       mediaUnderstandingProviders: ["openai"],
       webSearchProviders: ["gemini"],
+    });
+  });
+
+  it("removes duplicate legacy top-level plugin tools while keeping contracts.tools", async () => {
+    const pluginsRoot = makeTrustedBundledPluginsDir();
+    const root = path.join(pluginsRoot, "cortex");
+    fs.mkdirSync(root, { recursive: true });
+    writePackageJson(root);
+    writeManifest(root, {
+      id: "cortex",
+      tools: ["legacy_tool"],
+      contracts: {
+        tools: ["contract_tool"],
+      },
+      configSchema: { type: "object" },
+    });
+
+    await maybeRepairLegacyPluginManifestContracts({
+      config: configWithPluginLoadPath(pluginsRoot),
+      env: {
+        ...process.env,
+      },
+      manifestRoots: [pluginsRoot],
+      runtime: createRuntime(),
+      prompter: createPrompter(),
+      note: vi.fn(),
+    });
+
+    const next = JSON.parse(fs.readFileSync(path.join(root, "openclaw.plugin.json"), "utf-8")) as {
+      tools?: string[];
+      contracts?: Record<string, string[]>;
+    };
+    expect(next.tools).toBeUndefined();
+    expect(next.contracts).toEqual({
+      tools: ["contract_tool"],
     });
   });
 

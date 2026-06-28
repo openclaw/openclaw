@@ -2,12 +2,13 @@
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
 
-import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
-import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "@openclaw/normalization-core/string-coerce";
+import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
+import { sanitizeInboundSystemTags } from "../security/system-tags.js";
+import { resolveGlobalMap } from "../shared/global-singleton.js";
 import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
@@ -19,7 +20,6 @@ export type SystemEvent = {
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
-  trusted?: boolean;
 };
 
 const MAX_EVENTS = 20;
@@ -37,7 +37,6 @@ type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
-  trusted?: boolean;
 };
 
 function requireSessionKey(key?: string | null): string {
@@ -91,61 +90,50 @@ function findDuplicateInQueue(
   text: string,
   contextKey: string | null,
   deliveryContext: DeliveryContext | undefined,
-  trusted: boolean,
-): SystemEvent | undefined {
+): boolean {
+  const incoming = { text, contextKey, deliveryContext };
   if (contextKey === null) {
     const last = queue[queue.length - 1];
-    return last && isDuplicateSystemEvent(last, { text, contextKey, deliveryContext, trusted })
-      ? last
-      : undefined;
+    return last ? isDuplicateSystemEvent(last, incoming) : false;
   }
-  for (const event of queue) {
-    if (isDuplicateSystemEvent(event, { text, contextKey, deliveryContext, trusted })) {
-      return event;
-    }
-  }
-  return undefined;
+  return queue.some((event) => isDuplicateSystemEvent(event, incoming));
 }
 
-function applyContextKeyPolicy(entry: SessionQueue, incomingContextKey: string | null): void {
-  if (incomingContextKey !== null) {
-    entry.lastContextKey = incomingContextKey;
-  }
-}
-
-export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
-  const key = requireSessionKey(options?.sessionKey);
+export function enqueueSystemEventEntry(
+  text: string,
+  options: SystemEventOptions,
+): SystemEvent | null {
+  const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
-  const cleaned = text.trim();
+  // These entries are rendered as `System:` lines, so strip nested system-marker
+  // spoofs at the queue boundary before any plugin/channel text reaches a prompt.
+  const cleaned = sanitizeInboundSystemTags(text).trim();
   if (!cleaned) {
-    return false;
+    return null;
   }
-  const normalizedContextKey = normalizeContextKey(options?.contextKey);
-  const normalizedDeliveryContext = normalizeDeliveryContext(options?.deliveryContext);
-  const trusted = options.trusted !== false;
-  if (
-    findDuplicateInQueue(
-      entry.queue,
-      cleaned,
-      normalizedContextKey,
-      normalizedDeliveryContext,
-      trusted,
-    )
-  ) {
-    return false;
+  const normalizedContextKey = normalizeContextKey(options.contextKey);
+  const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
+  if (findDuplicateInQueue(entry.queue, cleaned, normalizedContextKey, normalizedDeliveryContext)) {
+    return null;
   }
-  applyContextKeyPolicy(entry, normalizedContextKey);
-  entry.queue.push({
+  if (normalizedContextKey !== null) {
+    entry.lastContextKey = normalizedContextKey;
+  }
+  const event: SystemEvent = {
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
-    trusted,
-  });
+  };
+  entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {
     entry.queue.shift();
   }
-  return true;
+  return cloneSystemEvent(event);
+}
+
+export function enqueueSystemEvent(text: string, options: SystemEventOptions) {
+  return enqueueSystemEventEntry(text, options) !== null;
 }
 
 export function drainSystemEventEntries(sessionKey: string): SystemEvent[] {
@@ -173,12 +161,11 @@ function areDeliveryContextsEqual(left?: DeliveryContext, right?: DeliveryContex
 
 function isDuplicateSystemEvent(
   existing: SystemEvent,
-  incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext" | "trusted">,
+  incoming: Pick<SystemEvent, "text" | "contextKey" | "deliveryContext">,
 ): boolean {
   return (
     existing.text === incoming.text &&
     (existing.contextKey ?? null) === (incoming.contextKey ?? null) &&
-    (existing.trusted ?? true) === (incoming.trusted ?? true) &&
     areDeliveryContextsEqual(existing.deliveryContext, incoming.deliveryContext)
   );
 }
@@ -188,7 +175,6 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
     left.text === right.text &&
     left.ts === right.ts &&
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
-    (left.trusted ?? true) === (right.trusted ?? true) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );
 }

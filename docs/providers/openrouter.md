@@ -4,6 +4,7 @@ read_when:
   - You want a single API key for many LLMs
   - You want to run models via OpenRouter in OpenClaw
   - You want to use OpenRouter for image generation
+  - You want to use OpenRouter for music generation
   - You want to use OpenRouter for video generation
 title: "OpenRouter"
 ---
@@ -13,24 +14,52 @@ endpoint and API key. It is OpenAI-compatible, so most OpenAI SDKs work by switc
 
 ## Getting started
 
-<Steps>
-  <Step title="Get your API key">
-    Create an API key at [openrouter.ai/keys](https://openrouter.ai/keys).
-  </Step>
-  <Step title="Run onboarding">
-    ```bash
-    openclaw onboard --auth-choice openrouter-api-key
-    ```
-  </Step>
-  <Step title="(Optional) Switch to a specific model">
-    Onboarding defaults to `openrouter/auto`. Pick a concrete model later:
+<Tabs>
+  <Tab title="OAuth">
+    <Steps>
+      <Step title="Run OAuth onboarding">
+        ```bash
+        openclaw onboard --auth-choice openrouter-oauth
+        ```
 
-    ```bash
-    openclaw models set openrouter/<provider>/<model>
-    ```
+        OpenClaw opens OpenRouter's browser sign-in flow, exchanges the PKCE
+        code for an OpenRouter API key, and stores that key in the default
+        OpenRouter auth profile. On remote/headless hosts, OpenClaw prints the
+        sign-in URL and asks you to paste the redirect URL after signing in.
+      </Step>
+      <Step title="(Optional) Switch to a specific model">
+        Onboarding defaults to `openrouter/auto`. Pick a concrete model later:
 
-  </Step>
-</Steps>
+        ```bash
+        openclaw models set openrouter/<provider>/<model>
+        ```
+
+      </Step>
+    </Steps>
+
+  </Tab>
+  <Tab title="API key">
+    <Steps>
+      <Step title="Get your API key">
+        Create an API key at [openrouter.ai/keys](https://openrouter.ai/keys).
+      </Step>
+      <Step title="Run API-key onboarding">
+        ```bash
+        openclaw onboard --auth-choice openrouter-api-key
+        ```
+      </Step>
+      <Step title="(Optional) Switch to a specific model">
+        Onboarding defaults to `openrouter/auto`. Pick a concrete model later:
+
+        ```bash
+        openclaw models set openrouter/<provider>/<model>
+        ```
+
+      </Step>
+    </Steps>
+
+  </Tab>
+</Tabs>
 
 ## Config example
 
@@ -57,6 +86,7 @@ Bundled fallback examples:
 | Model ref                         | Notes                        |
 | --------------------------------- | ---------------------------- |
 | `openrouter/auto`                 | OpenRouter automatic routing |
+| `openrouter/openrouter/fusion`    | OpenRouter Fusion router     |
 | `openrouter/moonshotai/kimi-k2.6` | Kimi K2.6 via MoonshotAI     |
 | `openrouter/moonshotai/kimi-k2.5` | Kimi K2.5 via MoonshotAI     |
 
@@ -107,6 +137,34 @@ second durations, `720P`/`1080P` resolutions, and `16:9`/`9:16` aspect
 ratios. Video-to-video is not registered for OpenRouter because the upstream
 video generation API currently accepts text and image references.
 
+## Music generation
+
+OpenRouter can also back the `music_generate` tool through chat completions
+audio output. Use an OpenRouter audio model under
+`agents.defaults.musicGenerationModel`:
+
+```json5
+{
+  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  agents: {
+    defaults: {
+      musicGenerationModel: {
+        primary: "openrouter/google/lyria-3-pro-preview",
+        timeoutMs: 180_000,
+      },
+    },
+  },
+}
+```
+
+The bundled OpenRouter music provider defaults to
+`google/lyria-3-pro-preview` and also exposes
+`google/lyria-3-clip-preview`. OpenClaw sends `modalities: ["text",
+"audio"]`, enables streaming, collects the streamed audio chunks, and saves
+the result as generated media for channel delivery. Reference images are
+accepted for Lyria models through the shared `music_generate image=...`
+parameter.
+
 ## Text-to-speech
 
 OpenRouter can also be used as a TTS provider through its OpenAI-compatible
@@ -121,7 +179,7 @@ OpenRouter can also be used as a TTS provider through its OpenAI-compatible
       providers: {
         openrouter: {
           model: "hexgrad/kokoro-82m",
-          voice: "af_alloy",
+          speakerVoice: "af_alloy",
           responseFormat: "mp3",
         },
       },
@@ -156,9 +214,95 @@ media understanding preflight.
 OpenClaw sends OpenRouter STT requests as JSON with base64 audio under
 `input_audio` (OpenRouter STT contract), not as multipart OpenAI form uploads.
 
+## Fusion router
+
+Use OpenRouter Fusion when you want one OpenClaw model ref to ask several
+OpenRouter models in parallel, have OpenRouter judge their answers, and return a
+single final response through the normal OpenRouter provider endpoint. Because
+the upstream model slug is `openrouter/fusion`, the OpenClaw model ref includes
+both the OpenClaw provider prefix and the upstream OpenRouter namespace:
+
+```bash
+openclaw models set openrouter/openrouter/fusion
+```
+
+Configure Fusion's panel and judge through the model's `params.extraBody`. Those
+fields are forwarded into the OpenRouter chat-completions request body. Fusion
+works with either OpenRouter OAuth onboarding or API-key onboarding; if you use
+OAuth, omit the `env.OPENROUTER_API_KEY` line from the example below.
+
+```json5
+{
+  env: { OPENROUTER_API_KEY: "sk-or-..." },
+  agents: {
+    defaults: {
+      model: { primary: "openrouter/openrouter/fusion" },
+      models: {
+        "openrouter/openrouter/fusion": {
+          params: {
+            extraBody: {
+              plugins: [
+                {
+                  id: "fusion",
+                  analysis_models: [
+                    "google/gemini-3.5-flash",
+                    "moonshotai/kimi-k2.6",
+                    "deepseek/deepseek-v4-pro",
+                  ],
+                  model: "google/gemini-3.5-flash",
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+The `analysis_models` list is the parallel panel, and `model` inside the Fusion
+plugin config is the judge model. Do not set top-level `tool_choice` to
+`"required"` in normal OpenClaw agent/chat turns to try to force Fusion;
+OpenClaw turns may include OpenClaw tool definitions, and a top-level required
+tool choice can require one of those tools instead of the Fusion router. When
+this Fusion plugin config is present, OpenClaw also adds a sanitized
+system-prompt note with the configured analysis models and judge model so the
+agent can answer questions about its current Fusion panel. Other `extraBody`
+fields are not copied into the prompt.
+
+Fusion is slower by design. OpenRouter may send the same OpenClaw prompt to
+multiple analysis models and then run a final judge/synthesis step, so latency is
+usually higher than a direct single-model request. Use Fusion for deliberate,
+high-quality answers or escalation paths, not as the default for
+latency-sensitive chat. For faster responses, keep the panel small and choose
+faster analysis and judge models.
+
+Test the configured ref with a one-shot local model call:
+
+```bash
+openclaw infer model run --local \
+  --model openrouter/openrouter/fusion \
+  --prompt "Reply with exactly: FUSION_OK" \
+  --json
+```
+
 ## Authentication and headers
 
-OpenRouter uses a Bearer token with your API key under the hood.
+OpenRouter uses a Bearer token with your API key under the hood. OpenRouter
+OAuth is a PKCE login flow that issues an OpenRouter API key, so OpenClaw stores
+the result as the same `openrouter:default` API-key auth profile used by the
+manual API-key setup path.
+
+For an existing install, sign in or rotate the stored OpenRouter key without
+rerunning full onboarding:
+
+```bash
+openclaw models auth login --provider openrouter --method oauth
+```
+
+Use `openclaw models auth login --provider openrouter --method api-key` when
+you want to paste a key you created manually at OpenRouter.
 
 On real OpenRouter requests (`https://openrouter.ai/api/v1`), OpenClaw also adds
 OpenRouter's documented app-attribution headers:
@@ -253,8 +397,58 @@ does **not** inject those OpenRouter-specific headers or Anthropic cache markers
   </Accordion>
 
   <Accordion title="Provider routing metadata">
-    If you pass OpenRouter provider routing under model params, OpenClaw forwards
-    it as OpenRouter routing metadata before the shared stream wrappers run.
+    OpenRouter supports a `provider` request object for underlying provider
+    routing. Configure a default policy for all OpenRouter text-model requests
+    with `models.providers.openrouter.params.provider`:
+
+    ```json5
+    {
+      models: {
+        providers: {
+          openrouter: {
+            params: {
+              provider: {
+                sort: "latency",
+                require_parameters: true,
+                data_collection: "deny",
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    OpenClaw forwards that object to OpenRouter as the request `provider`
+    payload. Use OpenRouter's documented snake_case fields, including `sort`,
+    `only`, `ignore`, `order`, `allow_fallbacks`, `require_parameters`,
+    `data_collection`, `quantizations`, `max_price`, `preferred_max_latency`,
+    `preferred_min_throughput`, `zdr`, and `enforce_distillable_text`.
+
+    Per-model params still override the provider-wide routing object:
+
+    ```json5
+    {
+      agents: {
+        defaults: {
+          models: {
+            "openrouter/anthropic/claude-sonnet-4-6": {
+              params: {
+                provider: {
+                  order: ["anthropic"],
+                  allow_fallbacks: false,
+                },
+              },
+            },
+          },
+        },
+      },
+    }
+    ```
+
+    This only applies on OpenRouter chat-completions routes. Direct Anthropic,
+    Google, OpenAI, or custom provider routes ignore OpenRouter routing params.
+
   </Accordion>
 </AccordionGroup>
 

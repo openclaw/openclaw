@@ -1,11 +1,13 @@
-import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 // Manual facade. Keep loader boundary explicit.
+import { createPluginStateKeyedStore } from "../plugin-state/plugin-state-store.js";
+// Memory core bundled runtime helpers load the internal memory plugin through SDK facades.
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-loader.js";
 import type {
   MemoryEmbeddingProvider,
-  MemoryEmbeddingProviderAdapter,
   MemoryEmbeddingProviderCreateOptions,
   MemoryEmbeddingProviderRuntime,
 } from "./memory-core-host-engine-embeddings.js";
+import type { OpenKeyedStoreOptions, PluginStateKeyedStore } from "./plugin-state-runtime.js";
 
 type EmbeddingProviderResult = {
   provider: MemoryEmbeddingProvider | null;
@@ -17,18 +19,23 @@ type EmbeddingProviderResult = {
 };
 
 type RuntimeFacadeModule = {
+  configureMemoryCoreDreamingState: (
+    openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+  ) => void;
   createEmbeddingProvider: (
     options: MemoryEmbeddingProviderCreateOptions & {
       provider: string;
       fallback: string;
     },
   ) => Promise<EmbeddingProviderResult>;
-  registerBuiltInMemoryEmbeddingProviders: (register: {
-    registerMemoryEmbeddingProvider: (adapter: MemoryEmbeddingProviderAdapter) => void;
-  }) => void;
   removeGroundedShortTermCandidates: (params: {
     workspaceDir: string;
   }) => Promise<{ removed: number; storePath: string }>;
+  loadShortTermPromotionDreamingStats: (params: {
+    workspaceDir: string;
+    nowMs: number;
+    timezone?: string;
+  }) => Promise<ShortTermDreamingStats>;
   repairDreamingArtifacts: (params: {
     workspaceDir: string;
     archiveDiary?: boolean;
@@ -88,6 +95,43 @@ type PromotionCandidate = {
   promotedAt?: string;
 };
 
+export type ShortTermDreamingStatsEntry = {
+  key: string;
+  path: string;
+  startLine: number;
+  endLine: number;
+  snippet: string;
+  recallCount: number;
+  dailyCount: number;
+  groundedCount: number;
+  totalSignalCount: number;
+  lightHits: number;
+  remHits: number;
+  phaseHitCount: number;
+  promotedAt?: string;
+  lastRecalledAt?: string;
+};
+
+export type ShortTermDreamingStats = {
+  shortTermCount: number;
+  recallSignalCount: number;
+  dailySignalCount: number;
+  groundedSignalCount: number;
+  totalSignalCount: number;
+  phaseSignalCount: number;
+  lightPhaseHitCount: number;
+  remPhaseHitCount: number;
+  promotedTotal: number;
+  promotedToday: number;
+  storePath: string;
+  phaseSignalPath: string;
+  phaseSignalError?: string;
+  lastPromotedAt?: string;
+  shortTermEntries: ShortTermDreamingStatsEntry[];
+  signalEntries: ShortTermDreamingStatsEntry[];
+  promotedEntries: ShortTermDreamingStatsEntry[];
+};
+
 type RemHarnessPreviewResult = {
   workspaceDir: string;
   nowMs: number;
@@ -118,6 +162,9 @@ type RemHarnessPreviewResult = {
 };
 
 type ApiFacadeModule = {
+  configureMemoryCoreDreamingState: (
+    openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
+  ) => void;
   previewGroundedRemMarkdown: (params: {
     workspaceDir: string;
     inputPaths: string[];
@@ -167,40 +214,52 @@ type RepairDreamingArtifactsResult = {
 };
 
 function loadApiFacadeModule(): ApiFacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<ApiFacadeModule>({
+  const module = loadBundledPluginPublicSurfaceModuleSync<ApiFacadeModule>({
     dirName: "memory-core",
     artifactBasename: "api.js",
   });
+  module.configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
+    createPluginStateKeyedStore<T>("memory-core", options),
+  );
+  return module;
 }
 
 function loadRuntimeFacadeModule(): RuntimeFacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSync<RuntimeFacadeModule>({
+  const module = loadBundledPluginPublicSurfaceModuleSync<RuntimeFacadeModule>({
     dirName: "memory-core",
     artifactBasename: "runtime-api.js",
   });
+  module.configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
+    createPluginStateKeyedStore<T>("memory-core", options),
+  );
+  return module;
 }
 
+/** Create a memory embedding provider with built-in fallback metadata. */
 export const createEmbeddingProvider: RuntimeFacadeModule["createEmbeddingProvider"] = ((...args) =>
   loadRuntimeFacadeModule().createEmbeddingProvider(
     ...args,
   )) as RuntimeFacadeModule["createEmbeddingProvider"];
 
-export const registerBuiltInMemoryEmbeddingProviders: RuntimeFacadeModule["registerBuiltInMemoryEmbeddingProviders"] =
-  ((...args) =>
-    loadRuntimeFacadeModule().registerBuiltInMemoryEmbeddingProviders(
-      ...args,
-    )) as RuntimeFacadeModule["registerBuiltInMemoryEmbeddingProviders"];
-
+/** Remove short-term recall candidates already grounded into durable memory. */
 export const removeGroundedShortTermCandidates: RuntimeFacadeModule["removeGroundedShortTermCandidates"] =
   ((...args) =>
     loadRuntimeFacadeModule().removeGroundedShortTermCandidates(
       ...args,
     )) as RuntimeFacadeModule["removeGroundedShortTermCandidates"];
+/** Load short-term dreaming stats for doctor/control status. */
+export const loadShortTermPromotionDreamingStats: RuntimeFacadeModule["loadShortTermPromotionDreamingStats"] =
+  ((...args) =>
+    loadRuntimeFacadeModule().loadShortTermPromotionDreamingStats(
+      ...args,
+    )) as RuntimeFacadeModule["loadShortTermPromotionDreamingStats"];
+/** Repair or archive problematic dreaming artifacts through the bundled runtime facade. */
 export const repairDreamingArtifacts: RuntimeFacadeModule["repairDreamingArtifacts"] = ((...args) =>
   loadRuntimeFacadeModule().repairDreamingArtifacts(
     ...args,
   )) as RuntimeFacadeModule["repairDreamingArtifacts"];
 
+/** Preview grounded REM markdown facts and candidates for selected input files. */
 export const previewGroundedRemMarkdown: ApiFacadeModule["previewGroundedRemMarkdown"] = ((
   ...args
 ) =>
@@ -208,16 +267,19 @@ export const previewGroundedRemMarkdown: ApiFacadeModule["previewGroundedRemMark
     ...args,
   )) as ApiFacadeModule["previewGroundedRemMarkdown"];
 
+/** Remove duplicate dreaming diary entries while preserving canonical records. */
 export const dedupeDreamDiaryEntries: ApiFacadeModule["dedupeDreamDiaryEntries"] = ((...args) =>
   loadApiFacadeModule().dedupeDreamDiaryEntries(
     ...args,
   )) as ApiFacadeModule["dedupeDreamDiaryEntries"];
 
+/** Write synthetic/backfill dreaming diary entries for harness or migration use. */
 export const writeBackfillDiaryEntries: ApiFacadeModule["writeBackfillDiaryEntries"] = ((...args) =>
   loadApiFacadeModule().writeBackfillDiaryEntries(
     ...args,
   )) as ApiFacadeModule["writeBackfillDiaryEntries"];
 
+/** Remove dreaming diary entries previously written by the backfill helper. */
 export const removeBackfillDiaryEntries: ApiFacadeModule["removeBackfillDiaryEntries"] = ((
   ...args
 ) =>
@@ -225,11 +287,13 @@ export const removeBackfillDiaryEntries: ApiFacadeModule["removeBackfillDiaryEnt
     ...args,
   )) as ApiFacadeModule["removeBackfillDiaryEntries"];
 
+/** Filter recall entries to the configured REM lookback window. */
 export const filterRecallEntriesWithinLookback: ApiFacadeModule["filterRecallEntriesWithinLookback"] =
   ((...args) =>
     loadApiFacadeModule().filterRecallEntriesWithinLookback(
       ...args,
     )) as ApiFacadeModule["filterRecallEntriesWithinLookback"];
 
+/** Preview REM harness output across dreaming, grounded, and deep promotion candidates. */
 export const previewRemHarness: ApiFacadeModule["previewRemHarness"] = ((...args) =>
   loadApiFacadeModule().previewRemHarness(...args)) as ApiFacadeModule["previewRemHarness"];

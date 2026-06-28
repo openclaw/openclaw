@@ -1,3 +1,7 @@
+/**
+ * In-memory registry that associates browser tabs with OpenClaw sessions for
+ * cleanup on session end or idle sweeps.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -12,6 +16,15 @@ type TrackedSessionBrowserTab = {
   trackedAt: number;
   lastUsedAt: number;
 };
+
+type SessionBrowserTabIdentityParams = {
+  sessionKey?: string;
+  targetId?: string;
+  baseUrl?: string;
+  profile?: string;
+};
+
+type TrackedSessionBrowserTabIdentity = Omit<TrackedSessionBrowserTab, "trackedAt" | "lastUsedAt">;
 
 const trackedTabsBySession = new Map<string, Map<string, TrackedSessionBrowserTab>>();
 
@@ -39,12 +52,9 @@ function toTrackedTabId(params: { targetId: string; baseUrl?: string; profile?: 
   return `${params.targetId}\u0000${params.baseUrl ?? ""}\u0000${params.profile ?? ""}`;
 }
 
-function resolveTrackedTabIdentity(params: {
-  sessionKey?: string;
-  targetId?: string;
-  baseUrl?: string;
-  profile?: string;
-}): Omit<TrackedSessionBrowserTab, "trackedAt" | "lastUsedAt"> | undefined {
+function resolveTrackedTabIdentity(
+  params: SessionBrowserTabIdentityParams,
+): TrackedSessionBrowserTabIdentity | undefined {
   const sessionKeyRaw = params.sessionKey?.trim();
   const targetIdRaw = params.targetId?.trim();
   if (!sessionKeyRaw || !targetIdRaw) {
@@ -58,6 +68,23 @@ function resolveTrackedTabIdentity(params: {
   };
 }
 
+function trackedTabsForIdentity(
+  identity: TrackedSessionBrowserTabIdentity,
+): Map<string, TrackedSessionBrowserTab> | undefined {
+  return trackedTabsBySession.get(identity.sessionKey);
+}
+
+function deleteTrackedTab(identity: TrackedSessionBrowserTabIdentity): void {
+  const trackedForSession = trackedTabsForIdentity(identity);
+  if (!trackedForSession) {
+    return;
+  }
+  trackedForSession.delete(toTrackedTabId(identity));
+  if (trackedForSession.size === 0) {
+    trackedTabsBySession.delete(identity.sessionKey);
+  }
+}
+
 function isIgnorableCloseError(err: unknown): boolean {
   const message = normalizeLowercaseStringOrEmpty(String(err));
   return (
@@ -68,12 +95,8 @@ function isIgnorableCloseError(err: unknown): boolean {
   );
 }
 
-export function trackSessionBrowserTab(params: {
-  sessionKey?: string;
-  targetId?: string;
-  baseUrl?: string;
-  profile?: string;
-}): void {
+/** Starts tracking a browser tab for later session cleanup. */
+export function trackSessionBrowserTab(params: SessionBrowserTabIdentityParams): void {
   const identity = resolveTrackedTabIdentity(params);
   if (!identity) {
     return;
@@ -97,18 +120,15 @@ export function trackSessionBrowserTab(params: {
   });
 }
 
-export function touchSessionBrowserTab(params: {
-  sessionKey?: string;
-  targetId?: string;
-  baseUrl?: string;
-  profile?: string;
-  now?: number;
-}): void {
+/** Updates last-used time for a tracked browser tab. */
+export function touchSessionBrowserTab(
+  params: SessionBrowserTabIdentityParams & { now?: number },
+): void {
   const identity = resolveTrackedTabIdentity(params);
   if (!identity) {
     return;
   }
-  const trackedForSession = trackedTabsBySession.get(identity.sessionKey);
+  const trackedForSession = trackedTabsForIdentity(identity);
   if (!trackedForSession) {
     return;
   }
@@ -123,25 +143,13 @@ export function touchSessionBrowserTab(params: {
   });
 }
 
-export function untrackSessionBrowserTab(params: {
-  sessionKey?: string;
-  targetId?: string;
-  baseUrl?: string;
-  profile?: string;
-}): void {
+/** Removes a browser tab from session cleanup tracking. */
+export function untrackSessionBrowserTab(params: SessionBrowserTabIdentityParams): void {
   const identity = resolveTrackedTabIdentity(params);
   if (!identity) {
     return;
   }
-  const trackedForSession = trackedTabsBySession.get(identity.sessionKey);
-  if (!trackedForSession) {
-    return;
-  }
-  const trackedId = toTrackedTabId(identity);
-  trackedForSession.delete(trackedId);
-  if (trackedForSession.size === 0) {
-    trackedTabsBySession.delete(identity.sessionKey);
-  }
+  deleteTrackedTab(identity);
 }
 
 function takeTrackedTabsForSessionKeys(
@@ -210,6 +218,7 @@ async function closeTrackedTabs(params: {
   return closed;
 }
 
+/** Closes and untracks tabs for the supplied session keys. */
 export async function closeTrackedBrowserTabsForSessions(params: {
   sessionKeys: Array<string | undefined>;
   closeTab?: (tab: { targetId: string; baseUrl?: string; profile?: string }) => Promise<void>;
@@ -288,6 +297,7 @@ function takeStaleTrackedTabs(params: {
   return tabsToClose;
 }
 
+/** Closes and untracks stale or excess browser tabs across tracked sessions. */
 export async function sweepTrackedBrowserTabs(params: {
   now?: number;
   idleMs?: number;
@@ -308,11 +318,13 @@ export async function sweepTrackedBrowserTabs(params: {
   });
 }
 
-export function __resetTrackedSessionBrowserTabsForTests(): void {
+/** Clears tracked tab state for tests. */
+export function resetTrackedSessionBrowserTabsForTests(): void {
   trackedTabsBySession.clear();
 }
 
-export function __countTrackedSessionBrowserTabsForTests(sessionKey?: string): number {
+/** Counts tracked tabs for one session or all sessions in tests. */
+export function countTrackedSessionBrowserTabsForTests(sessionKey?: string): number {
   if (typeof sessionKey === "string" && sessionKey.trim()) {
     return trackedTabsBySession.get(normalizeSessionKey(sessionKey))?.size ?? 0;
   }

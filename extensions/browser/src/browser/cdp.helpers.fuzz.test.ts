@@ -1,3 +1,4 @@
+// Browser tests cover cdp.helpers.fuzz plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   appendCdpPath,
@@ -133,8 +134,8 @@ describe("fuzz: isWebSocketUrl", () => {
       try {
         // Only assert the property when the URL itself parses; assign
         // the result to satisfy eslint's no-new rule.
-        const _parsed = new URL(url);
-        void _parsed;
+        const parsedValue = new URL(url);
+        void parsedValue;
       } catch {
         continue;
       }
@@ -347,6 +348,12 @@ describe("fuzz: parseBrowserHttpUrl", () => {
       const scheme = pick(rng, ["ftp://", "file://", "gopher://", "data:"] as const);
       const url = scheme === "data:" ? "data:text/plain,hello" : `${scheme}${randHost(rng)}`;
       expect(() => parseBrowserHttpUrl(url, "test")).toThrow(/must be http\(s\) or ws\(s\)/);
+    }
+  });
+
+  it("rejects explicitly configured port zero", () => {
+    for (const scheme of ["http", "https", "ws", "wss"]) {
+      expect(() => parseBrowserHttpUrl(`${scheme}://127.0.0.1:0`, "test")).toThrow(/invalid port/);
     }
   });
 });

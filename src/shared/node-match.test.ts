@@ -1,26 +1,12 @@
+// Node match tests cover node selection from names, ids, and address hints.
 import { describe, expect, it } from "vitest";
-import { normalizeNodeKey, resolveNodeIdFromCandidates, resolveNodeMatches } from "./node-match.js";
+import { normalizeNodeKey, resolveNodeIdFromCandidates } from "./node-match.js";
 
 describe("shared/node-match", () => {
   it("normalizes node keys by lowercasing and collapsing separators", () => {
     expect(normalizeNodeKey(" Mac Studio! ")).toBe("mac-studio");
     expect(normalizeNodeKey("---PI__Node---")).toBe("pi-node");
     expect(normalizeNodeKey("###")).toBe("");
-  });
-
-  it("matches candidates by node id, remote ip, normalized name, and long prefix", () => {
-    const nodes = [
-      { nodeId: "mac-abcdef", displayName: "Mac Studio", remoteIp: "100.0.0.1" },
-      { nodeId: "pi-456789", displayName: "Raspberry Pi", remoteIp: "100.0.0.2" },
-    ];
-
-    expect(resolveNodeMatches(nodes, "mac-abcdef")).toEqual([nodes[0]]);
-    expect(resolveNodeMatches(nodes, "100.0.0.2")).toEqual([nodes[1]]);
-    expect(resolveNodeMatches(nodes, "mac studio")).toEqual([nodes[0]]);
-    expect(resolveNodeMatches(nodes, "  Mac---Studio!! ")).toEqual([nodes[0]]);
-    expect(resolveNodeMatches(nodes, "pi-456")).toEqual([nodes[1]]);
-    expect(resolveNodeMatches(nodes, "pi")).toStrictEqual([]);
-    expect(resolveNodeMatches(nodes, "   ")).toStrictEqual([]);
   });
 
   it("resolves unique matches and prefers a unique connected node", () => {

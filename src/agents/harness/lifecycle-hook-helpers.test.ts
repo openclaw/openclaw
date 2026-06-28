@@ -1,5 +1,7 @@
+// Exercises harness lifecycle hook adapters and finalize-retry budget semantics.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  awaitAgentHarnessAgentEndHook,
   clearAgentHarnessFinalizeRetryBudget,
   runAgentHarnessAgentEndHook,
   runAgentHarnessBeforeAgentFinalizeHook,
@@ -22,6 +24,8 @@ const EVENT = {
   transcriptPath: "/tmp/session.jsonl",
   stopHookActive: false,
   lastAssistantMessage: "done",
+  messages: [],
+  success: true,
 };
 
 describe("agent harness lifecycle hook helpers", () => {
@@ -59,6 +63,59 @@ describe("agent harness lifecycle hook helpers", () => {
     expect(hookRunner.hasHooks).toHaveBeenCalledWith("agent_end");
   });
 
+  it("resolves after agent_end hooks settle", async () => {
+    let releaseHook: () => void = () => undefined;
+    const agentEndSettled = new Promise<void>((resolve) => {
+      releaseHook = resolve;
+    });
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
+      runAgentEnd: vi.fn(() => agentEndSettled),
+    };
+
+    const run = awaitAgentHarnessAgentEndHook({
+      ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+      event: EVENT,
+      hookRunner: hookRunner as never,
+    });
+    let resolved = false;
+    void run.then(() => {
+      resolved = true;
+    });
+
+    await Promise.resolve();
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledTimes(1);
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
+      EVENT,
+      expect.objectContaining({ runId: "run-1", sessionKey: "agent:main:session-1" }),
+      { unrefTimeout: false },
+    );
+    expect(resolved).toBe(false);
+    releaseHook();
+    await expect(run).resolves.toBeUndefined();
+    expect(resolved).toBe(true);
+  });
+
+  it("can leave agent_end timeouts unref'd for fire-and-forget callers", async () => {
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => hookName === "agent_end"),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+
+    runAgentHarnessAgentEndHook({
+      ctx: { runId: "run-1", sessionKey: "agent:main:session-1" },
+      event: EVENT,
+      hookRunner: hookRunner as never,
+    });
+    await Promise.resolve();
+
+    expect(hookRunner.runAgentEnd).toHaveBeenCalledWith(
+      EVENT,
+      expect.objectContaining({ runId: "run-1", sessionKey: "agent:main:session-1" }),
+      { unrefTimeout: true },
+    );
+  });
+
   it("continues when legacy hook runners advertise before_agent_finalize without a runner method", async () => {
     await expect(
       runAgentHarnessBeforeAgentFinalizeHook({
@@ -82,6 +139,8 @@ describe("agent harness lifecycle hook helpers", () => {
       }),
     };
 
+    // Retry budgets are per run. A finalize hook may ask for exactly one
+    // revision, and clearing the run id should make that run eligible again.
     await expect(
       runAgentHarnessBeforeAgentFinalizeHook({
         event: EVENT,
@@ -230,6 +289,8 @@ describe("agent harness lifecycle hook helpers", () => {
       reason: "retry generated artifacts\n\nretry focused tests",
       retry: firstRetry,
     };
+    // retryCandidates is intentionally non-enumerable in production hook
+    // results, so callers do not serialize internal retry bookkeeping.
     Object.defineProperty(result, "retryCandidates", {
       enumerable: false,
       value: [firstRetry, secondRetry],
@@ -294,6 +355,8 @@ describe("agent harness lifecycle hook helpers", () => {
   });
 
   it("does not collide fallback retry keys for long instructions with shared prefixes", async () => {
+    // Fallback keys include a digest of the full instruction. Prefix-only
+    // truncation would spend unrelated long retry requests together.
     const sharedPrefix = "x".repeat(180);
     const firstInstruction = `${sharedPrefix} first`;
     const secondInstruction = `${sharedPrefix} second`;

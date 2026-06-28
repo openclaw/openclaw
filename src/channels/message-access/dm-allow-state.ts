@@ -1,6 +1,11 @@
-import { normalizeStringEntries } from "../../shared/string-normalization.js";
+/**
+ * Direct-message allowlist audit state.
+ *
+ * Merges configured and persisted allowFrom entries for setup/status prompts.
+ */
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ChannelId } from "../plugins/types.public.js";
-import { readChannelIngressStoreAllowFromForDmPolicy } from "./runtime.js";
+import { readChannelIngressStoreAllowFromForDmPolicy } from "./store-allow-from.js";
 
 export async function resolveDmAllowAuditState(params: {
   provider: ChannelId;
@@ -26,15 +31,12 @@ export async function resolveDmAllowAuditState(params: {
     readStore: params.readStore,
   });
   const normalizeEntry = params.normalizeEntry ?? ((value: string) => value);
-  const normalizedCfg = configAllowFrom
-    .filter((value) => value !== "*")
-    .map((value) => normalizeEntry(value))
-    .map((value) => value.trim())
-    .filter(Boolean);
-  const normalizedStore = storeAllowFrom
-    .map((value) => normalizeEntry(value))
-    .map((value) => value.trim())
-    .filter(Boolean);
+  const normalizedCfg = normalizeStringEntries(
+    configAllowFrom.filter((value) => value !== "*").map((value) => normalizeEntry(value)),
+  );
+  const normalizedStore = normalizeStringEntries(
+    storeAllowFrom.map((value) => normalizeEntry(value)),
+  );
   const allowCount = new Set([...normalizedCfg, ...normalizedStore]).size;
   return {
     configAllowFrom,

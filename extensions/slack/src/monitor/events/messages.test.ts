@@ -1,13 +1,35 @@
+// Slack tests cover messages plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSlackSystemEventTestHarness,
   type SlackSystemEventTestOverrides,
 } from "./system-event-test-harness.js";
 
-const { messageQueueMock, messageAllowMock } = vi.hoisted(() => ({
+const { messageQueueMock, messageAllowMock, inboundInfoSpy } = vi.hoisted(() => ({
   messageQueueMock: vi.fn(),
   messageAllowMock: vi.fn(),
+  inboundInfoSpy: vi.fn(),
 }));
+
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
+  const makeLogger = () => {
+    const logger = {
+      subsystem: "test",
+      isEnabled: () => true,
+      trace: () => {},
+      debug: () => {},
+      info: inboundInfoSpy,
+      warn: () => {},
+      error: () => {},
+      fatal: () => {},
+      raw: () => {},
+      child: () => logger,
+    };
+    return logger;
+  };
+  return { ...actual, createSubsystemLogger: () => makeLogger() };
+});
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
   enqueueSystemEvent: (...args: unknown[]) => messageQueueMock(...args),
@@ -20,6 +42,13 @@ vi.mock("openclaw/plugin-sdk/conversation-runtime", () => ({
 }));
 
 let registerSlackMessageEvents: typeof import("./messages.js").registerSlackMessageEvents;
+let formatSlackInboundLogLine: typeof import("./messages.js").formatSlackInboundLogLine;
+
+function inboundLogLines(): string[] {
+  return inboundInfoSpy.mock.calls
+    .map((call) => call[0])
+    .filter((line): line is string => typeof line === "string" && line.startsWith("Inbound "));
+}
 
 type MessageHandler = (args: { event: Record<string, unknown>; body: unknown }) => Promise<void>;
 type RegisteredEventName = "message" | "app_mention";
@@ -56,11 +85,12 @@ function resetMessageMocks(): void {
 }
 
 beforeAll(async () => {
-  ({ registerSlackMessageEvents } = await import("./messages.js"));
+  ({ registerSlackMessageEvents, formatSlackInboundLogLine } = await import("./messages.js"));
 });
 
 beforeEach(() => {
   resetMessageMocks();
+  inboundInfoSpy.mockClear();
 });
 
 function makeChangedEvent(overrides?: { channel?: string; user?: string }) {
@@ -89,6 +119,14 @@ function makeAssistantChangedEvent(overrides?: { user?: string }) {
       user: "U_BOT",
       text: "assistant wrapped user text",
       metadata: { event_payload: { user } },
+      assistant_thread: {
+        channel_id: "D1",
+        thread_ts: "123.000",
+        context: {
+          channel_id: "C123",
+          team_id: "T123",
+        },
+      },
     },
     previous_message: { ts: "123.456", user: "U_BOT" },
     event_ts: "123.789",
@@ -248,6 +286,7 @@ describe("registerSlackMessageEvents", () => {
             text?: string;
             ts?: string;
             thread_ts?: string;
+            assistant_thread?: Record<string, unknown>;
           },
           { source?: string },
         ]
@@ -259,6 +298,14 @@ describe("registerSlackMessageEvents", () => {
     expect(message?.text).toBe("assistant wrapped user text");
     expect(message?.ts).toBe("123.456");
     expect(message?.thread_ts).toBe("123.000");
+    expect(message?.assistant_thread).toEqual({
+      channel_id: "D1",
+      thread_ts: "123.000",
+      context: {
+        channel_id: "C123",
+        team_id: "T123",
+      },
+    });
     expect(call?.[1]).toEqual({ source: "message" });
     expect(messageQueueMock).not.toHaveBeenCalled();
   });
@@ -369,6 +416,8 @@ describe("registerSlackMessageEvents", () => {
     });
 
     expect(handleSlackMessage).not.toHaveBeenCalled();
+    // Dropped DM app_mention (already handled via message.im) must not log a receipt.
+    expect(inboundLogLines()).toEqual([]);
   });
 
   it("routes app_mention events from channels to the message handler", async () => {
@@ -379,5 +428,55 @@ describe("registerSlackMessageEvents", () => {
     });
 
     expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+    expect(inboundLogLines()).toEqual([
+      "Inbound app_mention slack:T_TEST:channel:C123:user:U1 -> bot:U_BOT (channel, 14 chars)",
+    ]);
+  });
+
+  it("logs channel app_mention receipts with zero chars when text is absent", async () => {
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "app_mention",
+      overrides: { dmPolicy: "open" },
+      event: {
+        ...makeAppMentionEvent({ channel: "C123", channelType: "channel" }),
+        text: undefined,
+      },
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+    expect(inboundLogLines()).toEqual([
+      "Inbound app_mention slack:T_TEST:channel:C123:user:U1 -> bot:U_BOT (channel, 0 chars)",
+    ]);
+  });
+
+  it("logs channel app_mention receipts with unknown sender when user is absent", async () => {
+    const { handleSlackMessage } = await invokeRegisteredHandler({
+      eventName: "app_mention",
+      overrides: { dmPolicy: "open" },
+      event: {
+        ...makeAppMentionEvent({ channel: "C123", channelType: "channel" }),
+        user: undefined,
+      },
+    });
+
+    expect(handleSlackMessage).toHaveBeenCalledTimes(1);
+    expect(inboundLogLines()).toEqual([
+      "Inbound app_mention slack:T_TEST:channel:C123:user:unknown -> bot:U_BOT (channel, 14 chars)",
+    ]);
+  });
+
+  it("formats the inbound receipt line with channel, sender, body length, and bot identity", () => {
+    expect(
+      formatSlackInboundLogLine({
+        workspaceId: "T123",
+        channelId: "C456",
+        channelType: "channel",
+        userId: "U789",
+        botUserId: "U_BOT",
+        bodyChars: 42,
+      }),
+    ).toBe(
+      "Inbound app_mention slack:T123:channel:C456:user:U789 -> bot:U_BOT (channel, 42 chars)",
+    );
   });
 });

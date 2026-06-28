@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
+/** Runs Android speech recognition in a restart loop and dispatches wake-word commands. */
 class VoiceWakeManager(
   private val context: Context,
   private val scope: CoroutineScope,
@@ -33,13 +34,15 @@ class VoiceWakeManager(
 
   private var recognizer: SpeechRecognizer? = null
   private var restartJob: Job? = null
-  private var lastDispatched: String? = null
+  private var lastCycleDispatched: String? = null
   private var stopRequested = false
 
+  /** Replaces the configured wake phrases checked against partial and final transcripts. */
   fun setTriggerWords(words: List<String>) {
     triggerWords = words
   }
 
+  /** Starts wake listening if Android's speech recognizer is available. */
   fun start() {
     mainHandler.post {
       if (_isListening.value) return@post
@@ -62,6 +65,7 @@ class VoiceWakeManager(
     }
   }
 
+  /** Stops listening, destroys the current recognizer, and publishes a terminal status. */
   fun stop(statusText: String = "Off") {
     stopRequested = true
     restartJob?.cancel()
@@ -99,6 +103,8 @@ class VoiceWakeManager(
         mainHandler.post {
           if (stopRequested) return@post
           try {
+            // SpeechRecognizer sessions end frequently after partial/final results;
+            // restart the same recognizer cycle instead of exposing that churn to UI.
             recognizer?.cancel()
             startListeningInternal()
           } catch (_: Throwable) {
@@ -110,8 +116,8 @@ class VoiceWakeManager(
 
   private fun handleTranscription(text: String) {
     val command = VoiceWakeCommandExtractor.extractCommand(text, triggerWords) ?: return
-    if (command == lastDispatched) return
-    lastDispatched = command
+    if (command == lastCycleDispatched) return
+    lastCycleDispatched = command
 
     scope.launch { onCommand(command) }
     _statusText.value = "Triggered"
@@ -121,6 +127,7 @@ class VoiceWakeManager(
   private val listener =
     object : RecognitionListener {
       override fun onReadyForSpeech(params: Bundle?) {
+        lastCycleDispatched = null
         _statusText.value = "Listening"
       }
 

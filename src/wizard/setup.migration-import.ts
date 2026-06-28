@@ -1,3 +1,4 @@
+// Setup migration import helpers read existing config during onboarding migration.
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OnboardOptions } from "../commands/onboard-types.js";
@@ -6,8 +7,11 @@ import { formatErrorMessage } from "../infra/errors.js";
 import type { MigrationProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveUserPath } from "../utils.js";
+import { t } from "./i18n/index.js";
 import { WizardCancelledError, type WizardPrompter } from "./prompts.js";
 
+// Onboarding migration import helpers detect existing setups, select a plugin
+// migration provider, preview a plan, back up state, and apply into fresh setup.
 export type SetupMigrationDetection = {
   providerId: string;
   label: string;
@@ -25,6 +29,28 @@ const MEANINGFUL_WORKSPACE_ENTRIES = [
   "skills",
 ] as const;
 const MEANINGFUL_STATE_ENTRIES = ["credentials", "sessions", "agents"] as const;
+
+let migrationProviderRuntimeModulePromise: Promise<
+  typeof import("../plugins/migration-provider-runtime.js")
+> | null = null;
+let migrationContextModulePromise: Promise<typeof import("../commands/migrate/context.js")> | null =
+  null;
+let configPathsModulePromise: Promise<typeof import("../config/paths.js")> | null = null;
+
+const loadMigrationProviderRuntimeModule = async () => {
+  migrationProviderRuntimeModulePromise ??= import("../plugins/migration-provider-runtime.js");
+  return await migrationProviderRuntimeModulePromise;
+};
+
+const loadMigrationContextModule = async () => {
+  migrationContextModulePromise ??= import("../commands/migrate/context.js");
+  return await migrationContextModulePromise;
+};
+
+const loadConfigPathsModule = async () => {
+  configPathsModulePromise ??= import("../config/paths.js");
+  return await configPathsModulePromise;
+};
 
 async function exists(candidate: string): Promise<boolean> {
   try {
@@ -75,6 +101,8 @@ function assertFreshSetupMigrationTarget(freshness: {
   fresh: boolean;
   reasons: readonly string[];
 }): void {
+  // Migration import is currently fresh-setup only unless an explicit env gate
+  // opts into existing-target behavior.
   if (freshness.fresh || process.env.OPENCLAW_MIGRATION_EXISTING_IMPORT === "1") {
     return;
   }
@@ -98,9 +126,9 @@ export async function detectSetupMigrationSources(params: {
     { createMigrationLogger },
     { resolveStateDir },
   ] = await Promise.all([
-    import("../plugins/migration-provider-runtime.js"),
-    import("../commands/migrate/context.js"),
-    import("../config/paths.js"),
+    loadMigrationProviderRuntimeModule(),
+    loadMigrationContextModule(),
+    loadConfigPathsModule(),
   ]);
   ensureStandaloneMigrationProviderRegistryLoaded({ cfg: params.config });
   const stateDir = resolveStateDir();
@@ -125,6 +153,8 @@ export async function detectSetupMigrationSources(params: {
         });
       }
     } catch (error) {
+      // Detection is advisory; one failing provider must not prevent onboarding
+      // from offering other migration sources.
       logger.debug?.(
         `Migration provider ${provider.id} detection failed: ${formatErrorMessage(error)}`,
       );
@@ -159,7 +189,7 @@ async function selectSetupMigrationProvider(params: {
     ensureStandaloneMigrationProviderRegistryLoaded,
     resolvePluginMigrationProvider,
     resolvePluginMigrationProviders,
-  } = await import("../plugins/migration-provider-runtime.js");
+  } = await loadMigrationProviderRuntimeModule();
   ensureStandaloneMigrationProviderRegistryLoaded({ cfg: params.baseConfig });
   const providers = resolvePluginMigrationProviders({ cfg: params.baseConfig });
   if (providers.length === 0) {
@@ -169,7 +199,7 @@ async function selectSetupMigrationProvider(params: {
   const providerId =
     params.opts.importFrom?.trim() ||
     (await params.prompter.select({
-      message: "Migration source",
+      message: t("wizard.migration.source"),
       options: [
         ...params.detections.map((detection) => ({
           value: detection.providerId,
@@ -186,7 +216,7 @@ async function selectSetupMigrationProvider(params: {
           .map((provider) => ({
             value: provider.id,
             label: provider.label,
-            hint: provider.description ?? "Enter a source path next",
+            hint: provider.description ?? t("wizard.migration.sourcePathHint"),
           })),
       ],
       initialValue: params.detections[0]?.providerId ?? providers[0]?.id,
@@ -217,10 +247,10 @@ export async function runSetupMigrationImport(params: {
     onboardHelpers,
   ] = await Promise.all([
     import("../commands/onboard-config.js"),
-    import("../commands/migrate/context.js"),
+    loadMigrationContextModule(),
     import("../commands/migrate/apply.js"),
     import("../commands/migrate/output.js"),
-    import("../config/paths.js"),
+    loadConfigPathsModule(),
     import("../commands/onboard-helpers.js"),
   ]);
   const { provider, providerId } = await selectSetupMigrationProvider({
@@ -238,7 +268,7 @@ export async function runSetupMigrationImport(params: {
           throw new Error("--import-source is required for non-interactive migration import.");
         })()
       : await params.prompter.text({
-          message: "Source agent home",
+          message: t("wizard.migration.sourceAgentHome"),
           initialValue: providerId === "hermes" ? "~/.hermes" : undefined,
         }));
   const workspaceInput =
@@ -246,7 +276,7 @@ export async function runSetupMigrationImport(params: {
     (params.opts.nonInteractive
       ? (params.baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE)
       : await params.prompter.text({
-          message: "Target workspace directory",
+          message: t("wizard.migration.targetWorkspace"),
           initialValue:
             params.baseConfig.agents?.defaults?.workspace ?? onboardHelpers.DEFAULT_WORKSPACE,
         }));
@@ -257,6 +287,8 @@ export async function runSetupMigrationImport(params: {
   }
 
   const stateDir = resolveStateDir();
+  // Freshness is checked after workspace selection because the migration target
+  // can be different from the process cwd/default workspace.
   assertFreshSetupMigrationTarget(
     await inspectSetupMigrationFreshness({
       baseConfig: params.baseConfig,
@@ -273,22 +305,27 @@ export async function runSetupMigrationImport(params: {
     logger: createMigrationLogger(params.runtime),
   };
   const plan = await provider.plan(ctx);
-  await params.prompter.note(formatMigrationPreview(plan).join("\n"), "Migration preview");
+  await params.prompter.note(
+    formatMigrationPreview(plan).join("\n"),
+    t("wizard.migration.previewTitle"),
+  );
   assertConflictFreePlan(plan, providerId);
 
   const confirmed =
     params.opts.nonInteractive === true
       ? true
       : await params.prompter.confirm({
-          message: "Apply this migration now?",
+          message: t("wizard.migration.apply"),
           initialValue: false,
         });
   if (!confirmed) {
-    throw new WizardCancelledError("migration cancelled");
+    throw new WizardCancelledError(t("wizard.migration.cancelled"));
   }
 
   const reportDir = buildMigrationReportDir(providerId, stateDir);
   const backupPath = await createPreMigrationBackup({});
+  // Commit base wizard metadata before applying migrations so generated reports
+  // can reference a concrete OpenClaw config target.
   targetConfig = onboardHelpers.applyWizardMetadata(targetConfig, {
     command: "onboard",
     mode: "local",
@@ -307,6 +344,9 @@ export async function runSetupMigrationImport(params: {
     reportDir: result.reportDir ?? reportDir,
   };
   assertApplySucceeded(withReport);
-  await params.prompter.note(formatMigrationResult(withReport).join("\n"), "Migration applied");
-  await params.prompter.outro("Migration complete. Run `openclaw doctor` next.");
+  await params.prompter.note(
+    formatMigrationResult(withReport).join("\n"),
+    t("wizard.migration.appliedTitle"),
+  );
+  await params.prompter.outro(t("wizard.migration.complete"));
 }

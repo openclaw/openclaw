@@ -1,3 +1,5 @@
+// Tlon tests cover sse client plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { urbitFetch } from "./fetch.js";
 import { UrbitSSEClient } from "./sse-client.js";
@@ -137,6 +139,16 @@ describe("UrbitSSEClient", () => {
       expect(client.onReconnect).toBe(onReconnect);
     });
 
+    it("clamps oversized reconnect delays", () => {
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
+        reconnectDelay: Number.MAX_SAFE_INTEGER,
+        maxReconnectDelay: Number.MAX_SAFE_INTEGER,
+      });
+
+      expect(client.reconnectDelay).toBe(MAX_TIMER_TIMEOUT_MS);
+      expect(client.maxReconnectDelay).toBe(MAX_TIMER_TIMEOUT_MS);
+    });
+
     it("resets reconnect attempts on successful connect", async () => {
       const mockUrbitFetch = vi.mocked(urbitFetch);
 
@@ -169,6 +181,35 @@ describe("UrbitSSEClient", () => {
   });
 
   describe("event acking", () => {
+    it("logs malformed SSE JSON with an owned parser error", () => {
+      const logger = { error: vi.fn() };
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123", {
+        logger,
+      });
+
+      client.processEvent("id: 1\ndata: {not json");
+
+      expect(logger.error).toHaveBeenCalledWith(
+        "Error parsing SSE event: Error: Tlon Urbit SSE event was malformed JSON",
+      );
+    });
+
+    it("ignores malformed event ids when deciding whether to ack", async () => {
+      const mockUrbitFetch = vi.mocked(urbitFetch);
+      mockUrbitFetch.mockResolvedValue({
+        response: { ok: true, status: 200 } as unknown as Response,
+        finalUrl: "https://example.com",
+        release: vi.fn().mockResolvedValue(undefined),
+      });
+      const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
+
+      client.processEvent('id: 25abc\ndata: {"json":{"ok":true}}');
+      await Promise.resolve();
+
+      expect(mockUrbitFetch).not.toHaveBeenCalled();
+      expect((client as unknown as { lastHeardEventId: number }).lastHeardEventId).toBe(-1);
+    });
+
     it("tracks lastHeardEventId and ackThreshold", () => {
       const client = new UrbitSSEClient("https://example.com", "urbauth-~zod=123");
 

@@ -21,15 +21,16 @@ Treat them differently from normal config:
 
 ## Currently documented flags
 
-| Surface                  | Key                                                       | Use it when                                                                                                    | More                                                                                          |
-| ------------------------ | --------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
-| Local model runtime      | `agents.defaults.experimental.localModelLean`             | A smaller or stricter local backend chokes on OpenClaw's full default tool surface                             | [Local Models](/gateway/local-models)                                                         |
-| Memory search            | `agents.defaults.memorySearch.experimental.sessionMemory` | You want `memory_search` to index prior session transcripts and accept the extra storage/indexing cost         | [Memory configuration reference](/reference/memory-config#session-memory-search-experimental) |
-| Structured planning tool | `tools.experimental.planTool`                             | You want the structured `update_plan` tool exposed for multi-step work tracking in compatible runtimes and UIs | [Gateway configuration reference](/gateway/config-tools#toolsexperimental)                    |
+| Surface                  | Key                                                                                        | Use it when                                                                                                                       | More                                                                                          |
+| ------------------------ | ------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| Local model runtime      | `agents.defaults.experimental.localModelLean`, `agents.list[].experimental.localModelLean` | A smaller or stricter local backend chokes on OpenClaw's full default tool surface                                                | [Local Models](/gateway/local-models)                                                         |
+| Memory search            | `agents.defaults.memorySearch.experimental.sessionMemory`                                  | You want `memory_search` to index prior session transcripts and accept the extra storage/indexing cost                            | [Memory configuration reference](/reference/memory-config#session-memory-search-experimental) |
+| Codex harness            | `plugins.entries.codex.config.appServer.experimental.sandboxExecServer`                    | You want native Codex app-server 0.132.0 or newer to target an OpenClaw sandbox-backed exec-server instead of disabling Code Mode | [Codex harness reference](/plugins/codex-harness-reference#sandboxed-native-execution)        |
+| Structured planning tool | `tools.experimental.planTool`                                                              | You want the structured `update_plan` tool exposed for multi-step work tracking in compatible runtimes and UIs                    | [Gateway configuration reference](/gateway/config-tools#toolsexperimental)                    |
 
 ## Local model lean mode
 
-`agents.defaults.experimental.localModelLean: true` is a pressure-release valve for weaker local-model setups. When it is on, OpenClaw drops three default tools — `browser`, `cron`, and `message` — from the agent's tool surface for every turn. Nothing else changes.
+`agents.defaults.experimental.localModelLean: true` is a pressure-release valve for weaker local-model setups. When it is on, OpenClaw drops three default tools — `browser`, `cron`, and `message` — from the agent's tool surface for every turn. It also defaults that run to structured Tool Search controls when `tools.toolSearch` is not explicitly configured, so larger plugin, MCP, or client tool catalogs stay behind `tool_search`, `tool_describe`, and `tool_call` instead of being dumped into the prompt. Runs that require direct `message` delivery keep that tool direct instead of enabling the lean-mode Tool Search default. Use `agents.list[].experimental.localModelLean` to enable or disable the same behavior for one configured agent.
 
 ### Why these three tools
 
@@ -39,7 +40,7 @@ These three tools have the largest descriptions and the most parameter shapes in
 - The model picking the right tool vs. emitting malformed tool calls because there are too many similar-looking schemas.
 - The Chat Completions adapter staying inside the server's structured-output limits vs. tripping a 400 on tool-call payload size.
 
-Removing them does not silently rewire OpenClaw — it just makes the tool list shorter. The model still has `read`, `write`, `edit`, `exec`, `apply_patch`, web search/fetch (when configured), memory, and session/agent tools available.
+Removing them does not silently rewire OpenClaw — it just makes the direct tool list shorter. The model still has `read`, `write`, `edit`, `exec`, `apply_patch`, web search/fetch (when configured), memory, and session/agent tools available. Extra catalogs remain callable through Tool Search unless you explicitly set `tools.toolSearch: false`.
 
 ### When to turn it on
 
@@ -55,6 +56,8 @@ If your backend handles the full default runtime cleanly, leave this off. Lean m
 
 Lean mode also does not replace `tools.profile`, `tools.allow`/`tools.deny`, or the model `compat.supportsTools: false` escape hatch. If you need a permanent narrower tool surface for a specific agent, prefer those stable knobs over the experimental flag.
 
+If you already tune Tool Search globally, OpenClaw leaves that operator config alone. Set `tools.toolSearch: false` to opt out of the lean-mode Tool Search default.
+
 ### Enable
 
 ```json5
@@ -69,13 +72,31 @@ Lean mode also does not replace `tools.profile`, `tools.allow`/`tools.deny`, or 
 }
 ```
 
+For one agent only:
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "local",
+        model: "lmstudio/gemma-4-e4b-it",
+        experimental: {
+          localModelLean: true,
+        },
+      },
+    ],
+  },
+}
+```
+
 Restart the Gateway after changing the flag, then confirm the trimmed tool list with:
 
 ```bash
 openclaw status --deep
 ```
 
-The deep status output lists the active agent tools; `browser`, `cron`, and `message` should be absent when lean mode is on.
+The deep status output lists the active agent tools; `browser`, `cron`, and `message` should be absent when lean mode is on unless the current delivery mode forces direct `message` replies.
 
 ## Experimental does not mean hidden
 

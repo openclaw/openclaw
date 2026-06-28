@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+// Zai tests cover detect plugin behavior.
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { detectZaiEndpoint } from "./detect.js";
 
 type FetchResponse = { status: number; body?: unknown };
@@ -19,6 +21,10 @@ function makeFetch(map: Record<string, FetchResponse>) {
 }
 
 describe("detectZaiEndpoint", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("resolves preferred/fallback endpoints and null when probes fail", async () => {
     const scenarios: Array<{
       endpoint?: "global" | "cn" | "coding-global" | "coding-cn";
@@ -33,10 +39,7 @@ describe("detectZaiEndpoint", () => {
       },
       {
         responses: {
-          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": {
-            status: 404,
-            body: { error: { message: "not found" } },
-          },
+          "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 404 },
           "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.1": { status: 200 },
         },
         expected: { endpoint: "cn", modelId: "glm-5.1" },
@@ -45,13 +48,17 @@ describe("detectZaiEndpoint", () => {
         responses: {
           "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 404 },
           "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.1": { status: 404 },
-          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.1": { status: 200 },
+          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.2": { status: 200 },
         },
-        expected: { endpoint: "coding-global", modelId: "glm-5.1" },
+        expected: { endpoint: "coding-global", modelId: "glm-5.2" },
       },
       {
         endpoint: "coding-global",
         responses: {
+          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.2": {
+            status: 404,
+            body: { error: { message: "glm-5.2 unavailable" } },
+          },
           "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.1": {
             status: 404,
             body: { error: { message: "glm-5.1 unavailable" } },
@@ -61,8 +68,45 @@ describe("detectZaiEndpoint", () => {
         expected: { endpoint: "coding-global", modelId: "glm-4.7" },
       },
       {
+        endpoint: "coding-global",
+        responses: {
+          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.2": {
+            status: 400,
+            body: { code: 1311, msg: "model not included in the current plan" },
+          },
+          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.1": {
+            status: 400,
+            body: { code: 1211, msg: "model does not exist" },
+          },
+          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-4.7": { status: 200 },
+        },
+        expected: { endpoint: "coding-global", modelId: "glm-4.7" },
+      },
+      {
+        endpoint: "coding-global",
+        responses: {
+          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.2": {
+            status: 429,
+            body: { error: { message: "rate limited" } },
+          },
+        },
+        expected: null,
+      },
+      {
         endpoint: "coding-cn",
         responses: {
+          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.2": {
+            status: 200,
+          },
+        },
+        expected: { endpoint: "coding-cn", modelId: "glm-5.2" },
+      },
+      {
+        endpoint: "coding-cn",
+        responses: {
+          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.2": {
+            status: 404,
+          },
           "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.1": {
             status: 200,
           },
@@ -72,6 +116,10 @@ describe("detectZaiEndpoint", () => {
       {
         endpoint: "coding-cn",
         responses: {
+          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.2": {
+            status: 404,
+            body: { error: { message: "glm-5.2 unavailable" } },
+          },
           "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.1": {
             status: 404,
             body: { error: { message: "glm-5.1 unavailable" } },
@@ -86,8 +134,12 @@ describe("detectZaiEndpoint", () => {
         responses: {
           "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 401 },
           "https://open.bigmodel.cn/api/paas/v4/chat/completions::glm-5.1": { status: 401 },
+          "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.2": { status: 401 },
           "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-5.1": { status: 401 },
           "https://api.z.ai/api/coding/paas/v4/chat/completions::glm-4.7": { status: 401 },
+          "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.2": {
+            status: 401,
+          },
           "https://open.bigmodel.cn/api/coding/paas/v4/chat/completions::glm-5.1": {
             status: 401,
           },
@@ -113,5 +165,23 @@ describe("detectZaiEndpoint", () => {
         expect(detected?.modelId).toBe(scenario.expected.modelId);
       }
     }
+  });
+
+  it("caps oversized probe timeouts before scheduling", async () => {
+    const timeoutSpy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockReturnValue(1 as unknown as ReturnType<typeof setTimeout>);
+    vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => undefined);
+    const fetchFn = makeFetch({
+      "https://api.z.ai/api/paas/v4/chat/completions::glm-5.1": { status: 200 },
+    });
+
+    await detectZaiEndpoint({
+      apiKey: "sk-test", // pragma: allowlist secret
+      fetchFn,
+      timeoutMs: MAX_TIMER_TIMEOUT_MS + 1_000_000,
+    });
+
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
   });
 });

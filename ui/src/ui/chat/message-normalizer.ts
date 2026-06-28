@@ -2,6 +2,7 @@
  * Message normalization utilities for chat rendering.
  */
 
+import { mediaKindFromMime } from "@openclaw/media-core/constants";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { extractCanvasShortcodes } from "../../../../src/chat/canvas-render.js";
 import {
@@ -9,11 +10,22 @@ import {
   isToolResultContentType,
   resolveToolBlockArgs,
 } from "../../../../src/chat/tool-content.js";
-import { mediaKindFromMime } from "../../../../src/media/constants.js";
 import { splitMediaFromOutput } from "../../../../src/media/parse.js";
 import { parseInlineDirectives } from "../../../../src/utils/directive-tags.js";
 import type { NormalizedMessage, MessageContentItem } from "../types/chat-types.ts";
 export { isToolResultMessage, normalizeRoleForGrouping } from "./role-normalizer.ts";
+
+function isTextContentBlock(
+  item: Record<string, unknown>,
+  role: string,
+): item is Record<string, unknown> & { text: string } {
+  return (
+    typeof item.text === "string" &&
+    (item.type === "text" ||
+      (role === "user" && item.type === "input_text") ||
+      (role === "assistant" && (item.type === "input_text" || item.type === "output_text")))
+  );
+}
 
 function coerceCanvasPreview(
   value: unknown,
@@ -143,6 +155,58 @@ function inferAttachmentKind(url: string): {
     return name || url;
   })();
   return { kind, mimeType, label };
+}
+
+function coerceAudioContentBlock(
+  item: Record<string, unknown>,
+): Extract<MessageContentItem, { type: "attachment" }> | null {
+  if (item.type !== "audio") {
+    return null;
+  }
+  const source = item.source;
+  if (!source || typeof source !== "object" || Array.isArray(source)) {
+    return null;
+  }
+  const sourceRecord = source as Record<string, unknown>;
+  const mediaType =
+    typeof sourceRecord.media_type === "string" &&
+    sourceRecord.media_type.trim().toLowerCase().startsWith("audio/")
+      ? sourceRecord.media_type.trim()
+      : "audio/mpeg";
+  if (sourceRecord.type === "base64" && typeof sourceRecord.data === "string") {
+    const data = sourceRecord.data.trim();
+    if (!data) {
+      return null;
+    }
+    const url = data.startsWith("data:") ? data : `data:${mediaType};base64,${data}`;
+    return {
+      type: "attachment",
+      attachment: {
+        url,
+        kind: "audio",
+        label: typeof item.label === "string" && item.label.trim() ? item.label.trim() : "Audio",
+        mimeType: mediaType,
+        ...(item.isVoiceNote === true ? { isVoiceNote: true } : {}),
+      },
+    };
+  }
+  if (sourceRecord.type === "url" && typeof sourceRecord.url === "string") {
+    const url = sourceRecord.url.trim();
+    if (!url) {
+      return null;
+    }
+    return {
+      type: "attachment",
+      attachment: {
+        url,
+        kind: "audio",
+        label: typeof item.label === "string" && item.label.trim() ? item.label.trim() : "Audio",
+        mimeType: mediaType,
+        ...(item.isVoiceNote === true ? { isVoiceNote: true } : {}),
+      },
+    };
+  }
+  return null;
 }
 
 function mergeAdjacentTextItems(items: MessageContentItem[]): MessageContentItem[] {
@@ -292,6 +356,14 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
     }
   } else if (Array.isArray(m.content)) {
     content = m.content.flatMap((item: Record<string, unknown>) => {
+      if (isAssistantMessage) {
+        const audioAttachment = coerceAudioContentBlock(item);
+        if (audioAttachment) {
+          return [audioAttachment];
+        }
+      } else if (item.type === "audio") {
+        return [];
+      }
       if (
         item.type === "attachment" &&
         item.attachment &&
@@ -346,15 +418,25 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
           },
         ];
       }
-      if (item.type === "text" && typeof item.text === "string" && isAssistantMessage) {
-        const expanded = expandTextContent(item.text);
-        audioAsVoice = audioAsVoice || expanded.audioAsVoice;
-        if (expanded.replyTarget?.kind === "id") {
-          replyTarget = expanded.replyTarget;
-        } else if (expanded.replyTarget?.kind === "current" && replyTarget === null) {
-          replyTarget = expanded.replyTarget;
+      if (isTextContentBlock(item, role)) {
+        if (isAssistantMessage) {
+          const expanded = expandTextContent(item.text);
+          audioAsVoice = audioAsVoice || expanded.audioAsVoice;
+          if (expanded.replyTarget?.kind === "id") {
+            replyTarget = expanded.replyTarget;
+          } else if (expanded.replyTarget?.kind === "current" && replyTarget === null) {
+            replyTarget = expanded.replyTarget;
+          }
+          return expanded.content;
         }
-        return expanded.content;
+        return [
+          {
+            type: "text" as const,
+            text: item.text,
+            name: undefined,
+            args: undefined,
+          },
+        ];
       }
       return [
         {

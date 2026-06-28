@@ -1,3 +1,4 @@
+// Line plugin module implements bot message context behavior.
 import type { webhook } from "@line/bot-sdk";
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import {
@@ -14,8 +15,8 @@ import {
   resolveRuntimeConversationBindingRoute,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-dispatch-runtime";
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
-import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
+import { createChannelHistoryWindow, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeAllowFrom } from "./bot-access.js";
@@ -377,6 +378,10 @@ async function finalizeLineInboundContext(params: {
         normalizeEntry: (entry) => normalizeAllowFrom([entry]).entries[0],
       })
     : null;
+  const inboundLastRouteSessionKey = resolveInboundLastRouteSessionKey({
+    route: params.route,
+    sessionKey: params.route.sessionKey,
+  });
   if (shouldLogVerbose()) {
     const preview = body.slice(0, 200).replace(/\n/g, "\\n");
     const mediaInfo =
@@ -397,12 +402,14 @@ async function finalizeLineInboundContext(params: {
       record: {
         updateLastRoute: !params.source.isGroup
           ? {
-              sessionKey: params.route.mainSessionKey,
+              sessionKey: inboundLastRouteSessionKey,
               channel: "line",
               to: params.source.userId ?? params.source.peerId,
               accountId: params.route.accountId,
               mainDmOwnerPin:
-                pinnedMainDmOwner && params.source.userId
+                inboundLastRouteSessionKey === params.route.mainSessionKey &&
+                pinnedMainDmOwner &&
+                params.source.userId
                   ? {
                       ownerRecipient: pinnedMainDmOwner,
                       senderRecipient: params.source.userId,
@@ -469,11 +476,10 @@ export async function buildLineMessageContext(params: BuildLineMessageContextPar
   const historyKey = isGroup ? peerId : undefined;
   const inboundHistory =
     historyKey && groupHistories && (historyLimit ?? 0) > 0
-      ? (groupHistories.get(historyKey) ?? []).map((entry) => ({
-          sender: entry.sender,
-          body: entry.body,
-          timestamp: entry.timestamp,
-        }))
+      ? createChannelHistoryWindow({ historyMap: groupHistories }).buildInboundHistory({
+          historyKey,
+          limit: historyLimit ?? 0,
+        })
       : undefined;
 
   const finalized = await finalizeLineInboundContext({

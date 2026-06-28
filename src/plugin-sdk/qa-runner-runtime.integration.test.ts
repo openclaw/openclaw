@@ -1,12 +1,22 @@
+/**
+ * Integration tests for QA runner runtime public surface loading.
+ */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { resetFacadeRuntimeStateForTest } from "./facade-runtime.js";
+import { setTestEnvValue } from "../test-utils/env.js";
+import * as activationCheckRuntime from "./facade-activation-check.runtime.js";
+import {
+  testing as facadeRuntimeTesting,
+  resetFacadeRuntimeStateForTest,
+} from "./facade-runtime.js";
+import { listQaRunnerCliContributions } from "./qa-runner-runtime.js";
 
 const ORIGINAL_ENV = {
   OPENCLAW_DISABLE_BUNDLED_PLUGINS: process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS,
   OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
+  OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
   OPENCLAW_TEST_FAST: process.env.OPENCLAW_TEST_FAST,
 } as const;
 
@@ -20,6 +30,7 @@ function makeTempDir(prefix: string): string {
 
 function resetQaRunnerRuntimeState() {
   resetFacadeRuntimeStateForTest();
+  facadeRuntimeTesting.setFacadeActivationCheckRuntimeForTest(activationCheckRuntime);
 }
 
 describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
@@ -38,7 +49,7 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
       if (value === undefined) {
         delete process.env[key];
       } else {
-        process.env[key] = value;
+        setTestEnvValue(key, value);
       }
     }
   });
@@ -56,6 +67,7 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
       "utf8",
     );
     process.env.OPENCLAW_CONFIG_PATH = configPath;
+    process.env.OPENCLAW_STATE_DIR = stateDir;
 
     fs.mkdirSync(pluginDir, { recursive: true });
     fs.writeFileSync(
@@ -104,15 +116,13 @@ describe("plugin-sdk qa-runner-runtime linked plugin smoke", () => {
       "utf8",
     );
 
-    const module = await import("./qa-runner-runtime.js");
-
-    const contributions = module.listQaRunnerCliContributions();
+    const contributions = listQaRunnerCliContributions();
     const contribution = contributions[0];
     expect(contribution?.status).toBe("available");
     if (!contribution || contribution.status !== "available") {
       throw new Error("Expected linked QA runner contribution to be available");
     }
-    const register = contribution.registration.register;
+    const register = contribution.registration["register"];
     expect(typeof register).toBe("function");
     expect(contributions).toEqual([
       {

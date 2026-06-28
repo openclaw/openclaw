@@ -1,6 +1,7 @@
+// Msteams tests cover message handler.thread parent plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../runtime-api.js";
-import { _resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
+import { resetThreadParentContextCachesForTest } from "../thread-parent-context.js";
 import "./message-handler-mock-support.test-support.js";
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
@@ -38,11 +39,18 @@ vi.mock("../graph-thread.js", () => {
 
 describe("msteams thread parent context injection", () => {
   type MessageHandler = ReturnType<typeof createMSTeamsMessageHandler>;
+  type ParentSystemEventCall = [
+    string,
+    {
+      sessionKey: string;
+      contextKey?: string;
+    },
+  ];
 
   function findParentSystemEventCall(
     mock: ReturnType<typeof vi.fn>,
-  ): [string, { sessionKey: string; contextKey?: string }] | undefined {
-    const calls = mock.mock.calls as Array<[string, { sessionKey: string; contextKey?: string }]>;
+  ): ParentSystemEventCall | undefined {
+    const calls = mock.mock.calls as ParentSystemEventCall[];
     return calls.find(([text]) => text.startsWith("Replying to @"));
   }
 
@@ -59,7 +67,7 @@ describe("msteams thread parent context injection", () => {
   }
 
   beforeEach(() => {
-    _resetThreadParentContextCachesForTest();
+    resetThreadParentContextCachesForTest();
     fetchChannelMessageMock.mockReset();
     fetchThreadRepliesMock.mockReset();
     fetchThreadRepliesMock.mockImplementation(async () => []);
@@ -93,6 +101,7 @@ describe("msteams thread parent context injection", () => {
     expect(parentCall[0]).toBe("Replying to @Alice: Can someone investigate the latency spike?");
     expect(parentCall[1]?.contextKey).toContain("msteams:thread-parent:");
     expect(parentCall[1]?.contextKey).toContain("thread-root-123");
+    expect(parentCall[1]).toMatchObject({});
   });
 
   it("caches parent fetches across thread replies in the same session", async () => {

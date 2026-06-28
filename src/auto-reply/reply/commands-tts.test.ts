@@ -1,3 +1,4 @@
+// Tests text-to-speech command configuration, preference persistence, and summaries.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -140,6 +141,13 @@ describe("handleTtsCommands status fallback reporting", () => {
     );
   });
 
+  it("does not coerce partial TTS limit values", async () => {
+    const result = await handleTtsCommands(buildTtsParams("/tts limit 2000chars"), true);
+
+    expect(expectReply(result).text).toBe("❌ Limit must be between 100 and 4096 characters.");
+    expect(ttsMocks.setTtsMaxLength).not.toHaveBeenCalled();
+  });
+
   it("shows attempted provider chain for failed attempts", async () => {
     ttsMocks.getLastTtsAttempt.mockReturnValue({
       timestamp: Date.now() - 1_000,
@@ -212,6 +220,22 @@ describe("handleTtsCommands status fallback reporting", () => {
     expect(statusReply.text).toContain(
       `Attempt details: ${PRIMARY_TTS_PROVIDER}:failed(provider_error) 65ms, ${FALLBACK_TTS_PROVIDER}:success(ok) 175ms`,
     );
+  });
+
+  it("uses the channel-derived audioAsVoice decision for /tts audio", async () => {
+    ttsMocks.textToSpeech.mockResolvedValue({
+      success: true,
+      audioPath: "/tmp/channel-voice.ogg",
+      provider: PRIMARY_TTS_PROVIDER,
+      voiceCompatible: false,
+      audioAsVoice: true,
+    });
+
+    const result = await handleTtsCommands(buildTtsParams("/tts audio hello channel"), true);
+    const reply = expectReply(result);
+
+    expect(reply.mediaUrl).toBe("/tmp/channel-voice.ogg");
+    expect(reply.audioAsVoice).toBe(true);
   });
 
   it("treats bare /tts as status", async () => {

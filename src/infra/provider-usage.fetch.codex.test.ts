@@ -1,3 +1,4 @@
+// Covers Codex provider usage fetch parsing.
 import { describe, expect, it } from "vitest";
 import { createProviderUsageFetch, makeResponse } from "../test-utils/provider-usage-fetch.js";
 import { fetchCodexUsage } from "./provider-usage.fetch.codex.js";
@@ -20,6 +21,15 @@ describe("fetchCodexUsage", () => {
 
     const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
     expect(result.error).toBe("HTTP 429");
+    expect(result.windows).toHaveLength(0);
+  });
+
+  it("returns a stable error for malformed successful usage JSON", async () => {
+    const mockFetch = createProviderUsageFetch(async () => makeResponse(200, "{not json"));
+
+    const result = await fetchCodexUsage("token", undefined, 5000, mockFetch);
+
+    expect(result.error).toBe("Malformed usage response");
     expect(result.windows).toHaveLength(0);
   });
 
@@ -49,7 +59,7 @@ describe("fetchCodexUsage", () => {
 
     const result = await fetchCodexUsage("token", "acct-1", 5000, mockFetch);
 
-    expect(result.provider).toBe("openai-codex");
+    expect(result.provider).toBe("openai");
     expect(result.plan).toBe("Plus ($12.50)");
     expect(result.windows).toEqual([
       { label: "3h", usedPercent: 35.5, resetAt: 1_700_000_000_000 },

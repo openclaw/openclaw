@@ -1,5 +1,8 @@
+// Feishu plugin module implements send behavior.
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
 import {
+  isRecord,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -7,9 +10,9 @@ import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
-import { createFeishuApiError, requestFeishuApi } from "./comment-shared.js";
+import { requestFeishuApi } from "./comment-shared.js";
 import type { MentionTarget } from "./mention-target.types.js";
-import { buildMentionedCardContent, buildMentionedMessage } from "./mention.js";
+import { buildMentionedCardContent } from "./mention.js";
 import { parsePostContent } from "./post.js";
 import {
   assertFeishuMessageApiSuccess,
@@ -64,11 +67,12 @@ function isWithdrawnReplyError(err: unknown): boolean {
   ) {
     return true;
   }
+  // Wrapped error shape from createFeishuApiError: err.cause holds the original error.
+  const cause = (err as { cause?: unknown }).cause;
+  if (cause && cause !== err) {
+    return isWithdrawnReplyError(cause);
+  }
   return false;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 type FeishuCreateMessageClient = {
@@ -170,17 +174,22 @@ async function sendReplyOrFallbackDirect(
 
   let response: { code?: number; msg?: string; data?: { message_id?: string } };
   try {
-    response = await client.im.message.reply({
-      path: { message_id: params.replyToMessageId },
-      data: {
-        content: params.content,
-        msg_type: params.msgType,
-        ...(params.replyInThread ? { reply_in_thread: true } : {}),
-      },
-    });
+    response = await requestFeishuApi(
+      () =>
+        client.im.message.reply({
+          path: { message_id: params.replyToMessageId! },
+          data: {
+            content: params.content,
+            msg_type: params.msgType,
+            ...(params.replyInThread ? { reply_in_thread: true } : {}),
+          },
+        }),
+      params.replyErrorPrefix,
+      { includeNestedErrorLogId: true },
+    );
   } catch (err) {
     if (!isWithdrawnReplyError(err)) {
-      throw createFeishuApiError(err, params.replyErrorPrefix, { includeNestedErrorLogId: true });
+      throw err;
     }
     if (replyTargetFallbackError) {
       throw replyTargetFallbackError;
@@ -381,7 +390,7 @@ function parseFeishuMessageItem(
     senderType: item.sender?.sender_type,
     content: parseFeishuMessageContent(rawContent, msgType),
     contentType: msgType,
-    createTime: item.create_time ? Number.parseInt(item.create_time, 10) : undefined,
+    createTime: parseStrictNonNegativeInteger(item.create_time),
     threadId: item.thread_id || undefined,
   };
 }
@@ -405,6 +414,7 @@ export async function getMessageFeishu(params: {
 
   try {
     const response = (await client.im.message.get({
+      params: { card_msg_content_type: "user_card_content" },
       path: { message_id: messageId },
     })) as FeishuGetMessageResponse;
 
@@ -468,6 +478,7 @@ export async function listFeishuThreadMessages(params: {
       // Results are reversed below to restore chronological order.
       sort_type: "ByCreateTimeDesc",
       page_size: Math.min(limit + 1, 50),
+      card_msg_content_type: "user_card_content",
     },
   })) as {
     code?: number;
@@ -535,22 +546,50 @@ export type SendFeishuMessageParams = {
   accountId?: string;
 };
 
-export function buildFeishuPostMessagePayload(params: { messageText: string }): {
+type FeishuPostMessageElement =
+  | { tag: "at"; user_id: string; user_name?: string }
+  | { tag: "md"; text: string };
+
+function buildFeishuPostMentionElements(mentions?: MentionTarget[]): FeishuPostMessageElement[] {
+  if (!mentions?.length) {
+    return [];
+  }
+
+  const elements: FeishuPostMessageElement[] = [];
+  for (const mention of mentions) {
+    const userId = mention.openId.trim();
+    if (!userId) {
+      continue;
+    }
+    const userName = mention.name.trim();
+    elements.push({
+      tag: "at",
+      user_id: userId,
+      ...(userName ? { user_name: userName } : {}),
+    });
+  }
+  return elements;
+}
+
+export function buildFeishuPostMessagePayload(params: {
+  messageText: string;
+  mentions?: MentionTarget[];
+}): {
   content: string;
   msgType: string;
 } {
-  const { messageText } = params;
+  const { messageText, mentions } = params;
+  const content: FeishuPostMessageElement[] = [
+    ...buildFeishuPostMentionElements(mentions),
+    {
+      tag: "md",
+      text: messageText,
+    },
+  ];
   return {
     content: JSON.stringify({
       zh_cn: {
-        content: [
-          [
-            {
-              tag: "md",
-              text: messageText,
-            },
-          ],
-        ],
+        content: [content],
       },
     }),
     msgType: "post",
@@ -576,14 +615,9 @@ export async function sendMessageFeishu(
     channel: "feishu",
   });
 
-  // Build message content (with @mention support)
-  let rawText = text ?? "";
-  if (mentions && mentions.length > 0) {
-    rawText = buildMentionedMessage(mentions, rawText);
-  }
-  const messageText = convertMarkdownTables(rawText, tableMode);
+  const messageText = convertMarkdownTables(text ?? "", tableMode);
 
-  const { content, msgType } = buildFeishuPostMessagePayload({ messageText });
+  const { content, msgType } = buildFeishuPostMessagePayload({ messageText, mentions });
 
   const directParams = { receiveId, receiveIdType, content, msgType };
   return sendReplyOrFallbackDirect(client, {
@@ -679,31 +713,6 @@ export async function editMessageFeishu(params: {
   }
 
   return { messageId, contentType: "post" };
-}
-
-export async function updateCardFeishu(params: {
-  cfg: ClawdbotConfig;
-  messageId: string;
-  card: Record<string, unknown>;
-  accountId?: string;
-}): Promise<void> {
-  const { cfg, messageId, card, accountId } = params;
-  const account = resolveFeishuRuntimeAccount({ cfg, accountId });
-  if (!account.configured) {
-    throw new Error(`Feishu account "${account.accountId}" not configured`);
-  }
-
-  const client = createFeishuClient(account);
-  const content = JSON.stringify(card);
-
-  const response = await client.im.message.patch({
-    path: { message_id: messageId },
-    data: { content },
-  });
-
-  if (response.code !== 0) {
-    throw new Error(`Feishu card update failed: ${response.msg || `code ${response.code}`}`);
-  }
 }
 
 /**

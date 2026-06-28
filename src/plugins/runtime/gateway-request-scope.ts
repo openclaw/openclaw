@@ -1,3 +1,4 @@
+// Gateway request scope tracks request-local plugin runtime context across async work.
 import { AsyncLocalStorage } from "node:async_hooks";
 import type {
   GatewayRequestContext,
@@ -11,6 +12,7 @@ export type PluginRuntimeGatewayRequestScope = {
   isWebchatConnect: GatewayRequestOptions["isWebchatConnect"];
   pluginId?: string;
   pluginSource?: string;
+  gatewayMethodDispatchAllowed?: boolean;
 };
 
 export type PluginRuntimePluginScope = {

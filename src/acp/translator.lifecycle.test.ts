@@ -1,3 +1,4 @@
+/** Tests ACP translator initialize/session lifecycle and prompt bridge behavior. */
 import type {
   CloseSessionRequest,
   InitializeRequest,
@@ -7,10 +8,10 @@ import type {
   ResumeSessionRequest,
 } from "@agentclientprotocol/sdk";
 import { PROTOCOL_VERSION } from "@agentclientprotocol/sdk";
+import { createInMemorySessionStore } from "@openclaw/acp-core/session";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
 import type { GatewaySessionRow } from "../gateway/session-utils.js";
-import { createInMemorySessionStore } from "./session.js";
 import { AcpGatewayAgent } from "./translator.js";
 import { createAcpConnection, createAcpGateway } from "./translator.test-helpers.js";
 
@@ -43,7 +44,7 @@ function createListSessionsRequest(params: {
     request.cursor = params.cursor;
   }
   if (params.limit !== undefined) {
-    request._meta = { limit: params.limit };
+    request["_meta"] = { limit: params.limit };
   }
   return request;
 }
@@ -108,6 +109,15 @@ function createSessionRow(params: {
     modelProvider: "openai",
     model: "gpt-5.4",
   };
+}
+
+async function settlePromptQuickly<T>(promise: Promise<T>): Promise<T | "pending"> {
+  return await Promise.race([
+    promise,
+    new Promise<"pending">((resolve) => {
+      setTimeout(() => resolve("pending"), 50);
+    }),
+  ]);
 }
 
 async function startPendingPrompt(params: {
@@ -254,6 +264,33 @@ describe("acp translator stable lifecycle handlers", () => {
     sessionStore.clearAllSessionsForTest();
   });
 
+  it("lists Gateway sessions with invalid updated timestamps", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "sessions.list") {
+        return createGatewaySessions([
+          createSessionRow({
+            key: "agent:main:work",
+            cwd: "/tmp/openclaw",
+            title: "Work session",
+            updatedAt: Number.POSITIVE_INFINITY,
+          }),
+        ]);
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      sessionStore,
+    });
+
+    const result = await agent.listSessions(createListSessionsRequest({ cwd: "/tmp/openclaw" }));
+
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]?.updatedAt).toBeUndefined();
+
+    sessionStore.clearAllSessionsForTest();
+  });
+
   it("rejects session/list cursors when the cwd filter changes", async () => {
     const allRows = [
       createSessionRow({ key: "agent:main:a1", cwd: "/work/a", title: "A1" }),
@@ -312,7 +349,7 @@ describe("acp translator stable lifecycle handlers", () => {
 
   it("resumes an existing Gateway session without replaying transcript history", async () => {
     const connection = createAcpConnection();
-    const sessionUpdate = connection.__sessionUpdateMock;
+    const sessionUpdate = connection["__sessionUpdateMock"];
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.list") {
         return createGatewaySessions([
@@ -379,6 +416,81 @@ describe("acp translator stable lifecycle handlers", () => {
 
     expect(sessionStore.hasSession("missing-session")).toBe(false);
     sessionStore.clearAllSessionsForTest();
+  });
+
+  it("resolves prompts when chat send returns a terminal timeout ack", async () => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.send") {
+        return { runId: params?.idempotencyKey, status: "timeout" };
+      }
+      if (method === "sessions.list") {
+        return createGatewaySessions([createSessionRow({ key: "agent:main:work" })]);
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    sessionStore.createSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:work",
+      cwd: "/tmp/openclaw",
+    });
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      sessionStore,
+    });
+
+    await expect(
+      settlePromptQuickly(agent.prompt(createPromptRequest("session-1"))),
+    ).resolves.toEqual({
+      stopReason: "cancelled",
+    });
+  });
+
+  it("rejects prompts when chat send returns a terminal error ack", async () => {
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.send") {
+        return { runId: params?.idempotencyKey, status: "error" };
+      }
+      return { ok: true };
+    }) as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    sessionStore.createSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:work",
+      cwd: "/tmp/openclaw",
+    });
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      sessionStore,
+    });
+
+    await expect(
+      settlePromptQuickly(agent.prompt(createPromptRequest("session-1"))),
+    ).rejects.toThrow("Chat failed before the run started; try again.");
+  });
+
+  it("resolves prompts when chat send returns a terminal ok ack", async () => {
+    const requestMock = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "chat.send") {
+        return { runId: params?.idempotencyKey, status: "ok" };
+      }
+      return { ok: true };
+    });
+    const request = requestMock as GatewayClient["request"];
+    const sessionStore = createInMemorySessionStore();
+    sessionStore.createSession({
+      sessionId: "session-1",
+      sessionKey: "agent:main:work",
+      cwd: "/tmp/openclaw",
+    });
+    const agent = new AcpGatewayAgent(createAcpConnection(), createAcpGateway(request), {
+      sessionStore,
+    });
+
+    await expect(
+      settlePromptQuickly(agent.prompt(createPromptRequest("session-1"))),
+    ).resolves.toEqual({
+      stopReason: "end_turn",
+    });
+    expect(requestMock.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
   });
 
   it("closes sessions by aborting active work, resolving pending prompts, and deleting bridge state", async () => {

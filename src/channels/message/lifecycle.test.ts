@@ -1,3 +1,4 @@
+// Message lifecycle tests cover channel message state transitions and notifications.
 import { describe, expect, it, vi } from "vitest";
 import {
   createLiveMessageState,
@@ -109,10 +110,42 @@ describe("message lifecycle primitives", () => {
     expect(stateArg).toBe(liveState);
   });
 
+  it("delivers supplemental payloads after finalizing live previews", async () => {
+    const editFinal = vi.fn(async () => undefined);
+    const deliverNormally = vi.fn(async () => undefined);
+    const deliverSupplemental = vi.fn(async () => true);
+
+    const result = await deliverFinalizableLivePreview<
+      { text?: string; mediaUrl: string },
+      string,
+      { text?: string }
+    >({
+      kind: "final",
+      payload: { text: "done", mediaUrl: "file:///tmp/reply.mp3" },
+      draft: {
+        flush: vi.fn(async () => undefined),
+        id: () => "preview-1",
+        seal: vi.fn(async () => undefined),
+        clear: vi.fn(async () => undefined),
+      },
+      buildFinalEdit: (payload) => ({ text: payload.text }),
+      buildSupplementalPayload: (payload) => ({ mediaUrl: payload.mediaUrl }),
+      editFinal,
+      deliverNormally,
+      deliverSupplemental,
+    });
+
+    expect(result.kind).toBe("preview-finalized");
+    expect(editFinal).toHaveBeenCalledWith("preview-1", { text: "done" });
+    expect(deliverNormally).not.toHaveBeenCalled();
+    expect(deliverSupplemental).toHaveBeenCalledWith({ mediaUrl: "file:///tmp/reply.mp3" });
+  });
+
   it("treats live preview fallback delivery as terminal state", async () => {
     const discardPending = vi.fn(async () => undefined);
     const clear = vi.fn(async () => undefined);
     const deliverNormally = vi.fn(async () => true);
+    const onNormalDelivered = vi.fn(async () => undefined);
 
     const result = await deliverFinalizableLivePreview({
       kind: "final",
@@ -126,11 +159,13 @@ describe("message lifecycle primitives", () => {
       buildFinalEdit: () => undefined,
       editFinal: vi.fn(async () => undefined),
       deliverNormally,
+      onNormalDelivered,
     });
 
     expect(result.kind).toBe("normal-delivered");
     expect(discardPending).toHaveBeenCalledTimes(1);
     expect(deliverNormally).toHaveBeenCalledWith({ text: "with media" });
+    expect(onNormalDelivered).toHaveBeenCalledTimes(1);
     expect(clear).toHaveBeenCalledTimes(1);
     const liveState = result.liveState;
     if (!liveState) {
@@ -138,6 +173,35 @@ describe("message lifecycle primitives", () => {
     }
     expect(liveState.phase).toBe("cancelled");
     expect(liveState.canFinalizeInPlace).toBe(false);
+  });
+
+  it("does not complete live preview fallback state when normal delivery throws", async () => {
+    const discardPending = vi.fn(async () => undefined);
+    const clear = vi.fn(async () => undefined);
+    const onNormalDelivered = vi.fn(async () => undefined);
+
+    await expect(
+      deliverFinalizableLivePreview({
+        kind: "final",
+        payload: { text: "with media" },
+        draft: {
+          flush: vi.fn(async () => undefined),
+          id: () => "preview-2",
+          discardPending,
+          clear,
+        },
+        buildFinalEdit: () => undefined,
+        editFinal: vi.fn(async () => undefined),
+        deliverNormally: vi.fn(async () => {
+          throw new Error("send failed");
+        }),
+        onNormalDelivered,
+      }),
+    ).rejects.toThrow("send failed");
+
+    expect(discardPending).toHaveBeenCalledTimes(1);
+    expect(onNormalDelivered).not.toHaveBeenCalled();
+    expect(clear).not.toHaveBeenCalled();
   });
 
   it("delivers through finalizable live preview adapters", async () => {

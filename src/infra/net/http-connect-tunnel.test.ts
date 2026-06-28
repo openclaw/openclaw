@@ -1,4 +1,7 @@
+// HTTP CONNECT tunnel tests cover HTTP/HTTPS proxy handshakes, proxy auth,
+// timeout/error cleanup, and tunneled-byte preservation.
 import { EventEmitter } from "node:events";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 class FakeSocket extends EventEmitter {
@@ -89,6 +92,15 @@ const {
 
 vi.mock("node:net", () => ({
   connect: netConnectSpy,
+  isIP: (host: string) => {
+    if (host === "127.0.0.1") {
+      return 4;
+    }
+    if (host === "::1") {
+      return 6;
+    }
+    return 0;
+  },
 }));
 
 vi.mock("node:tls", () => ({
@@ -155,6 +167,7 @@ describe("openHttpConnectTunnel", () => {
 
     await openHttpConnectTunnel({
       proxyUrl: new URL("https://proxy.example:8443"),
+      proxyTls: { ca: "proxy-ca" },
       targetHost: "api.sandbox.push.apple.com",
       targetPort: 443,
     });
@@ -164,11 +177,34 @@ describe("openHttpConnectTunnel", () => {
       port: 8443,
       servername: "proxy.example",
       ALPNProtocols: ["http/1.1"],
+      ca: "proxy-ca",
     });
     expect(tlsConnectSpy).toHaveBeenLastCalledWith({
       socket: proxySocket,
       servername: "api.sandbox.push.apple.com",
       ALPNProtocols: ["h2"],
+    });
+  });
+
+  it("omits SNI for HTTPS proxy IP literals", async () => {
+    const proxySocket = new FakeSocket("HTTP/1.1 200 Connection Established\r\n\r\n");
+    const targetTlsSocket = new FakeSocket();
+    setNextProxyTlsSocket(proxySocket);
+    setNextTargetTlsSocket(targetTlsSocket);
+    const { openHttpConnectTunnel } = await import("./http-connect-tunnel.js");
+
+    await openHttpConnectTunnel({
+      proxyUrl: new URL("https://127.0.0.1:8443"),
+      proxyTls: { ca: "proxy-ca" },
+      targetHost: "api.sandbox.push.apple.com",
+      targetPort: 443,
+    });
+
+    expect(requireFirstTlsConnectOptions()).toEqual({
+      host: "127.0.0.1",
+      port: 8443,
+      ALPNProtocols: ["http/1.1"],
+      ca: "proxy-ca",
     });
   });
 
@@ -269,7 +305,9 @@ describe("openHttpConnectTunnel", () => {
       return socket;
     });
 
-    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => {
+      setImmediate(resolve);
+    });
     expect(resolved).toBe(false);
 
     targetTlsSocket.emit("secureConnect");
@@ -297,20 +335,51 @@ describe("openHttpConnectTunnel", () => {
   });
 
   it("rejects and destroys the proxy socket when CONNECT times out", async () => {
+    vi.useFakeTimers();
     const proxySocket = new FakeSocket();
     setNextNetSocket(proxySocket);
     const { openHttpConnectTunnel } = await import("./http-connect-tunnel.js");
 
-    await expect(
-      openHttpConnectTunnel({
-        proxyUrl: new URL("http://proxy.example:8080"),
-        targetHost: "api.push.apple.com",
-        targetPort: 443,
-        timeoutMs: 1,
-      }),
-    ).rejects.toThrow(
+    const tunnel = openHttpConnectTunnel({
+      proxyUrl: new URL("http://proxy.example:8080"),
+      targetHost: "api.push.apple.com",
+      targetPort: 443,
+      timeoutMs: 1,
+    });
+    void tunnel.catch(() => undefined);
+    const rejected = expect(tunnel).rejects.toThrow(
       "Proxy CONNECT failed via http://proxy.example:8080: Proxy CONNECT timed out after 1ms",
     );
+
+    await vi.advanceTimersByTimeAsync(1);
+    await rejected;
+    expect(proxySocket.destroyed).toBe(true);
+  });
+
+  it("caps oversized CONNECT timeouts before arming the watchdog", async () => {
+    vi.useFakeTimers();
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const proxySocket = new FakeSocket();
+    setNextNetSocket(proxySocket);
+    const { openHttpConnectTunnel } = await import("./http-connect-tunnel.js");
+
+    const tunnel = openHttpConnectTunnel({
+      proxyUrl: new URL("http://proxy.example:8080"),
+      targetHost: "api.push.apple.com",
+      targetPort: 443,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+    });
+    void tunnel.catch(() => undefined);
+    const rejected = expect(tunnel).rejects.toThrow(
+      `Proxy CONNECT failed via http://proxy.example:8080: Proxy CONNECT timed out after ${MAX_TIMER_TIMEOUT_MS}ms`,
+    );
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(proxySocket.destroyed).toBe(false);
+
+    await vi.advanceTimersToNextTimerAsync();
+    await rejected;
     expect(proxySocket.destroyed).toBe(true);
   });
 });

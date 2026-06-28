@@ -1,3 +1,5 @@
+// Heartbeat response tool tests cover the one-shot heartbeat contract and
+// provider-portable schema shape.
 import { describe, expect, it } from "vitest";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "../../auto-reply/heartbeat-tool-response.js";
 import { createHeartbeatResponseTool } from "./heartbeat-response-tool.js";
@@ -23,6 +25,8 @@ type HeartbeatResponseDetails = {
 
 describe("createHeartbeatResponseTool", () => {
   it("uses flat enum schemas for provider portability", () => {
+    // Some providers reject anyOf literal unions in tool schemas; flat enums are
+    // the portable contract for heartbeat status fields.
     const tool = createHeartbeatResponseTool();
 
     const outcome = readSchemaProperty(tool.parameters, "outcome");
@@ -51,6 +55,26 @@ describe("createHeartbeatResponseTool", () => {
     expect(details.outcome).toBe("no_change");
     expect(details.notify).toBe(false);
     expect(details.summary).toBe("Nothing needs attention.");
+  });
+
+  it("rejects repeated heartbeat responses from the same tool instance", async () => {
+    // A heartbeat turn has one final outcome; accepting multiple writes would
+    // make notification delivery ambiguous.
+    const tool = createHeartbeatResponseTool();
+
+    await tool.execute("call-1", {
+      outcome: "no_change",
+      notify: false,
+      summary: "Nothing needs attention.",
+    });
+
+    await expect(
+      tool.execute("call-2", {
+        outcome: "no_change",
+        notify: false,
+        summary: "Nothing needs attention.",
+      }),
+    ).rejects.toThrow("heartbeat_respond already recorded");
   });
 
   it("accepts notification text and optional scheduling metadata", async () => {

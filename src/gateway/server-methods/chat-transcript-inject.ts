@@ -1,22 +1,30 @@
-import type { SessionManager } from "@earendil-works/pi-coding-agent";
-import { appendSessionTranscriptMessage } from "../../config/sessions/transcript-append.js";
+// Chat transcript injection appends gateway-authored assistant rows while
+// preserving agent-session parent links and transcript update notifications.
+import type { SessionManager } from "../../agents/sessions/session-manager.js";
+import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { emitSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 
 type AppendMessageArg = Parameters<SessionManager["appendMessage"]>[0];
 
+/** Metadata persisted on gateway-injected assistant messages that mark a stopped run. */
 export type GatewayInjectedAbortMeta = {
   aborted: true;
   origin: "rpc" | "stop-command";
   runId: string;
 };
 
+/** Result shape returned after appending an assistant row to a session transcript. */
 export type GatewayInjectedTranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;
   error?: string;
+};
+
+/** Hash marker used to dedupe companion TTS text/audio supplements. */
+export type GatewayInjectedTtsSupplementMarker = {
+  textSha256: string;
 };
 
 function resolveInjectedAssistantContent(params: {
@@ -25,6 +33,8 @@ function resolveInjectedAssistantContent(params: {
   content?: Array<Record<string, unknown>>;
 }): Array<Record<string, unknown>> {
   const labelPrefix = params.label ? `[${params.label}]\n\n` : "";
+  // Preserve rich content arrays when callers already prepared media blocks;
+  // only the first text block is rewritten so block ordering stays intact.
   if (params.content && params.content.length > 0) {
     if (!labelPrefix) {
       return params.content;
@@ -43,14 +53,18 @@ function resolveInjectedAssistantContent(params: {
   return [{ type: "text", text: `${labelPrefix}${params.message}` }];
 }
 
+/** Append a gateway-authored assistant message while preserving transcript parent links. */
 export async function appendInjectedAssistantMessageToTranscript(params: {
   transcriptPath: string;
+  sessionKey?: string;
+  agentId?: string;
   message: string;
   label?: string;
   /** When set, used as the assistant `content` array (e.g. text + embedded audio blocks). */
   content?: Array<Record<string, unknown>>;
   idempotencyKey?: string;
   abortMeta?: GatewayInjectedAbortMeta;
+  ttsSupplement?: GatewayInjectedTtsSupplementMarker;
   now?: number;
   config?: OpenClawConfig;
 }): Promise<GatewayInjectedTranscriptAppendResult> {
@@ -82,7 +96,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
       { role: "assistant" }
     >["content"],
     timestamp: now,
-    // Pi stopReason is a strict enum; this is not model output, but we still store it as a
+    // stopReason is a strict runner enum; this is not model output, but we still store it as a
     // normal assistant message so it participates in the session parentId chain.
     stopReason: "stop",
     usage,
@@ -91,6 +105,7 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     provider: "openclaw",
     model: "gateway-injected",
     ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    ...(params.ttsSupplement ? { openclawTtsSupplement: params.ttsSupplement } : {}),
     ...(params.abortMeta
       ? {
           openclawAbort: {
@@ -103,19 +118,33 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
   };
 
   try {
-    const { messageId, message: appendedMessage } = await appendSessionTranscriptMessage({
-      transcriptPath: params.transcriptPath,
-      message: messageBody,
-      now,
-      useRawWhenLinear: true,
-      config: params.config,
-    });
-    emitSessionTranscriptUpdate({
-      sessionFile: params.transcriptPath,
-      message: appendedMessage,
-      messageId,
-    });
-    return { ok: true, messageId, message: appendedMessage as unknown as Record<string, unknown> };
+    const turn = await persistSessionTranscriptTurn(
+      {
+        sessionFile: params.transcriptPath,
+        sessionKey: params.sessionKey ?? "",
+        ...(params.agentId ? { agentId: params.agentId } : {}),
+      },
+      {
+        updateMode: "inline",
+        ...(params.config ? { config: params.config } : {}),
+        messages: [
+          {
+            message: messageBody,
+            now,
+            useRawWhenLinear: true,
+          },
+        ],
+      },
+    );
+    const appended = turn.messages[0];
+    if (!appended) {
+      return { ok: false, error: "gateway-injected assistant message was not appended" };
+    }
+    return {
+      ok: true,
+      messageId: appended.messageId,
+      message: appended.message as Record<string, unknown>,
+    };
   } catch (err) {
     return { ok: false, error: formatErrorMessage(err) };
   }

@@ -1,7 +1,8 @@
+// Resolves Windows system and Program Files install roots.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 export const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 const DEFAULT_PROGRAM_FILES = "C:\\Program Files";
@@ -233,7 +234,44 @@ export function getWindowsProgramFilesRoots(
   return result;
 }
 
-export function _resetWindowsInstallRootsForTests(
+export function getWindowsCmdExePath(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return getWindowsSystem32ExePath("cmd.exe", env);
+}
+
+export function getWindowsSystem32ExePath(
+  executableName: string,
+  env: Record<string, string | undefined> = process.env,
+): string {
+  if (
+    path.win32.basename(executableName) !== executableName ||
+    !/^[A-Za-z0-9_.-]+\.exe$/u.test(executableName)
+  ) {
+    throw new Error(`Invalid Windows System32 executable name: ${executableName}`);
+  }
+  return path.win32.join(getWindowsInstallRoots(env).systemRoot, "System32", executableName);
+}
+
+export function getWindowsPowerShellExePath(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return path.win32.join(
+    getWindowsInstallRoots(env).systemRoot,
+    "System32",
+    "WindowsPowerShell",
+    "v1.0",
+    "powershell.exe",
+  );
+}
+
+export function getWindowsWmicExePath(
+  env: Record<string, string | undefined> = process.env,
+): string {
+  return path.win32.join(getWindowsInstallRoots(env).systemRoot, "System32", "wbem", "wmic.exe");
+}
+
+export function resetWindowsInstallRootsForTests(
   overrides: WindowsInstallRootsTestOverrides = {},
 ): void {
   queryRegistryValueFn = overrides.queryRegistryValue ?? defaultQueryRegistryValue;
@@ -241,7 +279,7 @@ export function _resetWindowsInstallRootsForTests(
   cachedProcessInstallRoots = null;
 }
 
-export const _private = {
+export const privateTestApi = {
   getWindowsRegExeCandidates,
   locateWindowsRegExe,
 };

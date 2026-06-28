@@ -1,3 +1,4 @@
+// Tests inbound context text built from sender and conversation metadata.
 import { describe, expect, it } from "vitest";
 import { expectChannelInboundContextContract as expectInboundContextContract } from "../../channels/plugins/contracts/test-helpers.js";
 import type { MsgContext } from "../templating.js";
@@ -179,4 +180,71 @@ describe("inbound context contract (providers + extensions)", () => {
       expectInboundContextContract(ctx);
     });
   }
+});
+
+describe("finalizeInboundContext supplemental projection", () => {
+  it("projects supplemental facts into legacy context fields", () => {
+    const ctx = finalizeInboundContext({
+      Body: "hello",
+      SupplementalContext: {
+        quote: {
+          id: "reply-1",
+          fullId: "room/reply-1",
+          body: "quoted",
+          sender: "Alice",
+          isQuote: true,
+        },
+        forwarded: {
+          from: "Bob",
+          fromType: "user",
+          fromId: "bob",
+          date: 1_700_000_000,
+        },
+        thread: {
+          starterBody: "starter",
+          historyBody: "history",
+          label: "thread label",
+        },
+        groupSystemPrompt: "group prompt",
+        untrustedContext: [{ label: "raw", payload: { ok: true } }],
+      },
+    });
+
+    expect(ctx).toMatchObject({
+      ReplyToId: "reply-1",
+      ReplyToIdFull: "room/reply-1",
+      ReplyToBody: "quoted",
+      ReplyToSender: "Alice",
+      ReplyToIsQuote: true,
+      ForwardedFrom: "Bob",
+      ForwardedFromType: "user",
+      ForwardedFromId: "bob",
+      ForwardedDate: 1_700_000_000,
+      ThreadStarterBody: "starter",
+      ThreadHistoryBody: "history",
+      ThreadLabel: "thread label",
+      GroupSystemPrompt: "group prompt",
+      UntrustedStructuredContext: [{ label: "raw", payload: { ok: true } }],
+    });
+    expect(Object.hasOwn(ctx, "SupplementalContext")).toBe(false);
+  });
+
+  it("keeps explicit legacy fields and omits undefined supplemental fields", () => {
+    const ctx = finalizeInboundContext({
+      Body: "hello",
+      ReplyToId: "explicit-reply",
+      GroupSystemPrompt: "explicit prompt",
+      SupplementalContext: {
+        quote: {
+          id: "supplemental-reply",
+          isQuote: false,
+        },
+      },
+    });
+
+    expect(ctx.ReplyToId).toBe("explicit-reply");
+    expect(ctx.GroupSystemPrompt).toBe("explicit prompt");
+    expect(ctx.ReplyToIsQuote).toBe(false);
+    expect(Object.hasOwn(ctx, "ReplyToBody")).toBe(false);
+  });
 });

@@ -1,3 +1,4 @@
+// Nextcloud Talk plugin module implements setup core behavior.
 import type { ChannelSetupAdapter, ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
@@ -10,6 +11,7 @@ import {
   mergeAllowFromEntries,
   promptParsedAllowFromForAccount,
   resolveSetupAccountId,
+  createSetupTranslator,
   type ChannelSetupDmPolicy,
   type WizardPrompter,
 } from "openclaw/plugin-sdk/setup-runtime";
@@ -17,6 +19,8 @@ import { formatDocsLink } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveDefaultNextcloudTalkAccountId, resolveNextcloudTalkAccount } from "./accounts.js";
 import type { CoreConfig } from "./types.js";
+
+const t = createSetupTranslator();
 
 const channel = "nextcloud-talk" as const;
 
@@ -116,14 +120,16 @@ async function promptNextcloudTalkAllowFrom(params: {
     accountId: params.accountId,
     defaultAccountId: params.accountId,
     prompter: params.prompter,
-    noteTitle: "Nextcloud Talk user id",
+    noteTitle: t("wizard.nextcloudTalk.userIdTitle"),
     noteLines: [
-      "1) Check the Nextcloud admin panel for user IDs",
-      "2) Or look at the webhook payload logs when someone messages",
-      "3) User IDs are typically lowercase usernames in Nextcloud",
-      `Docs: ${formatDocsLink("/channels/nextcloud-talk", "nextcloud-talk")}`,
+      t("wizard.nextcloudTalk.userIdHelpAdmin"),
+      t("wizard.nextcloudTalk.userIdHelpLogs"),
+      t("wizard.nextcloudTalk.userIdHelpLowercase"),
+      t("wizard.channels.docs", {
+        link: formatDocsLink("/channels/nextcloud-talk", "nextcloud-talk"),
+      }),
     ],
-    message: "Nextcloud Talk allowFrom (user id)",
+    message: t("wizard.nextcloudTalk.allowFromPrompt"),
     placeholder: "username",
     parseEntries: (raw) => ({
       entries: raw

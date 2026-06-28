@@ -160,9 +160,9 @@ troubleshooting, see the main [FAQ](/help/faq).
   <Accordion title="Can I use GPT 5.5 for daily tasks and Codex 5.5 for coding?">
     Yes. Treat model choice and runtime choice separately:
 
-    - **Native Codex coding agent:** set `agents.defaults.model.primary` to `openai/gpt-5.5`. Sign in with `openclaw models auth login --provider openai-codex` when you want ChatGPT/Codex subscription auth.
+    - **Native Codex coding agent:** set `agents.defaults.model.primary` to `openai/gpt-5.5`. Sign in with `openclaw models auth login --provider openai` when you want ChatGPT/Codex subscription auth.
     - **Direct OpenAI API tasks outside the agent loop:** configure `OPENAI_API_KEY` for images, embeddings, speech, realtime, and other non-agent OpenAI API surfaces.
-    - **OpenAI agent API-key auth:** use `/model openai/gpt-5.5` with an ordered `openai-codex` API-key profile.
+    - **OpenAI agent API-key auth:** use `/model openai/gpt-5.5` with an ordered `openai` API-key profile.
     - **Sub-agents:** route coding tasks to a Codex-focused agent with its own `openai/gpt-5.5` model.
 
     See [Models](/concepts/models) and [Slash commands](/tools/slash-commands).
@@ -174,6 +174,7 @@ troubleshooting, see the main [FAQ](/help/faq).
 
     - **Per session:** send `/fast on` while the session is using `openai/gpt-5.5`.
     - **Per model default:** set `agents.defaults.models["openai/gpt-5.5"].params.fastMode` to `true`.
+    - **Automatic cutoff:** use `/fast auto` or `params.fastMode: "auto"` to start new model calls fast until the auto cutoff, then start later retry, fallback, tool-result, or continuation calls without fast mode. The cutoff defaults to 60 seconds; set `params.fastAutoOnSeconds` on the active model to change it.
 
     Example:
 
@@ -184,7 +185,8 @@ troubleshooting, see the main [FAQ](/help/faq).
           models: {
             "openai/gpt-5.5": {
               params: {
-                fastMode: true,
+                fastMode: "auto",
+                fastAutoOnSeconds: 30,
               },
             },
           },
@@ -193,7 +195,7 @@ troubleshooting, see the main [FAQ](/help/faq).
     }
     ```
 
-    For OpenAI, fast mode maps to `service_tier = "priority"` on supported native Responses requests. Session `/fast` overrides beat config defaults.
+    For OpenAI, fast mode maps to `service_tier = "priority"` on supported native Responses requests. Session `/fast` overrides beat config defaults. Codex app-server turns can only receive the tier at turn start, so `auto` applies on the next OpenClaw-started model turn rather than inside one already-running app-server turn.
 
     See [Thinking and fast mode](/tools/thinking) and [OpenAI fast mode](/providers/openai#fast-mode).
 
@@ -215,7 +217,7 @@ troubleshooting, see the main [FAQ](/help/faq).
 
   </Accordion>
 
-  <Accordion title='Why do I see "Unknown model: minimax/MiniMax-M2.7"?'>
+  <Accordion title='Why do I see "Unknown model: minimax/MiniMax-M3"?'>
     This means the **provider isn't configured** (no MiniMax provider config or auth
     profile was found), so the model can't be resolved.
 
@@ -227,8 +229,9 @@ troubleshooting, see the main [FAQ](/help/faq).
        (`MINIMAX_API_KEY` for `minimax`, `MINIMAX_OAUTH_TOKEN` or stored MiniMax
        OAuth for `minimax-portal`).
     3. Use the exact model id (case-sensitive) for your auth path:
-       `minimax/MiniMax-M2.7` or `minimax/MiniMax-M2.7-highspeed` for API-key
-       setup, or `minimax-portal/MiniMax-M2.7` /
+       `minimax/MiniMax-M3`, `minimax/MiniMax-M2.7`, or
+       `minimax/MiniMax-M2.7-highspeed` for API-key setup, or
+       `minimax-portal/MiniMax-M3`, `minimax-portal/MiniMax-M2.7`, or
        `minimax-portal/MiniMax-M2.7-highspeed` for OAuth setup.
     4. Run:
 
@@ -253,9 +256,9 @@ troubleshooting, see the main [FAQ](/help/faq).
       env: { MINIMAX_API_KEY: "sk-...", OPENAI_API_KEY: "sk-..." },
       agents: {
         defaults: {
-          model: { primary: "minimax/MiniMax-M2.7" },
+          model: { primary: "minimax/MiniMax-M3" },
           models: {
-            "minimax/MiniMax-M2.7": { alias: "minimax" },
+            "minimax/MiniMax-M3": { alias: "minimax" },
             "openai/gpt-5.5": { alias: "gpt" },
           },
         },
@@ -282,14 +285,14 @@ troubleshooting, see the main [FAQ](/help/faq).
   <Accordion title="Are opus / sonnet / gpt built-in shortcuts?">
     Yes. OpenClaw ships a few default shorthands (only applied when the model exists in `agents.defaults.models`):
 
-    - `opus` → `anthropic/claude-opus-4-7`
+    - `opus` → `anthropic/claude-opus-4-8`
     - `sonnet` → `anthropic/claude-sonnet-4-6`
     - `gpt` → `openai/gpt-5.4`
     - `gpt-mini` → `openai/gpt-5.4-mini`
     - `gpt-nano` → `openai/gpt-5.4-nano`
     - `gemini` → `google/gemini-3.1-pro-preview`
     - `gemini-flash` → `google/gemini-3-flash-preview`
-    - `gemini-flash-lite` → `google/gemini-3.1-flash-lite-preview`
+    - `gemini-flash-lite` → `google/gemini-3.1-flash-lite`
 
     If you set your own alias with the same name, your value wins.
 
@@ -306,7 +309,6 @@ troubleshooting, see the main [FAQ](/help/faq).
           models: {
             "anthropic/claude-opus-4-6": { alias: "opus" },
             "anthropic/claude-sonnet-4-6": { alias: "sonnet" },
-            "anthropic/claude-haiku-4-5": { alias: "haiku" },
           },
         },
       },
@@ -537,7 +539,14 @@ Related: [/concepts/oauth](/concepts/oauth) (OAuth flows, token storage, multi-a
   <Accordion title="OAuth vs API key - what is the difference?">
     OpenClaw supports both:
 
-    - **OAuth** often leverages subscription access (where applicable).
+    - **OAuth / CLI login** often leverages subscription access where the
+      provider supports it. For Anthropic, OpenClaw's Claude CLI backend uses
+      Claude Code `claude -p`; Anthropic currently treats that as Agent
+      SDK/programmatic usage. Anthropic paused the June 15, 2026 separate Agent
+      SDK credit change, so for now this still draws from subscription usage
+      limits. See Anthropic's [Agent SDK plan
+      article](https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan)
+      for the current pause notice.
     - **API keys** use pay-per-token billing.
 
     The wizard explicitly supports Anthropic Claude CLI, OpenAI Codex OAuth, and API keys.

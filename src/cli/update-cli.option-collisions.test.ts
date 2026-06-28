@@ -1,3 +1,4 @@
+// Update CLI option collision tests cover update command flag registration boundaries.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { runRegisteredCli } from "../test-utils/command-runner.js";
@@ -5,6 +6,7 @@ import { registerUpdateCli } from "./update-cli.js";
 
 const mocks = vi.hoisted(() => ({
   updateCommand: vi.fn(async (_opts: unknown) => {}),
+  updateFinalizeCommand: vi.fn(async (_opts: unknown) => {}),
   updateStatusCommand: vi.fn(async (_opts: unknown) => {}),
   updateWizardCommand: vi.fn(async (_opts: unknown) => {}),
   defaultRuntime: {
@@ -16,10 +18,17 @@ const mocks = vi.hoisted(() => ({
   },
 }));
 
-const { updateCommand, updateStatusCommand, updateWizardCommand, defaultRuntime } = mocks;
+const {
+  updateCommand,
+  updateFinalizeCommand,
+  updateStatusCommand,
+  updateWizardCommand,
+  defaultRuntime,
+} = mocks;
 
 vi.mock("./update-cli/update-command.js", () => ({
   updateCommand: (opts: unknown) => mocks.updateCommand(opts),
+  updateFinalizeCommand: (opts: unknown) => mocks.updateFinalizeCommand(opts),
 }));
 
 vi.mock("./update-cli/status.js", () => ({
@@ -38,9 +47,17 @@ function firstCallOptions(mock: { mock: { calls: unknown[][] } }) {
   return mock.mock.calls[0]?.[0];
 }
 
+type UpdateFinalizeCommandOptions = {
+  acknowledgeClawHubRisk?: boolean;
+  json?: boolean;
+  timeout?: string;
+  restart?: boolean;
+};
+
 describe("update cli option collisions", () => {
   beforeEach(() => {
     updateCommand.mockClear();
+    updateFinalizeCommand.mockClear();
     updateStatusCommand.mockClear();
     updateWizardCommand.mockClear();
     defaultRuntime.log.mockClear();
@@ -59,6 +76,66 @@ describe("update cli option collisions", () => {
         const opts = firstCallOptions(updateStatusCommand);
         expect((opts as { json?: boolean; timeout?: string } | undefined)?.json).toBe(true);
         expect((opts as { json?: boolean; timeout?: string } | undefined)?.timeout).toBe("9");
+      },
+    },
+    {
+      name: "forwards parent-captured options to hidden `update finalize`",
+      argv: [
+        "update",
+        "--acknowledge-clawhub-risk",
+        "finalize",
+        "--json",
+        "--timeout",
+        "17",
+        "--no-restart",
+      ],
+      assert: () => {
+        expect(updateFinalizeCommand).toHaveBeenCalledTimes(1);
+        const opts = firstCallOptions(updateFinalizeCommand) as
+          | UpdateFinalizeCommandOptions
+          | undefined;
+        expect(opts?.json).toBe(true);
+        expect(opts?.timeout).toBe("17");
+        expect(opts?.restart).toBe(false);
+        expect(opts?.acknowledgeClawHubRisk).toBe(true);
+      },
+    },
+    {
+      name: "forwards parent-captured --json/--timeout to `update repair`",
+      argv: ["update", "repair", "--json", "--timeout", "19"],
+      assert: () => {
+        expect(updateFinalizeCommand).toHaveBeenCalledTimes(1);
+        const opts = firstCallOptions(updateFinalizeCommand);
+        expect(
+          (opts as { json?: boolean; timeout?: string; restart?: boolean } | undefined)?.json,
+        ).toBe(true);
+        expect(
+          (opts as { json?: boolean; timeout?: string; restart?: boolean } | undefined)?.timeout,
+        ).toBe("19");
+        expect(
+          (opts as { json?: boolean; timeout?: string; restart?: boolean } | undefined)?.restart,
+        ).toBe(false);
+      },
+    },
+    {
+      name: "forwards repair channel and confirmation options",
+      argv: ["update", "repair", "--channel", "beta", "--yes"],
+      assert: () => {
+        expect(updateFinalizeCommand).toHaveBeenCalledTimes(1);
+        const opts = firstCallOptions(updateFinalizeCommand);
+        expect((opts as { channel?: string; yes?: boolean } | undefined)?.channel).toBe("beta");
+        expect((opts as { channel?: string; yes?: boolean } | undefined)?.yes).toBe(true);
+      },
+    },
+    {
+      name: "keeps hidden `update finalize --no-restart` as a no-op parity flag",
+      argv: ["update", "finalize", "--no-restart"],
+      assert: () => {
+        expect(updateFinalizeCommand).toHaveBeenCalledTimes(1);
+        const opts = firstCallOptions(updateFinalizeCommand);
+        expect(
+          (opts as { json?: boolean; timeout?: string; restart?: boolean } | undefined)?.restart,
+        ).toBe(false);
       },
     },
     {

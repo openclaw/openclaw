@@ -1,5 +1,7 @@
+// OpenAI-compatible error helpers.
+// Converts OpenClaw failover/sampling errors to OpenAI-style HTTP responses.
+import type { FailoverReason } from "../agents/embedded-agent-helpers/types.js";
 import { describeFailoverError, resolveFailoverStatus } from "../agents/failover-error.js";
-import type { FailoverReason } from "../agents/pi-embedded-helpers/types.js";
 
 export type OpenAiCompatError = {
   status: number;
@@ -50,6 +52,7 @@ function messageForReason(params: {
   return params.rawError?.trim() || params.message.trim() || "request failed";
 }
 
+/** Converts a provider failover error into an OpenAI-compatible error envelope. */
 export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | undefined {
   const described = describeFailoverError(err);
   const reason = described.reason;
@@ -76,9 +79,13 @@ export function resolveOpenAiCompatError(err: unknown): OpenAiCompatError | unde
   };
 }
 
+/** Validates OpenAI-compatible sampling parameters before provider dispatch. */
 export function validateOpenAiSamplingParams(params: {
   temperature?: unknown;
   topP?: unknown;
+  frequencyPenalty?: unknown;
+  presencePenalty?: unknown;
+  seed?: unknown;
 }): string | undefined {
   if (params.temperature != null) {
     if (typeof params.temperature !== "number" || !Number.isFinite(params.temperature)) {
@@ -94,6 +101,30 @@ export function validateOpenAiSamplingParams(params: {
     }
     if (params.topP < 0 || params.topP > 1) {
       return "`top_p` must be between 0 and 1.";
+    }
+  }
+  if (params.frequencyPenalty != null) {
+    if (typeof params.frequencyPenalty !== "number" || !Number.isFinite(params.frequencyPenalty)) {
+      return "`frequency_penalty` must be a finite number.";
+    }
+    if (params.frequencyPenalty < -2 || params.frequencyPenalty > 2) {
+      return "`frequency_penalty` must be between -2.0 and 2.0.";
+    }
+  }
+  if (params.presencePenalty != null) {
+    if (typeof params.presencePenalty !== "number" || !Number.isFinite(params.presencePenalty)) {
+      return "`presence_penalty` must be a finite number.";
+    }
+    if (params.presencePenalty < -2 || params.presencePenalty > 2) {
+      return "`presence_penalty` must be between -2.0 and 2.0.";
+    }
+  }
+  if (params.seed != null) {
+    if (typeof params.seed !== "number" || !Number.isFinite(params.seed)) {
+      return "`seed` must be a finite number.";
+    }
+    if (!Number.isInteger(params.seed)) {
+      return "`seed` must be an integer.";
     }
   }
   return undefined;

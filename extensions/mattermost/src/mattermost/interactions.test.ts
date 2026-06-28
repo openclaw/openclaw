@@ -1,4 +1,5 @@
-import { type IncomingMessage, type ServerResponse } from "node:http";
+// Mattermost tests cover interactions plugin behavior.
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMattermostRuntime } from "../runtime.js";
@@ -9,7 +10,6 @@ import {
   computeInteractionCallbackUrl,
   createMattermostInteractionHandler,
   generateInteractionToken,
-  getInteractionCallbackUrl,
   getInteractionSecret,
   resolveInteractionCallbackPath,
   resolveInteractionCallbackUrl,
@@ -196,21 +196,6 @@ describe("generateInteractionToken / verifyInteractionToken", () => {
   });
 });
 
-// ── Callback URL registry ────────────────────────────────────────────
-
-describe("callback URL registry", () => {
-  it("stores and retrieves callback URLs", () => {
-    setInteractionCallbackUrl("acct1", "http://localhost:18789/mattermost/interactions/acct1");
-    expect(getInteractionCallbackUrl("acct1")).toBe(
-      "http://localhost:18789/mattermost/interactions/acct1",
-    );
-  });
-
-  it("returns undefined for unknown account", () => {
-    expect(getInteractionCallbackUrl("nonexistent-account-id")).toBeUndefined();
-  });
-});
-
 describe("resolveInteractionCallbackUrl", () => {
   afterEach(() => {
     for (const accountId of ["cached", "default", "acct", "myaccount"]) {
@@ -355,7 +340,7 @@ describe("buildButtonAttachments", () => {
     });
 
     const action = requireAction(result);
-    expect(action.integration.context._token).toMatch(/^[0-9a-f]{64}$/);
+    expect(action.integration.context["_token"]).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("includes sanitized action_id in integration context", () => {
@@ -380,7 +365,7 @@ describe("buildButtonAttachments", () => {
     expect(ctx.tweet_id).toBe("123");
     expect(ctx.batch).toBe(true);
     expect(ctx.action_id).toBe("btn");
-    expect(ctx._token).toMatch(/^[0-9a-f]{64}$/);
+    expect(ctx["_token"]).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("passes callback URL to each button integration", () => {
@@ -437,7 +422,7 @@ describe("buildButtonAttachments", () => {
     });
 
     const ctx = requireAction(result).integration.context;
-    const token = ctx._token as string;
+    const token = ctx["_token"] as string;
     const { _token, ...contextWithoutToken } = ctx;
     expect(verifyInteractionToken(contextWithoutToken, token)).toBe(true);
   });
@@ -449,7 +434,7 @@ describe("buildButtonAttachments", () => {
     });
 
     const ctx = requireAction(result).integration.context;
-    const token = ctx._token as string;
+    const token = ctx["_token"] as string;
 
     // Simulate Mattermost returning context with keys in a different order
     const reordered: Record<string, unknown> = {};
@@ -499,7 +484,12 @@ describe("createMattermostInteractionHandler", () => {
     remoteAddress?: string;
     headers?: Record<string, string>;
   }): IncomingMessage {
-    const body = params.body === undefined ? "" : JSON.stringify(params.body);
+    const body =
+      params.body === undefined
+        ? ""
+        : typeof params.body === "string"
+          ? params.body
+          : JSON.stringify(params.body);
     const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
 
     const req = {
@@ -715,6 +705,26 @@ describe("createMattermostInteractionHandler", () => {
     });
 
     expectSuccessfulApprovalUpdate(res, requestLog);
+  });
+
+  it("rejects malformed JSON callback requests with a stable parser error", async () => {
+    const log = vi.fn();
+    const handler = createMattermostInteractionHandler({
+      client: createMattermostClientMock(async () => {
+        throw new Error("unexpected client request");
+      }),
+      botUserId: "bot",
+      accountId: "acct",
+      log,
+    });
+
+    const res = await runHandler(handler, { body: "{not json" });
+
+    expect(res.statusCode).toBe(400);
+    expect(res.body).toBe(JSON.stringify({ error: "Invalid request body" }));
+    expect(log).toHaveBeenCalledWith(
+      "mattermost interaction: failed to parse body: Error: Mattermost interaction body was malformed JSON",
+    );
   });
 
   it("accepts forwarded Mattermost source IPs from a trusted proxy", async () => {

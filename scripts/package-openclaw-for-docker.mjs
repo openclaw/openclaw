@@ -6,103 +6,374 @@ import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { preparePackageChangelog, restorePackageChangelog } from "./package-changelog.mjs";
 
 const ROOT_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const DEFAULT_PACKAGE_BUILD_TIMEOUT_MS = 45 * 60 * 1000;
+const DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_PACKAGE_PACK_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_PACKAGE_TARBALL_CHECK_TIMEOUT_MS = 5 * 60 * 1000;
+const DEFAULT_TIMEOUT_KILL_AFTER_MS = 5_000;
+const PROCESS_GROUP_EXIT_POLL_MS = 25;
+const POST_FORCE_KILL_WAIT_MS = 1_000;
+const DEFAULT_CAPTURED_STDOUT_MAX_BYTES = 1024 * 1024;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
+const ACTIVE_CHILD_KILLERS = new Set();
+const SIGNAL_EXIT_CODES = {
+  SIGHUP: 129,
+  SIGINT: 130,
+  SIGTERM: 143,
+};
+let forwardedSignalExitCode;
 
-function parseArgs(argv) {
+class ForwardedSignalExitError extends Error {
+  constructor(exitCode) {
+    super(`forwarded signal requested exit ${exitCode}`);
+    this.exitCode = exitCode;
+  }
+}
+
+for (const signal of Object.keys(SIGNAL_EXIT_CODES)) {
+  process.on(signal, () => {
+    forwardedSignalExitCode ??= SIGNAL_EXIT_CODES[signal];
+    if (ACTIVE_CHILD_KILLERS.size === 0) {
+      process.exit(forwardedSignalExitCode);
+    }
+    for (const killChild of ACTIVE_CHILD_KILLERS) {
+      killChild(signal);
+    }
+    setTimeout(() => {
+      for (const killChild of ACTIVE_CHILD_KILLERS) {
+        killChild("SIGKILL");
+      }
+      process.exit(forwardedSignalExitCode);
+    }, DEFAULT_TIMEOUT_KILL_AFTER_MS);
+  });
+}
+
+function resolveTimeoutMs(envName, defaultValue) {
+  const raw = process.env[envName];
+  if (raw === undefined || raw === "") {
+    return defaultValue;
+  }
+  if (!/^[0-9]+$/u.test(raw)) {
+    throw new Error(`${envName} must be a positive timeout in milliseconds`);
+  }
+  const parsed = Number(raw);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${envName} must be a positive timeout in milliseconds`);
+  }
+  return parsed;
+}
+
+function numericTimerValueMs(valueMs) {
+  const value = Number(valueMs);
+  return Number.isFinite(value) ? Math.floor(value) : undefined;
+}
+
+function resolveTimerTimeoutMs(valueMs, fallbackMs = MAX_TIMER_TIMEOUT_MS) {
+  const value = numericTimerValueMs(valueMs) ?? numericTimerValueMs(fallbackMs);
+  return Math.min(Math.max(value ?? MAX_TIMER_TIMEOUT_MS, 1), MAX_TIMER_TIMEOUT_MS);
+}
+
+function resolveOptionalTimerTimeoutMs(valueMs) {
+  if (valueMs === undefined) {
+    return undefined;
+  }
+  return resolveTimerTimeoutMs(valueMs, 1);
+}
+
+function readOptionValue(argv, index, optionName) {
+  const value = argv[index + 1];
+  if (value === undefined || value === "" || value.startsWith("-")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+function readEqualsOptionValue(value, optionName) {
+  if (value === "" || value.startsWith("-")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+function validateOutputName(value) {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*\.t(?:ar\.)?gz$/u.test(value)) {
+    throw new Error(`--output-name must be a tarball filename, not a path: ${value}`);
+  }
+}
+
+function resolvePackedOpenClawFileName(value) {
+  const filename = value.trim();
+  if (
+    !filename.endsWith(".tgz") ||
+    (!filename.startsWith("openclaw-") &&
+      !filename.includes(":") &&
+      !filename.includes("/") &&
+      !filename.includes("\\"))
+  ) {
+    return "";
+  }
+  if (
+    !/^openclaw-[A-Za-z0-9._-]+\.tgz$/u.test(filename) ||
+    filename.includes("\0") ||
+    filename !== path.basename(filename) ||
+    filename !== path.win32.basename(filename)
+  ) {
+    throw new Error(`npm pack reported unsafe OpenClaw tarball filename: ${filename}`);
+  }
+  return filename;
+}
+
+export function parseArgs(argv) {
   const options = {
     outputDir: "",
     outputName: "",
     skipBuild: false,
     sourceDir: ROOT_DIR,
   };
+  const seen = new Set();
+  const setOnce = (flag, key, value) => {
+    if (seen.has(flag)) {
+      throw new Error(`${flag} was provided more than once`);
+    }
+    seen.add(flag);
+    options[key] = value;
+  };
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--output-dir") {
-      options.outputDir = argv[(index += 1)] ?? "";
+      setOnce("--output-dir", "outputDir", readOptionValue(argv, index, arg));
+      index += 1;
     } else if (arg?.startsWith("--output-dir=")) {
-      options.outputDir = arg.slice("--output-dir=".length);
+      setOnce(
+        "--output-dir",
+        "outputDir",
+        readEqualsOptionValue(arg.slice("--output-dir=".length), "--output-dir"),
+      );
     } else if (arg === "--output-name") {
-      options.outputName = argv[(index += 1)] ?? "";
+      setOnce("--output-name", "outputName", readOptionValue(argv, index, arg));
+      index += 1;
     } else if (arg?.startsWith("--output-name=")) {
-      options.outputName = arg.slice("--output-name=".length);
+      setOnce(
+        "--output-name",
+        "outputName",
+        readEqualsOptionValue(arg.slice("--output-name=".length), "--output-name"),
+      );
     } else if (arg === "--skip-build") {
-      options.skipBuild = true;
+      setOnce(arg, "skipBuild", true);
     } else if (arg === "--source-dir") {
-      options.sourceDir = argv[(index += 1)] ?? "";
+      setOnce("--source-dir", "sourceDir", readOptionValue(argv, index, arg));
+      index += 1;
     } else if (arg?.startsWith("--source-dir=")) {
-      options.sourceDir = arg.slice("--source-dir=".length);
+      setOnce(
+        "--source-dir",
+        "sourceDir",
+        readEqualsOptionValue(arg.slice("--source-dir=".length), "--source-dir"),
+      );
     } else {
       throw new Error(`unknown argument: ${arg}`);
     }
+  }
+  if (options.outputName) {
+    validateOutputName(options.outputName);
   }
   return options;
 }
 
 function run(command, args, cwd, options = {}) {
   return new Promise((resolve, reject) => {
+    const resolvedTimeoutMs = resolveOptionalTimerTimeoutMs(options.timeoutMs);
+    const resolvedKillAfterMs = resolveTimerTimeoutMs(
+      options.killAfterMs,
+      DEFAULT_TIMEOUT_KILL_AFTER_MS,
+    );
+    const useProcessGroup = process.platform !== "win32";
     const child = spawn(command, args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
+      env: options.env ?? process.env,
+      detached: useProcessGroup,
     });
     let timedOut = false;
-    const timeout =
-      options.timeoutMs === undefined
-        ? undefined
-        : setTimeout(() => {
-            timedOut = true;
-            child.kill("SIGTERM");
-            setTimeout(() => child.kill("SIGKILL"), 5_000).unref?.();
-          }, options.timeoutMs);
-    timeout?.unref?.();
-    child.stdout.pipe(process.stderr, { end: false });
-    child.stderr.pipe(process.stderr, { end: false });
-    child.on("error", reject);
-    child.on("close", (status, signal) => {
+    let outputLimitExceeded = false;
+    let stdout = "";
+    let stdoutBytes = 0;
+    let settled = false;
+    let forceKillTimeout;
+    const maxCapturedStdoutBytes = Math.max(
+      1,
+      options.maxCapturedStdoutBytes ?? DEFAULT_CAPTURED_STDOUT_MAX_BYTES,
+    );
+    const finish = (error, value = "") => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       if (timeout) {
         clearTimeout(timeout);
       }
+      ACTIVE_CHILD_KILLERS.delete(killChild);
+      if (forwardedSignalExitCode !== undefined && ACTIVE_CHILD_KILLERS.size === 0) {
+        if (options.deferForwardedSignalExit) {
+          reject(new ForwardedSignalExitError(forwardedSignalExitCode));
+          return;
+        }
+        process.exit(forwardedSignalExitCode);
+      }
+      if (error) {
+        reject(toLintErrorObject(error, "Non-Error rejection"));
+        return;
+      }
+      resolve(value);
+    };
+    const killChild = (signal) => {
+      if (useProcessGroup && child.pid) {
+        try {
+          process.kill(-child.pid, signal);
+          return;
+        } catch {
+          // The direct child may already have exited; fall back to child.kill.
+        }
+      }
+      child.kill(signal);
+    };
+    const processGroupAlive = () => {
+      if (!useProcessGroup || !child.pid) {
+        return false;
+      }
+      try {
+        process.kill(-child.pid, 0);
+        return true;
+      } catch (error) {
+        return error?.code === "EPERM";
+      }
+    };
+    const waitForProcessGroupExit = async (timeoutMs) => {
+      const deadlineAt = Date.now() + timeoutMs;
+      while (Date.now() < deadlineAt) {
+        if (!processGroupAlive()) {
+          return true;
+        }
+        await new Promise((resolvePoll) => {
+          setTimeout(resolvePoll, PROCESS_GROUP_EXIT_POLL_MS);
+        });
+      }
+      return !processGroupAlive();
+    };
+    const terminateChild = () => {
+      killChild("SIGTERM");
+      forceKillTimeout = setTimeout(() => {
+        forceKillTimeout = undefined;
+        if (settled && !processGroupAlive()) {
+          return;
+        }
+        killChild("SIGKILL");
+      }, resolvedKillAfterMs);
+      forceKillTimeout.unref?.();
+    };
+    ACTIVE_CHILD_KILLERS.add(killChild);
+    const timeout =
+      resolvedTimeoutMs === undefined
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            terminateChild();
+          }, resolvedTimeoutMs);
+    timeout?.unref?.();
+    const finishAfterTeardown = async (error, value = "") => {
+      if (processGroupAlive()) {
+        await waitForProcessGroupExit(resolvedKillAfterMs);
+      }
+      if (processGroupAlive()) {
+        killChild("SIGKILL");
+        await waitForProcessGroupExit(POST_FORCE_KILL_WAIT_MS);
+      }
+      finish(error, value);
+    };
+    if (options.captureStdout) {
+      child.stdout.on("data", (chunk) => {
+        if (outputLimitExceeded) {
+          return;
+        }
+        const chunkText = String(chunk);
+        const chunkBytes = Buffer.byteLength(chunkText);
+        if (stdoutBytes + chunkBytes > maxCapturedStdoutBytes) {
+          outputLimitExceeded = true;
+          terminateChild();
+          return;
+        }
+        stdout += chunkText;
+        stdoutBytes += chunkBytes;
+      });
+    } else {
+      child.stdout.pipe(process.stderr, { end: false });
+    }
+    child.stderr.pipe(process.stderr, { end: false });
+    child.on("error", (error) => finish(error));
+    child.on("close", (status, signal) => {
       if (timedOut) {
-        reject(new Error(`${command} ${args.join(" ")} timed out after ${options.timeoutMs}ms`));
+        void finishAfterTeardown(
+          new Error(`${command} ${args.join(" ")} timed out after ${resolvedTimeoutMs}ms`),
+        );
+        return;
+      }
+      if (outputLimitExceeded) {
+        void finishAfterTeardown(
+          new Error(
+            `${command} ${args.join(" ")} exceeded captured stdout limit (${maxCapturedStdoutBytes} bytes)`,
+          ),
+        );
         return;
       }
       if (status === 0) {
-        resolve();
+        finish(undefined, stdout);
         return;
       }
-      reject(new Error(`${command} ${args.join(" ")} failed with ${status ?? signal}`));
+      finish(new Error(`${command} ${args.join(" ")} failed with ${status ?? signal}`));
     });
   });
 }
 
-async function runCapture(command, args, cwd) {
-  return await new Promise((resolve, reject) => {
-    const child = spawn(command, args, {
-      cwd,
-      stdio: ["ignore", "pipe", "pipe"],
+const PACKAGE_ARTIFACT_BUILD_STEPS = [
+  {
+    label: "Building OpenClaw package artifacts",
+    command: "node",
+    args: ["scripts/build-all.mjs"],
+  },
+];
+
+export async function buildPackageArtifacts(sourceDir, options = {}) {
+  const runImpl = options.runImpl ?? run;
+  for (const step of PACKAGE_ARTIFACT_BUILD_STEPS) {
+    console.error(`==> ${step.label}`);
+    await runImpl(step.command, step.args, sourceDir, {
+      env: {
+        ...process.env,
+        OPENCLAW_BUILD_ALL_NO_PNPM: "1",
+        OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1",
+      },
+      timeoutMs: resolveTimeoutMs(
+        "OPENCLAW_DOCKER_PACKAGE_BUILD_TIMEOUT_MS",
+        DEFAULT_PACKAGE_BUILD_TIMEOUT_MS,
+      ),
     });
-    let stdout = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += String(chunk);
-    });
-    child.stderr.pipe(process.stderr, { end: false });
-    child.on("error", reject);
-    child.on("close", (status, signal) => {
-      if (status === 0) {
-        resolve(stdout);
-        return;
-      }
-      reject(new Error(`${command} ${args.join(" ")} failed with ${status ?? signal}`));
-    });
-  });
+  }
+}
+
+export const runCommandForTest = run;
+
+async function runCapture(command, args, cwd, options = {}) {
+  return await run(command, args, cwd, { ...options, captureStdout: true });
 }
 
 async function newestOpenClawTarball(outputDir, packOutput) {
   let fromOutput = "";
   for (const line of packOutput.split(/\r?\n/u)) {
-    const trimmed = line.trim();
-    if (/^openclaw-.*\.tgz$/u.test(trimmed)) {
-      fromOutput = trimmed;
+    const filename = resolvePackedOpenClawFileName(line);
+    if (filename) {
+      fromOutput = filename;
     }
   }
   if (fromOutput) {
@@ -111,13 +382,70 @@ async function newestOpenClawTarball(outputDir, packOutput) {
 
   const entries = await fs.readdir(outputDir);
   const packed = entries
-    .filter((entry) => /^openclaw-.*\.tgz$/u.test(entry))
+    .filter((entry) => {
+      try {
+        return resolvePackedOpenClawFileName(entry) === entry;
+      } catch {
+        return false;
+      }
+    })
     .toSorted()
     .at(-1);
   if (!packed) {
     throw new Error(`missing packed OpenClaw tarball in ${outputDir}`);
   }
   return path.join(outputDir, packed);
+}
+
+async function cleanPackedOpenClawTarballs(outputDir) {
+  let entries;
+  try {
+    entries = await fs.readdir(outputDir);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      entries = [];
+    } else {
+      throw error;
+    }
+  }
+  await Promise.all(
+    entries
+      .filter((entry) => {
+        try {
+          return resolvePackedOpenClawFileName(entry) === entry;
+        } catch {
+          return false;
+        }
+      })
+      .map((entry) => fs.rm(path.join(outputDir, entry), { force: true })),
+  );
+}
+
+export async function packOpenClawPackageForDocker(sourceDir, outputDir, options = {}) {
+  const runCaptureImpl = options.runCaptureImpl ?? runCapture;
+  const prepareChangelog = options.prepareChangelog ?? preparePackageChangelog;
+  const restoreChangelog = options.restoreChangelog ?? restorePackageChangelog;
+  console.error("==> Packing OpenClaw package");
+  await prepareChangelog(sourceDir);
+  let packOutput;
+  try {
+    await cleanPackedOpenClawTarballs(outputDir);
+    packOutput = await runCaptureImpl(
+      "npm",
+      ["pack", "--silent", "--ignore-scripts", "--pack-destination", outputDir],
+      sourceDir,
+      {
+        deferForwardedSignalExit: true,
+        timeoutMs: resolveTimeoutMs(
+          "OPENCLAW_DOCKER_PACKAGE_PACK_TIMEOUT_MS",
+          DEFAULT_PACKAGE_PACK_TIMEOUT_MS,
+        ),
+      },
+    );
+  } finally {
+    await restoreChangelog(sourceDir);
+  }
+  return await newestOpenClawTarball(outputDir, packOutput);
 }
 
 async function main() {
@@ -130,10 +458,7 @@ async function main() {
   await fs.mkdir(outputDir, { recursive: true });
 
   if (!options.skipBuild) {
-    console.error("==> Building OpenClaw package artifacts");
-    await run("pnpm", ["build"], sourceDir);
-    console.error("==> Building OpenClaw Control UI artifacts");
-    await run("pnpm", ["ui:build"], sourceDir);
+    await buildPackageArtifacts(sourceDir);
   }
 
   console.error("==> Writing OpenClaw package inventory");
@@ -147,15 +472,15 @@ async function main() {
       "const { writePackageDistInventory } = await import('./src/infra/package-dist-inventory.ts'); await writePackageDistInventory(process.cwd());",
     ],
     sourceDir,
+    {
+      timeoutMs: resolveTimeoutMs(
+        "OPENCLAW_DOCKER_PACKAGE_INVENTORY_TIMEOUT_MS",
+        DEFAULT_PACKAGE_INVENTORY_TIMEOUT_MS,
+      ),
+    },
   );
 
-  console.error("==> Packing OpenClaw package");
-  const packOutput = await runCapture(
-    "npm",
-    ["pack", "--silent", "--ignore-scripts", "--pack-destination", outputDir],
-    sourceDir,
-  );
-  let tarball = await newestOpenClawTarball(outputDir, packOutput);
+  let tarball = await packOpenClawPackageForDocker(sourceDir, outputDir);
 
   if (options.outputName) {
     const target = path.join(outputDir, options.outputName);
@@ -172,7 +497,12 @@ async function main() {
     "node",
     [path.join(ROOT_DIR, "scripts/check-openclaw-package-tarball.mjs"), tarball],
     sourceDir,
-    { timeoutMs: 5 * 60 * 1000 },
+    {
+      timeoutMs: resolveTimeoutMs(
+        "OPENCLAW_DOCKER_PACKAGE_TARBALL_CHECK_TIMEOUT_MS",
+        DEFAULT_PACKAGE_TARBALL_CHECK_TIMEOUT_MS,
+      ),
+    },
   );
   console.error(
     `==> OpenClaw package tarball check finished in ${Math.round((Date.now() - checkStartedAt) / 1000)}s`,
@@ -181,7 +511,25 @@ async function main() {
   process.stdout.write(`${tarball}\n`);
 }
 
-await main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error));
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main().catch(
+    /** @param {unknown} error */ (error) => {
+      console.error(error instanceof Error ? error.message : String(error));
+      process.exit(Number.isInteger(error?.exitCode) ? error.exitCode : 1);
+    },
+  );
+}
+
+function toLintErrorObject(value, fallbackMessage) {
+  if (value instanceof Error) {
+    return value;
+  }
+  if (typeof value === "string") {
+    return new Error(value);
+  }
+  const error = new Error(fallbackMessage, { cause: value });
+  if ((typeof value === "object" && value !== null) || typeof value === "function") {
+    Object.assign(error, value);
+  }
+  return error;
+}

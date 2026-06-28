@@ -1,3 +1,14 @@
+/**
+ * Browser storage and context mutation routes.
+ *
+ * Parses and applies cookies, local/session storage, geolocation, permissions,
+ * and related browser-context mutations for the selected profile/tab.
+ */
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+import { formatErrorMessage } from "../../infra/errors.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import {
   readBody,
@@ -5,19 +16,33 @@ import {
   resolveTargetIdFromQuery,
   withPlaywrightRouteContext,
 } from "./agent.shared.js";
+import { readOptionalRouteFiniteNumber, readRouteFiniteNumber } from "./route-numeric.js";
 import type { BrowserRequest, BrowserResponse, BrowserRouteRegistrar } from "./types.js";
-import { asyncBrowserRoute, jsonError, toBoolean, toNumber, toStringOrEmpty } from "./utils.js";
-
-function readStringValue(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function normalizeOptionalString(value: unknown): string | undefined {
-  return readStringValue(value)?.trim() || undefined;
-}
+import { asyncBrowserRoute, jsonError, toBoolean, toStringOrEmpty } from "./utils.js";
 
 type StorageKind = "local" | "session";
 
+type GeolocationOptions = {
+  clear: boolean;
+  latitude?: number;
+  longitude?: number;
+  accuracy?: number;
+  origin?: string;
+};
+
+type CookieSetOptions = {
+  name: string;
+  value: string;
+  url?: string;
+  domain?: string;
+  path?: string;
+  expires?: number;
+  httpOnly?: boolean;
+  secure?: boolean;
+  sameSite?: "Lax" | "None" | "Strict";
+};
+
+/** Parse the supported browser storage bucket names. */
 export function parseStorageKind(raw: string): StorageKind | null {
   if (raw === "local" || raw === "session") {
     return raw;
@@ -25,6 +50,7 @@ export function parseStorageKind(raw: string): StorageKind | null {
   return null;
 }
 
+/** Parse an optional storage mutation request from a route body. */
 export function parseStorageMutationRequest(
   kindParam: unknown,
   body: Record<string, unknown>,
@@ -35,6 +61,7 @@ export function parseStorageMutationRequest(
   };
 }
 
+/** Parse a required storage mutation request and throw on invalid input. */
 export function parseRequiredStorageMutationRequest(
   kindParam: unknown,
   body: Record<string, unknown>,
@@ -71,6 +98,69 @@ function parseStorageMutationFromRequest(req: BrowserRequest, res: BrowserRespon
   return { body, parsed };
 }
 
+function assertRange(
+  value: number | undefined,
+  fieldName: string,
+  min: number,
+  max: number,
+): number | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value < min || value > max) {
+    throw new Error(`${fieldName} must be between ${min} and ${max}.`);
+  }
+  return value;
+}
+
+/** Parse cookie options accepted by browser storage mutation routes. */
+export function parseCookieSetOptions(cookie: Record<string, unknown>): CookieSetOptions {
+  return {
+    name: toStringOrEmpty(cookie.name),
+    value: toStringOrEmpty(cookie.value),
+    url: toStringOrEmpty(cookie.url) || undefined,
+    domain: toStringOrEmpty(cookie.domain) || undefined,
+    path: toStringOrEmpty(cookie.path) || undefined,
+    expires: readOptionalRouteFiniteNumber(cookie.expires, "cookie.expires"),
+    httpOnly: toBoolean(cookie.httpOnly) ?? undefined,
+    secure: toBoolean(cookie.secure) ?? undefined,
+    sameSite:
+      cookie.sameSite === "Lax" || cookie.sameSite === "None" || cookie.sameSite === "Strict"
+        ? cookie.sameSite
+        : undefined,
+  };
+}
+
+/** Parse geolocation override options accepted by context mutation routes. */
+export function parseGeolocationOptions(body: Record<string, unknown>): GeolocationOptions {
+  const clear = toBoolean(body.clear) ?? false;
+  const origin = toStringOrEmpty(body.origin) || undefined;
+  if (clear) {
+    return { clear, origin };
+  }
+  const latitude = assertRange(
+    readRouteFiniteNumber(body.latitude, "latitude"),
+    "latitude",
+    -90,
+    90,
+  );
+  const longitude = assertRange(
+    readRouteFiniteNumber(body.longitude, "longitude"),
+    "longitude",
+    -180,
+    180,
+  );
+  const accuracy = readRouteFiniteNumber(body.accuracy, "accuracy");
+  if (accuracy !== undefined && accuracy < 0) {
+    throw new Error("accuracy must be non-negative.");
+  }
+  if (!clear && (latitude === undefined || longitude === undefined)) {
+    throw new Error("latitude and longitude are required (or set clear=true)");
+  }
+  return { clear, latitude, longitude, accuracy, origin };
+}
+
+/** Register storage and browser-context mutation endpoints. */
 export function registerBrowserAgentStorageRoutes(
   app: BrowserRouteRegistrar,
   ctx: BrowserRouteContext,
@@ -109,6 +199,12 @@ export function registerBrowserAgentStorageRoutes(
       if (!cookie) {
         return jsonError(res, 400, "cookie is required");
       }
+      let parsedCookie: CookieSetOptions;
+      try {
+        parsedCookie = parseCookieSetOptions(cookie);
+      } catch (err) {
+        return jsonError(res, 400, formatErrorMessage(err));
+      }
 
       // Intentional: mutation routes are outside the tab-scoped read/export guard scope.
       await withPlaywrightRouteContext({
@@ -121,22 +217,7 @@ export function registerBrowserAgentStorageRoutes(
           await pw.cookiesSetViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
-            cookie: {
-              name: toStringOrEmpty(cookie.name),
-              value: toStringOrEmpty(cookie.value),
-              url: toStringOrEmpty(cookie.url) || undefined,
-              domain: toStringOrEmpty(cookie.domain) || undefined,
-              path: toStringOrEmpty(cookie.path) || undefined,
-              expires: toNumber(cookie.expires) ?? undefined,
-              httpOnly: toBoolean(cookie.httpOnly) ?? undefined,
-              secure: toBoolean(cookie.secure) ?? undefined,
-              sameSite:
-                cookie.sameSite === "Lax" ||
-                cookie.sameSite === "None" ||
-                cookie.sameSite === "Strict"
-                  ? cookie.sameSite
-                  : undefined,
-            },
+            cookie: parsedCookie,
           });
           res.json({ ok: true, targetId: tab.targetId });
         },
@@ -361,11 +442,12 @@ export function registerBrowserAgentStorageRoutes(
     asyncBrowserRoute(async (req, res) => {
       const body = readBody(req);
       const targetId = resolveTargetIdFromBody(body);
-      const clear = toBoolean(body.clear) ?? false;
-      const latitude = toNumber(body.latitude);
-      const longitude = toNumber(body.longitude);
-      const accuracy = toNumber(body.accuracy) ?? undefined;
-      const origin = toStringOrEmpty(body.origin) || undefined;
+      let geolocation: GeolocationOptions;
+      try {
+        geolocation = parseGeolocationOptions(body);
+      } catch (err) {
+        return jsonError(res, 400, formatErrorMessage(err));
+      }
 
       await withPlaywrightRouteContext({
         req,
@@ -377,11 +459,7 @@ export function registerBrowserAgentStorageRoutes(
           await pw.setGeolocationViaPlaywright({
             cdpUrl,
             targetId: tab.targetId,
-            latitude,
-            longitude,
-            accuracy,
-            origin,
-            clear,
+            ...geolocation,
           });
           res.json({ ok: true, targetId: tab.targetId });
         },

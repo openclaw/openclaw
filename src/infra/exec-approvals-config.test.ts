@@ -1,3 +1,4 @@
+// Covers exec approval config normalization and safe-bin policy.
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -63,6 +64,7 @@ describe("exec approvals node host allowlist check", () => {
       resolution: {
         rawExecutable: "python3",
         resolvedPath: "/usr/bin/python3",
+        resolvedRealPath: "/usr/bin/python3",
         executableName: "python3",
       },
       entries: [{ pattern: "/usr/bin/python3" }],

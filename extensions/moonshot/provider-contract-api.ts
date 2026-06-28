@@ -1,3 +1,4 @@
+// Moonshot API module exposes the plugin public contract.
 import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
 
 const noopAuth = async () => ({ profiles: [] });
@@ -7,6 +8,7 @@ export function createMoonshotProvider(): ProviderPlugin {
     id: "moonshot",
     label: "Moonshot",
     docsPath: "/providers/moonshot",
+    aliases: ["moonshotai", "moonshot-ai"],
     auth: [
       {
         id: "api-key",

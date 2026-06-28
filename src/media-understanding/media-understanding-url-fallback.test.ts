@@ -1,3 +1,5 @@
+// Attachment URL fallback tests cover blocked local paths falling back to
+// remote media fetches and temp-file materialization.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -17,7 +19,7 @@ vi.mock("../media/fetch.js", async () => {
 
 function requireReadRemoteMediaBufferInput(): {
   url?: unknown;
-  fetchImpl?: unknown;
+  timeoutMs?: unknown;
   maxBytes?: unknown;
   ssrfPolicy?: unknown;
   retry?: unknown;
@@ -84,15 +86,13 @@ describe("media understanding attachment URL fallback", () => {
         expect(path.extname(result.path)).toBe(".jpg");
         expect(readRemoteMediaBufferMock).toHaveBeenCalledTimes(1);
         const fetchInput = requireReadRemoteMediaBufferInput();
-        const fetchImpl = fetchInput.fetchImpl;
         expect(fetchInput).toStrictEqual({
           url: fallbackUrl,
-          fetchImpl,
+          timeoutMs: 1000,
           maxBytes: 1024,
           ssrfPolicy: undefined,
           retry: expect.objectContaining({ attempts: 3 }),
         });
-        expect(typeof fetchImpl).toBe("function");
         // Clean up the temp file
         if (result.cleanup) {
           await result.cleanup();
@@ -113,15 +113,13 @@ describe("media understanding attachment URL fallback", () => {
         expect(result.buffer.toString()).toBe("fallback-buffer");
         expect(readRemoteMediaBufferMock).toHaveBeenCalledTimes(1);
         const fetchInput = requireReadRemoteMediaBufferInput();
-        const fetchImpl = fetchInput.fetchImpl;
         expect(fetchInput).toStrictEqual({
           url: fallbackUrl,
-          fetchImpl,
+          timeoutMs: 1000,
           maxBytes: 1024,
           ssrfPolicy: undefined,
           retry: expect.objectContaining({ attempts: 3 }),
         });
-        expect(typeof fetchImpl).toBe("function");
       },
     );
   });

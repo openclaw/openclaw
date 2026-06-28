@@ -1,8 +1,9 @@
+// Feishu plugin module implements lifecycle test support behavior.
 import { randomUUID } from "node:crypto";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { expect, vi, type Mock } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
-import { setFeishuRuntime } from "../runtime.js";
+import { getFeishuRuntime, setFeishuRuntime } from "../runtime.js";
 import type { ResolvedFeishuAccount } from "../types.js";
 
 const FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS = 10_000;
@@ -37,10 +38,12 @@ type FeishuLifecycleReplyDispatcher = {
     sendFinalReply: AsyncUnknownMock;
     waitForIdle: AsyncUnknownMock;
     getQueuedCounts: UnknownMock;
+    getFailedCounts: UnknownMock;
     markComplete: UnknownMock;
   };
   replyOptions: Record<string, never>;
   markDispatchIdle: UnknownMock;
+  ensureNoVisibleReplyFallback: AsyncUnknownMock;
 };
 
 export function setFeishuLifecycleStateDir(prefix: string) {
@@ -69,10 +72,12 @@ export function createFeishuLifecycleReplyDispatcher(): FeishuLifecycleReplyDisp
       sendFinalReply: vi.fn(async () => true),
       waitForIdle: vi.fn(async () => {}),
       getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
+      getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
       markComplete: vi.fn(),
     },
     replyOptions: {},
     markDispatchIdle: vi.fn(),
+    ensureNoVisibleReplyFallback: vi.fn(async () => false),
   };
 }
 
@@ -88,6 +93,7 @@ function createImmediateInboundDebounce() {
         }
       },
       flushKey: async () => {},
+      cancelKey: () => false,
     }),
   };
 }
@@ -431,6 +437,9 @@ export async function setupFeishuLifecycleHandler(params: {
   } else {
     params.createEventDispatcherMock.mockReturnValue({ register });
   }
+  getFeishuRuntime().config.current = vi.fn(
+    () => params.cfg,
+  ) as unknown as PluginRuntime["config"]["current"];
 
   const monitorSingleAccount = await loadMonitorSingleAccount();
   await monitorSingleAccount({

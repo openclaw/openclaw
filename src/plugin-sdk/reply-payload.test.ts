@@ -1,5 +1,7 @@
+// Reply payload tests cover reply target parsing, media payloads, and approval metadata.
 import { describe, expect, it, vi } from "vitest";
 import {
+  buildTtsSupplementMediaPayload,
   countOutboundMedia,
   createNormalizedOutboundDeliverer,
   deliverFormattedTextWithAttachments,
@@ -7,8 +9,10 @@ import {
   hasOutboundMedia,
   hasOutboundReplyContent,
   hasOutboundText,
+  getReplyPayloadTtsSupplement,
   isReasoningReplyPayload,
   isNumericTargetId,
+  markReplyPayloadAsTtsSupplement,
   normalizeOutboundReplyPayload,
   resolveOutboundMediaUrls,
   resolveSendableOutboundReplyParts,
@@ -21,11 +25,32 @@ import {
 describe("isReasoningReplyPayload", () => {
   it.each([
     { name: "flagged", payload: { text: "Visible", isReasoning: true }, expected: true },
-    { name: "prefix", payload: { text: "  \n Reasoning:\n_hidden_" }, expected: true },
-    { name: "blockquote", payload: { text: "> Reasoning:\n> _hidden_" }, expected: true },
+    { name: "prefix", payload: { text: "  \n Thinking\n_hidden_" }, expected: true },
+    {
+      name: "legacy animated prefix",
+      payload: { text: "Thinking...\n\n_hidden_" },
+      expected: true,
+    },
+    { name: "legacy prefix", payload: { text: "  \n Reasoning:\n_hidden_" }, expected: true },
+    { name: "blockquote", payload: { text: "> Thinking\n> _hidden_" }, expected: true },
+    {
+      name: "visible prose starting with thinking",
+      payload: { text: "Thinking... this is the answer" },
+      expected: false,
+    },
+    {
+      name: "visible exact thinking label",
+      payload: { text: "Thinking..." },
+      expected: false,
+    },
+    {
+      name: "visible thinking status line",
+      payload: { text: "Thinking...\nI'll check that now" },
+      expected: false,
+    },
     {
       name: "mid-message mention",
-      payload: { text: "Intro\nReasoning: visible discussion" },
+      payload: { text: "Intro\nThinking: visible discussion" },
       expected: false,
     },
     { name: "missing text", payload: {}, expected: false },
@@ -251,6 +276,48 @@ describe("normalizeOutboundReplyPayload", () => {
       sensitiveMedia: true,
       replyToId: undefined,
       mediaUrls: undefined,
+    });
+  });
+});
+
+describe("TTS supplement payload helpers", () => {
+  it("marks media payloads as TTS supplements without treating spokenText alone as enough", () => {
+    const explicitTtsCommandPayload = {
+      mediaUrl: "file:///tmp/tts.mp3",
+      spokenText: "read this",
+    };
+
+    expect(getReplyPayloadTtsSupplement(explicitTtsCommandPayload)).toBeUndefined();
+
+    const marked = markReplyPayloadAsTtsSupplement(explicitTtsCommandPayload, "read this");
+
+    expect(getReplyPayloadTtsSupplement(marked)).toEqual({ spokenText: "read this" });
+    expect(
+      getReplyPayloadTtsSupplement(
+        markReplyPayloadAsTtsSupplement(explicitTtsCommandPayload, "read this", {
+          visibleTextAlreadyDelivered: true,
+        }),
+      ),
+    ).toEqual({ spokenText: "read this", visibleTextAlreadyDelivered: true });
+  });
+
+  it("strips visible content while keeping TTS supplement media fallback text", () => {
+    expect(
+      buildTtsSupplementMediaPayload(
+        markReplyPayloadAsTtsSupplement({
+          text: "visible",
+          mediaUrl: "file:///tmp/tts.mp3",
+          audioAsVoice: true,
+          presentation: { title: "visible", blocks: [] },
+          interactive: { blocks: [] },
+          btw: { question: "side" },
+        }),
+      ),
+    ).toEqual({
+      mediaUrl: "file:///tmp/tts.mp3",
+      audioAsVoice: true,
+      spokenText: "visible",
+      ttsSupplement: { spokenText: "visible" },
     });
   });
 });

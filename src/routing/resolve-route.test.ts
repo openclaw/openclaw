@@ -1,3 +1,4 @@
+// Route resolution tests cover resolving channel route targets from input.
 import { describe, expect, test, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import * as routingBindings from "./bindings.js";
@@ -420,6 +421,18 @@ describe("resolveAgentRoute", () => {
       peer: { kind: "channel", id: 1468834856187203680n as unknown as string },
     });
     expect(route.sessionKey).toBe("agent:main:discord:channel:1468834856187203680");
+  });
+
+  test("preserves mixed-case Signal group ids in route session keys", () => {
+    const mixedGroupId = "VWATodkf2hc8zdOS76q9Tb0+5Bi522E03qLdaQ/9ypg=";
+    const route = resolveAgentRoute({
+      cfg: {},
+      channel: "signal",
+      accountId: null,
+      peer: { kind: "group", id: mixedGroupId },
+    });
+    expect(route.sessionKey).toBe(`agent:main:signal:group:${mixedGroupId}`);
+    expect(route.lastRoutePolicy).toBe("session");
   });
 
   test.each([

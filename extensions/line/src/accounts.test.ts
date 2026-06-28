@@ -1,3 +1,4 @@
+// Line tests cover accounts plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -196,10 +197,9 @@ describe("LINE accounts", () => {
         },
       };
 
-      const account = resolveLineAccount({ cfg });
-      expect(account.channelAccessToken).toBe("");
-      expect(account.channelSecret).toBe("");
-      expect(account.tokenSource).toBe("none");
+      expect(() => resolveLineAccount({ cfg })).toThrow(
+        /LINE credential file.*must not be a symlink/,
+      );
     });
   });
 

@@ -1,19 +1,43 @@
+// Covers task-flow registry store persistence, events, and state queries.
 import { statSync } from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  createManagedTaskFlow,
+  createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
   requestFlowCancel,
   resetTaskFlowRegistryForTests,
   setFlowWaiting,
 } from "./task-flow-registry.js";
-import {
-  resolveTaskFlowRegistryDir,
-  resolveTaskFlowRegistrySqlitePath,
-} from "./task-flow-registry.paths.js";
 import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
-import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import {
+  loadTaskFlowRegistryStateFromSqlite,
+  saveTaskFlowRegistryStateToSqlite,
+} from "./task-flow-registry.store.sqlite.js";
+import {
+  parseOptionalTaskFlowSyncMode,
+  parseTaskFlowStatus,
+  type TaskFlowRecord,
+} from "./task-flow-registry.types.js";
+import { parseTaskNotifyPolicy } from "./task-registry.types.js";
+
+function createManagedTaskFlow(
+  params: Parameters<typeof createManagedTaskFlowOrNull>[0],
+): TaskFlowRecord {
+  const flow = createManagedTaskFlowOrNull(params);
+  if (!flow) {
+    throw new Error("expected managed TaskFlow creation to succeed");
+  }
+  return flow;
+}
+
+type TaskFlowRegistryTestDatabase = Pick<OpenClawStateKyselyDatabase, "flow_runs">;
 
 function createStoredFlow(): TaskFlowRecord {
   return {
@@ -45,25 +69,14 @@ async function withFlowRegistryTempDir<T>(run: (root: string) => Promise<T>): Pr
     },
     async (state) => {
       const root = state.stateDir;
-      process.env.OPENCLAW_STATE_DIR = root;
       resetTaskFlowRegistryForTests();
       try {
-        return await run(root);
+        return await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => await run(root));
       } finally {
         resetTaskFlowRegistryForTests();
       }
     },
   );
-}
-
-const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
-
-function restoreOriginalStateDir(): void {
-  if (ORIGINAL_STATE_DIR === undefined) {
-    delete process.env.OPENCLAW_STATE_DIR;
-  } else {
-    process.env.OPENCLAW_STATE_DIR = ORIGINAL_STATE_DIR;
-  }
 }
 
 describe("task-flow-registry store runtime", () => {
@@ -73,7 +86,6 @@ describe("task-flow-registry store runtime", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    restoreOriginalStateDir();
     resetTaskFlowRegistryForTests();
   });
 
@@ -124,9 +136,74 @@ describe("task-flow-registry store runtime", () => {
     expect(restoredFlow.goal).toBe("Restored flow");
   });
 
+  it("rejects invalid persisted flow enum values", () => {
+    expect(parseOptionalTaskFlowSyncMode("managed")).toBe("managed");
+    expect(parseOptionalTaskFlowSyncMode(null)).toBeUndefined();
+    expect(parseTaskFlowStatus("waiting")).toBe("waiting");
+    expect(parseTaskNotifyPolicy("state_changes")).toBe("state_changes");
+
+    expect(() => parseOptionalTaskFlowSyncMode("legacy")).toThrow(
+      "Invalid persisted task flow sync mode",
+    );
+    expect(() => parseTaskFlowStatus("done")).toThrow("Invalid persisted task flow status");
+    expect(() => parseTaskNotifyPolicy("verbose")).toThrow("Invalid persisted task notify policy");
+  });
+
+  it("rejects corrupt persisted flow rows during sqlite restore", async () => {
+    await withFlowRegistryTempDir(async () => {
+      resetTaskFlowRegistryForTests();
+
+      const created = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/corrupt-flow",
+        goal: "Corrupt flow",
+        status: "running",
+      });
+
+      const database = openOpenClawStateDatabase();
+      const db = getNodeSqliteKysely<TaskFlowRegistryTestDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db.updateTable("flow_runs").set({ status: "done" }).where("flow_id", "=", created.flowId),
+      );
+
+      expect(() => loadTaskFlowRegistryStateFromSqlite()).toThrow(
+        "Invalid persisted task flow status",
+      );
+    });
+  });
+
+  it("drops invalid requester origins during sqlite restore", async () => {
+    await withFlowRegistryTempDir(async () => {
+      resetTaskFlowRegistryForTests();
+
+      const created = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/invalid-origin-flow",
+        goal: "Invalid origin flow",
+        requesterOrigin: {
+          channel: "test-channel",
+          to: "C1234567890",
+        },
+      });
+
+      const database = openOpenClawStateDatabase();
+      const db = getNodeSqliteKysely<TaskFlowRegistryTestDatabase>(database.db);
+      executeSqliteQuerySync(
+        database.db,
+        db
+          .updateTable("flow_runs")
+          .set({ requester_origin_json: '{"channel":42}' })
+          .where("flow_id", "=", created.flowId),
+      );
+
+      const restored = loadTaskFlowRegistryStateFromSqlite();
+      expect(restored.flows.get(created.flowId)?.requesterOrigin).toBeUndefined();
+    });
+  });
+
   it("restores persisted wait-state, revision, and cancel intent from sqlite", async () => {
-    await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+    await withFlowRegistryTempDir(async () => {
       resetTaskFlowRegistryForTests();
 
       const created = createManagedTaskFlow({
@@ -171,8 +248,7 @@ describe("task-flow-registry store runtime", () => {
   });
 
   it("round-trips explicit json null through sqlite", async () => {
-    await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+    await withFlowRegistryTempDir(async () => {
       resetTaskFlowRegistryForTests();
 
       const created = createManagedTaskFlow({
@@ -192,12 +268,38 @@ describe("task-flow-registry store runtime", () => {
     });
   });
 
+  it("prunes large sqlite snapshots without binding every flow id at once", async () => {
+    await withFlowRegistryTempDir(async () => {
+      resetTaskFlowRegistryForTests();
+
+      const flows = new Map<string, TaskFlowRecord>();
+      for (let index = 0; index < 1_200; index++) {
+        const flow: TaskFlowRecord = {
+          ...createStoredFlow(),
+          flowId: `flow-large-${index}`,
+          controllerId: `tests/large-flow-${index}`,
+          createdAt: index,
+          updatedAt: index,
+        };
+        flows.set(flow.flowId, flow);
+      }
+
+      saveTaskFlowRegistryStateToSqlite({ flows });
+      const retainedFlows = new Map([...flows].slice(100));
+      saveTaskFlowRegistryStateToSqlite({ flows: retainedFlows });
+
+      const restored = loadTaskFlowRegistryStateFromSqlite();
+      expect(restored.flows.size).toBe(1_100);
+      expect(restored.flows.has("flow-large-0")).toBe(false);
+      expect(restored.flows.has("flow-large-1199")).toBe(true);
+    });
+  });
+
   it("hardens the sqlite flow store directory and file modes", async () => {
     if (process.platform === "win32") {
       return;
     }
-    await withFlowRegistryTempDir(async (root) => {
-      process.env.OPENCLAW_STATE_DIR = root;
+    await withFlowRegistryTempDir(async () => {
       resetTaskFlowRegistryForTests();
 
       createManagedTaskFlow({
@@ -210,10 +312,11 @@ describe("task-flow-registry store runtime", () => {
         waitJson: { kind: "task", taskId: "task-secured" },
       });
 
-      const registryDir = resolveTaskFlowRegistryDir(process.env);
-      const sqlitePath = resolveTaskFlowRegistrySqlitePath(process.env);
+      const databasePath = resolveOpenClawStateSqlitePath(process.env);
+      const registryDir = path.dirname(databasePath);
+      expect(databasePath.endsWith(path.join("state", "openclaw.sqlite"))).toBe(true);
       expect(statSync(registryDir).mode & 0o777).toBe(0o700);
-      expect(statSync(sqlitePath).mode & 0o777).toBe(0o600);
+      expect(statSync(databasePath).mode & 0o777).toBe(0o600);
     });
   });
 });

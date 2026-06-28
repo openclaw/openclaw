@@ -6,10 +6,38 @@
  * globals, fully supporting multi-account concurrent operation.
  */
 
+import {
+  asDateTimestampMs,
+  parseStrictPositiveInteger,
+  resolveExpiresAtMsFromDurationSeconds,
+  resolveTimestampMsToIsoString,
+} from "openclaw/plugin-sdk/number-runtime";
+import { readResponseTextLimited } from "openclaw/plugin-sdk/provider-http";
+import { fetchWithSsrFGuard, type SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import type { EngineLogger } from "../types.js";
 import { formatErrorMessage } from "../utils/format.js";
 
 const TOKEN_URL = "https://bots.qq.com/app/getAppAccessToken";
+const DEFAULT_TOKEN_EXPIRES_IN_SECONDS = 7200;
+const QQBOT_TOKEN_RESPONSE_LIMIT_BYTES = 8 * 1024;
+
+/**
+ * Host-scoped SSRF policy for the QQ Bot token endpoint.
+ *
+ * `TOKEN_URL` is a hard-coded `https://bots.qq.com/...` constant, so this
+ * relaxation only ever applies to that single host. Fake-IP proxy stacks
+ * (sing-box, Clash, Surge, WSL2 DNS, etc.) routinely map `bots.qq.com` into
+ * the RFC 2544 benchmark range `198.18.0.0/15`, which the default SSRF
+ * guard blocks. We mirror the existing media-path pattern
+ * (`QQBOT_MEDIA_SSRF_POLICY` in `../utils/file-utils.ts`) so the relaxation
+ * stays narrowly host-scoped instead of weakening the global default.
+ *
+ * See https://github.com/openclaw/openclaw/issues/88984.
+ */
+const QQBOT_TOKEN_SSRF_POLICY: SsrFPolicy = {
+  hostnameAllowlist: ["bots.qq.com"],
+  allowRfc2544BenchmarkRange: true,
+};
 
 interface CachedToken {
   token: string;
@@ -22,6 +50,17 @@ interface BackgroundRefreshOptions {
   randomOffsetMs?: number;
   minRefreshIntervalMs?: number;
   retryDelayMs?: number;
+}
+
+function resolveTokenExpiresInSeconds(value: unknown): number {
+  const parsed = parseStrictPositiveInteger(value);
+  if (parsed !== undefined) {
+    return parsed;
+  }
+  if (value == null || (typeof value === "number" && !Number.isFinite(value))) {
+    return DEFAULT_TOKEN_EXPIRES_IN_SECONDS;
+  }
+  return 0;
 }
 
 /**
@@ -171,9 +210,11 @@ export class TokenManager {
       this.logger?.info?.(`[qqbot:token:${appId}] Background refresh stopped`);
     };
 
-    loop().catch((err) => {
+    loop().catch((err: unknown) => {
       this.refreshControllers.delete(appId);
-      this.logger?.error?.(`[qqbot:token:${appId}] Background refresh crashed: ${err}`);
+      this.logger?.error?.(
+        `[qqbot:token:${appId}] Background refresh crashed: ${formatErrorMessage(err)}`,
+      );
     });
   }
 
@@ -193,29 +234,30 @@ export class TokenManager {
     }
   }
 
-  /** Check whether background refresh is running. */
-  isBackgroundRefreshRunning(appId?: string): boolean {
-    if (appId) {
-      return this.refreshControllers.has(appId);
-    }
-    return this.refreshControllers.size > 0;
-  }
-
   // ---- Internal ----
 
   private async doFetchToken(appId: string, clientSecret: string): Promise<string> {
     this.logger?.debug?.(`[qqbot:token:${appId}] >>> POST ${TOKEN_URL}`);
 
     let response: Response;
+    let release: (() => Promise<void>) | undefined;
     try {
-      response = await fetch(TOKEN_URL, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent": this.resolveUserAgent(),
+      const guarded = await fetchWithSsrFGuard({
+        url: TOKEN_URL,
+        auditContext: "qqbot-token",
+        capture: false,
+        policy: QQBOT_TOKEN_SSRF_POLICY,
+        init: {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "User-Agent": this.resolveUserAgent(),
+          },
+          body: JSON.stringify({ appId, clientSecret }),
         },
-        body: JSON.stringify({ appId, clientSecret }),
       });
+      response = guarded.response;
+      release = guarded.release;
     } catch (err) {
       this.logger?.error?.(`[qqbot:token:${appId}] Network error: ${formatErrorMessage(err)}`);
       throw new Error(`Network error getting access_token: ${formatErrorMessage(err)}`, {
@@ -223,34 +265,52 @@ export class TokenManager {
       });
     }
 
-    const traceId = response.headers.get("x-tps-trace-id") ?? "";
-    this.logger?.debug?.(
-      `[qqbot:token:${appId}] <<< ${response.status}${traceId ? ` | TraceId: ${traceId}` : ""}`,
-    );
-
-    let data: { access_token?: string; expires_in?: number };
     try {
-      const rawBody = await response.text();
+      const traceId = response.headers.get("x-tps-trace-id") ?? "";
+      this.logger?.debug?.(
+        `[qqbot:token:${appId}] <<< ${response.status}${traceId ? ` | TraceId: ${traceId}` : ""}`,
+      );
+
+      let rawBody: string;
+      try {
+        rawBody = await readResponseTextLimited(response, QQBOT_TOKEN_RESPONSE_LIMIT_BYTES);
+      } catch (err) {
+        throw new Error(`Failed to read access_token response: ${formatErrorMessage(err)}`, {
+          cause: err,
+        });
+      }
       const logBody = rawBody.replace(/"access_token"\s*:\s*"[^"]+"/g, '"access_token": "***"');
       this.logger?.debug?.(`[qqbot:token:${appId}] <<< Body: ${logBody}`);
-      data = JSON.parse(rawBody);
-    } catch (err) {
-      throw new Error(`Failed to parse access_token response: ${formatErrorMessage(err)}`, {
-        cause: err,
-      });
+
+      let data: { access_token?: string; expires_in?: unknown };
+      try {
+        data = JSON.parse(rawBody);
+      } catch {
+        throw new Error("QQBot access_token response was malformed JSON");
+      }
+
+      if (!data.access_token) {
+        throw new Error(`Failed to get access_token: ${JSON.stringify(data)}`);
+      }
+
+      const nowMs = asDateTimestampMs(Date.now());
+      if (nowMs === undefined) {
+        this.logger?.debug?.(`[qqbot:token:${appId}] Not cached: invalid process clock`);
+        return data.access_token;
+      }
+      const expiresAt =
+        resolveExpiresAtMsFromDurationSeconds(resolveTokenExpiresInSeconds(data.expires_in), {
+          nowMs,
+        }) ?? nowMs;
+      this.cache.set(appId, { token: data.access_token, expiresAt, appId });
+      this.logger?.debug?.(
+        `[qqbot:token:${appId}] Cached, expires at: ${resolveTimestampMsToIsoString(expiresAt)}`,
+      );
+
+      return data.access_token;
+    } finally {
+      await release?.();
     }
-
-    if (!data.access_token) {
-      throw new Error(`Failed to get access_token: ${JSON.stringify(data)}`);
-    }
-
-    const expiresAt = Date.now() + (data.expires_in ?? 7200) * 1000;
-    this.cache.set(appId, { token: data.access_token, expiresAt, appId });
-    this.logger?.debug?.(
-      `[qqbot:token:${appId}] Cached, expires at: ${new Date(expiresAt).toISOString()}`,
-    );
-
-    return data.access_token;
   }
 
   private abortableSleep(ms: number, signal: AbortSignal): Promise<void> {

@@ -77,7 +77,8 @@ driver's safety model.
 ## Quick setup
 
 Set `plugins.entries.codex.config.computerUse` when Codex-mode turns must have
-Computer Use available before a thread starts:
+Computer Use available before a thread starts. `autoInstall: true` opts
+Computer Use in and lets OpenClaw install or re-enable it before the turn:
 
 ```json5
 {
@@ -114,6 +115,17 @@ before the thread starts.
 After changing Computer Use config, use `/new` or `/reset` in the affected chat
 before testing if an existing Codex thread has already started.
 
+On macOS managed stdio startup, OpenClaw prefers the signed desktop Codex app
+bundle at `/Applications/Codex.app/Contents/Resources/codex` when it exists.
+That keeps Computer Use under the app bundle that owns the local desktop-control
+permissions. If the desktop app is not installed, OpenClaw falls back to the
+managed Codex binary installed beside the plugin. If an installed desktop app
+initializes with an unsupported app-server version, OpenClaw closes that child
+and retries the next managed binary candidate instead of letting a stale
+desktop app shadow the plugin-local fallback. Explicit `appServer.command`
+config or `OPENCLAW_CODEX_APP_SERVER_BIN` still overrides this managed
+selection.
+
 ## Commands
 
 Use the `/codex computer-use` commands from any chat surface where the `codex`
@@ -129,7 +141,8 @@ not `openclaw codex ...` CLI subcommands:
 ```
 
 `status` is read-only. It does not add marketplace sources, install plugins, or
-enable Codex plugin support.
+enable Codex plugin support. If no config opts Computer Use in, `status` can
+report disabled even after a one-off install command.
 
 `install` enables Codex app-server plugin support, optionally adds a configured
 marketplace source, installs or re-enables the configured plugin through Codex
@@ -177,9 +190,10 @@ You can also register it explicitly from a shell with Codex:
 codex plugin marketplace add /Applications/Codex.app/Contents/Resources/plugins/openai-bundled
 ```
 
-If you use a nonstandard Codex app path, set `computerUse.marketplacePath` to a
-local marketplace file path or run `/codex computer-use install --source
-<marketplace-source>` once.
+If you use a nonstandard Codex app path, run `/codex computer-use install
+--source <marketplace-root>` once or set `computerUse.marketplacePath` to a
+local marketplace file path. Use `--marketplace-path` only when you have the
+marketplace JSON file path, not the bundled marketplace root.
 
 ## Remote catalog limit
 
@@ -273,13 +287,20 @@ Codex app-server MCP status, or macOS permissions.
 **Status or a probe times out on `computer-use.list_apps`.** The plugin and MCP
 server are present, but the local Computer Use bridge did not answer. Quit or
 restart Codex Computer Use, relaunch Codex Desktop if needed, then retry in a
-fresh OpenClaw session.
+fresh OpenClaw session. If the host previously ran Computer Use through an older
+managed Codex app-server, refresh the installed plugin from the desktop bundled
+marketplace:
+
+```text
+/codex computer-use install --source /Applications/Codex.app/Contents/Resources/plugins/openai-bundled
+```
 
 **A Computer Use tool says `Native hook relay unavailable`.** The Codex-native
 tool hook could not reach an active OpenClaw relay through the local bridge or
 Gateway fallback. Start a fresh OpenClaw session with `/new` or `/reset`. If it
-keeps happening, restart the gateway so old app-server threads and hook
-registrations are dropped, then retry.
+works once and then fails again on a later tool call, `/new` is only clearing the
+current attempt; restart the Codex app-server or OpenClaw Gateway so old threads
+and hook registrations are dropped, then retry in a fresh session.
 
 **Turn-start auto-install refuses a source.** This is intentional. Add the
 source with explicit `/codex computer-use install --source <marketplace-source>`

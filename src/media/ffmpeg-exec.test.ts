@@ -1,3 +1,4 @@
+// FFmpeg exec tests cover command execution wrappers and error mapping.
 import type { ChildProcess, ExecFileOptions } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -5,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   parseFfprobeCodecAndSampleRate,
   parseFfprobeCsvFields,
+  resolveFfmpegBin,
   runFfprobe,
 } from "./ffmpeg-exec.js";
 
@@ -98,6 +100,38 @@ describe("parseFfprobeCodecAndSampleRate", () => {
         sampleRateHz: null,
       },
     },
+    {
+      name: "rejects partially numeric sample rates",
+      input: "opus,48000hz",
+      expected: {
+        codec: "opus",
+        sampleRateHz: null,
+      },
+    },
+    {
+      name: "rejects missing sample rates",
+      input: "opus,",
+      expected: {
+        codec: "opus",
+        sampleRateHz: null,
+      },
+    },
+    {
+      name: "rejects zero sample rates",
+      input: "opus,0",
+      expected: {
+        codec: "opus",
+        sampleRateHz: null,
+      },
+    },
+    {
+      name: "rejects signed sample rates",
+      input: "opus,-48000",
+      expected: {
+        codec: "opus",
+        sampleRateHz: null,
+      },
+    },
   ] as const)("$name", ({ input, expected }) => {
     expectParsedCodecAndSampleRateCase(input, expected);
   });
@@ -129,5 +163,14 @@ describe("runFfprobe", () => {
     execCallback()(childError, "", "");
 
     await expect(promise).rejects.toBe(childError);
+  });
+});
+
+describe("resolveFfmpegBin", () => {
+  it("resolves ffmpeg from trusted system paths", () => {
+    resolveSystemBinMock.mockReturnValue("/usr/bin/ffmpeg");
+
+    expect(resolveFfmpegBin()).toBe("/usr/bin/ffmpeg");
+    expect(resolveSystemBinMock).toHaveBeenCalledWith("ffmpeg", { trust: "standard" });
   });
 });

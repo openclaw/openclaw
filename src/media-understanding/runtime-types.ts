@@ -1,6 +1,8 @@
+// Public media-understanding runtime API types for file-based image/audio/video
+// helpers and direct structured extraction.
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/types.js";
-import type { ActiveMediaModel } from "./active-model.types.js";
+import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import type {
   MediaUnderstandingDecision,
   MediaUnderstandingOutput,
@@ -11,12 +13,21 @@ import type {
 export type RunMediaUnderstandingFileParams = {
   capability: "image" | "audio" | "video";
   filePath: string;
+  mediaUrl?: string;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
   prompt?: string;
   timeoutMs?: number;
+  scopeContext?: MediaUnderstandingScopeContext;
+};
+
+export type MediaUnderstandingScopeContext = {
+  sessionKey?: string;
+  channel?: string;
+  chatType?: string;
 };
 
 export type RunMediaUnderstandingFileResult = {
@@ -29,18 +40,23 @@ export type RunMediaUnderstandingFileResult = {
 
 export type DescribeImageFileParams = {
   filePath: string;
+  mediaUrl?: string;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
   prompt?: string;
   timeoutMs?: number;
+  scopeContext?: MediaUnderstandingScopeContext;
 };
 
 export type DescribeImageFileWithModelParams = {
   filePath: string;
+  mediaUrl?: string;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   mime?: string;
   provider: string;
   model: string;
@@ -78,6 +94,7 @@ export type DescribeVideoFileParams = {
   filePath: string;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
 };
@@ -86,6 +103,7 @@ export type TranscribeAudioFileParams = {
   filePath: string;
   cfg: OpenClawConfig;
   agentDir?: string;
+  workspaceDir?: string;
   mime?: string;
   activeModel?: ActiveMediaModel;
   language?: string;

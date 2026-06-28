@@ -1,3 +1,4 @@
+// Msteams plugin module implements user agent behavior.
 import { createRequire } from "node:module";
 import { getMSTeamsRuntime } from "./runtime.js";
 
@@ -42,6 +43,18 @@ export function buildUserAgent(): string {
   }
   cachedUserAgent = `teams.ts[apps]/${resolveTeamsSdkVersion()} OpenClaw/${resolveOpenClawVersion()}`;
   return cachedUserAgent;
+}
+
+/**
+ * User-Agent fragment for the Teams SDK App's client. The SDK's Client.clone
+ * merges this with its own `teams.ts[apps]/<sdk-version>` identifier, so we
+ * only contribute the OpenClaw piece — passing the full `buildUserAgent()`
+ * would double-print the SDK token.
+ *
+ * Format: "OpenClaw/<openclaw-version>"
+ */
+export function buildOpenClawUserAgentFragment(): string {
+  return `OpenClaw/${resolveOpenClawVersion()}`;
 }
 
 export function ensureUserAgentHeader(headers?: HeadersInit): Headers {

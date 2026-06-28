@@ -1,3 +1,4 @@
+// Imessage tests cover actions plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -302,6 +303,52 @@ describe("imessage message actions", () => {
         },
       ],
     ]);
+  });
+
+  it("rejects fractional chatId params before resolving chat GUIDs", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "react",
+        cfg: cfg(),
+        params: {
+          chatId: 42.5,
+          messageId: "message-guid",
+          emoji: "👍",
+        },
+      } as never),
+    ).rejects.toThrow("chatId must be a positive integer");
+
+    expect(runtimeMock.resolveChatGuidForTarget).not.toHaveBeenCalled();
+    expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects fractional partIndex values before invoking bridge actions", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "react",
+        cfg: cfg(),
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          messageId: "message-guid",
+          emoji: "👍",
+          partIndex: 1.5,
+        },
+      } as never),
+    ).rejects.toThrow("partIndex must be a non-negative integer");
+
+    expect(runtimeMock.sendReaction).not.toHaveBeenCalled();
   });
 
   it("resolves short message ids before invoking bridge actions", async () => {

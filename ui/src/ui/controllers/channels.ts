@@ -1,4 +1,5 @@
-import { ChannelsStatusSnapshot } from "../types.ts";
+// Control UI controller manages channels gateway state.
+import type { ChannelsStatusSnapshot } from "../types.ts";
 import type { ChannelsState } from "./channels.types.ts";
 import {
   formatMissingOperatorReadScopeMessage,
@@ -12,7 +13,9 @@ type LoadChannelsOptions = {
 };
 
 function delay(ms: number): Promise<"timeout"> {
-  return new Promise((resolve) => setTimeout(() => resolve("timeout"), ms));
+  return new Promise((resolve) => {
+    setTimeout(() => resolve("timeout"), ms);
+  });
 }
 
 export async function loadChannels(

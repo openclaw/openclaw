@@ -1,3 +1,4 @@
+/** Tests manifest activation planning for commands, providers, channels, and capabilities. */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -59,13 +60,37 @@ describe("activation planner", () => {
             onAgentHarnesses: ["codex"],
           },
           setup: {
-            providers: [{ id: "openai-codex" }],
+            providers: [{ id: "openai" }],
           },
           channels: [],
           cliBackends: [],
           skills: [],
           hooks: [],
           origin: "bundled",
+        },
+        {
+          id: "custom-harness-plugin",
+          providers: [],
+          channels: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          activation: {
+            onAgentHarnesses: ["custom-harness"],
+          },
+          origin: "workspace",
+        },
+        {
+          id: "load-path-harness-plugin",
+          providers: [],
+          channels: [],
+          cliBackends: [],
+          skills: [],
+          hooks: [],
+          activation: {
+            onAgentHarnesses: ["load-path-harness"],
+          },
+          origin: "config",
         },
         {
           id: "demo-channel",
@@ -126,6 +151,110 @@ describe("activation planner", () => {
     ).toEqual(["demo-channel"]);
   });
 
+  it("does not activate manifest-triggered plugins that are disabled in config", () => {
+    expect(
+      resolveManifestActivationPluginIds({
+        config: {
+          plugins: {
+            entries: {
+              "memory-core": { enabled: false },
+            },
+          },
+        },
+        trigger: {
+          kind: "command",
+          command: "memory",
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("plans manifest-owned custom harnesses and respects their activation policy", () => {
+    expect(
+      resolveManifestActivationPluginIds({
+        trigger: {
+          kind: "agentHarness",
+          runtime: "custom-harness",
+        },
+      }),
+    ).toEqual(["custom-harness-plugin"]);
+
+    expect(
+      resolveManifestActivationPluginIds({
+        config: {
+          plugins: {
+            entries: {
+              "custom-harness-plugin": { enabled: false },
+            },
+          },
+        },
+        trigger: {
+          kind: "agentHarness",
+          runtime: "custom-harness",
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("requires canonical ids for explicit manifest owner trust", () => {
+    expect(
+      resolveManifestActivationPluginIds({
+        config: {
+          plugins: {
+            allow: ["legacy-custom-harness-plugin"],
+          },
+        },
+        trigger: {
+          kind: "agentHarness",
+          runtime: "custom-harness",
+        },
+        requireExplicitManifestOwnerTrust: true,
+      }),
+    ).toEqual([]);
+
+    expect(
+      resolveManifestActivationPluginIds({
+        config: {
+          plugins: {
+            allow: ["custom-harness-plugin"],
+          },
+        },
+        trigger: {
+          kind: "agentHarness",
+          runtime: "custom-harness",
+        },
+        requireExplicitManifestOwnerTrust: true,
+      }),
+    ).toEqual(["custom-harness-plugin"]);
+  });
+
+  it("treats load-path manifest owners as explicitly trusted for activation planning", () => {
+    expect(
+      resolveManifestActivationPluginIds({
+        trigger: {
+          kind: "agentHarness",
+          runtime: "load-path-harness",
+        },
+        requireExplicitManifestOwnerTrust: true,
+      }),
+    ).toEqual(["load-path-harness-plugin"]);
+
+    expect(
+      resolveManifestActivationPluginIds({
+        config: {
+          plugins: {
+            deny: ["load-path-harness-plugin"],
+          },
+        },
+        trigger: {
+          kind: "agentHarness",
+          runtime: "load-path-harness",
+        },
+        requireExplicitManifestOwnerTrust: true,
+      }),
+    ).toEqual([]);
+  });
+
   it("keeps ids-only provider, agent harness, channel, and route planning stable", () => {
     expect(
       resolveManifestActivationPluginIds({
@@ -140,7 +269,7 @@ describe("activation planner", () => {
       resolveManifestActivationPluginIds({
         trigger: {
           kind: "provider",
-          provider: "openai-codex",
+          provider: "openai",
         },
       }),
     ).toEqual(["openai"]);
@@ -269,22 +398,7 @@ describe("activation planner", () => {
       {
         pluginId: "openai",
         origin: "bundled",
-        reasons: ["manifest-provider-owner"],
-      },
-    ]);
-
-    expect(
-      resolveManifestActivationPlan({
-        trigger: {
-          kind: "provider",
-          provider: "openai-codex",
-        },
-      }).entries,
-    ).toEqual([
-      {
-        pluginId: "openai",
-        origin: "bundled",
-        reasons: ["manifest-setup-provider-owner"],
+        reasons: ["manifest-provider-owner", "manifest-setup-provider-owner"],
       },
     ]);
 

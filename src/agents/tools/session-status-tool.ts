@@ -1,3 +1,10 @@
+/**
+ * session_status built-in tool.
+ *
+ * Reports and updates session runtime state, model overrides, visibility, task status, and delivery context.
+ */
+import { randomUUID } from "node:crypto";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type {
   ElevatedLevel,
@@ -7,17 +14,16 @@ import type {
 } from "../../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
-  loadSessionStore,
-  mergeSessionEntry,
+  patchSessionEntryWithKey,
   resolveStorePath,
   type SessionEntry,
-  updateSessionStore,
 } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
 import { resolveSessionModelIdentityRef } from "../../gateway/session-utils.js";
+import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import {
   buildAgentMainSessionKey,
-  DEFAULT_AGENT_ID,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../routing/session-key.js";
@@ -26,6 +32,15 @@ import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { BuildStatusTextParams } from "../../status/status-text.types.js";
 import { buildTaskStatusSnapshotForRelatedSessionKeyForOwner } from "../../tasks/task-owner-access.js";
 import { formatTaskStatusDetail, formatTaskStatusTitle } from "../../tasks/task-status.js";
+import {
+  deliveryContextFromSession,
+  normalizeDeliveryContext,
+  type DeliveryContext,
+} from "../../utils/delivery-context.shared.js";
+import {
+  isDeliverableMessageChannel,
+  normalizeMessageChannel,
+} from "../../utils/message-channel.js";
 import { loadModelCatalog } from "../model-catalog.js";
 import {
   buildModelAliasIndex,
@@ -42,11 +57,16 @@ import {
 import type { AnyAgentTool } from "./common.js";
 import { normalizeToolModelOverride, readStringParam } from "./common.js";
 import {
+  listImplicitDefaultDirectFallbackKeys,
+  resolveImplicitCurrentSessionFallback,
+  resolveSessionStatusEntry,
+  resolveStoreScopedRequesterKey,
+} from "./session-status-session-resolve.js";
+import {
   createAgentToAgentPolicy,
   createSessionVisibilityGuard,
   resolveCurrentSessionClientAlias,
   resolveEffectiveSessionToolsVisibility,
-  resolveInternalSessionKey,
   resolveSandboxedSessionToolContext,
   resolveSessionReference,
   resolveVisibleSessionReference,
@@ -70,121 +90,141 @@ function loadCommandsStatusRuntime(): Promise<CommandsStatusRuntimeModule> {
   return commandsStatusRuntimeLoader.load();
 }
 
-function resolveSessionEntry(params: {
-  store: Record<string, SessionEntry>;
-  keyRaw: string;
-  alias: string;
-  mainKey: string;
-  requesterInternalKey?: string;
-  includeAliasFallback?: boolean;
-}): { key: string; entry: SessionEntry } | null {
-  const keyRaw = params.keyRaw.trim();
-  if (!keyRaw) {
-    return null;
-  }
-  const includeAliasFallback = params.includeAliasFallback ?? true;
-  const internal = resolveInternalSessionKey({
-    key: keyRaw,
-    alias: params.alias,
-    mainKey: params.mainKey,
-    requesterInternalKey: params.requesterInternalKey,
-  });
-
-  const candidates: string[] = [keyRaw];
-  if (!keyRaw.startsWith("agent:")) {
-    candidates.push(`agent:${DEFAULT_AGENT_ID}:${keyRaw}`);
-  }
-  if (includeAliasFallback && internal !== keyRaw) {
-    candidates.push(internal);
-  }
-  if (includeAliasFallback && !keyRaw.startsWith("agent:")) {
-    const agentInternal = `agent:${DEFAULT_AGENT_ID}:${internal}`;
-    const agentRaw = `agent:${DEFAULT_AGENT_ID}:${keyRaw}`;
-    if (agentInternal !== agentRaw) {
-      candidates.push(agentInternal);
-    }
-  }
-  if (includeAliasFallback && (keyRaw === "main" || keyRaw === "current")) {
-    const defaultMainKey = buildAgentMainSessionKey({
-      agentId: DEFAULT_AGENT_ID,
-      mainKey: params.mainKey,
-    });
-    if (!candidates.includes(defaultMainKey)) {
-      candidates.push(defaultMainKey);
-    }
-  }
-
-  for (const key of candidates) {
-    const entry = params.store[key];
-    if (entry) {
-      return { key, entry };
-    }
-  }
-
-  return null;
-}
-
-function resolveStoreScopedRequesterKey(params: {
-  requesterKey: string;
-  agentId: string;
-  mainKey: string;
-}) {
-  const parsed = parseAgentSessionKey(params.requesterKey);
-  if (!parsed || parsed.agentId !== params.agentId) {
-    return params.requesterKey;
-  }
-  return parsed.rest === params.mainKey ? params.mainKey : params.requesterKey;
-}
-
-function synthesizeImplicitCurrentSessionEntry(): SessionEntry {
-  return {
-    sessionId: "",
-    updatedAt: Date.now(),
-  };
-}
-
-function resolveImplicitCurrentSessionFallback(params: {
-  allowFallback: boolean;
-  fallbackKey: string;
-}): { key: string; entry: SessionEntry } | null {
-  const fallbackKey = params.fallbackKey.trim();
-  if (!params.allowFallback || !fallbackKey) {
-    return null;
-  }
-  return {
-    key: fallbackKey,
-    entry: synthesizeImplicitCurrentSessionEntry(),
-  };
-}
-
-function listImplicitDefaultDirectFallbackKeys(params: {
-  keyRaw: string;
-  mainKey: string;
-}): string[] {
-  const parsed = parseAgentSessionKey(params.keyRaw.trim());
-  if (!parsed) {
-    return [];
-  }
-  const parts = parsed.rest.split(":");
-  if (parts.length < 4 || parts[1] !== "default" || parts[2] !== "direct") {
-    return [];
-  }
-  const [channel, , , ...peerParts] = parts;
-  if (!channel || peerParts.length === 0) {
-    return [];
-  }
-  const candidates = [
-    `agent:${parsed.agentId}:${channel}:direct:${peerParts.join(":")}`,
-    buildAgentMainSessionKey({
-      agentId: parsed.agentId,
-      mainKey: params.mainKey,
-    }),
-    params.mainKey,
-  ];
-  return [...new Set(candidates)];
-}
-
 type ActiveStatusModelIdentity = { provider?: string; model: string };
+
+type SessionStatusOriginDetails = {
+  provider?: string;
+  accountId?: string;
+  threadId?: string | number;
+};
+
+type SessionStatusDeliveryContextDetails = {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string | number;
+};
+
+type SessionStatusRouteDetails = {
+  origin?: SessionStatusOriginDetails;
+  active?: SessionStatusDeliveryContextDetails;
+  deliveryContext?: SessionStatusDeliveryContextDetails;
+};
+
+const INTERNAL_SESSION_KEY_ORIGIN_PREFIXES = new Set(["main", "cron", "subagent", "acp"]);
+
+function readRouteThreadId(value: unknown): string | number | undefined {
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  return undefined;
+}
+
+function compactOriginDetails(params: {
+  provider?: string;
+  accountId?: string;
+  threadId?: string | number;
+}): SessionStatusOriginDetails | undefined {
+  const threadId = readRouteThreadId(params.threadId);
+  const details: SessionStatusOriginDetails = {
+    ...(params.provider ? { provider: params.provider } : {}),
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+    ...(threadId !== undefined ? { threadId } : {}),
+  };
+  return Object.keys(details).length ? details : undefined;
+}
+
+function compactDeliveryContextDetails(params: {
+  channel?: string;
+  to?: string;
+  accountId?: string;
+  threadId?: string | number;
+}): SessionStatusDeliveryContextDetails | undefined {
+  const threadId = readRouteThreadId(params.threadId);
+  const details: SessionStatusDeliveryContextDetails = {
+    ...(params.channel ? { channel: params.channel } : {}),
+    ...(params.to ? { to: params.to } : {}),
+    ...(params.accountId ? { accountId: params.accountId } : {}),
+    ...(threadId !== undefined ? { threadId } : {}),
+  };
+  return Object.keys(details).length ? details : undefined;
+}
+
+function normalizeStatusDeliveryContext(
+  context?: DeliveryContext,
+): SessionStatusDeliveryContextDetails | undefined {
+  return compactDeliveryContextDetails({
+    channel: readStringValue(context?.channel),
+    to: readStringValue(context?.to),
+    accountId: readStringValue(context?.accountId),
+    threadId: context?.threadId,
+  });
+}
+
+function normalizeActiveDeliveryContext(
+  context?: DeliveryContext,
+): SessionStatusDeliveryContextDetails | undefined {
+  if (!context) {
+    return undefined;
+  }
+  const normalized = normalizeDeliveryContext(context);
+  const rawChannel = readStringValue(normalized?.channel) ?? readStringValue(context.channel);
+  const channel = rawChannel ? (normalizeMessageChannel(rawChannel) ?? rawChannel) : undefined;
+  return compactDeliveryContextDetails({
+    channel,
+    to: readStringValue(normalized?.to) ?? readStringValue(context.to),
+    accountId: readStringValue(normalized?.accountId) ?? readStringValue(context.accountId),
+    threadId: normalized?.threadId ?? context.threadId,
+  });
+}
+
+function inferOriginProviderFromSessionKey(sessionKey: string): string | undefined {
+  const parsed = parseAgentSessionKey(sessionKey);
+  const head = readStringValue(parsed?.rest.split(":")[0]);
+  if (!head || INTERNAL_SESSION_KEY_ORIGIN_PREFIXES.has(head.toLowerCase())) {
+    return undefined;
+  }
+  const channel = normalizeMessageChannel(head);
+  return channel && isDeliverableMessageChannel(channel) ? channel : undefined;
+}
+
+function buildSessionStatusRouteDetails(params: {
+  entry: SessionEntry;
+  sessionKey: string;
+  activeDeliveryContext?: DeliveryContext;
+  isLiveRunSession?: boolean;
+}): SessionStatusRouteDetails {
+  const origin = compactOriginDetails({
+    provider:
+      readStringValue(params.entry.origin?.provider) ??
+      inferOriginProviderFromSessionKey(params.sessionKey),
+    accountId: readStringValue(params.entry.origin?.accountId),
+    threadId: params.entry.origin?.threadId,
+  });
+  const deliveryContext = normalizeStatusDeliveryContext(deliveryContextFromSession(params.entry));
+  const active = params.isLiveRunSession
+    ? normalizeActiveDeliveryContext(params.activeDeliveryContext)
+    : undefined;
+
+  return {
+    ...(origin ? { origin } : {}),
+    ...(active ? { active } : {}),
+    ...(deliveryContext ? { deliveryContext } : {}),
+  };
+}
+
+function formatSessionStatusRouteContext(details: SessionStatusRouteDetails): string | undefined {
+  if (Object.keys(details).length === 0) {
+    return undefined;
+  }
+  return `Route context:
+\`\`\`json
+${JSON.stringify(details, null, 2)}
+\`\`\``;
+}
 
 function resolveActiveStatusModelIdentity(params: {
   activeModelId?: string;
@@ -287,18 +327,33 @@ async function resolveModelOverride(params: {
     defaultProvider: currentProvider,
   });
   const catalog = await loadModelCatalog({ config: params.cfg });
+  const manifestMetadataSnapshot = loadManifestMetadataSnapshot({
+    config: params.cfg,
+    workspaceDir: params.sessionEntry?.spawnedWorkspaceDir,
+    env: process.env,
+  });
+  const modelManifestContext = {
+    manifestPlugins: manifestMetadataSnapshot.plugins,
+  };
   const policy = createModelVisibilityPolicy({
     cfg: params.cfg,
     catalog,
     defaultProvider: currentProvider,
     defaultModel: currentModel,
     agentId: params.agentId,
+    allowManifestNormalization: true,
+    allowPluginNormalization: true,
+    ...modelManifestContext,
   });
 
   const resolved = resolveModelRefFromString({
+    cfg: params.cfg,
     raw,
     defaultProvider: currentProvider,
     aliasIndex,
+    allowManifestNormalization: true,
+    allowPluginNormalization: true,
+    ...modelManifestContext,
   });
   if (!resolved) {
     throw new Error(`Unrecognized model "${raw}".`);
@@ -329,6 +384,8 @@ export function createSessionStatusTool(opts?: {
   sandboxed?: boolean;
   activeModelProvider?: string;
   activeModelId?: string;
+  /** Active live-run route, kept separate from the persisted/origin delivery route. */
+  activeDeliveryContext?: DeliveryContext;
 }): AnyAgentTool {
   return {
     label: "Session Status",
@@ -396,15 +453,24 @@ export function createSessionStatusTool(opts?: {
       });
 
       const requestedKeyParam = readStringParam(params, "sessionKey");
+      const isImplicitRunSessionStatus =
+        requestedKeyParam === undefined && Boolean(opts?.runSessionKey?.trim());
       let requestedKeyRaw = requestedKeyParam ?? opts?.agentSessionKey;
+
+      // No-arg status should prefer the live run session when available (#82669).
+      if (isImplicitRunSessionStatus) {
+        requestedKeyRaw = opts?.runSessionKey;
+      }
+      let requestedKeyInput = requestedKeyRaw?.trim() ?? "";
 
       // Track whether this is a semantic-current request (literal "current" or a
       // current-client alias) BEFORE any rewrite, so visibility treats it as self.
       const isSemanticCurrentRequest =
-        requestedKeyRaw === "current" ||
+        requestedKeyInput === "current" ||
+        isImplicitRunSessionStatus ||
         Boolean(
           resolveCurrentSessionClientAlias({
-            key: requestedKeyRaw ?? "",
+            key: requestedKeyInput,
             requesterInternalKey: effectiveRequesterKey,
           }),
         );
@@ -412,23 +478,26 @@ export function createSessionStatusTool(opts?: {
       // Resolve semantic "current" to the live run session key for lookup purposes (#76708).
       // In sandboxed channel runs there may be no separate runSessionKey because the sandbox
       // key already is the live requester; avoid probing literal "current" through the gateway.
-      if (requestedKeyRaw === "current" && (opts?.runSessionKey || opts?.sandboxed === true)) {
+      if (requestedKeyInput === "current" && (opts?.runSessionKey || opts?.sandboxed === true)) {
         requestedKeyRaw = opts.runSessionKey ?? effectiveRequesterKey;
+        requestedKeyInput = requestedKeyRaw?.trim() ?? "";
       }
 
       const currentSessionAlias = resolveCurrentSessionClientAlias({
-        key: requestedKeyRaw ?? "",
+        key: requestedKeyInput,
         requesterInternalKey: effectiveRequesterKey,
       });
       if (currentSessionAlias) {
         requestedKeyRaw = opts?.runSessionKey ?? currentSessionAlias;
+        requestedKeyInput = requestedKeyRaw?.trim() ?? "";
       }
-      const requestedKeyInput = requestedKeyRaw?.trim() ?? "";
+      const effectiveRequesterLookupKey = effectiveRequesterKey.trim();
       let resolvedViaSessionId = false;
       let resolvedViaImplicitCurrentFallback = false;
-      if (!requestedKeyRaw?.trim()) {
+      if (!requestedKeyInput) {
         throw new Error("sessionKey required");
       }
+      requestedKeyRaw = requestedKeyInput;
       const ensureAgentAccess = (targetAgentId: string) => {
         if (targetAgentId === requesterAgentId) {
           return;
@@ -444,23 +513,22 @@ export function createSessionStatusTool(opts?: {
         }
       };
 
-      if (requestedKeyRaw.startsWith("agent:") && !isSemanticCurrentRequest) {
-        const requestedAgentId = resolveAgentIdFromSessionKey(requestedKeyRaw);
+      if (requestedKeyInput.startsWith("agent:") && !isSemanticCurrentRequest) {
+        const requestedAgentId = resolveAgentIdFromSessionKey(requestedKeyInput);
         ensureAgentAccess(requestedAgentId);
         const access = visibilityGuard.check(
-          normalizeVisibilityTargetSessionKey(requestedKeyRaw, requestedAgentId),
+          normalizeVisibilityTargetSessionKey(requestedKeyInput, requestedAgentId),
         );
         if (!access.allowed) {
           throw new Error(access.error);
         }
       }
 
-      const isExplicitAgentKey = requestedKeyRaw.startsWith("agent:");
+      const isExplicitAgentKey = requestedKeyInput.startsWith("agent:");
       let agentId = isExplicitAgentKey
-        ? resolveAgentIdFromSessionKey(requestedKeyRaw)
+        ? resolveAgentIdFromSessionKey(requestedKeyInput)
         : requesterAgentId;
       let storePath = resolveStorePath(cfg.session?.store, { agentId });
-      let store = loadSessionStore(storePath);
       let storeScopedRequesterKey = resolveStoreScopedRequesterKey({
         requesterKey: effectiveRequesterKey,
         agentId,
@@ -468,21 +536,22 @@ export function createSessionStatusTool(opts?: {
       });
 
       // Resolve against the requester-scoped store first to avoid leaking default agent data.
-      let resolved = resolveSessionEntry({
-        store,
+      let resolved = resolveSessionStatusEntry({
+        cfg,
+        agentId,
         keyRaw: requestedKeyRaw,
         alias,
         mainKey,
         requesterInternalKey: storeScopedRequesterKey,
-        includeAliasFallback: requestedKeyRaw !== "current",
+        includeAliasFallback: requestedKeyInput !== "current",
       });
 
       if (
         !resolved &&
-        (requestedKeyRaw === "current" || shouldResolveSessionIdInput(requestedKeyRaw))
+        (requestedKeyInput === "current" || shouldResolveSessionIdInput(requestedKeyInput))
       ) {
         const resolvedSession = await resolveSessionReference({
-          sessionKey: requestedKeyRaw,
+          sessionKey: requestedKeyInput,
           alias,
           mainKey,
           requesterInternalKey: effectiveRequesterKey,
@@ -493,7 +562,7 @@ export function createSessionStatusTool(opts?: {
             resolvedSession,
             requesterSessionKey: effectiveRequesterKey,
             restrictToSpawned: opts?.sandboxed === true,
-            visibilitySessionKey: requestedKeyRaw,
+            visibilitySessionKey: requestedKeyInput,
           });
           if (!visibleSession.ok) {
             throw new Error("Session status visibility is restricted to the current session tree.");
@@ -502,16 +571,17 @@ export function createSessionStatusTool(opts?: {
           ensureAgentAccess(resolveAgentIdFromSessionKey(visibleSession.key));
           resolvedViaSessionId = true;
           requestedKeyRaw = visibleSession.key;
+          requestedKeyInput = requestedKeyRaw.trim();
           agentId = resolveAgentIdFromSessionKey(visibleSession.key);
           storePath = resolveStorePath(cfg.session?.store, { agentId });
-          store = loadSessionStore(storePath);
           storeScopedRequesterKey = resolveStoreScopedRequesterKey({
             requesterKey: effectiveRequesterKey,
             agentId,
             mainKey,
           });
-          resolved = resolveSessionEntry({
-            store,
+          resolved = resolveSessionStatusEntry({
+            cfg,
+            agentId,
             keyRaw: requestedKeyRaw,
             alias,
             mainKey,
@@ -522,9 +592,22 @@ export function createSessionStatusTool(opts?: {
         }
       }
 
-      if (!resolved && requestedKeyRaw === "current") {
-        resolved = resolveSessionEntry({
-          store,
+      if (!resolved && requestedKeyInput === "current" && effectiveRequesterLookupKey) {
+        resolved = resolveSessionStatusEntry({
+          cfg,
+          agentId,
+          keyRaw: effectiveRequesterLookupKey,
+          alias,
+          mainKey,
+          requesterInternalKey: storeScopedRequesterKey,
+          includeAliasFallback: false,
+        });
+      }
+
+      if (!resolved && requestedKeyInput === "current") {
+        resolved = resolveSessionStatusEntry({
+          cfg,
+          agentId,
           keyRaw: requestedKeyRaw,
           alias,
           mainKey,
@@ -538,8 +621,9 @@ export function createSessionStatusTool(opts?: {
           keyRaw: requestedKeyRaw,
           mainKey,
         })) {
-          resolved = resolveSessionEntry({
-            store,
+          resolved = resolveSessionStatusEntry({
+            cfg,
+            agentId,
             keyRaw: fallbackKey,
             alias,
             mainKey,
@@ -554,12 +638,17 @@ export function createSessionStatusTool(opts?: {
       }
 
       if (!resolved) {
+        const runSessionFallbackKey = opts?.runSessionKey?.trim();
         const fallback = resolveImplicitCurrentSessionFallback({
+          agentId,
           allowFallback: isSemanticCurrentRequest || requestedKeyParam === undefined,
+          cfg,
           fallbackKey:
-            isSemanticCurrentRequest && opts?.runSessionKey
-              ? opts.runSessionKey
-              : storeScopedRequesterKey,
+            (isSemanticCurrentRequest || isImplicitRunSessionStatus) && runSessionFallbackKey
+              ? runSessionFallbackKey
+              : isSemanticCurrentRequest
+                ? effectiveRequesterLookupKey
+                : storeScopedRequesterKey,
         });
         if (fallback) {
           resolved = fallback;
@@ -568,8 +657,8 @@ export function createSessionStatusTool(opts?: {
       }
 
       if (!resolved) {
-        const kind = shouldResolveSessionIdInput(requestedKeyRaw) ? "sessionId" : "sessionKey";
-        throw new Error(`Unknown ${kind}: ${requestedKeyRaw}`);
+        const kind = shouldResolveSessionIdInput(requestedKeyInput) ? "sessionId" : "sessionKey";
+        throw new Error(`Unknown ${kind}: ${requestedKeyInput}`);
       }
 
       // Preserve caller-scoped raw-key/current lookups as "self" for visibility checks.
@@ -596,40 +685,69 @@ export function createSessionStatusTool(opts?: {
           sessionEntry: resolved.entry,
           agentId,
         });
+        const modelSelection =
+          selection.kind === "reset"
+            ? {
+                provider: configured.provider,
+                model: configured.model,
+                isDefault: true,
+              }
+            : {
+                provider: selection.provider,
+                model: selection.model,
+                isDefault: selection.isDefault,
+              };
         const nextEntry: SessionEntry = { ...resolved.entry };
         const applied = applyModelOverrideToSessionEntry({
           entry: nextEntry,
-          selection:
-            selection.kind === "reset"
-              ? {
-                  provider: configured.provider,
-                  model: configured.model,
-                  isDefault: true,
-                }
-              : {
-                  provider: selection.provider,
-                  model: selection.model,
-                  isDefault: selection.isDefault,
-                },
+          selection: modelSelection,
           markLiveSwitchPending: true,
         });
         if (applied.updated) {
-          const persistedEntry = nextEntry.sessionId.trim()
-            ? nextEntry
-            : (() => {
-                const persistedEntryPatch: Partial<SessionEntry> = { ...nextEntry };
-                delete persistedEntryPatch.sessionId;
-                const existingEntry = store[resolved.key];
-                const existingWithValidSessionId = existingEntry?.sessionId?.trim()
-                  ? existingEntry
-                  : undefined;
-                return mergeSessionEntry(existingWithValidSessionId, persistedEntryPatch);
-              })();
-          store[resolved.key] = persistedEntry;
-          await updateSessionStore(storePath, (nextStore) => {
-            nextStore[resolved.key] = persistedEntry;
+          const patchResult = await patchSessionEntryWithKey(
+            {
+              agentId,
+              sessionKey: resolved.key,
+              storePath,
+            },
+            (entry, context) => {
+              const persistedEntryPatch: SessionEntry = { ...entry };
+              applyModelOverrideToSessionEntry({
+                entry: persistedEntryPatch,
+                selection: modelSelection,
+                markLiveSwitchPending: true,
+              });
+              if (
+                !persistedEntryPatch.sessionId.trim() &&
+                !context.existingEntry?.sessionId?.trim()
+              ) {
+                persistedEntryPatch.sessionId = randomUUID();
+              }
+              return persistedEntryPatch;
+            },
+            {
+              fallbackEntry: resolved.persisted ? undefined : resolved.entry,
+              replaceEntry: true,
+            },
+          );
+          if (!patchResult) {
+            throw new Error(`Unknown sessionKey: ${resolved.key}`);
+          }
+          const persistedEntry = patchResult.entry;
+          resolved = {
+            entry: persistedEntry,
+            key: patchResult.sessionKey,
+            persisted: true,
+          };
+          triggerSessionPatchHook({
+            cfg,
+            sessionEntry: persistedEntry,
+            sessionKey: patchResult.sessionKey,
+            patch: {
+              key: patchResult.sessionKey,
+              model: selection.kind === "reset" ? null : `${selection.provider}/${selection.model}`,
+            },
           });
-          resolved.entry = persistedEntry;
           changedModel = true;
         }
       }
@@ -637,17 +755,18 @@ export function createSessionStatusTool(opts?: {
       const activeModelId = opts?.activeModelId?.trim();
       const activeModelProvider = opts?.activeModelProvider?.trim();
       const isImplicitCurrentRequest = requestedKeyParam === undefined;
+      const liveSessionKeys = [
+        opts?.runSessionKey,
+        storeScopedRequesterKey,
+        effectiveRequesterKey,
+        visibilityRequesterKey,
+      ];
       const activeModelIdentity = resolveActiveStatusModelIdentity({
         activeModelId,
         activeModelProvider,
         isImplicitCurrentRequest,
         isSemanticCurrentRequest,
-        liveSessionKeys: [
-          opts?.runSessionKey,
-          storeScopedRequesterKey,
-          effectiveRequesterKey,
-          visibilityRequesterKey,
-        ],
+        liveSessionKeys,
         modelRaw,
         resolvedKey: resolved.key,
       });
@@ -731,6 +850,27 @@ export function createSessionStatusTool(opts?: {
         taskLine && !statusText.includes(taskLine) ? `${statusText}\n${taskLine}` : statusText;
       const resultOverrideProvider = statusSessionEntry.providerOverride?.trim();
       const resultOverrideModel = statusSessionEntry.modelOverride?.trim();
+      const liveSessionKeySet = new Set(
+        liveSessionKeys
+          .map((value) => value?.trim())
+          .filter((value): value is string => Boolean(value)),
+      );
+      const activeRouteRunSessionKey = opts?.runSessionKey?.trim();
+      const isLiveRouteSession = activeRouteRunSessionKey
+        ? resolved.key.trim() === activeRouteRunSessionKey
+        : liveSessionKeySet.has(resolved.key.trim());
+      const routeDetails = buildSessionStatusRouteDetails({
+        entry: statusSessionEntry,
+        sessionKey: resolved.key,
+        activeDeliveryContext: opts?.activeDeliveryContext,
+        isLiveRunSession: isLiveRouteSession,
+      });
+      const routeContextText = formatSessionStatusRouteContext(routeDetails);
+      const visibleStatusText = routeContextText
+        ? `${fullStatusText}
+
+${routeContextText}`
+        : fullStatusText;
       const modelOverrideForResult =
         modelRaw === undefined
           ? undefined
@@ -741,7 +881,7 @@ export function createSessionStatusTool(opts?: {
             : null;
 
       return {
-        content: [{ type: "text", text: fullStatusText }],
+        content: [{ type: "text", text: visibleStatusText }],
         details: {
           ok: true,
           sessionKey: resolved.key,
@@ -755,7 +895,8 @@ export function createSessionStatusTool(opts?: {
                 modelOverride: modelOverrideForResult,
               }
             : {}),
-          statusText: fullStatusText,
+          statusText: visibleStatusText,
+          ...routeDetails,
         },
       };
     },

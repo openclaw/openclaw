@@ -1,3 +1,4 @@
+// Verifies node command security audit findings.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -105,7 +106,7 @@ describe("security audit node command findings", () => {
     const findings = collectNodeDenyCommandPatternFindings({
       gateway: {
         nodes: {
-          denyCommands: ["camera.snap", "camera.clip", "screen.record", "sms.send"],
+          denyCommands: ["camera.snap", "camera.clip", "screen.record", "sms.send", "system.run"],
         },
       },
     } satisfies OpenClawConfig);

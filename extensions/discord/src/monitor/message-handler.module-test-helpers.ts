@@ -1,3 +1,4 @@
+// Discord helper module supports message handler.module test helpers behavior.
 import type { MockFn } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { vi } from "vitest";
 import type { DiscordMessageRunQueueTestingHooks } from "./message-run-queue.js";
@@ -8,7 +9,7 @@ export const processDiscordMessageMock: MockFn = vi.fn();
 const { createDiscordMessageHandler: createRealDiscordMessageHandler } =
   await import("./message-handler.js");
 type DiscordMessageHandlerParams = Parameters<typeof createRealDiscordMessageHandler>[0];
-type DiscordMessageHandlerTestingHooks = NonNullable<DiscordMessageHandlerParams["__testing"]>;
+type DiscordMessageHandlerTestingHooks = NonNullable<DiscordMessageHandlerParams["testing"]>;
 type PreflightDiscordMessageHook = NonNullable<
   DiscordMessageHandlerTestingHooks["preflightDiscordMessage"]
 >;
@@ -22,8 +23,8 @@ export function createDiscordMessageHandler(
   const [params] = args;
   return createRealDiscordMessageHandler({
     ...params,
-    __testing: {
-      ...params.__testing,
+    testing: {
+      ...params.testing,
       preflightDiscordMessage: preflightDiscordMessageMock as PreflightDiscordMessageHook,
       processDiscordMessage: processDiscordMessageMock as ProcessDiscordMessageHook,
     },

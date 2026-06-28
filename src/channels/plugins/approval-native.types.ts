@@ -1,19 +1,39 @@
+/**
+ * Native channel approval delivery types.
+ *
+ * Describes approval request targets, surfaces, capabilities, and plugin adapters.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ChannelApprovalKind } from "../../infra/approval-types.js";
 import type { ExecApprovalRequest } from "../../infra/exec-approvals.js";
 import type { PluginApprovalRequest } from "../../infra/plugin-approvals.js";
 
+/**
+ * Native channel surface that can receive approval prompts.
+ */
 export type ChannelApprovalNativeSurface = "origin" | "approver-dm";
 
+/**
+ * Native channel destination for an approval prompt.
+ */
 export type ChannelApprovalNativeTarget = {
   to: string;
   threadId?: string | number | null;
 };
 
+/**
+ * Preferred native delivery surface for approval prompts.
+ */
 export type ChannelApprovalNativeDeliveryPreference = ChannelApprovalNativeSurface | "both";
 
+/**
+ * Approval request shapes supported by native channel approval delivery.
+ */
 export type ChannelApprovalNativeRequest = ExecApprovalRequest | PluginApprovalRequest;
 
+/**
+ * Capabilities returned by native channel approval delivery inspection.
+ */
 export type ChannelApprovalNativeDeliveryCapabilities = {
   enabled: boolean;
   preferredSurface: ChannelApprovalNativeDeliveryPreference;
@@ -22,6 +42,9 @@ export type ChannelApprovalNativeDeliveryCapabilities = {
   notifyOriginWhenDmOnly?: boolean;
 };
 
+/**
+ * Adapter implemented by channel plugins that support native approval delivery.
+ */
 export type ChannelApprovalNativeAdapter = {
   describeDeliveryCapabilities: (params: {
     cfg: OpenClawConfig;

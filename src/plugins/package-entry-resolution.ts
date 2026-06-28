@@ -1,12 +1,13 @@
+// Resolves package entry files for plugin loading and public surfaces.
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   matchRootFileOpenFailure,
   openRootFile,
   openRootFileSync,
 } from "../infra/boundary-file-read.js";
 import { resolveRootPath, resolveRootPathSync } from "../infra/boundary-path.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
 import { getPackageManifestMetadata, type PackageManifest } from "./manifest.js";
 import {
@@ -138,10 +139,12 @@ async function validatePackageExtensionEntry(params: {
   return { ok: true, exists: true };
 }
 
+/** Validates package extension/setup entries before installing a plugin package. */
 export async function validatePackageExtensionEntriesForInstall(params: {
   packageDir: string;
   extensions: string[];
   manifest: PackageManifest;
+  allowSourceTypeScriptEntries?: boolean;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const runtimeResolution = resolvePackageRuntimeExtensionEntries({
     manifest: params.manifest,
@@ -195,6 +198,14 @@ export async function validatePackageExtensionEntriesForInstall(params: {
     }
 
     if (foundBuiltEntry) {
+      continue;
+    }
+
+    if (
+      sourceEntry.exists &&
+      isTypeScriptPackageEntry(entry) &&
+      params.allowSourceTypeScriptEntries
+    ) {
       continue;
     }
 
@@ -279,6 +290,14 @@ export async function validatePackageExtensionEntriesForInstall(params: {
     }
 
     if (foundBuiltSetupEntry) {
+      return { ok: true };
+    }
+
+    if (
+      sourceEntry.exists &&
+      isTypeScriptPackageEntry(setupEntry) &&
+      params.allowSourceTypeScriptEntries
+    ) {
       return { ok: true };
     }
 
@@ -532,6 +551,7 @@ function resolvePackageRuntimeEntrySource(params: {
         return null;
       }
     }
+    // Installed packages must ship compiled JS for TS entries; only trusted source paths fall back.
     if (
       (params.requireBuiltRuntimeEntry ?? shouldRequireBuiltRuntimeEntry(params.origin)) &&
       isTypeScriptPackageEntry(safeEntry.relativePath)
@@ -580,6 +600,7 @@ function resolvePackageRuntimeEntrySource(params: {
   return null;
 }
 
+/** Resolves the runtime setup source for a plugin package manifest. */
 export function resolvePackageSetupSource(params: {
   packageDir: string;
   packageRootRealPath?: string;
@@ -615,6 +636,7 @@ export function resolvePackageSetupSource(params: {
   });
 }
 
+/** Resolves runtime extension sources for a plugin package manifest. */
 export function resolvePackageRuntimeExtensionSources(params: {
   packageDir: string;
   packageRootRealPath?: string;

@@ -1,3 +1,4 @@
+// Inworld tests cover speech provider plugin behavior.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 
 const { inworldTTSMock, listInworldVoicesMock } = vi.hoisted(() => ({
@@ -158,6 +159,52 @@ describe("buildInworldSpeechProvider", () => {
       handled: true,
       warnings: ['invalid Inworld temperature "3"'],
     });
+  });
+
+  it("warns on non-decimal directive temperature", () => {
+    const provider = buildInworldSpeechProvider();
+    expect(
+      provider.parseDirectiveToken?.({
+        key: "temperature",
+        value: "0x1",
+        policy: {
+          enabled: true,
+          allowText: true,
+          allowProvider: true,
+          allowVoice: true,
+          allowModelId: true,
+          allowVoiceSettings: true,
+          allowNormalization: true,
+          allowSeed: true,
+        },
+      }),
+    ).toEqual({
+      handled: true,
+      warnings: ['invalid Inworld temperature "0x1"'],
+    });
+  });
+
+  it("drops malformed temperature values before synthesis", async () => {
+    inworldTTSMock.mockResolvedValueOnce(Buffer.from("audio"));
+    const provider = buildInworldSpeechProvider();
+
+    await provider.synthesize?.({
+      text: "Hello",
+      cfg: {} as never,
+      providerConfig: {
+        apiKey: "key",
+        voiceId: "Sarah",
+        modelId: "inworld-tts-1.5-max",
+        temperature: 0,
+      },
+      providerOverrides: { temperature: 3 },
+      target: "audio-file",
+      timeoutMs: 30_000,
+    });
+
+    expect(inworldTTSMock).toHaveBeenCalledWith(
+      expect.not.objectContaining({ temperature: expect.any(Number) }),
+    );
   });
 
   it("synthesizes voice-note targets with native OGG_OPUS output", async () => {

@@ -1,3 +1,4 @@
+// Discord tests cover native command.status direct plugin behavior.
 import { ChannelType } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -31,7 +32,7 @@ vi.mock("openclaw/plugin-sdk/web-media", () => ({
 }));
 
 let createDiscordNativeCommand: typeof import("./native-command.js").createDiscordNativeCommand;
-let discordNativeCommandTesting: typeof import("./native-command.js").__testing;
+let discordNativeCommandTesting: typeof import("./native-command.js").testing;
 
 function createConfig(params?: { requireMention?: boolean }): OpenClawConfig {
   return {
@@ -136,7 +137,7 @@ function firstStatusCall(): {
 
 describe("discord native /status", () => {
   beforeAll(async () => {
-    ({ createDiscordNativeCommand, __testing: discordNativeCommandTesting } =
+    ({ createDiscordNativeCommand, testing: discordNativeCommandTesting } =
       await import("./native-command.js"));
   });
 

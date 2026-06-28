@@ -1,6 +1,7 @@
+// Slack tests cover send.identity fallback plugin behavior.
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createSlackSendTestClient, installSlackBlockTestMocks } from "./blocks.test-helpers.js";
+import { createSlackSendTestClient } from "./blocks.test-helpers.js";
 
 vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   logVerbose: vi.fn(),
@@ -8,8 +9,8 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
   shouldLogVerbose: () => false,
 }));
 
-installSlackBlockTestMocks();
-const { sendMessageSlack } = await import("./send.js");
+const { clearSlackDefaultSendIdentitiesForTest, sendMessageSlack, setSlackDefaultSendIdentity } =
+  await import("./send.js");
 const SLACK_TEST_CFG = { channels: { slack: { botToken: "xoxb-test" } } };
 
 type SlackMissingScopeError = Error & {
@@ -59,6 +60,51 @@ function readPostMessagePayload(
 describe("sendMessageSlack customize-scope fallback", () => {
   beforeEach(() => {
     vi.mocked(logVerbose).mockClear();
+    clearSlackDefaultSendIdentitiesForTest();
+  });
+
+  it("uses the relay-provided default identity", async () => {
+    const client = createSlackSendTestClient();
+    vi.mocked(client.chat.postMessage).mockResolvedValueOnce({ ts: "171234.567" });
+    setSlackDefaultSendIdentity("default", {
+      username: "Nik Team Claw",
+      iconUrl: "https://example.com/nik.png",
+    });
+
+    await sendMessageSlack("channel:C123", "hello", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+    });
+
+    expect(readPostMessagePayload(client, 0)).toEqual({
+      channel: "C123",
+      text: "hello",
+      username: "Nik Team Claw",
+      icon_url: "https://example.com/nik.png",
+      unfurl_links: false,
+    });
+  });
+
+  it("prefers an explicit send identity over the relay default", async () => {
+    const client = createSlackSendTestClient();
+    vi.mocked(client.chat.postMessage).mockResolvedValueOnce({ ts: "171234.567" });
+    setSlackDefaultSendIdentity("default", { username: "Nik Team Claw" });
+
+    await sendMessageSlack("channel:C123", "hello", {
+      token: "xoxb-test",
+      cfg: SLACK_TEST_CFG,
+      client,
+      identity: { username: "Explicit Bot", iconEmoji: ":robot_face:" },
+    });
+
+    expect(readPostMessagePayload(client, 0)).toEqual({
+      channel: "C123",
+      text: "hello",
+      username: "Explicit Bot",
+      icon_emoji: ":robot_face:",
+      unfurl_links: false,
+    });
   });
 
   it("retries without identity when needed contains chat:write.customize", async () => {
@@ -82,10 +128,12 @@ describe("sendMessageSlack customize-scope fallback", () => {
       text: "hello",
       username: "Bot",
       icon_url: "https://example.com/bot.png",
+      unfurl_links: false,
     });
     expect(secondCall).toEqual({
       channel: "C123",
       text: "hello",
+      unfurl_links: false,
     });
     expect(vi.mocked(logVerbose)).toHaveBeenCalledWith(
       "slack send: missing chat:write.customize, retrying without custom identity",

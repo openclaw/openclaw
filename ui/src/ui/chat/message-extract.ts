@@ -1,12 +1,21 @@
+// Control UI chat module implements message extract behavior.
 import { stripInternalRuntimeContext } from "../../../../src/agents/internal-runtime-context.js";
 import { stripInboundMetadata } from "../../../../src/auto-reply/reply/strip-inbound-meta.js";
 import { stripEnvelope } from "../../../../src/shared/chat-envelope.js";
 import { extractAssistantVisibleText as extractSharedAssistantVisibleText } from "../../../../src/shared/chat-message-content.js";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import { normalizeLowercaseStringOrEmpty, normalizeStringEntries } from "../string-coerce.ts";
 import { stripThinkingTags } from "../strip-thinking-tags.ts";
 
 const textCache = new WeakMap<object, string | null>();
 const thinkingCache = new WeakMap<object, string | null>();
+
+function isTextContentBlockType(value: unknown, role: string): boolean {
+  return (
+    value === "text" ||
+    (role === "user" && value === "input_text") ||
+    (role === "assistant" && (value === "input_text" || value === "output_text"))
+  );
+}
 
 function processMessageText(text: string, role: string): string {
   const shouldStripInboundMetadata = normalizeLowercaseStringOrEmpty(role) === "user";
@@ -70,7 +79,7 @@ export function extractThinking(message: unknown): string | null {
   const matches = [
     ...rawText.matchAll(/<\s*think(?:ing)?\s*>([\s\S]*?)<\s*\/\s*think(?:ing)?\s*>/gi),
   ];
-  const extracted = matches.map((m) => (m[1] ?? "").trim()).filter(Boolean);
+  const extracted = normalizeStringEntries(matches.map((mLocal) => mLocal[1] ?? ""));
   return extracted.length > 0 ? extracted.join("\n") : null;
 }
 
@@ -89,6 +98,7 @@ export function extractThinkingCached(message: unknown): string | null {
 
 export function extractRawText(message: unknown): string | null {
   const m = message as Record<string, unknown>;
+  const role = normalizeLowercaseStringOrEmpty(m.role);
   const content = m.content;
   if (typeof content === "string") {
     return content;
@@ -97,7 +107,7 @@ export function extractRawText(message: unknown): string | null {
     const parts = content
       .map((p) => {
         const item = p as Record<string, unknown>;
-        if (item.type === "text" && typeof item.text === "string") {
+        if (isTextContentBlockType(item.type, role) && typeof item.text === "string") {
           return item.text;
         }
         return null;

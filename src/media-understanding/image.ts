@@ -1,11 +1,7 @@
-import type {
-  Api,
-  AssistantMessage,
-  Context,
-  Model,
-  ProviderStreamOptions,
-} from "@earendil-works/pi-ai";
-import { complete } from "@earendil-works/pi-ai";
+// Model-backed image understanding runtime for providers without a native media
+// provider hook.
+import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
+import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "../agents/minimax-vlm.js";
 import {
   getApiKeyForModel,
@@ -14,18 +10,21 @@ import {
 } from "../agents/model-auth.js";
 import { normalizeModelRef } from "../agents/model-selection.js";
 import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { resolveModelAsync } from "../agents/pi-embedded-runner/model.js";
 import { resolveProviderRequestCapabilities } from "../agents/provider-attribution.js";
 import { registerProviderStreamForModel } from "../agents/provider-stream.js";
 import {
   coerceImageAssistantText,
   hasImageReasoningOnlyResponse,
 } from "../agents/tools/image-tool.helpers.js";
+import { isSecretRef } from "../config/types.secrets.js";
+import { complete } from "../llm/stream.js";
+import type { AssistantMessage, Context, Model, ProviderStreamOptions } from "../llm/types.js";
 import {
   buildCopilotIdeHeaders,
   COPILOT_INTEGRATION_ID,
   resolveCopilotApiToken,
 } from "../plugin-sdk/provider-auth.js";
+import { normalizeMediaProviderId } from "./provider-id.js";
 import type {
   ImageDescriptionRequest,
   ImageDescriptionResult,
@@ -48,11 +47,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function isNativeResponsesReasoningPayload(model: Model<Api>): boolean {
+function isNativeResponsesReasoningPayload(model: Model): boolean {
   if (
     model.api !== "openai-responses" &&
     model.api !== "azure-openai-responses" &&
-    model.api !== "openai-codex-responses"
+    model.api !== "openai-chatgpt-responses"
   ) {
     return false;
   }
@@ -65,7 +64,7 @@ function isNativeResponsesReasoningPayload(model: Model<Api>): boolean {
   }).usesKnownNativeOpenAIRoute;
 }
 
-function formatModelInputCapabilities(input: Model<Api>["input"] | undefined): string {
+function formatModelInputCapabilities(input: Model["input"] | undefined): string {
   return input && input.length > 0 ? input.join(", ") : "none";
 }
 
@@ -77,7 +76,9 @@ function removeReasoningInclude(value: unknown): unknown {
   return next.length > 0 ? next : undefined;
 }
 
-function disableReasoningForImageRetryPayload(payload: unknown, model: Model<Api>): unknown {
+function disableReasoningForImageRetryPayload(payload: unknown, model: Model): unknown {
+  // Empty-text image responses can be caused by reasoning-only payloads; retry
+  // with reasoning stripped while preserving provider-specific Responses shape.
   if (!isRecord(payload)) {
     return undefined;
   }
@@ -142,9 +143,46 @@ async function resolveImageRuntime(params: {
   profile?: string;
   preferredProfile?: string;
   authStore?: ImageDescriptionRequest["authStore"];
-}): Promise<{ apiKey: string; model: Model<Api> }> {
-  await ensureOpenClawModelsJson(params.cfg, params.agentDir);
+  workspaceDir?: string;
+}): Promise<{ apiKey: string; model: Model }> {
+  // Fast static resolution avoids provider runtime hooks during tool discovery;
+  // execution falls back to full model discovery when the static path lacks image metadata.
   const resolvedRef = normalizeModelRef(params.provider, params.model);
+  const fastResolved = await resolveModelAsync(
+    resolvedRef.provider,
+    resolvedRef.model,
+    params.agentDir,
+    params.cfg,
+    {
+      allowBundledStaticCatalogFallback: true,
+      skipAgentDiscovery: true,
+      skipProviderRuntimeHooks: true,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+    },
+  );
+  if (fastResolved.model?.input?.includes("image")) {
+    const normalizedResolved = await resolveModelAsync(
+      resolvedRef.provider,
+      resolvedRef.model,
+      params.agentDir,
+      params.cfg,
+      {
+        allowBundledStaticCatalogFallback: true,
+        skipAgentDiscovery: true,
+        ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+      },
+    );
+    if (normalizedResolved.model?.input?.includes("image")) {
+      return await prepareResolvedImageRuntime(
+        params,
+        normalizedResolved.model,
+        normalizedResolved.authStorage,
+      );
+    }
+  }
+
+  const modelsOptions = params.workspaceDir ? { workspaceDir: params.workspaceDir } : undefined;
+  await ensureOpenClawModelsJson(params.cfg, params.agentDir, modelsOptions);
   const resolved = await resolveModelAsync(
     resolvedRef.provider,
     resolvedRef.model,
@@ -152,10 +190,11 @@ async function resolveImageRuntime(params: {
     params.cfg,
     {
       allowBundledStaticCatalogFallback: true,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     },
   );
   const { authStorage } = resolved;
-  let { model } = resolved;
+  const { model } = resolved;
   if (!model) {
     throw new Error(`Unknown model: ${resolvedRef.provider}/${resolvedRef.model}`);
   }
@@ -172,10 +211,29 @@ async function resolveImageRuntime(params: {
         `(resolved ${model.provider}/${model.id} input: ${formatModelInputCapabilities(model.input)})`,
     );
   }
+  return await prepareResolvedImageRuntime(params, model, authStorage);
+}
+
+async function prepareResolvedImageRuntime(
+  params: {
+    cfg: ImageDescriptionRequest["cfg"];
+    agentDir: string;
+    provider: string;
+    model: string;
+    profile?: string;
+    preferredProfile?: string;
+    authStore?: ImageDescriptionRequest["authStore"];
+    workspaceDir?: string;
+  },
+  resolvedModel: Model,
+  authStorage: Awaited<ReturnType<typeof resolveModelAsync>>["authStorage"],
+): Promise<{ apiKey: string; model: Model }> {
+  let model = resolvedModel;
   const apiKeyInfo = await getApiKeyForModel({
     model,
     cfg: params.cfg,
     agentDir: params.agentDir,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     profileId: params.profile,
     preferredProfile: params.preferredProfile,
     store: params.authStore,
@@ -224,7 +282,7 @@ function buildImageContext(
   };
 }
 
-function shouldPlaceImagePromptInUserContent(model: Model<Api>): boolean {
+function shouldPlaceImagePromptInUserContent(model: Model): boolean {
   // GitHub Copilot models (including Gemini 3.1 Pro Preview) require the
   // prompt text to be in the user message alongside the image. Placing it
   // in a separate system message produces "Request must contain at least
@@ -241,11 +299,12 @@ function shouldPlaceImagePromptInUserContent(model: Model<Api>): boolean {
   });
   return (
     capabilities.endpointClass === "openrouter" ||
+    capabilities.endpointClass === "modelstudio-native" ||
     (model.provider.toLowerCase() === "openrouter" && capabilities.endpointClass === "default")
   );
 }
 
-function buildImageRequestHeaders(model: Model<Api>): Record<string, string> | undefined {
+function buildImageRequestHeaders(model: Model): Record<string, string> | undefined {
   if (model.provider !== "github-copilot") {
     return undefined;
   }
@@ -260,6 +319,7 @@ function buildImageRequestHeaders(model: Model<Api>): Record<string, string> | u
 
 async function describeImagesWithMinimax(params: {
   apiKey: string;
+  provider: string;
   modelId: string;
   modelBaseUrl?: string;
   prompt: string;
@@ -274,6 +334,7 @@ async function describeImagesWithMinimax(params: {
         : params.prompt;
     const text = await minimaxUnderstandImage({
       apiKey: params.apiKey,
+      provider: params.provider,
       prompt,
       imageDataUrl: `data:${image.mime ?? "image/jpeg"};base64,${image.buffer.toString("base64")}`,
       modelBaseUrl: params.modelBaseUrl,
@@ -299,40 +360,106 @@ function resolveConfiguredProviderBaseUrl(
   if (typeof direct?.baseUrl === "string" && direct.baseUrl.trim()) {
     return direct.baseUrl.trim();
   }
+  const normalizedProvider = normalizeMediaProviderId(provider);
+  const normalized = cfg.models?.providers?.[normalizedProvider];
+  if (typeof normalized?.baseUrl === "string" && normalized.baseUrl.trim()) {
+    if (isMinimaxCnAlias(provider) && !isMinimaxCnBaseUrl(normalized.baseUrl)) {
+      return undefined;
+    }
+    return normalized.baseUrl.trim();
+  }
   return undefined;
+}
+
+function isMinimaxCnAlias(provider: string): boolean {
+  const normalized = provider.trim().toLowerCase();
+  return normalized === "minimax-cn" || normalized === "minimax-portal-cn";
+}
+
+function isMinimaxCnBaseUrl(baseUrl: string): boolean {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) {
+    return false;
+  }
+  try {
+    const parsed = new URL(/^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`);
+    return parsed.hostname.toLowerCase() === "api.minimaxi.com";
+  } catch {
+    return false;
+  }
+}
+
+function hasConfiguredProviderApiKey(
+  cfg: ImageDescriptionRequest["cfg"],
+  provider: string,
+): boolean {
+  const apiKey = cfg.models?.providers?.[provider]?.apiKey;
+  return (typeof apiKey === "string" && apiKey.trim().length > 0) || isSecretRef(apiKey);
+}
+
+function resolveMinimaxVlmAuthProvider(
+  cfg: ImageDescriptionRequest["cfg"],
+  provider: string,
+): string {
+  if (!isMinimaxCnAlias(provider) || hasConfiguredProviderApiKey(cfg, provider)) {
+    return provider;
+  }
+  return normalizeMediaProviderId(provider);
 }
 
 async function resolveMinimaxVlmFallbackRuntime(params: {
   cfg: ImageDescriptionRequest["cfg"];
   agentDir: string;
+  workspaceDir?: string;
   provider: string;
   profile?: string;
   preferredProfile?: string;
 }): Promise<{ apiKey: string; modelBaseUrl?: string }> {
+  const authProvider = resolveMinimaxVlmAuthProvider(params.cfg, params.provider);
   const auth = await resolveApiKeyForProvider({
-    provider: params.provider,
+    provider: authProvider,
     cfg: params.cfg,
     profileId: params.profile,
     preferredProfile: params.preferredProfile,
     agentDir: params.agentDir,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
   return {
-    apiKey: requireApiKey(auth, params.provider),
+    apiKey: requireApiKey(auth, authProvider),
     modelBaseUrl: resolveConfiguredProviderBaseUrl(params.cfg, params.provider),
   };
 }
 
-function resolveImageDescriptionTimeoutMs(timeoutMs: number | undefined, startedAtMs: number) {
-  if (typeof timeoutMs !== "number" || !Number.isFinite(timeoutMs) || timeoutMs <= 0) {
-    return undefined;
+function resolveImageDescriptionTimeoutMs(timeoutMs: number | undefined) {
+  return clampPositiveTimerTimeoutMs(timeoutMs);
+}
+
+function buildImageDescriptionTimeoutError(params: {
+  phase: "setup" | "request";
+  timeoutMs: number;
+  setupDurationMs?: number;
+}): Error {
+  if (params.phase === "setup") {
+    return new Error(
+      `image description setup timed out after ${params.timeoutMs}ms before provider request started`,
+    );
   }
-  return Math.max(1, Math.floor(timeoutMs - (Date.now() - startedAtMs)));
+  const setupDurationMs =
+    typeof params.setupDurationMs === "number" && Number.isFinite(params.setupDurationMs)
+      ? Math.max(0, Math.floor(params.setupDurationMs))
+      : 0;
+  return new Error(
+    setupDurationMs > 0
+      ? `image description request timed out after ${params.timeoutMs}ms (setup took ${setupDurationMs}ms before provider request started)`
+      : `image description request timed out after ${params.timeoutMs}ms`,
+  );
 }
 
 async function withImageDescriptionTimeout<T>(params: {
   task: Promise<T>;
   timeoutMs: number | undefined;
   controller: AbortController;
+  createTimeoutError: (timeoutMs: number) => Error;
 }): Promise<T> {
   if (params.timeoutMs === undefined) {
     return await params.task;
@@ -344,7 +471,7 @@ async function withImageDescriptionTimeout<T>(params: {
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
           params.controller.abort();
-          reject(new Error(`image description timed out after ${params.timeoutMs}ms`));
+          reject(params.createTimeoutError(params.timeoutMs!));
         }, params.timeoutMs);
       }),
     ]);
@@ -362,13 +489,16 @@ async function describeImagesWithModelInternal(
   const prompt = params.prompt ?? "Describe the image.";
   const startedAtMs = Date.now();
   const controller = new AbortController();
+  const configuredTimeoutMs = resolveImageDescriptionTimeoutMs(params.timeoutMs);
   let apiKey: string;
-  let model: Model<Api> | undefined;
+  let model: Model | undefined;
 
   try {
     const resolved = await withImageDescriptionTimeout({
       controller,
-      timeoutMs: resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs),
+      timeoutMs: configuredTimeoutMs,
+      createTimeoutError: (timeoutMs) =>
+        buildImageDescriptionTimeoutError({ phase: "setup", timeoutMs }),
       task: resolveImageRuntime(params),
     });
     apiKey = resolved.apiKey;
@@ -377,9 +507,16 @@ async function describeImagesWithModelInternal(
     if (!isMinimaxVlmModel(params.provider, params.model) || !isUnknownModelError(err)) {
       throw err;
     }
-    const fallback = await resolveMinimaxVlmFallbackRuntime(params);
+    const fallback = await withImageDescriptionTimeout({
+      controller,
+      timeoutMs: configuredTimeoutMs,
+      createTimeoutError: (timeoutMs) =>
+        buildImageDescriptionTimeoutError({ phase: "setup", timeoutMs }),
+      task: resolveMinimaxVlmFallbackRuntime(params),
+    });
     return await describeImagesWithMinimax({
       apiKey: fallback.apiKey,
+      provider: params.provider,
       modelId: params.model,
       modelBaseUrl: fallback.modelBaseUrl,
       prompt,
@@ -388,9 +525,12 @@ async function describeImagesWithModelInternal(
     });
   }
 
+  const setupDurationMs = Date.now() - startedAtMs;
+
   if (isMinimaxVlmModel(model.provider, model.id)) {
     return await describeImagesWithMinimax({
       apiKey,
+      provider: model.provider,
       modelId: model.id,
       modelBaseUrl: model.baseUrl,
       prompt,
@@ -403,16 +543,17 @@ async function describeImagesWithModelInternal(
     model,
     cfg: params.cfg,
     agentDir: params.agentDir,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
 
   const context = buildImageContext(prompt, params.images, {
     promptInUserContent: shouldPlaceImagePromptInUserContent(model),
   });
 
-  const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens ?? 512);
+  const maxTokens = resolveImageToolMaxTokens(model.maxTokens, params.maxTokens);
   const completeImage = async (onPayload?: ProviderStreamOptions["onPayload"]) => {
     const payloadHandler = composeImageDescriptionPayloadHandlers(onPayload, options.onPayload);
-    const timeoutMs = resolveImageDescriptionTimeoutMs(params.timeoutMs, startedAtMs);
+    const timeoutMs = configuredTimeoutMs;
     const headers = buildImageRequestHeaders(model);
     const streamOptions = {
       apiKey,
@@ -428,6 +569,12 @@ async function describeImagesWithModelInternal(
     return await withImageDescriptionTimeout({
       controller,
       timeoutMs,
+      createTimeoutError: (requestTimeoutMs) =>
+        buildImageDescriptionTimeoutError({
+          phase: "request",
+          timeoutMs: requestTimeoutMs,
+          setupDurationMs,
+        }),
       task,
     });
   };
@@ -455,23 +602,8 @@ async function describeImagesWithModelInternal(
   return { text, model: model.id };
 }
 
-export async function describeImagesWithModel(
-  params: ImagesDescriptionRequest,
-): Promise<ImagesDescriptionResult> {
-  return await describeImagesWithModelInternal(params);
-}
-
-export async function describeImagesWithModelPayloadTransform(
-  params: ImagesDescriptionRequest,
-  onPayload: ProviderStreamOptions["onPayload"],
-): Promise<ImagesDescriptionResult> {
-  return await describeImagesWithModelInternal(params, { onPayload });
-}
-
-export async function describeImageWithModel(
-  params: ImageDescriptionRequest,
-): Promise<ImageDescriptionResult> {
-  return await describeImagesWithModel({
+function toImagesDescriptionRequest(params: ImageDescriptionRequest): ImagesDescriptionRequest {
+  return {
     images: [
       {
         buffer: params.buffer,
@@ -488,8 +620,28 @@ export async function describeImageWithModel(
     preferredProfile: params.preferredProfile,
     authStore: params.authStore,
     agentDir: params.agentDir,
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
     cfg: params.cfg,
-  });
+  };
+}
+
+export async function describeImagesWithModel(
+  params: ImagesDescriptionRequest,
+): Promise<ImagesDescriptionResult> {
+  return await describeImagesWithModelInternal(params);
+}
+
+export async function describeImagesWithModelPayloadTransform(
+  params: ImagesDescriptionRequest,
+  onPayload: ProviderStreamOptions["onPayload"],
+): Promise<ImagesDescriptionResult> {
+  return await describeImagesWithModelInternal(params, { onPayload });
+}
+
+export async function describeImageWithModel(
+  params: ImageDescriptionRequest,
+): Promise<ImageDescriptionResult> {
+  return await describeImagesWithModel(toImagesDescriptionRequest(params));
 }
 
 export async function describeImageWithModelPayloadTransform(
@@ -497,25 +649,7 @@ export async function describeImageWithModelPayloadTransform(
   onPayload: ProviderStreamOptions["onPayload"],
 ): Promise<ImageDescriptionResult> {
   return await describeImagesWithModelPayloadTransform(
-    {
-      images: [
-        {
-          buffer: params.buffer,
-          fileName: params.fileName,
-          mime: params.mime,
-        },
-      ],
-      model: params.model,
-      provider: params.provider,
-      prompt: params.prompt,
-      maxTokens: params.maxTokens,
-      timeoutMs: params.timeoutMs,
-      profile: params.profile,
-      preferredProfile: params.preferredProfile,
-      authStore: params.authStore,
-      agentDir: params.agentDir,
-      cfg: params.cfg,
-    },
+    toImagesDescriptionRequest(params),
     onPayload,
   );
 }
