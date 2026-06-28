@@ -3,6 +3,8 @@ import type { MessageMetadata } from "@slack/types";
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
 import {
   createMessageReceiptFromOutboundResults,
+  type ChannelMessageUnknownSendContext,
+  type ChannelMessageUnknownSendReconciliationResult,
   type MessageReceipt,
   type MessageReceiptPartKind,
   type MessageReceiptSourceResult,
@@ -35,7 +37,7 @@ import { SLACK_TEXT_LIMIT } from "./limits.js";
 import { loadOutboundMediaFromUrl } from "./runtime-api.js";
 import { recordSlackThreadParticipation } from "./sent-thread-cache.js";
 import { parseSlackTarget } from "./targets.js";
-import { normalizeSlackThreadTsCandidate } from "./thread-ts.js";
+import { normalizeSlackThreadTsCandidate, resolveSlackThreadTsValue } from "./thread-ts.js";
 import { resolveSlackBotToken } from "./token.js";
 import { truncateSlackText } from "./truncate.js";
 const SLACK_UPLOAD_SSRF_POLICY = {
@@ -46,6 +48,9 @@ const SLACK_DM_CHANNEL_CACHE_MAX = 1024;
 const SLACK_DNS_RETRY_CODES = new Set(["EAI_AGAIN", "ENOTFOUND", "UND_ERR_DNS_RESOLVE_FAILED"]);
 const SLACK_DNS_RETRY_ATTEMPTS = 2;
 const SLACK_DNS_RETRY_BASE_DELAY_MS = 250;
+const SLACK_RECONCILE_LOOKBACK_MS = 30_000;
+const SLACK_RECONCILE_LOOKAHEAD_MS = 10_000;
+const SLACK_RECONCILE_LIMIT = 50;
 const slackDmChannelCache = new Map<string, string>();
 const slackSendQueues = new Map<string, Promise<void>>();
 
@@ -415,6 +420,18 @@ export type SlackSendResult = {
   threadTs?: string;
 };
 
+type SlackConversationMessage = {
+  ts?: unknown;
+  text?: unknown;
+  thread_ts?: unknown;
+};
+
+type SlackConversationLookupResponse = {
+  messages?: unknown;
+};
+
+type SlackConversationLookupClient = Pick<WebClient, "conversations">;
+
 function createSlackSendReceipt(params: {
   platformMessageIds: readonly string[];
   channelId?: string;
@@ -592,6 +609,153 @@ export function clearSlackSendQueuesForTest(): void {
 
 export function clearSlackDefaultSendIdentitiesForTest(): void {
   slackDefaultSendIdentities.clear();
+}
+
+function normalizeSlackReconciliationText(text?: string | null): string | undefined {
+  const normalized = normalizeOptionalString(text)?.replace(/\r\n?/g, "\n").trim();
+  return normalized || undefined;
+}
+
+function resolveUnknownSendExpectedText(ctx: ChannelMessageUnknownSendContext): string | undefined {
+  if (ctx.payloads.length !== 1) {
+    return undefined;
+  }
+  const planItems = ctx.renderedBatchPlan?.items.filter((item) =>
+    normalizeSlackReconciliationText(item.text),
+  );
+  if (planItems?.length === 1) {
+    return normalizeSlackReconciliationText(planItems[0]?.text);
+  }
+  const payloadText = normalizeSlackReconciliationText(ctx.payloads[0]?.text);
+  if (!payloadText) {
+    return undefined;
+  }
+  return payloadText.length <= SLACK_TEXT_LIMIT ? payloadText : undefined;
+}
+
+function formatSlackTimestampFromMs(ms: number): string {
+  return (Math.max(0, ms) / 1000).toFixed(6);
+}
+
+function asSlackConversationMessages(
+  response: SlackConversationLookupResponse,
+): SlackConversationMessage[] {
+  return Array.isArray(response.messages)
+    ? response.messages.filter(
+        (message): message is SlackConversationMessage =>
+          typeof message === "object" && message !== null && !Array.isArray(message),
+      )
+    : [];
+}
+
+function findSlackConversationMessageByText(params: {
+  messages: readonly SlackConversationMessage[];
+  expectedText: string;
+}): { messageId: string; threadTs?: string } | undefined {
+  const expectedText = normalizeSlackReconciliationText(params.expectedText);
+  if (!expectedText) {
+    return undefined;
+  }
+  for (const message of params.messages) {
+    const messageText =
+      typeof message.text === "string" ? normalizeSlackReconciliationText(message.text) : undefined;
+    const messageId =
+      typeof message.ts === "string" ? normalizeSlackThreadTsCandidate(message.ts) : undefined;
+    if (messageText === expectedText && messageId) {
+      const threadTs =
+        typeof message.thread_ts === "string"
+          ? normalizeSlackThreadTsCandidate(message.thread_ts)
+          : undefined;
+      return { messageId, ...(threadTs ? { threadTs } : {}) };
+    }
+  }
+  return undefined;
+}
+
+export async function reconcileSlackUnknownSend(
+  ctx: ChannelMessageUnknownSendContext,
+  opts?: { client?: SlackConversationLookupClient; now?: number },
+): Promise<ChannelMessageUnknownSendReconciliationResult> {
+  const expectedText = resolveUnknownSendExpectedText(ctx);
+  if (!expectedText) {
+    return {
+      status: "unresolved",
+      error: "Slack unknown-send reconciliation requires one short text payload",
+      retryable: true,
+    };
+  }
+  const cfg = requireRuntimeConfig(ctx.cfg, "Slack delivery reconciliation");
+  const account = resolveSlackAccount({
+    cfg,
+    accountId: ctx.accountId ?? undefined,
+  });
+  const token = resolveToken({
+    accountId: account.accountId,
+    fallbackToken: account.botToken,
+    fallbackSource: account.botTokenSource,
+  });
+  const client = opts?.client ?? getSlackWriteClient(token);
+  const recipient = parseRecipient(ctx.to);
+  const { channelId } = await resolveChannelId(client as WebClient, recipient, {
+    accountId: account.accountId,
+    token,
+  });
+  const threadTs = resolveSlackThreadTsValue({
+    replyToId: ctx.replyToId,
+    threadId: ctx.threadId,
+  });
+  const searchStartedAt = ctx.platformSendStartedAt ?? ctx.enqueuedAt;
+  const oldest = formatSlackTimestampFromMs(searchStartedAt - SLACK_RECONCILE_LOOKBACK_MS);
+  const latest = formatSlackTimestampFromMs(
+    (opts?.now ?? Date.now()) + SLACK_RECONCILE_LOOKAHEAD_MS,
+  );
+
+  try {
+    const response = threadTs
+      ? await withSlackDnsRequestRetry("conversations.replies", () =>
+          client.conversations.replies({
+            channel: channelId,
+            ts: threadTs,
+            oldest,
+            latest,
+            limit: SLACK_RECONCILE_LIMIT,
+          }),
+        )
+      : await withSlackDnsRequestRetry("conversations.history", () =>
+          client.conversations.history({
+            channel: channelId,
+            oldest,
+            latest,
+            limit: SLACK_RECONCILE_LIMIT,
+          }),
+        );
+    const match = findSlackConversationMessageByText({
+      messages: asSlackConversationMessages(response),
+      expectedText,
+    });
+    if (!match) {
+      return { status: "not_sent" };
+    }
+    const reconciledThreadTs = match.threadTs ?? threadTs;
+    const receipt = createSlackSendReceipt({
+      platformMessageIds: [match.messageId],
+      channelId,
+      kind: "text",
+      ...(reconciledThreadTs ? { threadTs: reconciledThreadTs } : {}),
+    });
+    return {
+      status: "sent",
+      messageId: match.messageId,
+      receipt,
+    };
+  } catch (err) {
+    const enriched = enrichSlackWebApiError(err);
+    return {
+      status: "unresolved",
+      error: readSlackRequestErrorMessage(enriched),
+      retryable: true,
+    };
+  }
 }
 
 async function uploadSlackFile(params: {

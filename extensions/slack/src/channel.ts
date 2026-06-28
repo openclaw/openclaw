@@ -518,7 +518,7 @@ const slackChannelOutbound: ChannelOutboundAdapter = {
   }),
 };
 
-const slackMessageAdapter = createChannelMessageAdapterFromOutbound({
+const slackMessageAdapterBase = createChannelMessageAdapterFromOutbound({
   id: "slack",
   outbound: slackChannelOutbound,
   live: {
@@ -537,6 +537,18 @@ const slackMessageAdapter = createChannelMessageAdapterFromOutbound({
     },
   },
 });
+
+const slackMessageAdapter = {
+  ...slackMessageAdapterBase,
+  durableFinal: {
+    capabilities: {
+      ...slackMessageAdapterBase.durableFinal?.capabilities,
+      reconcileUnknownSend: true,
+    },
+    reconcileUnknownSend: async (ctx) =>
+      await (await loadSlackSendRuntime()).reconcileSlackUnknownSend(ctx),
+  },
+} satisfies typeof slackMessageAdapterBase;
 
 export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = createChatChannelPlugin<
   ResolvedSlackAccount,
@@ -661,8 +673,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         }
         return resolveTargetsWithOptionalToken({
           token:
-            normalizeOptionalString(account.userToken) ??
-            normalizeOptionalString(account.botToken),
+            normalizeOptionalString(account.userToken) ?? normalizeOptionalString(account.botToken),
           inputs,
           missingTokenNote: "missing Slack token",
           resolveWithToken: async ({ token, inputs: inputsLocal }) =>

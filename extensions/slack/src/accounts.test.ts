@@ -398,6 +398,28 @@ describe("resolveSlackAccount active secret surfaces", () => {
     ).toThrowError(/channels\.slack\.accounts\.default\.botToken/);
   });
 
+  it("resolves inherited top-level bot SecretRefs at the top-level Slack path", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          botToken: secretRef,
+          accounts: {
+            default: {
+              allowFrom: ["U999"],
+            },
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(() =>
+      resolveSlackAccount({
+        cfg,
+        accountId: "default",
+      }),
+    ).toThrowError(/channels\.slack\.botToken/);
+  });
+
   it("does not read credentials for disabled accounts", () => {
     const resolved = resolveSlackAccount({
       cfg: {
