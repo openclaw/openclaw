@@ -524,6 +524,49 @@ describe("task-registry", () => {
     });
   });
 
+  it("reuses an ACP run task when a derived flow id is linked before a duplicate create", async () => {
+    await withTaskRegistryTempDir(async () => {
+      resetTaskRegistryMemoryForTest({ persist: false });
+      resetTaskFlowRegistryForTests({ persist: false });
+      configureInMemoryTaskStoresForLinkValidationTests();
+
+      const first = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:jarvis:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-acp-derived-flow-dedupe",
+        label: "original ACP task",
+        task: "Run ACP child",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+      const flow = createTaskFlowForTask({ task: first });
+      const linked = linkTaskToFlowById({
+        taskId: first.taskId,
+        flowId: flow.flowId,
+      });
+      expect(linked?.parentFlowId).toBe(flow.flowId);
+
+      const duplicateCreate = createTaskRecord({
+        runtime: "acp",
+        ownerKey: "agent:jarvis:main",
+        scopeKind: "session",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-acp-derived-flow-dedupe",
+        label: "late ACP mirror",
+        task: "Late mirror of the same ACP child",
+        status: "running",
+        deliveryStatus: "pending",
+        notifyPolicy: "silent",
+      });
+
+      expect(duplicateCreate.taskId).toBe(first.taskId);
+      expect(listTaskRecords().filter((task) => task.runId === first.runId)).toHaveLength(1);
+    });
+  });
+
   it("ignores late agent events for operator-cancelled tasks", async () => {
     await withTaskRegistryTempDir(async () => {
       resetTaskRegistryMemoryForTest();
