@@ -2009,22 +2009,10 @@ describe("scripts/test-projects changed-target routing", () => {
         "scripts/lib/plugin-npm-release.ts",
         ["test/plugin-npm-release.test.ts", "test/plugin-clawhub-release.test.ts"],
       ],
-      [
-        "scripts/plugin-clawhub-release-check.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
-      [
-        "scripts/plugin-clawhub-release-plan.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
-      [
-        "scripts/plugin-npm-release-check.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
-      [
-        "scripts/plugin-npm-release-plan.ts",
-        ["test/scripts/release-wrapper-scripts.test.ts"],
-      ],
+      ["scripts/plugin-clawhub-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+      ["scripts/plugin-clawhub-release-plan.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+      ["scripts/plugin-npm-release-check.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
+      ["scripts/plugin-npm-release-plan.ts", ["test/scripts/release-wrapper-scripts.test.ts"]],
       [
         "scripts/plugin-release-pretag-pack-check.ts",
         ["test/scripts/plugin-release-pretag-pack-check.test.ts"],

@@ -7,7 +7,7 @@ import {
   SpanStatusCode,
   TraceFlags,
 } from "@opentelemetry/api";
-import type { SpanContext } from "@opentelemetry/api";
+import type { Context, SpanContext } from "@opentelemetry/api";
 import type { LogRecord, SeverityNumber } from "@opentelemetry/api-logs";
 import { OTLPLogExporter } from "@opentelemetry/exporter-logs-otlp-proto";
 import { OTLPMetricExporter } from "@opentelemetry/exporter-metrics-otlp-proto";
@@ -28,7 +28,11 @@ import {
   ATTR_GEN_AI_SYSTEM_INSTRUCTIONS,
   ATTR_GEN_AI_TOOL_DEFINITIONS,
 } from "@opentelemetry/semantic-conventions/incubating";
-import { waitForDiagnosticEventsDrained } from "openclaw/plugin-sdk/diagnostic-runtime";
+import {
+  resetContinuationTracer,
+  setContinuationTracer,
+  waitForDiagnosticEventsDrained,
+} from "openclaw/plugin-sdk/diagnostic-runtime";
 import { registerUnhandledRejectionHandler } from "openclaw/plugin-sdk/runtime-env";
 import type {
   DiagnosticEventMetadata,
@@ -42,6 +46,7 @@ import {
   isValidDiagnosticTraceId,
   redactSensitiveText,
 } from "../api.js";
+import { createContinuationOtelTracerAdapter } from "./continuation-tracer-adapter.js";
 
 const DEFAULT_SERVICE_NAME = "openclaw";
 const DROPPED_OTEL_ATTRIBUTE_KEYS = new Set([
@@ -1041,6 +1046,12 @@ function normalizeTraceContext(value: unknown): DiagnosticTraceContext | undefin
     ...(candidate.spanId ? { spanId: candidate.spanId } : {}),
     ...(candidate.parentSpanId ? { parentSpanId: candidate.parentSpanId } : {}),
     ...(candidate.traceFlags ? { traceFlags: candidate.traceFlags } : {}),
+    // Preserve `parentSpanIdSource` so downstream parent-stitch logic can
+    // distinguish a remote-carried parent (W3C traceparent from a producer)
+    // from a logical parent that should fall back to the locally-registered
+    // run/span on the same traceId.
+    ...(candidate.parentSpanIdSource === "remote" ? { parentSpanIdSource: "remote" as const } : {}),
+    ...(candidate.spanIdSource === "remote" ? { spanIdSource: "remote" as const } : {}),
   };
 }
 
@@ -1293,23 +1304,29 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
   let unsubscribe: (() => void) | null = null;
   let stopActiveTrustedSpans: (() => void) | null = null;
   let unregisterUnhandledRejectionHandler: (() => void) | null = null;
+  let continuationTracerInstalled = false;
 
   const stopStarted = async () => {
     const currentUnsubscribe = unsubscribe;
     const currentLogProvider = logProvider;
     const currentSdk = sdk;
+    const currentContinuationTracerInstalled = continuationTracerInstalled;
     const currentStopActiveTrustedSpans = stopActiveTrustedSpans;
     const currentUnregisterUnhandledRejectionHandler = unregisterUnhandledRejectionHandler;
 
     unsubscribe = null;
     logProvider = null;
     sdk = null;
+    continuationTracerInstalled = false;
     stopActiveTrustedSpans = null;
     unregisterUnhandledRejectionHandler = null;
 
     currentUnregisterUnhandledRejectionHandler?.();
     currentUnsubscribe?.();
     currentStopActiveTrustedSpans?.();
+    if (currentContinuationTracerInstalled) {
+      resetContinuationTracer();
+    }
     if (currentLogProvider) {
       await currentLogProvider.shutdown().catch(() => undefined);
     }
@@ -1500,6 +1517,12 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         string,
         { spanContext: SpanContext; token: symbol; owner?: TrustedSpanAliasOwner }
       >();
+      // First registered trusted span context per OTEL traceId. Captured
+      // eagerly on `trackTrustedSpan` so logical-traceId fallback (used by
+      // both the run.started parent-stitch and the continuation-tracer
+      // adapter resolvers) can resolve in O(1) without scanning every
+      // active span/alias on the hot path.
+      const trustedSpanContextsByTraceId = new Map<string, SpanContext>();
       const retainedTrustedSpanContextCleanupTimers = new Set<ReturnType<typeof setTimeout>>();
       stopActiveTrustedSpans = () => {
         const stopAt = Date.now();
@@ -1508,6 +1531,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         retainedTrustedSpanContextCleanupTimers.clear();
         retainedTrustedSpanContexts.clear();
+        trustedSpanContextsByTraceId.clear();
         for (const span of new Set([
           ...activeTrustedSpans.values(),
           ...Array.from(activeTrustedSpanAliases.values(), (entry) => entry.span),
@@ -2063,6 +2087,17 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         }
         return alias.span;
       };
+      // Logical traceId fallback used when a carried parentSpanId has no
+      // direct registration. Returns the OTEL span context for the first
+      // registered trusted span on this traceId so sibling/child runs stay
+      // parented to the same logical trace even when the producer's
+      // parentSpanId did not match a local registration. Backed by the
+      // eagerly-captured `trustedSpanContextsByTraceId` map populated by
+      // `trackTrustedSpan` / `trackInternalOrTrustedSpan` so this resolves
+      // in O(1) on hot paths.
+      const firstTrustedSpanContextForTraceId = (traceId: string): SpanContext | undefined => {
+        return trustedSpanContextsByTraceId.get(traceId);
+      };
       const internalOrTrustedParentContext = (
         evt: DiagnosticEventPayload,
         metadata: DiagnosticEventMetadata,
@@ -2096,19 +2131,38 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
       ) => {
         const traceContext = trustedTraceContext(evt, metadata);
         const parentSpanId = traceContext?.parentSpanId;
-        if (!parentSpanId) {
+        if (!traceContext || !parentSpanId) {
           return undefined;
         }
         const owner = trustedSpanAliasOwner(evt);
         const activeParentSpan =
           activeTrustedSpans.get(parentSpanId) ?? activeTrustedSpanAlias(parentSpanId, owner);
-        const spanContext =
+        const directSpanContext =
           activeParentSpan?.spanContext() ??
           retainedTrustedSpanContext(traceContext, parentSpanId, owner);
-        if (!spanContext) {
-          return undefined;
+        if (directSpanContext) {
+          return trace.setSpanContext(otelContextApi.active(), directSpanContext);
         }
-        return trace.setSpanContext(otelContextApi.active(), spanContext);
+        // Carried W3C traceparent: producer marked the parentSpanId as
+        // remote-sourced. Stitch directly to the carried span id without
+        // requiring a local registration so cross-process continuation chains
+        // remain connected.
+        if (traceContext.parentSpanIdSource === "remote") {
+          return trace.setSpanContext(otelContextApi.active(), {
+            traceId: traceContext.traceId,
+            spanId: parentSpanId,
+            traceFlags: traceFlagsToOtel(traceContext.traceFlags),
+            isRemote: true,
+          });
+        }
+        // Logical fallback: when the carried parentSpanId has no direct
+        // mapping, parent to the first registered trusted span on the same
+        // logical traceId so sibling runs on one trace stay connected.
+        const logicalSpanContext = firstTrustedSpanContextForTraceId(traceContext.traceId);
+        if (logicalSpanContext) {
+          return trace.setSpanContext(otelContextApi.active(), logicalSpanContext);
+        }
+        return undefined;
       };
       const activeInternalOrTrustedContext = (
         evt: DiagnosticEventPayload,
@@ -2144,9 +2198,23 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         metadata: DiagnosticEventMetadata,
         span: ReturnType<typeof tracer.startSpan>,
       ) => {
-        const spanId = trustedTraceContext(evt, metadata)?.spanId;
+        const traceContext = trustedTraceContext(evt, metadata);
+        const spanId = traceContext?.spanId;
         if (spanId) {
           activeTrustedSpans.set(spanId, span);
+        }
+        // Eagerly capture the OTEL span context for trusted spans whose
+        // logical trace context is itself a root (no carried parentSpanId).
+        // Sibling/child runs that arrive later with an unresolved
+        // parentSpanId can then fall back to this canonical anchor; runs
+        // that carry their own external parentSpanId are intentionally
+        // excluded so unrelated siblings do not cross-parent through a
+        // shared logical traceId.
+        if (traceContext && !traceContext.parentSpanId) {
+          const spanContext = span.spanContext();
+          if (spanContext.traceId && !trustedSpanContextsByTraceId.has(spanContext.traceId)) {
+            trustedSpanContextsByTraceId.set(spanContext.traceId, spanContext);
+          }
         }
         return span;
       };
@@ -2155,9 +2223,16 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         metadata: DiagnosticEventMetadata,
         span: ReturnType<typeof tracer.startSpan>,
       ) => {
-        const spanId = internalOrTrustedTraceContext(evt, metadata)?.spanId;
+        const traceContext = internalOrTrustedTraceContext(evt, metadata);
+        const spanId = traceContext?.spanId;
         if (spanId) {
           activeTrustedSpans.set(spanId, span);
+        }
+        if (traceContext && !traceContext.parentSpanId) {
+          const spanContext = span.spanContext();
+          if (spanContext.traceId && !trustedSpanContextsByTraceId.has(spanContext.traceId)) {
+            trustedSpanContextsByTraceId.set(spanContext.traceId, spanContext);
+          }
         }
         return span;
       };
@@ -3621,6 +3696,57 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         return;
       }
 
+      // Install the OTEL continuation-tracer adapter once the trusted-span
+      // substrate (`activeTrustedSpans`, alias map, retained context map,
+      // `firstTrustedSpanContextForTraceId`) is fully defined so the
+      // resolvers below can stitch continuation traceparents to whichever
+      // trusted run/span is registered when a producer hands off.
+      if (tracesEnabled && (sdk !== null || sdkPreloaded)) {
+        const adapterResolveSpanContext = (
+          traceContext: DiagnosticTraceContext,
+        ): SpanContext | undefined => {
+          const spanId = traceContext.spanId;
+          if (spanId) {
+            const activeSpan = activeTrustedSpans.get(spanId);
+            if (activeSpan) {
+              return activeSpan.spanContext();
+            }
+            for (const alias of activeTrustedSpanAliases.values()) {
+              const aliasSpanContext = alias.span.spanContext();
+              if (aliasSpanContext.spanId === spanId) {
+                return aliasSpanContext;
+              }
+            }
+            const retained = retainedTrustedSpanContext(traceContext, spanId);
+            if (retained) {
+              return retained;
+            }
+          }
+          // Logical traceId fallback: when the producer's spanId is not
+          // (yet) registered locally, point the continuation hop at the
+          // first trusted run/span we have on that traceId so the
+          // formatted traceparent and parent-stitch land on a real local
+          // span instead of falling through to the noop tracer.
+          return firstTrustedSpanContextForTraceId(traceContext.traceId);
+        };
+        const adapterResolveParentContext = (
+          traceContext: DiagnosticTraceContext,
+        ): Context | undefined => {
+          const spanContext = adapterResolveSpanContext(traceContext);
+          if (!spanContext) {
+            return undefined;
+          }
+          return trace.setSpanContext(otelContextApi.active(), spanContext);
+        };
+        setContinuationTracer(
+          createContinuationOtelTracerAdapter({
+            resolveSpanContext: adapterResolveSpanContext,
+            resolveParentContext: adapterResolveParentContext,
+          }),
+        );
+        continuationTracerInstalled = true;
+      }
+
       unsubscribe = subscribe((evt, metadata, privateData) => {
         try {
           switch (evt.type) {
@@ -3763,6 +3889,11 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
               return;
             case "diagnostic.async_queue.dropped":
               recordAsyncQueueDropped(evt);
+              return;
+            case "diagnostic.continuation_queue.sample":
+              // Continuation-queue diagnostic events are emitted by the continuation feature
+              // (PR #85651). No OTel-side handler is needed; swallow silently to satisfy
+              // exhaustiveness-check after upstream's service.ts was taken wholesale at merge.
               return;
             case "telemetry.exporter":
               recordTelemetryExporter(evt, metadata);

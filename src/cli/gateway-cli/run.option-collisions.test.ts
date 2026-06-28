@@ -2,6 +2,7 @@
 import path from "node:path";
 import { Command } from "commander";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { useHermeticOpenclawEnv } from "../../../test/vitest/hermetic-openclaw-env.js";
 import type { ConfigFileSnapshot } from "../../config/types.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../../daemon/constants.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../../infra/supervisor-markers.js";
@@ -286,6 +287,7 @@ vi.mock("./run-loop.js", () => ({
 }));
 
 describe("gateway run option collisions", () => {
+  useHermeticOpenclawEnv();
   let addGatewayRunCommand: typeof import("./run-command.js").addGatewayRunCommand;
   let sharedProgram: Command;
 
@@ -302,8 +304,19 @@ describe("gateway run option collisions", () => {
   });
 
   beforeEach(() => {
-    delete process.env.OPENCLAW_SERVICE_MARKER;
-    delete process.env.OPENCLAW_SERVICE_KIND;
+    // Hermetic env: host shells running under the openclaw-gateway systemd unit
+    // inherit OPENCLAW_SERVICE_MARKER and related markers, which trip the
+    // service-mode future-version-block branch before the --force branch the
+    // first sub-test exercises. Clear via vi.stubEnv so afterEach's implicit
+    // unstub restores the host env. The test that needs the marker re-sets it
+    // explicitly via process.env (and restores in finally) lower in this file.
+    vi.stubEnv("OPENCLAW_SERVICE_MARKER", "");
+    vi.stubEnv("OPENCLAW_SERVICE_KIND", "");
+    // OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS=1 bypasses the future-version
+    // guard before the marker/service-kind gates fire. Some agent-host deployments export
+    // this via their openclaw-gateway systemd unit (caught during cross-host
+    // review of PR #844), so stub it empty for hermeticity too.
+    vi.stubEnv("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS", "");
     deleteTestEnvValue(GATEWAY_SERVICE_RUNTIME_PID_ENV);
     resetRuntimeCapture();
     configState.cfg = {};

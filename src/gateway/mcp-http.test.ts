@@ -721,6 +721,8 @@ describe("mcp loopback server", () => {
       "apply_patch",
       "exec",
       "process",
+      "continue_work",
+      "request_compaction",
     ]);
   });
 

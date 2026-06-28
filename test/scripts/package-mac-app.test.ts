@@ -276,7 +276,7 @@ describe("package-mac-app plist stamping", () => {
     const result = runHelper(`
       set -euo pipefail
       ROOT_DIR=${JSON.stringify(tempRoot)}
-      PATH=${JSON.stringify(`${toolsDir}:/usr/bin:/bin`)}
+      PATH=${JSON.stringify(toolsDir)}
       ${helperBlock}
       run_pnpm build
     `);

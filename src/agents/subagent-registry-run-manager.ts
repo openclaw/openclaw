@@ -160,6 +160,13 @@ export type RegisterSubagentRunParams = {
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
+  silentAnnounce?: boolean;
+  wakeOnReturn?: boolean;
+  drainsContinuationDelegateQueue?: boolean;
+  continuationTargetSessionKey?: string;
+  continuationTargetSessionKeys?: string[];
+  continuationFanoutMode?: "tree" | "all";
+  traceparent?: string;
 };
 
 export function createSubagentRunManager(params: {
@@ -673,6 +680,13 @@ export function createSubagentRunManager(params: {
       attachmentsDir: registerParams.attachmentsDir,
       attachmentsRootDir: registerParams.attachmentsRootDir,
       retainAttachmentsOnKeep: registerParams.retainAttachmentsOnKeep,
+      silentAnnounce: registerParams.silentAnnounce,
+      wakeOnReturn: registerParams.wakeOnReturn,
+      drainsContinuationDelegateQueue: registerParams.drainsContinuationDelegateQueue,
+      continuationTargetSessionKey: registerParams.continuationTargetSessionKey,
+      continuationTargetSessionKeys: registerParams.continuationTargetSessionKeys,
+      continuationFanoutMode: registerParams.continuationFanoutMode,
+      ...(registerParams.traceparent ? { traceparent: registerParams.traceparent } : {}),
     });
     params.runs.set(runId, entry);
     try {
@@ -705,10 +719,16 @@ export function createSubagentRunManager(params: {
         });
       }
     } catch (error) {
-      log.warn("Failed to create background task for subagent run", {
-        runId: registerParams.runId,
-        error,
-      });
+      params.runs.delete(runId);
+      try {
+        params.persistOrThrow();
+      } catch (rollbackError) {
+        log.warn("Failed to persist subagent registration rollback", {
+          runId: registerParams.runId,
+          error: rollbackError,
+        });
+      }
+      throw error;
     }
     params.ensureListener();
     params.persist();

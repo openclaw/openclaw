@@ -602,6 +602,9 @@ afterEach(() => {
 const baseQueuedRun = (messageProvider = "whatsapp"): FollowupRun =>
   createMockFollowupRun({ run: { messageProvider } });
 
+// Continuation regression anchors: follow-up turns must keep continue_work,
+// continue_delegate, and drainsContinuationDelegateQueue wired through the
+// queued runner even after embedded-runner rename churn.
 function createQueuedRun(
   overrides: Partial<Omit<FollowupRun, "run">> & { run?: Partial<FollowupRun["run"]> } = {},
 ): FollowupRun {
@@ -4897,5 +4900,252 @@ describe("createFollowupRunner queued user message idempotency across fallback",
     expect(firstAttempt.suppressNextUserMessagePersistence).toBe(false);
     expect(secondAttempt.suppressNextUserMessagePersistence).toBe(false);
     expect(secondAttempt.suppressAssistantErrorPersistence).toBe(false);
+  });
+});
+
+describe("createFollowupRunner continueWorkOpts threading (#746)", () => {
+  it("passes continueWorkOpts to runEmbeddedAgent when continuation.enabled=true", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude",
+      sessionKey: "agent:main:subagent:test-organ",
+    });
+    const queued = createQueuedRun({
+      run: {
+        sessionKey: "agent:main:subagent:test-organ",
+        config: {
+          agents: {
+            defaults: {
+              continuation: {
+                enabled: true,
+                maxChainLength: 200,
+                defaultDelayMs: 15000,
+                minDelayMs: 5000,
+                maxDelayMs: 86400000,
+                costCapTokens: 50000000,
+                maxDelegatesPerTurn: 500,
+              },
+            },
+          },
+        } as OpenClawConfig,
+        drainsContinuationDelegateQueue: true,
+      },
+    });
+
+    await runner(queued);
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalled();
+    const callArgs = requireLastMockCallArg(runEmbeddedAgentMock, "runEmbeddedAgent");
+    expect(callArgs.continueWorkOpts).toBeDefined();
+    expect(typeof (callArgs.continueWorkOpts as any).requestContinuation).toBe("function");
+  });
+
+  it("persists followup continue_work chain state to the session store", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-continue-work-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:subagent:continue-work-followup";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-followup-cw",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 200,
+            defaultDelayMs: 15000,
+            minDelayMs: 5000,
+            maxDelayMs: 86400000,
+            costCapTokens: 50000000,
+            maxDelegatesPerTurn: 500,
+          },
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig);
+    await saveSessionStore(storePath, sessionStore);
+    runEmbeddedAgentMock.mockImplementationOnce(async (callArgs: unknown) => {
+      const opts = (
+        callArgs as {
+          continueWorkOpts?: {
+            requestContinuation: (req: { reason: string; delaySeconds: number }) => void;
+          };
+        }
+      ).continueWorkOpts;
+      if (!opts) {
+        throw new Error("continueWorkOpts missing");
+      }
+      opts.requestContinuation({ reason: "persist proof", delaySeconds: 30 });
+      return {
+        payloads: [{ text: "done" }],
+        meta: {
+          agentMeta: {
+            provider: "anthropic",
+            model: "claude",
+            usage: { input: 7, output: 5, cacheRead: 0, cacheWrite: 0 },
+          },
+        },
+      };
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude",
+    });
+
+    try {
+      await runner(
+        createQueuedRun({
+          run: {
+            sessionKey,
+            sessionId: sessionEntry.sessionId,
+            sessionFile: sessionEntry.sessionFile,
+            provider: "anthropic",
+            model: "claude",
+            drainsContinuationDelegateQueue: true,
+            config: runtimeConfig,
+          },
+        }),
+      );
+
+      const stored = loadSessionStore(storePath, { skipCache: true })[sessionKey];
+      expect(stored).toMatchObject({
+        continuationChainCount: 1,
+        continuationChainTokens: 12,
+      });
+      expect(stored?.continuationChainStartedAt).toBeGreaterThan(0);
+    } finally {
+      const { resetContinuationWorkDispatchForTests } =
+        await import("../continuation/work-dispatch.js");
+      const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
+      resetContinuationWorkDispatchForTests();
+      resetTaskFlowRegistryForTests({ persist: false });
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("honors followup bracket continue_work fallback and strips the emitted token", async () => {
+    const tmpDir = await fs.mkdtemp(path.join(tmpdir(), "openclaw-followup-token-cw-"));
+    const storePath = path.join(tmpDir, "sessions.json");
+    const sessionKey = "agent:main:subagent:continue-work-token-followup";
+    const sessionEntry: SessionEntry = {
+      sessionId: "session-followup-token-cw",
+      sessionFile: path.join(tmpDir, "session.jsonl"),
+      updatedAt: Date.now(),
+    };
+    const sessionStore: Record<string, SessionEntry> = { [sessionKey]: sessionEntry };
+    const runtimeConfig = {
+      agents: {
+        defaults: {
+          continuation: {
+            enabled: true,
+            maxChainLength: 200,
+            defaultDelayMs: 15000,
+            minDelayMs: 5000,
+            maxDelayMs: 86400000,
+            costCapTokens: 50000000,
+            maxDelegatesPerTurn: 500,
+          },
+        },
+      },
+      session: { store: storePath },
+    } as OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeConfig);
+    await saveSessionStore(storePath, sessionStore);
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done\nCONTINUE_WORK" }],
+      meta: {
+        agentMeta: {
+          provider: "anthropic",
+          model: "claude",
+          usage: { input: 7, output: 5, cacheRead: 0, cacheWrite: 0 },
+        },
+      },
+    });
+
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude",
+    });
+
+    try {
+      await runner(
+        createQueuedRun({
+          originatingChannel: "discord",
+          originatingTo: "channel:C1",
+          run: {
+            sessionKey,
+            sessionId: sessionEntry.sessionId,
+            sessionFile: sessionEntry.sessionFile,
+            provider: "anthropic",
+            model: "claude",
+            drainsContinuationDelegateQueue: true,
+            config: runtimeConfig,
+          },
+        }),
+      );
+
+      const deliveredPayload = requireMockCallArg(routeReplyMock, 0).payload as { text?: string };
+      expect(deliveredPayload.text).toBe("done");
+      const { listTaskFlowsForOwnerKey } = await import("../../tasks/task-flow-registry.js");
+      const [flow] = listTaskFlowsForOwnerKey(sessionKey);
+      expect(flow?.stateJson).toMatchObject({
+        kind: "continuation_work",
+        delayMs: 15000,
+      });
+    } finally {
+      const { resetContinuationWorkDispatchForTests } =
+        await import("../continuation/work-dispatch.js");
+      const { resetTaskFlowRegistryForTests } = await import("../../tasks/task-flow-registry.js");
+      resetContinuationWorkDispatchForTests();
+      resetTaskFlowRegistryForTests({ persist: false });
+      await fs.rm(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does NOT pass continueWorkOpts when continuation is disabled", async () => {
+    runEmbeddedAgentMock.mockResolvedValueOnce({
+      payloads: [{ text: "done" }],
+      meta: {},
+    });
+    const runner = createFollowupRunner({
+      typing: createMockTypingController(),
+      typingMode: "instant",
+      defaultModel: "anthropic/claude",
+      sessionKey: "agent:main:subagent:test-leaf",
+    });
+    const queued = createQueuedRun({
+      run: {
+        sessionKey: "agent:main:subagent:test-leaf",
+        config: {
+          agents: { defaults: {} },
+        } as OpenClawConfig,
+      },
+    });
+
+    await runner(queued);
+
+    expect(runEmbeddedAgentMock).toHaveBeenCalled();
+    const callArgs = requireLastMockCallArg(runEmbeddedAgentMock, "runEmbeddedAgent");
+    expect(callArgs.continueWorkOpts).toBeUndefined();
   });
 });

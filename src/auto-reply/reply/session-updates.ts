@@ -283,10 +283,13 @@ export async function incrementCompactionCount(params: {
   }
   const incrementBy = Math.max(0, amount);
   const nextCount = (entry.compactionCount ?? 0) + incrementBy;
-  // Build update payload with compaction count and optionally updated token counts
+  // Build update payload with compaction count and optionally updated token counts.
+  // Reset lastContextPressureBand: compaction reduces context, so band-tracking
+  // history is stale; next pressure-check should start fresh.
   const updates: Partial<SessionEntry> = {
     compactionCount: nextCount,
     updatedAt: now,
+    lastContextPressureBand: undefined,
   };
   const explicitNewSessionFile = normalizeOptionalString(newSessionFile);
   const sessionIdChanged = Boolean(newSessionId && newSessionId !== entry.sessionId);
@@ -303,6 +306,11 @@ export async function incrementCompactionCount(params: {
         storePath,
         newSessionId,
       });
+    // SessionId rotation is handled by the session-accessor seam: when sessionId
+    // changes, the seam rolls sessionStartedAt to its own persist-time Date.now()
+    // (the same timestamp it stamps on updatedAt), so sessionStartedAt === updatedAt
+    // holds byte-identical for the new logical-session epoch. Setting it explicitly
+    // here would override the seam's rotation and drift ~1ms vs the seam's updatedAt.
     updates.usageFamilyKey = entry.usageFamilyKey ?? sessionKey;
     updates.usageFamilySessionIds = Array.from(
       new Set([...(entry.usageFamilySessionIds ?? []), entry.sessionId, newSessionId]),
@@ -330,7 +338,7 @@ export async function incrementCompactionCount(params: {
   sessionStore[sessionKey] = nextEntry;
   if (storePath) {
     const persistedEntry = await patchSessionEntry({ storePath, sessionKey }, () => updates, {
-      fallbackEntry: nextEntry,
+      fallbackEntry: entry,
     });
     if (persistedEntry) {
       sessionStore[sessionKey] = persistedEntry;

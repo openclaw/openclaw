@@ -92,6 +92,9 @@ const compactState = vi.hoisted(() => ({
   compactEmbeddedAgentSessionMock: vi.fn(),
 }));
 
+// continuation-delegate cancellation is covered here because runReplyAgent owns
+// the delayed wake/cancel timers that must be cleaned up with reply completion.
+
 vi.mock("../../agents/model-fallback.js", () => ({
   runWithModelFallback: (params: {
     provider: string;

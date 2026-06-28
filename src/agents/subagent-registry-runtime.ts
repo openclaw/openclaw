@@ -12,6 +12,7 @@ export {
   countPendingDescendantRuns,
   countPendingDescendantRunsExcludingRun,
   isSubagentSessionRunActive,
+  listAncestorSessionKeys,
   listSubagentRunsForRequester,
   resolveRequesterForChildSession,
   shouldIgnorePostCompletionAnnounceForSession,

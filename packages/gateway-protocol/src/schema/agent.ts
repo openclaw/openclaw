@@ -1,15 +1,14 @@
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
+import { AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION } from "../../../../src/agents/internal-event-contract.js";
+import { DIAGNOSTIC_TRACEPARENT_PATTERN } from "../../../../src/infra/diagnostic-trace-context-pure.js";
+import { internalProtocolField } from "./internal-fields.js";
 import { InputProvenanceSchema, NonEmptyString, SessionLabelString } from "./primitives.js";
 
-/**
- * Agent and channel-action gateway schemas.
- *
- * These payloads sit on the boundary between external channel adapters, gateway
- * RPC callers, and the agent runtime. Keep public request fields documented
- * because older CLI/channel clients may continue sending them across releases.
- */
-const AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION = "task_completion";
+// AGENT_INTERNAL_EVENT_SOURCES/STATUSES were export-narrowed to module-private in
+// internal-event-contract.ts upstream (2026-06-03); mirror the value-lists locally for the
+// protocol enum, matching upstream's agent.ts. (AgentInternalEventSource/Status types remain
+// importable from the contract; only the value-consts moved private.)
 const AGENT_INTERNAL_EVENT_SOURCES = [
   "subagent",
   "cron",
@@ -19,6 +18,13 @@ const AGENT_INTERNAL_EVENT_SOURCES = [
 ] as const;
 const AGENT_INTERNAL_EVENT_STATUSES = ["ok", "timeout", "error", "unknown"] as const;
 
+/**
+ * Agent and channel-action gateway schemas.
+ *
+ * These payloads sit on the boundary between external channel adapters, gateway
+ * RPC callers, and the agent runtime. Keep public request fields documented
+ * because older CLI/channel clients may continue sending them across releases.
+ */
 /** Generated media/file attachment metadata carried by internal agent events. */
 export const AgentGeneratedAttachmentSchema = Type.Object(
   {
@@ -34,6 +40,8 @@ export const AgentGeneratedAttachmentSchema = Type.Object(
 );
 
 /** Internal completion event surfaced when child automation reports back to a parent run. */
+const CONTINUATION_TRIGGER_VALUES = ["work-wake", "delegate-return", "subagent-return"] as const;
+
 export const AgentInternalEventSchema = Type.Object(
   {
     type: Type.Literal(AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION),
@@ -213,6 +221,15 @@ export const AgentParamsSchema = Type.Object(
     promptMode: Type.Optional(
       Type.Union([Type.Literal("full"), Type.Literal("minimal"), Type.Literal("none")]),
     ),
+    continuationTrigger: internalProtocolField(
+      Type.Optional(
+        Type.String({
+          enum: [...CONTINUATION_TRIGGER_VALUES],
+          description:
+            "Internal continuation lifecycle metadata for internally-triggered turns; omitted from public generated protocol artifacts.",
+        }),
+      ),
+    ),
     extraSystemPrompt: Type.Optional(Type.String()),
     bootstrapContextMode: Type.Optional(
       Type.Union([Type.Literal("full"), Type.Literal("lightweight")]),
@@ -234,6 +251,23 @@ export const AgentParamsSchema = Type.Object(
     voiceWakeTrigger: Type.Optional(Type.String()),
     idempotencyKey: NonEmptyString,
     label: Type.Optional(SessionLabelString),
+    drainsContinuationDelegateQueue: internalProtocolField(
+      Type.Optional(
+        Type.Boolean({
+          description:
+            "Internal continuation runner knob; omitted from public generated protocol artifacts.",
+        }),
+      ),
+    ),
+    traceparent: internalProtocolField(
+      Type.Optional(
+        Type.String({
+          description:
+            "Internal continuation trace context for inherited child agent runs; omitted from public generated protocol artifacts.",
+          pattern: DIAGNOSTIC_TRACEPARENT_PATTERN,
+        }),
+      ),
+    ),
   },
   { additionalProperties: false },
 );

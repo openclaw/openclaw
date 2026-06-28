@@ -60,6 +60,7 @@ import { emitPreAgentMessageHooks } from "./message-preprocess-hooks.js";
 import { createFastTestModelSelectionState, createModelSelectionState } from "./model-selection.js";
 import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
+import { isContinuationHeartbeatEquivalent, resolveReplyHookTrigger } from "./run-provenance.js";
 import { initSessionState } from "./session.js";
 import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 import {
@@ -331,12 +332,14 @@ export async function getReplyFromConfig(
   );
   let provider = defaultProvider;
   let model = defaultModel;
+  const shouldApplyHeartbeatModelOverride =
+    opts?.isHeartbeat === true || isContinuationHeartbeatEquivalent(opts?.continuationTrigger);
   let hasResolvedHeartbeatModelOverride = false;
-  if (opts?.isHeartbeat) {
+  if (shouldApplyHeartbeatModelOverride) {
     // Prefer the resolved per-agent heartbeat model passed from the heartbeat runner,
     // fall back to the global defaults heartbeat model for backward compatibility.
     const heartbeatRaw =
-      normalizeOptionalString(opts.heartbeatModelOverride) ??
+      normalizeOptionalString(opts?.heartbeatModelOverride) ??
       normalizeOptionalString(agentCfg?.heartbeat?.model) ??
       "";
     const heartbeatRef = heartbeatRaw
@@ -625,7 +628,7 @@ export async function getReplyFromConfig(
     defaultProvider,
   });
   const staleHeartbeatAutoFallbackOverride = isStaleHeartbeatAutoFallbackOverride({
-    isHeartbeat: opts?.isHeartbeat === true,
+    isHeartbeat: shouldApplyHeartbeatModelOverride,
     hasResolvedHeartbeatModelOverride,
     sessionEntry,
     storedOverride: storedModelOverride,
@@ -960,7 +963,7 @@ export async function getReplyFromConfig(
       const hookChatId =
         normalizeOptionalString(sessionCtx.NativeChannelId) ??
         normalizeOptionalString(sessionCtx.ChatId);
-      const hookTrigger = opts?.isHeartbeat ? "heartbeat" : "user";
+      const hookTrigger = resolveReplyHookTrigger(opts);
       const hookResult = await traceGetReplyPhase("reply.before_agent_reply_hooks", () =>
         hookRunner.runBeforeAgentReply(
           { cleanedBody },

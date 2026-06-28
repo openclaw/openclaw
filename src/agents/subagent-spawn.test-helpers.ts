@@ -20,6 +20,8 @@ type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks"> &
   >;
 type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {
   resetSubagentRegistryForTests: MockFn;
+  consumeSubagentTraceparentHandoff: typeof import("./subagent-traceparent-handoff.js").consumeSubagentTraceparentHandoff;
+  resetSubagentTraceparentHandoffsForTests: typeof import("./subagent-traceparent-handoff.js").resetSubagentTraceparentHandoffsForTests;
 };
 
 /** Build a minimal runtime config for sessions_spawn tests. */
@@ -358,16 +360,40 @@ export async function loadSubagentSpawnModuleForTest(params: {
     getSubagentDepthFromSessionStore: params.getSubagentDepthFromSessionStore ?? (() => 0),
   }));
 
+  const countActiveRunsForSessionImpl = params.countActiveRunsForSession ?? (() => 0);
+  const registerSubagentRunImpl =
+    params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined);
+
   vi.doMock("./subagent-registry.js", () => ({
-    countActiveRunsForSession: params.countActiveRunsForSession ?? (() => 0),
-    registerSubagentRun:
-      params.registerSubagentRunMock ?? vi.fn((_record: Record<string, unknown>) => undefined),
+    countActiveRunsForSession: countActiveRunsForSessionImpl,
+    registerSubagentRun: registerSubagentRunImpl,
     resetSubagentRegistryForTests,
   }));
 
+  // Refactor (#826) moved the spawn-runtime entry points out of
+  // subagent-registry.js into a leaf module to break a types <-> targeting
+  // import cycle. subagent-spawn.ts now imports countActiveRunsForSession +
+  // registerSubagentRun from here, so the test mock must follow the new path
+  // or the registry gate and register hooks silently no-op.
+  vi.doMock("./subagent-registry-spawn-runtime.js", () => ({
+    countActiveRunsForSession: countActiveRunsForSessionImpl,
+    registerSubagentRun: registerSubagentRunImpl,
+    configureSubagentRegistrySpawnRuntime: () => undefined,
+  }));
+
   const subagentSpawnModule = await import("./subagent-spawn.js");
+  // Re-import traceparent-handoff module AFTER vi.resetModules() so the
+  // returned consume/reset functions reference the same module instance the
+  // SUT writes to (registerSubagentTraceparentHandoff in subagent-spawn.ts).
+  // The test-file's file-top import is stale post-reset and would consume from
+  // a different in-memory Map than the SUT registers into — returning
+  // undefined and silently failing the traceparent-handoff test.
+  const traceparentHandoffModule = await import("./subagent-traceparent-handoff.js");
   return {
     ...subagentSpawnModule,
     resetSubagentRegistryForTests,
+    consumeSubagentTraceparentHandoff: traceparentHandoffModule.consumeSubagentTraceparentHandoff,
+    resetSubagentTraceparentHandoffsForTests:
+      traceparentHandoffModule.resetSubagentTraceparentHandoffsForTests,
   };
 }

@@ -7,11 +7,7 @@ import {
   testing as sessionBindingTesting,
   registerSessionBindingAdapter,
 } from "openclaw/plugin-sdk/session-binding-runtime";
-import {
-  getSessionEntry,
-  saveSessionStore,
-  upsertSessionEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { loadSessionStore, saveSessionStore } from "openclaw/plugin-sdk/session-store-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY } from "../send/types.js";
@@ -81,27 +77,33 @@ async function writeMatrixSessionMeta(
     nativeDirectUserId?: string;
   },
 ): Promise<void> {
-  const existing = getSessionEntry({ storePath, sessionKey }) ?? {
-    sessionId: `sess-${sessionKey}`,
+  // Read via loadSessionStore + write via saveSessionStore so the seeded
+  // entries land in the SQLite-backed store the handler reads. Raw
+  // writeFileSync(sessions.json) is invisible to the migrated store.
+  const store = loadSessionStore(storePath, { skipCache: true }) as Record<
+    string,
+    Record<string, unknown>
+  >;
+  const existing = store[sessionKey] ?? {
+    sessionId: `sess-${Object.keys(store).length + 1}`,
     updatedAt: Date.now(),
   };
   const existingOrigin =
     typeof existing.origin === "object" && existing.origin !== null
       ? (existing.origin as Record<string, unknown>)
       : {};
-  await upsertSessionEntry({
-    storePath,
-    sessionKey,
-    entry: {
-      ...existing,
-      origin: {
-        ...existingOrigin,
-        provider: "matrix",
-        surface: "matrix",
-        accountId: "ops",
-        ...origin,
-      },
+  store[sessionKey] = {
+    ...existing,
+    origin: {
+      ...existingOrigin,
+      provider: "matrix",
+      surface: "matrix",
+      accountId: "ops",
+      ...origin,
     },
+  };
+  await saveSessionStore(storePath, store as Parameters<typeof saveSessionStore>[1], {
+    skipMaintenance: true,
   });
 }
 

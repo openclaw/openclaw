@@ -6,17 +6,20 @@ import {
 import { resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildChannelSummary } from "../../infra/channel-summary.js";
+import { emitContinuationQueueDrainSpan } from "../../infra/continuation-tracer.js";
 import {
   formatUtcTimestamp,
   formatZonedTimestamp,
   resolveTimezone,
 } from "../../infra/format-time/format-datetime.ts";
 import { isExecCompletionEvent } from "../../infra/heartbeat-events-filter.js";
+import { ackSessionDelivery } from "../../infra/session-delivery-queue-storage.js";
 import {
   consumeSelectedSystemEventEntries,
   peekSystemEventEntries,
   type SystemEvent,
 } from "../../infra/system-events.js";
+import { defaultRuntime } from "../../runtime.js";
 
 function isCronContextSystemEvent(event: SystemEvent): boolean {
   return event.contextKey?.startsWith("cron:") ?? false;
@@ -81,6 +84,20 @@ function resolveSystemEventTimezone(cfg: OpenClawConfig) {
   const explicit = resolveTimezone(raw);
   return explicit ? { mode: "iana" as const, timeZone: explicit } : { mode: "local" as const };
 }
+async function ackDrainedSessionDeliveries(events: readonly SystemEvent[]): Promise<void> {
+  for (const event of events) {
+    if (!event.sessionDeliveryAckId) {
+      continue;
+    }
+    try {
+      await ackSessionDelivery(event.sessionDeliveryAckId, event.sessionDeliveryAckStateDir);
+    } catch (err) {
+      defaultRuntime.log(
+        `Failed to ack drained session delivery ${event.sessionDeliveryAckId}: ${String(err)}`,
+      );
+    }
+  }
+}
 
 function formatSystemEventTimestamp(ts: number, cfg: OpenClawConfig) {
   const date = new Date(ts);
@@ -117,18 +134,33 @@ export async function drainFormattedSystemEvents(params: {
       suppressHeartbeatOwnedEvents: params.suppressHeartbeatOwnedEvents,
     }),
   );
-  for (const event of queued) {
-    const compacted = compactSystemEvent(event.text);
-    if (!compacted) {
-      continue;
-    }
-    const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
-    let index = 0;
-    for (const subline of compacted.split("\n")) {
-      systemLines.push(`System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
-      index += 1;
-    }
-  }
+  await ackDrainedSessionDeliveries(queued);
+  // Emit `continuation.queue.drain` on every drain, including empty drains;
+  // absence of work is still a drain tick. Continuation-prefix detection is
+  // best-effort, while structural traceparent reconstruction belongs to the
+  // concrete tracing adapter.
+  const drainedContinuationCount = queued.filter((event) =>
+    event.text.startsWith("[continuation:"),
+  ).length;
+  const traceparent = queued.find((event) => event.traceparent)?.traceparent;
+  emitContinuationQueueDrainSpan({
+    drainedCount: queued.length,
+    drainedContinuationCount,
+    ...(traceparent ? { traceparent } : {}),
+    log: (message) => defaultRuntime.log(message),
+  });
+  systemLines.push(
+    ...queued.flatMap((event) => {
+      const compacted = compactSystemEvent(event.text);
+      if (!compacted) {
+        return [];
+      }
+      const timestamp = `[${formatSystemEventTimestamp(event.ts, params.cfg)}]`;
+      return compacted
+        .split("\n")
+        .map((subline, index) => `System: ${index === 0 ? `${timestamp} ` : ""}${subline}`);
+    }),
+  );
   if (params.isMainSession && params.isNewSession) {
     const summary = await buildChannelSummary(params.cfg);
     if (summary.length > 0) {

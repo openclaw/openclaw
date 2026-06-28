@@ -7,6 +7,7 @@ import {
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
   ProtocolSchemas,
+  stripInternalProtocolFields,
 } from "../packages/gateway-protocol/src/schema.js";
 
 type JsonSchema = {
@@ -703,7 +704,10 @@ function emitGatewayFrame(): string {
 }
 
 async function generate() {
-  const definitions = Object.entries(ProtocolSchemas) as Array<[string, JsonSchema]>;
+  const definitions = Object.entries(ProtocolSchemas).flatMap(([name, schema]) => {
+    const publicSchema = stripInternalProtocolFields(schema);
+    return publicSchema === undefined ? [] : ([[name, publicSchema as JsonSchema]] as const);
+  }) as Array<[string, JsonSchema]>;
 
   for (const [name, schema] of definitions) {
     registerNamedSchema(name, schema);

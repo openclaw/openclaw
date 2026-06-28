@@ -19,6 +19,7 @@ import {
   loadCompactHooksHarness,
   maybeCompactAgentHarnessSessionMock,
   resolveAgentHarnessPolicyMock,
+  resolveSelectedOpenAIRuntimeProviderMock,
   registerProviderStreamForModelMock,
   resolveContextWindowInfoMock,
   resolveContextEngineMock,
@@ -2117,6 +2118,42 @@ describe("compactEmbeddedAgentSession hooks (ownsCompaction engine)", () => {
     expectRecordFields(compactArg.runtimeContext, {
       provider: "openai",
       runtimeProvider: undefined,
+      model: "gpt-5.5",
+    });
+  });
+
+  it("resolves queued compaction model metadata through the selected runtime provider", async () => {
+    resolveSelectedOpenAIRuntimeProviderMock.mockImplementation((params: { provider: string }) =>
+      params.provider === "openai" ? "openai-runtime" : params.provider,
+    );
+
+    const result = await compactEmbeddedAgentSession(
+      wrappedCompactionArgs({
+        provider: "openai",
+        model: "gpt-5.5",
+        agentHarnessId: "codex",
+        config: {
+          models: {
+            providers: {
+              openai: { models: [{ id: "gpt-5.5", contextWindow: 350_000 }] },
+            },
+          },
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(mockCallArg(resolveModelMock)).toBe("openai-runtime");
+    expectRecordFields(mockCallArg(resolveContextWindowInfoMock), {
+      provider: "openai-runtime",
+      modelId: "gpt-5.5",
+    });
+    const compactArg = mockCallArg(contextEngineCompactMock) as {
+      runtimeContext?: Record<string, unknown>;
+    };
+    expectRecordFields(compactArg.runtimeContext, {
+      provider: "openai",
+      runtimeProvider: "openai-runtime",
       model: "gpt-5.5",
     });
   });

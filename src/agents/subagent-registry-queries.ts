@@ -5,7 +5,12 @@
  */
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { hasSubagentRunEnded, isLiveUnendedSubagentRun } from "./subagent-run-liveness.js";
+import {
+  classifySubagentRunLiveness,
+  hasSubagentRunEnded,
+  isLiveUnendedSubagentRun,
+  type SubagentRunLiveness,
+} from "./subagent-run-liveness.js";
 
 function resolveControllerSessionKey(entry: SubagentRunRecord): string {
   return entry.controllerSessionKey?.trim() || entry.requesterSessionKey;
@@ -274,6 +279,24 @@ export function isSubagentSessionRunActiveFromRuns(
   return Boolean(latest && isLiveUnendedSubagentRun(latest));
 }
 
+/**
+ * Three-state liveness of the latest run for a child session (#990 orphan-reap).
+ *
+ * READ-TIME JOIN: liveness mutates after a continuation flow is classified
+ * (a driver can die or finish between the classify and this read), so the
+ * verdict is computed fresh against the live `runs` map at each dispatch — never
+ * persisted onto the flow row. A missing record resolves to `uncertain`
+ * (never reap) so same-session/main flows with no child-run record are safe.
+ */
+export function classifyChildSessionRunLivenessFromRuns(
+  runs: Map<string, SubagentRunRecord>,
+  childSessionKey: string,
+  options?: { now?: number; staleCutoffMs?: number },
+): SubagentRunLiveness {
+  const latest = findLatestRunForChildSession(runs, childSessionKey);
+  return classifySubagentRunLiveness(latest, options ?? {});
+}
+
 /** Returns the preferred run for a child session, active first then latest ended. */
 export function getSubagentRunByChildSessionKeyFromRuns(
   runs: Map<string, SubagentRunRecord>,
@@ -320,6 +343,31 @@ export function resolveRequesterForChildSessionFromRuns(
     requesterSessionKey: latest.requesterSessionKey,
     requesterOrigin: latest.requesterOrigin,
   };
+}
+
+export function listAncestorSessionKeysFromRuns(
+  runs: Map<string, SubagentRunRecord>,
+  sessionKey: string,
+): string[] {
+  const first = sessionKey.trim();
+  if (!first) {
+    return [];
+  }
+
+  const ancestors: string[] = [];
+  const visited = new Set<string>();
+  let current = first;
+  while (current && !visited.has(current)) {
+    ancestors.push(current);
+    visited.add(current);
+    const latest = findLatestRunForChildSession(runs, current);
+    const parent = latest?.requesterSessionKey.trim();
+    if (!parent || parent === current) {
+      break;
+    }
+    current = parent;
+  }
+  return ancestors;
 }
 
 /** Returns whether post-completion announce should be skipped for a cleaned-up run. */

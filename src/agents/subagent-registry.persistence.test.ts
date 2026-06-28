@@ -12,6 +12,11 @@ import {
 } from "../config/sessions/store.js";
 import { callGateway } from "../gateway/call.js";
 import { onAgentEvent } from "../infra/agent-events.js";
+import type { DetachedTaskLifecycleRuntime } from "../tasks/detached-task-runtime-contract.js";
+import {
+  resetDetachedTaskLifecycleRuntimeForTests,
+  setDetachedTaskLifecycleRuntime,
+} from "../tasks/detached-task-runtime.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue, withEnv } from "../test-utils/env.js";
 import { persistSubagentSessionTiming } from "./subagent-registry-helpers.js";
 import { getSubagentRunsSnapshotForRead } from "./subagent-registry-state.js";
@@ -57,6 +62,22 @@ function expectFields(value: unknown, expected: Record<string, unknown>): void {
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key], key).toEqual(expectedValue);
   }
+}
+
+function createDetachedTaskRuntime(
+  overrides: Partial<DetachedTaskLifecycleRuntime> = {},
+): DetachedTaskLifecycleRuntime {
+  return {
+    createQueuedTaskRun: vi.fn(() => ({}) as never),
+    createRunningTaskRun: vi.fn(() => ({}) as never),
+    startTaskRunByRunId: vi.fn(() => []),
+    recordTaskRunProgressByRunId: vi.fn(() => []),
+    completeTaskRunByRunId: vi.fn(() => []),
+    failTaskRunByRunId: vi.fn(() => []),
+    setDetachedTaskDeliveryStatusByRunId: vi.fn(() => []),
+    cancelDetachedTaskRunById: vi.fn(async () => ({ found: false, cancelled: false })),
+    ...overrides,
+  };
 }
 
 describe("subagent registry persistence", () => {
@@ -225,6 +246,7 @@ describe("subagent registry persistence", () => {
   afterEach(async () => {
     testing.setDepsForTest();
     resetSubagentRegistryForTests({ persist: false });
+    resetDetachedTaskLifecycleRuntimeForTests();
     await drainSessionStoreWriterQueuesForTest();
     clearSessionStoreCacheForTest();
     if (tempStateDir) {
@@ -261,6 +283,199 @@ describe("subagent registry persistence", () => {
       endedAt,
       outcome: { status: "ok" },
     } as never);
+
+    const store = await readSubagentSessionStore(storePath);
+    const persisted = store["agent:main:subagent:timing"];
+    expect(persisted?.endedAt).toBe(endedAt);
+    expect(persisted?.runtimeMs).toBe(500);
+    expect(persisted?.status).toBe("done");
+    expect(persisted?.startedAt).toBeGreaterThanOrEqual(startedAt);
+    expect(persisted?.startedAt).toBeLessThanOrEqual(endedAt);
+  });
+
+  it("rolls back a new subagent run when initial persistence fails", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    const persistError = new Error("disk full");
+    testing.setDepsForTest({
+      ...createSubagentRegistryTestDeps(),
+      persistSubagentRunsToDisk: () => {
+        throw persistError;
+      },
+      runSubagentAnnounceFlow: announceSpy,
+    });
+
+    expect(() =>
+      registerSubagentRun({
+        runId: "run-persist-fails",
+        childSessionKey: "agent:main:subagent:persist-fails",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "must be durable before spawn",
+        cleanup: "keep",
+      }),
+    ).toThrow(persistError);
+
+    expect(getLatestSubagentRunByChildSessionKey("agent:main:subagent:persist-fails")).toBeNull();
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("uses fail-closed production persistence for initial subagent registration", async () => {
+    tempStateDir = path.join(
+      os.tmpdir(),
+      `openclaw-subagent-state-file-${process.pid}-${Date.now()}`,
+    );
+    await fs.writeFile(tempStateDir, "not a directory", "utf8");
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    testing.setDepsForTest({
+      ...createSubagentRegistryTestDeps(),
+      runSubagentAnnounceFlow: announceSpy,
+    });
+
+    expect(() =>
+      registerSubagentRun({
+        runId: "run-prod-persist-fails",
+        childSessionKey: "agent:main:subagent:prod-persist-fails",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "must use strict production persistence",
+        cleanup: "keep",
+      }),
+    ).toThrow();
+
+    expect(
+      getLatestSubagentRunByChildSessionKey("agent:main:subagent:prod-persist-fails"),
+    ).toBeNull();
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("rolls back a new subagent run when TaskFlow tracking fails", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+    const taskFlowError = new Error("task registry unavailable");
+    setDetachedTaskLifecycleRuntime(
+      createDetachedTaskRuntime({
+        createRunningTaskRun: vi.fn(() => {
+          throw taskFlowError;
+        }),
+      }),
+    );
+
+    expect(() =>
+      registerSubagentRun({
+        runId: "run-taskflow-fails",
+        childSessionKey: "agent:main:subagent:taskflow-fails",
+        requesterSessionKey: "agent:main:main",
+        requesterDisplayKey: "main",
+        task: "must be tracked before spawn acceptance",
+        cleanup: "keep",
+      }),
+    ).toThrow(taskFlowError);
+
+    expect(getLatestSubagentRunByChildSessionKey("agent:main:subagent:taskflow-fails")).toBeNull();
+    expect(loadSubagentRegistryFromDisk().has("run-taskflow-fails")).toBe(false);
+    expect(callGateway).not.toHaveBeenCalled();
+  });
+
+  it("persists silent announce metadata and replays it after restart", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    let releaseInitialWait:
+      | ((value: { status: "ok"; startedAt: number; endedAt: number }) => void)
+      | undefined;
+    vi.mocked(callGateway)
+      .mockImplementationOnce(
+        async () =>
+          await new Promise((resolve) => {
+            releaseInitialWait = resolve as typeof releaseInitialWait;
+          }),
+      )
+      .mockResolvedValueOnce({
+        status: "ok",
+        startedAt: 111,
+        endedAt: 222,
+      });
+
+    registerSubagentRun({
+      runId: "run-silent",
+      childSessionKey: "agent:main:subagent:silent-test",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "quiet enrichment",
+      cleanup: "keep",
+      silentAnnounce: true,
+      wakeOnReturn: true,
+      traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+    });
+    await writeChildSessionEntry({
+      sessionKey: "agent:main:subagent:silent-test",
+      sessionId: "sess-silent",
+    });
+
+    const registryPath = path.join(tempStateDir, "subagents", "runs.json");
+    const run = await readPersistedRun<{
+      silentAnnounce?: boolean;
+      wakeOnReturn?: boolean;
+      traceparent?: string;
+    }>(registryPath, "run-silent");
+    expect(run).toMatchObject({
+      silentAnnounce: true,
+      wakeOnReturn: true,
+      traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+    });
+
+    resetSubagentRegistryForTests({ persist: false });
+    initSubagentRegistry();
+    releaseInitialWait?.({
+      status: "ok",
+      startedAt: 111,
+      endedAt: 222,
+    });
+
+    await vi.waitFor(() => {
+      expect(announceSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          childRunId: "run-silent",
+          silentAnnounce: true,
+          wakeOnReturn: true,
+          traceparent: "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01",
+        }),
+      );
+    });
+  });
+
+  it("persists completed subagent timing through the lifecycle (registerSubagentRun → callGateway → persist)", async () => {
+    tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-subagent-"));
+    process.env.OPENCLAW_STATE_DIR = tempStateDir;
+
+    const now = Date.now();
+    const startedAt = now;
+    const endedAt = now + 500;
+    vi.mocked(callGateway).mockResolvedValueOnce({
+      status: "ok",
+      startedAt,
+      endedAt,
+    });
+
+    const storePath = await writeChildSessionEntry({
+      sessionKey: "agent:main:subagent:timing",
+      sessionId: "sess-timing",
+      updatedAt: startedAt - 1,
+    });
+    registerSubagentRun({
+      runId: "run-session-timing",
+      childSessionKey: "agent:main:subagent:timing",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      task: "persist timing",
+      cleanup: "keep",
+    });
+
+    await waitForRegistryWork(async () => {
+      const store = await readSubagentSessionStore(storePath);
+      return store["agent:main:subagent:timing"]?.endedAt === endedAt;
+    });
 
     const store = await readSubagentSessionStore(storePath);
     const persisted = store["agent:main:subagent:timing"];

@@ -27,7 +27,11 @@ import {
   buildAgentRuntimeOutcomePlan,
 } from "../../agents/runtime-plan/build.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  loadSessionEntry,
+  patchSessionEntry,
+  updateSessionEntry,
+} from "../../config/sessions/session-accessor.js";
 import type { TypingMode } from "../../config/types.js";
 import { logVerbose } from "../../globals.js";
 import {
@@ -38,9 +42,11 @@ import {
   registerAgentRunContext,
 } from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
+import type { ChainState, ContinueWorkRequest } from "../continuation/types.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -93,6 +99,7 @@ import type { ReplyOperation } from "./reply-run-registry.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildReplyUsageState } from "./reply-usage-state.js";
 import { isRoutableChannel, routeReply } from "./route-reply.js";
+import { resolveReplyHookTrigger } from "./run-provenance.js";
 import { incrementRunCompactionCount, persistRunSessionUsage } from "./session-run-accounting.js";
 import { createTypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
@@ -848,6 +855,9 @@ export function createFollowupRunner(params: {
         | undefined;
       let queuedUserMessagePersistedAcrossFallback = false;
       let assistantErrorPersistedAcrossFallback = false;
+      // Accumulate every continue_work election fired this turn; capturing only
+      // the last one silently drops the rest (#982).
+      const attemptContinueWorkRequests: ContinueWorkRequest[] = [];
       const fastModeStartedAtMs = Date.now();
       const fastModeAutoProgressState: FastModeAutoProgressState = {
         offAnnounced: false,
@@ -1040,7 +1050,7 @@ export function createFollowupRunner(params: {
                     sessionId: run.sessionId,
                     sessionKey: replySessionKey,
                     agentId: run.agentId,
-                    trigger: opts?.isHeartbeat === true ? "heartbeat" : "user",
+                    trigger: resolveReplyHookTrigger(opts),
                     sessionFile: run.sessionFile,
                     workspaceDir: run.workspaceDir,
                     cwd: run.cwd,
@@ -1138,7 +1148,7 @@ export function createFollowupRunner(params: {
                 sessionId: run.sessionId,
                 sessionKey: run.sessionKey,
                 agentId: run.agentId,
-                trigger: "user",
+                trigger: resolveReplyHookTrigger(opts),
                 messageChannel: queued.originatingChannel ?? undefined,
                 messageProvider: run.messageProvider,
                 chatType: run.chatType,
@@ -1219,6 +1229,18 @@ export function createFollowupRunner(params: {
                   bootstrapPromptWarningSignaturesSeen[
                     bootstrapPromptWarningSignaturesSeen.length - 1
                   ],
+                // Continuation: thread continueWorkOpts so continue_work is
+                // callable on queued followup turns (subagent sessions,
+                // continuation-triggered heartbeats). Without this, the tool never
+                // registers and subagents cannot self-elect another turn.
+                continueWorkOpts:
+                  runtimeConfig?.agents?.defaults?.continuation?.enabled === true
+                    ? {
+                        requestContinuation: (request: ContinueWorkRequest) => {
+                          attemptContinueWorkRequests.push(request);
+                        },
+                      }
+                    : undefined,
                 toolProgressDetail,
                 shouldEmitToolResult: shouldEmitToolResultProgress,
                 shouldEmitToolOutput: shouldEmitToolOutputProgress,
@@ -1341,6 +1363,234 @@ export function createFollowupRunner(params: {
       }
 
       await drainProgressDeliveries();
+
+      let continuationChainStateAfterDelegateDispatch: ChainState | undefined;
+      // Consume and dispatch continue_delegate queue enqueued during this
+      // followup turn. Parallels the main-session dispatch in agent-runner.ts:
+      // without this, delegates queued by continue_work-triggered heartbeats
+      // (or any followup turn) stay in the queue until the NEXT inbound
+      // message arrives to trigger the main-session dispatch
+      // (docs/design/continue-work-signal-v2.md §3.2).
+      if (runtimeConfig?.agents?.defaults?.continuation?.enabled === true && sessionKey) {
+        const [
+          { dispatchToolDelegates },
+          { resolveLiveContinuationRuntimeConfig },
+          { loadContinuationChainState, persistContinuationChainState },
+        ] = await Promise.all([
+          import("../continuation/delegate-dispatch.js"),
+          import("../continuation/config.js"),
+          import("../continuation/state.js"),
+        ]);
+        const tailUsage = runResult.meta?.agentMeta?.usage;
+        const turnTokens = (tailUsage?.input ?? 0) + (tailUsage?.output ?? 0);
+        const tailEntry = (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
+        const chainState = loadContinuationChainState(tailEntry, turnTokens);
+        const persistDispatchChainState = async (nextState: typeof chainState): Promise<void> => {
+          if (!tailEntry) {
+            return;
+          }
+          persistContinuationChainState({
+            sessionEntry: tailEntry,
+            count: nextState.currentChainCount,
+            startedAt: nextState.chainStartedAt,
+            tokens: nextState.accumulatedChainTokens,
+            // Carry the advanced/minted chain id so the next drain reloads it
+            // instead of re-minting a fresh one (stable chain correlation).
+            ...(nextState.chainId ? { chainId: nextState.chainId } : {}),
+          });
+          // The in-memory mutation above is orphaned for disk. The followup
+          // path's only durable writer is `persistRunSessionUsage`
+          // -> `updateSessionStoreEntry`, which `loadSessionStore(...,
+          // skipCache: true)` and patches usage fields only --
+          // `continuationChain*` is not in that patch shape. Without an
+          // explicit chain-state persist the followup-only token chain
+          // never reaches disk; cost-cap and `maxChainLength` enforcement
+          // see stale values across cache eviction or gateway restart.
+          if (storePath && sessionKey) {
+            try {
+              await patchSessionEntry(
+                { storePath, sessionKey },
+                () => ({
+                  continuationChainCount: nextState.currentChainCount,
+                  continuationChainStartedAt: nextState.chainStartedAt,
+                  continuationChainTokens: nextState.accumulatedChainTokens,
+                  // Persist the chain id to disk too so it survives gateway
+                  // restart / cache eviction and the next drain does not
+                  // re-mint a fresh id.
+                  ...(nextState.chainId ? { continuationChainId: nextState.chainId } : {}),
+                }),
+                // Chain bookkeeping is not user activity: keep updatedAt stable.
+                { preserveActivity: true },
+              );
+            } catch (err) {
+              // Mirror agent-runner.ts's defensive log: persistence failure
+              // must not break the followup reply itself.
+              defaultRuntime.error?.(
+                `[followup-runner] failed to persist continuation chain state for ${sessionKey}: ${String(err)}`,
+              );
+            }
+          }
+        };
+        const dispatchResult = await dispatchToolDelegates({
+          sessionKey,
+          chainState,
+          ctx: {
+            sessionKey,
+            agentChannel: queued.originatingChannel ?? undefined,
+            agentAccountId: queued.originatingAccountId ?? undefined,
+            agentTo: queued.originatingTo ?? undefined,
+            agentThreadId: queued.originatingThreadId ?? undefined,
+          },
+          maxChainLength: resolveLiveContinuationRuntimeConfig(runtimeConfig).maxChainLength,
+          // Hedge re-arm must see fresh chain state.
+          loadFreshChainState: () => loadContinuationChainState(tailEntry, 0),
+          persistChainState: persistDispatchChainState,
+        });
+        // Persist the advanced chain state back to the session
+        // entry after dispatch. Without this the followup-path counter never
+        // advances and `maxChainLength` enforcement breaks across hops.
+        //
+        // Persist even when `dispatched === 0`. The chainState
+        // returned from `dispatchToolDelegates` carries the fresh
+        // `accumulatedChainTokens` from `loadContinuationChainState(tailEntry,
+        // turnTokens)` regardless of whether any delegate spawned. Guarding on
+        // `dispatched > 0` drops the token total on followup-only chains
+        // (delayed-only delegates, all-deferred dispatches, or pure
+        // continue_work turns), causing token-budget drift across hops.
+        if (dispatchResult) {
+          continuationChainStateAfterDelegateDispatch = dispatchResult.chainState;
+          await persistDispatchChainState(dispatchResult.chainState);
+        }
+      }
+
+      // --- continue_work processing ---
+      // The election is durable TaskFlow state; the dispatcher only arms a
+      // maturity timer and can replay it after gateway restart.
+      const continuationEnabled = runtimeConfig?.agents?.defaults?.continuation?.enabled === true;
+      // One entry per continue_work tool call this turn; each fans out its own
+      // wake. Falls back to a single bracket-derived election when the model
+      // used [[CONTINUE_WORK]] text instead of the tool (subagent leaf path).
+      let effectiveContinueWorkRequests: {
+        reason: string;
+        delaySeconds?: number;
+        traceparent?: string;
+      }[] = attemptContinueWorkRequests;
+      if (effectiveContinueWorkRequests.length === 0 && continuationEnabled && sessionKey) {
+        const [{ extractContinuationSignal }, { stripContinuationSignal }] = await Promise.all([
+          import("../continuation/signal.js"),
+          import("../tokens.js"),
+        ]);
+        const continuationPayloads = runResult.payloads ?? [];
+        const extraction = extractContinuationSignal({
+          payloads: continuationPayloads.map((payload) => ({ ...payload })),
+          enabled: true,
+          sessionKey,
+        });
+        if (extraction.signal?.kind === "work") {
+          if (extraction.fromBracket) {
+            for (let i = continuationPayloads.length - 1; i >= 0; i--) {
+              const payload = continuationPayloads[i];
+              if (!payload?.text) {
+                continue;
+              }
+              const stripped = stripContinuationSignal(payload.text);
+              if (stripped.signal?.kind !== "work") {
+                continue;
+              }
+              payload.text = stripped.text;
+              break;
+            }
+          }
+          effectiveContinueWorkRequests = [
+            {
+              reason: extraction.workReason ?? "",
+              ...(extraction.signal.delayMs !== undefined
+                ? { delaySeconds: extraction.signal.delayMs / 1000 }
+                : {}),
+              ...(extraction.signal.traceparent
+                ? { traceparent: extraction.signal.traceparent }
+                : {}),
+            },
+          ];
+        }
+      }
+      if (effectiveContinueWorkRequests.length > 0 && continuationEnabled && sessionKey) {
+        const [
+          { resolveLiveContinuationRuntimeConfig },
+          { loadContinuationChainState, persistContinuationChainState },
+          { scheduleContinuationWorkBatch },
+        ] = await Promise.all([
+          import("../continuation/config.js"),
+          import("../continuation/state.js"),
+          import("../continuation/lazy.runtime.js"),
+        ]);
+        const continuationConfig = resolveLiveContinuationRuntimeConfig(runtimeConfig);
+        const tailUsage = runResult.meta?.agentMeta?.usage;
+        const turnTokens = (tailUsage?.input ?? 0) + (tailUsage?.output ?? 0);
+        const tailEntry = (sessionKey ? sessionStore?.[sessionKey] : undefined) ?? sessionEntry;
+        const chainState =
+          continuationChainStateAfterDelegateDispatch ??
+          loadContinuationChainState(tailEntry, turnTokens);
+        const scheduleResult = await scheduleContinuationWorkBatch({
+          sessionKey,
+          chainState,
+          requests: effectiveContinueWorkRequests.map((request) => ({
+            reason: request.reason,
+            delaySeconds: request.delaySeconds ?? continuationConfig.defaultDelayMs / 1000,
+            ...(request.traceparent ? { traceparent: request.traceparent } : {}),
+          })),
+          config: continuationConfig,
+          // Same-session own-turn continue_work has no spawning lineage; leave
+          // parentRunId unset so #990 bucket-1 never orphan-reaps it (see the
+          // matching note in attempt-execution.ts scheduleSpawnInitContinueWorkWake).
+          log: (message) => defaultRuntime.log(message),
+        });
+        // #986 cap-notice symmetry: surface cap-dropped elections on the
+        // followup lane too, matching the main-reply lane (agent-runner).
+        // Multi-election only, to keep single-work behavior intact
+        // (Rune #988 review residual + frond fold-in).
+        if (scheduleResult.cappedCount > 0 && effectiveContinueWorkRequests.length > 1) {
+          enqueueSystemEvent(
+            `[continuation] ${scheduleResult.cappedCount} of ${effectiveContinueWorkRequests.length} continue_work elections were not scheduled (chain/cost/pending cap).`,
+            { sessionKey, trusted: true },
+          );
+        }
+        if (scheduleResult.scheduledCount > 0) {
+          persistContinuationChainState({
+            sessionEntry: tailEntry,
+            count: scheduleResult.chainState.currentChainCount,
+            startedAt: scheduleResult.chainState.chainStartedAt,
+            tokens: scheduleResult.chainState.accumulatedChainTokens,
+            ...(scheduleResult.chainState.chainId
+              ? { chainId: scheduleResult.chainState.chainId }
+              : {}),
+          });
+          // Followup usage persistence only writes usage/model fields. Persist
+          // continuation chain counters explicitly so recovered TaskFlow work
+          // reloads the advanced budget after cache eviction or restart.
+          if (storePath) {
+            try {
+              await patchSessionEntry(
+                { storePath, sessionKey },
+                () => ({
+                  continuationChainCount: scheduleResult.chainState.currentChainCount,
+                  continuationChainStartedAt: scheduleResult.chainState.chainStartedAt,
+                  continuationChainTokens: scheduleResult.chainState.accumulatedChainTokens,
+                  ...(scheduleResult.chainState.chainId
+                    ? { continuationChainId: scheduleResult.chainState.chainId }
+                    : {}),
+                }),
+                // Chain bookkeeping is not user activity: keep updatedAt stable.
+                { preserveActivity: true },
+              );
+            } catch (err) {
+              defaultRuntime.error?.(
+                `[followup-runner] failed to persist continue_work chain state for ${sessionKey}: ${String(err)}`,
+              );
+            }
+          }
+        }
+      }
 
       const usage = runResult.meta?.agentMeta?.usage;
       const promptTokens = runResult.meta?.agentMeta?.promptTokens;

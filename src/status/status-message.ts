@@ -1,3 +1,4 @@
+// "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
 // Status message helpers read and format stored status messages.
 import fs from "node:fs";
 import {
@@ -22,6 +23,12 @@ import {
 } from "../agents/model-selection.js";
 import { resolveOpenAITextVerbosity } from "../agents/openai-text-verbosity.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox.js";
+import { getVolitionalCompactionCount } from "../agents/tools/request-compaction-tool.js";
+import { resolveContinuationRuntimeConfig } from "../auto-reply/continuation/config.js";
+import {
+  pendingDelegateCount,
+  stagedPostCompactionDelegateCount,
+} from "../auto-reply/continuation/delegate-store.js";
 import {
   formatProviderModelRef,
   resolveSelectedAndActiveModel,
@@ -68,6 +75,55 @@ import { VERSION } from "../version.js";
 import { resolveAgentRuntimeLabel } from "./agent-runtime-label.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
 
+/**
+ * RFC §6.3 Continuation row formatter for /status.
+ * Renders only when continuation is enabled and a sessionKey is provided.
+ * Format:
+ *   🔄 Continuation: chain X/Y [| Z delegate(s) pending] [| W post-compaction staged] [| volitional: N]
+ * Pending / staged fields are omitted when zero; volitional is omitted when zero.
+ * Pluralization: "1 delegate pending" vs "N delegates pending".
+ */
+function formatContinuationStatusLine(args: StatusArgs): string | null {
+  const continuation = args.config?.agents?.defaults?.continuation;
+  if (!continuation?.enabled || !args.sessionKey) {
+    return null;
+  }
+  const { maxChainLength } = resolveContinuationRuntimeConfig(args.config);
+  const chainCount = args.sessionEntry?.continuationChainCount ?? 0;
+  let pending = 0;
+  let staged = 0;
+  let volitional = 0;
+  try {
+    pending = pendingDelegateCount(args.sessionKey);
+  } catch {
+    /* delegate-store not initialised */
+  }
+  try {
+    staged = stagedPostCompactionDelegateCount(args.sessionKey);
+  } catch {
+    /* delegate-store not initialised */
+  }
+  try {
+    volitional = getVolitionalCompactionCount(args.sessionKey);
+  } catch {
+    /* request-compaction-tool not initialised */
+  }
+  if (chainCount === 0 && pending === 0 && staged === 0 && volitional === 0) {
+    return null;
+  }
+  const parts = [`chain ${chainCount}/${maxChainLength}`];
+  if (pending > 0) {
+    parts.push(`${pending} ${pending === 1 ? "delegate" : "delegates"} pending`);
+  }
+  if (staged > 0) {
+    parts.push(`${staged} post-compaction staged`);
+  }
+  if (volitional > 0) {
+    parts.push(`volitional: ${volitional}`);
+  }
+  return `🔄 Continuation: ${parts.join(" | ")}`;
+}
+
 type AgentDefaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
 type AgentConfig = Partial<AgentDefaults> & {
   model?: AgentDefaults["model"] | string;
@@ -110,6 +166,7 @@ export type StatusArgs = {
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
   subagentsLine?: string;
   taskLine?: string;
+  continuationLine?: string;
   pluginHealthLine?: string;
   channelFeatureLine?: string;
   includeTranscriptUsage?: boolean;
@@ -1126,6 +1183,7 @@ export function buildStatusMessage(args: StatusArgs): string {
     `🧵 ${sessionLine}`,
     args.subagentsLine,
     args.taskLine,
+    args.continuationLine ?? formatContinuationStatusLine(args),
     args.channelFeatureLine,
     `⚙️ ${optionsLine}`,
     args.pluginHealthLine,

@@ -36,6 +36,7 @@ vi.mock("../../config/sessions/paths.js", () => ({
 
 const storeRuntimeLoads = vi.hoisted(() => vi.fn());
 const updateSessionStore = vi.hoisted(() => vi.fn());
+const drainFormattedSystemEventsMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 vi.mock("../../config/sessions/store.runtime.js", () => {
   storeRuntimeLoads();
@@ -72,10 +73,15 @@ vi.mock("../command-detection.js", () => ({
 
 vi.mock("./agent-runner.runtime.js", () => ({
   runReplyAgent: vi.fn().mockResolvedValue({ text: "ok" }),
+  cancelContinuationTimer: vi.fn(),
 }));
 
 vi.mock("./body.js", () => ({
   applySessionHints: vi.fn().mockImplementation(async ({ baseBody }) => baseBody),
+}));
+
+vi.mock("../continuation/context-pressure.js", () => ({
+  checkContextPressure: vi.fn().mockReturnValue({ fired: false, band: 0 }),
 }));
 
 vi.mock("./groups.js", () => ({
@@ -122,7 +128,7 @@ vi.mock("./session-updates.runtime.js", () => ({
 }));
 
 vi.mock("./session-system-events.js", () => ({
-  drainFormattedSystemEvents: vi.fn().mockResolvedValue(undefined),
+  drainFormattedSystemEvents: drainFormattedSystemEventsMock,
 }));
 
 vi.mock("./typing-mode.js", () => ({
@@ -2811,6 +2817,56 @@ describe("runPreparedReply media-only handling", () => {
       suppressTyping?: boolean;
     };
     expect(call?.suppressTyping).toBe(true);
+  });
+
+  it("marks delegate-return turns as continuation wakes and clears delegate-pending state", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          continuationTrigger: "delegate-return",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.isContinuationWake).toBe(true);
+  });
+
+  it("marks work-wake turns as continuation wakes without clearing delegate-pending state", async () => {
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          continuationTrigger: "work-wake",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.isContinuationWake).toBe(true);
+  });
+
+  it("leaves ordinary turns unmarked as continuation wakes", async () => {
+    await runPreparedReply(baseParams());
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.isContinuationWake).toBe(false);
+  });
+
+  it("leaves ordinary subagent-return turns unmarked as continuation wakes (#989 chain-budget reset)", async () => {
+    // An ordinary inter-session subagent completion is NOT a mid-chain wake. It
+    // must NOT set isContinuationWake, otherwise the agent-runner chain-budget
+    // reset gate (#987) is skipped and a stale chain count rejects every fresh
+    // continuation elected from the subagent return (the #989 doom-lock hole).
+    await runPreparedReply(
+      baseParams({
+        opts: {
+          continuationTrigger: "subagent-return",
+        },
+      }),
+    );
+
+    const call = vi.mocked(runReplyAgent).mock.calls[0]?.[0];
+    expect(call?.isContinuationWake).toBe(false);
   });
 
   it("routes queued system events into user prompt text, not system prompt context", async () => {

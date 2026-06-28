@@ -1,6 +1,9 @@
 // Persists queued session deliveries for retry and recovery.
 import { createHash } from "node:crypto";
 import type { ChatType } from "../channels/chat-type.js";
+import type { SessionPostCompactionDelegate } from "../config/sessions/types.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   deleteDeliveryQueueEntry,
   loadDeliveryQueueEntries,
@@ -10,13 +13,63 @@ import {
   upsertDeliveryQueueEntry,
   type DeliveryQueueRowMetadata,
 } from "./delivery-queue-sqlite.js";
+import { normalizeDiagnosticTraceparent } from "./diagnostic-trace-context.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
 import { generateSecureUuid } from "./secure-random.js";
 
 // Session delivery queue persists session-scoped messages until channel
 // delivery acknowledges them or recovery exhausts retry policy.
 const QUEUE_NAME = "session";
 
-type SessionDeliveryContext = {
+/** Default age threshold for purging failed entries (14 days). */
+export const DEFAULT_FAILED_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1000;
+
+type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
+
+function openStateDatabaseForSession(stateDir?: string) {
+  return openOpenClawStateDatabase({
+    env: stateDir ? { ...process.env, OPENCLAW_STATE_DIR: stateDir } : process.env,
+  });
+}
+
+/**
+ * Prune failed session-delivery entries older than maxAgeMs.
+ * Returns scanned + removed counts for caller logging.
+ */
+export async function pruneFailedOlderThan(
+  maxAgeMs: number,
+  now: number = Date.now(),
+  stateDir?: string,
+): Promise<{ scanned: number; removed: number }> {
+  const cutoff = now - maxAgeMs;
+  const database = openStateDatabaseForSession(stateDir);
+  const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);
+  const scannedRow = executeSqliteQueryTakeFirstSync(
+    database.db,
+    queueDb
+      .selectFrom("delivery_queue_entries")
+      .select((eb) => eb.fn.countAll<number>().as("count"))
+      .where("queue_name", "=", QUEUE_NAME)
+      .where("status", "=", "failed"),
+  ) as { count: number | bigint } | undefined;
+  const scanned = scannedRow ? Number(scannedRow.count) : 0;
+  const deleteResult = executeSqliteQuerySync(
+    database.db,
+    queueDb
+      .deleteFrom("delivery_queue_entries")
+      .where("queue_name", "=", QUEUE_NAME)
+      .where("status", "=", "failed")
+      .where("failed_at", "<", cutoff),
+  );
+  const removed = Number(deleteResult.numAffectedRows ?? 0n);
+  return { scanned, removed };
+}
+
+export type SessionDeliveryContext = {
   channel?: string;
   to?: string;
   accountId?: string;
@@ -37,15 +90,36 @@ export type SessionDeliveryRoute = {
 };
 
 /** Payload variants that can be replayed by session delivery recovery. */
-export type QueuedSessionDeliveryPayload =
-  | ({
+export interface AttachmentRef {
+  kind: "blob-sha256";
+  sha256: string;
+  mediaType?: string;
+}
+
+type QueuedSessionDeliveryPayloadMetadata = {
+  /**
+   * W3C trace-context traceparent for chain-correlation runtime. This is the
+   * address-recipient shape; broadcast-mode surfaces use the same substrate
+   * with a different verb set.
+   */
+  traceparent?: string;
+  /**
+   * Descriptor-stub attachment references for sibling enrichment runtime.
+   * This is the address-recipient shape; broadcast mode uses the same substrate
+   * with a different verb set.
+   */
+  attachments?: AttachmentRef[];
+};
+
+export type QueuedSessionDeliveryPayload = (
+  | {
       kind: "systemEvent";
       sessionKey: string;
       text: string;
       deliveryContext?: SessionDeliveryContext;
       idempotencyKey?: string;
-    } & SessionDeliveryRetryPolicy)
-  | ({
+    }
+  | {
       kind: "agentTurn";
       sessionKey: string;
       message: string;
@@ -54,7 +128,25 @@ export type QueuedSessionDeliveryPayload =
       route?: SessionDeliveryRoute;
       deliveryContext?: SessionDeliveryContext;
       idempotencyKey?: string;
-    } & SessionDeliveryRetryPolicy);
+    }
+  | {
+      kind: "postCompactionDelegate";
+      sessionKey: string;
+      task: string;
+      createdAt: number;
+      firstArmedAt?: number;
+      silent?: boolean;
+      silentWake?: boolean;
+      targetSessionKey?: string;
+      targetSessionKeys?: string[];
+      fanoutMode?: "tree" | "all";
+      model?: string;
+      deliveryContext?: SessionDeliveryContext;
+      idempotencyKey?: string;
+    }
+) &
+  SessionDeliveryRetryPolicy &
+  QueuedSessionDeliveryPayloadMetadata;
 
 export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   id: string;
@@ -64,11 +156,85 @@ export type QueuedSessionDelivery = QueuedSessionDeliveryPayload & {
   lastError?: string;
 };
 
+// Strip trailing whitespace per line and at end-of-string before hashing the
+// idempotency key, so same-intent keys that differ only by trailing whitespace
+// produce the same sha256 taskHash and the replay-dedupe path stays robust.
+function canonicalizeIdempotencyKey(key: string): string {
+  return key.replace(/[ \t\r\f\v]+(?=\n|$)/g, "").replace(/\s+$/, "");
+}
+
 function buildEntryId(idempotencyKey?: string): string {
   if (!idempotencyKey) {
     return generateSecureUuid();
   }
-  return createHash("sha256").update(idempotencyKey).digest("hex");
+  return createHash("sha256").update(canonicalizeIdempotencyKey(idempotencyKey)).digest("hex");
+}
+
+function normalizeQueuedTraceparent(
+  payload: QueuedSessionDeliveryPayload,
+): QueuedSessionDeliveryPayload {
+  const normalizedTraceparent = normalizeDiagnosticTraceparent(payload.traceparent);
+  const normalizedPayload: QueuedSessionDeliveryPayload = { ...payload };
+  if (normalizedTraceparent) {
+    normalizedPayload.traceparent = normalizedTraceparent;
+  } else {
+    delete normalizedPayload.traceparent;
+  }
+  return normalizedPayload;
+}
+
+function buildPostCompactionDelegateIdempotencyKey(params: {
+  sessionKey: string;
+  delegate: SessionPostCompactionDelegate;
+  sequence: number;
+  compactionCount?: number;
+}): string {
+  const taskHash = createHash("sha256").update(params.delegate.task).digest("hex").slice(0, 16);
+  return [
+    "post-compaction-delegate",
+    params.sessionKey,
+    String(params.compactionCount ?? "unknown"),
+    String(params.delegate.firstArmedAt ?? params.delegate.createdAt),
+    String(params.sequence),
+    taskHash,
+  ].join(":");
+}
+
+export function buildPostCompactionDelegateDeliveryPayload(params: {
+  sessionKey: string;
+  delegate: SessionPostCompactionDelegate;
+  sequence: number;
+  compactionCount?: number;
+  deliveryContext?: SessionDeliveryContext;
+  idempotencyKey?: string;
+}): QueuedSessionDeliveryPayload {
+  return {
+    kind: "postCompactionDelegate",
+    sessionKey: params.sessionKey,
+    task: params.delegate.task,
+    createdAt: params.delegate.createdAt,
+    firstArmedAt: params.delegate.firstArmedAt ?? params.delegate.createdAt,
+    ...(params.delegate.silent != null ? { silent: params.delegate.silent } : {}),
+    ...(params.delegate.silentWake != null ? { silentWake: params.delegate.silentWake } : {}),
+    ...(params.delegate.targetSessionKey
+      ? { targetSessionKey: params.delegate.targetSessionKey }
+      : {}),
+    ...(params.delegate.targetSessionKeys && params.delegate.targetSessionKeys.length > 0
+      ? { targetSessionKeys: params.delegate.targetSessionKeys }
+      : {}),
+    ...(params.delegate.fanoutMode ? { fanoutMode: params.delegate.fanoutMode } : {}),
+    ...(params.delegate.model ? { model: params.delegate.model } : {}),
+    ...(params.delegate.traceparent ? { traceparent: params.delegate.traceparent } : {}),
+    ...(params.deliveryContext ? { deliveryContext: params.deliveryContext } : {}),
+    idempotencyKey:
+      params.idempotencyKey ??
+      buildPostCompactionDelegateIdempotencyKey({
+        sessionKey: params.sessionKey,
+        delegate: params.delegate,
+        sequence: params.sequence,
+        compactionCount: params.compactionCount,
+      }),
+  };
 }
 
 function queuedSessionDeliveryMetadata(entry: QueuedSessionDelivery): DeliveryQueueRowMetadata {
@@ -87,14 +253,15 @@ export async function enqueueSessionDelivery(
   params: QueuedSessionDeliveryPayload,
   stateDir?: string,
 ): Promise<string> {
-  const id = buildEntryId(params.idempotencyKey);
+  const payload = normalizeQueuedTraceparent(params);
+  const id = buildEntryId(payload.idempotencyKey);
 
-  if (params.idempotencyKey && loadDeliveryQueueEntry(QUEUE_NAME, id, stateDir)) {
+  if (payload.idempotencyKey && loadDeliveryQueueEntry(QUEUE_NAME, id, stateDir)) {
     return id;
   }
 
   const entry: QueuedSessionDelivery = {
-    ...params,
+    ...payload,
     id,
     enqueuedAt: Date.now(),
     retryCount: 0,
@@ -106,6 +273,21 @@ export async function enqueueSessionDelivery(
     stateDir,
   });
   return id;
+}
+
+/** Acknowledge a successfully delivered session entry. */
+export async function enqueuePostCompactionDelegateDelivery(
+  params: {
+    sessionKey: string;
+    delegate: SessionPostCompactionDelegate;
+    sequence: number;
+    compactionCount?: number;
+    deliveryContext?: SessionDeliveryContext;
+    idempotencyKey?: string;
+  },
+  stateDir?: string,
+): Promise<string> {
+  return await enqueueSessionDelivery(buildPostCompactionDelegateDeliveryPayload(params), stateDir);
 }
 
 /** Acknowledge a successfully delivered session entry. */

@@ -1,3 +1,4 @@
+// "RFC §" references herein cite docs/design/continue-work-signal-v2.md (Agent Self-Elected Turn Continuation / CONTINUE_WORK).
 // Lightweight in-memory queue for human-readable system events that should be
 // prefixed to the next prompt. We intentionally avoid persistence to keep
 // events ephemeral. Events are session-scoped and require an explicit key.
@@ -14,12 +15,25 @@ import {
   normalizeDeliveryContext,
 } from "../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import { normalizeDiagnosticTraceparent } from "./diagnostic-trace-context.js";
 
 export type SystemEvent = {
   text: string;
   ts: number;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  sessionDeliveryAckId?: string;
+  sessionDeliveryAckStateDir?: string;
+  /**
+   * W3C `traceparent` captured at enqueue-time so the substrate-queue drain can
+   * reconstruct the producer trace at announce/deliver time. Per RFC §6.7 the
+   * substrate queue is an asynchronous boundary (enqueue turn != drain turn,
+   * possibly across a gateway restart), so trace context rides on the payload
+   * itself rather than on a runtime ambient. Optional and additive — invalid
+   * traceparent values are silently dropped at enqueue-time so producers never
+   * fail-the-write on a malformed header.
+   */
+  traceparent?: string;
 };
 
 const MAX_EVENTS = 20;
@@ -37,7 +51,37 @@ type SystemEventOptions = {
   sessionKey: string;
   contextKey?: string | null;
   deliveryContext?: DeliveryContext;
+  sessionDeliveryAckId?: string;
+  sessionDeliveryAckStateDir?: string;
+  /**
+   * @deprecated Legacy untrusted-producer downgrade flag, re-exported via the
+   * `plugin-sdk/channel-runtime` + `plugin-sdk/system-event-runtime` subpaths.
+   * Accepted-and-ignored for installed third-party channel plugins that still
+   * pass it: the anti-spoof sanitizer is now unconditional for untrusted
+   * producers (sanitize-by-default), so this flag has no runtime effect. Kept
+   * until a named SDK removal window.
+   */
+  forceSenderIsOwnerFalse?: boolean;
+  /**
+   * Trusted-internal enrichment marker (continuation/OCR/transcripts). When
+   * `true`, the payload is trusted core data that may legitimately contain
+   * `System:`/`[System]` examples (subagent returns, post-compaction context,
+   * AGENTS.md text), so it bypasses the inbound anti-spoof sanitizer and is
+   * preserved verbatim. Untrusted producers (plugin/channel text) omit this
+   * flag and are sanitized at the queue boundary.
+   */
+  trusted?: boolean;
+  /**
+   * Optional W3C `traceparent` to attach to the queued event for cross-boundary
+   * trace correlation. Invalid values are silently dropped (additive contract:
+   * a malformed traceparent never prevents an enqueue).
+   */
+  traceparent?: string;
 };
+
+function normalizeTraceparent(traceparent?: string): string | undefined {
+  return normalizeDiagnosticTraceparent(traceparent);
+}
 
 function requireSessionKey(key?: string | null): string {
   const trimmed = normalizeOptionalString(key) ?? "";
@@ -99,15 +143,26 @@ function findDuplicateInQueue(
   return queue.some((event) => isDuplicateSystemEvent(event, incoming));
 }
 
+function applyContextKeyPolicy(entry: SessionQueue, incomingContextKey: string | null): void {
+  if (incomingContextKey !== null) {
+    entry.lastContextKey = incomingContextKey;
+  }
+}
+
 export function enqueueSystemEventEntry(
   text: string,
   options: SystemEventOptions,
 ): SystemEvent | null {
   const key = requireSessionKey(options.sessionKey);
   const entry = getOrCreateSessionQueue(key);
-  // These entries are rendered as `System:` lines, so strip nested system-marker
-  // spoofs at the queue boundary before any plugin/channel text reaches a prompt.
-  const cleaned = sanitizeInboundSystemTags(text).trim();
+  // Untrusted producers (plugin/channel text) are rendered as `System:` lines, so
+  // strip nested system-marker spoofs at the queue boundary before any such text
+  // reaches a prompt. Trusted-internal producers (tagged `trusted: true`) carry
+  // workspace/subagent data that may legitimately contain those markers and are
+  // preserved verbatim.
+  const cleaned = (
+    options.trusted === true ? text : sanitizeInboundSystemTags(text)
+  ).trim();
   if (!cleaned) {
     return null;
   }
@@ -115,15 +170,19 @@ export function enqueueSystemEventEntry(
   const normalizedDeliveryContext = normalizeDeliveryContext(options.deliveryContext);
   if (findDuplicateInQueue(entry.queue, cleaned, normalizedContextKey, normalizedDeliveryContext)) {
     return null;
-  }
-  if (normalizedContextKey !== null) {
-    entry.lastContextKey = normalizedContextKey;
-  }
+  } // skip consecutive duplicates
+  const normalizedTraceparent = normalizeTraceparent(options?.traceparent);
+  applyContextKeyPolicy(entry, normalizedContextKey);
   const event: SystemEvent = {
     text: cleaned,
     ts: Date.now(),
     contextKey: normalizedContextKey,
     deliveryContext: normalizedDeliveryContext,
+    ...(options.sessionDeliveryAckId ? { sessionDeliveryAckId: options.sessionDeliveryAckId } : {}),
+    ...(options.sessionDeliveryAckStateDir
+      ? { sessionDeliveryAckStateDir: options.sessionDeliveryAckStateDir }
+      : {}),
+    ...(normalizedTraceparent ? { traceparent: normalizedTraceparent } : {}),
   };
   entry.queue.push(event);
   if (entry.queue.length > MAX_EVENTS) {
@@ -175,6 +234,9 @@ function areSystemEventsEqual(left: SystemEvent, right: SystemEvent): boolean {
     left.text === right.text &&
     left.ts === right.ts &&
     (left.contextKey ?? null) === (right.contextKey ?? null) &&
+    left.sessionDeliveryAckId === right.sessionDeliveryAckId &&
+    left.sessionDeliveryAckStateDir === right.sessionDeliveryAckStateDir &&
+    (left.traceparent ?? undefined) === (right.traceparent ?? undefined) &&
     areDeliveryContextsEqual(left.deliveryContext, right.deliveryContext)
   );
 }
@@ -241,6 +303,38 @@ export function consumeSelectedSystemEventEntries(
 
 export function drainSystemEvents(sessionKey: string): string[] {
   return drainSystemEventEntries(sessionKey).map((event) => event.text);
+}
+
+/**
+ * Remove system events matching a predicate without draining the entire queue.
+ * Returns the removed events; non-matching events stay queued.
+ */
+export function removeSystemEvents(
+  sessionKey: string,
+  predicate: (event: SystemEvent) => boolean,
+): SystemEvent[] {
+  const key = requireSessionKey(sessionKey);
+  const entry = queues.get(key);
+  if (!entry || entry.queue.length === 0) {
+    return [];
+  }
+  const removed: SystemEvent[] = [];
+  entry.queue = entry.queue.filter((event) => {
+    if (predicate(event)) {
+      removed.push(event);
+      return false;
+    }
+    return true;
+  });
+  if (removed.length > 0) {
+    // Reset dedup state to reflect actual queue contents. `resetQueueState`
+    // deletes the now-empty queue, or restores `lastContextKey` to the last
+    // *non-null* contextKey (matching `applyContextKeyPolicy`'s enqueue policy),
+    // rather than naively taking the final event's key — which would wipe a
+    // still-valid key when the last remaining event has `contextKey: null`.
+    resetQueueState(key, entry);
+  }
+  return removed;
 }
 
 export function peekSystemEventEntries(sessionKey: string): SystemEvent[] {

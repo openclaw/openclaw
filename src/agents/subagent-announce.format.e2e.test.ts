@@ -314,7 +314,7 @@ function loadSessionStoreFixture(): Record<string, SessionEntry> {
   }) as unknown as Record<string, SessionEntry>;
 }
 
-vi.mock("./subagent-registry.js", () => subagentRegistryMock);
+vi.mock("./subagent-announce.registry.runtime.js", () => subagentRegistryMock);
 vi.mock("./subagent-registry-runtime.js", () => subagentRegistryMock);
 
 describe("subagent announce formatting", () => {
@@ -498,6 +498,10 @@ describe("subagent announce formatting", () => {
   });
 
   it("sends instructional message to main agent with status and findings", async () => {
+    setConfigOverride({
+      ...configOverride,
+      agents: { defaults: { continuation: { enabled: true } } },
+    });
     sessionStore = {
       "agent:main:subagent:test": {
         sessionId: "child-session-123",
@@ -544,6 +548,24 @@ describe("subagent announce formatting", () => {
     expect(msg).toContain("Keep this internal context private");
     expect(call?.params?.internalEvents?.[0]?.type).toBe("task_completion");
     expect(call?.params?.internalEvents?.[0]?.taskLabel).toBe("do thing");
+    expect(call?.params?.continuationTrigger).toBe("delegate-return");
+  });
+
+  it("omits continuationTrigger when continuation is disabled", async () => {
+    await runSubagentAnnounceFlow({
+      childSessionKey: "agent:main:subagent:test",
+      childRunId: "run-no-continuation-trigger",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      ...defaultOutcomeAnnounce,
+    });
+
+    const call = agentSpy.mock.calls[0]?.[0] as {
+      params?: {
+        continuationTrigger?: string;
+      };
+    };
+    expect(call?.params?.continuationTrigger).toBeUndefined();
   });
 
   it("includes success status when outcome is ok", async () => {
@@ -1893,7 +1915,45 @@ describe("subagent announce formatting", () => {
     expect(direct).toHaveBeenCalledTimes(1);
   });
 
+  it("prefers direct delivery first for completion-mode and falls back to steering on direct failure", async () => {
+    setConfigOverride({
+      ...configOverride,
+      agents: { defaults: { continuation: { enabled: true } } },
+    });
+    embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(true);
+    embeddedRunMock.isEmbeddedAgentRunStreaming.mockReturnValue(false);
+    sessionStore = {
+      "agent:main:main": {
+        sessionId: "session-collect",
+        lastChannel: "whatsapp",
+        lastTo: "+1555",
+        queueMode: "collect",
+        queueDebounceMs: 0,
+      },
+    };
+    const direct = vi.fn(async () => ({
+      delivered: false,
+      path: "direct" as const,
+      error: "direct delivery unavailable",
+    }));
+    const steer = vi.fn(async () => ({ status: "steered" as const }));
+    const delivery = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      direct,
+      steer,
+    });
+
+    expect(delivery.delivered).toBe(true);
+    expect(delivery.path).toBe("steered");
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(steer).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to internal requester-session injection when completion route is missing", async () => {
+    setConfigOverride({
+      ...configOverride,
+      agents: { defaults: { continuation: { enabled: true } } },
+    });
     embeddedRunMock.isEmbeddedAgentRunActive.mockReturnValue(false);
     embeddedRunMock.isEmbeddedAgentRunStreaming.mockReturnValue(false);
     sessionStore = {
@@ -1922,9 +1982,13 @@ describe("subagent announce formatting", () => {
     expect(didAnnounce).toBe(true);
     expect(sendSpy).toHaveBeenCalledTimes(0);
     expect(agentSpy).toHaveBeenCalledTimes(1);
-    expectAgentCallFields(getAgentCall(), {
-      sessionKey: "agent:main:main",
-      deliver: false,
+    expect(agentSpy.mock.calls[0]?.[0]).toMatchObject({
+      method: "agent",
+      params: {
+        sessionKey: "agent:main:main",
+        deliver: false,
+        continuationTrigger: "delegate-return",
+      },
     });
   });
 

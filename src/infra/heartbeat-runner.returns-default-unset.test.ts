@@ -1205,6 +1205,72 @@ describe("runHeartbeatOnce", () => {
     }
   });
 
+  it("routes to subagent session when reason=continuation (continue_work wake)", async () => {
+    const replySpy = vi.fn();
+    try {
+      const tmpDir = await createCaseDir("hb-subagent-continuation");
+      const storePath = path.join(tmpDir, "sessions.json");
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            workspace: tmpDir,
+            heartbeat: {
+              every: "5m",
+              target: "last",
+            },
+          },
+        },
+        channels: { whatsapp: { allowFrom: ["*"] } },
+        session: { store: storePath },
+      };
+      const mainSessionKey = resolveMainSessionKey(cfg);
+      const agentId = resolveAgentIdFromSessionKey(mainSessionKey);
+      const subagentKey = `agent:${agentId}:subagent:task-continuation`;
+
+      await fs.writeFile(
+        storePath,
+        JSON.stringify({
+          [mainSessionKey]: {
+            sessionId: "sid-main",
+            updatedAt: Date.now(),
+            lastChannel: "whatsapp",
+            lastTo: "120363401234567890@g.us",
+          },
+          [subagentKey]: {
+            sessionId: "sid-subagent-cont",
+            updatedAt: Date.now() + 10_000,
+            lastChannel: "whatsapp",
+            lastTo: "99999@g.us",
+          },
+        }),
+      );
+
+      replySpy.mockClear();
+      replySpy.mockResolvedValue([{ text: "Continuation wake" }]);
+      const sendWhatsApp = vi
+        .fn<
+          (
+            to: string,
+            text: string,
+            opts?: unknown,
+          ) => Promise<{ messageId: string; toJid: string }>
+        >()
+        .mockResolvedValue({ messageId: "m1", toJid: "jid" });
+
+      await runHeartbeatOnce({
+        cfg,
+        sessionKey: subagentKey,
+        reason: "continuation",
+        deps: createHeartbeatDeps(sendWhatsApp, { getReplyFromConfig: replySpy }),
+      });
+
+      // The heartbeat must use the subagent session (not fall back to main).
+      expectReplyCall(replySpy, 0, { SessionKey: subagentKey });
+    } finally {
+      replySpy.mockReset();
+    }
+  });
+
   it("suppresses duplicate heartbeat payloads within 24h", async () => {
     const tmpDir = await createCaseDir("hb-dup-suppress");
     const storePath = path.join(tmpDir, "sessions.json");

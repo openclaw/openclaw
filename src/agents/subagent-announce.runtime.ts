@@ -4,7 +4,8 @@
  * Keeping these imports behind one module lets tests replace gateway/session
  * IO without changing the announce logic itself.
  */
-export { getRuntimeConfig } from "../config/config.js";
+export { getRuntimeConfig, loadConfig } from "../config/config.js";
+export { resolveContinuationRuntimeConfig } from "../auto-reply/continuation/config.js";
 export {
   loadSessionStore,
   readSessionEntry,

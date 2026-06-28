@@ -7,6 +7,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TEST_BUNDLED_RUNTIME_SIDECAR_PATHS } from "../../test/helpers/bundled-runtime-sidecars.js";
+import { useHermeticOpenclawEnv } from "../../test/vitest/hermetic-openclaw-env.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { GATEWAY_SERVICE_RUNTIME_PID_ENV } from "../daemon/constants.js";
@@ -414,6 +415,7 @@ type UpdateCliScenario = {
 };
 
 describe("update-cli", () => {
+  useHermeticOpenclawEnv();
   const fixtureRoot = "/tmp/openclaw-update-tests";
   let fixtureCount = 0;
   const tempDirsToCleanup = new Set<string>();

@@ -569,6 +569,15 @@ export async function runPreparedReply(
     promptSessionCtx.ChatType === "group" || promptSessionCtx.ChatType === "channel";
   const isDirectChat = promptSessionCtx.ChatType === "direct" || promptSessionCtx.ChatType === "dm";
   const wasMentioned = ctx.WasMentioned === true;
+  const continuationTrigger = opts?.continuationTrigger;
+  const isDelegateWake = continuationTrigger === "delegate-return";
+  // `isContinuationWake` is the chain-budget reset gate's discriminator (#987):
+  // only mid-chain wakes preserve the runaway leash. `work-wake` (CONTINUE_WORK
+  // timer) and an in-chain `delegate-return` (a `[continuation:chain-hop:N]`
+  // return) are mid-chain steps. `subagent-return` (an ordinary inter-session
+  // subagent completion) is an external turn-entry, so it is deliberately NOT a
+  // continuation wake — the reset gate rewinds the chain budget for it (#989).
+  const isContinuationWake = continuationTrigger === "work-wake" || isDelegateWake;
   const { typingPolicy, suppressTyping } = resolveRunTypingPolicy({
     requestedPolicy: opts?.typingPolicy,
     suppressTyping: opts?.suppressTyping === true,
@@ -1481,6 +1490,7 @@ export async function runPreparedReply(
     typingMode,
     resetTriggered: effectiveResetTriggered,
     replyThreadingOverride,
+    isContinuationWake,
     replyOperation: providedReplyOperation,
   });
 }

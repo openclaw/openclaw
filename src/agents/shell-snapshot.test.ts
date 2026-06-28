@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
   maybeWrapCommandWithShellSnapshot,
   resetShellSnapshotCacheForTests,
@@ -63,6 +63,7 @@ describe("exec shell snapshots", () => {
       "PNPM_HOME",
       "ZDOTDIR",
     ]);
+    deleteTestEnvValue(EXEC_SHELL_SNAPSHOT_ENV);
   });
 
   afterEach(() => {

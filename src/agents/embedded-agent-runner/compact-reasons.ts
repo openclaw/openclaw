@@ -9,6 +9,57 @@ const MAX_COMPACTION_REASON_DETAIL_CHARS = 100;
 export const DEFERRED_CONTEXT_ENGINE_COMPACTION_REASON =
   "deferred to background context-engine maintenance";
 
+/**
+ * Closed union of compaction-attempt outcomes returned by
+ * {@link classifyCompactionReason}. Replaces the prior bare `string` return,
+ * which forced consumers to substring-match on free-form messages.
+ *
+ * Add new variants here when the classifier learns a new shape.
+ */
+export type CompactionReasonCode =
+  | "unknown"
+  | "no_compactable_entries"
+  | "no_real_conversation_messages"
+  | "unknown_model"
+  | "below_threshold"
+  | "already_compacted_recently"
+  | "deferred_background"
+  | "live_context_still_exceeds_target"
+  | "guard_blocked"
+  | "summary_failed"
+  | "timeout"
+  | "provider_error_4xx"
+  | "provider_error_5xx";
+
+/**
+ * Reason codes that mean "compaction did not run, but for a legitimate
+ * non-error cause" — caller should treat the request as gracefully skipped
+ * rather than as a failure.
+ *
+ * Single source of truth shared by the request-compaction tool and the
+ * /compact command.
+ */
+const SKIP_CODES: ReadonlySet<CompactionReasonCode> = new Set([
+  "no_compactable_entries",
+  "no_real_conversation_messages",
+  "below_threshold",
+  "already_compacted_recently",
+  "deferred_background",
+]);
+
+export function isCompactionSkipCode(code: CompactionReasonCode): boolean {
+  return SKIP_CODES.has(code);
+}
+
+/**
+ * Convenience wrapper: classify a free-form reason string, then check whether
+ * the resulting code is a skip-class outcome. Replaces the duplicated
+ * `isLegitSkipReason` / `isCompactionSkipReason` substring helpers.
+ */
+export function isCompactionSkipReason(reason?: string): boolean {
+  return isCompactionSkipCode(classifyCompactionReason(reason));
+}
+
 function isGenericCompactionCancelledReason(reason: string): boolean {
   const normalized = normalizeLowercaseStringOrEmpty(reason);
   return normalized === "compaction cancelled" || normalized === "error: compaction cancelled";
@@ -26,13 +77,21 @@ export function resolveCompactionFailureReason(params: {
 }
 
 /** Bucket a raw compaction reason into stable telemetry/status classes. */
-export function classifyCompactionReason(reason?: string): string {
+export function classifyCompactionReason(reason?: string): CompactionReasonCode {
   const text = normalizeLowercaseStringOrEmpty(reason);
   if (!text) {
     return "unknown";
   }
-  if (text.includes("nothing to compact") || text.includes("no real conversation messages")) {
+  if (text.includes("nothing to compact")) {
     return "no_compactable_entries";
+  }
+  if (text.includes("no real conversation messages")) {
+    return "no_real_conversation_messages";
+  }
+  if (text.includes("unknown model")) {
+    // Surfaced when DEFAULT_PROVIDER/DEFAULT_MODEL fallback hits an unsupported
+    // model, e.g. volitional compaction without provider/model passed.
+    return "unknown_model";
   }
   // Backends use both phrases for the same harmless state: the transcript is
   // already small enough, so preflight compaction should skip instead of fail.
