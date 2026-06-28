@@ -573,7 +573,7 @@ export async function readSessionMessagesAsync(
         target.sessionId,
         target.storePath,
         undefined,
-        { ...opts, resetArchiveOnly: true },
+        opts,
         target.agentId,
       );
     }
@@ -805,7 +805,35 @@ export async function readSessionMessagesPageWithStatsAsync(
   scope: SessionTranscriptReadScope,
   opts: { offset: number; maxMessages: number; allowResetArchiveFallback?: boolean },
 ): Promise<ReadRecentSessionMessagesResult> {
-  const target = resolveFileBackedReadScope(scope);
+  const target = resolveTranscriptReadTarget(scope);
+  if (isSqliteReadTarget(target)) {
+    const records = await readSqliteMessageRecords(target);
+    if (records.length === 0 && opts.allowResetArchiveFallback === true) {
+      return await readSessionMessagesPageWithStatsAsyncFile(
+        target.sessionId,
+        target.storePath,
+        undefined,
+        { ...opts, resetArchiveOnly: true },
+        target.agentId,
+      );
+    }
+    const totalMessages = records.length;
+    const offset = Math.min(
+      Math.max(0, Math.floor(Number.isFinite(opts.offset) ? opts.offset : 0)),
+      totalMessages,
+    );
+    const maxMessages = Math.max(
+      0,
+      Math.floor(Number.isFinite(opts.maxMessages) ? opts.maxMessages : 0),
+    );
+    const endExclusive = Math.max(0, totalMessages - offset);
+    const start = Math.max(0, endExclusive - maxMessages);
+    return {
+      messages: records.slice(start, endExclusive).map(sqliteRecordMessageWithSeq),
+      totalMessages,
+      transcriptPath: target.sessionFile,
+    };
+  }
   return await readSessionMessagesPageWithStatsAsyncFile(
     target.sessionId,
     target.storePath,
