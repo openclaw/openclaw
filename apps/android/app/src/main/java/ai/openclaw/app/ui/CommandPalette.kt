@@ -5,6 +5,7 @@ import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawPanel
+import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSeparatedColumn
 import ai.openclaw.app.ui.design.ClawTextField
@@ -94,7 +95,11 @@ internal fun CommandPalette(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(9.dp),
           ) {
-            CommandIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search", onClick = onDismiss)
+            ClawPlainIconButton(
+              icon = Icons.AutoMirrored.Filled.ArrowBack,
+              contentDescription = "Close search",
+              onClick = onDismiss,
+            )
             Text(text = "Search", style = ClawTheme.type.title, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
             CommandAvatar(text = "OC")
           }
@@ -258,19 +263,6 @@ private fun CommandSessionListRow(
         modifier = Modifier.size(17.dp),
         tint = ClawTheme.colors.textMuted,
       )
-    }
-  }
-}
-
-@Composable
-private fun CommandIconButton(
-  icon: ImageVector,
-  contentDescription: String,
-  onClick: () -> Unit,
-) {
-  Surface(onClick = onClick, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
-    Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
     }
   }
 }

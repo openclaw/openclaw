@@ -16,6 +16,9 @@ import type { HandleCommandsParams } from "./commands-types.js";
 const abortEmbeddedAgentRunMock = vi.hoisted(() => vi.fn());
 const createInternalHookEventMock = vi.hoisted(() => vi.fn(() => ({})));
 const persistAbortTargetEntryMock = vi.hoisted(() => vi.fn(async () => true));
+const resolveCommandSessionEntryForKeyMock = vi.hoisted(() =>
+  vi.fn(() => ({ entry: undefined, key: undefined })),
+);
 const resolveSessionIdMock = vi.hoisted(() => vi.fn(() => undefined));
 const stopSubagentsForRequesterMock = vi.hoisted(() => vi.fn(() => ({ stopped: 0 })));
 const abortSessionRunTargetMock = vi.hoisted(() => vi.fn());
@@ -42,13 +45,13 @@ vi.mock("./abort.js", () => ({
   abortSessionRunTarget: abortSessionRunTargetMock,
   formatAbortReplyText: vi.fn(() => "⚙️ Agent was aborted."),
   isAbortTrigger: vi.fn(() => false),
-  resolveSessionEntryForKey: vi.fn(() => ({ entry: undefined, key: undefined })),
   setAbortMemory: vi.fn(),
   stopSubagentsForRequester: stopSubagentsForRequesterMock,
 }));
 
 vi.mock("./commands-session-store.js", () => ({
   persistAbortTargetEntry: persistAbortTargetEntryMock,
+  resolveCommandSessionEntryForKey: resolveCommandSessionEntryForKeyMock,
 }));
 
 vi.mock("./reply-run-registry.js", () => ({

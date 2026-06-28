@@ -8,7 +8,8 @@ This directory owns local tooling, script wrappers, and generated-artifact helpe
 - For tests, prefer `scripts/run-vitest.mjs` or the root `pnpm test ...` entrypoints over raw `vitest run` calls.
 - Never use bare `vitest ...` in automation; it starts local watch mode unless `run` or `--run` is explicit.
 - For lint/typecheck flows, prefer `scripts/run-oxlint.mjs` and `scripts/run-tsgo.mjs` when adding or editing package scripts or CI steps that should honor repo-local runtime behavior.
-- For changed-file verification, prefer `scripts/check-changed.mjs` and keep lane classification in `scripts/changed-lanes.mjs`. Do not copy path-scope rules into new hooks or ad hoc CI snippets.
+- For changed-file verification, prefer `scripts/check-changed.mjs` and keep lane classification in `scripts/changed-lanes.mjs`. Use `node scripts/check-changed.mjs --dry-run [--staged|-- <files...>]` to inspect the plan before running anything expensive. Do not copy path-scope rules into new hooks or ad hoc CI snippets.
+- For one/few lint files, prefer direct `node scripts/run-oxlint.mjs --tsconfig <matching config> <files...>` over sharded `pnpm lint`; `check-changed.mjs` owns this targeting for core, extension, and script diffs.
 
 ## Local Heavy-Check Lock
 

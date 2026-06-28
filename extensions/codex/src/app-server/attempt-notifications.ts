@@ -63,6 +63,45 @@ export function updateActiveTurnItemIds(
   activeItemIds.delete(itemId);
 }
 
+export function updateActiveCompletionBlockerItemIds(
+  notification: CodexServerNotification,
+  activeItemIds: Set<string>,
+): void {
+  if (notification.method !== "item/started" && notification.method !== "item/completed") {
+    return;
+  }
+  const itemId = readNotificationItemId(notification);
+  if (!itemId) {
+    return;
+  }
+  if (notification.method === "item/completed") {
+    activeItemIds.delete(itemId);
+    return;
+  }
+  const item = readCodexNotificationItem(notification.params);
+  if (item && isCompletionBlockingItem(item)) {
+    activeItemIds.add(itemId);
+  }
+}
+
+function isCompletionBlockingItem(item: CodexThreadItem): boolean {
+  // Codex emits paired item/started and item/completed notifications for these
+  // execution items. Completion must not time out while any pair is still open.
+  switch (item.type) {
+    case "collabAgentToolCall":
+    case "commandExecution":
+    case "dynamicToolCall":
+    case "fileChange":
+    case "imageGeneration":
+    case "imageView":
+    case "mcpToolCall":
+    case "webSearch":
+      return true;
+    default:
+      return false;
+  }
+}
+
 function isCompletedAssistantNotification(notification: CodexServerNotification): boolean {
   if (!isJsonObject(notification.params)) {
     return false;
@@ -189,7 +228,23 @@ export function isRawToolOutputCompletionNotification(
     return false;
   }
   const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
-  return item ? readString(item, "type") === "custom_tool_call_output" : false;
+  switch (item ? readString(item, "type") : undefined) {
+    case "custom_tool_call_output":
+    case "function_call_output":
+      return true;
+    default:
+      return false;
+  }
+}
+
+export function isRawFunctionToolOutputCompletionNotification(
+  notification: CodexServerNotification,
+): boolean {
+  if (notification.method !== "rawResponseItem/completed" || !isJsonObject(notification.params)) {
+    return false;
+  }
+  const item = isJsonObject(notification.params.item) ? notification.params.item : undefined;
+  return item ? readString(item, "type") === "function_call_output" : false;
 }
 
 /** Returns true for progress on Codex-native tool item types. */

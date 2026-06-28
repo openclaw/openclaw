@@ -14,6 +14,7 @@ import { resolveWindowsTaskkillPath } from "./lib/windows-taskkill.mjs";
 
 const DEFAULT_METHODS = ["health", "config.get"];
 const DEFAULT_ITERATIONS = 10;
+const SINGLE_VALUE_FLAGS = new Set(["--iterations", "--methods", "--output-dir", "--repo-root"]);
 /** Maximum time to wait for a spawned gateway to become reachable. */
 export const READY_TIMEOUT_MS = 120_000;
 /** Per-probe timeout used while polling gateway readiness endpoints. */
@@ -38,7 +39,7 @@ function usage() {
 
 function readFlagValue(argv, index, flag) {
   const value = argv[index + 1];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${flag} requires a value.`);
   }
   return value;
@@ -56,17 +57,36 @@ function parsePositiveInt(value, flag) {
   return parsed;
 }
 
+function parseMethodList(value) {
+  const methods = value
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+  const duplicate = methods.find((method, index) => methods.indexOf(method) !== index);
+  if (duplicate) {
+    throw new Error(`--methods contains duplicate gateway method: ${duplicate}`);
+  }
+  return methods;
+}
+
 export function parseArgs(argv) {
   const args = {
     help: false,
     iterations: DEFAULT_ITERATIONS,
     methods: DEFAULT_METHODS,
   };
+  const seenSingleValueFlags = new Set();
   for (let index = 0; index < argv.length; index += 1) {
     const arg = argv[index];
     if (arg === "--help" || arg === "-h") {
       args.help = true;
       continue;
+    }
+    if (SINGLE_VALUE_FLAGS.has(arg)) {
+      if (seenSingleValueFlags.has(arg)) {
+        throw new Error(`${arg} was provided more than once.`);
+      }
+      seenSingleValueFlags.add(arg);
     }
     if (arg === "--output-dir") {
       args.outputDir = readFlagValue(argv, index, arg);
@@ -84,10 +104,7 @@ export function parseArgs(argv) {
       continue;
     }
     if (arg === "--methods") {
-      args.methods = readFlagValue(argv, index, arg)
-        .split(",")
-        .map((entry) => entry.trim())
-        .filter(Boolean);
+      args.methods = parseMethodList(readFlagValue(argv, index, arg));
       index += 1;
       continue;
     }

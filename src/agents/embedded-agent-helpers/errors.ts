@@ -75,6 +75,10 @@ export {
 const log = createSubsystemLogger("errors");
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
+export const AUTH_INVALID_TOKEN_USER_TEXT =
+  "Authentication failed (provider returned HTTP 401). " +
+  "Your provider token may have expired — try the request again in a moment. " +
+  "If the failure persists, re-authenticate this provider.";
 const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
   "LLM request failed: provider rejected the request schema or tool payload.";
 const MODEL_NOT_FOUND_USER_TEXT =
@@ -1419,11 +1423,7 @@ export function formatAssistantErrorText(
   }
 
   if (providerRuntimeFailureKind === "auth_invalid_token") {
-    return (
-      "Authentication failed (provider returned HTTP 401). " +
-      "Your provider token may have expired — try the request again in a moment. " +
-      "If the failure persists, re-authenticate this provider."
-    );
+    return AUTH_INVALID_TOKEN_USER_TEXT;
   }
 
   if (providerRuntimeFailureKind === "upstream_html") {
@@ -1723,8 +1723,6 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
   }
   return isAuthErrorMessage(msg.errorMessage ?? "");
 }
-
-export { isModelNotFoundErrorMessage };
 
 function isCliSessionExpiredErrorMessage(raw: string): boolean {
   if (!raw) {

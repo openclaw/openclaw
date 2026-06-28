@@ -49,6 +49,8 @@ scenario:
         - "confirmed: the hidden fact is present"
         - hidden fact is present
         - hidden fact exists
+        - hidden fact is available
+        - available in memory files
 
 flow:
   steps:
