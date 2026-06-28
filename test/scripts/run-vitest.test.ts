@@ -542,6 +542,7 @@ describe("scripts/run-vitest", () => {
       "--config=test/vitest/vitest.contracts-plugin.config.ts",
       "--config=test/vitest/vitest.infra.config.ts",
       "--config=test/vitest/vitest.gateway-core.config.ts",
+      "--config=test/vitest/vitest.gateway-server.config.ts",
     ]) {
       expect(resolveRunVitestSpawnEnv({ PATH: "/usr/bin" }, ["run", configArg])).toEqual({
         PATH: "/usr/bin",
@@ -596,6 +597,13 @@ describe("scripts/run-vitest", () => {
         "run",
         "--config",
         "/repo/test/vitest/vitest.gateway-core.config.ts",
+      ]),
+    ).toBe(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
+    expect(
+      resolveDefaultVitestNoOutputTimeoutMs([
+        "run",
+        "--config",
+        "/repo/test/vitest/vitest.gateway-server.config.ts",
       ]),
     ).toBe(DEFAULT_EXTRA_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS);
   });

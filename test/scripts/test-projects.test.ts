@@ -4600,6 +4600,14 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
           watchMode: false,
         },
         {
+          config: "test/vitest/vitest.gateway-server.config.ts",
+          env: { PATH: "/usr/bin" },
+          includeFilePath: null,
+          includePatterns: null,
+          pnpmArgs: [],
+          watchMode: false,
+        },
+        {
           config: "test/vitest/vitest.extension-feishu.config.ts",
           env: { PATH: "/usr/bin" },
           includeFilePath: null,
@@ -4614,7 +4622,8 @@ describe("scripts/test-projects Vitest stall watchdog", () => {
     expect(specs[0]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("2400000");
     expect(specs[1]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("2400000");
     expect(specs[2]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("2400000");
-    expect(specs[3]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
+    expect(specs[3]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe("2400000");
+    expect(specs[4]?.env.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS).toBe(
       DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS,
     );
   });
