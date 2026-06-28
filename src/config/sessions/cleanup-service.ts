@@ -30,7 +30,6 @@ import {
   shouldRunModelRunPrune,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
-import { archiveRemovedSessionTranscripts } from "./store.js";
 import {
   resolveSessionStoreTargets,
   type SessionStoreTarget,
@@ -106,30 +105,6 @@ function loadCleanupSessionStore(target: SessionStoreTarget): Record<string, Ses
       storePath: target.storePath,
     }).map(({ sessionKey, entry }) => [sessionKey, entry]),
   );
-}
-
-function collectReferencedSessionIds(store: Record<string, SessionEntry>): Set<string> {
-  return new Set(
-    Object.values(store)
-      .map((entry) => entry.sessionId)
-      .filter((sessionId): sessionId is string => Boolean(sessionId)),
-  );
-}
-
-function collectRemovedTranscriptFiles(
-  removals: readonly SessionEntryLifecycleRemoval[],
-): Map<string, string | undefined> {
-  const removedSessionFiles = new Map<string, string | undefined>();
-  for (const removal of removals) {
-    const entry = removal.expectedEntry;
-    if (removal.archiveRemovedTranscript !== true || !entry?.sessionId) {
-      continue;
-    }
-    if (!removedSessionFiles.has(entry.sessionId) || entry.sessionFile) {
-      removedSessionFiles.set(entry.sessionId, entry.sessionFile);
-    }
-  }
-  return removedSessionFiles;
 }
 
 function isTranscriptMessageRole(role: unknown): boolean {
@@ -577,16 +552,6 @@ export async function runSessionsCleanup(params: {
         restrictArchivedTranscriptsToStoreDir: true,
       });
       const postApplyStore = loadCleanupSessionStore(target);
-      const removedTranscriptFiles = collectRemovedTranscriptFiles(removals);
-      if (removedTranscriptFiles.size > 0) {
-        await archiveRemovedSessionTranscripts({
-          removedSessionFiles: removedTranscriptFiles,
-          referencedSessionIds: collectReferencedSessionIds(postApplyStore),
-          storePath: target.storePath,
-          reason: "deleted",
-          restrictToStoreDir: true,
-        });
-      }
       const appliedUnreferencedArtifacts =
         mode === "warn"
           ? null
