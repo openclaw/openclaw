@@ -1426,11 +1426,14 @@ function appendSqliteTranscriptMessageInTransaction<TMessage>(
     return undefined;
   }
 
-  const messageId = randomUUID();
+  const messageId = options.eventId ?? randomUUID();
   const now = options.now ?? Date.now();
   const finalMessage = redactTranscriptMessageForStorage(prepared, options);
   ensureTranscriptHeader(database, resolved, options.cwd, now);
-  const parentId = readActiveTranscriptAppendParentId(database, resolved.sessionId);
+  const parentId =
+    options.parentId === undefined
+      ? readActiveTranscriptAppendParentId(database, resolved.sessionId)
+      : options.parentId;
   const event = {
     type: "message",
     id: messageId,

@@ -272,6 +272,10 @@ export type TranscriptMessageAppendOptions<TMessage> = {
   message: TMessage;
   /** Testable timestamp override for the generated transcript entry. */
   now?: number;
+  /** Existing transcript event id owned by a caller with its own session tree. */
+  eventId?: string;
+  /** Existing parent id owned by a caller with its own session tree. */
+  parentId?: string | null;
   /** Optional finalizer that runs after duplicate detection but before persistence. */
   prepareMessageAfterIdempotencyCheck?: (message: TMessage) => TMessage | undefined;
   /** Allow append without parent-link migration for large legacy linear transcripts. */
