@@ -909,6 +909,7 @@ describe("test-projects args", () => {
           "test/scripts/release-preflight.test.ts",
           "test/scripts/render-maturity-docs.test.ts",
           "test/scripts/report-test-temp-creations.test.ts",
+          "test/scripts/snes-team-orchestrator.test.ts",
           "test/scripts/test-install-sh-docker.test.ts",
           "test/scripts/test-projects.test.ts",
           "test/test-env.test.ts",
