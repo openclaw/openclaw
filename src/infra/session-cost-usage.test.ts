@@ -145,7 +145,11 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       const summary = await loadCostUsageSummary({ days: 30, config });
-      expect(summary.daily.length).toBe(1);
+      // Daily series fills every calendar day in the requested range, even
+      // days with zero activity, so the chart shows one bar per day.
+      expect(summary.daily.length).toBe(summary.days);
+      const populated = summary.daily.filter((d) => d.totalTokens > 0);
+      expect(populated).toHaveLength(1);
       expect(summary.totals.totalTokens).toBe(50);
       expect(summary.totals.totalCost).toBeCloseTo(0.03003, 5);
     });
@@ -423,7 +427,9 @@ describe("session cost usage", () => {
 
     await withStateDir(root, async () => {
       const summary = await loadCostUsageSummary({ days: 30 });
-      expect(summary.daily.length).toBe(1);
+      expect(summary.daily.length).toBe(summary.days);
+      const populated = summary.daily.filter((d) => d.totalTokens > 0);
+      expect(populated).toHaveLength(1);
       expect(summary.totals.totalTokens).toBe(30);
       expect(summary.totals.totalCost).toBeCloseTo(0.03, 5);
 
@@ -432,6 +438,206 @@ describe("session cost usage", () => {
       expect(sessions[0]?.sessionId).toBe("sess-1");
       expect(sessions[0]?.sessionFile.endsWith("sess-1.jsonl")).toBe(true);
     });
+  });
+
+  it("fills missing calendar days with zero entries when no activity exists", async () => {
+    const root = await makeSessionCostRoot("cost-zero-fill");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    // No session files at all -> entirely empty range.
+
+    await withStateDir(root, async () => {
+      const endMs = Date.now();
+      const startMs = endMs - 6 * 24 * 60 * 60 * 1000; // 7 calendar days inclusive
+      const summary = await loadCostUsageSummary({ startMs, endMs });
+      expect(summary.daily.length).toBe(7);
+      expect(summary.daily.every((d) => d.totalTokens === 0 && d.totalCost === 0)).toBe(true);
+      // Dates should be unique, sorted, and contiguous in YYYY-MM-DD form.
+      const dates = summary.daily.map((d) => d.date);
+      expect(new Set(dates).size).toBe(dates.length);
+      expect(dates.toSorted()).toEqual(dates);
+      expect(summary.totals.totalTokens).toBe(0);
+      expect(summary.totals.totalCost).toBe(0);
+    });
+  });
+
+  it("fills missing days between sparse activity within the requested range", async () => {
+    const root = await makeSessionCostRoot("cost-sparse");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    // Build a 7-day window anchored at local-noon of "today" to avoid
+    // timezone boundary jitter. Day 1 = startMs, Day 7 = endMs.
+    const todayLocal = new Date();
+    todayLocal.setHours(12, 0, 0, 0);
+    const endMs = todayLocal.getTime();
+    const dayMs = 24 * 60 * 60 * 1000;
+    const startMs = endMs - 6 * dayMs; // 7 calendar days inclusive
+    const day1 = new Date(startMs);
+    const day5 = new Date(startMs + 4 * dayMs);
+
+    const makeEntry = (ts: Date, tokens: number) => ({
+      type: "message",
+      timestamp: ts.toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: {
+          input: tokens / 2,
+          output: tokens / 2,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: tokens,
+          cost: { total: 0.01 },
+        },
+      },
+    });
+
+    await fs.writeFile(
+      path.join(sessionsDir, "sess-sparse.jsonl"),
+      [makeEntry(day1, 100), makeEntry(day5, 200)].map((entry) => JSON.stringify(entry)).join("\n"),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      const summary = await loadCostUsageSummary({ startMs, endMs });
+      expect(summary.daily.length).toBe(7);
+      const populated = summary.daily.filter((d) => d.totalTokens > 0);
+      expect(populated).toHaveLength(2);
+      const tokensByDate = new Map(summary.daily.map((d) => [d.date, d.totalTokens]));
+      const day1Key = day1.toLocaleDateString("en-CA", {
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      });
+      const day5Key = day5.toLocaleDateString("en-CA", {
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      });
+      expect(tokensByDate.get(day1Key)).toBe(100);
+      expect(tokensByDate.get(day5Key)).toBe(200);
+      // The remaining five days should be zero-filled.
+      const zeroDays = summary.daily.filter((d) => d.date !== day1Key && d.date !== day5Key);
+      expect(zeroDays).toHaveLength(5);
+      expect(zeroDays.every((d) => d.totalTokens === 0 && d.totalCost === 0)).toBe(true);
+      expect(summary.totals.totalTokens).toBe(300);
+    });
+  });
+
+  it("falls back to sparse output for all-time / unbounded ranges", async () => {
+    // The usage UI's "All" range sends startDate: 1970-01-01 through the same
+    // cost-summary path. Zero-filling that span would synthesize ~20k empty
+    // buckets per call, so windows wider than MAX_ZERO_FILL_DAYS (366) keep
+    // their original sparse (activity-only) shape.
+    const root = await makeSessionCostRoot("cost-all-time");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+
+    const todayLocal = new Date();
+    todayLocal.setHours(12, 0, 0, 0);
+    const endMs = todayLocal.getTime();
+    const entry = {
+      type: "message",
+      timestamp: todayLocal.toISOString(),
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: {
+          input: 50,
+          output: 50,
+          totalTokens: 100,
+          cost: { total: 0.05 },
+        },
+      },
+    };
+    await fs.writeFile(path.join(sessionsDir, "sess-all.jsonl"), JSON.stringify(entry), "utf-8");
+
+    await withStateDir(root, async () => {
+      // startMs = 0 mirrors the "All" range filter from the UI.
+      const summary = await loadCostUsageSummary({ startMs: 0, endMs });
+      // Wider than the 366-day fill threshold -> sparse, not dense. We should
+      // get at most a handful of entries (only the day with activity, in this
+      // case 1) rather than ~20k zero buckets.
+      expect(summary.daily.length).toBeLessThanOrEqual(5);
+      const populated = summary.daily.filter((d) => d.totalTokens > 0);
+      expect(populated).toHaveLength(1);
+      expect(populated[0]?.totalTokens).toBe(100);
+      expect(summary.totals.totalTokens).toBe(100);
+    });
+  });
+
+  it("fills every calendar day in a bounded range that spans a spring-forward DST transition", async () => {
+    // Regression for the bug ClawSweeper flagged on PR #81467: a fixed-24h
+    // millisecond step in `fillMissingDays` can skip an interior calendar
+    // day across local-clock spring-forward (e.g. March 8, 2026 in
+    // US/Mountain: 02:00 MST -> 03:00 MDT, so the day is only 23h long).
+    // With startMs landing late in the local evening of March 7, a 24h ms
+    // step lands past midnight of March 9 in the post-DST clock and the
+    // March 8 key is never inserted. Iterating by calendar-day keys avoids
+    // this.
+    //
+    // We can't reliably switch process.env.TZ at runtime in vitest workers
+    // (V8 caches the system timezone for `Intl.DateTimeFormat().resolvedOptions()`
+    // at process startup, so a late `process.env.TZ` assignment is a no-op
+    // for the production code path). Instead, we stub `Intl.DateTimeFormat`
+    // so the production code's resolvedOptions().timeZone reports
+    // `America/Denver` for the duration of the test. Date math is
+    // unaffected: ms timestamps are absolute, only the day-key labels
+    // change, which is exactly what `formatDayKey` consumes.
+    const root = await makeSessionCostRoot("cost-dst-spring-forward");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    // No session files at all -> entirely empty range, so daily entries
+    // must come exclusively from the zero-fill helper.
+
+    const realIntlDateTimeFormat = Intl.DateTimeFormat;
+    type FormatArgs = ConstructorParameters<typeof Intl.DateTimeFormat>;
+    const StubbedIntlDateTimeFormat = function (
+      this: Intl.DateTimeFormat,
+      locales?: FormatArgs[0],
+      options?: FormatArgs[1],
+    ) {
+      const opts = options ? { ...options } : {};
+      if (!opts.timeZone) {
+        opts.timeZone = "America/Denver";
+      }
+      return new realIntlDateTimeFormat(locales, opts);
+    } as unknown as typeof Intl.DateTimeFormat;
+    StubbedIntlDateTimeFormat.supportedLocalesOf =
+      realIntlDateTimeFormat.supportedLocalesOf.bind(realIntlDateTimeFormat);
+    vi.stubGlobal("Intl", { ...Intl, DateTimeFormat: StubbedIntlDateTimeFormat });
+
+    try {
+      await withStateDir(root, async () => {
+        // Sanity-check the stub before exercising the production path.
+        expect(Intl.DateTimeFormat().resolvedOptions().timeZone).toBe("America/Denver");
+
+        // startMs = 2026-03-07T23:30 local (MST, UTC-7) = 06:30 UTC on Mar 8.
+        // endMs   = 2026-03-13T23:30 local (MDT, UTC-6) = 05:30 UTC on Mar 14.
+        // Window straddles the DST forward jump on the morning of Mar 8.
+        const startMs = Date.UTC(2026, 2, 8, 6, 30, 0); // Mar 8 06:30 UTC -> Mar 7 23:30 MST
+        const endMs = Date.UTC(2026, 2, 14, 5, 30, 0); // Mar 14 05:30 UTC -> Mar 13 23:30 MDT
+
+        const summary = await loadCostUsageSummary({ startMs, endMs });
+
+        const dates = summary.daily.map((d) => d.date);
+        // Seven calendar days inclusive: Mar 7, 8, 9, 10, 11, 12, 13.
+        // The old fixed-24h-ms step would skip 2026-03-08 entirely.
+        expect(dates).toEqual([
+          "2026-03-07",
+          "2026-03-08",
+          "2026-03-09",
+          "2026-03-10",
+          "2026-03-11",
+          "2026-03-12",
+          "2026-03-13",
+        ]);
+        // Every day is zero-filled (no activity in this fixture).
+        expect(summary.daily.every((d) => d.totalTokens === 0 && d.totalCost === 0)).toBe(true);
+        expect(summary.totals.totalTokens).toBe(0);
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("serves usage cost from durable aggregate cache without rescanning stale files", async () => {
