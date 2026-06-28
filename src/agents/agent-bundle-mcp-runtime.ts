@@ -40,7 +40,7 @@ import { applyBundleMcpCallerContext } from "./cli-runner/bundle-mcp-caller-cont
 import { loadEmbeddedAgentMcpConfig } from "./embedded-agent-mcp.js";
 import { isMcpConfigRecord } from "./mcp-config-shared.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
-import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
+import type { BundleMcpConfig } from "../plugins/bundle-mcp.js";
 
 type BundleMcpSession = {
   serverName: string;

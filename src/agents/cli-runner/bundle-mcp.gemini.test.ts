@@ -126,7 +126,6 @@ describe("prepareCliBundleMcpConfig gemini", () => {
       env: {
         OPENCLAW_MCP_TOKEN: "loopback-token-123",
         OPENCLAW_MCP_AGENT_ID: "agent-main",
-        OPENCLAW_MCP_SESSION_KEY: "sess-1",
       },
     });
 
@@ -136,7 +135,8 @@ describe("prepareCliBundleMcpConfig gemini", () => {
       mcpServers?: Record<string, { headers?: Record<string, string> }>;
     };
     expect(raw.mcpServers?.openclaw?.headers?.["x-openclaw-agent-id"]).toBe("agent-main");
-    expect(raw.mcpServers?.openclaw?.headers?.["x-session-key"]).toBe("sess-1");
+    // x-session-key is not part of injectCallerContext injection (it is a session bearer token,
+    // not a caller identity header). Set it directly in server headers when needed for loopback auth.
 
     await prepared.cleanup?.();
   });
