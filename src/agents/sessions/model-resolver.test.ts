@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Model } from "../../llm/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import type { ModelRegistry } from "./model-registry.js";
-import { findInitialModel, restoreModelFromSession } from "./model-resolver.js";
+import { findInitialModel, parseModelPattern, restoreModelFromSession } from "./model-resolver.js";
 
 function model(provider: string, id: string): Model {
   return {
@@ -31,6 +31,15 @@ function registry(models: Model[]): ModelRegistry {
 }
 
 describe("model resolver fallback selection", () => {
+  it("selects the numerically newest alias match across double-digit versions", () => {
+    const result = parseModelPattern("opus", [
+      model("anthropic", "claude-opus-4-9"),
+      model("anthropic", "claude-opus-4-10"),
+    ]);
+
+    expect(result.model?.id).toBe("claude-opus-4-10");
+  });
+
   it("prefers the product default when no configured or scoped model is selected", async () => {
     const productDefault = model(DEFAULT_PROVIDER, DEFAULT_MODEL);
     const result = await findInitialModel({

@@ -12,6 +12,7 @@ import { DEFAULT_THINKING_LEVEL } from "./defaults.js";
 import type { ModelRegistry } from "./model-registry.js";
 
 const VALID_THINKING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
+const MODEL_ID_COLLATOR = new Intl.Collator(undefined, { numeric: true });
 
 function isValidThinkingLevel(level: string): level is ThinkingLevel {
   return VALID_THINKING_LEVELS.includes(level as ThinkingLevel);
@@ -36,6 +37,10 @@ function isAlias(id: string): boolean {
   // Check if ID ends with a date pattern (-YYYYMMDD)
   const datePattern = /-\d{8}$/;
   return !datePattern.test(id);
+}
+
+function compareModelIdsDescending(a: Model, b: Model): number {
+  return MODEL_ID_COLLATOR.compare(b.id, a.id);
 }
 
 /**
@@ -116,11 +121,11 @@ function tryMatchModel(modelPattern: string, availableModels: Model[]): Model | 
 
   if (aliases.length > 0) {
     // Prefer alias - if multiple aliases, pick the one that sorts highest
-    aliases.sort((a, b) => b.id.localeCompare(a.id));
+    aliases.sort(compareModelIdsDescending);
     return aliases[0];
   }
   // No alias found, pick latest dated version
-  datedVersions.sort((a, b) => b.id.localeCompare(a.id));
+  datedVersions.sort(compareModelIdsDescending);
   return datedVersions[0];
 }
 
