@@ -25,7 +25,7 @@ import { nodeHandlers } from "./nodes.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const ctx = { getRuntimeConfig: () => ({}) };
-const entitledClient = { connect: { device: { id: "node-ok" } } };
+const entitledClient = { connect: { device: { id: "node-ok" }, permissions: { attach: true } } };
 const call = (
   method: string,
   params: unknown,
@@ -55,8 +55,22 @@ describe("node attach handlers (PR5 node conduit)", () => {
 
   it("node.attachGrant rejects a paired node WITHOUT the owner-approved attach entitlement", async () => {
     const respond = vi.fn();
-    await call("node.attachGrant", {}, respond, { connect: { device: { id: "node-bare" } } });
+    await call("node.attachGrant", {}, respond, {
+      connect: { device: { id: "node-bare" }, permissions: { attach: true } },
+    });
     expect(respond.mock.calls[0][0]).toBe(false); // role:node alone is not consent to attach
+  });
+
+  it("node.attachGrant rejects stored approval when the live session lacks attach permission", async () => {
+    for (const client of [
+      { connect: { device: { id: "node-ok" } } },
+      { connect: { device: { id: "node-ok" }, permissions: {} } },
+      { connect: { device: { id: "node-ok" }, permissions: { attach: false } } },
+    ]) {
+      const respond = vi.fn();
+      await call("node.attachGrant", {}, respond, client);
+      expect(respond.mock.calls[0][0]).toBe(false);
+    }
   });
 
   it("node.attachRelay rejects a non-JSON-RPC message and otherwise dispatches via the relay core", async () => {

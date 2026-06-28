@@ -912,8 +912,9 @@ export const nodeHandlers: GatewayRequestHandlers = {
   // Self-service attach grant for a paired node — gated on an EXPLICIT `attach` entitlement the owner
   // approved at pairing. Pairing a node for camera/canvas/system commands is NOT consent for it to
   // reach the owner's MAIN session tools + full conversation, so role:node alone is insufficient; the
-  // node's owner-approved permissions must carry `attach` (changing a node's approval surface
-  // re-triggers owner approval, so this can't be self-granted). The grant binds to the main session,
+  // node's owner-approved permissions and this live connection's effective permissions must carry
+  // `attach` (changing a node's approval surface re-triggers owner approval, and reconnects that
+  // omit/downgrade `attach` lose the effective permission). The grant binds to the main session,
   // scoped/TTL'd/revocable (PR1), bound to the session not the node. Caller-chosen sessions + a
   // cross-agent entitlement map are a follow-up. The node uses the returned token with node.attachRelay.
   "node.attachGrant": async ({ params, respond, client, context }) => {
@@ -921,13 +922,19 @@ export const nodeHandlers: GatewayRequestHandlers = {
       normalizeOptionalString(client?.connect?.device?.id ?? client?.connect?.client?.id) ?? "";
     const { paired } = await listNodePairing();
     const approved = nodeId ? paired.find((node) => node.nodeId === nodeId) : undefined;
-    if (!approved?.permissions?.attach) {
+    const livePermissions =
+      client?.connect?.permissions &&
+      typeof client.connect.permissions === "object" &&
+      !Array.isArray(client.connect.permissions)
+        ? (client.connect.permissions as Record<string, unknown>)
+        : undefined;
+    if (!approved?.permissions?.attach || livePermissions?.attach !== true) {
       respond(
         false,
         undefined,
         errorShape(
           ErrorCodes.INVALID_REQUEST,
-          "node is not entitled to attach; re-pair granting the 'attach' permission",
+          "node is not entitled to attach on this connection; reconnect declaring and re-pair granting the 'attach' permission",
         ),
       );
       return;
