@@ -3109,7 +3109,7 @@ describe("gateway server chat", () => {
 
       expect(res.ok).toBe(false);
       expect((res.error as { message?: string } | undefined)?.message ?? "").toContain(
-        "invalid chat.history params",
+        "includeFamily cannot be combined with offset",
       );
     });
   });

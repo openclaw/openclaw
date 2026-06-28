@@ -92,16 +92,9 @@ describe("lazy protocol validators", () => {
         agentId: "work",
         limit: 50,
         includeFamily: true,
-      }),
-    ).toBe(true);
-    expect(
-      validateChatHistoryParams({
-        sessionKey: "global",
-        agentId: "work",
-        includeFamily: true,
         offset: 100,
       }),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       validateChatSendParams({
         sessionKey: "global",

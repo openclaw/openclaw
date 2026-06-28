@@ -27,7 +27,7 @@ export const LogsTailResultSchema = Type.Object(
 );
 
 /** Session-scoped history request used by WebChat and native WebSocket clients. */
-const ChatHistoryParamsBaseSchema = Type.Object(
+export const ChatHistoryParamsSchema = Type.Object(
   {
     sessionKey: NonEmptyString,
     agentId: Type.Optional(NonEmptyString),
@@ -43,19 +43,6 @@ const ChatHistoryParamsBaseSchema = Type.Object(
   },
   { additionalProperties: false },
 );
-export const ChatHistoryParamsSchema = Type.Unsafe({
-  allOf: [
-    ChatHistoryParamsBaseSchema,
-    {
-      not: {
-        required: ["includeFamily", "offset"],
-        properties: {
-          includeFamily: { const: true },
-        },
-      },
-    },
-  ],
-});
 
 /** Lightweight chat metadata request; optional agent scope keeps selector state explicit. */
 export const ChatMetadataParamsSchema = Type.Object(
