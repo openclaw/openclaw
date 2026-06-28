@@ -190,6 +190,11 @@ describe("plugin runtime command execution", () => {
     expectRuntimeValue(readValue, expected);
   });
 
+  it("exposes reset freshness resolver on the host channel runtime", () => {
+    const sessionRuntime = createPluginRuntime().channel.session as Record<string, unknown>;
+    expect(typeof sessionRuntime.resolveEntryResetFreshness).toBe("function");
+  });
+
   it("maps deprecated runtime.system.requestHeartbeatNow to an immediate compatibility wake", async () => {
     vi.useFakeTimers();
     resetHeartbeatWakeStateForTests();

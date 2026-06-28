@@ -1,7 +1,7 @@
 // Slack plugin module implements prepare thread context behavior.
 import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
-import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-contracts";
+import type { ContextVisibilityMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   filterSupplementalContextItems,
@@ -10,7 +10,7 @@ import {
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackAllowListMatch } from "../allow-list.js";
-import { resolveChannelResetConfig, resolveSessionEntryFreshness } from "../config.runtime.js";
+import { resolveChannelResetConfig } from "../config.runtime.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMediaResult } from "../media-types.js";
 import { resolveSlackThreadHistory, type SlackThreadStarter } from "../thread.js";
@@ -41,6 +41,42 @@ type SlackThreadContextData = {
 };
 
 const SLACK_THREAD_CONTEXT_USER_LOOKUP_CONCURRENCY = 4;
+
+type SlackSessionResetFreshness = {
+  state: "missing" | "fresh" | "stale";
+};
+
+type SlackSessionFreshnessRuntime = {
+  session?: {
+    resolveEntryResetFreshness?: (params: {
+      storePath?: string;
+      sessionKey: string;
+      sessionCfg?: OpenClawConfig["session"];
+      resetType: "thread";
+      resetOverride?: ReturnType<typeof resolveChannelResetConfig>;
+    }) => SlackSessionResetFreshness;
+  };
+};
+
+function resolveSlackThreadSessionFreshness(params: {
+  ctx: SlackMonitorContext;
+  storePath: string;
+  sessionKey: string;
+}): SlackSessionResetFreshness | undefined {
+  // Gateway startup supplies the full channel runtime, but the public surface
+  // intentionally keeps non-context helpers untyped for external plugins.
+  const runtime = params.ctx.channelRuntime as SlackSessionFreshnessRuntime | undefined;
+  return runtime?.session?.resolveEntryResetFreshness?.({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    sessionCfg: params.ctx.cfg.session,
+    resetType: "thread",
+    resetOverride: resolveChannelResetConfig({
+      sessionCfg: params.ctx.cfg.session,
+      channel: "slack",
+    }),
+  });
+}
 
 function isSlackThreadContextSenderAllowed(params: {
   allowFromLower: string[];
@@ -127,15 +163,10 @@ export async function resolveSlackThreadContextData(params: {
   let threadStarterMedia: SlackMediaResult[] | null = null;
   const threadSessionFreshness =
     params.isThreadReply && params.threadTs
-      ? resolveSessionEntryFreshness({
+      ? resolveSlackThreadSessionFreshness({
+          ctx: params.ctx,
           storePath: params.storePath,
           sessionKey: params.sessionKey,
-          sessionCfg: params.ctx.cfg.session,
-          resetType: "thread",
-          resetOverride: resolveChannelResetConfig({
-            sessionCfg: params.ctx.cfg.session,
-            channel: "slack",
-          }),
         })
       : undefined;
   const shouldSeedInitialThreadContext = Boolean(
