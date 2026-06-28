@@ -32,6 +32,7 @@ import {
   wrapToolParamValidation,
 } from "./agent-tools.params.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { verifyHostFile, writeAndVerifySandboxFile } from "./agent-tools.write-verification.js";
 import type { ImageSanitizationLimits } from "./image-sanitization.js";
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -954,7 +955,12 @@ function createSandboxEditOperations(params: SandboxToolParams) {
     readFile: (absolutePath: string) =>
       params.bridge.readFile({ filePath: absolutePath, cwd: params.root }),
     writeFile: (absolutePath: string, content: string) =>
-      params.bridge.writeFile({ filePath: absolutePath, cwd: params.root, data: content }),
+      writeAndVerifySandboxFile({
+        bridge: params.bridge,
+        root: params.root,
+        absolutePath,
+        content,
+      }),
     access: (absolutePath: string) => assertSandboxFileExists(params, absolutePath),
   } as const;
 }
@@ -979,6 +985,7 @@ async function writeHostFile(absolutePath: string, content: string) {
   const resolved = resolveHostPath(absolutePath);
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   await fs.writeFile(resolved, content, "utf-8");
+  await verifyHostFile(resolved, content);
 }
 
 async function statHostFile(absolutePath: string) {
@@ -1010,6 +1017,7 @@ async function writeWorkspaceFile(
 ) {
   const relative = await toCanonicalRelativeWorkspacePath(root, absolutePath);
   await (await rootPromise).write(relative, content, { mkdir: true });
+  await verifyHostFile(path.resolve(root, relative), content);
 }
 
 function createHostWriteOperations(root: string, options?: { workspaceOnly?: boolean }) {

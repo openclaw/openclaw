@@ -6,6 +6,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Theme } from "../../modes/interactive/theme/theme.js";
 import { createEditTool, createEditToolDefinition, type EditOperations } from "./edit.js";
+import { WriteVerificationError } from "./write-verification.js";
 
 const testTheme = {
   bg: (_name: string, text: string) => text,
@@ -106,6 +107,29 @@ describe("edit tool", () => {
         undefined,
       ),
     ).rejects.toThrow("Simulated write failure");
+  });
+
+  it("does not recover write verification failures as edit success", async () => {
+    const filePath = await createTempFile("before old text after\n");
+    const operations: EditOperations = {
+      access: async () => {},
+      readFile: (absolutePath) => fs.readFile(absolutePath),
+      writeFile: async (absolutePath, content) => {
+        await fs.writeFile(absolutePath, content, "utf-8");
+        throw new WriteVerificationError(
+          `Write verification failed: file does not exist after write (${absolutePath})`,
+        );
+      },
+    };
+    const tool = createEditTool(tmpDir, { operations });
+
+    await expect(
+      tool.execute(
+        "call-1",
+        { path: filePath, edits: [{ oldText: "old text", newText: "new text" }] },
+        undefined,
+      ),
+    ).rejects.toThrow(WriteVerificationError);
   });
 
   it("recovers multi-edit post-write failures", async () => {
