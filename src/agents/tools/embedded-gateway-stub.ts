@@ -118,6 +118,7 @@ type SessionTranscriptReadTarget = {
 };
 
 const MAX_EMBEDDED_CHAT_HISTORY_FAMILY_READ_TARGETS = 32;
+const RESERVED_CURRENT_EMBEDDED_CHAT_HISTORY_FAMILY_TARGETS = 2;
 
 async function getRuntime(): Promise<EmbeddedGatewayRuntime> {
   if (!runtimeMod) {
@@ -283,9 +284,15 @@ async function resolveChatHistoryTranscriptReadTargets(params: {
     ? resolveHistoryFamilySessionIds(params.entry, currentSessionId)
     : [currentSessionId];
   const targets: SessionTranscriptReadTarget[] = [];
+  const ancestorTargets: SessionTranscriptReadTarget[] = [];
+  const currentTargets: SessionTranscriptReadTarget[] = [];
   const seenFiles = new Set<string>();
-  const pushTarget = (target: SessionTranscriptReadTarget): boolean => {
-    if (targets.length >= MAX_EMBEDDED_CHAT_HISTORY_FAMILY_READ_TARGETS) {
+  const pushTarget = (
+    collection: SessionTranscriptReadTarget[],
+    target: SessionTranscriptReadTarget,
+    limit: number,
+  ): boolean => {
+    if (collection.length >= limit) {
       return false;
     }
     const resolved = target.sessionFile ? path.resolve(target.sessionFile) : undefined;
@@ -295,17 +302,41 @@ async function resolveChatHistoryTranscriptReadTargets(params: {
     if (resolved) {
       seenFiles.add(resolved);
     }
-    targets.push({ ...target, ...(resolved ? { sessionFile: resolved } : {}) });
-    return targets.length < MAX_EMBEDDED_CHAT_HISTORY_FAMILY_READ_TARGETS;
+    collection.push({ ...target, ...(resolved ? { sessionFile: resolved } : {}) });
+    return collection.length < limit;
   };
-  const finalizeTargets = (): SessionTranscriptReadTarget[] =>
-    params.includeFamily ? orderFamilyReadTargetsForOutput(targets, currentSessionId) : targets;
+  const finalizeTargets = (): SessionTranscriptReadTarget[] => {
+    if (!params.includeFamily) {
+      return targets;
+    }
+    const ancestorTargetLimit = Math.max(
+      0,
+      MAX_EMBEDDED_CHAT_HISTORY_FAMILY_READ_TARGETS -
+        RESERVED_CURRENT_EMBEDDED_CHAT_HISTORY_FAMILY_TARGETS,
+    );
+    return orderFamilyReadTargetsForOutput(
+      [...ancestorTargets.slice(-ancestorTargetLimit), ...currentTargets],
+      currentSessionId,
+    );
+  };
   for (const familySessionId of sessionIds) {
+    const isCurrentSession = familySessionId === currentSessionId;
+    const targetCollection = params.includeFamily
+      ? isCurrentSession
+        ? currentTargets
+        : ancestorTargets
+      : targets;
+    const targetLimit =
+      params.includeFamily && !isCurrentSession
+        ? Number.MAX_SAFE_INTEGER
+        : params.includeFamily
+          ? RESERVED_CURRENT_EMBEDDED_CHAT_HISTORY_FAMILY_TARGETS
+          : MAX_EMBEDDED_CHAT_HISTORY_FAMILY_READ_TARGETS;
     const archivedFiles = params.includeFamily
       ? await resolveSessionTranscriptResetArchiveCandidatesAsync(
           familySessionId,
           params.storePath,
-          familySessionId === currentSessionId ? params.entry?.sessionFile : undefined,
+          isCurrentSession ? params.entry?.sessionFile : undefined,
           params.agentId,
         )
       : [];
@@ -314,8 +345,7 @@ async function resolveChatHistoryTranscriptReadTargets(params: {
         ? resolveFirstExistingTranscriptCandidate({
             sessionId: familySessionId,
             storePath: params.storePath,
-            sessionFile:
-              familySessionId === currentSessionId ? params.entry?.sessionFile : undefined,
+            sessionFile: isCurrentSession ? params.entry?.sessionFile : undefined,
             agentId: params.agentId,
           })
         : await resolveSessionHistoryTranscriptPathAsync(
@@ -327,53 +357,54 @@ async function resolveChatHistoryTranscriptReadTargets(params: {
               allowResetArchiveFallback: true,
             },
           );
-    if (!params.includeFamily && familySessionId === currentSessionId && !activeFile) {
+    if (!params.includeFamily && isCurrentSession && !activeFile) {
       if (
-        !pushTarget({
-          sessionId: familySessionId,
-          sessionFile: params.entry?.sessionFile,
-          applySessionStartedAtFilter: true,
-          isCurrentActive: true,
-          useStoreEntryFallback: true,
-        })
+        !pushTarget(
+          targetCollection,
+          {
+            sessionId: familySessionId,
+            sessionFile: params.entry?.sessionFile,
+            applySessionStartedAtFilter: true,
+            isCurrentActive: true,
+            useStoreEntryFallback: true,
+          },
+          targetLimit,
+        )
       ) {
         return finalizeTargets();
       }
       continue;
     }
-    if (familySessionId === currentSessionId && activeFile) {
-      if (
-        !pushTarget({
-          sessionId: familySessionId,
-          sessionFile: activeFile,
-          applySessionStartedAtFilter: true,
-          isCurrentActive: true,
-        })
-      ) {
-        return finalizeTargets();
-      }
-    }
+    const archiveTargetLimit =
+      params.includeFamily && isCurrentSession && activeFile
+        ? Math.max(0, targetLimit - 1)
+        : targetLimit;
     for (const file of archivedFiles) {
       if (
-        !pushTarget({
-          sessionId: familySessionId,
-          sessionFile: file,
-          applySessionStartedAtFilter: false,
-        })
+        !pushTarget(
+          targetCollection,
+          {
+            sessionId: familySessionId,
+            sessionFile: file,
+            applySessionStartedAtFilter: false,
+          },
+          archiveTargetLimit,
+        )
       ) {
-        return finalizeTargets();
+        break;
       }
     }
-    if (familySessionId !== currentSessionId && activeFile) {
-      if (
-        !pushTarget({
+    if (activeFile) {
+      pushTarget(
+        targetCollection,
+        {
           sessionId: familySessionId,
           sessionFile: activeFile,
-          applySessionStartedAtFilter: false,
-        })
-      ) {
-        return finalizeTargets();
-      }
+          applySessionStartedAtFilter: isCurrentSession,
+          ...(isCurrentSession ? { isCurrentActive: true } : {}),
+        },
+        targetLimit,
+      );
     }
   }
   return finalizeTargets();

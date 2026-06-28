@@ -410,14 +410,14 @@ describe("embedded gateway stub", () => {
         },
     );
     expect(result.includeFamily).toBe(true);
-    expect(calls).toHaveLength(32);
+    expect(calls).toHaveLength(31);
     expect(calls.at(-1)).toMatchObject({
       sessionFile: currentActive,
       sessionId: currentSessionId,
     });
-    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-00")).toBe(true);
-    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-31")).toBe(false);
-    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-39")).toBe(false);
+    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-00")).toBe(false);
+    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-10")).toBe(true);
+    expect(calls.some((scope) => scope.sessionId === "ancestor-cap-session-39")).toBe(true);
     expect(JSON.stringify(result.messages)).toContain("current-cap-session");
     expect(JSON.stringify(result.messages)).toContain("ancestor-cap-session");
   });
