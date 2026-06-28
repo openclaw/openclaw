@@ -283,6 +283,7 @@ export function createCronPromptExecutor(params: {
       agentDir: params.agentDir,
       agentId: params.agentId,
       sessionKey: params.runSessionKey,
+      abortSignal: params.abortSignal,
       prepareAgentHarnessRuntime: async ({ provider, model, agentHarnessRuntimeOverride }) => {
         await ensureSelectedAgentHarnessPlugin({
           config: params.cfgWithAgentDefaults,
@@ -321,6 +322,7 @@ export function createCronPromptExecutor(params: {
             agentId: params.agentId,
             trigger: "cron",
             jobId: params.job.id,
+            cleanupCliLiveSessionOnRunEnd: params.job.sessionTarget === "isolated",
             sessionFile,
             workspaceDir: params.workspaceDir,
             config: params.cfgWithAgentDefaults,
