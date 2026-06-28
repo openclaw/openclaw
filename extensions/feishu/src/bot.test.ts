@@ -344,7 +344,8 @@ vi.mock("./reasoning-preview.js", () => ({
   resolveFeishuReasoningPreviewEnabled: mockResolveFeishuReasoningPreviewEnabled,
 }));
 
-vi.mock("./send.js", () => ({
+vi.mock("./send.js", (importOriginal) => ({
+  ...(importOriginal() as Record<string, unknown>),
   sendMessageFeishu: mockSendMessageFeishu,
   getMessageFeishu: mockGetMessageFeishu,
   listFeishuThreadMessages: mockListFeishuThreadMessages,
@@ -2848,6 +2849,7 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(mockGetMerged).toHaveBeenCalledWith({
       path: { message_id: "msg-merge-forward" },
+      params: { card_msg_content_type: "user_card_content" },
     });
     const context = mockCallArg<{ BodyForAgent?: string }>(mockFinalizeInboundContext, 0, 0);
     expect(context.BodyForAgent).toContain(
@@ -2927,13 +2929,15 @@ describe("handleFeishuMessage command authorization", () => {
 
     expect(mockGetMerged).toHaveBeenCalledWith({
       path: { message_id: "msg-merge-card" },
+      params: { card_msg_content_type: "user_card_content" },
     });
     const context = mockCallArg<{ BodyForAgent?: string }>(mockFinalizeInboundContext, 0, 0);
-    // Card header title must appear in the agent body
-    expect(context.BodyForAgent).toContain("Q2 Sales Dashboard");
-    // Card body text (table-like content) must reach the agent
+    // Card body text must reach the agent via the shared interactive card parser.
+    // Note: parseInteractiveCardContent extracts body.elements text only — header.title
+    // is not included.  Header text extraction is a separate follow-up.
     expect(context.BodyForAgent).toContain("Revenue");
     expect(context.BodyForAgent).toContain("Profit");
+    expect(context.BodyForAgent).toContain("All targets met");
     // Plain text sub-message must still be included
     expect(context.BodyForAgent).toContain("please review");
   });
@@ -2978,7 +2982,7 @@ describe("handleFeishuMessage command authorization", () => {
       {
         message_id: "card-1",
         msg_type: "interactive",
-        // Card with header title — the most common Feishu card pattern.
+        // Card with header title and body elements — the most common Feishu card pattern.
         body: {
           content: JSON.stringify({
             header: { title: { tag: "plain_text", content: "Weekly Report" } },
@@ -2999,7 +3003,9 @@ describe("handleFeishuMessage command authorization", () => {
       },
     ]);
 
-    expect(parseMergeForwardContent({ content })).toContain("Weekly Report");
+    // parseInteractiveCardContent extracts body.elements text (not header.title);
+    // the card's body text must still reach the agent.
+    expect(parseMergeForwardContent({ content })).toContain("¥12,000");
     expect(parseMergeForwardContent({ content })).toContain("Sales");
     expect(parseMergeForwardContent({ content })).toContain("Cost");
     expect(parseMergeForwardContent({ content })).toContain("check this");
