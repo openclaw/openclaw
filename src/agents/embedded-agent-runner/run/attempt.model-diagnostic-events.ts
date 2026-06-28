@@ -136,7 +136,26 @@ function responseStreamChunkByteLengthUnchecked(chunk: unknown): number | undefi
   }
   // Plain stream deltas can carry an accumulated partial snapshot. Byte metrics
   // count the new stream payload, not the answer-so-far replay.
-  const { partial: _partial, ...snapshotlessChunk } = chunk;
+  //
+  // PERF: Avoid rest destructuring to prevent V8 hidden class degradation.
+  // When chunk is Proxy-wrapped (via observeModelCallStream), rest destructuring
+  // triggers dictionary mode for the chunk object, leading to exponential RSS
+  // growth over millions of stream chunks. See #91588.
+  //
+  // Use null-prototype target + defineProperty to preserve object-rest semantics:
+  // - Own enumerable __proto__ is copied as a plain data field, not prototype setter
+  // - No prototype pollution risk at diagnostic boundary
+  const snapshotlessChunk = Object.create(null) as Record<string, unknown>;
+  for (const key of Object.keys(chunk)) {
+    if (key !== "partial") {
+      Object.defineProperty(snapshotlessChunk, key, {
+        value: (chunk as Record<string, unknown>)[key],
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
+    }
+  }
   return utf8JsonByteLength(snapshotlessChunk);
 }
 
@@ -286,22 +305,26 @@ function baseModelCallEvent(
   callId: string,
   trace: DiagnosticTraceContext,
 ): ModelCallEventBase {
-  return {
+  // PERF: Avoid conditional spread to prevent V8 hidden class degradation.
+  // Conditional spread on ctx degrades the ctx object to dictionary mode after
+  // thousands of model calls, leading to 3-4x slower event creation and exponential
+  // RSS growth over multi-day Gateway runs. See #91588.
+  const event: ModelCallEventBase = {
     runId: ctx.runId,
     callId,
-    ...(ctx.sessionKey && { sessionKey: ctx.sessionKey }),
-    ...(ctx.sessionId && { sessionId: ctx.sessionId }),
     provider: ctx.provider,
     model: ctx.model,
-    ...(ctx.api && { api: ctx.api }),
-    ...(ctx.transport && { transport: ctx.transport }),
-    ...(ctx.contextTokenBudget ? { contextTokenBudget: ctx.contextTokenBudget } : {}),
-    ...(ctx.contextWindowSource ? { contextWindowSource: ctx.contextWindowSource } : {}),
-    ...(ctx.contextWindowReferenceTokens
-      ? { contextWindowReferenceTokens: ctx.contextWindowReferenceTokens }
-      : {}),
     trace,
   };
+  if (ctx.sessionKey) event.sessionKey = ctx.sessionKey;
+  if (ctx.sessionId) event.sessionId = ctx.sessionId;
+  if (ctx.api) event.api = ctx.api;
+  if (ctx.transport) event.transport = ctx.transport;
+  if (ctx.contextTokenBudget) event.contextTokenBudget = ctx.contextTokenBudget;
+  if (ctx.contextWindowSource) event.contextWindowSource = ctx.contextWindowSource;
+  if (ctx.contextWindowReferenceTokens)
+    event.contextWindowReferenceTokens = ctx.contextWindowReferenceTokens;
+  return event;
 }
 
 function modelContentPrivateData(modelContent: DiagnosticModelCallContent | undefined) {
