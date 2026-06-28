@@ -166,24 +166,6 @@ const bootLocalUserIdentity = loadLocalUserIdentity();
 const bootTerminalEnabled =
   typeof document !== "undefined" &&
   document.documentElement.getAttribute(CONTROL_UI_TERMINAL_ENABLED_ATTRIBUTE) === "true";
-const FULL_MESSAGE_SIDEBAR_MAX_CHARS = 500_000;
-
-function isSidebarMarkdownLike(content: SidebarContent | null): content is SidebarContent {
-  return Boolean(content && (content.kind === "markdown" || content.kind === "canvas"));
-}
-
-function resolveSidebarUnavailableReason(
-  reason: "not_found" | "oversized" | "not_visible" | null | undefined,
-): string {
-  switch (reason) {
-    case "oversized":
-      return "Full content is unavailable because the stored transcript entry is too large to return safely.";
-    case "not_visible":
-      return "Full content is unavailable because this transcript entry does not have a visible WebChat projection.";
-    default:
-      return "Full content is no longer available for this transcript entry.";
-  }
-}
 
 function resolveOnboardingMode(): boolean {
   if (!window.location.search) {
@@ -240,7 +222,6 @@ export class OpenClawApp extends LitElement {
   @state() eventLog: EventLogEntry[] = [];
   eventLogBuffer: EventLogEntry[] = [];
   toolStreamSyncTimer: number | null = null;
-  private sidebarCloseTimer: number | null = null;
 
   @state() assistantName = bootAssistantIdentity.name;
   @state() assistantAvatar = bootAssistantIdentity.avatar;
@@ -362,7 +343,6 @@ export class OpenClawApp extends LitElement {
   // Sidebar state for tool output viewing
   @state() sidebarOpen = false;
   @state() sidebarContent: SidebarContent | null = null;
-  @state() sidebarError: string | null = null;
   @state() splitRatio = this.settings.splitRatio;
 
   @state() nodesLoading = false;
@@ -1437,117 +1417,15 @@ export class OpenClawApp extends LitElement {
     restoreChatComposerState(this, { preserveCurrent: true });
   }
 
-  private async maybeUpgradeSidebarToFullMessage(content: SidebarContent) {
-    const request = content.fullMessageRequest;
-    if (!request || !this.client) {
-      return;
-    }
-    try {
-      const result = (await this.client.request("chat.message.get", {
-        sessionKey: request.sessionKey,
-        ...(request.agentId ? { agentId: request.agentId } : {}),
-        messageId: request.messageId,
-        maxChars: FULL_MESSAGE_SIDEBAR_MAX_CHARS,
-      })) as
-        | {
-            ok?: boolean;
-            message?: unknown;
-            unavailableReason?: "not_found" | "oversized" | "not_visible";
-          }
-        | undefined;
-
-      if (this.sidebarContent !== content) {
-        return;
-      }
-
-      if (!result?.ok || !result.message || typeof result.message !== "object") {
-        this.sidebarContent = {
-          ...content,
-          unavailableReason: result?.unavailableReason ?? "not_found",
-        };
-        this.sidebarError = resolveSidebarUnavailableReason(
-          result?.unavailableReason ?? "not_found",
-        );
-        return;
-      }
-
-      const message = result.message as Record<string, unknown>;
-      const fetchedMessageText =
-        typeof message.text === "string"
-          ? message.text
-          : typeof message.content === "string"
-            ? message.content
-            : Array.isArray(message.content)
-              ? message.content
-                  .map((block) =>
-                    block &&
-                    typeof block === "object" &&
-                    typeof (block as { text?: unknown }).text === "string"
-                      ? (block as { text: string }).text
-                      : null,
-                  )
-                  .filter((value): value is string => typeof value === "string")
-                  .join("\n")
-              : null;
-      const nextRawText =
-        fetchedMessageText ??
-        (typeof content.rawText === "string"
-          ? content.rawText
-          : content.kind === "markdown"
-            ? content.content
-            : null);
-
-      if (content.kind === "markdown") {
-        this.sidebarContent = {
-          ...content,
-          content: nextRawText || content.content,
-          rawText: nextRawText || content.rawText || content.content,
-          unavailableReason: null,
-        };
-      } else {
-        this.sidebarContent = {
-          ...content,
-          rawText: nextRawText || content.rawText || null,
-          unavailableReason: null,
-        };
-      }
-      this.sidebarError = null;
-    } catch (err) {
-      if (this.sidebarContent !== content) {
-        return;
-      }
-      this.sidebarError = `Failed to load full content: ${err instanceof Error ? err.message : String(err)}`;
-    }
-  }
-
   // Sidebar handlers for tool output viewing
   handleOpenSidebar(content: SidebarContent) {
-    if (this.sidebarCloseTimer != null) {
-      window.clearTimeout(this.sidebarCloseTimer);
-      this.sidebarCloseTimer = null;
-    }
     this.sidebarContent = content;
-    this.sidebarError = null;
     this.sidebarOpen = true;
-    if (isSidebarMarkdownLike(content) && content.fullMessageRequest) {
-      void this.maybeUpgradeSidebarToFullMessage(content);
-    }
   }
 
   handleCloseSidebar() {
     this.sidebarOpen = false;
-    // Clear content after transition
-    if (this.sidebarCloseTimer != null) {
-      window.clearTimeout(this.sidebarCloseTimer);
-    }
-    this.sidebarCloseTimer = window.setTimeout(() => {
-      if (this.sidebarOpen) {
-        return;
-      }
-      this.sidebarContent = null;
-      this.sidebarError = null;
-      this.sidebarCloseTimer = null;
-    }, 200);
+    this.sidebarContent = null;
   }
 
   handleSplitRatioChange(ratio: number) {
