@@ -90,6 +90,20 @@ function normalizeFableToolChoice(
   return toolChoice;
 }
 
+// OpenClaw synthesizes these caps when the provider's real output limit is unknown.
+// Keep them out of Bedrock adaptive requests so Bedrock can use its native default.
+const OPENCLAW_FALLBACK_MODEL_MAX_TOKENS = new Set([4096, 8192, 16_384]);
+
+function resolveAdaptiveBedrockMaxTokens(
+  model: Model<"bedrock-converse-stream">,
+  baseMaxTokens: number | undefined,
+): number | undefined {
+  if (baseMaxTokens !== undefined) {
+    return baseMaxTokens;
+  }
+  return OPENCLAW_FALLBACK_MODEL_MAX_TOKENS.has(model.maxTokens) ? undefined : model.maxTokens;
+}
+
 /** Stream a Bedrock Converse request using Bedrock-specific options. */
 export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (
   model: Model<"bedrock-converse-stream">,
@@ -361,6 +375,7 @@ function resolveSimpleBedrockOptions(
   if (usesClaudeFable5BedrockContract(model)) {
     return {
       ...base,
+      maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens),
       reasoning: options?.reasoning ?? "high",
       thinkingBudgets: options?.thinkingBudgets,
     } satisfies BedrockOptions;
@@ -372,6 +387,9 @@ function resolveSimpleBedrockOptions(
         : undefined;
     return {
       ...base,
+      ...(reasoning !== undefined
+        ? { maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens) }
+        : {}),
       reasoning,
     } satisfies BedrockOptions;
   }
@@ -380,6 +398,7 @@ function resolveSimpleBedrockOptions(
     if (supportsAdaptiveThinking(model)) {
       return {
         ...base,
+        maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens),
         reasoning: options.reasoning,
         thinkingBudgets: options.thinkingBudgets,
       } satisfies BedrockOptions;
