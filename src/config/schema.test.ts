@@ -131,6 +131,47 @@ describe("config schema", () => {
     expect(res.generatedAt.trim().length).toBeGreaterThan(0);
   });
 
+  it("accepts agent skillsMerge config", () => {
+    const result = OpenClawSchema.safeParse({
+      agents: {
+        defaults: {
+          skills: ["github", "weather"],
+        },
+        list: [
+          {
+            id: "writer",
+            skillsMerge: {
+              add: ["docs-search"],
+              remove: ["weather"],
+            },
+          },
+        ],
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts Telegram group and topic skillsMerge config", () => {
+    const result = TelegramConfigSchema.safeParse({
+      groups: {
+        "-1001234567890": {
+          skills: ["github", "weather"],
+          topics: {
+            "99": {
+              skillsMerge: {
+                add: ["project-docs"],
+                remove: ["weather"],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
   it("accepts qmd query rerank override", () => {
     const result = OpenClawSchema.safeParse({
       memory: {

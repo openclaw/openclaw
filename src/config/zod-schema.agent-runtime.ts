@@ -23,6 +23,7 @@ import {
   TtsConfigSchema,
 } from "./zod-schema.core.js";
 import { sensitive } from "./zod-schema.sensitive.js";
+import { SkillFilterMergeSchema } from "./zod-schema.skills.js";
 
 function validateSandboxBindEntries(
   binds: readonly string[] | undefined,
@@ -1059,6 +1060,7 @@ export const AgentEntrySchema = z
       .strict()
       .optional(),
     skills: z.array(z.string()).optional(),
+    skillsMerge: SkillFilterMergeSchema.optional(),
     memorySearch: MemorySearchSchema,
     humanDelay: HumanDelaySchema.optional(),
     tts: TtsConfigSchema,

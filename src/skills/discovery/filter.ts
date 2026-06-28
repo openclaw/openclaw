@@ -12,6 +12,54 @@ export function normalizeSkillFilter(skillFilter?: ReadonlyArray<unknown>): stri
   return normalizeStringEntries(skillFilter);
 }
 
+export type SkillFilterMergeShape = {
+  add?: ReadonlyArray<unknown>;
+  remove?: ReadonlyArray<unknown>;
+};
+
+function hasOwnProperty(value: object, key: string): boolean {
+  return Object.hasOwn(value, key);
+}
+
+/** Applies an add/remove delta to an inherited skill filter while preserving allowlist semantics. */
+export function mergeSkillFilter(
+  inheritedFilter: ReadonlyArray<unknown> | undefined,
+  mergeConfig: SkillFilterMergeShape | undefined,
+): string[] | undefined {
+  const inherited = normalizeSkillFilter(inheritedFilter);
+  if (!mergeConfig) {
+    return inherited;
+  }
+  if (inherited === undefined) {
+    return undefined;
+  }
+
+  const remove = new Set(normalizeSkillFilter(mergeConfig.remove) ?? []);
+  const merged = inherited.filter((skill) => !remove.has(skill));
+  for (const skill of normalizeSkillFilter(mergeConfig.add) ?? []) {
+    if (!remove.has(skill) && !merged.includes(skill)) {
+      merged.push(skill);
+    }
+  }
+  return merged;
+}
+
+/** Resolves a scope's effective skill filter from replacement or inherited merge config. */
+export function resolveComposedSkillFilter(
+  scopeConfig:
+    | {
+        skills?: ReadonlyArray<unknown>;
+        skillsMerge?: SkillFilterMergeShape;
+      }
+    | undefined,
+  inheritedFilter?: ReadonlyArray<unknown>,
+): string[] | undefined {
+  if (scopeConfig && hasOwnProperty(scopeConfig, "skills")) {
+    return normalizeSkillFilter(scopeConfig.skills);
+  }
+  return mergeSkillFilter(inheritedFilter, scopeConfig?.skillsMerge);
+}
+
 export function normalizeSkillFilterForComparison(
   skillFilter?: ReadonlyArray<unknown>,
 ): string[] | undefined {

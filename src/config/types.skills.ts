@@ -56,6 +56,14 @@ export type SkillsLimitsConfig = {
   maxSkillFileBytes?: number;
 };
 
+/** Delta composition for skill allowlists. Applies only when an inherited skill filter exists. */
+export type SkillFilterMergeConfig = {
+  /** Skill names to append to the inherited filter. */
+  add?: string[];
+  /** Skill names to remove from the inherited filter after additions are applied. */
+  remove?: string[];
+};
+
 /** Autonomous and approval settings for generated skill proposals. */
 export type SkillsWorkshopConfig = {
   /** Autonomous Skill Workshop behavior controlled separately from user-prompted proposals. */

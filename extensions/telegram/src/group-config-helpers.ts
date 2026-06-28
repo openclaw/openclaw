@@ -5,7 +5,54 @@ import type {
   TelegramGroupConfig,
   TelegramTopicConfig,
 } from "openclaw/plugin-sdk/config-contracts";
-import { firstDefined } from "./bot-access.js";
+
+type SkillFilterMergeConfig = {
+  add?: ReadonlyArray<unknown>;
+  remove?: ReadonlyArray<unknown>;
+};
+
+function normalizeSkillFilter(skillFilter?: ReadonlyArray<unknown>): string[] | undefined {
+  if (skillFilter === undefined) {
+    return undefined;
+  }
+  return skillFilter
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter((entry): entry is string => entry.length > 0);
+}
+
+function mergeSkillFilter(
+  inheritedFilter: ReadonlyArray<unknown> | undefined,
+  mergeConfig: SkillFilterMergeConfig | undefined,
+): string[] | undefined {
+  const inherited = normalizeSkillFilter(inheritedFilter);
+  if (!mergeConfig) {
+    return inherited;
+  }
+  if (inherited === undefined) {
+    return undefined;
+  }
+
+  const remove = new Set(normalizeSkillFilter(mergeConfig.remove) ?? []);
+  const merged = inherited.filter((skill) => !remove.has(skill));
+  for (const skill of normalizeSkillFilter(mergeConfig.add) ?? []) {
+    if (!remove.has(skill) && !merged.includes(skill)) {
+      merged.push(skill);
+    }
+  }
+  return merged;
+}
+
+function resolveScopedSkillFilter(
+  scopedConfig:
+    | { skills?: ReadonlyArray<unknown>; skillsMerge?: SkillFilterMergeConfig }
+    | undefined,
+  inheritedFilter?: ReadonlyArray<unknown>,
+): string[] | undefined {
+  if (scopedConfig && Object.hasOwn(scopedConfig, "skills")) {
+    return normalizeSkillFilter(scopedConfig.skills);
+  }
+  return mergeSkillFilter(inheritedFilter, scopedConfig?.skillsMerge);
+}
 
 export function resolveTelegramScopedGroupConfig(
   telegramCfg: TelegramAccountConfig,
@@ -39,7 +86,8 @@ export function resolveTelegramGroupPromptSettings(params: {
   skillFilter: string[] | undefined;
   groupSystemPrompt: string | undefined;
 } {
-  const skillFilter = firstDefined(params.topicConfig?.skills, params.groupConfig?.skills);
+  const groupSkillFilter = resolveScopedSkillFilter(params.groupConfig);
+  const skillFilter = resolveScopedSkillFilter(params.topicConfig, groupSkillFilter);
   const systemPromptParts = [
     params.groupConfig?.systemPrompt?.trim() || null,
     params.topicConfig?.systemPrompt?.trim() || null,
