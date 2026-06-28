@@ -619,8 +619,10 @@ struct RootTabsSourceGuardTests {
         let controllerSource = try String(contentsOf: Self.gatewayConnectionControllerSourceURL(), encoding: .utf8)
 
         #expect(appSource.contains("deferDiscoveryUntilLocalNetworkRequest: true"))
-        #expect(controllerSource.contains("func requestLocalNetworkAccess(reason: String)"))
+        #expect(controllerSource.contains("func requestLocalNetworkAccess(reason: String, allowReconnect: Bool = true)"))
         #expect(controllerSource.contains("guard self.localNetworkAccessRequested else"))
+        #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"start_discovery\", allowReconnect: allowAutoConnect)"))
+        #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"restart_discovery\", allowReconnect: allowAutoConnect)"))
         #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"connect_manual\")"))
         #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"connect_discovered_gateway\")"))
         #expect(controllerSource.contains("self.requestLocalNetworkAccess(reason: \"connect_last_known\")"))

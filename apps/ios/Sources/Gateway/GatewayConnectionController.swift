@@ -166,7 +166,7 @@ final class GatewayConnectionController {
         self.discovery.setDebugLoggingEnabled(enabled)
     }
 
-    func requestLocalNetworkAccess(reason: String) {
+    func requestLocalNetworkAccess(reason: String, allowReconnect: Bool = true) {
         guard self.discoveryEnabled else {
             self.discovery.stop()
             self.updateFromDiscovery()
@@ -179,7 +179,9 @@ final class GatewayConnectionController {
         guard self.currentScenePhase != .background else { return }
         self.discovery.start()
         self.updateFromDiscovery()
-        self.attemptAutoReconnectIfNeeded()
+        if allowReconnect {
+            self.attemptAutoReconnectIfNeeded()
+        }
     }
 
     func setScenePhase(_ phase: ScenePhase) {
@@ -220,7 +222,7 @@ final class GatewayConnectionController {
         self.discoveryEnabled = true
         self.discoveryAutoConnectEnabled = allowAutoConnect
         guard self.localNetworkAccessRequested else {
-            self.requestLocalNetworkAccess(reason: "start_discovery")
+            self.requestLocalNetworkAccess(reason: "start_discovery", allowReconnect: allowAutoConnect)
             return
         }
         self.discovery.start()
@@ -231,7 +233,7 @@ final class GatewayConnectionController {
         self.discoveryEnabled = true
         self.discoveryAutoConnectEnabled = allowAutoConnect
         guard self.localNetworkAccessRequested else {
-            self.requestLocalNetworkAccess(reason: "restart_discovery")
+            self.requestLocalNetworkAccess(reason: "restart_discovery", allowReconnect: allowAutoConnect)
             return
         }
 
