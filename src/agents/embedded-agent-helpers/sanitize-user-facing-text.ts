@@ -399,13 +399,17 @@ function stripPlaceholderLines(text: string): string {
  * (#78177)
  */
 function stripCopiedCurrentMessageScaffolding(text: string): string {
-  const blocks = text.split(/(\n[ \t]*\n)/);
+  // Split on blank-line separators, matching both LF and CRLF so copied
+  // scaffolding that uses Windows line endings still parses as its own block
+  // (otherwise the scaffold and the genuine reply would be one droppable
+  // block and the real answer would be suppressed). (#78177)
+  const blocks = text.split(/(\r?\n[ \t]*\r?\n)/);
   let changed = false;
   const kept: string[] = [];
 
   for (let index = 0; index < blocks.length; index += 1) {
     const block = blocks[index];
-    if (/^\n[ \t]*\n$/.test(block)) {
+    if (/^\r?\n[ \t]*\r?\n$/.test(block)) {
       kept.push(block);
       continue;
     }
@@ -428,7 +432,7 @@ function stripCopiedCurrentMessageScaffolding(text: string): string {
       (CURRENT_MESSAGE_PRIORITY_LINE_RE.test(firstLine) && blockHasBracketedScaffoldMarker);
     if (shouldDrop) {
       changed = true;
-      if (/^\n[ \t]*\n$/.test(blocks[index + 1] ?? "")) {
+      if (/^\r?\n[ \t]*\r?\n$/.test(blocks[index + 1] ?? "")) {
         index += 1;
       }
       continue;
@@ -443,8 +447,8 @@ function stripCopiedCurrentMessageScaffolding(text: string): string {
 
   return kept
     .join("")
-    .replace(/^(?:[ \t]*\n)+/, "")
-    .replace(/(?:\n[ \t]*)+$/, "");
+    .replace(/^(?:[ \t]*\r?\n)+/, "")
+    .replace(/(?:\r?\n[ \t]*)+$/, "");
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
