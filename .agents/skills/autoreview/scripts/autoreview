@@ -17,12 +17,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 
-ENGINES = ("codex", "claude", "droid", "copilot")
+ENGINES = ("codex", "claude", "droid", "copilot", "cursor-agent")
 THINKING_LEVELS_BY_ENGINE = {
     "codex": {"low", "medium", "high", "xhigh"},
     "claude": {"low", "medium", "high", "xhigh", "max"},
     "droid": set(),
     "copilot": set(),
+    "cursor-agent": set(),
 }
 
 
@@ -480,7 +481,7 @@ def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, e
         {json.dumps(SCHEMA, indent=2)}
         - Do not modify files.
         - Do not invoke nested reviewers or review tools.
-        - Forbidden nested review commands include: codex review, autoreview, claude review, oracle review.
+        - Forbidden nested review commands include: codex review, autoreview, claude review, cursor-agent, oracle review.
         - You may use read-only tools and web search to inspect files, dependency contracts, upstream docs, current behavior, and security implications.
         - Shell commands, if available, must be read-only inspection commands. Do not run tests, formatters, package installs, generators, network mutation commands, git mutation commands, or commands that write files.
         - Report only actionable defects introduced or exposed by this change.
@@ -660,6 +661,44 @@ def run_copilot(args: argparse.Namespace, repo: Path, prompt: str) -> str:
     return result.stdout
 
 
+def run_cursor_agent(args: argparse.Namespace, repo: Path, prompt: str) -> str:
+    if args.thinking:
+        raise SystemExit("--thinking is not supported by the cursor-agent engine")
+    if not args.tools:
+        raise SystemExit("--no-tools is not supported by the cursor-agent engine; use --engine claude --no-tools for a no-tools run")
+    if not args.web_search:
+        raise SystemExit("--no-web-search is not supported by the cursor-agent engine; use an engine with a CLI-level web-search disable switch")
+    with tempfile.TemporaryDirectory(prefix="autoreview-cursor-agent.") as tempdir:
+        # Trust only the helper-owned empty workspace, never the reviewed repo.
+        # Cursor may load trusted project hooks/config before model instructions apply.
+        cmd = [
+            resolve_command(args.cursor_agent_bin, repo),
+            "--print",
+            "--output-format",
+            "stream-json" if args.stream_engine_output else "json",
+            "--trust",
+            "--workspace",
+            tempdir,
+            "--mode",
+            "ask",
+            "--sandbox",
+            "enabled",
+        ]
+        if args.model:
+            cmd.extend(["--model", args.model])
+        result = run_with_heartbeat(
+            cmd,
+            Path(tempdir),
+            input_text=prompt,
+            label="cursor-agent",
+            stream_output=args.stream_engine_output,
+            stream_display=CursorAgentStreamDisplay() if args.stream_engine_output else None,
+        )
+    if result.returncode != 0:
+        raise SystemExit(f"cursor-agent engine failed ({result.returncode})\n{result.stderr or result.stdout}")
+    return result.stdout
+
+
 class CodexStreamDisplay:
     def __init__(self, *, activity_seconds: int = 20) -> None:
         self.activity_seconds = activity_seconds
@@ -779,6 +818,41 @@ class ClaudeStreamDisplay:
         return text
 
 
+class CursorAgentStreamDisplay(ClaudeStreamDisplay):
+    def __call__(self, name: str, line: str) -> str | None:
+        if name != "stdout":
+            return line
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            return self.visible(line)
+        event_type = event.get("type")
+        if event_type == "system":
+            return self.visible(f"cursor-agent session: {event.get('session_id', '<unknown>')}\n")
+        if event_type == "assistant":
+            return self.assistant_message(event)
+        if event_type == "result":
+            return self.visible(self.flush_hidden() + self.result_summary(event))
+        return self.hidden_activity()
+
+    def result_summary(self, event: dict[str, Any]) -> str:
+        usage = event.get("usage")
+        fields: list[str] = []
+        if isinstance(usage, dict):
+            for key in ("inputTokens", "cacheReadTokens", "cacheWriteTokens", "outputTokens"):
+                value = usage.get(key)
+                if isinstance(value, int):
+                    fields.append(f"{key}={value}")
+        return "cursor-agent usage: " + " ".join(fields) + "\n" if fields else "cursor-agent turn completed\n"
+
+    def flush_hidden(self) -> str:
+        if not self.hidden_events:
+            return ""
+        count = self.hidden_events
+        self.hidden_events = 0
+        return f"cursor-agent activity: {count} hidden tool/status events\n"
+
+
 def format_codex_usage(usage: dict[str, Any]) -> str:
     fields = [
         "input_tokens",
@@ -868,11 +942,33 @@ def parse_json_candidate(text: str) -> Any | None:
     try:
         parsed = json.loads(stripped)
     except json.JSONDecodeError:
-        return None
+        return parse_embedded_json_object(stripped)
     if isinstance(parsed, str) and parsed != text:
         nested = parse_json_candidate(parsed)
         return nested if nested is not None else parsed
     return parsed
+
+
+def parse_embedded_json_object(text: str) -> Any | None:
+    decoder = json.JSONDecoder()
+    candidates: list[Any] = []
+    for index, char in enumerate(text):
+        if char not in "[{":
+            continue
+        try:
+            parsed, _end = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, str):
+            nested = parse_json_candidate(parsed)
+            if nested is not None:
+                candidates.append(nested)
+        else:
+            candidates.append(parsed)
+    for candidate in reversed(candidates):
+        if isinstance(candidate, dict) and "findings" in candidate:
+            return candidate
+    return candidates[-1] if candidates else None
 
 
 def validate_report(report: dict[str, Any], repo: Path, changed_paths: set[str], required: list[str]) -> None:
@@ -1016,7 +1112,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--claude-bin", default=os.environ.get("CLAUDE_BIN", "claude"))
     parser.add_argument("--droid-bin", default=os.environ.get("DROID_BIN", "droid"))
     parser.add_argument("--copilot-bin", default=os.environ.get("COPILOT_BIN", "copilot"))
-    parser.add_argument("--no-tools", dest="tools", action="store_false", default=True, help="Disable tools for engines that support it. Codex and copilot reject no-tools review.")
+    parser.add_argument("--cursor-agent-bin", default=os.environ.get("CURSOR_AGENT_BIN", "cursor-agent"))
+    parser.add_argument("--no-tools", dest="tools", action="store_false", default=True, help="Disable tools for engines that support it. Codex, copilot, and cursor-agent reject no-tools review.")
     parser.add_argument("--no-web-search", dest="web_search", action="store_false", default=True)
     parser.add_argument(
         "--claude-allowed-tools",
@@ -1034,7 +1131,7 @@ def parse_args() -> argparse.Namespace:
         "--stream-engine-output",
         action="store_true",
         default=os.environ.get("AUTOREVIEW_STREAM_ENGINE_OUTPUT") == "1",
-        help="Stream review engine output while preserving buffered output for validation. Codex output is filtered to hide tool/file chatter.",
+        help="Stream review engine output while preserving buffered output for validation. Codex, Claude, and cursor-agent output is filtered to hide tool/file chatter.",
     )
     parser.add_argument("--parallel-tests", help="Run a test command concurrently with review; failure fails the helper.")
     parser.add_argument(
@@ -1061,6 +1158,8 @@ def run_engine(args: argparse.Namespace, repo: Path, prompt: str) -> str:
         return run_droid(args, repo, prompt)
     if args.engine == "copilot":
         return run_copilot(args, repo, prompt)
+    if args.engine == "cursor-agent":
+        return run_cursor_agent(args, repo, prompt)
     raise SystemExit(f"unsupported engine: {args.engine}")
 
 
