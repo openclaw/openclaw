@@ -302,8 +302,6 @@ export type TelegramGroupConfig = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** If specified, only load these skills for this group (when no topic). Omit = all skills; empty = no skills. */
   skills?: string[];
-  /** Optional delta applied to an inherited/default skill filter when skills is omitted. */
-  skillsMerge?: SkillFilterMergeConfig;
   /** Per-topic configuration (key is message_thread_id as string, or "*" for topic defaults). */
   topics?: Record<string, TelegramTopicConfig>;
   /** If false, disable the bot for this group (and its topics). */
@@ -339,8 +337,6 @@ export type TelegramDirectConfig = {
   toolsBySender?: GroupToolPolicyBySenderConfig;
   /** If specified, only load these skills for this DM (when no topic). Omit = all skills; empty = no skills. */
   skills?: string[];
-  /** Optional delta applied to an inherited/default skill filter when skills is omitted. */
-  skillsMerge?: SkillFilterMergeConfig;
   /** Per-topic configuration for DM topics (key is message_thread_id as string, or "*" for topic defaults). */
   topics?: Record<string, TelegramTopicConfig>;
   /** If false, disable the bot for this DM (and its topics). */

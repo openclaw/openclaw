@@ -152,7 +152,7 @@ describe("config schema", () => {
     expect(result.success).toBe(true);
   });
 
-  it("accepts Telegram group and topic skillsMerge config", () => {
+  it("accepts Telegram topic skillsMerge config", () => {
     const result = TelegramConfigSchema.safeParse({
       groups: {
         "-1001234567890": {
@@ -170,6 +170,30 @@ describe("config schema", () => {
     });
 
     expect(result.success).toBe(true);
+  });
+
+  it("rejects Telegram group and direct skillsMerge config", () => {
+    const groupResult = TelegramConfigSchema.safeParse({
+      groups: {
+        "-1001234567890": {
+          skillsMerge: {
+            add: ["project-docs"],
+          },
+        },
+      },
+    });
+    const directResult = TelegramConfigSchema.safeParse({
+      direct: {
+        "123": {
+          skillsMerge: {
+            add: ["project-docs"],
+          },
+        },
+      },
+    });
+
+    expect(groupResult.success).toBe(false);
+    expect(directResult.success).toBe(false);
   });
 
   it("accepts qmd query rerank override", () => {
