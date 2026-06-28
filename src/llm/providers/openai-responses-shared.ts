@@ -51,6 +51,14 @@ import { transformMessages } from "./transform-messages.js";
 // Utilities
 // =============================================================================
 
+const EMPTY_TOOL_RESULT_TEXT = "(no output)";
+const IMAGE_TOOL_RESULT_TEXT = "(see attached image)";
+
+function sanitizeToolResultText(text: string, fallback: string): string {
+  const sanitized = sanitizeSurrogates(text);
+  return sanitized.trim().length > 0 ? sanitized : fallback;
+}
+
 type ReplayableResponseOutputMessage = Omit<ResponseOutputMessage, "id"> & { id?: string };
 type ReplayableResponseReasoningItem = Omit<ResponseReasoningItem, "id"> & { id?: string };
 type ResponsesTextContentPart =
@@ -376,8 +384,9 @@ export function convertResponsesMessages<TApi extends Api>(
         .filter((c): c is TextContent => c.type === "text")
         .map((c) => c.text)
         .join("\n");
+      const sanitizedTextResult = sanitizeSurrogates(textResult);
       const hasImages = msg.content.some((c): c is ImageContent => c.type === "image");
-      const hasText = textResult.length > 0;
+      const hasText = sanitizedTextResult.trim().length > 0;
       const [callId] = msg.toolCallId.split("|");
 
       let output: string | ResponseFunctionCallOutputItemList;
@@ -387,7 +396,7 @@ export function convertResponsesMessages<TApi extends Api>(
         if (hasText) {
           contentParts.push({
             type: "input_text",
-            text: sanitizeSurrogates(textResult),
+            text: sanitizedTextResult,
           });
         }
 
@@ -403,7 +412,10 @@ export function convertResponsesMessages<TApi extends Api>(
 
         output = contentParts;
       } else {
-        output = sanitizeSurrogates(hasText ? textResult : "(see attached image)");
+        output = sanitizeToolResultText(
+          textResult,
+          hasImages ? IMAGE_TOOL_RESULT_TEXT : EMPTY_TOOL_RESULT_TEXT,
+        );
       }
 
       messages.push({
