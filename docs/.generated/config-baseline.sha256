@@ -1,11 +1,4 @@
-<<<<<<< HEAD
 26afb40d889df462d5886e6fa0ecd09ce6bae12387836b59a2489c696a8ff3a1  config-baseline.json
 00242f93938579d3ff3130f8d42e08a423e43dc7a73e3b5e5afb45b80c78d25a  config-baseline.core.json
 671979e86e4c4f59415d0a20879e838f9bbd883b3d29eeb02cb5131db8d187fe  config-baseline.channel.json
 21ce3d97ac3a83323fa29ddc35045c04f6eae3040c2c5515077f543b4608fd12  config-baseline.plugin.json
-=======
-ca52ac1661a52415c8d1df4a9d1a3f35d0648b76ee606a0b1a7ed2ba5e52dca8  config-baseline.json
-b861f7d41ec13602c7d10e1fad6a3055605665df3a29412dd08cb26bda6b7ec2  config-baseline.core.json
-da8e055ebba0730498703d209f9e2cfaa1484a83f3240e611dcdd7280e22a525  config-baseline.channel.json
-6005cf9f6e8c9f25ef97207b5eee29ae0e506cf910cdeca77fc9894ad1755b1f  config-baseline.plugin.json
->>>>>>> 3bb4a01d77e (Fixes)
