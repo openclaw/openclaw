@@ -9,11 +9,30 @@ import { resolveStorePath, type SessionEntry } from "../config/sessions.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { resolveSessionKeyFromResolveParams } from "./sessions-resolve.js";
 
 describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
   const freshUpdatedAt = () => Date.now();
+
+  function closeSessionSqliteDatabasesForTest(): void {
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+  }
+
+  async function withStateDirEnv<T>(
+    prefix: string,
+    fn: (ctx: { tempRoot: string; stateDir: string }) => Promise<T>,
+  ): Promise<T> {
+    return withRawStateDirEnv(prefix, async (ctx) => {
+      try {
+        return await fn(ctx);
+      } finally {
+        closeSessionSqliteDatabasesForTest();
+      }
+    });
+  }
 
   async function seedSessionStore(
     storePath: string,
@@ -25,7 +44,7 @@ describe("resolveSessionKeyFromResolveParams store canonicalization", () => {
   }
 
   afterEach(() => {
-    closeOpenClawAgentDatabasesForTest();
+    closeSessionSqliteDatabasesForTest();
   });
 
   it("resolves legacy main-alias matches by sessionId and label for the configured default agent", async () => {

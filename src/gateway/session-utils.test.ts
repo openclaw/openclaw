@@ -15,7 +15,8 @@ import {
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withStateDirEnv as withRawStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
   canonicalizeSpawnedByForAgent,
   buildGatewaySessionRow,
@@ -42,6 +43,24 @@ import {
 
 function resolveSyncRealpath(filePath: string): string {
   return fs.realpathSync.native(filePath);
+}
+
+function closeSessionSqliteDatabasesForTest(): void {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+}
+
+async function withStateDirEnv<T>(
+  prefix: string,
+  fn: (ctx: { tempRoot: string; stateDir: string }) => Promise<T>,
+): Promise<T> {
+  return withRawStateDirEnv(prefix, async (ctx) => {
+    try {
+      return await fn(ctx);
+    } finally {
+      closeSessionSqliteDatabasesForTest();
+    }
+  });
 }
 
 async function seedSessionEntries(
@@ -136,7 +155,7 @@ describe("gateway session utils", () => {
   afterEach(() => {
     resetConfigRuntimeState();
     resetPluginRuntimeStateForTest();
-    closeOpenClawAgentDatabasesForTest();
+    closeSessionSqliteDatabasesForTest();
   });
 
   test("capArrayByJsonBytes trims from the front", () => {
@@ -1947,7 +1966,7 @@ describe("listSessionsFromStore selected model display", () => {
       expect(listed.sessions[0]?.thinkingOptions?.length).toBeGreaterThan(0);
       expect(listed.sessions[0]?.thinkingDefault).toBe("off");
     } finally {
-      closeOpenClawAgentDatabasesForTest();
+      closeSessionSqliteDatabasesForTest();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
@@ -1999,7 +2018,7 @@ describe("listSessionsFromStore selected model display", () => {
       expect(result.sessions[100]?.derivedTitle).toBeUndefined();
       expect(result.sessions[100]?.lastMessagePreview).toBeUndefined();
     } finally {
-      closeOpenClawAgentDatabasesForTest();
+      closeSessionSqliteDatabasesForTest();
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
