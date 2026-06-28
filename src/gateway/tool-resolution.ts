@@ -124,11 +124,11 @@ export function resolveGatewayScopedTools(params: {
   const excludedToolNames = params.excludeToolNames ? Array.from(params.excludeToolNames) : [];
   const surface = params.surface ?? "http";
   const gatewayToolsCfg = params.cfg.gateway?.tools;
-  const defaultGatewayDeny =
+  const defaultGatewayDeny: string[] =
     surface === "http"
       ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
       : [];
-  const ownerOnlyGatewayDeny =
+  const ownerOnlyGatewayDeny: string[] =
     params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
       ? [...GATEWAY_OWNER_ONLY_CORE_TOOLS]
       : [];
@@ -152,6 +152,25 @@ export function resolveGatewayScopedTools(params: {
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
   ]);
   const inheritedToolDenylist = [...explicitDenylist];
+  const hostFsBuiltinCodingDeny = new Set<string>(HOST_FS_BUILTIN_CODING_DENY_NAMES);
+  // The host-FS coding names (`read`/`write`/`edit`) gate the BUILT-IN coding tool
+  // at the final gateway deny filter, which preserves a same-named PLUGIN tool. They
+  // must NOT be passed to the plugin loader's denylist, or the production plugin
+  // resolver drops a same-named plugin tool by name before it can reach that filter
+  // (clawsweeper #63919 [P1]). Names denied for any OTHER reason (explicit
+  // `gateway.tools.deny`, owner-only, or excluded) stay in the plugin denylist.
+  const gatewayConfiguredDeny = Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : [];
+  const pluginToolDenylist = explicitDenylist.filter((name) => {
+    if (!hostFsBuiltinCodingDeny.has(name)) {
+      return true;
+    }
+    const deniedOnlyByHostFsDefault =
+      defaultGatewayDeny.includes(name) &&
+      !ownerOnlyGatewayDeny.includes(name) &&
+      !gatewayConfiguredDeny.includes(name) &&
+      !excludedToolNames.includes(name);
+    return !deniedOnlyByHostFsDefault;
+  });
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist: string[] = [];
@@ -207,7 +226,7 @@ export function resolveGatewayScopedTools(params: {
       inheritedToolPolicy,
       gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
     ]),
-    pluginToolDenylist: explicitDenylist,
+    pluginToolDenylist,
     cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist
       ? cronCreatorToolAllowlist
       : undefined,
@@ -352,7 +371,6 @@ export function resolveGatewayScopedTools(params: {
     ...explicitGatewayDeny,
     ...excludedToolNames,
   ]);
-  const hostFsBuiltinCodingDeny = new Set<string>(HOST_FS_BUILTIN_CODING_DENY_NAMES);
   const tools = policyFiltered.filter((tool) => {
     if (!gatewayDenySet.has(tool.name)) {
       return true;

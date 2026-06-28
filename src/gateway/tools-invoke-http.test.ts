@@ -139,8 +139,8 @@ vi.mock("../agents/openclaw-tools.js", () => {
       execute: async () => ({ ok: true, result: "apply_patch" }),
     },
     {
-      // A same-named PLUGIN `read` tool. `read` is HTTP-denied by default, so
-      // this is only reachable once `gateway.tools.allow: ["read"]` lifts it.
+      // A same-named PLUGIN `read` tool. The host-FS default-deny is scoped to the
+      // built-in coding tool, so this plugin stays reachable by default (#63919 [P1]).
       // The collision-precedence tests (PR #85664 [P1]) assert that the opted-in
       // BUILT-IN reader wins over this plugin when both are present.
       name: "read",
@@ -148,11 +148,11 @@ vi.mock("../agents/openclaw-tools.js", () => {
       execute: async () => ({ ok: true, result: "PLUGIN-read" }),
     },
     {
-      // A same-named PLUGIN `write` tool. `write` is HTTP-denied by default, so
-      // this is only reachable once `gateway.tools.allow: ["write"]` lifts it.
-      // The collision-precedence tests (PR #63919) assert that the opted-in
-      // BUILT-IN writer wins over this plugin when both are present, and that a
-      // non-owner caller falls through to this plugin (built-in not materialized).
+      // A same-named PLUGIN `write` tool. The host-FS default-deny is scoped to the
+      // built-in coding tool, so this plugin stays reachable by default (#63919 [P1]).
+      // The collision-precedence tests (PR #63919) assert that the opted-in BUILT-IN
+      // writer wins over this plugin when both are present, and that a non-owner
+      // caller falls through to this plugin (built-in not materialized).
       name: "write",
       parameters: { type: "object", properties: {} },
       execute: async () => ({ ok: true, result: "PLUGIN-write" }),
@@ -225,7 +225,17 @@ vi.mock("../agents/openclaw-tools.js", () => {
   return {
     createOpenClawTools: (ctx: Record<string, unknown>) => {
       lastCreateOpenClawToolsContext = ctx;
-      return ctx.disablePluginTools ? tools.filter((tool) => tool.name !== "browser") : tools;
+      const base = ctx.disablePluginTools ? tools.filter((tool) => tool.name !== "browser") : tools;
+      // Mirror the production plugin loader: a PLUGIN-owned tool whose name is in
+      // `pluginToolDenylist` is filtered out during resolution, before the gateway
+      // deny filter runs. Built-in tools (no plugin meta) are unaffected here. This
+      // is the real path the #63919 [P1] plugin-name preservation must survive.
+      const pluginDenylist = new Set(
+        Array.isArray(ctx.pluginToolDenylist) ? (ctx.pluginToolDenylist as string[]) : [],
+      );
+      return base.filter(
+        (tool) => !(pluginDenylist.has(tool.name) && pluginToolMetaState.has(tool.name)),
+      );
     },
   };
 });
