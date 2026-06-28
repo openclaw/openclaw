@@ -31,7 +31,10 @@ import {
   type SessionEntry,
 } from "../../config/sessions.js";
 import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
+import {
+  formatSqliteSessionFileMarker,
+  parseSqliteSessionFileMarker,
+} from "../../config/sessions/sqlite-marker.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionMessagesAsync } from "../../gateway/session-utils.fs.js";
 import { logVerbose } from "../../globals.js";
@@ -419,13 +422,20 @@ function resolveSessionLogPath(
       (sessionEntry as (SessionEntry & { transcriptPath?: string }) | undefined)?.transcriptPath,
     );
     const sessionFile = normalizeOptionalString(sessionEntry?.sessionFile) || transcriptPath;
-    if (!sessionFile) {
-      return undefined;
-    }
     if (parseSqliteSessionFileMarker(sessionFile)) {
       return sessionFile;
     }
     const agentId = resolveAgentIdFromSessionKey(sessionKey);
+    if (!sessionFile && agentId && opts?.storePath) {
+      return formatSqliteSessionFileMarker({
+        agentId,
+        sessionId,
+        storePath: opts.storePath,
+      });
+    }
+    if (!sessionFile) {
+      return undefined;
+    }
     const pathOpts = resolveSessionFilePathOptions({
       agentId,
       storePath: opts?.storePath,
