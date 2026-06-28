@@ -1649,6 +1649,8 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
       : {};
   const metadataId = typeof metadata.id === "string" ? metadata.id : undefined;
   const metadataSeq = typeof metadata.seq === "number" ? metadata.seq : undefined;
+  const metadataIdempotencyKey =
+    typeof metadata.idempotencyKey === "string" ? metadata.idempotencyKey : undefined;
   return {
     role,
     timestamp,
@@ -1656,6 +1658,7 @@ export function buildOversizedHistoryPlaceholder(message?: unknown): Record<stri
     __openclaw: {
       ...(metadataId ? { id: metadataId } : {}),
       ...(metadataSeq !== undefined ? { seq: metadataSeq } : {}),
+      ...(metadataIdempotencyKey ? { idempotencyKey: metadataIdempotencyKey } : {}),
       truncated: true,
       reason: "oversized",
     },
