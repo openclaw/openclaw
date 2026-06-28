@@ -267,6 +267,14 @@ export function sanitizeToolResult(result: unknown): unknown {
   return out;
 }
 
+function redactInlineDataUriValue(value: string): string {
+  const trimmed = value.trimStart();
+  if (!trimmed.toLowerCase().startsWith("data:")) {
+    return value;
+  }
+  return `[inline data URI: ${value.length} chars]`;
+}
+
 function stringifyStructuredToolResultContent(block: unknown): string | undefined {
   if (!block || typeof block !== "object") {
     return undefined;
@@ -280,10 +288,7 @@ function stringifyStructuredToolResultContent(block: unknown): string | undefine
   try {
     const serialized = JSON.stringify(record, (_key, value) => {
       if (typeof value === "string") {
-        return value.replace(
-          /data:[^"'\\\s]+/gi,
-          (match) => `[inline data URI: ${match.length} chars]`,
-        );
+        return redactInlineDataUriValue(value);
       }
       if (!value || typeof value !== "object") {
         return value;
@@ -312,16 +317,20 @@ export function extractToolResultText(result: unknown): string | undefined {
       return trimmed ? trimmed : undefined;
     })
     .filter((value): value is string => Boolean(value));
+  if (texts.length > 0) {
+    return texts.join("\n");
+  }
+  const structuredTexts: string[] = [];
   for (const item of content) {
     const structured = stringifyStructuredToolResultContent(item);
     if (structured) {
-      texts.push(structured);
+      structuredTexts.push(structured);
     }
   }
-  if (texts.length === 0) {
+  if (structuredTexts.length === 0) {
     return undefined;
   }
-  return texts.join("\n");
+  return truncateToolText(structuredTexts.join("\n"));
 }
 
 function pushUniqueMessagingMediaUrl(urls: string[], seen: Set<string>, value: unknown): void {
