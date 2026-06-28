@@ -555,20 +555,22 @@ export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   const configuredBeforeDeliver = params.dispatcherOptions.beforeDeliver
     ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
     : globalBeforeDeliver;
-  const beforeDeliver: ReplyDispatchBeforeDeliver = async (payload, info) => {
-    const fence = getForegroundReplyFence();
-    // Check both before and after hooks because hooks can await while newer replies finish.
-    if (await shouldCancelForegroundReplyDelivery(fence)) {
-      return null;
-    }
-    const deliverPayload = configuredBeforeDeliver
-      ? await configuredBeforeDeliver(payload, info)
-      : payload;
-    if (!deliverPayload || (await shouldCancelForegroundReplyDelivery(fence))) {
-      return null;
-    }
-    return deliverPayload;
-  };
+  const beforeDeliver: ReplyDispatchBeforeDeliver | undefined = configuredBeforeDeliver
+    ? async (payload, info) => {
+        const fence = getForegroundReplyFence();
+        // Check both before and after hooks because hooks can await while newer replies finish.
+        if (await shouldCancelForegroundReplyDelivery(fence)) {
+          return null;
+        }
+        const deliverPayload = configuredBeforeDeliver
+          ? await configuredBeforeDeliver(payload, info)
+          : payload;
+        if (!deliverPayload || (await shouldCancelForegroundReplyDelivery(fence))) {
+          return null;
+        }
+        return deliverPayload;
+      }
+    : undefined;
   const deliver: ReplyDispatcherWithTypingOptions["deliver"] = async (payload, info) => {
     const fence = getForegroundReplyFence();
     try {
