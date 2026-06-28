@@ -6,7 +6,10 @@ import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { testing as agentStepTesting } from "../agents/tools/agent-step.js";
 import { runSessionsSendA2AFlow } from "../agents/tools/sessions-send-tool.a2a.js";
-import { resolveSessionTranscriptPath } from "../config/sessions.js";
+import {
+  loadSessionEntry,
+  persistSessionTranscriptTurn,
+} from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
@@ -74,21 +77,9 @@ async function emitLifecycleAssistantReply(params: {
   };
   const sessionId = commandParams.sessionId ?? params.defaultSessionId;
   const runId = commandParams.runId ?? sessionId;
-  let sessionFile = resolveSessionTranscriptPath(sessionId);
-  if (testState.sessionStorePath && commandParams.sessionKey) {
-    const rawStore = JSON.parse(await fs.readFile(testState.sessionStorePath, "utf-8")) as Record<
-      string,
-      {
-        sessionId?: string;
-        sessionFile?: string;
-      }
-    >;
-    const entry = rawStore[commandParams.sessionKey];
-    if (entry?.sessionId === sessionId && entry.sessionFile) {
-      sessionFile = entry.sessionFile;
-    }
+  if (!commandParams.sessionKey) {
+    throw new Error("expected session key for lifecycle reply");
   }
-  await fs.mkdir(path.dirname(sessionFile), { recursive: true });
 
   const startedAt = Date.now();
   emitAgentEvent({
@@ -103,7 +94,18 @@ async function emitLifecycleAssistantReply(params: {
     content: [{ type: "text", text }],
     ...(params.includeTimestamp ? { timestamp: Date.now() } : {}),
   };
-  await fs.appendFile(sessionFile, `${JSON.stringify({ message })}\n`, "utf8");
+  await persistSessionTranscriptTurn(
+    {
+      sessionId,
+      sessionKey: commandParams.sessionKey,
+      ...(testState.sessionStorePath ? { storePath: testState.sessionStorePath } : {}),
+    },
+    {
+      cwd: "/tmp",
+      updateMode: "none",
+      messages: [{ message, now: Date.now() }],
+    },
+  );
 
   emitAgentEvent({
     runId,
@@ -427,15 +429,11 @@ describe("sessions_send agent targeting", () => {
         expect(orionCall).toBeDefined();
         expect(orionCall?.sessionId).toBeTypeOf("string");
 
-        const rawStore = JSON.parse(
-          await fs.readFile(testState.sessionStorePath, "utf-8"),
-        ) as Record<
-          string,
-          {
-            sessionId?: string;
-          }
-        >;
-        expect(rawStore["agent:orion:main"]?.sessionId).toBe(orionCall?.sessionId);
+        const stored = loadSessionEntry({
+          sessionKey: "agent:orion:main",
+          storePath: testState.sessionStorePath,
+        });
+        expect(stored?.sessionId).toBe(orionCall?.sessionId);
       } finally {
         testState.agentsConfig = undefined;
         testState.sessionStorePath = undefined;

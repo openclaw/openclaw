@@ -4,6 +4,7 @@
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import {
   createChannelTestPluginBase,
   createDirectOutboundTestAdapter,
@@ -301,13 +302,12 @@ describe("gateway server agent", () => {
     expect(res.ok).toBe(true);
     await waitForAgentCommandCall("idem-agent-subdepth");
 
-    const raw = await fs.readFile(gatewaySuite.sessionStorePath, "utf-8");
-    const persisted = JSON.parse(raw) as Record<
-      string,
-      { spawnDepth?: number; spawnedBy?: string }
-    >;
-    expect(persisted["agent:main:subagent:depth"]?.spawnDepth).toBe(2);
-    expect(persisted["agent:main:subagent:depth"]?.spawnedBy).toBe("agent:main:main");
+    const persisted = loadSessionEntry({
+      sessionKey: "agent:main:subagent:depth",
+      storePath: gatewaySuite.sessionStorePath,
+    }) as { spawnDepth?: number; spawnedBy?: string } | undefined;
+    expect(persisted?.spawnDepth).toBe(2);
+    expect(persisted?.spawnedBy).toBe("agent:main:main");
   });
 
   test("agent derives sessionKey from agentId", async () => {
