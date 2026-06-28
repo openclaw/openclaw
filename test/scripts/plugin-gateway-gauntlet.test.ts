@@ -145,7 +145,9 @@ describe("plugin gateway gauntlet helpers", () => {
     ).toThrow("Duplicate --qa-scenario value: channel-chat-baseline");
 
     vi.stubEnv("OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS", "telegram,discord");
-    expect(() => parseArgs(["--plugin", "telegram"])).toThrow("Duplicate --plugin value: telegram");
+    expect(() => parseArgs(["--plugin", "telegram"])).toThrow(
+      "Duplicate --plugin value: telegram",
+    );
   });
 
   it("rejects duplicate single-value controls", () => {

@@ -2802,6 +2802,14 @@ grep -Fxq preserved "$TMPDIR/caller-fd"
     }
   });
 
+  it("gives Codex on-demand package installs enough time to reach Codex assertions", () => {
+    const runner = readFileSync(CODEX_ON_DEMAND_DOCKER_E2E_PATH, "utf8");
+
+    expect(runner).toContain(
+      'export OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-1200s}"',
+    );
+  });
+
   it("cleans package-backed onboarding and plugin Docker artifacts on every exit path", () => {
     for (const path of [
       CODEX_ON_DEMAND_DOCKER_E2E_PATH,

@@ -241,7 +241,9 @@ describe("resolveTuiShutdownHardExitMs", () => {
 
   it("clamps oversized local run shutdown grace values", () => {
     withEnv({ OPENCLAW_TUI_LOCAL_RUN_SHUTDOWN_GRACE_MS: String(Number.MAX_SAFE_INTEGER) }, () => {
-      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(MAX_TIMER_TIMEOUT_MS + 2000);
+      expect(resolveTuiShutdownHardExitMs({ localMode: true })).toBe(
+        MAX_TIMER_TIMEOUT_MS + 2000,
+      );
     });
   });
 });

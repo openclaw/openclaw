@@ -191,7 +191,9 @@ describe("script-specific dev tooling hardening", () => {
       "--channel requires a value",
     );
     for (const flag of ["--channel", "--token", "--timeout-ms", "--state-dir"]) {
-      expect(() => discordSmokeTesting.parseArgs([flag, "-h"])).toThrow(`${flag} requires a value`);
+      expect(() => discordSmokeTesting.parseArgs([flag, "-h"])).toThrow(
+        `${flag} requires a value`,
+      );
     }
   });
 

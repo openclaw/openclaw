@@ -1,7 +1,7 @@
-import { spawnSync } from "node:child_process";
 // Release preflight tests keep generated-artifact checks fail-closed for operators.
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
+import { spawnSync } from "node:child_process";
 import { afterEach, describe, expect, it } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../helpers/temp-dir.js";
 

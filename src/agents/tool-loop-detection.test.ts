@@ -1264,4 +1264,5 @@ describe("tool-loop-detection", () => {
       expect(loopResult.stuck && loopResult.level).not.toBe("critical");
     });
   });
+
 });

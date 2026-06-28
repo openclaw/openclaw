@@ -1613,7 +1613,9 @@ export function resolveModelRef(params: AttemptParamsLike): ModelRef {
         readString((params as { provider?: unknown }).provider) ??
         "unknown-provider",
       baseUrl: readString(model.baseUrl),
-      azureApiVersion: readString(model.azureApiVersion ?? model.params?.azureApiVersion),
+      azureApiVersion: readString(
+        model.azureApiVersion ?? model.params?.azureApiVersion,
+      ),
       headers: model.headers,
       authHeader: model.authHeader,
       requestAuthMode: readString(requestTransport?.auth?.mode ?? rawRequest?.auth?.mode),

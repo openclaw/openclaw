@@ -97,6 +97,27 @@ describe("session accessor file-backed seam", () => {
     });
   });
 
+  it("keeps case-distinct Matrix sessions separate under nested agent ownership", async () => {
+    const mixedKey = "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org";
+    const lowerKey = "agent:voice:agent:other:matrix:channel:!Roomabc:example.org";
+
+    await upsertSessionEntry(
+      { sessionKey: mixedKey, storePath },
+      { sessionId: "mixed-session", updatedAt: 10 },
+    );
+    await upsertSessionEntry(
+      { sessionKey: lowerKey, storePath },
+      { sessionId: "lower-session", updatedAt: 20 },
+    );
+
+    expect(loadSessionEntry({ sessionKey: mixedKey, storePath })?.sessionId).toBe("mixed-session");
+    expect(loadSessionEntry({ sessionKey: lowerKey, storePath })?.sessionId).toBe("lower-session");
+    expect(listSessionEntries({ storePath }).map((entry) => entry.sessionKey)).toEqual([
+      mixedKey,
+      lowerKey,
+    ]);
+  });
+
   it("marks abort targets while canonicalizing legacy session keys", async () => {
     fs.writeFileSync(
       storePath,
@@ -1033,6 +1054,92 @@ describe("session accessor file-backed seam", () => {
         sessionId: branchSessionId,
         totalTokens: 42,
       }),
+    });
+  });
+
+  it("branches from the newest matching compaction checkpoint without sorting all checkpoints", async () => {
+    const sourceSessionId = "11111111-1111-4111-8111-111111111111";
+    const branchSessionId = "22222222-2222-4222-8222-222222222222";
+    const branchPath = path.join(tempDir, "branch-newest.jsonl");
+    fs.writeFileSync(branchPath, `{"type":"session","id":"${branchSessionId}"}\n`, "utf8");
+    const oldMatchingCheckpoint = {
+      checkpointId: "checkpoint-1",
+      sessionKey: "agent:main:main",
+      sessionId: sourceSessionId,
+      createdAt: 10,
+      reason: "manual",
+      preCompaction: {
+        sessionId: sourceSessionId,
+        leafId: "old-leaf",
+      },
+      postCompaction: { sessionId: "33333333-3333-4333-8333-333333333333" },
+    } satisfies NonNullable<SessionEntry["compactionCheckpoints"]>[number];
+    const newestMatchingCheckpoint = {
+      ...oldMatchingCheckpoint,
+      createdAt: 20,
+      preCompaction: {
+        sessionId: sourceSessionId,
+        leafId: "new-leaf",
+      },
+      postCompaction: { sessionId: "44444444-4444-4444-8444-444444444444" },
+    } satisfies NonNullable<SessionEntry["compactionCheckpoints"]>[number];
+    const newestDifferentCheckpoint = {
+      ...oldMatchingCheckpoint,
+      checkpointId: "checkpoint-2",
+      createdAt: 30,
+      preCompaction: {
+        sessionId: sourceSessionId,
+        leafId: "different-leaf",
+      },
+      postCompaction: { sessionId: "55555555-5555-4555-8555-555555555555" },
+    } satisfies NonNullable<SessionEntry["compactionCheckpoints"]>[number];
+    fs.writeFileSync(
+      storePath,
+      JSON.stringify(
+        {
+          main: {
+            sessionId: sourceSessionId,
+            updatedAt: 30,
+            compactionCheckpoints: [
+              oldMatchingCheckpoint,
+              newestDifferentCheckpoint,
+              newestMatchingCheckpoint,
+            ],
+          },
+        } satisfies Record<string, SessionEntry>,
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = await branchSessionFromCompactionCheckpoint({
+      storePath,
+      sourceKey: "agent:main:main",
+      sourceStoreKey: "main",
+      nextKey: "agent:main:branch-newest",
+      checkpointId: "checkpoint-1",
+      forkTranscriptFromCheckpoint: async (selectedCheckpoint) => {
+        expect(selectedCheckpoint).toEqual(newestMatchingCheckpoint);
+        return {
+          status: "created",
+          transcript: {
+            sessionFile: branchPath,
+            sessionId: branchSessionId,
+          },
+        };
+      },
+      buildEntry: ({ currentEntry, forkedTranscript }) => ({
+        ...currentEntry,
+        sessionFile: forkedTranscript.sessionFile,
+        sessionId: forkedTranscript.sessionId,
+      }),
+    });
+
+    expect(result).toMatchObject({
+      status: "created",
+      key: "agent:main:branch-newest",
+      checkpoint: newestMatchingCheckpoint,
     });
   });
 

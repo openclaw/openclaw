@@ -619,7 +619,10 @@ export function runShellCommand({
       }
       terminateChild(child, "SIGTERM");
       killAt = Date.now() + resolvedTimeoutKillGraceMs;
-      killTimer = setTimeout(() => terminateChild(child, "SIGKILL"), resolvedTimeoutKillGraceMs);
+      killTimer = setTimeout(
+        () => terminateChild(child, "SIGKILL"),
+        resolvedTimeoutKillGraceMs,
+      );
       killTimer.unref?.();
     };
     const resetNoOutputTimer = () => {

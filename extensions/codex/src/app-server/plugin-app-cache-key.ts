@@ -8,8 +8,8 @@ import {
   type CodexAppInventoryCacheKeyInput,
 } from "./app-inventory-cache.js";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
-import type { CodexAppServerRuntimeIdentity } from "./client.js";
 import type { CodexAppServerRuntimeOptions, CodexAppServerStartOptions } from "./config.js";
+import type { CodexAppServerRuntimeIdentity } from "./client.js";
 
 /** Inputs that identify the Codex app inventory cache scope for one runtime. */
 export type CodexPluginAppCacheKeyParams = Omit<

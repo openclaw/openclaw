@@ -627,10 +627,9 @@ describe("scripts/test-group-report arg parsing", () => {
       ["--kill-grace-ms", ["100", "200"]],
       ["--concurrency", ["2", "3"]],
     ]) {
-      const args =
-        flag === "--compare"
-          ? [flag, values[0], values[1], flag, values[2], values[3]]
-          : [flag, values[0], flag, values[1]];
+      const args = flag === "--compare"
+        ? [flag, values[0], values[1], flag, values[2], values[3]]
+        : [flag, values[0], flag, values[1]];
       expect(() => parseTestGroupReportArgs(args)).toThrow(`${flag} was provided more than once`);
     }
     expect(parseTestGroupReportArgs(["--config", "a.ts", "--config", "b.ts"]).configs).toEqual([

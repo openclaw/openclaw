@@ -16,10 +16,7 @@ type BridgeInternals = {
   pendingClaudePermissions: Map<string, unknown>;
   pendingApprovals: Map<string, unknown>;
   pendingSweepInterval: NodeJS.Timeout | null;
-  pollEvents: (
-    filter: WaitFilter,
-    limit?: number,
-  ) => {
+  pollEvents: (filter: WaitFilter, limit?: number) => {
     events: QueueEvent[];
     nextCursor: number;
   };

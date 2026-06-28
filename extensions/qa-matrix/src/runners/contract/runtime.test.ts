@@ -86,9 +86,9 @@ describe("matrix live qa runtime", () => {
     expect(path.dirname(firstOutputDir)).toBe(path.join(repoRoot, ".artifacts", "qa-e2e"));
     expect(path.basename(firstOutputDir)).toMatch(/^matrix-[a-z0-9]+-[a-f0-9]{8}$/u);
     expect(secondOutputDir).not.toBe(firstOutputDir);
-    expect(liveTesting.resolveMatrixQaOutputDir({ outputDir: ".artifacts/custom", repoRoot })).toBe(
-      ".artifacts/custom",
-    );
+    expect(
+      liveTesting.resolveMatrixQaOutputDir({ outputDir: ".artifacts/custom", repoRoot }),
+    ).toBe(".artifacts/custom");
   });
 
   it("prints Matrix QA progress by default for non-interactive runs", () => {

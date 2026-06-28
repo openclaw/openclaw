@@ -67,9 +67,9 @@ describe("slash command browser import", () => {
       'import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";',
     ]);
     expect(importDeclarations(sharedRegistry)).toEqual([
+      'import { formatFastModeAutoLabel, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";',
       'import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";',
       'import { normalizeStringEntries } from "../../packages/normalization-core/src/string-normalization.js";',
-      'import { formatFastModeAutoLabel, resolveFastModeModelAutoOnSeconds } from "../shared/fast-mode.js";',
       'import { COMMAND_ARG_FORMATTERS } from "./commands-args.js";',
       'import type { ChatCommandDefinition, CommandArgChoiceContext, CommandCategory, CommandScope, CommandTier } from "./commands-registry.types.js";',
       'import { BASE_THINKING_LEVELS, type ThinkLevel } from "./thinking.shared.js";',

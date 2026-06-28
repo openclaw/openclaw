@@ -34,13 +34,8 @@ async function loadExecModules(options?: { mockSpawn?: boolean; mockExecFile?: b
     vi.doUnmock("node:child_process");
   }
   ({ attachChildProcessBridge } = await import("./child-process-bridge.js"));
-  ({
-    resolveCommandEnv,
-    resolveProcessExitCode,
-    runCommandWithTimeout,
-    runExec,
-    shouldSpawnWithShell,
-  } = await import("./exec.js"));
+  ({ resolveCommandEnv, resolveProcessExitCode, runCommandWithTimeout, runExec, shouldSpawnWithShell } =
+    await import("./exec.js"));
 }
 
 describe("runCommandWithTimeout", () => {

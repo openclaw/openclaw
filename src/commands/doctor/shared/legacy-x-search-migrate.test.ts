@@ -132,4 +132,5 @@ describe("legacy x_search config migration", () => {
     expect(res.changes).toStrictEqual([]);
     expect(res.config.plugins?.entries?.xai).toBeUndefined();
   });
+
 });
