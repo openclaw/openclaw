@@ -60,6 +60,7 @@ function requireRecord(value: unknown, label: string): Record<string, unknown> {
 }
 
 describe("noteDevicePairingHealth", () => {
+  let collectDevicePairingHealthFindings: typeof import("./doctor-device-pairing.js").collectDevicePairingHealthFindings;
   let noteDevicePairingHealth: typeof import("./doctor-device-pairing.js").noteDevicePairingHealth;
 
   async function withApprovedOperatorPairing(
@@ -102,7 +103,8 @@ describe("noteDevicePairingHealth", () => {
     vi.resetModules();
     callGatewayMock.mockReset();
     noteMock.mockReset();
-    ({ noteDevicePairingHealth } = await import("./doctor-device-pairing.js"));
+    ({ collectDevicePairingHealthFindings, noteDevicePairingHealth } =
+      await import("./doctor-device-pairing.js"));
   });
 
   afterEach(() => {
@@ -112,7 +114,7 @@ describe("noteDevicePairingHealth", () => {
 
   it("warns about pending scope upgrades from local pairing state when the gateway is down", async () => {
     await withApprovedOperatorPairing(async ({ identity, publicKey }) => {
-      await requestDevicePairing({
+      const pending = await requestDevicePairing({
         deviceId: identity.deviceId,
         publicKey,
         role: "operator",
@@ -133,6 +135,22 @@ describe("noteDevicePairingHealth", () => {
       expect(message).toContain("Pending scope upgrade");
       expect(message).toContain("operator.admin");
       expect(message).toContain("openclaw devices approve");
+      expect(callGatewayMock).not.toHaveBeenCalled();
+
+      const findings = await collectDevicePairingHealthFindings({
+        cfg: { gateway: { mode: "local" } },
+      });
+      expect(findings).toEqual([
+        expect.objectContaining({
+          checkId: "core/doctor/device-pairing",
+          severity: "warning",
+          path: "devices.pending",
+          target: identity.deviceId + ":" + pending.request.requestId,
+          requirement: "scope-upgrade",
+          message: expect.stringContaining("Pending scope upgrade"),
+          fixHint: expect.stringContaining("openclaw devices approve"),
+        }),
+      ]);
       expect(callGatewayMock).not.toHaveBeenCalled();
     });
   });
@@ -159,6 +177,20 @@ describe("noteDevicePairingHealth", () => {
           expect(requireNoteTitle()).toBe("Device pairing");
           expect(message).toContain("paired.json");
           expect(message).toContain("refused to treat it as empty");
+          expect(await fs.readFile(pairedPath, "utf8")).toBe("{not-json}");
+
+          const findings = await collectDevicePairingHealthFindings({
+            cfg: { gateway: { mode: "local" } },
+          });
+          expect(findings).toEqual([
+            expect.objectContaining({
+              checkId: "core/doctor/device-pairing",
+              severity: "warning",
+              path: pairedPath,
+              requirement: "pairing-store-parse",
+              message: expect.stringContaining("refused to treat it as empty"),
+            }),
+          ]);
           expect(await fs.readFile(pairedPath, "utf8")).toBe("{not-json}");
         },
       );

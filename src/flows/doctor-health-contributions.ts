@@ -1755,6 +1755,16 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:device-pairing",
       label: "Device pairing",
+      healthChecks: {
+        id: "core/doctor/device-pairing",
+        description: "Device pairing requests and stale device-auth records are findings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectDevicePairingHealthFindings } =
+            await import("../commands/doctor-device-pairing.js");
+          return await collectDevicePairingHealthFindings({ cfg: ctx.cfg, healthOk: false });
+        },
+      },
       run: runDevicePairingHealth,
     }),
     createDoctorHealthContribution({
