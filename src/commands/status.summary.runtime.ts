@@ -101,6 +101,55 @@ function resolveConfiguredStatusModelRef(params: {
   return { provider: params.defaultProvider, model: params.defaultModel };
 }
 
+function resolveProviderlessPersistedStatusModelRef(params: {
+  defaultProvider: string;
+  provider?: unknown;
+  model?: unknown;
+}): { provider: string; model: string } | null {
+  const provider = normalizeOptionalString(params.provider);
+  const model = normalizeOptionalString(params.model);
+  if (
+    !model ||
+    provider ||
+    model.includes("/") ||
+    normalizeLowercaseStringOrEmpty(model) === "openrouter:auto"
+  ) {
+    return null;
+  }
+  // Status rows report the persisted session text. Shared ref parsing still
+  // canonicalizes provider-local aliases, which would rewrite this display.
+  return { provider: params.defaultProvider, model };
+}
+
+function resolveStatusModelLookupRef(params: {
+  provider?: unknown;
+  model?: unknown;
+  defaultProvider?: unknown;
+}): { provider: string; model: string } | null {
+  const provider = normalizeOptionalString(params.provider);
+  const model = normalizeOptionalString(params.model);
+  if (!model) {
+    return null;
+  }
+  const defaultProvider =
+    normalizeOptionalString(params.defaultProvider) ?? provider ?? DEFAULT_PROVIDER;
+  const raw = provider ? `${provider}/${model}` : model;
+  const parsed = parseModelRef(raw, defaultProvider, {
+    allowManifestNormalization: false,
+    allowPluginNormalization: false,
+  });
+  return parsed ?? { provider: provider ?? defaultProvider, model };
+}
+
+function resolveStatusModelComparisonLabel(params: {
+  provider?: unknown;
+  model?: unknown;
+  defaultProvider?: unknown;
+}): string | null {
+  const ref = resolveStatusModelLookupRef(params);
+  return ref ? `${ref.provider}/${ref.model}` : null;
+}
+
 function resolveSessionModelRef(
   cfg: OpenClawConfig,
   entry?:
@@ -114,10 +163,25 @@ function resolveSessionModelRef(
     defaultModel: DEFAULT_MODEL,
     agentId,
   });
+  const defaultProvider = resolved.provider || DEFAULT_PROVIDER;
+  const providerlessPersisted =
+    resolveProviderlessPersistedStatusModelRef({
+      defaultProvider,
+      provider: entry?.providerOverride,
+      model: entry?.modelOverride,
+    }) ??
+    resolveProviderlessPersistedStatusModelRef({
+      defaultProvider,
+      provider: entry?.modelProvider,
+      model: entry?.model,
+    });
+  if (providerlessPersisted) {
+    return providerlessPersisted;
+  }
   return (
     // Persisted selected model or overrides describe the active session, not just current config.
     resolvePersistedSelectedModelRef({
-      defaultProvider: resolved.provider || DEFAULT_PROVIDER,
+      defaultProvider,
       runtimeProvider: entry?.modelProvider,
       runtimeModel: entry?.model,
       overrideProvider: entry?.providerOverride,
@@ -171,4 +235,6 @@ export const statusSummaryRuntime = {
   resolveSessionModelRef,
   resolveSessionRuntimeLabel,
   resolveConfiguredStatusModelRef,
+  resolveStatusModelLookupRef,
+  resolveStatusModelComparisonLabel,
 };
