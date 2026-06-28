@@ -1504,8 +1504,11 @@ function summarizeJsonl(text: string): {
     if (typeof message?.role === "string") {
       messageRoles.add(message.role);
     }
-    if (message?.content !== undefined) {
-      messageTexts.add(String(message.content));
+    const messageContent = message?.content;
+    if (typeof messageContent === "string") {
+      messageTexts.add(messageContent);
+    } else if (messageContent !== undefined) {
+      messageTexts.add(JSON.stringify(messageContent));
     } else if (typeof event?.content === "string") {
       messageTexts.add(event.content);
     }
@@ -1563,8 +1566,7 @@ function readTrackedEntries(
     )
     .map((row) => {
       const sessionId = typeof row.sessionId === "string" ? row.sessionId : "";
-      return {
-        ...(typeof row.entryJson === "string" ? { entry: parseEntryJson(row.entryJson) } : {}),
+      const result: SqliteSessionEntryEvidence = {
         sessionId,
         sessionKey: typeof row.sessionKey === "string" ? row.sessionKey : "",
         transcriptEvents: scalarNumber(
@@ -1573,6 +1575,10 @@ function readTrackedEntries(
           [sessionId],
         ),
       };
+      if (typeof row.entryJson === "string") {
+        result.entry = parseEntryJson(row.entryJson);
+      }
+      return result;
     });
 }
 
