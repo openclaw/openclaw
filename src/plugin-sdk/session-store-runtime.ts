@@ -1,5 +1,6 @@
 // Narrow session-store helpers for channel hot paths.
 
+import path from "node:path";
 import { resolveStorePath as resolveSessionStorePath } from "../config/sessions/paths.js";
 import {
   cleanupSessionLifecycleArtifacts as cleanupAccessorSessionLifecycleArtifacts,
@@ -13,9 +14,12 @@ import {
   type SessionAccessScope,
   updateSessionEntry,
 } from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { normalizeResolvedMaintenanceConfigInput } from "../config/sessions/store-maintenance.js";
 import type { ResolvedSessionMaintenanceConfigInput } from "../config/sessions/store.js";
 import type { SessionEntry } from "../config/sessions/types.js";
+
+const SQLITE_SESSION_STORE_BACKUP_SUFFIXES = ["", "-wal", "-shm", "-journal"] as const;
 
 type SessionStoreReadParams = {
   agentId?: string;
@@ -192,6 +196,21 @@ export async function deleteSessionEntry(params: DeleteSessionEntryParams): Prom
     },
   });
   return result.deleted;
+}
+
+/** Resolves the file artifacts that should be backed up before mutating a session store. */
+export function resolveSessionStoreBackupPaths(params: { storePath: string }): string[] {
+  const backupPaths = new Set<string>();
+  backupPaths.add(path.resolve(params.storePath));
+
+  const sqlitePath = resolveSqliteTargetFromSessionStorePath(params.storePath).path;
+  if (sqlitePath) {
+    for (const suffix of SQLITE_SESSION_STORE_BACKUP_SUFFIXES) {
+      backupPaths.add(`${sqlitePath}${suffix}`);
+    }
+  }
+
+  return [...backupPaths];
 }
 
 /** Cleans stale lifecycle-owned session entries and orphan transcripts for one agent store. */
