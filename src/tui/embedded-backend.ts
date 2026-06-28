@@ -693,7 +693,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   async listModels(): Promise<TuiModelChoice[]> {
     const cfg = getRuntimeConfig();
-    const catalog = await loadGatewayModelCatalog({ readOnly: false });
+    const catalog = await loadEmbeddedTuiModelCatalog(cfg);
     const { allowedCatalog } = buildAllowedModelSet({
       cfg,
       catalog,
