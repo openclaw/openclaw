@@ -43,6 +43,7 @@ import {
   branchSqliteCompactionCheckpointSession,
   cleanupSqliteSessionLifecycleArtifacts,
   deleteSqliteTranscript,
+  forkSqliteSessionEntryFromParentTarget,
   listSqliteSessionEntries,
   loadExactSqliteSessionEntry,
   loadSqliteSessionEntry,
@@ -984,6 +985,70 @@ describe("sqlite session normalization", () => {
       session_id: "normalized-session",
       updated_at: expect.any(Number),
     });
+  });
+
+  it("skips parent fork when transcript rows exceed the token budget and entry totals are stale", async () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir };
+    const parentKey = "agent:main:parent";
+    const childKey = "agent:main:subagent:child";
+    await upsertSqliteSessionEntry(
+      {
+        agentId: "main",
+        env,
+        sessionKey: parentKey,
+        storePath: paths.sqlitePath,
+      },
+      {
+        sessionId: "parent-session",
+        totalTokens: 1,
+        totalTokensFresh: false,
+        updatedAt: 10,
+      },
+    );
+    await replaceSqliteTranscriptEvents(
+      {
+        agentId: "main",
+        env,
+        sessionId: "parent-session",
+        sessionKey: parentKey,
+        storePath: paths.sqlitePath,
+      },
+      [
+        { type: "session", id: "parent-session", cwd: paths.tempDir },
+        {
+          type: "message",
+          id: "oversized-parent",
+          parentId: null,
+          message: { role: "user", content: "x".repeat(420_000) },
+        },
+      ],
+    );
+
+    const result = await forkSqliteSessionEntryFromParentTarget({
+      fallbackEntry: { sessionId: "", updatedAt: 1 },
+      parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
+      sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
+      storePath: paths.sqlitePath,
+      decisionSkipPatch: () => ({ forkedFromParent: true, updatedAt: 11 }),
+    });
+
+    expect(result).toMatchObject({
+      status: "skipped",
+      reason: "decision-skip",
+      decision: {
+        status: "skip",
+        reason: "parent-too-large",
+      },
+      sessionEntry: {
+        forkedFromParent: true,
+        sessionId: "",
+        updatedAt: expect.any(Number),
+      },
+    });
+    if (result.status !== "skipped" || result.reason !== "decision-skip") {
+      throw new Error(`expected decision-skip, got ${result.status}`);
+    }
+    expect(result.decision?.parentTokens).toBeGreaterThan(100_000);
   });
 
   it("does not move current routes back to stale transcript session ids", async () => {
