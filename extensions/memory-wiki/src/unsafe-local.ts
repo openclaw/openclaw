@@ -45,27 +45,25 @@ function detectFenceLanguage(filePath: string): string {
   return "markdown";
 }
 
-// `readable` is false when this directory or any descendant could not be read
+// `unreadableDirs` lists the exact directories whose contents could not be read
 // (an unmounted/undocked volume), which is distinct from a readable-but-empty
-// directory. It propagates up so a transiently-gone nested mount is not mistaken
-// for deletion; callers use it to skip pruning during an outage (#97523).
+// directory. They bubble up so the caller preserves only the unavailable subtree
+// during an outage, while readable siblings still prune normally (#97523).
 async function listAllowedFilesRecursive(
   rootDir: string,
-): Promise<{ files: string[]; readable: boolean }> {
+): Promise<{ files: string[]; unreadableDirs: string[] }> {
   const entries = await fs.readdir(rootDir, { withFileTypes: true }).catch(() => null);
   if (entries === null) {
-    return { files: [], readable: false };
+    return { files: [], unreadableDirs: [rootDir] };
   }
   const files: string[] = [];
-  let readable = true;
+  const unreadableDirs: string[] = [];
   for (const entry of entries) {
     const fullPath = path.join(rootDir, entry.name);
     if (entry.isDirectory()) {
       const nested = await listAllowedFilesRecursive(fullPath);
       files.push(...nested.files);
-      if (!nested.readable) {
-        readable = false;
-      }
+      unreadableDirs.push(...nested.unreadableDirs);
       continue;
     }
     if (
@@ -75,32 +73,30 @@ async function listAllowedFilesRecursive(
       files.push(fullPath);
     }
   }
-  return { files: files.toSorted((left, right) => left.localeCompare(right)), readable };
+  return { files: files.toSorted((left, right) => left.localeCompare(right)), unreadableDirs };
 }
 
 async function collectUnsafeLocalArtifacts(
   configuredPaths: string[],
-): Promise<{ artifacts: UnsafeLocalArtifact[]; unreadableRoots: string[] }> {
+): Promise<{ artifacts: UnsafeLocalArtifact[]; unreadablePaths: string[] }> {
   const artifacts: UnsafeLocalArtifact[] = [];
-  // Configured roots that could not be fully read (undocked drive, unmounted
-  // NAS, not-yet-mounted nested mount, or a missing explicit file) are
-  // transiently absent, not deleted. The caller preserves imported entries under
-  // these roots from pruning while still cleaning up readable roots (#97523).
-  const unreadableRoots: string[] = [];
+  // Exact paths that could not be read (undocked drive, unmounted NAS,
+  // not-yet-mounted nested mount, or a missing explicit file) are transiently
+  // absent, not deleted. The caller preserves imported entries under these paths
+  // from pruning while readable siblings still clean up deletions (#97523).
+  const unreadablePaths: string[] = [];
   for (const configuredPath of configuredPaths) {
     const absoluteConfiguredPath = path.resolve(configuredPath);
     const stat = await fs.stat(absoluteConfiguredPath).catch(() => null);
     if (!stat) {
-      unreadableRoots.push(absoluteConfiguredPath);
+      unreadablePaths.push(absoluteConfiguredPath);
       continue;
     }
     if (stat.isDirectory()) {
       const listing = await listAllowedFilesRecursive(absoluteConfiguredPath);
-      // A nested mount that is gone still imports the files we can read, but the
-      // root is marked unreadable so its entries are not pruned during the outage.
-      if (!listing.readable) {
-        unreadableRoots.push(absoluteConfiguredPath);
-      }
+      // A gone nested mount still imports the files we can read; only the exact
+      // unreadable subtrees are preserved so readable siblings still prune.
+      unreadablePaths.push(...listing.unreadableDirs);
       for (const absolutePath of listing.files) {
         artifacts.push({
           syncKey: await resolveArtifactKey(absolutePath),
@@ -125,33 +121,34 @@ async function collectUnsafeLocalArtifacts(
   for (const artifact of artifacts) {
     deduped.set(artifact.syncKey, artifact);
   }
-  return { artifacts: [...deduped.values()], unreadableRoots };
+  return { artifacts: [...deduped.values()], unreadablePaths };
 }
 
-function isPathAtOrWithin(target: string, root: string): boolean {
-  if (target === root) {
+function isPathAtOrWithin(target: string, base: string): boolean {
+  if (target === base) {
     return true;
   }
-  const rootWithSep = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
-  return target.startsWith(rootWithSep);
+  const baseWithSep = base.endsWith(path.sep) ? base : `${base}${path.sep}`;
+  return target.startsWith(baseWithSep);
 }
 
-// Keep imported entries whose source lives under a transiently unreadable root
+// Keep imported entries whose source lives under a transiently unreadable path
 // out of the prune by marking their keys active, so a temporary outage cannot
-// delete their pages or human-notes while readable roots still clean up (#97523).
-function preserveEntriesUnderUnreadableRoots(params: {
+// delete their pages or human-notes while readable siblings still clean up
+// genuinely deleted files (#97523).
+function preserveEntriesUnderUnreadablePaths(params: {
   state: Awaited<ReturnType<typeof readMemoryWikiSourceSyncState>>;
-  unreadableRoots: string[];
+  unreadablePaths: string[];
   activeKeys: Set<string>;
 }): void {
-  if (params.unreadableRoots.length === 0) {
+  if (params.unreadablePaths.length === 0) {
     return;
   }
   for (const [syncKey, entry] of Object.entries(params.state.entries)) {
     if (entry.group !== "unsafe-local") {
       continue;
     }
-    if (params.unreadableRoots.some((root) => isPathAtOrWithin(entry.sourcePath, root))) {
+    if (params.unreadablePaths.some((base) => isPathAtOrWithin(entry.sourcePath, base))) {
       params.activeKeys.add(syncKey);
     }
   }
@@ -268,7 +265,7 @@ export async function syncMemoryWikiUnsafeLocalSources(
     };
   }
 
-  const { artifacts, unreadableRoots } = await collectUnsafeLocalArtifacts(
+  const { artifacts, unreadablePaths } = await collectUnsafeLocalArtifacts(
     config.unsafeLocal.paths,
   );
   const state = await readMemoryWikiSourceSyncState(config.vault.path);
@@ -292,12 +289,12 @@ export async function syncMemoryWikiUnsafeLocalSources(
     }),
   );
 
-  // A transiently unreadable root collects zero artifacts the same way a real
+  // A transiently unreadable path collects zero artifacts the same way a real
   // deletion does, so its entries would otherwise be pruned, hard-deleting their
-  // pages and human-notes blocks with nothing left to restore. Preserve those
-  // entries per-root, then prune normally so readable roots still clean up their
-  // genuinely deleted files. See #97523.
-  preserveEntriesUnderUnreadableRoots({ state, unreadableRoots, activeKeys });
+  // pages and human-notes blocks with nothing left to restore. Preserve only the
+  // entries under the exact unreadable subtrees, then prune normally so readable
+  // siblings still clean up their genuinely deleted files. See #97523.
+  preserveEntriesUnderUnreadablePaths({ state, unreadablePaths, activeKeys });
   const removedCount = await pruneImportedSourceEntries({
     vaultRoot: config.vault.path,
     group: "unsafe-local",

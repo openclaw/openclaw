@@ -190,6 +190,46 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     }
   });
 
+  it("prunes a deleted readable sibling while a nested directory is unreadable", async () => {
+    // Root bypasses permission bits, so the unreadable-directory simulation
+    // below would not actually fail; skip rather than assert a false pass.
+    if (process.getuid?.() === 0) {
+      return;
+    }
+
+    const privateDir = await createPrivateDir("private-nested-sibling");
+    const nestedDir = path.join(privateDir, "nested");
+    await fs.mkdir(nestedDir, { recursive: true });
+    await fs.writeFile(path.join(nestedDir, "deep.md"), "# deep\n", "utf8");
+    const siblingPath = path.join(privateDir, "sibling.md");
+    await fs.writeFile(siblingPath, "# sibling\n", "utf8");
+
+    const { config } = await createVault({
+      rootDir: nextCaseRoot("nested-sibling-vault"),
+      config: {
+        vaultMode: "unsafe-local",
+        unsafeLocal: {
+          allowPrivateMemoryCoreAccess: true,
+          paths: [privateDir],
+        },
+      },
+    });
+
+    const first = await syncMemoryWikiUnsafeLocalSources(config);
+    expect(first.importedCount).toBe(2);
+
+    // The nested directory goes offline while a readable sibling file is deleted.
+    // Only the unavailable subtree is preserved; the sibling's stale page prunes.
+    await fs.rm(siblingPath);
+    await fs.chmod(nestedDir, 0o000);
+    try {
+      const second = await syncMemoryWikiUnsafeLocalSources(config);
+      expect(second.removedCount).toBe(1);
+    } finally {
+      await fs.chmod(nestedDir, 0o755);
+    }
+  });
+
   it("keeps the imported page when an explicit configured file is transiently unavailable", async () => {
     const privateDir = await createPrivateDir("private-explicit");
     const secretPath = path.join(privateDir, "secret.md");
