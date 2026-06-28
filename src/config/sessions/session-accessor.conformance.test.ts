@@ -22,6 +22,7 @@ import {
   publishTranscriptUpdate,
   readSessionUpdatedAt,
   replaceSessionEntry,
+  resolveSessionTranscriptRuntimeTarget,
   updateSessionEntry,
   upsertSessionEntry,
   type ExactSessionEntry,
@@ -57,6 +58,7 @@ import {
   updateSqliteSessionEntry,
   upsertSqliteSessionEntry,
 } from "./session-accessor.sqlite.js";
+import { parseSqliteSessionFileMarker } from "./sqlite-marker.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
 
 // Keep accessor conformance independent of any real openclaw.json on the machine.
@@ -633,6 +635,39 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
       });
       expect(fs.existsSync(sqlitePath)).toBe(true);
       expect(fs.existsSync(customStorePath)).toBe(false);
+    });
+
+    it("uses the requested agent for custom sessions.json SQLite targets", async () => {
+      const customStorePath = path.join(paths.tempDir, "custom-store", "sessions.json");
+      const customSqlitePath = path.join(path.dirname(customStorePath), "openclaw-agent.sqlite");
+      const scope = {
+        agentId: "support",
+        env: { ...process.env, OPENCLAW_STATE_DIR: paths.stateDir },
+        sessionKey: "agent:support:main",
+        storePath: customStorePath,
+      };
+
+      await upsertSqliteSessionEntry(scope, {
+        model: "gpt-5.5",
+        sessionId: "support-session",
+        updatedAt: 10,
+      });
+      const runtimeTarget = await resolveSessionTranscriptRuntimeTarget({
+        ...scope,
+        sessionId: "support-session",
+      });
+      const marker = parseSqliteSessionFileMarker(runtimeTarget.sessionFile);
+
+      expect(loadSqliteSessionEntry({ ...scope, storePath: customSqlitePath })).toMatchObject({
+        model: "gpt-5.5",
+        sessionId: "support-session",
+      });
+      expect(fs.existsSync(customSqlitePath)).toBe(true);
+      expect(marker).toMatchObject({
+        agentId: "support",
+        sessionId: "support-session",
+        storePath: customStorePath,
+      });
     });
 
     it("serializes concurrent SQLite entry patches and updates", async () => {

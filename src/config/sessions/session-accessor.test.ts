@@ -101,10 +101,9 @@ describe("session accessor seam", () => {
 
     expect(loadSessionEntry({ sessionKey: mixedKey, storePath })?.sessionId).toBe("mixed-session");
     expect(loadSessionEntry({ sessionKey: lowerKey, storePath })?.sessionId).toBe("lower-session");
-    expect(listSessionEntries({ storePath }).map((entry) => entry.sessionKey)).toEqual([
-      mixedKey,
-      lowerKey,
-    ]);
+    expect(
+      listSessionEntries({ agentId: "voice", storePath }).map((entry) => entry.sessionKey),
+    ).toEqual([mixedKey, lowerKey]);
   });
 
   it("patches the freshest target alias and rewrites it to the canonical key", async () => {
