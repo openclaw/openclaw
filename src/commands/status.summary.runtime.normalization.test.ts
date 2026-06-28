@@ -94,6 +94,24 @@ describe("statusSummaryRuntime configured model normalization", () => {
       model: "opus-4.6",
     });
 
+    expect(
+      statusSummaryRuntime.resolveStatusModelComparisonLabel({
+        provider: "anthropic",
+        model: "opus-4.6",
+        defaultProvider: "anthropic",
+      }),
+    ).toBe("anthropic/claude-opus-4-6");
+    expect(
+      statusSummaryRuntime.resolveStatusModelLookupRef({
+        provider: "anthropic",
+        model: "opus-4.6",
+        defaultProvider: "anthropic",
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+    });
+
     expect(normalizeProviderModelIdWithManifestMock).not.toHaveBeenCalled();
     expect(normalizeProviderModelIdWithRuntimeMock).not.toHaveBeenCalled();
   });

@@ -40,6 +40,8 @@ const posixIt = process.platform === "win32" ? it.skip : it;
 it.runIf(process.platform !== "win32")("runs only on POSIX", () => {});
 it.runIf(process.platform !== "win32").each(["SIGTERM"] as const)("handles %s", () => {});
 const runIfPowerShell = powershell ? it : it.skip;
+it.concurrent.only("focused concurrent test", () => {});
+test.sequential.skip("skipped sequential test", () => {});
 const fixture = 'describe.skip("not code", () => {})';
 `,
   );
@@ -161,6 +163,20 @@ describe("collectTestSkipInventoryReport", () => {
         target: "it",
       },
       {
+        file: "src/example.test.ts",
+        kind: "call",
+        method: "only",
+        reason: "focused-only",
+        target: "it",
+      },
+      {
+        file: "src/example.test.ts",
+        kind: "call",
+        method: "skip",
+        reason: "explicit-skip",
+        target: "test",
+      },
+      {
         file: "test/scripts/test-live.test.ts",
         kind: "alias",
         method: "skip",
@@ -176,11 +192,11 @@ describe("collectTestSkipInventoryReport", () => {
       },
     ]);
     expect(report.summary).toMatchObject({
-      findingCount: 12,
+      findingCount: 14,
       reasonCounts: {
         "conditional-skip": 1,
-        "explicit-skip": 1,
-        "focused-only": 1,
+        "explicit-skip": 2,
+        "focused-only": 2,
         "live-gate": 1,
         "optional-dependency": 1,
         "platform-gate": 6,
@@ -196,11 +212,11 @@ describe("collectTestSkipInventoryReport", () => {
     const rendered = renderTestSkipInventoryReport(report, { limit: 4 });
 
     expect(rendered).toContain("OpenClaw test skip inventory");
-    expect(rendered).toContain("Findings: 12 in 4 file(s)");
+    expect(rendered).toContain("Findings: 14 in 4 file(s)");
     expect(rendered).toContain("platform-gate: 6");
-    expect(rendered).toContain("- src/example.test.ts (9)");
+    expect(rendered).toContain("- src/example.test.ts (11)");
     expect(rendered).toContain("L2 describe.skip explicit-skip");
-    expect(rendered).toContain("... 8 more finding(s) not shown");
+    expect(rendered).toContain("... 10 more finding(s) not shown");
   });
 
   it("prints JSON from the CLI and exits successfully", () => {
@@ -223,8 +239,8 @@ describe("collectTestSkipInventoryReport", () => {
 
     expect(result.status).toBe(0);
     const report = JSON.parse(result.stdout) as TestSkipInventoryReport;
-    expect(report.summary.findingCount).toBe(12);
-    expect(report.summary.reasonCounts["focused-only"]).toBe(1);
+    expect(report.summary.findingCount).toBe(14);
+    expect(report.summary.reasonCounts["focused-only"]).toBe(2);
   });
 
   it("prints CLI help without scanning the repository", () => {

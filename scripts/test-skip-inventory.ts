@@ -63,7 +63,7 @@ const EMPTY_REASON_COUNTS: Record<SkipInventoryReason, number> = {
 };
 const SKIP_METHODS = new Set(["only", "runIf", "skip", "skipIf", "todo"]);
 const TEST_TARGETS = new Set(["describe", "it", "test"]);
-const TRANSPARENT_CHAIN_METHODS = new Set(["concurrent", "each"]);
+const TRANSPARENT_CHAIN_METHODS = new Set(["concurrent", "each", "sequential"]);
 
 function isTestRelatedFile(relativePath: string): boolean {
   return (
@@ -117,6 +117,12 @@ function expressionText(sourceFile: ts.SourceFile, node: ts.Node): string {
 function targetFromExpression(expression: ts.Expression): SkipInventoryTarget {
   if (ts.isIdentifier(expression) && TEST_TARGETS.has(expression.text)) {
     return expression.text as SkipInventoryTarget;
+  }
+  if (
+    ts.isPropertyAccessExpression(expression) &&
+    TRANSPARENT_CHAIN_METHODS.has(expression.name.text)
+  ) {
+    return targetFromExpression(expression.expression);
   }
   return "unknown";
 }
