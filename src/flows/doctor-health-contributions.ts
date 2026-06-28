@@ -1638,6 +1638,18 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:startup-channel-maintenance",
       label: "Startup channel maintenance",
+      healthChecks: {
+        id: "core/doctor/channel-plugin-blockers",
+        description: "Configured channels must have loadable backing channel plugins.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { channelPluginBlockerHitToHealthFinding, scanConfiguredChannelPluginBlockers } =
+            await import("../commands/doctor/shared/channel-plugin-blockers.js");
+          return scanConfiguredChannelPluginBlockers(ctx.cfg, process.env).map(
+            channelPluginBlockerHitToHealthFinding,
+          );
+        },
+      },
       run: runStartupChannelMaintenanceHealth,
     }),
     createDoctorHealthContribution({

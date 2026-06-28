@@ -3,6 +3,7 @@ import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/s
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
 import { listExplicitlyDisabledChannelIdsForConfig } from "../../../channels/config-presence.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import type { HealthFinding } from "../../../flows/health-checks.js";
 import {
   hasExplicitChannelConfig,
   listExplicitConfiguredChannelIdsForConfig,
@@ -20,7 +21,9 @@ import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js
 import { loadPluginManifestRegistryForPluginRegistry } from "../../../plugins/plugin-registry.js";
 import { isSafeChannelEnvVarTriggerName } from "../../../secrets/channel-env-var-names.js";
 
-type ChannelPluginBlockerHit = {
+const CHANNEL_PLUGIN_BLOCKERS_CHECK_ID = "core/doctor/channel-plugin-blockers";
+
+export type ChannelPluginBlockerHit = {
   /** Normalized configured channel id whose backing plugin is unavailable. */
   channelId: string;
   /** Plugin id that would provide the configured channel. */
@@ -357,6 +360,25 @@ export function collectConfiguredChannelPluginBlockerWarnings(
     (hit) =>
       `- channels.${sanitizeForLog(hit.channelId)}: channel is configured, but ${formatReason(hit)} Fix plugin enablement before relying on setup guidance for this channel.`,
   );
+}
+
+function stripListMarker(message: string): string {
+  return message.startsWith("- ") ? message.slice(2) : message;
+}
+
+/** Convert a configured channel plugin blocker into a structured Doctor finding. */
+export function channelPluginBlockerHitToHealthFinding(
+  hit: ChannelPluginBlockerHit,
+): HealthFinding {
+  return {
+    checkId: CHANNEL_PLUGIN_BLOCKERS_CHECK_ID,
+    severity: "warning",
+    message: stripListMarker(collectConfiguredChannelPluginBlockerWarnings([hit])[0] ?? ""),
+    path: `channels.${hit.channelId}`,
+    target: hit.pluginId,
+    requirement: hit.reason,
+    fixHint: "Fix plugin enablement before relying on setup guidance for this channel.",
+  };
 }
 
 /** Return true when a setup warning targets a channel already explained by plugin blockers. */
