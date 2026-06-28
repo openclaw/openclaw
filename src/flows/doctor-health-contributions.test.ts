@@ -664,6 +664,21 @@ describe("doctor health contributions", () => {
     expect(contribution.healthCheckIds).toEqual(["core/doctor/workspace-status"]);
     expect(check.defaultEnabled).toBe(false);
 
+    const pluginVersionDrift = {
+      gatewayVersion: "2026.6.1",
+      drifts: [
+        {
+          pluginId: "codex",
+          installedVersion: "2026.5.30-beta.1",
+          gatewayVersion: "2026.6.1",
+          source: "npm" as const,
+        },
+      ],
+    };
+    mocks.gatherDaemonStatus.mockResolvedValueOnce({
+      gateway: { version: "2026.6.1" },
+      pluginVersionDrift,
+    });
     mocks.collectWorkspaceStatusHealthFindings.mockResolvedValueOnce([
       {
         checkId: "core/doctor/workspace-status",
@@ -691,7 +706,9 @@ describe("doctor health contributions", () => {
       checksSkipped: 0,
       findings: [expect.objectContaining({ checkId: "core/doctor/workspace-status" })],
     });
-    expect(mocks.collectWorkspaceStatusHealthFindings).toHaveBeenCalledWith(ctx.cfg);
+    expect(mocks.collectWorkspaceStatusHealthFindings).toHaveBeenCalledWith(ctx.cfg, {
+      pluginVersionDrift,
+    });
   });
 
   it("passes daemon-context plugin drift into the workspace status note", async () => {

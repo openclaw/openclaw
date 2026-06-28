@@ -16,6 +16,8 @@ import type { HealthCheck, HealthFinding } from "./health-checks.js";
 import type { FlowContribution } from "./types.js";
 
 type DoctorFlowMode = "local" | "remote";
+type PluginVersionDriftReport =
+  import("../plugins/plugin-version-drift.js").PluginVersionDriftReport;
 
 type DoctorConfigResult = {
   cfg: OpenClawConfig;
@@ -917,33 +919,41 @@ async function hasActiveGatewayExecCredential(
   });
 }
 
-async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<void> {
-  let pluginVersionDrift:
-    | import("../plugins/plugin-version-drift.js").PluginVersionDriftReport
-    | undefined;
-  if (ctx.cfg.gateway?.mode !== "remote") {
+async function collectWorkspaceStatusPluginVersionDrift(params: {
+  cfg: OpenClawConfig;
+  options?: Pick<DoctorOptions, "allowExec" | "deep" | "nonInteractive">;
+}): Promise<PluginVersionDriftReport | undefined> {
+  if (params.cfg.gateway?.mode !== "remote") {
     try {
       const { gatherDaemonStatus } = await import("../cli/daemon-cli/status.gather.js");
-      const allowExecSecretRefs = ctx.options.allowExec === true;
+      const allowExecSecretRefs = params.options?.allowExec === true;
       const status = await gatherDaemonStatus({
         rpc: {
-          timeout: ctx.options.nonInteractive === true ? "3000" : "10000",
+          timeout: params.options?.nonInteractive === true ? "3000" : "10000",
           json: true,
         },
         probe: true,
         requireRpc: false,
-        deep: ctx.options.deep === true,
+        deep: params.options?.deep === true,
         allowExecSecretRefs,
       });
       const hasProbedGatewayVersion =
         typeof status.gateway?.version === "string" && status.gateway.version.trim() !== "";
       if (status.pluginVersionDrift && hasProbedGatewayVersion && !status.rpc?.authWarning) {
-        pluginVersionDrift = status.pluginVersionDrift;
+        return status.pluginVersionDrift;
       }
     } catch {
       // Best-effort diagnostic: doctor should keep running if daemon status is unavailable.
     }
   }
+  return undefined;
+}
+
+async function runWorkspaceStatusHealth(ctx: DoctorHealthFlowContext): Promise<void> {
+  const pluginVersionDrift = await collectWorkspaceStatusPluginVersionDrift({
+    cfg: ctx.cfg,
+    options: ctx.options,
+  });
   const { noteWorkspaceStatus } = await import("../commands/doctor-workspace-status.js");
   noteWorkspaceStatus(ctx.cfg, { pluginVersionDrift });
 }
@@ -1613,7 +1623,11 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
         async detect(ctx) {
           const { collectWorkspaceStatusHealthFindings } =
             await import("../commands/doctor-workspace-status.js");
-          return collectWorkspaceStatusHealthFindings(ctx.cfg);
+          const pluginVersionDrift = await collectWorkspaceStatusPluginVersionDrift({
+            cfg: ctx.cfg,
+            options: { nonInteractive: true },
+          });
+          return collectWorkspaceStatusHealthFindings(ctx.cfg, { pluginVersionDrift });
         },
       },
       run: runWorkspaceStatusHealth,
