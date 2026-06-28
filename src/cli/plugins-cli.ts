@@ -26,6 +26,13 @@ export type PluginMarketplaceListOptions = {
   json?: boolean;
 };
 
+export type PluginMarketplaceEntriesOptions = {
+  feedProfile?: string;
+  feedUrl?: string;
+  json?: boolean;
+  offline?: boolean;
+};
+
 export type PluginMarketplaceRefreshOptions = {
   expectedSha256?: string;
   feedProfile?: string;
@@ -282,6 +289,18 @@ export function registerPluginsCli(program: Command) {
   const marketplace = plugins
     .command("marketplace")
     .description("Inspect Claude-compatible plugin marketplaces");
+
+  marketplace
+    .command("entries")
+    .description("List entries from the configured OpenClaw marketplace feed")
+    .option("--feed-profile <name>", "Configured marketplace feed profile to list")
+    .option("--feed-url <url>", "Explicit hosted marketplace feed URL")
+    .option("--offline", "Read the latest accepted snapshot without fetching the feed", false)
+    .option("--json", "Print JSON")
+    .action(async (opts: PluginMarketplaceEntriesOptions) => {
+      const { runPluginMarketplaceEntriesCommand } = await loadPluginsRuntime();
+      await runPluginMarketplaceEntriesCommand(opts);
+    });
 
   marketplace
     .command("refresh")
