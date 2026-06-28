@@ -44,6 +44,7 @@ type MemorySearchToolResult =
   | MemoryCorpusSearchResult;
 type MemoryManagerContext = Awaited<ReturnType<typeof getMemoryManagerContextWithPurpose>>;
 type ActiveMemoryManagerContext = Extract<MemoryManagerContext, { manager: unknown }>;
+type QmdRuntimeDebug = NonNullable<MemorySearchRuntimeDebug["qmd"]>;
 type MemorySearchDeadline = {
   timeoutMs: number;
   startedAtMs: number;
@@ -53,6 +54,28 @@ const DEFAULT_MEMORY_SEARCH_TOOL_TIMEOUT_MS = 15_000;
 const MEMORY_SEARCH_TOOL_COOLDOWN_MS = 60_000;
 
 const memorySearchToolCooldowns = new Map<string, { until: number; error: string }>();
+
+function mergeQmdRuntimeDebug(
+  entries: readonly MemorySearchRuntimeDebug[],
+): MemorySearchRuntimeDebug["qmd"] | undefined {
+  const merged: QmdRuntimeDebug = {};
+  for (const entry of entries) {
+    const qmd = entry.qmd;
+    if (!qmd) {
+      continue;
+    }
+    if (!merged.collectionValidation && qmd.collectionValidation) {
+      merged.collectionValidation = qmd.collectionValidation;
+    }
+    if (qmd.multiCollectionProbe) {
+      merged.multiCollectionProbe = qmd.multiCollectionProbe;
+    }
+    if (qmd.searchPlan) {
+      merged.searchPlan = qmd.searchPlan;
+    }
+  }
+  return Object.keys(merged).length > 0 ? merged : undefined;
+}
 
 function resolveMemorySearchToolCooldownKey(options: {
   agentId?: string;
@@ -175,8 +198,12 @@ function resolveMemorySearchDeadlineRemainingMs(deadline: MemorySearchDeadline):
 
 function resolveMemoryManagerSearchTimeoutMs(
   manager: ActiveMemoryManagerContext["manager"],
+  opts?: { qmdSearchModeOverride?: "query" | "search" | "vsearch" },
 ): number {
-  const timeoutMs = manager.getSearchTimeoutMs?.();
+  const getSearchTimeoutMs = manager.getSearchTimeoutMs as
+    | ((opts?: { qmdSearchModeOverride?: "query" | "search" | "vsearch" }) => number)
+    | undefined;
+  const timeoutMs = getSearchTimeoutMs?.(opts);
   return typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
     ? Math.max(DEFAULT_MEMORY_SEARCH_TOOL_TIMEOUT_MS, Math.floor(timeoutMs))
     : DEFAULT_MEMORY_SEARCH_TOOL_TIMEOUT_MS;
@@ -189,8 +216,9 @@ function resolveMemoryManagerSearchPhaseTimeoutMs(deadline: MemorySearchDeadline
 function createMemoryManagerSearchDeadline(
   manager: ActiveMemoryManagerContext["manager"],
   defaultDeadline: MemorySearchDeadline,
+  opts?: { qmdSearchModeOverride?: "query" | "search" | "vsearch" },
 ): MemorySearchDeadline {
-  const managerTimeoutMs = resolveMemoryManagerSearchTimeoutMs(manager);
+  const managerTimeoutMs = resolveMemoryManagerSearchTimeoutMs(manager, opts);
   return managerTimeoutMs > DEFAULT_MEMORY_SEARCH_TOOL_TIMEOUT_MS
     ? createMemorySearchDeadline(managerTimeoutMs)
     : defaultDeadline;
@@ -467,6 +495,7 @@ export function createMemorySearchTool(options: {
         };
 
         try {
+          const toolStartedAt = Date.now();
           const defaultDeadline = createMemorySearchDeadline();
           const { resolveMemoryBackendConfig } = await runMemorySearchTaskWithDeadline({
             timeoutMs: resolveMemorySearchDeadlineRemainingMs(defaultDeadline),
@@ -533,27 +562,35 @@ export function createMemorySearchTool(options: {
             let fallback: unknown;
             let searchMode: string | undefined;
             let pausedIndexIdentityReason: string | undefined;
+            let managerMs: number | undefined;
+            let managerCacheState: string | undefined;
             let searchDebug:
               | {
                   backend: string;
                   configuredMode?: string;
                   effectiveMode?: string;
                   fallback?: string;
+                  toolMs?: number;
+                  managerMs?: number;
+                  outsideSearchMs?: number;
                   searchMs: number;
+                  managerCacheState?: string;
+                  qmd?: MemorySearchRuntimeDebug["qmd"];
                   hits: number;
                 }
               | undefined;
             if (shouldQueryMemory && memory && !("error" in memory)) {
               await runUnavailablePhase("memory", async () => {
                 let activeMemory = memory;
-                let activeMemoryDeadline = createMemoryManagerSearchDeadline(
-                  activeMemory.manager,
-                  defaultDeadline,
-                );
                 const runtimeDebug: MemorySearchRuntimeDebug[] = [];
                 const qmdSearchModeOverride = resolveActiveMemoryQmdSearchModeOverride(
                   cfg,
                   options.agentSessionKey,
+                );
+                let activeMemoryDeadline = createMemoryManagerSearchDeadline(
+                  activeMemory.manager,
+                  defaultDeadline,
+                  { qmdSearchModeOverride },
                 );
                 const searchSources: MemorySource[] | undefined =
                   requestedCorpus === "sessions"
@@ -571,6 +608,8 @@ export function createMemorySearchTool(options: {
                   },
                   ...(searchSources ? { sources: searchSources } : {}),
                 };
+                managerMs = activeMemory.debug?.managerMs;
+                managerCacheState = activeMemory.debug?.managerCacheState;
                 const runActiveMemorySearch = async (
                   target: ActiveMemoryManagerContext,
                   deadline: MemorySearchDeadline,
@@ -607,10 +646,13 @@ export function createMemorySearchTool(options: {
                   if ("error" in refreshed) {
                     throw error;
                   }
+                  managerMs = refreshed.debug?.managerMs;
+                  managerCacheState = refreshed.debug?.managerCacheState;
                   activeMemory = refreshed;
                   activeMemoryDeadline = createMemoryManagerSearchDeadline(
                     activeMemory.manager,
                     defaultDeadline,
+                    { qmdSearchModeOverride },
                   );
                   rawResults = await runActiveMemorySearch(activeMemory, activeMemoryDeadline);
                 }
@@ -672,7 +714,9 @@ export function createMemorySearchTool(options: {
                 model = status.model;
                 fallback = status.fallback;
                 const latestDebug = runtimeDebug.at(-1);
+                const qmdDebug = mergeQmdRuntimeDebug(runtimeDebug);
                 searchMode = latestDebug?.effectiveMode;
+                const searchMs = Math.max(0, Date.now() - searchStartedAt);
                 searchDebug = {
                   backend: status.backend,
                   configuredMode: latestDebug?.configuredMode,
@@ -681,7 +725,10 @@ export function createMemorySearchTool(options: {
                       ? (latestDebug?.effectiveMode ?? latestDebug?.configuredMode)
                       : "n/a",
                   fallback: latestDebug?.fallback,
-                  searchMs: Math.max(0, Date.now() - searchStartedAt),
+                  managerMs,
+                  searchMs,
+                  managerCacheState,
+                  qmd: qmdDebug,
                   hits: rawResults.length,
                 };
               });
@@ -717,6 +764,14 @@ export function createMemorySearchTool(options: {
               maxResults: effectiveMax,
               balanceCorpora: requestedCorpus === "all",
             });
+            if (searchDebug) {
+              const finalToolMs = Math.max(0, Date.now() - toolStartedAt);
+              searchDebug = {
+                ...searchDebug,
+                toolMs: finalToolMs,
+                outsideSearchMs: Math.max(0, finalToolMs - searchDebug.searchMs),
+              };
+            }
             return jsonResult({
               results,
               provider,
