@@ -1,4 +1,5 @@
 // Defines reply directive parsing constants and text-matching helpers.
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../../utils.js";
 import type { NoticeLevel, ReasoningLevel, TraceLevel } from "../thinking.js";
 import {
@@ -155,7 +156,7 @@ export function extractTraceDirective(body?: string): {
 
 export function extractFastDirective(body?: string): {
   cleaned: string;
-  fastMode?: boolean;
+  fastMode?: FastMode;
   rawLevel?: string;
   hasDirective: boolean;
 } {

@@ -94,6 +94,51 @@ describe("gateway usage helpers", () => {
     expect(testApi.parseDateToMs(undefined)).toBeUndefined();
   });
 
+  it("parseDateToMs rejects out-of-range calendar dates instead of rolling them over", () => {
+    // Impossible dates that still match the YYYY-MM-DD shape must not silently shift to a real day.
+    expect(testApi.parseDateToMs("2026-02-30")).toBeUndefined(); // would roll to Mar 2
+    expect(testApi.parseDateToMs("2026-04-31")).toBeUndefined(); // would roll to May 1
+    expect(testApi.parseDateToMs("2025-02-29")).toBeUndefined(); // non-leap Feb 29
+    expect(testApi.parseDateToMs("2026-13-01")).toBeUndefined(); // month too large
+    expect(testApi.parseDateToMs("2026-00-10")).toBeUndefined(); // month zero
+    expect(testApi.parseDateToMs("2026-01-00")).toBeUndefined(); // day zero
+    // Real leap day must stay valid (guard against over-rejection).
+    expect(testApi.parseDateToMs("2024-02-29")).toBe(Date.UTC(2024, 1, 29));
+  });
+
+  it("findInvalidExplicitDate flags provided-but-unparseable dates and ignores absent/valid ones", () => {
+    // Explicitly provided invalid dates (bad format or impossible calendar date) are reported.
+    expect(testApi.findInvalidExplicitDate({ startDate: "2026-02-30" })).toBe("startDate");
+    expect(testApi.findInvalidExplicitDate({ endDate: "2026-2-5" })).toBe("endDate");
+    expect(testApi.findInvalidExplicitDate({ startDate: 0 })).toBe("startDate");
+    expect(testApi.findInvalidExplicitDate({ endDate: [] })).toBe("endDate");
+    expect(
+      testApi.findInvalidExplicitDate({ startDate: "2026-02-01", endDate: "2026-13-01" }),
+    ).toBe("endDate");
+    // Absent or valid dates are not flagged, so they still fall through to the default range.
+    expect(testApi.findInvalidExplicitDate({})).toBeUndefined();
+    expect(testApi.findInvalidExplicitDate({ startDate: "", endDate: null })).toBeUndefined();
+    expect(
+      testApi.findInvalidExplicitDate({ startDate: "2026-02-01", endDate: "2026-02-02" }),
+    ).toBeUndefined();
+  });
+
+  it("usage.cost rejects an explicitly provided invalid date with INVALID_REQUEST", async () => {
+    const respond = vi.fn();
+    await usageHandlers["usage.cost"]({
+      respond,
+      params: { startDate: 0 },
+      context: { getRuntimeConfig: () => ({}) },
+    } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+    expect(respond).toHaveBeenCalledTimes(1);
+    const [ok, payload, error] = respond.mock.calls[0];
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(JSON.stringify(error)).toContain("startDate");
+    // A rejected request must not query the cost loader for an unrelated range.
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).not.toHaveBeenCalled();
+  });
+
   it("parseUtcOffsetToMinutes supports whole-hour and half-hour offsets", () => {
     expect(testApi.parseUtcOffsetToMinutes("UTC-4")).toBe(-240);
     expect(testApi.parseUtcOffsetToMinutes("UTC+5:30")).toBe(330);

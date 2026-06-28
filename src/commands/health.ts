@@ -60,12 +60,7 @@ import type {
 } from "./health.types.js";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.js";
 export { formatHealthChannelLines } from "./health-format.js";
-export type {
-  AgentHealthSummary,
-  ChannelAccountHealthSummary,
-  ChannelHealthSummary,
-  HealthSummary,
-} from "./health.types.js";
+export type { HealthSummary } from "./health.types.js";
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 
@@ -86,6 +81,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
   timeoutMs?: number;
   token?: string;
   password?: string;
+  localPortOverride?: number;
   json?: boolean;
 }): Promise<boolean> {
   if (!isGatewayHealthAuthUnavailableError(params.error)) {
@@ -95,6 +91,7 @@ export async function emitReachableGatewayAuthDiagnostic(params: {
     config: params.config,
     token: params.token,
     password: params.password,
+    localPortOverride: params.localPortOverride,
   });
   const probe = await probeGatewayStatus({
     url: details.url,
@@ -694,6 +691,7 @@ export async function healthCommand(
     config?: OpenClawConfig;
     token?: string;
     password?: string;
+    localPortOverride?: number;
   },
   runtime: RuntimeEnv,
 ) {
@@ -715,6 +713,7 @@ export async function healthCommand(
           config: cfg,
           token: opts.token,
           password: opts.password,
+          localPortOverride: opts.localPortOverride,
         }),
     );
   } catch (error) {
@@ -726,6 +725,7 @@ export async function healthCommand(
         timeoutMs: opts.timeoutMs,
         token: opts.token,
         password: opts.password,
+        localPortOverride: opts.localPortOverride,
         json: opts.json,
       })
     ) {
@@ -753,7 +753,10 @@ export async function healthCommand(
     const debugEnabled = isTruthyEnvValue(process.env.OPENCLAW_DEBUG_HEALTH);
     const rich = isRich();
     if (opts.verbose) {
-      const details = buildGatewayConnectionDetails({ config: cfg });
+      const details = buildGatewayConnectionDetails({
+        config: cfg,
+        localPortOverride: opts.localPortOverride,
+      });
       logGatewayConnectionDetails({
         runtime,
         info,

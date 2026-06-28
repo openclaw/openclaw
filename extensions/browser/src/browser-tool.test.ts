@@ -1435,6 +1435,73 @@ describe("browser tool act compatibility", () => {
     expect(opts.profile).toBeUndefined();
   });
 
+  it("backfills missing flattened fields into nested act requests", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      kind: "click",
+      ref: "f1e3",
+      selector: "#title",
+      targetId: "tab-1",
+      timeoutMs: 5000,
+      request: {
+        kind: "click",
+        doubleClick: true,
+      },
+    });
+
+    const request = lastMockCallArg<{
+      kind?: string;
+      ref?: string;
+      selector?: string;
+      targetId?: string;
+      timeoutMs?: number;
+      doubleClick?: boolean;
+    }>(browserActionsMocks.browserAct, 1);
+    expect(request).toEqual({
+      kind: "click",
+      ref: "f1e3",
+      selector: "#title",
+      targetId: "tab-1",
+      timeoutMs: 5000,
+      doubleClick: true,
+    });
+  });
+
+  it("keeps nested act request fields authoritative when flattened fields differ", async () => {
+    const tool = createBrowserTool();
+    await tool.execute?.("call-1", {
+      action: "act",
+      kind: "click",
+      ref: "legacy-ref",
+      selector: "#legacy",
+      targetId: "legacy-tab",
+      timeoutMs: 5000,
+      request: {
+        kind: "click",
+        ref: "nested-ref",
+        selector: "#nested",
+        targetId: "nested-tab",
+        timeoutMs: 7000,
+      },
+    });
+
+    const request = lastMockCallArg<{
+      kind?: string;
+      ref?: string;
+      selector?: string;
+      targetId?: string;
+      timeoutMs?: number;
+    }>(browserActionsMocks.browserAct, 1);
+    expect(request).toEqual({
+      kind: "click",
+      ref: "nested-ref",
+      selector: "#nested",
+      targetId: "nested-tab",
+      timeoutMs: 7000,
+    });
+  });
+
   it("applies configured browser action timeout when act timeout is omitted", async () => {
     configMocks.loadConfig.mockReturnValue({ browser: { actionTimeoutMs: 45_000 } });
 

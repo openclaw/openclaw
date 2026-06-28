@@ -222,8 +222,12 @@ describe("web monitor inbox", () => {
     });
 
     expectSingleGroupMessage(onMessage, {
-      chatType: "group",
-      conversationId: "99999@g.us",
+      admission: expect.objectContaining({
+        conversation: expect.objectContaining({
+          kind: "group",
+          id: "99999@g.us",
+        }),
+      }),
       group: expect.objectContaining({
         mentions: expect.objectContaining({
           jids: ["123@s.whatsapp.net"],
@@ -261,8 +265,12 @@ describe("web monitor inbox", () => {
       ],
     });
     expectSingleGroupMessage(onMessage, {
-      chatType: "group",
-      conversationId: "424242@g.us",
+      admission: expect.objectContaining({
+        conversation: expect.objectContaining({
+          kind: "group",
+          id: "424242@g.us",
+        }),
+      }),
       group: expect.objectContaining({
         mentions: expect.objectContaining({
           jids: ["123@s.whatsapp.net"],
@@ -313,8 +321,12 @@ describe("web monitor inbox", () => {
       ],
     });
     expectSingleGroupMessage(onMessage, {
-      chatType: "group",
-      from: "55555@g.us",
+      admission: expect.objectContaining({
+        conversation: expect.objectContaining({
+          kind: "group",
+          id: "55555@g.us",
+        }),
+      }),
       group: expect.objectContaining({
         mentions: expect.objectContaining({
           jids: ["123@s.whatsapp.net"],

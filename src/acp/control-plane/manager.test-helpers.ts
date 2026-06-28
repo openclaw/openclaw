@@ -53,7 +53,7 @@ export const baseCfg = {
     dispatch: { enabled: true },
   },
 } as const;
-export const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
+const ORIGINAL_STATE_DIR = process.env.OPENCLAW_STATE_DIR;
 
 export async function flushMicrotasks(rounds = 3): Promise<void> {
   for (let index = 0; index < rounds; index += 1) {
@@ -108,11 +108,11 @@ export function mockCallArg(
   return call[0] as Record<string, unknown>;
 }
 
-export function mockCallArgs(mock: ReturnType<typeof vi.fn>): Array<Record<string, unknown>> {
+function mockCallArgs(mock: ReturnType<typeof vi.fn>): Array<Record<string, unknown>> {
   return mock.mock.calls.map((call) => call[0] as Record<string, unknown>);
 }
 
-export function findMockCallFields(
+function findMockCallFields(
   mock: ReturnType<typeof vi.fn>,
   expected: Record<string, unknown>,
 ) {

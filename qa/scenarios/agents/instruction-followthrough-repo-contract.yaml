@@ -25,6 +25,7 @@ scenario:
     kind: flow
     summary: Verify the agent reads repo instructions first, then completes the first bounded followthrough task without stalling.
     config:
+      requiredChannelDriver: qa-channel
       workspaceFiles:
         AGENT.md: |-
           # Repo contract

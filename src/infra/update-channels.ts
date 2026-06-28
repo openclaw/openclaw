@@ -16,6 +16,14 @@ export type UpdateChannelSource =
 export const DEFAULT_PACKAGE_CHANNEL: UpdateChannel = "stable";
 /** Default channel for source installs where branch metadata is unavailable. */
 export const DEFAULT_GIT_CHANNEL: UpdateChannel = "dev";
+/**
+ * Env var carrying the *effective* update channel into `openclaw update finalize`
+ * (e.g. the git/dev channel a source update actually ran on) without making it a
+ * *requested* channel. Convergence uses it as a fallback; it is never persisted
+ * to `update.channel`. Mirrors the CLI post-core resume's effective/requested
+ * channel split (`OPENCLAW_UPDATE_POST_CORE_CHANNEL` vs `…_REQUESTED_CHANNEL`).
+ */
+export const UPDATE_EFFECTIVE_CHANNEL_ENV = "OPENCLAW_UPDATE_EFFECTIVE_CHANNEL";
 /** Git branch that represents the development update stream. */
 export const DEV_BRANCH = "main";
 

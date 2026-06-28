@@ -11,6 +11,7 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { listOpenFileDescriptorsForPath } from "../infra/open-file-descriptors.test-support.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
@@ -77,6 +78,267 @@ describe("openclaw state database", () => {
       createSqliteSchemaShapeFromSql(new URL("./openclaw-state-schema.sql", import.meta.url)),
     );
     expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
+  });
+
+  it.runIf(process.platform === "linux")("closes the database when initialization fails", () => {
+    const databasePath = path.join(createTempStateDir(), "openclaw.sqlite");
+    fs.writeFileSync(databasePath, "not a sqlite database");
+
+    expect(() => openOpenClawStateDatabase({ path: databasePath })).toThrow(
+      "file is not a database",
+    );
+    expect(listOpenFileDescriptorsForPath(databasePath)).toEqual([]);
+  });
+
+  it("migrates requester and executor attribution for existing cross-agent tasks", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec("ALTER TABLE task_runs DROP COLUMN requester_agent_id");
+    legacyDb
+      .prepare(
+        `INSERT INTO task_runs (
+          task_id,
+          runtime,
+          requester_session_key,
+          owner_key,
+          scope_kind,
+          child_session_key,
+          agent_id,
+          task,
+          status,
+          delivery_status,
+          notify_policy,
+          created_at,
+          last_event_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "legacy-cross-agent",
+        "subagent",
+        "agent:main:main",
+        "agent:main:main",
+        "session",
+        "agent:worker:subagent:child",
+        "main",
+        "Inspect worker state",
+        "running",
+        "pending",
+        "done_only",
+        100,
+        100,
+      );
+    legacyDb
+      .prepare(
+        `INSERT INTO task_runs (
+          task_id,
+          runtime,
+          requester_session_key,
+          owner_key,
+          scope_kind,
+          child_session_key,
+          agent_id,
+          task,
+          status,
+          delivery_status,
+          notify_policy,
+          created_at,
+          last_event_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "legacy-global-cross-agent",
+        "subagent",
+        "global",
+        "global",
+        "session",
+        "agent:worker:subagent:global-child",
+        null,
+        "Inspect global worker state",
+        "running",
+        "pending",
+        "done_only",
+        110,
+        110,
+      );
+    legacyDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const columns = reopened.db.prepare("PRAGMA table_info(task_runs)").all() as Array<{
+      name?: string;
+    }>;
+    expect(columns.some((column) => column.name === "requester_agent_id")).toBe(true);
+    expect(
+      reopened.db
+        .prepare(
+          `SELECT agent_id, requester_agent_id
+           FROM task_runs
+           WHERE task_id = ?`,
+        )
+        .get("legacy-cross-agent"),
+    ).toEqual({
+      agent_id: "worker",
+      requester_agent_id: "main",
+    });
+    expect(
+      reopened.db
+        .prepare(
+          `SELECT agent_id, requester_agent_id
+           FROM task_runs
+           WHERE task_id = ?`,
+        )
+        .get("legacy-global-cross-agent"),
+    ).toEqual({
+      agent_id: null,
+      requester_agent_id: null,
+    });
+
+    reopened.db
+      .prepare(
+        `INSERT INTO task_runs (
+          task_id,
+          runtime,
+          requester_session_key,
+          owner_key,
+          scope_kind,
+          child_session_key,
+          agent_id,
+          requester_agent_id,
+          task,
+          status,
+          delivery_status,
+          notify_policy,
+          created_at,
+          last_event_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "current-explicit-attribution",
+        "subagent",
+        "global",
+        "global",
+        "session",
+        "agent:worker:subagent:current",
+        "main",
+        null,
+        "Current explicit attribution",
+        "running",
+        "pending",
+        "done_only",
+        200,
+        200,
+      );
+    closeOpenClawStateDatabaseForTest();
+
+    const currentReopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    expect(
+      currentReopened.db
+        .prepare(
+          `SELECT agent_id, requester_agent_id
+           FROM task_runs
+           WHERE task_id = ?`,
+        )
+        .get("current-explicit-attribution"),
+    ).toEqual({
+      agent_id: "main",
+      requester_agent_id: null,
+    });
+  });
+
+  it("rolls back the requester attribution column when its backfill fails", () => {
+    const stateDir = createTempStateDir();
+    const database = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    const databasePath = database.path;
+    closeOpenClawStateDatabaseForTest();
+
+    const { DatabaseSync } = requireNodeSqlite();
+    const legacyDb = new DatabaseSync(databasePath);
+    legacyDb.exec(`
+      ALTER TABLE task_runs DROP COLUMN requester_agent_id;
+      CREATE TRIGGER reject_task_attribution_repair
+      BEFORE UPDATE ON task_runs
+      BEGIN
+        SELECT RAISE(ABORT, 'blocked task attribution repair');
+      END;
+    `);
+    legacyDb
+      .prepare(
+        `INSERT INTO task_runs (
+          task_id,
+          runtime,
+          requester_session_key,
+          owner_key,
+          scope_kind,
+          child_session_key,
+          agent_id,
+          task,
+          status,
+          delivery_status,
+          notify_policy,
+          created_at,
+          last_event_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        "blocked-cross-agent",
+        "subagent",
+        "agent:main:main",
+        "agent:main:main",
+        "session",
+        "agent:worker:subagent:blocked",
+        "main",
+        "Inspect blocked worker state",
+        "running",
+        "pending",
+        "done_only",
+        100,
+        100,
+      );
+    legacyDb.close();
+
+    expect(() =>
+      openOpenClawStateDatabase({
+        env: { OPENCLAW_STATE_DIR: stateDir },
+      }),
+    ).toThrow(/blocked task attribution repair/);
+
+    const interruptedDb = new DatabaseSync(databasePath);
+    const interruptedColumns = interruptedDb
+      .prepare("PRAGMA table_info(task_runs)")
+      .all() as Array<{
+      name?: string;
+    }>;
+    expect(interruptedColumns.some((column) => column.name === "requester_agent_id")).toBe(false);
+    interruptedDb.exec("DROP TRIGGER reject_task_attribution_repair");
+    interruptedDb.close();
+
+    const reopened = openOpenClawStateDatabase({
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+    expect(
+      reopened.db
+        .prepare(
+          `SELECT agent_id, requester_agent_id
+           FROM task_runs
+           WHERE task_id = ?`,
+        )
+        .get("blocked-cross-agent"),
+    ).toEqual({
+      agent_id: "worker",
+      requester_agent_id: "main",
+    });
   });
 
   it("opens databases with early cron tables before creating cron indexes", () => {
@@ -342,7 +604,7 @@ describe("openclaw state database", () => {
       | { journal_mode?: string }
       | undefined;
     expect(journalMode?.journal_mode?.toLowerCase()).toBe("delete");
-    expect(statfs).toHaveBeenCalledWith(path.join(stateDir, "state"));
+    expect(statfs).toHaveBeenCalledWith(fs.realpathSync(path.join(stateDir, "state")));
   });
 
   it("records durable schema metadata", () => {

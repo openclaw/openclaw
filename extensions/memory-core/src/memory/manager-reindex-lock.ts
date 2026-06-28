@@ -1,6 +1,4 @@
-// Memory Core plugin module implements cross-process safe-reindex locking.
-// The dedicated sibling DB follows custom store paths and relies on SQLite to
-// release its exclusive transaction automatically after process/container death.
+// Memory Core plugin module serializes full memory reindex builds across processes.
 import type { DatabaseSync } from "node:sqlite";
 import { requireNodeSqlite } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
@@ -21,8 +19,7 @@ function isSqliteBusyError(err: unknown): boolean {
   return /SQLITE_(?:BUSY|LOCKED)|database is locked/i.test(message);
 }
 
-function openMemoryReindexLockDatabase(dbPath: string): DatabaseSync {
-  const lockPath = resolveMemoryReindexLockPath(dbPath);
+function openMemoryLockDatabase(lockPath: string): DatabaseSync {
   const { DatabaseSync } = requireNodeSqlite();
   const lockDb = new DatabaseSync(lockPath);
   try {
@@ -36,19 +33,7 @@ function openMemoryReindexLockDatabase(dbPath: string): DatabaseSync {
   }
 }
 
-export function tryAcquireMemoryReindexLock(dbPath: string): MemoryReindexLockHandle | undefined {
-  const lockDb = openMemoryReindexLockDatabase(dbPath);
-  try {
-    // SQLite releases this transaction automatically when a process or
-    // container dies, so ownership never depends on PID namespaces or leases.
-    lockDb.exec("BEGIN EXCLUSIVE");
-  } catch (err) {
-    lockDb.close();
-    if (isSqliteBusyError(err)) {
-      return undefined;
-    }
-    throw err;
-  }
+function createMemoryReindexLockHandle(lockDb: DatabaseSync): MemoryReindexLockHandle {
   return {
     release: () => {
       let releaseError: unknown;
@@ -69,6 +54,22 @@ export function tryAcquireMemoryReindexLock(dbPath: string): MemoryReindexLockHa
   };
 }
 
+/** Try to acquire the build lock without locking readers of the live agent database. */
+export function tryAcquireMemoryReindexLock(dbPath: string): MemoryReindexLockHandle | undefined {
+  const lockDb = openMemoryLockDatabase(resolveMemoryReindexLockPath(dbPath));
+  try {
+    lockDb.exec("BEGIN EXCLUSIVE");
+  } catch (err) {
+    lockDb.close();
+    if (isSqliteBusyError(err)) {
+      return undefined;
+    }
+    throw err;
+  }
+  return createMemoryReindexLockHandle(lockDb);
+}
+
+/** Acquire an exclusive build lock without locking readers of the live agent database. */
 export function acquireMemoryReindexLock(dbPath: string): MemoryReindexLockHandle {
   const lock = tryAcquireMemoryReindexLock(dbPath);
   if (lock) {

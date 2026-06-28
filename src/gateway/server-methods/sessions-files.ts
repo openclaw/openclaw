@@ -1,5 +1,6 @@
 // Gateway methods expose files referenced by one session transcript.
 import path from "node:path";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -15,7 +16,8 @@ import {
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { root as fsSafeRoot, FsSafeError, type ReadResult } from "../../infra/fs-safe.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { loadSessionEntry, visitSessionMessagesAsync } from "../session-utils.js";
+import { visitSessionMessagesAsync } from "../session-transcript-readers.js";
+import { loadSessionEntry } from "../session-utils.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -57,10 +59,6 @@ function sessionFilesError(type: string, message: string, details?: Record<strin
       ...details,
     },
   });
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
 }
 
 function normalizePathValue(value: unknown): string | undefined {
@@ -114,9 +112,9 @@ function addStructuredPatchFiles(files: Map<string, TouchedFile>, changes: unkno
     return;
   }
   for (const changeValue of changes) {
-    const change = asRecord(changeValue);
+    const change = asOptionalObjectRecord(changeValue);
     addTouchedFile(files, normalizePathValue(change?.path), "modified");
-    const kind = asRecord(change?.kind);
+    const kind = asOptionalObjectRecord(change?.kind);
     addTouchedFile(
       files,
       normalizePathValue(kind?.move_path) ?? normalizePathValue(kind?.movePath),
@@ -139,17 +137,20 @@ function isToolCallBlockType(value: unknown): boolean {
 }
 
 function collectTouchedFilesFromMessage(message: unknown, files: Map<string, TouchedFile>) {
-  const record = asRecord(message);
+  const record = asOptionalObjectRecord(message);
   if (record?.role !== "assistant" || !Array.isArray(record.content)) {
     return;
   }
   for (const blockValue of record.content) {
-    const block = asRecord(blockValue);
+    const block = asOptionalObjectRecord(blockValue);
     if (!block || !isToolCallBlockType(block.type)) {
       continue;
     }
     const toolName = normalizeOptionalString(block.name)?.toLowerCase();
-    const args = asRecord(block.arguments) ?? asRecord(block.input) ?? asRecord(block.args);
+    const args =
+      asOptionalObjectRecord(block.arguments) ??
+      asOptionalObjectRecord(block.input) ??
+      asOptionalObjectRecord(block.args);
     if (!toolName || !args) {
       continue;
     }
@@ -601,9 +602,13 @@ async function loadSessionFiles(params: {
   const fileRoot = resolveFileRoot({ root, spawnedCwd });
   const files = new Map<string, TouchedFile>();
   await visitSessionMessagesAsync(
-    entry.sessionId,
-    storePath,
-    entry.sessionFile,
+    {
+      agentId,
+      sessionEntry: entry,
+      sessionId: entry.sessionId,
+      sessionKey: canonicalKey,
+      storePath,
+    },
     (message) => collectTouchedFilesFromMessage(message, files),
     {
       mode: "full",

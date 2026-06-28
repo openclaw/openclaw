@@ -62,7 +62,7 @@ function replyDeliverySourceMatchesRoute(params: {
   );
 }
 
-export type RouteReplyParams = {
+type RouteReplyParams = {
   /** The reply payload to send. */
   payload: ReplyPayload;
   /** The originating channel type. */
@@ -105,7 +105,7 @@ export type RouteReplyParams = {
   runId?: string;
 };
 
-export type RouteReplyResult = {
+type RouteReplyResult = {
   /** Whether the reply was sent successfully. */
   ok: boolean;
   /** True when a hook intentionally suppressed provider delivery. */

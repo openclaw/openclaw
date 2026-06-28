@@ -34,7 +34,40 @@ describe("buildQaSuiteSummaryJson", () => {
     expect(json.run.alternateModelName).toBe("gpt-5.5-alt");
     expect(json.run.fastMode).toBe(true);
     expect(json.run.concurrency).toBe(2);
+    expect(json.run.channelDriver).toBeNull();
+    expect(json.run.channel).toBeNull();
+    expect(json.run.channelCapabilityMatrixPath).toBeNull();
+    expect(json.run.channelDriverSmokePath).toBeNull();
     expect(json.run.scenarioIds).toBeNull();
+  });
+
+  it("records Crabline channel-driver metadata when selected", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      channelDriverSelection: {
+        capabilityMatrixPath: "crabline-fake-provider-capabilities.json",
+        channel: "telegram",
+        channelDriver: "crabline",
+        smokeArtifactPath: "crabline-fake-provider-smoke.json",
+      },
+    });
+
+    expect(json.run.channelDriver).toBe("crabline");
+    expect(json.run.channel).toBe("telegram");
+    expect(json.run.channelCapabilityMatrixPath).toBe("crabline-fake-provider-capabilities.json");
+    expect(json.run.channelDriverSmokePath).toBe("crabline-fake-provider-smoke.json");
+  });
+
+  it("records declarative non-Crabline channel-driver metadata", () => {
+    const json = buildQaSuiteSummaryJson({
+      ...baseParams,
+      channelDriver: "live",
+    });
+
+    expect(json.run.channelDriver).toBe("live");
+    expect(json.run.channel).toBeNull();
+    expect(json.run.channelCapabilityMatrixPath).toBeNull();
+    expect(json.run.channelDriverSmokePath).toBeNull();
   });
 
   it("includes scenarioIds in run metadata when provided", () => {

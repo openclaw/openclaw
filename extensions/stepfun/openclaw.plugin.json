@@ -1,5 +1,6 @@
 {
   "id": "stepfun",
+  "name": "StepFun",
   "activation": {
     "onStartup": false
   },

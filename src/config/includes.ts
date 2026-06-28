@@ -10,13 +10,15 @@
  * ```
  */
 
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { canUseRootFileOpen, openRootFileSync } from "../infra/boundary-file-read.js";
+import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { isPathInside } from "../security/scan-paths.js";
 import { isPlainObject } from "../utils.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
-import { isBlockedObjectKey } from "./prototype-keys.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
 export const INCLUDE_KEY = "$include";
 export const MAX_INCLUDE_DEPTH = 10;
@@ -24,6 +26,45 @@ export const MAX_INCLUDE_FILE_BYTES = 2 * 1024 * 1024;
 
 /** Maximum length for $include path and resolved path (CWE-22 hardening). */
 export const MAX_INCLUDE_PATH_LENGTH = 4096;
+
+export function hashConfigIncludeRaw(raw: string | null): string {
+  const hash = crypto.createHash("sha256");
+  if (raw === null) {
+    hash.update("missing");
+  } else {
+    hash.update("present\0");
+    hash.update(raw, "utf-8");
+  }
+  return hash.digest("hex");
+}
+
+/** Resolve an include write target through its current ancestors and allowed roots. */
+export function resolveConfigIncludeWritePath(params: {
+  configPath: string;
+  includePath: string;
+  allowedRoots?: readonly string[];
+}): string {
+  const resolvedPath = path.normalize(path.resolve(params.includePath));
+  const roots = [path.dirname(params.configPath), ...(params.allowedRoots ?? [])]
+    .filter((root) => path.isAbsolute(root))
+    .map((root) => path.normalize(root));
+  if (!roots.some((root) => isPathInside(root, resolvedPath))) {
+    throw new ConfigIncludeError(
+      `Include write path escapes config directory: ${params.includePath}`,
+      params.includePath,
+    );
+  }
+
+  const canonicalPath = path.normalize(resolvePathViaExistingAncestorSync(resolvedPath));
+  const realRoots = roots.map((root) => path.normalize(safeRealpath(root)));
+  if (!realRoots.some((root) => isPathInside(root, canonicalPath))) {
+    throw new ConfigIncludeError(
+      `Include write path resolves outside config directory (symlink): ${params.includePath}`,
+      params.includePath,
+    );
+  }
+  return canonicalPath;
+}
 
 // ============================================================================
 // Types
@@ -41,6 +82,7 @@ type IncludeFileReadParams = {
   rootRealDir: string;
   ioFs?: typeof fs;
   maxBytes?: number;
+  onResolvedPath?: (resolvedPath: string) => void;
 };
 
 type ResolveConfigIncludesOptions = {
@@ -380,7 +422,13 @@ export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): 
   const ioFs = params.ioFs ?? fs;
   const maxBytes = params.maxBytes ?? MAX_INCLUDE_FILE_BYTES;
   if (!canUseRootFileOpen(ioFs)) {
-    return ioFs.readFileSync(params.resolvedPath, "utf-8");
+    const raw = ioFs.readFileSync(params.resolvedPath, "utf-8");
+    try {
+      params.onResolvedPath?.(path.normalize(ioFs.realpathSync(params.resolvedPath)));
+    } catch {
+      // The guarded read succeeded; target tracking is best-effort on reduced fs shims.
+    }
+    return raw;
   }
 
   const opened = openRootFileSync({
@@ -407,7 +455,9 @@ export function readConfigIncludeFileWithGuards(params: IncludeFileReadParams): 
   }
 
   try {
-    return ioFs.readFileSync(opened.fd, "utf-8");
+    const raw = ioFs.readFileSync(opened.fd, "utf-8");
+    params.onResolvedPath?.(path.normalize(opened.path));
+    return raw;
   } finally {
     ioFs.closeSync(opened.fd);
   }

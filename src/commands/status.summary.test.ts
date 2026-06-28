@@ -1,7 +1,7 @@
 // Status summary tests cover aggregate status text for channels, sessions, tasks, and audit findings.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TaskAuditFinding } from "../tasks/task-registry.audit.js";
-import type { TaskRegistrySummary } from "../tasks/task-registry.types.js";
+import type { TaskRecord, TaskRegistrySummary } from "../tasks/task-registry.types.js";
 
 const statusSummaryMocks = vi.hoisted(() => ({
   hasConfiguredChannelsForReadOnlyScope: vi.fn(() => true),
@@ -35,7 +35,11 @@ const statusSummaryMocks = vi.hoisted(() => ({
       cron: 0,
     },
   } as TaskRegistrySummary,
-  getInspectableTaskRegistrySummary: vi.fn(() => statusSummaryMocks.taskRegistrySummary),
+  inspectableTasks: [] as TaskRecord[],
+  reconcileInspectableTasks: vi.fn(() => statusSummaryMocks.inspectableTasks),
+  getInspectableTaskRegistrySummary: vi.fn(
+    (_tasks?: TaskRecord[]) => statusSummaryMocks.taskRegistrySummary,
+  ),
   taskAuditFindings: [
     {
       severity: "warn",
@@ -55,7 +59,9 @@ const statusSummaryMocks = vi.hoisted(() => ({
       },
     },
   ] as TaskAuditFinding[],
-  getInspectableTaskAuditFindings: vi.fn(() => statusSummaryMocks.taskAuditFindings),
+  getInspectableTaskAuditFindings: vi.fn(
+    (_tasks?: TaskRecord[]) => statusSummaryMocks.taskAuditFindings,
+  ),
 }));
 
 vi.mock("../plugins/channel-plugin-ids.js", () => ({
@@ -142,6 +148,7 @@ vi.mock("../infra/system-events.js", () => ({
 
 vi.mock("../tasks/task-registry.maintenance.js", () => ({
   configureTaskRegistryMaintenance: statusSummaryMocks.configureTaskRegistryMaintenance,
+  reconcileInspectableTasks: statusSummaryMocks.reconcileInspectableTasks,
   getInspectableTaskRegistrySummary: statusSummaryMocks.getInspectableTaskRegistrySummary,
   getInspectableTaskAuditFindings: statusSummaryMocks.getInspectableTaskAuditFindings,
 }));
@@ -204,6 +211,7 @@ describe("getStatusSummary", () => {
         cron: 0,
       },
     };
+    statusSummaryMocks.inspectableTasks = [];
     statusSummaryMocks.taskAuditFindings = [
       {
         severity: "warn",
@@ -250,6 +258,21 @@ describe("getStatusSummary", () => {
     expect(summary.channelSummary).toEqual(["ok"]);
     expect(summary.tasks.active).toBe(0);
     expect(summary.taskAudit.warnings).toBe(1);
+  });
+
+  it("reuses one reconciled task snapshot for task summaries and audit findings", async () => {
+    const inspectableTasks: TaskRecord[] = [];
+    statusSummaryMocks.inspectableTasks = inspectableTasks;
+
+    await getStatusSummary();
+
+    expect(statusSummaryMocks.reconcileInspectableTasks).toHaveBeenCalledTimes(1);
+    expect(statusSummaryMocks.getInspectableTaskRegistrySummary).toHaveBeenCalledWith(
+      inspectableTasks,
+    );
+    expect(statusSummaryMocks.getInspectableTaskAuditFindings).toHaveBeenCalledWith(
+      inspectableTasks,
+    );
   });
 
   it("keeps retained lost tasks out of default status audit counts", async () => {
@@ -343,6 +366,28 @@ describe("getStatusSummary", () => {
       modelContextWindow: 1_000_000,
       modelContextTokens: 272_000,
     });
+  });
+
+  it("does not pass stale session contextTokens as status row overrides", async () => {
+    statusSummaryMocks.listSessionEntries.mockReturnValue(
+      toSessionEntrySummaries({
+        "agent:main:main": {
+          sessionId: "stale-context",
+          updatedAt: Date.now(),
+          modelProvider: "openai",
+          model: "gpt-5.4",
+          contextTokens: 1_000_000,
+        },
+      }),
+    );
+
+    await getStatusSummary();
+
+    expect(
+      vi
+        .mocked(statusSummaryRuntime.resolveContextTokensForModel)
+        .mock.calls.some((call) => call[0]?.contextTokensOverride === 1_000_000),
+    ).toBe(false);
   });
 
   it("uses bundled provider static catalogs for cold status context", async () => {
@@ -463,6 +508,40 @@ describe("getStatusSummary", () => {
       .mock.calls.map(([params]) => params.sessionKey);
     expect(hydratedKeys).not.toContain("agent:main:session-1");
     expect(hydratedKeys).not.toContain("agent:main:session-2");
+  });
+
+  it("preserves store order for tied recent session timestamps", async () => {
+    const store = Object.fromEntries(
+      Array.from({ length: 11 }, (_, index) => {
+        const number = index + 1;
+        return [
+          `agent:main:session-${number}`,
+          {
+            sessionId: `session-${number}`,
+            updatedAt: 1,
+          },
+        ];
+      }),
+    );
+    statusSummaryMocks.listSessionEntries.mockReturnValue(toSessionEntrySummaries(store));
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent.map((session) => session.key)).toEqual([
+      "agent:main:session-1",
+      "agent:main:session-2",
+      "agent:main:session-3",
+      "agent:main:session-4",
+      "agent:main:session-5",
+      "agent:main:session-6",
+      "agent:main:session-7",
+      "agent:main:session-8",
+      "agent:main:session-9",
+      "agent:main:session-10",
+    ]);
+    expect(summary.sessions.byAgent[0]?.recent.map((session) => session.key)).toEqual(
+      summary.sessions.recent.map((session) => session.key),
+    );
   });
 
   it("passes agent scope when listing configured agent session stores", async () => {

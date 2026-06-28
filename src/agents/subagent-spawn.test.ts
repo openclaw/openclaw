@@ -187,6 +187,51 @@ describe("spawnSubagentDirect seam flow", () => {
     expect(result.childSessionKey).toMatch(/^agent:task-manager:subagent:/);
   });
 
+  it("registers the target agent id for cross-agent task attribution", async () => {
+    hoisted.configOverride = createConfigOverride({
+      session: {
+        scope: "global",
+      },
+      agents: {
+        defaults: {
+          workspace: os.tmpdir(),
+        },
+        list: [
+          {
+            id: "main",
+            workspace: "/tmp/workspace-main",
+            subagents: {
+              allowAgents: ["worker"],
+            },
+          },
+          {
+            id: "worker",
+            workspace: "/tmp/workspace-worker",
+          },
+        ],
+      },
+    });
+
+    const result = await spawnSubagentDirect(
+      {
+        task: "attribute worker run",
+        agentId: "worker",
+      },
+      {
+        agentSessionKey: "global",
+        requesterAgentIdOverride: "main",
+      },
+    );
+
+    expect(result.status).toBe("accepted");
+    expect(result.childSessionKey).toMatch(/^agent:worker:subagent:/);
+    const registerInput = firstRegisteredSubagentRun();
+    expect(registerInput.childSessionKey).toBe(result.childSessionKey);
+    expect(registerInput.agentId).toBe("worker");
+    expect(registerInput.requesterSessionKey).toBe("global");
+    expect(registerInput.requesterAgentId).toBe("main");
+  });
+
   it("accepts a spawned run across session patching, runtime-model persistence, registry registration, and lifecycle emission", async () => {
     const operations: string[] = [];
     let persistedStore: Record<string, Record<string, unknown>> | undefined;

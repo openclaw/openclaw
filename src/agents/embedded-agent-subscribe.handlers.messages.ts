@@ -213,7 +213,7 @@ function resolveAssistantTextChunk(params: {
   return "";
 }
 
-const REASONING_TAG_RE = /<\s*\/?\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b/i;
+const REASONING_TAG_RE = /<\s*\/?\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b/i;
 
 function resolveStreamVisibleText(params: {
   previousRawText: string;
@@ -271,7 +271,7 @@ function copyPartialBlockState(
 }
 
 /** Replaces a silent-reply token with the latest sent messaging-tool text when available. */
-export function resolveSilentReplyFallbackText(params: {
+function resolveSilentReplyFallbackText(params: {
   text: unknown;
   messagingToolSentTexts: string[];
 }): string {
@@ -475,7 +475,7 @@ function resolveStreamingReplyText(params: {
 }
 
 /** Records parsed reply directives until a sendable reply payload is built. */
-export function recordPendingAssistantReplyDirectives(
+function recordPendingAssistantReplyDirectives(
   state: Pick<EmbeddedAgentSubscribeState, "pendingAssistantReplyDirectives">,
   parsed: ReplyDirectiveParseResult | null | undefined,
 ) {
@@ -529,7 +529,7 @@ export function hasAssistantVisibleReply(params: {
 }
 
 /** Builds normalized stream payload data for assistant visible output. */
-export function buildAssistantStreamData(params: {
+function buildAssistantStreamData(params: {
   text?: string;
   delta?: string;
   replace?: boolean;
@@ -694,13 +694,21 @@ export function handleMessageUpdate(
   if (isPhasePendingOpenAiResponsesTextItem) {
     return;
   }
+  // Subagents have no live consumer; their final result is delivered from
+  // message_end. Keep accumulating deltaBuffer, but skip per-chunk visible-text
+  // parsing so long parallel subagent streams do not monopolize the event loop.
+  const skipLiveStream = ctx.params.suppressLiveStreamOutput === true;
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
 
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
-    if (!shouldUsePhaseAwareBlockReply) {
+    if (!skipLiveStream && !shouldUsePhaseAwareBlockReply) {
       appendBlockReplyChunk(ctx, chunk);
     }
+  }
+
+  if (skipLiveStream) {
+    return;
   }
 
   if (!suppressMessageToolOnlySourceReplyOutput && ctx.state.streamReasoning) {

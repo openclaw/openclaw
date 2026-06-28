@@ -70,11 +70,6 @@ final class TalkModeManager: NSObject {
         self.gatewayConnected
     }
 
-    var hasActiveAudioCapture: Bool {
-        self.isEnabled || self.isListening || self.isPushToTalkActive || self.realtimeRelaySession != nil
-            || self.realtimeRelayStartInFlight
-    }
-
     private enum CaptureMode {
         case idle
         case continuous
@@ -175,7 +170,7 @@ final class TalkModeManager: NSObject {
     private var incrementalSpeechPrefetch: IncrementalSpeechPrefetchState?
     private var incrementalSpeechPrefetchMonitorTask: Task<Void, Never>?
 
-    private let logger = Logger(subsystem: "ai.openclaw", category: "TalkMode")
+    private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "TalkMode")
 
     private static func nowSeconds() -> TimeInterval {
         ProcessInfo.processInfo.systemUptime
@@ -223,6 +218,34 @@ final class TalkModeManager: NSObject {
         if self.gatewayConnected, self.isEnabled {
             Task { await self.subscribeChatIfNeeded(sessionKey: trimmed) }
         }
+    }
+
+    func enterScreenshotFixtureMode() {
+        self.updateGatewayConnected(true)
+        self.isEnabled = false
+        self.isListening = false
+        self.isSpeaking = false
+        self.isUserSpeechDetected = false
+        self.statusText = "Ready"
+        self.gatewayTalkConfigLoaded = true
+        self.gatewayTalkApiKeyConfigured = true
+        self.gatewayTalkDefaultModelId = "gpt-realtime-2"
+        self.gatewayTalkDefaultVoiceId = "marin"
+        self.gatewayTalkProviderLabel = "OpenAI"
+        self.gatewayTalkTransportLabel = "Gateway Relay"
+        self.gatewayTalkUsesRealtime = true
+        self.gatewayTalkUsesRealtimeRelay = true
+        self.gatewayTalkRealtimeProviderLabel = "OpenAI"
+        self.gatewayTalkRealtimeModelId = "gpt-realtime-2"
+        self.gatewayTalkRealtimeVoiceId = "marin"
+        self.gatewayTalkVoiceModeTitle = "Realtime Voice"
+        self.gatewayTalkVoiceModeSubtitle = "Gateway relay ready"
+        self.gatewayTalkVoiceModeAccessibilityValue = "Realtime Voice, Gateway relay ready"
+        self.gatewayTalkActiveModeTitle = "Ready"
+        self.gatewayTalkActiveModeSubtitle = "Listening starts from this phone"
+        self.gatewayTalkLastIssueText = nil
+        self.gatewayTalkCurrentFallbackIssue = nil
+        self.gatewayTalkPermissionState = .ready
     }
 
     func setEnabled(_ enabled: Bool) {
@@ -475,26 +498,11 @@ final class TalkModeManager: NSObject {
         return wasActive
     }
 
-    func setForegroundAudioCaptureAllowed(_ allowed: Bool) {
-        self.foregroundAudioCaptureAllowed = allowed
-        if !allowed {
-            self.cancelPendingStart()
-        }
-    }
-
     func resumeAfterBackground(wasSuspended: Bool, wasKeptActive: Bool = false) async {
         if wasKeptActive { return }
         guard wasSuspended else { return }
         guard self.isEnabled else { return }
         await self.start()
-    }
-
-    func userTappedOrb() {
-        if let realtimeSession {
-            realtimeSession.cancelResponse()
-        }
-        self.realtimeRelaySession?.cancelOutput()
-        self.stopSpeaking()
     }
 
     func beginPushToTalk() async throws -> OpenClawTalkPTTStartPayload {
@@ -1000,39 +1008,60 @@ final class TalkModeManager: NSObject {
             self.logger.info(
                 "chat.send start sessionKey=\(sessionKey, privacy: .public) chars=\(prompt.count, privacy: .public)")
             GatewayDiagnostics.log("talk: chat.send start sessionKey=\(sessionKey) chars=\(prompt.count)")
-            let runId = try await self.sendChat(prompt, gateway: gateway)
-            self.logger.info("chat.send ok runId=\(runId, privacy: .public)")
-            GatewayDiagnostics.log("talk: chat.send ok runId=\(runId)")
+            let ack = try await self.sendChat(prompt, gateway: gateway)
+            let runId = ack.runId
+            let normalizedStatus = Self.normalizedChatSendStatus(ack.status)
+            self.logger.info(
+                "chat.send ok runId=\(runId, privacy: .public) status=\(normalizedStatus, privacy: .public)")
+            GatewayDiagnostics.log("talk: chat.send ok runId=\(runId) status=\(normalizedStatus)")
+            if Self.isTerminalChatSendFailure(ack.status) {
+                self.statusText = normalizedStatus == "error" ? "Chat error" : "Aborted"
+                self.logger.warning(
+                    "chat.send terminal ack runId=\(runId, privacy: .public) status=\(normalizedStatus, privacy: .public)")
+                GatewayDiagnostics.log(
+                    "talk: chat.send terminal ack runId=\(runId) status=\(normalizedStatus)")
+                if restartAfter {
+                    await self.start()
+                }
+                return
+            }
+
             let shouldIncremental = self.shouldUseIncrementalTTS()
             var streamingTask: Task<Void, Never>?
-            if shouldIncremental {
-                self.resetIncrementalSpeech()
-                streamingTask = Task { @MainActor [weak self] in
-                    guard let self else { return }
-                    await self.streamAssistant(runId: runId, gateway: gateway)
+            let completion: ChatCompletionResult
+            if Self.isTerminalChatSendSuccess(ack.status) {
+                GatewayDiagnostics.log("talk: chat.send terminal ok runId=\(runId); using history fallback")
+                completion = ChatCompletionResult(state: .final, assistantText: nil)
+            } else {
+                if shouldIncremental {
+                    self.resetIncrementalSpeech()
+                    streamingTask = Task { @MainActor [weak self] in
+                        guard let self else { return }
+                        await self.streamAssistant(runId: runId, gateway: gateway)
+                    }
                 }
-            }
-            let completion = await waitForChatCompletion(runId: runId, gateway: gateway, timeoutSeconds: 120)
-            if completion.state == .timeout {
-                self.logger.warning(
-                    "chat completion timeout runId=\(runId, privacy: .public); attempting history fallback")
-                GatewayDiagnostics.log("talk: chat completion timeout runId=\(runId)")
-            } else if completion.state == .aborted {
-                self.statusText = "Aborted"
-                self.logger.warning("chat completion aborted runId=\(runId, privacy: .public)")
-                GatewayDiagnostics.log("talk: chat completion aborted runId=\(runId)")
-                streamingTask?.cancel()
-                await self.finishIncrementalSpeech()
-                await self.start()
-                return
-            } else if completion.state == .error {
-                self.statusText = "Chat error"
-                self.logger.warning("chat completion error runId=\(runId, privacy: .public)")
-                GatewayDiagnostics.log("talk: chat completion error runId=\(runId)")
-                streamingTask?.cancel()
-                await self.finishIncrementalSpeech()
-                await self.start()
-                return
+                completion = await self.waitForChatCompletion(runId: runId, gateway: gateway, timeoutSeconds: 120)
+                if completion.state == .timeout {
+                    self.logger.warning(
+                        "chat completion timeout runId=\(runId, privacy: .public); attempting history fallback")
+                    GatewayDiagnostics.log("talk: chat completion timeout runId=\(runId)")
+                } else if completion.state == .aborted {
+                    self.statusText = "Aborted"
+                    self.logger.warning("chat completion aborted runId=\(runId, privacy: .public)")
+                    GatewayDiagnostics.log("talk: chat completion aborted runId=\(runId)")
+                    streamingTask?.cancel()
+                    await self.finishIncrementalSpeech()
+                    await self.start()
+                    return
+                } else if completion.state == .error {
+                    self.statusText = "Chat error"
+                    self.logger.warning("chat completion error runId=\(runId, privacy: .public)")
+                    GatewayDiagnostics.log("talk: chat completion error runId=\(runId)")
+                    streamingTask?.cancel()
+                    await self.finishIncrementalSpeech()
+                    await self.start()
+                    return
+                }
             }
 
             var assistantText = completion.assistantText
@@ -1045,7 +1074,7 @@ final class TalkModeManager: NSObject {
             if assistantText == nil {
                 assistantText = try await self.waitForAssistantTextFromHistory(
                     gateway: gateway,
-                    since: startedAt,
+                    since: Self.chatSendHistorySince(response: ack, startedAt: startedAt),
                     timeoutSeconds: completion.state == .final ? 12 : 25)
             }
             guard let assistantText else {
@@ -1335,8 +1364,27 @@ final class TalkModeManager: NSObject {
         var assistantText: String?
     }
 
-    private func sendChat(_ message: String, gateway: GatewayNodeSession) async throws -> String {
-        struct SendResponse: Decodable { let runId: String }
+    private static func normalizedChatSendStatus(_ status: String) -> String {
+        status.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func isTerminalChatSendSuccess(_ status: String) -> Bool {
+        self.normalizedChatSendStatus(status) == "ok"
+    }
+
+    private static func isTerminalChatSendFailure(_ status: String) -> Bool {
+        let normalized = self.normalizedChatSendStatus(status)
+        return normalized == "timeout" || normalized == "error"
+    }
+
+    private static func chatSendHistorySince(
+        response: OpenClawChatSendResponse,
+        startedAt: Double) -> Double?
+    {
+        self.isTerminalChatSendSuccess(response.status) ? nil : startedAt
+    }
+
+    private func sendChat(_ message: String, gateway: GatewayNodeSession) async throws -> OpenClawChatSendResponse {
         let payload: [String: Any] = [
             "sessionKey": mainSessionKey,
             "message": message,
@@ -1352,8 +1400,7 @@ final class TalkModeManager: NSObject {
                 userInfo: [NSLocalizedDescriptionKey: "Failed to encode chat payload"])
         }
         let res = try await gateway.request(method: "chat.send", paramsJSON: json, timeoutSeconds: 30)
-        let decoded = try JSONDecoder().decode(SendResponse.self, from: res)
-        return decoded.runId
+        return try JSONDecoder().decode(OpenClawChatSendResponse.self, from: res)
     }
 
     private func waitForChatCompletion(
@@ -1432,7 +1479,7 @@ final class TalkModeManager: NSObject {
 
     private func waitForAssistantTextFromHistory(
         gateway: GatewayNodeSession,
-        since: Double,
+        since: Double?,
         timeoutSeconds: Int) async throws -> String?
     {
         let deadline = Date().addingTimeInterval(TimeInterval(timeoutSeconds))
@@ -3102,23 +3149,6 @@ extension TalkModeManager {
 
     func _test_gatewayTalkCurrentFallbackIssue() -> TalkRuntimeIssue? {
         self.gatewayTalkCurrentFallbackIssue
-    }
-
-    func _test_seedTranscript(_ transcript: String) {
-        self.lastTranscript = transcript
-        self.lastHeard = Date()
-    }
-
-    func _test_handleTranscript(_ transcript: String, isFinal: Bool) async {
-        await self.handleTranscript(transcript: transcript, isFinal: isFinal)
-    }
-
-    func _test_backdateLastHeard(seconds: TimeInterval) {
-        self.lastHeard = Date().addingTimeInterval(-seconds)
-    }
-
-    func _test_runSilenceCheck() async {
-        await self.checkSilence()
     }
 
     func _test_incrementalReset() {

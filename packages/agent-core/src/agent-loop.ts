@@ -80,6 +80,14 @@ function resolveAssistantMessageUpdate(
   return currentMessage;
 }
 
+function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessage {
+  if (message.stopReason === "toolUse") {
+    return message;
+  }
+  const content = message.content.filter((item) => item.type !== "toolCall");
+  return content.length === message.content.length ? message : { ...message, content };
+}
+
 /**
  * Start an agent loop with a new prompt message.
  * The prompt is added to the context and events are emitted for it.
@@ -267,8 +275,32 @@ async function runLoop(
   let currentContext = initialContext;
   let config = initialConfig;
   let firstTurn = true;
+  let turnOpen = true;
   // Check for steering messages at start (user may have typed while waiting)
   let pendingMessages: AgentMessage[] = (await config.getSteeringMessages?.()) || [];
+  const stopIfAborted = async (): Promise<boolean> => {
+    if (!signal?.aborted) {
+      return false;
+    }
+    // Persist an aborted assistant outcome so session post-processing does not
+    // compact or continue from the preceding toolUse message.
+    const abortedMessage = createLoopFailureMessage(
+      config,
+      signal.reason instanceof Error ? signal.reason : new Error("Agent run aborted"),
+      true,
+    );
+    newMessages.push(abortedMessage);
+    if (!turnOpen) {
+      await emit({ type: "turn_start" });
+      turnOpen = true;
+    }
+    await emit({ type: "message_start", message: abortedMessage });
+    await emit({ type: "message_end", message: abortedMessage });
+    await emit({ type: "turn_end", message: abortedMessage, toolResults: [] });
+    turnOpen = false;
+    await emit({ type: "agent_end", messages: newMessages });
+    return true;
+  };
 
   // Outer loop: continues when queued follow-up messages arrive after agent would stop
   while (true) {
@@ -276,8 +308,13 @@ async function runLoop(
 
     // Inner loop: process tool calls and steering messages
     while (hasMoreToolCalls || pendingMessages.length > 0) {
+      if (await stopIfAborted()) {
+        return;
+      }
+
       if (!firstTurn) {
         await emit({ type: "turn_start" });
+        turnOpen = true;
       } else {
         firstTurn = false;
       }
@@ -290,6 +327,10 @@ async function runLoop(
           currentContext.messages.push(message);
           newMessages.push(message);
         }
+      }
+
+      if (await stopIfAborted()) {
+        return;
       }
 
       // Stream assistant response
@@ -309,12 +350,12 @@ async function runLoop(
         return;
       }
 
-      // Check for tool calls
+      // Only completed toolUse turns dispatch; length/stop can carry partial stream blocks.
       const toolCalls = message.content.filter((c) => c.type === "toolCall");
 
       const toolResults: ToolResultMessage[] = [];
       hasMoreToolCalls = false;
-      if (toolCalls.length > 0) {
+      if (message.stopReason === "toolUse" && toolCalls.length > 0) {
         const executedToolBatch = await executeToolCalls(
           currentContext,
           message,
@@ -332,6 +373,10 @@ async function runLoop(
       }
 
       await emit({ type: "turn_end", message, toolResults });
+      turnOpen = false;
+      if (await stopIfAborted()) {
+        return;
+      }
 
       const nextTurnContext = {
         message,
@@ -357,6 +402,9 @@ async function runLoop(
           reasoning: nextReasoning,
         });
       }
+      if (await stopIfAborted()) {
+        return;
+      }
 
       if (
         await config.shouldStopAfterTurn?.({
@@ -371,6 +419,9 @@ async function runLoop(
       }
 
       pendingMessages = (await config.getSteeringMessages?.()) || [];
+      if (await stopIfAborted()) {
+        return;
+      }
     }
 
     const followUpMessages = (await config.getFollowUpMessages?.()) || [];
@@ -465,7 +516,7 @@ async function streamAssistantResponse(
 
       case "done":
       case "error": {
-        const finalMessage = await response.result();
+        const finalMessage = removeNonExecutableToolCalls(await response.result());
         if (addedPartial) {
           context.messages[context.messages.length - 1] = finalMessage;
         } else {
@@ -480,7 +531,7 @@ async function streamAssistantResponse(
     }
   }
 
-  const finalMessage = await response.result();
+  const finalMessage = removeNonExecutableToolCalls(await response.result());
   if (addedPartial) {
     context.messages[context.messages.length - 1] = finalMessage;
   } else {
@@ -588,6 +639,7 @@ async function executeToolCallsSequential(
         toolCall,
         result: preparation.result,
         isError: preparation.isError,
+        executionStarted: false,
       };
     } else {
       const executed = await executePreparedToolCall(preparation, signal, emit);
@@ -650,6 +702,7 @@ async function executeToolCallsParallel(
         toolCall,
         result: preparation.result,
         isError: preparation.isError,
+        executionStarted: false,
       } satisfies FinalizedToolCallOutcome;
       await emitToolExecutionEnd(finalized, emit);
       finalizedCalls.push(finalized);
@@ -715,6 +768,7 @@ type FinalizedToolCallOutcome = {
   toolCall: AgentToolCall;
   result: AgentToolResult<unknown>;
   isError: boolean;
+  executionStarted: boolean;
 };
 
 type FinalizedToolCallEntry = FinalizedToolCallOutcome | (() => Promise<FinalizedToolCallOutcome>);
@@ -951,6 +1005,7 @@ async function finalizeExecutedToolCall(
     toolCall: prepared.toolCall,
     result,
     isError,
+    executionStarted: true,
   };
 }
 
@@ -971,6 +1026,7 @@ async function emitToolExecutionEnd(
     toolName: finalized.toolCall.name,
     result: finalized.result,
     isError: finalized.isError,
+    executionStarted: finalized.executionStarted,
   });
 }
 

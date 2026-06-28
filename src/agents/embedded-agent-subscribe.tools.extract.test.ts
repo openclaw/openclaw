@@ -47,6 +47,12 @@ describe("extractMessagingToolSend", () => {
             ...createChannelTestPluginBase({ id: "slack" }),
             messaging: { normalizeTarget: (raw: string) => raw.trim().toLowerCase() },
             actions: {
+              messageActionTargetAliases: {
+                reply: {
+                  aliases: ["chatGuid", "messageId"],
+                  deliveryTargetAliases: ["chatGuid"],
+                },
+              },
               extractToolSend: (params: { args: Record<string, unknown> }) => {
                 const { args } = params;
                 if (
@@ -246,6 +252,110 @@ describe("extractMessagingToolSend", () => {
     expect(result?.tool).toBe("message");
     expect(result?.provider).toBe("telegram");
     expect(result?.to).toBe("telegram:123");
+  });
+
+  it("accepts channelId alias when earlier target aliases are blank", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      channel: "telegram",
+      target: " ",
+      to: "",
+      channelId: "123",
+    });
+
+    expect(result?.tool).toBe("message");
+    expect(result?.provider).toBe("telegram");
+    expect(result?.to).toBe("telegram:123");
+  });
+
+  it("prefers canonical target over legacy target aliases", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      channel: "telegram",
+      target: "123",
+      to: "456",
+      channelId: "789",
+    });
+
+    expect(result?.to).toBe("telegram:123");
+  });
+
+  it.each(["poll", "reply", "sticker"] as const)(
+    "extracts target evidence for visible %s actions",
+    (action) => {
+      const result = extractMessagingToolSend("message", {
+        action,
+        provider: "slack",
+        target: "Channel:C1",
+      });
+
+      expect(result).toMatchObject({
+        tool: "message",
+        provider: "slack",
+        to: "channel:c1",
+      });
+    },
+  );
+
+  it("extracts implicit current-target evidence for visible reply actions", () => {
+    const result = extractMessagingToolSend(
+      "message",
+      {
+        action: "reply",
+        provider: "slack",
+      },
+      {
+        currentChannelId: "channel:c1",
+        currentMessagingTarget: "user:u123",
+      },
+    );
+
+    expect(result).toMatchObject({
+      tool: "message",
+      provider: "slack",
+      to: "user:u123",
+    });
+  });
+
+  it("extracts provider-declared target aliases for visible reply actions", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "reply",
+      provider: "slack",
+      chatGuid: "Channel:C1",
+    });
+
+    expect(result).toMatchObject({
+      tool: "message",
+      provider: "slack",
+      to: "channel:c1",
+    });
+  });
+
+  it("does not treat provider message-id aliases as delivery targets", () => {
+    const result = extractMessagingToolSend(
+      "message",
+      {
+        action: "reply",
+        provider: "slack",
+        messageId: "message-1",
+      },
+      {
+        currentMessagingTarget: "user:u123",
+      },
+    );
+
+    expect(result).toMatchObject({
+      tool: "message",
+      provider: "slack",
+      to: "user:u123",
+    });
+    expect(
+      extractMessagingToolSend("message", {
+        action: "reply",
+        provider: "slack",
+        messageId: "message-1",
+      }),
+    ).toBeUndefined();
   });
 
   it("recognizes attachment-style message tool sends", () => {

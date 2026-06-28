@@ -323,6 +323,7 @@ export const SkillsUploadCommitParamsSchema = Type.Object(
 export const SkillsInstallParamsSchema = Type.Union([
   Type.Object(
     {
+      agentId: Type.Optional(NonEmptyString),
       name: NonEmptyString,
       installId: NonEmptyString,
       dangerouslyForceUnsafeInstall: Type.Optional(
@@ -338,16 +339,19 @@ export const SkillsInstallParamsSchema = Type.Union([
   ),
   Type.Object(
     {
+      agentId: Type.Optional(NonEmptyString),
       source: Type.Literal("clawhub"),
       slug: NonEmptyString,
       version: Type.Optional(NonEmptyString),
       force: Type.Optional(Type.Boolean()),
+      acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
       timeoutMs: Type.Optional(Type.Integer({ minimum: 1000 })),
     },
     { additionalProperties: false },
   ),
   Type.Object(
     {
+      agentId: Type.Optional(NonEmptyString),
       source: Type.Literal("upload"),
       uploadId: NonEmptyString,
       slug: NonEmptyString,
@@ -372,9 +376,11 @@ export const SkillsUpdateParamsSchema = Type.Union([
   ),
   Type.Object(
     {
+      agentId: Type.Optional(NonEmptyString),
       source: Type.Literal("clawhub"),
       slug: Type.Optional(NonEmptyString),
       all: Type.Optional(Type.Boolean()),
+      acknowledgeClawHubRisk: Type.Optional(Type.Boolean()),
     },
     { additionalProperties: false },
   ),
@@ -435,6 +441,8 @@ export const SkillsDetailResultSchema = Type.Object(
           displayName: NonEmptyString,
           summary: Type.Optional(Type.String()),
           tags: Type.Optional(Type.Record(NonEmptyString, Type.String())),
+          channel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+          isOfficial: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
           createdAt: Type.Integer(),
           updatedAt: Type.Integer(),
         },
@@ -474,6 +482,9 @@ export const SkillsDetailResultSchema = Type.Object(
             handle: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
             displayName: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
             image: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+            official: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+            channel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+            isOfficial: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
           },
           { additionalProperties: false },
         ),
@@ -783,7 +794,13 @@ export const SkillsProposalRequestRevisionParamsSchema = Type.Object(
 export const SkillsProposalRequestRevisionResultSchema = Type.Object(
   {
     runId: NonEmptyString,
-    status: Type.Union([Type.Literal("started"), Type.Literal("in_flight"), Type.Literal("ok")]),
+    status: Type.Union([
+      Type.Literal("started"),
+      Type.Literal("in_flight"),
+      Type.Literal("ok"),
+      Type.Literal("timeout"),
+      Type.Literal("error"),
+    ]),
   },
   { additionalProperties: true },
 );

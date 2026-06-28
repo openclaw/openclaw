@@ -1878,6 +1878,107 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(JSON.stringify(messages[0])).toContain("Old duplicated section");
   });
 
+  it("falls back to LLM when provider throws a provider-side AbortError with signal not aborted", async () => {
+    // Reproduce the undici AbortError("This operation was aborted") shape that
+    // arrives when the compaction provider's HTTP connection drops mid-stream while
+    // the caller has NOT yet fired their abort signal. Before the fix,
+    // isAbortError() matched this shape so tryProviderSummarize rethrew and the
+    // extension runner swallowed the error — the LLM fallback path was skipped.
+    mockSummarizeInStages.mockReset();
+    mockSummarizeInStages.mockResolvedValue("llm fallback summary");
+
+    const providerAbortErr = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
+    const failingProviderSummarize = vi.fn().mockRejectedValue(providerAbortErr);
+    registerCompactionProvider({
+      id: "disconnecting-provider",
+      label: "Disconnecting Provider",
+      summarize: failingProviderSummarize,
+    });
+
+    const sessionManager = stubSessionManager();
+    const model = createAnthropicModelFixture();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "disconnecting-provider",
+      model,
+      recentTurnsPreserve: 0,
+    });
+
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "older context", timestamp: 1 },
+          { role: "assistant", content: "older reply", timestamp: 2 } as unknown as AgentMessage,
+        ],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+      },
+      customInstructions: "",
+      signal: new AbortController().signal, // not aborted
+    };
+    const { result } = await runCompactionScenario({ sessionManager, event, apiKey: "key" });
+
+    // Provider failure → LLM fallback ran, not { cancel: true }.
+    expect(result.cancel).not.toBe(true);
+    expect(mockSummarizeInStages).toHaveBeenCalled();
+  });
+
+  it("propagates provider AbortError and cancels when caller signal is already aborted", async () => {
+    mockSummarizeInStages.mockReset();
+
+    const providerAbortErr = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
+    const failingProviderSummarize = vi.fn().mockRejectedValue(providerAbortErr);
+    registerCompactionProvider({
+      id: "aborted-provider",
+      label: "Aborted Provider",
+      summarize: failingProviderSummarize,
+    });
+
+    const controller = new AbortController();
+    controller.abort();
+
+    const sessionManager = stubSessionManager();
+    setCompactionSafeguardRuntime(sessionManager, {
+      provider: "aborted-provider",
+    });
+
+    const event = {
+      preparation: {
+        messagesToSummarize: [
+          { role: "user", content: "older context", timestamp: 1 },
+        ] as AgentMessage[],
+        turnPrefixMessages: [] as AgentMessage[],
+        firstKeptEntryId: "entry-1",
+        tokensBefore: 1_500,
+        fileOps: {
+          read: [],
+          edited: [],
+          written: [],
+        },
+        settings: { reserveTokens: 4_000 },
+      },
+      customInstructions: "",
+      signal: controller.signal, // already aborted
+    };
+
+    await expect(
+      runCompactionScenario({ sessionManager, event, apiKey: "key" }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+
+    // Caller abort is terminal — LLM fallback should not have run.
+    expect(mockSummarizeInStages).not.toHaveBeenCalled();
+  });
+
   it("passes compaction instructions to providers and preserves suffix context", async () => {
     mockSummarizeInStages.mockReset();
     const providerSummarize = vi.fn().mockResolvedValue("provider summary body");

@@ -1,6 +1,9 @@
 // Doctor repair sequence coordinator for config, auth, plugin, and warning repairs.
 import { sanitizeForLog } from "../../../packages/terminal-core/src/ansi.js";
-import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
+import {
+  applyPluginAutoEnable,
+  materializePluginAutoEnableCandidates,
+} from "../../config/plugin-auto-enable.js";
 import {
   collectOpenAICodexAuthProfileStoreIdMap,
   maybeMigrateAuthProfileJsonStoresToSqlite,
@@ -123,9 +126,26 @@ export async function runDoctorRepairSequence(params: {
   if (missingConfiguredPluginInstallRepair.changes.length > 0) {
     changeNotes.push(sanitizeLines(missingConfiguredPluginInstallRepair.changes));
     applyMutation(applyPluginAutoEnable({ config: state.candidate, env }));
+    const repairedPluginIds = missingConfiguredPluginInstallRepair.repairedPluginIds ?? [];
+    if (repairedPluginIds.length > 0) {
+      applyMutation(
+        materializePluginAutoEnableCandidates({
+          config: state.candidate,
+          env,
+          candidates: repairedPluginIds.map((pluginId) => ({
+            pluginId,
+            kind: "configured-plugin-repaired" as const,
+          })),
+        }),
+      );
+    }
   }
   if (missingConfiguredPluginInstallRepair.warnings.length > 0) {
     warningNotes.push(sanitizeLines(missingConfiguredPluginInstallRepair.warnings));
+  }
+  const missingConfiguredPluginInstallNotices = missingConfiguredPluginInstallRepair.notices ?? [];
+  if (missingConfiguredPluginInstallNotices.length > 0) {
+    warningNotes.push(sanitizeLines(missingConfiguredPluginInstallNotices));
   }
   const failedPluginIds = missingConfiguredPluginInstallRepair.failedPluginIds ?? [];
   const hasUnscopedInstallRepairWarnings =

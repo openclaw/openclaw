@@ -556,6 +556,7 @@ describe("sessions_spawn tool", () => {
     registerAcpBackendForTest();
     const tool = createSessionsSpawnTool({
       agentSessionKey: "agent:main:main",
+      requesterAgentIdOverride: "main",
       agentChannel: "quietchat",
       agentAccountId: "default",
       agentTo: "channel:123",
@@ -587,11 +588,13 @@ describe("sessions_spawn tool", () => {
     expect(spawnArgs.streamTo).toBe("parent");
     const spawnContext = mockCallArg(hoisted.spawnAcpDirectMock, 0, 1, "spawnAcpDirect");
     expect(spawnContext.agentSessionKey).toBe("agent:main:main");
+    expect(spawnContext.requesterAgentIdOverride).toBe("main");
     expect(hoisted.spawnSubagentDirectMock).not.toHaveBeenCalled();
     const registration = mockCallArg(hoisted.registerSubagentRunMock, 0, 0, "registerSubagentRun");
     expect(registration.runId).toBe("run-acp");
     expect(registration.childSessionKey).toBe("agent:codex:acp:1");
     expect(registration.requesterSessionKey).toBe("agent:main:main");
+    expect(registration.requesterAgentId).toBe("main");
     expect(registration.task).toBe("investigate the failing CI run");
     expect(registration.cleanup).toBe("keep");
     expect(registration.spawnMode).toBe("session");
