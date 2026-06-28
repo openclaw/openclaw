@@ -1156,8 +1156,12 @@ describe("sessions tools", () => {
       `Agent 1 (requester) session: ${requesterKey}.`,
     );
     expect(initialAgentParams.extraSystemPrompt).toContain(
-      `Return replies with sessions_send(sessionKey: "${requesterKey}", message: ...).`,
+      'Return visible replies to the requester source conversation with message(action="send", message=...).',
     );
+    expect(initialAgentParams.extraSystemPrompt).toContain(
+      "Do not call sessions_send back to the requester.",
+    );
+    expect(initialAgentParams.extraSystemPrompt).not.toContain("sessions_send(sessionKey:");
     expect(initialAgentParams.extraSystemPrompt).toContain("Agent 1 (requester) channel: discord.");
     expect(initialAgentParams.extraSystemPrompt).toContain(
       "Agent 2 (target) session: <TARGET_SESSION>.",

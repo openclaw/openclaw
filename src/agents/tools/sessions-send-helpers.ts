@@ -68,7 +68,7 @@ function buildAgentSessionLines(params: {
     : undefined;
   const requesterReturnLine =
     params.requesterSessionKey && params.includeRequesterReturnInstruction
-      ? `Return replies with sessions_send(sessionKey: "${params.requesterSessionKey}", message: ...).`
+      ? `Return visible replies to the requester source conversation with message(action="send", message=...). Do not call sessions_send back to the requester.`
       : undefined;
   return [
     requesterSessionLine,
