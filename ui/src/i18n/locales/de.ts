@@ -1334,6 +1334,9 @@ export const de: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "New Session",
+  },
   chat: {
     disconnected: "Verbindung zum Gateway getrennt.",
     refreshTitle: "Chat-Daten aktualisieren",

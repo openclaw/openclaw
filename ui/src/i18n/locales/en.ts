@@ -1313,6 +1313,9 @@ export const en: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "New Session",
+  },
   chat: {
     disconnected: "Disconnected from gateway.",
     refreshTitle: "Refresh chat data",

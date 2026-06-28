@@ -1330,6 +1330,9 @@ export const it: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "New Session",
+  },
   chat: {
     disconnected: "Disconnesso dal gateway.",
     refreshTitle: "Aggiorna dati chat",

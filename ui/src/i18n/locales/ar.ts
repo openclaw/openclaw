@@ -1307,6 +1307,9 @@ export const ar: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "New Session",
+  },
   chat: {
     disconnected: "تم قطع الاتصال بـ Gateway.",
     refreshTitle: "تحديث بيانات الدردشة",

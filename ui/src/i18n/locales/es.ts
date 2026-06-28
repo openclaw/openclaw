@@ -1331,6 +1331,9 @@ export const es: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "New Session",
+  },
   chat: {
     disconnected: "Desconectado de la puerta de enlace.",
     refreshTitle: "Actualizar datos del chat",

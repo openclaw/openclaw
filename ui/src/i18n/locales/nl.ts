@@ -1329,6 +1329,9 @@ export const nl: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "New Session",
+  },
   chat: {
     disconnected: "Verbinding met Gateway verbroken.",
     refreshTitle: "Chatgegevens vernieuwen",

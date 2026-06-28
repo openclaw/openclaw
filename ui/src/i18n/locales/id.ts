@@ -1323,6 +1323,9 @@ export const id: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "New Session",
+  },
   chat: {
     disconnected: "Terputus dari gateway.",
     refreshTitle: "Refresh data chat",

@@ -1328,6 +1328,9 @@ export const ja_JP: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "New Session",
+  },
   chat: {
     disconnected: "Gateway から切断されました。",
     refreshTitle: "チャットデータを更新",

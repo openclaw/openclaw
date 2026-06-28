@@ -1325,6 +1325,9 @@ export const fa: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "New Session",
+  },
   chat: {
     disconnected: "اتصال از Gateway قطع شد.",
     refreshTitle: "تازه‌سازی داده‌های چت",

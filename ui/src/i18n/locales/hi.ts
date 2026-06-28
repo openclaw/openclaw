@@ -1309,6 +1309,9 @@ export const hi: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "नया सत्र",
+  },
   chat: {
     disconnected: "Gateway से डिस्कनेक्ट हो गया।",
     refreshTitle: "चैट डेटा रीफ़्रेश करें",

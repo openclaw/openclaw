@@ -1291,6 +1291,9 @@ export const th: TranslationMap = {
       },
     },
   },
+  session: {
+    newSession: "New Session",
+  },
   chat: {
     disconnected: "ตัดการเชื่อมต่อจากเกตเวย์แล้ว",
     refreshTitle: "รีเฟรชข้อมูลแชต",
