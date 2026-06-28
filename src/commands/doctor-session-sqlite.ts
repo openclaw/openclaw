@@ -171,7 +171,9 @@ async function inspectOrMigrateTarget(params: {
   target: SessionStoreTarget;
 }): Promise<DoctorSessionSqliteTargetReport> {
   const issues: DoctorSessionSqliteIssue[] = [];
-  const records = readLegacySessionRecords(params.target, issues);
+  const records = readLegacySessionRecords(params.target, issues, {
+    allowMissingStore: params.mode === "inspect",
+  });
   const referencedTranscriptFiles = new Set(
     records.flatMap((record) => (record.transcriptPath ? [record.transcriptPath] : [])),
   );
@@ -223,11 +225,18 @@ async function inspectOrMigrateTarget(params: {
 function readLegacySessionRecords(
   target: SessionStoreTarget,
   issues: DoctorSessionSqliteIssue[],
+  options: { allowMissingStore?: boolean } = {},
 ): LegacySessionRecord[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(fs.readFileSync(target.storePath, "utf-8"));
   } catch (err) {
+    if (
+      options.allowMissingStore === true &&
+      (err as NodeJS.ErrnoException | undefined)?.code === "ENOENT"
+    ) {
+      return [];
+    }
     issues.push({
       code: "store_unreadable",
       message: `${target.storePath}: ${String(err)}`,
