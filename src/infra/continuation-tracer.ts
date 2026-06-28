@@ -5,6 +5,7 @@
 // concrete exporter without changing continuation call sites.
 
 import { createHash, randomUUID } from "node:crypto";
+import { redactToolPayloadText } from "../logging/redact.js";
 import {
   formatDiagnosticTraceparent,
   getActiveDiagnosticTraceContext,
@@ -84,8 +85,14 @@ export type ContinuationSpanAttrs = {
   readonly "chain.step.remaining"?: number;
   /** Scheduled delay (ms) until the next-turn / delegate fires. */
   readonly "delay.ms"?: number;
-  /** First ≤80 chars of the tool-call `reason`, for operator readability. */
-  readonly "reason.preview"?: string;
+  /** True when a reason/task text existed but raw preview text was intentionally omitted. */
+  readonly "reason.present"?: boolean;
+  /** Character length of the original reason/task text; raw text is never exported. */
+  readonly "reason.length"?: number;
+  /** Stable sha256-16 of the redacted reason/task text for correlation without raw text. */
+  readonly "reason.hash"?: string;
+  /** True when the shared tool-payload redactor changed the text before hashing. */
+  readonly "reason.redacted"?: boolean;
   /** Mode of a `continue_delegate` dispatch (normal/silent/silent-wake/post-compaction). */
   readonly "delegate.mode"?: string;
   /**
@@ -441,21 +448,39 @@ export type ContinuationDelegateSpanArgs = {
   log?: (message: string) => void;
 };
 
+const CONTINUATION_REASON_HASH_HEX_LENGTH = 16;
+
+function continuationReasonAttributes(
+  reason: string | undefined,
+): Pick<
+  ContinuationSpanAttrs,
+  "reason.present" | "reason.length" | "reason.hash" | "reason.redacted"
+> {
+  if (!reason) {
+    return {};
+  }
+  const redactedReason = redactToolPayloadText(reason);
+  return {
+    "reason.present": true,
+    "reason.length": reason.length,
+    "reason.hash": createHash("sha256")
+      .update(redactedReason)
+      .digest("hex")
+      .slice(0, CONTINUATION_REASON_HASH_HEX_LENGTH),
+    "reason.redacted": redactedReason !== reason,
+  };
+}
+
 function continuationDelegateSpanAttributes(
   args: ContinuationDelegateSpanArgs,
 ): ContinuationSpanAttrs {
-  const reasonPreview = args.reason
-    ? args.reason.length > 80
-      ? args.reason.slice(0, 80)
-      : args.reason
-    : undefined;
   return {
     "delay.ms": Math.round(args.delayMs),
     "chain.step.remaining": Math.max(0, args.chainStepRemaining),
     "delegate.delivery": args.delivery,
     ...(args.chainId !== undefined && { "chain.id": args.chainId }),
     ...(args.delegateMode !== undefined && { "delegate.mode": args.delegateMode }),
-    ...(reasonPreview !== undefined && { "reason.preview": reasonPreview }),
+    ...continuationReasonAttributes(args.reason),
   };
 }
 
@@ -493,16 +518,11 @@ export function emitContinuationWorkSpan(args: {
   log?: (message: string) => void;
 }): void {
   try {
-    const reasonPreview = args.reason
-      ? args.reason.length > 80
-        ? args.reason.slice(0, 80)
-        : args.reason
-      : undefined;
     const attrs: ContinuationSpanAttrs = {
       "delay.ms": Math.round(args.delayMs),
       "chain.step.remaining": Math.max(0, args.chainStepRemaining),
       ...(args.chainId !== undefined && { "chain.id": args.chainId }),
-      ...(reasonPreview !== undefined && { "reason.preview": reasonPreview }),
+      ...continuationReasonAttributes(args.reason),
     };
     const span = getContinuationTracer().startSpan("continuation.work", {
       attributes: attrs,
@@ -519,8 +539,8 @@ export function emitContinuationWorkSpan(args: {
  * Emit a `continuation.delegate.dispatch` span at the runner-side
  * delegate accept seam. Mirrors
  * `emitContinuationWorkSpan` shape — same try/catch wrap, same
- * `chain.id` / `chain.step.remaining` / `delay.ms` / `reason.preview`
- * plumbing — plus two delegate-specific axes:
+ * `chain.id` / `chain.step.remaining` / `delay.ms` / privacy-safe
+ * reason metadata plumbing — plus two delegate-specific axes:
  *
  *  - `delegate.delivery` (`"immediate" | "timer"`): runner-internal
  *    scheduling axis. `"immediate"` when no delay was requested or
@@ -566,7 +586,7 @@ export function emitContinuationDelegateSpan(args: {
  * Emit a `continuation.disabled` span at a runner-side cap-gate reject
  * Mirrors `emitContinuationWorkSpan` /
  * `emitContinuationDelegateSpan` shape — same try/catch wrap, same
- * `chain.id` / `chain.step.remaining` / `reason.preview` plumbing. Adds
+ * `chain.id` / `chain.step.remaining` / privacy-safe reason metadata plumbing. Adds
  * three reject-specific axes:
  *
  *  - `disabled.reason` (`"cap.chain" | "cap.cost" |
@@ -606,11 +626,6 @@ export function emitContinuationDisabledSpan(args: {
   log?: (message: string) => void;
 }): void {
   try {
-    const reasonPreview = args.reason
-      ? args.reason.length > 80
-        ? args.reason.slice(0, 80)
-        : args.reason
-      : undefined;
     const attrs: ContinuationSpanAttrs = {
       "chain.step.remaining": Math.max(0, args.chainStepRemaining),
       "disabled.reason": args.disabledReason,
@@ -621,7 +636,7 @@ export function emitContinuationDisabledSpan(args: {
         "delegate.delivery": args.delegateDelivery,
       }),
       ...(args.delegateMode !== undefined && { "delegate.mode": args.delegateMode }),
-      ...(reasonPreview !== undefined && { "reason.preview": reasonPreview }),
+      ...continuationReasonAttributes(args.reason),
     };
     const span = getContinuationTracer().startSpan("continuation.disabled", {
       attributes: attrs,
@@ -697,11 +712,6 @@ export function emitContinuationDelegateFireSpan(args: {
     return;
   }
   try {
-    const reasonPreview = args.reason
-      ? args.reason.length > 80
-        ? args.reason.slice(0, 80)
-        : args.reason
-      : undefined;
     const attrs: ContinuationSpanAttrs = {
       "chain.id": args.chainId,
       "chain.step.remaining": Math.max(0, args.chainStepRemainingAtDispatch),
@@ -709,7 +719,7 @@ export function emitContinuationDelegateFireSpan(args: {
       "fire.deferred_ms": Math.max(0, Math.floor(args.fireDeferredMs)),
       "delegate.delivery": "timer",
       "delegate.mode": args.delegateMode,
-      ...(reasonPreview !== undefined && { "reason.preview": reasonPreview }),
+      ...continuationReasonAttributes(args.reason),
     };
     const span = getContinuationTracer().startSpan("continuation.delegate.fire", {
       attributes: attrs,
@@ -730,9 +740,10 @@ export function emitContinuationDelegateFireSpan(args: {
  * sibling.
  *
  * `continuation.work.fire` uses a separate helper because work-fire has no
- * delegate dispatch outcome. `reason.preview` is captured from dispatch-time
- * closure state so operator triage can pair `continuation.work` and
- * `continuation.work.fire` spans.
+ * delegate dispatch outcome. Privacy-safe reason metadata is captured from
+ * dispatch-time closure state so operator triage can pair
+ * `continuation.work` and `continuation.work.fire` spans without exporting
+ * raw reason text.
  *
  * Provenance pins:
  *  - `chainId` is closed-over from dispatch-time `persistContinuationChainState`
@@ -770,17 +781,12 @@ export function emitContinuationWorkFireSpan(args: {
     return;
   }
   try {
-    const reasonPreview = args.reason
-      ? args.reason.length > 80
-        ? args.reason.slice(0, 80)
-        : args.reason
-      : undefined;
     const attrs: ContinuationSpanAttrs = {
       "chain.id": args.chainId,
       "chain.step.remaining": Math.max(0, args.chainStepRemainingAtDispatch),
       "delay.ms": Math.round(args.delayMs),
       "fire.deferred_ms": Math.max(0, Math.floor(args.fireDeferredMs)),
-      ...(reasonPreview !== undefined && { "reason.preview": reasonPreview }),
+      ...continuationReasonAttributes(args.reason),
     };
     const span = getContinuationTracer().startSpan("continuation.work.fire", {
       attributes: attrs,

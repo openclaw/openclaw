@@ -392,7 +392,11 @@ describe("runReplyAgent :: delegate dispatch span uniformity", () => {
 
     const stableKeys = Object.keys(silent.attributes).filter(
       (key) =>
-        key !== "delegate.mode" && key !== "chain.step.remaining" && key !== "reason.preview",
+        key !== "delegate.mode" &&
+        key !== "chain.step.remaining" &&
+        key !== "reason.length" &&
+        key !== "reason.hash" &&
+        key !== "reason.redacted",
     );
     for (const key of stableKeys) {
       expect(silent.attributes[key]).toBe(silentWake.attributes[key]);

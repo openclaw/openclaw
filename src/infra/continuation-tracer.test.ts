@@ -7,6 +7,7 @@ import {
   emitContinuationDisabledSpan,
   emitContinuationFanoutSpan,
   emitContinuationQueueDrainSpan,
+  emitContinuationWorkFireSpan,
   emitContinuationWorkSpan,
   formatActiveContinuationTraceparent,
   formatContinuationTraceparent,
@@ -30,6 +31,33 @@ import { runWithDiagnosticTraceContext } from "./diagnostic-trace-context.js";
 afterEach(() => {
   resetContinuationTracer();
 });
+
+const REASON_HASH_RE = /^[0-9a-f]{16}$/u;
+
+function expectNoAttributeValueContains(attrs: SpanAttributes | undefined, rawText: string): void {
+  for (const value of Object.values(attrs ?? {})) {
+    if (typeof value === "string") {
+      expect(value).not.toContain(rawText);
+      continue;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (typeof item === "string") {
+          expect(item).not.toContain(rawText);
+        }
+      }
+    }
+  }
+}
+
+function expectSafeReasonAttributes(attrs: ContinuationSpanAttrs, reason: string): void {
+  expect(attrs["reason.present"]).toBe(true);
+  expect(attrs["reason.length"]).toBe(reason.length);
+  expect(attrs["reason.hash"]).toEqual(expect.stringMatching(REASON_HASH_RE));
+  expect(attrs["reason.redacted"]).toEqual(expect.any(Boolean));
+  expect(attrs).not.toHaveProperty("reason.preview");
+  expectNoAttributeValueContains(attrs, reason);
+}
 
 describe("continuation-tracer :: noop default contract", () => {
   it("default tracer is the no-op tracer", () => {
@@ -272,14 +300,20 @@ describe("continuation-tracer :: contract pin", () => {
         "chain.id": "01J0X0000000000000000000A0",
         "chain.step.remaining": 4,
         "delay.ms": 30000,
-        "reason.preview": "context-pressure handoff",
+        "reason.present": true,
+        "reason.length": 24,
+        "reason.hash": "0123456789abcdef",
+        "reason.redacted": false,
       },
     });
 
     expect(captured?.["chain.id"]).toBe("01J0X0000000000000000000A0");
     expect(captured?.["chain.step.remaining"]).toBe(4);
     expect(captured?.["delay.ms"]).toBe(30000);
-    expect(captured?.["reason.preview"]).toBe("context-pressure handoff");
+    expect(captured?.["reason.present"]).toBe(true);
+    expect(captured?.["reason.length"]).toBe(24);
+    expect(captured?.["reason.hash"]).toBe("0123456789abcdef");
+    expect(captured?.["reason.redacted"]).toBe(false);
   });
 
   // Type-level pin: ContinuationSpanAttrs is the load-bearing canonical
@@ -291,7 +325,10 @@ describe("continuation-tracer :: contract pin", () => {
       "chain.id": "abc",
       "chain.step.remaining": 3,
       "delay.ms": 1000,
-      "reason.preview": "x",
+      "reason.present": true,
+      "reason.length": 1,
+      "reason.hash": "0123456789abcdef",
+      "reason.redacted": false,
       "delegate.mode": "silent-wake",
       "continuation.disabled": false,
     };
@@ -408,8 +445,12 @@ describe("continuation-tracer :: emitContinuationWorkSpan helper", () => {
       "delay.ms": 30000,
       "chain.step.remaining": 7,
       "chain.id": "019dcf57-b536-77cc-834b-b803d9262032",
-      "reason.preview": "more work to do",
+      "reason.present": true,
+      "reason.length": 15,
+      "reason.hash": expect.stringMatching(REASON_HASH_RE),
+      "reason.redacted": false,
     });
+    expectNoAttributeValueContains(span.options?.attributes, "more work to do");
     expect(span.statusCalls).toEqual([{ status: "OK", message: undefined }]);
     expect(span.ended).toBe(true);
   });
@@ -430,7 +471,7 @@ describe("continuation-tracer :: emitContinuationWorkSpan helper", () => {
     expect(spans[0].options?.traceparent).toBe(traceparent);
   });
 
-  it("omits chain.id and reason.preview when not provided", () => {
+  it("omits chain.id and reason metadata when not provided", () => {
     const { tracer, spans } = makeRecordingTracer();
     setContinuationTracer(tracer);
     emitContinuationWorkSpan({
@@ -444,7 +485,7 @@ describe("continuation-tracer :: emitContinuationWorkSpan helper", () => {
     });
   });
 
-  it("truncates reason to 80 chars", () => {
+  it("emits safe reason metadata instead of raw reason text", () => {
     const { tracer, spans } = makeRecordingTracer();
     setContinuationTracer(tracer);
     const long = "x".repeat(200);
@@ -455,7 +496,7 @@ describe("continuation-tracer :: emitContinuationWorkSpan helper", () => {
       reason: long,
     });
     const attrs = spans[0].options?.attributes as ContinuationSpanAttrs;
-    expect(attrs["reason.preview"]).toBe("x".repeat(80));
+    expectSafeReasonAttributes(attrs, long);
   });
 
   it("rounds delayMs to integer", () => {
@@ -568,8 +609,12 @@ describe("continuation-tracer :: emitContinuationDelegateSpan helper", () => {
       "delegate.delivery": "timer",
       "chain.id": "019dcf57-b536-77cc-834b-b803d9262032",
       "delegate.mode": "silent-wake",
-      "reason.preview": "fan out three queries",
+      "reason.present": true,
+      "reason.length": 21,
+      "reason.hash": expect.stringMatching(REASON_HASH_RE),
+      "reason.redacted": false,
     });
+    expectNoAttributeValueContains(span.options?.attributes, "fan out three queries");
     expect(span.statusCalls).toEqual([{ status: "OK", message: undefined }]);
     expect(span.ended).toBe(true);
   });
@@ -637,19 +682,18 @@ describe("continuation-tracer :: emitContinuationDelegateSpan helper", () => {
     ).toEqual(["normal", "silent", "silent-wake", "post-compaction"]);
   });
 
-  it("truncates reason to 80 chars", () => {
+  it("emits safe reason metadata instead of raw reason text", () => {
     const { tracer, spans } = makeRecordingTracer();
     setContinuationTracer(tracer);
+    const reason = "y".repeat(200);
     emitContinuationDelegateSpan({
       chainId: "abc",
       chainStepRemaining: 1,
       delayMs: 100,
       delivery: "timer",
-      reason: "y".repeat(200),
+      reason,
     });
-    expect((spans[0].options!.attributes as ContinuationSpanAttrs)["reason.preview"]).toBe(
-      "y".repeat(80),
-    );
+    expectSafeReasonAttributes(spans[0].options!.attributes as ContinuationSpanAttrs, reason);
   });
 
   it("rounds delayMs and clamps negative chainStepRemaining", () => {
@@ -767,8 +811,12 @@ describe("continuation-tracer :: emitContinuationDisabledSpan helper", () => {
       "chain.id": "019dcf57-b536-77cc-834b-b803d9262032",
       "delegate.delivery": "timer",
       "delegate.mode": "silent",
-      "reason.preview": "fan out three queries",
+      "reason.present": true,
+      "reason.length": 21,
+      "reason.hash": expect.stringMatching(REASON_HASH_RE),
+      "reason.redacted": false,
     });
+    expectNoAttributeValueContains(span.options?.attributes, "fan out three queries");
     expect(span.statusCalls).toEqual([{ status: "OK", message: undefined }]);
     expect(span.ended).toBe(true);
   });
@@ -834,12 +882,16 @@ describe("continuation-tracer :: emitContinuationDisabledSpan helper", () => {
       "delegate.mode": "silent-wake",
       "chain.step.remaining": 12,
       "chain.id": "019dcf57-b536-77cc-834b-b803d9262099",
-      "reason.preview": "poll PR #999 status",
+      "reason.present": true,
+      "reason.length": 19,
+      "reason.hash": expect.stringMatching(REASON_HASH_RE),
+      "reason.redacted": false,
       "continuation.disabled": true,
     });
+    expectNoAttributeValueContains(spans[0].options?.attributes, "poll PR #999 status");
   });
 
-  it("truncates reason to 80 chars", () => {
+  it("emits safe reason metadata instead of raw reason text", () => {
     const { tracer, spans } = makeRecordingTracer();
     setContinuationTracer(tracer);
     const longReason = "x".repeat(200);
@@ -850,7 +902,7 @@ describe("continuation-tracer :: emitContinuationDisabledSpan helper", () => {
       signalKind: "tool-delegate",
       reason: longReason,
     });
-    expect(spans[0].options?.attributes?.["reason.preview"]).toHaveLength(80);
+    expectSafeReasonAttributes(spans[0].options?.attributes as ContinuationSpanAttrs, longReason);
   });
 
   it("clamps negative chainStepRemaining to 0", () => {
@@ -982,8 +1034,12 @@ describe("continuation-tracer :: emitContinuationDelegateFireSpan helper", () =>
       "fire.deferred_ms": 60_017,
       "delegate.delivery": "timer",
       "delegate.mode": "silent-wake",
-      "reason.preview": "fan out three queries",
+      "reason.present": true,
+      "reason.length": 21,
+      "reason.hash": expect.stringMatching(REASON_HASH_RE),
+      "reason.redacted": false,
     });
+    expectNoAttributeValueContains(span.options?.attributes, "fan out three queries");
     expect(span.statusCalls).toEqual([{ status: "OK", message: undefined }]);
     expect(span.ended).toBe(true);
   });
@@ -1014,20 +1070,19 @@ describe("continuation-tracer :: emitContinuationDelegateFireSpan helper", () =>
     expect((spans[0].options!.attributes as ContinuationSpanAttrs)["fire.deferred_ms"]).toBe(0);
   });
 
-  it("truncates reason.preview to 80 chars", () => {
+  it("emits safe reason metadata instead of raw reason text", () => {
     const { tracer, spans } = makeRecordingTracer();
     setContinuationTracer(tracer);
+    const reason = "z".repeat(200);
     emitContinuationDelegateFireSpan({
       chainId: "abc",
       chainStepRemainingAtDispatch: 0,
       delegateMode: "silent",
       delayMs: 100,
       fireDeferredMs: 105,
-      reason: "z".repeat(200),
+      reason,
     });
-    expect((spans[0].options!.attributes as ContinuationSpanAttrs)["reason.preview"]).toBe(
-      "z".repeat(80),
-    );
+    expectSafeReasonAttributes(spans[0].options!.attributes as ContinuationSpanAttrs, reason);
   });
 
   it("clamps negative chainStepRemainingAtDispatch to 0", () => {
@@ -1128,6 +1183,106 @@ describe("continuation-tracer :: emitContinuationDelegateFireSpan helper", () =>
         fireDeferredMs: 0,
       }),
     ).not.toThrow();
+  });
+});
+
+describe("continuation-tracer :: reason/task text privacy", () => {
+  type RecordedSpan = {
+    name: string;
+    options?: StartSpanOptions;
+    statusCalls: Array<{ status: SpanStatus; message?: string }>;
+    ended: boolean;
+  };
+
+  function makeRecordingTracer(): { tracer: Tracer; spans: RecordedSpan[] } {
+    const spans: RecordedSpan[] = [];
+    const tracer: Tracer = {
+      startSpan(name, options) {
+        const recorded: RecordedSpan = {
+          name,
+          options,
+          statusCalls: [],
+          ended: false,
+        };
+        spans.push(recorded);
+        return {
+          setAttributes() {},
+          setStatus(status, message) {
+            recorded.statusCalls.push({ status, message });
+          },
+          recordException() {},
+          end() {
+            recorded.ended = true;
+          },
+        };
+      },
+    };
+    return { tracer, spans };
+  }
+
+  it("omits raw continuation reason and delegate task preview text from span attributes", () => {
+    const sentinel = "ghp_EXAMPLE_DO_NOT_EXPORT_1121";
+    const reasons = [
+      `continue later with ${sentinel}`,
+      `delegate task preview with ${sentinel}`,
+      `disabled delegate task with ${sentinel}`,
+      `timer delegate task with ${sentinel}`,
+      `timer work reason with ${sentinel}`,
+    ];
+    const { tracer, spans } = makeRecordingTracer();
+    setContinuationTracer(tracer);
+
+    emitContinuationWorkSpan({
+      chainId: "chain-work",
+      chainStepRemaining: 4,
+      delayMs: 1_000,
+      reason: reasons[0],
+    });
+    emitContinuationDelegateSpan({
+      chainId: "chain-delegate",
+      chainStepRemaining: 3,
+      delayMs: 0,
+      delivery: "immediate",
+      delegateMode: "silent",
+      reason: reasons[1],
+    });
+    emitContinuationDisabledSpan({
+      chainId: "chain-disabled",
+      chainStepRemaining: 2,
+      disabledReason: "cap.chain",
+      signalKind: "tool-delegate",
+      delegateDelivery: "timer",
+      delegateMode: "silent-wake",
+      reason: reasons[2],
+    });
+    emitContinuationDelegateFireSpan({
+      chainId: "chain-fire",
+      chainStepRemainingAtDispatch: 1,
+      delegateMode: "normal",
+      delayMs: 1_000,
+      fireDeferredMs: 1_010,
+      reason: reasons[3],
+    });
+    emitContinuationWorkFireSpan({
+      chainId: "chain-work-fire",
+      chainStepRemainingAtDispatch: 0,
+      delayMs: 2_000,
+      fireDeferredMs: 2_020,
+      reason: reasons[4],
+    });
+
+    expect(spans.map((span) => span.name)).toEqual([
+      "continuation.work",
+      "continuation.delegate.dispatch",
+      "continuation.disabled",
+      "continuation.delegate.fire",
+      "continuation.work.fire",
+    ]);
+    for (const [index, span] of spans.entries()) {
+      const attrs = span.options?.attributes as ContinuationSpanAttrs;
+      expectSafeReasonAttributes(attrs, reasons[index]!);
+      expectNoAttributeValueContains(attrs, sentinel);
+    }
   });
 });
 
