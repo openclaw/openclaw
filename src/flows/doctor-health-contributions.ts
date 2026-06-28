@@ -1242,6 +1242,12 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
       run: runCommandOwnerHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:orphan-model-refs",
+      label: "Orphan model refs",
+      healthCheckIds: ["core/doctor/orphan-model-refs"],
+      run: async () => {},
+    }),
+    createDoctorHealthContribution({
       id: "doctor:structured-health-repairs",
       label: "Structured health repairs",
       run: runStructuredHealthRepairs,
