@@ -464,6 +464,41 @@ function parseClaudeCliStreamingDelta(params: {
   };
 }
 
+function parseClaudeCliStreamingReasoningDelta(params: {
+  backend: CliBackendConfig;
+  providerId: string;
+  parsed: Record<string, unknown>;
+  textSoFar: string;
+  sessionId?: string;
+  usage?: CliUsage;
+}): CliStreamingDelta | null {
+  if (!supportsCliJsonlToolEvents(params)) {
+    return null;
+  }
+  if (params.parsed.type !== "stream_event" || !isRecord(params.parsed.event)) {
+    return null;
+  }
+  const event = params.parsed.event;
+  if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
+    return null;
+  }
+  // Claude carries reasoning as `thinking_delta` blocks (`delta.thinking`),
+  // distinct from `text_delta` answer text. Signature-only deltas have no text.
+  const delta = event.delta;
+  if (delta.type !== "thinking_delta" || typeof delta.thinking !== "string") {
+    return null;
+  }
+  if (!delta.thinking) {
+    return null;
+  }
+  return {
+    text: `${params.textSoFar}${delta.thinking}`,
+    delta: delta.thinking,
+    sessionId: params.sessionId,
+    usage: params.usage,
+  };
+}
+
 type PendingToolUse = {
   toolCallId: string;
   name: string;
@@ -744,12 +779,14 @@ export function createCliJsonlStreamingParser(params: {
   backend: CliBackendConfig;
   providerId: string;
   onAssistantDelta: (delta: CliStreamingDelta) => void;
+  onReasoningDelta?: (delta: CliStreamingDelta) => void;
   onToolUseStart?: (delta: CliToolUseStartDelta) => void;
   onToolResult?: (delta: CliToolResultDelta) => void;
   onCommentaryText?: (text: string) => void;
 }) {
   let lineBuffer = "";
   let assistantText = "";
+  let reasoningText = "";
   let pendingClaudeText = "";
   let sessionId: string | undefined;
   let usage: CliUsage | undefined;
@@ -869,6 +906,25 @@ export function createCliJsonlStreamingParser(params: {
         onToolUseStart: params.onToolUseStart,
         onToolResult: params.onToolResult,
       });
+    }
+
+    if (params.onReasoningDelta) {
+      // Reasoning streams as `thinking_delta` blocks; forward them on a separate
+      // accumulator so they drive the reasoning preview without mixing into the
+      // assistant answer text or the commentary classification below.
+      const reasoningDelta = parseClaudeCliStreamingReasoningDelta({
+        backend: params.backend,
+        providerId: params.providerId,
+        parsed,
+        textSoFar: reasoningText,
+        sessionId,
+        usage,
+      });
+      if (reasoningDelta) {
+        reasoningText = reasoningDelta.text;
+        params.onReasoningDelta(reasoningDelta);
+        return;
+      }
     }
 
     const delta = parseClaudeCliStreamingDelta({
