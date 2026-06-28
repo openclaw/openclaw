@@ -507,7 +507,7 @@ function expandEmbeddedMcpCallerContextInConfig(
   const mcpServers: BundleMcpConfig["mcpServers"] = {};
   for (const [name, server] of Object.entries(config.mcpServers)) {
     if (!isRecord(server) || !isRecord((server as Record<string, unknown>).headers)) {
-      mcpServers[name] = server as BundleMcpServerConfig;
+      mcpServers[name] = server;
       continue;
     }
     const rawHeaders = (server as Record<string, unknown>).headers as Record<string, unknown>;
@@ -518,7 +518,7 @@ function expandEmbeddedMcpCallerContextInConfig(
           ? v.replace(/\$\{([^}]+)\}/g, (_, key: string) => env[key] ?? "")
           : v;
     }
-    mcpServers[name] = { ...(server as BundleMcpServerConfig), headers } as BundleMcpServerConfig;
+    mcpServers[name] = { ...server, headers };
   }
   return { mcpServers };
 }
@@ -547,12 +547,12 @@ export function createSessionMcpRuntime(params: {
     trustedServers.size > 0 && params.callerContext
       ? expandEmbeddedMcpCallerContextInConfig(
           applyBundleMcpCallerContext(
-            { mcpServers: loaded.mcpServers as BundleMcpConfig["mcpServers"] },
+            { mcpServers: loaded.mcpServers },
             trustedServers,
           ),
           params.callerContext,
         ).mcpServers
-      : (loaded.mcpServers as BundleMcpConfig["mcpServers"]);
+      : loaded.mcpServers;
   const createdAt = Date.now();
   let lastUsedAt = createdAt;
   let activeLeases = 0;
