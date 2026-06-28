@@ -38,33 +38,33 @@ plugins:
 
 ### Polly (Text-to-Speech)
 
-| Key            | Default        | Description                                          |
-| -------------- | -------------- | ---------------------------------------------------- |
-| `enabled`      | `true`         | Enable/disable Polly TTS                             |
-| `voice`        | `Ruth`         | Voice ID (see [full list](https://docs.aws.amazon.com/polly/latest/dg/voicelist.html)) |
-| `engine`       | `generative`   | Engine: generative, neural, standard, long-form      |
-| `region`       | `us-east-1`    | AWS region                                           |
-| `languageCode` | `en-US`        | BCP-47 language code                                 |
-| `sampleRate`   | `24000`        | Output sample rate (8000/16000/22050/24000)          |
+| Key            | Default      | Description                                                                            |
+| -------------- | ------------ | -------------------------------------------------------------------------------------- |
+| `enabled`      | `true`       | Enable/disable Polly TTS                                                               |
+| `voice`        | `Ruth`       | Voice ID (see [full list](https://docs.aws.amazon.com/polly/latest/dg/voicelist.html)) |
+| `engine`       | `generative` | Engine: generative, neural, standard, long-form                                        |
+| `region`       | `us-east-1`  | AWS region                                                                             |
+| `languageCode` | `en-US`      | BCP-47 language code                                                                   |
+| `sampleRate`   | `24000`      | Output sample rate (8000/16000/22050/24000)                                            |
 
 ### Transcribe (Speech-to-Text)
 
-| Key            | Default     | Description                              |
-| -------------- | ----------- | ---------------------------------------- |
-| `enabled`      | `true`      | Enable/disable Transcribe STT            |
-| `region`       | `us-east-1` | AWS region                               |
-| `languageCode` | `en-US`     | Default transcription language           |
+| Key            | Default     | Description                    |
+| -------------- | ----------- | ------------------------------ |
+| `enabled`      | `true`      | Enable/disable Transcribe STT  |
+| `region`       | `us-east-1` | AWS region                     |
+| `languageCode` | `en-US`     | Default transcription language |
 
 ### Nova Sonic (Realtime Voice)
 
-| Key           | Default                   | Description                                                             |
-| ------------- | ------------------------- | ----------------------------------------------------------------------- |
-| `enabled`     | `true`                    | Enable/disable Nova Sonic                                               |
-| `region`      | `us-east-1`              | AWS region                                                              |
-| `model`       | `amazon.nova-sonic-v1:0` | Model ID (`amazon.nova-sonic-v1:0` or `amazon.nova-2-sonic-v1:0`)       |
-| `voice`       | `tiffany`                | Voice ID (tiffany, matthew, amy)                                        |
-| `temperature` | `0.7`                    | Generation temperature                                                  |
-| `maxTokens`   | `4096`                   | Max output tokens                                                       |
+| Key           | Default                  | Description                                                       |
+| ------------- | ------------------------ | ----------------------------------------------------------------- |
+| `enabled`     | `true`                   | Enable/disable Nova Sonic                                         |
+| `region`      | `us-east-1`              | AWS region                                                        |
+| `model`       | `amazon.nova-sonic-v1:0` | Model ID (`amazon.nova-sonic-v1:0` or `amazon.nova-2-sonic-v1:0`) |
+| `voice`       | `tiffany`                | Voice ID (tiffany, matthew, amy)                                  |
+| `temperature` | `0.7`                    | Generation temperature                                            |
+| `maxTokens`   | `4096`                   | Max output tokens                                                 |
 
 ## Authentication
 
@@ -90,8 +90,8 @@ When using browser Talk (PCM 24kHz), the bridge passes audio through without res
 
 ## Regional Availability
 
-| Service     | Regions                                                              |
-| ----------- | -------------------------------------------------------------------- |
-| Polly       | Most AWS regions (generative engine: us-east-1, eu-west-1 only)      |
-| Transcribe  | us-east-1, us-east-2, us-west-2, eu-west-1, eu-central-1, ap-southeast-2, + more |
-| Nova Sonic  | us-east-1 (expanding)                                                |
+| Service    | Regions                                                                          |
+| ---------- | -------------------------------------------------------------------------------- |
+| Polly      | Most AWS regions (generative engine: us-east-1, eu-west-1 only)                  |
+| Transcribe | us-east-1, us-east-2, us-west-2, eu-west-1, eu-central-1, ap-southeast-2, + more |
+| Nova Sonic | us-east-1 (expanding)                                                            |

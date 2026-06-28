@@ -129,7 +129,7 @@ describe("NovaSonicVoiceBridge protocol", () => {
       region: "us-east-1",
       model: "amazon.nova-sonic-v1:0",
       voice: "tiffany",
-      tools: [{ name: "get_weather", description: "Get weather", parameters: { type: "object", properties: {} } }],
+      tools: [{ type: "function", name: "get_weather", description: "Get weather", parameters: { type: "object", properties: {} } }],
     });
 
     const event = (bridge as any).buildPromptStartEvent("prompt-456");

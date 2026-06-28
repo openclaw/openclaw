@@ -128,16 +128,15 @@ export function buildPollySpeechProvider(
     autoSelectOrder: 25,
 
     resolveConfig: ({ rawConfig }) => {
-      const raw = (rawConfig as Record<string, unknown>)?.polly ?? rawConfig;
+      const raw = rawConfig?.polly ?? rawConfig;
       return readPollyConfig(raw as Record<string, unknown>);
     },
 
     parseDirectiveToken,
 
     resolveTalkConfig: ({ baseTtsConfig, talkProviderConfig }) => {
-      const baseRaw = baseTtsConfig as Record<string, unknown>;
       const base = readPollyConfig(
-        (baseRaw?.polly as Record<string, unknown>) ?? baseRaw,
+        (baseTtsConfig?.polly as Record<string, unknown>) ?? baseTtsConfig,
       );
       return {
         ...base,
@@ -169,11 +168,11 @@ export function buildPollySpeechProvider(
     }),
 
     listVoices: async (req) => {
-      const config = req.providerConfig
+      const resolvedConfig = req.providerConfig
         ? readPollyConfig(req.providerConfig as Record<string, unknown>)
         : readPollyConfig(pollyConfig);
       const voices = await pollyListVoices({
-        region: config.region,
+        region: resolvedConfig.region,
         engine: req.providerConfig?.engine as string | undefined,
       });
       return voices.map(

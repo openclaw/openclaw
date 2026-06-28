@@ -28,7 +28,7 @@ describe("buildPollySpeechProvider", () => {
   });
 
   it("has correct id, label, and aliases", () => {
-    const provider = buildPollySpeechProvider();
+    const provider = buildPollySpeechProvider()!;
     expect(provider.id).toBe("amazon-polly");
     expect(provider.label).toBe("Amazon Polly");
     expect(provider.aliases).toEqual(["polly"]);
@@ -36,7 +36,7 @@ describe("buildPollySpeechProvider", () => {
   });
 
   it("synthesizes MP3 for audio-file target", async () => {
-    const provider = buildPollySpeechProvider();
+    const provider = buildPollySpeechProvider()!;
     const fakeBuffer = Buffer.from([0xff, 0xfb, 0x90, 0x00]);
     const synthesizeSpy = vi.spyOn(ttsModule, "pollySynthesize").mockResolvedValue(fakeBuffer);
 
@@ -60,7 +60,7 @@ describe("buildPollySpeechProvider", () => {
   });
 
   it("synthesizes voice-note with ffmpeg opus conversion", async () => {
-    const provider = buildPollySpeechProvider();
+    const provider = buildPollySpeechProvider()!;
     vi.spyOn(ttsModule, "pollySynthesize").mockResolvedValue(Buffer.from([0xff, 0xfb]));
     runFfmpegMock.mockResolvedValue("");
 
@@ -82,7 +82,7 @@ describe("buildPollySpeechProvider", () => {
   });
 
   it("applies voice override from providerOverrides", async () => {
-    const provider = buildPollySpeechProvider();
+    const provider = buildPollySpeechProvider()!;
     const synthesizeSpy = vi.spyOn(ttsModule, "pollySynthesize").mockResolvedValue(Buffer.from([0x01]));
 
     await provider.synthesize({
@@ -100,7 +100,7 @@ describe("buildPollySpeechProvider", () => {
   });
 
   it("uses engine-aware sample rate defaults", async () => {
-    const provider = buildPollySpeechProvider();
+    const provider = buildPollySpeechProvider()!;
     const synthesizeSpy = vi.spyOn(ttsModule, "pollySynthesize").mockResolvedValue(Buffer.from([0x01]));
 
     await provider.synthesize({
@@ -118,25 +118,25 @@ describe("buildPollySpeechProvider", () => {
   });
 
   it("isConfigured returns true when enabled", () => {
-    const provider = buildPollySpeechProvider();
+    const provider = buildPollySpeechProvider()!;
     expect(provider.isConfigured({ providerConfig: { enabled: true }, timeoutMs: 10_000 })).toBe(true);
   });
 
   it("isConfigured returns false when disabled", () => {
-    const provider = buildPollySpeechProvider();
+    const provider = buildPollySpeechProvider()!;
     expect(provider.isConfigured({ providerConfig: { enabled: false }, timeoutMs: 10_000 })).toBe(false);
   });
 });
 
 describe("buildPollySpeechProvider resolveConfig", () => {
   it("returns defaults for empty config", () => {
-    const provider = buildPollySpeechProvider();
+    const provider = buildPollySpeechProvider()!;
     const config = provider.resolveConfig!({ rawConfig: {}, cfg: {} as OpenClawConfig, timeoutMs: 10_000 });
     expect(config).toEqual(expect.objectContaining({ enabled: true, voice: "Ruth", engine: "generative", region: "us-east-1" }));
   });
 
   it("reads custom config", () => {
-    const provider = buildPollySpeechProvider();
+    const provider = buildPollySpeechProvider()!;
     const config = provider.resolveConfig!({
       rawConfig: { voice: "Matthew", engine: "neural", region: "eu-west-1", languageCode: "en-GB" },
       cfg: {} as OpenClawConfig,
