@@ -125,16 +125,16 @@ function closeWsClient(client: Lark.WSClient | undefined): void {
   }
 }
 
-function readBotIdentityRevision(accountId: string): number {
+export function readFeishuBotIdentityRevision(accountId: string): number {
   return botIdentityRevisions.get(accountId) ?? 0;
 }
 
 function bumpBotIdentityRevision(accountId: string): void {
-  botIdentityRevisions.set(accountId, readBotIdentityRevision(accountId) + 1);
+  botIdentityRevisions.set(accountId, readFeishuBotIdentityRevision(accountId) + 1);
 }
 
 function captureBotIdentitySnapshot(accountId: string): BotIdentitySnapshot {
-  return { revision: readBotIdentityRevision(accountId) };
+  return { revision: readFeishuBotIdentityRevision(accountId) };
 }
 
 function captureBotIdentitySnapshots(): Array<[accountId: string, snapshot: BotIdentitySnapshot]> {
@@ -149,7 +149,7 @@ function clearFeishuBotIdentityStateIfUnchanged(
   accountId: string,
   snapshot: BotIdentitySnapshot,
 ): void {
-  if (readBotIdentityRevision(accountId) !== snapshot.revision) {
+  if (readFeishuBotIdentityRevision(accountId) !== snapshot.revision) {
     return;
   }
   botOpenIds.delete(accountId);

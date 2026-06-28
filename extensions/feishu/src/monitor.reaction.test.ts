@@ -14,6 +14,7 @@ import {
   resolveReactionSyntheticEvent,
   type FeishuReactionCreatedEvent,
 } from "./monitor.account.js";
+import { readFeishuBotIdentityRevision, setFeishuBotIdentityState } from "./monitor.state.js";
 import { setFeishuRuntime } from "./runtime.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
@@ -558,8 +559,40 @@ describe("monitorSingleAccount lifecycle", () => {
       expect.objectContaining({
         accountId: "default",
         abortSignal: undefined,
+        staleRevision: readFeishuBotIdentityRevision("default"),
       }),
     );
+  });
+
+  it("passes no stale revision for active lifecycle bot identity recovery", async () => {
+    setFeishuRuntime(createFeishuMonitorRuntime());
+
+    await monitorSingleAccount({
+      cfg: buildDebounceConfig(),
+      account: buildDebounceAccount(),
+      runtime: createNonExitingRuntimeEnv(),
+      botOpenIdSource: {
+        kind: "prefetched",
+        botOpenId: undefined,
+      },
+    });
+
+    expect(startBotIdentityRecoveryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        accountId: "default",
+        abortSignal: undefined,
+        staleRevision: undefined,
+      }),
+    );
+  });
+
+  it("records a changed identity revision after a replacement lifecycle restores the bot", async () => {
+    setFeishuBotIdentityState("default", { botOpenId: "", botName: undefined });
+    const staleRevision = readFeishuBotIdentityRevision("default");
+
+    setFeishuBotIdentityState("default", { botOpenId: "ou_replacement", botName: "Bot" });
+
+    expect(readFeishuBotIdentityRevision("default")).toBeGreaterThan(staleRevision);
   });
 });
 
