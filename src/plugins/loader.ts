@@ -2806,14 +2806,32 @@ export function loadOpenClawPlugins(options: PluginLoadOptions = {}): PluginRegi
       }
 
       if (registrationPlan.runFullActivationOnlyRegistrations) {
-        if (definition?.reload) {
-          registerReload(record, definition.reload);
-        }
-        for (const nodeHostCommand of definition?.nodeHostCommands ?? []) {
-          registerNodeHostCommand(record, nodeHostCommand);
-        }
-        for (const collector of definition?.securityAuditCollectors ?? []) {
-          registerSecurityAuditCollector(record, collector);
+        const registrySnapshot = snapshotPluginRegistry(registry);
+        try {
+          if (definition?.reload) {
+            registerReload(record, definition.reload);
+          }
+          for (const nodeHostCommand of definition?.nodeHostCommands ?? []) {
+            registerNodeHostCommand(record, nodeHostCommand);
+          }
+          for (const collector of definition?.securityAuditCollectors ?? []) {
+            registerSecurityAuditCollector(record, collector);
+          }
+        } catch (err) {
+          restorePluginRegistry(registry, registrySnapshot);
+          recordPluginError({
+            logger,
+            registry,
+            record,
+            seenIds,
+            pluginId,
+            origin: candidate.origin,
+            phase: "load",
+            error: err,
+            logPrefix: `[plugins] ${record.id} failed to register plugin definition metadata from ${record.source}: `,
+            diagnosticMessagePrefix: "failed to register plugin definition metadata: ",
+          });
+          continue;
         }
       }
 

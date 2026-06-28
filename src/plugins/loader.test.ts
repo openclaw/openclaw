@@ -2973,6 +2973,61 @@ module.exports = { id: "throws-after-import", register() {} };`,
     clearInternalHooks();
   });
 
+  it("isolates unreadable definition reload metadata without dropping healthy plugins", () => {
+    useNoBundledPlugins();
+    const badPlugin = writePlugin({
+      id: "bad-definition-reload",
+      filename: "bad-definition-reload.cjs",
+      body: `module.exports = {
+        id: "bad-definition-reload",
+        reload: Object.defineProperty({}, "restartPrefixes", {
+          get() {
+            throw new Error("definition reload restart prefixes exploded");
+          },
+        }),
+        register() {
+          globalThis.badDefinitionReloadRegistered = true;
+        },
+      };`,
+    });
+    const healthyPlugin = writePlugin({
+      id: "healthy-after-bad-reload",
+      filename: "healthy-after-bad-reload.cjs",
+      body: `module.exports = {
+        id: "healthy-after-bad-reload",
+        register() {
+          globalThis.healthyAfterBadReloadRegistered = true;
+        },
+      };`,
+    });
+    const globals = globalThis as Record<string, unknown>;
+    delete globals.badDefinitionReloadRegistered;
+    delete globals.healthyAfterBadReloadRegistered;
+
+    const registry = loadOpenClawPlugins({
+      cache: false,
+      config: {
+        plugins: {
+          load: { paths: [badPlugin.file, healthyPlugin.file] },
+          allow: [badPlugin.id, healthyPlugin.id],
+        },
+      },
+      onlyPluginIds: [badPlugin.id, healthyPlugin.id],
+    });
+
+    expect(registry.plugins.find((entry) => entry.id === badPlugin.id)?.status).toBe("error");
+    expect(registry.plugins.find((entry) => entry.id === healthyPlugin.id)?.status).toBe("loaded");
+    expect(globals.badDefinitionReloadRegistered).toBeUndefined();
+    expect(globals.healthyAfterBadReloadRegistered).toBe(true);
+    expect(registry.reloads).toStrictEqual([]);
+    expectDiagnosticContaining({
+      registry,
+      level: "error",
+      pluginId: badPlugin.id,
+      message: "definition reload restart prefixes exploded",
+    });
+  });
+
   it("rolls back global side effects when registration fails", async () => {
     useNoBundledPlugins();
     const plugin = writePlugin({
