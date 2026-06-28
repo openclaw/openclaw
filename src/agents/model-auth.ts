@@ -93,7 +93,7 @@ const OPENAI_PROVIDER_ID = "openai";
 const OPENAI_AUDIO_TRANSCRIPTIONS_API = "openai-audio-transcriptions";
 const OPENAI_CODEX_RESPONSES_API = "openai-chatgpt-responses";
 
-export type OpenAIAudioEndpointTrust = "native-openai" | "custom-openai-compatible";
+type OpenAIAudioEndpointTrust = "native-openai" | "custom-openai-compatible";
 
 function openAIModelApiAllowsBearerAuth(params: {
   modelApi: string;
