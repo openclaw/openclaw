@@ -61,6 +61,27 @@ describe("runDoctorSessionSqlite", () => {
       validatedEntries: 1,
       validatedTranscriptEvents: 2,
     });
+    expect(report.targets[0]?.sqlitePath).toBeTruthy();
+    expect(fs.existsSync(report.targets[0]?.sqlitePath ?? "")).toBe(false);
+  });
+
+  it("inspects a legacy store without creating a SQLite database", async () => {
+    const store = createLegacyStore();
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "inspect",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({
+      issues: 0,
+      legacyEntries: 1,
+      sqliteEntries: 0,
+      targets: 1,
+    });
+    expect(report.targets[0]?.sqlitePath).toBeTruthy();
+    expect(fs.existsSync(report.targets[0]?.sqlitePath ?? "")).toBe(false);
   });
 
   it("imports and validates legacy sessions idempotently", async () => {
