@@ -14,6 +14,7 @@ import {
   isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 export {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
@@ -1540,7 +1541,7 @@ export function formatAssistantErrorText(
   if (raw.length > 600) {
     log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
   }
-  return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+  return raw.length > 600 ? `${truncateUtf16Safe(raw, 600)}…` : raw;
 }
 
 export function isRawAssistantErrorPassthrough(params: {
@@ -1560,7 +1561,7 @@ export function isRawAssistantErrorPassthrough(params: {
     friendlyError.startsWith("HTTP ");
   return (
     friendlyError === rawError ||
-    (rawError.length > 600 && friendlyError === `${rawError.slice(0, 600)}…`) ||
+    (rawError.length > 600 && friendlyError === `${truncateUtf16Safe(rawError, 600)}…`) ||
     Boolean(parsedMessage && hasRawDerivedProviderPrefix) ||
     Boolean(leadingStatusRest && friendlyError.startsWith("HTTP "))
   );
