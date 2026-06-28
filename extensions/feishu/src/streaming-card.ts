@@ -11,7 +11,7 @@ import {
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getFeishuUserAgent } from "./client.js";
-import { requestFeishuApi } from "./comment-shared.js";
+import { getFeishuTokenInvalidCodeFromResponse, requestFeishuApi } from "./comment-shared.js";
 import { resolveFeishuCardTemplate, type CardHeaderConfig } from "./send.js";
 import type { FeishuDomain } from "./types.js";
 
@@ -47,6 +47,10 @@ type StreamingStartOptions = {
   header?: StreamingCardHeader;
 };
 
+type FeishuStreamingSessionOptions = {
+  onSdkTokenInvalid?: () => void;
+};
+
 const STREAMING_UPDATE_THROTTLE_MS = 160;
 const STREAMING_SIGNIFICANT_DELTA_CHARS = 18;
 const FEISHU_STREAMING_TOKEN_DEFAULT_LIFETIME_SECONDS = 7200;
@@ -63,6 +67,50 @@ const tokenCache = new Map<string, { token: string; expiresAt: number }>();
  */
 export function invalidateStreamingTokenCache(creds: Credentials): void {
   tokenCache.delete(`${creds.domain ?? "feishu"}|${creds.appId}`);
+}
+
+type CardKitJsonResponse<T> = {
+  ok: boolean;
+  status: number;
+  data: T;
+};
+
+async function fetchCardKitJsonWithTokenRefresh<T extends { code?: number; msg?: string }>(params: {
+  creds: Credentials;
+  url: string;
+  init: {
+    method: string;
+    headers?: Record<string, string>;
+    body?: string;
+  };
+  auditContext: string;
+}): Promise<CardKitJsonResponse<T>> {
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const { response, release } = await fetchWithSsrFGuard({
+      url: params.url,
+      init: {
+        ...params.init,
+        headers: {
+          ...(params.init.headers ?? {}),
+          Authorization: `Bearer ${await getToken(params.creds)}`,
+          "User-Agent": getFeishuUserAgent(),
+        },
+      },
+      policy: { allowedHostnames: resolveAllowedHostnames(params.creds.domain) },
+      auditContext: params.auditContext,
+    });
+    try {
+      const data = (await response.json().catch(() => ({}))) as T;
+      if (attempt === 0 && getFeishuTokenInvalidCodeFromResponse(data) !== undefined) {
+        invalidateStreamingTokenCache(params.creds);
+        continue;
+      }
+      return { ok: response.ok, status: response.status, data };
+    } finally {
+      await release();
+    }
+  }
+  throw new Error("unreachable CardKit token refresh retry state");
 }
 
 function resolveStreamingTokenExpiresAt(value: unknown, nowMs = Date.now()): number {
@@ -218,21 +266,28 @@ export function resolveStreamingCardSendMode(options?: StreamingStartOptions) {
 
 /** Streaming card session manager */
 export class FeishuStreamingSession {
-  private client: Client;
+  private resolveClient: () => Client;
   private creds: Credentials;
   private state: CardState | null = null;
   private queue: Promise<void> = Promise.resolve();
   private closed = false;
   private log?: (msg: string) => void;
+  private options: FeishuStreamingSessionOptions;
   private lastUpdateTime = 0;
   private pendingText: string | null = null;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private updateThrottleMs = STREAMING_UPDATE_THROTTLE_MS;
 
-  constructor(client: Client, creds: Credentials, log?: (msg: string) => void) {
-    this.client = client;
+  constructor(
+    client: Client | (() => Client),
+    creds: Credentials,
+    log?: (msg: string) => void,
+    options: FeishuStreamingSessionOptions = {},
+  ) {
+    this.resolveClient = typeof client === "function" ? client : () => client;
     this.creds = creds;
     this.log = log;
+    this.options = options;
   }
 
   async start(
@@ -273,30 +328,26 @@ export class FeishuStreamingSession {
     }
 
     // Create card entity
-    const { response: createRes, release: releaseCreate } = await fetchWithSsrFGuard({
+    const createRes = await fetchCardKitJsonWithTokenRefresh<{
+      code: number;
+      msg: string;
+      data?: { card_id: string };
+    }>({
+      creds: this.creds,
       url: `${apiBase}/cardkit/v1/cards`,
       init: {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
           "Content-Type": "application/json",
-          "User-Agent": getFeishuUserAgent(),
         },
         body: JSON.stringify({ type: "card_json", data: JSON.stringify(cardJson) }),
       },
-      policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.create",
     });
     if (!createRes.ok) {
-      await releaseCreate();
       throw new Error(`Create card request failed with HTTP ${createRes.status}`);
     }
-    const createData = (await createRes.json()) as {
-      code: number;
-      msg: string;
-      data?: { card_id: string };
-    };
-    await releaseCreate();
+    const createData = createRes.data;
     if (createData.code !== 0 || !createData.data?.card_id) {
       throw new Error(`Create card failed: ${createData.msg}`);
     }
@@ -313,7 +364,7 @@ export class FeishuStreamingSession {
     if (sendMode === "reply") {
       sendRes = await requestFeishuApi(
         () =>
-          this.client.im.message.reply({
+          this.resolveClient().im.message.reply({
             path: { message_id: sendOptions.replyToMessageId! },
             data: {
               msg_type: "interactive",
@@ -322,13 +373,13 @@ export class FeishuStreamingSession {
             },
           }),
         "Send card failed",
-        { onTokenInvalid: () => invalidateStreamingTokenCache(this.creds) },
+        { onTokenInvalid: this.options.onSdkTokenInvalid },
       );
     } else if (sendMode === "root_create") {
       // root_id is undeclared in the SDK types but accepted at runtime
       sendRes = await requestFeishuApi(
         () =>
-          this.client.im.message.create({
+          this.resolveClient().im.message.create({
             params: { receive_id_type: receiveIdType },
             data: Object.assign(
               { receive_id: receiveId, msg_type: "interactive", content: cardContent },
@@ -336,12 +387,12 @@ export class FeishuStreamingSession {
             ),
           }),
         "Send card failed",
-        { onTokenInvalid: () => invalidateStreamingTokenCache(this.creds) },
+        { onTokenInvalid: this.options.onSdkTokenInvalid },
       );
     } else {
       sendRes = await requestFeishuApi(
         () =>
-          this.client.im.message.create({
+          this.resolveClient().im.message.create({
             params: { receive_id_type: receiveIdType },
             data: {
               receive_id: receiveId,
@@ -350,7 +401,7 @@ export class FeishuStreamingSession {
             },
           }),
         "Send card failed",
-        { onTokenInvalid: () => invalidateStreamingTokenCache(this.creds) },
+        { onTokenInvalid: this.options.onSdkTokenInvalid },
       );
     }
     if (sendRes.code !== 0 || !sendRes.data?.message_id) {
@@ -378,14 +429,13 @@ export class FeishuStreamingSession {
     const apiBase = resolveApiBase(this.creds.domain);
     this.state.sequence += 1;
     try {
-      const { response, release } = await fetchWithSsrFGuard({
+      const response = await fetchCardKitJsonWithTokenRefresh<{ code?: number; msg?: string }>({
+        creds: this.creds,
         url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content/content`,
         init: {
           method: "PUT",
           headers: {
-            Authorization: `Bearer ${await getToken(this.creds)}`,
             "Content-Type": "application/json",
-            "User-Agent": getFeishuUserAgent(),
           },
           body: JSON.stringify({
             content: text,
@@ -393,10 +443,8 @@ export class FeishuStreamingSession {
             uuid: `s_${this.state.cardId}_${this.state.sequence}`,
           }),
         },
-        policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
         auditContext: "feishu.streaming-card.update",
       });
-      await release();
       if (!response.ok) {
         onError?.(new Error(`Update card content failed with HTTP ${response.status}`));
         return false;
@@ -418,14 +466,13 @@ export class FeishuStreamingSession {
     const apiBase = resolveApiBase(this.creds.domain);
     this.state.sequence += 1;
     try {
-      const { response, release } = await fetchWithSsrFGuard({
+      const response = await fetchCardKitJsonWithTokenRefresh<{ code?: number; msg?: string }>({
+        creds: this.creds,
         url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/content`,
         init: {
           method: "PUT",
           headers: {
-            Authorization: `Bearer ${await getToken(this.creds)}`,
             "Content-Type": "application/json",
-            "User-Agent": getFeishuUserAgent(),
           },
           body: JSON.stringify({
             element: JSON.stringify({ tag: "markdown", content: text, element_id: "content" }),
@@ -433,10 +480,8 @@ export class FeishuStreamingSession {
             uuid: `r_${this.state.cardId}_${this.state.sequence}`,
           }),
         },
-        policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
         auditContext: "feishu.streaming-card.replace",
       });
-      await release();
       if (!response.ok) {
         onError?.(new Error(`Replace card content failed with HTTP ${response.status}`));
         return false;
@@ -519,14 +564,13 @@ export class FeishuStreamingSession {
     }
     const apiBase = resolveApiBase(this.creds.domain);
     this.state.sequence += 1;
-    await fetchWithSsrFGuard({
+    await fetchCardKitJsonWithTokenRefresh<{ code?: number; msg?: string }>({
+      creds: this.creds,
       url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/elements/note/content`,
       init: {
         method: "PUT",
         headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
           "Content-Type": "application/json",
-          "User-Agent": getFeishuUserAgent(),
         },
         body: JSON.stringify({
           content: `<font color='grey'>${note}</font>`,
@@ -534,13 +578,8 @@ export class FeishuStreamingSession {
           uuid: `n_${this.state.cardId}_${this.state.sequence}`,
         }),
       },
-      policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.note-update",
-    })
-      .then(async ({ release }) => {
-        await release();
-      })
-      .catch((e: unknown) => this.log?.(`Note update failed: ${String(e)}`));
+    }).catch((e: unknown) => this.log?.(`Note update failed: ${String(e)}`));
   }
 
   async close(finalText?: string, options?: { note?: string }): Promise<boolean> {
@@ -578,14 +617,13 @@ export class FeishuStreamingSession {
 
     // Close streaming mode
     this.state.sequence += 1;
-    await fetchWithSsrFGuard({
+    await fetchCardKitJsonWithTokenRefresh<{ code?: number; msg?: string }>({
+      creds: this.creds,
       url: `${apiBase}/cardkit/v1/cards/${this.state.cardId}/settings`,
       init: {
         method: "PATCH",
         headers: {
-          Authorization: `Bearer ${await getToken(this.creds)}`,
           "Content-Type": "application/json; charset=utf-8",
-          "User-Agent": getFeishuUserAgent(),
         },
         body: JSON.stringify({
           settings: JSON.stringify({
@@ -595,13 +633,8 @@ export class FeishuStreamingSession {
           uuid: `c_${this.state.cardId}_${this.state.sequence}`,
         }),
       },
-      policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.close",
-    })
-      .then(async ({ release }) => {
-        await release();
-      })
-      .catch((e: unknown) => this.log?.(`Close failed: ${String(e)}`));
+    }).catch((e: unknown) => this.log?.(`Close failed: ${String(e)}`));
     const finalState = this.state;
     this.state = null;
     this.pendingText = null;
@@ -620,7 +653,7 @@ export class FeishuStreamingSession {
 
     const currentState = this.state;
     try {
-      const response = await this.client.im.message.delete({
+      const response = await this.resolveClient().im.message.delete({
         path: { message_id: currentState.messageId },
       });
       if (response.code !== undefined && response.code !== 0) {

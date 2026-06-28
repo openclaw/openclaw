@@ -10,6 +10,7 @@ import {
   getFeishuSendRateLimitCode,
   getFeishuSendRateLimitCodeFromResponse,
   getFeishuTokenInvalidCode,
+  getFeishuTokenInvalidCodeFromResponse,
   requestFeishuApi,
 } from "./comment-shared.js";
 
@@ -342,6 +343,19 @@ describe("getFeishuTokenInvalidCode", () => {
 
   it("returns undefined for null", () => {
     expect(getFeishuTokenInvalidCode(null)).toBeUndefined();
+  });
+});
+
+describe("getFeishuTokenInvalidCodeFromResponse", () => {
+  it("returns token-invalid codes from fulfilled Feishu response bodies", () => {
+    expect(getFeishuTokenInvalidCodeFromResponse({ code: 99991663 })).toBe(99991663);
+    expect(getFeishuTokenInvalidCodeFromResponse({ code: 99991664 })).toBe(99991664);
+  });
+
+  it("ignores non-token-invalid fulfilled response bodies", () => {
+    expect(getFeishuTokenInvalidCodeFromResponse({ code: 0 })).toBeUndefined();
+    expect(getFeishuTokenInvalidCodeFromResponse({ code: 230020 })).toBeUndefined();
+    expect(getFeishuTokenInvalidCodeFromResponse(null)).toBeUndefined();
   });
 });
 

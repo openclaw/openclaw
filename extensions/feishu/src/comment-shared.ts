@@ -143,6 +143,14 @@ export function getFeishuTokenInvalidCode(error: unknown): number | undefined {
   return typeof code === "number" && FEISHU_TOKEN_INVALID_CODES.has(code) ? code : undefined;
 }
 
+export function getFeishuTokenInvalidCodeFromResponse(response: unknown): number | undefined {
+  if (!isRecord(response)) {
+    return undefined;
+  }
+  const code = (response as { code?: unknown }).code;
+  return typeof code === "number" && FEISHU_TOKEN_INVALID_CODES.has(code) ? code : undefined;
+}
+
 /**
  * Returns a retryable rate-limit code when a fulfilled (non-throwing) Feishu
  * SDK response embeds it in the response body. The Feishu node SDK can resolve

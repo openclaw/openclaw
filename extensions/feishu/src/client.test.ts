@@ -147,6 +147,16 @@ type HttpInstanceLike = {
   post: (url: string, body?: unknown, options?: Record<string, unknown>) => Promise<unknown>;
 };
 
+type TestCache = {
+  get: (key: string | symbol, options?: { namespace?: string }) => Promise<unknown>;
+  set: (
+    key: string | symbol,
+    value: unknown,
+    expire?: number,
+    options?: { namespace?: string },
+  ) => Promise<boolean>;
+};
+
 function requireHttpInstance(value: unknown): HttpInstanceLike {
   if (isRecord(value) && typeof value.get === "function" && typeof value.post === "function") {
     return {
@@ -163,6 +173,13 @@ function readCallOptions(
 ): Record<string, unknown> {
   const call = index < 0 ? mock.mock.calls.at(index)?.[0] : mock.mock.calls[index]?.[0];
   return isRecord(call) ? call : {};
+}
+
+function requireTestCache(value: unknown): TestCache {
+  if (isRecord(value) && typeof value.get === "function" && typeof value.set === "function") {
+    return value as TestCache;
+  }
+  throw new Error("expected Feishu SDK cache");
 }
 
 function firstWsClientOptions(): {
@@ -187,6 +204,7 @@ function firstWsClientOptions(): {
 beforeAll(async () => {
   vi.doMock("@larksuiteoapi/node-sdk", () => ({
     AppType: { SelfBuild: "self" },
+    CTenantAccessToken: Symbol("tenant-access-token"),
     Domain: { Feishu: "https://open.feishu.cn", Lark: "https://open.larksuite.com" },
     LoggerLevel: { info: "info" },
     Client: clientCtorMock,
@@ -460,6 +478,61 @@ describe("createFeishuClient HTTP timeout", () => {
     // Same credentials — would hit cache before the fix; now evicted
     createFeishuClient({ appId: "app_7", appSecret: "secret_7", accountId: "cache-clear-test" }); // pragma: allowlist secret
     expect(clientCtorMock.mock.calls.length).toBe(ctorCountA + 2);
+  });
+
+  it("passes a plugin-owned SDK cache and clears the tenant token for one account", async () => {
+    const { CTenantAccessToken } = await import("@larksuiteoapi/node-sdk");
+
+    createFeishuClient({
+      appId: "app_token_cache",
+      appSecret: "secret_token_cache", // pragma: allowlist secret
+      accountId: "token-cache-account",
+    });
+    const cache = requireTestCache(readCallOptions(clientCtorMock).cache);
+
+    await cache.set(CTenantAccessToken, "stale-token", Date.now() + 60_000, {
+      namespace: "app_token_cache",
+    });
+    expect(
+      await cache.get(CTenantAccessToken, {
+        namespace: "app_token_cache",
+      }),
+    ).toBe("stale-token");
+
+    clearClientCache("token-cache-account");
+
+    expect(
+      await cache.get(CTenantAccessToken, {
+        namespace: "app_token_cache",
+      }),
+    ).toBeUndefined();
+  });
+
+  it("clears account SDK cache when credentials change for the same app id", async () => {
+    const { CTenantAccessToken } = await import("@larksuiteoapi/node-sdk");
+
+    createFeishuClient({
+      appId: "app_rotated_secret",
+      appSecret: "old_secret", // pragma: allowlist secret
+      accountId: "rotating-account",
+    });
+    const cache = requireTestCache(readCallOptions(clientCtorMock).cache);
+    await cache.set(CTenantAccessToken, "old-token", Date.now() + 60_000, {
+      namespace: "app_rotated_secret",
+    });
+
+    createFeishuClient({
+      appId: "app_rotated_secret",
+      appSecret: "new_secret", // pragma: allowlist secret
+      accountId: "rotating-account",
+    });
+
+    expect(
+      await cache.get(CTenantAccessToken, {
+        namespace: "app_rotated_secret",
+      }),
+    ).toBeUndefined();
+    expect(readCallOptions(clientCtorMock).cache).toBe(cache);
   });
 });
 

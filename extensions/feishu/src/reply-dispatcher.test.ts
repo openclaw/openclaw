@@ -17,6 +17,7 @@ const sendMarkdownCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendStructuredCardFeishuMock = vi.hoisted(() => vi.fn());
 const sendMediaFeishuMock = vi.hoisted(() => vi.fn());
 const createFeishuClientMock = vi.hoisted(() => vi.fn());
+const clearClientCacheMock = vi.hoisted(() => vi.fn());
 const resolveReceiveIdTypeMock = vi.hoisted(() => vi.fn());
 const createReplyDispatcherWithTypingMock = vi.hoisted(() => vi.fn());
 const addTypingIndicatorMock = vi.hoisted(() => vi.fn(async () => ({ messageId: "om_msg" })));
@@ -68,7 +69,10 @@ vi.mock("./media.js", () => ({
   sendMediaFeishu: sendMediaFeishuMock,
   shouldSuppressFeishuTextForVoiceMedia: shouldSuppressFeishuTextForVoiceMediaMock,
 }));
-vi.mock("./client.js", () => ({ createFeishuClient: createFeishuClientMock }));
+vi.mock("./client.js", () => ({
+  clearClientCache: clearClientCacheMock,
+  createFeishuClient: createFeishuClientMock,
+}));
 vi.mock("./targets.js", () => ({ resolveReceiveIdType: resolveReceiveIdTypeMock }));
 vi.mock("./typing.js", () => ({
   addTypingIndicator: addTypingIndicatorMock,

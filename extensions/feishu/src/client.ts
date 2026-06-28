@@ -36,6 +36,7 @@ type FeishuClientSdk = Pick<
   typeof Lark,
   | "AppType"
   | "Client"
+  | "CTenantAccessToken"
   | "defaultHttpInstance"
   | "Domain"
   | "EventDispatcher"
@@ -46,6 +47,7 @@ type FeishuClientSdk = Pick<
 const defaultFeishuClientSdk: FeishuClientSdk = {
   AppType: Lark.AppType,
   Client: Lark.Client,
+  CTenantAccessToken: Lark.CTenantAccessToken,
   defaultHttpInstance: Lark.defaultHttpInstance,
   Domain: Lark.Domain,
   EventDispatcher: Lark.EventDispatcher,
@@ -110,6 +112,92 @@ const clientCache = new Map<
     config: { appId: string; appSecret: string; domain?: FeishuDomain; httpTimeoutMs: number };
   }
 >();
+
+type FeishuSdkCacheKey = string | Symbol;
+type FeishuSdkCacheOptions = { namespace?: string };
+
+class FeishuSdkCache implements Lark.Cache {
+  private values = new Map<
+    FeishuSdkCacheKey,
+    {
+      value: unknown;
+      expiredTime?: number;
+    }
+  >();
+
+  private getCacheKey(key: FeishuSdkCacheKey, namespace?: string): FeishuSdkCacheKey {
+    return namespace ? `${namespace}/${key.toString()}` : key;
+  }
+
+  async get(key: FeishuSdkCacheKey, options?: FeishuSdkCacheOptions): Promise<unknown> {
+    const cacheKey = this.getCacheKey(key, options?.namespace);
+    const data = this.values.get(cacheKey);
+    if (!data) {
+      return undefined;
+    }
+    if (data.expiredTime !== undefined && data.expiredTime <= Date.now()) {
+      this.values.delete(cacheKey);
+      return undefined;
+    }
+    return data.value;
+  }
+
+  async set(
+    key: FeishuSdkCacheKey,
+    value: unknown,
+    expiredTime?: number,
+    options?: FeishuSdkCacheOptions,
+  ): Promise<boolean> {
+    const cacheKey = this.getCacheKey(key, options?.namespace);
+    this.values.set(cacheKey, { value, expiredTime });
+    return true;
+  }
+
+  delete(key: FeishuSdkCacheKey, options?: FeishuSdkCacheOptions): void {
+    this.values.delete(this.getCacheKey(key, options?.namespace));
+  }
+
+  clear(): void {
+    this.values.clear();
+  }
+}
+
+const sdkTokenCaches = new Map<
+  string,
+  {
+    cache: FeishuSdkCache;
+    config: { appId: string; appSecret: string; domain?: FeishuDomain };
+  }
+>();
+
+function getSdkTokenCache(params: {
+  accountId: string;
+  appId: string;
+  appSecret: string;
+  domain?: FeishuDomain;
+}): FeishuSdkCache {
+  const cached = sdkTokenCaches.get(params.accountId);
+  if (
+    cached &&
+    cached.config.appId === params.appId &&
+    cached.config.appSecret === params.appSecret &&
+    cached.config.domain === params.domain
+  ) {
+    return cached.cache;
+  }
+
+  const cache = cached?.cache ?? new FeishuSdkCache();
+  cache.clear();
+  sdkTokenCaches.set(params.accountId, {
+    cache,
+    config: {
+      appId: params.appId,
+      appSecret: params.appSecret,
+      domain: params.domain,
+    },
+  });
+  return cache;
+}
 
 function resolveDomain(domain: FeishuDomain | undefined): Lark.Domain | string {
   if (domain === "lark") {
@@ -187,6 +275,7 @@ export function createFeishuClient(creds: FeishuClientCredentials): Lark.Client 
     appId,
     appSecret,
     appType: feishuClientSdk.AppType.SelfBuild,
+    cache: getSdkTokenCache({ accountId, appId, appSecret, domain }),
     domain: resolveDomain(domain),
     httpInstance: createTimeoutHttpInstance(defaultHttpTimeoutMs),
   });
@@ -249,8 +338,15 @@ export function createEventDispatcher(account: ResolvedFeishuAccount): Lark.Even
 export function clearClientCache(accountId?: string): void {
   if (accountId) {
     clientCache.delete(accountId);
+    const tokenCache = sdkTokenCaches.get(accountId);
+    tokenCache?.cache.delete(feishuClientSdk.CTenantAccessToken, {
+      namespace: tokenCache.config.appId,
+    });
   } else {
     clientCache.clear();
+    for (const { cache } of sdkTokenCaches.values()) {
+      cache.clear();
+    }
   }
 }
 
