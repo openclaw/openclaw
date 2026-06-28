@@ -587,7 +587,7 @@ describe("compactRawCommand middle truncation", () => {
 });
 
 describe("stripLeadingExecDisplayVerb", () => {
-  it("strips `run` when followed by a known interpreter/binary so the framework verb stays outside the backticks", () => {
+  it("strips `run` when followed by any binary so the framework verb stays outside the backticks", () => {
     expect(stripLeadingExecDisplayVerb("run python3 /path/to/script.py")).toBe(
       "python3 /path/to/script.py",
     );
@@ -595,6 +595,13 @@ describe("stripLeadingExecDisplayVerb", () => {
     expect(stripLeadingExecDisplayVerb("run git push")).toBe("git push");
     expect(stripLeadingExecDisplayVerb("run npm install")).toBe("npm install");
     expect(stripLeadingExecDisplayVerb("run openclaw configure")).toBe("openclaw configure");
+    // Generic binaries outside any allowlist are handled consistently with
+    // known binaries — the framework-injected `run` is stripped either way so
+    // the rendered warning does not embed the verb inside the backticks.
+    expect(stripLeadingExecDisplayVerb("run my-custom-tool --flag value")).toBe(
+      "my-custom-tool --flag value",
+    );
+    expect(stripLeadingExecDisplayVerb("run ./bin/local-script")).toBe("./bin/local-script");
   });
 
   it("preserves action-bearing exec summaries that `summarizeKnownExec` emits with semantic verbs", () => {
@@ -605,6 +612,8 @@ describe("stripLeadingExecDisplayVerb", () => {
     expect(stripLeadingExecDisplayVerb("start app")).toBe("start app");
     expect(stripLeadingExecDisplayVerb("run tests")).toBe("run tests");
     expect(stripLeadingExecDisplayVerb("run build")).toBe("run build");
+    expect(stripLeadingExecDisplayVerb("run lint")).toBe("run lint");
+    expect(stripLeadingExecDisplayVerb("run script")).toBe("run script");
     expect(stripLeadingExecDisplayVerb("show some-file.txt (workspace)")).toBe(
       "show some-file.txt (workspace)",
     );

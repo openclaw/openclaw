@@ -289,34 +289,24 @@ function summarizeKnownExec(words: string[]): string {
 
 // `run` is the only framework-injected verb in `summarizeKnownExec` output; every
 // other leading word (`check git status`, `install dependencies`, `start app`,
-// `show last 20 lines`, `run tests`) carries diagnostic meaning and must survive
-// stripping. `run` is only stripped when followed by a known interpreter/binary,
-// so semantically labeled `run` outputs from the npm/yarn map (`run tests`,
-// `run build`, `run script`) stay intact while the reported `run python3 /path`
-// case (issue #97319) collapses to `python3 /path`.
-const RUN_PREFIX_BINARIES: ReadonlySet<string> = new Set([
-  "node",
-  "python",
-  "python3",
-  "ruby",
-  "php",
-  "git",
-  "openclaw",
-  "sed",
-  "npm",
-  "pnpm",
-  "yarn",
-  "bun",
-]);
+// `show last 20 lines`) carries diagnostic meaning and must survive stripping.
+// `summarizeKnownExec` also emits a small set of semantic `run <noun>` labels from
+// the npm/pnpm/yarn subcommand map (`run tests`, `run build`, `run lint`,
+// `run script`); those must also survive so the failure message keeps the
+// package-manager script context. Any other `run <binary> ...` shape is
+// framework-injected by the catch-all and is stripped so the backtick-wrapped
+// text is exactly what was run (issue #97319).
+const SEMANTIC_RUN_WORDS: ReadonlySet<string> = new Set(["tests", "build", "lint", "script"]);
 
 /**
- * Strips a leading framework-injected `run` verb when it precedes a known binary
+ * Strips a leading framework-injected `run` verb when it precedes a binary
  * (e.g. `run python3 /path` -> `python3 /path`) so the action label is not
  * backtick-wrapped together with the literal command (issue #97319).
  *
  * Returns the original meta unchanged for any other shape — including action-
- * bearing summaries like `install dependencies`, `start app`, `run tests`, or
- * `show last 20 lines` — so diagnostic verbs stay visible in failure warnings.
+ * bearing summaries like `install dependencies`, `start app`, `run tests`,
+ * `run build`, or `show last 20 lines` — so diagnostic verbs and package-manager
+ * script labels stay visible in failure warnings.
  */
 export function stripLeadingExecDisplayVerb(meta: string): string {
   const match = meta.match(/^run\s+(\S.*)$/);
@@ -324,12 +314,8 @@ export function stripLeadingExecDisplayVerb(meta: string): string {
     return meta;
   }
   const rest = match[1];
-  const binary = rest.match(/^([A-Za-z0-9._/-]+)/)?.[1];
-  if (!binary) {
-    return meta;
-  }
-  const resolvedBinName = binary.split("/").pop() ?? binary;
-  if (!RUN_PREFIX_BINARIES.has(resolvedBinName)) {
+  const firstWord = rest.match(/^([A-Za-z0-9._-]+)/)?.[1];
+  if (!firstWord || SEMANTIC_RUN_WORDS.has(firstWord)) {
     return meta;
   }
   return rest;
