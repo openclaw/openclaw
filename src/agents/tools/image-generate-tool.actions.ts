@@ -50,7 +50,7 @@ function summarizeModelSpecificImageEditLimits(
   const entries = Object.entries(provider.capabilities.edit.maxInputImagesByModel ?? {})
     .filter(([, maxRefs]) => Number.isFinite(maxRefs))
     .filter(([, maxRefs]) => maxRefs !== provider.capabilities.edit.maxInputImages)
-    .sort(([left], [right]) => left.localeCompare(right));
+    .toSorted(([left], [right]) => left.localeCompare(right));
   if (entries.length === 0) {
     return undefined;
   }
