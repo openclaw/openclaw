@@ -12,7 +12,9 @@ function hasUnpairedSurrogate(value: string): boolean {
   for (let i = 0; i < value.length; i += 1) {
     const code = value.charCodeAt(i);
     if (code >= 0xd800 && code <= 0xdbff) {
-      const next = value.charCodeAt(i + 1);
+      // High surrogate must be followed by a low surrogate. charCodeAt past end
+      // returns NaN; NaN comparisons are always false, so guard bounds explicitly.
+      const next = i + 1 < value.length ? value.charCodeAt(i + 1) : -1;
       if (next < 0xdc00 || next > 0xdfff) {
         return true;
       }
@@ -247,6 +249,18 @@ describe("sanitizeReplyDirectiveId", () => {
 
     expect(result).toBe(`${prefix}😊`);
     expect(hasUnpairedSurrogate(result ?? "")).toBe(false);
+  });
+
+  test("hasUnpairedSurrogate catches a lone trailing high surrogate", () => {
+    // Proves the helper itself reports the failure mode the production fix prevents.
+    // Pre-fix helper: charCodeAt(out-of-bounds) returned NaN, NaN < 0xdc00 was false,
+    // so a trailing high surrogate was missed and the assertion above was vacuous.
+    expect(hasUnpairedSurrogate("a\ud83d")).toBe(true);
+    expect(hasUnpairedSurrogate(`${"a".repeat(255)}\ud83d`)).toBe(true);
+  });
+
+  test("hasUnpairedSurrogate accepts a properly paired emoji", () => {
+    expect(hasUnpairedSurrogate("a😊b")).toBe(false);
   });
 });
 
