@@ -1,12 +1,12 @@
 // Session delete lifecycle tests protect transcript deletion, ACP metadata,
 // active-run cleanup, hooks, thread bindings, and browser/MCP cleanup.
 import fs from "node:fs/promises";
-import path from "node:path";
 import { afterEach, expect, test } from "vitest";
 import {
   readAcpSessionMeta,
   writeAcpSessionMetaForMigration,
 } from "../acp/runtime/session-meta.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { embeddedRunMock, rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
@@ -192,14 +192,20 @@ test("sessions.delete scopes selected global deletes to the requested agent", as
     agentId: "work",
     deleteTranscript: false,
   });
-  const mainStore = JSON.parse(await fs.readFile(globalStores.mainStorePath, "utf-8")) as {
-    global?: { sessionId?: string };
-  };
-  const workStore = JSON.parse(await fs.readFile(globalStores.workStorePath, "utf-8")) as {
-    global?: { sessionId?: string };
-  };
-  expect(mainStore.global?.sessionId).toBe("sess-main-global");
-  expect(workStore.global).toBeUndefined();
+  expect(
+    loadSessionEntry({
+      agentId: "main",
+      sessionKey: "global",
+      storePath: globalStores.mainStorePath,
+    })?.sessionId,
+  ).toBe("sess-main-global");
+  expect(
+    loadSessionEntry({
+      agentId: "work",
+      sessionKey: "global",
+      storePath: globalStores.workStorePath,
+    }),
+  ).toBeUndefined();
   await resetConfiguredGlobalAgentSessionStore(globalStores);
 });
 
@@ -313,23 +319,11 @@ test("sessions.delete closes child ACP runtimes spawned from the deleted parent"
 test("sessions.delete emits session_end with deleted reason and no replacement", async () => {
   const { dir } = await createSessionStoreDir();
   await writeSingleLineSession(dir, "sess-main", "hello");
-  const transcriptPath = path.join(dir, "sess-delete.jsonl");
-  await fs.writeFile(
-    transcriptPath,
-    `${JSON.stringify({
-      type: "message",
-      id: "m-delete",
-      message: { role: "user", content: "delete me" },
-    })}\n`,
-    "utf-8",
-  );
 
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry("sess-main"),
-      "discord:group:delete": sessionStoreEntry("sess-delete", {
-        sessionFile: transcriptPath,
-      }),
+      "discord:group:delete": sessionStoreEntry("sess-delete"),
     },
   });
 
@@ -347,8 +341,10 @@ test("sessions.delete emits session_end with deleted reason and no replacement",
     "agent:main:discord:group:delete",
   );
   expect((event as { reason?: string } | undefined)?.reason).toBe("deleted");
-  expect((event as { transcriptArchived?: boolean } | undefined)?.transcriptArchived).toBe(true);
-  expect((event as { sessionFile?: string } | undefined)?.sessionFile).toContain(".jsonl.deleted.");
+  expect(
+    (event as { transcriptArchived?: boolean } | undefined)?.transcriptArchived,
+  ).toBeUndefined();
+  expect((event as { sessionFile?: string } | undefined)?.sessionFile).toBeUndefined();
   expect((event as { nextSessionId?: string } | undefined)?.nextSessionId).toBeUndefined();
   expect((context as { sessionId?: string } | undefined)?.sessionId).toBe("sess-delete");
   expect((context as { sessionKey?: string } | undefined)?.sessionKey).toBe(
@@ -444,11 +440,11 @@ test("sessions.delete returns unavailable when active run does not stop", async 
   );
   expect(browserSessionTabMocks.closeTrackedBrowserTabsForSessions).not.toHaveBeenCalled();
 
-  const store = JSON.parse(await fs.readFile(storePath, "utf-8")) as Record<
-    string,
-    { sessionId?: string }
-  >;
-  expect(store["agent:main:discord:group:dev"]?.sessionId).toBe("sess-active");
+  const storedEntry = loadSessionEntry({
+    sessionKey: "agent:main:discord:group:dev",
+    storePath,
+  });
+  expect(storedEntry?.sessionId).toBe("sess-active");
   const filesAfterDeleteAttempt = await fs.readdir(dir);
   expect(
     filesAfterDeleteAttempt.filter((fileName) => fileName.startsWith("sess-active.jsonl.deleted.")),
