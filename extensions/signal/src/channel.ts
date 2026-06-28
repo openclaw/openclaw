@@ -22,6 +22,7 @@ import {
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
 import { resolveSignalAccount, type ResolvedSignalAccount } from "./accounts.js";
 import {
   shouldSuppressLocalSignalExecApprovalPrompt,
@@ -461,6 +462,7 @@ export const signalPlugin: ChannelPlugin<ResolvedSignalAccount, SignalProbe> =
         chunker: chunkText,
         chunkerMode: "text",
         textChunkLimit: 4000,
+        sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
         shouldSuppressLocalPayloadPrompt: ({ cfg, accountId, payload, hint }) =>
           shouldSuppressLocalSignalExecApprovalPrompt({
             cfg,
