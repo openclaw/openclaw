@@ -291,7 +291,8 @@ async function captureShellSnapshot(opts: ShellSnapshotWrapOptions): Promise<str
 
 function buildCaptureShellArgs(shellName: string, shellArgs: string[]): string[] {
   if (shellName === "bash") {
-    return ["-i", "-c"];
+    // Avoid host/global bashrc leakage; buildStartupSourceScript sources the trusted user rc.
+    return ["--norc", "-i", "-c"];
   }
   if (shellName === "zsh") {
     return ["-f", "-i", "-c"];
@@ -326,7 +327,7 @@ function buildStartupSourceScript(shellName: string): string {
     return `if [ -r "\${ZDOTDIR:-$HOME}/.zshrc" ]; then . "\${ZDOTDIR:-$HOME}/.zshrc"; fi`;
   }
   if (shellName === "bash") {
-    return ":";
+    return `if [ -r "$HOME/.bashrc" ]; then . "$HOME/.bashrc"; fi`;
   }
   return ":";
 }

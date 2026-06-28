@@ -10,6 +10,15 @@ import {
 } from "./install-npm-fixtures.js";
 
 const SCRIPT_PATH = "scripts/install.sh";
+const HIDE_ARCH_PACKAGE_MANAGER = `
+command() {
+  if [[ "\${1:-}" == "-v" && "\${2:-}" == "pacman" ]]; then
+    return 1
+  fi
+  builtin command "$@"
+}
+is_arch_linux() { return 1; }
+`;
 
 function runInstallShell(script: string, env: NodeJS.ProcessEnv = {}) {
   const home = mkdtempSync(join(tmpdir(), "openclaw-install-home-"));
@@ -117,6 +126,7 @@ describe("install.sh", () => {
     const result = runInstallShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
+      ${HIDE_ARCH_PACKAGE_MANAGER}
       OS=linux
       require_sudo() { :; }
       install_build_tools_linux() { return 0; }
@@ -142,6 +152,7 @@ describe("install.sh", () => {
     const result = runInstallShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
+      ${HIDE_ARCH_PACKAGE_MANAGER}
       OS=linux
       NODE_FAKE_VERSION=v20.15.1
       require_sudo() { :; }
@@ -184,6 +195,7 @@ describe("install.sh", () => {
     const result = runInstallShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
+      ${HIDE_ARCH_PACKAGE_MANAGER}
       OS=linux
       NODE_FAKE_VERSION=v20.15.1
       require_sudo() { :; }
@@ -228,6 +240,7 @@ describe("install.sh", () => {
     const result = runInstallShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
+      ${HIDE_ARCH_PACKAGE_MANAGER}
       OS=linux
       require_sudo() { :; }
       install_build_tools_linux() { return 0; }
@@ -267,6 +280,7 @@ describe("install.sh", () => {
     const result = runInstallShell(`
       set -euo pipefail
       source "${SCRIPT_PATH}"
+      ${HIDE_ARCH_PACKAGE_MANAGER}
       OS=linux
       require_sudo() { :; }
       install_build_tools_linux() { return 0; }
@@ -1358,10 +1372,7 @@ describe("install.sh", () => {
     mkdirSync(bin, { recursive: true });
     mkdirSync(outer, { recursive: true });
     mkdirSync(repo, { recursive: true });
-    writeFileSync(
-      join(outer, "package.json"),
-      '{\n  "packageManager": "yarn@4.5.0"\n}\n',
-    );
+    writeFileSync(join(outer, "package.json"), '{\n  "packageManager": "yarn@4.5.0"\n}\n');
     writeFileSync(
       join(repo, "package.json"),
       '{\n  "packageManager": "pnpm@11.2.2+sha512.test"\n}\n',
