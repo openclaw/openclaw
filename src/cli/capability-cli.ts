@@ -6,6 +6,7 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { detectMime, extensionForMime, normalizeMimeType } from "@openclaw/media-core/mime";
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -65,6 +66,7 @@ import {
   describeVideoFile,
   transcribeAudioFile,
 } from "../media-understanding/runtime.js";
+import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
 import { convertHeicToJpeg, getImageMetadata } from "../media/media-services.js";
 import { saveMediaBuffer } from "../media/store.js";
 import { createEmbeddingProvider } from "../plugin-sdk/memory-core-bundled-runtime.js";
@@ -1339,7 +1341,24 @@ async function runVideoGenerate(params: {
           const stat = await fs.stat(filePath);
           return { path: filePath, mimeType: video.mimeType, size: stat.size };
         }
-        videoBuffer = Buffer.from(await response.arrayBuffer());
+        // Provider-supplied video URLs are untrusted external sources, and the
+        // in-memory fallback (no --output) must not buffer an unbounded body:
+        // generated videos routinely exceed tens of MiB and a hostile/buggy
+        // provider could exhaust process memory. Cap the read (fail-closed:
+        // overflow cancels the stream and throws rather than silently
+        // truncating) using the same shared bounded reader the rest of the
+        // media stack relies on. The --output branch above already streams
+        // straight to disk, so only this buffered path needs the guard. The
+        // overflow error reports only the provider label and byte cap (never
+        // the raw URL, which may be signed/tokenized) to match the sibling
+        // generated-media downloaders.
+        const videoMaxBytes = resolveGeneratedMediaMaxBytes(cfg, "video");
+        videoBuffer = await readResponseWithLimit(response, videoMaxBytes, {
+          onOverflow: ({ maxBytes }) =>
+            new Error(
+              `${result.provider} generated video download exceeds ${maxBytes} bytes; pass --output to stream large videos to disk`,
+            ),
+        });
       }
 
       return {
