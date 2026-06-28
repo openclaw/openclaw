@@ -5518,11 +5518,15 @@ function resolveLegacyAcpMetadataSessionStoreTargets(
   env: NodeJS.ProcessEnv,
 ): Array<{ agentId: string; storePath: string }> {
   const stateDir = resolveStateDir(env);
-  const agentsDir = path.join(stateDir, "agents");
+  const agentsDirs = new Set<string>([path.join(stateDir, "agents")]);
   const targets = new Map<string, { agentId: string; storePath: string }>();
   const addTarget = (agentId: string, storePath: string) => {
     if (!isManagedLegacySessionStorePathSafe(storePath)) {
       return;
+    }
+    const agentsDir = resolveAgentsDirFromSessionStorePath(storePath);
+    if (agentsDir) {
+      agentsDirs.add(agentsDir);
     }
     if (!targets.has(storePath)) {
       targets.set(storePath, { agentId, storePath });
@@ -5536,7 +5540,10 @@ function resolveLegacyAcpMetadataSessionStoreTargets(
     addTarget(target.agentId, target.storePath);
   }
 
-  if (existsDir(agentsDir)) {
+  for (const agentsDir of agentsDirs) {
+    if (!existsDir(agentsDir)) {
+      continue;
+    }
     for (const entry of safeReadDir(agentsDir)) {
       if (!entry.isDirectory()) {
         continue;
