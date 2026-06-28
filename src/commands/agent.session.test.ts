@@ -6,9 +6,10 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import { updateSessionStoreAfterAgentRun } from "../agents/command/session-store.js";
 import { resolveSession } from "../agents/command/session.js";
-import { loadSessionStore } from "../config/sessions/store-load.js";
+import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store.js";
 import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildOutboundSessionContext } from "../infra/outbound/session-context.js";
 
@@ -37,12 +38,15 @@ function mockConfig(
   } as OpenClawConfig;
 }
 
-function writeSessionStoreSeed(
+async function writeSessionStoreSeed(
   storePath: string,
-  sessions: Record<string, Record<string, unknown>>,
-) {
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  fs.writeFileSync(storePath, JSON.stringify(sessions));
+  sessions: Record<string, SessionEntry>,
+): Promise<void> {
+  await Promise.all(
+    Object.entries(sessions).map(([sessionKey, entry]) =>
+      replaceSessionEntry({ sessionKey, storePath }, entry),
+    ),
+  );
 }
 
 async function withCrossAgentResumeFixture(
@@ -53,7 +57,7 @@ async function withCrossAgentResumeFixture(
     const execStore = path.join(home, "sessions", "exec", "sessions.json");
     const sessionId = "session-exec-hook";
     const sessionKey = "agent:exec:hook:gmail:thread-1";
-    writeSessionStoreSeed(execStore, {
+    await writeSessionStoreSeed(execStore, {
       [sessionKey]: {
         sessionId,
         updatedAt: Date.now(),
@@ -99,13 +103,13 @@ describe("agent session resolution", () => {
       const storePattern = path.join(home, "sessions", "{agentId}", "sessions.json");
       const otherStore = path.join(home, "sessions", "other", "sessions.json");
       const retiredStore = path.join(home, "sessions", "retired", "sessions.json");
-      writeSessionStoreSeed(otherStore, {
+      await writeSessionStoreSeed(otherStore, {
         "agent:other:main": {
           sessionId: "run-dup",
           updatedAt: Date.now() + 1_000,
         },
       });
-      writeSessionStoreSeed(retiredStore, {
+      await writeSessionStoreSeed(retiredStore, {
         "agent:retired:acp:run-dup": {
           sessionId: "run-dup",
           updatedAt: Date.now(),
@@ -126,7 +130,7 @@ describe("agent session resolution", () => {
   it("uses origin.provider for channel-specific session reset overrides", async () => {
     await withTempHome(async (home) => {
       const store = path.join(home, "sessions.json");
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         main: {
           sessionId: "origin-provider-reset",
           updatedAt: Date.now() - 30 * 60_000,
@@ -179,7 +183,7 @@ describe("agent session resolution", () => {
           (registryUpdatedAt + 5_000) / 1000,
           (registryUpdatedAt + 5_000) / 1000,
         );
-        writeSessionStoreSeed(store, {
+        await writeSessionStoreSeed(store, {
           [scenario.sessionKey]: {
             sessionId,
             sessionFile,
@@ -248,9 +252,10 @@ describe("agent session resolution", () => {
             },
           } as never,
         });
-        const persisted = loadSessionStore(resolution.storePath, { skipCache: true })[
-          scenario.sessionKey
-        ];
+        const persisted = loadSessionEntry({
+          sessionKey: scenario.sessionKey,
+          storePath: resolution.storePath,
+        });
         expect(persisted?.sessionId).toBe(resolution.sessionId);
         expect(persisted?.sessionFile).not.toBe(sessionFile);
         expect(persisted?.status).toBeUndefined();
@@ -278,7 +283,7 @@ describe("agent session resolution", () => {
         (registryUpdatedAt + 5_000) / 1000,
         (registryUpdatedAt + 5_000) / 1000,
       );
-      writeSessionStoreSeed(store, {
+      await writeSessionStoreSeed(store, {
         "agent:main:main": {
           sessionId,
           sessionFile,
@@ -313,17 +318,16 @@ describe("agent session resolution", () => {
         storePath: resolution.storePath,
         agentId: "main",
       });
-      expect(fs.realpathSync.native(resolvedTranscript.sessionFile)).toBe(
-        fs.realpathSync.native(sessionFile),
+      expect(resolvedTranscript.sessionFile).toBe(
+        `sqlite:main:${sessionId}:${resolution.storePath}`,
       );
 
-      const persisted = loadSessionStore(resolution.storePath, { skipCache: true })[
-        resolution.sessionKey
-      ];
+      const persisted = loadSessionEntry({
+        sessionKey: resolution.sessionKey,
+        storePath: resolution.storePath,
+      });
       expect(persisted?.sessionId).toBe(sessionId);
-      expect(fs.realpathSync.native(persisted?.sessionFile ?? "")).toBe(
-        fs.realpathSync.native(sessionFile),
-      );
+      expect(persisted?.sessionFile).toBe(resolvedTranscript.sessionFile);
       expect(persisted?.status).toBe("done");
       expect(persisted?.startedAt).toBe(registryUpdatedAt - 1_000);
       expect(persisted?.endedAt).toBe(registryUpdatedAt - 100);
