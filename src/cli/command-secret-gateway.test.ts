@@ -623,7 +623,6 @@ describe("resolveCommandSecretRefsViaGateway", () => {
 
   it("keeps local exec SecretRef fallback enabled by default", async () => {
     const { config, markerPath } = await createExecProviderConfig("talk/providers/api-key");
-    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
 
     const result = await resolveCommandSecretRefsViaGateway({
       config,
@@ -632,15 +631,23 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       mode: "read_only_status",
     });
 
+    // The gateway RPC cannot resolve exec-backed targets from the active
+    // snapshot, so we skip the round-trip and resolve locally.
+    expect(callGateway).not.toHaveBeenCalled();
     expect(await markerExists(markerPath)).toBe(true);
     expect(readTalkProviderApiKey(result.resolvedConfig)).toBe("exec-local-key");
     expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("resolved_local");
-    expectGatewayUnavailableLocalFallbackDiagnostics(result);
+    expect(
+      result.diagnostics.some((entry) =>
+        entry.includes(
+          "memory status: skipped gateway secrets.resolve because command targets use exec SecretRefs at talk.providers.acme-speech.apiKey",
+        ),
+      ),
+    ).toBe(true);
   });
 
   it("skips local exec SecretRef fallback when the caller disallows exec providers", async () => {
     const { config, markerPath } = await createExecProviderConfig("talk/providers/api-key");
-    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
 
     const result = await resolveCommandSecretRefsViaGateway({
       config,
@@ -650,6 +657,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       allowLocalExecSecretRefs: false,
     });
 
+    expect(callGateway).not.toHaveBeenCalled();
     expect(await markerExists(markerPath)).toBe(false);
     expect(readTalkProviderApiKey(result.resolvedConfig)).toBeUndefined();
     expect(result.targetStatesByPath[TALK_TEST_PROVIDER_API_KEY_PATH]).toBe("unresolved");
@@ -663,16 +671,10 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         ),
       ),
     ).toBe(true);
-    expect(
-      result.diagnostics.some((entry) =>
-        entry.includes("attempted local command-secret resolution"),
-      ),
-    ).toBe(true);
   });
 
   it("can preserve unresolved SecretRefs when local exec fallback is disabled", async () => {
     const { config, markerPath } = await createExecProviderConfig("talk/providers/api-key");
-    callGateway.mockRejectedValueOnce(new Error("gateway closed"));
 
     const result = await resolveCommandSecretRefsViaGateway({
       config,
@@ -683,6 +685,7 @@ describe("resolveCommandSecretRefsViaGateway", () => {
       scrubUnresolvedSecretRefs: false,
     });
 
+    expect(callGateway).not.toHaveBeenCalled();
     expect(await markerExists(markerPath)).toBe(false);
     expect(readTalkProviderApiKey(result.resolvedConfig)).toEqual({
       source: "exec",
@@ -746,6 +749,67 @@ describe("resolveCommandSecretRefsViaGateway", () => {
         ).toBe(true);
       },
     );
+  });
+
+  it("skips gateway resolution when agent-runtime targets use exec SecretRefs (#96653)", async () => {
+    const restoreDeps = setSingleSecretTargetDeps({
+      path: "models.providers.anthropic.apiKey",
+      pathSegments: ["models", "providers", "anthropic", "apiKey"],
+    });
+    try {
+      await withEnvAsync(
+        {
+          ANTHROPIC_API_KEY_LOCAL: "exec-local-key",
+        },
+        async () => {
+          const result = await resolveCommandSecretRefsViaGateway({
+            config: {
+              models: {
+                providers: {
+                  anthropic: {
+                    apiKey: { source: "exec", provider: "vault", id: "anthropic/api-key" },
+                  },
+                },
+              },
+              secrets: {
+                providers: {
+                  vault: {
+                    source: "exec",
+                    command: process.execPath,
+                    args: [
+                      "-e",
+                      "process.stdout.write(JSON.stringify({protocolVersion:1,values:{'anthropic/api-key':'exec-local-key'}}))",
+                    ],
+                    allowInsecurePath: true,
+                    allowSymlinkCommand: true,
+                    jsonOnly: true,
+                  },
+                },
+              },
+            } as unknown as OpenClawConfig,
+            commandName: "reply",
+            targetIds: new Set(["models.providers.*.apiKey"]),
+          });
+
+          // The gateway RPC would only return UNAVAILABLE for exec-backed
+          // targets and force a local fallback; skip the noisy round-trip.
+          expect(callGateway).not.toHaveBeenCalled();
+          expect(result.resolvedConfig.models?.providers?.anthropic?.apiKey).toBe("exec-local-key");
+          expect(result.targetStatesByPath["models.providers.anthropic.apiKey"]).toBe(
+            "resolved_local",
+          );
+          expect(
+            result.diagnostics.some((entry) =>
+              entry.includes(
+                "reply: skipped gateway secrets.resolve because command targets use exec SecretRefs at models.providers.anthropic.apiKey",
+              ),
+            ),
+          ).toBe(true);
+        },
+      );
+    } finally {
+      restoreDeps();
+    }
   });
 
   it("falls back to local resolution for web search SecretRefs when gateway is unavailable", async () => {
