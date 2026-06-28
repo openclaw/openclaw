@@ -571,6 +571,19 @@ function rangeRequiresTimestampedTranscriptEntries(params: { startMs?: number })
   return params.startMs !== undefined && Number.isFinite(params.startMs) && params.startMs > 0;
 }
 
+function shouldDeriveCachedSessionSummaryForRange(params: {
+  summary: SessionCostSummary;
+  entry: UsageCostCacheFileEntry | undefined;
+  startMs: number;
+  endMs: number;
+}): boolean {
+  return (
+    !isSessionSummaryContainedInRange(params.summary, params.startMs, params.endMs) ||
+    (rangeRequiresTimestampedTranscriptEntries(params) &&
+      hasUntimestampedCachedTranscriptEntry(params.entry))
+  );
+}
+
 function buildSessionCostSummaryFromCacheEntry(params: {
   entry: UsageCostCacheFileEntry;
   sessionId?: string;
@@ -1763,20 +1776,26 @@ export async function loadSessionCostSummaryFromCache(params: {
       endMs: params.endMs,
     });
   }
+  const rangeStartMs = params.startMs;
+  const rangeEndMs = params.endMs;
   if (
     summary &&
-    params.startMs !== undefined &&
-    params.endMs !== undefined &&
-    (!isSessionSummaryContainedInRange(summary, params.startMs, params.endMs) ||
-      hasUntimestampedCachedTranscriptEntry(entry))
+    rangeStartMs !== undefined &&
+    rangeEndMs !== undefined &&
+    shouldDeriveCachedSessionSummaryForRange({
+      summary,
+      entry,
+      startMs: rangeStartMs,
+      endMs: rangeEndMs,
+    })
   ) {
     summary = entry
       ? buildSessionCostSummaryFromCacheEntry({
           entry,
           sessionId: params.sessionId,
           sessionFile: params.sessionFile,
-          startMs: params.startMs,
-          endMs: params.endMs,
+          startMs: rangeStartMs,
+          endMs: rangeEndMs,
         })
       : params.refreshMode === "sync-when-empty"
         ? await loadSessionCostSummary({
@@ -1785,8 +1804,8 @@ export async function loadSessionCostSummaryFromCache(params: {
             sessionFile: params.sessionFile,
             config: params.config,
             agentId: params.agentId,
-            startMs: params.startMs,
-            endMs: params.endMs,
+            startMs: rangeStartMs,
+            endMs: rangeEndMs,
           })
         : null;
   }
@@ -1833,6 +1852,8 @@ export async function loadSessionCostSummariesFromCache(params: {
   const staleFiles = new Set<string>();
   let cachedFiles = 0;
   const summaries = params.sessions.map((session, index) => {
+    const rangeStartMs = params.startMs;
+    const rangeEndMs = params.endMs;
     const stat = stats[index];
     const file = stat
       ? { filePath: session.sessionFile, size: stat.size, mtimeMs: stat.mtimeMs }
@@ -1854,17 +1875,22 @@ export async function loadSessionCostSummariesFromCache(params: {
     const summary = entry?.sessionSummary ?? null;
     if (
       summary &&
-      params.startMs !== undefined &&
-      params.endMs !== undefined &&
-      !isSessionSummaryContainedInRange(summary, params.startMs, params.endMs)
+      rangeStartMs !== undefined &&
+      rangeEndMs !== undefined &&
+      shouldDeriveCachedSessionSummaryForRange({
+        summary,
+        entry,
+        startMs: rangeStartMs,
+        endMs: rangeEndMs,
+      })
     ) {
       return entry
         ? buildSessionCostSummaryFromCacheEntry({
             entry,
             sessionId: session.sessionId,
             sessionFile: session.sessionFile,
-            startMs: params.startMs,
-            endMs: params.endMs,
+            startMs: rangeStartMs,
+            endMs: rangeEndMs,
           })
         : null;
     }

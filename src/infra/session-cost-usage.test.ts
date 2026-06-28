@@ -386,6 +386,78 @@ describe("session cost usage", () => {
     });
   });
 
+  it("excludes untimestamped entries from batched ranged session summaries", async () => {
+    const root = await makeSessionCostRoot("cost-cache-batch-range-untimestamped");
+    const sessionsDir = path.join(root, "agents", "main", "sessions");
+    await fs.mkdir(sessionsDir, { recursive: true });
+    const sessionFile = path.join(sessionsDir, "sess-batch-range.jsonl");
+    const assistantEntry = (
+      timestamp: string | undefined,
+      totalTokens: number,
+      model = "gpt-5.5",
+    ) => ({
+      type: "message",
+      timestamp,
+      message: {
+        role: "assistant",
+        provider: "openai",
+        model,
+        usage: {
+          input: totalTokens,
+          output: 0,
+          totalTokens,
+          cost: { total: totalTokens / 1000 },
+        },
+      },
+    });
+
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify(assistantEntry(undefined, 1_000, "glm-5")),
+        JSON.stringify(assistantEntry("2026-02-04T12:00:00.000Z", 10)),
+        JSON.stringify(assistantEntry("2026-02-05T12:00:00.000Z", 20)),
+      ].join("\n"),
+      "utf-8",
+    );
+
+    await withStateDir(root, async () => {
+      await refreshCostUsageCache({ sessionFiles: [sessionFile] });
+      const createReadStreamSpy = vi.spyOn(nodeFs, "createReadStream");
+      try {
+        const ranged = await loadSessionCostSummariesFromCache({
+          sessions: [{ sessionId: "sess-batch-range", sessionFile }],
+          agentId: "main",
+          startMs: Date.UTC(2026, 1, 5),
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        });
+
+        expect(ranged.cacheStatus.status).toBe("fresh");
+        expect(ranged.summaries[0]?.totalTokens).toBe(20);
+        expect(ranged.summaries[0]?.dailyBreakdown).toEqual([
+          { date: "2026-02-05", tokens: 20, cost: 0.02 },
+        ]);
+        expect(ranged.summaries[0]?.modelUsage?.map((entry) => entry.model)).toEqual(["gpt-5.5"]);
+
+        const allRange = await loadSessionCostSummariesFromCache({
+          sessions: [{ sessionId: "sess-batch-range", sessionFile }],
+          agentId: "main",
+          startMs: 0,
+          endMs: Date.UTC(2026, 1, 5) + 24 * 60 * 60 * 1000 - 1,
+        });
+
+        expect(allRange.cacheStatus.status).toBe("fresh");
+        expect(allRange.summaries[0]?.totalTokens).toBe(1_030);
+        expect(allRange.summaries[0]?.modelUsage?.some((entry) => entry.model === "glm-5")).toBe(
+          true,
+        );
+        expect(createReadStreamSpy).not.toHaveBeenCalled();
+      } finally {
+        createReadStreamSpy.mockRestore();
+      }
+    });
+  });
+
   it("ignores compaction checkpoint transcript snapshots in daily totals and discovery", async () => {
     const root = await makeSessionCostRoot("cost-checkpoint");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
