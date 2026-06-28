@@ -43,6 +43,21 @@ describe("resolveGatewayScopedTools", () => {
     expect(result.tools.some((tool) => tool.name === "message")).toBe(false);
   });
 
+  it("force-allows the message tool for direct webchat turns so targetless send projects to the same chat (#96840)", () => {
+    const result = resolveGatewayScopedTools({
+      cfg: { tools: { profile: "minimal" } } as OpenClawConfig,
+      sessionKey: "agent:main:webchat:forge-main",
+      messageProvider: "webchat",
+      inboundEventKind: "user_request",
+      surface: "loopback",
+    });
+
+    const messageTool = result.tools.find((tool) => tool.name === "message");
+    expect(messageTool?.description).toContain(
+      "visible replies to the current source conversation",
+    );
+  });
+
   it("force-allows the message tool for routed webchat room-event turns", () => {
     const result = resolveGatewayScopedTools({
       cfg: { tools: { profile: "minimal" } } as OpenClawConfig,

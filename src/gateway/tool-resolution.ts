@@ -81,9 +81,18 @@ export function resolveGatewayScopedTools(params: {
   const providerProfilePolicy = resolveToolProfilePolicy(providerProfile);
   const gatewayRequestedTools = params.gatewayRequestedTools ?? [];
   const messageProvider = params.messageProvider?.trim().toLowerCase();
+  // Activate source-reply delivery for:
+  //   - non-webchat room-event turns (existing), or
+  //   - direct WebChat turns (`message(action="send")` without a target should
+  //     project into the same chat rather than fail). WebChat room-event turns
+  //     keep automatic delivery because the WebChat harness already projects
+  //     those — see the "keeps webchat room-event turns on automatic source
+  //     delivery" regression test.
+  const isWebchatSession = messageProvider === "webchat";
+  const isRoomEvent = params.inboundEventKind === "room_event";
   const sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined =
     params.sourceReplyDeliveryMode ??
-    (params.inboundEventKind === "room_event" && messageProvider !== "webchat"
+    ((isRoomEvent && !isWebchatSession) || (isWebchatSession && !isRoomEvent)
       ? "message_tool_only"
       : undefined);
   const runtimeAlsoAllow = sourceReplyDeliveryMode === "message_tool_only" ? ["message"] : [];
