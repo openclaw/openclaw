@@ -786,6 +786,24 @@ describe("sessions tools", () => {
     expect(historyCalls[0]?.params).toMatchObject({ sessionKey: "main", includeFamily: true });
   });
 
+  it("sessions_history rejects includeFamily with offset", async () => {
+    const tool = createOpenClawTools().find((candidate) => candidate.name === "sessions_history");
+    if (!tool) {
+      throw new Error("missing sessions_history tool");
+    }
+
+    await expect(
+      tool.execute("call-family-offset", {
+        sessionKey: "main",
+        includeFamily: true,
+        offset: 0,
+      }),
+    ).rejects.toThrow("includeFamily cannot be combined with offset");
+    expect(callGatewayMock).not.toHaveBeenCalledWith(
+      expect.objectContaining({ method: "chat.history" }),
+    );
+  });
+
   it("sessions_history caps oversized payloads and strips heavy fields", async () => {
     const oversized = Array.from({ length: 80 }, (_, idx) => ({
       role: "assistant",

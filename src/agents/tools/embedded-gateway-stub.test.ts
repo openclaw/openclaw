@@ -772,4 +772,18 @@ describe("embedded gateway stub", () => {
     ).rejects.toThrow("offset must be a non-negative integer");
     expect(runtime.readSessionMessagesAsync).not.toHaveBeenCalled();
   });
+
+  it("rejects includeFamily with offset before reading session files", async () => {
+    const callGateway = createEmbeddedCallGateway();
+
+    await expect(
+      callGateway({
+        method: "chat.history",
+        params: { sessionKey: "agent:main:main", includeFamily: true, offset: 0 },
+      }),
+    ).rejects.toThrow("includeFamily cannot be combined with offset");
+    expect(runtime.readSessionMessagesAsync).not.toHaveBeenCalled();
+    expect(runtime.readRecentSessionMessagesWithStatsAsync).not.toHaveBeenCalled();
+    expect(runtime.readSessionMessagesPageWithStatsAsync).not.toHaveBeenCalled();
+  });
 });

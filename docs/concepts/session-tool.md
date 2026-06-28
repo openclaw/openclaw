@@ -63,7 +63,9 @@ tool results. Pass `includeTools: true` to see tool calls/results. Pass
 reset-ancestor transcripts linked through the session family before the active
 session transcript. The underlying Gateway `chat.history` method uses the same
 `includeFamily` flag; omitted or `false` keeps the active-history default. Use
-`limit` for the newest bounded tail. Pass `offset: 0` when you need
+`limit` for the newest bounded tail. `includeFamily` cannot be combined with
+`offset`; family history is returned only through the newest bounded tail view.
+Pass `offset: 0` when you need
 pagination metadata, then pass returned `nextOffset` values to page backward
 through older OpenClaw transcript windows without reading raw transcript files.
 Explicit offset pages do not merge external CLI fallback imports; use the
