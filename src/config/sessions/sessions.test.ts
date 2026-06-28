@@ -349,6 +349,42 @@ describe("session lifecycle timestamps", () => {
       await fsPromises.rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("does not recover session start time from loose or Date-invalid JSONL headers", async () => {
+    const headerTimestamps = ["01/02/03", "2026-02-29T00:00:00.000Z"];
+
+    for (const headerTimestamp of headerTimestamps) {
+      const dir = await fsPromises.mkdtemp("/tmp/openclaw-lifecycle-test-");
+      try {
+        const storePath = path.join(dir, "sessions.json");
+        const sessionFile = path.join(dir, "legacy-session.jsonl");
+        await fsPromises.writeFile(
+          sessionFile,
+          `${JSON.stringify({
+            type: "session",
+            version: 3,
+            id: "legacy-session",
+            timestamp: headerTimestamp,
+            cwd: dir,
+          })}\n`,
+          "utf8",
+        );
+
+        const timestamps = resolveSessionLifecycleTimestamps({
+          storePath,
+          entry: {
+            sessionId: "legacy-session",
+            sessionFile,
+            updatedAt: Date.parse("2026-04-25T08:00:00.000Z"),
+          },
+        });
+
+        expect(timestamps.sessionStartedAt).toBeUndefined();
+      } finally {
+        await fsPromises.rm(dir, { recursive: true, force: true });
+      }
+    }
+  });
 });
 
 describe("session store writer queue", () => {

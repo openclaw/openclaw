@@ -189,6 +189,57 @@ describe("SessionManager.open", () => {
     expect(findMostRecentSession(dir)).toBe(validSessionFile);
   });
 
+  it("ignores loose and Date-invalid strings when sorting listed sessions", async () => {
+    const dir = await makeTempDir();
+    const goodSessionFile = path.join(dir, "good-session.jsonl");
+    const looseSessionFile = path.join(dir, "loose-session.jsonl");
+    await fs.writeFile(
+      goodSessionFile,
+      [
+        buildSessionHeader(dir, "good-session"),
+        {
+          type: "message",
+          id: "good-message",
+          parentId: null,
+          timestamp: "2026-06-04T00:00:01.000Z",
+          message: { role: "user", content: "good" },
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+    await fs.writeFile(
+      looseSessionFile,
+      [
+        buildSessionHeader(dir, "loose-session"),
+        {
+          type: "message",
+          id: "loose-message",
+          parentId: null,
+          timestamp: "9999-12-31",
+          message: { role: "user", content: "loose" },
+        },
+      ]
+        .map((entry) => JSON.stringify(entry))
+        .join("\n") + "\n",
+      "utf8",
+    );
+    await fs.utimes(
+      goodSessionFile,
+      new Date("2026-06-04T00:00:00.000Z"),
+      new Date("2026-06-04T00:00:00.000Z"),
+    );
+    await fs.utimes(
+      looseSessionFile,
+      new Date("2000-01-01T00:00:00.000Z"),
+      new Date("2000-01-01T00:00:00.000Z"),
+    );
+
+    const sessions = await SessionManager.list(dir, dir);
+    expect(sessions.map((session) => session.id)).toEqual(["good-session", "loose-session"]);
+  });
+
   it("still migrates old transcript versions while bypassing the warm cache", async () => {
     const dir = await makeTempDir();
     const sessionFile = path.join(dir, "session.jsonl");

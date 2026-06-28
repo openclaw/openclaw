@@ -57,6 +57,40 @@ describe("JsonlSessionStorage timestamps", () => {
     );
   });
 
+  it("rejects loose and Date-invalid timestamp strings", async () => {
+    const looseHeaderFs = createReadOnlyFs(
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "session-1",
+        timestamp: "01/02/03",
+        cwd: "/repo",
+      })}\n`,
+    );
+    await expect(loadJsonlSessionMetadata(looseHeaderFs, "/sessions/loose.jsonl")).rejects.toThrow(
+      "session header has invalid timestamp",
+    );
+
+    const outOfRangeEntryFs = createReadOnlyFs(
+      `${JSON.stringify({
+        type: "session",
+        version: 3,
+        id: "session-1",
+        timestamp: "2026-01-01T00:00:00.000Z",
+        cwd: "/repo",
+      })}\n${JSON.stringify({
+        type: "custom",
+        id: "entry-1",
+        parentId: null,
+        timestamp: "+275760-09-13T00:00:00.001Z",
+        customType: "note",
+      })}\n`,
+    );
+    await expect(
+      JsonlSessionStorage.open(outOfRangeEntryFs, "/sessions/range.jsonl"),
+    ).rejects.toThrow("line 2 has invalid timestamp");
+  });
+
   it("uses a leaf control's opaque append parent for the next entry", async () => {
     let content = [
       {
