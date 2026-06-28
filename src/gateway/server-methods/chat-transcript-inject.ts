@@ -1,7 +1,11 @@
 // Chat transcript injection appends gateway-authored assistant rows while
 // preserving agent-session parent links and transcript update notifications.
 import type { SessionManager } from "../../agents/sessions/session-manager.js";
-import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEvents,
+  persistSessionTranscriptTurn,
+  type TranscriptEvent,
+} from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 
@@ -51,6 +55,53 @@ function resolveInjectedAssistantContent(params: {
     return [{ type: "text", text: labelPrefix.trim() }, ...params.content];
   }
   return [{ type: "text", text: `${labelPrefix}${params.message}` }];
+}
+
+function transcriptEventRecord(event: TranscriptEvent): Record<string, unknown> | undefined {
+  return event && typeof event === "object" && !Array.isArray(event)
+    ? (event as Record<string, unknown>)
+    : undefined;
+}
+
+function transcriptEventMessage(event: TranscriptEvent): Record<string, unknown> | undefined {
+  const message = transcriptEventRecord(event)?.message;
+  return message && typeof message === "object" && !Array.isArray(message)
+    ? (message as Record<string, unknown>)
+    : undefined;
+}
+
+function transcriptEventId(event: TranscriptEvent): string | undefined {
+  const id = transcriptEventRecord(event)?.id;
+  return typeof id === "string" && id.trim().length > 0 ? id : undefined;
+}
+
+type InjectedAssistantIdempotencyTarget = {
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+  storePath?: string;
+};
+
+async function findInjectedAssistantMessageByIdempotencyKey(params: {
+  idempotencyKey: string;
+  target: InjectedAssistantIdempotencyTarget;
+}): Promise<{ messageId: string; message: Record<string, unknown> } | undefined> {
+  if (!params.target.sessionId || !params.target.sessionKey) {
+    return undefined;
+  }
+  const events = await loadTranscriptEvents({
+    ...(params.target.agentId ? { agentId: params.target.agentId } : {}),
+    sessionId: params.target.sessionId,
+    sessionKey: params.target.sessionKey,
+    ...(params.target.storePath ? { storePath: params.target.storePath } : {}),
+  });
+  const event = events.toReversed().find((candidate) => {
+    const message = transcriptEventMessage(candidate);
+    return message?.role === "assistant" && message.idempotencyKey === params.idempotencyKey;
+  });
+  const message = event ? transcriptEventMessage(event) : undefined;
+  const messageId = event ? transcriptEventId(event) : undefined;
+  return message && messageId ? { messageId, message } : undefined;
 }
 
 /** Append a gateway-authored assistant message while preserving transcript parent links. */
@@ -123,6 +174,18 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
     if (!params.transcriptPath && (!params.storePath || !params.sessionId || !params.sessionKey)) {
       return { ok: false, error: "transcript identity not resolved" };
     }
+    const assistantScopedIdempotency =
+      params.idempotencyKey && params.storePath && params.sessionId && params.sessionKey
+        ? {
+            idempotencyKey: params.idempotencyKey,
+            target: {
+              ...(params.agentId ? { agentId: params.agentId } : {}),
+              sessionId: params.sessionId,
+              sessionKey: params.sessionKey,
+              storePath: params.storePath,
+            },
+          }
+        : undefined;
     const turn = await persistSessionTranscriptTurn(
       {
         sessionKey: params.sessionKey ?? "",
@@ -138,15 +201,30 @@ export async function appendInjectedAssistantMessageToTranscript(params: {
         messages: [
           {
             message: messageBody,
-            idempotencyLookup: "scan",
+            idempotencyLookup: assistantScopedIdempotency ? "caller-checked" : "scan",
             now,
             useRawWhenLinear: true,
+            shouldAppend: assistantScopedIdempotency
+              ? async (target) =>
+                  !(await findInjectedAssistantMessageByIdempotencyKey({
+                    idempotencyKey: assistantScopedIdempotency.idempotencyKey,
+                    target,
+                  }))
+              : undefined,
           },
         ],
       },
     );
     const appended = turn.messages[0];
     if (!appended) {
+      if (assistantScopedIdempotency) {
+        const existing = await findInjectedAssistantMessageByIdempotencyKey(
+          assistantScopedIdempotency,
+        );
+        if (existing) {
+          return { ok: true, messageId: existing.messageId, message: existing.message };
+        }
+      }
       return { ok: false, error: "gateway-injected assistant message was not appended" };
     }
     return {

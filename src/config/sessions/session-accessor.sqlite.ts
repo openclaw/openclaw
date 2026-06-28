@@ -3245,6 +3245,18 @@ function appendTranscriptEventInTransaction(
   if (!identity) {
     return true;
   }
+  // Caller-checked appends may intentionally keep a duplicate key in the
+  // message payload, but the identity index can only point at one row.
+  const indexedMessageIdempotencyKey =
+    identity.messageIdempotencyKey &&
+    !options.dedupeByMessageIdempotency &&
+    readTranscriptIdentityByMessageIdempotencyKey(
+      database,
+      scope.sessionId,
+      identity.messageIdempotencyKey,
+    )
+      ? undefined
+      : identity.messageIdempotencyKey;
   executeSqliteQuerySync(
     database.db,
     db
@@ -3255,7 +3267,7 @@ function appendTranscriptEventInTransaction(
         seq,
         event_type: identity.eventType,
         parent_id: identity.parentId,
-        message_idempotency_key: identity.messageIdempotencyKey,
+        message_idempotency_key: indexedMessageIdempotencyKey,
         created_at: createdAt,
       })
       .onConflict((conflict) => conflict.columns(["session_id", "event_id"]).doNothing()),
