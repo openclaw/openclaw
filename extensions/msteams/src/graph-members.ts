@@ -13,6 +13,7 @@ type GraphUserProfile = {
 
 type GetMemberInfoMSTeamsParams = {
   cfg: OpenClawConfig;
+  accountId?: string | null;
   userId: string;
 };
 
@@ -33,7 +34,7 @@ type GetMemberInfoMSTeamsResult = {
 export async function getMemberInfoMSTeams(
   params: GetMemberInfoMSTeamsParams,
 ): Promise<GetMemberInfoMSTeamsResult> {
-  const token = await resolveGraphToken(params.cfg);
+  const token = await resolveGraphToken(params.cfg, { accountId: params.accountId });
   const path = `/users/${encodeURIComponent(params.userId)}?$select=id,displayName,mail,jobTitle,userPrincipalName,officeLocation`;
   const user = await fetchGraphJson<GraphUserProfile>({ token, path });
   return {

@@ -764,17 +764,7 @@ describe("msteamsPlugin message actions", () => {
     });
 
     expect(sendAdaptiveCardMSTeamsMock).toHaveBeenCalledWith({
-      cfg: {
-        channels: {
-          msteams: {
-            tenantId: "tenant-id",
-            defaultAccount: "secondary",
-            appId: "secondary-app-id",
-            appPassword: "secondary-secret",
-            webhook: { port: 3979 },
-          },
-        },
-      },
+      cfg,
       accountId: "secondary",
       to: targetChannelId,
       card: {
@@ -794,6 +784,101 @@ describe("msteamsPlugin message actions", () => {
         conversationId: "conv-card-secondary",
       },
     );
+  });
+
+  it("passes the original config and explicit account id to upload actions", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          tenantId: "tenant-id",
+          accounts: {
+            support: {
+              appId: "support-app-id",
+              appPassword: "support-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expectSuccessfulAction({
+      mockFn: sendMessageMSTeamsMock,
+      mockResult: {
+        messageId: "msg-support-1",
+        conversationId: "conv-support-1",
+      },
+      action: "upload-file",
+      cfg,
+      accountId: "support",
+      actionParams: {
+        target: targetChannelId,
+        path: "/tmp/support.pdf",
+        message: "Support update",
+        filename: "support.pdf",
+      },
+      mediaLocalRoots: ["/tmp"],
+      runtimeParams: {
+        accountId: "support",
+        to: targetChannelId,
+        text: "Support update",
+        mediaUrl: "/tmp/support.pdf",
+        filename: "support.pdf",
+        mediaLocalRoots: ["/tmp"],
+        mediaReadFile: undefined,
+      },
+      details: {
+        ok: true,
+        channel: "msteams",
+        messageId: "msg-support-1",
+      },
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "upload-file",
+        messageId: "msg-support-1",
+        conversationId: "conv-support-1",
+      },
+    });
+  });
+
+  it("passes the selected account id to Graph runtime actions", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          tenantId: "tenant-id",
+          accounts: {
+            support: {
+              appId: "support-app-id",
+              appPassword: "support-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expectSuccessfulAction({
+      mockFn: getMemberInfoMSTeamsMock,
+      mockResult: { member: { id: "user-1" } },
+      action: "member-info",
+      cfg,
+      accountId: "support",
+      actionParams: { userId: " user-1 " },
+      runtimeParams: {
+        accountId: "support",
+        userId: "user-1",
+      },
+      details: okMSTeamsActionDetails("member-info", {
+        member: { id: "user-1" },
+      }),
+      contentDetails: {
+        ok: true,
+        channel: "msteams",
+        action: "member-info",
+        member: { id: "user-1" },
+      },
+    });
   });
 
   it("downgrades select blocks when sending presentation cards", async () => {

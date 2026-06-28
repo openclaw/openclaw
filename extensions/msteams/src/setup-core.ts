@@ -37,13 +37,28 @@ function resolveSetupAccountId(cfg: OpenClawConfig, accountId?: string | null): 
   return normalizeAccountId(accountId ?? resolveDefaultMSTeamsAccountId(cfg));
 }
 
+function resolveRawMSTeamsAccountKey(
+  accounts: Record<string, Partial<MSTeamsConfig>> | undefined,
+  accountId: string,
+): string | undefined {
+  const normalized = normalizeAccountId(accountId);
+  if (!accounts) {
+    return undefined;
+  }
+  return Object.keys(accounts).find((key) => normalizeAccountId(key) === normalized);
+}
+
 function resolveRawMSTeamsAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): MSTeamsSetupAccountConfig {
   const normalized = normalizeAccountId(accountId);
   const msteams = (cfg.channels?.msteams ?? {}) as MSTeamsMultiAccountConfig;
-  return normalized === DEFAULT_ACCOUNT_ID ? msteams : (msteams.accounts?.[normalized] ?? {});
+  if (normalized === DEFAULT_ACCOUNT_ID) {
+    return msteams;
+  }
+  const rawAccountKey = resolveRawMSTeamsAccountKey(msteams.accounts, normalized);
+  return (rawAccountKey ? msteams.accounts?.[rawAccountKey] : undefined) ?? {};
 }
 
 function splitRootIdentity(msteams: MSTeamsMultiAccountConfig): {
@@ -108,10 +123,14 @@ export function patchMSTeamsAccountConfig(params: {
           },
         }
       : baseAccounts;
+  const rawAccountKey =
+    accountId === DEFAULT_ACCOUNT_ID
+      ? DEFAULT_ACCOUNT_ID
+      : (resolveRawMSTeamsAccountKey(accounts, accountId) ?? accountId);
   const existing =
     accountId === DEFAULT_ACCOUNT_ID
-      ? ({ ...defaultAccount, ...accounts[accountId] } as MSTeamsSetupAccountConfig)
-      : ((accounts[accountId] ?? {}) as MSTeamsSetupAccountConfig);
+      ? ({ ...defaultAccount, ...accounts[rawAccountKey] } as MSTeamsSetupAccountConfig)
+      : ((accounts[rawAccountKey] ?? {}) as MSTeamsSetupAccountConfig);
   return {
     ...params.cfg,
     channels: {
@@ -121,7 +140,7 @@ export function patchMSTeamsAccountConfig(params: {
         ...(ensureEnabled ? { enabled: true } : {}),
         accounts: {
           ...accounts,
-          [accountId]: {
+          [rawAccountKey]: {
             ...existing,
             ...(ensureEnabled ? { enabled: true } : {}),
             ...params.patch,

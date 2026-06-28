@@ -125,6 +125,52 @@ describe("msteams setup surface", () => {
     });
   });
 
+  it("updates an existing display-style account key in place", () => {
+    const result = msteamsSetupAdapter.applyAccountConfig?.({
+      cfg: {
+        channels: {
+          msteams: {
+            accounts: {
+              "Support Bot": {
+                name: "Support Bot",
+                enabled: false,
+                appId: "old-app",
+                appPassword: "old-secret",
+                tenantId: "old-tenant",
+                webhook: { port: 3979 },
+              },
+            },
+          },
+        },
+      },
+      accountId: "support-bot",
+      input: {
+        appId: "support-app",
+        appPassword: "support-secret",
+        tenantId: "tenant-id",
+      },
+    } as never);
+
+    expect(result).toEqual({
+      channels: {
+        msteams: {
+          enabled: true,
+          accounts: {
+            "Support Bot": {
+              name: "Support Bot",
+              enabled: true,
+              appId: "support-app",
+              appPassword: "support-secret",
+              tenantId: "tenant-id",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    });
+    expect(result?.channels?.msteams?.accounts).not.toHaveProperty("support-bot");
+  });
+
   it("promotes root identity when adding a named account", () => {
     expect(
       msteamsSetupAdapter.applyAccountConfig?.({
