@@ -37,19 +37,6 @@ function hasCostValues(cost: unknown): cost is ModelDefinitionConfig["cost"] {
   );
 }
 
-function hasPositiveCostValues(cost: unknown): cost is ModelDefinitionConfig["cost"] {
-  if (!cost || typeof cost !== "object") {
-    return false;
-  }
-  const c = cost as Record<string, unknown>;
-  return (
-    isPositiveNumber(c.input) ||
-    isPositiveNumber(c.output) ||
-    isPositiveNumber(c.cacheRead) ||
-    isPositiveNumber(c.cacheWrite)
-  );
-}
-
 /**
  * Provider policy surface for DeepSeek.
  *
@@ -90,8 +77,8 @@ export function normalizeConfig(params: {
       modelMutated = true;
     }
 
-    // Hydrate cost from catalog when missing or when all fields are zero/absent.
-    if (!hasPositiveCostValues(raw.cost) && hasCostValues(catalogEntry.cost)) {
+    // Hydrate cost from catalog only when the model has no explicit numeric cost fields.
+    if (!hasCostValues(raw.cost) && hasCostValues(catalogEntry.cost)) {
       patched.cost = catalogEntry.cost;
       modelMutated = true;
     }
