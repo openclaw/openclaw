@@ -1747,8 +1747,9 @@ export async function planSkillUninstall(
   // Derive owner from origin metadata first, fall back to lockfile
   // (matches resolveRequestedUpdateSlug owner comparison).
   const trackedOwnerHandle = trackedOrigin?.ownerHandle ?? resolvedLockEntry?.ownerHandle;
-  const ownerMismatch =
-    requestedOwnerHandle && trackedOwnerHandle && requestedOwnerHandle !== trackedOwnerHandle;
+  const ownerMismatch = Boolean(
+    requestedOwnerHandle && trackedOwnerHandle && requestedOwnerHandle !== trackedOwnerHandle,
+  );
   const ownerRequiredButMissing = Boolean(requestedOwnerHandle) && !trackedOwnerHandle;
 
   return {
