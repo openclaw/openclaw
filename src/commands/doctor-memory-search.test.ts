@@ -949,7 +949,25 @@ describe("noteMemorySearchHealth", () => {
     expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
   });
 
-  it("does not resolve auth profiles when requested by lint callers", async () => {
+  it("does not warn for auth-profile-backed credentials when lint skips profile resolution", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "openai",
+      model: "text-embedding-3-small",
+      local: {},
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      skipAuthProfileResolution: true,
+      gatewayMemoryProbe: { checked: false, ready: false, skipped: true },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+    expect(resolveApiKeyForProvider).not.toHaveBeenCalled();
+  });
+
+  it("warns without resolving auth profiles when lint skips profile resolution and no auth store exists", async () => {
+    hasAnyAuthProfileStoreSource.mockReturnValue(false);
     resolveMemorySearchConfig.mockReturnValue({
       provider: "openai",
       model: "text-embedding-3-small",
