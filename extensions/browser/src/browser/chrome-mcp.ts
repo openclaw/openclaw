@@ -462,11 +462,6 @@ function buildChromeMcpArgsFromOptions(options: NormalizedChromeMcpProfileOption
   ];
 }
 
-/** Build command-line args for launching chrome-devtools-mcp. */
-export function buildChromeMcpArgs(input?: string | ChromeMcpProfileOptions): string[] {
-  return buildChromeMcpArgsFromOptions(normalizeChromeMcpOptions(input));
-}
-
 function drainStderr(transport: StdioClientTransport): () => string {
   const stream = transport.stderr;
   if (!stream) {
@@ -1743,22 +1738,6 @@ export async function resizeChromeMcpPage(params: {
   });
 }
 
-/** Accept or dismiss a Chrome MCP browser dialog. */
-export async function handleChromeMcpDialog(params: {
-  profileName: string;
-  profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
-  targetId: string;
-  action: "accept" | "dismiss";
-  promptText?: string;
-}): Promise<void> {
-  await callTool(params.profileName, chromeMcpProfileOptionsFromParams(params), "handle_dialog", {
-    pageId: parsePageId(params.targetId),
-    action: params.action,
-    ...(params.promptText ? { promptText: params.promptText } : {}),
-  });
-}
-
 /** Evaluate a JavaScript function in a Chrome MCP page. */
 export async function evaluateChromeMcpScript(params: {
   profileName: string;
@@ -1779,22 +1758,6 @@ export async function evaluateChromeMcpScript(params: {
     },
   );
   return extractJsonMessage(result);
-}
-
-/** Wait for text conditions in a Chrome MCP page. */
-export async function waitForChromeMcpText(params: {
-  profileName: string;
-  profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
-  targetId: string;
-  text: string[];
-  timeoutMs?: number;
-}): Promise<void> {
-  await callTool(params.profileName, chromeMcpProfileOptionsFromParams(params), "wait_for", {
-    pageId: parsePageId(params.targetId),
-    text: params.text,
-    ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
-  });
 }
 
 /** Replace Chrome MCP session creation for focused tests. */

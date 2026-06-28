@@ -5,7 +5,7 @@
  * entity subset emitted by trusted HTML producers without parsing full HTML.
  */
 /** Decoded entity text plus the source length consumed from the input. */
-export interface DecodedHtmlEntity {
+interface DecodedHtmlEntity {
   text: string;
   length: number;
 }
@@ -18,8 +18,10 @@ function decodeCodePoint(codePoint: number): string | undefined {
 }
 
 /** Decodes a named or numeric HTML entity without the surrounding `&`/`;`. */
-export function decodeHtmlEntity(entity: string): string | undefined {
-  switch (entity) {
+function decodeHtmlEntity(entity: string): string | undefined {
+  // Named entities match case-insensitively so callers keep the long-standing
+  // contract of decoding forms like "&AMP;" instead of leaking them as text.
+  switch (entity.toLowerCase()) {
     case "amp":
       return "&";
     case "lt":
@@ -32,12 +34,17 @@ export function decodeHtmlEntity(entity: string): string | undefined {
       return "'";
   }
 
+  // Numeric references must be fully numeric. A bare Number.parseInt is lenient
+  // and would consume a malformed entity such as "&#39x;" as "'" by stopping at
+  // the first non-digit; require the whole token to be valid digits instead.
   if (entity.startsWith("#x") || entity.startsWith("#X")) {
-    return decodeCodePoint(Number.parseInt(entity.slice(2), 16));
+    const hex = entity.slice(2);
+    return /^[0-9a-fA-F]+$/.test(hex) ? decodeCodePoint(Number.parseInt(hex, 16)) : undefined;
   }
 
   if (entity.startsWith("#")) {
-    return decodeCodePoint(Number.parseInt(entity.slice(1), 10));
+    const dec = entity.slice(1);
+    return /^[0-9]+$/.test(dec) ? decodeCodePoint(Number.parseInt(dec, 10)) : undefined;
   }
 
   return undefined;

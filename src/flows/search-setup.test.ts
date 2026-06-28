@@ -396,6 +396,46 @@ describe("runSearchSetupFlow", () => {
     expect(xaiConfig?.xSearch?.model).toBe("grok-4-1-fast");
   });
 
+  it("allows an explicit setup flow to reenable credential-ready web_search", async () => {
+    const select = vi.fn().mockResolvedValueOnce("grok").mockResolvedValueOnce("no");
+    const prompter = createWizardPrompter({
+      select: select as never,
+    });
+
+    const next = await runSearchSetupFlow(
+      {
+        plugins: {
+          allow: ["xai"],
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-test-key",
+                },
+              },
+            },
+          },
+        },
+        tools: {
+          web: {
+            search: {
+              enabled: false,
+              provider: "grok",
+            },
+          },
+        },
+      },
+      createNonExitingRuntime(),
+      prompter,
+      { preserveDisabledSearchState: false },
+    );
+
+    expect(next.tools?.web?.search).toMatchObject({
+      enabled: true,
+      provider: "grok",
+    });
+  });
+
   it("installs an external catalog search provider before enabling it", async () => {
     const select = vi.fn().mockResolvedValueOnce("brave");
     const text = vi.fn().mockResolvedValue("brave-test-key");

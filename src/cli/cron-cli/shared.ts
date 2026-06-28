@@ -182,9 +182,12 @@ export async function warnIfCronSchedulerDisabled(opts: GatewayRpcOpts) {
     if (res?.enabled === true) {
       return;
     }
-    const store = typeof res?.sqlitePath === "string" ? res.sqlitePath
-      : typeof res?.storePath === "string" ? res.storePath
-      : "";
+    const store =
+      typeof res?.sqlitePath === "string"
+        ? res.sqlitePath
+        : typeof res?.storePath === "string"
+          ? res.storePath
+          : "";
     defaultRuntime.error(
       [
         "warning: cron scheduler is disabled in the Gateway; jobs are saved but will not run automatically.",
@@ -260,6 +263,21 @@ export function parseCronToolsAllow(input: unknown): string[] | undefined {
     .map((tool) => normalizeOptionalString(tool))
     .filter((tool): tool is string => Boolean(tool));
   return tools.length > 0 ? tools : undefined;
+}
+
+export function parseCronFallbacks(input: unknown): string[] | undefined {
+  if (input === undefined) {
+    return undefined;
+  }
+  const raw = Array.isArray(input)
+    ? input.map((value) => String(value)).join(" ")
+    : typeof input === "string"
+      ? input
+      : "";
+  return raw
+    .split(/[,\s]+/u)
+    .map((fallback) => normalizeOptionalString(fallback))
+    .filter((fallback): fallback is string => Boolean(fallback));
 }
 
 /**
@@ -377,17 +395,6 @@ const formatSchedule = (schedule: CronSchedule | undefined) => {
   return `${base} (stagger ${formatDurationHuman(staggerMs)})`;
 };
 
-const formatStatus = (job: CronJob) => {
-  if (!job.enabled) {
-    return "disabled";
-  }
-  const state = job.state ?? {};
-  if (state.runningAtMs) {
-    return "running";
-  }
-  return state.lastStatus ?? "idle";
-};
-
 export function coerceCronDeliveryPreviews(value: unknown): Map<string, CronDeliveryPreview> {
   const previews =
     value && typeof value === "object"
@@ -450,7 +457,7 @@ export function printCronList(
       CRON_NEXT_PAD,
     );
     const lastLabel = pad(formatRelative(state.lastRunAtMs, now), CRON_LAST_PAD);
-    const statusRaw = formatStatus(job);
+    const statusRaw = computeStatus(job);
     const statusLabel = pad(statusRaw, CRON_STATUS_PAD);
     const targetLabel = pad(job.sessionTarget ?? "-", CRON_TARGET_PAD);
     const deliveryPreview = opts?.deliveryPreviews?.get(job.id);
@@ -528,6 +535,6 @@ export function printCronShow(
   runtime.log(`delivery: ${preview.label} (${preview.detail})`);
   runtime.log(`next: ${formatRelative(job.state.nextRunAtMs, Date.now())}`);
   runtime.log(`last: ${formatRelative(job.state.lastRunAtMs, Date.now())}`);
-  runtime.log(`status: ${formatStatus(job)}`);
+  runtime.log(`status: ${computeStatus(job)}`);
   runtime.log(`diagnostic: ${job.state.lastDiagnosticSummary ?? "-"}`);
 }

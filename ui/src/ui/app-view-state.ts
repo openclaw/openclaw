@@ -4,9 +4,11 @@ import type { ChatAbortOptions, ChatSendOptions } from "./app-chat.ts";
 import type { EventLogEntry } from "./app-events.ts";
 import type { CompactionStatus, FallbackStatus } from "./app-tool-stream.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./chat/input-history.ts";
+import type { RealtimeTalkCatalogProvider } from "./chat/realtime-talk-catalog.ts";
 import type { RealtimeTalkConversationEntry } from "./chat/realtime-talk-conversation.ts";
 import type { RealtimeTalkStatus } from "./chat/realtime-talk.ts";
 import type { ChatRunUiStatus } from "./chat/run-lifecycle.ts";
+import type { ChatMessageCache } from "./chat/session-message-cache.ts";
 import type { ChatSideResult } from "./chat/side-result.ts";
 import type { CronModelSuggestionsState, CronState } from "./controllers/cron.ts";
 import type { DevicePairingList } from "./controllers/devices.ts";
@@ -123,6 +125,7 @@ export type AppViewState = {
   chatAvatarStatus?: "none" | "local" | "remote" | "data" | null;
   chatAvatarReason?: string | null;
   chatThinkingLevel: string | null;
+  chatVerboseLevel: string | null;
   chatModelOverrides: Record<string, ChatModelOverride | null>;
   chatModelSwitchPromises: Record<string, Promise<boolean>>;
   chatModelsLoading: boolean;
@@ -141,6 +144,7 @@ export type AppViewState = {
   announceSessionSwitch?: (sessionKey: string, label: string) => void;
   chatQueue: ChatQueueItem[];
   chatQueueBySession: Record<string, ChatQueueItem[]>;
+  chatMessagesBySession: ChatMessageCache;
   chatLocalInputHistoryBySession: Record<string, Array<{ text: string; ts: number }>>;
   chatInputHistorySessionKey: string | null;
   chatInputHistoryItems: string[] | null;
@@ -152,6 +156,7 @@ export type AppViewState = {
   realtimeTalkTranscript: string | null;
   realtimeTalkConversation: RealtimeTalkConversationEntry[];
   realtimeTalkOptionsOpen: boolean;
+  realtimeTalkCatalogProviders: RealtimeTalkCatalogProvider[] | null;
   realtimeTalkOptions: {
     provider: string;
     model: string;
@@ -164,6 +169,7 @@ export type AppViewState = {
   };
   resetRealtimeTalkConversation?: () => void;
   updateRealtimeTalkOptions: (next: Partial<AppViewState["realtimeTalkOptions"]>) => void;
+  fetchRealtimeTalkCatalog: () => Promise<void>;
   chatManualRefreshInFlight: boolean;
   chatHeaderControlsHidden: boolean;
   chatMobileControlsOpen: boolean;
@@ -402,6 +408,8 @@ export type AppViewState = {
 > &
   Pick<CronModelSuggestionsState, "cronModelSuggestions"> & {
     skillsLoading: boolean;
+    skillsAgentId: string | null;
+    skillsAgentRevision: number;
     skillsReport: SkillStatusReport | null;
     skillsError: string | null;
     skillsFilter: string;
@@ -420,7 +428,13 @@ export type AppViewState = {
     clawhubDetailLoading: boolean;
     clawhubDetailError: string | null;
     clawhubInstallSlug: string | null;
-    clawhubInstallMessage: { kind: "success" | "error"; text: string } | null;
+    clawhubInstallMessage: {
+      kind: "success" | "error";
+      text: string;
+      acknowledgeSlug?: string;
+      acknowledgeVersion?: string;
+      acknowledgeLabel?: string;
+    } | null;
     clawhubVerdicts: Record<string, ClawHubSkillSecurityVerdict>;
     clawhubVerdictsLoading: boolean;
     clawhubVerdictsError: string | null;
@@ -485,7 +499,10 @@ export type AppViewState = {
     applySettings: (next: UiSettings) => void;
     applyLocalUserIdentity?: (next: { name?: string | null; avatar?: string | null }) => void;
     loadOverview: (opts?: { refresh?: boolean }) => Promise<void>;
-    loadAssistantIdentity: () => Promise<void>;
+    loadAssistantIdentity: (opts?: {
+      sessionKey?: string;
+      expectedSessionKey?: string;
+    }) => Promise<void>;
     loadCron: () => Promise<void>;
     handleWhatsAppStart: (force: boolean) => Promise<void>;
     handleWhatsAppWait: () => Promise<void>;

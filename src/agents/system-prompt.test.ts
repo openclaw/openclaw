@@ -507,7 +507,9 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("If a skill's <version> differs from a previous turn");
     expect(prompt).toContain("If several apply, choose the most specific.");
     expect(prompt).toContain("Docs: /tmp/openclaw/docs");
-    expect(prompt).toContain("OpenClaw behavior/config/architecture: read local docs first.");
+    expect(prompt).toContain(
+      "Docs are authoritative for OpenClaw self-knowledge: before understanding how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use `Read` or search local docs first; treat AGENTS.md/project context, workspace/profile/memory notes, and `memory_search` as instruction context or user memory, not OpenClaw design/implementation knowledge.",
+    );
   });
 
   it("includes docs guidance when docsPath is provided", () => {
@@ -520,8 +522,30 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain("## Documentation");
     expect(prompt).toContain("Docs: /tmp/openclaw/docs");
     expect(prompt).toContain("Source: /tmp/openclaw");
-    expect(prompt).toContain("OpenClaw behavior/config/architecture: read local docs first.");
-    expect(prompt).toContain("If docs are stale/incomplete, inspect local source.");
+    expect(prompt).toContain(
+      "Docs are authoritative for OpenClaw self-knowledge: before understanding how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use `read` or search local docs first; treat AGENTS.md/project context, workspace/profile/memory notes, and `memory_search` as instruction context or user memory, not OpenClaw design/implementation knowledge.",
+    );
+    expect(prompt).toContain("If docs are silent/stale, say so and inspect local source.");
+  });
+
+  it("keeps self-knowledge docs guidance concise and authoritative", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      docsPath: "/tmp/openclaw/docs",
+      sourcePath: "/tmp/openclaw",
+      toolNames: ["read", "memory_search"],
+    });
+    const docsStart = prompt.indexOf("## Documentation");
+    const nextSection = prompt.indexOf("\n## ", docsStart + 1);
+    const docsSection = prompt.slice(docsStart, nextSection);
+
+    expect(prompt).toContain(
+      "Docs are authoritative for OpenClaw self-knowledge: before understanding how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use `read` or search local docs first; treat AGENTS.md/project context, workspace/profile/memory notes, and `memory_search` as instruction context or user memory, not OpenClaw design/implementation knowledge.",
+    );
+    expect(docsSection.length).toBeLessThan(840);
+    expect(prompt).not.toContain("Self-knowledge rule: for questions about");
+    expect(prompt).not.toContain("Treat questions about daily notes");
+    expect(prompt).not.toContain("never answer from AGENTS.md/project context");
   });
 
   it("falls back to public docs and GitHub source guidance when local docs are unavailable", () => {
@@ -531,7 +555,10 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(prompt).toContain("Docs: https://docs.openclaw.ai");
     expect(prompt).toContain("Source: https://github.com/openclaw/openclaw");
-    expect(prompt).toContain("If docs are stale/incomplete, inspect GitHub source.");
+    expect(prompt).toContain(
+      "Docs are authoritative for OpenClaw self-knowledge: before understanding how OpenClaw works (memory/daily notes, sessions, tools, Gateway, config, commands, project context), use the docs mirror first when web tooling is available; treat AGENTS.md/project context, workspace/profile/memory notes, and `memory_search` as instruction context or user memory, not OpenClaw design/implementation knowledge.",
+    );
+    expect(prompt).toContain("If docs are silent/stale, say so and inspect GitHub source.");
   });
 
   it("includes workspace notes when provided", () => {
@@ -992,13 +1019,32 @@ describe("buildAgentSystemPrompt", () => {
 
     expect(telegramPrompt).toContain("Telegram rich text is available");
     expect(telegramPrompt).toContain("<details><summary>...</summary>...</details>");
+    expect(telegramPrompt).toContain("tables with alignment/captions/spans");
+    expect(telegramPrompt).toContain("pull quotes");
+    expect(telegramPrompt).toContain('task lists via `<input type="checkbox"/>` inside `<li>`');
+    expect(telegramPrompt).toContain("anchors/in-message links");
+    expect(telegramPrompt).toContain(
+      "formulas (inline `<tg-math>LaTeX</tg-math>`, block `<tg-math-block>LaTeX</tg-math-block>`; not `$...$` or `\\(...\\)`)",
+    );
+    expect(telegramPrompt).toContain("maps/collages/slideshows");
+    expect(telegramPrompt).toContain("use `<details>`, not legacy `<blockquote expandable>`");
+    expect(telegramPrompt).toContain("use `<ul><li>...</li></ul>`, not literal bullet characters");
+    expect(telegramPrompt).toContain(
+      'standalone rich media blocks such as `<img src="https://..."/>`',
+    );
+    expect(telegramPrompt).toContain("use captions/credits when helpful");
+    expect(telegramPrompt).toContain("Media tags are blocks, not inline prose");
     expect(telegramPrompt).toContain("This is not legacy MarkdownV2/parse_mode");
-    expect(telegramPrompt).toContain("Button labels are plain text only");
+    expect(telegramPrompt).toContain("OpenClaw renders Telegram-safe rich messages");
+    expect(telegramPrompt).toContain("button labels are plain text only");
     expect(telegramPrompt.indexOf("Telegram rich text is available")).toBeGreaterThan(
       telegramPrompt.indexOf(SYSTEM_PROMPT_CACHE_BOUNDARY),
     );
     expect(discordPrompt).not.toContain("Telegram rich text is available");
     expect(plainTelegramPrompt).not.toContain("Telegram rich text is available");
+    expect(plainTelegramPrompt).toContain("Telegram rich messages are disabled");
+    expect(plainTelegramPrompt).toContain("Do not claim Bot API 10.1 tables");
+    expect(plainTelegramPrompt).toContain("enable Telegram rich messages for this channel/account");
   });
 
   it("describes Telegram rich text for automatic final replies without the message tool", () => {
@@ -1067,6 +1113,22 @@ describe("buildAgentSystemPrompt", () => {
       expect(prompt).not.toContain("For `action=send`, include `target` and `message`.");
     },
   );
+
+  it("requires an explicit target for message-tool-only turns when requested", () => {
+    const prompt = buildAgentSystemPrompt({
+      workspaceDir: "/tmp/openclaw",
+      toolNames: ["message"],
+      sourceReplyDeliveryMode: "message_tool_only",
+      requireExplicitMessageTarget: true,
+      runtimeInfo: {
+        channel: "telegram",
+        chatType: "group",
+      },
+    });
+
+    expect(prompt).toContain("include `target` and `message`; `target` is required for this turn");
+    expect(prompt).not.toContain("The target defaults to the current source channel");
+  });
 
   it("tells automatic source delivery to expose generated media as MEDIA directives", () => {
     const prompt = buildAgentSystemPrompt({

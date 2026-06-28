@@ -10,6 +10,10 @@ import {
   saveMediaBuffer,
 } from "openclaw/plugin-sdk/media-runtime";
 import { DEFAULT_GROUP_HISTORY_LIMIT, type HistoryEntry } from "openclaw/plugin-sdk/reply-history";
+import {
+  deliverTextOrMediaReply,
+  resolveSendableOutboundReplyParts,
+} from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   chunkTextWithMode,
@@ -35,6 +39,10 @@ import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { waitForTransportReady } from "openclaw/plugin-sdk/transport-ready-runtime";
 import { resolveSignalAccount } from "./accounts.js";
 import { isSignalNativeApprovalHandlerConfigured } from "./approval-native.js";
+import {
+  addSignalApprovalReactionHintToStructuredPayload,
+  registerSignalApprovalReactionTargetForDeliveredPayload,
+} from "./approval-reactions.js";
 import { signalRpcRequest, signalCheck } from "./client-adapter.js";
 import { formatSignalDaemonExit, spawnSignalDaemon, type SignalDaemonHandle } from "./daemon.js";
 import { isSignalSenderAllowed, type resolveSignalSender } from "./identity.js";
@@ -377,12 +385,11 @@ export async function deliverReplies(params: {
     baseUrl,
     account,
     accountId,
-    runtime: _runtime,
+    runtime,
     maxBytes,
     textLimit,
     chunkMode,
   } = params;
-  void _runtime;
   for (const payload of replies) {
     const { payload: resolvedPayload, effectiveReplyTo } = resolveSignalReplyDelivery({
       payload,
@@ -392,58 +399,99 @@ export async function deliverReplies(params: {
     const effectiveQuoteAuthor = effectiveReplyTo
       ? params.resolveQuoteAuthor?.(effectiveReplyTo)
       : undefined;
-    const text = resolvedPayload.text ?? "";
-    const resolvedMediaList =
-      resolvedPayload.mediaUrls && resolvedPayload.mediaUrls.length > 0
-        ? resolvedPayload.mediaUrls
-        : resolvedPayload.mediaUrl
-          ? [resolvedPayload.mediaUrl]
-          : [];
-    if (!text && resolvedMediaList.length === 0) {
-      continue;
-    }
-    if (resolvedMediaList.length === 0) {
-      let first = true;
-      for (const chunk of chunkTextWithMode(text, textLimit, chunkMode)) {
-        await sendMessageSignal(target, chunk, {
-          cfg: params.cfg,
-          baseUrl,
-          account,
-          maxBytes,
-          accountId,
-          replyTo: first ? effectiveReplyTo : undefined,
-          quoteAuthor: first ? effectiveQuoteAuthor : undefined,
-        });
-        if (first) {
-          markSignalReplyConsumed(params.replyDeliveryState, effectiveReplyTo, {
-            isGroup: isSignalGroupTarget(target),
-            quoteAuthor: effectiveQuoteAuthor,
-          });
-        }
-        first = false;
+    const deliveryResults: Array<{
+      channel: "signal";
+      messageId: string;
+      meta: { signalVisibleText: string };
+    }> = [];
+    const deliveredPayload =
+      addSignalApprovalReactionHintToStructuredPayload({
+        cfg: params.cfg,
+        accountId,
+        to: target,
+        payload: resolvedPayload,
+        targetAuthor: account,
+      }) ?? resolvedPayload;
+    const reply = resolveSendableOutboundReplyParts(deliveredPayload);
+    let firstDelivery = true;
+    const markFirstReplyConsumed = () => {
+      if (!firstDelivery) {
+        return;
       }
-    } else {
-      let first = true;
-      for (const url of resolvedMediaList) {
-        const caption = first ? text : "";
-        await sendMessageSignal(target, caption, {
-          cfg: params.cfg,
-          baseUrl,
-          account,
-          mediaUrl: url,
-          maxBytes,
-          accountId,
-          replyTo: first ? effectiveReplyTo : undefined,
-          quoteAuthor: first ? effectiveQuoteAuthor : undefined,
+      markSignalReplyConsumed(params.replyDeliveryState, effectiveReplyTo, {
+        isGroup: isSignalGroupTarget(target),
+        quoteAuthor: effectiveQuoteAuthor,
+      });
+      firstDelivery = false;
+    };
+    const recordDeliveryResult = (
+      result: Awaited<ReturnType<typeof sendMessageSignal>>,
+      visibleText: string,
+    ) => {
+      const messageId =
+        typeof result?.messageId === "string" && result.messageId.trim()
+          ? result.messageId.trim()
+          : null;
+      if (messageId) {
+        deliveryResults.push({
+          channel: "signal",
+          messageId,
+          meta: { signalVisibleText: visibleText },
         });
-        if (first) {
-          markSignalReplyConsumed(params.replyDeliveryState, effectiveReplyTo, {
-            isGroup: isSignalGroupTarget(target),
-            quoteAuthor: effectiveQuoteAuthor,
-          });
-        }
-        first = false;
       }
+    };
+    const delivered = await deliverTextOrMediaReply({
+      payload: deliveredPayload,
+      text: reply.text,
+      chunkText: (value) => chunkTextWithMode(value, textLimit, chunkMode),
+      sendText: async (chunk) => {
+        const useReply = firstDelivery;
+        recordDeliveryResult(
+          await sendMessageSignal(target, chunk, {
+            cfg: params.cfg,
+            baseUrl,
+            account,
+            maxBytes,
+            accountId,
+            replyTo: useReply ? effectiveReplyTo : undefined,
+            quoteAuthor: useReply ? effectiveQuoteAuthor : undefined,
+          }),
+          chunk,
+        );
+        markFirstReplyConsumed();
+      },
+      sendMedia: async ({ mediaUrl, caption }) => {
+        const useReply = firstDelivery;
+        const visibleText = caption ?? "";
+        recordDeliveryResult(
+          await sendMessageSignal(target, visibleText, {
+            cfg: params.cfg,
+            baseUrl,
+            account,
+            mediaUrl,
+            maxBytes,
+            accountId,
+            replyTo: useReply ? effectiveReplyTo : undefined,
+            quoteAuthor: useReply ? effectiveQuoteAuthor : undefined,
+          }),
+          visibleText,
+        );
+        markFirstReplyConsumed();
+      },
+    });
+    if (delivered !== "empty") {
+      registerSignalApprovalReactionTargetForDeliveredPayload({
+        cfg: params.cfg,
+        target: {
+          channel: "signal",
+          to: target,
+          accountId,
+        },
+        payload: deliveredPayload,
+        results: deliveryResults,
+        targetAuthor: account,
+      });
+      runtime.log?.(`delivered reply to ${target}`);
     }
   }
 }

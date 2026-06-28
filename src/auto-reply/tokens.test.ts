@@ -128,6 +128,13 @@ describe("isSilentReplyPayloadText", () => {
     expect(isSilentReplyPayloadText("<think>I will stay quiet here.NO_REPLY")).toBe(true);
   });
 
+  it.each([
+    ["closed", "<mm:think>internal reasoning</mm:think>\nNO_REPLY"],
+    ["open", "<mm:think>internal reasoning\nNO_REPLY"],
+  ])("returns true for %s MiniMax reasoning followed by NO_REPLY", (_kind, text) => {
+    expect(isSilentReplyPayloadText(text)).toBe(true);
+  });
+
   it("keeps substantive replies that also contain a trailing NO_REPLY token", () => {
     expect(isSilentReplyPayloadText("Here is a helpful response.\n\nNO_REPLY")).toBe(false);
     expect(

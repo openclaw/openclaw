@@ -434,6 +434,21 @@ function normalizeNotificationSubscription(
     throw new Error("notification subscription needs cardId, sessionKey, runId, or target.");
   }
   const eventKinds = normalizeNotificationKinds(input.eventKinds);
+  const preservedFields: Partial<WorkboardNotificationSubscription> = {};
+  if (fallback) {
+    if (fallback.lastEventAt) {
+      preservedFields.lastEventAt = fallback.lastEventAt;
+    }
+    if (fallback.lastEventId) {
+      preservedFields.lastEventId = fallback.lastEventId;
+    }
+    if (fallback.lastEventSequence) {
+      preservedFields.lastEventSequence = fallback.lastEventSequence;
+    }
+    if (fallback.deliveredEventIds?.length) {
+      preservedFields.deliveredEventIds = fallback.deliveredEventIds;
+    }
+  }
   return {
     id: fallback?.id ?? randomUUID(),
     boardId,
@@ -442,12 +457,7 @@ function normalizeNotificationSubscription(
     ...(runId ? { runId } : {}),
     ...(target ? { target } : {}),
     ...(eventKinds ? { eventKinds } : {}),
-    ...(fallback?.lastEventAt ? { lastEventAt: fallback.lastEventAt } : {}),
-    ...(fallback?.lastEventId ? { lastEventId: fallback.lastEventId } : {}),
-    ...(fallback?.lastEventSequence ? { lastEventSequence: fallback.lastEventSequence } : {}),
-    ...(fallback?.deliveredEventIds?.length
-      ? { deliveredEventIds: fallback.deliveredEventIds }
-      : {}),
+    ...preservedFields,
     createdAt: fallback?.createdAt ?? now,
     updatedAt: now,
   };
@@ -2968,17 +2978,6 @@ export class WorkboardStore {
       metadata: { ...child.metadata, links: nextChildLinks },
     });
     return await this.promoteDependencyReady(nextChild.id);
-  }
-
-  async linkParents(childId: string, parentIds: readonly string[]): Promise<WorkboardCard> {
-    let child = await this.get(childId);
-    if (!child) {
-      throw new Error(`card not found: ${childId}`);
-    }
-    for (const parentId of parentIds) {
-      child = await this.linkCards(parentId, child.id);
-    }
-    return child;
   }
 
   private async dependencyTargetStatus(card: WorkboardCard, now: number): Promise<WorkboardStatus> {

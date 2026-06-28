@@ -495,6 +495,23 @@ openclaw infer image generate \
 ```
 
   </Tab>
+  <Tab title="Generate (OpenAI low quality)">
+```text
+/tool image_generate action=generate model=openai/gpt-image-2 prompt="Low-cost draft poster for a quiet productivity app" quality=low openai='{"moderation":"low"}'
+```
+
+Equivalent CLI:
+
+```bash
+openclaw infer image generate \
+  --model openai/gpt-image-2 \
+  --quality low \
+  --openai-moderation low \
+  --prompt "Low-cost draft poster for a quiet productivity app" \
+  --json
+```
+
+  </Tab>
   <Tab title="Generate (two square)">
 ```text
 /tool image_generate action=generate model=openai/gpt-image-2 prompt="Two visual directions for a calm productivity app icon" size=1024x1024 count=2
@@ -517,11 +534,11 @@ openclaw infer image generate \
   </Tab>
 </Tabs>
 
-The same `--output-format` and `--background` flags are available on
-`openclaw infer image edit`; `--openai-background` remains as an
-OpenAI-specific alias. Bundled providers other than OpenAI do not declare
-explicit background control today, so `background: "transparent"` is reported
-as ignored for them.
+The same `--output-format`, `--background`, `--quality`, and
+`--openai-moderation` flags are available on `openclaw infer image edit`;
+`--openai-background` remains as an OpenAI-specific alias. Bundled providers
+other than OpenAI do not declare explicit background control today, so
+`background: "transparent"` is reported as ignored for them.
 
 ## Related
 

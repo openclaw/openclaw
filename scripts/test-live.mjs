@@ -1,6 +1,7 @@
 // Runs the full live Vitest suite with live-test env and heartbeat output.
 import { spawnPnpmRunner } from "./pnpm-runner.mjs";
 import {
+  forwardSignalToVitestProcessGroup,
   installVitestProcessGroupCleanup,
   shouldUseDetachedVitestProcessGroup,
 } from "./vitest-process-group.mjs";
@@ -149,6 +150,8 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
   let forwardedSignal = null;
   const teardownChildCleanup = installVitestProcessGroupCleanup({
     child,
+    forceSignal: "SIGKILL",
+    forceSignalDelayMs: 100,
     onSignal: (signal) => {
       forwardedSignal ??= signal;
     },
@@ -189,13 +192,18 @@ export function main(argv = process.argv.slice(2), baseEnv = process.env) {
 
   child.on("exit", (code, signal) => {
     teardown();
+    if (forwardedSignal) {
+      forwardSignalToVitestProcessGroup({
+        child,
+        kill: process.kill.bind(process),
+        signal: "SIGKILL",
+      });
+      process.kill(process.pid, forwardedSignal);
+      return;
+    }
     if (signal) {
       process.stderr.write(`[test:live] vitest exited via signal=${signal}\n`);
       process.kill(process.pid, signal);
-      return;
-    }
-    if (forwardedSignal) {
-      process.kill(process.pid, forwardedSignal);
       return;
     }
     if ((code ?? 1) !== 0) {

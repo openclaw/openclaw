@@ -5,17 +5,17 @@
  * debounce drains, and force individual collection when cross-channel ordering matters.
  */
 /** Mutable summary state for a capped queue. */
-export type QueueSummaryState = {
+type QueueSummaryState = {
   dropPolicy: "summarize" | "old" | "new";
   droppedCount: number;
   summaryLines: string[];
 };
 
 /** Queue overflow strategy. */
-export type QueueDropPolicy = QueueSummaryState["dropPolicy"];
+type QueueDropPolicy = QueueSummaryState["dropPolicy"];
 
 /** Generic capped queue state with shared overflow summary fields. */
-export type QueueState<T> = QueueSummaryState & {
+type QueueState<T> = QueueSummaryState & {
   items: T[];
   cap: number;
 };
@@ -71,7 +71,7 @@ export function applyQueueRuntimeSettings<TMode extends string>(params: {
 }
 
 /** Trim queue summary text to a bounded single-line preview. */
-export function elideQueueText(text: string, limit = 140): string {
+function elideQueueText(text: string, limit = 140): string {
   if (text.length <= limit) {
     return text;
   }
@@ -79,7 +79,7 @@ export function elideQueueText(text: string, limit = 140): string {
 }
 
 /** Normalize whitespace and elide one dropped item for queue summaries. */
-export function buildQueueSummaryLine(text: string, limit = 160): string {
+function buildQueueSummaryLine(text: string, limit = 160): string {
   const cleaned = text.replace(/\s+/g, " ").trim();
   return elideQueueText(cleaned, limit);
 }
@@ -190,7 +190,7 @@ export async function drainNextQueueItem<T>(
 }
 
 /** Drain one item when collect mode requires individual processing. */
-export async function drainCollectItemIfNeeded<T>(params: {
+async function drainCollectItemIfNeeded<T>(params: {
   forceIndividualCollect: boolean;
   isCrossChannel: boolean;
   setForceIndividualCollect?: (next: boolean) => void;
@@ -227,7 +227,7 @@ export async function drainCollectQueueStep<T>(params: {
 }
 
 /** Build and consume the queue overflow summary prompt. */
-export function buildQueueSummaryPrompt(params: {
+function buildQueueSummaryPrompt(params: {
   state: QueueSummaryState;
   noun: string;
   title?: string;

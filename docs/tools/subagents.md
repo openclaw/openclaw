@@ -523,6 +523,7 @@ should be rewritten in normal assistant voice.
 - Credential/token-like text is redacted.
 - Long blocks can be truncated.
 - Very large histories can drop older rows or replace an oversized row with `[sessions_history omitted: message too large]`.
+- Use `nextOffset` when present to page backward through older transcript windows.
 - Raw on-disk transcript inspection is the fallback when you need the full byte-for-byte transcript.
 
 ## Tool policy

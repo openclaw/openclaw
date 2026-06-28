@@ -8,14 +8,14 @@ type OpenAIToolDescriptor = {
   readonly parameters: unknown;
 };
 
-export type OpenAIProjectedTool = {
+type OpenAIProjectedTool = {
   readonly toolIndex: number;
   readonly name: string;
   readonly description?: string;
   readonly parameters: Record<string, unknown>;
 };
 
-export type OpenAIToolProjectionDiagnostic = {
+type OpenAIToolProjectionDiagnostic = {
   readonly toolIndex: number;
   readonly toolName?: string;
   readonly violations: readonly string[];

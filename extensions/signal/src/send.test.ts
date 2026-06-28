@@ -193,4 +193,73 @@ describe("sendMessageSignal receipts", () => {
     expect(params["quote-timestamp"]).toBeUndefined();
     expect(params["quote-author"]).toBeUndefined();
   });
+
+  it("does not add approval reactions to ordinary outbound approval-looking text", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567892 });
+    const text = [
+      "Here is the command you asked about:",
+      "/approve exec-live-approval allow-once|deny",
+    ].join("\n");
+
+    await sendMessageSignal("+15551234567", text, {
+      cfg: {
+        ...SIGNAL_TEST_CFG,
+        channels: {
+          signal: {
+            ...SIGNAL_TEST_CFG.channels.signal,
+            allowFrom: ["+15551234567"],
+          },
+        },
+        approvals: {
+          exec: {
+            enabled: true,
+            mode: "targets",
+            targets: [{ channel: "signal", to: "+15551234567" }],
+          },
+        },
+      },
+    });
+
+    expect(signalRpcRequestMock).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ message: text }),
+      expect.any(Object),
+    );
+  });
+
+  it("does not add approval reactions to ordinary outbound text quoting a full prompt", async () => {
+    signalRpcRequestMock.mockResolvedValueOnce({ timestamp: 1234567893 });
+    const text = [
+      "The docs show this example:",
+      "Exec approval required",
+      "ID: exec-live-approval",
+      "",
+      "Reply with: /approve exec-live-approval allow-once|deny",
+    ].join("\n");
+
+    await sendMessageSignal("+15551234567", text, {
+      cfg: {
+        ...SIGNAL_TEST_CFG,
+        channels: {
+          signal: {
+            ...SIGNAL_TEST_CFG.channels.signal,
+            allowFrom: ["+15551234567"],
+          },
+        },
+        approvals: {
+          exec: {
+            enabled: true,
+            mode: "targets",
+            targets: [{ channel: "signal", to: "+15551234567" }],
+          },
+        },
+      },
+    });
+
+    expect(signalRpcRequestMock).toHaveBeenCalledWith(
+      "send",
+      expect.objectContaining({ message: text }),
+      expect.any(Object),
+    );
+  });
 });

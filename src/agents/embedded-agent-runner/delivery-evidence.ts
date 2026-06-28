@@ -21,7 +21,7 @@ type AgentPayloadLike = {
   isReasoning?: unknown;
 };
 
-export type AgentDeliveryEvidence = {
+type AgentDeliveryEvidence = {
   payloads?: unknown;
   deliveryStatus?: {
     status?: unknown;
@@ -80,7 +80,19 @@ function collectStringValues(value: unknown, output: Set<string>) {
   }
 }
 
-function collectMediaUrlsFromRecord(record: Record<string, unknown>, output: Set<string>) {
+function collectMediaUrlsFromRecord(
+  record: Record<string, unknown>,
+  output: Set<string>,
+  // Payloads arrive as in-process `unknown` objects, so a malformed
+  // self-referential `attachments` chain would recurse until the stack
+  // overflows. Track visited records to bound the descent, matching
+  // redactStringsDeep in embedded-agent-subscribe.tools.ts.
+  seen = new WeakSet<object>(),
+) {
+  if (seen.has(record)) {
+    return;
+  }
+  seen.add(record);
   collectStringValues(record.mediaUrl, output);
   collectStringValues(record.mediaUrls, output);
   collectStringValues(record.path, output);
@@ -90,7 +102,7 @@ function collectMediaUrlsFromRecord(record: Record<string, unknown>, output: Set
   if (Array.isArray(attachments)) {
     for (const attachment of attachments) {
       if (attachment && typeof attachment === "object" && !Array.isArray(attachment)) {
-        collectMediaUrlsFromRecord(attachment as Record<string, unknown>, output);
+        collectMediaUrlsFromRecord(attachment as Record<string, unknown>, output, seen);
       }
     }
   }
@@ -213,13 +225,20 @@ export function hasCommittedMessagingToolDeliveryEvidence(
   );
 }
 
-/** Returns whether any outbound side effect makes a retry unsafe. */
-export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
+/** Returns whether committed outbound evidence makes replay unsafe. */
+export function hasCommittedOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
   return (
     hasMessagingToolDeliveryEvidence(result) ||
     (Array.isArray(result.acceptedSessionSpawns) &&
       hasAcceptedSessionSpawn(result.acceptedSessionSpawns)) ||
-    hasPositiveNumber(result.successfulCronAdds) ||
+    hasPositiveNumber(result.successfulCronAdds)
+  );
+}
+
+/** Returns whether any tool progress or outbound side effect makes a retry unsafe. */
+export function hasOutboundDeliveryEvidence(result: AgentDeliveryEvidence): boolean {
+  return (
+    hasCommittedOutboundDeliveryEvidence(result) ||
     hasPositiveNumber(result.meta?.toolSummary?.calls)
   );
 }

@@ -10,7 +10,7 @@ import {
   type ManagedProxyTlsOptions,
 } from "./proxy-tls.js";
 
-export type ManagedEnvHttpProxyAgentOptions = ConstructorParameters<typeof EnvHttpProxyAgent>[0];
+type ManagedEnvHttpProxyAgentOptions = ConstructorParameters<typeof EnvHttpProxyAgent>[0];
 
 function readProxyTlsRecord(options: object | undefined): Record<string, unknown> | undefined {
   if (!options || !("proxyTls" in options)) {

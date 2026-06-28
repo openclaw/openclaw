@@ -1,7 +1,10 @@
 // Outbound payload planning normalizes reply payloads into sendable text,
 // media, presentation, interactive, and mirror projections.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import {
+  mergeReactionDirectiveChannelData,
+  parseReplyDirectives,
+} from "../../auto-reply/reply/reply-directives.js";
 import {
   formatBtwTextForExternalDelivery,
   isRenderablePayload,
@@ -228,6 +231,7 @@ function createOutboundPayloadPlanEntry(
   const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
   const resolvedReplyToId =
     payload.replyToId === null ? null : (payload.replyToId ?? parsed.replyToId);
+  const channelData = mergeReactionDirectiveChannelData(payload.channelData, parsed.reaction);
   const normalizedPayload: ReplyPayload = {
     ...payload,
     text:
@@ -241,6 +245,7 @@ function createOutboundPayloadPlanEntry(
     replyToTag: payload.replyToTag || parsed.replyToTag,
     replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
     audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
+    ...(channelData ? { channelData } : {}),
   };
   if (!isRenderablePayload(normalizedPayload) && !isSilent) {
     return null;

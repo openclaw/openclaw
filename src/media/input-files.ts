@@ -11,21 +11,22 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { logWarn } from "../logger.js";
+import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { convertHeicToJpeg } from "./media-services.js";
 import { extractPdfContent, type PdfExtractedImage } from "./pdf-extract.js";
 
 /** Image payload shape reused for extracted PDF images and normalized input images. */
-export type InputImageContent = PdfExtractedImage;
+type InputImageContent = PdfExtractedImage;
 
 /** Text/images extracted from an input_file source after MIME-specific processing. */
-export type InputFileExtractResult = {
+type InputFileExtractResult = {
   filename: string;
   text?: string;
   images?: InputImageContent[];
 };
 
 /** PDF extraction limits applied before model-visible input_file content is produced. */
-export type InputPdfLimits = {
+type InputPdfLimits = {
   maxPages: number;
   maxPixels: number;
   minTextChars: number;
@@ -82,7 +83,7 @@ export type InputImageSource =
     };
 
 /** Supported input_file source variants before text/PDF extraction. */
-export type InputFileSource =
+type InputFileSource =
   | {
       type: "base64";
       data: string;
@@ -97,7 +98,7 @@ export type InputFileSource =
     };
 
 /** Guarded URL fetch result before final MIME allowlist validation. */
-export type InputFetchResult = {
+type InputFetchResult = {
   buffer: Buffer;
   mimeType: string;
   contentType?: string;
@@ -275,6 +276,25 @@ function clampText(text: string, maxChars: number): string {
   return text.slice(0, maxChars);
 }
 
+function withInputFileTimeout<T>(params: {
+  task: Promise<T>;
+  timeoutMs: number;
+  label: string;
+}): Promise<T> {
+  const timeoutMs = resolveTimerTimeoutMs(params.timeoutMs, 1);
+  let timeout: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<never>((_, reject) => {
+    timeout = setTimeout(() => {
+      reject(new Error(`${params.label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  return Promise.race([params.task, timedOut]).finally(() => {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  });
+}
+
 async function normalizeInputImage(params: {
   buffer: Buffer;
   mimeType?: string;
@@ -439,15 +459,19 @@ export async function extractFileContentFromSource(params: {
   }
 
   if (mimeType === "application/pdf") {
-    const extracted = await extractPdfContent({
-      buffer,
-      maxPages: limits.pdf.maxPages,
-      maxPixels: limits.pdf.maxPixels,
-      minTextChars: limits.pdf.minTextChars,
-      ...(params.config ? { config: params.config } : {}),
-      onImageExtractionError: (err) => {
-        logWarn(`media: PDF image extraction skipped, ${String(err)}`);
-      },
+    const extracted = await withInputFileTimeout({
+      label: "PDF extraction",
+      timeoutMs: limits.timeoutMs,
+      task: extractPdfContent({
+        buffer,
+        maxPages: limits.pdf.maxPages,
+        maxPixels: limits.pdf.maxPixels,
+        minTextChars: limits.pdf.minTextChars,
+        ...(params.config ? { config: params.config } : {}),
+        onImageExtractionError: (err) => {
+          logWarn(`media: PDF image extraction skipped, ${String(err)}`);
+        },
+      }),
     });
     const text = extracted.text ? clampText(extracted.text, limits.maxChars) : "";
     return {

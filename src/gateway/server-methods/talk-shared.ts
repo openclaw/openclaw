@@ -1,5 +1,6 @@
 // Talk shared helpers build provider configs, launch options, tool schemas, and
 // room event broadcasts used by browser and gateway-owned Talk sessions.
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -25,7 +26,6 @@ import type {
 import type { TalkEvent } from "../../talk/talk-events.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import type { TalkHandoffTurnResult } from "../talk-handoff.js";
-import { asRecord } from "./record-shared.js";
 
 export function canUseTalkDirectTools(client: { connect?: { scopes?: string[] } } | null): boolean {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
@@ -66,7 +66,7 @@ export function talkHandoffErrorCode(reason: TalkHandoffFailureReason) {
 }
 
 function getRecord(value: unknown): Record<string, unknown> | undefined {
-  return asRecord(value) ?? undefined;
+  return asOptionalRecord(value) ?? undefined;
 }
 
 function singleRecordKey(record: Record<string, unknown> | undefined): string | undefined {

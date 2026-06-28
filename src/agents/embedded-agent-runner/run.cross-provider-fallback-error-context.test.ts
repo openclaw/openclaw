@@ -131,6 +131,10 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       ...overflowBaseRunParams,
       runId: "run-cross-provider-fallback-error-context",
       config: makeCrossProviderFallbackConfig(),
+      agentHarnessRuntimeOverride: "openclaw",
+      provider: "deepseek",
+      model: "deepseek-chat",
+      modelFallbacksOverride: ["deepseek/deepseek-chat"],
     });
 
     await expectDeepseekFallbackError(promise, getLastFormattedAssistant);
@@ -165,6 +169,10 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       ...overflowBaseRunParams,
       runId: "run-compaction-fallback-error-context",
       config: makeCrossProviderFallbackConfig(),
+      agentHarnessRuntimeOverride: "openclaw",
+      provider: "anthropic",
+      model: "test-model",
+      modelFallbacksOverride: ["deepseek/deepseek-chat"],
     });
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
@@ -200,6 +208,10 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       ...overflowBaseRunParams,
       runId: "run-stale-session-assistant-timeout",
       config: makeCrossProviderFallbackConfig(),
+      agentHarnessRuntimeOverride: "openclaw",
+      provider: "deepseek",
+      model: "deepseek-chat",
+      modelFallbacksOverride: ["deepseek/deepseek-chat"],
     });
 
     await expect(promise).rejects.toBeInstanceOf(MockedFailoverError);
@@ -232,6 +244,10 @@ describe("runEmbeddedAgent cross-provider fallback error handling", () => {
       ...overflowBaseRunParams,
       runId: "run-stale-session-assistant-non-timeout",
       config: makeCrossProviderFallbackConfig(),
+      agentHarnessRuntimeOverride: "openclaw",
+      provider: "deepseek",
+      model: "deepseek-chat",
+      modelFallbacksOverride: ["deepseek/deepseek-chat"],
     });
 
     expect(mockedIsFailoverAssistantError).toHaveBeenCalledWith(undefined);

@@ -3,8 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_POLLY_VOICE,
   escapeXml,
-  getOpenAiVoiceNames,
-  isOpenAiVoice,
   mapVoiceToPolly,
 } from "./voice-mapping.js";
 
@@ -22,12 +20,5 @@ describe("voice mapping", () => {
     expect(mapVoiceToPolly("Google.en-US-Standard-C")).toBe("Google.en-US-Standard-C");
     expect(mapVoiceToPolly("unknown")).toBe(DEFAULT_POLLY_VOICE);
     expect(mapVoiceToPolly(undefined)).toBe(DEFAULT_POLLY_VOICE);
-  });
-
-  it("detects known openai voices and lists them", () => {
-    expect(isOpenAiVoice("nova")).toBe(true);
-    expect(isOpenAiVoice("NOVA")).toBe(true);
-    expect(isOpenAiVoice("Polly.Joanna")).toBe(false);
-    expect(getOpenAiVoiceNames()).toEqual(["alloy", "echo", "fable", "onyx", "nova", "shimmer"]);
   });
 });
