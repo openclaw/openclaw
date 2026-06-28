@@ -437,6 +437,8 @@ Updates apply to tracked plugin installs in the managed plugin index and tracked
   <Accordion title="Resolving plugin id vs npm spec">
     When you pass a plugin id, OpenClaw reuses the recorded install spec for that plugin. That means previously stored dist-tags such as `@beta` and exact pinned versions continue to be used on later `update <id>` runs.
 
+    During `update <id> --dry-run`, exact pinned npm installs stay pinned. If OpenClaw can also resolve the package's registry default line and that default line is newer than the installed pinned version, the dry run reports the pin and prints the explicit `@latest` package update command to follow the registry default line.
+
     That targeted-update rule is different from the bulk `openclaw plugins update --all` maintenance path. Bulk updates still respect ordinary tracked install specs, but trusted official OpenClaw plugin records can sync to the current official catalog target instead of staying on a stale exact official package. Use targeted `update <id>` when you intentionally want to keep an exact or tagged official spec untouched.
 
     For npm installs, you can also pass an explicit npm package spec with a dist-tag or exact version. OpenClaw resolves that package name back to the tracked plugin record, updates that installed plugin, and records the new npm spec for future id-based updates.

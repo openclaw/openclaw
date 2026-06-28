@@ -23,7 +23,7 @@ import {
   messageAction,
 } from "./template-messages.js";
 
-const lineLoneHighSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
+const loneHighSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
 
 describe("createConfirmTemplate", () => {
   it("truncates text to 240 characters", () => {
@@ -31,6 +31,17 @@ describe("createConfirmTemplate", () => {
     const template = createConfirmTemplate(longText, messageAction("Yes"), messageAction("No"));
 
     expect((template.template as { text: string }).text.length).toBe(240);
+  });
+
+  it("drops a surrogate-pair emoji from fallback altText instead of splitting it", () => {
+    const template = createConfirmTemplate(
+      `${"x".repeat(399)}😀`,
+      messageAction("Yes"),
+      messageAction("No"),
+    );
+
+    expect(template.altText).toBe("x".repeat(399));
+    expect(loneHighSurrogate.test(template.altText)).toBe(false);
   });
 });
 
@@ -47,6 +58,25 @@ describe("createButtonTemplate", () => {
     const template = createButtonTemplate(longTitle, "Text", [messageAction("OK")]);
 
     expect((template.template as { title: string }).title.length).toBe(40);
+  });
+
+  it("drops a surrogate-pair emoji from the title instead of splitting it", () => {
+    // 39 chars + an emoji land the truncation boundary inside the surrogate pair;
+    // a raw code-unit slice would keep only the lone high surrogate.
+    const template = createButtonTemplate(`${"x".repeat(39)}😀`, "Text", [messageAction("OK")]);
+    const title = (template.template as { title: string }).title;
+
+    expect(title).toBe("x".repeat(39));
+    expect(loneHighSurrogate.test(title)).toBe(false);
+  });
+
+  it("drops a surrogate-pair emoji from explicit altText instead of splitting it", () => {
+    const template = createButtonTemplate("Title", "Text", [messageAction("OK")], {
+      altText: `${"x".repeat(399)}😀`,
+    });
+
+    expect(template.altText).toBe("x".repeat(399));
+    expect(loneHighSurrogate.test(template.altText)).toBe(false);
   });
 
   it("truncates text to 60 chars when no thumbnail is provided", () => {
@@ -98,6 +128,17 @@ describe("createCarouselColumn", () => {
     });
 
     expect(column.text.length).toBe(60);
+  });
+
+  it("drops a surrogate-pair emoji from the title instead of splitting it", () => {
+    const column = createCarouselColumn({
+      title: `${"x".repeat(39)}😀`,
+      text: "Text",
+      actions: [messageAction("OK")],
+    });
+
+    expect(column.title).toBe("x".repeat(39));
+    expect(loneHighSurrogate.test(column.title ?? "")).toBe(false);
   });
 
   it("does not split an emoji grapheme at the 60-code-unit boundary", () => {
@@ -166,6 +207,16 @@ describe("carousel column limits", () => {
   ])("limits columns to 10", ({ createTemplate }) => {
     const template = createTemplate();
     expect((template.template as { columns: unknown[] }).columns.length).toBe(10);
+  });
+
+  it("drops a surrogate-pair emoji from image-carousel altText instead of splitting it", () => {
+    const template = createImageCarousel(
+      [createImageCarouselColumn("https://example.com/0.jpg", messageAction("View"))],
+      `${"x".repeat(399)}😀`,
+    );
+
+    expect(template.altText).toBe("x".repeat(399));
+    expect(loneHighSurrogate.test(template.altText)).toBe(false);
   });
 });
 
@@ -287,7 +338,7 @@ describe("action label/data surrogate-safe truncation", () => {
     const action = messageAction(labelWithEmoji) as { label: string };
 
     expect(action.label).toBe("1234567890123456789");
-    expect(lineLoneHighSurrogate.test(action.label)).toBe(false);
+    expect(loneHighSurrogate.test(action.label)).toBe(false);
   });
 
   it("messageAction leaves a short ASCII label unchanged", () => {
@@ -300,7 +351,7 @@ describe("action label/data surrogate-safe truncation", () => {
     const action = uriAction(labelWithEmoji, "https://example.com") as { label: string };
 
     expect(action.label).toBe("1234567890123456789");
-    expect(lineLoneHighSurrogate.test(action.label)).toBe(false);
+    expect(loneHighSurrogate.test(action.label)).toBe(false);
   });
 
   it("postbackAction truncates label and data on surrogate boundaries", () => {
@@ -312,9 +363,9 @@ describe("action label/data surrogate-safe truncation", () => {
     };
 
     expect(action.label).toBe("1234567890123456789");
-    expect(lineLoneHighSurrogate.test(action.label)).toBe(false);
+    expect(loneHighSurrogate.test(action.label)).toBe(false);
     expect(action.data).toBe("d".repeat(299));
-    expect(lineLoneHighSurrogate.test(action.data)).toBe(false);
+    expect(loneHighSurrogate.test(action.data)).toBe(false);
   });
 
   it("postbackAction truncates displayText on surrogate boundaries but keeps undefined", () => {
@@ -325,7 +376,7 @@ describe("action label/data surrogate-safe truncation", () => {
     const withoutDisplay = postbackAction("Label", "data") as { displayText?: string };
 
     expect(withDisplay.displayText).toBe("t".repeat(299));
-    expect(lineLoneHighSurrogate.test(withDisplay.displayText ?? "")).toBe(false);
+    expect(loneHighSurrogate.test(withDisplay.displayText ?? "")).toBe(false);
     expect(withoutDisplay.displayText).toBeUndefined();
   });
 
@@ -337,9 +388,9 @@ describe("action label/data surrogate-safe truncation", () => {
     };
 
     expect(action.label).toBe("1234567890123456789");
-    expect(lineLoneHighSurrogate.test(action.label)).toBe(false);
+    expect(loneHighSurrogate.test(action.label)).toBe(false);
     expect(action.data).toBe("d".repeat(299));
-    expect(lineLoneHighSurrogate.test(action.data)).toBe(false);
+    expect(loneHighSurrogate.test(action.data)).toBe(false);
   });
 
   it("/card action command uses surrogate-safe labels and postback data", async () => {
@@ -364,9 +415,9 @@ describe("action label/data surrogate-safe truncation", () => {
     const action = result.channelData.line.flexMessage.contents.footer.contents[0].action;
 
     expect(action.label).toBe("1234567890123456789");
-    expect(lineLoneHighSurrogate.test(action.label)).toBe(false);
+    expect(loneHighSurrogate.test(action.label)).toBe(false);
     expect(action.data).toBe(`k=${"d".repeat(297)}`);
-    expect(lineLoneHighSurrogate.test(action.data)).toBe(false);
+    expect(loneHighSurrogate.test(action.data)).toBe(false);
   });
 
   it("media control postback labels truncate on surrogate boundaries", () => {
@@ -385,7 +436,7 @@ describe("action label/data surrogate-safe truncation", () => {
       .find((button) => button.action?.data === "extra")?.action;
 
     expect(extraAction?.label).toBe("x".repeat(14));
-    expect(lineLoneHighSurrogate.test(extraAction?.label ?? "")).toBe(false);
+    expect(loneHighSurrogate.test(extraAction?.label ?? "")).toBe(false);
   });
 });
 

@@ -469,8 +469,75 @@ describe("memory-core dreaming phases", () => {
         "utf-8",
       );
       expect(dailyContent).toContain("## Light Sleep");
-      expect(dailyContent.match(/^- Candidate:/gm)).toHaveLength(1);
+      expect(dailyContent).toContain("- No notable updates.");
+      expect(dailyContent.match(/^- Candidate:/gm) ?? []).toHaveLength(0);
       expect(dailyContent).not.toContain("Light Sleep: Candidate:");
+    });
+  });
+
+  it("does not restage unchanged light candidates in later cycles", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await withDreamingTestClock(async () => {
+      await writeDailyNote(workspaceDir, [
+        `# ${DREAMING_TEST_DAY}`,
+        "",
+        "- Added primary issue extraction for pain notifications.",
+        "- Updated signals cron notification style.",
+      ]);
+
+      const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 1);
+
+      const firstCycle = await fs.readFile(
+        path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+        "utf-8",
+      );
+      expect(firstCycle).toContain(
+        "Added primary issue extraction for pain notifications.; Updated signals cron notification style.",
+      );
+
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 61);
+
+      const secondCycle = await fs.readFile(
+        path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+        "utf-8",
+      );
+      expect(secondCycle).toContain("- No notable updates.");
+      expect(secondCycle).not.toContain(
+        "Added primary issue extraction for pain notifications.; Updated signals cron notification style.",
+      );
+    });
+  });
+
+  it("restages same-day light candidates after daily note content changes", async () => {
+    const workspaceDir = await createDreamingWorkspace();
+    await withDreamingTestClock(async () => {
+      await writeDailyNote(workspaceDir, [
+        `# ${DREAMING_TEST_DAY}`,
+        "",
+        "- Added primary issue extraction for pain notifications.",
+        "- Updated signals cron notification style.",
+      ]);
+
+      const { beforeAgentReply } = createLightDreamingHarness(workspaceDir);
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 1);
+
+      await writeDailyNote(workspaceDir, [
+        `# ${DREAMING_TEST_DAY}`,
+        "",
+        "- Added primary issue extraction for pain notifications.",
+        "- Updated signals cron notification style.",
+        "- Documented the shared pain notification issue.",
+      ]);
+      await triggerLightDreaming(beforeAgentReply, workspaceDir, 61);
+
+      const secondCycle = await fs.readFile(
+        path.join(workspaceDir, "memory", `${DREAMING_TEST_DAY}.md`),
+        "utf-8",
+      );
+      expect(secondCycle).toContain(
+        "Added primary issue extraction for pain notifications.; Updated signals cron notification style.; Documented the shared pain notification issue.",
+      );
     });
   });
 
@@ -2962,6 +3029,7 @@ describe("memory-core dreaming phases", () => {
     });
     expect(after1).toHaveLength(1);
     expect(after1[0]?.dailyCount).toBe(1);
+    expect(after1[0]?.lastRecalledAt).toBe("2026-04-05T10:00:00.000Z");
 
     const day2Ms = Date.parse("2026-04-06T10:00:00.000Z");
     const { beforeAgentReply: reply2 } = createHarness(configForTest, workspaceDir);
@@ -2982,6 +3050,7 @@ describe("memory-core dreaming phases", () => {
     });
     expect(after2).toHaveLength(1);
     expect(after2[0]?.dailyCount).toBe(2);
+    expect(after2[0]?.lastRecalledAt).toBe("2026-04-05T10:00:00.000Z");
   });
 });
 
