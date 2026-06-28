@@ -242,8 +242,13 @@ describe("normalizeApiKeyInput", () => {
 });
 
 describe("validateApiKeyInput", () => {
-  it("rejects pasted OpenClaw onboarding commands", () => {
-    expect(validateApiKeyInput("openclaw onboard --auth-choice zai-coding-global")).toBe(
+  it.each([
+    "openclaw onboard --auth-choice zai-coding-global",
+    "openclaw onboard --auth-choice=zai-coding-global",
+    "openclaw onboard --non-interactive --auth-choice zai-coding-global --zai-api-key $ZAI_API_KEY",
+    "openclaw onboard --non-interactive --auth-choice=zai-coding-global --zai-api-key $ZAI_API_KEY",
+  ])("rejects pasted OpenClaw onboarding command %p", (value) => {
+    expect(validateApiKeyInput(value)).toBe(
       "Paste the API key value, not an OpenClaw onboarding command.",
     );
   });
