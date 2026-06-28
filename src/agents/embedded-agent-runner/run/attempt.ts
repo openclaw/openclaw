@@ -4625,6 +4625,7 @@ export async function runEmbeddedAttempt(
               systemPrompt: systemPromptForHook,
               prompt: llmBoundaryPromptForPrecheck,
               contextMode: params.bootstrapContextMode,
+              promptImageCount: imageResult.images.length,
               contextTokenBudget,
               reserveTokens,
               toolResultMaxChars: promptToolResultMaxChars,

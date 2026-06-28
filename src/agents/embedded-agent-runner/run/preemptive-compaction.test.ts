@@ -351,13 +351,23 @@ describe("preemptive-compaction", () => {
       name: "admits the reported empty-history lightweight cron prompt",
       contextMode: "lightweight" as const,
       messages: () => [],
+      promptImageCount: 0,
       expectedPromptBudget: 3_584,
       expectedRoute: "fits" as const,
+    },
+    {
+      name: "keeps prompt-image lightweight runs on the shared prompt floor",
+      contextMode: "lightweight" as const,
+      messages: () => [],
+      promptImageCount: 1,
+      expectedPromptBudget: 2_048,
+      expectedRoute: "compact_only" as const,
     },
     {
       name: "keeps lightweight shared-history prompts on the shared prompt floor",
       contextMode: "lightweight" as const,
       messages: () => [makeAssistantHistory("existing shared heartbeat conversation")],
+      promptImageCount: 0,
       expectedPromptBudget: 2_048,
       expectedRoute: "compact_only" as const,
     },
@@ -365,27 +375,32 @@ describe("preemptive-compaction", () => {
       name: "keeps full-context small models on the shared prompt floor",
       contextMode: "full" as const,
       messages: () => [],
+      promptImageCount: 0,
       expectedPromptBudget: 2_048,
       expectedRoute: "compact_only" as const,
     },
-  ])("$name", ({ contextMode, messages, expectedPromptBudget, expectedRoute }) => {
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: messages(),
-      systemPrompt: "",
-      prompt: "run scheduled task",
-      contextMode,
-      contextTokenBudget: 4_096,
-      reserveTokens: 20_000,
-      llmBoundaryTokenPressure: {
-        estimatedPromptTokens: 3_544,
-        source: "reported_lightweight_cron",
-      },
-    });
+  ])(
+    "$name",
+    ({ contextMode, messages, promptImageCount, expectedPromptBudget, expectedRoute }) => {
+      const result = shouldPreemptivelyCompactBeforePrompt({
+        messages: messages(),
+        systemPrompt: "",
+        prompt: "run scheduled task",
+        contextMode,
+        promptImageCount,
+        contextTokenBudget: 4_096,
+        reserveTokens: 20_000,
+        llmBoundaryTokenPressure: {
+          estimatedPromptTokens: 3_544,
+          source: "reported_lightweight_cron",
+        },
+      });
 
-    expect(result.promptBudgetBeforeReserve).toBe(expectedPromptBudget);
-    expect(result.shouldCompact).toBe(expectedRoute === "compact_only");
-    expect(result.route).toBe(expectedRoute);
-  });
+      expect(result.promptBudgetBeforeReserve).toBe(expectedPromptBudget);
+      expect(result.shouldCompact).toBe(expectedRoute === "compact_only");
+      expect(result.route).toBe(expectedRoute);
+    },
+  );
 
   it("keeps the requested reserve when it leaves enough prompt budget", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
