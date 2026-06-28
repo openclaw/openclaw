@@ -206,6 +206,10 @@ function isDispatchReplyOperationAbortedError(
   return error instanceof DispatchReplyOperationAbortedError;
 }
 
+function isRecoverableTerminalSessionStatus(status: SessionEntry["status"] | undefined): boolean {
+  return status === "failed" || status === "timeout" || status === "killed";
+}
+
 function composeAbortSignals(...signals: Array<AbortSignal | undefined>): AbortSignal | undefined {
   const activeSignals: AbortSignal[] = [];
   for (const signal of signals) {
@@ -1421,6 +1425,48 @@ export async function dispatchReplyFromConfig(
         });
       }
     }
+    if (
+      admission.status === "skipped" &&
+      admission.reason === "active-run" &&
+      // Only visible reply turns may force-clear a stale terminal operation.
+      // A heartbeat/control turn can also see the terminal snapshot, but it must
+      // not abort an in-flight visible recovery a concurrent visible turn just
+      // admitted (before that op is marked `terminalRecovery`); let it fall
+      // through to normal busy/skip handling instead.
+      replyTurnKind === "visible" &&
+      isRecoverableTerminalSessionStatus(sessionStoreEntry.entry?.status) &&
+      // Only clear the leftover op that belongs to the SAME terminal session.
+      // A concurrent reset/rotation can admit a fresh op (new sessionId) under
+      // this session key while we still hold the stale terminal snapshot;
+      // force-clearing by the active op's id would drop that valid in-flight
+      // reply and recreate the message loss this fix exists to prevent (#86827).
+      admission.activeOperation?.sessionId === sessionStoreEntry.entry?.sessionId &&
+      // Only clear the proven stale leftover from the failed lifecycle. A
+      // freshly-admitted visible recovery op is marked `terminalRecovery` at the
+      // admission choke point below; force-failing that op would drop the very
+      // recovery turn this path exists to protect (concurrent visible turns can
+      // read the same terminal snapshot before it clears).
+      !admission.activeOperation?.terminalRecovery
+    ) {
+      const cleared = forceClearReplyRunBySessionId(
+        admission.activeOperation?.sessionId ?? operationSessionId,
+        new Error("clearing stale terminal reply operation"),
+      );
+      if (cleared) {
+        logVerbose(
+          `dispatch-from-config: cleared stale active reply operation for terminal session ${dispatchOperationSessionKey}`,
+        );
+        admission = await admitReplyTurn({
+          sessionKey: dispatchOperationSessionKey,
+          sessionId: operationSessionId,
+          kind: replyTurnKind,
+          resetTriggered: false,
+          routeThreadId,
+          upstreamAbortSignal: params.replyOptions?.abortSignal,
+          waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
+        });
+      }
+    }
     if (admission.status === "skipped") {
       if (allowActivePreDispatch && admission.reason === "active-run") {
         preDispatchAbortOperation = admission.activeOperation;
@@ -1444,6 +1490,20 @@ export async function dispatchReplyFromConfig(
         `dispatch-from-config: skipped reply operation admission for ${dispatchOperationSessionKey}; reason=${admission.reason}`,
       );
       return { status: "busy" };
+    }
+    // Mark every freshly-admitted visible recovery of a terminal session at this
+    // single choke point (both the clean no-stale admission and the
+    // re-admission after a sibling force-clear flow through here). The marker
+    // protects this op from being force-cleared by a concurrent sibling visible
+    // turn that reads the same terminal snapshot (#86827). Genuine stale
+    // leftovers from the original failed run never pass through this admission,
+    // so they stay unmarked and remain force-clearable.
+    if (
+      replyTurnKind === "visible" &&
+      isRecoverableTerminalSessionStatus(sessionStoreEntry.entry?.status) &&
+      operationSessionId === sessionStoreEntry.entry?.sessionId
+    ) {
+      admission.operation.markTerminalRecovery();
     }
     dispatchReplyOperation = admission.operation;
     dispatchReplyOperation.retainFailureUntilComplete();

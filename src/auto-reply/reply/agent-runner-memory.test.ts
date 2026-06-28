@@ -46,6 +46,7 @@ function createReplyOperation(): TestReplyOperation {
     sessionId: "session",
     abortSignal: new AbortController().signal,
     resetTriggered: false,
+    terminalRecovery: false,
     phase: "queued",
     result: null,
     setPhase: vi.fn<ReplyOperation["setPhase"]>(),
@@ -61,6 +62,7 @@ function createReplyOperation(): TestReplyOperation {
     fail: vi.fn(),
     abortByUser: vi.fn(),
     abortForRestart: vi.fn(),
+    markTerminalRecovery: vi.fn(),
   };
 }
 

@@ -1085,7 +1085,7 @@ describe("gateway agent handler", () => {
     expect(capturedEntry?.sessionFile).toBeUndefined();
   });
 
-  it("keeps a failed session reusable when its default transcript exists", async () => {
+  it("recovers a failed session when its default transcript exists", async () => {
     const now = Date.parse("2026-05-18T09:49:00.000Z");
     vi.useFakeTimers({ toFake: ["Date"] });
     dateOnlyFakeClockActive = true;
@@ -1098,6 +1098,10 @@ describe("gateway agent handler", () => {
       const failedEntryWithDefaultTranscript = {
         sessionId: "failed-present-default-session-id",
         status: "failed",
+        startedAt: now - 1_000,
+        endedAt: now,
+        runtimeMs: 1_000,
+        abortedLastRun: true,
         updatedAt: now,
         sessionStartedAt: now,
         lastInteractionAt: now,
@@ -1116,12 +1120,16 @@ describe("gateway agent handler", () => {
       const call = await waitForAgentCommandCall<{ sessionId?: string }>();
       expect(call.sessionId).toBe("failed-present-default-session-id");
       expect(capturedEntry?.sessionId).toBe("failed-present-default-session-id");
-      expect(capturedEntry?.status).toBe("failed");
+      expect(capturedEntry?.status).toBeUndefined();
+      expect(capturedEntry?.startedAt).toBeUndefined();
+      expect(capturedEntry?.endedAt).toBeUndefined();
+      expect(capturedEntry?.runtimeMs).toBeUndefined();
+      expect(capturedEntry?.abortedLastRun).toBeUndefined();
       expect(capturedEntry?.sessionFile).toBeUndefined();
     });
   });
 
-  it("keeps a failed session reusable when its relative transcript resolves and exists", async () => {
+  it("recovers a failed session when its relative transcript resolves and exists", async () => {
     const now = Date.parse("2026-05-18T09:50:00.000Z");
     vi.useFakeTimers({ toFake: ["Date"] });
     dateOnlyFakeClockActive = true;
@@ -1135,6 +1143,10 @@ describe("gateway agent handler", () => {
         sessionId: "failed-present-session-id",
         sessionFile: "relative-present.jsonl",
         status: "failed",
+        startedAt: now - 1_000,
+        endedAt: now,
+        runtimeMs: 1_000,
+        abortedLastRun: true,
         updatedAt: now,
         sessionStartedAt: now,
         lastInteractionAt: now,
@@ -1153,7 +1165,11 @@ describe("gateway agent handler", () => {
       const call = await waitForAgentCommandCall<{ sessionId?: string }>();
       expect(call.sessionId).toBe("failed-present-session-id");
       expect(capturedEntry?.sessionId).toBe("failed-present-session-id");
-      expect(capturedEntry?.status).toBe("failed");
+      expect(capturedEntry?.status).toBeUndefined();
+      expect(capturedEntry?.startedAt).toBeUndefined();
+      expect(capturedEntry?.endedAt).toBeUndefined();
+      expect(capturedEntry?.runtimeMs).toBeUndefined();
+      expect(capturedEntry?.abortedLastRun).toBeUndefined();
       expect(capturedEntry?.sessionFile).toBe("relative-present.jsonl");
     });
   });
@@ -1727,6 +1743,43 @@ describe("gateway agent handler", () => {
     });
     expect(mocks.agentCommand).not.toHaveBeenCalled();
   });
+
+  it("recovers terminal failed agent API sessions without rotating the session id", async () => {
+    const sessionId = "failed-agent-session";
+    await withTempDir({ prefix: "openclaw-gateway-terminal-recovery-" }, async (root) => {
+      const sessionsDir = `${root}/sessions`;
+      await fs.mkdir(sessionsDir, { recursive: true });
+      await fs.writeFile(`${sessionsDir}/${sessionId}.jsonl`, "", "utf8");
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: {},
+        storePath: `${sessionsDir}/sessions.json`,
+        entry: {
+          sessionId,
+          status: "failed",
+          startedAt: 100,
+          endedAt: 200,
+          runtimeMs: 100,
+          abortedLastRun: true,
+          updatedAt: Date.now(),
+        },
+        canonicalKey: "agent:main:main",
+      });
+
+      const capturedEntry = await runMainAgentAndCaptureEntry("recover-terminal-agent-session");
+      const call = await waitForAgentCommandCall();
+
+      expect(call.sessionId).toBe(sessionId);
+      expectRecordFields(capturedEntry, {
+        sessionId,
+        status: undefined,
+        startedAt: undefined,
+        endedAt: undefined,
+        runtimeMs: undefined,
+        abortedLastRun: undefined,
+      });
+    });
+  });
+
   it("does not restore a stale session id over a fresh store rotation (#5369)", async () => {
     mocks.resolveSessionLifecycleTimestamps.mockImplementation(
       ({ entry }: { entry?: { sessionId?: string; sessionStartedAt?: number } }) => ({
