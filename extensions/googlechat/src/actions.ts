@@ -17,6 +17,7 @@ import { listEnabledGoogleChatAccounts, resolveGoogleChatAccount } from "./accou
 import {
   createGoogleChatReaction,
   deleteGoogleChatReaction,
+  isGoogleChatAttachmentUploadUnauthorized,
   listGoogleChatReactions,
   sendGoogleChatMessage,
   uploadGoogleChatAttachment,
@@ -141,13 +142,34 @@ export const googlechatMessageActions: ChannelMessageActionAdapter = {
           readStringParam(params, "title") ??
           loaded.fileName ??
           "attachment";
-        const upload = await uploadGoogleChatAttachment({
-          account,
-          space,
-          filename: uploadFileName,
-          buffer: loaded.buffer,
-          contentType: loaded.contentType,
-        });
+        let upload: { attachmentUploadToken?: string };
+        try {
+          upload = await uploadGoogleChatAttachment({
+            account,
+            space,
+            filename: uploadFileName,
+            buffer: loaded.buffer,
+            contentType: loaded.contentType,
+          });
+        } catch (err) {
+          // App auth (chat.bot) cannot upload attachments (403). For remote URLs,
+          // deliver the media as a text link so the action still reaches the user
+          // instead of failing the whole tool call.
+          if (isGoogleChatAttachmentUploadUnauthorized(err) && /^https?:\/\//i.test(mediaUrl)) {
+            const linkText = [content, mediaUrl]
+              .map((part) => part?.trim())
+              .filter(Boolean)
+              .join("\n");
+            await sendGoogleChatMessage({
+              account,
+              space,
+              text: linkText,
+              thread: threadId ?? undefined,
+            });
+            return jsonResult({ ok: true, to: space });
+          }
+          throw err;
+        }
         const sent = await sendGoogleChatMessage({
           account,
           space,

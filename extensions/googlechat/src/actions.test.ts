@@ -20,6 +20,10 @@ vi.mock("./accounts.js", () => ({
 vi.mock("./api.js", () => ({
   createGoogleChatReaction,
   deleteGoogleChatReaction,
+  isGoogleChatAttachmentUploadUnauthorized: (err: unknown) =>
+    /\b403\b|PERMISSION_DENIED|insufficient authentication scopes/i.test(
+      String((err as { message?: unknown })?.message ?? err),
+    ),
   listGoogleChatReactions,
   sendGoogleChatMessage,
   uploadGoogleChatAttachment,
@@ -245,6 +249,85 @@ describe("googlechat message actions", () => {
       messageName: "spaces/BBB/messages/msg-2",
       threadName: "spaces/BBB/threads/thread-2",
     });
+  });
+
+  it("falls back to a text link when the action media upload is unauthorized", async () => {
+    const account = buildAccount({ config: { mediaMaxMb: 5 } });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/AAA");
+    const readRemoteMediaBuffer = vi.fn(async () => ({
+      buffer: Buffer.from("remote-bytes"),
+      fileName: "remote.png",
+      contentType: "image/png",
+    }));
+    getGoogleChatRuntime.mockReturnValue({
+      channel: { media: { readRemoteMediaBuffer } },
+    });
+    uploadGoogleChatAttachment.mockRejectedValue(
+      new Error(
+        "Google Chat upload 403: Request had insufficient authentication scopes. (PERMISSION_DENIED)",
+      ),
+    );
+    sendGoogleChatMessage.mockResolvedValue({ messageName: "spaces/AAA/messages/link-1" });
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    const result = await googlechatMessageActions.handleAction({
+      action: "send",
+      params: {
+        to: "spaces/AAA",
+        message: "caption",
+        media: "https://example.com/file.png",
+        threadId: "thread-1",
+      },
+      cfg: {},
+      accountId: "default",
+    } as never);
+
+    expect(readRemoteMediaBuffer).toHaveBeenCalled();
+    expect(sendGoogleChatMessage).toHaveBeenCalledTimes(1);
+    expect(sendGoogleChatMessage).toHaveBeenCalledWith({
+      account,
+      space: "spaces/AAA",
+      text: "caption\nhttps://example.com/file.png",
+      thread: "thread-1",
+    });
+    expectJsonResult(result, { ok: true, to: "spaces/AAA" });
+  });
+
+  it("does not fall back for a local-file upload-file when the upload is unauthorized", async () => {
+    const account = buildAccount({ config: { mediaMaxMb: 5 } });
+    resolveGoogleChatAccount.mockReturnValue(account);
+    resolveGoogleChatOutboundSpace.mockResolvedValue("spaces/BBB");
+    const localRoot = "/tmp/googlechat-action-test";
+    const localPath = path.join(localRoot, "local.md");
+    const readFile = vi.fn(async () => Buffer.from("local-bytes"));
+    getGoogleChatRuntime.mockReturnValue({
+      channel: { media: { readRemoteMediaBuffer: vi.fn() } },
+    });
+    uploadGoogleChatAttachment.mockRejectedValue(
+      new Error(
+        "Google Chat upload 403: Request had insufficient authentication scopes. (PERMISSION_DENIED)",
+      ),
+    );
+
+    if (!googlechatMessageActions.handleAction) {
+      throw new Error("Expected googlechatMessageActions.handleAction to be defined");
+    }
+    await expect(
+      googlechatMessageActions.handleAction({
+        action: "upload-file",
+        params: { to: "spaces/BBB", path: localPath, message: "notes", filename: "renamed.txt" },
+        cfg: {},
+        accountId: "default",
+        mediaLocalRoots: [localRoot],
+        mediaReadFile: readFile,
+      } as never),
+    ).rejects.toThrow(/403/);
+
+    // Local file has no remote https URL to post as a link -> no bogus link send.
+    expect(sendGoogleChatMessage).not.toHaveBeenCalled();
   });
 
   it("removes only matching app reactions on react remove", async () => {
