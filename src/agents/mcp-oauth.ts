@@ -49,7 +49,7 @@ export type McpOAuthCredentialsStatus = {
 const LEGACY_DEFAULT_REDIRECT_URL = "http://127.0.0.1:8989/oauth/callback";
 const LOCALHOST_REDIRECT_URL = "http://localhost:8989/oauth/callback";
 
-export function isMcpOAuthRedirectRegistrationError(error: unknown): boolean {
+function isMcpOAuthRedirectRegistrationError(error: unknown): boolean {
   return /invalid_client_metadata|redirect_uri/i.test(String(error));
 }
 

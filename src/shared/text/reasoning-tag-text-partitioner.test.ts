@@ -99,6 +99,21 @@ describe("createReasoningTagTextPartitioner", () => {
     ]);
   });
 
+  it("keeps split mm reasoning tags out of visible text", () => {
+    const partitioner = createReasoningTagTextPartitioner();
+    const deltas = [
+      ...partitioner.push("Before <mm:thi"),
+      ...partitioner.push("nk>secret</mm:think> after"),
+      ...partitioner.flush(),
+    ];
+
+    expect(deltas).toEqual([
+      { kind: "text", text: "Before " },
+      { kind: "thinking", text: "secret" },
+      { kind: "text", text: " after" },
+    ]);
+  });
+
   it("keeps nested reasoning hidden until the outer tag closes", () => {
     const partitioner = createReasoningTagTextPartitioner();
 

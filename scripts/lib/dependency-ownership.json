@@ -87,11 +87,6 @@
       "class": "core-runtime",
       "risk": ["cli-parser"]
     },
-    "cross-spawn": {
-      "owner": "core:child-process",
-      "class": "core-runtime",
-      "risk": ["process-spawn"]
-    },
     "croner": {
       "owner": "core:scheduler",
       "class": "core-runtime",

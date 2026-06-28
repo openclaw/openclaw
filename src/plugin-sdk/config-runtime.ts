@@ -4,20 +4,23 @@
  * config-mutation, and runtime-config-snapshot.
  */
 
-import {
-  listSessionEntries,
-  loadSessionEntry as getSessionEntry,
-  readSessionUpdatedAt,
-} from "../config/sessions/session-accessor.js";
 import { loadSessionStore as loadSessionStoreImpl } from "../config/sessions/store-load.js";
+export {
+  getSessionEntry,
+  listSessionEntries,
+  patchSessionEntry,
+  readSessionUpdatedAt,
+  updateSessionStoreEntry,
+  upsertSessionEntry,
+} from "./session-store-runtime.js";
 
 /**
  * @deprecated Use getSessionEntry/listSessionEntries for reads and
- * patchSessionEntry/upsertSessionEntry for writes. loadSessionStore keeps the
- * legacy mutable whole-store shape and will remain a compatibility escape hatch.
+ * patchSessionEntry/upsertSessionEntry for writes. This whole-store helper is
+ * kept only during the transition before SQLite migration. Callers must
+ * migrate away from reading sessions.json directly.
  */
 export const loadSessionStore = loadSessionStoreImpl;
-export { getSessionEntry, listSessionEntries, readSessionUpdatedAt };
 
 export { resolveDefaultAgentId } from "../agents/agent-scope.js";
 export {
@@ -147,13 +150,20 @@ export type {
 } from "../config/types.js";
 export {
   clearSessionStoreCacheForTest,
-  patchSessionEntry,
   recordSessionMetaFromInbound,
+  /**
+   * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
+   * whole-store helper is kept only during the transition before SQLite
+   * migration. Callers must migrate away from writing sessions.json directly.
+   */
   saveSessionStore,
   updateLastRoute,
+  /**
+   * @deprecated Use patchSessionEntry/upsertSessionEntry for writes. This
+   * whole-store helper is kept only during the transition before SQLite
+   * migration. Callers must migrate away from updating sessions.json directly.
+   */
   updateSessionStore,
-  updateSessionStoreEntry,
-  upsertSessionEntry,
   resolveSessionStoreEntry,
 } from "../config/sessions/store.js";
 export { resolveSessionKey } from "../config/sessions/session-key.js";

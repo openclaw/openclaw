@@ -40,6 +40,9 @@ const STUCK_RUN_MS = 2 * 60 * 60 * 1000;
 const STAGGER_OFFSET_CACHE_MAX = 4096;
 const staggerOffsetCache = new Map<string, number>();
 
+type CronAgentTurnPayload = Extract<CronPayload, { kind: "agentTurn" }>;
+type CronAgentTurnPayloadPatch = Extract<CronPayloadPatch, { kind: "agentTurn" }>;
+
 /** Default retry delays applied after consecutive cron execution errors. */
 export const DEFAULT_ERROR_BACKOFF_SCHEDULE_MS = [
   30_000,
@@ -176,7 +179,13 @@ function isStaggeredCronRunAtMs(job: CronJob, runAtMs: number): boolean {
   if (job.schedule.kind !== "cron" || !isFiniteTimestamp(runAtMs)) {
     return false;
   }
-  const previous = computeStaggeredCronPreviousRunAtMs(job, runAtMs + 1);
+  // Probe past the candidate second. Croner-style second-granular schedules
+  // normalize a 1ms probe back to the candidate's second, so
+  // `previousRuns(1, runAtMs + 1)` returns the slot before the candidate
+  // rather than the candidate itself and exact-second slots get misclassified
+  // as stale. A 1s probe lands past the candidate second, matching the cursor
+  // step used elsewhere in this file (cf. #81691).
+  const previous = computeStaggeredCronPreviousRunAtMs(job, runAtMs + 1_000);
   return previous === runAtMs;
 }
 
@@ -669,10 +678,16 @@ export function recomputeNextRuns(state: CronServiceState): boolean {
  */
 export function recomputeNextRunsForMaintenance(
   state: CronServiceState,
-  opts?: { recomputeExpired?: boolean; nowMs?: number; repairFutureCronNextRunAtMs?: boolean },
+  opts?: {
+    recomputeExpired?: boolean;
+    nowMs?: number;
+    repairFutureCronNextRunAtMs?: boolean;
+    skipFutureRepairJobIds?: ReadonlySet<string>;
+  },
 ): boolean {
   const recomputeExpired = opts?.recomputeExpired ?? false;
   const repairFutureCronNextRunAtMs = opts?.repairFutureCronNextRunAtMs ?? true;
+  const skipFutureRepairJobIds = opts?.skipFutureRepairJobIds;
   return walkSchedulableJobs(
     state,
     ({ job, nowMs: now }) => {
@@ -683,6 +698,7 @@ export function recomputeNextRunsForMaintenance(
         }
       } else if (
         repairFutureCronNextRunAtMs &&
+        !skipFutureRepairJobIds?.has(job.id) &&
         shouldRepairFutureCronNextRunAtMs({ state, job, nowMs: now })
       ) {
         if (recomputeJobNextRunAtMs({ state, job, nowMs: now })) {
@@ -890,6 +906,42 @@ export function applyJobPatch(
   }
 }
 
+function applyAgentTurnToolsAllowPatch(
+  payload: CronAgentTurnPayload,
+  patch: CronAgentTurnPayloadPatch,
+  existing?: CronAgentTurnPayload,
+): void {
+  if (Array.isArray(patch.toolsAllow)) {
+    payload.toolsAllow = patch.toolsAllow;
+    // Same-kind edits keep the marker only when the default list is unchanged;
+    // kind replacements carry the cron-tool-stamped marker into persistence.
+    if (
+      patch.toolsAllowIsDefault === true &&
+      (!existing || (existing.toolsAllowIsDefault === true && toolsAllowEqual(existing, patch)))
+    ) {
+      payload.toolsAllowIsDefault = true;
+    } else {
+      delete payload.toolsAllowIsDefault;
+    }
+  } else if (patch.toolsAllow === null) {
+    delete payload.toolsAllow;
+    delete payload.toolsAllowIsDefault;
+  }
+}
+
+function toolsAllowEqual(
+  left: Pick<CronAgentTurnPayload, "toolsAllow">,
+  right: Pick<CronAgentTurnPayloadPatch, "toolsAllow">,
+): boolean {
+  const rightToolsAllow = right.toolsAllow;
+  return (
+    Array.isArray(left.toolsAllow) &&
+    Array.isArray(rightToolsAllow) &&
+    left.toolsAllow.length === rightToolsAllow.length &&
+    left.toolsAllow.every((toolName, index) => toolName === rightToolsAllow[index])
+  );
+}
+
 function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronPayload {
   if (patch.kind !== existing.kind) {
     return buildPayloadFromPatch(patch);
@@ -936,7 +988,7 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
     return buildPayloadFromPatch(patch);
   }
 
-  const next: Extract<CronPayload, { kind: "agentTurn" }> = { ...existing };
+  const next: CronAgentTurnPayload = { ...existing };
   if (typeof patch.message === "string") {
     next.message = patch.message;
   }
@@ -947,12 +999,10 @@ function mergeCronPayload(existing: CronPayload, patch: CronPayloadPatch): CronP
   }
   if (Array.isArray(patch.fallbacks)) {
     next.fallbacks = patch.fallbacks;
+  } else if (patch.fallbacks === null) {
+    delete next.fallbacks;
   }
-  if (Array.isArray(patch.toolsAllow)) {
-    next.toolsAllow = patch.toolsAllow;
-  } else if (patch.toolsAllow === null) {
-    delete next.toolsAllow;
-  }
+  applyAgentTurnToolsAllowPatch(next, patch, existing);
   if (typeof patch.thinking === "string") {
     next.thinking = patch.thinking;
   }
@@ -996,23 +1046,24 @@ function buildPayloadFromPatch(patch: CronPayloadPatch): CronPayload {
     throw new Error('cron.update payload.kind="agentTurn" requires message');
   }
 
-  return {
+  const next: CronAgentTurnPayload = {
     kind: "agentTurn",
     message: patch.message,
     model: typeof patch.model === "string" ? patch.model : undefined,
-    fallbacks: patch.fallbacks,
-    toolsAllow: Array.isArray(patch.toolsAllow) ? patch.toolsAllow : undefined,
+    fallbacks: Array.isArray(patch.fallbacks) ? patch.fallbacks : undefined,
     thinking: patch.thinking,
     timeoutSeconds: patch.timeoutSeconds,
     lightContext: patch.lightContext,
     allowUnsafeExternalContent: patch.allowUnsafeExternalContent,
   };
+  applyAgentTurnToolsAllowPatch(next, patch);
+  return next;
 }
 
 function mergeCronDelivery(
   existing: CronDelivery | undefined,
   patch: CronDeliveryPatch,
-): CronDelivery {
+): CronDelivery | undefined {
   const hasCompletionDestinationPatch = "completionDestination" in patch;
   const next: CronDelivery = {
     mode: existing?.mode ?? "none",
@@ -1114,6 +1165,22 @@ function mergeCronDelivery(
         Object.hasOwn(nextFd, "mode");
       next.failureDestination = hasFailureDestination ? nextFd : undefined;
     }
+  }
+
+  if (
+    existing === undefined &&
+    !("mode" in patch) &&
+    next.mode === "none" &&
+    next.channel === undefined &&
+    next.to === undefined &&
+    next.threadId === undefined &&
+    next.accountId === undefined &&
+    next.bestEffort === undefined &&
+    next.completionDestination === undefined &&
+    next.failureDestination === undefined
+  ) {
+    // Clearing an absent override must preserve implicit detached-job delivery.
+    return undefined;
   }
 
   return next;

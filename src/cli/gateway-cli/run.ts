@@ -6,7 +6,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import type { Command } from "commander";
 import type {
   ConfigFileSnapshot,
   GatewayAuthMode,
@@ -14,6 +13,7 @@ import type {
   GatewayTailscaleMode,
   ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "../../config/config.js";
+import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "../../config/future-version-guard.js";
 import {
   CONFIG_PATH,
   normalizeStateDirEnv,
@@ -35,72 +35,31 @@ import { setVerbose } from "../../globals.js";
 import { isTruthyEnvValue } from "../../infra/env.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { GatewayLockError } from "../../infra/gateway-lock.js";
+import { parseStrictPositiveInteger } from "../../infra/parse-finite-number.js";
 import type { RespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { setConsoleSubsystemFilter, setConsoleTimestampPrefix } from "../../logging/console.js";
 import { withDiagnosticPhase } from "../../logging/diagnostic-phase.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
-import { inheritOptionFromParent } from "../command-options.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import { withProgress } from "../progress.js";
 import { parsePort } from "../shared/parse-port.js";
+import {
+  enforceGatewayRunFutureConfigGuard,
+  isGatewayRunFutureConfigAllowed,
+} from "./future-config-guard.js";
 import { installQaParentWatchdog } from "./qa-parent-watchdog.js";
 import { runGatewayLoop } from "./run-loop.js";
-
-type GatewayRunOpts = {
-  port?: unknown;
-  bind?: unknown;
-  token?: unknown;
-  auth?: unknown;
-  password?: unknown;
-  passwordFile?: unknown;
-  tailscale?: unknown;
-  tailscaleResetOnExit?: boolean;
-  allowUnconfigured?: boolean;
-  force?: boolean;
-  verbose?: boolean;
-  cliBackendLogs?: boolean;
-  /** @deprecated Use cliBackendLogs. */
-  claudeCliLogs?: boolean;
-  wsLog?: unknown;
-  compact?: boolean;
-  rawStream?: boolean;
-  rawStreamPath?: unknown;
-  dev?: boolean;
-  reset?: boolean;
-};
+import type { GatewayRunOpts } from "./run-options.js";
+import type { GatewayRunRuntimeHooks } from "./runtime-hooks.js";
 
 const gatewayLog = createSubsystemLogger("gateway");
-
-const GATEWAY_RUN_VALUE_KEYS = [
-  "port",
-  "bind",
-  "token",
-  "auth",
-  "password",
-  "passwordFile",
-  "tailscale",
-  "wsLog",
-  "rawStreamPath",
-] as const;
-
-const GATEWAY_RUN_BOOLEAN_KEYS = [
-  "tailscaleResetOnExit",
-  "allowUnconfigured",
-  "dev",
-  "reset",
-  "force",
-  "verbose",
-  "cliBackendLogs",
-  "claudeCliLogs",
-  "compact",
-  "rawStream",
-] as const;
 
 const SUPERVISED_GATEWAY_LOCK_RETRY_MS = 5000;
 const SUPERVISED_GATEWAY_LOCK_RETRY_TIMEOUT_MS = 30_000;
 const SUPERVISED_GATEWAY_HEALTH_PROBE_TIMEOUT_MS = 1000;
+const GATEWAY_SHELL_ENV_CONVERGENCE_MAX_READS = 4;
 
 type Awaitable<T> = T | Promise<T>;
 type GatewayRunLogger = Pick<ReturnType<typeof createSubsystemLogger>, "info" | "warn">;
@@ -287,6 +246,8 @@ function getGatewayStartGuardErrors(params: {
 }
 
 async function readGatewayStartupConfig(params: {
+  lowerPrecedenceEnv: Readonly<Record<string, string>>;
+  opts: GatewayRunOpts;
   startupTrace: ReturnType<typeof createGatewayCliStartupTrace>;
 }): Promise<{
   cfg: OpenClawConfig;
@@ -294,10 +255,35 @@ async function readGatewayStartupConfig(params: {
   startupConfigSnapshotRead?: ReadConfigFileSnapshotWithPluginMetadataResult;
 }> {
   const { readConfigFileSnapshotWithPluginMetadata } = await import("../../config/config.js");
+  let blockedRecoveryConfig: OpenClawConfig | null = null;
   const snapshotRead: ReadConfigFileSnapshotWithPluginMetadataResult | null =
     await params.startupTrace.measure("cli.config-snapshot", () =>
-      readConfigFileSnapshotWithPluginMetadata({ recoverSuspicious: true }).catch(() => null),
+      readConfigFileSnapshotWithPluginMetadata({
+        isolateEnv: true,
+        ...(Object.keys(params.lowerPrecedenceEnv).length > 0
+          ? { lowerPrecedenceEnv: params.lowerPrecedenceEnv }
+          : {}),
+        recoverSuspicious: true,
+        allowSuspiciousRecovery: (config, current) => {
+          const blockedConfig = [current, config].find(
+            (candidate) =>
+              !isGatewayRunFutureConfigAllowed({ opts: params.opts, config: candidate }),
+          );
+          if (!blockedConfig) {
+            return true;
+          }
+          blockedRecoveryConfig = blockedConfig;
+          return false;
+        },
+      }).catch(() => null),
     );
+  if (blockedRecoveryConfig) {
+    enforceGatewayRunFutureConfigGuard({
+      opts: params.opts,
+      runtime: defaultRuntime,
+      config: blockedRecoveryConfig,
+    });
+  }
   const snapshot: ConfigFileSnapshot | null = snapshotRead?.snapshot ?? null;
   const cfg = snapshot?.config ?? {};
   return {
@@ -307,25 +293,123 @@ async function readGatewayStartupConfig(params: {
   };
 }
 
-export function resolveGatewayRunOptions(opts: GatewayRunOpts, command?: Command): GatewayRunOpts {
-  const resolved: GatewayRunOpts = { ...opts };
+type GatewayRunShellEnvFallbackPlan =
+  | { enabled: false }
+  | {
+      enabled: true;
+      expectedKeys: string[];
+      timeoutMs: number;
+    };
 
-  for (const key of GATEWAY_RUN_VALUE_KEYS) {
-    const inherited = inheritOptionFromParent(command, key);
-    if (key === "wsLog") {
-      // wsLog has a child default ("auto"), so prefer inherited parent CLI value when present.
-      resolved[key] = inherited ?? resolved[key];
-      continue;
+async function resolveGatewayRunShellEnvFallbackPlan(
+  cfg: OpenClawConfig,
+): Promise<GatewayRunShellEnvFallbackPlan> {
+  const { createConfigRuntimeEnv } = await import("../../config/env-vars.js");
+  const {
+    resolveShellEnvFallbackTimeoutMs,
+    shouldDeferShellEnvFallback,
+    shouldEnableShellEnvFallback,
+  } = await import("../../infra/shell-env.js");
+  const planEnv = createConfigRuntimeEnv(cfg, process.env);
+  const enabled =
+    (shouldEnableShellEnvFallback(planEnv) || cfg.env?.shellEnv?.enabled === true) &&
+    !shouldDeferShellEnvFallback(planEnv);
+  if (!enabled) {
+    return { enabled: false };
+  }
+  const { resolveShellEnvExpectedKeys } = await import("../../config/shell-env-expected-keys.js");
+  return {
+    enabled: true,
+    expectedKeys: resolveShellEnvExpectedKeys(planEnv),
+    timeoutMs: cfg.env?.shellEnv?.timeoutMs ?? resolveShellEnvFallbackTimeoutMs(planEnv),
+  };
+}
+
+async function loadGatewayRunShellEnvFallback(
+  plan: Extract<GatewayRunShellEnvFallbackPlan, { enabled: true }>,
+): Promise<Record<string, string>> {
+  const { loadShellEnvFallback } = await import("../../infra/shell-env.js");
+  const valuesBeforeLoad = new Map(plan.expectedKeys.map((key) => [key, process.env[key]]));
+  loadShellEnvFallback({
+    enabled: true,
+    env: process.env,
+    expectedKeys: plan.expectedKeys,
+    logger: gatewayLog,
+    timeoutMs: plan.timeoutMs,
+  });
+  return Object.fromEntries(
+    plan.expectedKeys.flatMap((key) => {
+      const value = process.env[key];
+      return value !== undefined && value !== valuesBeforeLoad.get(key) ? [[key, value]] : [];
+    }),
+  );
+}
+
+async function clearGatewayRunShellEnvFallback(
+  values: Readonly<Record<string, string>>,
+): Promise<void> {
+  const keys = Object.keys(values);
+  if (keys.length === 0) {
+    return;
+  }
+  for (const [key, value] of Object.entries(values)) {
+    if (process.env[key] === value) {
+      delete process.env[key];
     }
-    resolved[key] = resolved[key] ?? inherited;
   }
+  const { clearShellEnvAppliedKeys } = await import("../../infra/shell-env.js");
+  clearShellEnvAppliedKeys(keys);
+}
 
-  for (const key of GATEWAY_RUN_BOOLEAN_KEYS) {
-    const inherited = inheritOptionFromParent<boolean>(command, key);
-    resolved[key] = Boolean(resolved[key] || inherited);
+function gatewayRunShellEnvFallbackPlanSignature(plan: GatewayRunShellEnvFallbackPlan): string {
+  return JSON.stringify(plan);
+}
+
+async function readGatewayStartupConfigWithShellEnv(params: {
+  opts: GatewayRunOpts;
+  startupTrace: ReturnType<typeof createGatewayCliStartupTrace>;
+}): Promise<
+  Awaited<ReturnType<typeof readGatewayStartupConfig>> & {
+    lowerPrecedenceEnv: Readonly<Record<string, string>>;
   }
-
-  return resolved;
+> {
+  let lowerPrecedenceEnv: Record<string, string> = {};
+  let loadedPlanSignature: string | undefined;
+  try {
+    for (let readCount = 0; readCount < GATEWAY_SHELL_ENV_CONVERGENCE_MAX_READS; readCount += 1) {
+      const startupConfig = await readGatewayStartupConfig({
+        lowerPrecedenceEnv,
+        opts: params.opts,
+        startupTrace: params.startupTrace,
+      });
+      const plan = await resolveGatewayRunShellEnvFallbackPlan(
+        startupConfig.snapshot?.valid === true ? startupConfig.cfg : {},
+      );
+      const planSignature = gatewayRunShellEnvFallbackPlanSignature(plan);
+      if (!plan.enabled) {
+        if (Object.keys(lowerPrecedenceEnv).length === 0) {
+          return { ...startupConfig, lowerPrecedenceEnv };
+        }
+        await clearGatewayRunShellEnvFallback(lowerPrecedenceEnv);
+        lowerPrecedenceEnv = {};
+        loadedPlanSignature = undefined;
+        continue;
+      }
+      if (loadedPlanSignature === planSignature) {
+        return { ...startupConfig, lowerPrecedenceEnv };
+      }
+      await clearGatewayRunShellEnvFallback(lowerPrecedenceEnv);
+      lowerPrecedenceEnv = await loadGatewayRunShellEnvFallback(plan);
+      loadedPlanSignature = planSignature;
+    }
+  } catch (err) {
+    await clearGatewayRunShellEnvFallback(lowerPrecedenceEnv);
+    throw err;
+  }
+  await clearGatewayRunShellEnvFallback(lowerPrecedenceEnv);
+  throw new Error(
+    "Gateway shell environment fallback settings changed repeatedly during startup. Retry startup.",
+  );
 }
 
 function isGatewayLockError(err: unknown): err is GatewayLockError {
@@ -477,12 +561,16 @@ async function maybeWriteGatewayStartupFailureBundle(err: unknown): Promise<void
   }
 }
 
-export async function runGatewayCommand(opts: GatewayRunOpts) {
+export async function runGatewayCommand(opts: GatewayRunOpts, hooks: GatewayRunRuntimeHooks = {}) {
+  // Reparenting can hide the running service from the ancestor walk.
+  // Preserve its inherited PID before config env rebuilding overwrites it.
+  const inheritedGatewayServicePid = parseStrictPositiveInteger(
+    process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV],
+  );
   normalizeStateDirEnv(process.env);
+  const { clearGatewayRunConfigEnvironment } = await import("./pre-bootstrap.js");
+  clearGatewayRunConfigEnvironment();
   installQaParentWatchdog();
-  if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
-    process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV] = String(process.pid);
-  }
   const isDevProfile = normalizeOptionalLowercaseString(process.env.OPENCLAW_PROFILE) === "dev";
   const devMode = Boolean(opts.dev) || isDevProfile;
   if (opts.reset && !devMode) {
@@ -490,7 +578,6 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
     defaultRuntime.exit(1);
     return;
   }
-
   setVerbose(Boolean(opts.verbose));
   if (opts.cliBackendLogs || opts.claudeCliLogs) {
     setConsoleSubsystemFilter(["agent/cli-backend"]);
@@ -533,16 +620,78 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
   setConsoleTimestampPrefix(true);
 
   if (devMode) {
+    if (opts.reset) {
+      // Recheck immediately before full reset; gateway module loading above can take seconds.
+      const { recheckGatewayRunReset } = await import("./pre-bootstrap.js");
+      if (!(await recheckGatewayRunReset({ opts, runtime: defaultRuntime }))) {
+        return;
+      }
+    }
     const { ensureDevGatewayConfig } = await import("./dev.js");
     await startupTrace.measure("cli.dev-config", () =>
       ensureDevGatewayConfig({ reset: Boolean(opts.reset) }),
     );
+    if (opts.reset) {
+      const { reloadTrustedGatewayRunEnvironment } = await import("./pre-bootstrap.js");
+      if (!(await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime }))) {
+        return;
+      }
+    }
   }
 
   gatewayLog.info("loading configuration…");
-  const { cfg, snapshot, startupConfigSnapshotRead } = await readGatewayStartupConfig({
-    startupTrace,
-  });
+  const { cfg, lowerPrecedenceEnv, snapshot, startupConfigSnapshotRead } =
+    await readGatewayStartupConfigWithShellEnv({
+      opts,
+      startupTrace,
+    });
+  if (
+    !enforceGatewayRunFutureConfigGuard({
+      opts,
+      runtime: defaultRuntime,
+      snapshot,
+    })
+  ) {
+    return;
+  }
+  if (snapshot) {
+    const { applyFinalGatewayRunConfigEnv } = await import("./pre-bootstrap.js");
+    if (
+      !(await applyFinalGatewayRunConfigEnv({
+        lowerPrecedenceEnv,
+        runtime: defaultRuntime,
+        snapshot,
+      }))
+    ) {
+      return;
+    }
+    const finalConfigEnteredServiceMode = Boolean(process.env.OPENCLAW_SERVICE_MARKER?.trim());
+    const clearRejectedFinalConfigEnv = () => {
+      clearGatewayRunConfigEnvironment();
+      if (finalConfigEnteredServiceMode) {
+        delete process.env[ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV];
+      }
+    };
+    let finalConfigAllowed: boolean;
+    try {
+      finalConfigAllowed = enforceGatewayRunFutureConfigGuard({
+        opts,
+        runtime: defaultRuntime,
+        snapshot,
+      });
+    } catch (err) {
+      clearRejectedFinalConfigEnv();
+      throw err;
+    }
+    if (!finalConfigAllowed) {
+      clearRejectedFinalConfigEnv();
+      return;
+    }
+  }
+  if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
+    process.env[GATEWAY_SERVICE_RUNTIME_PID_ENV] = String(process.pid);
+  }
+  await hooks.refreshManagedProxy?.(cfg.proxy);
   void maybeLogPendingControlUiBuild(cfg).catch((err: unknown) => {
     gatewayLog.warn(`Control UI asset check failed: ${String(err)}`);
   });
@@ -555,28 +704,6 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
   const port = portOverride ?? resolveGatewayPort(cfg);
   if (!Number.isFinite(port) || port <= 0 || port > 65_535) {
     defaultRuntime.error(formatInvalidConfigPort("gateway.port"));
-    defaultRuntime.exit(1);
-    return;
-  }
-  const { formatFutureConfigActionBlock, resolveFutureConfigActionBlock } =
-    await import("../../config/future-version-guard.js");
-  const futureStartupBlock = resolveFutureConfigActionBlock({
-    action: "start the gateway service",
-    snapshot,
-  });
-  if (futureStartupBlock && process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
-    defaultRuntime.error(formatFutureConfigActionBlock(futureStartupBlock));
-    defaultRuntime.exit(78);
-    return;
-  }
-  const futureForceBlock = opts.force
-    ? resolveFutureConfigActionBlock({
-        action: "force-kill gateway port listeners",
-        snapshot,
-      })
-    : null;
-  if (futureForceBlock) {
-    defaultRuntime.error(formatFutureConfigActionBlock(futureForceBlock));
     defaultRuntime.exit(1);
     return;
   }
@@ -595,7 +722,9 @@ export async function runGatewayCommand(opts: GatewayRunOpts) {
   const bindExplicitRaw = bindExplicitRawStr as GatewayBindMode | undefined;
   if (process.env.OPENCLAW_SERVICE_MARKER?.trim()) {
     const { cleanStaleGatewayProcessesSync } = await import("../../infra/restart-stale-pids.js");
-    const stale = cleanStaleGatewayProcessesSync(port);
+    const stale = cleanStaleGatewayProcessesSync(port, {
+      protectedPid: inheritedGatewayServicePid,
+    });
     if (stale.length > 0) {
       gatewayLog.info(
         `service-mode: cleared ${stale.length} stale gateway pid(s) before bind on port ${port}`,

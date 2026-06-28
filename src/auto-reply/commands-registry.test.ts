@@ -246,6 +246,31 @@ describe("commands registry", () => {
     );
   });
 
+  it("preserves multiline payloads for skill slash commands", () => {
+    expect(normalizeCommandBody("/skill demo_skill first line\nsecond line")).toBe(
+      "/skill demo_skill first line\nsecond line",
+    );
+    expect(
+      normalizeCommandBody("/skill@openclaw: demo_skill first line\nsecond line", {
+        botUsername: "openclaw",
+      }),
+    ).toBe("/skill demo_skill first line\nsecond line");
+    expect(resolveTextCommand("/skill demo_skill first line\nsecond line")?.args).toBe(
+      "demo_skill first line\nsecond line",
+    );
+  });
+
+  it("preserves multiline payloads for direct skill slash aliases only when unregistered", () => {
+    expect(normalizeCommandBody("/demo_skill first line\nsecond line")).toBe(
+      "/demo_skill first line\nsecond line",
+    );
+    expect(normalizeCommandBody("/reset soft\nre-read persona files")).toBe(
+      "/reset soft re-read persona files",
+    );
+    expect(normalizeCommandBody("/side first line\nsecond line")).toBe("/btw first line");
+    expect(normalizeCommandBody("/id\nignored")).toBe("/whoami");
+  });
+
   it("filters commands based on config flags", () => {
     const disabled = listChatCommandsForConfig({
       commands: { config: false, plugins: false, debug: false },
@@ -421,7 +446,32 @@ describe("commands registry", () => {
     expect(fast.textAliases).toEqual(["/fast"]);
     expect(fast.category).toBe("options");
     const modeArg = requireCommandArg(fast, "mode");
-    expect(modeArg.choices).toEqual(["status", "on", "off", "default"]);
+    expect(typeof modeArg.choices).toBe("function");
+    const menu = requireCommandArgMenu({
+      command: fast,
+      args: undefined,
+      cfg: {
+        agents: {
+          defaults: {
+            model: "openai-codex/gpt-5.5",
+            models: {
+              "openai-codex/gpt-5.5": {
+                params: { fastMode: "auto", fastAutoOnSeconds: 30 },
+              },
+            },
+          },
+        },
+      } as never,
+      provider: "openai-codex",
+      model: "gpt-5.5",
+    });
+    expect(menu.choices).toEqual([
+      { label: "on", value: "on" },
+      { label: "off", value: "off" },
+      { label: "auto (30 sec)", value: "auto" },
+      { label: "default", value: "default" },
+      { label: "status", value: "status" },
+    ]);
   });
 
   it("detects known text commands", () => {
@@ -715,24 +765,37 @@ describe("commands registry args", () => {
     expect(seenChoice.catalogLength).toBe(0);
   });
 
-  it("uses configured model catalog reasoning for /think arg menus", () => {
-    installOllamaThinkingProvider();
-    const command = requireNativeCommand("think");
-
-    const menu = requireCommandArgMenu({
-      command,
-      args: undefined,
+  it.each([
+    {
+      source: "configured",
       cfg: {
         models: {
           providers: {
             ollama: {
-              models: [{ id: "glm-5.1:cloud", name: "GLM 5.1 Cloud", reasoning: true }],
+              models: [{ id: "glm-5.2:cloud", name: "GLM 5.2 Cloud", reasoning: true }],
             },
           },
         },
-      } as never,
+      },
+      catalog: undefined,
+    },
+    {
+      source: "runtime",
+      cfg: { agents: { defaults: { models: { "ollama/*": {} } } } },
+      catalog: [
+        { provider: "ollama", id: "glm-5.2:cloud", name: "GLM 5.2 Cloud", reasoning: true },
+      ],
+    },
+  ])("uses $source model catalog reasoning for /think arg menus", ({ cfg, catalog }) => {
+    installOllamaThinkingProvider();
+    const command = requireNativeCommand("think");
+    const menu = requireCommandArgMenu({
+      command,
+      args: undefined,
+      cfg: cfg as never,
       provider: "ollama",
-      model: "glm-5.1:cloud",
+      model: "glm-5.2:cloud",
+      catalog,
     });
 
     expect(menu.arg.name).toBe("level");

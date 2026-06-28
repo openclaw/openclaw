@@ -1,8 +1,17 @@
+import { wrapToolWithBeforeToolCallHook } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  createTerminalPresentationContractTool,
+  textToolResult,
+} from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 // Covers embedded runner extension factories and tool-result middleware bridge.
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import {
+  consumeAdjustedParamsForToolCall,
+  recordAdjustedParamsForToolCall,
+} from "./agent-tools.before-tool-call.js";
 import { buildEmbeddedExtensionFactories } from "./embedded-agent-runner/extensions.js";
 import { consumeEmbeddedToolSendReceipt } from "./embedded-agent-runner/tool-send-receipts.js";
 import { cleanupTempPluginTestEnvironment } from "./test-helpers/temp-plugin-extension-fixtures.js";
@@ -72,6 +81,169 @@ describe("buildEmbeddedExtensionFactories", () => {
     expect(seenToolCallIds[0]).toMatch(/^openclaw-/);
     expect(seenToolCallIds[1]).toMatch(/^openclaw-/);
     expect(seenToolCallIds[0]).not.toBe(seenToolCallIds[1]);
+  });
+
+  it("finalizes terminal presentation from the post-middleware result", async () => {
+    const registry = createEmptyPluginRegistry();
+    const seenMiddlewareArgs: unknown[] = [];
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "redactor",
+      pluginName: "redactor",
+      rawHandler: () => undefined,
+      handler: (event) => {
+        seenMiddlewareArgs.push(structuredClone(event.args));
+        (event.args as { url?: string }).url = "https://mutated.example";
+        return {
+          result: textToolResult("redacted output", {
+            origin: "redacted.example",
+            status: 200,
+          }),
+        };
+      },
+      runtimes: ["openclaw"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const onToolOutcome = vi.fn();
+    const tool = wrapToolWithBeforeToolCallHook(
+      createTerminalPresentationContractTool({
+        name: "web_fetch",
+        result: textToolResult("raw output", {
+          origin: "private.example",
+          status: 200,
+        }),
+        format: (params, result) => {
+          const input = params as { url?: string };
+          const details = result.details as { origin?: string; status?: number };
+          return `URL: ${String(input.url)}\nOrigin: ${String(details.origin)}\nStatus: ${String(details.status)}`;
+        },
+      }),
+      {
+        runId: "run-terminal-middleware",
+        sessionId: "session-terminal-middleware",
+        onToolOutcome,
+      },
+    );
+    const rawResult = await tool.execute(
+      "call-terminal-middleware",
+      { url: "https://private.example" },
+      undefined,
+      undefined,
+    );
+    recordAdjustedParamsForToolCall(
+      "call-terminal-middleware",
+      { url: "https://approved.example" },
+      "run-terminal-middleware",
+    );
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+      runId: "run-terminal-middleware",
+    });
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+
+    await handlers.get("tool_result")?.(
+      {
+        toolName: "web_fetch",
+        toolCallId: "call-terminal-middleware",
+        input: { url: "https://private.example" },
+        content: rawResult.content,
+        details: rawResult.details,
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(onToolOutcome).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        presentationOnly: true,
+        terminalPresentation: "URL: https://private.example\nOrigin: redacted.example\nStatus: 200",
+      }),
+    );
+    expect(seenMiddlewareArgs).toEqual([{ url: "https://approved.example" }]);
+    expect(
+      consumeAdjustedParamsForToolCall("call-terminal-middleware", "run-terminal-middleware"),
+    ).toEqual({ url: "https://approved.example" });
+  });
+
+  it("clears terminal presentation when middleware blocks the result", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "blocker",
+      pluginName: "Blocker",
+      rawHandler: () => undefined,
+      handler: () => ({
+        result: textToolResult("blocked by middleware", {
+          status: "blocked",
+          reason: "policy denied",
+        }),
+      }),
+      runtimes: ["openclaw"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+    const onToolOutcome = vi.fn();
+    const tool = wrapToolWithBeforeToolCallHook(
+      createTerminalPresentationContractTool({
+        name: "web_fetch",
+        result: textToolResult("raw output", {
+          origin: "private.example",
+          status: 200,
+        }),
+        format: () => "Origin: private.example",
+      }),
+      {
+        runId: "run-terminal-blocked",
+        sessionId: "session-terminal-blocked",
+        onToolOutcome,
+      },
+    );
+    const rawResult = await tool.execute(
+      "call-terminal-blocked",
+      { url: "https://private.example" },
+      undefined,
+      undefined,
+    );
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager: SessionManager.inMemory(),
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+      runId: "run-terminal-blocked",
+    });
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+
+    const result = await handlers.get("tool_result")?.(
+      {
+        toolName: "web_fetch",
+        toolCallId: "call-terminal-blocked",
+        input: { url: "https://private.example" },
+        content: rawResult.content,
+        details: rawResult.details,
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(result).toMatchObject({ isError: true });
+    expect(onToolOutcome).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        presentationOnly: true,
+        terminalPresentation: undefined,
+      }),
+    );
   });
 
   it("marks status-error tool results as model-visible failures", async () => {
@@ -229,6 +401,63 @@ describe("buildEmbeddedExtensionFactories", () => {
       },
     });
     expect(consumeEmbeddedToolSendReceipt(sessionManager, "call-message")).toBeUndefined();
+  });
+
+  it("keeps a confirmed send successful when result middleware fails", async () => {
+    const registry = createEmptyPluginRegistry();
+    registry.agentToolResultMiddlewares.push({
+      pluginId: "broken-redactor",
+      pluginName: "broken redactor",
+      rawHandler: () => undefined,
+      handler: () => {
+        throw new Error("redaction failed");
+      },
+      runtimes: ["openclaw"],
+      source: "test",
+    });
+    setActivePluginRegistry(registry);
+
+    const sessionManager = SessionManager.inMemory();
+    const factories = buildEmbeddedExtensionFactories({
+      cfg: undefined,
+      sessionManager,
+      provider: "openai",
+      modelId: "gpt-5.4",
+      model: undefined,
+    });
+    const handlers = new Map<string, Function>();
+    await factories[0]?.({
+      on(event: string, handler: Function) {
+        handlers.set(event, handler);
+      },
+    } as never);
+
+    const result = await handlers.get("tool_result")?.(
+      {
+        toolName: "message",
+        toolCallId: "call-message",
+        input: { action: "send", target: "C123" },
+        content: [{ type: "text", text: "raw result must stay private" }],
+        details: {
+          ok: true,
+          result: { messageId: "1700000000.000100", channelId: "C123" },
+          toolSend: { to: "channel:C123" },
+        },
+      },
+      { cwd: "/tmp" },
+    );
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "Message delivered, but result post-processing failed." }],
+      details: {
+        ok: true,
+        deliveryStatus: "sent",
+        middlewareWarning: "post-processing failed",
+      },
+    });
+    expect(consumeEmbeddedToolSendReceipt(sessionManager, "call-message")).toEqual({
+      details: { toolSend: { to: "channel:C123" } },
+    });
   });
 
   it("marks status-timeout tool results as model-visible failures", async () => {

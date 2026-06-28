@@ -70,7 +70,7 @@ export type AcpRunTurnInput = {
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
 };
 
-export type AcpTurnLifecycleEvent = {
+type AcpTurnLifecycleEvent = {
   type: "prompt_submitted";
   at: number;
 };

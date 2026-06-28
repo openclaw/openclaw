@@ -16,7 +16,7 @@ export {
 
 export type AttemptContextEngine = ContextEngine;
 
-export type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unknown> = {
+type AttemptBootstrapContext<TBootstrapFile = unknown, TContextFile = unknown> = {
   bootstrapFiles: TBootstrapFile[];
   contextFiles: TContextFile[];
 };

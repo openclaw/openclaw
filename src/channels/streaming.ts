@@ -223,6 +223,7 @@ export type ChannelProgressDraftLineInput =
   | {
       event: "item";
       itemId?: string;
+      toolCallId?: string;
       itemKind?: string;
       title?: string;
       name?: string;
@@ -293,6 +294,8 @@ export type ChannelProgressDraftLine = {
   prefix?: boolean;
 };
 
+const progressDraftLineCorrelationKeys = new WeakMap<ChannelProgressDraftLine, string>();
+
 function compactStrings(values: readonly (string | undefined | null)[]): string[] {
   return values.map((value) => value?.replace(/\s+/g, " ").trim()).filter(Boolean) as string[];
 }
@@ -314,6 +317,7 @@ function buildNamedProgressLine(
   metas: readonly (string | undefined | null)[] | undefined,
   options?: ChannelProgressLineOptions,
   fields?: {
+    correlationKey?: string;
     id?: string;
     status?: string;
   },
@@ -325,14 +329,18 @@ function buildNamedProgressLine(
   });
   const display = resolveToolDisplay({ name: normalizedName });
   const prefix = `${display.emoji} ${display.label}`;
-  const compactCommandPrefix =
+  const compactCommandDetail =
     (display.name === "exec" || display.name === "bash") && text.startsWith(`${display.emoji} `)
       ? text.slice(display.emoji.length + 1).trim()
+      : undefined;
+  const compactCommandPrefix =
+    compactCommandDetail && compactCommandDetail !== display.label
+      ? compactCommandDetail
       : undefined;
   const detail = text.startsWith(`${prefix}: `)
     ? text.slice(prefix.length + 2).trim()
     : compactCommandPrefix;
-  return {
+  const line = {
     ...(fields?.id ? { id: fields.id } : {}),
     kind,
     text,
@@ -342,6 +350,18 @@ function buildNamedProgressLine(
     ...(fields?.status ? { status: fields.status } : {}),
     toolName: display.name,
   };
+  setProgressDraftLineCorrelationKey(line, fields?.correlationKey);
+  return line;
+}
+
+function setProgressDraftLineCorrelationKey(
+  line: ChannelProgressDraftLine,
+  correlationKey: string | undefined,
+): void {
+  const normalized = correlationKey?.trim();
+  if (normalized) {
+    progressDraftLineCorrelationKeys.set(line, normalized);
+  }
 }
 
 function itemKindToToolName(kind: string | undefined): string | undefined {
@@ -352,6 +372,8 @@ function itemKindToToolName(kind: string | undefined): string | undefined {
       return "apply_patch";
     case "search":
       return "web_search";
+    case "api":
+      return "api";
     case "tool":
       return "tool_call";
     default:
@@ -369,6 +391,37 @@ function isCommandProgressItem(input: Extract<ChannelProgressDraftLineInput, { e
   return itemKind === "command" || isCommandToolName(input.name);
 }
 
+function resolveProgressDraftLineId(
+  input: {
+    itemId?: string;
+    toolCallId?: string;
+  },
+  params?: {
+    useToolCallIdFallback?: boolean;
+  },
+): string | undefined {
+  const itemId = input.itemId?.trim();
+  const toolCallId = input.toolCallId?.trim();
+  if (itemId) {
+    return itemId;
+  }
+  return params?.useToolCallIdFallback === true ? toolCallId : undefined;
+}
+
+function resolveCommandProgressCorrelationKey(input: { toolCallId?: string }): string | undefined {
+  const toolCallId = input.toolCallId?.trim();
+  return toolCallId ? `command:${toolCallId}` : undefined;
+}
+
+function isTerminalProgressStatus(status: string | undefined): boolean {
+  const normalized = normalizeOptionalLowercaseString(status);
+  return (
+    normalized === "completed" ||
+    normalized === "failed" ||
+    normalized?.startsWith("exit ") === true
+  );
+}
+
 function isEmptyReasoningProgressItem(
   input: Extract<ChannelProgressDraftLineInput, { event: "item" }>,
   meta: string | undefined,
@@ -383,6 +436,42 @@ function isEmptyReasoningProgressItem(
 function patchMetas(input: Extract<ChannelProgressDraftLineInput, { event: "patch" }>): string[] {
   const fileMetas = [...(input.added ?? []), ...(input.modified ?? []), ...(input.deleted ?? [])];
   return compactStrings([input.summary, ...fileMetas, input.title]);
+}
+
+function buildCommandOutputProgressLine(
+  input: Extract<ChannelProgressDraftLineInput, { event: "command-output" }>,
+  status: string | undefined,
+  options?: ChannelProgressLineOptions,
+): ChannelProgressDraftLine | undefined {
+  const name = input.name ?? "exec";
+  const correlationKey = resolveCommandProgressCorrelationKey(input);
+  const detail = options?.commandText === "status" ? [] : compactStrings([input.title]);
+  const line = buildNamedProgressLine(input.event, name, detail, options, {
+    correlationKey,
+    id: resolveProgressDraftLineId(input, { useToolCallIdFallback: true }),
+    status,
+  });
+  if (!line || !status) {
+    return line;
+  }
+  if (status === "completed") {
+    return line;
+  }
+  if (!line.detail || line.detail === status) {
+    const statusLine = {
+      ...line,
+      detail: status,
+      text: formatToolAggregate(name, [status], { markdown: options?.markdown }),
+    };
+    setProgressDraftLineCorrelationKey(statusLine, correlationKey);
+    return statusLine;
+  }
+  const statusLine = {
+    ...line,
+    text: formatToolAggregate(name, [status, line.detail], { markdown: options?.markdown }),
+  };
+  setProgressDraftLineCorrelationKey(statusLine, correlationKey);
+  return statusLine;
 }
 
 function shouldPrefixProgressLine(line: string): boolean {
@@ -454,7 +543,12 @@ export function buildChannelProgressDraftLine(
           input.phase && !input.name ? input.phase : undefined,
         ],
         options,
-        { id: itemId },
+        {
+          correlationKey: isCommandToolName(input.name)
+            ? resolveCommandProgressCorrelationKey(input)
+            : undefined,
+          id: itemId,
+        },
       );
     }
     case "item": {
@@ -470,20 +564,30 @@ export function buildChannelProgressDraftLine(
       }
       if (name) {
         return buildNamedProgressLine(input.event, name, [meta], options, {
-          id: input.itemId,
+          correlationKey: isCommandProgressItem(input)
+            ? resolveCommandProgressCorrelationKey(input)
+            : undefined,
+          id: resolveProgressDraftLineId(input),
           status: input.status,
         });
       }
       const text = compactStrings([meta, input.title]).at(0);
-      return text
-        ? {
-            ...(input.itemId ? { id: input.itemId } : {}),
-            kind: input.event,
-            text,
-            label: input.title?.trim() || input.itemKind?.trim() || "Update",
-            ...(input.status ? { status: input.status } : {}),
-          }
+      const id = resolveProgressDraftLineId(input);
+      const correlationKey = isCommandProgressItem(input)
+        ? resolveCommandProgressCorrelationKey(input)
         : undefined;
+      if (!text) {
+        return undefined;
+      }
+      const line = {
+        ...(id ? { id } : {}),
+        kind: input.event,
+        text,
+        label: input.title?.trim() || input.itemKind?.trim() || "Update",
+        ...(input.status ? { status: input.status } : {}),
+      };
+      setProgressDraftLineCorrelationKey(line, correlationKey);
+      return line;
     }
     case "plan": {
       if (input.phase !== undefined && input.phase !== "update") {
@@ -518,13 +622,7 @@ export function buildChannelProgressDraftLine(
           : input.exitCode != null
             ? `exit ${input.exitCode}`
             : input.status;
-      return buildNamedProgressLine(
-        input.event,
-        input.name ?? "exec",
-        [status, input.title],
-        options,
-        { id: input.itemId ?? input.toolCallId, status },
-      );
+      return buildCommandOutputProgressLine(input, status, options);
     }
     case "patch": {
       if (input.phase !== undefined && input.phase !== "end") {
@@ -970,20 +1068,30 @@ function getProgressDraftLineText(line: string | ChannelProgressDraftLine): stri
   const prefix = icon ? `${icon} ` : "";
   const label = line.label.trim();
   const detail = line.detail?.trim();
+  const status = line.status?.trim();
+  const displayStatus = status === "completed" ? undefined : status;
   if (detail) {
     const compactCommandLine =
       line.toolName === "exec" || line.toolName === "bash" || line.toolName === "shell";
+    if (line.kind === "command-output" && displayStatus && detail !== displayStatus) {
+      const outputDetail = detail.startsWith(`${displayStatus};`)
+        ? detail
+        : `${displayStatus}; ${detail}`;
+      if (compactCommandLine) {
+        return `${prefix}${outputDetail}`;
+      }
+      return label ? `${prefix}${label}: ${outputDetail}` : `${prefix}${outputDetail}`;
+    }
     if (line.kind !== "patch" && label && !compactCommandLine) {
       return `${prefix}${label}: ${detail}`;
     }
     return `${prefix}${detail}`;
   }
-  const status = line.status?.trim();
-  if (status) {
+  if (displayStatus) {
     if (label) {
-      return `${prefix}${label}: ${status}`;
+      return `${prefix}${label}: ${displayStatus}`;
     }
-    return `${prefix}${status}`;
+    return `${prefix}${displayStatus}`;
   }
   const text = line.text.trim();
   if (!icon && text && text !== label) {
@@ -996,8 +1104,13 @@ export function normalizeChannelProgressDraftLineIdentity(
   /** Progress line whose duplicate/update identity should be normalized. */
   line: string | ChannelProgressDraftLine | undefined,
 ): string {
-  const text = typeof line === "string" ? line : line?.text;
-  return text?.replace(/\s+/g, " ").trim() ?? "";
+  const text = typeof line === "string" ? line : line ? getProgressDraftLineText(line) : undefined;
+  return (
+    text
+      ?.replace(/`([^`]+)`/gu, "$1")
+      .replace(/\s+/g, " ")
+      .trim() ?? ""
+  );
 }
 
 export function mergeChannelProgressDraftLine<TLine extends string | ChannelProgressDraftLine>(
@@ -1013,25 +1126,70 @@ export function mergeChannelProgressDraftLine<TLine extends string | ChannelProg
     return lines;
   }
   const maxLines = Math.max(1, params.maxLines);
-  const lineId = typeof line === "object" ? line.id?.trim() : undefined;
-  if (lineId) {
-    const existingIndex = lines.findIndex(
-      (entry) => typeof entry === "object" && entry.id?.trim() === lineId,
+  const lineKeys = resolveProgressDraftLineMergeKeys(line);
+  if (lineKeys.length > 0) {
+    const existingIndex = lines.findIndex((entry) =>
+      resolveProgressDraftLineMergeKeys(entry).some((entryKey) => lineKeys.includes(entryKey)),
     );
     if (existingIndex >= 0) {
-      if (normalizeChannelProgressDraftLineIdentity(lines[existingIndex]) === normalized) {
+      const replacement = mergeProgressDraftLineUpdate(lines[existingIndex], line);
+      if (replacement === lines[existingIndex]) {
         return lines;
       }
       const next = [...lines];
-      next[existingIndex] = line;
+      next[existingIndex] = replacement;
       return next.slice(-maxLines);
     }
   }
-  const previous = normalizeChannelProgressDraftLineIdentity(lines.at(-1));
-  if (previous === normalized) {
+  const previous = lines.at(-1);
+  if (previous && normalizeChannelProgressDraftLineIdentity(previous) === normalized) {
     return lines;
   }
   return [...lines, line].slice(-maxLines);
+}
+
+function mergeProgressDraftLineUpdate<TLine extends string | ChannelProgressDraftLine>(
+  previous: TLine,
+  line: TLine,
+): TLine {
+  if (typeof previous !== "object" || typeof line !== "object") {
+    return line;
+  }
+  if (
+    line.kind !== "command-output" ||
+    !line.status ||
+    (line.detail && line.detail !== line.status)
+  ) {
+    return line;
+  }
+  const previousDetail = previous.detail?.trim();
+  if (
+    !previousDetail ||
+    previousDetail === previous.status ||
+    isTerminalProgressStatus(previous.status)
+  ) {
+    return line;
+  }
+  const replacement = {
+    ...line,
+    detail: previousDetail,
+  };
+  replacement.text = getProgressDraftLineText(replacement);
+  setProgressDraftLineCorrelationKey(
+    replacement,
+    progressDraftLineCorrelationKeys.get(line) ?? progressDraftLineCorrelationKeys.get(previous),
+  );
+  return replacement;
+}
+
+function resolveProgressDraftLineMergeKeys(line: string | ChannelProgressDraftLine): string[] {
+  if (typeof line !== "object") {
+    return [];
+  }
+  const keys = [progressDraftLineCorrelationKeys.get(line), line.id]
+    .map((key) => key?.trim())
+    .filter((key): key is string => Boolean(key));
+  return [...new Set(keys)];
 }
 
 export function formatChannelProgressDraftText(params: {

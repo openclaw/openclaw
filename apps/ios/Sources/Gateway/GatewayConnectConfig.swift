@@ -62,6 +62,7 @@ struct GatewayConnectConfig {
             lhs.clientId == rhs.clientId &&
             lhs.clientMode == rhs.clientMode &&
             lhs.clientDisplayName == rhs.clientDisplayName &&
+            lhs.deviceIdentityProfile == rhs.deviceIdentityProfile &&
             lhs.includeDeviceIdentity == rhs.includeDeviceIdentity &&
             lhsScopes == rhsScopes &&
             lhsCaps == rhsCaps &&

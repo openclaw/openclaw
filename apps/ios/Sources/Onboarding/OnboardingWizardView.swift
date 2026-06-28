@@ -17,10 +17,6 @@ private enum OnboardingStep: Int, CaseIterable {
         Self(rawValue: self.rawValue - 1)
     }
 
-    var next: Self? {
-        Self(rawValue: self.rawValue + 1)
-    }
-
     /// Progress label for the manual setup flow (mode → connect → auth → success).
     var manualProgressTitle: String {
         let manualSteps: [OnboardingStep] = [.mode, .connect, .auth, .success]
@@ -77,10 +73,16 @@ struct OnboardingWizardView: View {
     private static let pairingAutoResumeTicker = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
     let allowSkip: Bool
+    let onRequestLocalNetworkAccess: (String) -> Void
     let onClose: () -> Void
 
-    init(allowSkip: Bool, onClose: @escaping () -> Void) {
+    init(
+        allowSkip: Bool,
+        onRequestLocalNetworkAccess: @escaping (String) -> Void,
+        onClose: @escaping () -> Void)
+    {
         self.allowSkip = allowSkip
+        self.onRequestLocalNetworkAccess = onRequestLocalNetworkAccess
         self.onClose = onClose
         _step = State(
             initialValue: OnboardingStateStore.shouldPresentFirstRunIntro() ? .intro : .welcome)
@@ -235,6 +237,7 @@ struct OnboardingWizardView: View {
             }
             .onAppear {
                 self.initializeState()
+                self.requestLocalNetworkAccessIfPastIntro(reason: "onboarding_appear")
             }
             .onDisappear {
                 self.discoveryRestartTask?.cancel()
@@ -382,7 +385,7 @@ struct OnboardingWizardView: View {
 
     private func onboardingSwitchIndicator(isOn: Bool) -> some View {
         Capsule()
-            .fill(isOn ? Color.accentColor : Color.secondary.opacity(0.35))
+            .fill(isOn ? OpenClawBrand.accent : Color.secondary.opacity(0.35))
             .frame(width: 52, height: 32)
             .overlay(alignment: isOn ? .trailing : .leading) {
                 Circle()
@@ -579,7 +582,7 @@ struct OnboardingWizardView: View {
 
             Image(systemName: "checkmark.circle.fill")
                 .font(.system(size: 64))
-                .foregroundStyle(.green)
+                .foregroundStyle(OpenClawBrand.ok)
                 .padding(.bottom, 20)
 
             Text("Connected")
@@ -868,8 +871,18 @@ extension OnboardingWizardView {
 
     private func advanceFromIntro() {
         OnboardingStateStore.markFirstRunIntroSeen()
+        self.requestLocalNetworkAccess(reason: "onboarding_continue")
         self.statusLine = "In your OpenClaw chat, run /pair qr, then scan the code here."
         self.step = .welcome
+    }
+
+    private func requestLocalNetworkAccessIfPastIntro(reason: String) {
+        guard self.step != .intro else { return }
+        self.requestLocalNetworkAccess(reason: reason)
+    }
+
+    private func requestLocalNetworkAccess(reason: String) {
+        self.onRequestLocalNetworkAccess(reason)
     }
 
     private func navigateBack() {

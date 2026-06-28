@@ -27,7 +27,11 @@ export type ChannelProgressDraftMode = StreamingMode;
 export type ChannelProgressDraftCompositor = ReturnType<
   typeof createChannelProgressDraftCompositor
 >;
-type ProgressDraftLine = string | ChannelProgressDraftLine;
+export type ChannelProgressDraftCompositorLine = string | ChannelProgressDraftLine;
+export type ChannelProgressDraftUpdateOptions = {
+  flush?: boolean;
+  lines?: readonly ChannelProgressDraftCompositorLine[];
+};
 
 /** Creates a stateful compositor for one streaming channel reply. */
 export function createChannelProgressDraftCompositor(params: {
@@ -35,12 +39,12 @@ export function createChannelProgressDraftCompositor(params: {
   mode: ChannelProgressDraftMode;
   active: boolean;
   seed: string;
-  update: (text: string, options?: { flush?: boolean }) => Promise<void> | void;
+  update: (text: string, options?: ChannelProgressDraftUpdateOptions) => Promise<void> | void;
   deleteCurrent?: () => Promise<void> | void;
   tryNativeUpdate?: (text: string) => Promise<boolean> | boolean;
   formatLine?: (line: string) => string;
-  isEmptyLine?: (line: ProgressDraftLine | undefined) => boolean;
-  shouldStartNow?: (line: ProgressDraftLine | undefined) => boolean;
+  isEmptyLine?: (line: ChannelProgressDraftCompositorLine | undefined) => boolean;
+  shouldStartNow?: (line: ChannelProgressDraftCompositorLine | undefined) => boolean;
 }) {
   const previewToolProgressEnabled =
     params.active && resolveChannelStreamingPreviewToolProgress(params.entry);
@@ -53,7 +57,7 @@ export function createChannelProgressDraftCompositor(params: {
       previewToolProgressEnabled,
     });
   let progressSuppressed = false;
-  let lines: ProgressDraftLine[] = [];
+  let lines: ChannelProgressDraftCompositorLine[] = [];
   let lastRenderedText = "";
   let reasoningRawText = "";
   let lastReasoningLine: string | undefined;
@@ -77,7 +81,7 @@ export function createChannelProgressDraftCompositor(params: {
   };
 
   const render = async (options?: { flush?: boolean }): Promise<boolean> => {
-    if (!params.active || params.mode !== "progress") {
+    if (!params.active || params.mode !== "progress" || finalReplyStarted || finalReplyDelivered) {
       return false;
     }
     const text = formatDraftText();
@@ -85,7 +89,7 @@ export function createChannelProgressDraftCompositor(params: {
       return false;
     }
     lastRenderedText = text;
-    await params.update(text, options);
+    await params.update(text, { ...options, lines: [...lines] });
     return true;
   };
 
@@ -114,7 +118,7 @@ export function createChannelProgressDraftCompositor(params: {
   };
 
   const noteProgress = async (
-    line?: ProgressDraftLine,
+    line?: ChannelProgressDraftCompositorLine,
     options?: { toolName?: string; startImmediately?: boolean },
   ) => {
     if (!params.active || finalReplyStarted || finalReplyDelivered) {
@@ -163,12 +167,16 @@ export function createChannelProgressDraftCompositor(params: {
         return false;
       }
       lastRenderedText = text;
-      await params.update(text);
+      await params.update(text, { lines: [...lines] });
       return true;
     }
     if (options?.startImmediately || params.shouldStartNow?.(line)) {
+      const alreadyStarted = gate.hasStarted;
       await gate.startNow();
-      return gate.hasStarted ? await render() : false;
+      if (!gate.hasStarted) {
+        return false;
+      }
+      return alreadyStarted ? await render() : true;
     }
     const alreadyStarted = gate.hasStarted;
     const progressActive = await gate.noteWork();
@@ -193,9 +201,11 @@ export function createChannelProgressDraftCompositor(params: {
     },
     markFinalReplyStarted() {
       finalReplyStarted = true;
+      gate.cancel();
     },
     markFinalReplyDelivered() {
       finalReplyDelivered = true;
+      gate.cancel();
     },
     reset() {
       clearProgressState(false);
@@ -211,6 +221,27 @@ export function createChannelProgressDraftCompositor(params: {
     },
     start() {
       return gate.startNow();
+    },
+    async noteActivity(options?: { startImmediately?: boolean }) {
+      if (
+        !params.active ||
+        params.mode !== "progress" ||
+        progressSuppressed ||
+        finalReplyStarted ||
+        finalReplyDelivered
+      ) {
+        return false;
+      }
+      if (options?.startImmediately) {
+        await gate.startNow();
+        return gate.hasStarted ? await render({ flush: true }) : false;
+      }
+      const alreadyStarted = gate.hasStarted;
+      const progressActive = await gate.noteWork();
+      if ((alreadyStarted || progressActive) && gate.hasStarted) {
+        return await render();
+      }
+      return false;
     },
     pushToolProgress: noteProgress,
     async pushReasoningProgress(text?: string, options?: { snapshot?: boolean }) {
@@ -308,7 +339,7 @@ function normalizeReasoningProgressLine(text: string): string {
 }
 
 const REASONING_PROGRESS_TAG_RE =
-  /<\s*(\/?)\s*(?:(?:antml:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/giu;
+  /<\s*(\/?)\s*(?:(?:antml:|mm:)?(?:think(?:ing)?|thought)|antthinking)\b[^<>]*>/giu;
 const REASONING_PROGRESS_TAG_NAMES = [
   "think",
   "thinking",
@@ -317,6 +348,9 @@ const REASONING_PROGRESS_TAG_NAMES = [
   "antml:think",
   "antml:thinking",
   "antml:thought",
+  "mm:think",
+  "mm:thinking",
+  "mm:thought",
 ] as const;
 const REASONING_PROGRESS_TAG_PREFIXES = REASONING_PROGRESS_TAG_NAMES.flatMap((name) => [
   `<${name}`,

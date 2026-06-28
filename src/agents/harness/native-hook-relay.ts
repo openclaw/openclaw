@@ -25,6 +25,7 @@ import {
   resolveExpiresAtMsFromDurationMs,
 } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { resolveOpenClawPackageRootSync } from "../../infra/openclaw-root.js";
 import { privateFileStoreSync } from "../../infra/private-file-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -1235,7 +1236,7 @@ function postNativeHookRelayBridgeRecord(params: {
     const rejectOnce = (error: unknown) => {
       if (!settled) {
         settled = true;
-        reject(toLintErrorObject(error, "Non-Error rejection"));
+        reject(toErrorObject(error, "Non-Error rejection"));
       }
     };
     const req = httpRequest(
@@ -2060,10 +2061,10 @@ async function waitForNativeHookRelayApprovalDecision(params: {
   let onAbort: (() => void) | undefined;
   const abortPromise = new Promise<never>((_, reject) => {
     if (params.signal!.aborted) {
-      reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
+      reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
       return;
     }
-    onAbort = () => reject(toLintErrorObject(params.signal!.reason, "Non-Error rejection"));
+    onAbort = () => reject(toErrorObject(params.signal!.reason, "Non-Error rejection"));
     params.signal!.addEventListener("abort", onAbort, { once: true });
   });
   try {
@@ -2380,17 +2381,3 @@ export const testing = {
   },
 } as const;
 export { testing as __testing };
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

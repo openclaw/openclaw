@@ -47,8 +47,11 @@ import {
 } from "../config/agent-limits.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
-import { loadSessionStore } from "../config/sessions/store.js";
-import { resolveSessionTranscriptFile } from "../config/sessions/transcript.js";
+import {
+  listSessionEntries,
+  loadSessionEntry,
+  resolveSessionTranscriptRuntimeTarget,
+} from "../config/sessions/session-accessor.js";
 import type { SessionAcpMeta, SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { callGateway } from "../gateway/call.js";
@@ -64,6 +67,7 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
+  normalizeOptionalAgentId,
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
@@ -162,6 +166,7 @@ function toGatewayImageAttachments(
 
 export type SpawnAcpContext = {
   agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
   agentChannel?: string;
   agentAccountId?: string;
   agentTo?: string;
@@ -266,7 +271,6 @@ type AcpSpawnInitializedRuntime = {
   runtimeCloseHandle: AcpSpawnRuntimeCloseHandle;
   sessionId?: string;
   sessionEntry: SessionEntry | undefined;
-  sessionStore: Record<string, SessionEntry>;
   storePath: string;
 };
 
@@ -443,8 +447,11 @@ function hasSessionLocalHeartbeatRelayRoute(params: {
   const storePath = resolveStorePath(params.cfg.session?.store, {
     agentId: params.requesterAgentId,
   });
-  const sessionStore = loadSessionStore(storePath);
-  const parentEntry = sessionStore[params.parentSessionKey];
+  const parentEntry = loadSessionEntry({
+    storePath,
+    sessionKey: params.parentSessionKey,
+    clone: false,
+  });
   const parentDeliveryContext = deliveryContextFromSession(parentEntry);
   return Boolean(parentDeliveryContext?.channel && parentDeliveryContext.to);
 }
@@ -530,14 +537,6 @@ function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): string[] {
   return Array.from(ids);
 }
 
-function normalizeOptionalAgentId(value: string | undefined | null): string | undefined {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  return normalizeAgentId(trimmed);
-}
-
 function summarizeError(err: unknown): string {
   return formatErrorMessage(err);
 }
@@ -601,23 +600,26 @@ async function persistAcpSpawnSessionFileBestEffort(params: {
   sessionId: string;
   sessionKey: string;
   sessionEntry: SessionEntry | undefined;
-  sessionStore: Record<string, SessionEntry>;
   storePath: string;
   agentId: string;
   threadId?: string | number;
   stage: "spawn" | "thread-bind";
 }): Promise<SessionEntry | undefined> {
   try {
-    const resolvedSessionFile = await resolveSessionTranscriptFile({
+    const resolvedSessionFile = await resolveSessionTranscriptRuntimeTarget({
       sessionId: params.sessionId,
       sessionKey: params.sessionKey,
-      sessionEntry: params.sessionEntry,
-      sessionStore: params.sessionStore,
       storePath: params.storePath,
       agentId: params.agentId,
       threadId: params.threadId,
     });
-    return resolvedSessionFile.sessionEntry;
+    return (
+      loadSessionEntry({
+        storePath: params.storePath,
+        sessionKey: resolvedSessionFile.sessionKey,
+        clone: false,
+      }) ?? params.sessionEntry
+    );
   } catch (error) {
     log.warn(
       `ACP session-file persistence failed during ${params.stage} for ${params.sessionKey}: ${summarizeError(error)}`,
@@ -766,6 +768,7 @@ function prepareAcpThreadBinding(params: {
 function resolveAcpSpawnRequesterState(params: {
   cfg: OpenClawConfig;
   parentSessionKey?: string;
+  requesterAgentId: string;
   targetAgentId: string;
   ctx: SpawnAcpContext;
   subagentStore?: SessionCapabilityStore;
@@ -784,8 +787,6 @@ function resolveAcpSpawnRequesterState(params: {
     typeof params.ctx.agentThreadId === "string"
       ? Boolean(normalizeOptionalString(params.ctx.agentThreadId))
       : params.ctx.agentThreadId != null;
-  const requesterAgentId = requesterParsedSession?.agentId;
-
   return {
     parentSessionKey: params.parentSessionKey,
     isSubagentSession,
@@ -796,17 +797,17 @@ function resolveAcpSpawnRequesterState(params: {
       sessionKey: params.parentSessionKey,
     }),
     heartbeatRelayRouteUsable:
-      params.parentSessionKey && requesterAgentId
+      params.parentSessionKey && params.requesterAgentId
         ? hasSessionLocalHeartbeatRelayRoute({
             cfg: params.cfg,
             parentSessionKey: params.parentSessionKey,
-            requesterAgentId,
+            requesterAgentId: params.requesterAgentId,
           })
         : false,
     origin: resolveRequesterOriginForChild({
       cfg: params.cfg,
       targetAgentId: params.targetAgentId,
-      requesterAgentId: normalizeAgentId(requesterAgentId),
+      requesterAgentId: params.requesterAgentId,
       requesterChannel: params.ctx.agentChannel,
       requesterAccountId: params.ctx.agentAccountId,
       requesterTo: params.ctx.agentTo,
@@ -820,6 +821,7 @@ function resolveAcpSpawnRequesterState(params: {
 function resolveAcpSubagentEnvelopeState(params: {
   cfg: OpenClawConfig;
   requesterSessionKey?: string;
+  requesterAgentId: string;
   targetAgentId: string;
   requestedAgentId?: string;
   subagentStore?: SessionCapabilityStore;
@@ -860,9 +862,8 @@ function resolveAcpSubagentEnvelopeState(params: {
     };
   }
 
-  const requesterAgentId = normalizeAgentId(parseAgentSessionKey(requesterSessionKey)?.agentId);
   const requireAgentId =
-    resolveAgentConfig(params.cfg, requesterAgentId)?.subagents?.requireAgentId ??
+    resolveAgentConfig(params.cfg, params.requesterAgentId)?.subagents?.requireAgentId ??
     params.cfg.agents?.defaults?.subagents?.requireAgentId ??
     false;
   if (requireAgentId && !params.requestedAgentId?.trim()) {
@@ -873,11 +874,11 @@ function resolveAcpSubagentEnvelopeState(params: {
   }
 
   const targetPolicy = resolveSubagentTargetPolicy({
-    requesterAgentId,
+    requesterAgentId: params.requesterAgentId,
     targetAgentId: params.targetAgentId,
     requestedAgentId: params.requestedAgentId,
     allowAgents:
-      resolveAgentConfig(params.cfg, requesterAgentId)?.subagents?.allowAgents ??
+      resolveAgentConfig(params.cfg, params.requesterAgentId)?.subagents?.allowAgents ??
       params.cfg.agents?.defaults?.subagents?.allowAgents,
     configuredAgentIds: resolveConfiguredAcpSubagentTargetIds(params.cfg),
   });
@@ -971,9 +972,8 @@ function validateAcpResumeSessionOwnership(params: {
   }
 
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
-  const sessionStore = loadSessionStore(storePath);
-  for (const [sessionKey, entry] of Object.entries(sessionStore)) {
-    const acp = readAcpSessionMeta({ sessionKey });
+  for (const { sessionKey, entry } of listSessionEntries({ storePath, clone: false })) {
+    const acp = readAcpSessionMeta({ sessionKey, cfg: params.cfg });
     if (!sessionEntryMatchesAcpResumeSessionId(acp, resumeSessionId)) {
       continue;
     }
@@ -1071,14 +1071,16 @@ async function initializeAcpSpawnRuntime(params: {
   cwd?: string;
 }): Promise<AcpSpawnInitializedRuntime> {
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.targetAgentId });
-  const sessionStore = loadSessionStore(storePath);
-  let sessionEntry: SessionEntry | undefined = sessionStore[params.sessionKey];
+  let sessionEntry = loadSessionEntry({
+    storePath,
+    sessionKey: params.sessionKey,
+    clone: false,
+  });
   const sessionId = sessionEntry?.sessionId;
   if (sessionId) {
     sessionEntry = await persistAcpSpawnSessionFileBestEffort({
       sessionId,
       sessionKey: params.sessionKey,
-      sessionStore,
       storePath,
       sessionEntry,
       agentId: params.targetAgentId,
@@ -1105,7 +1107,6 @@ async function initializeAcpSpawnRuntime(params: {
     },
     sessionId,
     sessionEntry,
-    sessionStore,
     storePath,
   };
 }
@@ -1177,7 +1178,6 @@ async function bindPreparedAcpThread(params: {
       sessionEntry = await persistAcpSpawnSessionFileBestEffort({
         sessionId: params.initializedRuntime.sessionId,
         sessionKey: params.sessionKey,
-        sessionStore: params.initializedRuntime.sessionStore,
         storePath: params.initializedRuntime.storePath,
         sessionEntry,
         agentId: params.targetAgentId,
@@ -1275,6 +1275,9 @@ export async function spawnAcpDirect(
     cfg,
     requesterSessionKey: ctx.agentSessionKey,
   });
+  const requesterAgentId = normalizeAgentId(
+    ctx.requesterAgentIdOverride ?? parseAgentSessionKey(requesterInternalKey)?.agentId,
+  );
   if (!isAcpEnabledByPolicy(cfg)) {
     return createAcpSpawnFailure({
       status: "forbidden",
@@ -1370,6 +1373,7 @@ export async function spawnAcpDirect(
   const requesterState = resolveAcpSpawnRequesterState({
     cfg,
     parentSessionKey,
+    requesterAgentId,
     targetAgentId,
     ctx,
     subagentStore,
@@ -1377,6 +1381,7 @@ export async function spawnAcpDirect(
   const subagentEnvelopeState = resolveAcpSubagentEnvelopeState({
     cfg,
     requesterSessionKey: requesterInternalKey,
+    requesterAgentId,
     targetAgentId,
     requestedAgentId: params.agentId,
     subagentStore,
@@ -1534,16 +1539,19 @@ export async function spawnAcpDirect(
           childSessionKey: sessionKey,
         })
       : undefined;
+  const parentAgentId = parentSessionKey
+    ? resolveAgentIdFromSessionKey(parentSessionKey)
+    : undefined;
   // Resolve parent session delivery context so system events route to the
   // correct thread/topic instead of falling back to the main DM.
   const parentDeliveryCtx =
     effectiveStreamToParent && parentSessionKey
       ? deliveryContextFromSession(
-          loadSessionStore(
-            resolveStorePath(cfg.session?.store, {
-              agentId: resolveAgentIdFromSessionKey(parentSessionKey),
-            }),
-          )[parentSessionKey],
+          loadSessionEntry({
+            sessionKey: parentSessionKey,
+            ...(parentAgentId ? { agentId: parentAgentId } : {}),
+            clone: false,
+          }),
         )
       : undefined;
 
@@ -1636,6 +1644,8 @@ export async function spawnAcpDirect(
         scopeKind: "session",
         requesterOrigin: requesterState.origin,
         childSessionKey: sessionKey,
+        agentId: targetAgentId,
+        requesterAgentId,
         runId: childRunId,
         label: params.label,
         task: params.task,
@@ -1675,6 +1685,8 @@ export async function spawnAcpDirect(
       scopeKind: "session",
       requesterOrigin: requesterState.origin,
       childSessionKey: sessionKey,
+      agentId: targetAgentId,
+      requesterAgentId,
       runId: childRunId,
       label: params.label,
       task: params.task,

@@ -216,9 +216,10 @@ describe("readSubagentOutput", () => {
       }),
     ).resolves.toBe("fresh recovered output");
     expect(deps.readSessionMessagesAsync).toHaveBeenCalledWith(
-      "agent:main:subagent:child",
-      undefined,
-      "/tmp/openclaw-internal-run.jsonl",
+      {
+        sessionFile: "/tmp/openclaw-internal-run.jsonl",
+        sessionId: "agent:main:subagent:child",
+      },
       { mode: "recent", maxMessages: 100, maxBytes: 1024 * 1024 },
     );
     expect(deps.callGateway).not.toHaveBeenCalled();

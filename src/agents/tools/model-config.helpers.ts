@@ -38,7 +38,7 @@ const OPENAI_PROVIDER_ID = "openai";
 const CODEX_MEDIA_PROVIDER_ID = "codex";
 const OPENAI_RESPONSES_MODEL_API = "openai-responses";
 
-export type OpenAiImageMediaCandidateDecision =
+type OpenAiImageMediaCandidateDecision =
   | { kind: "keep"; ref: string }
   | { kind: "substitute"; ref: string; provider: string }
   | { kind: "drop" };

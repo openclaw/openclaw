@@ -84,24 +84,6 @@ const PATH_ALIASES: Record<string, Tab> = {
   "/dreams": "dreams",
 };
 
-/**
- * Maps a tab to its parent tab when it should render as an indented sub-item
- * under the parent in the sidebar. Sub-items still get their own routes.
- */
-export const TAB_PARENTS: Partial<Record<Tab, Tab>> = {
-  skillWorkshop: "skills",
-};
-
-export function isChildTab(tab: Tab): boolean {
-  return Object.hasOwn(TAB_PARENTS, tab);
-}
-
-export function childTabsOf(parent: Tab): Tab[] {
-  return (Object.entries(TAB_PARENTS) as Array<[Tab, Tab]>)
-    .filter(([, p]) => p === parent)
-    .map(([child]) => child);
-}
-
 const PATH_TO_TAB = new Map<string, Tab>([
   ...Object.entries(TAB_PATHS).map(([tab, path]) => [path, tab as Tab] as const),
   ...Object.entries(PATH_ALIASES),

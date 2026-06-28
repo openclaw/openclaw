@@ -85,7 +85,9 @@ const buildFlags = (entry?: SessionEntry): string[] => {
   if (typeof verbose === "string" && verbose.length > 0) {
     flags.push(`verbose:${verbose}`);
   }
-  if (typeof entry?.fastMode === "boolean") {
+  if (entry?.fastMode === "auto") {
+    flags.push("fast:auto");
+  } else if (typeof entry?.fastMode === "boolean") {
     flags.push(entry.fastMode ? "fast" : "fast:off");
   }
   const reasoning = entry?.reasoningLevel;
@@ -136,6 +138,38 @@ function hasUserPinnedModelSelection(entry: SessionEntry | undefined): boolean {
   return !hasSessionAutoModelFallbackProvenance(entry);
 }
 
+function normalizeStatusModelPart(value: unknown): string {
+  return typeof value === "string" ? value.trim().toLowerCase() : "";
+}
+
+function resolveTrustedSessionContextTokens(params: {
+  entry: SessionEntry | undefined;
+  provider: string | undefined;
+  model: string | null;
+}): number | undefined {
+  const contextTokens =
+    typeof params.entry?.contextTokens === "number" && params.entry.contextTokens > 0
+      ? params.entry.contextTokens
+      : undefined;
+  if (contextTokens === undefined) {
+    return undefined;
+  }
+  if (hasSessionAutoModelFallbackProvenance(params.entry)) {
+    return contextTokens;
+  }
+  const entryProvider = normalizeStatusModelPart(params.entry?.modelProvider);
+  const entryModel = normalizeStatusModelPart(params.entry?.model);
+  const resolvedProvider = normalizeStatusModelPart(params.provider);
+  const resolvedModel = normalizeStatusModelPart(params.model);
+  if (!entryModel || !resolvedModel || entryModel !== resolvedModel) {
+    return undefined;
+  }
+  if (entryProvider && resolvedProvider && entryProvider !== resolvedProvider) {
+    return undefined;
+  }
+  return contextTokens;
+}
+
 type SessionCandidate = {
   key: string;
   entry: SessionEntry;
@@ -144,6 +178,27 @@ type SessionCandidate = {
 
 function compareSessionCandidatesByUpdatedAt(left: SessionCandidate, right: SessionCandidate) {
   return (right.updatedAt ?? 0) - (left.updatedAt ?? 0);
+}
+
+function selectRecentSessionCandidates(
+  candidates: SessionCandidate[],
+  limit: number,
+): SessionCandidate[] {
+  const selected: SessionCandidate[] = [];
+  for (const candidate of candidates) {
+    const insertAt = selected.findIndex(
+      (selectedCandidate) => compareSessionCandidatesByUpdatedAt(candidate, selectedCandidate) < 0,
+    );
+    if (insertAt >= 0) {
+      selected.splice(insertAt, 0, candidate);
+      if (selected.length > limit) {
+        selected.pop();
+      }
+    } else if (selected.length < limit) {
+      selected.push(candidate);
+    }
+  }
+  return selected;
 }
 
 function listSessionCandidates(storePath: string, agentId?: string) {
@@ -159,7 +214,6 @@ function listSessionCandidates(storePath: string, agentId?: string) {
         entry,
         updatedAt: entry?.updatedAt ?? null,
       }))
-      .toSorted(compareSessionCandidatesByUpdatedAt)
   );
 }
 
@@ -281,8 +335,9 @@ export async function getStatusSummary(
   taskMaintenanceModule.configureTaskRegistryMaintenance({
     cronStorePath: resolveCronJobsStorePath(cfg.cron?.store),
   });
-  const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary();
-  const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings();
+  const inspectableTasks = taskMaintenanceModule.reconcileInspectableTasks();
+  const rawTasks = taskMaintenanceModule.getInspectableTaskRegistrySummary(inspectableTasks);
+  const taskAuditFindings = taskMaintenanceModule.getInspectableTaskAuditFindings(inspectableTasks);
   const now = Date.now();
   const taskAudit = summarizeActionableTaskAuditFindings(taskAuditFindings, { now });
   const taskAuditRetainedLost = summarizeRetainedLostTaskAuditFindings(taskAuditFindings, { now });
@@ -361,7 +416,11 @@ export async function getStatusSummary(
             provider: resolvedModel.provider,
             model,
             ...modelContext,
-            contextTokensOverride: entry?.contextTokens,
+            contextTokensOverride: resolveTrustedSessionContextTokens({
+              entry,
+              provider: resolvedModel.provider,
+              model,
+            }),
             fallbackContextTokens: configContextTokens ?? undefined,
             allowAsyncLoad: false,
           }) ?? null;
@@ -432,9 +491,10 @@ export async function getStatusSummary(
     agentList.agents.map(async (agent) => {
       const storePath = resolveStorePath(cfg.session?.store, { agentId: agent.id });
       const candidates = loadSessionCandidates(storePath, agent.id);
-      const sessions = await buildSessionRows(candidates.slice(0, RECENT_SESSION_LIMIT), {
-        agentIdOverride: agent.id,
-      });
+      const sessions = await buildSessionRows(
+        selectRecentSessionCandidates(candidates, RECENT_SESSION_LIMIT),
+        { agentIdOverride: agent.id },
+      );
       return {
         agentId: agent.id,
         path: storePath,
@@ -453,9 +513,10 @@ export async function getStatusSummary(
         source.storePath,
         pathCounts.get(source.storePath) === 1 ? source.agentId : undefined,
       ),
-    )
-    .toSorted((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0));
-  const recent = await buildSessionRows(allSessions.slice(0, RECENT_SESSION_LIMIT));
+    );
+  const recent = await buildSessionRows(
+    selectRecentSessionCandidates(allSessions, RECENT_SESSION_LIMIT),
+  );
   const totalSessions = allSessions.length;
 
   const summary: StatusSummary = {

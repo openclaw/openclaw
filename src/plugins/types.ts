@@ -22,8 +22,6 @@ import type { PromptMode } from "../agents/system-prompt.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import type { ThinkLevel } from "../auto-reply/thinking.shared.js";
-import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
-import type { ChannelId } from "../channels/plugins/types.public.js";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
@@ -154,6 +152,8 @@ import type { WebFetchProviderPlugin, WebSearchProviderPlugin } from "./web-prov
 
 type ModelProviderRequestTransportOverrides =
   import("../agents/provider-request-config.js").ModelProviderRequestTransportOverrides;
+type ChannelId = import("../channels/plugins/types.core.js").ChannelId;
+type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 
 export type { PluginRuntime } from "./runtime/types.js";
 export type { PluginOrigin } from "./plugin-origin.types.js";
@@ -510,6 +510,7 @@ export type ProviderResolveDynamicModelContext = {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
+  agentRuntimeId?: string;
   provider: string;
   modelId: string;
   modelRegistry: ModelRegistry;

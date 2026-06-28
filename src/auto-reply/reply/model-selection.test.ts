@@ -59,6 +59,38 @@ vi.mock("../../agents/auth-profiles.runtime.js", () => ({
   ensureAuthProfileStore: authProfileStoreMock.ensureAuthProfileStore,
 }));
 
+// Alias-aware stub: mirrors the real isStoredCredentialCompatibleWithAuthProvider
+// but inlines the claude-cli->anthropic alias so tests don't need live plugin metadata.
+vi.mock("../../agents/auth-profiles/order.js", () => ({
+  isStoredCredentialCompatibleWithAuthProvider: ({
+    provider,
+    credential,
+  }: {
+    provider: string;
+    credential: { type: string; provider: string };
+  }) => {
+    const normalize = (v: string) => v.toLowerCase().replace(/[^a-z0-9]+/g, "");
+    const resolveAuthKey = (v: string) => {
+      const n = normalize(v);
+      // claude-cli is a deprecated choice id that resolves to the anthropic auth key
+      if (n === "claudecli") {
+        return "anthropic";
+      }
+      return n;
+    };
+    const providerKey = resolveAuthKey(provider);
+    const credentialKey = resolveAuthKey(credential.provider);
+    if (credentialKey === providerKey) {
+      return true;
+    }
+    // OpenAI Codex compat: openai api_key credential works for openai-codex provider
+    if (providerKey === "openaiapicodex" || providerKey === "openaicodex") {
+      return credentialKey === "openai" && credential.type === "api_key";
+    }
+    return false;
+  },
+}));
+
 afterEach(() => {
   MODEL_CONTEXT_TOKEN_CACHE.clear();
   vi.mocked(loadManifestModelCatalog).mockReset();
@@ -993,6 +1025,89 @@ describe("createModelSelectionState respects session model override", () => {
     expect(state.resetModelOverride).toBe(false);
   });
 
+  it("keeps provider-qualified stored overrides when providerOverride is also persisted", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const sessionKey = "agent:main:dashboard:child";
+    const sessionEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "openai/gpt-5.5",
+      modelOverrideSource: "user",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.4",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-5.5");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[sessionKey]?.providerOverride).toBe("openai");
+    expect(sessionStore[sessionKey]?.modelOverride).toBe("openai/gpt-5.5");
+  });
+
+  it("normalizes provider-qualified parent stored overrides before allowlist checks", async () => {
+    const cfg = {
+      agents: {
+        defaults: {
+          model: { primary: "openai/gpt-5.5" },
+          models: {
+            "openai/gpt-5.5": {},
+            "openai/gpt-5.4": {},
+          },
+        },
+      },
+    } as OpenClawConfig;
+    const parentSessionKey = "agent:main:dashboard:parent";
+    const sessionKey = "agent:main:dashboard:child";
+    const sessionEntry = makeEntry();
+    const parentEntry = makeEntry({
+      providerOverride: "openai",
+      modelOverride: "openai/gpt-5.5",
+      modelOverrideSource: "user",
+    });
+    const sessionStore = { [sessionKey]: sessionEntry, [parentSessionKey]: parentEntry };
+
+    const state = await createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      parentSessionKey,
+      defaultProvider: "openai",
+      defaultModel: "gpt-5.5",
+      provider: "openai",
+      model: "gpt-5.4",
+      hasModelDirective: false,
+    });
+
+    expect(state.provider).toBe("openai");
+    expect(state.model).toBe("gpt-5.5");
+    expect(state.resetModelOverride).toBe(false);
+    expect(sessionStore[parentSessionKey]?.modelOverride).toBe("openai/gpt-5.5");
+    expect(sessionStore[sessionKey]?.modelOverride).toBeUndefined();
+  });
+
   it("clears disallowed model overrides and falls back to the default", async () => {
     const cfg = {
       agents: {
@@ -1674,6 +1789,50 @@ describe("createModelSelectionState auto-failover overrides", () => {
     // Parent session entry is not modified by the child's selection logic.
     expect(sessionStore[parentKey]?.providerOverride).toBe("openrouter");
     expect(state.resetModelOverride).toBe(false);
+  });
+});
+
+describe("createModelSelectionState auth-profile override flapping regression", () => {
+  const sessionKey = "agent:main:telegram:direct:1";
+
+  it("keeps alias-compatible authProfileOverride when stored credential provider is 'anthropic' for a claude-cli session", async () => {
+    // Regression: the old code compared profile.provider directly to acceptedAuthProviders,
+    // which cleared an 'anthropic' credential when the session ran under the 'claude-cli'
+    // provider. The alias (claude-cli -> anthropic) must be respected so the override is kept.
+    authProfileStoreMock.store = {
+      version: 1,
+      profiles: {
+        "anthropic:claude-cli": {
+          type: "api_key",
+          provider: "anthropic",
+          key: "test-cli-oauth-token",
+        },
+      },
+    };
+    const sessionEntry: SessionEntry = {
+      sessionId: "s-cli",
+      updatedAt: 1,
+      authProfileOverride: "anthropic:claude-cli",
+    };
+    const sessionStore = { [sessionKey]: sessionEntry };
+
+    await createModelSelectionState({
+      cfg: {} as OpenClawConfig,
+      agentCfg: undefined,
+      sessionEntry,
+      sessionStore,
+      sessionKey,
+      defaultProvider: "claude-cli",
+      defaultModel: "claude-opus-4-7",
+      provider: "claude-cli",
+      model: "claude-opus-4-7",
+      hasModelDirective: false,
+    });
+
+    // The override must NOT have been cleared — the anthropic credential is
+    // alias-compatible with the claude-cli provider.
+    expect(sessionStore[sessionKey]?.authProfileOverride).toBe("anthropic:claude-cli");
+    expect(sessionEntry.authProfileOverride).toBe("anthropic:claude-cli");
   });
 });
 

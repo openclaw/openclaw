@@ -9,7 +9,7 @@ import {
 } from "./scenario-catalog.js";
 
 describe("qa scenario packs", () => {
-  it("points every pack scenario id at a loadable markdown scenario", () => {
+  it("points every pack scenario id at a loadable YAML scenario", () => {
     expect(QA_SCENARIO_PACKS.length).toBeGreaterThan(0);
 
     for (const pack of QA_SCENARIO_PACKS) {

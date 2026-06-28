@@ -10,8 +10,8 @@ import type { TaskRecord } from "./task-registry.types.js";
 const ACTIVE_TASK_STATUSES = new Set(["queued", "running"]);
 const FAILURE_TASK_STATUSES = new Set(["failed", "timed_out", "lost"]);
 /** Window for showing recently completed tasks in compact status output. */
-export const TASK_STATUS_RECENT_WINDOW_MS = 5 * 60_000;
-export const TASK_STATUS_TITLE_MAX_CHARS = 80;
+const TASK_STATUS_RECENT_WINDOW_MS = 5 * 60_000;
+const TASK_STATUS_TITLE_MAX_CHARS = 80;
 export const TASK_STATUS_DETAIL_MAX_CHARS = 120;
 
 function isActiveTask(task: TaskRecord): boolean {
@@ -151,7 +151,7 @@ export function formatTaskStatusDetail(task: TaskRecord): string | undefined {
   );
 }
 
-export type TaskStatusSnapshot = {
+type TaskStatusSnapshot = {
   latest?: TaskRecord;
   focus?: TaskRecord;
   visible: TaskRecord[];

@@ -24,6 +24,7 @@ import type {
 } from "../../plugins/cli-backend.types.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { resolveSkillsPromptForRun } from "../../skills/loading/workspace.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
@@ -31,8 +32,10 @@ import { resolveUserPath } from "../../utils.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import { resolveAgentDir, resolveSessionAgentIds } from "../agent-scope.js";
 import { externalCliDiscoveryForProviderAuth } from "../auth-profiles/external-cli-discovery.js";
+import { resolveApiKeyForProfile } from "../auth-profiles/oauth.js";
+import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { loadAuthProfileStoreForRuntime } from "../auth-profiles/store.js";
-import type { AuthProfileCredential } from "../auth-profiles/types.js";
+import type { AuthProfileCredential, AuthProfileStore } from "../auth-profiles/types.js";
 import {
   buildBootstrapInjectionStats,
   buildBootstrapPromptWarning,
@@ -104,6 +107,7 @@ const prepareDeps = {
   prepareClaudeCliSkillsPlugin,
   claudeCliSessionTranscriptHasContent,
   claudeCliSessionTranscriptHasOrphanedToolUse,
+  resolveApiKeyForProfile,
 };
 
 async function resolveCliSkillsPrompt(params: {
@@ -214,6 +218,20 @@ export function shouldSkipLocalCliCredentialEpoch(params: {
   );
 }
 
+function shouldRefreshAuthProfileForExecution(params: {
+  backendId: string;
+  authProfileId?: string;
+  authCredential?: AuthProfileCredential;
+}): boolean {
+  return Boolean(
+    params.backendId === "google-gemini-cli" &&
+    params.authProfileId &&
+    (params.authCredential?.type === "oauth" ||
+      params.authCredential?.type === "api_key" ||
+      params.authCredential?.type === "token"),
+  );
+}
+
 /** Builds the complete context required to execute a CLI-backed agent run. */
 export async function prepareCliRunContext(
   params: RunCliAgentParams,
@@ -269,18 +287,64 @@ export async function prepareCliRunContext(
   });
   const agentDir = resolveAgentDir(params.config ?? {}, sessionAgentId);
   const requestedAuthProfileId = params.authProfileId?.trim() || undefined;
-  const effectiveAuthProfileId =
+  let effectiveAuthProfileId =
     requestedAuthProfileId ?? backendResolved.defaultAuthProfileId?.trim() ?? undefined;
+  let authStore: AuthProfileStore | undefined;
   let authCredential: AuthProfileCredential | undefined;
-  if (effectiveAuthProfileId) {
-    const authStore = loadAuthProfileStoreForRuntime(agentDir, {
-      readOnly: true,
+  const loadScopedAuthStore = (options: { profileId?: string; readOnly?: boolean } = {}) =>
+    loadAuthProfileStoreForRuntime(agentDir, {
+      readOnly: options.readOnly ?? true,
       externalCli: externalCliDiscoveryForProviderAuth({
+        cfg: params.config,
         provider: params.provider,
-        profileId: effectiveAuthProfileId,
+        ...(options.profileId ? { profileId: options.profileId } : {}),
       }),
     });
+  if (effectiveAuthProfileId) {
+    authStore = loadScopedAuthStore({ profileId: effectiveAuthProfileId });
     authCredential = authStore.profiles[effectiveAuthProfileId];
+  } else if (backendResolved.prepareExecution || backendResolved.authEpochMode === "profile-only") {
+    authStore = loadScopedAuthStore();
+    effectiveAuthProfileId =
+      resolveAuthProfileOrder({
+        cfg: params.config,
+        store: authStore,
+        provider: params.provider,
+      })[0]?.trim() || undefined;
+    if (effectiveAuthProfileId) {
+      authCredential = authStore.profiles[effectiveAuthProfileId];
+    }
+  }
+  if (
+    effectiveAuthProfileId &&
+    shouldRefreshAuthProfileForExecution({
+      backendId: backendResolved.id,
+      authProfileId: effectiveAuthProfileId,
+      authCredential,
+    })
+  ) {
+    const authProfileId = effectiveAuthProfileId;
+    const writableAuthStore = loadScopedAuthStore({ profileId: authProfileId, readOnly: false });
+    const resolvedAuth = await prepareDeps.resolveApiKeyForProfile({
+      cfg: params.config,
+      store: writableAuthStore,
+      profileId: authProfileId,
+      agentDir,
+    });
+    const resolvedAuthProfileId = resolvedAuth?.profileId ?? authProfileId;
+    const resolvedAuthCredential = resolvedAuth?.credential;
+    authStore = loadScopedAuthStore({ profileId: resolvedAuthProfileId });
+    authCredential = resolvedAuthCredential ?? authStore.profiles[resolvedAuthProfileId];
+    if (resolvedAuth && authCredential) {
+      effectiveAuthProfileId = resolvedAuthProfileId;
+      // Apply resolved strings only to static credentials with secret refs.
+      // OAuth CLI bridges need raw refreshed fields from the reloaded store.
+      if (authCredential.type === "api_key") {
+        authCredential = { ...authCredential, key: resolvedAuth.apiKey };
+      } else if (authCredential.type === "token") {
+        authCredential = { ...authCredential, token: resolvedAuth.apiKey };
+      }
+    }
   }
   const extraSystemPrompt = params.extraSystemPrompt?.trim() ?? "";
   // Use the static portion (excluding per-message inbound metadata) for session reuse hashing.
@@ -289,6 +353,19 @@ export async function prepareCliRunContext(
     params.extraSystemPromptStatic !== undefined
       ? hashCliSessionText(params.extraSystemPromptStatic.trim() || undefined)
       : hashCliSessionText(extraSystemPrompt);
+  const requireExplicitMessageTarget =
+    params.requireExplicitMessageTarget ?? isSubagentSessionKey(params.sessionKey);
+  const messageToolPolicyHash =
+    params.sourceReplyDeliveryMode !== undefined ||
+    params.requireExplicitMessageTarget !== undefined ||
+    requireExplicitMessageTarget
+      ? hashCliSessionText(
+          JSON.stringify({
+            sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+            requireExplicitMessageTarget,
+          }),
+        )
+      : undefined;
 
   const modelId = (params.model ?? "default").trim() || "default";
   const normalizedModel = normalizeCliModel(modelId, backendResolved.config);
@@ -359,6 +436,7 @@ export async function prepareCliRunContext(
     }
     mcpLoopbackRuntime = prepareDeps.getActiveMcpLoopbackRuntime();
   }
+  const mcpDeliveryCaptureEnabled = bundleMcpEnabled && Boolean(mcpLoopbackRuntime);
   const preparedBackend = await prepareCliBundleMcpConfig({
     enabled: bundleMcpEnabled,
     mode: backendResolved.bundleMcpMode,
@@ -377,6 +455,7 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_AGENT_ID: sessionAgentId ?? "",
           OPENCLAW_MCP_ACCOUNT_ID: params.agentAccountId ?? "",
           OPENCLAW_MCP_SESSION_KEY: params.sessionKey ?? "",
+          OPENCLAW_MCP_SESSION_ID: params.sessionId,
           OPENCLAW_MCP_MESSAGE_CHANNEL: params.messageChannel ?? params.messageProvider ?? "",
           OPENCLAW_MCP_CURRENT_CHANNEL_ID: params.currentChannelId ?? "",
           OPENCLAW_MCP_CURRENT_THREAD_TS: params.currentThreadTs ?? "",
@@ -385,11 +464,13 @@ export async function prepareCliRunContext(
           OPENCLAW_MCP_CURRENT_INBOUND_AUDIO: params.currentInboundAudio === true ? "true" : "",
           OPENCLAW_MCP_INBOUND_EVENT_KIND: params.currentInboundEventKind ?? "",
           OPENCLAW_MCP_SOURCE_REPLY_DELIVERY_MODE: params.sourceReplyDeliveryMode ?? "",
+          OPENCLAW_MCP_REQUIRE_EXPLICIT_MESSAGE_TARGET: requireExplicitMessageTarget ? "true" : "",
+          OPENCLAW_MCP_CLI_CAPTURE_KEY: "",
         }
       : undefined,
     warn: (message) => cliBackendLog.warn(message),
   });
-  const preparedExecution = await backendResolved.prepareExecution?.({
+  const prepareExecutionContext = {
     config: params.config,
     workspaceDir,
     agentDir,
@@ -397,7 +478,32 @@ export async function prepareCliRunContext(
     modelId,
     authProfileId: effectiveAuthProfileId,
     executionMode,
-  });
+    env: preparedBackend.env,
+  } as Parameters<NonNullable<typeof backendResolved.prepareExecution>>[0];
+  let preparedExecution: Awaited<ReturnType<NonNullable<typeof backendResolved.prepareExecution>>> =
+    undefined;
+  try {
+    preparedExecution = await backendResolved.prepareExecution?.(
+      (backendResolved.id === "google-gemini-cli"
+        ? {
+            ...prepareExecutionContext,
+            // Private bridge for bundled Gemini CLI. This is intentionally not
+            // part of the public Plugin SDK until a credential-forwarding
+            // contract exists.
+            authCredential,
+          }
+        : prepareExecutionContext) as typeof prepareExecutionContext & {
+        authCredential?: AuthProfileCredential;
+      },
+    );
+  } catch (err) {
+    try {
+      await preparedBackend.cleanup?.();
+    } catch (cleanupErr) {
+      cliBackendLog.warn(`cli backend cleanup after prepare failure failed: ${String(cleanupErr)}`);
+    }
+    throw err;
+  }
   const skipLocalCredentialEpoch = shouldSkipLocalCliCredentialEpoch({
     authEpochMode: backendResolved.authEpochMode,
     authProfileId: effectiveAuthProfileId,
@@ -406,6 +512,7 @@ export async function prepareCliRunContext(
   });
   const authEpoch = await resolveCliAuthEpoch({
     provider: params.provider,
+    agentDir,
     authProfileId: effectiveAuthProfileId,
     skipLocalCredential: skipLocalCredentialEpoch,
   });
@@ -474,6 +581,7 @@ export async function prepareCliRunContext(
           accountId: params.agentAccountId,
           inboundEventKind: params.currentInboundEventKind,
           sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+          requireExplicitMessageTarget,
           senderIsOwner: params.senderIsOwner,
         }).tools
       : [];
@@ -490,6 +598,7 @@ export async function prepareCliRunContext(
           authEpoch,
           authEpochVersion: CLI_AUTH_EPOCH_VERSION,
           extraSystemPromptHash,
+          messageToolPolicyHash,
           promptToolNamesHash,
           cwdHash,
           mcpConfigHash: preparedBackendFinal.mcpConfigHash,
@@ -583,6 +692,7 @@ export async function prepareCliRunContext(
         defaultThinkLevel: params.thinkLevel,
         extraSystemPrompt,
         sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
+        requireExplicitMessageTarget,
         silentReplyPromptMode: params.silentReplyPromptMode,
         runtimeChannel,
         runtimeChatType: params.sessionEntry?.chatType,
@@ -756,6 +866,7 @@ export async function prepareCliRunContext(
       ...params,
       config: contextEngineConfig,
       prompt: preparedPrompt,
+      ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
     };
 
     return {
@@ -779,8 +890,10 @@ export async function prepareCliRunContext(
       authEpoch,
       authEpochVersion: CLI_AUTH_EPOCH_VERSION,
       extraSystemPromptHash,
+      messageToolPolicyHash,
       promptToolNamesHash,
       cwdHash,
+      ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
     };
   }
   try {
@@ -819,6 +932,7 @@ export async function prepareCliRunContext(
       ...params,
       config: contextEngineConfig,
       prompt: preparedPrompt,
+      ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
     };
 
     return {
@@ -846,8 +960,10 @@ export async function prepareCliRunContext(
       authEpoch,
       authEpochVersion: CLI_AUTH_EPOCH_VERSION,
       extraSystemPromptHash,
+      messageToolPolicyHash,
       promptToolNamesHash,
       cwdHash,
+      ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
     };
   } catch (err) {
     try {

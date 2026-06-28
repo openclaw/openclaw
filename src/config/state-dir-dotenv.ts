@@ -8,11 +8,16 @@ import {
   normalizeEnvVarKey,
 } from "../infra/host-env-security.js";
 import { collectConfigServiceEnvVars } from "./config-env-vars.js";
+import { ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV } from "./future-version-guard.js";
 import { resolveStateDir } from "./paths.js";
 import type { OpenClawConfig } from "./types.js";
 
 function isBlockedServiceEnvVar(key: string): boolean {
-  return isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key);
+  return (
+    key.toUpperCase() === ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV ||
+    isDangerousHostEnvVarName(key) ||
+    isDangerousHostEnvOverrideVarName(key)
+  );
 }
 
 function unwrapMatchingLiteralQuotes(value: string): string {
@@ -83,11 +88,6 @@ function parseStateDirDotEnvContent(content: string): ParsedStateDirDotEnv {
   return { entries, skippedShellReferenceKeys };
 }
 
-/** Reads a specific state directory `.env` as managed service env vars. */
-export function readStateDirDotEnvVarsFromStateDir(stateDir: string): Record<string, string> {
-  return readStateDirDotEnvFromStateDir(stateDir).entries;
-}
-
 /**
  * Read and parse the state-dir `.env`, returning both the persisted entries and
  * the keys that were skipped because they held unresolved shell references. The
@@ -112,7 +112,7 @@ export function readStateDirDotEnvVars(
   env: Record<string, string | undefined>,
 ): Record<string, string> {
   const stateDir = resolveStateDir(env as NodeJS.ProcessEnv);
-  return readStateDirDotEnvVarsFromStateDir(stateDir);
+  return readStateDirDotEnvFromStateDir(stateDir).entries;
 }
 
 /** Split view of durable gateway service env sources before precedence is applied. */

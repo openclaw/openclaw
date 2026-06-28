@@ -62,13 +62,13 @@ describe("parallel-free web search provider", () => {
     endpointMockState.responses = [];
   });
 
-  it("exposes keyless metadata as the zero-config default", () => {
+  it("exposes keyless metadata without claiming auto-detect fallback", () => {
     const provider = createParallelFreeWebSearchProvider();
     expect(provider.id).toBe("parallel-free");
     expect(provider.label).toBe("Parallel Search (Free)");
     expect(provider.requiresCredential).toBe(false);
     expect(provider.envVars).toEqual([]);
-    expect(provider.autoDetectOrder).toBe(76);
+    expect(provider.autoDetectOrder).toBeUndefined();
   });
 
   it("advertises the free MCP's tighter 100-char session_id cap in its tool schema", () => {

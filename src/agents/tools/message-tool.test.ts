@@ -735,6 +735,69 @@ describe("message tool secret scoping", () => {
     expect(Array.from(secretResolveCall.targetIds ?? [])).toEqual(["channels.telegram.botToken"]);
   });
 
+  it("preserves empty opaque target segments in inferred session delivery", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {
+          channels: {
+            telegram: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+            },
+          },
+        } as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:telegram:group:room::part",
+      },
+    });
+
+    expect(input?.toolContext?.currentChannelProvider).toBe("telegram");
+    expect(input?.toolContext?.currentChannelId).toBe("room::part");
+  });
+
+  it("does not infer delivery from empty structural session segments", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {
+          channels: {
+            telegram: {
+              botToken: { source: "env", provider: "default", id: "TELEGRAM_BOT_TOKEN" },
+            },
+          },
+        } as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:main:telegram::group:room",
+      },
+    });
+
+    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+    expect(input?.toolContext?.currentChannelId).toBeUndefined();
+  });
+
+  it("does not infer delivery from a nested opaque agent identity", async () => {
+    mockSendResult();
+
+    const input = await executeSend({
+      action: { message: "hi" },
+      toolOptions: {
+        config: {} as never,
+        sourceReplyDeliveryMode: "message_tool_only",
+        currentChannelProvider: "webchat",
+        agentSessionKey: "agent:voice:agent:channel:room",
+      },
+    });
+
+    expect(input?.toolContext?.currentChannelProvider).toBe("webchat");
+    expect(input?.toolContext?.currentChannelId).toBeUndefined();
+  });
+
   it("preserves direct session keys as explicit user targets when ambient channel drifted to webchat", async () => {
     mockSendResult({ channel: "discord", to: "user:123456789" });
 
@@ -1254,6 +1317,35 @@ describe("message tool explicit target guard", () => {
         filePath: "/tmp/report.png",
       }),
     ).rejects.toThrow(/Explicit message target required/i);
+
+    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      action: "poll",
+      params: {
+        action: "poll",
+        pollQuestion: "Lunch?",
+        pollOption: ["Pizza", "Sushi"],
+      },
+    },
+    {
+      action: "sticker",
+      params: {
+        action: "sticker",
+        stickerId: "sticker-1",
+      },
+    },
+  ] as const)("requires an explicit target for $action when configured", async ({ params }) => {
+    const tool = createMessageTool({
+      runMessageAction: mocks.runMessageAction as never,
+      requireExplicitTarget: true,
+      currentChannelProvider: "slack",
+      currentChannelId: "channel:C123",
+    });
+
+    await expect(tool.execute("1", params)).rejects.toThrow(/Explicit message target required/i);
 
     expect(mocks.runMessageAction).not.toHaveBeenCalled();
   });
