@@ -8,7 +8,7 @@
       "name": "@openclaw/claude",
       "version": "2026.5.20",
       "dependencies": {
-        "@zeroaltitude/openclaw-claude-bridge": "0.2.15",
+        "@zeroaltitude/openclaw-claude-bridge": "0.2.16",
         "zod": "4.4.3"
       }
     },
@@ -229,9 +229,9 @@
       "license": "MIT"
     },
     "node_modules/@zeroaltitude/openclaw-claude-bridge": {
-      "version": "0.2.15",
-      "resolved": "https://registry.npmjs.org/@zeroaltitude/openclaw-claude-bridge/-/openclaw-claude-bridge-0.2.15.tgz",
-      "integrity": "sha512-TgMBN7rJmgqcyJqdqAMpB3HBm7JuY1v1QzJPrv4ZTVuXSZ3rsYKSvfKF0zz+rRqJ2CWmQQ9fU2Ocr4F6gI2Lew==",
+      "version": "0.2.16",
+      "resolved": "https://registry.npmjs.org/@zeroaltitude/openclaw-claude-bridge/-/openclaw-claude-bridge-0.2.16.tgz",
+      "integrity": "sha512-u0ySSWXt5lBInqMq6cdUcjb5gtkexqtkUv1ttUKS0sVl3xs4cRrRr0/upTUzhey+Rmx4J6QzBVDl0JaGAsSkJg==",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.3.145",
         "@modelcontextprotocol/sdk": "^1.29.0",

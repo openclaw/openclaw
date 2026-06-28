@@ -491,8 +491,8 @@ importers:
   extensions/claude:
     dependencies:
       '@zeroaltitude/openclaw-claude-bridge':
-        specifier: 0.2.15
-        version: 0.2.15(@anthropic-ai/sdk@0.100.1(zod@4.4.3))(zod@4.4.3)
+        specifier: 0.2.16
+        version: 0.2.16(@anthropic-ai/sdk@0.100.1(zod@4.4.3))(zod@4.4.3)
       zod:
         specifier: 4.4.3
         version: 4.4.3
@@ -500,6 +500,7 @@ importers:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
+
   extensions/clickclack:
     dependencies:
       ws:
@@ -2432,16 +2433,8 @@ packages:
     resolution: {integrity: sha512-fT1qHVGAag4IEkrupZ6lRRbNCs1vS9P01KB/sG8zKgvUztbYtFBtQpjSITNwooDZ83tpsPzP0mRNs1/KVszCRA==}
     engines: {node: '>= 20.12.0'}
 
-  '@clack/core@1.4.1':
-    resolution: {integrity: sha512-FILJa1gGKEFTGZAJE9RpVhrjKz3c3h4ar60dSv6cGuDqufQ84YEIS3GAGvZiN+H6yaLbbvTFNejjCC4tXpZEuw==}
-    engines: {node: '>= 20.12.0'}
-
   '@clack/prompts@1.4.0':
     resolution: {integrity: sha512-S0My7XPGIgpRWMDG8uRqalbgT+a6FmCUdOW+HaIOVVpUPHOb7RrpvjTjiODadKp06fsrVDJZlIzc6yCTp4AnxA==}
-    engines: {node: '>= 20.12.0'}
-
-  '@clack/prompts@1.5.1':
-    resolution: {integrity: sha512-zccHj2z2oCCO4yrDiRSlFOxWerGqRiysP7a5jPK6uoI9URKAquwY42Dd/iUP8JWHxEzdRe4TlbvZCo8z1/mhrw==}
     engines: {node: '>= 20.12.0'}
 
   '@clawdbot/lobster@2026.5.22':
@@ -4645,10 +4638,11 @@ packages:
 
   '@zed-industries/codex-acp@0.15.0':
     resolution: {integrity: sha512-eAv7sGBeiYrYkOulF729nrM51szS7WIhBtugRj5wWq6csRKZUhAZfoUZlF8xUWdHPtOIzd/eT6MNG6gMHu6z0w==}
+    deprecated: This package has been replaced by @agentclientprotocol/codex-acp. Please migrate to continue receiving updates.
     hasBin: true
 
-  '@zeroaltitude/openclaw-claude-bridge@0.2.15':
-    resolution: {integrity: sha512-TgMBN7rJmgqcyJqdqAMpB3HBm7JuY1v1QzJPrv4ZTVuXSZ3rsYKSvfKF0zz+rRqJ2CWmQQ9fU2Ocr4F6gI2Lew==}
+  '@zeroaltitude/openclaw-claude-bridge@0.2.16':
+    resolution: {integrity: sha512-u0ySSWXt5lBInqMq6cdUcjb5gtkexqtkUv1ttUKS0sVl3xs4cRrRr0/upTUzhey+Rmx4J6QzBVDl0JaGAsSkJg==}
     engines: {node: '>=22.0.0'}
     hasBin: true
 
@@ -7599,6 +7593,10 @@ packages:
     resolution: {integrity: sha512-cRZYrTDwWznlnRiPjggAGxZXanty6M8RV1ff8Wm4LWXBp7/IG8v5DnOm74DtUBp9OONpK75YlPnIjQqX0dBDtA==}
     engines: {node: '>=20.18.1'}
 
+  undici@8.3.0:
+    resolution: {integrity: sha512-TkUDgb6tl7KOGZ+7e8E3d2FYgUQgF6z5YypqjWmixVQSQERFcVrVg0ySADm2LVLRh5ljAaHTCR5Fmz3Q34rB7Q==}
+    engines: {node: '>=22.19.0'}
+
   undici@8.5.0:
     resolution: {integrity: sha512-xamtWoB1EshgjpmlXd7GGm2VfdDtw1+rD8uhry8pSNW3If6S8E0m2T2+orSKeZXEn/aPJMviCpDBA65WJt8zhg==}
     engines: {node: '>=22.19.0'}
@@ -8626,21 +8624,9 @@ snapshots:
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
 
-  '@clack/core@1.4.1':
-    dependencies:
-      fast-wrap-ansi: 0.2.2
-      sisteransi: 1.0.5
-
   '@clack/prompts@1.4.0':
     dependencies:
       '@clack/core': 1.3.1
-      fast-string-width: 3.0.2
-      fast-wrap-ansi: 0.2.2
-      sisteransi: 1.0.5
-
-  '@clack/prompts@1.5.1':
-    dependencies:
-      '@clack/core': 1.4.1
       fast-string-width: 3.0.2
       fast-wrap-ansi: 0.2.2
       sisteransi: 1.0.5
@@ -9388,6 +9374,10 @@ snapshots:
     optionalDependencies:
       jszip: 3.10.1
       tar: 7.5.16
+
+  '@openclaw/proxyline@0.3.3(undici@8.3.0)':
+    dependencies:
+      undici: 8.3.0
 
   '@openclaw/proxyline@0.3.3(undici@8.5.0)':
     dependencies:
@@ -10743,7 +10733,7 @@ snapshots:
       '@zed-industries/codex-acp-win32-arm64': 0.15.0
       '@zed-industries/codex-acp-win32-x64': 0.15.0
 
-  '@zeroaltitude/openclaw-claude-bridge@0.2.15(@anthropic-ai/sdk@0.100.1(zod@4.4.3))(zod@4.4.3)':
+  '@zeroaltitude/openclaw-claude-bridge@0.2.16(@anthropic-ai/sdk@0.100.1(zod@4.4.3))(zod@4.4.3)':
     dependencies:
       '@anthropic-ai/claude-agent-sdk': 0.3.168(@anthropic-ai/sdk@0.100.1(zod@4.4.3))(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))(zod@4.4.3)
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
@@ -13080,7 +13070,7 @@ snapshots:
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
       '@mozilla/readability': 0.6.0
       '@openclaw/fs-safe': 0.3.0
-      '@openclaw/proxyline': 0.3.3(undici@8.5.0)
+      '@openclaw/proxyline': 0.3.3(undici@8.3.0)
       '@silvia-odwyer/photon-node': 0.3.4
       chalk: 5.6.2
       chokidar: 5.0.0
@@ -13118,7 +13108,7 @@ snapshots:
       tslog: 4.10.2
       typebox: 1.1.39
       typescript: 6.0.3
-      undici: 8.5.0
+      undici: 8.3.0
       web-push: 3.6.7
       web-tree-sitter: 0.26.9
       ws: 8.21.0
@@ -14255,6 +14245,8 @@ snapshots:
   undici-types@7.24.6: {}
 
   undici@7.28.0: {}
+
+  undici@8.3.0: {}
 
   undici@8.5.0: {}
 
