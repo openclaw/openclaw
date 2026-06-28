@@ -260,14 +260,16 @@ content and identifiers.
 
     `allowFrom` accepts E.164-style numbers (normalized internally).
 
-    `allowFrom` is a DM sender access-control list. It does not gate explicit outbound sends to WhatsApp group JIDs or `@newsletter` channel JIDs.
+    `allowFrom` is a DM sender access-control list. By default it also gates direct-message outbound sends.
 
-    Multi-account override: `channels.whatsapp.accounts.<id>.dmPolicy` (and `allowFrom`) take precedence over channel-level defaults for that account.
+    `allowSendTo` is an optional direct-message outbound allowlist. Set it when the agent should only accept DMs from `allowFrom`, but may send to a different set of numbers. `allowSendTo: ["*"]` permits outbound DMs to any number, and `allowSendTo: []` blocks direct-message outbound sends. WhatsApp group JIDs and `@newsletter` channel JIDs are governed by group/channel rules instead.
+
+    Multi-account override: `channels.whatsapp.accounts.<id>.dmPolicy` (and `allowFrom` / `allowSendTo`) take precedence over channel-level defaults for that account.
 
     Runtime behavior details:
 
     - pairings are persisted in channel allow-store and merged with configured `allowFrom`
-    - scheduled automation and heartbeat recipient fallback use explicit delivery targets or configured `allowFrom`; DM pairing approvals are not implicit cron or heartbeat recipients
+    - scheduled automation and heartbeat recipient fallback use explicit delivery targets, `allowSendTo` when configured, or configured `allowFrom`; DM pairing approvals are not implicit cron or heartbeat recipients
     - if no allowlist is configured, the linked self number is allowed by default
     - OpenClaw never auto-pairs outbound `fromMe` DMs (messages you send to yourself from the linked device)
 
@@ -813,7 +815,7 @@ Primary reference:
 
 High-signal WhatsApp fields:
 
-- access: `dmPolicy`, `allowFrom`, `groupPolicy`, `groupAllowFrom`, `groups`
+- access: `dmPolicy`, `allowFrom`, `allowSendTo`, `groupPolicy`, `groupAllowFrom`, `groups`
 - delivery: `textChunkLimit`, `chunkMode`, `mediaMaxMb`, `sendReadReceipts`, `ackReaction`, `reactionLevel`
 - multi-account: `accounts.<id>.enabled`, `accounts.<id>.authDir`, account-level overrides
 - operations: `configWrites`, `debounceMs`, `web.enabled`, `web.heartbeatSeconds`, `web.reconnect.*`, `web.whatsapp.*`

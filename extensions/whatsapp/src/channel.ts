@@ -311,6 +311,7 @@ export const whatsappPlugin: ChannelPlugin<ResolvedWhatsAppAccount> =
               healthState: runtime?.healthState ?? undefined,
               dmPolicy: account.dmPolicy,
               allowFrom: account.allowFrom,
+              allowSendTo: account.allowSendTo,
             },
           };
         },

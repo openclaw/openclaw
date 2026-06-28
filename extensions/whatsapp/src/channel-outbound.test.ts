@@ -190,6 +190,24 @@ describe("whatsappChannelOutbound", () => {
     expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
   });
 
+  it("uses allowSendTo for direct outbound target gating", () => {
+    const allowed = whatsappChannelOutbound.resolveTarget?.({
+      to: "+19876543210",
+      allowFrom: ["+11234567890"],
+      allowSendTo: ["+19876543210"],
+      mode: "explicit",
+    });
+    const blocked = whatsappChannelOutbound.resolveTarget?.({
+      to: "+19876543210",
+      allowFrom: ["*"],
+      allowSendTo: [],
+      mode: "explicit",
+    });
+
+    expect(allowed).toEqual({ ok: true, to: "+19876543210" });
+    expect(blocked?.ok).toBe(false);
+  });
+
   it("preserves indentation for payload delivery", async () => {
     await whatsappChannelOutbound.sendPayload!({
       cfg: {},

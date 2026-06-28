@@ -104,6 +104,7 @@ describe("resolveWhatsAppAuthDir", () => {
               default: {
                 dmPolicy: "allowlist",
                 allowFrom: ["+15550001111"],
+                allowSendTo: ["+15550004444"],
                 groupPolicy: "open",
                 groupAllowFrom: ["+15550002222"],
                 defaultTo: "+15550003333",
@@ -123,6 +124,7 @@ describe("resolveWhatsAppAuthDir", () => {
 
     expect(resolved.dmPolicy).toBe("allowlist");
     expect(resolved.allowFrom).toEqual(["+15550001111"]);
+    expect(resolved.allowSendTo).toEqual(["+15550004444"]);
     expect(resolved.groupPolicy).toBe("open");
     expect(resolved.groupAllowFrom).toEqual(["+15550002222"]);
     expect(resolved.defaultTo).toBe("+15550003333");

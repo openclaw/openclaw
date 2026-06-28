@@ -30,8 +30,8 @@ export const whatsappOutbound: ChannelOutboundAdapter = createWhatsAppOutboundBa
   sendPollWhatsApp: async (to, poll, options) =>
     await (await loadWhatsAppSendModule()).sendPollWhatsApp(to, poll, options),
   shouldLogVerbose: () => shouldLogVerbose(),
-  resolveTarget: ({ to, allowFrom, mode }) =>
-    resolveWhatsAppOutboundTarget({ to, allowFrom, mode }),
+  resolveTarget: ({ to, allowFrom, allowSendTo, mode }) =>
+    resolveWhatsAppOutboundTarget({ to, allowFrom, allowSendTo, mode }),
   normalizeText: normalizeOutboundText,
   skipEmptyText: true,
 });

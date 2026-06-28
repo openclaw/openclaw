@@ -64,6 +64,23 @@ describe("whatsapp config schema", () => {
     }
   });
 
+  it("accepts root and account-scoped allowSendTo", () => {
+    const res = expectWhatsAppConfigValid({
+      allowFrom: ["+15555550123"],
+      allowSendTo: ["+15555550999"],
+      accounts: {
+        work: {
+          allowSendTo: ["*"],
+        },
+      },
+    });
+
+    if (res.success) {
+      expect(res.data.allowSendTo).toEqual(["+15555550999"]);
+      expect(res.data.accounts?.work?.allowSendTo).toEqual(["*"]);
+    }
+  });
+
   it("accepts enabled", () => {
     expectWhatsAppConfigValid({
       enabled: true,

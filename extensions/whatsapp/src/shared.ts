@@ -61,6 +61,7 @@ const whatsappConfigAdapter = createScopedChannelConfigAdapter<ResolvedWhatsAppA
   clearBaseFields: [],
   allowTopLevel: false,
   resolveAllowFrom: (account) => account.allowFrom,
+  resolveAllowSendTo: (account) => account.allowSendTo,
   formatAllowFrom: (allowFrom) => formatWhatsAppConfigAllowFromEntries(allowFrom),
   resolveDefaultTo: (account) => account.defaultTo,
 });
@@ -201,6 +202,7 @@ export function createWhatsAppPluginBase(params: {
             linked: Boolean(account.authDir),
             dmPolicy: account.dmPolicy,
             allowFrom: account.allowFrom,
+            allowSendTo: account.allowSendTo,
           },
         }),
     },

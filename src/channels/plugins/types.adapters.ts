@@ -146,6 +146,10 @@ export type ChannelConfigAdapter<ResolvedAccount> = {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => Array<string | number> | undefined;
+  resolveAllowSendTo?: (params: {
+    cfg: OpenClawConfig;
+    accountId?: string | null;
+  }) => Array<string | number> | undefined;
   formatAllowFrom?: (params: {
     cfg: OpenClawConfig;
     accountId?: string | null;

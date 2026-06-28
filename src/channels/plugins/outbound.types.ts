@@ -221,6 +221,7 @@ export type ChannelOutboundAdapter = {
     cfg?: OpenClawConfig;
     to?: string;
     allowFrom?: string[];
+    allowSendTo?: string[];
     accountId?: string | null;
     mode?: ChannelOutboundTargetMode;
   }) => { ok: true; to: string } | { ok: false; error: Error };

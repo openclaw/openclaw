@@ -46,6 +46,7 @@ function mockNormalizedDirectMessage(...values: Array<string | null>) {
 
 function expectAllowedForTarget(params: {
   allowFrom: ResolveParams["allowFrom"];
+  allowSendTo?: ResolveParams["allowSendTo"];
   mode: ResolveParams["mode"];
   to?: string;
 }) {
@@ -54,6 +55,7 @@ function expectAllowedForTarget(params: {
     {
       to,
       allowFrom: params.allowFrom,
+      allowSendTo: params.allowSendTo,
       mode: params.mode,
     },
     to,
@@ -62,12 +64,14 @@ function expectAllowedForTarget(params: {
 
 function expectDeniedForTarget(params: {
   allowFrom: ResolveParams["allowFrom"];
+  allowSendTo?: ResolveParams["allowSendTo"];
   mode: ResolveParams["mode"];
   to?: string;
 }) {
   expectResolutionError({
     to: params.to ?? PRIMARY_TARGET,
     allowFrom: params.allowFrom,
+    allowSendTo: params.allowSendTo,
     mode: params.mode,
   });
 }
@@ -222,6 +226,71 @@ describe("resolveWhatsAppOutboundTarget", () => {
         allowFrom: ["invalid", PRIMARY_TARGET],
         mode: "implicit",
       });
+    });
+  });
+
+  describe("allowSendTo outbound policy", () => {
+    it("allows direct outbound targets listed in allowSendTo even when allowFrom is narrower", () => {
+      mockNormalizedDirectMessage(PRIMARY_TARGET, PRIMARY_TARGET);
+
+      expectAllowedForTarget({
+        allowFrom: [SECONDARY_TARGET],
+        allowSendTo: [PRIMARY_TARGET],
+        mode: "implicit",
+      });
+    });
+
+    it("allows unrestricted direct outbound when allowSendTo contains wildcard", () => {
+      mockNormalizedDirectMessage(PRIMARY_TARGET);
+
+      expectAllowedForTarget({
+        allowFrom: [SECONDARY_TARGET],
+        allowSendTo: ["*"],
+        mode: "implicit",
+      });
+    });
+
+    it("blocks direct outbound when allowSendTo is explicitly empty", () => {
+      mockNormalizedDirectMessage(PRIMARY_TARGET);
+
+      expectResolutionErrorMessage(
+        {
+          to: PRIMARY_TARGET,
+          allowFrom: ["*"],
+          allowSendTo: [],
+          mode: "implicit",
+        },
+        `Target "${PRIMARY_TARGET}" is not listed in the configured WhatsApp allowSendTo policy.`,
+      );
+    });
+
+    it("falls back to allowFrom when allowSendTo is null", () => {
+      mockNormalizedDirectMessage(PRIMARY_TARGET, SECONDARY_TARGET);
+
+      expectResolutionErrorMessage(
+        {
+          to: PRIMARY_TARGET,
+          allowFrom: [SECONDARY_TARGET],
+          allowSendTo: null,
+          mode: "implicit",
+        },
+        `Target "${PRIMARY_TARGET}" is not listed in the configured WhatsApp allowFrom policy.`,
+      );
+    });
+
+    it("does not apply allowSendTo to group JIDs", () => {
+      vi.mocked(normalize.normalizeWhatsAppTarget).mockReturnValueOnce("120363123456789@g.us");
+      vi.mocked(normalize.isWhatsAppGroupJid).mockReturnValueOnce(true);
+
+      expectResolutionOk(
+        {
+          to: "120363123456789@g.us",
+          allowFrom: [SECONDARY_TARGET],
+          allowSendTo: [],
+          mode: "implicit",
+        },
+        "120363123456789@g.us",
+      );
     });
   });
 

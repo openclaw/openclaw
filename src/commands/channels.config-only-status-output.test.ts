@@ -179,6 +179,32 @@ function makeUnavailableHttpSlackPlugin(): ChannelPlugin {
   });
 }
 
+function makeWhatsAppRoutingBitsPlugin(): ChannelPlugin {
+  return makeDirectPlugin({
+    id: "whatsapp",
+    label: "WhatsApp",
+    docsPath: "/channels/whatsapp",
+    config: {
+      listAccountIds: () => ["primary", "locked"],
+      defaultAccountId: () => "primary",
+      inspectAccount: (_cfg, accountId) => ({
+        accountId,
+        enabled: true,
+        configured: true,
+        dmPolicy: "allowlist",
+        allowFrom: ["+15550001111"],
+        allowSendTo: accountId === "locked" ? [] : ["+15550002222"],
+      }),
+      resolveAccount: () => ({
+        enabled: true,
+        configured: true,
+      }),
+      isConfigured: () => true,
+      isEnabled: () => true,
+    },
+  });
+}
+
 function expectResolvedTokenStatusSummary(
   summary: string,
   options?: { includeUnavailableTokenLine?: boolean },
@@ -258,5 +284,18 @@ describe("config-only channels status output", () => {
     expect(joined).toContain("mode:http");
     expect(joined).toContain("bot:config");
     expect(joined).toContain("signing:config (unavailable)");
+  });
+
+  it("renders direct-message send allowlist bits in config-only status", async () => {
+    registerSingleTestPlugin("whatsapp", makeWhatsAppRoutingBitsPlugin());
+
+    const joined = await formatLocalStatusSummary({ channels: { whatsapp: {} } });
+
+    expect(joined).toContain("WhatsApp primary");
+    expect(joined).toContain("dm:allowlist");
+    expect(joined).toContain("allow:+15550001111");
+    expect(joined).toContain("send:+15550002222");
+    expect(joined).toContain("WhatsApp locked");
+    expect(joined).toContain("send:none");
   });
 });

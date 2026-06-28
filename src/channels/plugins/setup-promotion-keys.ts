@@ -29,6 +29,7 @@ const COMMON_SINGLE_ACCOUNT_PROMOTION_KEYS = [
   "code",
   "dmPolicy",
   "allowFrom",
+  "allowSendTo",
   "groupPolicy",
   "groupAllowFrom",
   "defaultTo",
