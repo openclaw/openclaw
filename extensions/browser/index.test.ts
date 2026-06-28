@@ -193,6 +193,33 @@ describe("browser plugin", () => {
     });
   });
 
+  it("passes trusted agent id to the browser runtime tool", async () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+
+    const tool = factory({
+      agentId: "browser-session-credential-steward",
+      sessionKey: "global",
+    });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("expected browser plugin to return a single tool");
+    }
+
+    await tool.execute("call-1", { action: "status" });
+    expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
+      agentId: "browser-session-credential-steward",
+      agentSessionKey: "global",
+      mediaScope: {
+        sessionKey: "global",
+      },
+    });
+  });
+
   it("derives group chat type for browser media scope", async () => {
     const { api, registerTool } = createApi();
     registerBrowserPlugin(api);

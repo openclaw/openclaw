@@ -10,8 +10,8 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assertBrowserStewardRuntimeAllowed,
-  isBrowserStewardSession,
   resolveBrowserStewardProxyAction,
+  shouldApplyBrowserStewardRuntimeGuard,
 } from "../browser/browser-steward-runtime-guard.js";
 import {
   ErrorCodes,
@@ -41,6 +41,7 @@ type BrowserRequestParams = {
   body?: unknown;
   timeoutMs?: number;
   agentSessionKey?: string;
+  agentId?: string;
 };
 
 type BrowserProxyFile = {
@@ -147,8 +148,14 @@ function enforceBrowserStewardGatewayRequest(params: {
   query?: Record<string, unknown>;
   body?: unknown;
   profile?: string;
+  agentId?: string;
 }): string | null {
-  if (!isBrowserStewardSession(params.agentSessionKey)) {
+  if (
+    !shouldApplyBrowserStewardRuntimeGuard({
+      sessionKey: params.agentSessionKey,
+      agentId: params.agentId,
+    })
+  ) {
     return null;
   }
   try {
@@ -160,6 +167,7 @@ function enforceBrowserStewardGatewayRequest(params: {
       }),
       profile: params.profile,
       agentSessionKey: params.agentSessionKey,
+      agentId: params.agentId,
       request: {
         method: params.method,
         path: params.path,
@@ -205,6 +213,7 @@ export async function handleBrowserGatewayRequest({
   const requestedProfile = resolveRequestedBrowserProfile({ query, body });
   const browserStewardBlock = enforceBrowserStewardGatewayRequest({
     agentSessionKey: normalizeOptionalString(typed.agentSessionKey),
+    agentId: normalizeOptionalString(typed.agentId),
     method: methodRaw,
     path,
     query,
@@ -267,6 +276,7 @@ export async function handleBrowserGatewayRequest({
       timeoutMs,
       profile: requestedProfile,
       agentSessionKey: normalizeOptionalString(typed.agentSessionKey),
+      agentId: normalizeOptionalString(typed.agentId),
     };
     const res = await context.nodeRegistry.invoke({
       nodeId: nodeTarget.nodeId,

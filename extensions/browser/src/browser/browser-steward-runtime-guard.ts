@@ -17,6 +17,7 @@ type BrowserStewardRuntimeRequest = {
   action: string;
   profile?: string;
   agentSessionKey?: string;
+  agentId?: string;
   approved?: boolean;
   delegated?: boolean;
   request?: unknown;
@@ -125,6 +126,17 @@ export function isBrowserStewardSession(sessionKey: string | undefined): boolean
   return resolveBrowserStewardSessionBoundary(sessionKey).kind === "browser_steward";
 }
 
+export function isBrowserStewardAgentId(agentId: string | undefined): boolean {
+  return agentId?.trim().toLowerCase() === BROWSER_STEWARD_AGENT_ID;
+}
+
+export function shouldApplyBrowserStewardRuntimeGuard(params: {
+  sessionKey?: string;
+  agentId?: string;
+}): boolean {
+  return isBrowserStewardSession(params.sessionKey) || isBrowserStewardAgentId(params.agentId);
+}
+
 function normalizeProxyPath(value: string): string {
   const trimmed = value.trim();
   if (!trimmed) {
@@ -199,6 +211,13 @@ export function resolveBrowserStewardProxyAction(params: {
 
 function normalizeAction(value: string): string {
   return value.trim().toLowerCase();
+}
+
+function safeRequestedAction(action: string): string {
+  if (NON_SECRET_READ_ACTIONS.has(action) || ACTION_CREDENTIAL_CLASSES[action]) {
+    return action;
+  }
+  return "unknown";
 }
 
 function classifyCredentialLabel(value: string): string | undefined {
@@ -366,6 +385,7 @@ export function evaluateBrowserStewardRuntimeGuard(
   request: BrowserStewardRuntimeRequest,
 ): BrowserStewardRuntimeDecision {
   const action = normalizeAction(request.action);
+  const requestedAction = safeRequestedAction(action);
   const profile = request.profile?.trim() || "UNKNOWN";
   const sessionBoundary = resolveBrowserStewardSessionBoundary(request.agentSessionKey);
   const credentialExposure = evaluateBrowserCredentialExposure(request);
@@ -378,7 +398,7 @@ export function evaluateBrowserStewardRuntimeGuard(
   const allow = readOnlyAllowed || approved;
   return {
     boundaryDecision: allow ? "allow" : "approval_required",
-    requestedAction: action || "UNKNOWN",
+    requestedAction,
     affectedBrowserProfile: profile,
     affectedSession: sessionBoundary.affectedSession,
     sessionBoundary,

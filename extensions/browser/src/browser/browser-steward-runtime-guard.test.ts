@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   evaluateBrowserStewardRuntimeGuard,
   isBrowserStewardSession,
+  shouldApplyBrowserStewardRuntimeGuard,
   resolveBrowserStewardSessionBoundary,
   resolveBrowserStewardProxyAction,
 } from "./browser-steward-runtime-guard.js";
@@ -62,6 +63,21 @@ describe("Browser Steward runtime guard", () => {
     expect(isBrowserStewardSession("browser-session-credential-steward")).toBe(false);
   });
 
+  it("enables the guard for Browser Steward global sessions by agent id", () => {
+    expect(
+      shouldApplyBrowserStewardRuntimeGuard({
+        sessionKey: "global",
+        agentId: "browser-session-credential-steward",
+      }),
+    ).toBe(true);
+    expect(
+      shouldApplyBrowserStewardRuntimeGuard({
+        sessionKey: "global",
+        agentId: "main",
+      }),
+    ).toBe(false);
+  });
+
   it.each(browserBoundaryFixtures)("matches shared boundary fixture: $name", (fixture) => {
     const boundary = resolveBrowserStewardSessionBoundary(fixture.sessionKey ?? undefined);
     expect(boundary).toEqual(fixture.browserExpected);
@@ -98,6 +114,20 @@ describe("Browser Steward runtime guard", () => {
         }),
       ),
     ).not.toContain("person-123");
+  });
+
+  it("redacts untrusted credential-like action strings in decisions", () => {
+    const decision = evaluateBrowserStewardRuntimeGuard({
+      action: "Bearer SHOULD_NOT_APPEAR",
+      agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+    });
+
+    expect(decision).toMatchObject({
+      requestedAction: "unknown",
+      credentialExposureKind: "credential_material",
+      telemetryEvent: "browser_steward.blocked_credential_exposure",
+    });
+    expect(JSON.stringify(decision)).not.toContain("SHOULD_NOT_APPEAR");
   });
 
   it("allows approved Browser Steward mutations with redacted session metadata", () => {

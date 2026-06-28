@@ -7,8 +7,8 @@ import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   assertBrowserStewardRuntimeAllowed,
-  isBrowserStewardSession,
   resolveBrowserStewardProxyAction,
+  shouldApplyBrowserStewardRuntimeGuard,
 } from "../browser/browser-steward-runtime-guard.js";
 import { redactCdpUrl } from "../browser/cdp.helpers.js";
 import { loadBrowserConfigForRuntimeRefresh } from "../browser/config-refresh-source.js";
@@ -34,6 +34,7 @@ type BrowserProxyParams = {
   timeoutMs?: number;
   profile?: string;
   agentSessionKey?: string;
+  agentId?: string;
 };
 
 type BrowserProxyFile = {
@@ -254,11 +255,17 @@ export async function runBrowserProxyCommand(paramsJSON?: string | null): Promis
       body,
       profile: params.profile,
     }) ?? "";
-  if (isBrowserStewardSession(params.agentSessionKey)) {
+  if (
+    shouldApplyBrowserStewardRuntimeGuard({
+      sessionKey: params.agentSessionKey,
+      agentId: params.agentId,
+    })
+  ) {
     assertBrowserStewardRuntimeAllowed({
       action: resolveBrowserStewardProxyAction({ method, path, body }),
       profile: requestedProfile,
       agentSessionKey: params.agentSessionKey,
+      agentId: params.agentId,
       request: {
         method,
         path,

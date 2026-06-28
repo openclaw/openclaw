@@ -491,6 +491,35 @@ describe("Browser Steward runtime guard", () => {
     expect(browserClientMocks.browserOpenTab).not.toHaveBeenCalled();
   });
 
+  it("blocks Browser Steward global-session mutation by trusted agent id", async () => {
+    const tool = createBrowserTool({
+      agentSessionKey: "global",
+      agentId: "browser-session-credential-steward",
+    });
+
+    await expect(
+      tool.execute?.("call-1", { action: "open", url: "https://example.com" }),
+    ).rejects.toThrow(/Browser Steward runtime guard blocked open: approval_required/);
+    expect(browserClientMocks.browserOpenTab).not.toHaveBeenCalled();
+  });
+
+  it("does not echo credential-like action values in Browser Steward errors", async () => {
+    const tool = createBrowserTool({
+      agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+    });
+
+    let thrown: unknown;
+    try {
+      await tool.execute?.("call-1", { action: "Bearer SHOULD_NOT_APPEAR" });
+    } catch (error) {
+      thrown = error;
+    }
+
+    expect(String(thrown)).toMatch(/Browser Steward runtime guard blocked unknown/);
+    expect(String(thrown)).toMatch(/browser_steward\.blocked_credential_exposure/);
+    expect(String(thrown)).not.toContain("SHOULD_NOT_APPEAR");
+  });
+
   it("allows non-secret read-only Browser Steward status checks", async () => {
     const tool = createBrowserTool({
       agentSessionKey: "agent:browser-session-credential-steward:runtime-check",

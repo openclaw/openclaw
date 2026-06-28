@@ -56,7 +56,7 @@ import {
 import {
   type BrowserStewardRuntimeDecision,
   assertBrowserStewardRuntimeAllowed,
-  isBrowserStewardSession,
+  shouldApplyBrowserStewardRuntimeGuard,
 } from "./browser/browser-steward-runtime-guard.js";
 import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "./browser/constants.js";
 import { normalizeBrowserScreenshot } from "./browser/screenshot.js";
@@ -320,6 +320,7 @@ async function callBrowserProxy(params: {
   timeoutMs?: number;
   profile?: string;
   agentSessionKey?: string;
+  agentId?: string;
 }): Promise<BrowserProxyResult> {
   const proxyTimeoutMs =
     typeof params.timeoutMs === "number" && Number.isFinite(params.timeoutMs)
@@ -340,6 +341,7 @@ async function callBrowserProxy(params: {
         timeoutMs: proxyTimeoutMs,
         profile: params.profile,
         ...(params.agentSessionKey ? { agentSessionKey: params.agentSessionKey } : {}),
+        ...(params.agentId ? { agentId: params.agentId } : {}),
       },
       idempotencyKey: crypto.randomUUID(),
     },
@@ -472,6 +474,7 @@ export function createBrowserTool(opts?: {
   };
   browserStewardApproved?: boolean;
   browserStewardDelegated?: boolean;
+  agentId?: string;
 }): AnyAgentTool {
   const targetDefault = opts?.sandboxBridgeUrl ? "sandbox" : "host";
   const hostHint =
@@ -498,11 +501,17 @@ export function createBrowserTool(opts?: {
       const action = readStringParam(params, "action", { required: true });
       const profile = readStringParam(params, "profile");
       let browserStewardRuntimeDecision: BrowserStewardRuntimeDecision | undefined;
-      if (isBrowserStewardSession(opts?.agentSessionKey)) {
+      if (
+        shouldApplyBrowserStewardRuntimeGuard({
+          sessionKey: opts?.agentSessionKey,
+          agentId: opts?.agentId,
+        })
+      ) {
         browserStewardRuntimeDecision = assertBrowserStewardRuntimeAllowed({
           action,
           profile,
           agentSessionKey: opts?.agentSessionKey,
+          agentId: opts?.agentId,
           approved: opts?.browserStewardApproved === true,
           delegated: opts?.browserStewardDelegated === true,
           request: params.request ?? params,
@@ -574,6 +583,7 @@ export function createBrowserTool(opts?: {
               timeoutMs: proxyOpts.timeoutMs,
               profile: proxyOpts.profile,
               agentSessionKey: browserStewardRuntimeDecision ? undefined : opts?.agentSessionKey,
+              agentId: browserStewardRuntimeDecision ? undefined : opts?.agentId,
             });
             const mapping = await persistProxyFiles(proxy.files);
             applyProxyPaths(proxy.result, mapping);
