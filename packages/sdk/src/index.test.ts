@@ -445,6 +445,11 @@ describe("OpenClaw SDK", () => {
       timeoutMs: 1_500,
       idempotencyKey: "timeout-test",
     });
+    await oc.runs.create({
+      input: "run without SDK watchdog",
+      timeoutMs: 0,
+      idempotencyKey: "no-watchdog-test",
+    });
 
     expect(requireTransportCall(transport.calls, 0)).toEqual({
       method: "agent",
@@ -453,6 +458,15 @@ describe("OpenClaw SDK", () => {
         message: "short run",
         timeout: 2,
         idempotencyKey: "timeout-test",
+      },
+    });
+    expect(requireTransportCall(transport.calls, 1)).toEqual({
+      method: "agent",
+      options: { expectFinal: false, timeoutMs: null },
+      params: {
+        message: "run without SDK watchdog",
+        timeout: 0,
+        idempotencyKey: "no-watchdog-test",
       },
     });
     await expect(
@@ -1339,9 +1353,11 @@ describe("OpenClaw SDK", () => {
     const oc = new OpenClaw({ transport });
 
     const session = await oc.sessions.create({ key: "session-main" });
-    const run = await session.send({ message: "continue", thinking: "medium" });
+    const run = await session.send({ message: "continue", thinking: "medium", timeoutMs: 1_500 });
+    const noTimeoutRun = await session.send({ message: "continue without timeout", timeoutMs: 0 });
 
     expect(run.id).toBe("run_session");
+    expect(noTimeoutRun.id).toBe("run_session");
     expect(transport.calls).toEqual([
       {
         method: "sessions.create",
@@ -1350,8 +1366,13 @@ describe("OpenClaw SDK", () => {
       },
       {
         method: "sessions.send",
-        options: { expectFinal: true },
-        params: { key: "session-main", message: "continue", thinking: "medium" },
+        options: { expectFinal: true, timeoutMs: 1_500 },
+        params: { key: "session-main", message: "continue", thinking: "medium", timeoutMs: 1_500 },
+      },
+      {
+        method: "sessions.send",
+        options: { expectFinal: true, timeoutMs: null },
+        params: { key: "session-main", message: "continue without timeout", timeoutMs: 0 },
       },
     ]);
   });

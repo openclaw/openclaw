@@ -10,7 +10,6 @@ import { isLoopbackHost } from "../../gateway/net.js";
 import type { GatewayProbeCapability, GatewayProbeResult } from "../../gateway/probe.js";
 import { inspectBestEffortPrimaryTailnetIPv4 } from "../../infra/network-discovery-display.js";
 import { parseStrictInteger } from "../../infra/parse-finite-number.js";
-import { pickGatewaySelfPresence } from "../gateway-presence.js";
 
 const MISSING_SCOPE_PATTERN = /\bmissing scope:\s*[a-z0-9._-]+/i;
 
@@ -87,7 +86,11 @@ function normalizeWsUrl(value: string): string | null {
 }
 
 /** Builds the deduplicated ordered gateway probe targets from CLI input and config. */
-export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): GatewayStatusTarget[] {
+export function resolveTargets(
+  cfg: OpenClawConfig,
+  explicitUrl?: string,
+  localPortOverride?: number,
+): GatewayStatusTarget[] {
   const targets: GatewayStatusTarget[] = [];
   const add = (t: GatewayStatusTarget) => {
     if (!targets.some((x) => x.url === t.url)) {
@@ -98,6 +101,19 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
   const explicit = typeof explicitUrl === "string" ? normalizeWsUrl(explicitUrl) : null;
   if (explicit) {
     add({ id: "explicit", kind: "explicit", url: explicit, active: true });
+  }
+
+  const port = localPortOverride ?? resolveGatewayPort(cfg);
+  const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
+  const localLoopbackTarget: GatewayStatusTarget = {
+    id: "localLoopback",
+    kind: "localLoopback",
+    url: `${localScheme}://127.0.0.1:${port}`,
+    active: localPortOverride !== undefined || cfg.gateway?.mode !== "remote",
+  };
+  if (localPortOverride !== undefined && !explicit) {
+    add(localLoopbackTarget);
+    return targets;
   }
 
   const remoteUrl =
@@ -111,14 +127,7 @@ export function resolveTargets(cfg: OpenClawConfig, explicitUrl?: string): Gatew
     });
   }
 
-  const port = resolveGatewayPort(cfg);
-  const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
-  add({
-    id: "localLoopback",
-    kind: "localLoopback",
-    url: `${localScheme}://127.0.0.1:${port}`,
-    active: cfg.gateway?.mode !== "remote",
-  });
+  add(localLoopbackTarget);
 
   return targets;
 }
@@ -141,15 +150,15 @@ export function resolveProbeBudgetMs(
   if (target.kind === "sshTunnel") {
     return Math.min(2000, overallMs);
   }
+  if (target.active) {
+    return overallMs;
+  }
+  if (target.kind === "localLoopback") {
+    return Math.min(800, overallMs);
+  }
   if (!isLoopbackProbeTarget(target)) {
     return Math.min(1500, overallMs);
   }
-  if (target.kind === "localLoopback" && !target.active) {
-    return Math.min(800, overallMs);
-  }
-  // Active/discovered loopback probes and explicit loopback URLs should honor
-  // the caller budget because healthy local detail RPCs can legitimately take
-  // longer than the legacy short caps.
   return overallMs;
 }
 
@@ -182,8 +191,6 @@ export async function resolveAuthForTarget(
     surface: target.kind === "configRemote" || target.kind === "sshTunnel" ? "remote" : "local",
   });
 }
-
-export { pickGatewaySelfPresence };
 
 /** Extracts the config fields displayed by `openclaw gateway status --deep`. */
 export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSummary {
@@ -252,10 +259,10 @@ export function extractConfigSummary(snapshotUnknown: unknown): GatewayConfigSum
   };
 }
 
-/** Builds local and tailnet gateway URL hints for the configured gateway port. */
-export function buildNetworkHints(cfg: OpenClawConfig) {
+/** Builds local and tailnet gateway URL hints for the selected gateway port. */
+export function buildNetworkHints(cfg: OpenClawConfig, localPortOverride?: number) {
   const { tailnetIPv4 } = inspectBestEffortPrimaryTailnetIPv4();
-  const port = resolveGatewayPort(cfg);
+  const port = localPortOverride ?? resolveGatewayPort(cfg);
   const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
   return {
     localLoopbackUrl: `${localScheme}://127.0.0.1:${port}`,

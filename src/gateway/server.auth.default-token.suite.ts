@@ -25,7 +25,7 @@ import {
   waitForWsClose,
   withGatewayServer,
   withRuntimeVersionEnv,
-} from "./server.auth.shared.js";
+} from "./server.auth.test-helpers.js";
 
 export function registerDefaultAuthTokenSuite(): void {
   describe("default auth (token)", () => {

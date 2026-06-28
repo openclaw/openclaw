@@ -7,7 +7,8 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { logVerboseMock } = vi.hoisted(() => ({
+const { loadModelCatalogMock, logVerboseMock } = vi.hoisted(() => ({
+  loadModelCatalogMock: vi.fn(),
   logVerboseMock: vi.fn(),
 }));
 const { loggerWarnMock } = vi.hoisted(() => ({
@@ -32,6 +33,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
 });
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
+  loadModelCatalog: loadModelCatalogMock,
   resolveHumanDelayConfig: () => undefined,
 }));
 
@@ -227,6 +229,7 @@ describe("createDiscordNativeCommand option wiring", () => {
 
   beforeEach(() => {
     clearRuntimeConfigSnapshot();
+    loadModelCatalogMock.mockReset().mockResolvedValue([]);
     logVerboseMock.mockReset();
     loggerWarnMock.mockReset();
   });
@@ -255,6 +258,30 @@ describe("createDiscordNativeCommand option wiring", () => {
       { name: "status", value: "status" },
       { name: "install", value: "install" },
     ]);
+  });
+
+  it("uses the provider-startup catalog snapshot for /think autocomplete", async () => {
+    const cfg = {
+      channels: {
+        discord: {
+          dm: { enabled: true, policy: "open", allowFrom: ["*"] },
+        },
+      },
+    } as OpenClawConfig;
+    const command = createNativeCommand("think", { cfg });
+    const level = requireOption(command, "level");
+    const autocomplete = requireAutocomplete(level, "think level option did not wire autocomplete");
+
+    await runAutocomplete(autocomplete, {
+      userId: "owner",
+      channelType: ChannelType.DM,
+      channelId: "dm-1",
+      channelName: "dm-1",
+      focusedValue: "",
+    });
+
+    expect(loadModelCatalogMock).toHaveBeenCalledWith({ cacheOnly: true });
+    expect(loadModelCatalogMock).toHaveBeenCalledWith({ config: cfg });
   });
 
   it("keeps static choices for non-acp string action arguments", () => {

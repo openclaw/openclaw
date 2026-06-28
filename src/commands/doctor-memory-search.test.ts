@@ -1,4 +1,3 @@
-import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { checkQmdBinaryAvailability as checkQmdBinaryAvailabilityFn } from "../memory-host-sdk/engine-qmd.js";
@@ -97,7 +96,7 @@ vi.mock("./doctor-workspace.js", async (importOriginal) => {
 
 import { noteMemorySearchHealth } from "./doctor-memory-search.js";
 import { maybeRepairMemoryRecallHealth, noteMemoryRecallHealth } from "./doctor-memory-search.js";
-import { detectLegacyWorkspaceDirs, formatRootMemoryFilesWarning } from "./doctor-workspace.js";
+import { formatRootMemoryFilesWarning } from "./doctor-workspace.js";
 
 function resetMemoryRecallMocks() {
   auditShortTermPromotionArtifacts.mockReset();
@@ -236,6 +235,47 @@ describe("noteMemorySearchHealth", () => {
     });
 
     expect(note).not.toHaveBeenCalled();
+  });
+
+  it("does not warn when local provider readiness probe was intentionally skipped", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: { modelPath: "hf:some-org/some-model-GGUF/model.gguf" },
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: false,
+        ready: false,
+        error:
+          "memory embedding readiness not checked; run `openclaw memory status --deep` to probe",
+        skipped: true,
+      },
+    });
+
+    expect(note).not.toHaveBeenCalled();
+  });
+
+  it("warns when local provider skipped readiness but configured local model is missing", async () => {
+    resolveMemorySearchConfig.mockReturnValue({
+      provider: "local",
+      local: { modelPath: "/definitely/missing/openclaw-memory-model.gguf" },
+      remote: {},
+    });
+
+    await noteMemorySearchHealth(cfg, {
+      gatewayMemoryProbe: {
+        checked: false,
+        ready: false,
+        error:
+          "memory embedding readiness not checked; run `openclaw memory status --deep` to probe",
+        skipped: true,
+      },
+    });
+
+    expect(note).toHaveBeenCalledTimes(1);
+    expect(firstNoteMessage()).toContain('Memory search provider is set to "local"');
   });
 
   it("warns when local provider readiness probe is inconclusive", async () => {
@@ -1110,15 +1150,6 @@ describe("memory recall doctor integration", () => {
     expect(message).toContain("Dreaming artifacts repaired:");
     expect(message).toContain("archived session corpus");
     expect(message).toContain("archived session-ingestion state");
-  });
-});
-
-describe("detectLegacyWorkspaceDirs", () => {
-  it("returns active workspace and no legacy dirs", () => {
-    const workspaceDir = "/home/user/openclaw";
-    const detection = detectLegacyWorkspaceDirs({ workspaceDir });
-    expect(detection.activeWorkspace).toBe(path.resolve(workspaceDir));
-    expect(detection.legacyDirs).toStrictEqual([]);
   });
 });
 

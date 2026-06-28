@@ -5,6 +5,7 @@ import {
   takeMessageIdAfterStop,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { buildTelegramThreadParams, type TelegramThreadSpec } from "./bot/helpers.js";
 import { renderTelegramHtmlText, telegramHtmlToPlainTextFallback } from "./format.js";
 import {
@@ -88,12 +89,16 @@ function isTelegramHtmlParseError(err: unknown): boolean {
   return TELEGRAM_PARSE_ERR_RE.test(formatErrorMessage(err));
 }
 
+function telegramRichHtmlToParseModeHtml(html: string): string {
+  return html.replace(/<br\s*\/?>/giu, "\n");
+}
+
 function normalizeTelegramDraftTransportPreview(
   preview: TelegramDraftPreview,
 ): TelegramDraftTransportPreview {
   if (preview.richMessage?.html) {
     return {
-      text: preview.richMessage.html,
+      text: telegramRichHtmlToParseModeHtml(preview.richMessage.html),
       parseMode: "HTML",
       plainText: preview.text,
     };
@@ -165,7 +170,7 @@ function findTelegramDraftChunkLength(
       high = mid - 1;
     }
   }
-  return best;
+  return sliceUtf16Safe(text, 0, best).length;
 }
 
 export function createTelegramDraftStream(params: {
@@ -351,8 +356,7 @@ export function createTelegramDraftStream(params: {
     const renderedPayloadLength = richMessages
       ? telegramDraftRichPayloadLength(rendered)
       : renderedText.length;
-    const renderedPreview = { ...rendered, text: renderedText };
-    const renderedPreviewKey = telegramDraftPreviewKey(renderedPreview);
+    const renderedPreviewKey = telegramDraftPreviewKey({ ...rendered, text: renderedText });
     if (!renderedText) {
       return false;
     }
@@ -413,7 +417,7 @@ export function createTelegramDraftStream(params: {
     lastSentPreviewKey = renderedPreviewKey;
     try {
       const sent = await sendMessageTransportPreview({
-        preview: renderedPreview,
+        preview: rendered,
         sendGeneration,
       });
       if (sent) {

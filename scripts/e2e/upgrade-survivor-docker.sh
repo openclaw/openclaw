@@ -25,10 +25,35 @@ PROBE_ATTEMPT_TIMEOUT_MS="$(
 PROBE_MAX_BODY_BYTES="$(
   openclaw_e2e_read_positive_int_env OPENCLAW_UPGRADE_SURVIVOR_PROBE_MAX_BODY_BYTES 1048576
 )"
-LANE_ARTIFACT_SUFFIX="${OPENCLAW_DOCKER_ALL_LANE_NAME:-default}"
+ROOT_MANAGED_VPS="${OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS:-0}"
+
+resolve_lane_artifact_suffix() {
+  if [ -n "${OPENCLAW_DOCKER_ALL_LANE_NAME:-}" ]; then
+    printf "%s" "$OPENCLAW_DOCKER_ALL_LANE_NAME"
+    return
+  fi
+
+  if [ "$ROOT_MANAGED_VPS" = "1" ]; then
+    printf "root-managed-vps-upgrade"
+  elif [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
+    printf "update-restart-auth"
+  elif [ "${OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE:-0}" = "1" ]; then
+    printf "published-upgrade-survivor"
+  else
+    printf "upgrade-survivor"
+  fi
+
+  if [ -n "${BASELINE_SPEC// }" ]; then
+    printf -- "-%s" "$BASELINE_SPEC"
+  fi
+  if [ "$SCENARIO" != "base" ]; then
+    printf -- "-%s" "$SCENARIO"
+  fi
+}
+
+LANE_ARTIFACT_SUFFIX="$(resolve_lane_artifact_suffix)"
 LANE_ARTIFACT_SUFFIX="${LANE_ARTIFACT_SUFFIX//[^A-Za-z0-9_.-]/_}"
 ARTIFACT_DIR="${OPENCLAW_UPGRADE_SURVIVOR_ARTIFACT_DIR:-$ROOT_DIR/.artifacts/upgrade-survivor/$LANE_ARTIFACT_SUFFIX}"
-ROOT_MANAGED_VPS="${OPENCLAW_UPGRADE_SURVIVOR_ROOT_MANAGED_VPS:-0}"
 DOCKER_RUN_USER_ARGS=()
 PROBE_ENV_ARGS=(
   -e OPENCLAW_UPGRADE_SURVIVOR_PROBE_TIMEOUT_MS="$PROBE_TIMEOUT_MS"
@@ -372,6 +397,7 @@ echo "Verifying config and state survived update..."
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-config
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-state
 
+startup_summary="n/a"
 if [ "$UPDATE_RESTART_MODE" = "auto-auth" ]; then
   echo "Gateway restart was handled by openclaw update."
 else
@@ -387,6 +413,7 @@ else
     openclaw_e2e_print_log "$GATEWAY_LOG" >&2
     exit 1
   fi
+  startup_summary="${start_seconds}s"
 fi
 
 echo "Checking gateway HTTP probes..."
@@ -428,5 +455,5 @@ if [ "$status_seconds" -gt "$STATUS_BUDGET" ]; then
 fi
 node scripts/e2e/lib/upgrade-survivor/assertions.mjs assert-status-json /tmp/openclaw-upgrade-survivor-status.json
 
-echo "Upgrade survivor Docker E2E passed scenario=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base} updateRestartMode=${UPDATE_RESTART_MODE} startup=${start_seconds}s status=${status_seconds}s."
+echo "Upgrade survivor Docker E2E passed scenario=${OPENCLAW_UPGRADE_SURVIVOR_SCENARIO:-base} updateRestartMode=${UPDATE_RESTART_MODE} startup=${startup_summary} status=${status_seconds}s."
 '

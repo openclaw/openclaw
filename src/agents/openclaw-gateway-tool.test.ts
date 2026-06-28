@@ -3,10 +3,11 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeConfigPatchReplacePath } from "../config/patch-replace-paths.js";
 import { GatewayClientRequestError } from "../gateway/client.js";
+import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { testing as restartTesting } from "../infra/restart.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { normalizeConfigPatchReplacePath } from "../config/patch-replace-paths.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
@@ -332,13 +333,9 @@ describe("gateway tool", () => {
           });
           expect(restartSignalKillCalls()).toHaveLength(0);
 
-          const sentinelPath = path.join(stateDir, "restart-sentinel.json");
-          const raw = await fs.readFile(sentinelPath, "utf-8");
-          const parsed = JSON.parse(raw) as {
-            payload?: { kind?: string; doctorHint?: string | null };
-          };
-          expect(parsed.payload?.kind).toBe("restart");
-          expect(parsed.payload?.doctorHint).toBe(
+          const sentinel = await readRestartSentinel();
+          expect(sentinel?.payload.kind).toBe("restart");
+          expect(sentinel?.payload.doctorHint).toBe(
             "Recommended follow-up: run openclaw --profile isolated doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
           );
         },
@@ -507,15 +504,13 @@ describe("gateway tool", () => {
   it("distinguishes explicit terminal array consent from indexed consent", () => {
     expect(normalizeConfigPatchReplacePath("bindings[]")).toBe("bindings");
     expect(normalizeConfigPatchReplacePath("bindings[0]")).toBe("bindings[0]");
-    expect(normalizeConfigPatchReplacePath("agents.list[0].skills")).toBe(
-      "agents.list[].skills",
-    );
+    expect(normalizeConfigPatchReplacePath("agents.list[0].skills")).toBe("agents.list[].skills");
     expect(normalizeConfigPatchReplacePath(normalizeConfigPatchReplacePath("bindings[]"))).toBe(
       "bindings",
     );
-    expect(
-      normalizeConfigPatchReplacePath(normalizeConfigPatchReplacePath("bindings[0]")),
-    ).toBe("bindings[0]");
+    expect(normalizeConfigPatchReplacePath(normalizeConfigPatchReplacePath("bindings[0]"))).toBe(
+      "bindings[0]",
+    );
   });
 
   it("rejects config.patch when it changes safe bin approval paths", async () => {

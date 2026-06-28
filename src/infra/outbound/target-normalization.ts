@@ -32,6 +32,52 @@ function resolveChannelPluginForTargetRead(channelId: ChannelId): ChannelPlugin 
   return getLoadedChannelPluginForRead(channelId) ?? getChannelPlugin(channelId);
 }
 
+function normalizeTargetLiteral(value: string): string | undefined {
+  return normalizeOptionalLowercaseString(value);
+}
+
+function stripPluginTargetPrefix(raw: string, plugin: ChannelPlugin): string {
+  let target = raw.trim();
+  const prefixes = [plugin.id, ...(plugin.messaging?.targetPrefixes ?? [])]
+    .map((prefix) => normalizeTargetLiteral(String(prefix)))
+    .filter((prefix): prefix is string => Boolean(prefix));
+  while (target) {
+    const lowered = normalizeTargetLiteral(target) ?? "";
+    const prefix = prefixes.find((candidate) => lowered.startsWith(`${candidate}:`));
+    if (!prefix) {
+      return target;
+    }
+    target = target.slice(prefix.length + 1).trim();
+  }
+  return target;
+}
+
+export function resolveReservedTargetLiteral(params: {
+  raw?: string;
+  plugin?: ChannelPlugin;
+}): string | undefined {
+  const raw = normalizeOptionalString(params.raw);
+  const plugin = params.plugin;
+  const reservedLiterals = plugin?.messaging?.targetResolver?.reservedLiterals;
+  if (!raw || !plugin || !reservedLiterals?.length) {
+    return undefined;
+  }
+  const stripped = stripPluginTargetPrefix(raw, plugin);
+  if (!stripped || /^[@#]/.test(stripped) || /^(channel|group|user):/i.test(stripped)) {
+    return undefined;
+  }
+  const normalized = normalizeTargetLiteral(stripped);
+  if (!normalized) {
+    return undefined;
+  }
+  const reserved = new Set(
+    reservedLiterals
+      .map(normalizeTargetLiteral)
+      .filter((literal): literal is string => Boolean(literal)),
+  );
+  return reserved.has(normalized) ? normalized : undefined;
+}
+
 function resetTargetNormalizerCacheForTests(): void {
   targetNormalizerCacheByChannelId.clear();
 }
@@ -224,10 +270,15 @@ export function buildTargetResolverSignature(
     : "pinned";
   const resolver = plugin?.messaging?.targetResolver;
   const hint = resolver?.hint ?? "";
+  const reserved = (resolver?.reservedLiterals ?? [])
+    .map(normalizeTargetLiteral)
+    .filter((literal): literal is string => Boolean(literal))
+    .toSorted()
+    .join(",");
   const looksLike = resolver?.looksLikeId;
   // Function source is only a cheap invalidation hint; resolver behavior still belongs to the plugin.
   const source = looksLike ? looksLike.toString() : "";
-  return hashSignature(`${registryScope}|${hint}|${source}`);
+  return hashSignature(`${registryScope}|${hint}|${reserved}|${source}`);
 }
 
 function hashSignature(value: string): string {

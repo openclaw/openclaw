@@ -156,6 +156,18 @@ describe("matrix harness runtime", () => {
     );
   });
 
+  it("cancels Matrix versions probe response bodies", async () => {
+    const cancel = vi.fn(async () => {});
+    const fetchImpl = vi.fn(async () => ({ ok: true, body: { cancel } }));
+
+    await expect(
+      testing.isMatrixVersionsReachable("http://127.0.0.1:28008/", fetchImpl),
+    ).resolves.toBe(true);
+
+    expect(fetchImpl).toHaveBeenCalledWith("http://127.0.0.1:28008/_matrix/client/versions");
+    expect(cancel).toHaveBeenCalledTimes(1);
+  });
+
   it("falls back to the container IP when the host port is unreachable", async () => {
     const calls: string[] = [];
 

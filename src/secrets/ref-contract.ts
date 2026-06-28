@@ -1,6 +1,7 @@
 /** Shared SecretRef grammar and validation helpers for config, schema, SDK, and gateway parity. */
 import {
   DEFAULT_SECRET_PROVIDER_ALIAS,
+  isSecretRef,
   isValidEnvSecretRefId,
   type SecretRef,
   type SecretRefSource,
@@ -135,6 +136,9 @@ export function isValidExecSecretRefId(value: string): boolean {
 
 /** Validates a complete SecretRef against the shared provider/source/id grammar. */
 export function isValidSecretRef(ref: SecretRef): boolean {
+  if (!isSecretRef(ref)) {
+    return false;
+  }
   if (!isValidSecretProviderAlias(ref.provider)) {
     return false;
   }

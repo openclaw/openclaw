@@ -91,16 +91,27 @@ describe("lazy protocol validators", () => {
         sessionKey: "global",
         agentId: "work",
         limit: 50,
+        offset: 100,
       }),
     ).toBe(true);
     expect(
       validateChatSendParams({
         sessionKey: "global",
         agentId: "work",
+        sessionId: "session-work",
         message: "hello",
         idempotencyKey: "run-global-work",
       }),
     ).toBe(true);
+    expect(
+      validateChatSendParams({
+        sessionKey: "global",
+        sessionId: "session-work",
+        resumeSession: true,
+        message: "hello",
+        idempotencyKey: "run-global-work",
+      }),
+    ).toBe(false);
     expect(
       validateChatAbortParams({
         sessionKey: "global",
@@ -725,6 +736,21 @@ describe("validateChatEvent", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("validateChatSendParams", () => {
+  it("accepts one-turn fast:auto cutoff seconds", () => {
+    const base = {
+      sessionKey: "agent:main:main",
+      message: "hello",
+      fastMode: "auto",
+      idempotencyKey: "run-1",
+    };
+
+    expect(validateChatSendParams(base)).toBe(true);
+    expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 2 })).toBe(true);
+    expect(validateChatSendParams({ ...base, fastAutoOnSeconds: 0 })).toBe(false);
   });
 });
 

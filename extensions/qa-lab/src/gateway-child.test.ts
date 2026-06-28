@@ -134,6 +134,32 @@ describe("buildQaRuntimeEnv", () => {
     await expect(readdir(tempParent)).resolves.toStrictEqual([]);
   });
 
+  it("reports command spawn errors instead of leaking unhandled child errors", async () => {
+    const tempParent = await mkdtemp(path.join(os.tmpdir(), "qa-gateway-spawn-fail-"));
+    cleanups.push(async () => {
+      await rm(tempParent, { recursive: true, force: true });
+    });
+    qaTempPathState.preferredTmpDir = tempParent;
+    const missingExecutable = path.join(tempParent, "missing-openclaw-node");
+
+    await expect(
+      startQaGatewayChild({
+        repoRoot: process.cwd(),
+        command: {
+          executablePath: missingExecutable,
+          usePackagedPlugins: true,
+        },
+        transport: {
+          requiredPluginIds: [],
+          createGatewayConfig: () => ({}),
+        },
+        transportBaseUrl: "http://127.0.0.1:43123",
+      }),
+    ).rejects.toThrow(/gateway failed to spawn: .*ENOENT/u);
+
+    await expect(readdir(tempParent)).resolves.toStrictEqual([]);
+  });
+
   it("keeps the slow-reply QA opt-out enabled under fast mode", () => {
     const env = buildQaRuntimeEnv({
       ...createParams(),
@@ -978,6 +1004,58 @@ describe("buildQaRuntimeEnv", () => {
     expect([child.exitCode, child.signalCode]).not.toEqual([null, null]);
   });
 
+  it("force-kills Windows gateway process trees when graceful taskkill fails", () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+    const originalSystemRoot = process.env.SystemRoot;
+    const originalWindir = process.env.WINDIR;
+    Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+    process.env.SystemRoot = "C:\\Windows";
+    delete process.env.WINDIR;
+    try {
+      const child = Object.assign(new EventEmitter(), {
+        pid: 12345,
+        exitCode: null as number | null,
+        signalCode: null as string | null,
+        kill: vi.fn(),
+      });
+      const runTaskkill = vi
+        .fn()
+        .mockReturnValueOnce({ status: 1 })
+        .mockReturnValueOnce({ status: 0 });
+
+      testing.signalQaGatewayChildProcessTree(
+        child as unknown as Parameters<typeof testing.signalQaGatewayChildProcessTree>[0],
+        "SIGTERM",
+        runTaskkill,
+      );
+
+      const taskkillPath = path.win32.join("C:\\Windows", "System32", "taskkill.exe");
+      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally {
+      if (platformDescriptor) {
+        Object.defineProperty(process, "platform", platformDescriptor);
+      }
+      if (originalSystemRoot === undefined) {
+        delete process.env.SystemRoot;
+      } else {
+        process.env.SystemRoot = originalSystemRoot;
+      }
+      if (originalWindir === undefined) {
+        delete process.env.WINDIR;
+      } else {
+        process.env.WINDIR = originalWindir;
+      }
+    }
+  });
+
   it("does not trust an exited gateway wrapper while its process group is alive", async () => {
     const child = Object.assign(new EventEmitter(), {
       pid: 12346,
@@ -1152,6 +1230,9 @@ describe("buildQaRuntimeEnv", () => {
     );
     await expect(readFile(path.join(artifactDir, "README.txt"), "utf8")).resolves.toContain(
       "was not copied because it may contain credentials or auth tokens",
+    );
+    await expect(readFile(path.join(artifactDir, "README.txt"), "utf8")).resolves.not.toContain(
+      tempRoot,
     );
   });
 

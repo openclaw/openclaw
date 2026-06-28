@@ -56,6 +56,11 @@ export type {
   UnifiedModelCatalogProviderPlugin,
 } from "../plugins/types.js";
 export type {
+  PluginHookChannelChatContext,
+  PluginHookChannelContext,
+  PluginHookChannelSenderContext,
+} from "../plugins/types.js";
+export type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogKind,
   UnifiedModelCatalogSource,

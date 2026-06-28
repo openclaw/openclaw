@@ -121,6 +121,8 @@ export function resolveCodexContextEngineProjectionReserveTokens(params: {
 export function fitCodexProjectedContextForTurnStart(params: {
   promptText: string;
   contextRange?: CodexProjectedContextRange;
+  requestRange?: CodexProjectedContextRange;
+  preservedRange?: CodexProjectedContextRange;
   maxChars?: number;
 }): string {
   const maxChars =
@@ -132,23 +134,63 @@ export function fitCodexProjectedContextForTurnStart(params: {
   }
   const range = normalizeProjectedContextRange(params.contextRange, params.promptText.length);
   if (!range) {
-    return params.promptText;
+    const preservedRange = normalizeProjectedContextRange(
+      params.preservedRange,
+      params.promptText.length,
+    );
+    if (!preservedRange) {
+      return params.promptText;
+    }
+    const preservedText = params.promptText.slice(preservedRange.start, preservedRange.end);
+    if (!preservedText) {
+      return truncateOlderContext(params.promptText, maxChars);
+    }
+    if (preservedText.length >= maxChars) {
+      return truncateOlderContext(preservedText, maxChars);
+    }
+    const beforeRange = params.promptText.slice(0, preservedRange.start);
+    return `${truncateOlderContext(beforeRange, maxChars - preservedText.length)}${preservedText}`;
   }
 
   const beforeContext = params.promptText.slice(0, range.start);
   const context = params.promptText.slice(range.start, range.end);
   const afterContext = params.promptText.slice(range.end);
+  const requestRange = normalizeProjectedContextRange(
+    params.requestRange,
+    params.promptText.length,
+  );
+  if (
+    requestRange &&
+    requestRange.start >= range.end &&
+    requestRange.end < params.promptText.length
+  ) {
+    const request = params.promptText.slice(requestRange.start, requestRange.end);
+    if (request.length >= maxChars) {
+      return truncateOlderContext(request, maxChars);
+    }
+    const appendedContext = params.promptText.slice(requestRange.end);
+    // Hook-appended context is newer than the projected history. Retain it
+    // before trimming the projection, while the full current request remains
+    // the hard boundary that must survive a bounded turn/start input.
+    const fittedAppendedContext = truncateOlderContext(appendedContext, maxChars - request.length);
+    const contextBudget = maxChars - request.length - fittedAppendedContext.length;
+    const fittedContext = truncateOlderContext(context, contextBudget);
+    const beforeContextBudget =
+      maxChars - fittedContext.length - request.length - fittedAppendedContext.length;
+    return `${truncateOlderContext(beforeContext, beforeContextBudget)}${fittedContext}${request}${fittedAppendedContext}`;
+  }
   const contextBudget = maxChars - beforeContext.length - afterContext.length;
   if (contextBudget > 0) {
     const fittedContext = truncateOlderContext(context, contextBudget);
     return `${beforeContext}${fittedContext}${afterContext}`;
   }
-  // The header plus the trailing user request already fill the limit, so the
-  // older context drops entirely and the remaining text must still be bounded;
-  // otherwise Codex app-server rejects the turn for exceeding
-  // MAX_USER_INPUT_TEXT_CHARS. truncateOlderContext keeps the tail, preserving
-  // the user's actual request over the older header text.
-  return truncateOlderContext(`${beforeContext}${afterContext}`, maxChars);
+  // Hook-added prefixes can make the non-context text exceed the limit. Keep
+  // the current context tail before the user's request; dropping it would make
+  // a duplicated earlier projection crowd out the newest assembled context.
+  const afterContextText = truncateOlderContext(afterContext, maxChars);
+  const contextBudgetAfterRequest = maxChars - afterContextText.length;
+  const fittedContext = truncateOlderContext(context, contextBudgetAfterRequest);
+  return `${fittedContext}${afterContextText}`;
 }
 
 function normalizeProjectedContextRange(

@@ -1,4 +1,5 @@
 // Covers MiniMax VLM auth/header normalization and provider-specific routing.
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withFetchPreconnect } from "../test-utils/fetch-mock.js";
 import { isMinimaxVlmModel, minimaxUnderstandImage } from "./minimax-vlm.js";
@@ -155,6 +156,54 @@ describe("minimaxUnderstandImage apiKey normalization", () => {
 
     expect(timeoutSpy).toHaveBeenCalledOnce();
     expect(timeoutSpy).toHaveBeenCalledWith(180_000);
+  });
+
+  it("uses the default request timeout for non-positive caller timeouts", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchSpy = vi.fn(async () => {
+      return new Response(apiResponse, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    await expect(
+      minimaxUnderstandImage({
+        apiKey: "minimax-test-key",
+        prompt: "hi",
+        imageDataUrl: "data:image/png;base64,AAAA",
+        apiHost: "https://api.minimax.io",
+        timeoutMs: 0,
+      }),
+    ).resolves.toBe("ok");
+
+    expect(timeoutSpy).toHaveBeenCalledOnce();
+    expect(timeoutSpy).toHaveBeenCalledWith(60_000);
+  });
+
+  it("clamps oversized caller request timeouts before creating the abort signal", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const fetchSpy = vi.fn(async () => {
+      return new Response(apiResponse, {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    });
+    global.fetch = withFetchPreconnect(fetchSpy);
+
+    await expect(
+      minimaxUnderstandImage({
+        apiKey: "minimax-test-key",
+        prompt: "hi",
+        imageDataUrl: "data:image/png;base64,AAAA",
+        apiHost: "https://api.minimax.io",
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      }),
+    ).resolves.toBe("ok");
+
+    expect(timeoutSpy).toHaveBeenCalledOnce();
+    expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
   });
 
   it("bounds large provider error response bodies", async () => {

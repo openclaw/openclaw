@@ -8,6 +8,11 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  resolveWindowsPowerShellPath,
+  resolveWindowsSystem32Path,
+  resolveWindowsTaskkillPath,
+} from "../lib/windows-taskkill.mjs";
 
 const PLUGIN_SPEC =
   process.env.OPENCLAW_KITCHEN_SINK_NPM_SPEC || "npm:@openclaw/kitchen-sink@latest";
@@ -29,8 +34,10 @@ const DEFAULT_FETCH_BODY_MAX_BYTES = 1024 * 1024;
 const DEFAULT_MAX_RSS_MIB = 2048;
 const DEFAULT_MAX_COMMAND_RSS_MIB = 8192;
 const DEFAULT_OUTPUT_CAPTURE_CHARS = 1024 * 1024;
+export const MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS = 2_147_000_000;
 const GATEWAY_TEARDOWN_GRACE_MS = 10000;
 const GATEWAY_TEARDOWN_KILL_GRACE_MS = 2000;
+const COMMAND_PARENT_SIGNAL_KILL_GRACE_MS = 2000;
 const COMMAND_PROCESS_TREE_EXIT_POLL_MS = 50;
 const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 const LOG_SCAN_MAX_LINE_CHARS = 16 * 1024;
@@ -56,6 +63,40 @@ const ERROR_LOG_ALLOW_PATTERNS = [
 ];
 
 let callGatewayModulePromise;
+const activeCommandChildren = new Set();
+const commandParentSignals =
+  process.platform === "win32" ? ["SIGINT", "SIGTERM"] : ["SIGINT", "SIGTERM", "SIGHUP"];
+let commandShutdownPromise;
+let commandSignalHandlersInstalled = false;
+
+function installCommandSignalHandlers() {
+  if (commandSignalHandlersInstalled) {
+    return;
+  }
+  commandSignalHandlersInstalled = true;
+  for (const signal of commandParentSignals) {
+    process.on(signal, commandSignalHandlers.get(signal));
+  }
+}
+
+function removeCommandSignalHandlers() {
+  if (!commandSignalHandlersInstalled) {
+    return;
+  }
+  commandSignalHandlersInstalled = false;
+  for (const signal of commandParentSignals) {
+    process.off(signal, commandSignalHandlers.get(signal));
+  }
+}
+
+const commandSignalHandlers = new Map(
+  commandParentSignals.map((signal) => [
+    signal,
+    () => {
+      void shutdownActiveCommands(signal);
+    },
+  ]),
+);
 
 function usage() {
   return `Usage: node scripts/e2e/kitchen-sink-rpc-walk.mjs
@@ -109,8 +150,19 @@ export function readPositiveInt(raw, fallback, label = "value") {
   return parsed;
 }
 
+export function clampKitchenSinkTimerTimeoutMs(value) {
+  if (!Number.isFinite(value)) {
+    return 1;
+  }
+  return Math.min(Math.max(1, Math.floor(value)), MAX_KITCHEN_SINK_TIMER_TIMEOUT_MS);
+}
+
+export function readPositiveTimerMs(raw, fallback, label = "value") {
+  return clampKitchenSinkTimerTimeoutMs(readPositiveInt(raw, fallback, label));
+}
+
 export function resolveKitchenSinkRpcConfig(env = process.env) {
-  const commandTimeoutMs = readPositiveInt(
+  const commandTimeoutMs = readPositiveTimerMs(
     env.OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS,
     DEFAULT_COMMAND_TIMEOUT_MS,
     "OPENCLAW_KITCHEN_SINK_RPC_COMMAND_MS",
@@ -127,12 +179,12 @@ export function resolveKitchenSinkRpcConfig(env = process.env) {
       DEFAULT_FETCH_BODY_MAX_BYTES,
       "OPENCLAW_KITCHEN_SINK_RPC_FETCH_BODY_BYTES",
     ),
-    fetchTimeoutMs: readPositiveInt(
+    fetchTimeoutMs: readPositiveTimerMs(
       env.OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS,
       DEFAULT_FETCH_TIMEOUT_MS,
       "OPENCLAW_KITCHEN_SINK_RPC_FETCH_MS",
     ),
-    installTimeoutMs: readPositiveInt(
+    installTimeoutMs: readPositiveTimerMs(
       env.OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS,
       Math.max(commandTimeoutMs, DEFAULT_INSTALL_TIMEOUT_MS),
       "OPENCLAW_KITCHEN_SINK_RPC_INSTALL_MS",
@@ -147,12 +199,12 @@ export function resolveKitchenSinkRpcConfig(env = process.env) {
       DEFAULT_OUTPUT_CAPTURE_CHARS,
       "OPENCLAW_KITCHEN_SINK_OUTPUT_CAPTURE_CHARS",
     ),
-    readyTimeoutMs: readPositiveInt(
+    readyTimeoutMs: readPositiveTimerMs(
       env.OPENCLAW_KITCHEN_SINK_RPC_READY_MS,
       DEFAULT_READY_TIMEOUT_MS,
       "OPENCLAW_KITCHEN_SINK_RPC_READY_MS",
     ),
-    rpcTimeoutMs: readPositiveInt(
+    rpcTimeoutMs: readPositiveTimerMs(
       env.OPENCLAW_KITCHEN_SINK_RPC_CALL_MS,
       DEFAULT_RPC_TIMEOUT_MS,
       "OPENCLAW_KITCHEN_SINK_RPC_CALL_MS",
@@ -301,6 +353,11 @@ function formatCapturedOutput(label, buffer) {
 }
 
 export function runCommand(command, args, options = {}) {
+  if (commandShutdownPromise) {
+    return commandShutdownPromise.then(() => {
+      throw new Error(`${command} ${args.join(" ")} skipped during parent signal shutdown`);
+    });
+  }
   return new Promise((resolve, reject) => {
     const config = resolveKitchenSinkRpcConfig();
     const {
@@ -315,16 +372,21 @@ export function runCommand(command, args, options = {}) {
       timeoutMs = config.commandTimeoutMs,
       ...spawnOptions
     } = options;
+    const resolvedTimeoutMs = clampKitchenSinkTimerTimeoutMs(timeoutMs);
+    const resolvedTimeoutKillGraceMs = clampKitchenSinkTimerTimeoutMs(timeoutKillGraceMs);
     const child = childProcess.spawn(command, args, {
       stdio: ["ignore", "pipe", "pipe"],
       ...spawnOptions,
       detached: spawnOptions.detached ?? process.platform !== "win32",
     });
+    activeCommandChildren.add(child);
+    installCommandSignalHandlers();
     const startedAt = Date.now();
     let stdout = { text: "", truncatedChars: 0 };
     let stderr = { text: "", truncatedChars: 0 };
     let timedOut = false;
     let forceKillTimer;
+    let forceKillAt;
     let sampleTimer;
     let resourceSampleInFlight = null;
     let capturedResourceSampleCount = 0;
@@ -378,9 +440,13 @@ export function runCommand(command, args, options = {}) {
     const timer = setTimeout(() => {
       timedOut = true;
       signalProcessGroup(child, "SIGTERM");
-      forceKillTimer = setTimeout(() => signalProcessGroup(child, "SIGKILL"), timeoutKillGraceMs);
+      forceKillAt = Date.now() + resolvedTimeoutKillGraceMs;
+      forceKillTimer = setTimeout(
+        () => signalProcessGroup(child, "SIGKILL"),
+        resolvedTimeoutKillGraceMs,
+      );
       forceKillTimer.unref();
-    }, timeoutMs);
+    }, resolvedTimeoutMs);
     child.stdout?.on("data", (chunk) => {
       stdout = appendBoundedOutput(stdout, chunk, outputCaptureChars);
     });
@@ -390,6 +456,8 @@ export function runCommand(command, args, options = {}) {
     child.on("error", (error) => {
       clearTimeout(timer);
       clearTimeout(forceKillTimer);
+      forceKillAt = undefined;
+      releaseCommandChild(child);
       void stopResourceSampling().finally(() =>
         reject(toLintErrorObject(error, "Command failed before exit")),
       );
@@ -398,6 +466,8 @@ export function runCommand(command, args, options = {}) {
       clearTimeout(timer);
       const finish = () => {
         clearTimeout(forceKillTimer);
+        forceKillAt = undefined;
+        releaseCommandChild(child);
         void stopResourceSampling().then((resourceSampleFailure) => {
           if (!timedOut && status === 0) {
             if (resourceSampleFailure) {
@@ -420,7 +490,7 @@ export function runCommand(command, args, options = {}) {
             .join("\n")
             .trim();
           const failure = timedOut
-            ? `timed out after ${timeoutMs}ms`
+            ? `timed out after ${resolvedTimeoutMs}ms`
             : `failed with ${signal || status}`;
           reject(
             Object.assign(
@@ -439,7 +509,10 @@ export function runCommand(command, args, options = {}) {
       };
 
       if (timedOut) {
-        void finishTimedOutCommandProcessTree(child, timeoutKillGraceMs).then(finish, finish);
+        void finishTimedOutCommandProcessTree(child, {
+          forceKillAt,
+          timeoutKillGraceMs: resolvedTimeoutKillGraceMs,
+        }).then(finish, finish);
         return;
       }
 
@@ -448,12 +521,51 @@ export function runCommand(command, args, options = {}) {
   });
 }
 
-async function finishTimedOutCommandProcessTree(child, timeoutKillGraceMs) {
+async function finishTimedOutCommandProcessTree(child, { forceKillAt, timeoutKillGraceMs }) {
   if (!commandProcessTreeIsAlive(child)) {
     return;
   }
-  signalProcessGroup(child, "SIGKILL");
+  const graceRemainingMs =
+    forceKillAt === undefined ? timeoutKillGraceMs : Math.max(0, forceKillAt - Date.now());
+  if (graceRemainingMs > 0) {
+    await waitForCommandProcessTreeExit(child, graceRemainingMs);
+  }
+  if (commandProcessTreeIsAlive(child)) {
+    signalProcessGroup(child, "SIGKILL");
+  }
   await waitForCommandProcessTreeExit(child, timeoutKillGraceMs);
+}
+
+function releaseCommandChild(child) {
+  activeCommandChildren.delete(child);
+  if (activeCommandChildren.size === 0 && !commandShutdownPromise) {
+    removeCommandSignalHandlers();
+  }
+}
+
+async function shutdownActiveCommands(signal) {
+  if (commandShutdownPromise) {
+    for (const child of activeCommandChildren) {
+      signalProcessGroup(child, "SIGKILL");
+    }
+    return commandShutdownPromise;
+  }
+  const children = [...activeCommandChildren];
+  for (const child of children) {
+    signalProcessGroup(child, signal);
+  }
+  commandShutdownPromise = Promise.all(
+    children.map((child) =>
+      finishTimedOutCommandProcessTree(child, {
+        forceKillAt: Date.now() + COMMAND_PARENT_SIGNAL_KILL_GRACE_MS,
+        timeoutKillGraceMs: COMMAND_PARENT_SIGNAL_KILL_GRACE_MS,
+      }),
+    ),
+  ).finally(() => {
+    removeCommandSignalHandlers();
+    process.kill(process.pid, signal);
+  });
+  return commandShutdownPromise;
 }
 
 async function waitForCommandProcessTreeExit(child, timeoutMs) {
@@ -484,12 +596,42 @@ function commandProcessTreeIsAlive(child) {
   }
 }
 
-function signalProcessGroup(child, signal) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+function signalWindowsProcessTree(pid, signal, runTaskkill = childProcess.spawnSync) {
+  const taskkillPath = resolveWindowsTaskkillPath();
+  const args = ["/PID", String(pid), "/T"];
+  if (signal === "SIGKILL") {
+    args.push("/F");
+  }
+  const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+  return !result?.error && result?.status === 0;
+}
+
+function signalWindowsProcessTreeOrForce(pid, signal, runTaskkill = childProcess.spawnSync) {
+  if (signalWindowsProcessTree(pid, signal, runTaskkill)) {
+    return true;
+  }
+  return signal !== "SIGKILL" && signalWindowsProcessTree(pid, "SIGKILL", runTaskkill);
+}
+
+export function signalProcessGroup(
+  child,
+  signal,
+  {
+    platform = process.platform,
+    runTaskkill = childProcess.spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = {},
+) {
+  if (useProcessGroup && typeof child.pid === "number") {
     try {
       process.kill(-child.pid, signal);
       return;
     } catch {}
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
+      return;
+    }
   }
   try {
     child.kill(signal);
@@ -534,7 +676,7 @@ async function resolveOpenClawCommand(runner, args, env, options = {}) {
   };
 }
 
-function parseJsonOutput(stdout) {
+export function parseJsonOutput(stdout) {
   const trimmed = stdout.trim();
   if (!trimmed) {
     throw new Error("command produced no JSON output");
@@ -667,6 +809,9 @@ function extractBalancedJsonObjects(text) {
     if (text[index] !== "{") {
       continue;
     }
+    if (!isJsonObjectRecordStart(text, index)) {
+      continue;
+    }
     const end = findBalancedJsonObjectEnd(text, index);
     if (end > index) {
       candidates.push(text.slice(index, end + 1));
@@ -674,6 +819,17 @@ function extractBalancedJsonObjects(text) {
     }
   }
   return candidates;
+}
+
+function isJsonObjectRecordStart(text, index) {
+  if (index === 0) {
+    return true;
+  }
+  let cursor = index - 1;
+  while (cursor >= 0 && (text[cursor] === " " || text[cursor] === "\t")) {
+    cursor -= 1;
+  }
+  return cursor < 0 || text[cursor] === "\n" || text[cursor] === "\r";
 }
 
 function findBalancedJsonObjectEnd(text, startIndex) {
@@ -813,7 +969,7 @@ export function createRpcCliRunOptions(method, options = {}) {
   return {
     ...options.commandResourceOptions,
     resourceLabel: `gateway call ${method}`,
-    timeoutMs: config.rpcTimeoutMs + 30000,
+    timeoutMs: clampKitchenSinkTimerTimeoutMs(config.rpcTimeoutMs + 30000),
   };
 }
 
@@ -895,7 +1051,7 @@ function isRetryableTransientNetworkError(error, seen = new Set()) {
 export async function fetchJson(url, options = {}) {
   const config = resolveKitchenSinkRpcConfig();
   const attempts = Math.max(1, options.attempts ?? 3);
-  const timeoutMs = Math.max(1, options.timeoutMs ?? config.fetchTimeoutMs);
+  const timeoutMs = clampKitchenSinkTimerTimeoutMs(options.timeoutMs ?? config.fetchTimeoutMs);
   const maxBodyBytes = Math.max(1, options.maxBodyBytes ?? config.fetchBodyMaxBytes);
   const externalSignal = options.signal;
   let lastError;
@@ -1209,8 +1365,13 @@ function releaseUnsettledGatewayChild(child) {
   child.unref?.();
 }
 
-function signalGateway(child, signal, killProcess = defaultKillProcess) {
-  if (process.platform !== "win32" && typeof child.pid === "number") {
+export function signalGateway(child, signal, killProcess = defaultKillProcess, options = {}) {
+  const {
+    platform = process.platform,
+    runTaskkill = childProcess.spawnSync,
+    useProcessGroup = platform !== "win32",
+  } = options;
+  if (useProcessGroup && typeof child.pid === "number") {
     try {
       killProcess(-child.pid, signal);
       return true;
@@ -1218,6 +1379,11 @@ function signalGateway(child, signal, killProcess = defaultKillProcess) {
       if (error?.code === "ESRCH") {
         return false;
       }
+    }
+  }
+  if (platform === "win32" && typeof child.pid === "number") {
+    if (signalWindowsProcessTreeOrForce(child.pid, signal, runTaskkill)) {
+      return true;
     }
   }
   try {
@@ -1285,7 +1451,7 @@ export async function waitForGatewayReady(child, port, logPath, options = {}) {
   const config = resolveKitchenSinkRpcConfig();
   const started = Date.now();
   let lastError = "";
-  const timeoutMs = Math.max(1, options.timeoutMs ?? config.readyTimeoutMs);
+  const timeoutMs = clampKitchenSinkTimerTimeoutMs(options.timeoutMs ?? config.readyTimeoutMs);
   const pollDelayMs = Math.max(1, options.pollDelayMs ?? 250);
   const logReportedReady = createGatewayReadyLogScanner(logPath);
   const childExit = createChildExitPromise(child);
@@ -2008,9 +2174,14 @@ function collectPosixProcessTree(rows, rootPid) {
   const root = rows.find((row) => row.processId === rootPid);
   const collected = root ? [root] : [];
   const pending = [rootPid];
+  const seen = new Set(pending);
   while (pending.length > 0) {
     const nextPid = pending.shift();
     for (const child of byParent.get(nextPid) ?? []) {
+      if (seen.has(child.processId)) {
+        continue;
+      }
+      seen.add(child.processId);
       collected.push(child);
       pending.push(child.processId);
     }
@@ -2098,7 +2269,7 @@ async function sampleWindowsPidWithTasklist(pid, run) {
   }
   try {
     const { stdout } = await run(
-      "tasklist.exe",
+      resolveWindowsSystem32Path("tasklist.exe"),
       ["/FI", `PID eq ${safePid}`, "/FO", "CSV", "/NH"],
       { timeoutMs: 15000 },
     );
@@ -2135,7 +2306,9 @@ export async function sampleWindowsProcessByPort(port, options = {}) {
   }
   const run = options.runCommand ?? runCommand;
   try {
-    const { stdout } = await run("netstat.exe", ["-ano", "-p", "tcp"], { timeoutMs: 15000 });
+    const { stdout } = await run(resolveWindowsSystem32Path("netstat.exe"), ["-ano", "-p", "tcp"], {
+      timeoutMs: 15000,
+    });
     const pid = stdout
       .split(/\r?\n/u)
       .map((line) => line.trim())
@@ -2195,40 +2368,38 @@ async function sampleWindowsProcess(pid, run, commandLineNeedles = []) {
     "if ($null -ne $process.CPU) { $cpu = $process.CPU }",
     "[Console]::Out.Write(('{0} {1} {2} {3}' -f $process.WorkingSet64, $cpu, $process.Id, $totalWorkingSet))",
   ].join("; ");
-  for (const powershell of ["powershell.exe", "powershell"]) {
-    try {
-      const { stdout } = await run(
-        powershell,
-        ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
-        { timeoutMs: 15000 },
-      );
-      const [workingSetBytesRaw, cpuSecondsRaw, processIdRaw, aggregateWorkingSetBytesRaw] = stdout
-        .trim()
-        .split(/\s+/u);
-      const workingSetBytes = parseStrictUnsignedInteger(workingSetBytesRaw);
-      const aggregateWorkingSetBytes = parseStrictUnsignedInteger(
-        aggregateWorkingSetBytesRaw ?? workingSetBytesRaw ?? "",
-      );
-      const cpuSeconds = parseStrictNonNegativeDecimal(cpuSecondsRaw);
-      const processId = parseStrictUnsignedInteger(processIdRaw);
-      if (workingSetBytes === null) {
-        return null;
-      }
-      return {
-        rssMiB: Math.round((workingSetBytes / 1024 / 1024) * 10) / 10,
-        aggregateRssMiB:
-          aggregateWorkingSetBytes !== null
-            ? Math.round((aggregateWorkingSetBytes / 1024 / 1024) * 10) / 10
-            : Math.round((workingSetBytes / 1024 / 1024) * 10) / 10,
-        cpuPercent: null,
-        cpuSeconds,
-        processId: processId ?? safePid,
-      };
-    } catch {
-      // Try the next Windows PowerShell command name.
+  const powershell = resolveWindowsPowerShellPath();
+  try {
+    const { stdout } = await run(
+      powershell,
+      ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command", command],
+      { timeoutMs: 15000 },
+    );
+    const [workingSetBytesRaw, cpuSecondsRaw, processIdRaw, aggregateWorkingSetBytesRaw] = stdout
+      .trim()
+      .split(/\s+/u);
+    const workingSetBytes = parseStrictUnsignedInteger(workingSetBytesRaw);
+    const aggregateWorkingSetBytes = parseStrictUnsignedInteger(
+      aggregateWorkingSetBytesRaw ?? workingSetBytesRaw ?? "",
+    );
+    const cpuSeconds = parseStrictNonNegativeDecimal(cpuSecondsRaw);
+    const processId = parseStrictUnsignedInteger(processIdRaw);
+    if (workingSetBytes === null) {
+      return null;
     }
+    return {
+      rssMiB: Math.round((workingSetBytes / 1024 / 1024) * 10) / 10,
+      aggregateRssMiB:
+        aggregateWorkingSetBytes !== null
+          ? Math.round((aggregateWorkingSetBytes / 1024 / 1024) * 10) / 10
+          : Math.round((workingSetBytes / 1024 / 1024) * 10) / 10,
+      cpuPercent: null,
+      cpuSeconds,
+      processId: processId ?? safePid,
+    };
+  } catch {
+    return null;
   }
-  return null;
 }
 
 function assertProcessResourceCeiling(sample, { label, maxRssMiB, requireSample = true }) {
