@@ -17,15 +17,7 @@ export function createTelegramMediaExtraToolSchemas() {
       Type.Boolean({
         description:
           "Send an audio file as a Telegram voice message (rendered with waveform). " +
-          "Provide an OGG/Opus or MP3 file via mediaUrl. Mutually exclusive with asVideoNote.",
-      }),
-    ),
-    asVideoNote: Type.Optional(
-      Type.Boolean({
-        description:
-          "Send a video file as a Telegram round video note (видеокружок, circle). " +
-          "Provide a square MP4 video ≤60 seconds via the sendVideoNote action. " +
-          "Mutually exclusive with asVoice.",
+          "Provide an OGG/Opus or MP3 file via mediaUrl.",
       }),
     ),
   };

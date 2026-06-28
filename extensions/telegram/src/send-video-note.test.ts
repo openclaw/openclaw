@@ -71,6 +71,7 @@ describe("sendVideoNoteTelegram", () => {
         api,
       },
     );
+    expect(api.sendVideoNote).toHaveBeenCalled();
     expect(result.messageId).toBeDefined();
   });
 });
