@@ -95,6 +95,15 @@ describe("plugin shape compatibility matrix", () => {
       },
     });
 
+    registerVirtualTestPlugin({
+      registry,
+      config,
+      id: "document-extract-test",
+      name: "Document Extract Test",
+      contracts: { documentExtractors: ["pdf"] },
+      register() {},
+    });
+
     const report = {
       workspaceDir: "/virtual-workspace",
       ...registry.registry,
@@ -130,40 +139,22 @@ describe("plugin shape compatibility matrix", () => {
         shape: "plain-capability",
         capabilityMode: "plain",
       },
+      {
+        id: "document-extract-test",
+        shape: "plain-capability",
+        capabilityMode: "plain",
+      },
     ]);
 
     expect(inspect[0]?.usesLegacyBeforeAgentStart).toBe(true);
     expect(inspect.map((entry) => entry.capabilities.map((capability) => capability.kind))).toEqual(
-      [[], ["text-inference"], ["text-inference", "web-search"], ["channel"]],
+      [
+        [],
+        ["text-inference"],
+        ["text-inference", "web-search"],
+        ["channel"],
+        ["document-extractors"],
+      ],
     );
-  });
-
-  it("recognizes document-extractors contract as a capability kind", () => {
-    const { config, registry } = createPluginRegistryFixture();
-
-    registerVirtualTestPlugin({
-      registry,
-      config,
-      id: "document-extract-test",
-      name: "Document Extract Test",
-      contracts: {
-        documentExtractors: ["pdf", "docx"],
-      },
-      register() {},
-    });
-
-    const report = {
-      workspaceDir: "/virtual-workspace",
-      ...registry.registry,
-    };
-    const plugin = report.plugins.find((p) => p.id === "document-extract-test")!;
-    const summary = buildPluginShapeSummary({ plugin, report });
-
-    expect(summary.shape).toBe("plain-capability");
-    expect(summary.capabilityMode).toBe("plain");
-    expect(summary.capabilityCount).toBe(1);
-    expect(summary.capabilities).toEqual([
-      { kind: "document-extractors", ids: ["pdf", "docx"] },
-    ]);
   });
 });
