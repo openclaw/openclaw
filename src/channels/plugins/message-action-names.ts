@@ -59,6 +59,9 @@ export const CHANNEL_MESSAGE_ACTION_NAMES = [
   "set-profile",
   "download-file",
   "upload-file",
+  "sendLocation",
+  "sendVenue",
+  "sendVideoNote",
 ] as const;
 
 /**

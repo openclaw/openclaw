@@ -44,6 +44,9 @@ const TELEGRAM_MESSAGE_ACTION_MAP = {
   poll: "poll",
   react: "react",
   send: "sendMessage",
+  sendLocation: "sendLocation",
+  sendVenue: "sendVenue",
+  sendVideoNote: "sendVideoNote",
   sticker: "sendSticker",
   "sticker-search": "searchSticker",
   "topic-create": "createForumTopic",
@@ -60,8 +63,11 @@ const TELEGRAM_TOOL_DELIVERY_ACTIONS = new Set([
   "poll",
   "react",
   "send",
+  "sendLocation",
   "sendMessage",
   "sendSticker",
+  "sendVenue",
+  "sendVideoNote",
   "sticker",
   "topic-create",
   "topic-edit",
@@ -164,6 +170,11 @@ function describeTelegramMessageTool({
   }
   if (discovery.isEnabled("editForumTopic")) {
     actions.add("topic-edit");
+  }
+  if (discovery.isEnabled("sendMessage")) {
+    actions.add("sendLocation");
+    actions.add("sendVenue");
+    actions.add("sendVideoNote");
   }
   const schema: ChannelMessageToolSchemaContribution[] = [];
   if (discovery.pollEnabled) {
