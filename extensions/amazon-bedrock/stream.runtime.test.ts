@@ -507,10 +507,10 @@ describe("Real Bedrock API integration tests for maxTokens (#97176)", () => {
 
   beforeEach(() => {
     sendSpy = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockResolvedValue({
-      output: { 
-        message: { 
-          content: [{ text: "Test response", type: "text" }], 
-          role: "assistant" 
+      output: {
+        message: {
+          content: [{ text: "Test response", type: "text" }],
+          role: "assistant",
         },
       },
       $metadata: {},
@@ -573,7 +573,7 @@ describe("Real Bedrock API integration tests for maxTokens (#97176)", () => {
       maxTokens: 200_000,
     });
 
-    await streamSimpleBedrock(model, context(), { 
+    await streamSimpleBedrock(model, context(), {
       reasoning: "high",
       maxTokens: 8000,
     }).result();
@@ -606,13 +606,12 @@ describe("Real Bedrock API integration tests for maxTokens (#97176)", () => {
     });
 
     await streamSimpleBedrock(model, context(), {
-      prompt: "Explain quantum computing in one sentence",
       maxTokens: 100,
       temperature: 0.7,
     }).result();
 
     const requestPayload = sendSpy.mock.calls[0][0].input;
-    
+
     expect(requestPayload).toHaveProperty("modelId");
     expect(requestPayload).toHaveProperty("inferenceConfig");
     expect(requestPayload.inferenceConfig).toHaveProperty("maxTokens");
