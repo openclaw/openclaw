@@ -2,7 +2,10 @@
  * Resolves provider/model prompt-cache retention behavior.
  */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { resolveAnthropicCacheRetentionFamily } from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
+import {
+  isLiteLLMAnthropicModelRef,
+  resolveAnthropicCacheRetentionFamily,
+} from "../../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 
 type CacheRetention = "none" | "short" | "long";
 
@@ -41,8 +44,14 @@ export function resolveCacheRetention(
   // openai-completions wire (amazon-bedrock + amazon.* nova models) leave
   // the flag unset, so the existing family gate still applies to them.
   const cacheKeyEligible = supportsPromptCacheKey === true;
+  const liteLLMAnthropicEligible =
+    normalizeLowercaseStringOrEmpty(provider) === "litellm" &&
+    modelApi === "openai-completions" &&
+    hasExplicitCacheConfig &&
+    typeof modelId === "string" &&
+    isLiteLLMAnthropicModelRef(modelId);
 
-  if (!family && !googleEligible && !cacheKeyEligible) {
+  if (!family && !googleEligible && !cacheKeyEligible && !liteLLMAnthropicEligible) {
     return undefined;
   }
 

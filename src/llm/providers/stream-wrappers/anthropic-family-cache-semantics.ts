@@ -13,6 +13,15 @@ export function isAnthropicModelRef(modelId: string): boolean {
   return normalizeLowercaseStringOrEmpty(modelId).startsWith("anthropic/");
 }
 
+export function isLiteLLMAnthropicModelRef(modelId: string): boolean {
+  const normalized = normalizeLowercaseStringOrEmpty(modelId);
+  return (
+    isAnthropicModelRef(normalized) ||
+    normalized.startsWith("anthropic.claude") ||
+    normalized.startsWith("claude-")
+  );
+}
+
 /** Matches Application Inference Profile ARNs across all AWS partitions with Bedrock. */
 const BEDROCK_APP_INFERENCE_PROFILE_ARN_RE = /^arn:aws(-cn|-us-gov)?:bedrock:/;
 

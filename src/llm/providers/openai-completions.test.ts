@@ -590,6 +590,147 @@ describe("OpenAI-compatible completions params", () => {
     });
   });
 
+  it("splits the cache boundary before applying Anthropic cache control for LiteLLM Anthropic models", async () => {
+    let capturedMessages: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        id: "claude-opus-4-6",
+        provider: "litellm",
+        baseUrl: "https://litellm.example.test/v1",
+      },
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-test",
+        cacheRetention: "long",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: unknown }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    expect(messages[0]).toEqual({
+      role: "system",
+      content: [
+        {
+          type: "text",
+          text: "Stable prefix",
+          cache_control: { type: "ephemeral", ttl: "1h" },
+        },
+        {
+          type: "text",
+          text: "Dynamic suffix",
+        },
+      ],
+    });
+  });
+
+  it("does not default Anthropic cache control for LiteLLM Anthropic models", async () => {
+    let capturedMessages: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        id: "claude-opus-4-6",
+        provider: "litellm",
+        baseUrl: "https://litellm.example.test/v1",
+      },
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: unknown }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    expect(messages[0]).toEqual({
+      role: "system",
+      content: "Stable prefix\nDynamic suffix",
+    });
+  });
+
+  it("does not apply Anthropic cache control for LiteLLM Anthropic models when cacheRetention is none", async () => {
+    let capturedMessages: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        id: "claude-opus-4-6",
+        provider: "litellm",
+        baseUrl: "https://litellm.example.test/v1",
+      },
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-test",
+        cacheRetention: "none",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: unknown }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    expect(messages[0]).toEqual({
+      role: "system",
+      content: "Stable prefix\nDynamic suffix",
+    });
+  });
+
+  it("does not apply Anthropic cache control for non-Anthropic LiteLLM models", async () => {
+    let capturedMessages: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        id: "openai/gpt-5.5",
+        provider: "litellm",
+        baseUrl: "https://litellm.example.test/v1",
+      },
+      {
+        systemPrompt: `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`,
+        messages: [{ role: "user", content: "hi", timestamp: 1 }],
+      },
+      {
+        apiKey: "sk-test",
+        cacheRetention: "long",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: unknown }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = capturedMessages as Array<{ role: string; content: unknown }>;
+    expect(messages[0]).toEqual({
+      role: "system",
+      content: "Stable prefix\nDynamic suffix",
+    });
+  });
+
   it("adds reasoning_content replay fields for Xiaomi MiMo assistant tool history", async () => {
     let capturedMessages: unknown;
     const stream = streamOpenAICompletions(

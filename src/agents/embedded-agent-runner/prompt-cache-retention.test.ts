@@ -121,6 +121,53 @@ describe("prompt cache retention", () => {
     ).toBeUndefined();
   });
 
+  it("passes explicit cacheRetention through for LiteLLM Anthropic openai-completions models", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "litellm",
+        "openai-completions",
+        "claude-opus-4-6",
+      ),
+    ).toBe("long");
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "short" },
+        "litellm",
+        "openai-completions",
+        "anthropic/claude-sonnet-4.6",
+      ),
+    ).toBe("short");
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "none" },
+        "litellm",
+        "openai-completions",
+        "anthropic.claude-sonnet-4-6",
+      ),
+    ).toBe("none");
+  });
+
+  it("does not default cacheRetention for LiteLLM Anthropic openai-completions models", () => {
+    expect(
+      resolveCacheRetention(undefined, "litellm", "openai-completions", "claude-opus-4-6"),
+    ).toBeUndefined();
+    expect(
+      resolveCacheRetention({}, "litellm", "openai-completions", "claude-opus-4-6"),
+    ).toBeUndefined();
+  });
+
+  it("does not honor explicit cacheRetention for non-Anthropic LiteLLM openai-completions models", () => {
+    expect(
+      resolveCacheRetention(
+        { cacheRetention: "long" },
+        "litellm",
+        "openai-completions",
+        "openai/gpt-5.5",
+      ),
+    ).toBeUndefined();
+  });
+
   it("identifies supported direct Google cache families", () => {
     expect(
       isGooglePromptCacheEligible({
