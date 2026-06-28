@@ -252,11 +252,23 @@ function buildLivePioneerModelDefinition(
   };
 }
 
+// Model IDs present in the static catalog but not returned by the live API —
+// routing aliases that must always be available regardless of discovery results.
+const PIONEER_STATIC_ONLY_MODEL_IDS = new Set(["pioneer/auto"]);
+
 function buildPioneerModelsFromLiveRows(rows: readonly unknown[]): ModelDefinitionConfig[] {
   const staticModels = buildPioneerModels();
   const staticModelsById = new Map(staticModels.map((model) => [model.id, model]));
   const seen = new Set<string>();
   const models: ModelDefinitionConfig[] = [];
+  // Prepend static-only routing aliases (e.g. pioneer/auto) so they survive
+  // live catalog replacement and remain available as a default primary.
+  for (const staticModel of staticModels) {
+    if (PIONEER_STATIC_ONLY_MODEL_IDS.has(staticModel.id)) {
+      seen.add(staticModel.id);
+      models.push(staticModel);
+    }
+  }
   for (const row of rows) {
     const model = buildLivePioneerModelDefinition(row, staticModelsById);
     if (!model || seen.has(model.id)) {
