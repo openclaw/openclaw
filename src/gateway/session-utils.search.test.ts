@@ -16,6 +16,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { registerAgentRunContext, resetAgentRunContextForTest } from "../infra/agent-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { buildGatewaySessionInfo, listSessionsFromStore } from "./session-utils.js";
 
 const MAIN_SESSION_KEY = "agent:main:main";
@@ -65,6 +66,11 @@ function createModelDefaultsConfig(params: {
       },
     },
   } as OpenClawConfig;
+}
+
+function closeSessionSqliteDatabasesForTest(): void {
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
 }
 
 function createLegacyRuntimeListConfig(
@@ -172,7 +178,7 @@ async function withTranscriptFixture<T>(
     });
     return await params.run({ storePath, now });
   } finally {
-    closeOpenClawAgentDatabasesForTest();
+    closeSessionSqliteDatabasesForTest();
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 }
@@ -357,7 +363,7 @@ describe("listSessionsFromStore search", () => {
   afterEach(() => {
     resetSubagentRegistryForTests();
     resetAgentRunContextForTest();
-    closeOpenClawAgentDatabasesForTest();
+    closeSessionSqliteDatabasesForTest();
   });
 
   const baseCfg = {
