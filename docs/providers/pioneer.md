@@ -75,6 +75,6 @@ in the live row.
 ```json5
 {
   env: { PIONEER_API_KEY: "YOUR_API_KEY_HERE" }, // pragma: allowlist secret
-  agents: { defaults: { model: { primary: "pioneer/claude-sonnet-4-6" } } },
+  agents: { defaults: { model: { primary: "pioneer/auto" } } },
 }
 ```
