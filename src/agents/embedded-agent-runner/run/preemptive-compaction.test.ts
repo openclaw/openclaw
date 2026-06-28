@@ -346,6 +346,32 @@ describe("preemptive-compaction", () => {
     expect(result.route).toBe("fits");
   });
 
+  it("grants lightweight context a larger prompt share on small-context models (#96658)", () => {
+    // phi3:mini-class 4,096-token context with the default 20k reserve floor.
+    // Full bootstrap mode reserves half the window and leaves only 2,048
+    // tokens for the prompt — a lightweight cron prompt easily overflows.
+    const full = shouldPreemptivelyCompactBeforePrompt({
+      messages: [],
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: 4_096,
+      reserveTokens: 20_000,
+    });
+    expect(full.promptBudgetBeforeReserve).toBe(2_048);
+
+    const lightweight = shouldPreemptivelyCompactBeforePrompt({
+      messages: [],
+      systemPrompt: "sys",
+      prompt: "hello",
+      contextTokenBudget: 4_096,
+      reserveTokens: 20_000,
+      contextMode: "lightweight",
+    });
+    // 80% ratio → 3,276 tokens for the prompt; reserve squeezed to 820.
+    expect(lightweight.promptBudgetBeforeReserve).toBe(3_276);
+    expect(lightweight.effectiveReserveTokens).toBe(820);
+  });
+
   it("keeps the requested reserve when it leaves enough prompt budget", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [makeAssistantHistory("short history")],

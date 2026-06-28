@@ -4612,6 +4612,9 @@ export async function runEmbeddedAttempt(
                 contextTokenBudget,
                 reserveTokens,
                 toolResultMaxChars: promptToolResultMaxChars,
+                ...(params.bootstrapContextMode
+                  ? { contextMode: params.bootstrapContextMode }
+                  : {}),
                 llmBoundaryTokenPressure: {
                   estimatedPromptTokens: llmBoundaryTokenPressure,
                   source: "llm_boundary_normalized_prompt",

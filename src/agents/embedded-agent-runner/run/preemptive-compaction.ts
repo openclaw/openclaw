@@ -6,6 +6,7 @@ import type { SessionContextBudgetStatus } from "../../../config/sessions.js";
 import { estimateStringChars } from "../../../utils/cjk-chars.js";
 import {
   MIN_PROMPT_BUDGET_RATIO,
+  MIN_PROMPT_BUDGET_RATIO_LIGHTWEIGHT,
   MIN_PROMPT_BUDGET_TOKENS,
 } from "../../agent-compaction-constants.js";
 import { SAFETY_MARGIN } from "../../compaction.js";
@@ -254,6 +255,13 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   reserveTokens: number;
   toolResultMaxChars?: number;
   llmBoundaryTokenPressure?: LlmBoundaryTokenPressure;
+  /**
+   * When set to "lightweight", the precheck assumes the run booted with
+   * minimal history (e.g. an isolated cron job with lightContext). Such runs
+   * have little to compact, so the prompt is allowed a larger share of the
+   * context window before reserve tokens are subtracted.
+   */
+  contextMode?: "full" | "lightweight";
 }): PreemptiveCompactionDecision {
   let messagesForPressure = params.messages;
   const llmBoundaryTokenPressure = normalizeLlmBoundaryTokenPressure(
@@ -281,9 +289,13 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   }
   const contextTokenBudget = Math.max(1, Math.floor(params.contextTokenBudget));
   const requestedReserveTokens = Math.max(0, Math.floor(params.reserveTokens));
+  const minPromptBudgetRatio =
+    params.contextMode === "lightweight"
+      ? MIN_PROMPT_BUDGET_RATIO_LIGHTWEIGHT
+      : MIN_PROMPT_BUDGET_RATIO;
   const minPromptBudget = Math.min(
     MIN_PROMPT_BUDGET_TOKENS,
-    Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
+    Math.max(1, Math.floor(contextTokenBudget * minPromptBudgetRatio)),
   );
   // Keep a minimum prompt budget even when reserveTokens asks for most of the context window.
   const effectiveReserveTokens = Math.min(
