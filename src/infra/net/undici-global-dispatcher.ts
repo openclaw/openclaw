@@ -184,23 +184,16 @@ function createNoProxyAwareEnvDispatcher(
       if (UNDICI_DISPATCHER_LIFECYCLE_METHODS.has(property)) {
         return (...args: unknown[]) => {
           // Clean up both the proxy dispatcher and the bypass agent
-          // and await their completion so callers can safely observe
-          // the settled state after close/destroy (#97234).
+          // so callers can safely observe the settled state after
+          // close/destroy. Fire the bypass callbacks stripped of
+          // trailing functions to avoid double-callback when both
+          // dispatchers receive the same args (#97234).
           const bypassValue = Reflect.get(bypassAgent, property, bypassAgent);
-          const proxyResult = Reflect.apply(value, target, args);
-          if (typeof bypassValue !== "function") {
-            return proxyResult;
+          if (typeof bypassValue === "function") {
+            const bypassArgs = args.filter((a) => typeof a !== "function");
+            Reflect.apply(bypassValue, bypassAgent, bypassArgs);
           }
-          // Strip trailing callbacks from the bypass-agent call so
-          // the original args carry the single caller-intended callback.
-          const bypassArgs = args.filter((a) => typeof a !== "function");
-          const bypassResult = Reflect.apply(bypassValue, bypassAgent, bypassArgs);
-          // When both return thenables, wait for both so close/destroy
-          // resolves only after both dispatchers have settled.
-          if (proxyResult instanceof Promise || bypassResult instanceof Promise) {
-            return Promise.all([proxyResult, bypassResult]).then(() => undefined);
-          }
-          return proxyResult;
+          return Reflect.apply(value, target, args);
         };
       }
       if (UNDICI_DISPATCH_HELPER_METHODS.has(property)) {
