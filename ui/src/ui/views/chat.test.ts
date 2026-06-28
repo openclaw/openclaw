@@ -161,6 +161,13 @@ vi.mock("../chat/grouped-render.ts", () => ({
 }));
 
 vi.mock("../markdown.ts", () => ({
+  OPENCLAW_DOCS_MARKDOWN_OPTIONS: {
+    rootRelativeLinkBaseUrl: "https://docs.openclaw.ai",
+  },
+  OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS: {
+    preserveControlUiRoutes: true,
+    rootRelativeLinkBaseUrl: "https://docs.openclaw.ai",
+  },
   toSanitizedMarkdownHtml: (value: string) => value,
 }));
 

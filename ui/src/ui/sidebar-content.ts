@@ -10,6 +10,7 @@ export type MarkdownSidebarContent = {
   kind: "markdown";
   content: string;
   rawText?: string | null;
+  rewriteOpenClawDocsLinks?: boolean;
   fullMessageRequest?: SidebarFullMessageRequest;
   unavailableReason?: "not_found" | "oversized" | "not_visible" | null;
 };

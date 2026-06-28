@@ -469,7 +469,8 @@ describe("cron view", () => {
       sessionTarget: "isolated" as const,
       payload: {
         kind: "agentTurn" as const,
-        message: "## Plan\n\n- **Ship** [docs](https://example.com)\n\n<script>alert(1)</script>",
+        message:
+          "## Plan\n\n- **Ship** [docs](/concepts/agent-workspace)\n- Keep [Cron](/cron)\n\n<script>alert(1)</script>",
       },
       delivery: { mode: "announce" as const, channel: "telegram", to: "123" },
     };
@@ -494,7 +495,10 @@ describe("cron view", () => {
 
     const prompt = getElement(container, ".cron-job-detail-value.chat-text", HTMLElement);
     expect(prompt.querySelector("strong")?.textContent).toBe("Ship");
-    expect(prompt.querySelector("a")?.getAttribute("href")).toBe("https://example.com");
+    const promptLinks = Array.from(prompt.querySelectorAll("a")).map((link) =>
+      link.getAttribute("href"),
+    );
+    expect(promptLinks).toEqual(["https://docs.openclaw.ai/concepts/agent-workspace", "/cron"]);
     expect(prompt.querySelector("script")).toBeNull();
 
     const promptLink = getElement(prompt, "a", HTMLAnchorElement);

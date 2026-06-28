@@ -14,7 +14,16 @@ import { normalizeMessage } from "./message-normalizer.ts";
 
 const localStorageValues = vi.hoisted(() => new Map<string, string>());
 const markdownRenderMock = vi.hoisted(() =>
-  vi.fn((value: string, _options?: { codeBlockChrome?: "copy" | "none" }) => value),
+  vi.fn(
+    (
+      value: string,
+      _options?: {
+        codeBlockChrome?: "copy" | "none";
+        preserveControlUiRoutes?: boolean;
+        rootRelativeLinkBaseUrl?: string;
+      },
+    ) => value,
+  ),
 );
 const streamingTextRenderMock = vi.hoisted(() =>
   vi.fn((value: string) => `<div class="markdown-plain-text-fallback">${value}</div>`),
@@ -32,6 +41,13 @@ vi.mock("../../local-storage.ts", () => ({
 }));
 
 vi.mock("../markdown.ts", () => ({
+  OPENCLAW_DOCS_MARKDOWN_OPTIONS: {
+    rootRelativeLinkBaseUrl: "https://docs.openclaw.ai",
+  },
+  OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS: {
+    preserveControlUiRoutes: true,
+    rootRelativeLinkBaseUrl: "https://docs.openclaw.ai",
+  },
   toSanitizedMarkdownHtml: markdownRenderMock,
   toStreamingMarkdownHtml: streamingMarkdownRenderMock,
   toStreamingPlainTextHtml: streamingTextRenderMock,
@@ -606,7 +622,10 @@ describe("grouped chat rendering", () => {
       timestamp: 1000,
     });
 
-    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, undefined);
+    expect(markdownRenderMock).toHaveBeenCalledWith(markdown, {
+      preserveControlUiRoutes: true,
+      rootRelativeLinkBaseUrl: "https://docs.openclaw.ai",
+    });
   });
 
   it("positions delete confirm by message side", () => {
@@ -906,7 +925,10 @@ describe("grouped chat rendering", () => {
 
     expect(markdownRenderMock).not.toHaveBeenCalled();
     expect(streamingTextRenderMock).not.toHaveBeenCalled();
-    expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", undefined);
+    expect(streamingMarkdownRenderMock).toHaveBeenCalledWith("**live**\nreply", {
+      preserveControlUiRoutes: true,
+      rootRelativeLinkBaseUrl: "https://docs.openclaw.ai",
+    });
     const text = container.querySelector(".streaming-markdown");
     expect(text?.textContent).toBe("**live**\nreply");
   });
@@ -2468,6 +2490,7 @@ describe("grouped chat rendering", () => {
 
     const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
     expect(sidebar.kind).toBe("markdown");
+    expect(sidebar.rewriteOpenClawDocsLinks).toBe(true);
     expect(sidebar.fullMessageRequest).toEqual({
       sessionKey: "global",
       agentId: "work",

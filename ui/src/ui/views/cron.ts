@@ -12,7 +12,7 @@ import type {
 import { getCronJobPayload } from "../cron-payload.ts";
 import { resolveCronJobLastRunStatus } from "../cron-status.ts";
 import { formatRelativeTimestamp, formatMs } from "../format.ts";
-import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS, toSanitizedMarkdownHtml } from "../markdown.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatCronSchedule, formatNextRun } from "../presenter.ts";
 import { normalizeStringEntries, uniqueStrings } from "../string-coerce.ts";
@@ -1761,7 +1761,9 @@ function renderJobPayload(job: CronJob) {
       <div class="cron-job-detail-section">
         <span class="cron-job-detail-label">${t("cron.jobDetail.prompt")}</span>
         <div class="muted cron-job-detail-value chat-text" @click=${stopPropagationForInteractive}>
-          ${unsafeHTML(toSanitizedMarkdownHtml(payload.message))}
+          ${unsafeHTML(
+            toSanitizedMarkdownHtml(payload.message, OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS),
+          )}
         </div>
       </div>
       ${delivery
@@ -1938,7 +1940,9 @@ function renderRun(
         </div>
       </div>
       <div class="cron-run-entry__body chat-text">
-        ${unsafeHTML(toSanitizedMarkdownHtml(bodySource))}
+        ${unsafeHTML(
+          toSanitizedMarkdownHtml(bodySource, OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS),
+        )}
       </div>
     </div>
   `;

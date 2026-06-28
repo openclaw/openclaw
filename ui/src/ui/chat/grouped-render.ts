@@ -7,7 +7,12 @@ import type { AssistantIdentity } from "../assistant-identity.ts";
 import type { EmbedSandboxMode } from "../embed-sandbox.ts";
 import { resolveUiHourCycleOptions } from "../format.ts";
 import { icons } from "../icons.ts";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownHtml } from "../markdown.ts";
+import {
+  OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS,
+  toSanitizedMarkdownHtml,
+  toStreamingMarkdownHtml,
+  type MarkdownRenderOptions,
+} from "../markdown.ts";
 import { openExternalUrlSafe } from "../open-external-url.ts";
 import type { SidebarContent } from "../sidebar-content.ts";
 import { detectTextDirection } from "../text-direction.ts";
@@ -1578,6 +1583,7 @@ function renderExpandButton(
         onOpenSidebar({
           kind: "markdown",
           content: markdown,
+          rewriteOpenClawDocsLinks: true,
           ...(options?.sessionKey && options?.messageId
             ? {
                 fullMessageRequest: {
@@ -1663,7 +1669,8 @@ function renderGroupedMessage(
   const markdownBase = extractedText?.trim() ? extractedText : null;
   const reasoningMarkdown = extractedThinking ? formatReasoningMarkdown(extractedThinking) : null;
   const markdown = markdownBase;
-  const markdownRenderOptions = role === "user" ? { codeBlockChrome: "none" as const } : undefined;
+  const markdownRenderOptions: MarkdownRenderOptions =
+    role === "user" ? { codeBlockChrome: "none" } : OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS;
   const canCopyMarkdown = role === "assistant" && Boolean(markdown?.trim());
   const canExpand = role === "assistant" && Boolean(onOpenSidebar && markdown?.trim());
   const hasActions = canCopyMarkdown || canExpand;
@@ -1815,7 +1822,12 @@ function renderGroupedMessage(
                       )}
                       ${reasoningMarkdown
                         ? html`<div class="chat-thinking">
-                            ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                            ${unsafeHTML(
+                              toSanitizedMarkdownHtml(
+                                reasoningMarkdown,
+                                OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS,
+                              ),
+                            )}
                           </div>`
                         : nothing}
                       ${jsonResult
@@ -1872,7 +1884,12 @@ function renderGroupedMessage(
             )}
             ${reasoningMarkdown
               ? html`<div class="chat-thinking">
-                  ${unsafeHTML(toSanitizedMarkdownHtml(reasoningMarkdown))}
+                  ${unsafeHTML(
+                    toSanitizedMarkdownHtml(
+                      reasoningMarkdown,
+                      OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS,
+                    ),
+                  )}
                 </div>`
               : nothing}
             ${normalizedRole === "assistant" && assistantViewBlocks.length > 0
@@ -1927,7 +1944,7 @@ function renderGroupedMessage(
 function renderMarkdownText(
   markdown: string,
   isStreaming: boolean,
-  markdownRenderOptions?: { codeBlockChrome: "copy" | "none" },
+  markdownRenderOptions: MarkdownRenderOptions,
 ) {
   if (isStreaming) {
     return html`

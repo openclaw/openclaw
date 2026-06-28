@@ -12,7 +12,7 @@ import type {
 } from "../controllers/skills.ts";
 import { clawhubVerdictKey } from "../controllers/skills.ts";
 import { clampText } from "../format.ts";
-import { toSanitizedMarkdownHtml } from "../markdown.ts";
+import { OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS, toSanitizedMarkdownHtml } from "../markdown.ts";
 import { resolveSafeExternalUrl } from "../open-external-url.ts";
 import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
 import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../types.ts";
@@ -802,7 +802,7 @@ function renderInstalledSkillCard(skill: SkillStatusEntry, props: SkillsProps) {
   }
   return html`
     <article class="sidebar-markdown" style="max-width: 100%; overflow-wrap: anywhere;">
-      ${unsafeHTML(toSanitizedMarkdownHtml(content))}
+      ${unsafeHTML(toSanitizedMarkdownHtml(content, OPENCLAW_MISSION_CONTROL_MARKDOWN_OPTIONS))}
     </article>
   `;
 }
