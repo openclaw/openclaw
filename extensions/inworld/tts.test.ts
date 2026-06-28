@@ -406,6 +406,18 @@ describe("Inworld response read bounding", () => {
     expect(audio.toString("utf8")).toBe(payload);
   });
 
+  it("fail-closed: rejects decoded audio that exceeds the shared audio cap", async () => {
+    const decodedPayload = Buffer.alloc(16 * MiB + 1, 0x61);
+    const body = JSON.stringify({
+      result: { audioContent: decodedPayload.toString("base64") },
+    });
+    queueGuardedResponse(new Response(body, { status: 200 }));
+
+    await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toThrow(
+      /Inworld TTS decoded audio too large: 16777217 bytes \(limit: 16777216 bytes\)/,
+    );
+  });
+
   it("regression: a malformed NDJSON line under the cap still throws a bounded parse error", async () => {
     queueGuardedResponse(new Response("this-is-not-json", { status: 200 }));
     await expect(inworldTTS({ text: "test", apiKey: "test-key" })).rejects.toThrow(

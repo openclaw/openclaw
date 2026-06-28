@@ -160,6 +160,7 @@ export async function inworldTTS(params: {
       })
     ).toString("utf8");
     const chunks: Buffer[] = [];
+    let decodedAudioBytes = 0;
 
     for (const line of body.split("\n")) {
       const trimmed = line.trim();
@@ -184,7 +185,15 @@ export async function inworldTTS(params: {
       }
 
       if (parsed.result?.audioContent) {
-        chunks.push(Buffer.from(parsed.result.audioContent, "base64"));
+        const chunk = Buffer.from(parsed.result.audioContent, "base64");
+        const nextDecodedAudioBytes = decodedAudioBytes + chunk.length;
+        if (nextDecodedAudioBytes > MAX_AUDIO_BYTES) {
+          throw new Error(
+            `Inworld TTS decoded audio too large: ${nextDecodedAudioBytes} bytes (limit: ${MAX_AUDIO_BYTES} bytes)`,
+          );
+        }
+        decodedAudioBytes = nextDecodedAudioBytes;
+        chunks.push(chunk);
       }
     }
 
