@@ -11,6 +11,13 @@ type SkillFilterMergeConfig = {
   remove?: ReadonlyArray<unknown>;
 };
 
+type ScopedSkillConfig = {
+  skills?: ReadonlyArray<unknown>;
+  skillsMerge?: SkillFilterMergeConfig;
+};
+
+const topicSkillConfigChains = new WeakMap<object, readonly ScopedSkillConfig[]>();
+
 function normalizeSkillFilter(skillFilter?: ReadonlyArray<unknown>): string[] | undefined {
   if (skillFilter === undefined) {
     return undefined;
@@ -43,15 +50,27 @@ function mergeSkillFilter(
 }
 
 function resolveScopedSkillFilter(
-  scopedConfig:
-    | { skills?: ReadonlyArray<unknown>; skillsMerge?: SkillFilterMergeConfig }
-    | undefined,
+  scopedConfig: ScopedSkillConfig | undefined,
   inheritedFilter?: ReadonlyArray<unknown>,
 ): string[] | undefined {
   if (scopedConfig && Object.hasOwn(scopedConfig, "skills")) {
     return normalizeSkillFilter(scopedConfig.skills);
   }
   return mergeSkillFilter(inheritedFilter, scopedConfig?.skillsMerge);
+}
+
+function resolveTopicSkillFilter(
+  topicConfig: TelegramTopicConfig | undefined,
+  inheritedFilter?: ReadonlyArray<unknown>,
+): string[] | undefined {
+  const chain = topicConfig ? topicSkillConfigChains.get(topicConfig) : undefined;
+  if (!chain) {
+    return resolveScopedSkillFilter(topicConfig, inheritedFilter);
+  }
+  return chain.reduce<string[] | undefined>(
+    (filter, scopedConfig) => resolveScopedSkillFilter(scopedConfig, filter),
+    normalizeSkillFilter(inheritedFilter),
+  );
 }
 
 export function resolveTelegramScopedGroupConfig(
@@ -68,7 +87,9 @@ export function resolveTelegramScopedGroupConfig(
     const defaultConfig = scopedConfig.topics?.["*"];
     const exactConfig = scopedConfig.topics?.[String(messageThreadId)];
     if (defaultConfig && exactConfig) {
-      return { ...defaultConfig, ...exactConfig };
+      const mergedConfig = { ...defaultConfig, ...exactConfig };
+      topicSkillConfigChains.set(mergedConfig, [defaultConfig, exactConfig]);
+      return mergedConfig;
     }
     return exactConfig ?? defaultConfig;
   };
@@ -87,7 +108,7 @@ export function resolveTelegramGroupPromptSettings(params: {
   groupSystemPrompt: string | undefined;
 } {
   const groupSkillFilter = resolveScopedSkillFilter(params.groupConfig);
-  const skillFilter = resolveScopedSkillFilter(params.topicConfig, groupSkillFilter);
+  const skillFilter = resolveTopicSkillFilter(params.topicConfig, groupSkillFilter);
   const systemPromptParts = [
     params.groupConfig?.systemPrompt?.trim() || null,
     params.topicConfig?.systemPrompt?.trim() || null,

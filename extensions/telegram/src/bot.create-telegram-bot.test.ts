@@ -4562,6 +4562,35 @@ describe("createTelegramBot", () => {
     expect(settings.skillFilter).toStrictEqual(["github", "summarize", "project-docs"]);
   });
 
+  it("merges exact topic skill filters over topics star skills", () => {
+    const { groupConfig, topicConfig } = resolveTelegramScopedGroupConfig(
+      {
+        groupPolicy: "open",
+        groups: {
+          "-1001234567890": {
+            skills: ["fallback"],
+            topics: {
+              "*": {
+                skills: ["github", "weather"],
+              },
+              "99": {
+                skillsMerge: {
+                  add: ["project-docs"],
+                  remove: ["weather"],
+                },
+              },
+            },
+          },
+        },
+      },
+      -1001234567890,
+      99,
+    );
+    const settings = resolveTelegramGroupPromptSettings({ groupConfig, topicConfig });
+
+    expect(settings.skillFilter).toStrictEqual(["github", "project-docs"]);
+  });
+
   it("keeps explicit topic skills as a replacement ahead of skillsMerge", () => {
     const { groupConfig, topicConfig } = resolveTelegramScopedGroupConfig(
       {
