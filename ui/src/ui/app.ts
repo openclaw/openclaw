@@ -985,6 +985,10 @@ export class OpenClawApp extends LitElement {
     );
   }
 
+  scheduleChatScroll() {
+    scheduleChatScrollInternal(this as unknown as Parameters<typeof scheduleChatScrollInternal>[0]);
+  }
+
   async loadAssistantIdentity(opts?: { sessionKey?: string; expectedSessionKey?: string }) {
     await loadAssistantIdentityInternal(this, opts);
   }
