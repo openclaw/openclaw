@@ -1,7 +1,7 @@
 /**
  * Tests agent harness runtime helpers and task dispatch behavior.
  */
-import { beforeEach, describe, expect, expectTypeOf, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   attachModelProviderRequestTransport,
   buildAgentHarnessUserInputAnswers,
@@ -10,7 +10,6 @@ import {
   formatAgentHarnessUserInputPrompt,
   getModelProviderRequestTransport,
   type AgentHarnessTerminalOutcomeClassification,
-  type PreemptiveCompactionDecision,
 } from "./agent-harness-runtime.js";
 
 const { loadResearchAutocapture } = vi.hoisted(() => ({
@@ -167,21 +166,6 @@ describe("agent harness runtime SDK facade", () => {
     expect(getModelProviderRequestTransport(model)).toEqual({
       auth: { mode: "header", headerName: "x-api-key", value: "secret" },
     });
-  });
-
-  it("keeps preemptive compaction decisions source-compatible without tool diagnostics", () => {
-    const decision = {
-      route: "fits",
-      shouldCompact: false,
-      estimatedPromptTokens: 10,
-      promptBudgetBeforeReserve: 100,
-      overflowTokens: 0,
-      toolResultReducibleChars: 0,
-      effectiveReserveTokens: 50,
-    } satisfies PreemptiveCompactionDecision;
-
-    expectTypeOf(decision).toMatchTypeOf<PreemptiveCompactionDecision>();
-    expect(decision.route).toBe("fits");
   });
 });
 

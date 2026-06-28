@@ -9,8 +9,6 @@ import {
   MIN_PROMPT_BUDGET_TOKENS,
 } from "../../agent-compaction-constants.js";
 import { SAFETY_MARGIN } from "../../compaction.js";
-import { projectOpenAITools } from "../../openai-tool-projection.js";
-import { normalizeOpenAIStrictToolParameters } from "../../openai-tool-schema.js";
 import type { AgentMessage, BashExecutionMessage } from "../../runtime/index.js";
 import {
   BRANCH_SUMMARY_PREFIX,
@@ -34,20 +32,11 @@ const IMAGE_BLOCK_TOKENS = 2_000;
 const TRUNCATION_ROUTE_BUFFER_TOKENS = 512;
 const LIGHTWEIGHT_MIN_PROMPT_BUDGET_RATIO = 0.875;
 
-type ToolSchemaTokenPressureSource = {
-  name?: unknown;
-  description?: unknown;
-  parameters?: unknown;
-};
-type ToolSchemaTokenPressurePayload = "raw" | "openai-completions" | "openai-responses";
-type ProviderToolSchemaTokenPressurePayload = Exclude<ToolSchemaTokenPressurePayload, "raw">;
-
 /** Pre-prompt routing decision plus the budget facts used to explain it in logs and session state. */
 export type PreemptiveCompactionDecision = {
   route: PreemptiveCompactionRoute;
   shouldCompact: boolean;
   estimatedPromptTokens: number;
-  toolSchemaTokens?: number;
   pressureSource?: string;
   promptBudgetBeforeReserve: number;
   overflowTokens: number;
@@ -160,105 +149,6 @@ function estimateContentTokenPressure(content: unknown): number {
     return estimateJsonPayloadTokenPressure(content);
   }
   return 0;
-}
-
-function estimateToolSchemaTokenPressure(
-  tools: readonly ToolSchemaTokenPressureSource[] | undefined,
-  payloadShape: ToolSchemaTokenPressurePayload = "raw",
-): number {
-  if (!tools?.length) {
-    return 0;
-  }
-  const providerPayload =
-    payloadShape === "raw"
-      ? tools.map((tool) => ({
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.parameters,
-        }))
-      : buildOpenAIToolPressurePayload(tools, payloadShape);
-  return Math.max(
-    0,
-    Math.ceil(
-      estimateJsonPayloadTokenPressure(providerPayload, JSON_PAYLOAD_CHARS_PER_TOKEN) *
-        SAFETY_MARGIN,
-    ),
-  );
-}
-
-function buildOpenAIToolPressurePayload(
-  tools: readonly ToolSchemaTokenPressureSource[],
-  payloadShape: ProviderToolSchemaTokenPressurePayload,
-): unknown[] {
-  const projection = projectOpenAITools(
-    tools.map((tool) => ({
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters ?? {},
-    })),
-  );
-  return sortToolPressurePayloadByName(projection.tools).map((tool) => {
-    if (payloadShape === "openai-completions") {
-      return {
-        type: "function",
-        function: {
-          name: tool.name,
-          description: tool.description,
-          parameters: normalizeOpenAIStrictToolParameters(tool.parameters, false),
-          strict: false,
-        },
-      };
-    }
-    return {
-      type: "function",
-      name: tool.name,
-      description: tool.description,
-      // Native Responses paths can strict-normalize schemas; use that upper-bound
-      // payload so small-window fits leave room for provider tool wrappers.
-      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, true),
-      strict: true,
-    };
-  });
-}
-
-export function resolveOpenAIToolSchemaPayloadForPrecheck(
-  api: unknown,
-): ProviderToolSchemaTokenPressurePayload | undefined {
-  if (api === "openai-completions" || api === "openclaw-openai-completions-transport") {
-    return "openai-completions";
-  }
-  if (
-    api === "openai-responses" ||
-    api === "azure-openai-responses" ||
-    api === "openai-chatgpt-responses" ||
-    api === "openclaw-openai-responses-transport" ||
-    api === "openclaw-azure-openai-responses-transport"
-  ) {
-    return "openai-responses";
-  }
-  return undefined;
-}
-
-function compareToolText(left: string | undefined, right: string | undefined): number {
-  const leftText = left ?? "";
-  const rightText = right ?? "";
-  if (leftText < rightText) {
-    return -1;
-  }
-  if (leftText > rightText) {
-    return 1;
-  }
-  return 0;
-}
-
-function sortToolPressurePayloadByName<T extends { name?: string; description?: string }>(
-  tools: readonly T[],
-): T[] {
-  return tools.toSorted(
-    (left, right) =>
-      compareToolText(left.name, right.name) ||
-      compareToolText(left.description, right.description),
-  );
 }
 
 function isToolResultMessage(message: AgentMessage): boolean {
@@ -395,8 +285,6 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
   contextMode?: "full" | "lightweight";
   contextTokenBudget: number;
   reserveTokens: number;
-  tools?: readonly ToolSchemaTokenPressureSource[];
-  toolSchemaPayload?: ToolSchemaTokenPressurePayload;
   toolResultMaxChars?: number;
   llmBoundaryTokenPressure?: LlmBoundaryTokenPressure;
 }): PreemptiveCompactionDecision {
@@ -434,33 +322,19 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     params.contextMode === "lightweight" &&
     params.messages.length === 0 &&
     (!params.unwindowedMessages || params.unwindowedMessages.length === 0);
-  const toolSchemaTokens = lightweightPromptBudgetEligible
-    ? estimateToolSchemaTokenPressure(params.tools, params.toolSchemaPayload)
-    : 0;
   const lightweightMinPromptBudget = lightweightPromptBudgetEligible
     ? Math.max(
         sharedMinPromptBudget,
-        Math.max(
-          1,
-          Math.floor(contextTokenBudget * LIGHTWEIGHT_MIN_PROMPT_BUDGET_RATIO) - toolSchemaTokens,
-        ),
+        Math.max(1, Math.floor(contextTokenBudget * LIGHTWEIGHT_MIN_PROMPT_BUDGET_RATIO)),
       )
     : sharedMinPromptBudget;
-  const minPromptBudget = Math.min(
-    lightweightMinPromptBudget,
-    Math.max(1, contextTokenBudget - toolSchemaTokens),
-  );
+  const minPromptBudget = lightweightMinPromptBudget;
   // Keep a minimum prompt budget even when reserveTokens asks for most of the context window.
   const effectiveReserveTokens = Math.min(
     requestedReserveTokens,
-    Math.max(0, contextTokenBudget - toolSchemaTokens - minPromptBudget),
+    Math.max(0, contextTokenBudget - minPromptBudget),
   );
-  // Provider requests carry tool schemas next to messages, so prompt budget must leave
-  // room for the exact effective tool surface before accepting a small-window fit.
-  const promptBudgetBeforeReserve = Math.max(
-    1,
-    contextTokenBudget - effectiveReserveTokens - toolSchemaTokens,
-  );
+  const promptBudgetBeforeReserve = Math.max(1, contextTokenBudget - effectiveReserveTokens);
   const overflowTokens = Math.max(0, estimatedPromptTokens - promptBudgetBeforeReserve);
   const toolResultPotential = estimateToolResultReductionPotential({
     messages: messagesForPressure,
@@ -490,7 +364,6 @@ export function shouldPreemptivelyCompactBeforePrompt(params: {
     route,
     shouldCompact: route === "compact_only" || route === "compact_then_truncate",
     estimatedPromptTokens,
-    toolSchemaTokens,
     pressureSource,
     promptBudgetBeforeReserve,
     overflowTokens,
@@ -513,14 +386,12 @@ export function formatPrePromptPrecheckLog(params: {
   sessionFile?: string;
 }): string {
   const { result } = params;
-  const toolSchemaTokens = result.toolSchemaTokens ?? 0;
   return (
     `[context-overflow-precheck] pre-prompt check ` +
     `sessionKey=${params.sessionKey ?? params.sessionId ?? "unknown"} ` +
     `provider=${params.provider}/${params.modelId} ` +
     `route=${result.route} ` +
     `estimatedPromptTokens=${result.estimatedPromptTokens} ` +
-    `toolSchemaTokens=${toolSchemaTokens} ` +
     `pressureSource=${result.pressureSource ?? "unknown"} ` +
     `promptBudgetBeforeReserve=${result.promptBudgetBeforeReserve} ` +
     `overflowTokens=${result.overflowTokens} ` +

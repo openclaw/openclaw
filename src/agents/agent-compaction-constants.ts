@@ -7,6 +7,6 @@ export const MIN_PROMPT_BUDGET_TOKENS = 8_000;
 
 /**
  * Minimum share of the context window that must remain available for prompt
- * content after reserve tokens are subtracted, even on very small local models.
+ * content after reserve tokens are subtracted.
  */
 export const MIN_PROMPT_BUDGET_RATIO = 0.5;

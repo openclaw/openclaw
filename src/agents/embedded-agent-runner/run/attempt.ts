@@ -501,7 +501,6 @@ import {
   buildPrePromptContextBudgetStatus,
   estimateLlmBoundaryTokenPressure,
   formatPrePromptPrecheckLog,
-  resolveOpenAIToolSchemaPayloadForPrecheck,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 import {
@@ -4604,9 +4603,6 @@ export async function runEmbeddedAttempt(
             systemPrompt: systemPromptForHook,
             prompt: llmBoundaryPromptForPrecheck,
           });
-          const toolSchemaPayloadForPrecheck = resolveOpenAIToolSchemaPayloadForPrecheck(
-            params.model.api,
-          );
           let preemptiveCompaction = null;
           const shouldSkipPrecheck =
             skipPromptSubmission ||
@@ -4631,10 +4627,6 @@ export async function runEmbeddedAttempt(
               contextMode: params.bootstrapContextMode,
               contextTokenBudget,
               reserveTokens,
-              tools: [...effectiveTools, ...clientToolDefs],
-              ...(toolSchemaPayloadForPrecheck
-                ? { toolSchemaPayload: toolSchemaPayloadForPrecheck }
-                : {}),
               toolResultMaxChars: promptToolResultMaxChars,
               llmBoundaryTokenPressure: {
                 estimatedPromptTokens: llmBoundaryTokenPressure,

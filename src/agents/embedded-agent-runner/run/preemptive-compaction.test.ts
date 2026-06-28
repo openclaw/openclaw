@@ -10,7 +10,6 @@ let estimateLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js"
 let buildPrePromptContextBudgetStatus: typeof import("./preemptive-compaction.js").buildPrePromptContextBudgetStatus;
 let estimateRenderedLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateRenderedLlmBoundaryTokenPressure;
 let formatPrePromptPrecheckLog: typeof import("./preemptive-compaction.js").formatPrePromptPrecheckLog;
-let resolveOpenAIToolSchemaPayloadForPrecheck: typeof import("./preemptive-compaction.js").resolveOpenAIToolSchemaPayloadForPrecheck;
 let shouldPreemptivelyCompactBeforePrompt: typeof import("./preemptive-compaction.js").shouldPreemptivelyCompactBeforePrompt;
 
 beforeAll(async () => {
@@ -23,7 +22,6 @@ beforeAll(async () => {
     buildPrePromptContextBudgetStatus,
     estimateRenderedLlmBoundaryTokenPressure,
     formatPrePromptPrecheckLog,
-    resolveOpenAIToolSchemaPayloadForPrecheck,
     shouldPreemptivelyCompactBeforePrompt,
   } = await import("./preemptive-compaction.js"));
 });
@@ -75,33 +73,6 @@ function makeAssistantToolCall(args: unknown): AgentMessage {
     ],
     timestamp: timestamp++,
   } as AgentMessage;
-}
-
-function makeToolSchema(descriptionChars: number) {
-  return {
-    name: `tool_${descriptionChars}`,
-    description: "tool schema pressure ".repeat(4),
-    parameters: {
-      type: "object",
-      properties: {
-        payload: {
-          type: "string",
-          description: "x".repeat(descriptionChars),
-        },
-      },
-    },
-  };
-}
-
-function makeSmallClientTool(index: number) {
-  return {
-    name: `client_lookup_${index.toString().padStart(2, "0")}`,
-    description: "lookup",
-    parameters: {
-      type: "object",
-      properties: {},
-    },
-  };
 }
 
 describe("preemptive-compaction", () => {
@@ -186,7 +157,6 @@ describe("preemptive-compaction", () => {
     expect(line).toContain("provider=anthropic/claude-opus-4-6");
     expect(line).toContain("route=fits");
     expect(line).toContain(`estimatedPromptTokens=${result.estimatedPromptTokens}`);
-    expect(line).toContain(`toolSchemaTokens=${result.toolSchemaTokens}`);
     expect(line).toContain(`promptBudgetBeforeReserve=${result.promptBudgetBeforeReserve}`);
     expect(line).toContain("overflowTokens=0");
     expect(line).toContain(`toolResultReducibleChars=${result.toolResultReducibleChars}`);
@@ -376,163 +346,34 @@ describe("preemptive-compaction", () => {
     expect(result.route).toBe("fits");
   });
 
-  it("keeps small-context tool-less lightweight cron prompts out of no-op compact-only recovery", () => {
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [],
-      systemPrompt: "",
-      prompt: "run scheduled task",
-      contextMode: "lightweight",
-      contextTokenBudget: 4_096,
-      reserveTokens: 20_000,
-      tools: [],
-      llmBoundaryTokenPressure: {
-        estimatedPromptTokens: 3_544,
-        source: "reported_lightweight_cron",
-      },
-    });
-
-    expect(result.promptBudgetBeforeReserve).toBeGreaterThanOrEqual(3_544);
-    expect(result.effectiveReserveTokens).toBeLessThan(1_000);
-    expect(result.shouldCompact).toBe(false);
-    expect(result.route).toBe("fits");
-  });
-
-  it("keeps tool-schema pressure inside the lightweight small-context budget", () => {
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [],
-      systemPrompt: "",
-      prompt: "run scheduled task",
-      contextMode: "lightweight",
-      contextTokenBudget: 4_096,
-      reserveTokens: 20_000,
-      tools: [makeToolSchema(1_200)],
-      llmBoundaryTokenPressure: {
-        estimatedPromptTokens: 3_544,
-        source: "reported_lightweight_cron",
-      },
-    });
-
-    expect(result.toolSchemaTokens).toBeGreaterThan(40);
-    expect(result.promptBudgetBeforeReserve).toBeLessThan(3_544);
-    expect(result.shouldCompact).toBe(true);
-    expect(result.route).toBe("compact_only");
-  });
-
-  it.each([["openai-responses"], ["openclaw-azure-openai-responses-transport"]])(
-    "budgets Responses-shaped %s tool payloads before accepting lightweight small-context fits",
-    (api) => {
-      const toolSchemaPayload = resolveOpenAIToolSchemaPayloadForPrecheck(api);
-      if (!toolSchemaPayload) {
-        throw new Error(`missing tool schema payload for ${api}`);
-      }
-      const tools = Array.from({ length: 8 }, (_, index) => makeSmallClientTool(index));
-      const rawResult = shouldPreemptivelyCompactBeforePrompt({
-        messages: [],
-        systemPrompt: "",
-        prompt: "run scheduled task",
-        contextMode: "lightweight",
-        contextTokenBudget: 4_096,
-        reserveTokens: 20_000,
-        tools,
-        llmBoundaryTokenPressure: {
-          estimatedPromptTokens: 3_250,
-          source: "reported_lightweight_cron",
-        },
-      });
-      const responsesResult = shouldPreemptivelyCompactBeforePrompt({
-        messages: [],
-        systemPrompt: "",
-        prompt: "run scheduled task",
-        contextMode: "lightweight",
-        contextTokenBudget: 4_096,
-        reserveTokens: 20_000,
-        tools,
-        toolSchemaPayload,
-        llmBoundaryTokenPressure: {
-          estimatedPromptTokens: 3_250,
-          source: "reported_lightweight_cron",
-        },
-      });
-
-      expect(rawResult.route).toBe("fits");
-      expect(responsesResult.toolSchemaTokens).toBeGreaterThan(rawResult.toolSchemaTokens ?? 0);
-      expect(responsesResult.promptBudgetBeforeReserve).toBeLessThan(3_250);
-      expect(responsesResult.shouldCompact).toBe(true);
-      expect(responsesResult.route).toBe("compact_only");
+  it.each([
+    {
+      name: "admits the reported empty-history lightweight cron prompt",
+      contextMode: "lightweight" as const,
+      messages: () => [],
+      expectedPromptBudget: 3_584,
+      expectedRoute: "fits" as const,
     },
-  );
-
-  it.each([["openai-completions"], ["openclaw-openai-completions-transport"]])(
-    "budgets Completions-shaped %s tool payloads before accepting lightweight small-context fits",
-    (api) => {
-      const toolSchemaPayload = resolveOpenAIToolSchemaPayloadForPrecheck(api);
-      if (!toolSchemaPayload) {
-        throw new Error(`missing tool schema payload for ${api}`);
-      }
-      const tools = Array.from({ length: 6 }, (_, index) => makeSmallClientTool(index));
-      const rawResult = shouldPreemptivelyCompactBeforePrompt({
-        messages: [],
-        systemPrompt: "",
-        prompt: "run scheduled task",
-        contextMode: "lightweight",
-        contextTokenBudget: 4_096,
-        reserveTokens: 20_000,
-        tools,
-        llmBoundaryTokenPressure: {
-          estimatedPromptTokens: 3_250,
-          source: "reported_lightweight_cron",
-        },
-      });
-      const completionsResult = shouldPreemptivelyCompactBeforePrompt({
-        messages: [],
-        systemPrompt: "",
-        prompt: "run scheduled task",
-        contextMode: "lightweight",
-        contextTokenBudget: 4_096,
-        reserveTokens: 20_000,
-        tools,
-        toolSchemaPayload,
-        llmBoundaryTokenPressure: {
-          estimatedPromptTokens: 3_250,
-          source: "reported_lightweight_cron",
-        },
-      });
-
-      expect(rawResult.route).toBe("fits");
-      expect(completionsResult.toolSchemaTokens).toBeGreaterThan(rawResult.toolSchemaTokens ?? 0);
-      expect(completionsResult.promptBudgetBeforeReserve).toBeLessThan(3_250);
-      expect(completionsResult.shouldCompact).toBe(true);
-      expect(completionsResult.route).toBe("compact_only");
+    {
+      name: "keeps lightweight shared-history prompts on the shared prompt floor",
+      contextMode: "lightweight" as const,
+      messages: () => [makeAssistantHistory("existing shared heartbeat conversation")],
+      expectedPromptBudget: 2_048,
+      expectedRoute: "compact_only" as const,
     },
-  );
-
-  it("keeps lightweight shared-history prompts on the shared prompt floor", () => {
+    {
+      name: "keeps full-context small models on the shared prompt floor",
+      contextMode: "full" as const,
+      messages: () => [],
+      expectedPromptBudget: 2_048,
+      expectedRoute: "compact_only" as const,
+    },
+  ])("$name", ({ contextMode, messages, expectedPromptBudget, expectedRoute }) => {
     const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [makeAssistantHistory("existing shared heartbeat conversation")],
-      systemPrompt: "",
-      prompt: "run heartbeat",
-      contextMode: "lightweight",
-      contextTokenBudget: 4_096,
-      reserveTokens: 20_000,
-      tools: [makeToolSchema(1_200)],
-      llmBoundaryTokenPressure: {
-        estimatedPromptTokens: 3_544,
-        source: "reported_shared_heartbeat",
-      },
-    });
-
-    expect(result.toolSchemaTokens).toBe(0);
-    expect(result.promptBudgetBeforeReserve).toBe(2_048);
-    expect(result.shouldCompact).toBe(true);
-    expect(result.route).toBe("compact_only");
-  });
-
-  it("keeps full-context small models on the shared prompt floor", () => {
-    const result = shouldPreemptivelyCompactBeforePrompt({
-      messages: [],
+      messages: messages(),
       systemPrompt: "",
       prompt: "run scheduled task",
-      contextMode: "full",
+      contextMode,
       contextTokenBudget: 4_096,
       reserveTokens: 20_000,
       llmBoundaryTokenPressure: {
@@ -541,9 +382,9 @@ describe("preemptive-compaction", () => {
       },
     });
 
-    expect(result.promptBudgetBeforeReserve).toBe(2_048);
-    expect(result.shouldCompact).toBe(true);
-    expect(result.route).toBe("compact_only");
+    expect(result.promptBudgetBeforeReserve).toBe(expectedPromptBudget);
+    expect(result.shouldCompact).toBe(expectedRoute === "compact_only");
+    expect(result.route).toBe(expectedRoute);
   });
 
   it("keeps the requested reserve when it leaves enough prompt budget", () => {
