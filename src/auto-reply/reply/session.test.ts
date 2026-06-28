@@ -30,10 +30,10 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import { drainFormattedSystemEvents } from "./session-updates.js";
 import { persistSessionUsageUpdate } from "./session-usage.js";
 import { initSessionState } from "./session.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
 
 const sessionForkMocks = vi.hoisted(() => ({
   forkSessionFromParent: vi.fn(),
@@ -3850,6 +3850,68 @@ describe("initSessionState preserves behavior overrides across /new and /reset",
       expect(result.sessionId).toBe(existingSessionId);
       expect(result.previousSessionEntry).toBeUndefined();
       expect(result.sessionEntry.sessionStartedAt).toBe(sessionStartedAt);
+      expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
+      const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
+        entry.startsWith(`${existingSessionId}.jsonl.reset.`),
+      );
+      expect(archived).toHaveLength(0);
+    } finally {
+      operation?.complete();
+      vi.useRealTimers();
+    }
+  });
+
+  it("defers closed thread rollover while the same session has an active run", async () => {
+    vi.useFakeTimers();
+    const existingSessionId = "active-closed-thread-session";
+    let operation: ReturnType<typeof replyRunRegistry.begin> | undefined;
+    try {
+      vi.setSystemTime(new Date(2026, 0, 18, 5, 0, 0));
+      const storePath = await createStorePath("openclaw-active-closed-thread-");
+      const sessionKey = "agent:main:discord:channel:active-closed-thread";
+      const transcriptPath = path.join(path.dirname(storePath), `${existingSessionId}.jsonl`);
+      const now = Date.now();
+
+      await writeSessionStoreFast(storePath, {
+        [sessionKey]: {
+          sessionId: existingSessionId,
+          updatedAt: now,
+          sessionStartedAt: now,
+          lastInteractionAt: now,
+          sessionClosedAt: now,
+        },
+      });
+      await fs.writeFile(transcriptPath, '{"type":"message"}\n', "utf8");
+      operation = replyRunRegistry.begin({
+        sessionKey,
+        sessionId: existingSessionId,
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+
+      const cfg = { session: { store: storePath } } as OpenClawConfig;
+      const result = await initSessionState({
+        ctx: {
+          Body: "hello while active",
+          RawBody: "hello while active",
+          CommandBody: "hello while active",
+          From: "user-active-closed-thread",
+          To: "bot",
+          ChatType: "channel",
+          MessageThreadId: "active-closed-thread",
+          SessionKey: sessionKey,
+          Provider: "discord",
+          Surface: "discord",
+        },
+        cfg,
+        commandAuthorized: true,
+      });
+
+      expect(result.isNewSession).toBe(false);
+      expect(result.resetTriggered).toBe(false);
+      expect(result.sessionId).toBe(existingSessionId);
+      expect(result.previousSessionEntry).toBeUndefined();
+      expect(result.sessionEntry.sessionClosedAt).toBe(now);
       expect(await fs.stat(transcriptPath).catch(() => null)).not.toBeNull();
       const archived = (await fs.readdir(path.dirname(storePath))).filter((entry) =>
         entry.startsWith(`${existingSessionId}.jsonl.reset.`),
