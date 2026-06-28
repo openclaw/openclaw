@@ -250,4 +250,77 @@ describe("plugin health status formatting", () => {
     expect(text).toContain("- WARN legacy-plugin [hook-only]: uses a compatibility shim");
     expect(text).toContain("Full inventory: /plugins list");
   });
+
+  it("separates runtime-loaded plugins from installed-but-not-active inventory", () => {
+    const text = formatDetailedPluginHealth({
+      plugins: [
+        { id: "runtime-ok", status: "loaded", enabled: true },
+        // Disk scan marks this "loaded" from config, but the runtime registry
+        // never loaded it (absent from runtimeLoadedPluginIds).
+        { id: "installed-idle", status: "loaded", enabled: true },
+        { id: "broken", status: "error", enabled: true, failurePhase: "load", error: "boom" },
+        { id: "off", status: "disabled", enabled: false },
+      ],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["runtime-ok"],
+    });
+
+    expect(text).toContain("Loaded: 1 (runtime-ok)");
+    expect(text).toContain("Installed (not active): 1 (installed-idle)");
+    expect(text).toContain("Disabled: 1");
+    // The errored plugin stays in Errors and the disabled plugin in Disabled;
+    // neither leaks into the installed inventory line.
+    expect(text).toContain("- broken [load]: boom");
+    expect(text).not.toContain("Loaded: 2");
+  });
+
+  it("falls back to status-loaded when runtime provenance is absent", () => {
+    const text = formatDetailedPluginHealth({
+      plugins: [
+        { id: "a", status: "loaded", enabled: true },
+        { id: "b", status: "loaded", enabled: true },
+      ],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+    });
+
+    expect(text).toContain("Loaded: 2 (a, b)");
+    expect(text).not.toContain("Installed (not active):");
+  });
+
+  it("keeps installed-only loaded plugins out of Loaded after merge", () => {
+    const snapshot = mergeStatusPluginHealthSnapshots(
+      {
+        plugins: [{ id: "installed-idle", status: "loaded", enabled: true }],
+        diagnostics: [],
+        contextEngineQuarantines: [],
+      },
+      {
+        plugins: [{ id: "runtime-ok", status: "loaded", enabled: true }],
+        diagnostics: [],
+        contextEngineQuarantines: [],
+        runtimeLoadedPluginIds: ["runtime-ok"],
+      },
+    );
+
+    expect(snapshot.runtimeLoadedPluginIds).toEqual(["runtime-ok"]);
+    const text = formatDetailedPluginHealth(snapshot);
+    expect(text).toContain("Loaded: 1 (runtime-ok)");
+    expect(text).toContain("Installed (not active): 1 (installed-idle)");
+  });
+
+  it("lists runtime-loaded plugins even when absent from the merged plugin records", () => {
+    // A plugin live only via a pinned runtime surface is in runtimeLoadedPluginIds
+    // but not in snapshot.plugins; it must still show under Loaded, not be dropped.
+    const text = formatDetailedPluginHealth({
+      plugins: [{ id: "active-ok", status: "loaded", enabled: true }],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["active-ok", "pinned-only"],
+    });
+
+    expect(text).toContain("Loaded: 2 (active-ok, pinned-only)");
+    expect(text).not.toContain("Installed (not active):");
+  });
 });

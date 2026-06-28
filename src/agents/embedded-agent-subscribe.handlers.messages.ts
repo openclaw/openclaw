@@ -942,9 +942,12 @@ export function handleMessageEnd(
         ctx.params.sourceReplyDeliveryMode === "message_tool_only" &&
         ctx.builtinToolNames?.has("message") === true,
     }) ?? rawVisibleText;
+  const finalVisibleText = ctx.params.enforceFinalTag
+    ? ctx.stripBlockTags(visibleText, { thinking: false, final: false }, { final: true })
+    : visibleText;
 
   const text = resolveSilentReplyFallbackText({
-    text: ctx.stripBlockTags(visibleText, { thinking: false, final: false }, { final: true }),
+    text: finalVisibleText,
     messagingToolSentTexts: ctx.state.messagingToolSentTexts,
   });
   const rawThinking =

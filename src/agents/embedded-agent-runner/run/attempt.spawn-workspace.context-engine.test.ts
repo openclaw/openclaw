@@ -2285,6 +2285,36 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(runLlmInput).not.toHaveBeenCalled();
   });
 
+  it("flushes the embedded session transcript before afterTurn", async () => {
+    const events: string[] = [];
+    const afterTurn = vi.fn(async () => {
+      events.push("afterTurn");
+    });
+    hoisted.sessionManager.rewriteFile.mockImplementation(() => {
+      events.push("flush");
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({ afterTurn }),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        currentInboundEventKind: "room_event",
+        currentInboundContext: { text: "[OpenClaw room event]" },
+        suppressNextUserMessagePersistence: true,
+        transcriptPrompt: "",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [...session.messages, doneMessage];
+      },
+    });
+
+    const afterTurnIndex = events.indexOf("afterTurn");
+    expect(afterTurn).toHaveBeenCalledTimes(1);
+    expect(afterTurnIndex).not.toBe(-1);
+    expect(events.slice(0, afterTurnIndex)).toContain("flush");
+  });
+
   it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {
     const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const afterTurn = vi.fn(async (_params: { sessionKey?: string }) => {});

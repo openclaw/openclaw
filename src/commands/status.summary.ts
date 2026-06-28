@@ -254,8 +254,10 @@ export async function getStatusSummary(
     resolveContextTokensForModel,
     resolveSessionRuntimeLabel,
     resolveSessionModelRef,
+    waitForContextWindowCacheLoad,
   } = await loadStatusSummaryRuntimeModule();
   const cfg = options.config ?? getRuntimeConfig();
+  await waitForContextWindowCacheLoad();
   const contextSourceConfig =
     options.sourceConfig !== undefined
       ? options.sourceConfig

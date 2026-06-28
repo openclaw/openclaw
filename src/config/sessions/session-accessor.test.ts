@@ -97,6 +97,27 @@ describe("session accessor file-backed seam", () => {
     });
   });
 
+  it("keeps case-distinct Matrix sessions separate under nested agent ownership", async () => {
+    const mixedKey = "agent:voice:agent:other:matrix:channel:!RoomAbC:example.org";
+    const lowerKey = "agent:voice:agent:other:matrix:channel:!Roomabc:example.org";
+
+    await upsertSessionEntry(
+      { sessionKey: mixedKey, storePath },
+      { sessionId: "mixed-session", updatedAt: 10 },
+    );
+    await upsertSessionEntry(
+      { sessionKey: lowerKey, storePath },
+      { sessionId: "lower-session", updatedAt: 20 },
+    );
+
+    expect(loadSessionEntry({ sessionKey: mixedKey, storePath })?.sessionId).toBe("mixed-session");
+    expect(loadSessionEntry({ sessionKey: lowerKey, storePath })?.sessionId).toBe("lower-session");
+    expect(listSessionEntries({ storePath }).map((entry) => entry.sessionKey)).toEqual([
+      mixedKey,
+      lowerKey,
+    ]);
+  });
+
   it("marks abort targets while canonicalizing legacy session keys", async () => {
     fs.writeFileSync(
       storePath,
@@ -1337,7 +1358,7 @@ describe("session accessor file-backed seam", () => {
     ).toHaveLength(1);
   });
 
-  it("persists reset lifecycle entry changes with transcript replay and cleanup", async () => {
+  it("persists reset lifecycle entry changes with transcript replay and archive", async () => {
     const now = Date.now();
     const sessionKey = "agent:main:main";
     const previousTranscript = path.join(tempDir, "previous-session.jsonl");
@@ -1389,6 +1410,16 @@ describe("session accessor file-backed seam", () => {
     expect(result.replayedMessages).toBe(2);
     expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject(nextEntry);
     expect(fs.existsSync(previousTranscript)).toBe(false);
+    const archivedPreviousTranscripts = fs
+      .readdirSync(tempDir)
+      .filter((file) => file.startsWith("previous-session.jsonl.reset."));
+    expect(archivedPreviousTranscripts).toHaveLength(1);
+    const [archivedPreviousTranscriptName] = archivedPreviousTranscripts;
+    const archivedPreviousTranscript = path.join(tempDir, archivedPreviousTranscriptName);
+    expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain(
+      '"id":"previous-session"',
+    );
+    expect(fs.readFileSync(archivedPreviousTranscript, "utf-8")).toContain('"content":"hi"');
     expect(fs.readFileSync(nextTranscript, "utf-8")).toContain('"content":"hello"');
   });
 
