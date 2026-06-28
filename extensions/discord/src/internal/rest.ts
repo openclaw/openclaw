@@ -95,6 +95,7 @@ const defaultLaneOptions: Record<RestRequestPriority, { staleAfterMs?: number; w
 // (bulk message/member fetches stay in the low hundreds of KB) so a controlled
 // or hijacked endpoint cannot flood the body into an unbounded buffer (OOM).
 const DISCORD_REST_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024;
+const GZIP_MAGIC = [0x1f, 0x8b] as const;
 
 async function readResponseBodyText(response: Response, idleTimeoutMs: number): Promise<string> {
   const buffer = await readResponseWithLimit(response, DISCORD_REST_RESPONSE_BODY_MAX_BYTES, {
@@ -124,7 +125,7 @@ function decodeResponseBody(buffer: Buffer): string {
   if (!buffer.byteLength) {
     return "";
   }
-  if (buffer[0] === 0x1f && buffer[1] === 0x8b) {
+  if (buffer[0] === GZIP_MAGIC[0] && buffer[1] === GZIP_MAGIC[1]) {
     return gunzipSync(buffer).toString("utf8");
   }
   return buffer.toString("utf8");
