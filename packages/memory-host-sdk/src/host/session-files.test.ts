@@ -9,6 +9,7 @@ import {
   listSessionFilesForAgent,
   listSessionTranscriptCorpusEntriesForAgent,
   loadSessionTranscriptClassificationForAgent,
+  normalizeSessionTranscriptPathForComparison,
   parseCanonicalSessionSyncTargetFromPath,
   resolveSessionIdentityForTranscriptFile,
   resolveSessionFileForSyncTarget,
@@ -40,12 +41,30 @@ let tmpDir: string;
 let envSnapshot: ReturnType<typeof captureStateDirEnv> | undefined;
 let fixtureId = 0;
 
+// On Windows the session-state sqlite handle can briefly keep fixture files
+// locked after a test, so `fs.rmSync(..., { force: true })` can surface EBUSY
+// during teardown. Retry removal a few times before giving up; the test
+// assertions already passed by this point, so a transient lock is not a failure.
+function removeFixtureDir(target: string): void {
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    try {
+      fsSync.rmSync(target, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (code !== "EBUSY" && code !== "ENOTEMPTY" && code !== "EPERM") {
+        throw error;
+      }
+    }
+  }
+}
+
 beforeAll(() => {
   fixtureRoot = fsSync.mkdtempSync(path.join(os.tmpdir(), "session-entry-test-"));
 });
 
 afterAll(() => {
-  fsSync.rmSync(fixtureRoot, { recursive: true, force: true });
+  removeFixtureDir(fixtureRoot);
 });
 
 beforeEach(() => {
@@ -147,7 +166,7 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     const classification = loadSessionTranscriptClassificationForAgent("main");
 
     expect(classification.cronRunTranscriptPaths).toEqual(
-      new Set([activePath, archivePath].map((filePath) => path.resolve(filePath))),
+      new Set([activePath, archivePath].map(normalizeSessionTranscriptPathForComparison)),
     );
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toContainEqual({
       agentId: "main",
@@ -209,8 +228,8 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
 
     expect(classification.cronRunTranscriptPaths).toEqual(
       new Set(
-        [cronPath, spawnedChildPath, keyedChildPath, orphanChildPath].map((filePath) =>
-          path.resolve(filePath),
+        [cronPath, spawnedChildPath, keyedChildPath, orphanChildPath].map(
+          normalizeSessionTranscriptPathForComparison,
         ),
       ),
     );
@@ -261,7 +280,9 @@ describe("listSessionTranscriptCorpusEntriesForAgent", () => {
     const expectedArchivePath = archivePath;
     const classification = loadSessionTranscriptClassificationForAgent("main");
 
-    expect(classification.cronRunTranscriptPaths).toEqual(new Set([expectedArchivePath]));
+    expect(classification.cronRunTranscriptPaths).toEqual(
+      new Set([normalizeSessionTranscriptPathForComparison(expectedArchivePath)]),
+    );
     await expect(listSessionFilesForAgent("main")).resolves.toEqual([expectedArchivePath]);
     await expect(listSessionTranscriptCorpusEntriesForAgent("main")).resolves.toEqual([
       {
