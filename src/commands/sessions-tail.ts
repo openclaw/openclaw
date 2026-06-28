@@ -376,12 +376,14 @@ async function buildTailSelection(params: {
   const sessionsDir = path.dirname(params.storePath);
   let sessionFile: string;
   try {
-    sessionFile = parseSqliteSessionFileMarker(params.entry.sessionFile)
-      ? params.entry.sessionFile
-      : resolveSessionFilePath(sessionId, params.entry, {
-          agentId: params.agentId,
-          sessionsDir,
-        });
+    const entrySessionFile = params.entry.sessionFile?.trim();
+    sessionFile =
+      entrySessionFile && parseSqliteSessionFileMarker(entrySessionFile)
+        ? entrySessionFile
+        : resolveSessionFilePath(sessionId, params.entry, {
+            agentId: params.agentId,
+            sessionsDir,
+          });
   } catch {
     return null;
   }
