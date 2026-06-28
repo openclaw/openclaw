@@ -180,6 +180,12 @@ export type ReadRecentSessionMessagesOptions = {
   allowResetArchiveFallback?: boolean;
 };
 
+export type ReadSessionMessagesPageOptions = {
+  offset: number;
+  maxMessages: number;
+  allowResetArchiveFallback?: boolean;
+};
+
 export type ReadSessionMessagesAsyncOptions =
   | {
       mode: "full";
@@ -750,6 +756,38 @@ export async function readRecentSessionMessagesWithStatsAsync(
     attachOpenClawTranscriptMeta(message, { seq: firstSeq + index }),
   );
   return { messages: messagesWithSeq, totalMessages, transcriptPath: filePath };
+}
+
+export async function readSessionMessagesPageWithStatsAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  opts: ReadSessionMessagesPageOptions,
+  agentId?: string,
+): Promise<ReadRecentSessionMessagesResult> {
+  const filePath =
+    opts.allowResetArchiveFallback === true
+      ? await findExistingTranscriptHistoryPathAsync(sessionId, storePath, sessionFile, agentId)
+      : findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return { messages: [], totalMessages: 0 };
+  }
+  const index = await readSessionTranscriptIndex(filePath);
+  if (!index) {
+    return { messages: [], totalMessages: 0, transcriptPath: filePath };
+  }
+  const totalMessages = index.entries.length;
+  const offset = Math.min(resolveNonNegativeIntegerOption(opts.offset, 0), totalMessages);
+  const maxMessages = resolveNonNegativeIntegerOption(opts.maxMessages, 0);
+  const endExclusive = Math.max(0, totalMessages - offset);
+  const start = Math.max(0, endExclusive - maxMessages);
+  return {
+    messages: index.entries
+      .slice(start, endExclusive)
+      .flatMap((entry) => indexedTranscriptEntryToMessages(entry)),
+    totalMessages,
+    transcriptPath: filePath,
+  };
 }
 
 export function readRecentSessionTranscriptLines(params: {

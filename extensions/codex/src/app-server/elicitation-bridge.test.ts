@@ -157,7 +157,7 @@ function buildConnectorPluginApprovalElicitation(overrides: Record<string, unkno
 function createPluginAppPolicyContext(
   params: {
     allowDestructiveActions?: boolean;
-    destructiveApprovalMode?: "allow" | "deny" | "auto";
+    destructiveApprovalMode?: "allow" | "deny" | "auto" | "always";
     apps?: Array<{ appId: string; pluginName: string; mcpServerNames: string[] }>;
   } = {},
 ) {
@@ -1014,6 +1014,96 @@ describe("Codex app-server elicitation bridge", () => {
     });
     expect(gatewayToolArg(0, 2)).toMatchObject({
       allowedDecisions: ["allow-once", "deny"],
+    });
+  });
+
+  it("does not expose allow-always for always plugin policy", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({ id: "plugin:approval-calendar-always-policy", status: "accepted" })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-calendar-always-policy",
+        decision: "allow-once",
+      });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildConnectorPluginApprovalElicitation({
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          source: "connector",
+          connector_id: "connector_google_calendar",
+          connector_name: "Google Calendar",
+          persist: ["session", "always"],
+          tool_title: "create_event",
+        },
+      }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({
+        allowDestructiveActions: true,
+        destructiveApprovalMode: "always",
+        apps: [
+          {
+            appId: "connector_google_calendar",
+            pluginName: "google-calendar",
+            mcpServerNames: [],
+          },
+        ],
+      }),
+    });
+
+    expect(result).toEqual({
+      action: "accept",
+      content: null,
+      _meta: null,
+    });
+    expect(gatewayToolArg(0, 2)).toMatchObject({
+      allowedDecisions: ["allow-once", "deny"],
+    });
+  });
+
+  it("maps unexpected allow-always decisions to one-shot for always plugin policy", async () => {
+    mockCallGatewayTool
+      .mockResolvedValueOnce({
+        id: "plugin:approval-calendar-unexpected-always",
+        status: "accepted",
+      })
+      .mockResolvedValueOnce({
+        id: "plugin:approval-calendar-unexpected-always",
+        decision: "allow-always",
+      });
+
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildConnectorPluginApprovalElicitation({
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          source: "connector",
+          connector_id: "connector_google_calendar",
+          connector_name: "Google Calendar",
+          persist: ["session", "always"],
+          tool_title: "create_event",
+        },
+      }),
+      paramsForRun: createParams(),
+      threadId: "thread-1",
+      turnId: "turn-1",
+      pluginAppPolicyContext: createPluginAppPolicyContext({
+        allowDestructiveActions: true,
+        destructiveApprovalMode: "always",
+        apps: [
+          {
+            appId: "connector_google_calendar",
+            pluginName: "google-calendar",
+            mcpServerNames: [],
+          },
+        ],
+      }),
+    });
+
+    expect(result).toEqual({
+      action: "accept",
+      content: null,
+      _meta: null,
     });
   });
 

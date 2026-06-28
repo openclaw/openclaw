@@ -452,8 +452,17 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
     const activeChunkIndexAfterStop = useFinalTextRecovery
       ? clampActiveChunkIndex()
       : activeChunkIndex;
-    const activeChunkAfterStop = chunks[activeChunkIndexAfterStop] ?? activeChunk;
-    const remainingChunksAfterStop = chunks.slice(activeChunkIndexAfterStop + 1);
+    const deliveredStreamTextAfterStop = stream.lastDeliveredText?.();
+    const retainedOriginalActiveChunkAfterStop =
+      activeChunkIndexAfterStop > activeChunkIndex &&
+      deliveredStreamTextAfterStop === activeChunk.trimEnd();
+    // `activeChunkIndex` is advanced by retained preview callbacks. If callbacks
+    // outrun the stream's delivered text, trust the delivered text and replay the gap.
+    const effectiveActiveChunkIndexAfterStop = retainedOriginalActiveChunkAfterStop
+      ? activeChunkIndex
+      : activeChunkIndexAfterStop;
+    const activeChunkAfterStop = chunks[effectiveActiveChunkIndexAfterStop] ?? activeChunk;
+    const remainingChunksAfterStop = chunks.slice(effectiveActiveChunkIndexAfterStop + 1);
 
     const messageId = stream.messageId();
     if (typeof messageId !== "number") {
@@ -468,16 +477,12 @@ export function createLaneTextDeliverer(params: CreateLaneTextDelivererParams) {
       return undefined;
     }
 
-    const deliveredStreamTextAfterStop = stream.lastDeliveredText?.();
     const activeChunkTextAfterStop = activeChunkAfterStop.trimEnd();
-    const retainedActiveChunkAfterStop =
-      activeChunkIndexAfterStop !== activeChunkIndex &&
-      deliveredStreamTextAfterStop === activeChunk.trimEnd();
     if (
       finalizePreview &&
       deliveredStreamTextAfterStop !== undefined &&
       deliveredStreamTextAfterStop !== activeChunkTextAfterStop &&
-      !retainedActiveChunkAfterStop
+      !retainedOriginalActiveChunkAfterStop
     ) {
       if (
         useFinalTextRecovery &&
