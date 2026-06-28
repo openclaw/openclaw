@@ -81,6 +81,7 @@ vi.mock("./status.summary.runtime.js", () => ({
     })),
     resolveSessionRuntimeLabel: vi.fn(() => "OpenClaw Default"),
     resolveContextTokensForModel: vi.fn(() => 200_000),
+    waitForContextWindowCacheLoad: vi.fn(async () => "idle" as const),
   },
 }));
 
@@ -359,6 +360,7 @@ describe("getStatusSummary", () => {
   it("does not trigger async context warmup while building status summaries", async () => {
     await getStatusSummary();
 
+    expect(statusSummaryRuntime.waitForContextWindowCacheLoad).toHaveBeenCalledTimes(1);
     const contextCall = vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock
       .calls[0]?.[0];
     expect(contextCall?.allowAsyncLoad).toBe(false);

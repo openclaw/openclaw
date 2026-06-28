@@ -9466,7 +9466,7 @@ describe("openai transport stream", () => {
     expect(output.content.some((block) => block.type === "thinking")).toBe(false);
   });
 
-  it("strips content-only reasoning tags from OpenAI-compatible visible text", async () => {
+  it("strips content-only closed reasoning tags from OpenAI-compatible visible text", async () => {
     const model = createDeepSeekCompletionsModel();
     const output = createAssistantOutput(model);
 
@@ -9497,6 +9497,41 @@ describe("openai transport stream", () => {
     expect(output.content).toContainEqual({
       type: "text",
       text: "Before  after",
+    });
+    expect(output.content.some((block) => block.type === "thinking")).toBe(false);
+  });
+
+  it("keeps content-only unclosed mid-answer reasoning-looking tags visible", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-content-only-unclosed-tags",
+          object: "chat.completion.chunk" as const,
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content: "Before <think>literal tag text after",
+              },
+              logprobs: null,
+              finish_reason: "stop" as const,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.content).toContainEqual({
+      type: "text",
+      text: "Before <think>literal tag text after",
     });
     expect(output.content.some((block) => block.type === "thinking")).toBe(false);
   });

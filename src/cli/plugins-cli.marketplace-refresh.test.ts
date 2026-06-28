@@ -1,5 +1,8 @@
 // Covers the hosted OpenClaw marketplace feed refresh command.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => {
   const defaultRuntime = {
@@ -33,6 +36,19 @@ vi.mock("../plugins/official-external-plugin-catalog.js", () => ({
     mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries,
 }));
 
+async function createTimelinePath(): Promise<string> {
+  const dir = await mkdtemp(path.join(tmpdir(), "openclaw-marketplace-refresh-"));
+  return path.join(dir, "timeline.jsonl");
+}
+
+async function readTimeline(pathname: string): Promise<Record<string, unknown>[]> {
+  const content = await readFile(pathname, "utf8");
+  return content
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
 describe("plugins marketplace refresh", () => {
   beforeEach(() => {
     mocks.defaultRuntime.error.mockClear();
@@ -41,6 +57,11 @@ describe("plugins marketplace refresh", () => {
     mocks.defaultRuntime.writeJson.mockClear();
     mocks.getRuntimeConfig.mockReset();
     mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockReset();
+    vi.unstubAllEnvs();
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("refreshes the configured marketplace feed and prints JSON", async () => {
@@ -239,5 +260,69 @@ describe("plugins marketplace refresh", () => {
       "Pinned marketplace feed refresh did not accept a fresh hosted payload (source: bundled-fallback).",
     );
     expect(mocks.defaultRuntime.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("emits bounded diagnostics for refresh without raw feed URLs", async () => {
+    const timelinePath = await createTimelinePath();
+    vi.stubEnv("OPENCLAW_DIAGNOSTICS_TIMELINE_PATH", timelinePath);
+    const config = {
+      diagnostics: { flags: ["timeline"] },
+      marketplaces: {
+        feeds: { acme: { url: "https://packages.acme.example/openclaw/feed" } },
+      },
+    };
+    mocks.getRuntimeConfig.mockReturnValue(config);
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
+      source: "hosted",
+      entries: [{ name: "@acme/calendar" }, { name: "@acme/docs" }],
+      feed: {
+        schemaVersion: 1,
+        id: "acme-marketplace",
+        generatedAt: "2026-06-23T00:00:00.000Z",
+        sequence: 7,
+        entries: [],
+      },
+      metadata: {
+        url: "https://user:secret@packages.acme.example/openclaw/feed?token=leak#frag",
+        status: 200,
+        checksum: "feed-sha",
+        etag: '"abc"',
+      },
+    });
+
+    const { runPluginMarketplaceRefreshCommand } = await import("./plugins-cli.runtime.js");
+    await runPluginMarketplaceRefreshCommand({
+      expectedSha256: "feed-sha",
+      feedProfile: "acme",
+      feedUrl: "https://override.example/openclaw/feed?token=override-leak",
+    });
+
+    const [event] = await readTimeline(timelinePath);
+    expect(mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries).toHaveBeenCalledWith(
+      config,
+      expect.objectContaining({
+        feedUrl: "https://override.example/openclaw/feed?token=override-leak",
+      }),
+    );
+    expect(event?.name).toBe("plugins.marketplace.feed.refresh");
+    expect(event?.phase).toBe("plugin-marketplace");
+    expect(event?.attributes).toMatchObject({
+      command: "refresh",
+      entries: 2,
+      expectedSha256Provided: true,
+      feedIdPresent: true,
+      feedProfileProvided: true,
+      feedSequence: 7,
+      feedUrlOverride: true,
+      hasEtag: true,
+      payloadChecksumPresent: true,
+      source: "hosted",
+    });
+    expect(JSON.stringify(event)).not.toContain("packages.acme.example");
+    expect(JSON.stringify(event)).not.toContain("acme-marketplace");
+    expect(JSON.stringify(event)).not.toContain("feed-sha");
+    expect(JSON.stringify(event)).not.toContain("secret");
+    expect(JSON.stringify(event)).not.toContain("token=leak");
+    expect(JSON.stringify(event)).not.toContain("override-leak");
   });
 });
