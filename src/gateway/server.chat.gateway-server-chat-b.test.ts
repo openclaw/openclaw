@@ -107,6 +107,18 @@ function futureFixtureUpdatedAt(): number {
   return Date.now() + 60_000;
 }
 
+function readOpenClawSeq(message: unknown): number | undefined {
+  if (!message || typeof message !== "object" || Array.isArray(message)) {
+    return undefined;
+  }
+  const metadata = (message as Record<string, unknown>)["__openclaw"];
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) {
+    return undefined;
+  }
+  const seq = (metadata as Record<string, unknown>).seq;
+  return typeof seq === "number" ? seq : undefined;
+}
+
 async function writeGatewayConfig(config: Record<string, unknown>) {
   const configPath = process.env.OPENCLAW_CONFIG_PATH;
   if (!configPath) {
@@ -2188,6 +2200,76 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.history offset pages overread context before filtering stale announce replies", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      await connectOk(ws);
+      const sessionDir = await createSessionDir();
+      const sessionStartedAt = Date.parse("2026-05-23T04:02:30.000Z");
+      const announce = {
+        kind: "inter_session",
+        sourceSessionKey: "agent:main:subagent:child",
+        sourceTool: "subagent_announce",
+      };
+      await writeSessionStore({
+        entries: {
+          main: {
+            sessionId: "sess-main",
+            updatedAt: Date.now(),
+            sessionStartedAt,
+          },
+        },
+      });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          timestamp: "2026-05-23T04:03:10.000Z",
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "older visible turn" }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:31.000Z",
+          message: {
+            role: "user",
+            content:
+              "[Inter-session message] sourceSession=agent:main:subagent:child sourceChannel=internal sourceTool=subagent_announce",
+            provenance: announce,
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-16T16:00:33.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "stale announce reply" }],
+          },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-23T04:03:20.000Z",
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "latest visible reply" }],
+          },
+        }),
+      ]);
+
+      const page = await rpcReq<{
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+        nextOffset?: number;
+        hasMore?: boolean;
+      }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 1,
+        offset: 1,
+        maxChars: 100,
+      });
+      expect(page.ok).toBe(true);
+      expect(page.payload?.messages).toEqual([]);
+      expect(JSON.stringify(page.payload)).not.toContain("stale announce reply");
+      expect(page.payload?.nextOffset).toBe(2);
+      expect(page.payload?.hasMore).toBe(true);
+    });
+  });
+
   test("smoke: caps history payload and preserves routing metadata", async () => {
     await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
       const historyMaxBytes = 64 * 1024;
@@ -3083,6 +3165,132 @@ describe("gateway server chat", () => {
       expect(JSON.stringify(messages)).toContain("visible question");
       expect(JSON.stringify(messages)).toContain("visible answer");
       expect(JSON.stringify(messages)).not.toContain("NO_REPLY");
+    });
+  });
+
+  test("chat.history offset pagination advances from the projected first-page boundary", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({ ws, createSessionDir });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "oldest question" }],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "oldest answer" }],
+            timestamp: Date.now() + 1,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "visible boundary" }],
+            timestamp: Date.now() + 2,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "NO_REPLY" }],
+            timestamp: Date.now() + 3,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "visible latest" }],
+            timestamp: Date.now() + 4,
+          },
+        }),
+      ]);
+
+      const firstPage = await rpcReq<{
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+        nextOffset?: number;
+        hasMore?: boolean;
+        totalMessages?: number;
+      }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 2,
+        offset: 0,
+        maxChars: 100,
+      });
+      expect(firstPage.ok).toBe(true);
+      expect(firstPage.payload?.messages?.map(readOpenClawSeq)).toEqual([3, 5]);
+      expect(firstPage.payload?.nextOffset).toBe(3);
+      expect(firstPage.payload?.hasMore).toBe(true);
+      expect(firstPage.payload?.totalMessages).toBe(5);
+
+      const secondPage = await rpcReq<{
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+        hasMore?: boolean;
+        nextOffset?: number;
+      }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 2,
+        offset: firstPage.payload?.nextOffset,
+        maxChars: 100,
+      });
+      expect(secondPage.ok).toBe(true);
+      expect(secondPage.payload?.messages?.map(readOpenClawSeq)).toEqual([1, 2]);
+      expect(JSON.stringify(secondPage.payload?.messages)).not.toContain("visible boundary");
+      expect(secondPage.payload?.hasMore).toBe(false);
+      expect(secondPage.payload?.nextOffset).toBeUndefined();
+    });
+  });
+
+  test("chat.history offset pagination advances from the final budgeted page", async () => {
+    await withGatewayChatHarness(async ({ ws, createSessionDir }) => {
+      const sessionDir = await prepareMainHistoryHarness({
+        ws,
+        createSessionDir,
+        historyMaxBytes: 250,
+      });
+      await writeMainSessionTranscript(sessionDir, [
+        JSON.stringify({
+          message: {
+            role: "user",
+            content: [{ type: "text", text: "older question" }],
+            timestamp: Date.now(),
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "older answer" }],
+            timestamp: Date.now() + 1,
+          },
+        }),
+        JSON.stringify({
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "latest" }],
+            timestamp: Date.now() + 2,
+          },
+        }),
+      ]);
+
+      const firstPage = await rpcReq<{
+        messages?: Array<{ __openclaw?: { seq?: number } }>;
+        nextOffset?: number;
+        hasMore?: boolean;
+        totalMessages?: number;
+      }>(ws, "chat.history", {
+        sessionKey: "main",
+        limit: 3,
+        offset: 0,
+        maxChars: 1_000,
+      });
+      expect(firstPage.ok).toBe(true);
+      expect(firstPage.payload?.messages?.map(readOpenClawSeq)).toEqual([2, 3]);
+      expect(firstPage.payload?.nextOffset).toBe(2);
+      expect(firstPage.payload?.hasMore).toBe(true);
+      expect(firstPage.payload?.totalMessages).toBe(3);
     });
   });
 
