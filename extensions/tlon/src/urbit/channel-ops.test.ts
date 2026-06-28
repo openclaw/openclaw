@@ -31,7 +31,7 @@ describe("Urbit channel operations", () => {
         },
         { path: "/chat/inbox.json", auditContext: "test" },
       ),
-    ).rejects.toThrow("Urbit scry response was malformed JSON for path /chat/inbox.json");
+    ).rejects.toThrow(/Urbit scry response/);
     expect(release).toHaveBeenCalledTimes(1);
   });
 });

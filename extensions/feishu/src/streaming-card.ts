@@ -8,6 +8,7 @@ import {
   resolveDateTimestampMs,
   resolveExpiresAtMsFromDurationSeconds,
 } from "openclaw/plugin-sdk/number-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getFeishuUserAgent } from "./client.js";
@@ -113,25 +114,27 @@ async function getToken(creds: Credentials): Promise<string> {
     policy: { allowedHostnames: resolveAllowedHostnames(creds.domain) },
     auditContext: "feishu.streaming-card.token",
   });
-  if (!response.ok) {
+  try {
+    if (!response.ok) {
+      throw new Error(`Token request failed with HTTP ${response.status}`);
+    }
+    const data = await readProviderJsonResponse<{
+      code: number;
+      msg: string;
+      tenant_access_token?: string;
+      expire?: number;
+    }>(response, "Feishu streaming-card token response");
+    if (data.code !== 0 || !data.tenant_access_token) {
+      throw new Error(`Token error: ${data.msg}`);
+    }
+    tokenCache.set(key, {
+      token: data.tenant_access_token,
+      expiresAt: resolveStreamingTokenExpiresAt(data.expire, now),
+    });
+    return data.tenant_access_token;
+  } finally {
     await release();
-    throw new Error(`Token request failed with HTTP ${response.status}`);
   }
-  const data = (await response.json()) as {
-    code: number;
-    msg: string;
-    tenant_access_token?: string;
-    expire?: number;
-  };
-  await release();
-  if (data.code !== 0 || !data.tenant_access_token) {
-    throw new Error(`Token error: ${data.msg}`);
-  }
-  tokenCache.set(key, {
-    token: data.tenant_access_token,
-    expiresAt: resolveStreamingTokenExpiresAt(data.expire, now),
-  });
-  return data.tenant_access_token;
 }
 
 function truncateSummary(text: string, max = 50): string {
@@ -276,16 +279,19 @@ export class FeishuStreamingSession {
       policy: { allowedHostnames: resolveAllowedHostnames(this.creds.domain) },
       auditContext: "feishu.streaming-card.create",
     });
-    if (!createRes.ok) {
+    let createData: { code: number; msg: string; data?: { card_id: string } };
+    try {
+      if (!createRes.ok) {
+        throw new Error(`Create card request failed with HTTP ${createRes.status}`);
+      }
+      createData = await readProviderJsonResponse<{
+        code: number;
+        msg: string;
+        data?: { card_id: string };
+      }>(createRes, "Feishu streaming-card create response");
+    } finally {
       await releaseCreate();
-      throw new Error(`Create card request failed with HTTP ${createRes.status}`);
     }
-    const createData = (await createRes.json()) as {
-      code: number;
-      msg: string;
-      data?: { card_id: string };
-    };
-    await releaseCreate();
     if (createData.code !== 0 || !createData.data?.card_id) {
       throw new Error(`Create card failed: ${createData.msg}`);
     }

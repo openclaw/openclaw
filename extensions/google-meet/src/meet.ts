@@ -1,4 +1,5 @@
 // Google Meet plugin module implements meet behavior.
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { exportGoogleDriveDocumentText, extractGoogleDriveDocumentId } from "./drive.js";
@@ -289,7 +290,7 @@ async function fetchGoogleMeetJson<T>(params: {
         scopes: [GOOGLE_MEET_MEDIA_SCOPE],
       });
     }
-    return (await response.json()) as T;
+    return await readProviderJsonResponse<T>(response, "Google Meet API response");
   } finally {
     await release();
   }
@@ -354,7 +355,10 @@ export async function fetchGoogleMeetSpace(params: {
         scopes: [GOOGLE_MEET_SPACE_SCOPE],
       });
     }
-    const payload = (await response.json()) as GoogleMeetSpace;
+    const payload = await readProviderJsonResponse<GoogleMeetSpace>(
+      response,
+      "Google Meet spaces.get response",
+    );
     if (!payload.name?.trim()) {
       throw new Error("Google Meet spaces.get response was missing name");
     }
@@ -397,7 +401,10 @@ export async function createGoogleMeetSpace(params: {
             : [GOOGLE_MEET_SPACE_CREATED_SCOPE],
       });
     }
-    const payload = (await response.json()) as GoogleMeetSpace;
+    const payload = await readProviderJsonResponse<GoogleMeetSpace>(
+      response,
+      "Google Meet spaces.create response",
+    );
     if (!payload.name?.trim()) {
       throw new Error("Google Meet spaces.create response was missing name");
     }

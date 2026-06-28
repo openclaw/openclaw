@@ -7,6 +7,7 @@ import { finiteSecondsToTimerSafeMilliseconds } from "openclaw/plugin-sdk/number
  * Replaces axios with native fetch, removes inquirer/ora/chalk in favor of
  * the openclaw WizardPrompter surface.
  */
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { renderQrTerminal } from "./qr-terminal.js";
 import type { FeishuDomain } from "./types.js";
@@ -109,7 +110,7 @@ async function fetchFeishuJson<T>(params: {
   });
   try {
     // Registration poll returns 4xx for pending/error states with a JSON body.
-    return (await response.json()) as T;
+    return await readProviderJsonResponse<T>(response, "Feishu registration response");
   } finally {
     await release();
   }

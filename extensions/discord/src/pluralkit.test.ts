@@ -68,14 +68,14 @@ describe("fetchPluralKitMessageInfo", () => {
     let receivedHeaders: Record<string, string> | undefined;
     const fetcher = vi.fn(async (_url: string, init?: RequestInit) => {
       receivedHeaders = init?.headers as Record<string, string> | undefined;
-      return buildResponse({
-        status: 200,
-        body: {
+      return new Response(
+        JSON.stringify({
           id: "123",
           member: { id: "mem_1", name: "Alex" },
           system: { id: "sys_1", name: "System" },
-        },
-      });
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      );
     });
 
     const result = await fetchPluralKitMessageInfo({
