@@ -50,6 +50,8 @@ async function withSqliteStore<T>(
   entries: Record<string, SessionEntry>,
   run: (storePath: string) => Promise<T>,
 ): Promise<T> {
+  // Use a sessions.json-shaped path so the accessor targets the same SQLite
+  // database layout that command code resolves from configured session stores.
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
   const storePath = path.join(dir, "sessions.json");
   try {
