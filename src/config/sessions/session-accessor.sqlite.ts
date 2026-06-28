@@ -750,7 +750,9 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const store = readSqliteSessionEntryStore(database);
     const removedSessionKeys: string[] = [];
+    const removedEntriesToArchive: SessionEntry[] = [];
     const upsertedEntries: Array<{ sessionKey: string; entry: SessionEntry }> = [];
+    const archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
     let afterCount = 0;
     for (const removal of params.removals ?? []) {
       const sessionKey = removal.sessionKey.trim();
@@ -760,6 +762,9 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
       const entry = store[sessionKey];
       if (!shouldRemoveSqliteSessionEntry(entry, removal)) {
         continue;
+      }
+      if (removal.archiveRemovedTranscript === true) {
+        removedEntriesToArchive.push(entry);
       }
       delete store[sessionKey];
       removedSessionKeys.push(sessionKey);
@@ -800,12 +805,29 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
           : undefined,
         skipMaintenance: params.skipMaintenance,
       });
+      const referencedSessionIds = readReferencedSqliteSessionIds(transactionDb);
+      for (const entry of removedEntriesToArchive) {
+        for (const sessionId of collectSqliteSessionStateIdsForEntry(entry)) {
+          const archived = deleteSqliteSessionStateIfUnreferenced({
+            archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+            database: transactionDb,
+            referencedSessionIds,
+            sessionId,
+          });
+          if (archived) {
+            archivedTranscripts.push(archived);
+          }
+        }
+      }
       afterCount = Object.keys(readSqliteSessionEntryStore(database)).length;
     }, toDatabaseOptions(resolved));
+    emitArchivedSqliteTranscriptUpdates(archivedTranscripts);
     return {
       removedEntries: removedSessionKeys.length,
       removedSessionKeys,
-      archivedTranscriptDirectories: [],
+      archivedTranscriptDirectories: uniqueStrings(
+        archivedTranscripts.map((transcript) => path.dirname(transcript.archivedPath)),
+      ).toSorted(),
       unreferencedArtifacts: null,
       maintenanceReport: null,
       afterCount,

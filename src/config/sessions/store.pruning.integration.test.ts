@@ -19,7 +19,13 @@ vi.mock("../config.js", async () => ({
 
 import { getRuntimeConfig } from "../config.js";
 import { runSessionsCleanup } from "./cleanup-service.js";
-import { listSessionEntries, loadSessionEntry, patchSessionEntry } from "./session-accessor.js";
+import {
+  appendTranscriptMessage,
+  listSessionEntries,
+  loadSessionEntry,
+  loadTranscriptEventsSync,
+  patchSessionEntry,
+} from "./session-accessor.js";
 import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintenance-preserve.js";
 import {
   clearSessionStoreCacheForTest,
@@ -122,6 +128,25 @@ function loadSqliteSessionStore(targetStorePath: string): Record<string, Session
       sessionKey,
       entry,
     ]),
+  );
+}
+
+async function seedSqliteTranscriptMessage(params: {
+  content: string;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+}): Promise<void> {
+  await appendTranscriptMessage(
+    {
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      storePath: params.storePath,
+    },
+    {
+      cwd: path.dirname(params.storePath),
+      message: { role: "user", content: params.content },
+    },
   );
 }
 
@@ -477,25 +502,15 @@ describe("Integration: saveSessionStore with pruning", () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
-    const validTranscript = path.join(testDir, "valid-present.jsonl");
-    const legacyPresentTranscript = path.join(testDir, "legacy-present.jsonl");
-    const emptyPresentTranscript = path.join(testDir, "empty-present.jsonl");
-    const headerOnlyPresentTranscript = path.join(testDir, "header-only-present.jsonl");
-    const userOnlyPresentTranscript = path.join(testDir, "user-only-present.jsonl");
-    const legacyRolePresentTranscript = path.join(testDir, "legacy-role-present.jsonl");
-    const legacyNestedRolePresentTranscript = path.join(
-      testDir,
-      "legacy-nested-role-present.jsonl",
-    );
     await seedSqliteSessionStore(storePath, {
-      "invalid-no-file": { sessionId: "agent:main:main", updatedAt: now },
+      "invalid-no-file": { sessionId: "invalid-no-file", updatedAt: now },
       "invalid-bad-file": {
-        sessionId: "agent:main:main",
+        sessionId: "invalid-bad-file",
         sessionFile: "../outside.jsonl",
         updatedAt: now,
       },
       "invalid-missing-relative-file": {
-        sessionId: "agent:main:main",
+        sessionId: "invalid-missing-relative-file",
         sessionFile: "missing.jsonl",
         updatedAt: now,
       },
@@ -519,29 +534,36 @@ describe("Integration: saveSessionStore with pruning", () => {
         updatedAt: now,
       },
     } satisfies Record<string, SessionEntry>);
-    await fs.writeFile(validTranscript, "valid", "utf-8");
-    await fs.writeFile(legacyPresentTranscript, "legacy", "utf-8");
-    await fs.writeFile(emptyPresentTranscript, "", "utf-8");
-    await fs.writeFile(
-      headerOnlyPresentTranscript,
-      '{"type":"session","id":"header-only-present","cwd":"/tmp"}\n',
-      "utf-8",
-    );
-    await fs.writeFile(
-      userOnlyPresentTranscript,
-      '{"type":"session","id":"user-only-present"}\n{"type":"message","message":{"role":"user","content":"hello"}}\n',
-      "utf-8",
-    );
-    await fs.writeFile(
-      legacyRolePresentTranscript,
-      '{"role":"user","content":"legacy transcript row"}\n',
-      "utf-8",
-    );
-    await fs.writeFile(
-      legacyNestedRolePresentTranscript,
-      '{"message":{"role":"user","content":"legacy nested transcript row"}}\n',
-      "utf-8",
-    );
+    await seedSqliteTranscriptMessage({
+      content: "valid",
+      sessionId: "valid-present",
+      sessionKey: "valid-present",
+      storePath,
+    });
+    await seedSqliteTranscriptMessage({
+      content: "legacy",
+      sessionId: "agent:main:main",
+      sessionKey: "legacy-present-invalid-id",
+      storePath,
+    });
+    await seedSqliteTranscriptMessage({
+      content: "hello",
+      sessionId: "user-only-present",
+      sessionKey: "user-only-present",
+      storePath,
+    });
+    await seedSqliteTranscriptMessage({
+      content: "legacy transcript row",
+      sessionId: "legacy-role-present",
+      sessionKey: "legacy-role-present",
+      storePath,
+    });
+    await seedSqliteTranscriptMessage({
+      content: "legacy nested transcript row",
+      sessionId: "legacy-nested-role-present",
+      sessionKey: "legacy-nested-role-present",
+      storePath,
+    });
 
     const dryRun = await runSessionsCleanup({
       cfg: {},
@@ -586,11 +608,41 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(persisted["agent:main:metadata"]).toMatchObject({ groupActivation: "always" });
     expect(persisted["agent:main:metadata"]?.sessionId).toBe("agent:main:metadata");
     expect(persisted["legacy-present-invalid-id"]?.sessionId).toBe("agent:main:main");
-    await expectPathExists(validTranscript);
-    await expectPathExists(legacyPresentTranscript);
-    await expectPathExists(legacyRolePresentTranscript);
-    await expectPathExists(legacyNestedRolePresentTranscript);
-    await expectPathExists(userOnlyPresentTranscript);
+    expect(
+      loadTranscriptEventsSync({
+        sessionId: "valid-present",
+        sessionKey: "valid-present",
+        storePath,
+      }).length,
+    ).toBeGreaterThan(0);
+    expect(
+      loadTranscriptEventsSync({
+        sessionId: "agent:main:main",
+        sessionKey: "legacy-present-invalid-id",
+        storePath,
+      }).length,
+    ).toBeGreaterThan(0);
+    expect(
+      loadTranscriptEventsSync({
+        sessionId: "legacy-role-present",
+        sessionKey: "legacy-role-present",
+        storePath,
+      }).length,
+    ).toBeGreaterThan(0);
+    expect(
+      loadTranscriptEventsSync({
+        sessionId: "legacy-nested-role-present",
+        sessionKey: "legacy-nested-role-present",
+        storePath,
+      }).length,
+    ).toBeGreaterThan(0);
+    expect(
+      loadTranscriptEventsSync({
+        sessionId: "user-only-present",
+        sessionKey: "user-only-present",
+        storePath,
+      }).length,
+    ).toBeGreaterThan(0);
   });
 
   it("sessions cleanup repairs stale generated sessionFile metadata before pruning", async () => {
@@ -813,7 +865,6 @@ describe("Integration: saveSessionStore with pruning", () => {
     applyEnforcedMaintenanceConfig(mockLoadConfig);
 
     const now = Date.now();
-    const directTranscript = path.join(testDir, "direct-session.jsonl");
     await seedSqliteSessionStore(storePath, {
       "agent:main:main": {
         sessionId: "main-session",
@@ -831,7 +882,12 @@ describe("Integration: saveSessionStore with pruning", () => {
       },
     } satisfies Record<string, SessionEntry>);
     await fs.writeFile(path.join(testDir, "main-session.jsonl"), "main", "utf-8");
-    await fs.writeFile(directTranscript, "direct", "utf-8");
+    await seedSqliteTranscriptMessage({
+      content: "direct",
+      sessionId: "direct-session",
+      sessionKey: "agent:main:telegram:direct:6101296751",
+      storePath,
+    });
 
     const dryRun = await runSessionsCleanup({
       cfg: { session: { dmScope: "main" } },
@@ -845,7 +901,13 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(preview?.dmScopeRetiredKeys.has("agent:main:telegram:direct:6101296751")).toBe(true);
     expect(preview?.dmScopeRetiredKeys.has("agent:main:telegram::direct:malformed")).toBe(false);
     expect(preview?.summary.unreferencedArtifacts.removedFiles).toBe(0);
-    await expectPathExists(directTranscript);
+    expect(
+      loadTranscriptEventsSync({
+        sessionId: "direct-session",
+        sessionKey: "agent:main:telegram:direct:6101296751",
+        storePath,
+      }).length,
+    ).toBeGreaterThan(0);
   });
 
   it("sessions cleanup retires stale direct DM rows and archives their transcripts", async () => {
@@ -873,7 +935,12 @@ describe("Integration: saveSessionStore with pruning", () => {
       },
     } satisfies Record<string, SessionEntry>);
     await fs.writeFile(path.join(testDir, "main-session.jsonl"), "main", "utf-8");
-    await fs.writeFile(directTranscript, "direct", "utf-8");
+    await seedSqliteTranscriptMessage({
+      content: "direct",
+      sessionId: "direct-session",
+      sessionKey: "agent:main:telegram:direct:6101296751",
+      storePath,
+    });
     await fs.writeFile(nestedTranscript, "nested", "utf-8");
 
     const applied = await runSessionsCleanup({
@@ -887,6 +954,13 @@ describe("Integration: saveSessionStore with pruning", () => {
     expect(persisted).toHaveProperty("agent:main:main");
     expect(persisted).toHaveProperty("agent:main:agent:direct:customer");
     expect(persisted["agent:main:telegram:direct:6101296751"]).toBeUndefined();
+    expect(
+      loadTranscriptEventsSync({
+        sessionId: "direct-session",
+        sessionKey: "agent:main:telegram:direct:6101296751",
+        storePath,
+      }),
+    ).toEqual([]);
     await expectPathMissing(directTranscript);
     await expectPathExists(nestedTranscript);
     const files = await fs.readdir(testDir);
