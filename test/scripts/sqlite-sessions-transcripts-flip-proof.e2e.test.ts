@@ -18,6 +18,8 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
       "after-full-agent-turn",
       "after-manual-compaction",
       "after-plugin-sdk-consumer",
+      "after-cleanup-pruning",
+      "after-doctor-import-idempotence",
       "after-concurrent-multi-client",
       "after-sessions-reset",
       "after-transcript-append",
@@ -92,8 +94,8 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
       (artifact) =>
         artifact.archiveReason === "reset" && artifact.archiveSessionId === report.legacySessionId,
     );
-    expect(resetArchive?.textTail).toContain("legacy hello");
-    expect(resetArchive?.textTail).toContain("sqlite user-facing send before reset");
+    expect(resetArchive?.messageTexts).toContain("legacy hello");
+    expect(resetArchive?.messageTexts).toContain("sqlite user-facing send before reset");
     expect(
       report.checkpoints.some(
         (checkpoint) =>
@@ -146,6 +148,31 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
           ),
       ),
     ).toBe(true);
+    const cleanupCheckpoint = report.checkpoints.find(
+      (checkpoint) => checkpoint.label === "after-cleanup-pruning",
+    );
+    expect(
+      cleanupCheckpoint?.sqlite.trackedEntries.some(
+        (entry) => entry.sessionKey === report.cleanupPruneSessionKey,
+      ),
+    ).toBe(false);
+    const cleanupArchive = cleanupCheckpoint?.archiveArtifacts.find(
+      (artifact) =>
+        artifact.archiveReason === "deleted" &&
+        artifact.archiveSessionId === "sqlite-cleanup-prune",
+    );
+    expect(cleanupArchive?.messageTexts).toContain("sqlite cleanup prune me");
+    const idempotenceCheckpoint = report.checkpoints.find(
+      (checkpoint) => checkpoint.label === "after-doctor-import-idempotence",
+    );
+    expect(idempotenceCheckpoint?.doctor).toMatchObject({
+      code: 0,
+      mode: "import",
+      totals: expect.objectContaining({
+        importedEntries: 0,
+        importedTranscriptEvents: 0,
+      }),
+    });
     const concurrentCheckpoint = report.checkpoints.find(
       (checkpoint) => checkpoint.label === "after-concurrent-multi-client",
     );
@@ -181,7 +208,7 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
         artifact.archiveReason === "deleted" &&
         artifact.archiveSessionId === "sqlite-delete-session",
     );
-    expect(deleteArchive?.textTail).toContain("delete me");
+    expect(deleteArchive?.messageTexts).toContain("delete me");
     const sharedFirstCheckpoint = report.checkpoints.find(
       (checkpoint) => checkpoint.label === "after-shared-first-delete",
     );
@@ -200,7 +227,7 @@ describe("SQLite sessions/transcripts flip proof harness", () => {
         artifact.archiveReason === "deleted" &&
         artifact.archiveSessionId === "sqlite-shared-session",
     );
-    expect(sharedFinalArchive?.textTail).toContain("shared");
+    expect(sharedFinalArchive?.messageTexts).toContain("shared");
     expect(
       report.checkpoints.some(
         (checkpoint) =>
