@@ -28,6 +28,12 @@ describe("extractToolErrorMessage", () => {
   it("keeps error-like status values", () => {
     expect(extractToolErrorMessage({ details: { status: "failed" } })).toBe("failed");
     expect(extractToolErrorMessage({ details: { status: "timeout" } })).toBe("timeout");
+    expect(
+      extractToolErrorMessage({
+        content: [{ type: "text", text: "Approval is unavailable." }],
+        details: { status: "approval-unavailable" },
+      }),
+    ).toBe("Approval is unavailable.");
   });
 
   it("prefers node-host aggregated denial text over generic failed status", () => {

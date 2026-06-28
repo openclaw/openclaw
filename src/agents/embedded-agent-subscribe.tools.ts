@@ -23,9 +23,13 @@ import type {
   MessagingToolSourceReplyPayload,
 } from "./embedded-agent-messaging.types.js";
 import { normalizeToolName } from "./tool-policy.js";
-import { readToolResultDetails, readToolResultStatus } from "./tool-result-error.js";
+import {
+  isToolResultError,
+  readToolResultDetails,
+  readToolResultStatus,
+} from "./tool-result-error.js";
 
-export { isToolResultError } from "./tool-result-error.js";
+export { isToolResultError };
 
 const TOOL_RESULT_MAX_CHARS = 8000;
 const TOOL_ERROR_MAX_CHARS = 400;
@@ -800,7 +804,7 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
     return fromRootStatus;
   }
   const status = readToolResultStatus(result);
-  if (status && !isErrorLikeStatus(status)) {
+  if (status && !isToolResultError(result)) {
     return undefined;
   }
   return text ? normalizeToolErrorText(text) : undefined;
