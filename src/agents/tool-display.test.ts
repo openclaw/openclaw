@@ -587,7 +587,7 @@ describe("compactRawCommand middle truncation", () => {
 });
 
 describe("stripLeadingExecDisplayVerb", () => {
-  it("strips `run` when followed by any binary so the framework verb stays outside the backticks", () => {
+  it("strips `run` when followed by a binary plus arguments so the framework verb stays outside the backticks", () => {
     expect(stripLeadingExecDisplayVerb("run python3 /path/to/script.py")).toBe(
       "python3 /path/to/script.py",
     );
@@ -601,19 +601,27 @@ describe("stripLeadingExecDisplayVerb", () => {
     expect(stripLeadingExecDisplayVerb("run my-custom-tool --flag value")).toBe(
       "my-custom-tool --flag value",
     );
-    expect(stripLeadingExecDisplayVerb("run ./bin/local-script")).toBe("./bin/local-script");
   });
 
-  it("preserves action-bearing exec summaries that `summarizeKnownExec` emits with semantic verbs", () => {
-    // `install dependencies`, `start app`, `run tests`, `show last 20 lines`,
-    // `check git status`, `find files named …` all carry diagnostic meaning
-    // beyond the bare command — strip must not drop those verbs.
-    expect(stripLeadingExecDisplayVerb("install dependencies")).toBe("install dependencies");
-    expect(stripLeadingExecDisplayVerb("start app")).toBe("start app");
+  it("preserves single-token `run <X>` summaries because package-script names are indistinguishable from bare binaries", () => {
+    // `summarizeKnownExec` emits `run <scriptName>` for arbitrary npm/pnpm/yarn
+    // scripts (`npm run dev`, `npm run start`, `npm run custom-script`); those
+    // single-token metas cannot be told apart from a bare-binary `run python3`
+    // at strip time, so we keep `run` to preserve the package-script context.
     expect(stripLeadingExecDisplayVerb("run tests")).toBe("run tests");
     expect(stripLeadingExecDisplayVerb("run build")).toBe("run build");
     expect(stripLeadingExecDisplayVerb("run lint")).toBe("run lint");
     expect(stripLeadingExecDisplayVerb("run script")).toBe("run script");
+    expect(stripLeadingExecDisplayVerb("run dev")).toBe("run dev");
+    expect(stripLeadingExecDisplayVerb("run custom-script")).toBe("run custom-script");
+  });
+
+  it("preserves action-bearing exec summaries that `summarizeKnownExec` emits with semantic verbs", () => {
+    // `install dependencies`, `start app`, `show last 20 lines`,
+    // `check git status`, `find files named …` all carry diagnostic meaning
+    // beyond the bare command — strip must not drop those verbs.
+    expect(stripLeadingExecDisplayVerb("install dependencies")).toBe("install dependencies");
+    expect(stripLeadingExecDisplayVerb("start app")).toBe("start app");
     expect(stripLeadingExecDisplayVerb("show some-file.txt (workspace)")).toBe(
       "show some-file.txt (workspace)",
     );
