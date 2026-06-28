@@ -501,6 +501,7 @@ import {
   buildPrePromptContextBudgetStatus,
   estimateLlmBoundaryTokenPressure,
   formatPrePromptPrecheckLog,
+  resolveOpenAIToolSchemaPayloadForPrecheck,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 import {
@@ -650,23 +651,6 @@ function repairAttemptToolUseResultPairing(
     erroredAssistantResultPolicy: "drop",
     ...(isOpenAIResponsesApi ? { missingToolResultText: "aborted" } : {}),
   });
-}
-
-function resolveOpenAIToolSchemaPayload(
-  api: unknown,
-): "openai-completions" | "openai-responses" | undefined {
-  if (api === "openai-completions") {
-    return "openai-completions";
-  }
-  if (
-    api === "openai-responses" ||
-    api === "azure-openai-responses" ||
-    api === "openai-chatgpt-responses" ||
-    api === "openclaw-openai-responses-transport"
-  ) {
-    return "openai-responses";
-  }
-  return undefined;
 }
 
 function shouldPreservePromptErrorAfterCleanupError(params: {
@@ -4620,7 +4604,9 @@ export async function runEmbeddedAttempt(
             systemPrompt: systemPromptForHook,
             prompt: llmBoundaryPromptForPrecheck,
           });
-          const toolSchemaPayloadForPrecheck = resolveOpenAIToolSchemaPayload(params.model.api);
+          const toolSchemaPayloadForPrecheck = resolveOpenAIToolSchemaPayloadForPrecheck(
+            params.model.api,
+          );
           let preemptiveCompaction = null;
           const shouldSkipPrecheck =
             skipPromptSubmission ||

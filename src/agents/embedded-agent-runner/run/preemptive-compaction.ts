@@ -40,6 +40,7 @@ type ToolSchemaTokenPressureSource = {
   parameters?: unknown;
 };
 type ToolSchemaTokenPressurePayload = "raw" | "openai-completions" | "openai-responses";
+type ProviderToolSchemaTokenPressurePayload = Exclude<ToolSchemaTokenPressurePayload, "raw">;
 
 /** Pre-prompt routing decision plus the budget facts used to explain it in logs and session state. */
 export type PreemptiveCompactionDecision = {
@@ -187,7 +188,7 @@ function estimateToolSchemaTokenPressure(
 
 function buildOpenAIToolPressurePayload(
   tools: readonly ToolSchemaTokenPressureSource[],
-  payloadShape: Exclude<ToolSchemaTokenPressurePayload, "raw">,
+  payloadShape: ProviderToolSchemaTokenPressurePayload,
 ): unknown[] {
   const projection = projectOpenAITools(
     tools.map((tool) => ({
@@ -218,6 +219,24 @@ function buildOpenAIToolPressurePayload(
       strict: true,
     };
   });
+}
+
+export function resolveOpenAIToolSchemaPayloadForPrecheck(
+  api: unknown,
+): ProviderToolSchemaTokenPressurePayload | undefined {
+  if (api === "openai-completions" || api === "openclaw-openai-completions-transport") {
+    return "openai-completions";
+  }
+  if (
+    api === "openai-responses" ||
+    api === "azure-openai-responses" ||
+    api === "openai-chatgpt-responses" ||
+    api === "openclaw-openai-responses-transport" ||
+    api === "openclaw-azure-openai-responses-transport"
+  ) {
+    return "openai-responses";
+  }
+  return undefined;
 }
 
 function compareToolText(left: string | undefined, right: string | undefined): number {
