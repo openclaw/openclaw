@@ -177,8 +177,7 @@ export const DEFAULT_COMMAND_SPECS: MattermostCommandSpec[] = [
     originalName: "queue",
     description: "Adjust active-run queue behavior",
     autoComplete: true,
-    autoCompleteHint:
-      "[steer|followup|collect|interrupt] [debounce:2s] [cap:N] [drop:old|new|summarize]",
+    autoCompleteHint: "[steer|followup|collect|interrupt] [debounce:2s] [cap:N] [drop:old|new|summarize]",
   },
 ];
 

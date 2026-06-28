@@ -64,4 +64,5 @@ describe("legacy web fetch config", () => {
       },
     });
   });
+
 });

@@ -35,6 +35,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
+import { runExclusiveSessionStoreWrite } from "../../config/sessions/store-writer.js";
 import { parseSessionThreadInfoFast } from "../../config/sessions/thread-info.js";
 import {
   DEFAULT_RESET_TRIGGERS,
@@ -77,6 +78,7 @@ import {
   resolveLastChannelRaw,
   resolveLastToRaw,
 } from "./session-delivery.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import {
   createReplySessionEntryHandle,
   type ReplySessionEntryHandle,
@@ -186,6 +188,14 @@ export type InitSessionStateParams = {
   resumeRequestedSession?: boolean;
 };
 
+type InitSessionStateAttemptContext = {
+  agentId: string;
+  conversationBindingContext: ReturnType<typeof resolveSessionConversationBindingContext>;
+  isSystemEvent: boolean;
+  sessionCtxForState: MsgContext;
+  storePath: string;
+};
+
 function resolveSessionConversationBindingContext(
   cfg: OpenClawConfig,
   ctx: MsgContext,
@@ -244,32 +254,19 @@ function resolveBoundConversationSessionKey(params: {
   return binding.targetSessionKey;
 }
 
-/** Initializes or reuses the reply session state for one inbound turn. */
-export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
-  return await initSessionStateAttempt(params, false);
-}
-
-async function initSessionStateAttempt(
+function resolveInitSessionStateAttemptContext(
   params: InitSessionStateParams,
-  staleSnapshotRetried: boolean,
-): Promise<SessionInitResult> {
-  const { ctx, cfg, commandAuthorized } = params;
-  // Heartbeat, cron-event, and exec-event runs should NEVER trigger session
-  // resets or conversation binding retargeting. These are automated system
-  // events, not user interactions that should affect session continuity.
-  // See #58409 for details on silent session reset bug.
+): InitSessionStateAttemptContext {
+  const { cfg, ctx } = params;
+  // Automated system events must not reset sessions or retarget conversation bindings.
   const isSystemEvent =
     ctx.Provider === "heartbeat" || ctx.Provider === "cron-event" || ctx.Provider === "exec-event";
   const conversationBindingContext = isSystemEvent
     ? null
     : resolveSessionConversationBindingContext(cfg, ctx);
-  // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
-  // "slash session" key, but should mutate the target chat session.
+  // Slash/menu commands may arrive on a transport session while targeting the chat session.
+  // Prefer explicit command target before binding lookup so command mutations land there.
   const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(ctx);
-  // Native slash/menu commands can arrive on a transport-specific "slash session"
-  // while explicitly targeting an existing chat session. Honor that explicit target
-  // before any binding lookup so command-side mutations land on the intended session.
-  // Priority: commandTargetSessionKey > boundConversation > route.
   const targetSessionKey =
     commandTargetSessionKey ??
     resolveBoundConversationSessionKey({
@@ -281,20 +278,54 @@ async function initSessionStateAttempt(
     targetSessionKey && targetSessionKey !== ctx.SessionKey
       ? { ...ctx, SessionKey: targetSessionKey }
       : ctx;
-  const sessionCfg = cfg.session;
-  const maintenanceConfig = resolveMaintenanceConfigFromInput(sessionCfg?.maintenance);
-  const mainKey = normalizeMainKey(sessionCfg?.mainKey);
   const agentId = resolveSessionAgentId({
     sessionKey: sessionCtxForState.SessionKey,
     config: cfg,
     fallbackAgentId: sessionCtxForState.AgentId,
   });
+  return {
+    agentId,
+    conversationBindingContext,
+    isSystemEvent,
+    sessionCtxForState,
+    storePath: resolveStorePath(cfg.session?.store, { agentId }),
+  };
+}
+
+/** Initializes or reuses the reply session state for one inbound turn. */
+export async function initSessionState(params: InitSessionStateParams): Promise<SessionInitResult> {
+  return await initSessionStateAttempt(params, false);
+}
+
+async function initSessionStateAttempt(
+  params: InitSessionStateParams,
+  staleSnapshotRetried: boolean,
+): Promise<SessionInitResult> {
+  const attemptContext = resolveInitSessionStateAttemptContext(params);
+  // Guarded revision checks only serialize correctly when the snapshot and
+  // commit share the same writer lane.
+  return await runExclusiveSessionStoreWrite(
+    attemptContext.storePath,
+    async () => await initSessionStateAttemptLocked(params, attemptContext, staleSnapshotRetried),
+  );
+}
+
+async function initSessionStateAttemptLocked(
+  params: InitSessionStateParams,
+  attemptContext: InitSessionStateAttemptContext,
+  staleSnapshotRetried: boolean,
+): Promise<SessionInitResult> {
+  const { ctx, cfg, commandAuthorized } = params;
+  const { agentId, conversationBindingContext, isSystemEvent, sessionCtxForState, storePath } =
+    attemptContext;
+  const sessionCfg = cfg.session;
+  const maintenanceConfig = resolveMaintenanceConfigFromInput(sessionCfg?.maintenance);
+  const mainKey = normalizeMainKey(sessionCfg?.mainKey);
   const groupResolution = resolveGroupSessionKey(sessionCtxForState) ?? undefined;
   const resetTriggers = sessionCfg?.resetTriggers?.length
     ? sessionCfg.resetTriggers
     : DEFAULT_RESET_TRIGGERS;
   const sessionScope = sessionCfg?.scope ?? "per-sender";
-  const storePath = resolveStorePath(sessionCfg?.store, { agentId });
   const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
 
   let sessionEntry: SessionEntry;
@@ -513,11 +544,25 @@ async function initSessionStateAttempt(
       (entryFreshness?.fresh ?? false) ||
       (softResetAllowed && canReuseExistingEntry)) &&
       !terminalMainTranscriptNewerThanRegistry);
+  const activeReplyOperation = replyRunRegistry.get(sessionKey);
+  const deferImplicitRolloverForActiveRun =
+    !resetTriggered &&
+    !freshEntry &&
+    canReuseExistingEntry &&
+    entryFreshness?.fresh === false &&
+    entryFreshness.staleReason != null &&
+    activeReplyOperation?.phase !== "queued" &&
+    activeReplyOperation?.sessionId === entry?.sessionId;
+  // Implicit daily/idle rollover must not rename a transcript while that exact
+  // session's active writer is still running. Admission will steer/wait/queue;
+  // queued pre-dispatch reservations still let the current turn roll over.
+  const effectiveFreshEntry = deferImplicitRolloverForActiveRun ? true : freshEntry;
   // Capture the current session entry before any reset so its transcript can be
   // archived afterward.  We need to do this for both explicit resets (/new, /reset)
   // and for scheduled/daily resets where the session has become stale (!freshEntry).
   // Without this, daily-reset transcripts are left as orphaned files on disk (#35481).
-  const previousSessionEntry = (resetTriggered || !freshEntry) && entry ? { ...entry } : undefined;
+  const previousSessionEntry =
+    (resetTriggered || !effectiveFreshEntry) && entry ? { ...entry } : undefined;
   const previousSessionEndReason = resetTriggered
     ? resolveExplicitSessionEndReason(matchedResetTriggerLower)
     : resolveStaleSessionEndReason({
@@ -532,7 +577,7 @@ async function initSessionStateAttempt(
     clearSessionResetRuntimeState([sessionKey, previousSessionEntry.sessionId]);
   }
 
-  if (!isNewSession && freshEntry && canReuseExistingEntry) {
+  if (!isNewSession && effectiveFreshEntry && canReuseExistingEntry) {
     sessionId = entry.sessionId;
     systemSent = entry.systemSent ?? false;
     abortedLastRun = entry.abortedLastRun ?? false;
@@ -603,7 +648,7 @@ async function initSessionStateAttempt(
     }
   }
 
-  const baseEntry = !isNewSession && freshEntry ? entry : undefined;
+  const baseEntry = !isNewSession && effectiveFreshEntry ? entry : undefined;
   const usageFamilyKey = previousSessionEntry
     ? (previousSessionEntry.usageFamilyKey ?? sessionKey)
     : baseEntry?.usageFamilyKey;
@@ -858,7 +903,7 @@ async function initSessionStateAttempt(
   });
   if (!committed.ok) {
     if (!staleSnapshotRetried) {
-      return await initSessionStateAttempt(params, true);
+      return await initSessionStateAttemptLocked(params, attemptContext, true);
     }
     throw new Error(`reply session initialization conflicted for ${sessionKey}`);
   }

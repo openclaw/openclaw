@@ -110,7 +110,9 @@ describe("secret target registry", () => {
       "appServer",
       "authToken",
     ]);
-    expect(codexAuthTarget?.entry?.id).toBe("plugins.entries.codex.config.appServer.authToken");
+    expect(codexAuthTarget?.entry?.id).toBe(
+      "plugins.entries.codex.config.appServer.authToken",
+    );
 
     const codexHeaderTarget = resolveConfigSecretTargetByPath([
       "plugins",
@@ -121,6 +123,8 @@ describe("secret target registry", () => {
       "headers",
       "x-codex-client-session-token",
     ]);
-    expect(codexHeaderTarget?.entry?.id).toBe("plugins.entries.codex.config.appServer.headers.*");
+    expect(codexHeaderTarget?.entry?.id).toBe(
+      "plugins.entries.codex.config.appServer.headers.*",
+    );
   });
 });

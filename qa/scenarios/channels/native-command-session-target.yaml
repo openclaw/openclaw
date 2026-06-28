@@ -1,0 +1,23 @@
+title: Native command active session target evidence
+
+scenario:
+  id: native-command-session-target
+  surface: channel-framework
+  category: channel-framework.channel-actions-commands-and-approvals
+  coverage:
+    primary:
+      - channels.native-command-session-target
+  objective: Link native command target-session e2e coverage to channel framework maturity accounting.
+  successCriteria:
+    - Native `/stop` commands use the active target session key instead of the slash-command session.
+    - The target embedded agent run is aborted.
+    - Queued follow-up work for the target session is cleared.
+  docsRefs:
+    - docs/channels/qa-channel.md
+    - docs/help/testing.md
+  codeRefs:
+    - src/auto-reply/reply.triggers.trigger-handling.targets-active-session-native-stop.e2e.test.ts
+  execution:
+    kind: vitest
+    path: src/auto-reply/reply.triggers.trigger-handling.targets-active-session-native-stop.e2e.test.ts
+    summary: Vitest e2e coverage for native command active-session targeting.

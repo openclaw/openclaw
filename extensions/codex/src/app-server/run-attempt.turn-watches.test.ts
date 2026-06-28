@@ -76,6 +76,7 @@ describe("createCodexAttemptTurnWatchController", () => {
       isTerminalTurnNotificationQueued: () => false,
       getActiveAppServerTurnRequests: () => 0,
       getActiveTurnItemCount: () => 0,
+      getActiveCompletionBlockerItemCount: () => 0,
       turnCompletionIdleTimeoutMs: 500,
       turnAssistantCompletionIdleTimeoutMs: 500,
       turnAttemptIdleTimeoutMs: 200,
@@ -797,6 +798,93 @@ describe("runCodexAppServerAttempt turn watches", () => {
         ),
       fastWait,
     );
+    await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
+
+    const result = await run;
+    expect(result.aborted).toBe(false);
+    expect(result.timedOut).toBe(false);
+    expect(result.promptError).toBeNull();
+  });
+
+  it("keeps an eliciting MCP tool active past the completion timeout", async () => {
+    const harness = createStartedThreadHarness();
+    const bridgedResponse = {
+      action: "accept",
+      content: null,
+      _meta: null,
+    } as const;
+    vi.spyOn(elicitationBridge, "handleCodexAppServerElicitationRequest").mockResolvedValue(
+      bridgedResponse,
+    );
+    const params = createParams(
+      path.join(tempDir, "session-mcp-elicitation.jsonl"),
+      path.join(tempDir, "workspace-mcp-elicitation"),
+    );
+    params.timeoutMs = 500;
+
+    let settled = false;
+    const run = runCodexAppServerAttempt(params, {
+      turnCompletionIdleTimeoutMs: 15,
+      turnAssistantCompletionIdleTimeoutMs: 1_000,
+      turnTerminalIdleTimeoutMs: 1_000,
+    }).finally(() => {
+      settled = true;
+    });
+    await harness.waitForMethod("turn/start");
+    await harness.notify({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "mcp-1",
+          type: "mcpToolCall",
+          server: "computer-use",
+          tool: "computer",
+          status: "inProgress",
+          arguments: {},
+        },
+      },
+    });
+
+    await expect(
+      harness.handleServerRequest({
+        id: "request-mcp-elicitation",
+        method: "mcpServer/elicitation/request",
+        params: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          mode: "form",
+          message: "Approve?",
+          requestedSchema: { type: "object", properties: {} },
+          serverName: "computer-use",
+          _meta: null,
+        },
+      }),
+    ).resolves.toEqual(bridgedResponse);
+
+    await new Promise((resolve) => {
+      setTimeout(resolve, 40);
+    });
+    expect(settled).toBe(false);
+    expect(harness.request.mock.calls.some(([method]) => method === "turn/interrupt")).toBe(false);
+
+    await harness.notify({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        item: {
+          id: "mcp-1",
+          type: "mcpToolCall",
+          server: "computer-use",
+          tool: "computer",
+          status: "completed",
+          arguments: {},
+          result: { content: [] },
+        },
+      },
+    });
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
 
     const result = await run;

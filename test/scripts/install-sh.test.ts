@@ -1358,7 +1358,10 @@ describe("install.sh", () => {
     mkdirSync(bin, { recursive: true });
     mkdirSync(outer, { recursive: true });
     mkdirSync(repo, { recursive: true });
-    writeFileSync(join(outer, "package.json"), '{\n  "packageManager": "yarn@4.5.0"\n}\n');
+    writeFileSync(
+      join(outer, "package.json"),
+      '{\n  "packageManager": "yarn@4.5.0"\n}\n',
+    );
     writeFileSync(
       join(repo, "package.json"),
       '{\n  "packageManager": "pnpm@11.2.2+sha512.test"\n}\n',

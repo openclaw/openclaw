@@ -74,8 +74,8 @@ export type CodexAppServerSandboxMode = "read-only" | "workspace-write" | "dange
 type CodexAppServerApprovalsReviewer = "user" | "auto_review" | "guardian_subagent";
 type CodexAppServerCommandSource = "managed" | "resolved-managed" | "config" | "env";
 export type CodexDynamicToolsLoading = "searchable" | "direct";
-export type CodexPluginDestructivePolicy = boolean | "auto";
-export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto";
+export type CodexPluginDestructivePolicy = boolean | "auto" | "always";
+export type CodexPluginDestructiveApprovalMode = "allow" | "deny" | "auto" | "always";
 
 export const CODEX_PLUGINS_MARKETPLACE_NAME = "openai-curated";
 
@@ -167,6 +167,7 @@ export type CodexAppServerStartOptions = {
   transport: CodexAppServerTransportMode;
   command: string;
   commandSource?: CodexAppServerCommandSource;
+  managedFallbackCommandPaths?: string[];
   args: string[];
   url?: string;
   authToken?: string;
@@ -310,7 +311,11 @@ const codexAppServerApprovalPolicySchema = z.enum([
 const codexAppServerSandboxSchema = z.enum(["read-only", "workspace-write", "danger-full-access"]);
 const codexAppServerApprovalsReviewerSchema = z.enum(["user", "auto_review", "guardian_subagent"]);
 const codexDynamicToolsLoadingSchema = z.enum(["searchable", "direct"]);
-const codexPluginDestructivePolicySchema = z.union([z.boolean(), z.literal("auto")]);
+const codexPluginDestructivePolicySchema = z.union([
+  z.boolean(),
+  z.literal("auto"),
+  z.literal("always"),
+]);
 const codexAppServerServiceTierSchema = z
   .preprocess(
     (value) => (value === null ? null : normalizeCodexServiceTier(value)),
@@ -494,8 +499,8 @@ function resolveCodexPluginDestructivePolicy(policy: CodexPluginDestructivePolic
   allowDestructiveActions: boolean;
   destructiveApprovalMode: CodexPluginDestructiveApprovalMode;
 } {
-  if (policy === "auto") {
-    return { allowDestructiveActions: true, destructiveApprovalMode: "auto" };
+  if (policy === "auto" || policy === "always") {
+    return { allowDestructiveActions: true, destructiveApprovalMode: policy };
   }
   return {
     allowDestructiveActions: policy,
@@ -876,6 +881,7 @@ export function codexAppServerStartOptionsKey(
     transport: options.transport,
     command: options.command,
     commandSource: options.commandSource ?? null,
+    managedFallbackCommandPaths: [...(options.managedFallbackCommandPaths ?? [])],
     args: options.args,
     url: options.url ?? null,
     authToken: hashSecretForKey(options.authToken, "authToken"),

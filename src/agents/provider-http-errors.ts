@@ -14,6 +14,7 @@ export { normalizeOptionalString as trimToUndefined } from "../../packages/norma
 const ERROR_BODY_METADATA_LIMIT = 500;
 const PROVIDER_BINARY_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const PROVIDER_JSON_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
+const PROVIDER_TEXT_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 
 /** Returns a plain object view for provider JSON payloads when one exists. */
 export function asObject(value: unknown): Record<string, unknown> | undefined {
@@ -84,6 +85,20 @@ export async function readResponseTextLimited(
   }
 
   return text;
+}
+
+/** Reads a successful provider text response under a byte cap. */
+export async function readProviderTextResponse(
+  response: Response,
+  label: string,
+  opts?: { maxBytes?: number },
+): Promise<string> {
+  const maxBytes = opts?.maxBytes ?? PROVIDER_TEXT_RESPONSE_MAX_BYTES;
+  const bytes = await readResponseWithLimit(response, maxBytes, {
+    onOverflow: ({ maxBytes: maxBytesLocal }) =>
+      new Error(`${label}: text response exceeds ${maxBytesLocal} bytes`),
+  });
+  return new TextDecoder().decode(bytes);
 }
 
 /** Formats common provider JSON error payload shapes into one readable detail string. */

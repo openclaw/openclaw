@@ -91,6 +91,13 @@ const GENERATED_LOCALES = [
     navMode: "clone-en",
   },
   {
+    language: "hi",
+    dir: "hi",
+    navFile: "hi-navigation.json",
+    tmFile: "hi.tm.jsonl",
+    navMode: "clone-en",
+  },
+  {
     language: "ar",
     dir: "ar",
     navFile: "ar-navigation.json",
@@ -167,6 +174,13 @@ const GENERATED_LOCALES = [
     // Keep generated docs and translation memory so the locale stays available
     // once the docs host accepts it.
     navigation: false,
+  },
+  {
+    language: "ru",
+    dir: "ru",
+    navFile: "ru-navigation.json",
+    tmFile: "ru.tm.jsonl",
+    navMode: "clone-en",
   },
 ];
 

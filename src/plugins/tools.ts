@@ -707,6 +707,17 @@ function createCachedDescriptorPluginTool(params: {
         throw new Error(`plugin tool runtime unavailable (${pluginId}): ${toolName}`);
       }
       const requestedToolName = normalizeToolName(toolName);
+      const matchingNamedCandidates: PluginToolRegistration[] = [];
+      const unnamedCandidates: PluginToolRegistration[] = [];
+      for (const candidate of candidates) {
+        if (candidate.names.length === 0) {
+          unnamedCandidates.push(candidate);
+          continue;
+        }
+        if (candidate.names.some((name) => normalizeToolName(name) === requestedToolName)) {
+          matchingNamedCandidates.push(candidate);
+        }
+      }
       const resolveCandidateTool = (
         candidate: PluginToolRegistration,
       ): AnyAgentTool | undefined => {
@@ -724,12 +735,6 @@ function createCachedDescriptorPluginTool(params: {
         }
         return undefined;
       };
-      const matchingNamedCandidates = candidates.filter(
-        (candidate) =>
-          candidate.names.length > 0 &&
-          candidate.names.some((name) => normalizeToolName(name) === requestedToolName),
-      );
-      const unnamedCandidates = candidates.filter((candidate) => candidate.names.length === 0);
       for (const candidate of [...matchingNamedCandidates, ...unnamedCandidates]) {
         let matchedTool: AnyAgentTool | undefined;
         try {

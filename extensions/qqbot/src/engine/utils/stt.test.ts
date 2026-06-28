@@ -41,6 +41,36 @@ function cancelTrackedResponse(
   };
 }
 
+function largeTranscriptionJsonResponse(params: { chunkCount: number; chunkSize: number }): {
+  response: Response;
+  getReadCount: () => number;
+} {
+  let chunkIndex = 0;
+  const encoder = new TextEncoder();
+  const chunks = [
+    '{"text":"',
+    ...Array.from({ length: params.chunkCount }, () => "a".repeat(params.chunkSize)),
+    '"}',
+  ];
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (chunkIndex >= chunks.length) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(encoder.encode(chunks[chunkIndex]));
+      chunkIndex += 1;
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+    getReadCount: () => chunkIndex,
+  };
+}
+
 function requireFirstSsrfRequest(): {
   url?: unknown;
   auditContext?: unknown;
@@ -173,6 +203,44 @@ describe("engine/utils/stt", () => {
       expect(new Uint8Array(await (file as File).arrayBuffer())).toEqual(
         new Uint8Array([1, 2, 3, 4]),
       );
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("bounds successful STT JSON responses before parsing", async () => {
+    await withTempDir("openclaw-qqbot-stt-success-limit-", async (tmpDir) => {
+      const audioPath = path.join(tmpDir, "voice.wav");
+      fs.writeFileSync(audioPath, Buffer.from([1, 2, 3, 4]));
+
+      const release = vi.fn(async () => {});
+      const streamed = largeTranscriptionJsonResponse({
+        chunkCount: 18,
+        chunkSize: 1024 * 1024,
+      });
+      ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: streamed.response,
+        release,
+      });
+
+      let error: unknown;
+      try {
+        await transcribeAudio(audioPath, {
+          channels: {
+            qqbot: {
+              stt: {
+                baseUrl: "https://api.example.test/v1/",
+                apiKey: "secret",
+                model: "whisper-1",
+              },
+            },
+          },
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(String(error)).toContain("qqbot.stt: JSON response exceeds 16777216 bytes");
+      expect(streamed.getReadCount()).toBeLessThan(20);
       expect(release).toHaveBeenCalledTimes(1);
     });
   });

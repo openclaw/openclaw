@@ -120,7 +120,9 @@ describe("exec allowlist matching", () => {
         ];
 
         expect(matchAllowlist(restrictedEntries, resolution, undefined, platform)).toBeNull();
-        expect(matchAllowlist(mixedEntries, resolution, undefined, platform)).toBe(mixedEntries[1]);
+        expect(matchAllowlist(mixedEntries, resolution, undefined, platform)).toBe(
+          mixedEntries[1],
+        );
       },
     );
 

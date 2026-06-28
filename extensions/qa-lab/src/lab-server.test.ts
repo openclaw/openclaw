@@ -6,12 +6,12 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readQaJsonBody } from "./bus-server.js";
-import { resolveUiAssetVersion } from "./lab-server-ui.js";
 import {
   startQaLabServer,
   writeQaLabServerError,
   type QaLabServerStartParams,
 } from "./lab-server.js";
+import { resolveUiAssetVersion } from "./lab-server-ui.js";
 
 const qaChannelMock = vi.hoisted(() => ({
   resolveAccount: vi.fn(),
