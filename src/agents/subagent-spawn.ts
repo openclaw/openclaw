@@ -209,6 +209,11 @@ async function callSubagentGateway(
   const scopes = params.scopes ?? (isAdminOnlyMethod(params.method) ? [ADMIN_SCOPE] : undefined);
   return await subagentSpawnDeps.callGateway({
     ...params,
+    // Subagent calls negotiate explicit operator scopes against the paired
+    // device token, so the gateway needs the device identity attached even on
+    // loopback backend connections. Without this the completion announce fails
+    // with "missing scope: operator.write" (#77807).
+    requireDeviceIdentity: true,
     ...(scopes != null ? { scopes } : {}),
   });
 }

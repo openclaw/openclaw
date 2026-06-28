@@ -76,6 +76,16 @@ type CallGatewayBaseOptions = {
   mode?: GatewayClientMode;
   approvalRuntimeToken?: string;
   deviceIdentity?: DeviceIdentity | null;
+  /**
+   * Forces device identity to be attached even for BACKEND + GATEWAY_CLIENT
+   * loopback shared-token calls (which normally omit it). Set by internal
+   * callers that negotiate explicit operator scopes against the paired device
+   * token — e.g. subagent lifecycle/announce calls — so the gateway can verify
+   * those scopes. Without it, such calls fail with "missing scope: ...".
+   * See #77807. Does not affect direct-local shared-token calls that don't
+   * opt in.
+   */
+  requireDeviceIdentity?: boolean;
   instanceId?: string;
   minProtocol?: number;
   maxProtocol?: number;
@@ -328,18 +338,18 @@ function shouldOmitDeviceIdentityForGatewayCall(params: {
   url: string;
   token?: string;
   password?: string;
-  scopes?: string[];
 }): boolean {
   const mode = params.opts.mode ?? GATEWAY_CLIENT_MODES.CLI;
   const clientName = params.opts.clientName ?? GATEWAY_CLIENT_NAMES.CLI;
   const hasSharedAuth = Boolean(params.token || params.password);
-  // When the call carries explicit operator scopes (e.g. ["operator.write"]),
-  // keep device identity so the gateway can verify them against the paired
-  // device token. Without this, loopback backend calls — such as subagent
-  // completion announce — fail with "missing scope: operator.write" even when
-  // the device has full scopes. Fixes #77807.
-  const requestedScopes = Array.isArray(params.scopes) ? params.scopes : [];
-  if (requestedScopes.length > 0) {
+  // Callers that must verify explicit operator scopes against the paired
+  // device token (e.g. subagent completion announce) opt in via
+  // `requireDeviceIdentity`. Without device identity, those loopback backend
+  // calls fail with "missing scope: operator.write" even when the device has
+  // full scopes. Fixes #77807. This is intentionally narrow: it does not fire
+  // for ordinary scoped backend calls (which keep the direct-local
+  // shared-token contract of omitting device identity).
+  if (params.opts.requireDeviceIdentity === true) {
     return false;
   }
   return (
@@ -355,7 +365,6 @@ function resolveDeviceIdentityForGatewayCall(params: {
   url: string;
   token?: string;
   password?: string;
-  scopes?: string[];
 }): ReturnType<typeof loadOrCreateDeviceIdentity> | null {
   if (shouldOmitDeviceIdentityForGatewayCall(params)) {
     return null;
@@ -784,7 +793,7 @@ async function executeGatewayRequestWithScopes<T>(params: {
       scopes,
       deviceIdentity:
         opts.deviceIdentity === undefined
-          ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password, scopes })
+          ? resolveDeviceIdentityForGatewayCall({ opts, url, token, password })
           : opts.deviceIdentity,
       minProtocol: opts.minProtocol ?? MIN_CLIENT_PROTOCOL_VERSION,
       maxProtocol: opts.maxProtocol ?? PROTOCOL_VERSION,
