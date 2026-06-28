@@ -77,6 +77,37 @@ describe("resolveAgentConfig", () => {
     });
   });
 
+  it("returns per-agent env for the resolved agent only", () => {
+    const cfg = {
+      agents: {
+        list: [
+          {
+            id: "main",
+            env: {
+              OPENCLAW_AGENT_ENV: "main-only",
+              GIT_AUTHOR_EMAIL: "main@example.com",
+            },
+          },
+          {
+            id: "worker",
+            env: {
+              OPENCLAW_AGENT_ENV: "worker-only",
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+
+    const result = resolveAgentConfig(cfg, "main") as
+      | ({ env?: Record<string, string> } & NonNullable<ReturnType<typeof resolveAgentConfig>>)
+      | undefined;
+
+    expect(result?.env).toEqual({
+      OPENCLAW_AGENT_ENV: "main-only",
+      GIT_AUTHOR_EMAIL: "main@example.com",
+    });
+  });
+
   it("prefers per-agent verbose defaults over global defaults", () => {
     const cfg: OpenClawConfig = {
       agents: {

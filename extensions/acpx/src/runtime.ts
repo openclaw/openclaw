@@ -13,7 +13,6 @@ import {
   createFileSessionStore,
   decodeAcpxRuntimeHandleState,
   encodeAcpxRuntimeHandleState,
-  isRequestedModelUnsupportedError,
   type AcpAgentRegistry,
   type AcpRuntimeDoctorReport,
   type AcpRuntimeEvent,
@@ -65,6 +64,11 @@ const OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV = "OPENCLAW_TOOLS_MCP_AGENT_SESSI
 
 type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
+};
+
+type StablePersistentSessionReuseDecision = {
+  canReuse: boolean;
+  requiresFreshRecord: boolean;
 };
 
 type OpenClawLeaseSessionMetadata = {
@@ -179,6 +183,45 @@ function readRecordResetOnNextEnsure(record: unknown): boolean {
     return false;
   }
   return (acpx as { reset_on_next_ensure?: unknown }).reset_on_next_ensure === true;
+}
+
+function normalizeSessionEnv(value: unknown): Record<string, string> | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return undefined;
+  }
+  const entries = Object.entries(value)
+    .filter((entry): entry is [string, string] => typeof entry[1] === "string")
+    .toSorted(([left], [right]) => left.localeCompare(right));
+  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+function readRecordSessionEnv(record: unknown): Record<string, string> | undefined {
+  if (typeof record !== "object" || record === null) {
+    return undefined;
+  }
+  const { acpx } = record as { acpx?: unknown };
+  if (typeof acpx !== "object" || acpx === null) {
+    return undefined;
+  }
+  const { session_options: sessionOptions } = acpx as { session_options?: unknown };
+  if (typeof sessionOptions !== "object" || sessionOptions === null) {
+    return undefined;
+  }
+  return normalizeSessionEnv((sessionOptions as { env?: unknown }).env);
+}
+
+function sessionEnvMatches(left: unknown, right: unknown): boolean {
+  return (
+    JSON.stringify(normalizeSessionEnv(left) ?? {}) ===
+    JSON.stringify(normalizeSessionEnv(right) ?? {})
+  );
+}
+
+function readRuntimeEnsureSessionEnv(
+  input: OpenClawRuntimeEnsureInput,
+): Record<string, string> | undefined {
+  const existingOptions = (input as { sessionOptions?: SessionAgentOptions }).sessionOptions;
+  return normalizeSessionEnv(input.env ?? existingOptions?.env);
 }
 
 function readRecordAgentPid(record: unknown): number | undefined {
@@ -585,15 +628,30 @@ function normalizeClaudeAcpModelOverride(rawModel: string | undefined): string |
 function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegateEnsureInput {
   const existingOptions = (input as { sessionOptions?: SessionAgentOptions }).sessionOptions;
   const model = input.model?.trim() || existingOptions?.model;
-  const sessionOptions = model ? { ...existingOptions, model } : existingOptions;
+  const env = input.env ?? existingOptions?.env;
+  const sessionOptions = {
+    ...existingOptions,
+    ...(model ? { model } : {}),
+    ...(env ? { env } : {}),
+  };
   return {
     ...input,
-    ...(sessionOptions ? { sessionOptions } : {}),
+    ...(Object.keys(sessionOptions).length > 0 ? { sessionOptions } : {}),
   } as AcpxDelegateEnsureInput;
 }
 
 function isAcpModelCapabilityMissingError(error: unknown): boolean {
-  return isRequestedModelUnsupportedError(error) && error.reason === "missing-capability";
+  if (!(error instanceof Error) || error.name !== "RequestedModelUnsupportedError") {
+    return false;
+  }
+  const reason = (error as { reason?: unknown }).reason;
+  if (reason === "missing-capability") {
+    return true;
+  }
+  if (reason) {
+    return false;
+  }
+  return error.message.includes("did not advertise model support");
 }
 
 // ACPX owns the distinction between missing model capability and an invalid model id.
@@ -889,32 +947,39 @@ export class AcpxRuntime implements AcpRuntime {
     });
   }
 
-  private async canReuseStablePersistentSession(params: {
+  private async resolveStablePersistentSessionReuse(params: {
     sessionKey: string;
     mode: Parameters<AcpRuntime["ensureSession"]>[0]["mode"];
     cwd: string | undefined;
     command: string | undefined;
     resumeSessionId: string | undefined;
-  }): Promise<boolean> {
+    env: Record<string, string> | undefined;
+  }): Promise<StablePersistentSessionReuseDecision> {
     if (params.mode !== "persistent" || !params.command) {
-      return false;
+      return { canReuse: false, requiresFreshRecord: false };
     }
     const existing = await this.sessionStore.load(params.sessionKey);
     if (!existing || readRecordResetOnNextEnsure(existing)) {
-      return false;
+      return { canReuse: false, requiresFreshRecord: false };
     }
     const recordCwd = readRecordCwd(existing);
     if (!recordCwd || resolvePath(recordCwd) !== resolvePath(params.cwd?.trim() || this.cwd)) {
-      return false;
+      return { canReuse: false, requiresFreshRecord: false };
     }
     if (readRecordAgentCommand(existing) !== params.command) {
-      return false;
+      return { canReuse: false, requiresFreshRecord: false };
+    }
+    if (!sessionEnvMatches(readRecordSessionEnv(existing), params.env)) {
+      return { canReuse: false, requiresFreshRecord: true };
     }
     const existingSessionId =
       typeof existing === "object" && existing !== null
         ? (existing as { acpSessionId?: unknown }).acpSessionId
         : undefined;
-    return !params.resumeSessionId || existingSessionId === params.resumeSessionId;
+    return {
+      canReuse: !params.resumeSessionId || existingSessionId === params.resumeSessionId,
+      requiresFreshRecord: false,
+    };
   }
 
   private async runWithLaunchLease<T>(params: {
@@ -1090,13 +1155,18 @@ export class AcpxRuntime implements AcpRuntime {
       codexModelOverride && command
         ? appendCodexAcpConfigOverrides(command, codexModelOverride)
         : command;
-    const shouldStartWithLease = !(await this.canReuseStablePersistentSession({
+    const reuseDecision = await this.resolveStablePersistentSessionReuse({
       sessionKey: input.sessionKey,
       mode: input.mode,
       cwd: input.cwd,
       command: stableLaunchCommand,
       resumeSessionId: input.resumeSessionId,
-    }));
+      env: readRuntimeEnsureSessionEnv(ensureInput),
+    });
+    if (reuseDecision.requiresFreshRecord) {
+      this.sessionStore.markFresh(input.sessionKey);
+    }
+    const shouldStartWithLease = !reuseDecision.canReuse;
 
     if (!codexModelOverride) {
       return await this.runWithLaunchLease({

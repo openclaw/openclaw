@@ -4,6 +4,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveOpenClawMcpTransportAlias } from "../config/mcp-config-normalize.js";
+import { sanitizeHostEnvOverrides } from "../infra/host-env-security.js";
 import { logWarn } from "../logger.js";
 import {
   describeHttpMcpServerLaunchConfig,
@@ -48,14 +49,22 @@ type ResolvedHttpMcpTransportConfig = ResolvedBaseMcpTransportConfig & {
 
 type ResolvedMcpTransportConfig = ResolvedStdioMcpTransportConfig | ResolvedHttpMcpTransportConfig;
 
+type ResolveMcpTransportConfigOptions = {
+  inheritedEnv?: Record<string, string>;
+};
+
 const DEFAULT_CONNECTION_TIMEOUT_MS = 30_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 60_000;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function getPositiveNumber(rawServer: unknown, keys: readonly string[]): number | undefined {
-  if (!rawServer || typeof rawServer !== "object") {
+  if (!isRecord(rawServer)) {
     return undefined;
   }
-  const record = rawServer as Record<string, unknown>;
+  const record = rawServer;
   for (const key of keys) {
     const value = record[key];
     if (typeof value === "number" && Number.isFinite(value) && value > 0) {
@@ -119,8 +128,7 @@ function getStringField(rawServer: unknown, keys: readonly string[]): string | u
 
 function getRequestedTransport(rawServer: unknown): string {
   if (
-    !rawServer ||
-    typeof rawServer !== "object" ||
+    !isRecord(rawServer) ||
     typeof (rawServer as { transport?: unknown }).transport !== "string"
   ) {
     return "";
@@ -129,14 +137,31 @@ function getRequestedTransport(rawServer: unknown): string {
 }
 
 function getRequestedTransportAlias(rawServer: unknown): HttpMcpTransportType | "" {
-  if (
-    !rawServer ||
-    typeof rawServer !== "object" ||
-    typeof (rawServer as { type?: unknown }).type !== "string"
-  ) {
+  if (!isRecord(rawServer) || typeof (rawServer as { type?: unknown }).type !== "string") {
     return "";
   }
   return resolveOpenClawMcpTransportAlias((rawServer as { type?: string }).type) ?? "";
+}
+
+function withInheritedStdioEnv(
+  rawServer: unknown,
+  inheritedEnv: Record<string, string> | undefined,
+): unknown {
+  const safeInheritedEnv = sanitizeHostEnvOverrides({
+    overrides: inheritedEnv,
+    blockPathOverrides: true,
+  });
+  if (!safeInheritedEnv || Object.keys(safeInheritedEnv).length === 0 || !isRecord(rawServer)) {
+    return rawServer;
+  }
+  const serverEnv = isRecord(rawServer.env) ? rawServer.env : undefined;
+  return {
+    ...rawServer,
+    env: {
+      ...safeInheritedEnv,
+      ...serverEnv,
+    },
+  };
 }
 
 function resolveHttpTransportConfig(
@@ -165,13 +190,10 @@ function resolveHttpTransportConfig(
     transportType: launch.config.transportType,
     url: launch.config.url,
     headers: launch.config.headers,
-    ...(rawServer &&
-    typeof rawServer === "object" &&
-    (rawServer as { auth?: unknown }).auth === "oauth"
+    ...(isRecord(rawServer) && (rawServer as { auth?: unknown }).auth === "oauth"
       ? { auth: "oauth" as const }
       : {}),
-    ...(rawServer &&
-    typeof rawServer === "object" &&
+    ...(isRecord(rawServer) &&
     (rawServer as { oauth?: unknown }).oauth &&
     typeof (rawServer as { oauth?: unknown }).oauth === "object" &&
     !Array.isArray((rawServer as { oauth?: unknown }).oauth)
@@ -199,12 +221,14 @@ function resolveHttpTransportConfig(
 export function resolveMcpTransportConfig(
   serverName: string,
   rawServer: unknown,
+  options?: ResolveMcpTransportConfigOptions,
 ): ResolvedMcpTransportConfig | null {
   const logServerName = sanitizeForLog(serverName);
   const requestedTransport = getRequestedTransport(rawServer);
   const requestedTransportAlias = requestedTransport ? "" : getRequestedTransportAlias(rawServer);
   const effectiveTransport = requestedTransport || requestedTransportAlias;
-  const stdioLaunch = resolveStdioMcpServerLaunchConfig(rawServer, {
+  const stdioRawServer = withInheritedStdioEnv(rawServer, options?.inheritedEnv);
+  const stdioLaunch = resolveStdioMcpServerLaunchConfig(stdioRawServer, {
     onDroppedEnv: (key) => {
       logWarn(
         `bundle-mcp: server "${logServerName}": env "${sanitizeForLog(key)}" is blocked for stdio startup safety and was ignored.`,

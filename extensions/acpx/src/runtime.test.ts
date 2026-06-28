@@ -2,7 +2,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { RequestedModelUnsupportedError } from "acpx/runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AcpRuntimeError,
@@ -26,6 +25,12 @@ const CODEX_ACP_WRAPPER_COMMAND_WITH_LEASE = `${CODEX_ACP_WRAPPER_COMMAND} ${OPE
 const LOCAL_NODE_MODULES_CODEX_COMMAND = `node "${path.resolve(
   "node_modules/@zed-industries/codex-acp/bin/codex-acp.js",
 )}"`;
+
+function makeRequestedModelUnsupportedError(message: string): Error {
+  const error = new Error(message);
+  error.name = "RequestedModelUnsupportedError";
+  return error;
+}
 
 function makeRuntime(
   baseStore: TestSessionStore,
@@ -325,6 +330,47 @@ describe("AcpxRuntime fresh reset wrapper", () => {
       mode: "persistent",
       model: "gpt-5.4",
       sessionOptions: { model: "gpt-5.4" },
+    });
+  });
+
+  it("passes OpenClaw env through ACPX session options", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => undefined),
+      save: vi.fn(async () => {}),
+    };
+    const { runtime, delegate } = makeRuntime(baseStore, {
+      agentRegistry: {
+        resolve: (agentName: string) => (agentName === "codex" ? CODEX_ACP_COMMAND : agentName),
+        list: () => ["codex", "openclaw"],
+      },
+    });
+    const ensure = vi.spyOn(delegate, "ensureSession").mockResolvedValue({
+      sessionKey: "agent:codex:acp:test-env",
+      backend: "acpx",
+      runtimeSessionName: "codex",
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:test-env",
+      agent: "codex",
+      mode: "persistent",
+      env: {
+        OPENCLAW_AGENT_ENV: "visible-to-acpx",
+      },
+    });
+
+    expect(readFirstEnsureSessionInput(ensure)).toEqual({
+      sessionKey: "agent:codex:acp:test-env",
+      agent: "codex",
+      mode: "persistent",
+      env: {
+        OPENCLAW_AGENT_ENV: "visible-to-acpx",
+      },
+      sessionOptions: {
+        env: {
+          OPENCLAW_AGENT_ENV: "visible-to-acpx",
+        },
+      },
     });
   });
 
@@ -826,9 +872,8 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     const ensure = vi
       .spyOn(delegate, "ensureSession")
       .mockRejectedValueOnce(
-        new RequestedModelUnsupportedError(
+        makeRequestedModelUnsupportedError(
           "Cannot apply --model: the ACP agent did not advertise model support",
-          "missing-capability",
         ),
       )
       .mockResolvedValueOnce({
@@ -868,9 +913,8 @@ describe("AcpxRuntime fresh reset wrapper", () => {
     const ensure = vi
       .spyOn(delegate, "ensureSession")
       .mockRejectedValueOnce(
-        new RequestedModelUnsupportedError(
+        makeRequestedModelUnsupportedError(
           "Cannot apply --model: the ACP agent did not advertise that model",
-          "unadvertised-model",
         ),
       );
 
@@ -1508,6 +1552,67 @@ describe("AcpxRuntime fresh reset wrapper", () => {
 
     expect(resolvedCommands).toEqual([CODEX_ACP_WRAPPER_COMMAND]);
     expect(leaseStore.store.save).not.toHaveBeenCalled();
+  });
+
+  it("starts a fresh persistent ACPX session when effective env changes", async () => {
+    const baseStore: TestSessionStore = {
+      load: vi.fn(async () => ({
+        name: "agent:codex:acp:binding:test",
+        acpxRecordId: "record-1",
+        acpSessionId: "session-1",
+        agentCommand: CODEX_ACP_WRAPPER_COMMAND,
+        cwd: "/tmp",
+        closed: false,
+        acpx: {
+          session_options: {
+            env: {
+              OPENCLAW_AGENT_ENV: "old-value",
+            },
+          },
+        },
+      })),
+      save: vi.fn(async () => {}),
+    };
+    const leaseStore = makeLeaseStore();
+    const { runtime, delegate, wrappedStore } = makeRuntime(baseStore, {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leaseStore.store,
+      openclawWrapperRoot: "/tmp/openclaw/acpx",
+      agentRegistry: {
+        resolve: (agentName: string) =>
+          agentName === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agentName,
+        list: () => ["codex"],
+      },
+    });
+    const recordsLoadedByDelegate: unknown[] = [];
+    const ensure = vi.spyOn(delegate, "ensureSession").mockImplementation(async (input) => {
+      recordsLoadedByDelegate.push(await wrappedStore.load(input.sessionKey));
+      return {
+        sessionKey: "agent:codex:acp:binding:test",
+        backend: "acpx",
+        runtimeSessionName: "agent:codex:acp:binding:test",
+      };
+    });
+
+    await runtime.ensureSession({
+      sessionKey: "agent:codex:acp:binding:test",
+      agent: "codex",
+      mode: "persistent",
+      env: {
+        OPENCLAW_AGENT_ENV: "new-value",
+      },
+    });
+
+    expect(leaseStore.store.save).toHaveBeenCalledOnce();
+    expect(recordsLoadedByDelegate).toEqual([undefined]);
+    expect(readFirstEnsureSessionInput(ensure)).toMatchObject({
+      sessionKey: "agent:codex:acp:binding:test",
+      sessionOptions: {
+        env: {
+          OPENCLAW_AGENT_ENV: "new-value",
+        },
+      },
+    });
   });
 
   it("merges sidecar lease ids into loaded ACPX session records", async () => {

@@ -19,6 +19,7 @@ export type ResolvedAgentConfig = {
   name?: string;
   workspace?: string;
   agentDir?: string;
+  env?: AgentEntry["env"];
   model?: AgentEntry["model"];
   thinkingDefault?: AgentEntry["thinkingDefault"];
   verboseDefault?: AgentDefaultsConfig["verboseDefault"];
@@ -124,6 +125,7 @@ export function resolveAgentConfig(
     name: readStringValue(entry.name),
     workspace: readStringValue(entry.workspace),
     agentDir: readStringValue(entry.agentDir),
+    env: entry.env ? { ...entry.env } : undefined,
     model:
       typeof entry.model === "string" || (entry.model && typeof entry.model === "object")
         ? entry.model

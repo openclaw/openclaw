@@ -16,8 +16,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { Compile } from "typebox/compile";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { toErrorObject } from "../infra/errors.js";
+import { sanitizeHostEnvOverrides } from "../infra/host-env-security.js";
 import { logWarn } from "../logger.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import {
   findJsonSchemaShapeError,
@@ -33,6 +35,7 @@ import type {
   SessionMcpRuntime,
   SessionMcpRuntimeManager,
 } from "./agent-bundle-mcp-types.js";
+import { resolveAgentConfig } from "./agent-scope-config.js";
 import { loadEmbeddedAgentMcpConfig } from "./embedded-agent-mcp.js";
 import { isMcpConfigRecord } from "./mcp-config-shared.js";
 import { resolveMcpTransport } from "./mcp-transport.js";
@@ -422,18 +425,40 @@ async function disposeSession(session: BundleMcpSession) {
   }
 }
 
-function createCatalogFingerprint(servers: Record<string, unknown>): string {
-  return crypto.createHash("sha1").update(JSON.stringify(servers)).digest("hex");
+function createCatalogFingerprint(
+  servers: Record<string, unknown>,
+  inheritedEnv?: Record<string, string>,
+): string {
+  return crypto.createHash("sha1").update(JSON.stringify({ servers, inheritedEnv })).digest("hex");
+}
+
+function resolveSessionMcpInheritedEnv(params: {
+  cfg?: OpenClawConfig;
+  sessionKey?: string;
+  agentId?: string;
+}): Record<string, string> | undefined {
+  if (!params.cfg) {
+    return undefined;
+  }
+  const agentId = params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey);
+  const env = resolveAgentConfig(params.cfg, agentId)?.env;
+  return sanitizeHostEnvOverrides({
+    overrides: env,
+    blockPathOverrides: true,
+  });
 }
 
 function loadSessionMcpConfig(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  sessionKey?: string;
+  agentId?: string;
   logDiagnostics?: boolean;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): {
   loaded: LoadedMcpConfig;
   fingerprint: string;
+  inheritedEnv?: Record<string, string>;
 } {
   const loaded = loadEmbeddedAgentMcpConfig({
     workspaceDir: params.workspaceDir,
@@ -445,9 +470,15 @@ function loadSessionMcpConfig(params: {
       logWarn(`bundle-mcp: ${diagnostic.pluginId}: ${diagnostic.message}`);
     }
   }
+  const inheritedEnv = resolveSessionMcpInheritedEnv({
+    cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
+  });
   return {
     loaded,
-    fingerprint: createCatalogFingerprint(loaded.mcpServers),
+    fingerprint: createCatalogFingerprint(loaded.mcpServers, inheritedEnv),
+    ...(inheritedEnv ? { inheritedEnv } : {}),
   };
 }
 
@@ -458,11 +489,15 @@ function loadSessionMcpConfig(params: {
 export function resolveSessionMcpConfigSummary(params: {
   workspaceDir: string;
   cfg?: OpenClawConfig;
+  sessionKey?: string;
+  agentId?: string;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): { fingerprint: string; serverNames: string[] } {
   const { loaded, fingerprint } = loadSessionMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
     logDiagnostics: false,
     manifestRegistry: params.manifestRegistry,
   });
@@ -487,13 +522,20 @@ function resolveSessionMcpRuntimeIdleTtlMs(cfg?: OpenClawConfig): number {
 export function createSessionMcpRuntime(params: {
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   workspaceDir: string;
   cfg?: OpenClawConfig;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): SessionMcpRuntime {
-  const { loaded, fingerprint: configFingerprint } = loadSessionMcpConfig({
+  const {
+    loaded,
+    fingerprint: configFingerprint,
+    inheritedEnv,
+  } = loadSessionMcpConfig({
     workspaceDir: params.workspaceDir,
     cfg: params.cfg,
+    sessionKey: params.sessionKey,
+    agentId: params.agentId,
     logDiagnostics: true,
     manifestRegistry: params.manifestRegistry,
   });
@@ -610,7 +652,7 @@ export function createSessionMcpRuntime(params: {
         }> = [];
         for (const [serverName, rawServer] of Object.entries(loaded.mcpServers)) {
           failIfDisposed();
-          const resolved = resolveMcpTransport(serverName, rawServer);
+          const resolved = resolveMcpTransport(serverName, rawServer, { inheritedEnv });
           if (!resolved) {
             continue;
           }
@@ -1074,6 +1116,8 @@ function createSessionMcpRuntimeManager(
       const { fingerprint: nextFingerprint } = loadSessionMcpConfig({
         workspaceDir: params.workspaceDir,
         cfg: params.cfg,
+        sessionKey: params.sessionKey,
+        agentId: params.agentId,
         logDiagnostics: false,
       });
       const existing = runtimesBySessionId.get(params.sessionId);
@@ -1108,6 +1152,7 @@ function createSessionMcpRuntimeManager(
         createRuntime({
           sessionId: params.sessionId,
           sessionKey: params.sessionKey,
+          agentId: params.agentId,
           workspaceDir: params.workspaceDir,
           cfg: params.cfg,
           configFingerprint: nextFingerprint,
@@ -1191,6 +1236,7 @@ export function getSessionMcpRuntimeManager(): SessionMcpRuntimeManager {
 export async function getOrCreateSessionMcpRuntime(params: {
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   workspaceDir: string;
   cfg?: OpenClawConfig;
 }): Promise<SessionMcpRuntime> {

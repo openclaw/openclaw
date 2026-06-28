@@ -302,6 +302,121 @@ afterEach(async () => {
 });
 
 describe("session MCP runtime", () => {
+  it("resolves inherited stdio MCP env from trusted agent owner before raw session key", async () => {
+    const tempDir = makeTempDir(tempDirs, "bundle-mcp-trusted-owner-env-");
+    const serverPath = path.join(tempDir, "env-server.mjs");
+    const logPath = path.join(tempDir, "server.log");
+
+    await writeExecutable(
+      serverPath,
+      `#!/usr/bin/env node
+import fs from "node:fs/promises";
+
+const logPath = ${JSON.stringify(logPath)};
+let buffer = "";
+function log(line) {
+  void fs.appendFile(logPath, line + "\\n", "utf8").catch(() => {});
+}
+function send(message) {
+  process.stdout.write(JSON.stringify(message) + "\\n");
+}
+function handle(message) {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  if (message.method === "initialize") {
+    log("env " + String(process.env.OPENCLAW_AGENT_ENV ?? "null"));
+    log("ld " + String(process.env.LD_PRELOAD ?? "null"));
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        protocolVersion: message.params?.protocolVersion ?? "2025-03-26",
+        capabilities: { tools: {} },
+        serverInfo: { name: "env-owner", version: "1.0.0" },
+      },
+    });
+    return;
+  }
+  if (message.method === "tools/list") {
+    send({
+      jsonrpc: "2.0",
+      id: message.id,
+      result: {
+        tools: [{ name: "env_tool", inputSchema: { type: "object", properties: {} } }],
+      },
+    });
+  }
+}
+process.stdin.setEncoding("utf8");
+process.stdin.on("data", (chunk) => {
+  buffer += chunk;
+  while (true) {
+    const newline = buffer.indexOf("\\n");
+    if (newline < 0) {
+      return;
+    }
+    const line = buffer.slice(0, newline).replace(/\\r$/, "");
+    buffer = buffer.slice(newline + 1);
+    if (line.trim()) {
+      handle(JSON.parse(line));
+    }
+  }
+});
+process.stdin.on("end", () => process.exit(0));
+process.on("SIGTERM", () => process.exit(0));
+process.on("SIGINT", () => process.exit(0));`,
+    );
+
+    const runtimeParams: Parameters<typeof getOrCreateSessionMcpRuntime>[0] & { agentId: string } =
+      {
+        sessionId: "session-trusted-owner-env",
+        sessionKey: "main:abc",
+        agentId: "reviewer",
+        workspaceDir: "/workspace",
+        cfg: {
+          agents: {
+            list: [
+              {
+                id: "main",
+                env: {
+                  OPENCLAW_AGENT_ENV: "wrong-main-env",
+                },
+              },
+              {
+                id: "reviewer",
+                env: {
+                  OPENCLAW_AGENT_ENV: "visible-reviewer-env",
+                  LD_PRELOAD: "/blocked-loader",
+                },
+              },
+            ],
+          },
+          mcp: {
+            servers: {
+              envProbe: {
+                command: process.execPath,
+                args: [serverPath],
+              },
+            },
+          },
+        },
+      };
+
+    const runtime = await getOrCreateSessionMcpRuntime(runtimeParams);
+    try {
+      const catalog = await runtime.getCatalog();
+      expect(catalog.tools.map((tool) => tool.toolName)).toEqual(["env_tool"]);
+      const logText = await fs.readFile(logPath, "utf8");
+      expect(logText).toContain("env visible-reviewer-env");
+      expect(logText).not.toContain("wrong-main-env");
+      expect(logText).toContain("ld null");
+      expect(logText).not.toContain("/blocked-loader");
+    } finally {
+      await runtime.dispose();
+    }
+  });
+
   it("accepts draft-2020-12 tool output schemas from external MCP catalogs", () => {
     const validator = createBundleMcpJsonSchemaValidator().getValidator<{
       format: string;

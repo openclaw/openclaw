@@ -1,6 +1,6 @@
+import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Defines agent routing, model, and runtime configuration types.
 import type { ChatType } from "../channels/chat-type.js";
-import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type {
   AgentContextLimitsConfig,
   AgentDefaultsConfig,
@@ -86,6 +86,7 @@ export type AgentConfig = {
   description?: string;
   workspace?: string;
   agentDir?: string;
+  env?: Record<string, string>;
   model?: AgentModelConfig;
   /**
    * @deprecated Legacy raw config accepted only by doctor/migration repair.

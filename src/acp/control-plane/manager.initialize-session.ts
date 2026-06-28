@@ -4,9 +4,11 @@ import {
   mergeSessionIdentity,
 } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
+import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { sanitizeHostEnvOverrides } from "../../infra/host-env-security.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { AcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
@@ -17,6 +19,7 @@ import type {
   SessionEntry,
   WriteManagerSessionMeta,
 } from "./manager.types.js";
+import { resolveAcpAgentFromSessionKey } from "./manager.utils.js";
 import {
   normalizeRuntimeOptions,
   normalizeText,
@@ -40,6 +43,11 @@ export async function runManagerInitializeSession(params: {
   const backend = params.deps.requireRuntimeBackend(input.backendId || input.cfg.acp?.backend);
   const runtime = backend.runtime;
   const agent = normalizeAgentId(input.agent);
+  const agentEnvOwner = resolveAcpAgentFromSessionKey(sessionKey, agent);
+  const agentEnv = sanitizeHostEnvOverrides({
+    overrides: resolveAgentConfig(input.cfg, agentEnvOwner)?.env,
+    blockPathOverrides: true,
+  });
   const initialRuntimeOptions = validateRuntimeOptionPatch({
     ...input.runtimeOptions,
     ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
@@ -60,6 +68,7 @@ export async function runManagerInitializeSession(params: {
         resumeSessionId: input.resumeSessionId,
         ...(requestedModel ? { model: requestedModel } : {}),
         ...(requestedThinking ? { thinking: requestedThinking } : {}),
+        ...(agentEnv ? { env: agentEnv } : {}),
         cwd: requestedCwd,
       }),
     fallbackCode: "ACP_SESSION_INIT_FAILED",

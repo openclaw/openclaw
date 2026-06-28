@@ -9,9 +9,11 @@ import {
   resolveSessionIdentityFromMeta,
 } from "@openclaw/acp-core/runtime/session-identity";
 import type { AcpRuntime, AcpRuntimeHandle } from "@openclaw/acp-core/runtime/types";
+import { resolveAgentConfig } from "../../agents/agent-scope-config.js";
 import { resolveRuntimeConfigCacheKey } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { logVerbose } from "../../globals.js";
+import { sanitizeHostEnvOverrides } from "../../infra/host-env-security.js";
 import { toAcpRuntimeError, withAcpRuntimeErrorBoundary } from "../runtime/errors.js";
 import type { ManagerRuntimeHandleCache } from "./manager.runtime-handle-cache.js";
 import type {
@@ -45,6 +47,11 @@ export async function ensureManagerRuntimeHandle(params: {
   const model = normalizeText(runtimeOptions.model);
   const thinking = normalizeText(runtimeOptions.thinking);
   const configuredBackend = (params.meta.backend || params.cfg.acp?.backend || "").trim();
+  const agentEnvOwner = resolveAcpAgentFromSessionKey(params.sessionKey, agent);
+  const agentEnv = sanitizeHostEnvOverrides({
+    overrides: resolveAgentConfig(params.cfg, agentEnvOwner)?.env,
+    blockPathOverrides: true,
+  });
   const configSignature = resolveRuntimeConfigCacheKey(params.cfg);
   const cached = params.runtimeHandles.get(params.sessionKey);
   if (cached) {
@@ -108,6 +115,7 @@ export async function ensureManagerRuntimeHandle(params: {
           ...(resumeSessionId ? { resumeSessionId } : {}),
           ...(model ? { model } : {}),
           ...(thinking ? { thinking } : {}),
+          ...(agentEnv ? { env: agentEnv } : {}),
           cwd,
         }),
       fallbackCode: "ACP_SESSION_INIT_FAILED",

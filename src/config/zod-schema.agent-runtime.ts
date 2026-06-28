@@ -1038,6 +1038,7 @@ export const AgentEntrySchema = z
     description: z.string().optional(),
     workspace: z.string().optional(),
     agentDir: z.string().optional(),
+    env: z.record(z.string(), z.string()).optional(),
     model: AgentModelSchema.optional(),
     models: z.record(z.string(), AgentModelRuntimeEntrySchema).optional(),
     thinkingDefault: z

@@ -303,6 +303,16 @@ export function inspectHostExecEnvOverrides(params?: {
   };
 }
 
+export function sanitizeHostEnvOverrides(params?: {
+  overrides?: Record<string, string> | null;
+  blockPathOverrides?: boolean;
+}): Record<string, string> | undefined {
+  const result = sanitizeHostEnvOverridesWithDiagnostics(params);
+  return result.acceptedOverrides && Object.keys(result.acceptedOverrides).length > 0
+    ? result.acceptedOverrides
+    : undefined;
+}
+
 export function sanitizeHostExecEnv(params?: {
   baseEnv?: Record<string, string | undefined>;
   overrides?: Record<string, string> | null;

@@ -374,6 +374,105 @@ describe("AcpSessionManager runtime handles", () => {
     });
   });
 
+  it("passes configured agent env into ACP runtime re-ensure after restart", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:codex:acp:binding:demo-binding:default:agent-env-restart";
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: readySessionMeta({ agent: "codex" }),
+      };
+    });
+    const cfg = {
+      ...baseCfg,
+      agents: {
+        list: [
+          {
+            id: "codex",
+            env: {
+              OPENCLAW_AGENT_ENV: "visible-after-restart",
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg,
+      sessionKey,
+      text: "after restart",
+      mode: "prompt",
+      requestId: "r-binding-restart-agent-env",
+    });
+
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      sessionKey,
+      env: {
+        OPENCLAW_AGENT_ENV: "visible-after-restart",
+      },
+    });
+  });
+
+  it("uses the configured agent owner env when ACP runtime re-ensure targets a harness agent", async () => {
+    const runtimeState = createRuntime();
+    hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
+      id: "acpx",
+      runtime: runtimeState.runtime,
+    });
+    const sessionKey = "agent:reviewer:acp:binding:discord:default:agent-env-restart";
+    hoisted.readAcpSessionEntryMock.mockImplementation((paramsUnknown: unknown) => {
+      const key = (paramsUnknown as { sessionKey?: string }).sessionKey ?? sessionKey;
+      return {
+        sessionKey: key,
+        storeSessionKey: key,
+        acp: readySessionMeta({ agent: "codex" }),
+      };
+    });
+    const cfg = {
+      ...baseCfg,
+      agents: {
+        list: [
+          {
+            id: "reviewer",
+            env: {
+              OPENCLAW_AGENT_ENV: "visible-after-owner-restart",
+            },
+            runtime: {
+              type: "acp",
+              acp: {
+                agent: "codex",
+              },
+            },
+          },
+        ],
+      },
+    } as unknown as OpenClawConfig;
+
+    const manager = new AcpSessionManager();
+    await manager.runTurn({
+      cfg,
+      sessionKey,
+      text: "after restart",
+      mode: "prompt",
+      requestId: "r-binding-restart-owner-agent-env",
+    });
+
+    expectRecordFields(mockCallArg(runtimeState.ensureSession), {
+      sessionKey,
+      agent: "codex",
+      env: {
+        OPENCLAW_AGENT_ENV: "visible-after-owner-restart",
+      },
+    });
+  });
+
   it("passes persisted model runtime options into ensureSession after restart", async () => {
     const runtimeState = createRuntime();
     hoisted.requireAcpRuntimeBackendMock.mockReturnValue({
