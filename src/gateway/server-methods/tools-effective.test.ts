@@ -574,21 +574,16 @@ describe("tools.effective handler", () => {
     expect(firstRespondCall(respond)?.[0]).toBe(true);
   });
 
-  it("rejects agent ids that do not match the session agent", async () => {
+  it("rejects unknown agent ids before loading the session", async () => {
     const { respond, invoke } = createInvokeParams({
       sessionKey: "main:abc",
       agentId: "other",
     });
-    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
-      cfg: {},
-      canonicalKey: "main:abc",
-      entry: {
-        sessionId: "session-1",
-        updatedAt: 1,
-      },
-    } as never);
+    // `other` is not configured, so the handler rejects before reaching
+    // loadSessionEntry; no session mock is queued here on purpose.
     await invoke();
     expectInvalidResponse(respond, 'unknown agent id "other"');
+    expect(runtimeMocks.loadSessionEntry).not.toHaveBeenCalled();
   });
 
   it("loads global sessions with the requested agent id before matching session agent", async () => {
@@ -630,5 +625,31 @@ describe("tools.effective handler", () => {
     expect(call?.[0]).toBe(true);
     expect(resolveEffectiveToolInventoryArg()?.agentId).toBe("work");
     expect(runtimeMocks.resolveAgentDir).toHaveBeenCalledWith({}, "work");
+  });
+
+  it("does not let a requested agent override ownership of a non-global session key", async () => {
+    runtimeMocks.listAgentIds.mockReturnValueOnce(["main", "work"]);
+    runtimeMocks.loadSessionEntry.mockReturnValueOnce({
+      cfg: {},
+      canonicalKey: "agent:main:abc",
+      entry: { sessionId: "session-main", updatedAt: 1 },
+    } as never);
+    // Persisted owner of the non-global key.
+    runtimeMocks.resolveSessionAgentId.mockReturnValueOnce("main");
+
+    const { respond, invoke } = createInvokeParams({
+      sessionKey: "agent:main:abc",
+      agentId: "work",
+    });
+    await invoke();
+
+    // Wiring guard: for a non-global key the requested agent must NOT be forwarded
+    // as the session-agent override, otherwise the real resolver would prefer
+    // "work" and silently pass the mismatch check below.
+    expect(runtimeMocks.resolveSessionAgentId).toHaveBeenLastCalledWith(
+      expect.not.objectContaining({ agentId: expect.anything() }),
+    );
+    expectInvalidResponse(respond, 'agent id "work" does not match session agent "main"');
+    expect(runtimeMocks.resolveEffectiveToolInventory).not.toHaveBeenCalled();
   });
 });

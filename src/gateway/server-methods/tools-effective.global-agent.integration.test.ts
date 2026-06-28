@@ -133,4 +133,56 @@ describe("tools.effective global agent integration", () => {
       }),
     );
   });
+
+  // Negative control on the real session-resolution path: a non-global key owned
+  // by `main` must keep rejecting a mismatched configured agent. Before the
+  // ownership-narrowing fix the requested agent overrode session-agent resolution
+  // here, so this request would have succeeded under `work`.
+  it("rejects a mismatched configured agent for a non-global session key", async () => {
+    await seedNonGlobalMainStore();
+
+    await writeSessionStore({
+      storePath: mainStorePath,
+      entries: {
+        "agent:main:abc": sessionStoreEntry("sess-main-agent", {
+          modelProvider: "openai",
+          model: "main-model",
+        }),
+      },
+    });
+
+    const respond = vi.fn();
+    await toolsEffectiveHandlers["tools.effective"]({
+      params: { sessionKey: "agent:main:abc", agentId: "work" },
+      respond: respond as never,
+      context: { getRuntimeConfig } as never,
+      client: null,
+      req: { type: "req", id: "req-tools-effective-mismatch", method: "tools.effective" },
+      isWebchatConnect: () => false,
+    });
+
+    const call = respond.mock.calls[0] as
+      | [boolean, unknown?, { code: number; message: string }?]
+      | undefined;
+    expect(call?.[0]).toBe(false);
+    expect(call?.[2]?.message).toBe('agent id "work" does not match session agent "main"');
+    expect(inventoryMocks.resolveEffectiveToolInventory).not.toHaveBeenCalled();
+  });
+
+  async function seedNonGlobalMainStore() {
+    const stateDir = process.env.OPENCLAW_STATE_DIR;
+    if (!stateDir) {
+      throw new Error("OPENCLAW_STATE_DIR is required");
+    }
+    const dir = path.join(stateDir, "session-stores", `tools-effective-nonglobal-${Date.now()}`);
+    const storeTemplate = path.join(dir, "{agentId}", "sessions.json");
+    testState.sessionStorePath = storeTemplate;
+    testState.sessionConfig = undefined;
+    testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
+    mainStorePath = storeTemplate.replace("{agentId}", "main");
+    const configModule = await getGatewayConfigModule();
+    configModule.clearRuntimeConfigSnapshot();
+    configModule.clearConfigCache();
+    getRuntimeConfig = configModule.getRuntimeConfig;
+  }
 });
