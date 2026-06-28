@@ -86,6 +86,7 @@ describe("model auth markers", () => {
     withEnv(cleanPluginManifestEnv(), () => {
       const markers = new Set(listKnownNonSecretApiKeyMarkers());
       expect(markers.has("codex-app-server")).toBe(true);
+      expect(markers.has("openclaw:claude-cli-api-key-helper")).toBe(true);
       expect(markers.has("gcp-vertex-credentials")).toBe(true);
       expect(markers.has("lmstudio-local")).toBe(true);
       expect(markers.has("minimax-oauth")).toBe(true);
