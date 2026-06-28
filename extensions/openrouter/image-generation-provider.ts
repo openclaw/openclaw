@@ -35,7 +35,16 @@ const SUPPORTED_MODELS = [
   "openai/gpt-5-image",
   "openai/gpt-5-image-mini",
   "openai/gpt-5.4-image-2",
+  "microsoft/mai-image-2.5",
 ] as const;
+const DEDICATED_IMAGE_API_MODELS = new Set<string>([
+  "google/gemini-3.1-flash-image",
+  "google/gemini-3-pro-image",
+  "google/gemini-2.5-flash-image",
+  "openai/gpt-5-image",
+  "openai/gpt-5-image-mini",
+  "microsoft/mai-image-2.5",
+]);
 const SUPPORTED_ASPECT_RATIOS = [
   "1:1",
   "2:3",
@@ -141,6 +150,42 @@ function extractImagesFromPart(
   throwMalformedOpenRouterImageResponse(malformedResponseError);
 }
 
+function extractImagesFromDataArray(
+  images: GeneratedImageAsset[],
+  data: unknown,
+  malformedResponseError?: string,
+): boolean {
+  if (data === undefined || data === null) {
+    return false;
+  }
+  if (!Array.isArray(data)) {
+    throwMalformedOpenRouterImageResponse(malformedResponseError);
+    return true;
+  }
+  for (const entry of data) {
+    if (!isRecord(entry)) {
+      throwMalformedOpenRouterImageResponse(malformedResponseError);
+      continue;
+    }
+    const rawBase64 = normalizeOptionalString(entry.b64_json);
+    if (!rawBase64) {
+      throwMalformedOpenRouterImageResponse(malformedResponseError);
+      continue;
+    }
+    const image = generatedImageAssetFromBase64({
+      base64: rawBase64,
+      index: images.length,
+      mimeType: normalizeOptionalString(entry.media_type),
+    });
+    if (!image) {
+      throwMalformedOpenRouterImageResponse(malformedResponseError);
+      continue;
+    }
+    images.push(image);
+  }
+  return true;
+}
+
 export function extractOpenRouterImagesFromResponse(
   body: unknown,
   options: { malformedResponseError?: string } = {},
@@ -148,6 +193,10 @@ export function extractOpenRouterImagesFromResponse(
   if (!isRecord(body)) {
     throwMalformedOpenRouterImageResponse(options.malformedResponseError);
     return [];
+  }
+  const images: GeneratedImageAsset[] = [];
+  if (extractImagesFromDataArray(images, body.data, options.malformedResponseError)) {
+    return images;
   }
   const choices = body.choices;
   if (choices === undefined || choices === null) {
@@ -158,7 +207,6 @@ export function extractOpenRouterImagesFromResponse(
     return [];
   }
 
-  const images: GeneratedImageAsset[] = [];
   for (const choice of choices) {
     if (!isRecord(choice)) {
       throwMalformedOpenRouterImageResponse(options.malformedResponseError);
@@ -270,6 +318,34 @@ function buildImageConfig(req: ImageGenerationRequest, model: string): Record<st
   return imageConfig;
 }
 
+function shouldUseDedicatedImagesApi(model: string): boolean {
+  return DEDICATED_IMAGE_API_MODELS.has(model);
+}
+
+function buildImagesApiBody(req: ImageGenerationRequest, model: string, count: number) {
+  const body: Record<string, unknown> = {
+    model,
+    prompt: req.prompt,
+    n: count,
+  };
+  const aspectRatio = normalizeOptionalString(req.aspectRatio);
+  if (aspectRatio) {
+    body.aspect_ratio = aspectRatio;
+  }
+  const resolution = normalizeOptionalString(req.resolution);
+  if (resolution) {
+    body.resolution = resolution;
+  }
+  const inputImages = req.inputImages ?? [];
+  if (inputImages.length > 0) {
+    body.input_references = inputImages.map((image) => ({
+      type: "image_url",
+      image_url: { url: toImageDataUrl(image) },
+    }));
+  }
+  return body;
+}
+
 export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvider {
   return {
     id: "openrouter",
@@ -327,16 +403,19 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
         });
 
       const count = resolveImageCount(req.count);
+      const useImagesApi = shouldUseDedicatedImagesApi(model);
       const { response, release } = await postJsonRequest({
-        url: `${baseUrl}/chat/completions`,
+        url: useImagesApi ? `${baseUrl}/images` : `${baseUrl}/chat/completions`,
         headers,
-        body: {
-          model,
-          messages: [{ role: "user", content: buildMessageContent(req) }],
-          modalities: ["image", "text"],
-          n: count,
-          ...(Object.keys(imageConfig).length > 0 ? { image_config: imageConfig } : {}),
-        },
+        body: useImagesApi
+          ? buildImagesApiBody(req, model, count)
+          : {
+              model,
+              messages: [{ role: "user", content: buildMessageContent(req) }],
+              modalities: ["image", "text"],
+              n: count,
+              ...(Object.keys(imageConfig).length > 0 ? { image_config: imageConfig } : {}),
+            },
         timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
         fetchFn: fetch,
         allowPrivateNetwork,

@@ -108,14 +108,20 @@ OpenRouter can also back the `image_generate` tool. Use an OpenRouter image mode
 }
 ```
 
-OpenClaw sends image requests to OpenRouter's chat completions image API with `modalities: ["image", "text"]`. Gemini image models receive supported `aspectRatio` and `resolution` hints through OpenRouter's `image_config`. Use `agents.defaults.imageGenerationModel.timeoutMs` for slower OpenRouter image models; the `image_generate` tool's per-call `timeoutMs` parameter still wins.
+OpenClaw sends current OpenRouter image models through OpenRouter's dedicated
+`/images` API. Existing preview/default chat-image models continue to use chat
+completions with `modalities: ["image", "text"]`; Gemini chat-image models
+receive supported `aspectRatio` and `resolution` hints through OpenRouter's
+`image_config`. Use `agents.defaults.imageGenerationModel.timeoutMs` for slower
+OpenRouter image models; the `image_generate` tool's per-call `timeoutMs`
+parameter still wins.
 
 The bundled OpenRouter image provider exposes a curated set of OpenRouter
 image-output models, including `google/gemini-3.1-flash-image`,
 `google/gemini-3-pro-image`, `google/gemini-2.5-flash-image`,
 `openai/gpt-5-image`, `openai/gpt-5-image-mini`, and
-`openai/gpt-5.4-image-2`. Existing preview model refs remain accepted when
-you have already configured them.
+`microsoft/mai-image-2.5`. Existing preview model refs and
+`openai/gpt-5.4-image-2` remain accepted when you have already configured them.
 
 ## Video generation
 

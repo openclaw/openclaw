@@ -107,10 +107,48 @@ describe("openrouter image generation provider", () => {
     expect(provider.models).toContain("openai/gpt-5-image");
     expect(provider.models).toContain("openai/gpt-5-image-mini");
     expect(provider.models).toContain("openai/gpt-5.4-image-2");
+    expect(provider.models).toContain("microsoft/mai-image-2.5");
     expect(provider.capabilities.generate.maxCount).toBe(4);
     expect(provider.capabilities.generate.supportsAspectRatio).toBe(true);
     expect(provider.capabilities.edit.enabled).toBe(true);
     expect(provider.capabilities.edit.maxInputImages).toBe(5);
+  });
+
+  it("sends current image models through OpenRouter images API", async () => {
+    const release = vi.fn(async () => {});
+    postJsonRequestMock.mockResolvedValue({
+      response: {
+        json: async () => ({
+          data: [{ b64_json: Buffer.from("png-one").toString("base64") }],
+        }),
+      },
+      release,
+    });
+
+    const provider = buildOpenRouterImageGenerationProvider();
+    const result = await provider.generateImage({
+      provider: "openrouter",
+      model: "microsoft/mai-image-2.5",
+      prompt: "draw a sticker",
+      aspectRatio: "16:9",
+      resolution: "2K",
+      count: 2,
+      cfg: {},
+    });
+
+    const request = requireOpenRouterPostRequest();
+    expect(request).toMatchObject({
+      url: "https://openrouter.ai/api/v1/images",
+      body: {
+        model: "microsoft/mai-image-2.5",
+        prompt: "draw a sticker",
+        n: 2,
+        aspect_ratio: "16:9",
+        resolution: "2K",
+      },
+    });
+    expect(result.model).toBe("microsoft/mai-image-2.5");
+    expect(requireGeneratedImage(result, 0).buffer.toString()).toBe("png-one");
   });
 
   it("sends chat completion image requests with Gemini image config and count", async () => {
