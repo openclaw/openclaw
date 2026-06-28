@@ -182,7 +182,7 @@ describe("session transcript reader facade", () => {
 
   test("reads SQLite-only transcript rows without a JSONL mirror", async () => {
     const sessionId = "reader-sqlite-only";
-    const scope: SessionTranscriptReadScope = {
+    const scope = {
       agentId: "main",
       sessionId,
       sessionKey: `agent:main:${sessionId}`,
@@ -310,7 +310,7 @@ describe("session transcript reader facade", () => {
 
   test("projects SQLite transcript reads to the active branch", async () => {
     const sessionId = "reader-sqlite-branch";
-    const scope: SessionTranscriptReadScope = {
+    const scope = {
       agentId: "main",
       sessionId,
       sessionKey: `agent:main:${sessionId}`,
@@ -355,7 +355,7 @@ describe("session transcript reader facade", () => {
 
   test("bounds SQLite recent message and usage reads", async () => {
     const sessionId = "reader-sqlite-bounded-recent";
-    const scope: SessionTranscriptReadScope = {
+    const scope = {
       agentId: "main",
       sessionId,
       sessionKey: `agent:main:${sessionId}`,
@@ -413,7 +413,7 @@ describe("session transcript reader facade", () => {
 
   test("ignores zero-usage SQLite delivery mirrors for latest usage", async () => {
     const sessionId = "reader-sqlite-delivery-mirror";
-    const scope: SessionTranscriptReadScope = {
+    const scope = {
       agentId: "main",
       sessionId,
       sessionKey: `agent:main:${sessionId}`,

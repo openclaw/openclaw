@@ -6,7 +6,7 @@ import type { HandleCommandsParams } from "./commands-types.js";
 const hookRunnerMocks = vi.hoisted(() => ({
   hasHooks: vi.fn<HookRunner["hasHooks"]>(),
   runBeforeReset: vi.fn<HookRunner["runBeforeReset"]>(),
-  loadTranscriptEvents: vi.fn(async () => []),
+  loadTranscriptEvents: vi.fn(async (): Promise<unknown[]> => []),
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => {

@@ -507,7 +507,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         conversationId: "C1",
       },
     };
-    const sessionStore = {
+    const sessionStore: Record<string, { sessionId: string; updatedAt: number }> = {
       [sourceSessionKey]: {
         sessionId: "source-session-id",
         updatedAt: Date.now(),

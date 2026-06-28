@@ -755,7 +755,13 @@ describe("gateway agent handler", () => {
 
     await runMainAgent("persist me", "idem-user-turn-recorder");
 
-    const call = await waitForAgentCommandCall();
+    const call = await waitForAgentCommandCall<
+      AgentCommandCall & {
+        userTurnTranscriptRecorder?: {
+          persistApproved: () => Promise<unknown>;
+        };
+      }
+    >();
     expect(call.userTurnTranscriptRecorder).toEqual(
       expect.objectContaining({
         persistApproved: expect.any(Function),
@@ -769,7 +775,13 @@ describe("gateway agent handler", () => {
 
     await runMainAgent("stale after reset", "idem-user-turn-rebound");
 
-    const call = await waitForAgentCommandCall();
+    const call = await waitForAgentCommandCall<
+      AgentCommandCall & {
+        userTurnTranscriptRecorder?: {
+          persistApproved: () => Promise<unknown>;
+        };
+      }
+    >();
     mocks.loadSessionEntry.mockReturnValue({
       cfg: {},
       storePath: "/tmp/sessions.json",
@@ -2363,6 +2375,9 @@ describe("gateway agent handler", () => {
     const callArgs = await waitForAgentCommandCall<
       AgentCommandCall & {
         message?: string;
+        userTurnTranscriptRecorder?: {
+          message?: unknown;
+        };
       }
     >();
     expect(callArgs.message).toMatch(/^\[Inter-session message\]/);

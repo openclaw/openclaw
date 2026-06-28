@@ -1,6 +1,7 @@
 import {
   loadTranscriptEvents,
   replaceTranscriptEvents,
+  type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
 import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 /**
@@ -37,6 +38,14 @@ import {
 type SessionManagerLike = ReturnType<typeof SessionManager.open>;
 type SessionBranchEntry = ReturnType<SessionManagerLike["getBranch"]>[number];
 
+function isTranscriptEventRecord(event: unknown): event is TranscriptEvent & {
+  id?: unknown;
+  message?: unknown;
+  type?: unknown;
+} {
+  return typeof event === "object" && event !== null && !Array.isArray(event);
+}
+
 async function rewriteSqliteRuntimeTranscript(params: {
   target: Awaited<ReturnType<typeof resolveRuntimeTranscriptReadTarget>>;
   request: TranscriptRewriteRequest;
@@ -62,6 +71,9 @@ async function rewriteSqliteRuntimeTranscript(params: {
     storePath: marker.storePath,
   });
   const nextEvents = events.map((event) => {
+    if (!isTranscriptEventRecord(event)) {
+      return event;
+    }
     const eventId = typeof event.id === "string" ? event.id : undefined;
     const replacement = eventId ? replacementsById.get(eventId) : undefined;
     if (!replacement || event.type !== "message") {

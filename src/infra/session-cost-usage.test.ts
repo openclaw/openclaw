@@ -349,7 +349,7 @@ describe("session cost usage", () => {
       expect(
         resolveExistingUsageSessionFile({
           agentId: "main",
-          sessionEntry: { sessionFile: sqliteMarker, sessionId },
+          sessionEntry: { sessionFile: sqliteMarker, sessionId, updatedAt: 1 },
           sessionFile: legacyJsonl,
           sessionId,
         }),

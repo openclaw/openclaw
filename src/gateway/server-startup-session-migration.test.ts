@@ -30,8 +30,10 @@ function firstLogMessage(log: ReturnType<typeof vi.fn>, label: string): string {
 }
 
 function makeSessionSqliteImport(
-  report: Partial<Awaited<ReturnType<StartupSessionMigrationDeps["runDoctorSessionSqlite"]>>> = {},
-): StartupSessionMigrationDeps["runDoctorSessionSqlite"] {
+  report: Partial<
+    Awaited<ReturnType<NonNullable<StartupSessionMigrationDeps["runDoctorSessionSqlite"]>>>
+  > = {},
+): NonNullable<StartupSessionMigrationDeps["runDoctorSessionSqlite"]> {
   return vi.fn().mockResolvedValue({
     mode: "import",
     targets: [],

@@ -21,7 +21,7 @@ const hoisted = await vi.hoisted(async () => {
     mkdirMock: vi.fn(async (_filePath: string, _options?: { recursive?: boolean }) => undefined),
     accessMock: vi.fn(async (_filePath: string) => undefined),
     migrateSessionEntriesMock: vi.fn((_entries: unknown[]) => undefined),
-    loadTranscriptEventsMock: vi.fn(async () => []),
+    loadTranscriptEventsMock: vi.fn(async (): Promise<unknown[]> => []),
     exportHtmlTemplateContents: new Map<string, string>(),
     sessionTranscriptEvents: [] as unknown[],
   };

@@ -4,6 +4,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { type Mock, vi } from "vitest";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
+import type { ContextEngineSessionTarget } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import type {
   PluginHookBeforeAgentFinalizeEvent,
@@ -35,6 +36,7 @@ type MockCompactionResult =
         tokensAfter?: number;
         sessionId?: string;
         sessionFile?: string;
+        sessionTarget?: ContextEngineSessionTarget;
       };
       reason?: string;
     }

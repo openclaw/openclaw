@@ -777,7 +777,7 @@ export async function captureCompactionCheckpointSnapshotAsync(params: {
     if (typeof params.sessionManager?.getEntries !== "function") {
       return null;
     }
-    const entryRecords = params.sessionManager.getEntries() as Record<string, unknown>[];
+    const entryRecords = params.sessionManager.getEntries() as unknown as Record<string, unknown>[];
     const transcriptState = readSessionLeafStateFromRecords(entryRecords);
     const position = resolveCompactionCheckpointTranscriptPosition({
       preferredLeafId: liveLeafId,

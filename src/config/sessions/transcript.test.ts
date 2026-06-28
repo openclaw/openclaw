@@ -47,7 +47,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
       const storePath = path.join(sessionsDir, "sessions.json");
       await replaceSessionEntry(
         { sessionKey: "warm", storePath },
-        { sessionId: "warm-session", chatType: "direct" },
+        { sessionId: "warm-session", chatType: "direct", updatedAt: 1 },
       );
       await appendAssistantMessageToSessionTranscript({
         sessionKey: "warm",
@@ -84,15 +84,19 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         sessionId,
         chatType: "direct",
         channel: "discord",
+        updatedAt: 1,
         ...entry,
       },
     );
   }
 
-  async function writeTranscriptSessionEntry(params: { entry: SessionEntry; sessionKey: string }) {
+  async function writeTranscriptSessionEntry(params: {
+    entry: Partial<SessionEntry> & Pick<SessionEntry, "sessionId">;
+    sessionKey: string;
+  }) {
     await replaceSessionEntry(
       { agentId: "main", sessionKey: params.sessionKey, storePath: fixture.storePath() },
-      params.entry,
+      { updatedAt: 1, ...params.entry },
     );
   }
 
@@ -163,6 +167,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         {
           sessionId: "configured-session-id",
           chatType: "direct",
+          updatedAt: 1,
         },
       );
 
@@ -219,6 +224,7 @@ describe("appendAssistantMessageToSessionTranscript", () => {
         {
           sessionId: "worker-session-id",
           chatType: "direct",
+          updatedAt: 1,
         },
       );
       const beforeMessageWrite = vi.fn(({ message }: BeforeMessageWriteParams) => message);

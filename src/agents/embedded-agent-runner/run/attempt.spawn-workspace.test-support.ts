@@ -13,6 +13,7 @@ import type {
   CompactResult,
   ContextEngineInfo,
   ContextEngineMaintenanceResult,
+  ContextEngineSessionTarget,
   IngestBatchResult,
   IngestResult,
 } from "../../../context-engine/types.js";
@@ -1214,8 +1215,9 @@ export async function createContextEngineAttemptRunner(params: {
     }) => Promise<IngestResult>;
     compact?: (params: {
       sessionId: string;
-      sessionKey?: string;
-      sessionFile: string;
+      sessionKey: string;
+      agentId?: string;
+      sessionTarget?: ContextEngineSessionTarget;
       tokenBudget?: number;
     }) => Promise<CompactResult>;
     info?: Partial<ContextEngineInfo>;

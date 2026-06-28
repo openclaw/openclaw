@@ -37,6 +37,7 @@ function lastEmbeddedAgentCall(): {
   agentDir?: string;
   bootstrapContextMode?: "full" | "lightweight";
   prompt?: string;
+  sessionId?: string;
   sessionKey?: string;
   workspaceDir?: string;
   sessionFile?: string;
@@ -54,6 +55,7 @@ function lastEmbeddedAgentCall(): {
     agentDir?: string;
     bootstrapContextMode?: "full" | "lightweight";
     prompt?: string;
+    sessionId?: string;
     sessionKey?: string;
     workspaceDir?: string;
     sessionFile?: string;
