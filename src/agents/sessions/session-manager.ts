@@ -2238,13 +2238,6 @@ export class SessionManager {
       appendTranscriptEventSync(scope, entry);
       return;
     }
-    const role = (entry.message as { role?: unknown }).role;
-    if (role === "user") {
-      // Gateway-owned SQLite turns have already persisted the user message
-      // before the agent loop opens SessionManager. Re-appending here would
-      // duplicate the model-visible user turn in chat.history.
-      return;
-    }
     appendTranscriptMessageSync(scope, {
       cwd: this.cwd,
       eventId: entry.id,
