@@ -1,7 +1,8 @@
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.js";
+// Assistant visible text helpers strip hidden reasoning and control marker text.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
 import { findCodeRegions, isInsideCode } from "./code-regions.js";
 import { stripModelSpecialTokens } from "./model-special-tokens.js";
-import { stripPlainTextToolCallBlocks } from "./plain-text-tool-call-blocks.js";
 import {
   stripReasoningTagsFromText,
   type ReasoningTagMode,
@@ -11,6 +12,16 @@ import {
 const MEMORY_TAG_RE = /<\s*(\/?)\s*relevant[-_]memories\b[^<>]*>/gi;
 const MEMORY_TAG_QUICK_RE = /<\s*\/?\s*relevant[-_]memories\b/i;
 const LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE = /\[\s*\/?\s*TOOL_(?:CALL|RESULT)\s*\]/i;
+const INTERNAL_TRACE_LINE_QUICK_RE =
+  /(?:📊|🛠️|📖|📝|🔍|🔎|⚙️|tool[-_ ]?call|tool[-_ ]?result|function[-_ ]?call)/i;
+const INTERNAL_TRACE_LINE_RE =
+  /^(?:>\s*)?(?:⚠️\s*)?(?:📊|🛠️|📖|📝|🔍|🔎|⚙️)\s*(?:Session Status|Exec|Read|Edit|Write|Patch|Search|Open|Click|Find|Screenshot|Update Plan|Tool Call|Tool Result|Function Call|Shell|Command)\s*:/i;
+const INTERNAL_COMPACT_FAILURE_TRACE_LINE_RE =
+  /^(?:>\s*)?⚠️\s*🛠️\s+\S[\s\S]*\s+\(agent\)`{0,2}\s+failed(?:\s*:.*)?\s*$/i;
+const INTERNAL_COMPACT_COMMAND_TRACE_LINE_RE =
+  /^(?:>\s*)?🛠️\s*(?:(?:(?:elevated|pty)\b\s*(?:·|,)\s*)+)?(?:`{1,2}\s*\S|(?:run|check|fetch|pull|push|view|show|list|switch|create|merge|rebase|stage|restore|reset|stash|search|find|print|copy|move|remove|install|start|cd|git|pnpm|npm|yarn|bun|node|python|python3|bash|sh)\b)/i;
+const INTERNAL_CHANNEL_TRACE_LINE_RE =
+  /^(?:>\s*)?(?:tool[-_ ]?call|tool[-_ ]?result|function[-_ ]?call)\s*[:=]/i;
 
 /**
  * Strip XML-style tool call tags that models sometimes emit as plain text.
@@ -18,12 +29,13 @@ const LEGACY_BRACKET_TOOL_BLOCK_QUICK_RE = /\[\s*\/?\s*TOOL_(?:CALL|RESULT)\s*\]
  * closing tag, or to end-of-string if the stream was truncated mid-tag.
  */
 const TOOL_CALL_QUICK_RE =
-  /<\s*\/?\s*(?:tool_call|tool_result|function_calls?|function|tool_calls)\b/i;
+  /<\s*\/?\s*(?:tool_call|tool_result|function_calls?|function_response|function|tool_calls)\b/i;
 const TOOL_CALL_TAG_NAMES = new Set([
   "tool_call",
   "tool_result",
   "function_call",
   "function_calls",
+  "function_response",
   "function",
   "tool_calls",
 ]);
@@ -168,6 +180,101 @@ function isLikelyStandaloneFunctionToolCall(
   return idx < 0 || text[idx] === "\n" || text[idx] === "\r" || /[.!?:]/.test(text[idx]);
 }
 
+function isStandaloneOpeningTagLine(
+  text: string,
+  tagStart: number,
+  tag: ParsedToolCallTag,
+): boolean {
+  let idx = tagStart - 1;
+  while (idx >= 0 && (text[idx] === " " || text[idx] === "\t")) {
+    idx -= 1;
+  }
+  if (!(idx < 0 || text[idx] === "\n" || text[idx] === "\r")) {
+    return false;
+  }
+  let after = tag.end;
+  while (after < text.length && (text[after] === " " || text[after] === "\t")) {
+    after += 1;
+  }
+  return after >= text.length || text[after] === "\n" || text[after] === "\r";
+}
+
+function isOpeningTagFollowedByLineBreak(text: string, tag: ParsedToolCallTag): boolean {
+  let after = tag.end;
+  while (after < text.length && (text[after] === " " || text[after] === "\t")) {
+    after += 1;
+  }
+  return after >= text.length || text[after] === "\n" || text[after] === "\r";
+}
+
+function hasSameLineContentAfterOpeningTag(text: string, tag: ParsedToolCallTag): boolean {
+  let after = tag.end;
+  while (after < text.length && (text[after] === " " || text[after] === "\t")) {
+    after += 1;
+  }
+  return after < text.length && text[after] !== "\n" && text[after] !== "\r";
+}
+
+function isVisibleLineStart(text: string): boolean {
+  let idx = text.length - 1;
+  while (idx >= 0 && (text[idx] === " " || text[idx] === "\t")) {
+    idx -= 1;
+  }
+  return idx < 0 || text[idx] === "\n" || text[idx] === "\r";
+}
+
+function isAdjacentToStrippedToolCallBlock(
+  text: string,
+  tagStart: number,
+  lastStrippedBlockEnd: number | null,
+): boolean {
+  if (lastStrippedBlockEnd === null || lastStrippedBlockEnd > tagStart) {
+    return false;
+  }
+  for (let idx = lastStrippedBlockEnd; idx < tagStart; idx += 1) {
+    if (text[idx] !== " " && text[idx] !== "\t" && text[idx] !== "\n" && text[idx] !== "\r") {
+      return false;
+    }
+  }
+  return true;
+}
+
+function findMatchingToolCallCloseIndex(text: string, start: number, tagName: string): number {
+  for (let idx = start; idx < text.length; idx += 1) {
+    if (text[idx] !== "<") {
+      continue;
+    }
+    const tag = parseToolCallTagAt(text, idx);
+    if (!tag) {
+      continue;
+    }
+    if (tag.isClose && tag.tagName === tagName && !tag.isTruncated) {
+      return idx;
+    }
+    idx = Math.max(idx, tag.end - 1);
+  }
+  return -1;
+}
+
+function findAdjacentOpeningToolCallTag(
+  text: string,
+  start: number,
+  tagName: string,
+): ParsedToolCallTag | null {
+  let idx = start;
+  while (idx < text.length && /\s/.test(text[idx])) {
+    idx += 1;
+  }
+  if (text[idx] !== "<") {
+    return null;
+  }
+  const tag = parseToolCallTagAt(text, idx);
+  if (!tag || tag.isClose || tag.tagName !== tagName) {
+    return null;
+  }
+  return tag;
+}
+
 function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | null {
   if (text[start] !== "<") {
     return null;
@@ -222,7 +329,10 @@ function parseToolCallTagAt(text: string, start: number): ParsedToolCallTag | nu
 
 export function stripToolCallXmlTags(
   text: string,
-  options: { stripFunctionCallsXmlPayloads?: boolean } = {},
+  options: {
+    stripFunctionCallsXmlPayloads?: boolean;
+    stripFunctionResponseAfterPluralToolCalls?: boolean;
+  } = {},
 ): string {
   if (!text || !TOOL_CALL_QUICK_RE.test(text)) {
     return text;
@@ -236,6 +346,7 @@ export function stripToolCallXmlTags(
   let toolCallBlockNeedsQuoteBalance = false;
   let toolCallBlockStart = 0;
   let toolCallBlockTagName: string | null = null;
+  let lastStrippedToolCallBlockEnd: number | null = null;
   const visibleTagBalance = new Map<string, number>();
 
   for (let idx = 0; idx < text.length; idx += 1) {
@@ -271,16 +382,30 @@ export function stripToolCallXmlTags(
         continue;
       }
       if (tag.isSelfClosing) {
+        lastStrippedToolCallBlockEnd = tag.end;
         lastIndex = tag.end;
         idx = Math.max(idx, tag.end - 1);
         continue;
       }
       const payloadStart = tag.isTruncated ? tag.contentStart : tag.end;
+      const isPluralToolCallWrapper =
+        tag.tagName === "function_calls" || tag.tagName === "tool_calls";
+      const matchingCloseStart = isPluralToolCallWrapper
+        ? findMatchingToolCallCloseIndex(text, tag.end, tag.tagName)
+        : -1;
+      const matchingCloseTag =
+        matchingCloseStart === -1 ? null : parseToolCallTagAt(text, matchingCloseStart);
+      const shouldStripPluralWrapperBeforeResponse =
+        options.stripFunctionResponseAfterPluralToolCalls === true &&
+        isPluralToolCallWrapper &&
+        matchingCloseTag !== null &&
+        findAdjacentOpeningToolCallTag(text, matchingCloseTag.end, "function_response") !== null;
       const shouldDetectXmlPayload =
         tag.tagName === "tool_call" ||
         tag.tagName === "function" ||
-        (options.stripFunctionCallsXmlPayloads === true &&
-          (tag.tagName === "function_calls" || tag.tagName === "tool_calls"));
+        ((options.stripFunctionCallsXmlPayloads === true ||
+          shouldStripPluralWrapperBeforeResponse) &&
+          isPluralToolCallWrapper);
       const payloadKind = shouldDetectXmlPayload
         ? detectToolCallPayloadKind(text, payloadStart)
         : TOOL_CALL_JSON_PAYLOAD_START_RE.test(text.slice(payloadStart))
@@ -288,7 +413,26 @@ export function stripToolCallXmlTags(
           : null;
       const shouldStripStandaloneFunction =
         tag.tagName !== "function" || isLikelyStandaloneFunctionToolCall(text, idx, tag);
-      if (!tag.isClose && payloadKind && shouldStripStandaloneFunction) {
+      const functionResponseCloseStart =
+        tag.tagName === "function_response"
+          ? findMatchingToolCallCloseIndex(text, tag.end, tag.tagName)
+          : -1;
+      const shouldStripAdjacentResult =
+        isAdjacentToStrippedToolCallBlock(text, idx, lastStrippedToolCallBlockEnd) &&
+        (isOpeningTagFollowedByLineBreak(text, tag) ||
+          functionResponseCloseStart !== -1 ||
+          hasSameLineContentAfterOpeningTag(text, tag));
+      const shouldStripStandaloneResult =
+        tag.tagName === "function_response" &&
+        (isStandaloneOpeningTagLine(text, idx, tag) ||
+          shouldStripAdjacentResult ||
+          (functionResponseCloseStart !== -1 &&
+            isVisibleLineStart(result) &&
+            isOpeningTagFollowedByLineBreak(text, tag)));
+      if (
+        !tag.isClose &&
+        ((payloadKind && shouldStripStandaloneFunction) || shouldStripStandaloneResult)
+      ) {
         inToolCallBlock = true;
         toolCallBlockContentStart = tag.end;
         toolCallBlockNeedsQuoteBalance =
@@ -317,9 +461,13 @@ export function stripToolCallXmlTags(
       (!toolCallBlockNeedsQuoteBalance ||
         !endsInsideQuotedString(text, toolCallBlockContentStart, idx))
     ) {
+      const closedBlockTagName = toolCallBlockTagName;
       inToolCallBlock = false;
       toolCallBlockNeedsQuoteBalance = false;
       toolCallBlockTagName = null;
+      if (closedBlockTagName) {
+        lastStrippedToolCallBlockEnd = tag.end;
+      }
     }
 
     lastIndex = tag.end;
@@ -623,13 +771,47 @@ function stripRelevantMemoriesTags(text: string): string {
   return result;
 }
 
-export type AssistantVisibleTextSanitizerProfile = "delivery" | "history" | "internal-scaffolding";
+export function stripAssistantInternalTraceLines(text: string): string {
+  if (!text || !INTERNAL_TRACE_LINE_QUICK_RE.test(text)) {
+    return text;
+  }
+
+  const codeRegions = findCodeRegions(text);
+  let result = "";
+  let lineStart = 0;
+  while (lineStart < text.length) {
+    const newlineIndex = text.indexOf("\n", lineStart);
+    const lineEnd = newlineIndex === -1 ? text.length : newlineIndex + 1;
+    const rawLine = text.slice(lineStart, lineEnd);
+    const line = rawLine.endsWith("\n") ? rawLine.slice(0, -1).replace(/\r$/, "") : rawLine;
+    const trimmed = line.trim();
+    const shouldStrip =
+      !isInsideCode(lineStart, codeRegions) &&
+      (INTERNAL_TRACE_LINE_RE.test(trimmed) ||
+        INTERNAL_COMPACT_FAILURE_TRACE_LINE_RE.test(trimmed) ||
+        INTERNAL_COMPACT_COMMAND_TRACE_LINE_RE.test(trimmed) ||
+        INTERNAL_CHANNEL_TRACE_LINE_RE.test(trimmed));
+    if (!shouldStrip) {
+      result += rawLine;
+    }
+    lineStart = lineEnd;
+  }
+  return result;
+}
+
+export type AssistantVisibleTextSanitizerProfile =
+  | "delivery"
+  | "history"
+  | "internal-scaffolding"
+  | "tool-progress";
 
 type AssistantVisibleTextPipelineOptions = {
   finalTrim: ReasoningTagTrim;
   preserveDowngradedToolText?: boolean;
   preserveMinimaxToolXml?: boolean;
   stripFunctionCallsXmlPayloads?: boolean;
+  stripFunctionResponseAfterPluralToolCalls?: boolean;
+  stripInternalTraceLines?: boolean;
   reasoningMode: ReasoningTagMode;
   reasoningTrim: ReasoningTagTrim;
   stageOrder: "reasoning-first" | "reasoning-last";
@@ -641,6 +823,7 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
 > = {
   delivery: {
     finalTrim: "both",
+    stripFunctionResponseAfterPluralToolCalls: true,
     reasoningMode: "strict",
     reasoningTrim: "both",
     stageOrder: "reasoning-last",
@@ -658,6 +841,14 @@ const ASSISTANT_VISIBLE_TEXT_PIPELINE_OPTIONS: Record<
     reasoningMode: "preserve",
     reasoningTrim: "start",
     stageOrder: "reasoning-first",
+  },
+  "tool-progress": {
+    finalTrim: "both",
+    stripFunctionCallsXmlPayloads: true,
+    stripInternalTraceLines: false,
+    reasoningMode: "strict",
+    reasoningTrim: "both",
+    stageOrder: "reasoning-last",
   },
 };
 
@@ -692,7 +883,11 @@ function applyAssistantVisibleTextStagePipeline(
     cleaned = stripRelevantMemoriesTags(cleaned);
     cleaned = stripToolCallXmlTags(cleaned, {
       stripFunctionCallsXmlPayloads: options.stripFunctionCallsXmlPayloads,
+      stripFunctionResponseAfterPluralToolCalls: options.stripFunctionResponseAfterPluralToolCalls,
     });
+    if (options.stripInternalTraceLines !== false) {
+      cleaned = stripAssistantInternalTraceLines(cleaned);
+    }
     cleaned = stripLegacyBracketToolCallBlocks(cleaned);
     cleaned = stripPlainTextToolCallBlocks(cleaned);
     if (!options.preserveDowngradedToolText) {

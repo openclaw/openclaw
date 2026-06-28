@@ -1,19 +1,33 @@
+/** Auto-reply dispatch orchestration, hook composition, and foreground delivery fencing. */
 import { normalizeChatType } from "../channels/chat-type.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   deriveInboundMessageHookContext,
   toPluginMessageContext,
 } from "../hooks/message-hook-mappers.js";
+import { isDiagnosticsEnabled } from "../infra/diagnostic-events.js";
 import {
   measureDiagnosticsTimelineSpan,
   measureDiagnosticsTimelineSpanSync,
 } from "../infra/diagnostics-timeline.js";
+import { isOutboundDeliveryError } from "../infra/outbound/deliver-types.js";
+import { logMessageReceived } from "../logging/diagnostic.js";
+import { hasOutboundReplyContent } from "../plugin-sdk/reply-payload.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { SilentReplyConversationType } from "../shared/silent-reply-policy.js";
+import {
+  resolveCommandTurnContext,
+  resolveCommandTurnTargetSessionKey,
+} from "./command-turn-context.js";
 import { withReplyDispatcher } from "./dispatch-dispatcher.js";
+import { copyReplyPayloadMetadata } from "./reply-payload.js";
+import type { CommandSessionMetadataChange } from "./reply/command-session-metadata.js";
 import { dispatchReplyFromConfig } from "./reply/dispatch-from-config.js";
 import type { DispatchFromConfigResult } from "./reply/dispatch-from-config.types.js";
-import type { GetReplyFromConfig } from "./reply/get-reply.types.js";
+import type {
+  InternalGetReplyFromConfig,
+  InternalGetReplyOptions,
+} from "./reply/get-reply.types.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
   createReplyDispatcher,
@@ -23,12 +37,19 @@ import {
   type ReplyDispatcherWithTypingOptions,
 } from "./reply/reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply/reply-dispatcher.types.js";
+import { runReplyPayloadSendingHook } from "./reply/reply-payload-sending-hook.js";
+import { consumeReplyUsageState } from "./reply/reply-usage-state.js";
 import type { FinalizedMsgContext, MsgContext } from "./templating.js";
-import type { GetReplyOptions, ReplyPayload } from "./types.js";
+import type { ReplyPayload } from "./types.js";
+
+type InternalDispatchReplyOptions = Omit<InternalGetReplyOptions, "onBlockReply">;
 
 type ForegroundReplyFenceState = {
   generation: number;
+  visibleDeliveryGeneration: number;
   activeDispatches: number;
+  activeGenerations: Map<number, number>;
+  waiters: Set<() => void>;
 };
 
 type ForegroundReplyFenceSnapshot = {
@@ -36,7 +57,25 @@ type ForegroundReplyFenceSnapshot = {
   generation: number;
 };
 
+type ReplyPayloadRunState = {
+  runId?: string;
+};
+
 const foregroundReplyFenceByKey = new Map<string, ForegroundReplyFenceState>();
+const replyPayloadSendingDispatchers = new WeakSet<ReplyDispatcher>();
+
+function applyRuntimeToolsAllow(
+  replyOptions: InternalDispatchReplyOptions | undefined,
+  toolsAllow: string[] | undefined,
+): InternalDispatchReplyOptions | undefined {
+  if (toolsAllow === undefined) {
+    return replyOptions;
+  }
+  return {
+    ...replyOptions,
+    toolsAllow,
+  };
+}
 
 function normalizeForegroundReplyFencePart(value: unknown): string | undefined {
   if (typeof value !== "string") {
@@ -62,6 +101,7 @@ function resolveForegroundReplyFenceKey(finalized: FinalizedMsgContext): string 
     return undefined;
   }
 
+  // JSON keeps the composite key unambiguous across account/session/channel ids.
   return JSON.stringify([
     "foreground",
     channel,
@@ -81,10 +121,18 @@ function beginForegroundReplyFence(
   }
   const state = foregroundReplyFenceByKey.get(key) ?? {
     generation: 0,
+    visibleDeliveryGeneration: 0,
     activeDispatches: 0,
+    activeGenerations: new Map<number, number>(),
+    waiters: new Set<() => void>(),
   };
+  // Generation ordering lets newer foreground replies suppress stale visible deliveries.
   state.generation += 1;
   state.activeDispatches += 1;
+  state.activeGenerations.set(
+    state.generation,
+    (state.activeGenerations.get(state.generation) ?? 0) + 1,
+  );
   foregroundReplyFenceByKey.set(key, state);
   return {
     key,
@@ -92,13 +140,132 @@ function beginForegroundReplyFence(
   };
 }
 
-function isForegroundReplyFenceSuperseded(
-  snapshot: ForegroundReplyFenceSnapshot | undefined,
+function notifyForegroundReplyFenceWaiters(state: ForegroundReplyFenceState): void {
+  const waiters = [...state.waiters];
+  state.waiters.clear();
+  for (const resolve of waiters) {
+    resolve();
+  }
+}
+
+function hasNewerActiveForegroundReplyFenceGeneration(
+  state: ForegroundReplyFenceState,
+  generation: number,
 ): boolean {
-  return Boolean(
-    snapshot &&
-    (foregroundReplyFenceByKey.get(snapshot.key)?.generation ?? 0) !== snapshot.generation,
+  for (const [activeGeneration, count] of state.activeGenerations) {
+    if (activeGeneration > generation && count > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+async function shouldCancelForegroundReplyDelivery(
+  snapshot: ForegroundReplyFenceSnapshot | undefined,
+): Promise<boolean> {
+  if (!snapshot) {
+    return false;
+  }
+  while (true) {
+    const state = foregroundReplyFenceByKey.get(snapshot.key);
+    if (!state) {
+      return false;
+    }
+    if (state.visibleDeliveryGeneration > snapshot.generation) {
+      return true;
+    }
+    if (!hasNewerActiveForegroundReplyFenceGeneration(state, snapshot.generation)) {
+      return false;
+    }
+    // Wait for newer generations to settle before deciding whether this delivery is stale.
+    await new Promise<void>((resolve) => {
+      state.waiters.add(resolve);
+    });
+  }
+}
+
+function markForegroundReplyFenceVisibleDelivery(
+  snapshot: ForegroundReplyFenceSnapshot | undefined,
+  payload: ReplyPayload,
+  deliveryResult: unknown,
+): void {
+  if (!snapshot || !hasOutboundReplyContent(payload, { trimText: true })) {
+    return;
+  }
+  if (isExplicitlyNonVisibleDelivery(deliveryResult)) {
+    return;
+  }
+  // A visible payload with no explicit negative delivery result becomes the generation winner.
+  markForegroundReplyFenceVisibleDeliveryGeneration(snapshot);
+}
+
+function markForegroundReplyFenceVisibleDeliveryGeneration(
+  snapshot: ForegroundReplyFenceSnapshot | undefined,
+): void {
+  if (!snapshot) {
+    return;
+  }
+  const state = foregroundReplyFenceByKey.get(snapshot.key);
+  if (!state) {
+    return;
+  }
+  state.visibleDeliveryGeneration = Math.max(state.visibleDeliveryGeneration, snapshot.generation);
+  notifyForegroundReplyFenceWaiters(state);
+}
+
+function isExplicitlyNonVisibleDelivery(deliveryResult: unknown): boolean {
+  return (
+    typeof deliveryResult === "object" &&
+    deliveryResult !== null &&
+    !Array.isArray(deliveryResult) &&
+    "visibleReplySent" in deliveryResult &&
+    (deliveryResult as { visibleReplySent?: unknown }).visibleReplySent === false
   );
+}
+
+function isExplicitlyVisibleDelivery(deliveryResult: unknown): boolean {
+  return (
+    typeof deliveryResult === "object" &&
+    deliveryResult !== null &&
+    !Array.isArray(deliveryResult) &&
+    (deliveryResult as { visibleReplySent?: unknown }).visibleReplySent === true
+  );
+}
+
+function isVisiblePartialDeliveryError(error: unknown): boolean {
+  if (isOutboundDeliveryError(error)) {
+    return error.sentBeforeError;
+  }
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    !Array.isArray(error) &&
+    ((error as { visibleReplySent?: unknown }).visibleReplySent === true ||
+      (error as { sentBeforeError?: unknown }).sentBeforeError === true)
+  );
+}
+
+async function runForegroundReplyFenceFreshSettledDelivery(
+  snapshot: ForegroundReplyFenceSnapshot | undefined,
+  onFreshSettledDelivery: (() => unknown) | undefined,
+): Promise<void> {
+  if (!onFreshSettledDelivery) {
+    return;
+  }
+  if (await shouldCancelForegroundReplyDelivery(snapshot)) {
+    return;
+  }
+  try {
+    const deliveryResult = await onFreshSettledDelivery();
+    if (isExplicitlyVisibleDelivery(deliveryResult)) {
+      markForegroundReplyFenceVisibleDeliveryGeneration(snapshot);
+    }
+  } catch (err: unknown) {
+    if (isVisiblePartialDeliveryError(err)) {
+      markForegroundReplyFenceVisibleDeliveryGeneration(snapshot);
+    }
+    throw err;
+  }
 }
 
 function endForegroundReplyFence(snapshot: ForegroundReplyFenceSnapshot): void {
@@ -106,7 +273,14 @@ function endForegroundReplyFence(snapshot: ForegroundReplyFenceSnapshot): void {
   if (!state) {
     return;
   }
+  const activeGenerationCount = state.activeGenerations.get(snapshot.generation) ?? 0;
+  if (activeGenerationCount <= 1) {
+    state.activeGenerations.delete(snapshot.generation);
+  } else {
+    state.activeGenerations.set(snapshot.generation, activeGenerationCount - 1);
+  }
   state.activeDispatches -= 1;
+  notifyForegroundReplyFenceWaiters(state);
   if (state.activeDispatches <= 0) {
     foregroundReplyFenceByKey.delete(snapshot.key);
   }
@@ -117,21 +291,18 @@ function resolveDispatcherSilentReplyContext(
   cfg: OpenClawConfig,
 ) {
   const finalized = finalizeInboundContext(ctx);
-  const policySessionKey =
-    finalized.CommandSource === "native"
-      ? (finalized.CommandTargetSessionKey ?? finalized.SessionKey)
-      : finalized.SessionKey;
+  const commandTargetSessionKey = resolveCommandTurnTargetSessionKey(finalized);
+  const policySessionKey = commandTargetSessionKey ?? finalized.SessionKey;
   const chatType = normalizeChatType(finalized.ChatType);
   const conversationType: SilentReplyConversationType | undefined =
-    finalized.CommandSource === "native" &&
-    finalized.CommandTargetSessionKey &&
-    finalized.CommandTargetSessionKey !== finalized.SessionKey
+    commandTargetSessionKey && commandTargetSessionKey !== finalized.SessionKey
       ? undefined
       : chatType === "direct"
         ? "direct"
         : chatType === "group" || chatType === "channel"
           ? "group"
           : undefined;
+  // Cross-session native command dispatch bypasses direct/group inference for silent policy.
   return {
     cfg,
     sessionKey: policySessionKey,
@@ -179,13 +350,99 @@ function buildMessageSendingBeforeDeliver(
       return null;
     }
     if (result?.content != null) {
-      return { ...payload, text: result.content };
+      return copyReplyPayloadMetadata(payload, { ...payload, text: result.content });
     }
     return payload;
   };
 }
 
+function buildReplyPayloadSendingBeforeDeliver(
+  ctx: MsgContext | FinalizedMsgContext,
+  runState: ReplyPayloadRunState,
+): ReplyDispatchBeforeDeliver {
+  const finalized = finalizeInboundContext(ctx);
+  const hookCtx = deriveInboundMessageHookContext(finalized);
+
+  return async (payload: ReplyPayload, info): Promise<ReplyPayload | null> => {
+    const runId = runState.runId;
+    const hookedPayload = await runReplyPayloadSendingHook({
+      payload,
+      kind: info.kind,
+      channel: finalized.Surface ?? finalized.Provider,
+      sessionKey: finalized.SessionKey,
+      runId,
+      usageState: consumeReplyUsageState(runId),
+      context: {
+        ...toPluginMessageContext(hookCtx),
+        runId,
+      },
+    });
+    return hookedPayload && hasOutboundReplyContent(hookedPayload) ? hookedPayload : null;
+  };
+}
+
+function bindReplyPayloadRunState(
+  replyOptions: InternalDispatchReplyOptions | undefined,
+  runState: ReplyPayloadRunState,
+): InternalDispatchReplyOptions {
+  const onAgentRunStart = replyOptions?.onAgentRunStart;
+  return {
+    ...replyOptions,
+    onAgentRunStart: (runId) => {
+      runState.runId = runId;
+      onAgentRunStart?.(runId);
+    },
+  };
+}
+
+function installReplyPayloadSendingBeforeDeliver(
+  dispatcher: ReplyDispatcher,
+  ctx: MsgContext | FinalizedMsgContext,
+  runState: ReplyPayloadRunState,
+): void {
+  if (replyPayloadSendingDispatchers.has(dispatcher)) {
+    return;
+  }
+  const beforeDeliver = buildReplyPayloadSendingBeforeDeliver(ctx, runState);
+  if (!beforeDeliver || !dispatcher.appendBeforeDeliver) {
+    return;
+  }
+  dispatcher.appendBeforeDeliver(beforeDeliver);
+  replyPayloadSendingDispatchers.add(dispatcher);
+}
+
+function markReplyPayloadSendingBeforeDeliverInstalled(
+  dispatcher: ReplyDispatcher,
+  beforeDeliver: ReplyDispatchBeforeDeliver | undefined,
+): void {
+  if (beforeDeliver) {
+    replyPayloadSendingDispatchers.add(dispatcher);
+  }
+}
+
+function combineBeforeDeliverHooks(
+  ...hooks: Array<ReplyDispatchBeforeDeliver | undefined>
+): ReplyDispatchBeforeDeliver | undefined {
+  const activeHooks = hooks.filter((hook): hook is ReplyDispatchBeforeDeliver => Boolean(hook));
+  if (activeHooks.length === 0) {
+    return undefined;
+  }
+
+  return async (payload, info) => {
+    let current: ReplyPayload | null = payload;
+    for (const hook of activeHooks) {
+      if (!current) {
+        return null;
+      }
+      const next = await hook(current, info);
+      current = next ? copyReplyPayloadMetadata(current, next) : null;
+    }
+    return current;
+  };
+}
+
 function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) {
+  const commandTurn = resolveCommandTurnContext(ctx);
   return {
     surface:
       typeof ctx.Surface === "string"
@@ -195,7 +452,7 @@ function buildDispatchTimelineAttributes(ctx: MsgContext | FinalizedMsgContext) 
           : "unknown",
     hasSessionKey:
       typeof ctx.SessionKey === "string" || typeof ctx.CommandTargetSessionKey === "string",
-    commandSource: typeof ctx.CommandSource === "string" ? ctx.CommandSource : "message",
+    commandSource: commandTurn.source,
   };
 }
 
@@ -217,6 +474,7 @@ function finalizeDispatchResult(
     block: result.counts?.block ?? 0,
     final: result.counts?.final ?? 0,
   };
+  // Dispatcher counts include cancelled/failed queued blocks; public result counts do not.
   const counts = {
     tool: Math.max(0, resultCounts.tool - (cancelledCounts?.tool ?? 0) - (failedCounts?.tool ?? 0)),
     block: Math.max(
@@ -240,13 +498,22 @@ function finalizeDispatchResult(
   };
 }
 
+/** Dispatches one finalized inbound message through reply resolution and queued delivery. */
 export async function dispatchInboundMessage(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcher: ReplyDispatcher;
-  replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
-  replyResolver?: GetReplyFromConfig;
+  toolsAllow?: string[];
+  replyOptions?: InternalDispatchReplyOptions;
+  replyResolver?: InternalGetReplyFromConfig;
+  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
+  replyPayloadRunState?: ReplyPayloadRunState;
 }): Promise<DispatchInboundResult> {
+  const replyOptions = applyRuntimeToolsAllow(params.replyOptions, params.toolsAllow);
+  const replyPayloadRunState = params.replyPayloadRunState ?? {
+    runId: replyOptions?.runId,
+  };
+  const replyOptionsWithRunState = bindReplyPayloadRunState(replyOptions, replyPayloadRunState);
   const finalized = measureDiagnosticsTimelineSpanSync(
     "auto_reply.finalize_context",
     () => finalizeInboundContext(params.ctx),
@@ -256,6 +523,16 @@ export async function dispatchInboundMessage(params: {
       attributes: buildDispatchTimelineAttributes(params.ctx),
     },
   );
+  if (isDiagnosticsEnabled(params.cfg)) {
+    logMessageReceived({
+      sessionKey: finalized.SessionKey,
+      channel: finalized.Surface ?? finalized.Provider,
+      chatId: finalized.To ?? finalized.From,
+      messageId: finalized.MessageSid ?? finalized.MessageSidFirst ?? finalized.MessageSidLast,
+      source: "dispatchInboundMessage",
+    });
+  }
+  installReplyPayloadSendingBeforeDeliver(params.dispatcher, finalized, replyPayloadRunState);
   const result = await withReplyDispatcher({
     dispatcher: params.dispatcher,
     run: () =>
@@ -266,8 +543,9 @@ export async function dispatchInboundMessage(params: {
             ctx: finalized,
             cfg: params.cfg,
             dispatcher: params.dispatcher,
-            replyOptions: params.replyOptions,
+            replyOptions: replyOptionsWithRunState,
             replyResolver: params.replyResolver,
+            onSessionMetadataChanges: params.onSessionMetadataChanges,
           }),
         {
           phase: "agent-turn",
@@ -279,78 +557,145 @@ export async function dispatchInboundMessage(params: {
   return finalizeDispatchResult(result, params.dispatcher);
 }
 
+/** Creates a buffered dispatcher with typing, hooks, and stale foreground delivery suppression. */
 export async function dispatchInboundMessageWithBufferedDispatcher(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherWithTypingOptions;
-  replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
-  replyResolver?: GetReplyFromConfig;
+  toolsAllow?: string[];
+  replyOptions?: InternalDispatchReplyOptions;
+  replyResolver?: InternalGetReplyFromConfig;
+  onSessionMetadataChanges?: (changes: CommandSessionMetadataChange[]) => void;
 }): Promise<DispatchInboundResult> {
   const finalized = finalizeInboundContext(params.ctx);
   const foregroundReplyFence = beginForegroundReplyFence(finalized);
   const silentReplyContext = resolveDispatcherSilentReplyContext(finalized, params.cfg);
-  const configuredBeforeDeliver =
-    params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(finalized);
+  const replyPayloadRunState = {
+    runId: params.replyOptions?.runId,
+  };
+  const replyPayloadBeforeDeliver = buildReplyPayloadSendingBeforeDeliver(
+    finalized,
+    replyPayloadRunState,
+  );
+  const globalBeforeDeliver = combineBeforeDeliverHooks(
+    replyPayloadBeforeDeliver,
+    buildMessageSendingBeforeDeliver(finalized),
+  );
+  const configuredBeforeDeliver = params.dispatcherOptions.beforeDeliver
+    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
+    : globalBeforeDeliver;
   const beforeDeliver: ReplyDispatchBeforeDeliver | undefined =
     foregroundReplyFence || configuredBeforeDeliver
       ? async (payload, info) => {
-          if (isForegroundReplyFenceSuperseded(foregroundReplyFence)) {
+          // Check both before and after hooks because hooks can await while newer replies finish.
+          if (await shouldCancelForegroundReplyDelivery(foregroundReplyFence)) {
             return null;
           }
           const deliverPayload = configuredBeforeDeliver
             ? await configuredBeforeDeliver(payload, info)
             : payload;
-          if (!deliverPayload || isForegroundReplyFenceSuperseded(foregroundReplyFence)) {
+          if (
+            !deliverPayload ||
+            (await shouldCancelForegroundReplyDelivery(foregroundReplyFence))
+          ) {
             return null;
           }
           return deliverPayload;
         }
       : undefined;
+  const deliver: ReplyDispatcherWithTypingOptions["deliver"] = async (payload, info) => {
+    try {
+      const result = await params.dispatcherOptions.deliver(payload, info);
+      markForegroundReplyFenceVisibleDelivery(foregroundReplyFence, payload, result);
+      return result;
+    } catch (err: unknown) {
+      if (isVisiblePartialDeliveryError(err)) {
+        markForegroundReplyFenceVisibleDelivery(foregroundReplyFence, payload, {
+          visibleReplySent: true,
+        });
+      }
+      throw err;
+    }
+  };
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     createReplyDispatcherWithTyping({
       ...params.dispatcherOptions,
+      deliver,
       beforeDeliver,
       silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
     });
+  markReplyPayloadSendingBeforeDeliverInstalled(dispatcher, replyPayloadBeforeDeliver);
   try {
     return await dispatchInboundMessage({
       ctx: finalized,
       cfg: params.cfg,
       dispatcher,
+      toolsAllow: params.toolsAllow,
       replyResolver: params.replyResolver,
       replyOptions: {
         ...params.replyOptions,
         ...replyOptions,
       },
+      replyPayloadRunState,
+      onSessionMetadataChanges: params.onSessionMetadataChanges,
     });
   } finally {
-    if (foregroundReplyFence) {
-      endForegroundReplyFence(foregroundReplyFence);
+    try {
+      const settledResult = await params.dispatcherOptions.onSettled?.();
+      if (isExplicitlyVisibleDelivery(settledResult)) {
+        markForegroundReplyFenceVisibleDeliveryGeneration(foregroundReplyFence);
+      }
+      await runForegroundReplyFenceFreshSettledDelivery(
+        foregroundReplyFence,
+        params.dispatcherOptions.onFreshSettledDelivery,
+      );
+    } finally {
+      if (foregroundReplyFence) {
+        endForegroundReplyFence(foregroundReplyFence);
+      }
+      markRunComplete();
+      markDispatchIdle();
     }
-    markRunComplete();
-    markDispatchIdle();
   }
 }
 
+/** Creates a plain dispatcher, installs global send hooks, and dispatches the inbound message. */
 export async function dispatchInboundMessageWithDispatcher(params: {
   ctx: MsgContext | FinalizedMsgContext;
   cfg: OpenClawConfig;
   dispatcherOptions: ReplyDispatcherOptions;
-  replyOptions?: Omit<GetReplyOptions, "onBlockReply">;
-  replyResolver?: GetReplyFromConfig;
+  toolsAllow?: string[];
+  replyOptions?: InternalDispatchReplyOptions;
+  replyResolver?: InternalGetReplyFromConfig;
 }): Promise<DispatchInboundResult> {
   const silentReplyContext = resolveDispatcherSilentReplyContext(params.ctx, params.cfg);
+  const replyPayloadRunState = {
+    runId: params.replyOptions?.runId,
+  };
+  const replyPayloadBeforeDeliver = buildReplyPayloadSendingBeforeDeliver(
+    params.ctx,
+    replyPayloadRunState,
+  );
+  const globalBeforeDeliver = combineBeforeDeliverHooks(
+    replyPayloadBeforeDeliver,
+    buildMessageSendingBeforeDeliver(params.ctx),
+  );
+  const composedBeforeDeliver = params.dispatcherOptions.beforeDeliver
+    ? combineBeforeDeliverHooks(params.dispatcherOptions.beforeDeliver, replyPayloadBeforeDeliver)
+    : globalBeforeDeliver;
   const dispatcher = createReplyDispatcher({
     ...params.dispatcherOptions,
-    beforeDeliver:
-      params.dispatcherOptions.beforeDeliver ?? buildMessageSendingBeforeDeliver(params.ctx),
+    beforeDeliver: composedBeforeDeliver,
     silentReplyContext: params.dispatcherOptions.silentReplyContext ?? silentReplyContext,
   });
+  markReplyPayloadSendingBeforeDeliverInstalled(dispatcher, replyPayloadBeforeDeliver);
   return await dispatchInboundMessage({
     ctx: params.ctx,
     cfg: params.cfg,
     dispatcher,
+    toolsAllow: params.toolsAllow,
     replyResolver: params.replyResolver,
     replyOptions: params.replyOptions,
+    replyPayloadRunState,
   });
 }

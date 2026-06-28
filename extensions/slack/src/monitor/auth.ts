@@ -1,3 +1,4 @@
+// Slack plugin module implements auth behavior.
 import {
   type ChannelIngressEventInput,
   type ChannelIngressIdentifierKind,
@@ -9,6 +10,10 @@ import {
   readChannelIngressStoreAllowFromForDmPolicy,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import {
+  asDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   allowListMatches,
@@ -145,8 +150,8 @@ function readSlackCacheTtlMs(envName: string, fallback: number): number {
   if (!raw) {
     return fallback;
   }
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : fallback;
+  const parsed = /^\d+$/.test(raw) ? Number(raw) : Number.NaN;
+  return Number.isSafeInteger(parsed) ? parsed : fallback;
 }
 
 function getChannelMembersCache(
@@ -183,7 +188,7 @@ export async function resolveSlackEffectiveAllowFrom(
   if (options?.includePairingStore !== true) {
     return base;
   }
-  let storeAllowFrom: string[] = [];
+  let storeAllowFrom: string[];
   try {
     const resolved = await readChannelIngressStoreAllowFromForDmPolicy({
       provider: "slack",
@@ -236,26 +241,33 @@ async function resolveSlackChannelMemberIds(
     "OPENCLAW_SLACK_CHANNEL_MEMBERS_CACHE_TTL_MS",
     DEFAULT_CHANNEL_MEMBERS_CACHE_TTL_MS,
   );
-  const nowMs = Date.now();
+  const rawNowMs = Date.now();
+  const nowMs = asDateTimestampMs(rawNowMs);
   const cached = cache.get(key);
-  if (ttlMs > 0 && cached?.members && cached.expiresAtMs >= nowMs) {
-    return cached.members;
+  if (cached?.members) {
+    if (ttlMs > 0 && nowMs !== undefined && cached.expiresAtMs >= nowMs) {
+      return cached.members;
+    }
+    cache.delete(key);
   }
   if (cached?.pending) {
     return await cached.pending;
   }
 
   const pending = fetchSlackChannelMemberIds(ctx, channelId);
+  const pendingExpiresAtMs =
+    ttlMs > 0 ? resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNowMs }) : undefined;
   cache.set(key, {
-    expiresAtMs: ttlMs > 0 ? nowMs + ttlMs : 0,
+    expiresAtMs: pendingExpiresAtMs ?? 0,
     pending,
   });
   pruneChannelMembersCache(cache);
   try {
     const members = await pending;
-    if (ttlMs > 0) {
+    const membersExpiresAtMs = ttlMs > 0 ? resolveExpiresAtMsFromDurationMs(ttlMs) : undefined;
+    if (membersExpiresAtMs !== undefined) {
       cache.set(key, {
-        expiresAtMs: Date.now() + ttlMs,
+        expiresAtMs: membersExpiresAtMs,
         members,
       });
       pruneChannelMembersCache(cache);

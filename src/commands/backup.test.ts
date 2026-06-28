@@ -1,13 +1,16 @@
+// Backup command tests cover backup create, verify, and runtime output paths.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../runtime.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import * as backupShared from "./backup-shared.js";
 import {
   buildBackupArchiveRoot,
   encodeAbsolutePathForBackupArchive,
+  formatBackupArchiveTimestamp,
   type BackupAsset,
   resolveBackupPlanFromPaths,
   resolveBackupPlanFromDisk,
@@ -101,15 +104,16 @@ describe("backup commands", () => {
   async function withInvalidWorkspaceBackupConfig<T>(fn: (runtime: RuntimeEnv) => Promise<T>) {
     const stateDir = path.join(tempHome.home, ".openclaw");
     const configPath = path.join(tempHome.home, "custom-config.json");
-    process.env.OPENCLAW_CONFIG_PATH = configPath;
     await fs.writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify({}), "utf8");
     await fs.writeFile(configPath, '{"agents": { defaults: { workspace: ', "utf8");
-    const runtime = createBackupTestRuntime();
 
+    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH"]);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
+    const runtime = createBackupTestRuntime();
     try {
       return await fn(runtime);
     } finally {
-      delete process.env.OPENCLAW_CONFIG_PATH;
+      envSnapshot.restore();
     }
   }
 
@@ -160,6 +164,15 @@ describe("backup commands", () => {
       },
     ]);
   }
+
+  it("formats backup archive timestamps in local time with an explicit offset", () => {
+    expect(formatBackupArchiveTimestamp(Date.UTC(2026, 2, 14, 1, 2, 3, 456), 8 * 60)).toBe(
+      "2026-03-14T09-02-03.456+08-00",
+    );
+    expect(formatBackupArchiveTimestamp(Date.UTC(2026, 2, 14, 1, 2, 3, 456), -5 * 60)).toBe(
+      "2026-03-13T20-02-03.456-05-00",
+    );
+  });
 
   it("collapses default config, credentials, and workspace into the state backup root", async () => {
     const stateDir = path.join(tempHome.home, ".openclaw");
@@ -222,8 +235,9 @@ describe("backup commands", () => {
     let capturedManifest: CapturedBackupManifest | null = null;
     let capturedEntryPaths: string[] = [];
     let capturedOnWriteEntry: ((entry: { path: string }) => void) | null = null;
+    const envSnapshot = captureEnv(["OPENCLAW_CONFIG_PATH"]);
     try {
-      process.env.OPENCLAW_CONFIG_PATH = configPath;
+      setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
       await fs.writeFile(
         configPath,
         JSON.stringify({
@@ -340,7 +354,7 @@ describe("backup commands", () => {
         ),
       );
     } finally {
-      delete process.env.OPENCLAW_CONFIG_PATH;
+      envSnapshot.restore();
       await fs.rm(externalWorkspace, { recursive: true, force: true });
       await fs.rm(backupDir, { recursive: true, force: true });
     }
@@ -452,7 +466,7 @@ describe("backup commands", () => {
       const workspaceLink = path.join(linkParent, "workspace-link");
       try {
         await fs.symlink(workspaceDir, workspaceLink);
-        vi.mocked(process.cwd).mockReturnValue(workspaceLink);
+        vi.mocked(process["cwd"]).mockReturnValue(workspaceLink);
         const symlinkNowMs = Date.UTC(2026, 2, 9, 1, 3, 4);
         await mockWorkspaceBackupPlan(stateDir, workspaceDir, symlinkNowMs);
         const symlinkResult = await backupCreateCommand(createBackupTestRuntime(), {

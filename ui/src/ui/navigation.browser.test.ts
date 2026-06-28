@@ -1,3 +1,4 @@
+// Control UI tests cover navigation behavior.
 import { describe, expect, it, vi } from "vitest";
 import { mountApp as mountTestApp, registerAppMountHooks } from "./test-helpers/app-mount.ts";
 
@@ -35,6 +36,20 @@ function expectButtonWithText(app: ReturnType<typeof mountApp>, text: string): H
     throw new Error(`Expected button with text "${text}"`);
   }
   return button;
+}
+
+function createSessionsResult(sessions: Array<Record<string, unknown>>) {
+  return {
+    ts: 0,
+    path: "",
+    count: sessions.length,
+    defaults: { modelProvider: "openai", model: "gpt-5.5", contextTokens: null },
+    sessions: sessions.map((session) => ({
+      kind: "direct",
+      updatedAt: Date.now(),
+      ...session,
+    })),
+  };
 }
 
 async function confirmPendingGatewayChange(app: ReturnType<typeof mountApp>) {
@@ -406,11 +421,27 @@ describe("control UI routing", () => {
     expect([...nav.classList]).toEqual(["shell-nav"]);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
 
-    const link = expectElement(app, 'a.nav-item[href="/channels"]', HTMLAnchorElement);
+    const drawerClose = expectElement(
+      app,
+      ".sidebar-shell__header .nav-collapse-toggle",
+      HTMLButtonElement,
+    );
+    expect(drawerClose.getAttribute("aria-label")).toBe("Collapse sidebar");
+    drawerClose.click();
+    await app.updateComplete;
+
+    expect([...shell.classList]).toEqual(["shell", "shell--chat"]);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+
+    toggle.click();
+    await app.updateComplete;
+    expect([...shell.classList]).toEqual(["shell", "shell--chat", "shell--nav-drawer-open"]);
+
+    const link = expectElement(app, 'a.nav-item[href="/config"]', HTMLAnchorElement);
     link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 
     await app.updateComplete;
-    expect(app.tab).toBe("channels");
+    expect(app.tab).toBe("config");
     expect([...shell.classList]).toEqual(["shell"]);
 
     app.applySettings({ ...app.settings, navCollapsed: true });
@@ -433,12 +464,129 @@ describe("control UI routing", () => {
     expectElement(header, ".nav-collapse-toggle", HTMLElement);
   });
 
-  it("closes mobile chat controls on Escape, outside pointerdown, and tab changes", async () => {
+  it("hides child nav items when the active group is collapsed", async () => {
     const app = mountApp("/chat");
     await app.updateComplete;
 
-    const toggle = expectElement(app, ".chat-controls-mobile-toggle", HTMLButtonElement);
-    const dropdown = expectElement(app, ".chat-controls-dropdown", HTMLElement);
+    app.applySettings({
+      ...app.settings,
+      navGroupsCollapsed: { ...app.settings.navGroupsCollapsed, chat: true },
+    });
+    await app.updateComplete;
+
+    const chatLink = expectElement(app, 'a.nav-item[href="/chat"]', HTMLAnchorElement);
+    const section = chatLink.closest(".nav-section");
+    expect(section).toBeInstanceOf(HTMLElement);
+    if (!(section instanceof HTMLElement)) {
+      throw new Error("Expected chat link to be inside a nav section");
+    }
+
+    expect([...section.classList]).toContain("nav-section--collapsed");
+    expect(
+      section
+        .querySelector<HTMLButtonElement>(".nav-section__label")
+        ?.getAttribute("aria-expanded"),
+    ).toBe("false");
+  });
+
+  it("shows recent sessions in the sidebar and switches through them", async () => {
+    const app = mountApp("/overview");
+    app.sessionKey = "agent:main:second";
+    app.sessionsResult = createSessionsResult([
+      { key: "global", kind: "global", label: "Global", updatedAt: Date.now() },
+      { key: "unknown", kind: "unknown", label: "Unknown", updatedAt: Date.now() - 10_000 },
+      { key: "cron:daily", kind: "cron", label: "Daily cron", updatedAt: Date.now() - 20_000 },
+      {
+        key: "agent:main:subagent:task",
+        label: "Subagent",
+        spawnedBy: "agent:main:second",
+        updatedAt: Date.now() - 25_000,
+      },
+      { key: "agent:main:first", label: "First workspace", updatedAt: Date.now() - 5 * 60_000 },
+      { key: "agent:main:second", label: "Second workspace", updatedAt: Date.now() - 30_000 },
+    ]) as typeof app.sessionsResult;
+    await app.updateComplete;
+
+    const recent = Array.from(app.querySelectorAll<HTMLAnchorElement>(".sidebar-recent-session"));
+    expect(recent.map((entry) => entry.textContent?.replace(/\s+/g, " ").trim())).toEqual([
+      "Second workspace just now",
+      "First workspace 5m ago",
+    ]);
+
+    const recentSection = expectElement(app, ".sidebar-recent-sessions", HTMLElement);
+    const recentToggle = expectElement(
+      recentSection,
+      ".sidebar-recent-sessions__label",
+      HTMLButtonElement,
+    );
+    expect(recentToggle.getAttribute("aria-expanded")).toBe("true");
+
+    recentToggle.click();
+    await app.updateComplete;
+
+    expect(app.settings.recentSessionsCollapsed).toBe(true);
+    expect(recentToggle.getAttribute("aria-expanded")).toBe("false");
+    expect([...recentSection.classList]).toContain("sidebar-recent-sessions--collapsed");
+
+    recentToggle.click();
+    await app.updateComplete;
+
+    expect(app.settings.recentSessionsCollapsed).toBe(false);
+    expect(recentToggle.getAttribute("aria-expanded")).toBe("true");
+    expect([...recentSection.classList]).not.toContain("sidebar-recent-sessions--collapsed");
+
+    recent[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+    await app.updateComplete;
+
+    expect(app.tab).toBe("chat");
+    expect(app.sessionKey).toBe("agent:main:first");
+    expect(window.location.pathname).toBe("/chat");
+    expect(window.location.search).toBe("?session=agent%3Amain%3Afirst");
+  });
+
+  it("creates a new chat session from the sidebar", async () => {
+    const app = mountApp("/overview");
+    app.sessionKey = "agent:main:main";
+    app.sessionsResult = createSessionsResult([
+      { key: "agent:main:main", label: "Main Session" },
+    ]) as typeof app.sessionsResult;
+    app.client = {
+      stop: vi.fn(),
+      request: vi.fn(async (method: string) => {
+        if (method === "sessions.create") {
+          return { key: "agent:main:fresh" };
+        }
+        if (method === "sessions.list") {
+          return createSessionsResult([
+            { key: "agent:main:fresh", label: "Fresh session" },
+            { key: "agent:main:main", label: "Main Session" },
+          ]);
+        }
+        return null;
+      }),
+    } as unknown as typeof app.client;
+    await app.updateComplete;
+
+    expectButtonWithText(app, "New session").click();
+
+    await vi.waitFor(() => {
+      expect(app.sessionKey).toBe("agent:main:fresh");
+    });
+    expect(app.tab).toBe("chat");
+    expect(window.location.pathname).toBe("/chat");
+    expect(app.client?.["request"]).toHaveBeenCalledWith("sessions.create", {
+      agentId: "main",
+      parentSessionKey: "agent:main:main",
+      emitCommandHooks: true,
+    });
+  });
+
+  it("closes composer view settings on Escape, outside pointerdown, and tab changes", async () => {
+    const app = mountApp("/chat");
+    await app.updateComplete;
+
+    const toggle = expectElement(app, ".chat-settings-chip", HTMLButtonElement);
+    const dropdown = expectElement(app, ".chat-settings-popover", HTMLElement);
 
     toggle.focus();
     toggle.click();
@@ -446,13 +594,11 @@ describe("control UI routing", () => {
 
     expect(app.chatMobileControlsOpen).toBe(true);
     expect(toggle.getAttribute("aria-expanded")).toBe("true");
-    expect([...toggle.classList]).toEqual([
-      "btn",
-      "btn--sm",
-      "btn--icon",
-      "chat-controls-mobile-toggle",
+    expect([...toggle.classList]).toEqual(["chat-settings-chip", "chat-settings-chip--open"]);
+    expect([...dropdown.classList]).toEqual([
+      "chat-settings-popover",
+      "chat-settings-popover--open",
     ]);
-    expect([...dropdown.classList]).toEqual(["chat-controls-dropdown", "open"]);
 
     document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     await app.updateComplete;
@@ -460,7 +606,7 @@ describe("control UI routing", () => {
 
     expect(app.chatMobileControlsOpen).toBe(false);
     expect(toggle.getAttribute("aria-expanded")).toBe("false");
-    expect([...dropdown.classList]).toEqual(["chat-controls-dropdown"]);
+    expect([...dropdown.classList]).toEqual(["chat-settings-popover"]);
     expect(document.activeElement).toBe(toggle);
 
     toggle.click();
@@ -468,18 +614,21 @@ describe("control UI routing", () => {
     app.requestUpdate();
     await app.updateComplete;
 
-    const openDropdown = expectElement(app, ".chat-controls-dropdown", HTMLElement);
+    const openDropdown = expectElement(app, ".chat-settings-popover", HTMLElement);
     expect(app.chatMobileControlsOpen).toBe(true);
-    expect([...openDropdown.classList]).toEqual(["chat-controls-dropdown", "open"]);
+    expect([...openDropdown.classList]).toEqual([
+      "chat-settings-popover",
+      "chat-settings-popover--open",
+    ]);
 
     document.body.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
     await app.updateComplete;
 
-    const closedDropdown = expectElement(app, ".chat-controls-dropdown", HTMLElement);
+    const closedDropdown = expectElement(app, ".chat-settings-popover", HTMLElement);
     expect(app.chatMobileControlsOpen).toBe(false);
-    expect([...closedDropdown.classList]).toEqual(["chat-controls-dropdown"]);
+    expect([...closedDropdown.classList]).toEqual(["chat-settings-popover"]);
 
-    expectElement(app, ".chat-controls-mobile-toggle", HTMLButtonElement).click();
+    expectElement(app, ".chat-settings-chip", HTMLButtonElement).click();
     await app.updateComplete;
     expect(app.chatMobileControlsOpen).toBe(true);
 
@@ -488,7 +637,7 @@ describe("control UI routing", () => {
     expect(app.chatMobileControlsOpen).toBe(false);
   });
 
-  it("preserves session navigation and keeps focus mode scoped to chat", async () => {
+  it("preserves session navigation without hiding the page chrome", async () => {
     const app = mountApp("/sessions?session=agent:main:subagent:task-123");
     await app.updateComplete;
 
@@ -502,29 +651,36 @@ describe("control UI routing", () => {
     expect(window.location.search).toBe("?session=agent%3Amain%3Asubagent%3Atask-123");
 
     const shell = expectElement(app, ".shell", HTMLElement);
+    const topbar = expectElement(app, ".topbar", HTMLElement);
+    const sessionSelect = expectElement(app, ".sidebar-session-select", HTMLElement);
     expect([...shell.classList]).toEqual(["shell", "shell--chat"]);
-
-    const toggle = expectElement(app, 'button[title^="Toggle focus mode"]', HTMLButtonElement);
-    toggle.click();
-
-    await app.updateComplete;
-    expect([...shell.classList]).toEqual(["shell", "shell--chat", "shell--chat-focus"]);
-
-    const channelsLink = expectElement(app, 'a.nav-item[href="/channels"]', HTMLAnchorElement);
-    channelsLink.dispatchEvent(
-      new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }),
+    expect(topbar.hasAttribute("inert")).toBe(false);
+    expect(topbar.hasAttribute("aria-hidden")).toBe(false);
+    expect(app.querySelector(".content-header")).toBeNull();
+    expect(sessionSelect.querySelector(".chat-controls__session-picker")).toBeInstanceOf(
+      HTMLElement,
     );
+
+    app.setTab("channels");
 
     await app.updateComplete;
     expect(app.tab).toBe("channels");
     expect([...shell.classList]).toEqual(["shell"]);
+    expect(topbar.hasAttribute("inert")).toBe(false);
+    expect(topbar.hasAttribute("aria-hidden")).toBe(false);
+    const channelsContentHeader = expectElement(app, ".content-header", HTMLElement);
+    expect(channelsContentHeader.hasAttribute("inert")).toBe(false);
+    expect(channelsContentHeader.hasAttribute("aria-hidden")).toBe(false);
 
     const chatLink = expectElement(app, 'a.nav-item[href="/chat"]', HTMLAnchorElement);
     chatLink.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
 
     await app.updateComplete;
     expect(app.tab).toBe("chat");
-    expect([...shell.classList]).toEqual(["shell", "shell--chat", "shell--chat-focus"]);
+    expect([...shell.classList]).toEqual(["shell", "shell--chat"]);
+    expect(topbar.hasAttribute("inert")).toBe(false);
+    expect(topbar.hasAttribute("aria-hidden")).toBe(false);
+    expect(app.querySelector(".content-header")).toBeNull();
   });
 
   it("auto-scrolls chat history to the latest message", async () => {
@@ -618,7 +774,7 @@ describe("control UI routing", () => {
     expect(thread.scrollTop).toBe(targetScrollTop);
   });
 
-  it("hydrates hash tokens, restores same-tab refreshes, and clears after gateway changes", async () => {
+  it("hydrates hash tokens, preserves same-scope URL edits, and reloads after gateway changes", async () => {
     const app = mountApp("/ui/overview#token=abc123");
     await app.updateComplete;
 
@@ -643,12 +799,32 @@ describe("control UI routing", () => {
       'input[placeholder="ws://100.x.y.z:18789"]',
       HTMLInputElement,
     );
+
+    const sameScopeUrl = `${refreshed.settings.gatewayUrl}/`;
+    gatewayUrlInput.value = sameScopeUrl;
+    gatewayUrlInput.dispatchEvent(new Event("input", { bubbles: true }));
+    await refreshed.updateComplete;
+
+    expect(refreshed.settings.gatewayUrl).toBe(sameScopeUrl);
+    expect(refreshed.settings.token).toBe("abc123");
+
+    gatewayUrlInput.value = "wss://missing-token.example/openclaw";
+    gatewayUrlInput.dispatchEvent(new Event("input", { bubbles: true }));
+    await refreshed.updateComplete;
+
+    expect(refreshed.settings.gatewayUrl).toBe("wss://missing-token.example/openclaw");
+    expect(refreshed.settings.token).toBe("");
+
+    sessionStorage.setItem(
+      "openclaw.control.token.v1:wss://other-gateway.example/openclaw",
+      "other-token",
+    );
     gatewayUrlInput.value = "wss://other-gateway.example/openclaw";
     gatewayUrlInput.dispatchEvent(new Event("input", { bubbles: true }));
     await refreshed.updateComplete;
 
     expect(refreshed.settings.gatewayUrl).toBe("wss://other-gateway.example/openclaw");
-    expect(refreshed.settings.token).toBe("");
+    expect(refreshed.settings.token).toBe("other-token");
   });
 
   it("keeps a hash token pending until the gateway URL change is confirmed", async () => {

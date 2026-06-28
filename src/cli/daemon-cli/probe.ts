@@ -1,3 +1,4 @@
+// Gateway status probe helper used by `gateway status` service diagnostics.
 import type { OpenClawConfig } from "../../config/types.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -34,6 +35,17 @@ function resolveGatewayStatusProbeDetails(result: GatewayStatusProbeResult) {
   return "authProbe" in result ? result.authProbe : result;
 }
 
+function readRuntimeVersionFromStatusPayload(payload: unknown): string | null {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const runtimeVersion = (payload as { runtimeVersion?: unknown }).runtimeVersion;
+  return typeof runtimeVersion === "string" && runtimeVersion.trim().length > 0
+    ? runtimeVersion.trim()
+    : null;
+}
+
+/** Probe Gateway connectivity or read-capability status with optional RPC verification. */
 export async function probeGatewayStatus(opts: {
   url: string;
   token?: string;
@@ -44,10 +56,12 @@ export async function probeGatewayStatus(opts: {
   preauthHandshakeTimeoutMs?: number;
   json?: boolean;
   requireRpc?: boolean;
+  allowRpcConfigCredentials?: boolean;
   configPath?: string;
 }) {
   const kind = (opts.requireRpc ? "read" : "connect") satisfies GatewayStatusProbeKind;
   try {
+    let statusRuntimeVersion: string | null = null;
     const result = await withProgress<GatewayStatusProbeResult>(
       {
         label: "Checking gateway status...",
@@ -70,17 +84,24 @@ export async function probeGatewayStatus(opts: {
           includeDetails: false,
         };
         if (opts.requireRpc) {
+          const allowRpcConfigCredentials = opts.allowRpcConfigCredentials !== false;
+          if (!allowRpcConfigCredentials && !opts.token && !opts.password) {
+            throw new Error(
+              "gateway status RPC skipped because configured gateway credentials are disabled for this status request",
+            );
+          }
           const { callGateway } = await import("../../gateway/call.js");
-          await callGateway({
+          const statusPayload = await callGateway({
             url: opts.url,
             token: opts.token,
             password: opts.password,
             tlsFingerprint: opts.tlsFingerprint,
-            ...(opts.config ? { config: opts.config } : {}),
+            ...(allowRpcConfigCredentials && opts.config ? { config: opts.config } : {}),
             method: "status",
             timeoutMs: opts.timeoutMs,
             ...(opts.configPath ? { configPath: opts.configPath } : {}),
           });
+          statusRuntimeVersion = readRuntimeVersionFromStatusPayload(statusPayload);
           const authProbe = await probeGateway(probeOpts).catch(() => null);
           return { ok: true as const, authProbe };
         }
@@ -91,6 +112,7 @@ export async function probeGatewayStatus(opts: {
     const auth = probeDetails?.auth;
     const server = probeDetails?.server;
     const serverSummary = server ? { server } : {};
+    const version = server?.version ?? ("authProbe" in result ? statusRuntimeVersion : null);
     if (result.ok) {
       return {
         ok: true,
@@ -103,6 +125,7 @@ export async function probeGatewayStatus(opts: {
             : auth?.capability,
         auth,
         ...serverSummary,
+        ...(version != null ? { version } : {}),
       } as const;
     }
     return {
@@ -111,6 +134,7 @@ export async function probeGatewayStatus(opts: {
       capability: auth?.capability,
       auth,
       ...serverSummary,
+      ...(version != null ? { version } : {}),
       error: resolveProbeFailureMessage(result),
     } as const;
   } catch (err) {

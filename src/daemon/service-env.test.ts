@@ -1,3 +1,4 @@
+// Daemon service env tests cover environment variable assembly for services.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -601,9 +602,20 @@ describe("buildServiceEnvironment", () => {
     expect(typeof env.OPENCLAW_SERVICE_VERSION).toBe("string");
     expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway.service");
     expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Gateway");
+    expect(env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBe("1");
     if (process.platform === "darwin") {
       expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.gateway");
     }
+  });
+
+  it("sets the OpenClaw-owned launchd marker for macOS gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/Users/user" },
+      port: 18789,
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.gateway");
   });
 
   it("passes through OPENCLAW_WRAPPER for gateway services", () => {
@@ -675,6 +687,43 @@ describe("buildServiceEnvironment", () => {
     }
   });
 
+  it("preserves explicit systemd unit overrides", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_PROFILE: "work",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance",
+      },
+      port: 18789,
+      platform: "linux",
+    });
+
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-maintenance.service");
+  });
+
+  it("preserves explicit systemd unit overrides with service suffix", () => {
+    const env = buildServiceEnvironment({
+      env: {
+        HOME: "/home/user",
+        OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-maintenance.service",
+      },
+      port: 18789,
+      platform: "linux",
+    });
+
+    expect(env.OPENCLAW_SYSTEMD_UNIT).toBe("openclaw-gateway-maintenance.service");
+  });
+
+  it("sets a profile-specific launchd marker for macOS gateway services", () => {
+    const env = buildServiceEnvironment({
+      env: { HOME: "/Users/user", OPENCLAW_PROFILE: "work" },
+      port: 18789,
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.work");
+  });
+
   it("does not persist ambient proxy environment variables for launchd/systemd runtime", () => {
     const env = buildServiceEnvironment({
       env: {
@@ -739,11 +788,11 @@ describe("buildServiceEnvironment", () => {
       env: { HOME: "/Users/user", VOLTA_HOME: "/Users/user/.volta" },
       port: 18789,
       platform: "darwin",
-      extraPathDirs: ["/opt/homebrew/Cellar/node/22.16.0/bin"],
+      extraPathDirs: ["/opt/homebrew/Cellar/node/22.19.0/bin"],
     });
 
     expect(env.PATH).toBe(
-      "/opt/homebrew/Cellar/node/22.16.0/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+      "/opt/homebrew/Cellar/node/22.19.0/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
     );
   });
 });
@@ -754,6 +803,15 @@ describe("buildNodeServiceEnvironment", () => {
       env: { HOME: "/home/user" },
     });
     expect(env.HOME).toBe("/home/user");
+  });
+
+  it("sets the OpenClaw-owned launchd marker for macOS node services", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "/Users/user" },
+      platform: "darwin",
+    });
+
+    expect(env.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.node");
   });
 
   it("passes through OPENCLAW_GATEWAY_TOKEN for node services", () => {
@@ -838,6 +896,17 @@ describe("buildNodeServiceEnvironment", () => {
     expect(env.PATH?.split(path.posix.delimiter)[0]).toBe(
       "/home/user/.nvm/versions/node/v22.22.0/bin",
     );
+  });
+
+  it("marks Windows node tasks for hidden launcher startup", () => {
+    const env = buildNodeServiceEnvironment({
+      env: { HOME: "C:\\Users\\alice" },
+      platform: "win32",
+    });
+
+    expect(env.OPENCLAW_WINDOWS_TASK_NAME).toBe("OpenClaw Node");
+    expect(env.OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER).toBe("1");
+    expect(env.OPENCLAW_TASK_SCRIPT_NAME).toBe("node.cmd");
   });
 });
 

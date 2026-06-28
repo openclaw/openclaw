@@ -10,7 +10,7 @@ CONTAINER_NAME="openclaw-crestodian-first-run-e2e-$$"
 RUN_LOG="$(mktemp -t openclaw-crestodian-first-run-log.XXXXXX)"
 
 cleanup() {
-  docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+  docker_e2e_docker_cmd rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
   rm -f "$RUN_LOG"
 }
 trap cleanup EXIT
@@ -35,9 +35,9 @@ set -e
 
 if [ "$status" -ne 0 ]; then
   echo "Docker Crestodian first-run smoke failed"
-  cat "$RUN_LOG"
+  docker_e2e_print_log "$RUN_LOG"
   exit "$status"
 fi
 
-cat "$RUN_LOG"
+docker_e2e_print_log "$RUN_LOG"
 echo "OK"

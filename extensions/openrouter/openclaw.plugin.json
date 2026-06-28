@@ -1,5 +1,6 @@
 {
   "id": "openrouter",
+  "icon": "https://cdn.simpleicons.org/openrouter",
   "activation": {
     "onStartup": false
   },
@@ -35,8 +36,13 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "openrouter": ["OPENROUTER_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "openrouter",
+        "envVars": ["OPENROUTER_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
@@ -46,16 +52,30 @@
       "choiceLabel": "OpenRouter API key",
       "groupId": "openrouter",
       "groupLabel": "OpenRouter",
-      "groupHint": "API key",
+      "groupHint": "OAuth or API key",
+      "onboardingScopes": ["text-inference", "music-generation"],
       "optionKey": "openrouterApiKey",
       "cliFlag": "--openrouter-api-key",
       "cliOption": "--openrouter-api-key <key>",
       "cliDescription": "OpenRouter API key"
+    },
+    {
+      "provider": "openrouter",
+      "method": "oauth",
+      "choiceId": "openrouter-oauth",
+      "choiceLabel": "OpenRouter OAuth",
+      "choiceHint": "Browser sign-in",
+      "groupId": "openrouter",
+      "groupLabel": "OpenRouter",
+      "groupHint": "OAuth or API key",
+      "onboardingScopes": ["text-inference", "music-generation"],
+      "onboardingFeatured": true
     }
   ],
   "contracts": {
     "mediaUnderstandingProviders": ["openrouter"],
     "imageGenerationProviders": ["openrouter"],
+    "musicGenerationProviders": ["openrouter"],
     "videoGenerationProviders": ["openrouter"],
     "speechProviders": ["openrouter"]
   },

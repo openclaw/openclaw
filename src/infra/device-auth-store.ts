@@ -1,21 +1,28 @@
+// Persists device authorization records for paired nodes.
+import fs from "node:fs";
 import path from "node:path";
-import { z } from "zod";
 import { resolveStateDir } from "../config/paths.js";
 import {
   clearDeviceAuthTokenFromStore,
+  coerceDeviceAuthStore,
   type DeviceAuthEntry,
+  type DeviceAuthStore,
   loadDeviceAuthTokenFromStore,
   storeDeviceAuthTokenInStore,
 } from "../shared/device-auth-store.js";
-import type { DeviceAuthStore } from "../shared/device-auth.js";
 import { privateFileStoreSync } from "./private-file-store.js";
 
 const DEVICE_AUTH_FILE = "device-auth.json";
-const DeviceAuthStoreSchema = z.object({
-  version: z.literal(1),
-  deviceId: z.string(),
-  tokens: z.record(z.string(), z.unknown()),
-}) as z.ZodType<DeviceAuthStore>;
+
+type StoreCacheEntry = { store: DeviceAuthStore | null; mtimeMs: number; size: number };
+const storeReadCache = new Map<string, StoreCacheEntry>();
+
+function storeCacheHit(
+  cached: StoreCacheEntry | undefined,
+  stat: { mtimeMs: number; size: number },
+): boolean {
+  return cached !== undefined && cached.mtimeMs === stat.mtimeMs && cached.size === stat.size;
+}
 
 function resolveDeviceAuthPath(env: NodeJS.ProcessEnv = process.env): string {
   return path.join(resolveStateDir(env), "identity", DEVICE_AUTH_FILE);
@@ -23,11 +30,28 @@ function resolveDeviceAuthPath(env: NodeJS.ProcessEnv = process.env): string {
 
 function readStore(filePath: string): DeviceAuthStore | null {
   try {
+    let stat: fs.Stats | null = null;
+    try {
+      stat = fs.statSync(filePath);
+    } catch {
+      const cached = storeReadCache.get(filePath);
+      if (cached?.mtimeMs === -1 && cached.size === -1) {
+        return cached.store;
+      }
+      storeReadCache.set(filePath, { store: null, mtimeMs: -1, size: -1 });
+      return null;
+    }
+    const cached = storeReadCache.get(filePath);
+    if (cached !== undefined && storeCacheHit(cached, stat)) {
+      // Device auth is read during gateway reconnects; cache by file metadata to avoid rereads.
+      return cached.store;
+    }
     const parsed = privateFileStoreSync(path.dirname(filePath)).readJsonIfExists(
       path.basename(filePath),
     );
-    const store = DeviceAuthStoreSchema.safeParse(parsed);
-    return store.success ? store.data : null;
+    const store = coerceDeviceAuthStore(parsed);
+    storeReadCache.set(filePath, { store, mtimeMs: stat.mtimeMs, size: stat.size });
+    return store;
   } catch {
     return null;
   }
@@ -37,8 +61,15 @@ function writeStore(filePath: string, store: DeviceAuthStore): void {
   privateFileStoreSync(path.dirname(filePath)).writeJson(path.basename(filePath), store, {
     trailingNewline: true,
   });
+  try {
+    const stat = fs.statSync(filePath);
+    storeReadCache.set(filePath, { store, mtimeMs: stat.mtimeMs, size: stat.size });
+  } catch {
+    storeReadCache.delete(filePath);
+  }
 }
 
+/** Load a cached device-auth token from the configured OpenClaw state directory. */
 export function loadDeviceAuthToken(params: {
   deviceId: string;
   role: string;
@@ -52,6 +83,7 @@ export function loadDeviceAuthToken(params: {
   });
 }
 
+/** Persist or replace one device-auth role token in the private state directory. */
 export function storeDeviceAuthToken(params: {
   deviceId: string;
   role: string;
@@ -72,6 +104,7 @@ export function storeDeviceAuthToken(params: {
   });
 }
 
+/** Remove one role token for the current gateway device from the private state directory. */
 export function clearDeviceAuthToken(params: {
   deviceId: string;
   role: string;

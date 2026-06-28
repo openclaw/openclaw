@@ -15,7 +15,8 @@ sidebarTitle: "Adding capabilities"
   load pipeline, runtime helpers), see [Plugin internals](/plugins/architecture).
 </Info>
 
-Use this when OpenClaw needs a new shared domain such as image generation, video generation, or some future vendor-backed feature area.
+Use this when OpenClaw needs a new shared domain such as embeddings, image
+generation, video generation, or some future vendor-backed feature area.
 
 The rule:
 
@@ -70,7 +71,7 @@ If the work is vendor-only and no shared contract exists yet, stop and define th
 
 Use **provider hooks** when the behavior belongs to the model provider contract rather than the generic agent loop. Examples include provider-specific request params after transport selection, auth-profile preference, prompt overlays, and follow-up fallback routing after model/profile failover.
 
-Use **agent harness hooks** when the behavior belongs to the runtime that is executing a turn. Harnesses can classify successful-but-unusable attempt results such as empty, reasoning-only, or planning-only responses so the outer model fallback policy can make the retry decision.
+Use **agent harness hooks** when the behavior belongs to the runtime that is executing a turn. Harnesses can classify explicit protocol outcomes such as empty output, reasoning without visible output, or a structured plan without a final answer so the outer model fallback policy can make the retry decision.
 
 Keep both seams narrow:
 
@@ -112,6 +113,18 @@ The config key is intentionally separate from vision-analysis routing:
 - `agents.defaults.imageGenerationModel` generates images.
 
 Keep those separate so fallback and policy remain explicit.
+
+## Embedding providers
+
+Use `embeddingProviders` for reusable vector embedding providers. This contract
+is intentionally broader than memory: tools, search, retrieval, importers, or
+future feature plugins can consume embeddings without depending on the memory
+engine.
+
+Memory search can consume generic `embeddingProviders`. The older
+`memoryEmbeddingProviders` contract is deprecated compatibility while existing
+memory-specific providers migrate; new reusable embedding providers should use
+`embeddingProviders`.
 
 ## Review checklist
 

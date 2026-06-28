@@ -1,3 +1,6 @@
+/**
+ * Tests talk handoff coordination between gateway sessions and realtime state.
+ */
 import { describe, expect, it, vi } from "vitest";
 import {
   cancelTalkHandoffTurn,
@@ -104,6 +107,45 @@ describe("talk handoff store", () => {
 
     vi.advanceTimersByTime(5001);
     expect(getTalkHandoff(handoff.id)).toBeUndefined();
+    vi.useRealTimers();
+  });
+
+  it("expires handoffs immediately when the creation clock is invalid", () => {
+    clearTalkHandoffsForTest();
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      const handoff = createTalkHandoff({
+        sessionKey: "session:main",
+        ttlMs: 5000,
+      });
+
+      expect(handoff.createdAt).toBe(0);
+      expect(handoff.expiresAt).toBe(0);
+      expect(joinTalkHandoff(handoff.id, handoff.token)).toEqual({
+        ok: false,
+        reason: "expired",
+      });
+    } finally {
+      dateNow.mockRestore();
+    }
+  });
+
+  it("expires handoffs immediately when expiry would exceed Date bounds", () => {
+    clearTalkHandoffsForTest();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+
+    const handoff = createTalkHandoff({
+      sessionKey: "session:main",
+      ttlMs: 5000,
+    });
+
+    expect(handoff.expiresAt).toBe(0);
+    expect(joinTalkHandoff(handoff.id, handoff.token)).toEqual({
+      ok: false,
+      reason: "expired",
+    });
+
     vi.useRealTimers();
   });
 

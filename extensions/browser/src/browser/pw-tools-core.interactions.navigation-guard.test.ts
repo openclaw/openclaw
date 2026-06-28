@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.interactions.navigation guard plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import {
   getPwToolsCoreNavigationGuardMocks,
@@ -918,6 +919,52 @@ describe("pw-tools-core interaction navigation guard", () => {
     });
   });
 
+  it("runs statement-body page evaluate sources", async () => {
+    const page = {
+      evaluate: vi.fn(async (evaluateFn: (args: unknown) => unknown, args: unknown) =>
+        evaluateFn(args),
+      ),
+      url: vi.fn(() => "http://127.0.0.1:9222/json/version"),
+    };
+    setPwToolsCoreCurrentPage(page);
+
+    const result = await mod.evaluateViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      fn: "const value = 41; return value + 1;",
+    });
+
+    expect(result).toBe(42);
+    expect(page.evaluate.mock.calls[0]?.[1]).toMatchObject({
+      fnSource: "async () => {\nconst value = 41; return value + 1;\n}",
+    });
+  });
+
+  it("runs statement-body ref evaluate sources", async () => {
+    const page = {
+      url: vi.fn(() => "http://127.0.0.1:9222/json/version"),
+    };
+    const locator = {
+      evaluate: vi.fn(async (evaluateFn: (el: Element, args: unknown) => unknown, args: unknown) =>
+        evaluateFn({ textContent: "Ada" } as Element, args),
+      ),
+    };
+    setPwToolsCoreCurrentPage(page);
+    setPwToolsCoreCurrentRefLocator(locator);
+
+    const result = await mod.evaluateViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "T1",
+      ref: "1",
+      fn: "const text = el.textContent; return text;",
+    });
+
+    expect(result).toBe("Ada");
+    expect(locator.evaluate.mock.calls[0]?.[1]).toMatchObject({
+      fnSource: "async (el) => {\nconst text = el.textContent; return text;\n}",
+    });
+  });
+
   it("runs the post-keypress navigation guard when navigation starts shortly after the keypress resolves", async () => {
     vi.useFakeTimers();
     try {
@@ -967,6 +1014,35 @@ describe("pw-tools-core interaction navigation guard", () => {
           targetId: "T1",
         },
       );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("defaults non-finite keypress delays before calling Playwright", async () => {
+    vi.useFakeTimers();
+    try {
+      const press = vi.fn(async () => {});
+      const page = {
+        keyboard: { press },
+        on: vi.fn(),
+        off: vi.fn(),
+        url: vi.fn(() => "http://127.0.0.1:9222/json/version"),
+      };
+      setPwToolsCoreCurrentPage(page);
+
+      const task = mod.pressKeyViaPlaywright({
+        cdpUrl: "http://127.0.0.1:18792",
+        targetId: "T1",
+        key: "Enter",
+        delayMs: Number.NaN,
+        ssrfPolicy: { allowPrivateNetwork: false },
+      });
+
+      await vi.advanceTimersByTimeAsync(250);
+      await task;
+
+      expect(press).toHaveBeenCalledWith("Enter", { delay: 0 });
     } finally {
       vi.useRealTimers();
     }

@@ -1,13 +1,20 @@
 #!/usr/bin/env node
 
+// Production dependency audit helper using pnpm lock data and npm bulk advisories.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
+import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../lib/bounded-response.mjs";
 
 const DEFAULT_REGISTRY = "https://registry.npmjs.org";
 const BULK_ADVISORY_PATH = "/-/npm/v1/security/advisories/bulk";
 const MIN_SEVERITY = "high";
+/** Maximum advisory error body characters retained in messages. */
+export const BULK_ADVISORY_ERROR_BODY_MAX_CHARS = 4096;
+export const BULK_ADVISORY_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024;
+export const BULK_ADVISORY_REQUEST_TIMEOUT_MS = 60_000;
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
 const SEVERITY_RANK = {
   info: 0,
   low: 1,
@@ -25,12 +32,12 @@ const IMPORTER_SECTIONS = ["dependencies", "optionalDependencies"];
 const LOCAL_REFERENCE_PREFIXES = ["file:", "link:", "portal:", "workspace:"];
 // GitHub's GHSA-3q49-cfcf-g5fm feed includes an overbroad ">=0" range alongside
 // the compromised @mistralai/mistralai versions. Keep the production audit
-// blocking for the compromised releases while allowing our pinned 2.2.1 lock.
+// blocking for the compromised releases while allowing pinned safe locks.
 const AUDIT_ADVISORY_VERSION_OVERRIDES = [
   {
     packageName: "@mistralai/mistralai",
     advisoryIds: new Set(["1118204", "GHSA-3q49-cfcf-g5fm"]),
-    unaffectedVersions: new Set(["2.2.1"]),
+    unaffectedVersions: new Set(["2.2.1", "2.2.5"]),
   },
 ];
 
@@ -676,29 +683,172 @@ function resolveRegistryBaseUrl() {
   return configured.replace(/\/+$/u, "");
 }
 
+function parsePositiveIntegerEnv(name, fallback) {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return fallback;
+  }
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isSafeInteger(parsed) || parsed < 1 || String(parsed) !== raw) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return parsed;
+}
+
+function resolveBulkAdvisoryRequestTimeoutMs() {
+  return clampTimerTimeoutMs(
+    parsePositiveIntegerEnv(
+      "OPENCLAW_PNPM_AUDIT_BULK_TIMEOUT_MS",
+      BULK_ADVISORY_REQUEST_TIMEOUT_MS,
+    ),
+  );
+}
+
+function resolveBulkAdvisoryResponseBodyMaxBytes() {
+  return parsePositiveIntegerEnv(
+    "OPENCLAW_PNPM_AUDIT_BULK_RESPONSE_MAX_BYTES",
+    BULK_ADVISORY_RESPONSE_BODY_MAX_BYTES,
+  );
+}
+
+function clampTimerTimeoutMs(valueMs) {
+  const value = Number.isFinite(valueMs) ? valueMs : BULK_ADVISORY_REQUEST_TIMEOUT_MS;
+  return Math.min(Math.max(Math.floor(value), 1), MAX_TIMER_TIMEOUT_MS);
+}
+
+async function withBulkAdvisoryTimeout({ label, timeoutMs, run }) {
+  const resolvedTimeoutMs = clampTimerTimeoutMs(timeoutMs);
+  const controller = new AbortController();
+  let timeout;
+  const timeoutPromise = new Promise((_resolve, reject) => {
+    timeout = setTimeout(() => {
+      const error = new Error(`${label} exceeded timeout of ${resolvedTimeoutMs}ms`);
+      controller.abort(error);
+      reject(error);
+    }, resolvedTimeoutMs);
+  });
+  try {
+    return await Promise.race([run({ signal: controller.signal, timeoutPromise }), timeoutPromise]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+async function readBoundedResponseText(response, maxBytes, label, options = {}) {
+  return await readBoundedResponseTextWithLimit(response, label, maxBytes, {
+    signal: options.signal,
+    timeoutPromise: options.timeoutPromise,
+    formatTooLargeMessage: (messageLabel, bytes) => `${messageLabel} exceeded ${bytes} bytes`,
+    createTooLargeError: (message) => Object.assign(new Error(message), { code: "ETOOBIG" }),
+  });
+}
+
+export async function readBoundedBulkAdvisoryErrorText(
+  response,
+  maxChars = BULK_ADVISORY_ERROR_BODY_MAX_CHARS,
+  options = {},
+) {
+  if (!response.body) {
+    return "";
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  let truncated = false;
+  let canceled = false;
+
+  try {
+    while (text.length <= maxChars) {
+      const read = reader.read();
+      const readWithTimeout = options.timeoutPromise
+        ? Promise.race([
+            read,
+            options.timeoutPromise.catch((error) => {
+              canceled = true;
+              void Promise.resolve()
+                .then(() => reader.cancel())
+                .catch(() => undefined);
+              throw error;
+            }),
+          ])
+        : read;
+      const { done, value } = await readWithTimeout;
+      if (done) {
+        text += decoder.decode();
+        break;
+      }
+
+      text += decoder.decode(value, { stream: true });
+      if (text.length > maxChars) {
+        text = text.slice(0, maxChars);
+        truncated = true;
+        break;
+      }
+    }
+  } finally {
+    if (truncated) {
+      await reader.cancel().catch(() => undefined);
+    } else if (!canceled) {
+      reader.releaseLock();
+    }
+  }
+
+  return truncated ? `${text}\n[truncated]` : text;
+}
+
+async function readBulkAdvisoryJson(response, maxBytes, options = {}) {
+  const text = await readBoundedResponseText(
+    response,
+    maxBytes,
+    "Bulk advisory response body",
+    options,
+  );
+  if (!text.trim()) {
+    throw new Error("Bulk advisory response body was empty");
+  }
+  return JSON.parse(text);
+}
+
 export async function fetchBulkAdvisories({
   payload,
   fetchImpl = fetch,
   registryBaseUrl = resolveRegistryBaseUrl(),
+  responseBodyMaxBytes = resolveBulkAdvisoryResponseBodyMaxBytes(),
+  timeoutMs = resolveBulkAdvisoryRequestTimeoutMs(),
 }) {
   const url = `${registryBaseUrl}${BULK_ADVISORY_PATH}`;
-  const response = await fetchImpl(url, {
-    method: "POST",
-    headers: {
-      accept: "application/json",
-      "content-type": "application/json",
+  return await withBulkAdvisoryTimeout({
+    label: "Bulk advisory request",
+    timeoutMs,
+    run: async ({ signal, timeoutPromise }) => {
+      const response = await fetchImpl(url, {
+        method: "POST",
+        headers: {
+          accept: "application/json",
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(payload),
+        signal,
+      });
+
+      if (!response.ok) {
+        const bodyText = await readBoundedBulkAdvisoryErrorText(response, undefined, {
+          timeoutPromise,
+        });
+        throw new Error(
+          `Bulk advisory request failed (${response.status} ${response.statusText}): ${bodyText}`,
+        );
+      }
+
+      return await readBulkAdvisoryJson(response, responseBodyMaxBytes, {
+        signal,
+        timeoutPromise,
+      });
     },
-    body: JSON.stringify(payload),
   });
-
-  if (!response.ok) {
-    const bodyText = await response.text();
-    throw new Error(
-      `Bulk advisory request failed (${response.status} ${response.statusText}): ${bodyText}`,
-    );
-  }
-
-  return response.json();
 }
 
 export async function runPnpmAuditProd({
@@ -765,22 +915,29 @@ export async function runPnpmAuditProd({
   return 1;
 }
 
-function parseArgs(argv) {
+function readSeverityValue(value, optionName) {
+  if (value === undefined || value === "" || value.startsWith("-")) {
+    throw new Error(`${optionName} requires a value`);
+  }
+  return value;
+}
+
+export function parseArgs(argv) {
   let minSeverity = MIN_SEVERITY;
 
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     if (argument === "--audit-level" || argument === "--min-severity") {
-      minSeverity = argv[index + 1] ?? "";
+      minSeverity = readSeverityValue(argv[index + 1], argument);
       index += 1;
       continue;
     }
     if (argument.startsWith("--audit-level=")) {
-      minSeverity = argument.slice("--audit-level=".length);
+      minSeverity = readSeverityValue(argument.slice("--audit-level=".length), "--audit-level");
       continue;
     }
     if (argument.startsWith("--min-severity=")) {
-      minSeverity = argument.slice("--min-severity=".length);
+      minSeverity = readSeverityValue(argument.slice("--min-severity=".length), "--min-severity");
       continue;
     }
     throw new Error(`Unknown argument "${argument}".`);

@@ -1,14 +1,17 @@
+// Telegram tests cover channel.message adapter plugin behavior.
 import {
   verifyChannelMessageAdapterCapabilityProofs,
   verifyChannelMessageLiveCapabilityAdapterProofs,
   verifyChannelMessageLiveFinalizerProofs,
   verifyChannelMessageReceiveAckPolicyAdapterProofs,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageTelegramMock = vi.fn();
+const reactMessageTelegramMock = vi.fn();
 
 vi.mock("./send.js", () => ({
+  reactMessageTelegram: (...args: unknown[]) => reactMessageTelegramMock(...args),
   sendMessageTelegram: (...args: unknown[]) => sendMessageTelegramMock(...args),
 }));
 
@@ -25,6 +28,7 @@ function requireTelegramMessageAdapter(): TelegramMessageAdapter {
 
 describe("telegram channel message adapter", () => {
   beforeEach(() => {
+    reactMessageTelegramMock.mockReset();
     sendMessageTelegramMock.mockReset();
   });
 

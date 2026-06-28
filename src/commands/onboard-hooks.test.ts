@@ -1,3 +1,4 @@
+// Onboard hooks tests cover hook setup status, runtime output, and config mutation behavior.
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { HookStatusEntry, HookStatusReport } from "../hooks/hooks-status.js";
@@ -18,6 +19,7 @@ vi.mock("../agents/agent-scope.js", () => ({
 describe("onboard-hooks", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env.OPENCLAW_LOCALE;
   });
 
   const createMockPrompter = (multiselectValue: string[]): WizardPrompter => ({
@@ -164,6 +166,20 @@ describe("onboard-hooks", () => {
           },
         ],
       });
+    });
+
+    it("localizes built-in hook prompts when OPENCLAW_LOCALE is set", async () => {
+      process.env.OPENCLAW_LOCALE = "zh-CN";
+      const { prompter } = await runSetupInternalHooks({
+        selected: ["__skip__"],
+      });
+
+      expect(prompter.multiselect).toHaveBeenCalledWith(
+        expect.objectContaining({
+          message: "启用 hooks？",
+          options: expect.arrayContaining([{ value: "__skip__", label: "暂时跳过" }]),
+        }),
+      );
     });
 
     it("should not enable hooks when user skips", async () => {

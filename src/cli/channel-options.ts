@@ -1,17 +1,9 @@
-import { CHAT_CHANNEL_ORDER } from "../channels/ids.js";
+// CLI channel option formatter backed by generated startup metadata when available.
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { readCliStartupMetadata } from "./startup-metadata.js";
 
 function dedupe(values: string[]): string[] {
-  const seen = new Set<string>();
-  const resolved: string[] = [];
-  for (const value of values) {
-    if (!value || seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    resolved.push(value);
-  }
-  return resolved;
+  return uniqueStrings(values.filter(Boolean));
 }
 
 let precomputedChannelOptions: string[] | null | undefined;
@@ -29,7 +21,7 @@ function loadPrecomputedChannelOptions(): string[] | null {
       return precomputedChannelOptions;
     }
   } catch {
-    // Fall back to dynamic catalog resolution.
+    // Source checkouts may not have generated startup metadata yet.
   }
   precomputedChannelOptions = null;
   return null;
@@ -37,15 +29,17 @@ function loadPrecomputedChannelOptions(): string[] | null {
 
 export function resolveCliChannelOptions(): string[] {
   const precomputed = loadPrecomputedChannelOptions();
-  return precomputed ?? [...CHAT_CHANNEL_ORDER];
+  return precomputed ?? [];
 }
 
 export function formatCliChannelOptions(extra: string[] = []): string {
-  return [...extra, ...resolveCliChannelOptions()].join("|");
+  const options = [...extra, ...resolveCliChannelOptions()];
+  return options.length > 0 ? options.join("|") : "channel";
 }
 
-export const __testing = {
+export const testing = {
   resetPrecomputedChannelOptionsForTests(): void {
     precomputedChannelOptions = undefined;
   },
 };
+export { testing as __testing };

@@ -1,3 +1,5 @@
+// Covers outbound message send/poll orchestration, target resolution, durable
+// capability checks, gateway fallback, dry runs, and payload planning.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -143,7 +145,7 @@ describe("sendMessage", () => {
     mocks.resolveRuntimePluginRegistry.mockClear();
 
     mocks.getChannelPlugin.mockReturnValue({
-      outbound: { deliveryMode: "direct" },
+      outbound: { deliveryMode: "direct", sendText: vi.fn() },
     });
     mocks.resolveOutboundTarget.mockImplementation(({ to }: { to: string }) => ({ ok: true, to }));
     mocks.deliverOutboundPayloads.mockResolvedValue([{ channel: "forum", messageId: "m1" }]);
@@ -341,16 +343,18 @@ describe("sendMessage", () => {
       capability: "reconcileUnknownSend",
     });
 
-    await expect(
-      sendMessage({
-        cfg: {},
-        channel: "forum",
-        to: "123456",
-        content: "fallback text",
-        payloads: [{ text: "prepared", channelData: { forum: { card: true } } }],
-        queuePolicy: "required",
-      }),
-    ).rejects.toThrow("missing reconcileUnknownSend");
+    const send = sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "fallback text",
+      payloads: [{ text: "prepared", channelData: { forum: { card: true } } }],
+      queuePolicy: "required",
+    });
+
+    await expect(send).rejects.toThrow(
+      /missing reconcileUnknownSend[\s\S]*queuePolicy:"best_effort"[\s\S]*omit bestEffort:false/,
+    );
 
     expect(mocks.deliverOutboundPayloads).not.toHaveBeenCalled();
   });
@@ -456,7 +460,7 @@ describe("sendMessage", () => {
 
   it("does not load registries while resolving outbound plugins", async () => {
     const forumPlugin = {
-      outbound: { deliveryMode: "direct" },
+      outbound: { deliveryMode: "direct", sendText: vi.fn() },
     };
     mocks.getChannelPlugin
       .mockReturnValueOnce(undefined)
@@ -480,6 +484,19 @@ describe("sendMessage", () => {
     );
 
     expect(mocks.resolveRuntimePluginRegistry).not.toHaveBeenCalled();
+  });
+
+  it("preserves suppressed direct-send status", async () => {
+    mocks.deliverOutboundPayloads.mockResolvedValueOnce([]);
+
+    const result = await sendMessage({
+      cfg: {},
+      channel: "forum",
+      to: "123456",
+      content: "hidden",
+    });
+
+    expect(result.deliveryStatus).toBe("suppressed");
   });
 
   it("does not throw best-effort direct send failures", async () => {

@@ -11,7 +11,13 @@ DOCKER_TARGET="${OPENCLAW_NPM_TELEGRAM_DOCKER_TARGET:-build}"
 PACKAGE_SPEC="${OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC:-openclaw@beta}"
 PACKAGE_TGZ="${OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ:-${OPENCLAW_CURRENT_PACKAGE_TGZ:-}}"
 PACKAGE_LABEL="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-}"
-OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live}"
+RUN_ID="${OPENCLAW_NPM_TELEGRAM_RUN_ID:-$(date -u +%Y%m%dT%H%M%SZ)-$$}"
+OUTPUT_DIR="${OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR:-.artifacts/qa-e2e/npm-telegram-live/$RUN_ID}"
+case "$OUTPUT_DIR" in
+  /*) OUTPUT_DIR_HOST="$OUTPUT_DIR" ;;
+  *) OUTPUT_DIR_HOST="$ROOT_DIR/$OUTPUT_DIR" ;;
+esac
+OUTPUT_DIR_CONTAINER="/app/.artifacts/qa-e2e/npm-telegram-live-output"
 
 resolve_credential_source() {
   if [ -n "${OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE:-}" ]; then
@@ -73,9 +79,11 @@ resolve_package_tgz() {
 
 package_mount_args=()
 package_install_source="$PACKAGE_SPEC"
+package_source_kind="npm-package"
 resolved_package_tgz="$(resolve_package_tgz "$PACKAGE_TGZ")"
 if [ -n "$resolved_package_tgz" ]; then
   package_install_source="/package-under-test/$(basename "$resolved_package_tgz")"
+  package_source_kind="packed-tarball"
   package_mount_args=(-v "$resolved_package_tgz:$package_install_source:ro")
 else
   validate_openclaw_package_spec "$PACKAGE_SPEC"
@@ -90,8 +98,12 @@ fi
 
 credential_source="$(resolve_credential_source)"
 credential_role="$(resolve_credential_role)"
-if [ -z "$credential_role" ] && [ -n "${CI:-}" ] && [ "$credential_source" = "convex" ]; then
-  credential_role="ci"
+if [ -z "$credential_role" ] && [ "$credential_source" = "convex" ]; then
+  if [ -n "${CI:-}" ]; then
+    credential_role="ci"
+  else
+    credential_role="maintainer"
+  fi
 fi
 
 validate_credential_preflight() {
@@ -149,15 +161,21 @@ validate_credential_preflight
 docker_e2e_build_or_reuse "$IMAGE_NAME" npm-telegram-live "$ROOT_DIR/scripts/e2e/Dockerfile" "$ROOT_DIR" "$DOCKER_TARGET"
 
 mkdir -p "$ROOT_DIR/.artifacts/qa-e2e"
+mkdir -p "$OUTPUT_DIR_HOST"
 run_log="$(mktemp "${TMPDIR:-/tmp}/openclaw-npm-telegram-live.XXXXXX")"
 npm_prefix_host="$(mktemp -d "$ROOT_DIR/.artifacts/qa-e2e/npm-telegram-live-prefix.XXXXXX")"
 trap 'rm -f "$run_log"; rm -rf "$npm_prefix_host"' EXIT
 
 docker_env=(
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+  -e OPENCLAW_E2E_COMMAND_TIMEOUT="${OPENCLAW_E2E_COMMAND_TIMEOUT:-300s}"
+  -e TMPDIR=/tmp
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC="$PACKAGE_SPEC"
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL"
-  -e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR"
+  -e OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR="$OUTPUT_DIR_CONTAINER"
+  -e OPENCLAW_QA_PACKAGE_SOURCE="$package_install_source"
+  -e OPENCLAW_QA_PACKAGE_SOURCE_KIND="$package_source_kind"
+  -e OPENCLAW_QA_RUNNER="${OPENCLAW_QA_RUNNER:-docker}"
   -e OPENCLAW_NPM_TELEGRAM_FAST="${OPENCLAW_NPM_TELEGRAM_FAST:-1}"
 )
 
@@ -197,7 +215,7 @@ for key in \
   OPENCLAW_QA_CREDENTIAL_OWNER_ID \
   OPENCLAW_QA_ALLOW_INSECURE_HTTP \
   OPENCLAW_QA_REDACT_PUBLIC_METADATA \
-  OPENCLAW_QA_TELEGRAM_CAPTURE_CONTENT \
+  OPENCLAW_QA_PACKAGE_SOURCE_SHA \
   OPENCLAW_QA_TELEGRAM_CANARY_TIMEOUT_MS \
   OPENCLAW_QA_TELEGRAM_SCENARIO_TIMEOUT_MS \
   OPENCLAW_QA_SUITE_PROGRESS \
@@ -205,6 +223,10 @@ for key in \
   OPENCLAW_NPM_TELEGRAM_MODEL \
   OPENCLAW_NPM_TELEGRAM_ALT_MODEL \
   OPENCLAW_NPM_TELEGRAM_SCENARIOS \
+  OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES \
+  OPENCLAW_NPM_TELEGRAM_RTT_CHECKS \
+  OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS \
+  OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES \
   OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH \
   OPENCLAW_NPM_TELEGRAM_SUT_ACCOUNT \
   OPENCLAW_NPM_TELEGRAM_ALLOW_FAILURES; do
@@ -213,16 +235,17 @@ done
 
 run_logged() {
   if ! "$@" >"$run_log" 2>&1; then
-    cat "$run_log"
+    docker_e2e_print_log "$run_log"
     exit 1
   fi
-  cat "$run_log"
+  docker_e2e_print_log "$run_log"
   >"$run_log"
 }
 
 echo "Running package Telegram live Docker E2E ($PACKAGE_LABEL)..."
-run_logged docker run --rm \
+run_logged docker_e2e_docker_run_cmd run --rm \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
+  -e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" \
   -e OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE="$package_install_source" \
   -e OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL="$PACKAGE_LABEL" \
   ${package_mount_args[@]+"${package_mount_args[@]}"} \
@@ -237,7 +260,32 @@ export PATH="$NPM_CONFIG_PREFIX/bin:$PATH"
 install_source="${OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE:?missing OPENCLAW_NPM_TELEGRAM_INSTALL_SOURCE}"
 package_label="${OPENCLAW_NPM_TELEGRAM_PACKAGE_LABEL:-$install_source}"
 echo "Installing ${package_label} from ${install_source}..."
-npm install -g "$install_source" --no-fund --no-audit
+
+npm_install_timeout="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"
+run_npm_install() {
+  if [ -z "$npm_install_timeout" ] || [ "$npm_install_timeout" = "0" ]; then
+    npm install -g "$install_source" --no-fund --no-audit
+    return
+  fi
+
+  local timeout_bin=""
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_bin="timeout"
+  elif command -v gtimeout >/dev/null 2>&1; then
+    timeout_bin="gtimeout"
+  fi
+  if [ -z "$timeout_bin" ]; then
+    echo "timeout or gtimeout is required for OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$npm_install_timeout" >&2
+    return 127
+  fi
+
+  if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
+    "$timeout_bin" --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit
+  else
+    "$timeout_bin" "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit
+  fi
+}
+run_npm_install
 
 command -v openclaw
 openclaw --version
@@ -248,10 +296,12 @@ EOF
 run_logged docker_e2e_run_with_harness \
   "${docker_env[@]}" \
   -v "$ROOT_DIR/.artifacts:/app/.artifacts" \
+  -v "$OUTPUT_DIR_HOST:$OUTPUT_DIR_CONTAINER" \
   -v "$ROOT_DIR/extensions/qa-lab:/app/extensions/qa-lab:ro" \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'
 set -euo pipefail
+source scripts/lib/openclaw-e2e-instance.sh
 
 export HOME="$(mktemp -d "/tmp/openclaw-npm-telegram-runtime.XXXXXX")"
 export NPM_CONFIG_PREFIX="/npm-global"
@@ -268,14 +318,14 @@ dump_hotpath_logs() {
     /tmp/openclaw-npm-telegram-doctor-check.log; do
     if [ -f "$file" ]; then
       echo "--- $file ---" >&2
-      sed -n '1,220p' "$file" >&2 || true
+      openclaw_e2e_print_log "$file" >&2
     fi
   done
 }
 trap 'status=$?; dump_hotpath_logs "$status"; exit "$status"' ERR
 
 command -v openclaw
-openclaw --version
+openclaw_e2e_run_command openclaw --version
 mkdir -p /app/node_modules
 openclaw_package_dir="/npm-global/lib/node_modules/openclaw"
 # The mounted QA harness imports openclaw/plugin-sdk and package dependencies;
@@ -338,7 +388,9 @@ done
 
 if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]; then
   echo "Running installed-package onboarding recovery hot path..."
-  OPENAI_API_KEY="${OPENAI_API_KEY:-sk-openclaw-npm-telegram-hotpath}" openclaw onboard --non-interactive --accept-risk \
+  hotpath_openai_api_key="${OPENAI_API_KEY:-sk-openclaw-npm-telegram-hotpath}"
+  OPENAI_API_KEY="$hotpath_openai_api_key" openclaw_e2e_run_command openclaw onboard \
+    --non-interactive --accept-risk \
     --mode local \
     --auth-choice openai-api-key \
     --secret-input-mode ref \
@@ -350,9 +402,9 @@ if [ "${OPENCLAW_NPM_TELEGRAM_SKIP_HOTPATH:-0}" != "1" ]; then
     --skip-health \
     --json >/tmp/openclaw-npm-telegram-onboard.json </dev/null
 
-  openclaw channels add --channel telegram --token "123456:openclaw-npm-telegram-hotpath" >/tmp/openclaw-npm-telegram-channel-add.log 2>&1 </dev/null
-  openclaw doctor --fix --non-interactive >/tmp/openclaw-npm-telegram-doctor-fix.log 2>&1 </dev/null
-  openclaw doctor --non-interactive >/tmp/openclaw-npm-telegram-doctor-check.log 2>&1 </dev/null
+  openclaw_e2e_run_command openclaw channels add --channel telegram --token "123456:openclaw-npm-telegram-hotpath" >/tmp/openclaw-npm-telegram-channel-add.log 2>&1 </dev/null
+  openclaw_e2e_run_command openclaw doctor --fix --non-interactive >/tmp/openclaw-npm-telegram-doctor-fix.log 2>&1 </dev/null
+  openclaw_e2e_run_command openclaw doctor --non-interactive >/tmp/openclaw-npm-telegram-doctor-check.log 2>&1 </dev/null
 fi
 
 export OPENCLAW_NPM_TELEGRAM_SUT_COMMAND="$(command -v openclaw)"

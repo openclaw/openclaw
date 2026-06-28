@@ -1,3 +1,4 @@
+// Browser tests cover control auth.auto token plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { expectGeneratedTokenPersistedToGatewayAuth } from "../../test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -18,6 +19,7 @@ const mocks = vi.hoisted(() => ({
       return {
         path: "/tmp/openclaw.json",
         previousHash: "test-hash",
+        persistedHash: "test-hash",
         snapshot: { path: "/tmp/openclaw.json" },
         nextConfig: draft,
         result,

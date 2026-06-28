@@ -1,5 +1,10 @@
+// Diagnostic stability tests cover stable diagnostic output under repeated events.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { emitDiagnosticEvent, resetDiagnosticEventsForTest } from "../infra/diagnostic-events.js";
+import {
+  emitDiagnosticEvent,
+  resetDiagnosticEventsForTest,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import {
   getDiagnosticStabilitySnapshot,
   normalizeDiagnosticStabilityQuery,
@@ -65,7 +70,9 @@ describe("diagnostic stability recorder", () => {
       durationMs: 12,
       byteLength: 345,
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
@@ -137,6 +144,81 @@ describe("diagnostic stability recorder", () => {
     expect(snapshot.events[1]).not.toHaveProperty("reason");
   });
 
+  it("summarizes inbound delivery proof events without message content", () => {
+    startDiagnosticStabilityRecorder();
+
+    emitDiagnosticEvent({
+      type: "message.received",
+      channel: "signal",
+      sessionKey: "agent:main:signal:direct:u1",
+      messageId: "msg-secret",
+      chatId: "chat-secret",
+      source: "dispatchInboundMessage",
+    });
+    emitDiagnosticEvent({
+      type: "message.dispatch.started",
+      channel: "signal",
+      sessionKey: "agent:main:signal:direct:u1",
+      source: "replyResolver",
+    });
+    emitDiagnosticEvent({
+      type: "message.dispatch.completed",
+      channel: "signal",
+      sessionKey: "agent:main:signal:direct:u1",
+      source: "replyResolver",
+      durationMs: 12,
+      outcome: "completed",
+    });
+    emitDiagnosticEvent({
+      type: "session.turn.created",
+      runId: "run-1",
+      sessionKey: "agent:main:signal:direct:u1",
+      sessionId: "session-secret",
+      agentId: "main",
+      channel: "signal",
+      trigger: "user",
+    });
+
+    const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
+
+    expect(snapshot.summary.byType).toMatchObject({
+      "message.received": 1,
+      "message.dispatch.started": 1,
+      "message.dispatch.completed": 1,
+      "session.turn.created": 1,
+    });
+    expect(snapshot.events).toEqual([
+      expect.objectContaining({
+        type: "message.received",
+        channel: "signal",
+        source: "dispatchInboundMessage",
+      }),
+      expect.objectContaining({
+        type: "message.dispatch.started",
+        channel: "signal",
+        source: "replyResolver",
+      }),
+      expect.objectContaining({
+        type: "message.dispatch.completed",
+        channel: "signal",
+        source: "replyResolver",
+        outcome: "completed",
+      }),
+      expect.objectContaining({
+        type: "session.turn.created",
+        channel: "signal",
+        source: "main",
+        outcome: "user",
+      }),
+    ]);
+    for (const event of snapshot.events) {
+      expect(event).not.toHaveProperty("messageId");
+      expect(event).not.toHaveProperty("chatId");
+      expect(event).not.toHaveProperty("sessionId");
+      expect(event).not.toHaveProperty("sessionKey");
+    }
+  });
+
   it("summarizes assembled context diagnostics without prompt text", async () => {
     startDiagnosticStabilityRecorder();
 
@@ -158,7 +240,9 @@ describe("diagnostic stability recorder", () => {
       contextTokenBudget: 200_000,
       reserveTokens: 20_000,
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
@@ -205,7 +289,9 @@ describe("diagnostic stability recorder", () => {
         arrayBuffersBytes: 10,
       },
     });
-    await new Promise<void>((resolve) => setImmediate(resolve));
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
 
     const snapshot = getDiagnosticStabilitySnapshot({ limit: 10 });
 
@@ -333,6 +419,52 @@ describe("diagnostic stability recorder", () => {
       type: "payload.large",
       action: "chunked",
     });
+  });
+
+  it("keeps async queue drop summaries after drained queued events for sinceSeq polling", async () => {
+    startDiagnosticStabilityRecorder();
+
+    for (let index = 0; index < 10_001; index += 1) {
+      emitDiagnosticEvent({
+        type: "model.call.started",
+        runId: `overflow-run-${index}`,
+        callId: `overflow-call-${index}`,
+        provider: "openai",
+        model: "gpt-5.4",
+      });
+    }
+
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    const midDrainSnapshot = getDiagnosticStabilitySnapshot({ limit: 1000 });
+    expect(midDrainSnapshot.lastSeq).toBe(100);
+    expect(
+      midDrainSnapshot.events.some((event) => event.type === "diagnostic.async_queue.dropped"),
+    ).toBe(false);
+
+    await waitForDiagnosticEventsDrained();
+
+    const sinceMidDrain = getDiagnosticStabilitySnapshot({
+      sinceSeq: midDrainSnapshot.lastSeq,
+      limit: 1000,
+    });
+    const dropSummary = sinceMidDrain.events.find(
+      (event) => event.type === "diagnostic.async_queue.dropped",
+    );
+    expectFields(dropSummary, {
+      type: "diagnostic.async_queue.dropped",
+      droppedEvents: 1,
+      droppedUntrustedEvents: 1,
+      queueLength: 0,
+      maxQueueLength: 10_000,
+      drainBatchSize: 100,
+    });
+    expect(
+      sinceMidDrain.events.filter((event) => event.type === "model.call.started"),
+    ).not.toHaveLength(0);
+    expect(sinceMidDrain.lastSeq).toBeGreaterThan(10_000);
   });
 
   it("applies query filters to persisted snapshots without mutating the source", () => {

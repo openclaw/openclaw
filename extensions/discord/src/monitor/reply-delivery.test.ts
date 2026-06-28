@@ -1,3 +1,4 @@
+// Discord tests cover reply delivery plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -12,9 +13,9 @@ const sendDurableMessageBatchMock = vi.hoisted(() =>
 const sendMessageDiscordMock = vi.hoisted(() => vi.fn());
 const sendVoiceMessageDiscordMock = vi.hoisted(() => vi.fn());
 
-vi.mock("openclaw/plugin-sdk/channel-message", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-message")>(
-    "openclaw/plugin-sdk/channel-message",
+vi.mock("openclaw/plugin-sdk/channel-outbound", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/channel-outbound")>(
+    "openclaw/plugin-sdk/channel-outbound",
   );
   return {
     ...actual,
@@ -119,6 +120,7 @@ describe("deliverDiscordReply", () => {
       textLimit: 2000,
       replyToId: "reply-1",
       replyToMode: "all",
+      kind: "final",
     });
 
     const params = firstDeliverParams();
@@ -139,6 +141,21 @@ describe("deliverDiscordReply", () => {
     expect(sendOptions.rest).toBe(rest);
   });
 
+  it("formats reasoning replies as visible Discord payloads before shared outbound", async () => {
+    await deliverDiscordReply({
+      replies: [{ text: "Because it helps", isReasoning: true }],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      kind: "block",
+    });
+
+    expect(firstDeliverParams().payloads).toEqual([{ text: "Thinking\n\n_Because it helps_" }]);
+  });
+
   it("fails when shared outbound accepts a final reply but delivers no Discord message", async () => {
     sendDurableMessageBatchMock.mockResolvedValueOnce({ status: "sent", results: [] });
 
@@ -151,8 +168,55 @@ describe("deliverDiscordReply", () => {
         runtime,
         cfg,
         textLimit: 2000,
+        kind: "final",
       }),
     ).rejects.toThrow("discord final reply produced no delivered message for channel:101");
+  });
+
+  it("preserves explicit tool progress payloads at the tool delivery boundary", async () => {
+    await deliverDiscordReply({
+      replies: [{ text: "🛠️ Exec: `echo visible`" }],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      kind: "tool",
+    });
+
+    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "🛠️ Exec: `echo visible`" }],
+      }),
+    );
+  });
+
+  it("strips assistant scaffolding from explicit tool progress payloads", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: [
+            "<think>private reasoning</think>",
+            '<tool_call>{"name":"x"}</tool_call>',
+            "🛠️ run git status",
+          ].join("\n"),
+        },
+      ],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      kind: "tool",
+    });
+
+    expect(sendDurableMessageBatchMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payloads: [{ text: "🛠️ run git status" }],
+      }),
+    );
   });
 
   it("strips internal execution trace lines at the final Discord send boundary", async () => {
@@ -162,6 +226,7 @@ describe("deliverDiscordReply", () => {
           text: [
             "📊 Session Status: current",
             "🛠️ run git status",
+            "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
             "🛠️ `gh pr view`",
             "🛠️ `docker compose up`",
             "🛠️ elevated · `cd /tmp && pnpm test`",
@@ -177,6 +242,62 @@ describe("deliverDiscordReply", () => {
       runtime,
       cfg,
       textLimit: 2000,
+      kind: "final",
+    });
+
+    expect(firstDeliverParams().payloads).toEqual([{ text: "Visible reply." }]);
+  });
+
+  it("drops pure internal tool failure warnings at the final Discord send boundary", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: "⚠️ 🛠️ `run openclaw definitely-not-a-real-subcommand (agent)` failed",
+          isError: true,
+        },
+      ],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      kind: "final",
+    });
+
+    expect(sendDurableMessageBatchMock).not.toHaveBeenCalled();
+  });
+
+  it("strips serialized tool call blocks at the final Discord send boundary", async () => {
+    await deliverDiscordReply({
+      replies: [
+        {
+          text: [
+            "[tool:exec]",
+            "<parameter=command>",
+            'cat /proc/mounts 2>/dev/null | grep -i "libra|rav|openclaw" | head -20',
+            "</parameter>",
+            "",
+            "<function=exec>",
+            "<parameter=command>",
+            'find / -maxdepth 4 -type d \\( -name "ravdb" -o -name "librav" \\) 2>/dev/null | head -20',
+            "</parameter>",
+            "<parameter=timeout_ms>",
+            "1000",
+            "</parameter>",
+            "</function>",
+            "",
+            "Visible reply.",
+          ].join("\n"),
+        },
+      ],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      kind: "final",
     });
 
     expect(firstDeliverParams().payloads).toEqual([{ text: "Visible reply." }]);
@@ -196,6 +317,7 @@ describe("deliverDiscordReply", () => {
       runtime,
       cfg,
       textLimit: 2000,
+      kind: "final",
     });
 
     expect(firstDeliverParams().payloads).toEqual([
@@ -235,6 +357,7 @@ describe("deliverDiscordReply", () => {
       runtime,
       cfg,
       textLimit: 2000,
+      kind: "final",
     });
 
     expect(firstDeliverParams().payloads).toEqual([{ channelData, text: undefined }]);
@@ -264,6 +387,7 @@ describe("deliverDiscordReply", () => {
       runtime,
       cfg,
       textLimit: 2000,
+      kind: "final",
     });
 
     expect(firstDeliverParams().payloads).toEqual([{ presentation, text: undefined }]);
@@ -280,6 +404,7 @@ describe("deliverDiscordReply", () => {
       runtime,
       cfg,
       textLimit: 2000,
+      kind: "final",
     });
 
     expect(firstDeliverParams().payloads).toEqual([{ text }]);
@@ -301,6 +426,7 @@ describe("deliverDiscordReply", () => {
       runtime,
       cfg,
       textLimit: 2000,
+      kind: "final",
     });
 
     expect(firstDeliverParams().payloads).toEqual([{ text }]);
@@ -334,6 +460,7 @@ describe("deliverDiscordReply", () => {
       maxLinesPerMessage: 7,
       tableMode: "off",
       chunkMode: "newline",
+      kind: "final",
     });
 
     expect(firstDeliverParams().cfg).toBe(baseCfg);
@@ -363,6 +490,7 @@ describe("deliverDiscordReply", () => {
       textLimit: 2000,
       replyToMode: "off",
       mediaLocalRoots: ["/tmp/openclaw-media"],
+      kind: "final",
     });
 
     const params = firstDeliverParams();
@@ -381,6 +509,7 @@ describe("deliverDiscordReply", () => {
       cfg,
       textLimit: 2000,
       replyToId: "reply-1",
+      kind: "final",
     });
 
     const deps = firstDeliverParams().deps!;
@@ -429,6 +558,7 @@ describe("deliverDiscordReply", () => {
       replyToId: "reply-1",
       sessionKey: "agent:main:subagent:child",
       threadBindings,
+      kind: "final",
     });
 
     const params = firstDeliverParams();

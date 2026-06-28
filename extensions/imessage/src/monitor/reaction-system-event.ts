@@ -1,3 +1,4 @@
+// Imessage plugin module implements reaction system event behavior.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 
@@ -23,7 +24,6 @@ export function enqueueIMessageReactionSystemEvent(params: {
   const queued = enqueueSystemEvent(decision.text, {
     sessionKey: decision.route.sessionKey,
     contextKey: decision.contextKey,
-    trusted: false,
   });
   runtime.log?.(
     `imessage: reaction system event ${queued ? "queued" : "deduped"} session=${

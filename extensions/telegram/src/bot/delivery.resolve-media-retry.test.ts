@@ -1,4 +1,5 @@
-import type { Message } from "@grammyjs/types";
+// Telegram tests cover delivery.resolve media retry plugin behavior.
+import type { Message } from "grammy/types";
 import { retryAsync } from "openclaw/plugin-sdk/retry-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveMedia } from "./delivery.resolve-media.js";
@@ -564,6 +565,45 @@ describe("resolveMedia getFile retry", () => {
     expectResolvedMediaFields(result, "trusted local document", {
       path: "/tmp/inbound/file.pdf",
       contentType: "application/pdf",
+      placeholder: "<media:document>",
+    });
+  });
+
+  it("copies trusted local file paths whose names start with dots", async () => {
+    const getFile = vi
+      .fn()
+      .mockResolvedValue({ file_path: "/var/lib/telegram-bot-api/..photo.jpg" });
+    rootRead.mockResolvedValueOnce({
+      buffer: Buffer.from("image-data"),
+      realPath: "/var/lib/telegram-bot-api/..photo.jpg",
+      stat: { size: 10 },
+    });
+    saveMediaBuffer.mockResolvedValueOnce({
+      path: "/tmp/inbound/photo.jpg",
+      contentType: "image/jpeg",
+    });
+
+    const result = await resolveMediaWithDefaults(
+      makeCtx("document", getFile, { file_name: "..photo.jpg", mime_type: "image/jpeg" }),
+      { trustedLocalFileRoots: ["/var/lib/telegram-bot-api"] },
+    );
+
+    expect(readRemoteMediaBuffer).not.toHaveBeenCalled();
+    expect(rootRead).toHaveBeenCalledWith({
+      rootDir: "/var/lib/telegram-bot-api",
+      relativePath: "..photo.jpg",
+      maxBytes: MAX_MEDIA_BYTES,
+    });
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      Buffer.from("image-data"),
+      "image/jpeg",
+      "inbound",
+      MAX_MEDIA_BYTES,
+      "..photo.jpg",
+    );
+    expectResolvedMediaFields(result, "trusted local dot-prefixed document", {
+      path: "/tmp/inbound/photo.jpg",
+      contentType: "image/jpeg",
       placeholder: "<media:document>",
     });
   });

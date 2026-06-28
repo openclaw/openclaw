@@ -1,3 +1,4 @@
+// Audio transcode tests cover ffmpeg-backed audio conversion behavior.
 import { existsSync, realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -10,7 +11,7 @@ vi.mock("./ffmpeg-exec.js", () => ({
   runFfmpeg: runFfmpegMock,
 }));
 
-import { transcodeAudioBufferToOpus } from "./audio-transcode.js";
+import { transcodeAudioBuffer, transcodeAudioBufferToOpus } from "./audio-transcode.js";
 
 type MockWithCalls = { mock: { calls: unknown[][] } };
 
@@ -132,5 +133,90 @@ describe("transcodeAudioBufferToOpus", () => {
     const tempRoot = realpathSync(resolvePreferredOpenClawTmpDir());
     expect(capturedInputPath?.startsWith(tempRoot)).toBe(true);
     expect(capturedOutputPath ? existsSync(capturedOutputPath) : true).toBe(false);
+  });
+
+  it("preserves Windows-style output filename leaves on POSIX hosts", async () => {
+    let capturedOutputPath: string | undefined;
+    runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
+      capturedOutputPath = args.at(-1);
+      const outputPath = capturedOutputPath;
+      if (!outputPath) {
+        throw new Error("missing ffmpeg output path");
+      }
+      expect(path.basename(outputPath)).toContain("reply.opus");
+      await import("node:fs/promises").then((fs) =>
+        fs.writeFile(outputPath, Buffer.from("opus-output")),
+      );
+    });
+
+    await transcodeAudioBufferToOpus({
+      audioBuffer: Buffer.from("source"),
+      outputFileName: String.raw`C:\Users\Ada\Downloads\reply.opus`,
+    });
+
+    expect(capturedOutputPath ? existsSync(capturedOutputPath) : true).toBe(false);
+  });
+});
+
+describe("transcodeAudioBuffer", () => {
+  afterEach(() => {
+    runFfmpegMock.mockReset();
+  });
+
+  it("returns noop-same-container when source and target containers match", async () => {
+    const result = await transcodeAudioBuffer({
+      audioBuffer: Buffer.from("payload"),
+      sourceExtension: "mp3",
+      targetExtension: ".mp3",
+    });
+    expect(result).toEqual({ ok: false, reason: "noop-same-container" });
+  });
+
+  it("returns no-recipe when no afconvert recipe is defined for the requested pair", async () => {
+    const result = await transcodeAudioBuffer({
+      audioBuffer: Buffer.from("payload"),
+      sourceExtension: "mp3",
+      targetExtension: "flac",
+    });
+    expect(result).toEqual({ ok: false, reason: "no-recipe" });
+  });
+
+  it("returns invalid-extension for an empty source extension", async () => {
+    const result = await transcodeAudioBuffer({
+      audioBuffer: Buffer.from("payload"),
+      sourceExtension: "",
+      targetExtension: "caf",
+    });
+    expect(result).toEqual({ ok: false, reason: "invalid-extension" });
+  });
+
+  it("returns invalid-extension for an empty target extension", async () => {
+    const result = await transcodeAudioBuffer({
+      audioBuffer: Buffer.from("payload"),
+      sourceExtension: "mp3",
+      targetExtension: "",
+    });
+    expect(result).toEqual({ ok: false, reason: "invalid-extension" });
+  });
+
+  it("rejects path-traversal style extensions", async () => {
+    const result = await transcodeAudioBuffer({
+      audioBuffer: Buffer.from("payload"),
+      sourceExtension: "../etc/passwd",
+      targetExtension: "caf",
+    });
+    expect(result).toEqual({ ok: false, reason: "invalid-extension" });
+  });
+
+  it("returns platform-unsupported off-Darwin without invoking afconvert", async () => {
+    if (process.platform === "darwin") {
+      return;
+    }
+    const result = await transcodeAudioBuffer({
+      audioBuffer: Buffer.from("payload"),
+      sourceExtension: "mp3",
+      targetExtension: "caf",
+    });
+    expect(result).toEqual({ ok: false, reason: "platform-unsupported" });
   });
 });

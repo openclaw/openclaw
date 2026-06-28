@@ -1,4 +1,7 @@
+// Discord tests cover rest plugin behavior.
 import { createServer, type Server } from "node:http";
+import { gzipSync } from "node:zlib";
+import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { fetch as undiciFetch } from "undici";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { serializeRequestBody } from "./rest-body.js";
@@ -69,6 +72,74 @@ describe("RequestClient", () => {
     await expect(first).resolves.toEqual({ id: "u1" });
     await expect(second).resolves.toEqual({ ok: true });
     expect(client.queueSize).toBe(0);
+  });
+
+  it("defaults non-finite REST client numeric options before scheduling requests", async () => {
+    const fetchSpy = vi.fn(async (input: string | URL | Request) => {
+      expect(new URL(readRequestUrl(input)).pathname).toBe("/api/v10/guilds/g1/roles");
+      return createJsonResponse({ ok: true });
+    });
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      apiVersion: Number.NaN,
+      timeout: Number.NaN,
+      maxQueueSize: Number.NaN,
+      scheduler: {
+        maxConcurrency: Number.NaN,
+        maxRateLimitRetries: Number.NaN,
+        lanes: {
+          background: {
+            maxQueueSize: Number.NaN,
+            staleAfterMs: Number.NaN,
+            weight: Number.NaN,
+          },
+        },
+      },
+    });
+
+    await expect(client.get("/guilds/g1/roles")).resolves.toEqual({ ok: true });
+    expect(client.getSchedulerMetrics().maxConcurrentWorkers).toBe(4);
+  });
+
+  it("caps oversized REST client request timeouts before scheduling aborts", async () => {
+    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    const fetchSpy = vi.fn(async () => createJsonResponse({ ok: true }));
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      queueRequests: false,
+      timeout: Number.MAX_SAFE_INTEGER,
+    });
+
+    await expect(client.get("/guilds/g1/roles")).resolves.toEqual({ ok: true });
+
+    expect(client.options.timeout).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+  });
+
+  it("uses the default background stale timeout for non-finite lane overrides", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const firstResponse = createDeferred<Response>();
+    const fetchSpy = vi.fn(async () => await firstResponse.promise);
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      scheduler: {
+        maxConcurrency: 1,
+        lanes: {
+          background: { staleAfterMs: Number.NaN },
+        },
+      },
+    });
+
+    const first = client.get("/guilds/g1/roles");
+    const stale = client.get("/guilds/g2/roles");
+    await vi.waitFor(() => expect(fetchSpy).toHaveBeenCalledTimes(1));
+
+    await vi.advanceTimersByTimeAsync(20_001);
+    firstResponse.resolve(createJsonResponse({ ok: "first" }));
+
+    await expect(first).resolves.toEqual({ ok: "first" });
+    await expect(stale).rejects.toThrow(/Dropped stale background request/);
   });
 
   it("dispatches critical interaction callbacks before older background requests", async () => {
@@ -501,6 +572,41 @@ describe("RequestClient", () => {
     });
   });
 
+  it("ignores unsafe numeric Discord error code strings", async () => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(
+          JSON.stringify({
+            message: "Slow down",
+            retry_after: 1,
+            global: false,
+            code: "9007199254740993",
+          }),
+          { status: 429 },
+        ),
+    });
+
+    await expect(client.post("/applications/app/commands", { body: {} })).rejects.toMatchObject({
+      discordCode: undefined,
+    });
+  });
+
+  it("ignores unsafe numeric Discord error codes", async () => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(
+          '{"message":"Slow down","retry_after":1,"global":false,"code":9007199254740993}',
+          { status: 429 },
+        ),
+    });
+
+    await expect(client.post("/applications/app/commands", { body: {} })).rejects.toMatchObject({
+      discordCode: undefined,
+    });
+  });
+
   it("parses HTTP-date Retry-After headers on rate limit errors", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-01T12:00:00.000Z"));
@@ -532,6 +638,41 @@ describe("RequestClient", () => {
     await expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 7 });
   });
 
+  it("falls back to Retry-After when the rate limit body value is unsafe", async () => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(
+          JSON.stringify({ message: "Slow down", retry_after: "9007199254741", global: false }),
+          {
+            status: 429,
+            headers: { "Retry-After": "7" },
+          },
+        ),
+    });
+
+    await expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 7 });
+  });
+
+  it.each([
+    ["hex", "0x10"],
+    ["fractional", "1.5"],
+    ["unsafe-ms", "9007199254741"],
+    ["unsafe-integer", "9007199254740993"],
+    ["overflow", `1${"0".repeat(309)}`],
+  ])("rejects invalid Retry-After numeric strings: %s", async (_label, header) => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(JSON.stringify({ message: "Slow down", retry_after: "1e3", global: false }), {
+          status: 429,
+          headers: { "Retry-After": header },
+        }),
+    });
+
+    await expectRateLimitError(client.get("/channels/c1/messages"), { retryAfter: 1 });
+  });
+
   it("tracks invalid requests and exposes bucket scheduler metrics", async () => {
     const client = new RequestClient("test-token", {
       queueRequests: false,
@@ -550,6 +691,135 @@ describe("RequestClient", () => {
     const metrics = client.getSchedulerMetrics();
     expect(metrics.invalidRequestCount).toBe(1);
     expect(metrics.invalidRequestCountByStatus).toEqual({ 403: 1 });
+  });
+
+  it("bounds oversized REST response bodies instead of buffering them unbounded", async () => {
+    const encoder = new TextEncoder();
+    let pullCount = 0;
+    let cancelCount = 0;
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              pullCount += 1;
+              // Flood far past the cap so an unbounded reader would OOM.
+              controller.enqueue(encoder.encode("x".repeat(4 * 1024 * 1024)));
+            },
+            cancel() {
+              cancelCount += 1;
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    const client = new RequestClient("test-token", { fetch: fetchSpy, queueRequests: false });
+
+    await expect(client.get("/channels/c1/messages")).rejects.toThrow(
+      /Discord REST response body exceeds 8388608 bytes/,
+    );
+    // The reader was cancelled at the cap rather than draining the whole flood:
+    // only a handful of 4 MiB chunks are pulled before the cap is hit.
+    expect(cancelCount).toBe(1);
+    expect(pullCount).toBeLessThanOrEqual(4);
+  });
+
+  it("aborts stalled REST response bodies after the idle timeout", async () => {
+    const encoder = new TextEncoder();
+    let cancelReason: unknown;
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              // Emit a partial chunk, then stall forever so the idle timeout
+              // (request timeout) must fire and cancel the stream.
+              controller.enqueue(encoder.encode("partial payload"));
+            },
+            cancel(reason) {
+              cancelReason = reason;
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      queueRequests: false,
+      timeout: 50,
+    });
+
+    await expect(client.get("/channels/c1/messages")).rejects.toThrow(
+      "Discord REST response stalled: no data received for 50ms",
+    );
+    expect(cancelReason).toBeInstanceOf(Error);
+    expect((cancelReason as Error).message).toBe(
+      "Discord REST response stalled: no data received for 50ms",
+    );
+  });
+
+  it("still parses normal-sized REST response payloads under the cap", async () => {
+    const fetchSpy = vi.fn(async () => createJsonResponse({ id: "channel", name: "general" }));
+    const client = new RequestClient("test-token", { fetch: fetchSpy, queueRequests: false });
+
+    await expect(client.get("/channels/c1")).resolves.toEqual({ id: "channel", name: "general" });
+  });
+
+  it("parses raw gzip-compressed JSON response bodies", async () => {
+    const body = gzipSync(Buffer.from(JSON.stringify([{ id: "m1", content: "hello" }])));
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(body, {
+          status: 200,
+          headers: {
+            "Content-Encoding": "gzip",
+            "Content-Type": "application/json",
+          },
+        }),
+    });
+
+    await expect(client.get("/channels/c1/messages")).resolves.toEqual([
+      { id: "m1", content: "hello" },
+    ]);
+  });
+
+  it("bounds gzip-compressed REST response bodies after decompression", async () => {
+    const body = gzipSync(Buffer.from(JSON.stringify({ data: "x".repeat(8 * 1024 * 1024) })));
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(body, {
+          status: 200,
+          headers: {
+            "Content-Encoding": "gzip",
+            "Content-Type": "application/json",
+          },
+        }),
+    });
+
+    await expect(client.get("/channels/c1/messages")).rejects.toThrow(
+      /Discord REST response body exceeds 8388608 bytes/,
+    );
+  });
+
+  it("does not double-decompress responses fetch has already decoded", async () => {
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(JSON.stringify({ id: "m1", content: "hello" }), {
+          status: 200,
+          headers: {
+            "Content-Encoding": "gzip",
+            "Content-Type": "application/json",
+          },
+        }),
+    });
+
+    await expect(client.get("/channels/c1/messages/m1")).resolves.toEqual({
+      id: "m1",
+      content: "hello",
+    });
   });
 
   it("serializes message multipart uploads with payload_json", () => {
@@ -578,7 +848,7 @@ describe("RequestClient", () => {
   it("dispatches multipart uploads with a multipart/form-data content type", async () => {
     const fetchSpy = vi.fn(async (_input: string | URL | Request, init?: RequestInit) => {
       expect(init?.headers).toBeInstanceOf(Headers);
-      expect((init?.headers as Headers).get("Content-Type")).toMatch(
+      expect((init!.headers as Headers).get("Content-Type")).toMatch(
         /^multipart\/form-data; boundary=/,
       );
       expect(init?.body).not.toBeInstanceOf(FormData);

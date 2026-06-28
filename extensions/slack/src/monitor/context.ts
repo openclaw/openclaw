@@ -1,6 +1,8 @@
+// Slack plugin module implements context behavior.
 import type { App } from "@slack/bolt";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type {
   OpenClawConfig,
   SlackReactionNotificationMode,
@@ -30,12 +32,73 @@ import { isSlackChannelAllowedByPolicy } from "./policy.js";
 
 export { normalizeSlackChannelType, resolveSlackChatType } from "./channel-type.js";
 
+export type SlackAssistantSuggestedPrompt = {
+  title: string;
+  message: string;
+};
+
+export type SlackAssistantThreadContext = {
+  assistantChannelId: string;
+  threadTs: string;
+  userId?: string;
+  channelId?: string;
+  teamId?: string;
+  enterpriseId?: string | null;
+  updatedAt: number;
+};
+
+export const SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT = "assistant_thread_context";
+
+export function buildSlackAssistantThreadMetadata(
+  context: Omit<SlackAssistantThreadContext, "updatedAt">,
+) {
+  const eventPayload: Record<string, string> = {};
+  if (context.channelId) {
+    eventPayload.channel_id = context.channelId;
+  }
+  if (context.teamId) {
+    eventPayload.team_id = context.teamId;
+  }
+  if (context.enterpriseId) {
+    eventPayload.enterprise_id = context.enterpriseId;
+  }
+  return {
+    event_type: SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT,
+    event_payload: eventPayload,
+  };
+}
+
+export function parseSlackAssistantThreadMetadata(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const metadata = value as Record<string, unknown>;
+  if (metadata.event_type !== SLACK_ASSISTANT_THREAD_CONTEXT_METADATA_EVENT) {
+    return undefined;
+  }
+  const payload = metadata.event_payload;
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return undefined;
+  }
+  const record = payload as Record<string, unknown>;
+  const stringField = (key: string) => {
+    const raw = record[key];
+    return typeof raw === "string" && raw.trim() ? raw.trim() : undefined;
+  };
+  return {
+    channelId: stringField("channel_id"),
+    teamId: stringField("team_id"),
+    enterpriseId: stringField("enterprise_id"),
+  };
+}
+
 export type SlackMonitorContext = {
   cfg: OpenClawConfig;
   accountId: string;
   botToken: string;
   app: App;
   runtime: RuntimeEnv;
+  channelRuntime?: ChannelRuntimeSurface;
 
   botUserId: string;
   botId?: string;
@@ -99,7 +162,23 @@ export type SlackMonitorContext = {
     threadTs?: string;
     status: string;
   }) => Promise<void>;
+  getSlackAssistantThreadContext: (
+    channelId: string | undefined,
+    threadTs: string | undefined,
+  ) => SlackAssistantThreadContext | undefined;
+  saveSlackAssistantThreadContext: (
+    context: Omit<SlackAssistantThreadContext, "updatedAt">,
+  ) => void;
+  setSlackAssistantSuggestedPrompts: (params: {
+    channelId: string;
+    threadTs: string;
+    title?: string;
+    prompts: SlackAssistantSuggestedPrompt[];
+  }) => Promise<boolean>;
 };
+
+const SLACK_ASSISTANT_CONTEXT_TTL_MS = 24 * 60 * 60 * 1000;
+const SLACK_ASSISTANT_CONTEXT_CLEANUP_INTERVAL_MS = 10 * 60 * 1000;
 
 export function createSlackMonitorContext(params: {
   cfg: OpenClawConfig;
@@ -107,6 +186,7 @@ export function createSlackMonitorContext(params: {
   botToken: string;
   app: App;
   runtime: RuntimeEnv;
+  channelRuntime?: ChannelRuntimeSurface;
 
   botUserId: string;
   botId?: string;
@@ -155,6 +235,8 @@ export function createSlackMonitorContext(params: {
   >();
   const userCache = new Map<string, { name?: string }>();
   const seenMessages = createDedupeCache({ ttlMs: 60_000, maxSize: 500 });
+  const assistantThreadContexts = new Map<string, SlackAssistantThreadContext>();
+  let lastAssistantContextCleanupAt = Date.now();
 
   const allowFrom = normalizeAllowList(params.allowFrom);
   const groupDmChannels = normalizeAllowList(params.groupDmChannels);
@@ -177,6 +259,51 @@ export function createSlackMonitorContext(params: {
     seenMessages.delete(`${channelId}:${ts}`);
   };
 
+  const assistantContextKey = (channelId: string, threadTs: string) => `${channelId}:${threadTs}`;
+
+  const cleanupAssistantThreadContexts = () => {
+    const now = Date.now();
+    if (now - lastAssistantContextCleanupAt < SLACK_ASSISTANT_CONTEXT_CLEANUP_INTERVAL_MS) {
+      return;
+    }
+    lastAssistantContextCleanupAt = now;
+    const cutoff = now - SLACK_ASSISTANT_CONTEXT_TTL_MS;
+    for (const [key, entry] of assistantThreadContexts) {
+      if (entry.updatedAt < cutoff) {
+        assistantThreadContexts.delete(key);
+      }
+    }
+  };
+
+  const getSlackAssistantThreadContext = (
+    channelId: string | undefined,
+    threadTs: string | undefined,
+  ) => {
+    if (!channelId || !threadTs) {
+      return undefined;
+    }
+    const key = assistantContextKey(channelId, threadTs);
+    const entry = assistantThreadContexts.get(key);
+    if (!entry) {
+      return undefined;
+    }
+    if (Date.now() - entry.updatedAt > SLACK_ASSISTANT_CONTEXT_TTL_MS) {
+      assistantThreadContexts.delete(key);
+      return undefined;
+    }
+    return entry;
+  };
+
+  const saveSlackAssistantThreadContext = (
+    context: Omit<SlackAssistantThreadContext, "updatedAt">,
+  ) => {
+    cleanupAssistantThreadContexts();
+    assistantThreadContexts.set(assistantContextKey(context.assistantChannelId, context.threadTs), {
+      ...context,
+      updatedAt: Date.now(),
+    });
+  };
+
   const resolveSlackSystemEventSessionKey = (p: {
     channelId?: string | null;
     channelType?: string | null;
@@ -184,20 +311,19 @@ export function createSlackMonitorContext(params: {
     threadTs?: string | null;
   }) => {
     const channelId = normalizeOptionalString(p.channelId) ?? "";
-    if (!channelId) {
-      return params.mainKey;
-    }
+    const senderId = normalizeOptionalString(p.senderId) ?? "";
     const channelType = normalizeSlackChannelType(p.channelType, channelId);
     const isDirectMessage = channelType === "im";
+    if (!channelId && (!isDirectMessage || !senderId)) {
+      return params.mainKey;
+    }
     const isGroup = channelType === "mpim";
     const from = isDirectMessage
-      ? `slack:${channelId}`
+      ? `slack:${channelId || senderId}`
       : isGroup
         ? `slack:group:${channelId}`
         : `slack:channel:${channelId}`;
     const chatType = isDirectMessage ? "direct" : isGroup ? "group" : "channel";
-    const senderId = normalizeOptionalString(p.senderId) ?? "";
-
     // Resolve through shared channel/account bindings so system events route to
     // the same agent session as regular inbound messages.
     try {
@@ -337,6 +463,39 @@ export function createSlackMonitorContext(params: {
     }
   };
 
+  const setSlackAssistantSuggestedPrompts = async (p: {
+    channelId: string;
+    threadTs: string;
+    title?: string;
+    prompts: SlackAssistantSuggestedPrompt[];
+  }) => {
+    const prompts = p.prompts
+      .map((prompt) => ({
+        title: prompt.title.trim(),
+        message: prompt.message.trim(),
+      }))
+      .filter((prompt) => prompt.title && prompt.message)
+      .slice(0, 4);
+    if (prompts.length === 0) {
+      return false;
+    }
+    try {
+      await params.app.client.assistant.threads.setSuggestedPrompts({
+        token: params.botToken,
+        channel_id: p.channelId,
+        thread_ts: p.threadTs,
+        ...(p.title?.trim() ? { title: p.title.trim() } : {}),
+        prompts,
+      });
+      return true;
+    } catch (err) {
+      logVerbose(
+        `slack suggested prompts update failed for channel ${p.channelId}: ${formatSlackError(err)}`,
+      );
+      return false;
+    }
+  };
+
   const isChannelAllowed = (p: {
     channelId?: string;
     channelName?: string;
@@ -445,6 +604,7 @@ export function createSlackMonitorContext(params: {
     botToken: params.botToken,
     app: params.app,
     runtime: params.runtime,
+    channelRuntime: params.channelRuntime,
     botUserId: params.botUserId,
     botId: params.botId,
     teamId: params.teamId,
@@ -486,5 +646,8 @@ export function createSlackMonitorContext(params: {
     resolveChannelName,
     resolveUserName,
     setSlackThreadStatus,
+    getSlackAssistantThreadContext,
+    saveSlackAssistantThreadContext,
+    setSlackAssistantSuggestedPrompts,
   };
 }

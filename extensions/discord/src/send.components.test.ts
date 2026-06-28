@@ -1,3 +1,4 @@
+// Discord tests cover send.components plugin behavior.
 import { ChannelType, MessageFlags } from "discord-api-types/v10";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeDiscordRest } from "./send.test-harness.js";
@@ -170,9 +171,38 @@ describe("sendDiscordComponentMessage", () => {
     );
   });
 
+  it("treats bare numeric component edit targets as channels", async () => {
+    const { rest, patchMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildText,
+      id: "273512430271856640",
+    });
+    patchMock.mockResolvedValueOnce({ id: "msg1", channel_id: "273512430271856640" });
+
+    await editDiscordComponentMessage(
+      "273512430271856640",
+      "msg1",
+      {
+        text: "Updated picker",
+        blocks: [{ type: "actions", buttons: [{ label: "Tap" }] }],
+      },
+      {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        sessionKey: "agent:main:discord:channel:273512430271856640",
+        agentId: "main",
+      },
+    );
+
+    expect(patchMock).toHaveBeenCalledTimes(1);
+    expect(readMockCall(patchMock, 0)[0]).toContain("/channels/273512430271856640/messages/msg1");
+  });
+
   it("registers a prebuilt component message against an edited message id", () => {
     registerBuiltDiscordComponentMessage({
       messageId: "msg1",
+      ttlMs: 120_000,
       buildResult: {
         components: [],
         entries: [{ id: "entry-1", kind: "button", label: "Tap" }],
@@ -184,7 +214,44 @@ describe("sendDiscordComponentMessage", () => {
       entries: [{ id: "entry-1", kind: "button", label: "Tap" }],
       modals: [{ id: "modal-1", title: "Modal", fields: [] }],
       messageId: "msg1",
+      ttlMs: 120_000,
     });
+  });
+
+  it("passes configured component TTL when registering sent entries", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.DM,
+      recipients: [{ id: "user-1" }],
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "dm-1" });
+
+    await sendDiscordComponentMessage(
+      "channel:dm-1",
+      {
+        blocks: [{ type: "actions", buttons: [{ label: "Tap" }] }],
+      },
+      {
+        cfg: {
+          channels: {
+            discord: {
+              agentComponents: {
+                ttlMs: 120_000,
+              },
+              accounts: {
+                default: {},
+              },
+            },
+          },
+          session: { dmScope: "main" },
+        },
+        rest,
+        token: "t",
+      },
+    );
+
+    expect(registerMock).toHaveBeenCalledTimes(1);
+    expect(readRecordArg(registerMock, 0, 0).ttlMs).toBe(120_000);
   });
 });
 
@@ -272,6 +339,36 @@ describe("sendDiscordComponentMessage classic message downgrade", () => {
     expect(modals[0]?.title).toBe("Feedback");
     expect(modals[0]?.fields).toHaveLength(1);
     expect(modals[0]?.fields?.[0]?.label).toBe("Notes");
+  });
+
+  it("treats bare numeric component send targets as channels", async () => {
+    const { rest, postMock, getMock } = makeDiscordRest();
+    getMock.mockResolvedValueOnce({
+      type: ChannelType.GuildText,
+      id: "273512430271856640",
+    });
+    postMock.mockResolvedValueOnce({ id: "msg1", channel_id: "273512430271856640" });
+
+    await sendDiscordComponentMessage(
+      "273512430271856640",
+      {
+        text: "report",
+        modal: {
+          title: "Feedback",
+          fields: [{ type: "text", label: "Notes" }],
+        },
+      },
+      {
+        cfg: DISCORD_TEST_CFG,
+        rest,
+        token: "t",
+        mediaUrl: "https://example.com/report.pdf",
+      },
+    );
+
+    expect(sendMessageDiscordMock).not.toHaveBeenCalled();
+    expect(postMock).toHaveBeenCalledTimes(1);
+    expect(readMockCall(postMock, 0)[0]).toContain("/channels/273512430271856640/messages");
   });
 
   it("keeps spoiler file blocks on the component path", async () => {

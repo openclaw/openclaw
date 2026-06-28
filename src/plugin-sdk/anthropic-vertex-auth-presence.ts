@@ -1,10 +1,11 @@
+// Anthropic Vertex auth helpers detect local credential presence for provider setup flows.
 import { readFileSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { join } from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
-} from "../shared/string-coerce.js";
+} from "../../packages/normalization-core/src/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 
 const GCLOUD_DEFAULT_ADC_PATH = join(
@@ -39,6 +40,8 @@ function resolveAnthropicVertexAdcCredentialsPathCandidate(
   if (explicit) {
     return explicit;
   }
+  // Only probe the user's default ADC file for the real process environment; injected
+  // test/runtime env objects should not accidentally depend on host filesystem state.
   if (env !== process.env) {
     return undefined;
   }
@@ -58,6 +61,10 @@ function canReadAnthropicVertexAdc(env: NodeJS.ProcessEnv = process.env): boolea
   }
 }
 
+/**
+ * Return whether Anthropic Vertex can authenticate through GCP metadata or ADC credentials.
+ * This is a preflight signal only; provider calls still perform their own auth validation.
+ */
 export function hasAnthropicVertexAvailableAuth(env: NodeJS.ProcessEnv = process.env): boolean {
   return hasAnthropicVertexMetadataServerAdc(env) || canReadAnthropicVertexAdc(env);
 }

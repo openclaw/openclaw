@@ -1,5 +1,10 @@
+/**
+ * iMessage channel config types shared by core schema, bundled plugin runtime, and plugin SDK exports.
+ * Root fields apply to the default account; `accounts` entries override them per account.
+ */
 import type {
   BlockStreamingCoalesceConfig,
+  ChannelDeliveryStreamingConfig,
   ContextVisibilityMode,
   DmPolicy,
   GroupPolicy,
@@ -12,6 +17,7 @@ import type {
 import type { DmConfig } from "./types.messages.js";
 import type { GroupToolPolicyBySenderConfig, GroupToolPolicyConfig } from "./types.tools.js";
 
+/** Private-API and helper actions the iMessage runtime may expose to agents. */
 export type IMessageActionConfig = {
   reactions?: boolean;
   edit?: boolean;
@@ -26,8 +32,11 @@ export type IMessageActionConfig = {
   sendAttachment?: boolean;
 };
 
+/** Inbound tapback notification policy. */
 export type IMessageReactionNotificationMode = "off" | "own" | "all";
+export type IMessageSendTransport = "auto" | "bridge" | "applescript";
 
+/** Per-account iMessage runtime/config shape. */
 export type IMessageAccountConfig = {
   /** Optional display name for this account (used in CLI/UI lists). */
   name?: string;
@@ -49,6 +58,8 @@ export type IMessageAccountConfig = {
   actions?: IMessageActionConfig;
   /** Optional default send service (imessage|sms|auto). */
   service?: "imessage" | "sms" | "auto";
+  /** Preferred imsg RPC send transport. Default: auto. */
+  sendTransport?: IMessageSendTransport;
   /** Optional default region (used when sending SMS). */
   region?: string;
   /** Direct message access policy (default: pairing). */
@@ -88,6 +99,8 @@ export type IMessageAccountConfig = {
   textChunkLimit?: number;
   /** Chunking mode: "length" (default) splits by size; "newline" splits on every newline. */
   chunkMode?: "length" | "newline";
+  /** Structured streaming + chunking settings. */
+  streaming?: ChannelDeliveryStreamingConfig;
   blockStreaming?: boolean;
   /** Merge streamed block replies before sending. */
   blockStreamingCoalesce?: BlockStreamingCoalesceConfig;
@@ -103,10 +116,11 @@ export type IMessageAccountConfig = {
   /**
    * Merge consecutive same-sender DM rows from `chat.db` into a single agent
    * turn, so Apple's split-send (`<command> <URL>` arriving as two separate
-   * rows ~0.8-2.0 s apart) lands as one merged message. DM-only — group chats
+   * rows several seconds apart) lands as one merged message. DM-only — group chats
    * keep instant per-message dispatch. Widens the default inbound debounce
-   * window to 2500 ms when enabled without an explicit
-   * `messages.inbound.byChannel.imessage`. Default: `false`.
+   * window to 7000 ms when enabled without an explicit
+   * `messages.inbound.byChannel.imessage` or global
+   * `messages.inbound.debounceMs`. Default: `false`.
    */
   coalesceSameSenderDms?: boolean;
   groups?: Record<
@@ -166,6 +180,7 @@ export type IMessageAccountConfig = {
   responsePrefix?: string;
 };
 
+/** Top-level iMessage config, with optional account map layered over default account fields. */
 export type IMessageConfig = {
   /** Optional per-account iMessage configuration (multi-account). */
   accounts?: Record<string, IMessageAccountConfig>;

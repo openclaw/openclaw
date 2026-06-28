@@ -1,11 +1,18 @@
+// Covers APNs relay request signing, config, and response handling.
 import { generateKeyPairSync } from "node:crypto";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   deriveDeviceIdFromPublicKey,
   publicKeyRawBase64UrlFromPem,
   verifyDeviceSignature,
 } from "./device-identity.js";
-import { resolveApnsRelayConfigFromEnv, sendApnsRelayPush } from "./push-apns.relay.js";
+import {
+  DEFAULT_APNS_RELAY_BASE_URL,
+  DEFAULT_APNS_SANDBOX_RELAY_BASE_URL,
+  resolveApnsRelayConfigFromEnv,
+  sendApnsRelayPush,
+} from "./push-apns.relay.js";
 
 const relayGatewayIdentity = (() => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -60,12 +67,50 @@ function firstMockCall<T extends unknown[]>(mock: { mock: { calls: T[] } }): T |
 
 describe("push-apns.relay", () => {
   describe("resolveApnsRelayConfigFromEnv", () => {
-    it("returns a missing-config error when no relay base URL is configured", () => {
-      expect(resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv)).toEqual({
-        ok: false,
-        error:
-          "APNs relay config missing: set gateway.push.apns.relay.baseUrl or OPENCLAW_APNS_RELAY_BASE_URL",
-      });
+    it("defaults to the hosted relay when the registration was minted by the hosted relay", () => {
+      expectRelayConfig(
+        resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv, undefined, {
+          registrationRelayOrigin: `${DEFAULT_APNS_RELAY_BASE_URL}/`,
+        }),
+        {
+          baseUrl: DEFAULT_APNS_RELAY_BASE_URL,
+          timeoutMs: 10_000,
+        },
+      );
+    });
+
+    it("defaults to the sandbox hosted relay when the registration was minted there", () => {
+      expectRelayConfig(
+        resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv, undefined, {
+          registrationRelayOrigin: `${DEFAULT_APNS_SANDBOX_RELAY_BASE_URL}/`,
+        }),
+        {
+          baseUrl: DEFAULT_APNS_SANDBOX_RELAY_BASE_URL,
+          timeoutMs: 10_000,
+        },
+      );
+    });
+
+    it("fails closed when relay registration origin is unknown and no relay URL is configured", () => {
+      const resolved = resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv);
+
+      expect(resolved.ok).toBe(false);
+      if (!resolved.ok) {
+        expect(resolved.error).toContain("relay registrations without the hosted relay origin");
+      }
+    });
+
+    it("rejects config that does not match the registration relay origin", () => {
+      const resolved = resolveApnsRelayConfigFromEnv(
+        {} as NodeJS.ProcessEnv,
+        { push: { apns: { relay: { baseUrl: DEFAULT_APNS_RELAY_BASE_URL } } } },
+        { registrationRelayOrigin: "https://relay.example.com" },
+      );
+
+      expect(resolved.ok).toBe(false);
+      if (!resolved.ok) {
+        expect(resolved.error).toContain("origin mismatch");
+      }
     });
 
     it("lets env overrides win and clamps tiny timeout values", () => {
@@ -89,6 +134,18 @@ describe("push-apns.relay", () => {
       expectRelayConfig(resolved, {
         baseUrl: "https://relay-override.example.com/base",
         timeoutMs: 1000,
+      });
+    });
+
+    it("caps oversized timeout values before they reach AbortSignal.timeout", () => {
+      const resolved = resolveApnsRelayConfigFromEnv({
+        OPENCLAW_APNS_RELAY_BASE_URL: "https://relay.example.com",
+        OPENCLAW_APNS_RELAY_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER),
+      } as NodeJS.ProcessEnv);
+
+      expectRelayConfig(resolved, {
+        baseUrl: "https://relay.example.com",
+        timeoutMs: MAX_TIMER_TIMEOUT_MS,
       });
     });
 
@@ -230,7 +287,7 @@ describe("push-apns.relay", () => {
       expect(result.ok).toBe(false);
       expect(result.status).toBe(302);
       expect(result.reason).toBe("RelayRedirectNotAllowed");
-      expect(result.environment).toBe("production");
+      expect(result.environment).toBeUndefined();
     });
 
     it("falls back to fetch status when the relay body is not JSON", async () => {
@@ -246,7 +303,6 @@ describe("push-apns.relay", () => {
         status: 202,
         apnsId: undefined,
         reason: undefined,
-        environment: "production",
         tokenSuffix: undefined,
       });
     });
@@ -270,7 +326,29 @@ describe("push-apns.relay", () => {
         status: 410,
         apnsId: "relay-apns-id",
         reason: "Unregistered",
-        environment: "production",
+        tokenSuffix: "abcd1234",
+      });
+    });
+
+    it("normalizes sandbox relay response metadata", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          environment: "sandbox",
+          tokenSuffix: " abcd1234 ",
+        }),
+      });
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
+        ok: true,
+        status: 200,
+        apnsId: undefined,
+        reason: undefined,
+        environment: "sandbox",
         tokenSuffix: "abcd1234",
       });
     });

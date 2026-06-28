@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements bus server behavior.
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
@@ -5,7 +6,7 @@ import {
   readRequestBodyWithLimit,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import { normalizeAccountId } from "./bus-queries.js";
+import { normalizeAccountId, resolveQaBusPollStartCursor } from "./bus-queries.js";
 import type { QaBusState } from "./bus-state.js";
 import type {
   QaBusCreateThreadInput,
@@ -22,6 +23,9 @@ import type {
 
 const QA_HTTP_JSON_MAX_BODY_BYTES = 1024 * 1024;
 const QA_HTTP_JSON_BODY_TIMEOUT_MS = 5_000;
+const QA_BUS_POLL_TIMEOUT_MAX_MS = 30_000;
+const QA_BUS_POLL_LIMIT_MAX = 500;
+const QA_BUS_SEARCH_LIMIT_MAX = 100;
 
 export async function readQaJsonBody(req: IncomingMessage): Promise<unknown> {
   const text = (
@@ -54,6 +58,66 @@ export function writeQaRequestBodyLimitError(res: ServerResponse, error: unknown
   }
   writeError(res, error.statusCode, requestBodyErrorToText(error.code));
   return true;
+}
+
+function readOptionalIntegerField(
+  input: Record<string, unknown>,
+  field: string,
+  opts: {
+    label: string;
+    max?: number;
+    min: number;
+  },
+): number | undefined {
+  const value = input[field];
+  if (value === undefined) {
+    return undefined;
+  }
+  if (typeof value !== "number" || value < opts.min) {
+    throw new Error(`${opts.label} must be an integer at least ${opts.min}.`);
+  }
+  if (opts.max !== undefined && value > opts.max) {
+    return opts.max;
+  }
+  if (!Number.isSafeInteger(value)) {
+    throw new Error(`${opts.label} must be an integer at least ${opts.min}.`);
+  }
+  return opts.max === undefined ? value : Math.min(value, opts.max);
+}
+
+function normalizeQaBusPollInput(input: Record<string, unknown>): QaBusPollInput {
+  const cursor = readOptionalIntegerField(input, "cursor", {
+    label: "poll cursor",
+    min: 0,
+  });
+  const limit = readOptionalIntegerField(input, "limit", {
+    label: "poll limit",
+    max: QA_BUS_POLL_LIMIT_MAX,
+    min: 1,
+  });
+  const timeoutMs = readOptionalIntegerField(input, "timeoutMs", {
+    label: "poll timeoutMs",
+    max: QA_BUS_POLL_TIMEOUT_MAX_MS,
+    min: 0,
+  });
+  return {
+    ...input,
+    ...(cursor !== undefined ? { cursor } : {}),
+    ...(limit !== undefined ? { limit } : {}),
+    ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+  } as QaBusPollInput;
+}
+
+function normalizeQaBusSearchInput(input: Record<string, unknown>): QaBusSearchMessagesInput {
+  const limit = readOptionalIntegerField(input, "limit", {
+    label: "search limit",
+    max: QA_BUS_SEARCH_LIMIT_MAX,
+    min: 1,
+  });
+  return {
+    ...input,
+    ...(limit !== undefined ? { limit } : {}),
+  } as QaBusSearchMessagesInput;
 }
 
 export async function closeQaHttpServer(server: Server): Promise<void> {
@@ -145,22 +209,26 @@ export async function handleQaBusRequest(params: {
         return true;
       case "/v1/actions/search":
         writeJson(params.res, 200, {
-          messages: params.state.searchMessages(body as unknown as QaBusSearchMessagesInput),
+          messages: params.state.searchMessages(normalizeQaBusSearchInput(body)),
         });
         return true;
       case "/v1/poll": {
-        const input = body as unknown as QaBusPollInput;
-        const timeoutMs = Math.max(0, Math.min(input.timeoutMs ?? 0, 30_000));
+        const input = normalizeQaBusPollInput(body);
+        const timeoutMs = input.timeoutMs ?? 0;
         const accountId = normalizeAccountId(input.accountId);
         const initial = params.state.poll(input);
+        const effectiveStartCursor = resolveQaBusPollStartCursor({
+          currentCursor: initial.cursor,
+          requestedCursor: input.cursor,
+        });
         if (initial.events.length > 0 || timeoutMs === 0) {
           writeJson(params.res, 200, initial);
           return true;
         }
         try {
-          await params.state.waitForCursorAdvance(input.cursor ?? 0, timeoutMs, (snapshot) => {
+          await params.state.waitForCursorAdvance(effectiveStartCursor, timeoutMs, (snapshot) => {
             return snapshot.events.some(
-              (event) => event.accountId === accountId && event.cursor > (input.cursor ?? 0),
+              (event) => event.accountId === accountId && event.cursor > effectiveStartCursor,
             );
           });
         } catch {
@@ -188,11 +256,13 @@ export async function handleQaBusRequest(params: {
 }
 
 export function createQaBusServer(state: QaBusState): Server {
-  return createServer(async (req, res) => {
-    const handled = await handleQaBusRequest({ req, res, state });
-    if (!handled) {
-      writeError(res, 404, "not found");
-    }
+  return createServer((req, res) => {
+    void (async () => {
+      const handled = await handleQaBusRequest({ req, res, state });
+      if (!handled) {
+        writeError(res, 404, "not found");
+      }
+    })();
   });
 }
 

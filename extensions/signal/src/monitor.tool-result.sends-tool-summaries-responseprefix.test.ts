@@ -1,3 +1,4 @@
+// Signal tests cover monitor.tool result.sends tool summaries responseprefix plugin behavior.
 import { expectPairingReplyText } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
@@ -75,8 +76,7 @@ function hasQueuedReactionEventFor(sender: string) {
       typeof options === "object" &&
       options !== null &&
       "sessionKey" in options &&
-      (options as { sessionKey?: string; trusted?: boolean }).sessionKey === route.sessionKey &&
-      (options as { trusted?: boolean }).trusted === false
+      (options as { sessionKey?: string }).sessionKey === route.sessionKey
     );
   });
 }

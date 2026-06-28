@@ -1,3 +1,5 @@
+// Covers channel-specific outbound adapter behavior for message sends,
+// structured payloads, and channel capability interactions.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelOutboundAdapter, ChannelPlugin } from "../../channels/plugins/types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -365,6 +367,41 @@ describe("gateway url override hardening", () => {
       }
       expect((result as Record<string, unknown>)[key]).toEqual(value);
     }
+  });
+
+  it("forwards buffer metadata for gateway delivery-mode sends", async () => {
+    const buffer = Buffer.from("gateway delivery bytes").toString("base64");
+    const result = await sendThreadChatGatewayMessage({
+      mediaUrl: "buffer://message-send/attachment",
+      mediaUrls: ["buffer://message-send/attachment"],
+      buffer,
+      filename: "delivery.txt",
+      contentType: "text/plain",
+    });
+
+    expect(result.params).toMatchObject({
+      mediaUrl: "buffer://message-send/attachment",
+      mediaUrls: ["buffer://message-send/attachment"],
+      buffer,
+      filename: "delivery.txt",
+      contentType: "text/plain",
+    });
+  });
+
+  it("drops unused buffer metadata when explicit gateway media is present", async () => {
+    const result = await sendThreadChatGatewayMessage({
+      mediaUrl: "https://example.com/photo.png",
+      buffer: Buffer.from("ignored bytes").toString("base64"),
+      filename: "ignored.txt",
+      contentType: "text/plain",
+    });
+
+    expect(result.params).toMatchObject({
+      mediaUrl: "https://example.com/photo.png",
+    });
+    expect(result.params?.buffer).toBeUndefined();
+    expect(result.params?.filename).toBeUndefined();
+    expect(result.params?.contentType).toBeUndefined();
   });
 });
 

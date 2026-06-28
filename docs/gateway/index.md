@@ -73,7 +73,8 @@ After the first successful load, the running process serves the active in-memory
 - One always-on process for routing, control plane, and channel connections.
 - Single multiplexed port for:
   - WebSocket control/RPC
-  - HTTP APIs, OpenAI compatible (`/v1/models`, `/v1/embeddings`, `/v1/chat/completions`, `/v1/responses`, `/tools/invoke`)
+  - HTTP APIs (`/v1/models`, `/v1/embeddings`, `/v1/chat/completions`, `/v1/responses`, `/tools/invoke`)
+  - Plugin HTTP routes, such as optional `/api/v1/admin/rpc`
   - Control UI and hooks
 - Default bind mode: `loopback`.
 - Auth is required by default. Shared-secret setups use
@@ -104,6 +105,8 @@ Planning note:
 - Use `x-openclaw-model` when you want a backend provider/model override; otherwise the selected agent's normal model and embedding setup stays in control.
 
 All of these run on the main Gateway port and use the same trusted operator auth boundary as the rest of the Gateway HTTP API.
+
+Admin HTTP RPC (`POST /api/v1/admin/rpc`) is a separate, default-off plugin route for host tooling that cannot use WebSocket RPC. See [Admin HTTP RPC](/plugins/admin-http-rpc).
 
 ### Port and bind precedence
 
@@ -164,8 +167,10 @@ What to expect:
 
 - `gateway status --deep` can report `Other gateway-like services detected (best effort)`
   and print cleanup hints when stale launchd/systemd/schtasks installs are still around.
-- `gateway probe` can warn about `multiple reachable gateways` when more than one target
-  answers.
+- `gateway probe` can warn about `multiple reachable gateway identities` when distinct
+  gateways answer, or when OpenClaw cannot prove reachable targets are the same gateway.
+  An SSH tunnel, proxy URL, or configured remote URL to the same gateway is one
+  gateway with multiple transports, even when transport ports differ.
 - If that is intentional, isolate ports, config/state, and workspace roots per gateway.
 
 Checklist per instance:
@@ -254,6 +259,7 @@ RestartSec=5
 TimeoutStopSec=30
 TimeoutStartSec=30
 SuccessExitStatus=0 143
+OOMPolicy=continue
 KillMode=control-group
 
 [Install]
@@ -314,8 +320,9 @@ Defaults include isolated state/config and base gateway port `19001`.
   a generated dump of every callable helper route.
 - Requests: `req(method, params)` → `res(ok/payload|error)`.
 - Common events include `connect.challenge`, `agent`, `chat`,
-  `session.message`, `session.tool`, `sessions.changed`, `presence`, `tick`,
-  `health`, `heartbeat`, pairing/approval lifecycle events, and `shutdown`.
+  `session.message`, `session.operation`, `session.tool`, `sessions.changed`,
+  `presence`, `tick`, `health`, `heartbeat`, pairing/approval lifecycle events,
+  and `shutdown`.
 
 Agent runs are two-stage:
 

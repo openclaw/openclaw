@@ -1,8 +1,10 @@
+// Imessage tests cover test plugin plugin behavior.
 import {
   createMessageReceiptFromOutboundResults,
   verifyChannelMessageAdapterCapabilityProofs,
   verifyDurableFinalCapabilityProofs,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   listImportedBundledPluginFacadeIds,
   resetFacadeRuntimeStateForTest,
@@ -110,6 +112,56 @@ describe("createIMessageTestPlugin", () => {
     });
   });
 
+  it("declares native iMessage voice memo TTS delivery", () => {
+    expect(imessagePlugin.capabilities.tts?.voice).toStrictEqual({
+      synthesisTarget: "audio-file",
+      audioFileFormats: ["mp3", "caf", "audio/mpeg", "audio/x-caf"],
+      preferAudioFileFormat: "caf",
+    });
+  });
+
+  it("preserves the local approval prompt suppressor through attached-result composition", () => {
+    const suppressor = imessagePlugin.outbound?.shouldSuppressLocalPayloadPrompt;
+    if (!suppressor) {
+      throw new Error("iMessage outbound approval suppressor unavailable");
+    }
+
+    expect(
+      suppressor({
+        cfg: {
+          channels: {
+            imessage: {
+              enabled: true,
+              allowFrom: ["+15551230000"],
+            },
+          },
+          approvals: {
+            exec: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        accountId: "default",
+        payload: {
+          text: "Approval required.",
+          channelData: {
+            execApproval: {
+              approvalId: "exec-1",
+              approvalSlug: "exec-1",
+              approvalKind: "exec",
+              sessionKey: "agent:main:imessage:+15551230000",
+            },
+          },
+        },
+        hint: {
+          kind: "approval-pending",
+          approvalKind: "exec",
+          nativeRouteActive: true,
+        },
+      }),
+    ).toBe(true);
+  });
+
   it("backs declared durable final capabilities with delivery proofs", async () => {
     const outbound = requireOutbound();
     const sendText = requireOutboundSendText(outbound);
@@ -164,7 +216,7 @@ describe("createIMessageTestPlugin", () => {
     const sendIMessage = async (
       _to: string,
       _text: string,
-      opts?: { mediaUrl?: string; replyToId?: string },
+      opts?: { mediaUrl?: string; replyToId?: string; audioAsVoice?: boolean },
     ) => {
       const messageId = opts?.mediaUrl ? "imsg-media-1" : "imsg-text-1";
       return {
@@ -172,7 +224,7 @@ describe("createIMessageTestPlugin", () => {
         sentText: opts?.mediaUrl ? "<media:image>" : "hello",
         receipt: createMessageReceiptFromOutboundResults({
           results: [{ channel: "imessage", messageId }],
-          kind: opts?.mediaUrl ? "media" : "text",
+          kind: opts?.audioAsVoice ? "voice" : opts?.mediaUrl ? "media" : "text",
           ...(opts?.replyToId ? { replyToId: opts.replyToId } : {}),
         }),
       };
@@ -203,11 +255,13 @@ describe("createIMessageTestPlugin", () => {
             text: "caption",
             mediaUrl: "/tmp/image.png",
             mediaLocalRoots: ["/tmp"],
+            audioAsVoice: true,
             deps: { imessage: sendIMessage },
           } as Parameters<typeof sendMedia>[0] & {
             deps: { imessage: typeof sendIMessage };
           });
           expect(result.receipt.platformMessageIds).toEqual(["imsg-media-1"]);
+          expect(result.receipt.parts.map((part) => part.kind)).toEqual(["voice"]);
         },
         replyTo: async () => {
           const result = await sendText({

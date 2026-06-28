@@ -1,3 +1,4 @@
+// Msteams tests cover graph thread plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   _teamGroupIdCacheForTest,
@@ -33,6 +34,15 @@ describe("stripHtmlFromTeamsMessage", () => {
   it("decodes common HTML entities", () => {
     expect(stripHtmlFromTeamsMessage("&amp; &lt;b&gt; &quot;x&quot; &#39;y&#39; &nbsp;z")).toBe(
       "& <b> \"x\" 'y' z",
+    );
+  });
+
+  it("does not double-decode escaped entities (decodes &amp; last)", () => {
+    // Graph encodes literally-typed entity text by escaping its '&' to '&amp;'.
+    // Decoding '&amp;' first would re-decode the now-bare '&lt;'/'&gt;' into
+    // angle brackets, corrupting the user's literal text.
+    expect(stripHtmlFromTeamsMessage("The token is &amp;lt;APIKEY&amp;gt;")).toBe(
+      "The token is &lt;APIKEY&gt;",
     );
   });
 
@@ -75,6 +85,35 @@ describe("resolveTeamGroupId", () => {
     await resolveTeamGroupId("tok", "team-456");
 
     expect(fetchGraphJson).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not cache team ids when the expiry would exceed a valid Date", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    try {
+      vi.mocked(fetchGraphJson).mockResolvedValue({ id: "group-guid-boundary" } as never);
+
+      await resolveTeamGroupId("tok", "team-boundary");
+      await resolveTeamGroupId("tok", "team-boundary");
+
+      expect(fetchGraphJson).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("evicts cached team ids when the current clock is invalid", async () => {
+    vi.mocked(fetchGraphJson).mockResolvedValue({ id: "group-guid-invalid-clock" } as never);
+
+    await resolveTeamGroupId("tok", "team-invalid-clock");
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
+    try {
+      await resolveTeamGroupId("tok", "team-invalid-clock");
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    expect(fetchGraphJson).toHaveBeenCalledTimes(2);
   });
 
   it("falls back to conversationTeamId when Graph returns no id", async () => {

@@ -1,3 +1,10 @@
+// Normalizes provider auth choice metadata from plugin setup surfaces.
+import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeConfiguredProviderCatalogModelId } from "../agents/model-ref-shared.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import {
@@ -8,11 +15,6 @@ import { normalizeProviderConfigForConfigDefaults } from "../config/provider-pol
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
 import type { ProviderAuthMethod, ProviderPlugin } from "./types.js";
 
 export function resolveProviderMatch(
@@ -48,10 +50,6 @@ export function pickAuthMethod(
     provider.auth.find((method) => normalizeLowercaseStringOrEmpty(method.label) === normalized) ??
     null
   );
-}
-
-function isPlainRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
 }
 
 // Guard config patches against prototype-pollution payloads if a patch ever
@@ -94,6 +92,22 @@ function mergeConfigPatch<T>(base: T, patch: unknown): T {
     }
   }
   return next as T;
+}
+
+function deleteUndefinedPatchLeaves<T>(target: T, patch: unknown): T {
+  if (!isPlainRecord(target) || !isPlainRecord(patch)) {
+    return target;
+  }
+
+  const targetRecord = target as Record<string, unknown>;
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === undefined) {
+      delete targetRecord[key];
+      continue;
+    }
+    deleteUndefinedPatchLeaves(targetRecord[key], value);
+  }
+  return target;
 }
 
 function normalizeAgentModelConfigForWrite(value: unknown): unknown {
@@ -201,14 +215,14 @@ function normalizeAgentListForWrite(value: unknown): unknown {
     }
 
     let nextAgent = agent;
-    if (Object.prototype.hasOwnProperty.call(agent, "model")) {
+    if (Object.hasOwn(agent, "model")) {
       const normalizedModel = normalizeAgentModelConfigForWrite(agent.model);
       if (normalizedModel !== agent.model) {
         nextAgent = { ...nextAgent, model: normalizedModel };
         mutated = true;
       }
     }
-    if (Object.prototype.hasOwnProperty.call(agent, "models")) {
+    if (Object.hasOwn(agent, "models")) {
       const normalizedModels = normalizeAgentModelMapForWrite(agent.models);
       if (normalizedModels !== agent.models) {
         nextAgent = { ...nextAgent, models: normalizedModels };
@@ -261,7 +275,9 @@ export function applyProviderAuthConfigPatch(
   patch: unknown,
   options?: { replaceDefaultModels?: boolean },
 ): OpenClawConfig {
-  const merged = normalizeConfigModelRefsForWrite(mergeConfigPatch(cfg, patch));
+  const merged = normalizeConfigModelRefsForWrite(
+    deleteUndefinedPatchLeaves(mergeConfigPatch(cfg, patch), patch),
+  );
   if (!options?.replaceDefaultModels || !isPlainRecord(patch)) {
     return merged;
   }

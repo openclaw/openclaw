@@ -1,3 +1,4 @@
+// Mattermost plugin module implements interactions behavior.
 import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
@@ -63,10 +64,6 @@ const callbackUrls = new Map<string, string>();
 
 export function setInteractionCallbackUrl(accountId: string, url: string): void {
   callbackUrls.set(accountId, url);
-}
-
-export function getInteractionCallbackUrl(accountId: string): string | undefined {
-  return callbackUrls.get(accountId);
 }
 
 type InteractionCallbackConfig = Pick<OpenClawConfig, "gateway" | "channels"> & {
@@ -405,6 +402,14 @@ export function createMattermostInteractionHandler(params: {
   const { client, accountId, log } = params;
   const core = getMattermostRuntime();
 
+  function parseInteractionPayload(raw: string): MattermostInteractionPayload {
+    try {
+      return JSON.parse(raw) as MattermostInteractionPayload;
+    } catch {
+      throw new Error("Mattermost interaction body was malformed JSON");
+    }
+  }
+
   return async (req: IncomingMessage, res: ServerResponse) => {
     // Only accept POST
     if (req.method !== "POST") {
@@ -435,7 +440,7 @@ export function createMattermostInteractionHandler(params: {
     let payload: MattermostInteractionPayload;
     try {
       const raw = await readInteractionBody(req);
-      payload = JSON.parse(raw) as MattermostInteractionPayload;
+      payload = parseInteractionPayload(raw);
     } catch (err) {
       log?.(`mattermost interaction: failed to parse body: ${String(err)}`);
       res.statusCode = 400;
@@ -453,7 +458,7 @@ export function createMattermostInteractionHandler(params: {
     }
 
     // Verify HMAC token
-    const token = context._token;
+    const token = context["_token"];
     if (typeof token !== "string") {
       log?.("mattermost interaction: missing _token in context");
       res.statusCode = 403;
@@ -495,8 +500,8 @@ export function createMattermostInteractionHandler(params: {
     }
 
     const userName = payload.user_name ?? payload.user_id;
-    let originalMessage = "";
-    let originalPost: MattermostPost | null = null;
+    let originalMessage;
+    let originalPost: MattermostPost | null;
     let clickedButtonName: string | null = null;
     try {
       originalPost = await client.request<MattermostPost>(`/posts/${payload.post_id}`);

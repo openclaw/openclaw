@@ -1,4 +1,8 @@
-import { createAccountListHelpers } from "openclaw/plugin-sdk/account-helpers";
+// Mattermost plugin module implements accounts behavior.
+import {
+  createAccountListHelpers,
+  hasConfiguredAccountValue,
+} from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { resolveMergedAccountConfig } from "openclaw/plugin-sdk/account-resolution";
 import {
@@ -7,7 +11,7 @@ import {
   resolveChannelStreamingChunkMode,
   resolveChannelPreviewStreamMode,
   type StreamingMode,
-} from "openclaw/plugin-sdk/channel-streaming";
+} from "openclaw/plugin-sdk/channel-outbound";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeResolvedSecretInputString, normalizeSecretInputString } from "../secret-input.js";
 import type {
@@ -41,7 +45,15 @@ export type ResolvedMattermostAccount = {
   blockStreamingCoalesce?: MattermostAccountConfig["blockStreamingCoalesce"];
 };
 
-const mattermostAccountHelpers = createAccountListHelpers("mattermost");
+const mattermostAccountHelpers = createAccountListHelpers("mattermost", {
+  hasImplicitDefaultAccount: (cfg) => {
+    const mattermost = cfg.channels?.mattermost;
+    return Boolean(
+      mattermost?.baseUrl?.trim() &&
+      (hasConfiguredAccountValue(mattermost.botToken) || process.env.MATTERMOST_BOT_TOKEN?.trim()),
+    );
+  },
+});
 
 export function listMattermostAccountIds(cfg: OpenClawConfig): string[] {
   return mattermostAccountHelpers.listAccountIds(cfg);

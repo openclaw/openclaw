@@ -1,9 +1,11 @@
+// Discord tests cover thread session close plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const hoisted = vi.hoisted(() => {
-  const updateSessionStore = vi.fn();
+  const listSessionEntries = vi.fn();
+  const patchSessionEntry = vi.fn();
   const resolveStorePath = vi.fn(() => "/tmp/openclaw-sessions.json");
-  return { updateSessionStore, resolveStorePath };
+  return { listSessionEntries, patchSessionEntry, resolveStorePath };
 });
 
 vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
@@ -12,16 +14,37 @@ vi.mock("openclaw/plugin-sdk/session-store-runtime", async () => {
   );
   return {
     ...actual,
-    updateSessionStore: hoisted.updateSessionStore,
+    listSessionEntries: hoisted.listSessionEntries,
+    patchSessionEntry: hoisted.patchSessionEntry,
     resolveStorePath: hoisted.resolveStorePath,
   };
 });
 
 let closeDiscordThreadSessions: typeof import("./thread-session-close.js").closeDiscordThreadSessions;
 
-function setupStore(store: Record<string, { updatedAt: number }>) {
-  hoisted.updateSessionStore.mockImplementation(
-    async (_storePath: string, mutator: (s: typeof store) => unknown) => mutator(store),
+function setupStore(store: Record<string, { sessionId?: string; updatedAt: number }>) {
+  hoisted.listSessionEntries.mockImplementation(() =>
+    Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry })),
+  );
+  hoisted.patchSessionEntry.mockImplementation(
+    async (params: {
+      sessionKey: string;
+      update: (entry: {
+        sessionId?: string;
+        updatedAt: number;
+      }) => { sessionId?: string; updatedAt: number } | null;
+    }) => {
+      const entry = store[params.sessionKey];
+      if (!entry) {
+        return null;
+      }
+      const next = params.update({ ...entry });
+      if (!next) {
+        return entry;
+      }
+      store[params.sessionKey] = next;
+      return next;
+    },
   );
 }
 
@@ -37,7 +60,8 @@ describe("closeDiscordThreadSessions", () => {
   });
 
   beforeEach(() => {
-    hoisted.updateSessionStore.mockClear();
+    hoisted.listSessionEntries.mockReset();
+    hoisted.patchSessionEntry.mockReset();
     hoisted.resolveStorePath.mockClear();
     hoisted.resolveStorePath.mockReturnValue("/tmp/openclaw-sessions.json");
   });
@@ -142,7 +166,8 @@ describe("closeDiscordThreadSessions", () => {
     });
 
     expect(count).toBe(0);
-    expect(hoisted.updateSessionStore).not.toHaveBeenCalled();
+    expect(hoisted.listSessionEntries).not.toHaveBeenCalled();
+    expect(hoisted.patchSessionEntry).not.toHaveBeenCalled();
   });
 
   it("does not recount sessions that were already reset", async () => {
@@ -161,6 +186,35 @@ describe("closeDiscordThreadSessions", () => {
     expect(count).toBe(0);
     expect(store[MATCHED_KEY].updatedAt).toBe(0);
     expect(store[UNMATCHED_KEY].updatedAt).toBe(1_700_000_000_001);
+  });
+
+  it("does not reset a matching session that changed after the list snapshot", async () => {
+    const store = {
+      [MATCHED_KEY]: {
+        sessionId: "fresh-session",
+        updatedAt: 2_000,
+      },
+    };
+    setupStore(store);
+    hoisted.listSessionEntries.mockReturnValue([
+      {
+        sessionKey: MATCHED_KEY,
+        entry: {
+          sessionId: "old-session",
+          updatedAt: 1_000,
+        },
+      },
+    ]);
+
+    const count = await closeDiscordThreadSessions({
+      cfg: {},
+      accountId: "default",
+      threadId: THREAD_ID,
+    });
+
+    expect(count).toBe(0);
+    expect(store[MATCHED_KEY].updatedAt).toBe(2_000);
+    expect(store[MATCHED_KEY].sessionId).toBe("fresh-session");
   });
 
   it("resolves the store path using cfg.session.store and accountId", async () => {

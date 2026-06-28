@@ -1,17 +1,27 @@
-import { createHash } from "node:crypto";
+// Agents add tests cover agent creation, workspace setup, channel binding, and onboarding integration.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AUTH_STORE_VERSION } from "../agents/auth-profiles/constants.js";
+import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const readConfigFileSnapshotMock = vi.hoisted(() => vi.fn());
 const writeConfigFileMock = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 const replaceConfigFileMock = vi.hoisted(() =>
   vi.fn(async (params: { nextConfig: unknown }) => await writeConfigFileMock(params.nextConfig)),
+);
+const commitConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
+  vi.fn(async (params: { nextConfig: Record<string, unknown> }) => {
+    await writeConfigFileMock(params.nextConfig);
+    return { config: params.nextConfig };
+  }),
 );
 const transformConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
   vi.fn(
@@ -42,6 +52,7 @@ const transformConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
       return {
         path: snapshot.path ?? "/tmp/openclaw.json",
         previousHash: snapshot.hash ?? null,
+        persistedHash: "persisted-hash",
         snapshot,
         nextConfig: transformed.nextConfig,
         result: transformed.result,
@@ -56,6 +67,16 @@ const transformConfigWithPendingPluginInstallsMock = vi.hoisted(() =>
 const wizardMocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(),
 }));
+const authChoiceMocks = vi.hoisted(() => ({
+  applyAuthChoice: vi.fn(),
+  warnIfModelConfigLooksOff: vi.fn(async () => {}),
+}));
+const onboardChannelsMocks = vi.hoisted(() => ({
+  setupChannels: vi.fn(async (config: Record<string, unknown>) => config),
+}));
+const onboardHelpersMocks = vi.hoisted(() => ({
+  ensureWorkspaceAndSessions: vi.fn(async () => {}),
+}));
 
 vi.mock("../config/config.js", async () => ({
   ...(await vi.importActual<typeof import("../config/config.js")>("../config/config.js")),
@@ -68,6 +89,7 @@ vi.mock("../cli/plugins-install-record-commit.js", async () => ({
   ...(await vi.importActual<typeof import("../cli/plugins-install-record-commit.js")>(
     "../cli/plugins-install-record-commit.js",
   )),
+  commitConfigWithPendingPluginInstalls: commitConfigWithPendingPluginInstallsMock,
   transformConfigWithPendingPluginInstalls: transformConfigWithPendingPluginInstallsMock,
 }));
 
@@ -75,27 +97,54 @@ vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: wizardMocks.createClackPrompter,
 }));
 
+vi.mock("./auth-choice.js", () => ({
+  applyAuthChoice: authChoiceMocks.applyAuthChoice,
+  warnIfModelConfigLooksOff: authChoiceMocks.warnIfModelConfigLooksOff,
+}));
+
+vi.mock("./onboard-channels.js", () => ({
+  setupChannels: onboardChannelsMocks.setupChannels,
+}));
+
+vi.mock("./onboard-helpers.js", () => ({
+  ensureWorkspaceAndSessions: onboardHelpersMocks.ensureWorkspaceAndSessions,
+}));
+
 import { WizardCancelledError } from "../wizard/prompts.js";
-import { __testing } from "./agents.commands.add.js";
-import { agentsAddCommand } from "./agents.js";
+import { agentsAddCommand, testing } from "./agents.commands.add.js";
 
 const runtime = createTestRuntime();
-
-function oauthProfileSecretId(authStorePath: string, profileId: string): string {
-  return createHash("sha256").update(`${authStorePath}\0${profileId}`).digest("hex").slice(0, 32);
-}
 
 describe("agents add command", () => {
   beforeEach(() => {
     readConfigFileSnapshotMock.mockClear();
     writeConfigFileMock.mockClear();
     replaceConfigFileMock.mockClear();
+    commitConfigWithPendingPluginInstallsMock.mockClear();
     transformConfigWithPendingPluginInstallsMock.mockClear();
     wizardMocks.createClackPrompter.mockClear();
+    authChoiceMocks.applyAuthChoice.mockClear();
+    authChoiceMocks.warnIfModelConfigLooksOff.mockClear();
+    onboardChannelsMocks.setupChannels.mockClear();
+    onboardHelpersMocks.ensureWorkspaceAndSessions.mockClear();
     runtime.log.mockClear();
     runtime.error.mockClear();
     runtime.exit.mockClear();
   });
+
+  async function withAgentsAddStateRoot(
+    prefix: string,
+    run: (root: string) => Promise<void>,
+  ): Promise<void> {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
+    try {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => await run(root));
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      await fs.rm(root, { recursive: true, force: true });
+    }
+  }
 
   it("requires --workspace when flags are present", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({ ...baseConfigSnapshot });
@@ -141,79 +190,91 @@ describe("agents add command", () => {
     expect(writeConfigFileMock).not.toHaveBeenCalled();
   });
 
+  it("skips catalog validation when checking the interactive wizard model config", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: { agents: { list: [] } },
+      sourceConfig: { agents: { list: [] } },
+    });
+    wizardMocks.createClackPrompter.mockReturnValue({
+      intro: vi.fn(),
+      text: vi.fn().mockResolvedValueOnce("Jon").mockResolvedValueOnce("/tmp/openclaw-jon"),
+      confirm: vi.fn().mockResolvedValue(false),
+      note: vi.fn(),
+      outro: vi.fn(),
+    });
+
+    await agentsAddCommand({}, runtime);
+
+    expect(authChoiceMocks.warnIfModelConfigLooksOff).toHaveBeenCalledOnce();
+    expect(authChoiceMocks.warnIfModelConfigLooksOff).toHaveBeenCalledWith(
+      expect.objectContaining({ agents: expect.any(Object) }),
+      expect.any(Object),
+      expect.objectContaining({
+        agentId: "jon",
+        validateCatalog: false,
+      }),
+    );
+  });
+
   it("copies only portable auth profiles when seeding a new agent store", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agents-add-auth-copy-"));
-    try {
+    await withAgentsAddStateRoot("openclaw-agents-add-auth-copy-", async (root) => {
       const sourceAgentDir = path.join(root, "main", "agent");
       const destAgentDir = path.join(root, "work", "agent");
-      const destAuthPath = path.join(destAgentDir, "auth-profiles.json");
       await fs.mkdir(sourceAgentDir, { recursive: true });
-      await fs.writeFile(
-        path.join(sourceAgentDir, "auth-profiles.json"),
-        `${JSON.stringify(
-          {
-            version: AUTH_STORE_VERSION,
-            profiles: {
-              "openai:default": {
-                type: "api_key",
-                provider: "openai",
-                key: "sk-test",
-              },
-              "github-copilot:default": {
-                type: "token",
-                provider: "github-copilot",
-                token: "gho-test",
-              },
-              "openai-codex:default": {
-                type: "oauth",
-                provider: "openai-codex",
-                access: "codex-access",
-                refresh: "codex-refresh",
-                expires: Date.now() + 60_000,
-              },
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            "openai:default": {
+              type: "api_key",
+              provider: "openai",
+              key: "sk-test",
+            },
+            "github-copilot:default": {
+              type: "token",
+              provider: "github-copilot",
+              token: "gho-test",
+            },
+            "openai:oauth": {
+              type: "oauth",
+              provider: "openai",
+              access: "codex-access",
+              refresh: "codex-refresh",
+              expires: Date.now() + 60_000,
             },
           },
-          null,
-          2,
-        )}\n`,
-        "utf8",
+        },
+        sourceAgentDir,
       );
 
-      const result = await __testing.copyPortableAuthProfiles({
+      const result = await testing.copyPortableAuthProfiles({
         sourceAgentDir,
-        destAuthPath,
+        destAgentDir,
       });
 
       expect(result).toEqual({ copied: 2, skipped: 1 });
-      const copied = JSON.parse(await fs.readFile(destAuthPath, "utf8")) as {
-        profiles: Record<string, unknown>;
-      };
-      expect(Object.keys(copied.profiles).toSorted()).toEqual([
+      const copied = loadPersistedAuthProfileStore(destAgentDir);
+      expect(Object.keys(copied?.profiles ?? {}).toSorted()).toEqual([
         "github-copilot:default",
         "openai:default",
       ]);
-    } finally {
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    });
   });
 
-  it("copies portable Codex OAuth profiles without inline token material", async () => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agents-add-oauth-copy-"));
-    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = root;
-    try {
+  it("copies portable Codex OAuth profiles inline", async () => {
+    await withAgentsAddStateRoot("openclaw-agents-add-oauth-copy-", async (root) => {
       const sourceAgentDir = path.join(root, "main", "agent");
       const destAgentDir = path.join(root, "work", "agent");
-      const destAuthPath = path.join(destAgentDir, "auth-profiles.json");
       const expires = Date.now() + 60_000;
       await fs.mkdir(sourceAgentDir, { recursive: true });
       saveAuthProfileStore(
         {
           version: AUTH_STORE_VERSION,
           profiles: {
-            "openai-codex:default": {
+            "openai:oauth": {
               type: "oauth",
-              provider: "openai-codex",
+              provider: "openai",
               access: "codex-copy-access-token",
               refresh: "codex-copy-refresh-token",
               expires,
@@ -224,43 +285,64 @@ describe("agents add command", () => {
         sourceAgentDir,
       );
 
-      const result = await __testing.copyPortableAuthProfiles({
+      const result = await testing.copyPortableAuthProfiles({
         sourceAgentDir,
-        destAuthPath,
+        destAgentDir,
       });
 
       expect(result).toEqual({ copied: 1, skipped: 0 });
-      const copiedRaw = await fs.readFile(destAuthPath, "utf8");
-      expect(copiedRaw).not.toContain("codex-copy-access-token");
-      expect(copiedRaw).not.toContain("codex-copy-refresh-token");
-      const copied = JSON.parse(copiedRaw) as {
-        profiles: Record<string, Record<string, unknown>>;
-      };
-      const credential = copied.profiles["openai-codex:default"];
+      const copied = loadPersistedAuthProfileStore(destAgentDir);
+      const credential = copied?.profiles["openai:oauth"];
       expect(credential).toStrictEqual({
         type: "oauth",
-        provider: "openai-codex",
+        provider: "openai",
+        access: "codex-copy-access-token",
+        refresh: "codex-copy-refresh-token",
         expires,
         copyToAgents: true,
-        oauthRef: {
-          source: "openclaw-credentials",
-          provider: "openai-codex",
-          id: oauthProfileSecretId(destAuthPath, "openai-codex:default"),
-        },
       });
-    } finally {
-      if (previousStateDir === undefined) {
-        delete process.env.OPENCLAW_STATE_DIR;
-      } else {
-        process.env.OPENCLAW_STATE_DIR = previousStateDir;
-      }
-      await fs.rm(root, { recursive: true, force: true });
-    }
+    });
+  });
+
+  it("skips unresolved OAuth profiles when seeding a new agent store", async () => {
+    await withAgentsAddStateRoot("openclaw-agents-add-oauth-ref-skip-", async (root) => {
+      const sourceAgentDir = path.join(root, "main", "agent");
+      const destAgentDir = path.join(root, "work", "agent");
+      const profileId = "openai:oauth";
+      const ref = {
+        source: "openclaw-credentials" as const,
+        provider: "openai" as const,
+        id: "0123456789abcdef0123456789abcdef",
+      };
+      await fs.mkdir(sourceAgentDir, { recursive: true });
+      saveAuthProfileStore(
+        {
+          version: AUTH_STORE_VERSION,
+          profiles: {
+            [profileId]: {
+              type: "oauth",
+              provider: "openai",
+              copyToAgents: true,
+              expires: Date.now() + 60_000,
+              oauthRef: ref,
+            },
+          },
+        } as never,
+        sourceAgentDir,
+      );
+      const result = await testing.copyPortableAuthProfiles({
+        sourceAgentDir,
+        destAgentDir,
+      });
+
+      expect(result).toEqual({ copied: 0, skipped: 1 });
+      expect(loadPersistedAuthProfileStore(destAgentDir)).toBeNull();
+    });
   });
 
   it("does not claim skipped OAuth profiles stay shared from a non-main source agent", () => {
     expect(
-      __testing.formatSkippedOAuthProfilesMessage({
+      testing.formatSkippedOAuthProfilesMessage({
         sourceAgentId: "default-work",
         sourceIsInheritedMain: false,
       }),
@@ -268,7 +350,7 @@ describe("agents add command", () => {
       'OAuth profiles were not copied from "default-work"; sign in separately for this agent.',
     );
     expect(
-      __testing.formatSkippedOAuthProfilesMessage({
+      testing.formatSkippedOAuthProfilesMessage({
         sourceAgentId: "main",
         sourceIsInheritedMain: true,
       }),

@@ -1,3 +1,4 @@
+// Xai plugin module implements stt behavior.
 import type {
   AudioTranscriptionRequest,
   AudioTranscriptionResult,
@@ -7,8 +8,9 @@ import {
   assertOkOrThrowHttpError,
   buildAudioTranscriptionFormData,
   postTranscriptionRequest,
-  resolveProviderHttpRequestConfig,
+  readProviderJsonResponse,
   requireTranscriptionText,
+  resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { XAI_BASE_URL } from "./model-definitions.js";
@@ -67,7 +69,7 @@ export async function transcribeXaiAudio(
 
   try {
     await assertOkOrThrowHttpError(response, "xAI audio transcription failed");
-    const payload = (await response.json()) as XaiSttResponse;
+    const payload = await readProviderJsonResponse<XaiSttResponse>(response, "xai.stt");
     return {
       text: requireTranscriptionText(payload.text, "xAI transcription response missing text"),
       ...(model ? { model } : {}),
@@ -78,6 +80,9 @@ export async function transcribeXaiAudio(
 }
 
 export function buildXaiMediaUnderstandingProvider(): MediaUnderstandingProvider {
+  // Auth is resolved by media-understanding core via resolveProviderExecutionContext
+  // before transcribeAudio runs, so an OAuth profile (when configured) reaches
+  // here as `params.apiKey` already. No plugin-side fallback required.
   return {
     id: "xai",
     capabilities: ["audio"],

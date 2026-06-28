@@ -1,10 +1,17 @@
+/**
+ * Amazon Bedrock embedding provider runtime. It normalizes model-specific
+ * request/response shapes across Titan, Cohere, Nova, and TwelveLabs models.
+ */
 import {
   debugEmbeddingsLog,
   sanitizeAndNormalizeEmbedding,
   type MemoryEmbeddingProvider,
   type MemoryEmbeddingProviderCreateOptions,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  asOptionalRecord as asRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 
 // ---------------------------------------------------------------------------
@@ -17,6 +24,7 @@ type BedrockEmbeddingClient = {
   dimensions?: number;
 };
 
+/** Default Bedrock embedding model used when no explicit model is configured. */
 export const DEFAULT_BEDROCK_EMBEDDING_MODEL = "amazon.titan-embed-text-v2:0";
 
 /** Request/response format family — each has a different API shape. */
@@ -61,12 +69,18 @@ const MODELS: Record<string, ModelSpec> = {
   "twelvelabs.marengo-embed-3-0-v1:0": { maxTokens: 512, dims: 512, family: "twelvelabs" },
 };
 
+/** Strip AWS inference profile prefix (us., eu., ap., apac., au., jp., global.) from model ID. */
+function stripInferenceProfilePrefix(modelId: string): string {
+  return modelId.replace(/^(?:us|eu|ap|apac|au|jp|global)\./, "");
+}
+
 /** Resolve spec, stripping throughput suffixes like `:2:8k` or `:0:512`. */
 function resolveSpec(modelId: string): ModelSpec | undefined {
-  if (MODELS[modelId]) {
-    return MODELS[modelId];
+  const bare = stripInferenceProfilePrefix(modelId);
+  if (MODELS[bare]) {
+    return MODELS[bare];
   }
-  const parts = modelId.split(":");
+  const parts = bare.split(":");
   for (let i = parts.length - 1; i >= 1; i--) {
     const spec = MODELS[parts.slice(0, i).join(":")];
     if (spec) {
@@ -78,7 +92,7 @@ function resolveSpec(modelId: string): ModelSpec | undefined {
 
 /** Infer family from model ID prefix when not in catalog. */
 function inferFamily(modelId: string): Family {
-  const id = normalizeLowercaseStringOrEmpty(modelId);
+  const id = normalizeLowercaseStringOrEmpty(stripInferenceProfilePrefix(modelId));
   if (id.startsWith("amazon.titan-embed-text-v2")) {
     return "titan-v2";
   }
@@ -224,36 +238,88 @@ function buildCohereBody(
 // Response parsers
 // ---------------------------------------------------------------------------
 
+type BedrockEmbeddingResponseJson = {
+  embedding?: unknown;
+  embeddings?: unknown;
+  data?: unknown;
+};
+
+function parseBedrockEmbeddingResponseJson(raw: string): BedrockEmbeddingResponseJson {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Amazon Bedrock embedding response returned malformed JSON");
+    }
+    return parsed as BedrockEmbeddingResponseJson;
+  } catch {
+    throw new Error("Amazon Bedrock embedding response returned malformed JSON");
+  }
+}
+
+function malformedBedrockEmbeddingResponse(): Error {
+  return new Error("Amazon Bedrock embedding response returned malformed JSON");
+}
+
+function asNumberArray(value: unknown): number[] {
+  if (!Array.isArray(value)) {
+    throw malformedBedrockEmbeddingResponse();
+  }
+  for (const entry of value) {
+    if (typeof entry !== "number" || !Number.isFinite(entry)) {
+      throw malformedBedrockEmbeddingResponse();
+    }
+  }
+  return value;
+}
+
+function asNumberArrayBatch(value: unknown): number[][] {
+  if (!Array.isArray(value)) {
+    throw malformedBedrockEmbeddingResponse();
+  }
+  return value.map((entry) => asNumberArray(entry));
+}
+
 function parseSingle(family: Family, raw: string): number[] {
-  const data = JSON.parse(raw);
+  const data = parseBedrockEmbeddingResponseJson(raw);
   switch (family) {
     case "nova":
-      return data.embeddings?.[0]?.embedding ?? [];
+      return asNumberArray(Array.isArray(data.embeddings) ? data.embeddings[0]?.embedding : null);
     case "twelvelabs": {
       if (Array.isArray(data.data)) {
-        return data.data[0]?.embedding ?? [];
+        return asNumberArray(asRecord(data.data[0])?.embedding);
       }
-      if (Array.isArray(data.data?.embedding)) {
-        return data.data.embedding;
+      const dataRecord = asRecord(data.data);
+      if (dataRecord) {
+        return asNumberArray(dataRecord.embedding);
       }
-      return data.embedding ?? [];
+      return asNumberArray(data.embedding);
     }
     default:
-      return data.embedding ?? [];
+      return asNumberArray(data.embedding);
   }
 }
 
 function parseCohereBatch(family: Family, raw: string): number[][] {
-  const data = JSON.parse(raw);
+  const data = parseBedrockEmbeddingResponseJson(raw);
   const embeddings = data.embeddings;
   if (!embeddings) {
-    return [];
+    throw malformedBedrockEmbeddingResponse();
   }
   if (family === "cohere-v4" && !Array.isArray(embeddings)) {
-    return embeddings.float ?? [];
+    const embeddingRecord = asRecord(embeddings);
+    if (!embeddingRecord) {
+      throw malformedBedrockEmbeddingResponse();
+    }
+    return asNumberArrayBatch(embeddingRecord.float);
   }
-  return embeddings;
+  return asNumberArrayBatch(embeddings);
 }
+
+export const testing = {
+  parseCohereBatch,
+  parseSingle,
+  stripInferenceProfilePrefix,
+};
 
 // ---------------------------------------------------------------------------
 // Provider
@@ -274,7 +340,7 @@ export async function createBedrockEmbeddingProvider(
     family,
   });
 
-  const invoke = async (body: string): Promise<string> => {
+  const invoke = async (body: string, signal?: AbortSignal): Promise<string> => {
     await refreshAwsSharedConfigCacheForBedrock();
     const sdk = new BedrockRuntimeClient({ region: client.region });
     try {
@@ -285,6 +351,7 @@ export async function createBedrockEmbeddingProvider(
           contentType: "application/json",
           accept: "application/json",
         }),
+        signal ? { abortSignal: signal } : undefined,
       );
       return new TextDecoder().decode(res.body);
     } finally {
@@ -294,37 +361,46 @@ export async function createBedrockEmbeddingProvider(
 
   const isCohere = family === "cohere-v3" || family === "cohere-v4";
 
-  const embedSingle = async (text: string): Promise<number[]> => {
-    const raw = await invoke(buildBody(family, text, client.dimensions));
+  const embedSingle = async (text: string, signal?: AbortSignal): Promise<number[]> => {
+    const raw = await invoke(buildBody(family, text, client.dimensions), signal);
     return sanitizeAndNormalizeEmbedding(parseSingle(family, raw));
   };
 
   const embedCohere = async (
     texts: string[],
     inputType: "search_query" | "search_document",
+    signal?: AbortSignal,
   ): Promise<number[][]> => {
-    const raw = await invoke(buildCohereBody(family, texts, inputType, client.dimensions));
+    const raw = await invoke(buildCohereBody(family, texts, inputType, client.dimensions), signal);
     return parseCohereBatch(family, raw).map((e) => sanitizeAndNormalizeEmbedding(e));
   };
 
-  const embedQuery = async (text: string): Promise<number[]> => {
+  const embedQuery = async (
+    text: string,
+    optionsValue?: { signal?: AbortSignal },
+  ): Promise<number[]> => {
     if (!text.trim()) {
       return [];
     }
     if (isCohere) {
-      return (await embedCohere([text], "search_query"))[0] ?? [];
+      return (await embedCohere([text], "search_query", optionsValue?.signal))[0] ?? [];
     }
-    return embedSingle(text);
+    return embedSingle(text, optionsValue?.signal);
   };
 
-  const embedBatch = async (texts: string[]): Promise<number[][]> => {
+  const embedBatch = async (
+    texts: string[],
+    optionsLocal?: { signal?: AbortSignal },
+  ): Promise<number[][]> => {
     if (texts.length === 0) {
       return [];
     }
     if (isCohere) {
-      return embedCohere(texts, "search_document");
+      return embedCohere(texts, "search_document", optionsLocal?.signal);
     }
-    return Promise.all(texts.map((t) => (t.trim() ? embedSingle(t) : Promise.resolve([]))));
+    return Promise.all(
+      texts.map((t) => (t.trim() ? embedSingle(t, optionsLocal?.signal) : Promise.resolve([]))),
+    );
   };
 
   return {
@@ -400,3 +476,4 @@ export async function hasAwsCredentials(
     return false;
   }
 }
+export { testing as __testing };

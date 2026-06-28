@@ -1,14 +1,18 @@
+// Coalesces buffered block-streaming payloads into sendable reply parts.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import { copyReplyPayloadMetadata, isReplyPayloadStatusNotice } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { BlockStreamingCoalescing } from "./block-streaming.js";
 
-export type BlockReplyCoalescer = {
+/** Coalesces many streaming reply fragments into fewer outbound payloads. */
+type BlockReplyCoalescer = {
   enqueue: (payload: ReplyPayload) => void;
   flush: (options?: { force?: boolean }) => Promise<void>;
   hasBuffered: () => boolean;
   stop: () => void;
 };
 
+/** Creates a text coalescer with idle and size-based flush behavior. */
 export function createBlockReplyCoalescer(params: {
   config: BlockStreamingCoalescing;
   shouldAbort: () => boolean;
@@ -26,6 +30,9 @@ export function createBlockReplyCoalescer(params: {
   let bufferAudioAsVoice: ReplyPayload["audioAsVoice"];
   let bufferIsReasoning: ReplyPayload["isReasoning"];
   let bufferIsCompactionNotice: ReplyPayload["isCompactionNotice"];
+  let bufferIsFallbackNotice: ReplyPayload["isFallbackNotice"];
+  let bufferIsStatusNotice: ReplyPayload["isStatusNotice"];
+  let bufferMetadataSource: ReplyPayload | undefined;
   let idleTimer: NodeJS.Timeout | undefined;
 
   const clearIdleTimer = () => {
@@ -42,6 +49,19 @@ export function createBlockReplyCoalescer(params: {
     bufferAudioAsVoice = undefined;
     bufferIsReasoning = undefined;
     bufferIsCompactionNotice = undefined;
+    bufferIsFallbackNotice = undefined;
+    bufferIsStatusNotice = undefined;
+    bufferMetadataSource = undefined;
+  };
+
+  const startBufferFromPayload = (payload: ReplyPayload) => {
+    bufferReplyToId = payload.replyToId;
+    bufferAudioAsVoice = payload.audioAsVoice;
+    bufferIsReasoning = payload.isReasoning;
+    bufferIsCompactionNotice = payload.isCompactionNotice;
+    bufferIsFallbackNotice = payload.isFallbackNotice;
+    bufferIsStatusNotice = payload.isStatusNotice;
+    bufferMetadataSource = payload;
   };
 
   const scheduleIdleFlush = () => {
@@ -73,9 +93,43 @@ export function createBlockReplyCoalescer(params: {
       audioAsVoice: bufferAudioAsVoice,
       isReasoning: bufferIsReasoning,
       isCompactionNotice: bufferIsCompactionNotice,
+      isFallbackNotice: bufferIsFallbackNotice,
+      isStatusNotice: bufferIsStatusNotice,
     };
+    const payloadWithMetadata = copyReplyPayloadMetadata(bufferMetadataSource ?? payload, payload);
     resetBuffer();
-    await onFlush(payload);
+    await onFlush(payloadWithMetadata);
+  };
+
+  const canMergeBufferedTextWithMedia = (payload: ReplyPayload) =>
+    Boolean(bufferText) &&
+    !flushOnEnqueue &&
+    !bufferAudioAsVoice &&
+    !payload.audioAsVoice &&
+    !payload.isReasoning &&
+    !isReplyPayloadStatusNotice(payload) &&
+    !bufferIsReasoning &&
+    !isReplyPayloadStatusNotice({
+      isCompactionNotice: bufferIsCompactionNotice,
+      isFallbackNotice: bufferIsFallbackNotice,
+      isStatusNotice: bufferIsStatusNotice,
+    }) &&
+    (!payload.replyToId || bufferReplyToId === payload.replyToId);
+
+  /** Merges buffered text into a media payload without changing media metadata. */
+  const mergeBufferedTextWithMedia = (payload: ReplyPayload, text: string): ReplyPayload => {
+    const mergedText = text ? `${bufferText}${joiner}${text}` : bufferText;
+    const mergedPayload: ReplyPayload = {
+      ...payload,
+      text: mergedText,
+      replyToId: payload.replyToId ?? bufferReplyToId,
+    };
+    const metadataMergedPayload = copyReplyPayloadMetadata(
+      bufferMetadataSource ?? mergedPayload,
+      mergedPayload,
+    );
+    resetBuffer();
+    return copyReplyPayloadMetadata(payload, metadataMergedPayload);
   };
 
   const enqueue = (payload: ReplyPayload) => {
@@ -87,6 +141,10 @@ export function createBlockReplyCoalescer(params: {
     const text = reply.text;
     const hasText = reply.hasText;
     if (hasMedia) {
+      if (canMergeBufferedTextWithMedia(payload)) {
+        void onFlush(mergeBufferedTextWithMedia(payload, text));
+        return;
+      }
       void flush({ force: true });
       void onFlush(payload);
       return;
@@ -101,10 +159,7 @@ export function createBlockReplyCoalescer(params: {
       if (bufferText) {
         void flush({ force: true });
       }
-      bufferReplyToId = payload.replyToId;
-      bufferAudioAsVoice = payload.audioAsVoice;
-      bufferIsReasoning = payload.isReasoning;
-      bufferIsCompactionNotice = payload.isCompactionNotice;
+      startBufferFromPayload(payload);
       bufferText = text;
       void flush({ force: true });
       return;
@@ -118,7 +173,14 @@ export function createBlockReplyCoalescer(params: {
     const visibilityConflict =
       bufferText &&
       (bufferIsReasoning !== payload.isReasoning ||
-        bufferIsCompactionNotice !== payload.isCompactionNotice);
+        bufferIsCompactionNotice !== payload.isCompactionNotice ||
+        bufferIsFallbackNotice !== payload.isFallbackNotice ||
+        isReplyPayloadStatusNotice({
+          isCompactionNotice: bufferIsCompactionNotice,
+          isFallbackNotice: bufferIsFallbackNotice,
+          isStatusNotice: bufferIsStatusNotice,
+        }) !== isReplyPayloadStatusNotice(payload));
+    // Flush before changing reply target, audio mode, or visibility class.
     if (
       bufferText &&
       (replyToConflict || bufferAudioAsVoice !== payload.audioAsVoice || visibilityConflict)
@@ -127,20 +189,14 @@ export function createBlockReplyCoalescer(params: {
     }
 
     if (!bufferText) {
-      bufferReplyToId = payload.replyToId;
-      bufferAudioAsVoice = payload.audioAsVoice;
-      bufferIsReasoning = payload.isReasoning;
-      bufferIsCompactionNotice = payload.isCompactionNotice;
+      startBufferFromPayload(payload);
     }
 
     const nextText = bufferText ? `${bufferText}${joiner}${text}` : text;
     if (nextText.length > maxChars) {
       if (bufferText) {
         void flush({ force: true });
-        bufferReplyToId = payload.replyToId;
-        bufferAudioAsVoice = payload.audioAsVoice;
-        bufferIsReasoning = payload.isReasoning;
-        bufferIsCompactionNotice = payload.isCompactionNotice;
+        startBufferFromPayload(payload);
         if (text.length >= maxChars) {
           void onFlush(payload);
           return;

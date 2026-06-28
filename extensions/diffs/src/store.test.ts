@@ -1,11 +1,16 @@
+// Diffs tests cover store plugin behavior.
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDiffsHttpHandler } from "./http.js";
 import { DiffArtifactStore } from "./store.js";
-import { createDiffStoreHarness } from "./test-helpers.js";
+import { createDiffStoreHarness, ensureCuratedViewerRuntimeForTests } from "./test-helpers.js";
+
+beforeAll(async () => {
+  await ensureCuratedViewerRuntimeForTests();
+});
 
 describe("DiffArtifactStore", () => {
   let rootDir: string;
@@ -48,6 +53,21 @@ describe("DiffArtifactStore", () => {
       agentAccountId: "default",
     });
     expect(await store.readHtml(artifact.id)).toBe("<html>demo</html>");
+  });
+
+  it("caps artifact expiry instead of throwing near the Date boundary", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000 - 1_000));
+
+    const artifact = await store.createArtifact({
+      html: "<html>demo</html>",
+      title: "Demo",
+      inputKind: "patch",
+      fileCount: 1,
+      ttlMs: 60_000,
+    });
+
+    expect(artifact.expiresAt).toBe("+275760-09-13T00:00:00.000Z");
   });
 
   it("expires artifacts after the ttl", async () => {
@@ -125,6 +145,15 @@ describe("DiffArtifactStore", () => {
       agentId: "main",
       sessionId: "session-123",
     });
+  });
+
+  it("caps standalone file expiry instead of throwing near the Date boundary", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(8_640_000_000_000_000 - 1_000));
+
+    const standalone = await store.createStandaloneFileArtifact({ ttlMs: 60_000 });
+
+    expect(standalone.expiresAt).toBe("+275760-09-13T00:00:00.000Z");
   });
 
   it("expires standalone file artifacts using ttl metadata", async () => {

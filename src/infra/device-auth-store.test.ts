@@ -1,3 +1,4 @@
+// Covers persistent device auth token storage and clearing.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -74,6 +75,60 @@ describe("infra/device-auth-store", () => {
         "utf8",
       );
       expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toBeNull();
+    });
+  });
+
+  it("normalizes raw persisted token metadata while reading from disk", async () => {
+    await withTempDir("openclaw-device-auth-", async (stateDir) => {
+      const env = createEnv(stateDir);
+      await fs.mkdir(path.dirname(deviceAuthFile(stateDir)), { recursive: true });
+      await fs.writeFile(
+        deviceAuthFile(stateDir),
+        JSON.stringify({
+          version: 1,
+          deviceId: "device-1",
+          tokens: {
+            " operator ": {
+              token: "operator-token",
+              role: { nested: "bad" },
+              scopes: ["operator.write", "operator.read", 42],
+              updatedAtMs: "bad-time",
+            },
+          },
+        }) + "\n",
+        "utf8",
+      );
+
+      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toEqual({
+        token: "operator-token",
+        role: "operator",
+        scopes: ["operator.read", "operator.write"],
+        updatedAtMs: 0,
+      });
+    });
+  });
+
+  it("loads valid roles when another persisted token entry is malformed", async () => {
+    await withTempDir("openclaw-device-auth-", async (stateDir) => {
+      const env = createEnv(stateDir);
+      await fs.mkdir(path.dirname(deviceAuthFile(stateDir)), { recursive: true });
+      await fs.writeFile(
+        deviceAuthFile(stateDir),
+        JSON.stringify({
+          version: 1,
+          deviceId: "device-1",
+          tokens: {
+            operator: { token: "operator-token", role: "operator", scopes: [], updatedAtMs: 1 },
+            broken: { role: "broken", scopes: [], updatedAtMs: 1 },
+          },
+        }),
+        "utf8",
+      );
+
+      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })?.token).toBe(
+        "operator-token",
+      );
+      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "broken", env })).toBeNull();
     });
   });
 

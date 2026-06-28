@@ -1,3 +1,4 @@
+// Verifies prompt composition invariants across generated agent scenarios.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   createPromptCompositionScenarios,
@@ -7,6 +8,7 @@ import {
 type ScenarioFixture = Awaited<ReturnType<typeof createPromptCompositionScenarios>>;
 
 function getTurn(scenario: PromptScenario, id: string) {
+  // Scenario assertions use named turns so failures identify the prompt boundary.
   const turn = scenario.turns.find((entry) => entry.id === id);
   if (!turn) {
     throw new Error(`expected turn ${scenario.scenario}:${id}`);
@@ -20,6 +22,14 @@ function getScenario(fixture: ScenarioFixture, id: string): PromptScenario {
     throw new Error(`expected prompt scenario ${id}`);
   }
   return scenario;
+}
+
+function countOccurrences(text: string, needle: string): number {
+  // Avoid regex escaping when checking exact prompt-body duplication.
+  if (!needle) {
+    return 0;
+  }
+  return text.split(needle).length - 1;
 }
 
 describe("prompt composition invariants", () => {
@@ -86,13 +96,12 @@ describe("prompt composition invariants", () => {
     expect(steady.systemPrompt).toBe(eventTurn.systemPrompt);
   });
 
-  it("includes direct-chat guidance that routes NO_REPLY through the default rewrite path", () => {
+  it("keeps direct-chat guidance free of NO_REPLY", () => {
     const directScenario = getScenario(fixture, "auto-reply-direct");
     const first = getTurn(directScenario, "t1");
 
     expect(first.systemPrompt).toContain("You are in a Slack direct conversation.");
-    expect(first.systemPrompt).toContain('reply with exactly "NO_REPLY"');
-    expect(first.systemPrompt).toContain("so OpenClaw can send a short fallback reply");
+    expect(first.systemPrompt).not.toContain("NO_REPLY");
     expect(first.systemPrompt).not.toContain("## Silent Replies");
   });
 
@@ -104,5 +113,17 @@ describe("prompt composition invariants", () => {
     expect(flush.systemPrompt).not.toBe(refresh.systemPrompt);
     expect(flush.bodyPrompt).toContain("Pre-compaction memory flush.");
     expect(refresh.bodyPrompt).toContain("[Post-compaction context refresh]");
+  });
+
+  it("keeps Discord supplemental context out of the inbound body text", () => {
+    const scenario = getScenario(fixture, "auto-reply-discord-boundary");
+    const turn = getTurn(scenario, "t1");
+    const inboundBody = "Please summarize the deploy log.";
+
+    expect(turn.bodyPrompt).toContain("Discord channel metadata (untrusted metadata):");
+    expect(turn.bodyPrompt).toContain('"topic": "Deploy coordination"');
+    expect(turn.bodyPrompt).not.toContain("EXTERNAL_UNTRUSTED_CONTENT");
+    expect(countOccurrences(turn.bodyPrompt, inboundBody)).toBe(1);
+    expect(turn.systemPrompt).not.toContain(inboundBody);
   });
 });

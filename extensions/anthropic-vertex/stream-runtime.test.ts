@@ -1,8 +1,7 @@
-import { createAssistantMessageEventStream, type Model } from "@earendil-works/pi-ai";
+// Anthropic Vertex tests cover stream runtime plugin behavior.
+import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { AnthropicVertexStreamDeps } from "./stream-runtime.js";
-
-const SYSTEM_PROMPT_CACHE_BOUNDARY = "\n<!-- OPENCLAW_CACHE_BOUNDARY -->\n";
 
 function createStreamDeps(): {
   deps: AnthropicVertexStreamDeps;
@@ -31,16 +30,23 @@ function createStreamDeps(): {
 let createAnthropicVertexStreamFn: typeof import("./stream-runtime.js").createAnthropicVertexStreamFn;
 let createAnthropicVertexStreamFnForModel: typeof import("./stream-runtime.js").createAnthropicVertexStreamFnForModel;
 
-function makeModel(params: { id: string; maxTokens?: number }): Model<"anthropic-messages"> {
+function makeModel(params: {
+  id: string;
+  maxTokens?: number;
+  params?: Record<string, unknown>;
+  reasoning?: boolean;
+  thinkingLevelMap?: Model<"anthropic-messages">["thinkingLevelMap"];
+}): Model<"anthropic-messages"> {
   return {
     id: params.id,
     api: "anthropic-messages",
     provider: "anthropic-vertex",
+    reasoning: params.reasoning ?? true,
     ...(params.maxTokens !== undefined ? { maxTokens: params.maxTokens } : {}),
+    ...(params.params ? { params: params.params } : {}),
+    ...(params.thinkingLevelMap ? { thinkingLevelMap: params.thinkingLevelMap } : {}),
   } as Model<"anthropic-messages">;
 }
-
-const CACHE_BOUNDARY_PROMPT = `Stable prefix${SYSTEM_PROMPT_CACHE_BOUNDARY}Dynamic suffix`;
 
 type PayloadHook = (payload: unknown, payloadModel: unknown) => Promise<unknown>;
 
@@ -62,8 +68,8 @@ function streamTransportOptions(
   return options as Record<string, unknown>;
 }
 
-function captureCacheBoundaryPayloadHook(
-  onPayload: PayloadHook,
+function captureTransportPayloadHook(
+  onPayload: PayloadHook | undefined,
   deps: AnthropicVertexStreamDeps,
   streamAnthropicMock: ReturnType<typeof vi.fn>,
 ) {
@@ -72,14 +78,8 @@ function captureCacheBoundaryPayloadHook(
 
   void streamFn(
     model,
-    {
-      systemPrompt: CACHE_BOUNDARY_PROMPT,
-      messages: [{ role: "user", content: "Hello" }],
-    } as never,
-    {
-      cacheRetention: "short",
-      onPayload,
-    } as never,
+    { messages: [{ role: "user", content: "Hello" }] } as never,
+    { cacheRetention: "short", ...(onPayload ? { onPayload } : {}) } as never,
   );
 
   const transportOptions = streamTransportOptions(streamAnthropicMock);
@@ -87,32 +87,59 @@ function captureCacheBoundaryPayloadHook(
   return { model, onPayload: transportOptions.onPayload as PayloadHook | undefined };
 }
 
-function buildExpectedCacheBoundaryPayload(messageText: string) {
+// Mirrors the shared anthropic-messages transport output: cache boundary already
+// split (uncached dynamic suffix) and all four cache_control markers allocated.
+function buildBudgetedTransportPayload() {
   return {
     system: [
-      {
-        type: "text",
-        text: "Stable prefix",
-        cache_control: { type: "ephemeral" },
-      },
-      {
-        type: "text",
-        text: "Dynamic suffix",
-      },
+      { type: "text", text: "Stable prefix", cache_control: { type: "ephemeral" } },
+      { type: "text", text: "Dynamic suffix" },
+    ],
+    tools: [
+      { name: "exec", input_schema: { type: "object" }, cache_control: { type: "ephemeral" } },
     ],
     messages: [
       {
         role: "user",
+        content: [{ type: "text", text: "Hello", cache_control: { type: "ephemeral" } }],
+      },
+      { role: "assistant", content: [{ type: "tool_use", id: "t1", name: "exec", input: {} }] },
+      {
+        role: "user",
         content: [
           {
-            type: "text",
-            text: messageText,
+            type: "tool_result",
+            tool_use_id: "t1",
+            content: [],
             cache_control: { type: "ephemeral" },
           },
         ],
       },
     ],
   };
+}
+
+function countCacheControlMarkers(payload: unknown): number {
+  let count = 0;
+  const visit = (value: unknown) => {
+    if (Array.isArray(value)) {
+      value.forEach(visit);
+      return;
+    }
+    if (!value || typeof value !== "object") {
+      return;
+    }
+    const record = value as Record<string, unknown>;
+    if (record.cache_control !== undefined) {
+      count += 1;
+    }
+    visit(record.content);
+  };
+  const record = payload as Record<string, unknown>;
+  visit(record.system);
+  visit(record.tools);
+  visit(record.messages);
+  return count;
 }
 
 describe("createAnthropicVertexStreamFn", () => {
@@ -170,7 +197,105 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(streamTransportOptions(streamAnthropicMock).maxTokens).toBe(128000);
   });
 
-  it("maps xhigh reasoning to max effort for adaptive Opus models", () => {
+  it.each(["claude-opus-4-8", "claude-opus-4-7", "claude-fable-5", "claude-mythos-5"])(
+    "omits unsupported temperature for %s",
+    (modelId) => {
+      const { deps, streamAnthropicMock } = createStreamDeps();
+      const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+      const model = makeModel({ id: modelId, maxTokens: 128000 });
+
+      void streamFn(model, { messages: [] }, { temperature: 0.7 });
+
+      const transportOptions = streamTransportOptions(streamAnthropicMock);
+      expect(Object.hasOwn(transportOptions, "temperature")).toBe(false);
+    },
+  );
+
+  it("preserves temperature for Vertex models that support custom sampling", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { temperature: 0.7 });
+
+    expect(streamTransportOptions(streamAnthropicMock).temperature).toBe(0.7);
+  });
+
+  it("uses Fable 5's always-adaptive Vertex contract", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-fable-5", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { temperature: 0.7 });
+
+    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
+      thinkingEnabled: true,
+      effort: "high",
+      maxTokens: 128000,
+    });
+    expect(streamTransportOptions(streamAnthropicMock)).not.toHaveProperty("temperature");
+  });
+
+  it("uses Mythos 5's mandatory adaptive Vertex contract by default", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-mythos-5", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { temperature: 0.7 });
+
+    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
+      thinkingEnabled: true,
+      effort: "high",
+      maxTokens: 128000,
+    });
+    expect(streamTransportOptions(streamAnthropicMock)).not.toHaveProperty("temperature");
+  });
+
+  it("uses canonical Claude policy for Vertex deployment aliases", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({
+      id: "production-claude",
+      maxTokens: 128000,
+      params: { canonicalModelId: "claude-opus-4-8" },
+    });
+
+    void streamFn(model, { messages: [] }, { reasoning: "xhigh", temperature: 0.7 });
+
+    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
+      thinkingEnabled: true,
+      effort: "xhigh",
+    });
+    expect(streamTransportOptions(streamAnthropicMock)).not.toHaveProperty("temperature");
+  });
+
+  it("preserves Fable 5 low effort on Vertex", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-fable-5", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { reasoning: "low" });
+
+    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
+      thinkingEnabled: true,
+      effort: "low",
+    });
+  });
+
+  it("preserves Fable 5 xhigh effort on Vertex", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-fable-5", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { reasoning: "xhigh" });
+
+    expect(streamTransportOptions(streamAnthropicMock)).toMatchObject({
+      thinkingEnabled: true,
+      effort: "xhigh",
+    });
+  });
+
+  it("maps unsupported xhigh reasoning to high effort for Opus 4.6", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
     const model = makeModel({ id: "claude-opus-4-6", maxTokens: 64000 });
@@ -179,13 +304,13 @@ describe("createAnthropicVertexStreamFn", () => {
 
     const transportOptions = streamTransportOptions(streamAnthropicMock);
     expect(transportOptions.thinkingEnabled).toBe(true);
-    expect(transportOptions.effort).toBe("max");
+    expect(transportOptions.effort).toBe("high");
   });
 
-  it("maps xhigh reasoning to xhigh effort for Opus 4.7", () => {
+  it("maps xhigh reasoning to xhigh effort for Opus 4.8", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
-    const model = makeModel({ id: "claude-opus-4-7", maxTokens: 64000 });
+    const model = makeModel({ id: "claude-opus-4-8", maxTokens: 128000 });
 
     void streamFn(model, { messages: [] }, { reasoning: "xhigh" });
 
@@ -194,63 +319,76 @@ describe("createAnthropicVertexStreamFn", () => {
     expect(transportOptions.effort).toBe("xhigh");
   });
 
-  it("applies Anthropic cache-boundary shaping before forwarding payload hooks", async () => {
+  it("preserves max reasoning for Opus 4.8", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-opus-4-8", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { reasoning: "max" });
+
+    const transportOptions = streamTransportOptions(streamAnthropicMock);
+    expect(transportOptions.thinkingEnabled).toBe(true);
+    expect(transportOptions.effort).toBe("max");
+  });
+
+  it("preserves native max reasoning for Sonnet 4.6", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({ id: "claude-sonnet-4-6", maxTokens: 128000 });
+
+    void streamFn(model, { messages: [] }, { reasoning: "max" });
+
+    const transportOptions = streamTransportOptions(streamAnthropicMock);
+    expect(transportOptions.thinkingEnabled).toBe(true);
+    expect(transportOptions.effort).toBe("max");
+  });
+
+  it("honors explicit max opt-outs for Vertex aliases", () => {
+    const { deps, streamAnthropicMock } = createStreamDeps();
+    const streamFn = createAnthropicVertexStreamFn("vertex-project", "us-east5", undefined, deps);
+    const model = makeModel({
+      id: "production-claude",
+      params: { canonicalModelId: "claude-sonnet-4-6" },
+      reasoning: false,
+      thinkingLevelMap: { xhigh: null, max: null },
+    });
+
+    void streamFn(model, { messages: [] }, { reasoning: "max", temperature: 0.2 });
+
+    const transportOptions = streamTransportOptions(streamAnthropicMock);
+    expect(transportOptions.effort).toBe("high");
+    expect(transportOptions).not.toHaveProperty("temperature");
+  });
+
+  it("keeps already-budgeted cache_control markers intact when forwarding payload hooks", async () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
     const onPayload = vi.fn(async (payload: unknown) => payload);
-    const { model, onPayload: transportPayloadHook } = captureCacheBoundaryPayloadHook(
+    const { model, onPayload: transportPayloadHook } = captureTransportPayloadHook(
       onPayload,
       deps,
       streamAnthropicMock,
     );
-    const payload = {
-      system: [
-        {
-          type: "text",
-          text: CACHE_BOUNDARY_PROMPT,
-          cache_control: { type: "ephemeral" },
-        },
-      ],
-      messages: [{ role: "user", content: "Hello" }],
-    };
+    const payload = buildBudgetedTransportPayload();
 
     const nextPayload = await transportPayloadHook?.(payload, model);
 
-    const expectedPayload = buildExpectedCacheBoundaryPayload("Hello");
-    expect(onPayload).toHaveBeenCalledWith(expectedPayload, model);
-    expect(nextPayload).toEqual(expectedPayload);
+    expect(onPayload).toHaveBeenCalledWith(payload, model);
+    expect(countCacheControlMarkers(nextPayload)).toBe(4);
+    expect((nextPayload as ReturnType<typeof buildBudgetedTransportPayload>).system[1]).toEqual({
+      type: "text",
+      text: "Dynamic suffix",
+    });
   });
 
-  it("reapplies Anthropic cache-boundary shaping when payload hooks return a fresh payload", async () => {
+  it("omits the transport payload hook when the caller provides none", () => {
     const { deps, streamAnthropicMock } = createStreamDeps();
-    const onPayload = vi.fn(async () => ({
-      system: [
-        {
-          type: "text",
-          text: CACHE_BOUNDARY_PROMPT,
-        },
-      ],
-      messages: [{ role: "user", content: "Hello again" }],
-    }));
-    const { model, onPayload: transportPayloadHook } = captureCacheBoundaryPayloadHook(
-      onPayload,
+    const { onPayload: transportPayloadHook } = captureTransportPayloadHook(
+      undefined,
       deps,
       streamAnthropicMock,
     );
 
-    const nextPayload = await transportPayloadHook?.(
-      {
-        system: [
-          {
-            type: "text",
-            text: CACHE_BOUNDARY_PROMPT,
-          },
-        ],
-        messages: [{ role: "user", content: "Hello" }],
-      },
-      model,
-    );
-
-    expect(nextPayload).toEqual(buildExpectedCacheBoundaryPayload("Hello again"));
+    expect(transportPayloadHook).toBeUndefined();
   });
 
   it("omits maxTokens when neither the model nor request provide a finite limit", () => {

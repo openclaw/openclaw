@@ -1,4 +1,6 @@
+/** Resolves configured agent ids, directories, workspaces, and merged agent defaults. */
 import path from "node:path";
+import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import type {
   AgentContextLimitsConfig,
@@ -6,22 +8,27 @@ import type {
 } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
-import { readStringValue } from "../shared/string-coerce.js";
 import { resolveUserPath } from "../utils.js";
+import { registerResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveDefaultAgentWorkspaceDir } from "./workspace-default.js";
 
 type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[number];
 
+/** Per-agent config after applying agent defaults and normalizing scalar fields. */
 export type ResolvedAgentConfig = {
   name?: string;
   workspace?: string;
   agentDir?: string;
-  systemPromptOverride?: AgentEntry["systemPromptOverride"];
   model?: AgentEntry["model"];
   thinkingDefault?: AgentEntry["thinkingDefault"];
   verboseDefault?: AgentDefaultsConfig["verboseDefault"];
   reasoningDefault?: AgentEntry["reasoningDefault"];
   fastModeDefault?: AgentEntry["fastModeDefault"];
+  contextTokens?: AgentEntry["contextTokens"];
+  contextInjection?: AgentEntry["contextInjection"];
+  bootstrapMaxChars?: AgentEntry["bootstrapMaxChars"];
+  bootstrapTotalMaxChars?: AgentEntry["bootstrapTotalMaxChars"];
+  experimental?: AgentDefaultsConfig["experimental"];
   skills?: AgentEntry["skills"];
   memorySearch?: AgentEntry["memorySearch"];
   humanDelay?: AgentEntry["humanDelay"];
@@ -32,7 +39,7 @@ export type ResolvedAgentConfig = {
   groupChat?: AgentEntry["groupChat"];
   subagents?: AgentEntry["subagents"];
   runRetries?: AgentEntry["runRetries"];
-  embeddedPi?: AgentEntry["embeddedPi"];
+  embeddedAgent?: AgentEntry["embeddedAgent"];
   sandbox?: AgentEntry["sandbox"];
   tools?: AgentEntry["tools"];
 };
@@ -54,6 +61,7 @@ function stripNullBytes(s: string): string {
   return s.replaceAll("\0", "");
 }
 
+/** Lists valid configured agent entries from config. */
 export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
   const list = cfg.agents?.list;
   if (!Array.isArray(list)) {
@@ -62,6 +70,7 @@ export function listAgentEntries(cfg: OpenClawConfig): AgentEntry[] {
   return list.filter((entry): entry is AgentEntry => entry !== null && typeof entry === "object");
 }
 
+/** Lists unique configured agent ids, falling back to the default agent id. */
 export function listAgentIds(cfg: OpenClawConfig): string[] {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0) {
@@ -80,6 +89,7 @@ export function listAgentIds(cfg: OpenClawConfig): string[] {
   return ids.length > 0 ? ids : [DEFAULT_AGENT_ID];
 }
 
+/** Resolves the default agent id, warning once when multiple defaults exist. */
 export function resolveDefaultAgentId(cfg: OpenClawConfig): string {
   const agents = listAgentEntries(cfg);
   if (agents.length === 0) {
@@ -99,6 +109,7 @@ function resolveAgentEntry(cfg: OpenClawConfig, agentId: string): AgentEntry | u
   return listAgentEntries(cfg).find((entry) => normalizeAgentId(entry.id) === id);
 }
 
+/** Resolves merged config for one agent id. */
 export function resolveAgentConfig(
   cfg: OpenClawConfig,
   agentId: string,
@@ -113,7 +124,6 @@ export function resolveAgentConfig(
     name: readStringValue(entry.name),
     workspace: readStringValue(entry.workspace),
     agentDir: readStringValue(entry.agentDir),
-    systemPromptOverride: readStringValue(entry.systemPromptOverride),
     model:
       typeof entry.model === "string" || (entry.model && typeof entry.model === "object")
         ? entry.model
@@ -122,6 +132,14 @@ export function resolveAgentConfig(
     verboseDefault: entry.verboseDefault ?? agentDefaults?.verboseDefault,
     reasoningDefault: entry.reasoningDefault,
     fastModeDefault: entry.fastModeDefault,
+    contextTokens: entry.contextTokens ?? agentDefaults?.contextTokens,
+    contextInjection: entry.contextInjection,
+    bootstrapMaxChars: entry.bootstrapMaxChars,
+    bootstrapTotalMaxChars: entry.bootstrapTotalMaxChars,
+    experimental:
+      typeof entry.experimental === "object" && entry.experimental
+        ? { ...agentDefaults?.experimental, ...entry.experimental }
+        : agentDefaults?.experimental,
     skills: Array.isArray(entry.skills) ? entry.skills : undefined,
     memorySearch: entry.memorySearch,
     humanDelay: entry.humanDelay,
@@ -138,8 +156,10 @@ export function resolveAgentConfig(
       typeof entry.runRetries === "object" && entry.runRetries
         ? { ...agentDefaults?.runRetries, ...entry.runRetries }
         : agentDefaults?.runRetries,
-    embeddedPi:
-      typeof entry.embeddedPi === "object" && entry.embeddedPi ? entry.embeddedPi : undefined,
+    embeddedAgent:
+      typeof entry.embeddedAgent === "object" && entry.embeddedAgent
+        ? entry.embeddedAgent
+        : undefined,
     sandbox: entry.sandbox,
     tools: entry.tools,
   };
@@ -189,10 +209,14 @@ export function resolveAgentDir(
   const id = normalizeAgentId(agentId);
   const configured = resolveAgentConfig(cfg, id)?.agentDir?.trim();
   if (configured) {
-    return resolveUserPath(configured, env);
+    const agentDir = resolveUserPath(configured, env);
+    registerResolvedAgentDir({ agentId: id, agentDir, env });
+    return agentDir;
   }
   const root = resolveStateDir(env);
-  return path.join(root, "agents", id, "agent");
+  const agentDir = path.join(root, "agents", id, "agent");
+  registerResolvedAgentDir({ agentId: id, agentDir, env });
+  return agentDir;
 }
 
 export function resolveDefaultAgentDir(

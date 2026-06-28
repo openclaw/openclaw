@@ -1,3 +1,4 @@
+// Elevenlabs tests cover media understanding provider plugin behavior.
 import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -59,5 +60,37 @@ describe("elevenLabsMediaUnderstandingProvider", () => {
     expect(form.get("model_id")).toBe("scribe_v2");
     expect(form.get("language_code")).toBe("en");
     expect(form.get("file")).toBeInstanceOf(Blob);
+  });
+
+  it("wraps malformed successful speech-to-text JSON with a stable provider error", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response("{ nope"));
+
+    await expect(
+      transcribeElevenLabsAudio({
+        buffer: Buffer.from("audio"),
+        fileName: "voice.mp3",
+        mime: "audio/mpeg",
+        apiKey: "eleven-key",
+        model: "scribe_v2",
+        timeoutMs: 1000,
+        fetchFn: fetchMock,
+      }),
+    ).rejects.toThrow("ElevenLabs audio transcription failed: malformed JSON response");
+  });
+
+  it("rejects non-object successful speech-to-text JSON with a stable provider error", async () => {
+    const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(new Response(JSON.stringify([])));
+
+    await expect(
+      transcribeElevenLabsAudio({
+        buffer: Buffer.from("audio"),
+        fileName: "voice.mp3",
+        mime: "audio/mpeg",
+        apiKey: "eleven-key",
+        model: "scribe_v2",
+        timeoutMs: 1000,
+        fetchFn: fetchMock,
+      }),
+    ).rejects.toThrow("ElevenLabs audio transcription failed: malformed JSON response");
   });
 });

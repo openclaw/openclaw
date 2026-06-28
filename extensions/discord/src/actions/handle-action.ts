@@ -1,6 +1,7 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+// Discord plugin module implements handle action behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
-  readNumberParam,
+  readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/agent-runtime";
@@ -13,6 +14,7 @@ import {
 } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalStringifiedId } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
+import { notifyDiscordInboundEventOutboundSuccess } from "../inbound-event-delivery.js";
 import {
   buildDiscordInteractiveComponents,
   buildDiscordPresentationComponents,
@@ -41,10 +43,13 @@ export async function handleDiscordMessageAction(
     | "cfg"
     | "accountId"
     | "requesterSenderId"
+    | "senderIsOwner"
     | "toolContext"
     | "mediaAccess"
     | "mediaLocalRoots"
     | "mediaReadFile"
+    | "sessionKey"
+    | "inboundEventKind"
   >,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
@@ -54,6 +59,13 @@ export async function handleDiscordMessageAction(
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
   } as const;
+  const notifyVisibleOutbound = (to: string, fallbackSessionKey?: string) =>
+    notifyDiscordInboundEventOutboundSuccess({
+      sessionKey: ctx.sessionKey ?? fallbackSessionKey ?? undefined,
+      to,
+      accountId,
+      inboundEventKind: ctx.inboundEventKind,
+    });
 
   const readTarget = () => {
     const target =
@@ -102,14 +114,17 @@ export async function handleDiscordMessageAction(
     const rawEmbeds = params.embeds;
     const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
     const silent = readBooleanParam(params, "silent") === true;
+    const suppressEmbeds = readBooleanParam(params, "suppressEmbeds");
     const sessionKey = readStringParam(params, "__sessionKey");
     const agentId = readStringParam(params, "__agentId");
-    return await handleDiscordAction(
+    const threadName = readStringParam(params, "threadName");
+    const result = await handleDiscordAction(
       {
         action: "sendMessage",
         accountId: accountId ?? undefined,
         to,
         content: content ?? "",
+        ...(threadName ? { threadName } : {}),
         mediaUrl: mediaUrl ?? undefined,
         filename: filename ?? undefined,
         replyTo: replyTo ?? undefined,
@@ -117,12 +132,15 @@ export async function handleDiscordMessageAction(
         embeds,
         asVoice,
         silent,
+        ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
         __sessionKey: sessionKey ?? undefined,
         __agentId: agentId ?? undefined,
       },
       cfg,
       actionOptions,
     );
+    notifyVisibleOutbound(to, sessionKey);
+    return result;
   }
 
   if (action === "upload-file") {
@@ -140,9 +158,10 @@ export async function handleDiscordMessageAction(
     const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
     const silent = readBooleanParam(params, "silent") === true;
+    const suppressEmbeds = readBooleanParam(params, "suppressEmbeds");
     const sessionKey = readStringParam(params, "__sessionKey");
     const agentId = readStringParam(params, "__agentId");
-    return await handleDiscordAction(
+    const result = await handleDiscordAction(
       {
         action: "sendMessage",
         accountId: accountId ?? undefined,
@@ -152,12 +171,15 @@ export async function handleDiscordMessageAction(
         filename: filename ?? undefined,
         replyTo: replyTo ?? undefined,
         silent,
+        ...(suppressEmbeds === undefined ? {} : { suppressEmbeds }),
         __sessionKey: sessionKey ?? undefined,
         __agentId: agentId ?? undefined,
       },
       cfg,
       actionOptions,
     );
+    notifyVisibleOutbound(to, sessionKey);
+    return result;
   }
 
   if (action === "poll") {
@@ -167,11 +189,8 @@ export async function handleDiscordMessageAction(
     });
     const answers = readStringArrayParam(params, "pollOption", { required: true });
     const allowMultiselect = readBooleanParam(params, "pollMulti");
-    const durationHours = readNumberParam(params, "pollDurationHours", {
-      integer: true,
-      strict: true,
-    });
-    return await handleDiscordAction(
+    const durationHours = readPositiveIntegerParam(params, "pollDurationHours");
+    const result = await handleDiscordAction(
       {
         action: "poll",
         accountId: accountId ?? undefined,
@@ -185,6 +204,8 @@ export async function handleDiscordMessageAction(
       cfg,
       actionOptions,
     );
+    notifyVisibleOutbound(to);
+    return result;
   }
 
   if (action === "react") {
@@ -213,7 +234,7 @@ export async function handleDiscordMessageAction(
 
   if (action === "reactions") {
     const messageId = readStringParam(params, "messageId", { required: true });
-    const limit = readNumberParam(params, "limit", { integer: true });
+    const limit = readPositiveIntegerParam(params, "limit");
     return await handleDiscordAction(
       {
         action: "reactions",
@@ -228,7 +249,7 @@ export async function handleDiscordMessageAction(
   }
 
   if (action === "read") {
-    const limit = readNumberParam(params, "limit", { integer: true });
+    const limit = readPositiveIntegerParam(params, "limit");
     return await handleDiscordAction(
       {
         action: "readMessages",
@@ -305,11 +326,9 @@ export async function handleDiscordMessageAction(
     const name = readStringParam(params, "threadName", { required: true });
     const messageId = readStringParam(params, "messageId");
     const content = readStringParam(params, "message");
-    const autoArchiveMinutes = readNumberParam(params, "autoArchiveMin", {
-      integer: true,
-    });
+    const autoArchiveMinutes = readPositiveIntegerParam(params, "autoArchiveMin");
     const appliedTags = readStringArrayParam(params, "appliedTags");
-    return await handleDiscordAction(
+    const result = await handleDiscordAction(
       {
         action: "threadCreate",
         accountId: accountId ?? undefined,
@@ -323,25 +342,30 @@ export async function handleDiscordMessageAction(
       cfg,
       actionOptions,
     );
+    notifyVisibleOutbound(resolveChannelId());
+    return result;
   }
 
   if (action === "sticker") {
+    const to = readStringParam(params, "to", { required: true });
     const stickerIds =
       readStringArrayParam(params, "stickerId", {
         required: true,
         label: "sticker-id",
       }) ?? [];
-    return await handleDiscordAction(
+    const result = await handleDiscordAction(
       {
         action: "sticker",
         accountId: accountId ?? undefined,
-        to: readStringParam(params, "to", { required: true }),
+        to,
         stickerIds,
         content: readStringParam(params, "message"),
       },
       cfg,
       actionOptions,
     );
+    notifyVisibleOutbound(to);
+    return result;
   }
 
   if (action === "set-presence") {
@@ -365,6 +389,9 @@ export async function handleDiscordMessageAction(
     resolveChannelId,
   });
   if (adminResult !== undefined) {
+    if (action === "thread-reply") {
+      notifyVisibleOutbound(readStringParam(params, "threadId") ?? readTarget());
+    }
     return adminResult;
   }
 

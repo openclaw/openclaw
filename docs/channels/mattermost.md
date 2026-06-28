@@ -32,7 +32,7 @@ Details: [Plugins](/tools/plugin)
 
 <Steps>
   <Step title="Ensure plugin is available">
-    Current packaged OpenClaw releases already bundle it. Older/custom installs can add it manually with the commands above.
+    Install `@openclaw/mattermost` with the command above, then restart the Gateway if it is already running.
   </Step>
   <Step title="Create a Mattermost bot">
     Create a Mattermost bot account and copy the **bot token**.
@@ -155,6 +155,7 @@ Notes:
 
 - `onchar` still responds to explicit @mentions.
 - `channels.mattermost.requireMention` is honored for legacy configs but `chatmode` is preferred.
+- After the bot sends a visible reply in a channel thread, later messages in that same thread are answered without a new @mention or `onchar` prefix, so multi-turn thread conversations keep flowing. Participation is remembered for 7 days of thread inactivity (refreshed on each reply) and persists across gateway restarts. Threads the bot has only observed are unaffected; start a new top-level message to require an explicit mention again.
 
 ## Threading and sessions
 
@@ -289,7 +290,7 @@ Enable via `channels.mattermost.streaming`:
   </Accordion>
   <Accordion title="Streaming behavior notes">
     - If the stream cannot be finalized in place (for example the post was deleted mid-stream), OpenClaw falls back to sending a fresh final post so the reply is never lost.
-    - Reasoning-only payloads are suppressed from channel posts, including text that arrives as a `> Reasoning:` blockquote. Set `/reasoning on` to see thinking in other surfaces; the Mattermost final post keeps the answer only.
+    - Thinking-only payloads are suppressed from channel posts, including text that arrives as a `> Thinking` blockquote. Set `/reasoning on` to see thinking in other surfaces; the Mattermost final post keeps the answer only.
     - See [Streaming](/concepts/streaming#preview-streaming-modes) for the channel-mapping matrix.
 
   </Accordion>
@@ -318,6 +319,8 @@ Config:
 ## Interactive buttons (message tool)
 
 Send messages with clickable buttons. When a user clicks a button, the agent receives the selection and can respond.
+
+Normal agent replies can also include semantic `presentation` payloads. OpenClaw renders value buttons as Mattermost interactive buttons, keeps URL buttons visible in the message text, and downgrades select menus to readable text.
 
 Enable buttons by adding `inlineButtons` to the channel capabilities:
 

@@ -1,9 +1,14 @@
+// Builds provider auth choice lists from plugin setup metadata.
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import {
+  getOfficialExternalPluginCatalogManifest,
+  listOfficialExternalProviderCatalogEntries,
+} from "./official-external-plugin-catalog.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 
 export type ProviderAuthChoiceMetadata = {
@@ -24,7 +29,7 @@ export type ProviderAuthChoiceMetadata = {
   cliFlag?: string;
   cliOption?: string;
   cliDescription?: string;
-  onboardingScopes?: ("text-inference" | "image-generation")[];
+  onboardingScopes?: ("text-inference" | "image-generation" | "music-generation")[];
 };
 
 export type ProviderOnboardAuthFlag = {
@@ -359,6 +364,49 @@ export function resolveManifestProviderOnboardAuthFlags(
       cliOption: choice.cliOption,
       description: choice.cliDescription ?? choice.choiceLabel,
     });
+  }
+  return flags;
+}
+
+function resolveOfficialExternalProviderOnboardAuthFlags(): ProviderOnboardAuthFlag[] {
+  const flags: ProviderOnboardAuthFlag[] = [];
+  for (const entry of listOfficialExternalProviderCatalogEntries()) {
+    const manifest = getOfficialExternalPluginCatalogManifest(entry);
+    for (const provider of manifest?.providers ?? []) {
+      for (const choice of provider.authChoices ?? []) {
+        const optionKey = choice.optionKey?.trim();
+        const authChoice = choice.choiceId?.trim();
+        const cliFlag = choice.cliFlag?.trim();
+        const cliOption = choice.cliOption?.trim();
+        if (!optionKey || !authChoice || !cliFlag || !cliOption) {
+          continue;
+        }
+        flags.push({
+          optionKey,
+          authChoice,
+          cliFlag,
+          cliOption,
+          description: choice.cliDescription?.trim() || choice.choiceLabel?.trim() || authChoice,
+        });
+      }
+    }
+  }
+  return flags;
+}
+
+/** Resolves onboard auth flags from installed manifests and official cold-install metadata. */
+export function resolveProviderOnboardAuthFlags(
+  params?: ManifestProviderAuthChoiceParams,
+): ProviderOnboardAuthFlag[] {
+  const flags = resolveManifestProviderOnboardAuthFlags(params);
+  const seen = new Set(flags.map((flag) => `${flag.optionKey}::${flag.cliFlag}`));
+  for (const flag of resolveOfficialExternalProviderOnboardAuthFlags()) {
+    const dedupeKey = `${flag.optionKey}::${flag.cliFlag}`;
+    if (seen.has(dedupeKey)) {
+      continue;
+    }
+    seen.add(dedupeKey);
+    flags.push(flag);
   }
   return flags;
 }

@@ -1,3 +1,4 @@
+// Verifies session maintenance extension schema parsing.
 import { describe, expect, it } from "vitest";
 import { SessionSchema } from "./zod-schema.session.js";
 
@@ -6,12 +7,14 @@ describe("SessionSchema maintenance extensions", () => {
     const result = SessionSchema.safeParse({
       writeLock: {
         acquireTimeoutMs: 60_000,
+        staleMs: 1_800_000,
+        maxHoldMs: 300_000,
       },
     });
     expect(result.success).toBe(true);
   });
 
-  it("rejects invalid session write-lock acquire timeout values", () => {
+  it("rejects invalid session write-lock timeout values", () => {
     expect(() =>
       SessionSchema.parse({
         writeLock: {
@@ -19,6 +22,22 @@ describe("SessionSchema maintenance extensions", () => {
         },
       }),
     ).toThrow(/acquireTimeoutMs|number/i);
+
+    expect(() =>
+      SessionSchema.parse({
+        writeLock: {
+          staleMs: 0,
+        },
+      }),
+    ).toThrow(/staleMs|number/i);
+
+    expect(() =>
+      SessionSchema.parse({
+        writeLock: {
+          maxHoldMs: 0,
+        },
+      }),
+    ).toThrow(/maxHoldMs|number/i);
   });
 
   it("accepts valid maintenance extensions", () => {

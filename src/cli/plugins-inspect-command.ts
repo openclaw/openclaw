@@ -1,3 +1,6 @@
+// `openclaw plugins inspect`: renders plugin registry shape, capabilities, policy, diagnostics, and install records.
+import { getTerminalTableWidth, renderTable } from "../../packages/terminal-core/src/table.js";
+import { theme } from "../../packages/terminal-core/src/theme.js";
 import { getRuntimeConfig } from "../config/config.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import {
@@ -5,12 +8,11 @@ import {
   tracePluginLifecyclePhaseAsync,
 } from "../plugins/plugin-lifecycle-trace.js";
 import { defaultRuntime } from "../runtime.js";
-import { getTerminalTableWidth, renderTable } from "../terminal/table.js";
-import { theme } from "../terminal/theme.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
-import { quietPluginJsonLogger } from "./plugins-command-helpers.js";
+import { quietPluginJsonLogger } from "./plugins-json-logger.js";
 
+/** Options accepted by `openclaw plugins inspect`. */
 export type PluginInspectOptions = {
   json?: boolean;
   all?: boolean;
@@ -111,6 +113,7 @@ function formatInstallLines(install: PluginInstallRecord | undefined): string[] 
   return lines;
 }
 
+/** Inspect one plugin or all plugins using either snapshot-only or runtime-loaded registry data. */
 export async function runPluginsInspectCommand(
   id: string | undefined,
   opts: PluginInspectOptions,
@@ -343,7 +346,7 @@ export async function runPluginsInspectCommand(
   lines.push(...formatInspectSection("Commands", inspect.commands));
   lines.push(...formatInspectSection("CLI commands", inspect.cliCommands));
   lines.push(...formatInspectSection("Services", inspect.services));
-  lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods));
+  lines.push(...formatInspectSection("Gateway methods", inspect.gatewayMethods ?? []));
   lines.push(
     ...formatInspectSection(
       "MCP servers",

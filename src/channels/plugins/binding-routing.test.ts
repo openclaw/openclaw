@@ -1,6 +1,7 @@
+// Binding routing tests cover channel binding selection and message routing behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  __testing,
+  testing,
   registerSessionBindingAdapter,
   type SessionBindingAdapter,
   type SessionBindingRecord,
@@ -61,7 +62,7 @@ function registerAdapter(record: SessionBindingRecord | null): {
 
 describe("runtime conversation binding route", () => {
   beforeEach(() => {
-    __testing.resetSessionBindingAdaptersForTests();
+    testing.resetSessionBindingAdaptersForTests();
   });
 
   it("rewrites the route to a runtime-bound ACP session and touches the binding", () => {

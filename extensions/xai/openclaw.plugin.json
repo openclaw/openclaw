@@ -10,8 +10,6 @@
     "providers": {
       "xai": {
         "aliases": {
-          "grok-4-fast-reasoning": "grok-4-fast",
-          "grok-4-1-fast-reasoning": "grok-4-1-fast",
           "grok-4.20-experimental-beta-0304-reasoning": "grok-4.20-beta-latest-reasoning",
           "grok-4.20-experimental-beta-0304-non-reasoning": "grok-4.20-beta-latest-non-reasoning",
           "grok-4.20-reasoning": "grok-4.20-beta-latest-reasoning",
@@ -23,7 +21,7 @@
   "providerEndpoints": [
     {
       "endpointClass": "xai-native",
-      "hosts": ["api.x.ai", "api.grok.x.ai"]
+      "hosts": ["api.x.ai"]
     }
   ],
   "providerRequest": {
@@ -33,9 +31,53 @@
       }
     }
   },
+  "modelCatalog": {
+    "suppressions": [
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-0309",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-latest",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-beta-latest",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-experimental-beta-0304",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-experimental-beta-latest",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      },
+      {
+        "provider": "xai",
+        "model": "grok-4.20-multi-agent-beta-0309",
+        "reason": "OpenClaw does not currently support xAI multi-agent models; choose another xAI model. See https://docs.openclaw.ai/providers/xai."
+      }
+    ]
+  },
   "syntheticAuthRefs": ["xai"],
-  "providerAuthEnvVars": {
-    "xai": ["XAI_API_KEY"]
+  "setup": {
+    "providers": [
+      {
+        "id": "xai",
+        "envVars": ["XAI_API_KEY"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {
@@ -45,18 +87,40 @@
       "choiceLabel": "xAI API key",
       "groupId": "xai",
       "groupLabel": "xAI (Grok)",
-      "groupHint": "API key",
+      "groupHint": "API key or OAuth",
       "onboardingFeatured": true,
       "optionKey": "xaiApiKey",
       "cliFlag": "--xai-api-key",
       "cliOption": "--xai-api-key <key>",
       "cliDescription": "xAI API key"
+    },
+    {
+      "provider": "xai",
+      "method": "oauth",
+      "choiceId": "xai-oauth",
+      "choiceLabel": "xAI OAuth",
+      "choiceHint": "Remote-friendly browser sign-in without a localhost callback",
+      "groupId": "xai",
+      "groupLabel": "xAI (Grok)",
+      "groupHint": "API key or OAuth",
+      "onboardingFeatured": true
+    },
+    {
+      "provider": "xai",
+      "method": "device-code",
+      "choiceId": "xai-device-code",
+      "choiceLabel": "xAI device code",
+      "choiceHint": "Compatibility alias for xAI OAuth device-code sign-in",
+      "assistantVisibility": "manual-only",
+      "groupId": "xai",
+      "groupLabel": "xAI (Grok)",
+      "groupHint": "API key or OAuth"
     }
   ],
   "uiHints": {
     "webSearch.apiKey": {
       "label": "Grok Search API Key",
-      "help": "xAI API key for Grok web search (fallback: XAI_API_KEY env var).",
+      "help": "Optional xAI API key for Grok web search; xAI OAuth or XAI_API_KEY can satisfy it.",
       "sensitive": true
     },
     "webSearch.model": {
@@ -156,6 +220,7 @@
       ]
     },
     "x_search": {
+      "replaySafe": true,
       "authSignals": [
         {
           "provider": "xai"

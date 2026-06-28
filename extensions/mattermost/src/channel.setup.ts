@@ -1,3 +1,4 @@
+// Mattermost plugin module implements channel.setup behavior.
 import type { ChannelPlugin } from "./channel-api.js";
 import {
   describeMattermostAccount,
@@ -7,7 +8,7 @@ import {
   resolveMattermostGatewayAuthBypassPaths,
 } from "./channel-config-shared.js";
 import { MattermostChannelConfigSchema } from "./config-surface.js";
-import { type ResolvedMattermostAccount } from "./mattermost/accounts.js";
+import type { ResolvedMattermostAccount } from "./mattermost/accounts.js";
 import { mattermostSetupAdapter } from "./setup-core.js";
 import { mattermostSetupWizard } from "./setup-surface.js";
 

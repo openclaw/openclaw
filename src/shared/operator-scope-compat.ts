@@ -1,3 +1,4 @@
+// Operator scope compatibility helpers normalize legacy operator role names.
 const OPERATOR_ROLE = "operator";
 const OPERATOR_ADMIN_SCOPE = "operator.admin";
 const OPERATOR_READ_SCOPE = "operator.read";
@@ -31,6 +32,7 @@ function operatorScopeSatisfied(requestedScope: string, granted: Set<string>): b
   return granted.has(requestedScope);
 }
 
+/** Returns true when a role grant satisfies requested scopes, including operator implications. */
 export function roleScopesAllow(params: {
   role: string;
   requestedScopes: readonly string[];
@@ -52,6 +54,7 @@ export function roleScopesAllow(params: {
   return requested.every((scope) => operatorScopeSatisfied(scope, allowedSet));
 }
 
+/** Returns the first requested scope not covered by the role's allowed scopes. */
 export function resolveMissingRequestedScope(params: {
   role: string;
   requestedScopes: readonly string[];
@@ -71,6 +74,7 @@ export function resolveMissingRequestedScope(params: {
   return null;
 }
 
+/** Returns the first requested scope that does not belong to any requested role. */
 export function resolveScopeOutsideRequestedRoles(params: {
   requestedRoles: readonly string[];
   requestedScopes: readonly string[];

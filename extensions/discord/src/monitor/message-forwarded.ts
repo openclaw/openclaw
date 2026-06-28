@@ -1,3 +1,4 @@
+// Discord plugin module implements message forwarded behavior.
 import type { APIAttachment, APIStickerItem } from "discord-api-types/v10";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Message } from "../internal/discord.js";
@@ -81,6 +82,13 @@ export function resolveDiscordReferencedForwardMessage(message: Message): Messag
   return Number(referenceType) === FORWARD_MESSAGE_REFERENCE_TYPE
     ? message.referencedMessage
     : null;
+}
+
+export function resolveDiscordReferencedReplyMessage(message: Message): Message | null {
+  const referenceType = message.messageReference?.type;
+  return Number(referenceType) === FORWARD_MESSAGE_REFERENCE_TYPE
+    ? null
+    : (message.referencedMessage ?? null);
 }
 
 export function formatDiscordSnapshotAuthor(

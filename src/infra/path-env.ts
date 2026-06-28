@@ -1,15 +1,26 @@
+// Builds PATH values for OpenClaw child processes.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import {
+  normalizeStringEntries,
+  normalizeUniqueStringEntries,
+} from "@openclaw/normalization-core/string-normalization";
 import { resolveBrewPathDirs } from "./brew.js";
 import { isTruthyEnvValue } from "./env.js";
 
 type EnsureOpenClawPathOpts = {
+  /** Executable whose directory should stay first for shebang-compatible child processes. */
   execPath?: string;
+  /** Working directory used only when project-local bin fallback is explicitly enabled. */
   cwd?: string;
+  /** Home directory used for package-manager and user-bin fallback candidates. */
   homeDir?: string;
+  /** Platform override for tests and platform-specific candidate filtering. */
   platform?: NodeJS.Platform;
+  /** Existing PATH value to merge with; defaults to process.env.PATH. */
   pathEnv?: string;
+  /** Opt-in to append cwd/node_modules/.bin after trusted system paths. */
   allowProjectLocalBin?: boolean;
 };
 
@@ -30,26 +41,44 @@ function isDirectory(dirPath: string): boolean {
   }
 }
 
-function mergePath(params: { existing: string; prepend?: string[]; append?: string[] }): string {
-  const partsExisting = params.existing
-    .split(path.delimiter)
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const partsPrepend = (params.prepend ?? []).map((part) => part.trim()).filter(Boolean);
-  const partsAppend = (params.append ?? []).map((part) => part.trim()).filter(Boolean);
-
-  const seen = new Set<string>();
-  const merged: string[] = [];
-  for (const part of [...partsPrepend, ...partsExisting, ...partsAppend]) {
-    if (!seen.has(part)) {
-      seen.add(part);
-      merged.push(part);
-    }
-  }
-  return merged.join(path.delimiter);
+function splitPathParts(pathEnv: string): Set<string> {
+  return new Set(normalizeStringEntries(pathEnv.split(path.delimiter)));
 }
 
-function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; append: string[] } {
+function isKnownPathDir(existingPathParts: ReadonlySet<string>, dirPath: string): boolean {
+  return existingPathParts.has(dirPath) || isDirectory(dirPath);
+}
+
+function isLinuxbrewPath(dirPath: string): boolean {
+  return dirPath.split(path.sep).includes(".linuxbrew");
+}
+
+function resolvePathBootstrapBrewDirs(params: {
+  homeDir: string;
+  platform: NodeJS.Platform;
+  existingPathParts: ReadonlySet<string>;
+}): string[] {
+  const candidates = resolveBrewPathDirs({ homeDir: params.homeDir });
+  if (params.platform !== "darwin") {
+    return candidates;
+  }
+  return candidates.filter(
+    (candidate) => !isLinuxbrewPath(candidate) || params.existingPathParts.has(candidate),
+  );
+}
+
+function mergePath(params: { existing: string; prepend?: string[]; append?: string[] }): string {
+  return normalizeUniqueStringEntries([
+    ...(params.prepend ?? []),
+    ...params.existing.split(path.delimiter),
+    ...(params.append ?? []),
+  ]).join(path.delimiter);
+}
+
+function candidateBinDirs(
+  opts: EnsureOpenClawPathOpts,
+  existingPathParts: ReadonlySet<string>,
+): { prepend: string[]; append: string[] } {
   const execPath = opts.execPath ?? process.execPath;
   const cwd = opts.cwd ?? process.cwd();
   const homeDir = opts.homeDir ?? os.homedir();
@@ -100,10 +129,10 @@ function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; ap
   // shadow trusted OS binaries.
   // This includes Brew/Homebrew dirs, which are useful for finding `openclaw`
   // in launchd/minimal environments but must not be treated as trusted.
-  append.push(...resolveBrewPathDirs({ homeDir }));
+  append.push(...resolvePathBootstrapBrewDirs({ homeDir, platform, existingPathParts }));
   const miseDataDir = process.env.MISE_DATA_DIR ?? path.join(homeDir, ".local", "share", "mise");
   const miseShims = path.join(miseDataDir, "shims");
-  if (isDirectory(miseShims)) {
+  if (isKnownPathDir(existingPathParts, miseShims)) {
     append.push(miseShims);
   }
   if (platform === "darwin") {
@@ -117,7 +146,10 @@ function candidateBinDirs(opts: EnsureOpenClawPathOpts): { prepend: string[]; ap
   append.push(path.join(homeDir, ".bun", "bin"));
   append.push(path.join(homeDir, ".yarn", "bin"));
 
-  return { prepend: prepend.filter(isDirectory), append: append.filter(isDirectory) };
+  return {
+    prepend: prepend.filter((candidate) => isKnownPathDir(existingPathParts, candidate)),
+    append: append.filter((candidate) => isKnownPathDir(existingPathParts, candidate)),
+  };
 }
 
 /**
@@ -128,10 +160,13 @@ export function ensureOpenClawCliOnPath(opts: EnsureOpenClawPathOpts = {}) {
   if (isTruthyEnvValue(process.env.OPENCLAW_PATH_BOOTSTRAPPED)) {
     return;
   }
+  // Mark before filesystem probing so repeated calls from nested bootstraps do
+  // not keep reshuffling PATH.
   process.env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
 
   const existing = opts.pathEnv ?? process.env.PATH ?? "";
-  const { prepend, append } = candidateBinDirs(opts);
+  const existingPathParts = splitPathParts(existing);
+  const { prepend, append } = candidateBinDirs(opts, existingPathParts);
   if (prepend.length === 0 && append.length === 0) {
     return;
   }

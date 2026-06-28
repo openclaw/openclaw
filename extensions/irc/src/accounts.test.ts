@@ -1,3 +1,4 @@
+// Irc tests cover accounts plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -28,6 +29,27 @@ describe("listIrcAccountIds", () => {
     });
 
     expect(listIrcAccountIds(cfg)).toEqual(["ops-team", "work"]);
+  });
+
+  it("keeps the implicit default account when named accounts are added to top-level connection config", () => {
+    const cfg = asConfig({
+      channels: {
+        irc: {
+          host: "irc.example.com",
+          nick: "claw",
+          accounts: {
+            work: {
+              enabled: false,
+              host: "irc-work.example.com",
+              nick: "claw-work",
+            },
+          },
+        },
+      },
+    });
+
+    expect(listIrcAccountIds(cfg)).toEqual(["default", "work"]);
+    expect(resolveDefaultIrcAccountId(cfg)).toBe("default");
   });
 });
 
@@ -142,9 +164,32 @@ describe("resolveIrcAccount", () => {
       },
     });
 
-    const account = resolveIrcAccount({ cfg });
-    expect(account.password).toBe("");
-    expect(account.passwordSource).toBe("none");
+    expect(() => resolveIrcAccount({ cfg })).toThrow(/IRC password file.*must not be a symlink/);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it.runIf(process.platform !== "win32")("rejects symlinked NickServ password files", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-irc-nickserv-"));
+    const passwordFile = path.join(dir, "nickserv-password.txt");
+    const passwordLink = path.join(dir, "nickserv-password-link.txt");
+    fs.writeFileSync(passwordFile, "nickserv-pass\n", "utf8");
+    fs.symlinkSync(passwordFile, passwordLink);
+
+    const cfg = asConfig({
+      channels: {
+        irc: {
+          host: "irc.example.com",
+          nick: "claw",
+          nickserv: {
+            passwordFile: passwordLink,
+          },
+        },
+      },
+    });
+
+    expect(() => resolveIrcAccount({ cfg })).toThrow(
+      /IRC NickServ password file.*must not be a symlink/,
+    );
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

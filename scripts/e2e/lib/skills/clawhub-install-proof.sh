@@ -8,10 +8,19 @@ cd "$ROOT_DIR"
 source "$ROOT_DIR/scripts/lib/openclaw-e2e-instance.sh"
 
 OPENCLAW_TEST_STATE_SCRIPT_B64="${OPENCLAW_TEST_STATE_SCRIPT_B64:-}"
+openclaw_skill_install_owns_home=0
+cleanup_clawhub_skill_install_home() {
+  if [ "$openclaw_skill_install_owns_home" = "1" ] && [ -n "${HOME:-}" ]; then
+    rm -rf "$HOME"
+  fi
+}
+trap cleanup_clawhub_skill_install_home EXIT
+
 if [ -n "$OPENCLAW_TEST_STATE_SCRIPT_B64" ]; then
   openclaw_e2e_eval_test_state_from_b64 "$OPENCLAW_TEST_STATE_SCRIPT_B64"
 else
   export HOME="$(mktemp -d "${TMPDIR:-/tmp}/openclaw-skill-install-home.XXXXXX")"
+  openclaw_skill_install_owns_home=1
   export USERPROFILE="$HOME"
   export OPENCLAW_HOME="$HOME"
   export OPENCLAW_STATE_DIR="$HOME/.openclaw"
@@ -116,6 +125,10 @@ import fs from "node:fs";
 import path from "node:path";
 const [configPath, skillDir, originPath, lockPath, infoPath, slug] = process.argv.slice(2);
 const read = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
+function isPathInside(parentPath, childPath) {
+  const relative = path.relative(path.resolve(parentPath), path.resolve(childPath));
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
 const config = read(configPath);
 if (config.skills?.install?.allowUploadedArchives !== false) {
   throw new Error("skills.install.allowUploadedArchives must remain false during ClawHub install proof");
@@ -133,7 +146,7 @@ const infoFilePath = info.filePath ?? info.skill?.filePath;
 const infoBaseDir = info.baseDir ?? info.skill?.baseDir;
 if (
   info.skillKey !== slug &&
-  (!infoFilePath || !path.resolve(infoFilePath).startsWith(path.resolve(skillDir)))
+  (!infoFilePath || !isPathInside(skillDir, infoFilePath))
 ) {
   throw new Error(`skills info did not report installed skill ${slug}: ${JSON.stringify(info)}`);
 }

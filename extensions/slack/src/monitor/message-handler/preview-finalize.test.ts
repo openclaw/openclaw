@@ -1,3 +1,4 @@
+// Slack tests cover preview finalize plugin behavior.
 import type { WebClient } from "@slack/web-api";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,7 +10,7 @@ vi.mock("../../actions.js", () => ({
 }));
 
 let finalizeSlackPreviewEdit: typeof import("./preview-finalize.js").finalizeSlackPreviewEdit;
-let __testing: typeof import("./preview-finalize.js").__testing;
+let testing: typeof import("./preview-finalize.js").testing;
 
 function createClient(overrides?: {
   historyMessages?: Array<Record<string, unknown>>;
@@ -25,7 +26,7 @@ function createClient(overrides?: {
 
 describe("finalizeSlackPreviewEdit", () => {
   beforeAll(async () => {
-    ({ finalizeSlackPreviewEdit, __testing } = await import("./preview-finalize.js"));
+    ({ finalizeSlackPreviewEdit, testing } = await import("./preview-finalize.js"));
   });
 
   beforeEach(() => {
@@ -101,10 +102,10 @@ describe("finalizeSlackPreviewEdit", () => {
     const blocks = [{ type: "section", text: { type: "mrkdwn", text: "*Done*" } }] as const;
 
     expect(
-      __testing.buildExpectedSlackEditText({
+      testing.buildExpectedSlackEditText({
         text: "",
         blocks: blocks as unknown as Parameters<
-          typeof __testing.buildExpectedSlackEditText
+          typeof testing.buildExpectedSlackEditText
         >[0]["blocks"],
       }),
     ).toBe("*Done*");
@@ -122,10 +123,10 @@ describe("finalizeSlackPreviewEdit", () => {
         ],
       },
     ] as const;
-    const expectedText = __testing.buildExpectedSlackEditText({
+    const expectedText = testing.buildExpectedSlackEditText({
       text: "",
       blocks: blocks as unknown as Parameters<
-        typeof __testing.buildExpectedSlackEditText
+        typeof testing.buildExpectedSlackEditText
       >[0]["blocks"],
     });
     const client = createClient({
@@ -134,14 +135,14 @@ describe("finalizeSlackPreviewEdit", () => {
 
     expect(expectedText).toHaveLength(8000);
     await expect(
-      __testing.didSlackPreviewEditApplyAfterError({
+      testing.didSlackPreviewEditApplyAfterError({
         client,
         token: "xoxb-test",
         channelId: "C123",
         messageId: "171234.567",
         text: "",
         blocks: blocks as unknown as Parameters<
-          typeof __testing.didSlackPreviewEditApplyAfterError
+          typeof testing.didSlackPreviewEditApplyAfterError
         >[0]["blocks"],
       }),
     ).resolves.toBe(true);

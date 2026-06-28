@@ -1,9 +1,11 @@
+// Tests diagnostics command output and runtime diagnostic toggles.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { clearPluginCommands, registerPluginCommand } from "../../plugins/commands.js";
-import { createPluginRegistry, type PluginRecord } from "../../plugins/registry.js";
+import { createPluginRegistry } from "../../plugins/registry.js";
 import type { PluginRuntime } from "../../plugins/runtime/types.js";
-import type { PluginCommandContext } from "../../plugins/types.js";
+import { createBundledPluginRecord } from "../../plugins/status.test-helpers.js";
+import type { PluginCommandContext, PluginCommandHandler } from "../../plugins/types.js";
 import type { MsgContext } from "../templating.js";
 import { createDiagnosticsCommandHandler } from "./commands-diagnostics.js";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -103,43 +105,6 @@ function buildDiagnosticsParams(
   } as HandleCommandsParams;
 }
 
-function createBundledPluginRecord(id: string): PluginRecord {
-  return {
-    id,
-    name: id,
-    source: `bundled:${id}`,
-    rootDir: `/bundled/${id}`,
-    origin: "bundled",
-    enabled: true,
-    status: "loaded",
-    toolNames: [],
-    hookNames: [],
-    channelIds: [],
-    cliBackendIds: [],
-    providerIds: [],
-    speechProviderIds: [],
-    realtimeTranscriptionProviderIds: [],
-    realtimeVoiceProviderIds: [],
-    mediaUnderstandingProviderIds: [],
-    imageGenerationProviderIds: [],
-    videoGenerationProviderIds: [],
-    musicGenerationProviderIds: [],
-    webFetchProviderIds: [],
-    webSearchProviderIds: [],
-    migrationProviderIds: [],
-    memoryEmbeddingProviderIds: [],
-    agentHarnessIds: [],
-    gatewayMethods: [],
-    cliCommands: [],
-    services: [],
-    gatewayDiscoveryServiceIds: [],
-    commands: [],
-    httpRoutes: 0,
-    hookCount: 0,
-    configSchema: false,
-  } as PluginRecord;
-}
-
 function registerHostTrustedReservedCommandForTest(
   command: Parameters<typeof registerPluginCommand>[1],
 ) {
@@ -160,7 +125,7 @@ function registerCodexDiagnosticsCommandForTest(
   handler: (ctx: PluginCommandContext) => Promise<unknown>,
 ) {
   const calls: PluginCommandContext[] = [];
-  const commandHandler = vi.fn(async (ctx: PluginCommandContext) => {
+  const commandHandler = vi.fn<PluginCommandHandler>(async (ctx) => {
     calls.push(ctx);
     await handler(ctx);
     if (ctx.diagnosticsPreviewOnly) {
@@ -200,11 +165,19 @@ function registerCodexDiagnosticsCommandForTest(
             buttons: [
               {
                 label: "Send diagnostics",
+                action: {
+                  type: "command",
+                  command: "/codex diagnostics confirm abc123def456",
+                },
                 value: "/codex diagnostics confirm abc123def456",
                 style: "danger" as const,
               },
               {
                 label: "Cancel",
+                action: {
+                  type: "command",
+                  command: "/codex diagnostics cancel abc123def456",
+                },
                 value: "/codex diagnostics cancel abc123def456",
                 style: "secondary" as const,
               },
@@ -601,7 +574,7 @@ describe("diagnostics command", () => {
   });
 
   it("requires an owner for diagnostics", async () => {
-    const { handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
+    const { execCalls, handleDiagnosticsCommand } = createDiagnosticsHandlerForTest();
     const result = await handleDiagnosticsCommand(
       buildDiagnosticsParams("/diagnostics", {
         command: {
@@ -613,6 +586,7 @@ describe("diagnostics command", () => {
     );
 
     expect(result).toEqual({ shouldContinue: false });
+    expect(execCalls).toHaveLength(0);
   });
 
   it("routes confirmations back to the Codex diagnostics handler without repeating the preamble", async () => {

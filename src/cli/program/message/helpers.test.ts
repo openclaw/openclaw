@@ -1,3 +1,4 @@
+// Message program helper tests cover message command helper behavior and mocks.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const messageCommandMock = vi.fn(async () => {});
@@ -22,7 +23,7 @@ const { ensurePluginRegistryLoaded } = await import("../../plugin-registry.js");
 
 const hasHooksMock = vi.fn((_hookName: string) => false);
 const runGatewayStopMock = vi.fn(
-  async (_event: { reason?: string }, _ctx: Record<string, unknown>) => {},
+  async (_eventValue: { reason?: string }, _ctx: Record<string, unknown>) => {},
 );
 const runGlobalGatewayStopSafelyMock = vi.fn(
   async (params: {
@@ -58,6 +59,8 @@ vi.mock("../../deps.js", () => ({
 }));
 
 const { createMessageCliHelpers } = await import("./helpers.js");
+
+const NON_NEGATIVE_INTEGER_FLAGS = new Set(["--delete-days", "--duration-min"]);
 
 const baseSendOptions = {
   channel: "discord",
@@ -306,6 +309,137 @@ describe("runMessageAction", () => {
     expect(exitMock).not.toHaveBeenCalledWith(0);
   });
 
+  it.each([
+    [
+      "poll duration hours",
+      "poll",
+      {
+        channel: "discord",
+        target: "123",
+        pollQuestion: "ship?",
+        pollOption: ["yes", "no"],
+        pollDurationHours: "1.5",
+      },
+      "--poll-duration-hours",
+    ],
+    [
+      "poll duration seconds",
+      "poll",
+      {
+        channel: "telegram",
+        target: "123",
+        pollQuestion: "ship?",
+        pollOption: ["yes", "no"],
+        pollDurationSeconds: "60s",
+      },
+      "--poll-duration-seconds",
+    ],
+    [
+      "timeout duration",
+      "timeout",
+      { guildId: "g", userId: "u", durationMin: "5m" },
+      "--duration-min",
+    ],
+    ["ban delete days", "ban", { guildId: "g", userId: "u", deleteDays: "7d" }, "--delete-days"],
+    ["read limit", "read", { channel: "discord", target: "123", limit: "10x" }, "--limit"],
+    ["search limit", "search", { guildId: "g", query: "hello", limit: "10x" }, "--limit"],
+    ["pins limit", "list-pins", { channel: "discord", target: "123", limit: "10x" }, "--limit"],
+    [
+      "reactions limit",
+      "reactions",
+      { channel: "discord", target: "123", messageId: "m", limit: "10x" },
+      "--limit",
+    ],
+    [
+      "thread auto archive minutes",
+      "thread-create",
+      {
+        channel: "discord",
+        target: "123",
+        threadName: "ops",
+        autoArchiveMin: "60m",
+      },
+      "--auto-archive-min",
+    ],
+    ["thread list limit", "thread-list", { guildId: "g", limit: "10x" }, "--limit"],
+  ])("rejects malformed numeric CLI option for %s", async (_name, action, opts, flag) => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(runMessageAction(action, opts)).rejects.toThrow("exit");
+
+    const kind = NON_NEGATIVE_INTEGER_FLAGS.has(flag) ? "non-negative" : "positive";
+    expect(errorMock).toHaveBeenCalledWith(`Error: ${flag} must be a ${kind} integer.`);
+    expect(ensurePluginRegistryLoaded).not.toHaveBeenCalled();
+    expect(messageCommandMock).not.toHaveBeenCalled();
+    expect(exitMock).toHaveBeenCalledWith(1);
+    expect(exitMock).not.toHaveBeenCalledWith(0);
+  });
+
+  it.each([
+    ["pollDurationHours", "0", "--poll-duration-hours"],
+    ["pollDurationSeconds", "-1", "--poll-duration-seconds"],
+    ["durationMin", "", "--duration-min"],
+    ["deleteDays", Number.NaN, "--delete-days"],
+    ["limit", 1.2, "--limit"],
+    ["autoArchiveMin", null, "--auto-archive-min"],
+  ])("rejects non-positive or non-integer %s values", async (key, value, flag) => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("send", {
+        ...baseSendOptions,
+        [key]: value,
+      }),
+    ).rejects.toThrow("exit");
+
+    const kind = NON_NEGATIVE_INTEGER_FLAGS.has(flag) ? "non-negative" : "positive";
+    expect(errorMock).toHaveBeenCalledWith(`Error: ${flag} must be a ${kind} integer.`);
+    expect(messageCommandMock).not.toHaveBeenCalled();
+    expect(exitMock).toHaveBeenCalledWith(1);
+  });
+
+  it("allows zero delete-days for no-history Discord bans", async () => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("ban", {
+        guildId: "g",
+        userId: "u",
+        deleteDays: "0",
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(errorMock).not.toHaveBeenCalled();
+    expectMessageCommandOptions({
+      action: "ban",
+      guildId: "g",
+      userId: "u",
+      deleteDays: "0",
+    });
+    expect(exitMock).toHaveBeenCalledWith(0);
+  });
+
+  it("allows zero duration-min for clearing Discord timeouts", async () => {
+    const runMessageAction = createRunMessageAction();
+
+    await expect(
+      runMessageAction("timeout", {
+        guildId: "g",
+        userId: "u",
+        durationMin: "0",
+      }),
+    ).rejects.toThrow("exit");
+
+    expect(errorMock).not.toHaveBeenCalled();
+    expectMessageCommandOptions({
+      action: "timeout",
+      guildId: "g",
+      userId: "u",
+      durationMin: "0",
+    });
+    expect(exitMock).toHaveBeenCalledWith(0);
+  });
+
   it("runs gateway_stop hooks before exit when registered", async () => {
     hasHooksMock.mockReturnValueOnce(true);
     await runSendAction();
@@ -335,7 +469,7 @@ describe("runMessageAction", () => {
     vi.useFakeTimers();
     try {
       hasHooksMock.mockReturnValueOnce(true);
-      runGatewayStopMock.mockImplementationOnce(() => new Promise(() => undefined));
+      runGatewayStopMock.mockImplementationOnce(() => new Promise(() => {}));
       const runMessageAction = createRunMessageAction();
 
       const pending = expect(runMessageAction("send", baseSendOptions)).rejects.toThrow("exit");

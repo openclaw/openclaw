@@ -1,7 +1,17 @@
+// Builds setup metadata for self-hosted provider plugins.
+import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";
+import {
+  findNormalizedProviderValue,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
 import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
-import { findNormalizedProviderValue, normalizeProviderId } from "../agents/provider-id.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
@@ -12,10 +22,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
@@ -33,6 +39,12 @@ export {
 } from "../agents/self-hosted-provider-defaults.js";
 
 const log = createSubsystemLogger("plugins/self-hosted-provider-setup");
+
+// Self-hosted provider base URLs are user-supplied and untrusted (an attacker
+// who can influence the configured endpoint, e.g. via SSRF, could serve an
+// unbounded JSON stream). Cap discovery response bodies before parsing so a
+// hostile or buggy endpoint cannot drive the setup wizard into OOM.
+const SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
 type OpenAICompatModelsResponse = {
   data?: Array<{
@@ -81,6 +93,27 @@ function readPositiveInteger(value: unknown): number | undefined {
   return Math.trunc(value);
 }
 
+/**
+ * Reads and parses a self-hosted discovery JSON body under a hard byte cap.
+ * Mirrors the byte-bounded reader pattern shared across provider/media reads so
+ * an untrusted endpoint cannot stream an unbounded body into memory.
+ */
+async function readSelfHostedDiscoveryJson(response: Response, label: string): Promise<unknown> {
+  const bytes = await readResponseWithLimit(response, SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES, {
+    onOverflow: ({ size, maxBytes }) =>
+      new Error(
+        `${label} discovery response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
+      ),
+  });
+  return JSON.parse(new TextDecoder().decode(bytes));
+}
+
+async function cancelUnreadResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
+  }
+}
+
 function resolveLlamaCppPropsUrl(baseUrl: string, modelId?: string): string {
   const parsed = new URL(baseUrl);
   const pathname = parsed.pathname.replace(/\/+$/, "");
@@ -119,9 +152,13 @@ async function discoverLlamaCppRuntimeContextTokens(params: {
     });
     try {
       if (!response.ok) {
+        await cancelUnreadResponseBody(response);
         return undefined;
       }
-      const data = (await response.json()) as LlamaCppPropsResponse;
+      const data = (await readSelfHostedDiscoveryJson(
+        response,
+        "llama.cpp /props",
+      )) as LlamaCppPropsResponse;
       return (
         readPositiveInteger(data.default_generation_settings?.n_ctx) ??
         readPositiveInteger(data.n_ctx)
@@ -162,10 +199,14 @@ export async function discoverOpenAICompatibleLocalModels(params: {
     });
     try {
       if (!response.ok) {
+        await cancelUnreadResponseBody(response);
         log.warn(`Failed to discover ${params.label} models: ${response.status}`);
         return [];
       }
-      const data = (await response.json()) as OpenAICompatModelsResponse;
+      const data = (await readSelfHostedDiscoveryJson(
+        response,
+        params.label,
+      )) as OpenAICompatModelsResponse;
       const models = data.data ?? [];
       if (models.length === 0) {
         log.warn(`No ${params.label} models found on local instance`);
@@ -181,7 +222,7 @@ export async function discoverOpenAICompatibleLocalModels(params: {
       });
       const runtimeContextTokensByModelId = new Map<string, number>();
       if (params.contextWindow === undefined) {
-        const uniqueModelIds = [...new Set(discoveredModels.map((model) => model.id))];
+        const uniqueModelIds = uniqueStrings(discoveredModels.map((model) => model.id));
         const runtimeContextTokenResults = await Promise.all(
           uniqueModelIds.map(
             async (modelId) =>

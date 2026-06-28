@@ -1,3 +1,8 @@
+/**
+ * Exec background abort tests.
+ * Ensures agent-turn aborts stop foreground execs but do not kill already
+ * backgrounded sessions.
+ */
 import { afterEach, beforeAll, beforeEach, expect, test, vi } from "vitest";
 import { killProcessTree } from "../process/kill-tree.js";
 
@@ -42,7 +47,7 @@ vi.mock("../process/supervisor/index.js", () => {
             });
           };
           if (input.timeoutMs !== undefined) {
-            setTimeout(() => settle("overall-timeout", true), 12);
+            setTimeout(() => settle("overall-timeout", true), Math.max(50, input.timeoutMs));
           }
         });
         return {
@@ -58,7 +63,6 @@ vi.mock("../process/supervisor/index.js", () => {
       },
       cancel: vi.fn(),
       cancelScope: vi.fn(),
-      reconcileOrphans: vi.fn(),
       getRecord: vi.fn(),
     }),
   };
@@ -85,6 +89,7 @@ const ABORT_SETTLE_MS = process.platform === "win32" ? 200 : 0;
 const POLL_INTERVAL_MS = process.platform === "win32" ? 15 : 5;
 const FINISHED_WAIT_TIMEOUT_MS = process.platform === "win32" ? 8_000 : 1_000;
 const BACKGROUND_TIMEOUT_SEC = process.platform === "win32" ? 0.2 : 0.02;
+const YIELDED_BACKGROUND_TIMEOUT_SEC = process.platform === "win32" ? 0.4 : 0.2;
 const TEST_EXEC_DEFAULTS = {
   host: "gateway" as const,
   security: "full" as const,
@@ -158,7 +163,9 @@ async function expectBackgroundSessionSurvivesAbort(params: {
 
   abortController.abort();
   if (ABORT_SETTLE_MS > 0) {
-    await new Promise((resolve) => setTimeout(resolve, ABORT_SETTLE_MS));
+    await new Promise((resolve) => {
+      setTimeout(resolve, ABORT_SETTLE_MS);
+    });
   }
 
   const running = getSession(sessionId);
@@ -272,9 +279,9 @@ test("yielded background exec still times out", async () => {
     executeParams: {
       command: BACKGROUND_HOLD_CMD,
       yieldMs: 5,
-      timeout: BACKGROUND_TIMEOUT_SEC,
+      timeout: YIELDED_BACKGROUND_TIMEOUT_SEC,
     },
-    expectedTimeoutSec: BACKGROUND_TIMEOUT_SEC,
+    expectedTimeoutSec: YIELDED_BACKGROUND_TIMEOUT_SEC,
   });
 });
 
@@ -282,7 +289,7 @@ test("yieldMs exec without explicit timeout applies default timeout", async () =
   const tool = createTestExecTool({
     allowBackground: true,
     backgroundMs: 10,
-    timeoutSec: BACKGROUND_TIMEOUT_SEC,
+    timeoutSec: YIELDED_BACKGROUND_TIMEOUT_SEC,
   });
   await expectBackgroundSessionTimesOut({
     tool,
@@ -290,6 +297,6 @@ test("yieldMs exec without explicit timeout applies default timeout", async () =
       command: BACKGROUND_HOLD_CMD,
       yieldMs: 5,
     },
-    expectedTimeoutSec: BACKGROUND_TIMEOUT_SEC,
+    expectedTimeoutSec: YIELDED_BACKGROUND_TIMEOUT_SEC,
   });
 });

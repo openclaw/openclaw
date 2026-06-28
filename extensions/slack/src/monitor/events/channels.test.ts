@@ -1,3 +1,4 @@
+// Slack tests cover channels plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const enqueueSystemEventMock = vi.hoisted(() => vi.fn());
@@ -81,7 +82,6 @@ describe("registerSlackChannelEvents", () => {
     expect(enqueueSystemEventMock).toHaveBeenCalledWith("Slack channel created: #general.", {
       sessionKey: "agent:main:main",
       contextKey: "slack:channel:created:C1",
-      trusted: false,
     });
   });
 });

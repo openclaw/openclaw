@@ -1,3 +1,4 @@
+// Nextcloud Talk tests cover inbound.behavior plugin behavior.
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../runtime-api.js";
@@ -54,8 +55,8 @@ function installRuntime(params?: {
 }) {
   const runtime = {
     channel: {
-      turn: {
-        runAssembled: vi.fn(async () => undefined),
+      inbound: {
+        dispatchReply: vi.fn(async () => undefined),
       },
       pairing: {
         readAllowFromStore: vi.fn(async () => []),
@@ -271,7 +272,7 @@ describe("nextcloud-talk inbound behavior", () => {
       runtime,
     });
 
-    expect(coreRuntime.channel.turn.runAssembled).not.toHaveBeenCalled();
+    expect(coreRuntime.channel.inbound.dispatchReply).not.toHaveBeenCalled();
     expect(buildMentionRegexes).not.toHaveBeenCalled();
     expect(runtime.log).toHaveBeenCalledWith(
       "nextcloud-talk: drop control command (unauthorized) target=user-1",
@@ -301,7 +302,7 @@ describe("nextcloud-talk inbound behavior", () => {
     });
 
     const assembledRequest = requireFirstMockArg(
-      coreRuntime.channel.turn.runAssembled as ReturnType<typeof vi.fn>,
+      coreRuntime.channel.inbound.dispatchReply as ReturnType<typeof vi.fn>,
       "Nextcloud Talk assembled request",
     ) as { replyPipeline?: unknown };
     expect(assembledRequest.replyPipeline).toEqual({});

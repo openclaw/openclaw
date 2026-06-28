@@ -1,3 +1,4 @@
+// Qqbot plugin module implements gateway connection behavior.
 import WebSocket from "ws";
 import type { EngineAdapters } from "../adapter/index.js";
 import {
@@ -209,7 +210,7 @@ export class GatewayConnection {
       });
 
       // ---- WebSocket: message ----
-      ws.on("message", async (data) => {
+      ws.on("message", (data) => {
         try {
           const rawData = decodeGatewayMessageData(data);
           const payload = JSON.parse(rawData) as WSPayload;

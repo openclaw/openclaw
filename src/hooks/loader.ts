@@ -7,12 +7,12 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { openRootFile } from "../infra/boundary-file-read.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { sanitizeForLog } from "../terminal/ansi.js";
 import { shouldIncludeHook } from "./config.js";
 import { hasConfiguredInternalHooks, resolveConfiguredInternalHookNames } from "./configured.js";
 import { buildImportUrl } from "./import-url.js";
@@ -32,6 +32,15 @@ const loadedHookRegistrations = resolveGlobalSingleton<
 
 function safeLogValue(value: string): string {
   return sanitizeForLog(value);
+}
+
+function isNonEmptyRelativePathInsideRoot(relativePath: string): boolean {
+  return (
+    relativePath !== "" &&
+    relativePath !== ".." &&
+    !relativePath.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relativePath)
+  );
 }
 
 function maybeWarnTrustedHookSource(source: string): void {
@@ -211,7 +220,7 @@ export async function loadInternalHooks(
         continue;
       }
       const rel = path.relative(baseDirReal, modulePathSafe);
-      if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+      if (!isNonEmptyRelativePathInsideRoot(rel)) {
         log.error(`Handler module path must stay within workspaceDir: ${safeLogValue(rawModule)}`);
         continue;
       }

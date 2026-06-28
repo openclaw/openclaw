@@ -1,8 +1,8 @@
+/** Resolves system.run allowlist matches, argv plans, and truncated command output. */
 import {
   analyzeArgvCommand,
-  buildSafeBinsShellCommand,
   evaluateExecAllowlist,
-  evaluateShellAllowlist,
+  evaluateShellAllowlistWithAuthorization,
   resolvePlannedSegmentArgv,
   resolveExecApprovals,
   type ExecAllowlistEntry,
@@ -11,6 +11,8 @@ import {
   type ExecSecurity,
   type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
+import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
+import { buildAuthorizedShellCommandFromPlan } from "../infra/exec-authorization-render.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   normalizeExecutableToken,
@@ -23,6 +25,12 @@ import {
 } from "../infra/shell-inline-command.js";
 import type { RunResult } from "./invoke-types.js";
 
+/**
+ * Allowlist analysis and argv rewriting for node-host system.run.
+ *
+ * This module keeps command approval analysis separate from process execution,
+ * and only rewrites shell transports when the rebuilt command still satisfies policy.
+ */
 const POSIX_SHELL_WRAPPER_NAMES: ReadonlySet<string> = POSIX_SHELL_WRAPPERS;
 
 type SystemRunAllowlistAnalysis = {
@@ -32,9 +40,11 @@ type SystemRunAllowlistAnalysis = {
   segments: ExecCommandSegment[];
   segmentAllowlistEntries: Array<ExecAllowlistEntry | null>;
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
+  authorizationPlan?: ExecAuthorizationPlan;
 };
 
-export function evaluateSystemRunAllowlist(params: {
+/** Evaluates analyzed command segments against allowlist and trusted safe-bin policy. */
+export async function evaluateSystemRunAllowlist(params: {
   shellCommand: string | null;
   argv: string[];
   approvals: ReturnType<typeof resolveExecApprovals>;
@@ -46,9 +56,9 @@ export function evaluateSystemRunAllowlist(params: {
   env: Record<string, string> | undefined;
   skillBins: SkillBinTrustEntry[];
   autoAllowSkills: boolean;
-}): SystemRunAllowlistAnalysis {
+}): Promise<SystemRunAllowlistAnalysis> {
   if (params.shellCommand) {
-    const allowlistEval = evaluateShellAllowlist({
+    const allowlistEval = await evaluateShellAllowlistWithAuthorization({
       command: params.shellCommand,
       allowlist: params.approvals.allowlist,
       safeBins: params.safeBins,
@@ -70,6 +80,9 @@ export function evaluateSystemRunAllowlist(params: {
       segments: allowlistEval.segments,
       segmentAllowlistEntries: allowlistEval.segmentAllowlistEntries,
       segmentSatisfiedBy: allowlistEval.segmentSatisfiedBy,
+      ...(allowlistEval.authorizationPlan
+        ? { authorizationPlan: allowlistEval.authorizationPlan }
+        : {}),
     };
   }
 
@@ -95,6 +108,7 @@ export function evaluateSystemRunAllowlist(params: {
   };
 }
 
+/** Resolve the single planned argv that can replace the caller argv after allowlist approval. */
 export function resolvePlannedAllowlistArgv(params: {
   security: ExecSecurity;
   shellCommand: string | null;
@@ -119,10 +133,17 @@ export function resolvePlannedAllowlistArgv(params: {
   return plannedAllowlistArgv && plannedAllowlistArgv.length > 0 ? plannedAllowlistArgv : null;
 }
 
-export function resolveSystemRunExecArgv(params: {
+/** Resolve final argv after safe-bin shell rewriting. */
+export async function resolveSystemRunExecArgv(params: {
   plannedAllowlistArgv: string[] | undefined;
   argv: string[];
   security: ExecSecurity;
+  approvals: ReturnType<typeof resolveExecApprovals>;
+  safeBins: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBins"];
+  safeBinProfiles: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["safeBinProfiles"];
+  trustedSafeBinDirs: ReturnType<typeof resolveExecSafeBinRuntimePolicy>["trustedSafeBinDirs"];
+  skillBins: SkillBinTrustEntry[];
+  autoAllowSkills: boolean;
   isWindows: boolean;
   policy: {
     approvedByAsk: boolean;
@@ -132,9 +153,10 @@ export function resolveSystemRunExecArgv(params: {
   shellCommand: string | null;
   segments: ExecCommandSegment[];
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
+  authorizationPlan: ExecAuthorizationPlan | undefined;
   cwd: string | undefined;
   env: Record<string, string> | undefined;
-}): string[] | null {
+}): Promise<string[] | null> {
   let execArgv = params.plannedAllowlistArgv ?? params.argv;
   if (
     params.security === "allowlist" &&
@@ -146,6 +168,7 @@ export function resolveSystemRunExecArgv(params: {
     params.segments.length === 1 &&
     params.segments[0]?.argv.length > 0
   ) {
+    // Windows shell transports expose a parsed argv segment that is safer than the wrapper argv.
     execArgv = params.segments[0].argv;
   }
   if (
@@ -158,13 +181,13 @@ export function resolveSystemRunExecArgv(params: {
     params.segmentSatisfiedBy.some((entry) => entry === "safeBins" || entry === "inlineChain") &&
     isPosixShellInlineCommandTransport(params.argv)
   ) {
-    const rebuilt = buildSafeBinsShellCommand({
-      command: params.shellCommand,
-      segments: params.segments,
+    if (!params.authorizationPlan) {
+      return null;
+    }
+    const rebuilt = buildAuthorizedShellCommandFromPlan({
+      plan: params.authorizationPlan,
+      mode: "safeBins",
       segmentSatisfiedBy: params.segmentSatisfiedBy,
-      cwd: params.cwd,
-      env: params.env,
-      platform: process.platform,
     });
     if (!rebuilt.ok || !rebuilt.command) {
       return null;
@@ -242,6 +265,7 @@ function replacePosixShellInlineCommand(params: {
     return rewritten;
   }
   if (token.endsWith(params.oldCommand)) {
+    // Combined shell flags can leave the inline command in a suffix of the same argv token.
     rewritten[absoluteValueIndex] =
       token.slice(0, token.length - params.oldCommand.length) + params.nextCommand;
     return rewritten;
@@ -249,6 +273,8 @@ function replacePosixShellInlineCommand(params: {
   return null;
 }
 
+/** Mark truncated output in stderr when possible, otherwise stdout. */
+/** Truncates captured stdout/stderr in place to the node-host output cap. */
 export function applyOutputTruncation(result: RunResult): void {
   if (!result.truncated) {
     return;

@@ -1,4 +1,5 @@
-import { buildChannelTurnContext } from "openclaw/plugin-sdk/channel-inbound";
+// Telegram plugin module implements bot message context.route test support behavior.
+import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -26,7 +27,7 @@ const recordInboundSessionForTest: NonNullable<
 export const telegramRouteTestSessionRuntime: NonNullable<
   BuildTelegramMessageContextParams["sessionRuntime"]
 > = {
-  buildChannelTurnContext,
+  buildChannelInboundEventContext,
   readSessionUpdatedAt: () => undefined,
   recordInboundSession: recordInboundSessionForTest,
   resolveInboundLastRouteSessionKey: ({ route, sessionKey }) =>

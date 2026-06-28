@@ -1,6 +1,11 @@
+// Post-install migration helpers guide users through setup after package install.
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  readMigrationConfigPatchDetails,
+  writeMigrationConfigPath,
+} from "../plugin-sdk/migration.js";
 import type { MigrationProviderPlugin } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import type { WizardPrompter } from "./prompts.js";
@@ -20,9 +25,27 @@ export type PostInstallMigrationOptions = {
   nonInteractive?: boolean;
 };
 
+export type PostInstallMigrationResult = {
+  config: OpenClawConfig;
+};
+
 type ResolvedProviderCandidate = {
   provider: MigrationProviderPlugin;
   source?: string;
+};
+
+let migrationContextModulePromise: Promise<typeof import("../commands/migrate/context.js")> | null =
+  null;
+let configPathsModulePromise: Promise<typeof import("../config/paths.js")> | null = null;
+
+const loadMigrationContextModule = async () => {
+  migrationContextModulePromise ??= import("../commands/migrate/context.js");
+  return await migrationContextModulePromise;
+};
+
+const loadConfigPathsModule = async () => {
+  configPathsModulePromise ??= import("../config/paths.js");
+  return await configPathsModulePromise;
 };
 
 async function resolveCandidates(params: {
@@ -41,8 +64,8 @@ async function resolveCandidates(params: {
   ] = await Promise.all([
     import("../plugins/migration-provider-runtime.js"),
     import("../plugins/manifest-contract-runtime.js"),
-    import("../commands/migrate/context.js"),
-    import("../config/paths.js"),
+    loadMigrationContextModule(),
+    loadConfigPathsModule(),
   ]);
   ensureStandaloneMigrationProviderRegistryLoaded({ cfg: params.config });
   const installedIds = new Set(params.installedPluginIds);
@@ -99,6 +122,39 @@ function logMigrationHint(runtime: RuntimeEnv, candidate: ResolvedProviderCandid
   runtime.log(`Detected ${describeCandidate(candidate)}. Preview migration with ${command}.`);
 }
 
+function applyMigrationConfigPatches(
+  config: OpenClawConfig,
+  result: { items?: readonly unknown[] } | undefined,
+): OpenClawConfig {
+  const items = result?.items ?? [];
+  const patches = items
+    .filter((item): item is Parameters<typeof readMigrationConfigPatchDetails>[0] =>
+      Boolean(
+        item &&
+        typeof item === "object" &&
+        "kind" in item &&
+        item.kind === "config" &&
+        "action" in item &&
+        item.action === "merge" &&
+        "status" in item &&
+        item.status === "migrated",
+      ),
+    )
+    .map(readMigrationConfigPatchDetails)
+    .filter(
+      (patch): patch is NonNullable<ReturnType<typeof readMigrationConfigPatchDetails>> =>
+        patch !== undefined,
+    );
+  if (patches.length === 0) {
+    return config;
+  }
+  const nextConfig = structuredClone(config);
+  for (const patch of patches) {
+    writeMigrationConfigPath(nextConfig as Record<string, unknown>, patch.path, patch.value);
+  }
+  return nextConfig;
+}
+
 /**
  * Offer interactive migration for any migration provider owned by a plugin
  * that was just installed during onboarding. In non-interactive mode this is
@@ -109,15 +165,16 @@ function logMigrationHint(runtime: RuntimeEnv, candidate: ResolvedProviderCandid
  */
 export async function offerPostInstallMigrations(
   params: PostInstallMigrationOptions,
-): Promise<void> {
+): Promise<PostInstallMigrationResult> {
   const candidates = await resolveCandidates({
     config: params.config,
     runtime: params.runtime,
     installedPluginIds: params.installedPluginIds,
   });
   if (candidates.length === 0) {
-    return;
+    return { config: params.config };
   }
+  let nextConfig = params.config;
   const prompter = params.prompter;
   const interactive =
     params.nonInteractive !== true && process.stdin.isTTY && prompter !== undefined;
@@ -127,7 +184,7 @@ export async function offerPostInstallMigrations(
       continue;
     }
     const description = describeCandidate(candidate);
-    let accepted = false;
+    let accepted;
     try {
       accepted = await prompter.confirm({
         message: `Migrate ${description} into this agent now?`,
@@ -146,17 +203,37 @@ export async function offerPostInstallMigrations(
       logMigrationHint(params.runtime, candidate);
       continue;
     }
+    let preparation: Awaited<ReturnType<NonNullable<MigrationProviderPlugin["prepareApply"]>>> =
+      undefined;
     try {
-      const { migrateDefaultCommand } = await import("../commands/migrate.js");
-      await migrateDefaultCommand(params.runtime, {
+      const [{ migrateDefaultCommand }, { createMigrationLogger }, { resolveStateDir }] =
+        await Promise.all([
+          import("../commands/migrate.js"),
+          loadMigrationContextModule(),
+          loadConfigPathsModule(),
+        ]);
+      preparation = await candidate.provider.prepareApply?.({
+        config: nextConfig,
+        stateDir: resolveStateDir(),
+        logger: createMigrationLogger(params.runtime),
+        ...(candidate.source ? { source: candidate.source } : {}),
+        providerOptions: { configPatchMode: "return" },
+      });
+      const result = await migrateDefaultCommand(params.runtime, {
         provider: candidate.provider.id,
+        configOverride: nextConfig,
+        configPatchMode: "return",
         suppressPlanLog: true,
       });
+      nextConfig = applyMigrationConfigPatches(nextConfig, result);
     } catch (error) {
       params.runtime.log(
         `${candidate.provider.label} migration failed: ${formatErrorMessage(error)}. ` +
           `Re-run with ${formatCliCommand(`openclaw migrate ${candidate.provider.id} --dry-run`)} to inspect.`,
       );
+    } finally {
+      await preparation?.dispose?.();
     }
   }
+  return { config: nextConfig };
 }

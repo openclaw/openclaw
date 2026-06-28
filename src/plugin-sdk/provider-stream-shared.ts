@@ -1,17 +1,38 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { streamSimple } from "@earendil-works/pi-ai";
-import { streamWithPayloadPatch } from "../agents/pi-embedded-runner/stream-payload-utils.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
-import type { ProviderWrapStreamFnContext } from "./plugin-entry.js";
+// Provider stream shared helpers implement reusable stream wrappers and payload policies.
+import { randomUUID } from "node:crypto";
+import { normalizeLowercaseStringOrEmpty } from "../../packages/normalization-core/src/string-coerce.js";
+import {
+  extractStandalonePlainTextToolCallText,
+  normalizePlainTextToolCallStreamEvents,
+  promoteStandalonePlainTextToolCallMessage,
+  scrubOverCapPlainTextToolCallMessage,
+  type PlainTextToolCallNameMatcher,
+  type PlainTextToolCallMessageNormalization,
+} from "../../packages/tool-call-repair/src/index.js";
+import { resolveOpenAIReasoningEffortMap } from "../agents/openai-reasoning-compat.js";
+import { resolveOpenAIReasoningEffortForModel } from "../agents/openai-reasoning-effort.js";
+import type { StreamFn } from "../agents/runtime/index.js";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
+import { mapThinkingLevelToReasoningEffort } from "../llm/providers/stream-wrappers/reasoning-effort-utils.js";
+import { streamWithPayloadPatch } from "../llm/providers/stream-wrappers/stream-payload-utils.js";
+import { streamSimple } from "../llm/stream.js";
+import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
+export { applyAnthropicRefusal } from "../shared/anthropic-refusal.js";
+export { createDeferredEventBuffer } from "../shared/deferred-event-buffer.js";
+export { notifyLlmRequestActivity, onLlmRequestActivity } from "../shared/llm-request-activity.js";
 
+type ProviderWrapStreamFnContext = import("../plugins/types.js").ProviderWrapStreamFnContext;
+
+/** Optional provider stream decorator factory used by shared provider wrappers. */
 export type ProviderStreamWrapperFactory =
-  | ((streamFn: StreamFn | undefined) => StreamFn | undefined)
-  | null
-  | undefined
-  | false;
+  /** Wrapper factory that can decorate, replace, or omit a provider stream function. */
+  ((streamFn: StreamFn | undefined) => StreamFn | undefined) | null | undefined | false;
 
+/** Compose stream wrapper factories from left to right around a base stream function. */
 export function composeProviderStreamWrappers(
+  /** Base provider stream function to pass through the wrapper chain. */
   baseStreamFn: StreamFn | undefined,
+  /** Ordered wrapper factories; falsey entries are skipped. */
   ...wrappers: ProviderStreamWrapperFactory[]
 ): StreamFn | undefined {
   return wrappers.reduce(
@@ -20,8 +41,205 @@ export function composeProviderStreamWrappers(
   );
 }
 
+function toRecord(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" ? (value as Record<string, unknown>) : undefined;
+}
+
+function resolveContextToolNames(context: Parameters<StreamFn>[1]): Set<string> {
+  const tools = (context as { tools?: unknown }).tools;
+  if (!Array.isArray(tools)) {
+    return new Set();
+  }
+  const names = tools
+    .map((tool) => {
+      const record = toRecord(tool);
+      return typeof record?.name === "string" && record.name.trim() ? record.name : undefined;
+    })
+    .filter((name): name is string => Boolean(name));
+  return new Set(names);
+}
+
+function createSyntheticToolCallId(): string {
+  return `call_${randomUUID().replace(/-/g, "").slice(0, 24)}`;
+}
+
+function createPlainTextToolCallBlock(parsed: {
+  arguments: Record<string, unknown>;
+  name: string;
+}): Record<string, unknown> {
+  return {
+    type: "toolCall",
+    id: createSyntheticToolCallId(),
+    name: parsed.name,
+    arguments: parsed.arguments,
+    partialArgs: JSON.stringify(parsed.arguments),
+  };
+}
+
+function promotePlainTextToolCalls(
+  message: unknown,
+  toolNames: Set<string>,
+): Record<string, unknown> | undefined {
+  const messageRecord = toRecord(message);
+  if (
+    Array.isArray(messageRecord?.content) &&
+    messageRecord.content.some((block) => toRecord(block)?.type === "toolCall")
+  ) {
+    return undefined;
+  }
+  return promoteStandalonePlainTextToolCallMessage({
+    allowedToolNames: toolNames,
+    createToolCallBlock: (block, name) => createPlainTextToolCallBlock({ ...block, name }),
+    isRetainableNonTextBlock: () => true,
+    message,
+  });
+}
+
+function emitPromotedToolCallEvents(
+  stream: { push(event: unknown): void },
+  message: Record<string, unknown>,
+): void {
+  const content = Array.isArray(message.content) ? message.content : [];
+  content.forEach((block, contentIndex) => {
+    const record = toRecord(block);
+    if (record?.type !== "toolCall") {
+      return;
+    }
+    stream.push({ type: "toolcall_start", contentIndex, partial: message });
+    stream.push({
+      type: "toolcall_delta",
+      contentIndex,
+      delta: typeof record.partialArgs === "string" ? record.partialArgs : "{}",
+      partial: message,
+    });
+  });
+}
+
+function extractPlainTextToolCallCandidate(message: unknown): string | undefined {
+  return extractStandalonePlainTextToolCallText({
+    allowOtherNonTextBlocks: true,
+    message,
+  });
+}
+
+function createProviderToolNameMatcher(toolNames: Set<string>): PlainTextToolCallNameMatcher {
+  return {
+    hasExactName: (name) => toolNames.has(name),
+    hasNamePrefix: (prefix) => {
+      for (const toolName of toolNames) {
+        if (toolName.startsWith(prefix)) {
+          return true;
+        }
+      }
+      return false;
+    },
+  };
+}
+
+function normalizeProviderDoneMessage(
+  message: unknown,
+  reason: unknown,
+  toolNames: Set<string>,
+  matcher: PlainTextToolCallNameMatcher,
+): PlainTextToolCallMessageNormalization {
+  const scrubbedMessage = scrubOverCapPlainTextToolCallMessage({
+    candidateText: extractPlainTextToolCallCandidate(message),
+    matcher,
+    message,
+  });
+  if (scrubbedMessage) {
+    return { kind: "scrubbed", message: scrubbedMessage };
+  }
+  // Token-limit and error terminals can leave complete-looking tool syntax.
+  // Only normal completion or explicit tool use may promote it into an executable call.
+  if (reason !== "stop" && reason !== "toolUse") {
+    return undefined;
+  }
+  const promotedMessage = promotePlainTextToolCalls(message, toolNames);
+  return promotedMessage ? { kind: "promoted", message: promotedMessage } : undefined;
+}
+
+function wrapPlainTextToolCallStream(
+  source: ReturnType<StreamFn>,
+  context: Parameters<StreamFn>[1],
+): ReturnType<StreamFn> {
+  const toolNames = resolveContextToolNames(context);
+  if (toolNames.size === 0) {
+    return source;
+  }
+  const matcher = createProviderToolNameMatcher(toolNames);
+  const output = createAssistantMessageEventStream();
+  const stream = output as unknown as { push(event: unknown): void; end(): void };
+
+  void (async () => {
+    let ended = false;
+    const endStream = () => {
+      if (!ended) {
+        ended = true;
+        stream.end();
+      }
+    };
+
+    try {
+      const normalizedEvents = normalizePlainTextToolCallStreamEvents(
+        source as AsyncIterable<unknown>,
+        {
+          createPromotedToolCallEvents: (message) => {
+            const events: unknown[] = [];
+            emitPromotedToolCallEvents({ push: (event: unknown) => events.push(event) }, message);
+            return events;
+          },
+          matcher,
+          normalizeDoneMessage: ({ message, reason }) =>
+            normalizeProviderDoneMessage(message, reason, toolNames, matcher),
+          stopAfterDone: true,
+        },
+      );
+      for await (const event of normalizedEvents) {
+        stream.push(event);
+      }
+    } catch (error) {
+      stream.push({
+        type: "error",
+        reason: "error",
+        error: {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage: error instanceof Error ? error.message : String(error),
+        },
+      });
+    } finally {
+      endStream();
+    }
+  })();
+
+  return output as ReturnType<StreamFn>;
+}
+
+/**
+ * Provider stream wrapper for local/proxy providers that sometimes emit a
+ * standalone textual tool-call block even when native tool calling is enabled.
+ */
+export function createPlainTextToolCallCompatWrapper(
+  /** Provider stream function to wrap; defaults to the simple stream implementation. */
+  baseStreamFn: StreamFn | undefined,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  return (model, context, options) => {
+    const maybeStream = underlying(model, context, options);
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) =>
+        wrapPlainTextToolCallStream(stream, context),
+      ) as ReturnType<StreamFn>;
+    }
+    return wrapPlainTextToolCallStream(maybeStream, context);
+  };
+}
+
 /** @deprecated Bundled provider stream helper; do not use from third-party plugins. */
 export function defaultToolStreamExtraParams(
+  /** Existing provider extra params; explicit tool_stream values are preserved. */
   extraParams?: Record<string, unknown>,
 ): Record<string, unknown> {
   if (extraParams?.tool_stream !== undefined) {
@@ -33,18 +251,27 @@ export function defaultToolStreamExtraParams(
   };
 }
 
+/** Wrap a provider stream so callers can patch the outbound provider payload once. */
 export function createPayloadPatchStreamWrapper(
+  /** Provider stream function whose outbound payload should be patched. */
   baseStreamFn: StreamFn | undefined,
   patchPayload: (params: {
+    /** Mutable provider payload immediately before the underlying stream dispatches it. */
     payload: Record<string, unknown>;
+    /** Model selected for the stream call. */
     model: Parameters<StreamFn>[0];
+    /** Stream context passed by the runtime. */
     context: Parameters<StreamFn>[1];
+    /** Stream options passed by the runtime. */
     options: Parameters<StreamFn>[2];
   }) => void,
   wrapperOptions?: {
     shouldPatch?: (params: {
+      /** Model selected for the stream call. */
       model: Parameters<StreamFn>[0];
+      /** Stream context passed by the runtime. */
       context: Parameters<StreamFn>[1];
+      /** Stream options passed by the runtime. */
       options: Parameters<StreamFn>[2];
     }) => boolean;
   },
@@ -57,6 +284,44 @@ export function createPayloadPatchStreamWrapper(
     return streamWithPayloadPatch(underlying, model, context, options, (payload) =>
       patchPayload({ payload, model, context, options }),
     );
+  };
+}
+
+/**
+ * Applies explicit disabled-thinking intent to OpenAI-compatible Chat
+ * Completions payloads without changing enabled reasoning levels.
+ */
+export function createOpenAICompatibleCompletionsThinkingOffWrapper(
+  baseStreamFn: StreamFn | undefined,
+  thinkingLevel?: ThinkLevel,
+): StreamFn {
+  const underlying = baseStreamFn ?? streamSimple;
+  if (thinkingLevel !== "off") {
+    return underlying;
+  }
+  return (model, context, options) => {
+    if (model.api !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+    return streamWithPayloadPatch(underlying, model, context, options, (payload) => {
+      if (!("reasoning_effort" in payload)) {
+        return;
+      }
+      const disabled = resolveOpenAIReasoningEffortForModel({
+        model,
+        effort: "none",
+        fallbackMap: resolveOpenAIReasoningEffortMap({
+          provider: typeof model.provider === "string" ? model.provider : null,
+          id: typeof model.id === "string" ? model.id : null,
+          compat: model.compat,
+        }),
+      });
+      if (disabled) {
+        payload.reasoning_effort = disabled;
+      } else {
+        delete payload.reasoning_effort;
+      }
+    });
   };
 }
 
@@ -153,6 +418,56 @@ export function isOpenAICompatibleThinkingEnabled(params: {
   return normalized !== "off" && normalized !== "none";
 }
 
+/** Applies the shared reasoning payload policy used by OpenAI-compatible proxy providers. */
+export function normalizeOpenAICompatibleReasoningPayload(
+  payload: Record<string, unknown>,
+  thinkingLevel?: ThinkLevel,
+): void {
+  delete payload.reasoning_effort;
+  if (!thinkingLevel || thinkingLevel === "off") {
+    return;
+  }
+
+  const existingReasoning = payload.reasoning;
+  if (
+    existingReasoning &&
+    typeof existingReasoning === "object" &&
+    !Array.isArray(existingReasoning)
+  ) {
+    const reasoning = existingReasoning as Record<string, unknown>;
+    if (!("max_tokens" in reasoning) && !("effort" in reasoning)) {
+      reasoning.effort = mapThinkingLevelToReasoningEffort(thinkingLevel);
+    }
+  } else if (!existingReasoning) {
+    payload.reasoning = {
+      effort: mapThinkingLevelToReasoningEffort(thinkingLevel),
+    };
+  }
+}
+
+/** Applies Qwen chat-template thinking flags without discarding provider-specific kwargs. */
+export function setQwenChatTemplateThinking(
+  payload: Record<string, unknown>,
+  enabled: boolean,
+): void {
+  const existing = payload.chat_template_kwargs;
+  if (existing && typeof existing === "object" && !Array.isArray(existing)) {
+    const next: Record<string, unknown> = {
+      ...(existing as Record<string, unknown>),
+      enable_thinking: enabled,
+    };
+    if (!Object.hasOwn(next, "preserve_thinking")) {
+      next.preserve_thinking = true;
+    }
+    payload.chat_template_kwargs = next;
+    return;
+  }
+  payload.chat_template_kwargs = {
+    enable_thinking: enabled,
+    preserve_thinking: true,
+  };
+}
+
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
 export type DeepSeekV4ThinkingLevel = ProviderWrapStreamFnContext["thinkingLevel"];
 /** @deprecated DeepSeek provider stream helper; do not use from third-party plugins. */
@@ -181,7 +496,12 @@ function stripDeepSeekV4ReasoningContent(payload: Record<string, unknown>): void
   }
 }
 
-function ensureDeepSeekV4AssistantReasoningContent(payload: Record<string, unknown>): void {
+function ensureDeepSeekV4AssistantReasoningContent(
+  payload: Record<string, unknown>,
+  params?: {
+    shouldBackfillAssistantMessage?: (message: Record<string, unknown>) => boolean;
+  },
+): void {
   if (!Array.isArray(payload.messages)) {
     return;
   }
@@ -191,6 +511,9 @@ function ensureDeepSeekV4AssistantReasoningContent(payload: Record<string, unkno
     }
     const record = message as Record<string, unknown>;
     if (record.role !== "assistant") {
+      continue;
+    }
+    if (params?.shouldBackfillAssistantMessage && !params.shouldBackfillAssistantMessage(record)) {
       continue;
     }
     if (!("reasoning_content" in record)) {
@@ -205,6 +528,7 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
   thinkingLevel: DeepSeekV4ThinkingLevel;
   shouldPatchModel: (model: Parameters<StreamFn>[0]) => boolean;
   resolveReasoningEffort?: (thinkingLevel: DeepSeekV4ThinkingLevel) => DeepSeekV4ReasoningEffort;
+  shouldBackfillAssistantReasoningContent?: (message: Record<string, unknown>) => boolean;
 }): StreamFn | undefined {
   if (!params.baseStreamFn) {
     return undefined;
@@ -227,8 +551,129 @@ export function createDeepSeekV4OpenAICompatibleThinkingWrapper(params: {
 
       payload.thinking = { type: "enabled" };
       payload.reasoning_effort = resolveReasoningEffort(params.thinkingLevel);
-      ensureDeepSeekV4AssistantReasoningContent(payload);
+      ensureDeepSeekV4AssistantReasoningContent(payload, {
+        shouldBackfillAssistantMessage: params.shouldBackfillAssistantReasoningContent,
+      });
     });
+  };
+}
+
+type ThinkingOnlyFinalTextStream = Awaited<ReturnType<StreamFn>>;
+
+function promoteThinkingOnlyFinalOutputToText(message: unknown): void {
+  if (!message || typeof message !== "object") {
+    return;
+  }
+  const record = message as { content?: unknown; stopReason?: unknown };
+  if (record.stopReason !== "stop" && record.stopReason !== "length") {
+    return;
+  }
+  if (!Array.isArray(record.content) || record.content.length === 0) {
+    return;
+  }
+
+  let hasVisibleText = false;
+  let hasToolCall = false;
+  let hasVisibleThinking = false;
+  for (const block of record.content) {
+    if (!block || typeof block !== "object") {
+      continue;
+    }
+    const typedBlock = block as { type?: unknown; text?: unknown; thinking?: unknown };
+    if (
+      typedBlock.type === "text" &&
+      typeof typedBlock.text === "string" &&
+      typedBlock.text.trim()
+    ) {
+      hasVisibleText = true;
+    }
+    if (typedBlock.type === "toolCall" || typedBlock.type === "tool_use") {
+      hasToolCall = true;
+    }
+    if (
+      typedBlock.type === "thinking" &&
+      typeof typedBlock.thinking === "string" &&
+      typedBlock.thinking.trim()
+    ) {
+      hasVisibleThinking = true;
+    }
+  }
+  if (hasVisibleText || hasToolCall || !hasVisibleThinking) {
+    return;
+  }
+
+  record.content = record.content.map((block) => {
+    if (!block || typeof block !== "object") {
+      return block;
+    }
+    const typedBlock = block as { type?: unknown; thinking?: unknown };
+    if (
+      typedBlock.type !== "thinking" ||
+      typeof typedBlock.thinking !== "string" ||
+      !typedBlock.thinking.trim()
+    ) {
+      return block;
+    }
+    return { type: "text", text: typedBlock.thinking };
+  });
+}
+
+function wrapThinkingOnlyFinalTextStream(
+  stream: ThinkingOnlyFinalTextStream,
+): ThinkingOnlyFinalTextStream {
+  const originalResult = stream.result.bind(stream);
+  stream.result = async () => {
+    const message = await originalResult();
+    promoteThinkingOnlyFinalOutputToText(message);
+    return message;
+  };
+
+  const originalAsyncIterator = stream[Symbol.asyncIterator].bind(stream);
+  (stream as { [Symbol.asyncIterator]: typeof originalAsyncIterator })[Symbol.asyncIterator] =
+    function () {
+      const iterator = originalAsyncIterator();
+      return {
+        async next() {
+          const result = await iterator.next();
+          if (!result.done && result.value && typeof result.value === "object") {
+            const event = result.value as { partial?: unknown; message?: unknown };
+            promoteThinkingOnlyFinalOutputToText(event.partial);
+            promoteThinkingOnlyFinalOutputToText(event.message);
+          }
+          return result;
+        },
+        async return(value?: unknown) {
+          return iterator.return?.(value) ?? { done: true as const, value: undefined };
+        },
+        async throw(error?: unknown) {
+          return iterator.throw?.(error) ?? { done: true as const, value: undefined };
+        },
+        [Symbol.asyncIterator]() {
+          return this;
+        },
+      };
+    };
+  return stream;
+}
+
+/** @deprecated OpenAI-compatible provider stream helper; do not use from third-party plugins. */
+export function createThinkingOnlyFinalTextWrapper(params: {
+  baseStreamFn: StreamFn | undefined;
+  shouldPatchModel: (model: Parameters<StreamFn>[0]) => boolean;
+}): StreamFn | undefined {
+  if (!params.baseStreamFn) {
+    return undefined;
+  }
+  const underlying = params.baseStreamFn;
+  return (model, context, options) => {
+    const maybeStream = underlying(model, context, options);
+    if (!params.shouldPatchModel(model)) {
+      return maybeStream;
+    }
+    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
+      return Promise.resolve(maybeStream).then((stream) => wrapThinkingOnlyFinalTextStream(stream));
+    }
+    return wrapThinkingOnlyFinalTextStream(maybeStream);
   };
 }
 
@@ -274,7 +719,10 @@ export function isGoogleGemini3ThinkingLevelModel(modelId: string): boolean {
   return isGoogleGemini3ProModel(modelId) || isGoogleGemini3FlashModel(modelId);
 }
 
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
+/**
+ * Maps legacy numeric/semantic thinking input onto Gemini 3's provider enum.
+ * @deprecated Google provider-owned stream helper; do not use from third-party plugins.
+ */
 export function resolveGoogleGemini3ThinkingLevel(params: {
   modelId?: string;
   thinkingLevel?: GoogleThinkingInputLevel;
@@ -345,7 +793,10 @@ export function resolveGoogleGemini3ThinkingLevel(params: {
   return "HIGH";
 }
 
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
+/**
+ * Removes `thinkingBudget=0` only for Gemini models that reject disabled thinking.
+ * @deprecated Google provider-owned stream helper; do not use from third-party plugins.
+ */
 export function stripInvalidGoogleThinkingBudget(params: {
   thinkingConfig: Record<string, unknown>;
   modelId?: string;
@@ -401,7 +852,10 @@ function normalizeGemma4ThinkingLevel(value: unknown): "MINIMAL" | "HIGH" | unde
   }
 }
 
-/** @deprecated Google provider-owned stream helper; do not use from third-party plugins. */
+/**
+ * Normalizes Google thinking config across SDK payload shapes before provider transport.
+ * @deprecated Google provider-owned stream helper; do not use from third-party plugins.
+ */
 export function sanitizeGoogleThinkingPayload(params: {
   payload: unknown;
   modelId?: string;
@@ -439,6 +893,8 @@ function sanitizeGoogleThinkingConfigContainer(params: {
   const thinkingConfigObj = thinkingConfig as Record<string, unknown>;
 
   if (typeof params.modelId === "string" && isGemma4Model(params.modelId)) {
+    // Gemma 4 accepts thinkingLevel but not thinkingBudget; map legacy budget
+    // inputs before deleting the unsupported numeric field.
     const normalizedThinkingLevel = normalizeGemma4ThinkingLevel(thinkingConfigObj.thinkingLevel);
     const explicitMappedLevel = mapThinkLevelToGemma4ThinkingLevel(params.thinkingLevel);
     const disabledViaBudget =
@@ -483,6 +939,7 @@ function sanitizeGoogleThinkingConfigContainer(params: {
     typeof params.modelId === "string" &&
     isGoogleGemini3ThinkingLevelModel(params.modelId)
   ) {
+    // Gemini 3 adaptive mode means omit both controls so the provider chooses.
     delete thinkingConfigObj.thinkingBudget;
     delete thinkingConfigObj.thinkingLevel;
     if (Object.keys(thinkingConfigObj).length === 0) {
@@ -499,6 +956,7 @@ function sanitizeGoogleThinkingConfigContainer(params: {
     });
     delete thinkingConfigObj.thinkingBudget;
     if (mappedLevel) {
+      // Gemini 3 uses thinkingLevel; leaving thinkingBudget would make mixed-mode payloads.
       thinkingConfigObj.thinkingLevel = mappedLevel;
     }
     if (Object.keys(thinkingConfigObj).length === 0) {
@@ -520,7 +978,7 @@ function sanitizeGoogleThinkingConfigContainer(params: {
     return;
   }
 
-  // pi-ai can emit thinkingBudget=-1 for some Google model IDs; a negative budget
+  // shared model runtime can emit thinkingBudget=-1 for some Google model IDs; a negative budget
   // is invalid for Google-compatible backends and can lead to malformed handling.
   delete thinkingConfigObj.thinkingBudget;
   if (Object.keys(thinkingConfigObj).length === 0) {
@@ -555,13 +1013,13 @@ export {
   applyAnthropicPayloadPolicyToParams,
   resolveAnthropicPayloadPolicy,
 } from "../agents/anthropic-payload-policy.js";
-export { applyAnthropicEphemeralCacheControlMarkers } from "../agents/pi-embedded-runner/anthropic-cache-control-payload.js";
+export { applyAnthropicEphemeralCacheControlMarkers } from "../llm/providers/stream-wrappers/anthropic-cache-control-payload.js";
 export {
   createMoonshotThinkingWrapper,
   resolveMoonshotThinkingType,
-} from "../agents/pi-embedded-runner/moonshot-thinking-stream-wrappers.js";
+} from "../llm/providers/stream-wrappers/moonshot-thinking.js";
 export { streamWithPayloadPatch };
 export {
   createToolStreamWrapper,
   createZaiToolStreamWrapper,
-} from "../agents/pi-embedded-runner/zai-stream-wrappers.js";
+} from "../llm/providers/stream-wrappers/zai.js";

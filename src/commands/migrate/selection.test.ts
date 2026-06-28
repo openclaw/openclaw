@@ -1,3 +1,4 @@
+// Migration selection tests cover skill/plugin filtering, defaults, shortcuts, and skipped-item reasons.
 import { describe, expect, it } from "vitest";
 import type { MigrationItem, MigrationPlan } from "../../plugins/types.js";
 import {
@@ -36,7 +37,7 @@ function skillItem(params: {
     reason: params.reason,
     details: {
       skillName: params.name,
-      sourceLabel: "Codex CLI skill",
+      sourceLabel: "Codex skill",
     },
   };
 }
@@ -491,7 +492,7 @@ describe("applyMigrationPluginSelection", () => {
       "plugin:gmail",
     ]);
     expect(formatMigrationPluginSelectionHint(items[1])).toBe(
-      "openai-curated; conflict: plugin exists",
+      "openai-curated plugin already installed in workspace",
     );
   });
 

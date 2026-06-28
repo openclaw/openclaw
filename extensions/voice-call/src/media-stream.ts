@@ -10,6 +10,7 @@
 import type { IncomingMessage } from "node:http";
 import type { Duplex } from "node:stream";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderPlugin,
@@ -44,7 +45,7 @@ export interface MediaStreamConfig {
   maxConnections?: number;
   /** Optional trusted resolver for the source IP used by pending-connection guards. */
   resolveClientIp?: (request: IncomingMessage) => string | undefined;
-  /** Validate whether to accept a media stream for the given call ID */
+  /** Validate whether to accept a media stream for the given call ID. Missing validator rejects. */
   shouldAcceptStream?: (params: { callId: string; streamSid: string; token?: string }) => boolean;
   /** Callback when transcript is received */
   onTranscript?: (callId: string, transcript: string) => void;
@@ -121,6 +122,15 @@ function normalizeWsMessageData(data: RawData): Buffer {
   return Buffer.from(data);
 }
 
+export function parseTwilioMediaMessage(data: RawData): TwilioMediaMessage {
+  const raw = normalizeWsMessageData(data);
+  try {
+    return JSON.parse(raw.toString("utf8")) as TwilioMediaMessage;
+  } catch (cause) {
+    throw new Error("Twilio media stream message was malformed JSON", { cause });
+  }
+}
+
 /**
  * Manages WebSocket connections for Twilio media streams.
  */
@@ -146,7 +156,10 @@ export class MediaStreamHandler {
 
   constructor(config: MediaStreamConfig) {
     this.config = config;
-    this.preStartTimeoutMs = config.preStartTimeoutMs ?? DEFAULT_PRE_START_TIMEOUT_MS;
+    this.preStartTimeoutMs = resolveTimerTimeoutMs(
+      config.preStartTimeoutMs,
+      DEFAULT_PRE_START_TIMEOUT_MS,
+    );
     this.maxPendingConnections = config.maxPendingConnections ?? DEFAULT_MAX_PENDING_CONNECTIONS;
     this.maxPendingConnectionsPerIp =
       config.maxPendingConnectionsPerIp ?? DEFAULT_MAX_PENDING_CONNECTIONS_PER_IP;
@@ -163,7 +176,9 @@ export class MediaStreamHandler {
         // Reject oversized frames before app-level parsing runs on unauthenticated sockets.
         maxPayload: MAX_INBOUND_MESSAGE_BYTES,
       });
-      this.wss.on("connection", (ws, req) => this.handleConnection(ws, req));
+      this.wss.on("connection", (ws, req) => {
+        void this.handleConnection(ws, req);
+      });
     }
 
     const currentConnections = this.getCurrentConnectionCount();
@@ -217,10 +232,9 @@ export class MediaStreamHandler {
       return;
     }
 
-    ws.on("message", async (data: RawData) => {
+    ws.on("message", (data: RawData) => {
       try {
-        const raw = normalizeWsMessageData(data);
-        const message = JSON.parse(raw.toString("utf8")) as TwilioMediaMessage;
+        const message = parseTwilioMediaMessage(data);
 
         switch (message.event) {
           case "connected":
@@ -307,10 +321,13 @@ export class MediaStreamHandler {
       ws.close(1008, "Missing callSid");
       return null;
     }
-    if (
-      this.config.shouldAcceptStream &&
-      !this.config.shouldAcceptStream({ callId: callSid, streamSid, token: effectiveToken })
-    ) {
+    if (!this.config.shouldAcceptStream) {
+      console.warn("[MediaStream] Rejecting stream without an acceptance validator");
+      ws.close(1008, "Unauthorized stream");
+      return null;
+    }
+
+    if (!this.config.shouldAcceptStream({ callId: callSid, streamSid, token: effectiveToken })) {
       console.warn(`[MediaStream] Rejecting stream for unknown call: ${callSid}`);
       ws.close(1008, "Unknown call");
       return null;
@@ -690,25 +707,6 @@ export class MediaStreamHandler {
       }
     }
     this.clearAudio(streamSid);
-  }
-
-  /**
-   * Get active session by call ID.
-   */
-  getSessionByCallId(callId: string): StreamSession | undefined {
-    return [...this.sessions.values()].find((session) => session.callId === callId);
-  }
-
-  /**
-   * Close all sessions.
-   */
-  closeAll(): void {
-    for (const session of this.sessions.values()) {
-      this.clearTtsState(session.streamSid);
-      session.sttSession.close();
-      session.ws.close();
-    }
-    this.sessions.clear();
   }
 
   private getTtsQueue(streamSid: string): TtsQueueEntry[] {

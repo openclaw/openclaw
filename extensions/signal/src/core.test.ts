@@ -1,10 +1,16 @@
+import { buildExecApprovalPendingReplyPayload } from "openclaw/plugin-sdk/approval-reply-runtime";
+// Signal tests cover core plugin behavior.
 import {
   createMessageReceiptFromOutboundResults,
   verifyChannelMessageAdapterCapabilityProofs,
-} from "openclaw/plugin-sdk/channel-message";
+} from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createPluginSetupWizardStatus } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
+import {
+  clearSignalApprovalReactionTargetsForTest,
+  resolveSignalApprovalReactionTargetWithPersistence,
+} from "./approval-reactions.js";
 import { signalPlugin } from "./channel.js";
 import * as clientModule from "./client-adapter.js";
 import { classifySignalCliLogLine } from "./daemon.js";
@@ -17,6 +23,7 @@ import {
 import { probeSignal } from "./probe.js";
 import { clearSignalRuntime } from "./runtime.js";
 import {
+  createSignalCliPathTextInput,
   normalizeSignalAccountInput,
   parseSignalAllowFromEntries,
   signalDmPolicy,
@@ -208,6 +215,13 @@ describe("probeSignal", () => {
 
     expect(status.configured).toBe(true);
   });
+
+  it("does not show a second missing-binary note before the cliPath prompt", () => {
+    const input = createSignalCliPathTextInput(async () => true);
+
+    expect(input.helpLines).toBeUndefined();
+    expect(input.helpTitle).toBeUndefined();
+  });
 });
 
 describe("signal outbound", () => {
@@ -219,6 +233,185 @@ describe("signal outbound", () => {
     }
 
     expect(chunker("alpha beta", 5)).toEqual(["alpha", "beta"]);
+  });
+
+  it("preserves the local approval prompt suppressor through attached-result composition", () => {
+    const suppressor = signalPlugin.outbound?.shouldSuppressLocalPayloadPrompt;
+    if (!suppressor) {
+      throw new Error("signal outbound approval suppressor unavailable");
+    }
+
+    expect(
+      suppressor({
+        cfg: {
+          channels: {
+            signal: {
+              enabled: true,
+              allowFrom: ["+15551230000"],
+            },
+          },
+          approvals: {
+            exec: {
+              enabled: true,
+            },
+          },
+        } as OpenClawConfig,
+        accountId: "default",
+        payload: {
+          text: "Approval required.",
+          channelData: {
+            execApproval: {
+              approvalId: "exec-1",
+              approvalSlug: "exec-1",
+              approvalKind: "exec",
+              sessionKey: "agent:main:signal:+15551230000",
+            },
+          },
+        },
+        hint: {
+          kind: "approval-pending",
+          approvalKind: "exec",
+          nativeRouteActive: true,
+        },
+      }),
+    ).toBe(true);
+  });
+
+  it("registers structured approval payloads for reactions after delivery", async () => {
+    clearSignalApprovalReactionTargetsForTest();
+    const cfg = {
+      channels: {
+        signal: {
+          account: "+15550009999",
+          allowFrom: ["+15551230000"],
+        },
+      },
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "signal", to: "+15551230000" }],
+        },
+      },
+    } as OpenClawConfig;
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "exec-after-delivery",
+      approvalSlug: "exec-aft",
+      allowedDecisions: ["allow-once", "deny"],
+      command: "printf test",
+      host: "gateway",
+      agentId: "main",
+      sessionKey: "agent:main:signal:direct:+15551230000",
+    });
+    const rendered = await signalPlugin.outbound?.renderPresentation?.({
+      payload,
+      presentation: payload.presentation!,
+      ctx: {
+        cfg,
+        to: "+15551230000",
+        text: payload.text ?? "",
+        accountId: "default",
+        payload,
+      },
+    });
+    expect(rendered?.text).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
+
+    await signalPlugin.outbound?.afterDeliverPayload?.({
+      cfg,
+      target: {
+        channel: "signal",
+        to: "+15551230000",
+        accountId: "default",
+      },
+      payload: rendered!,
+      results: [
+        {
+          channel: "signal",
+          messageId: "1700000000099",
+        },
+      ],
+    });
+
+    await expect(
+      resolveSignalApprovalReactionTargetWithPersistence({
+        accountId: "default",
+        conversationKey: "+15551230000",
+        messageId: "1700000000099",
+        reactionKey: "👍",
+        targetAuthor: "+15550009999",
+      }),
+    ).resolves.toEqual({
+      approvalId: "exec-after-delivery",
+      approvalKind: "exec",
+      decision: "allow-once",
+      route: {
+        deliveryMode: "target",
+        to: "+15551230000",
+        accountId: "default",
+        agentId: "main",
+        sessionKey: "agent:main:signal:direct:+15551230000",
+      },
+    });
+  });
+
+  it("renders reaction hints only from structured approval payloads", async () => {
+    const cfg = {
+      channels: {
+        signal: {
+          account: "+15550009999",
+          allowFrom: ["+15551230000"],
+        },
+      },
+      approvals: {
+        exec: {
+          enabled: true,
+          mode: "targets",
+          targets: [{ channel: "signal", to: "+15551230000" }],
+        },
+      },
+    } as OpenClawConfig;
+    const payload = buildExecApprovalPendingReplyPayload({
+      approvalId: "exec-rendered-approval",
+      approvalSlug: "exec-ren",
+      allowedDecisions: ["allow-once", "deny"],
+      command: "printf test",
+      host: "gateway",
+    });
+    const rendered = await signalPlugin.outbound?.renderPresentation?.({
+      payload,
+      presentation: payload.presentation!,
+      ctx: {
+        cfg,
+        to: "+15551230000",
+        text: payload.text ?? "",
+        accountId: "default",
+        payload,
+      },
+    });
+
+    expect(rendered?.text).toContain("React with:\n\n👍 Allow Once\n👎 Deny");
+    expect(
+      await signalPlugin.outbound?.renderPresentation?.({
+        payload: {
+          text: [
+            "The docs show this example:",
+            "Exec approval required",
+            "ID: exec-rendered-approval",
+            "",
+            "Reply with: /approve exec-rendered-approval allow-once|deny",
+          ].join("\n"),
+          presentation: payload.presentation,
+        },
+        presentation: payload.presentation!,
+        ctx: {
+          cfg,
+          to: "+15551230000",
+          text: payload.text ?? "",
+          accountId: "default",
+          payload,
+        },
+      }),
+    ).toBeNull();
   });
 
   it("declares message adapter durable text and media with receipt proofs", async () => {
@@ -278,6 +471,7 @@ describe("signal outbound", () => {
     expect(proofResults).toEqual([
       { capability: "text", status: "verified" },
       { capability: "media", status: "verified" },
+      { capability: "poll", status: "not_declared" },
       { capability: "payload", status: "not_declared" },
       { capability: "silent", status: "not_declared" },
       { capability: "replyTo", status: "not_declared" },
@@ -298,9 +492,9 @@ describe("classifySignalCliLogLine", () => {
     expect(classifySignalCliLogLine("DEBUG Something")).toBe("log");
   });
 
-  it("treats WARN/ERROR as error", () => {
-    expect(classifySignalCliLogLine("WARN  Something")).toBe("error");
-    expect(classifySignalCliLogLine("WARNING Something")).toBe("error");
+  it("treats routine warnings as logs and errors as error state", () => {
+    expect(classifySignalCliLogLine("WARN  Something")).toBe("log");
+    expect(classifySignalCliLogLine("WARNING Something")).toBe("log");
     expect(classifySignalCliLogLine("ERROR Something")).toBe("error");
   });
 

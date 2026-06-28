@@ -1,3 +1,7 @@
+/**
+ * Integration-style tests for the public Bash/process tool barrel.
+ * Exercises exec and process behavior through the shared exported tool factory.
+ */
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
@@ -103,9 +107,47 @@ vi.mock("../process/supervisor/index.js", () => {
     onStdout?: (chunk: string) => void;
   };
 
-  const immediate = () => new Promise<void>((resolve) => setImmediate(resolve));
-  const readEnvPath = (env?: NodeJS.ProcessEnv) => env?.PATH ?? env?.Path ?? "";
+  const immediate = () =>
+    new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  const readPathKey = (env?: NodeJS.ProcessEnv) =>
+    env && "Path" in env && !("PATH" in env) ? "Path" : "PATH";
+  const readEnvPath = (env?: NodeJS.ProcessEnv) => env?.[readPathKey(env)] ?? "";
+  const writeEnvPath = (env: NodeJS.ProcessEnv, value: string) => {
+    env[readPathKey(env)] = value;
+  };
   const extractCommand = (input: SpawnInput) => input.ptyCommand ?? input.argv?.at(-1) ?? "";
+  const parseShellSingleQuoted = (input: string) => {
+    if (!input.startsWith("'")) {
+      return null;
+    }
+    let output = "";
+    for (let index = 1; index < input.length; index += 1) {
+      const char = input[index];
+      if (char !== "'") {
+        output += char;
+        continue;
+      }
+      if (input.startsWith("'\\''", index)) {
+        output += "'";
+        index += 3;
+        continue;
+      }
+      return input.slice(index + 1).trim().length === 0 ? output : null;
+    }
+    return null;
+  };
+  const unwrapSnapshotEvalCommand = (command: string) => {
+    const evalIndex = command.lastIndexOf("\neval ");
+    const evalCommand =
+      evalIndex === -1
+        ? command.trimStart().startsWith("eval ")
+          ? command.trimStart().slice("eval ".length)
+          : null
+        : command.slice(evalIndex + "\neval ".length);
+    return evalCommand ? (parseShellSingleQuoted(evalCommand.trim()) ?? command) : command;
+  };
   const splitCommands = (command: string) => {
     const commands: string[] = [];
     for (const part of command.split(";")) {
@@ -116,7 +158,18 @@ vi.mock("../process/supervisor/index.js", () => {
     }
     return commands;
   };
-  const stdoutForSegment = (segment: string, env?: NodeJS.ProcessEnv) => {
+  const applySegmentShellEffects = (segment: string, env: NodeJS.ProcessEnv) => {
+    if (segment === 'export PATH="${OPENCLAW_PREPEND_PATH}${PATH:+:$PATH}"') {
+      const prepend = env.OPENCLAW_PREPEND_PATH ?? "";
+      const current = readEnvPath(env);
+      writeEnvPath(env, `${prepend}${current ? `:${current}` : ""}`);
+      return;
+    }
+    if (segment === "unset OPENCLAW_PREPEND_PATH") {
+      delete env.OPENCLAW_PREPEND_PATH;
+    }
+  };
+  const stdoutForSegment = (segment: string, env: NodeJS.ProcessEnv) => {
     if (segment === "echo $PATH" || segment === "Write-Output $env:PATH") {
       return `${readEnvPath(env)}\n`;
     }
@@ -129,17 +182,24 @@ vi.mock("../process/supervisor/index.js", () => {
     return "";
   };
 
-  const commandOutput = (command: string, env?: NodeJS.ProcessEnv) =>
-    splitCommands(command)
-      .map((segment) => stdoutForSegment(segment, env))
+  const commandOutput = (command: string, env?: NodeJS.ProcessEnv) => {
+    const shellEnv = { ...env };
+    return splitCommands(unwrapSnapshotEvalCommand(command))
+      .map((segment) => {
+        applySegmentShellEffects(segment, shellEnv);
+        return stdoutForSegment(segment, shellEnv);
+      })
       .join("");
+  };
 
   return {
     getProcessSupervisor: () => ({
       spawn: async (input: SpawnInput) => {
         const command = extractCommand(input);
         const output = commandOutput(command, input.env);
-        const exitCode = splitCommands(command).includes("exit 1") ? 1 : 0;
+        const exitCode = splitCommands(unwrapSnapshotEvalCommand(command)).includes("exit 1")
+          ? 1
+          : 0;
         const stagedOutput = command.includes("after")
           ? output.replace(/after[^\n]*\n?/gu, "")
           : output;
@@ -153,6 +213,7 @@ vi.mock("../process/supervisor/index.js", () => {
           pid: 123,
           stdin: undefined,
           wait: async () => {
+            await immediate();
             await immediate();
             if (deferredOutput) {
               input.onStdout?.(deferredOutput);
@@ -173,7 +234,6 @@ vi.mock("../process/supervisor/index.js", () => {
       },
       cancel: vi.fn(),
       cancelScope: vi.fn(),
-      reconcileOrphans: vi.fn(),
       getRecord: vi.fn(),
     }),
   };
@@ -196,8 +256,8 @@ const NOTIFY_POLL_OPTIONS = {
   timeout: NOTIFY_EVENT_TIMEOUT_MS,
   interval: POLL_INTERVAL_MS,
 };
-const SHELL_ENV_KEYS = ["SHELL"] as const;
-const PATH_SHELL_ENV_KEYS = ["PATH", "SHELL"] as const;
+const SHELL_ENV_KEYS = ["OPENCLAW_EXEC_SHELL_SNAPSHOT", "SHELL"] as const;
+const PATH_SHELL_ENV_KEYS = ["OPENCLAW_EXEC_SHELL_SNAPSHOT", "PATH", "SHELL"] as const;
 const PROCESS_STATUS_RUNNING = "running";
 const PROCESS_STATUS_COMPLETED = "completed";
 const PROCESS_STATUS_FAILED = "failed";
@@ -275,7 +335,10 @@ const readNormalizedTextContent = (content: ToolTextContent) =>
   normalizeText(readTextContent(content));
 const readTrimmedLines = (content: ToolTextContent) =>
   (readTextContent(content) ?? "").split("\n").map((line) => line.trim());
-const waitOneTurn = () => new Promise<void>((resolve) => setImmediate(resolve));
+const waitOneTurn = () =>
+  new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
 const readTotalLines = (details: unknown) => (details as { totalLines?: number }).totalLines;
 const readProcessStatus = (details: unknown) => (details as { status?: string }).status;
 const readProcessStatusOrRunning = (details: unknown) =>
@@ -327,6 +390,7 @@ async function pollProcessSession(params: {
   };
 }
 function applyDefaultShellEnv() {
+  process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
   if (!isWin && defaultShell) {
     process.env.SHELL = defaultShell;
   }
@@ -461,12 +525,26 @@ type DisallowedElevationCase = LabeledCase & {
   expectedOutputIncludes?: string;
 };
 type NotifyNoopCase = LabeledCase & {
-  notifyOnExitEmptySuccess: boolean;
+  defaults?: Partial<ExecToolConfig>;
+  expectNotification: boolean;
 };
 const NOOP_NOTIFY_CASES: NotifyNoopCase[] = [
-  withLabel("default behavior skips no-op completion events", { notifyOnExitEmptySuccess: false }),
+  withLabel("default behavior skips no-op completion events", { expectNotification: false }),
+  withLabel("chat providers default no-op completion notifications on", {
+    defaults: { messageProvider: " Telegram " },
+    expectNotification: true,
+  }),
+  withLabel("explicit false keeps chat provider no-op completions silent", {
+    defaults: { messageProvider: "telegram", notifyOnExitEmptySuccess: false },
+    expectNotification: false,
+  }),
+  withLabel("generic providers keep no-op completions silent by default", {
+    defaults: { messageProvider: "generic" },
+    expectNotification: false,
+  }),
   withLabel("explicitly enabling no-op completion emits completion events", {
-    notifyOnExitEmptySuccess: true,
+    defaults: { notifyOnExitEmptySuccess: true },
+    expectNotification: true,
   }),
 ];
 const DISALLOWED_ELEVATION_CASES: DisallowedElevationCase[] = [
@@ -516,11 +594,11 @@ const LONG_LOG_EXPECTATION_CASES: LongLogExpectationCase[] = [
 ];
 const expectNotifyNoopEvents = (
   events: string[],
-  notifyOnExitEmptySuccess: boolean,
+  expectNotification: boolean,
   sessionId: string,
   label: string,
 ) => {
-  if (!notifyOnExitEmptySuccess) {
+  if (!expectNotification) {
     expect(events, label).toStrictEqual([]);
     return;
   }
@@ -616,15 +694,13 @@ const runLongLogExpectationCase = async ({
   expectTextContainsValues(snapshot.text, mustContain, true);
   expectTextContainsValues(snapshot.text, mustNotContain, false);
 };
-const runNotifyNoopCase = async ({ label, notifyOnExitEmptySuccess }: NotifyNoopCase) => {
-  const tool = createNotifyOnExitExecTool(
-    notifyOnExitEmptySuccess ? { notifyOnExitEmptySuccess: true } : {},
-  );
+const runNotifyNoopCase = async ({ label, defaults, expectNotification }: NotifyNoopCase) => {
+  const tool = createNotifyOnExitExecTool(defaults);
 
   const { sessionId, status } = await runBackgroundCommandToCompletion(tool, COMMAND_NOOP);
   expect(status).toBe(PROCESS_STATUS_COMPLETED);
   const events = peekSystemEvents(DEFAULT_NOTIFY_SESSION_KEY);
-  expectNotifyNoopEvents(events, notifyOnExitEmptySuccess, sessionId, label);
+  expectNotifyNoopEvents(events, expectNotification, sessionId, label);
 };
 
 describe("tool descriptions", () => {
@@ -750,6 +826,8 @@ describe("exec exit codes", () => {
 });
 
 describe("exec notifyOnExit", () => {
+  useCapturedEnv([...SHELL_ENV_KEYS], applyDefaultShellEnv);
+
   beforeEach(() => {
     resetHeartbeatWakeStateForTests();
   });
@@ -773,7 +851,7 @@ describe("exec notifyOnExit", () => {
     expect(finished?.status).toBe(PROCESS_STATUS_COMPLETED);
     expect(finished?.exitCode).toBe(0);
     expect(hasEvent).toBe(true);
-    expect(queuedEvent?.trusted).toBe(false);
+    expect(queuedEvent).toBeDefined();
     expect(formatted).toBeUndefined();
   });
 
@@ -793,7 +871,7 @@ describe("exec notifyOnExit", () => {
       event.text.includes(sessionId.slice(0, 8)),
     );
 
-    expect(queuedEvent?.trusted).toBe(false);
+    expect(queuedEvent).toBeDefined();
     expect(queuedEvent?.deliveryContext?.channel).toBe("telegram");
     expect(queuedEvent?.deliveryContext?.to).toBe("telegram:-1003774691294:topic:47");
     expect(queuedEvent?.deliveryContext?.threadId).toBe("47");
@@ -844,6 +922,23 @@ describe("exec PATH handling", () => {
     for (const index of prependIndexes) {
       expect(index).toBeLessThan(baseIndex);
     }
+  });
+
+  it("protects POSIX prepended paths from shell startup overrides", async () => {
+    if (isWin) {
+      return;
+    }
+    process.env.PATH = "/evil/bin:/usr/bin";
+    const tool = createTestExecTool({ pathPrepend: ["/custom/bin"] });
+
+    const result = await executeExecCommand(tool, COMMAND_PRINT_PATH);
+
+    const text = readNormalizedTextContent(result.content);
+    const entries = text.split(path.delimiter);
+
+    // Simulate a shell startup file prepending /evil/bin before the command runs.
+    // The exec wrapper must still restore configured pathPrepend entries to the front.
+    expect(entries).toEqual(["/custom/bin", "/evil/bin", "/usr/bin"]);
   });
 });
 
@@ -945,6 +1040,42 @@ describe("exec backgrounded onUpdate suppression", () => {
     },
     isWin ? 10_000 : 5_000,
   );
+
+  it("removes the abort listener after a foreground exec process exits", async () => {
+    const abortController = new AbortController();
+    const addListenerSpy = vi.spyOn(abortController.signal, "addEventListener");
+    const removeListenerSpy = vi.spyOn(abortController.signal, "removeEventListener");
+
+    await execTool.execute(
+      nextCallId(),
+      { command: shellEcho("foreground-cleanup") },
+      abortController.signal,
+      vi.fn(),
+    );
+
+    const abortListener = addListenerSpy.mock.calls.find(([type]) => type === "abort")?.[1];
+    expect(abortListener).toBeDefined();
+    expect(removeListenerSpy).toHaveBeenCalledWith("abort", abortListener);
+  });
+
+  it("removes the abort listener when an exec process is backgrounded", async () => {
+    const abortController = new AbortController();
+    const addListenerSpy = vi.spyOn(abortController.signal, "addEventListener");
+    const removeListenerSpy = vi.spyOn(abortController.signal, "removeEventListener");
+    const tool = createTestExecTool({ allowBackground: true, backgroundMs: 0 });
+
+    const result = await tool.execute(
+      nextCallId(),
+      { command: shellEcho("background-cleanup"), background: true },
+      abortController.signal,
+      vi.fn(),
+    );
+
+    expect(readProcessStatus(result.details)).toBe(PROCESS_STATUS_RUNNING);
+    const abortListener = addListenerSpy.mock.calls.find(([type]) => type === "abort")?.[1];
+    expect(abortListener).toBeDefined();
+    expect(removeListenerSpy).toHaveBeenCalledWith("abort", abortListener);
+  });
 
   it(
     "suppresses onUpdate after abort signal fires",

@@ -1,14 +1,16 @@
+// Xai plugin module implements code execution shared behavior.
+import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import { postTrustedWebToolsJson } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiResponsesToolBody,
-  resolveXaiResponseTextAndCitations,
+  requireXaiResponseTextAndCitations,
   XAI_RESPONSES_ENDPOINT,
 } from "./responses-tool-shared.js";
 import {
   resolveNormalizedXaiToolModel,
   resolvePositiveIntegerToolConfig,
 } from "./tool-config-shared.js";
-import { type XaiWebSearchResponse } from "./web-search-shared.js";
+import type { XaiWebSearchResponse } from "./web-search-shared.js";
 
 const XAI_CODE_EXECUTION_ENDPOINT = XAI_RESPONSES_ENDPOINT;
 const XAI_DEFAULT_CODE_EXECUTION_MODEL = "grok-4-1-fast";
@@ -81,8 +83,14 @@ export async function requestXaiCodeExecution(params: {
       errorLabel: "xAI",
     },
     async (response) => {
-      const data = (await response.json()) as XaiCodeExecutionResponse;
-      const { content, citations } = resolveXaiResponseTextAndCitations(data);
+      const data = (await readProviderJsonObjectResponse(
+        response,
+        "xAI code execution failed",
+      )) as XaiCodeExecutionResponse;
+      const { content, citations } = requireXaiResponseTextAndCitations(
+        data,
+        "xAI code execution failed",
+      );
       const outputTypes = Array.isArray(data.output)
         ? [
             ...new Set(

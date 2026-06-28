@@ -1,3 +1,4 @@
+// Slack tests cover dispatch.preview fallback plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const FINAL_REPLY_TEXT = "final answer";
@@ -5,10 +6,14 @@ const THREAD_TS = "thread-1";
 const SAME_TEXT = "same reply";
 
 const createSlackDraftStreamMock = vi.fn();
-const deliverRepliesMock = vi.fn(async () => {});
+const deliverRepliesMock = vi.fn(
+  async () => undefined as { messageId?: string; channelId?: string } | undefined,
+);
 const finalizeSlackPreviewEditMock = vi.fn(async () => {});
 const postMessageMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
+const chatUpdateMock = vi.fn(async () => ({ ok: true, ts: "171234.999" }));
 const recordInboundSessionMock = vi.fn(async () => undefined);
+const recordSlackThreadParticipationMock = vi.fn();
 const updateLastRouteMock = vi.fn(async () => {});
 const appendSlackStreamMock = vi.fn(async () => {});
 const startSlackStreamMock = vi.fn(async () => ({
@@ -18,7 +23,8 @@ const startSlackStreamMock = vi.fn(async () => ({
   delivered: true,
   pendingText: "",
 }));
-const stopSlackStreamMock = vi.fn(async () => {});
+const stopSlackStreamMock = vi.fn(async (_params?: unknown) => ({}) as { messageId?: string });
+const emitSlackMessageSentHooksMock = vi.fn(() => {});
 const reactSlackMessageMock = vi.fn(async () => {});
 const removeSlackReactionMock = vi.fn(async () => {});
 class TestSlackStreamNotDeliveredError extends Error {
@@ -35,12 +41,23 @@ let mockedNativeStreaming = false;
 let mockedBlockStreamingEnabled: boolean | undefined = false;
 let mockedSlackStreamingMode: "off" | "partial" | "block" | "progress" = "partial";
 let mockedSlackDraftMode: "replace" | "status_final" | "append" = "append";
+let mockedPinnedMainDmOwner: string | undefined;
 let capturedReplyOptions:
   | {
       disableBlockStreaming?: boolean;
       suppressDefaultToolProgressMessages?: boolean;
+      allowProgressCallbacksWhenSourceDeliverySuppressed?: boolean;
+      allowToolLifecycleWhenProgressHidden?: boolean;
+      onAssistantMessageStart?: () => Promise<void> | void;
+      onReasoningEnd?: () => Promise<void> | void;
+      onReasoningStream?: (payload?: {
+        text?: string;
+        isReasoningSnapshot?: boolean;
+      }) => Promise<void> | void;
       onItemEvent?: (payload: {
         kind?: string;
+        itemId?: string;
+        toolCallId?: string;
         progressText?: string;
         summary?: string;
         title?: string;
@@ -48,6 +65,34 @@ let capturedReplyOptions:
         phase?: string;
         status?: string;
         meta?: string;
+      }) => Promise<void> | void;
+      onCommandOutput?: (payload: {
+        itemId?: string;
+        toolCallId?: string;
+        phase?: string;
+        title?: string;
+        name?: string;
+        status?: string;
+        exitCode?: number | null;
+      }) => Promise<void> | void;
+      onToolStart?: (payload: {
+        itemId?: string;
+        toolCallId?: string;
+        name: string;
+        phase?: string;
+        args?: Record<string, unknown>;
+        detailMode?: "explain" | "raw";
+      }) => Promise<void> | void;
+      onPatchSummary?: (payload: {
+        itemId?: string;
+        toolCallId?: string;
+        phase?: string;
+        title?: string;
+        name?: string;
+        added?: string[];
+        modified?: string[];
+        deleted?: string[];
+        summary?: string;
       }) => Promise<void> | void;
       onPartialReply?: (payload: { text: string }) => Promise<void> | void;
     }
@@ -64,6 +109,8 @@ const statusReactionControllerMock = {
 };
 let mockedReplyThreadTs: string | undefined = THREAD_TS;
 let mockedReplyThreadTsSequence: Array<string | undefined> | undefined;
+let mockedSlackReplyBlocks: unknown[] | undefined;
+let mockedSlackIsThreadReply = true;
 let capturedTyping:
   | {
       start: () => Promise<void>;
@@ -72,31 +119,31 @@ let capturedTyping:
       onStopError?: (err: unknown) => void;
     }
   | undefined;
+type TestReplyDispatchKind = "tool" | "block" | "final";
+type TestReplyPayload = {
+  text?: string;
+  isError?: boolean;
+  isReasoning?: boolean;
+  mediaUrl?: string;
+  mediaUrls?: string[];
+  audioAsVoice?: boolean;
+  spokenText?: string;
+  ttsSupplement?: { spokenText: string; visibleTextAlreadyDelivered?: boolean };
+};
+type TestDispatchCounts = Record<TestReplyDispatchKind, number>;
 let mockedDispatchSequence: Array<{
-  kind: "tool" | "block" | "final";
-  payload: {
-    text: string;
-    isError?: boolean;
-    isReasoning?: boolean;
-    mediaUrl?: string;
-    mediaUrls?: string[];
-  };
+  kind: TestReplyDispatchKind;
+  payload: TestReplyPayload;
 }> = [];
-
-function countFinalDispatches(): number {
-  let count = 0;
-  for (const entry of mockedDispatchSequence) {
-    if (entry.kind === "final") {
-      count++;
-    }
-  }
-  return count;
-}
+let mockedQueuedDispatchCounts: TestDispatchCounts = { tool: 0, block: 0, final: 0 };
+let mockedDispatcherCapturesDeliveryErrors = false;
 
 let mockedProgressEvents: string[] = [];
 let mockedReplyOptionEvents: Array<
   | {
       kind: "item";
+      itemId?: string;
+      toolCallId?: string;
       itemKind?: string;
       progressText?: string;
       summary?: string;
@@ -106,7 +153,42 @@ let mockedReplyOptionEvents: Array<
       status?: string;
       meta?: string;
     }
+  | {
+      kind: "tool_start";
+      itemId?: string;
+      toolCallId?: string;
+      name: string;
+      phase?: string;
+      args?: Record<string, unknown>;
+      detailMode?: "explain" | "raw";
+    }
+  | {
+      kind: "patch";
+      itemId?: string;
+      toolCallId?: string;
+      phase?: string;
+      title?: string;
+      name?: string;
+      added?: string[];
+      modified?: string[];
+      deleted?: string[];
+      summary?: string;
+    }
+  | {
+      kind: "command_output";
+      itemId?: string;
+      toolCallId?: string;
+      phase?: string;
+      title?: string;
+      name?: string;
+      status?: string;
+      exitCode?: number | null;
+    }
+  | { kind: "concurrent_items"; progressTexts: string[] }
   | { kind: "partial"; text: string }
+  | { kind: "assistant_start" }
+  | { kind: "reasoning"; text?: string; isReasoningSnapshot?: boolean }
+  | { kind: "reasoning_end" }
 > = [];
 
 function requireCapturedTyping() {
@@ -154,6 +236,54 @@ function expectMockCallArgFields(
   expectRecordFields(requireRecord(requireMockCall(mock, index, label)[0], label), fields);
 }
 
+function expectNativeProgressStart(chunks: unknown[]) {
+  expect(postMessageMock).not.toHaveBeenCalled();
+  expect(chatUpdateMock).not.toHaveBeenCalled();
+  expectMockCallArgFields(startSlackStreamMock, 0, "native progress stream start", {
+    channel: "C123",
+    threadTs: THREAD_TS,
+    taskDisplayMode: "plan",
+    chunks,
+  });
+}
+
+function expectNativeProgressAppend(index: number, chunks: unknown[]) {
+  expectMockCallArgFields(appendSlackStreamMock, index, "native progress stream append", {
+    chunks,
+  });
+}
+
+function planUpdate(title: string) {
+  return { type: "plan_update", title };
+}
+
+function taskUpdate(id: unknown, title: string, status: "in_progress" | "complete" | "error") {
+  return { type: "task_update", id, title, status };
+}
+
+function collectNativeTaskUpdates() {
+  const chunks: unknown[] = [];
+  const collectChunks = (call: unknown[]) => {
+    const arg = requireRecord(call[0], "native progress call");
+    if (Array.isArray(arg.chunks)) {
+      chunks.push(...arg.chunks);
+    }
+  };
+  for (const call of startSlackStreamMock.mock.calls) {
+    collectChunks(call);
+  }
+  for (const call of appendSlackStreamMock.mock.calls) {
+    collectChunks(call);
+  }
+  for (const call of stopSlackStreamMock.mock.calls) {
+    collectChunks(call);
+  }
+  return chunks.flatMap((chunk) => {
+    const record = requireRecord(chunk, "native progress chunk");
+    return record.type === "task_update" ? [record] : [];
+  });
+}
+
 function expectDeliverReplyCall(index: number, text: string, fields?: Record<string, unknown>) {
   const params = requireRecord(
     requireMockCall(deliverRepliesMock, index, "deliver replies")[0],
@@ -165,7 +295,6 @@ function expectDeliverReplyCall(index: number, text: string, fields?: Record<str
 
 const noop = () => {};
 const noopAsync = async () => {};
-
 function createDraftStreamStub() {
   return {
     update: vi.fn(),
@@ -174,7 +303,7 @@ function createDraftStreamStub() {
     discardPending: noopAsync,
     seal: noopAsync,
     stop: noop,
-    forceNewMessage: noop,
+    forceNewMessage: vi.fn(),
     messageId: () => "171234.567",
     channelId: () => "C123",
   };
@@ -210,18 +339,26 @@ function createPreparedSlackMessage(params?: {
   typingReaction?: string;
   ackReactionMessageTs?: string;
   ackReactionPromise?: Promise<boolean> | null;
+  relayIdentity?: { username?: string; iconUrl?: string; iconEmoji?: string };
 }) {
   const routeSessionKey = params?.route?.sessionKey ?? "agent:agent-1:slack:C123";
   const mainSessionKey = params?.route?.mainSessionKey ?? "main";
   const lastRoutePolicy =
     params?.route?.lastRoutePolicy ?? (routeSessionKey === mainSessionKey ? "main" : "session");
+  const message = {
+    channel: "C123",
+    ts: "171234.111",
+    thread_ts: THREAD_TS,
+    user: "U123",
+    ...params?.message,
+  };
 
   return {
     ctx: {
       cfg: params?.cfg ?? {},
       runtime: {},
       botToken: "xoxb-test",
-      app: { client: { chat: { postMessage: postMessageMock } } },
+      app: { client: { chat: { postMessage: postMessageMock, update: chatUpdateMock } } },
       teamId: "T1",
       botUserId: "U_OPENCLAW",
       botId: "B_OPENCLAW",
@@ -237,13 +374,8 @@ function createPreparedSlackMessage(params?: {
       accountId: "default",
       config: params?.accountConfig ?? {},
     },
-    message: {
-      channel: "C123",
-      ts: "171234.111",
-      thread_ts: THREAD_TS,
-      user: "U123",
-      ...params?.message,
-    },
+    relayIdentity: params?.relayIdentity,
+    message,
     route: {
       agentId: "agent-1",
       accountId: "default",
@@ -253,7 +385,7 @@ function createPreparedSlackMessage(params?: {
       ...params?.route,
     },
     channelConfig: params?.channelConfig ?? null,
-    replyTarget: "channel:C123",
+    replyTarget: `channel:${message.channel}`,
     ctxPayload: {
       MessageThreadId: THREAD_TS,
       ...params?.ctxPayload,
@@ -271,6 +403,32 @@ function createPreparedSlackMessage(params?: {
     ackReactionMessageTs: params?.ackReactionMessageTs,
     ackReactionPromise: params?.ackReactionPromise ?? null,
   } as never;
+}
+
+async function dispatchNativeProgressScenario(params: {
+  events: typeof mockedReplyOptionEvents;
+  finalPayload?: { text: string; isError?: boolean };
+  progress?: { label?: string; maxLineChars?: number; nativeTaskCards?: true; render?: "rich" };
+  replyToMode?: "off" | "first" | "all" | "batched";
+}) {
+  mockedNativeStreaming = true;
+  mockedSlackStreamingMode = "progress";
+  mockedSlackDraftMode = "status_final";
+  mockedDispatchSequence =
+    params.finalPayload === undefined ? [] : [{ kind: "final", payload: params.finalPayload }];
+  mockedReplyOptionEvents = params.events;
+
+  await dispatchPreparedSlackMessage(
+    createPreparedSlackMessage({
+      replyToMode: params.replyToMode,
+      accountConfig: {
+        streaming: {
+          mode: "progress",
+          progress: params.progress ?? { nativeTaskCards: true, render: "rich" },
+        },
+      },
+    }),
+  );
 }
 
 vi.mock("openclaw/plugin-sdk/agent-runtime", () => ({
@@ -295,11 +453,12 @@ vi.mock("../conversation.runtime.js", () => ({
   recordInboundSession: recordInboundSessionMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/channel-message", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-message")>();
+vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-outbound")>();
   return {
     ...actual,
     createChannelMessageReplyPipeline: (params: {
+      transformReplyPayload?: (payload: TestReplyPayload) => TestReplyPayload | null;
       typing?: {
         start: () => Promise<void>;
         stop?: () => Promise<void>;
@@ -318,6 +477,9 @@ vi.mock("openclaw/plugin-sdk/channel-message", async (importOriginal) => {
                 },
               },
             }
+          : {}),
+        ...(params.transformReplyPayload
+          ? { transformReplyPayload: params.transformReplyPayload }
           : {}),
         onModelSelected: undefined,
       };
@@ -338,177 +500,287 @@ vi.mock("openclaw/plugin-sdk/channel-message", async (importOriginal) => {
       }
       return "automatic";
     },
+    resolveAgentOutboundIdentity: () => undefined,
+    buildChannelProgressDraftLine: (params: {
+      event?: string;
+      itemId?: string;
+      toolCallId?: string;
+      progressText?: string;
+      summary?: string;
+      title?: string;
+      name?: string;
+      status?: string;
+      exitCode?: number | null;
+    }) => {
+      if (params.event === "command-output") {
+        const status =
+          params.exitCode === 0
+            ? "completed"
+            : params.exitCode != null
+              ? `exit ${params.exitCode}`
+              : params.status;
+        const id = params.toolCallId ? `command:${params.toolCallId}` : params.itemId;
+        return {
+          kind: "command-output",
+          ...(id ? { id } : {}),
+          text: status ?? params.title ?? params.name ?? "exec",
+          label: params.name ?? "exec",
+          ...(status ? { status } : {}),
+          toolName: params.name ?? "exec",
+        };
+      }
+      const text = params.progressText ?? params.summary ?? params.title ?? params.name;
+      return text
+        ? {
+            kind: "item",
+            ...((params.itemId ?? params.toolCallId)
+              ? { id: params.itemId ?? params.toolCallId }
+              : {}),
+            text,
+            label: params.title ?? params.name ?? "Update",
+          }
+        : undefined;
+    },
+    buildChannelProgressDraftLineForEntry: (
+      entry: {
+        streaming?: {
+          progress?: { commandText?: "raw" | "status" };
+          preview?: { commandText?: "raw" | "status" };
+        };
+      },
+      params: {
+        event?: string;
+        itemId?: string;
+        toolCallId?: string;
+        itemKind?: string;
+        args?: Record<string, unknown>;
+        meta?: string;
+        progressText?: string;
+        summary?: string;
+        title?: string;
+        name?: string;
+      },
+    ) => {
+      if (params.event === "tool") {
+        const text = params.name;
+        return text
+          ? {
+              kind: "tool",
+              ...((params.itemId ?? params.toolCallId)
+                ? { id: params.itemId ?? params.toolCallId }
+                : {}),
+              text,
+              label: params.name ?? "Tool",
+              ...(typeof params.args?.command === "string" ? { detail: params.args.command } : {}),
+              toolName: params.name,
+            }
+          : undefined;
+      }
+      if (
+        params.itemKind === "analysis" &&
+        params.title === "Reasoning" &&
+        !params.meta &&
+        !params.summary &&
+        !params.progressText
+      ) {
+        return undefined;
+      }
+      if (
+        (entry.streaming?.progress?.commandText ?? entry.streaming?.preview?.commandText) ===
+          "status" &&
+        (params.itemKind === "command" || params.name === "exec")
+      ) {
+        const id = params.toolCallId ? `command:${params.toolCallId}` : params.itemId;
+        return {
+          kind: "item",
+          ...(id ? { id } : {}),
+          text: "🛠️ Exec",
+          label: "Exec",
+        };
+      }
+      const text = params.progressText ?? params.summary ?? params.title ?? params.name;
+      const id =
+        params.itemKind === "command" || params.name === "exec"
+          ? params.toolCallId
+            ? `command:${params.toolCallId}`
+            : params.itemId
+          : undefined;
+      return text
+        ? {
+            kind: "item",
+            ...(id ? { id } : {}),
+            text,
+            label: params.title ?? params.name ?? "Update",
+          }
+        : undefined;
+    },
+    createChannelProgressDraftGate: (params: { onStart: () => void | Promise<void> }) => {
+      let started = false;
+      let workEvents = 0;
+      return {
+        get hasStarted() {
+          return started;
+        },
+        async noteWork() {
+          workEvents += 1;
+          if (!started && workEvents > 1) {
+            started = true;
+            await params.onStart();
+          }
+          return started;
+        },
+        async startNow() {
+          if (!started) {
+            started = true;
+            await params.onStart();
+          }
+        },
+        cancel() {},
+      };
+    },
+    formatChannelProgressDraftText: (params: {
+      entry?: { streaming?: { progress?: { label?: string | false; maxLines?: number } } };
+      lines: Array<
+        string | { text: string; icon?: string; detail?: string; status?: string; label: string }
+      >;
+      formatLine?: (line: string) => string;
+    }) => {
+      const label = params.entry?.streaming?.progress?.label;
+      const maxLines = params.entry?.streaming?.progress?.maxLines ?? 8;
+      const formatLine = params.formatLine ?? ((line: string) => line);
+      const lines = [
+        label === false ? undefined : (label ?? "Thinking"),
+        ...params.lines.map((line) => {
+          const text =
+            typeof line === "string"
+              ? line
+              : line.detail
+                ? `${line.icon ?? ""} ${line.detail}`.trim()
+                : line.status
+                  ? `${line.icon ?? ""} ${line.status}`.trim()
+                  : line.text;
+          const formatted = formatLine(text);
+          return /^\p{Extended_Pictographic}/u.test(text) ? formatted : `• ${formatted}`;
+        }),
+      ]
+        .filter((line): line is string => Boolean(line))
+        .slice(-maxLines);
+      return lines.join("\n");
+    },
+    formatChannelProgressDraftLine: (params: {
+      progressText?: string;
+      summary?: string;
+      title?: string;
+      name?: string;
+    }) => params.progressText ?? params.summary ?? params.title ?? params.name,
+    formatChannelProgressDraftLineForEntry: (
+      _entry: unknown,
+      params: {
+        progressText?: string;
+        summary?: string;
+        title?: string;
+        name?: string;
+      },
+    ) => params.progressText ?? params.summary ?? params.title ?? params.name,
+    resolveChannelProgressDraftMaxLines: (entry?: {
+      streaming?: { progress?: { maxLines?: number } };
+    }) => entry?.streaming?.progress?.maxLines ?? 8,
+    resolveChannelProgressDraftMaxLineChars: (entry?: {
+      streaming?: { progress?: { maxLineChars?: number } };
+    }) => entry?.streaming?.progress?.maxLineChars,
+    mergeChannelProgressDraftLine: <TLine extends string | { id?: string; text: string }>(
+      lines: TLine[],
+      line: TLine,
+      params: { maxLines: number },
+    ) => {
+      const normalized = typeof line === "string" ? line.trim() : line.text.trim();
+      const lineId = typeof line === "object" ? line.id : undefined;
+      if (lineId) {
+        const index = lines.findIndex((entry) => typeof entry === "object" && entry.id === lineId);
+        if (index >= 0) {
+          const next = [...lines];
+          next[index] = line;
+          return next.slice(-params.maxLines);
+        }
+      }
+      const previous = lines.at(-1);
+      const previousText = typeof previous === "string" ? previous.trim() : previous?.text.trim();
+      return previousText === normalized ? lines : [...lines, line].slice(-params.maxLines);
+    },
+    resolveChannelProgressDraftRender: (entry?: {
+      streaming?: { progress?: { render?: "text" | "rich" } };
+    }) => entry?.streaming?.progress?.render ?? "text",
+    resolveChannelStreamingBlockEnabled: () => mockedBlockStreamingEnabled,
+    resolveChannelStreamingNativeTransport: () => mockedNativeStreaming,
+    resolveChannelStreamingPreviewToolProgress: (entry?: {
+      streaming?: { progress?: { toolProgress?: boolean }; preview?: { toolProgress?: boolean } };
+    }) =>
+      entry?.streaming?.progress?.toolProgress ?? entry?.streaming?.preview?.toolProgress ?? true,
+    resolveChannelStreamingSuppressDefaultToolProgressMessages: (
+      entry?: {
+        streaming?: {
+          mode?: string;
+          progress?: { toolProgress?: boolean };
+          preview?: { toolProgress?: boolean };
+        };
+      },
+      options?: {
+        draftStreamActive?: boolean;
+        previewStreamingEnabled?: boolean;
+        previewToolProgressEnabled?: boolean;
+      },
+    ) => {
+      if (options?.draftStreamActive === false || options?.previewStreamingEnabled === false) {
+        return false;
+      }
+      if (entry?.streaming?.mode === "progress") {
+        return true;
+      }
+      if (options?.draftStreamActive === true) {
+        return true;
+      }
+      return options?.previewToolProgressEnabled ?? true;
+    },
+    isChannelProgressDraftWorkToolName: (name?: string) =>
+      Boolean(name && !["message", "react", "reaction"].includes(name.toLowerCase())),
   };
 });
 
-vi.mock("openclaw/plugin-sdk/channel-streaming", () => ({
-  buildChannelProgressDraftLine: (params: {
-    progressText?: string;
-    summary?: string;
-    title?: string;
-    name?: string;
-  }) => {
-    const text = params.progressText ?? params.summary ?? params.title ?? params.name;
-    return text
-      ? {
-          kind: "item",
-          text,
-          label: params.title ?? params.name ?? "Update",
-        }
-      : undefined;
-  },
-  buildChannelProgressDraftLineForEntry: (
-    entry: {
-      streaming?: {
-        progress?: { commandText?: "raw" | "status" };
-        preview?: { commandText?: "raw" | "status" };
-      };
-    },
-    params: {
-      itemKind?: string;
-      progressText?: string;
-      summary?: string;
-      title?: string;
-      name?: string;
-    },
-  ) => {
-    if (
-      (entry.streaming?.progress?.commandText ?? entry.streaming?.preview?.commandText) ===
-        "status" &&
-      (params.itemKind === "command" || params.name === "exec")
-    ) {
-      return {
-        kind: "item",
-        text: "🛠️ Exec",
-        label: "Exec",
-      };
-    }
-    const text = params.progressText ?? params.summary ?? params.title ?? params.name;
-    return text
-      ? {
-          kind: "item",
-          text,
-          label: params.title ?? params.name ?? "Update",
-        }
-      : undefined;
-  },
-  createChannelProgressDraftGate: (params: { onStart: () => void | Promise<void> }) => {
-    let started = false;
-    let workEvents = 0;
-    return {
-      get hasStarted() {
-        return started;
-      },
-      async noteWork() {
-        workEvents += 1;
-        if (!started && workEvents > 1) {
-          started = true;
-          await params.onStart();
-        }
-        return started;
-      },
-      async startNow() {
-        if (!started) {
-          started = true;
-          await params.onStart();
-        }
-      },
-      cancel() {},
-    };
-  },
-  formatChannelProgressDraftText: (params: {
-    entry?: { streaming?: { progress?: { label?: string | false; maxLines?: number } } };
-    lines: Array<
-      string | { text: string; icon?: string; detail?: string; status?: string; label: string }
-    >;
-    formatLine?: (line: string) => string;
-  }) => {
-    const label = params.entry?.streaming?.progress?.label;
-    const maxLines = params.entry?.streaming?.progress?.maxLines ?? 8;
-    const formatLine = params.formatLine ?? ((line: string) => line);
-    const lines = [
-      label === false ? undefined : (label ?? "Thinking"),
-      ...params.lines.map((line) => {
-        const text =
-          typeof line === "string"
-            ? line
-            : line.detail
-              ? `${line.icon ?? ""} ${line.detail}`.trim()
-              : line.status
-                ? `${line.icon ?? ""} ${line.status}`.trim()
-                : line.text;
-        const formatted = formatLine(text);
-        return /^\p{Extended_Pictographic}/u.test(text) ? formatted : `• ${formatted}`;
-      }),
-    ]
-      .filter((line): line is string => Boolean(line))
-      .slice(-maxLines);
-    return lines.join("\n");
-  },
-  formatChannelProgressDraftLine: (params: {
-    progressText?: string;
-    summary?: string;
-    title?: string;
-    name?: string;
-  }) => params.progressText ?? params.summary ?? params.title ?? params.name,
-  formatChannelProgressDraftLineForEntry: (
-    _entry: unknown,
-    params: {
-      progressText?: string;
-      summary?: string;
-      title?: string;
-      name?: string;
-    },
-  ) => params.progressText ?? params.summary ?? params.title ?? params.name,
-  resolveChannelProgressDraftMaxLines: (entry?: {
-    streaming?: { progress?: { maxLines?: number } };
-  }) => entry?.streaming?.progress?.maxLines ?? 8,
-  resolveChannelProgressDraftRender: (entry?: {
-    streaming?: { progress?: { render?: "text" | "rich" } };
-  }) => entry?.streaming?.progress?.render ?? "text",
-  resolveChannelStreamingBlockEnabled: () => mockedBlockStreamingEnabled,
-  resolveChannelStreamingNativeTransport: () => mockedNativeStreaming,
-  resolveChannelStreamingPreviewToolProgress: (entry?: {
-    streaming?: { progress?: { toolProgress?: boolean }; preview?: { toolProgress?: boolean } };
-  }) => entry?.streaming?.progress?.toolProgress ?? entry?.streaming?.preview?.toolProgress ?? true,
-  resolveChannelStreamingSuppressDefaultToolProgressMessages: (
-    entry?: {
-      streaming?: {
-        mode?: string;
-        progress?: { toolProgress?: boolean };
-        preview?: { toolProgress?: boolean };
-      };
-    },
-    options?: {
-      draftStreamActive?: boolean;
-      previewStreamingEnabled?: boolean;
-      previewToolProgressEnabled?: boolean;
-    },
-  ) => {
-    if (options?.draftStreamActive === false || options?.previewStreamingEnabled === false) {
-      return false;
-    }
-    if (entry?.streaming?.mode === "progress") {
-      return true;
-    }
-    if (options?.draftStreamActive === true) {
-      return true;
-    }
-    return options?.previewToolProgressEnabled ?? true;
-  },
-  isChannelProgressDraftWorkToolName: (name?: string) =>
-    Boolean(name && !["message", "react", "reaction"].includes(name.toLowerCase())),
-}));
-
-vi.mock("openclaw/plugin-sdk/outbound-runtime", () => ({
-  resolveAgentOutboundIdentity: () => undefined,
-}));
-
 vi.mock("openclaw/plugin-sdk/reply-history", () => ({
   clearHistoryEntriesIfEnabled: () => {},
+  createChannelHistoryWindow: () => ({
+    clear: () => {},
+  }),
 }));
 
 vi.mock("openclaw/plugin-sdk/reply-payload", () => ({
+  buildTtsSupplementMediaPayload: (payload: {
+    text?: string;
+    mediaUrl?: string;
+    mediaUrls?: string[];
+    audioAsVoice?: boolean;
+    spokenText?: string;
+    ttsSupplement?: { spokenText: string; visibleTextAlreadyDelivered?: boolean };
+  }) => {
+    const { text: _text, ...rest } = payload;
+    return rest;
+  },
+  getReplyPayloadTtsSupplement: (payload: {
+    mediaUrl?: string;
+    mediaUrls?: string[];
+    ttsSupplement?: { spokenText?: string; visibleTextAlreadyDelivered?: boolean };
+  }) => {
+    const hasMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
+    const spokenText = payload.ttsSupplement?.spokenText?.trim();
+    return hasMedia && spokenText
+      ? {
+          spokenText,
+          ...(payload.ttsSupplement?.visibleTextAlreadyDelivered === true
+            ? { visibleTextAlreadyDelivered: true }
+            : {}),
+        }
+      : undefined;
+  },
   resolveSendableOutboundReplyParts: (
     payload: { text?: string; mediaUrl?: string; mediaUrls?: string[] },
     opts?: { text?: string },
@@ -533,11 +805,14 @@ vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
 }));
 
 vi.mock("openclaw/plugin-sdk/security-runtime", () => ({
-  resolvePinnedMainDmOwnerFromAllowlist: () => undefined,
+  resolvePinnedMainDmOwnerFromAllowlist: () => mockedPinnedMainDmOwner,
 }));
 
 vi.mock("openclaw/plugin-sdk/string-coerce-runtime", () => ({
+  isRecord: (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value),
   normalizeOptionalLowercaseString: (value?: string) => value?.toLowerCase(),
+  normalizeOptionalString: (value?: string) => value,
 }));
 
 vi.mock("../../actions.js", () => ({
@@ -558,7 +833,7 @@ vi.mock("../../limits.js", () => ({
 }));
 
 vi.mock("../../sent-thread-cache.js", () => ({
-  recordSlackThreadParticipation: () => {},
+  recordSlackThreadParticipation: recordSlackThreadParticipationMock,
 }));
 
 vi.mock("../../stream-mode.js", () => ({
@@ -567,7 +842,6 @@ vi.mock("../../stream-mode.js", () => ({
     rendered: incoming,
     source: incoming,
   }),
-  buildStatusFinalPreviewText: () => "status",
   resolveSlackStreamingConfig: () => ({
     mode: mockedSlackStreamingMode,
     nativeStreaming: mockedNativeStreaming,
@@ -582,22 +856,25 @@ vi.mock("../../streaming.js", () => ({
     pendingText: string;
     stopped: boolean;
   }) => {
-    const hadNativeDelivery = session.delivered;
-    session.delivered = true;
     session.pendingText = "";
-    if (!hadNativeDelivery) {
-      session.stopped = true;
-    }
+    session.stopped = !session.delivered;
   },
   SlackStreamNotDeliveredError: TestSlackStreamNotDeliveredError,
   startSlackStream: startSlackStreamMock,
-  stopSlackStream: stopSlackStreamMock,
+  stopSlackStream: async (params: { session: { stopped: boolean } }) => {
+    params.session.stopped = true;
+    return await stopSlackStreamMock(params);
+  },
+}));
+
+vi.mock("../../message-sent-hook.js", () => ({
+  emitSlackMessageSentHooks: emitSlackMessageSentHooksMock,
 }));
 
 vi.mock("../../threading.js", () => ({
   resolveSlackThreadTargets: () => ({
     statusThreadTs: THREAD_TS,
-    isThreadReply: true,
+    isThreadReply: mockedSlackIsThreadReply,
   }),
 }));
 
@@ -612,13 +889,14 @@ vi.mock("../config.runtime.js", () => ({
 
 vi.mock("../replies.js", () => ({
   createSlackReplyDeliveryPlan: () => ({
-    peekThreadTs: () => mockedReplyThreadTsSequence?.[0] ?? mockedReplyThreadTs,
+    peekThreadTs: () =>
+      mockedReplyThreadTsSequence ? mockedReplyThreadTsSequence[0] : mockedReplyThreadTs,
     nextThreadTs: () =>
       mockedReplyThreadTsSequence ? mockedReplyThreadTsSequence.shift() : mockedReplyThreadTs,
     markSent: () => {},
   }),
   deliverReplies: deliverRepliesMock,
-  readSlackReplyBlocks: () => undefined,
+  readSlackReplyBlocks: () => mockedSlackReplyBlocks,
   resolveDeliveredSlackReplyThreadTs: (params: {
     replyToMode: "off" | "first" | "all" | "batched";
     payloadReplyToId?: string;
@@ -630,20 +908,50 @@ vi.mock("../replies.js", () => ({
 
 vi.mock("../reply.runtime.js", () => ({
   createReplyDispatcherWithTyping: (params: {
-    deliver: (payload: unknown, info: { kind: "tool" | "block" | "final" }) => Promise<void>;
+    transformReplyPayload?: (payload: TestReplyPayload) => TestReplyPayload | null;
+    beforeDeliver?: (
+      payload: TestReplyPayload,
+      info: { kind: TestReplyDispatchKind },
+    ) => Promise<TestReplyPayload | null> | TestReplyPayload | null;
+    deliver: (payload: TestReplyPayload, info: { kind: TestReplyDispatchKind }) => Promise<void>;
   }) => ({
     dispatcher: {
-      deliver: params.deliver,
+      deliver: async (payload: TestReplyPayload, info: { kind: TestReplyDispatchKind }) => {
+        const transformed = params.transformReplyPayload
+          ? params.transformReplyPayload(payload)
+          : payload;
+        if (!transformed) {
+          return;
+        }
+        const deliverPayload = params.beforeDeliver
+          ? await params.beforeDeliver(transformed, info)
+          : transformed;
+        if (!deliverPayload) {
+          return;
+        }
+        mockedQueuedDispatchCounts[info.kind] += 1;
+        await params.deliver(deliverPayload, info);
+      },
     },
     replyOptions: {},
     markDispatchIdle: () => {},
   }),
-  dispatchInboundMessage: async (params: {
+  dispatchReplyWithBufferedBlockDispatcher: async (params: {
+    dispatcherOptions: {
+      transformReplyPayload?: (payload: TestReplyPayload) => TestReplyPayload | null;
+      beforeDeliver?: (
+        payload: TestReplyPayload,
+        info: { kind: TestReplyDispatchKind },
+      ) => Promise<TestReplyPayload | null> | TestReplyPayload | null;
+      deliver: (payload: TestReplyPayload, info: { kind: TestReplyDispatchKind }) => Promise<void>;
+    };
     replyOptions?: {
       disableBlockStreaming?: boolean;
       suppressDefaultToolProgressMessages?: boolean;
       onItemEvent?: (payload: {
         kind?: string;
+        itemId?: string;
+        toolCallId?: string;
         progressText?: string;
         summary?: string;
         title?: string;
@@ -652,19 +960,41 @@ vi.mock("../reply.runtime.js", () => ({
         status?: string;
         meta?: string;
       }) => Promise<void> | void;
+      onCommandOutput?: (payload: {
+        itemId?: string;
+        toolCallId?: string;
+        phase?: string;
+        title?: string;
+        name?: string;
+        status?: string;
+        exitCode?: number | null;
+      }) => Promise<void> | void;
+      onToolStart?: (payload: {
+        itemId?: string;
+        toolCallId?: string;
+        name: string;
+        phase?: string;
+        args?: Record<string, unknown>;
+        detailMode?: "explain" | "raw";
+      }) => Promise<void> | void;
+      onPatchSummary?: (payload: {
+        itemId?: string;
+        toolCallId?: string;
+        phase?: string;
+        title?: string;
+        name?: string;
+        added?: string[];
+        modified?: string[];
+        deleted?: string[];
+        summary?: string;
+      }) => Promise<void> | void;
+      onAssistantMessageStart?: () => Promise<void> | void;
+      onReasoningEnd?: () => Promise<void> | void;
+      onReasoningStream?: (payload?: {
+        text?: string;
+        isReasoningSnapshot?: boolean;
+      }) => Promise<void> | void;
       onPartialReply?: (payload: { text: string }) => Promise<void> | void;
-    };
-    dispatcher: {
-      deliver: (
-        payload: {
-          text: string;
-          isError?: boolean;
-          isReasoning?: boolean;
-          mediaUrl?: string;
-          mediaUrls?: string[];
-        },
-        info: { kind: "tool" | "block" | "final" },
-      ) => Promise<void>;
     };
   }) => {
     capturedReplyOptions = params.replyOptions;
@@ -673,6 +1003,8 @@ vi.mock("../reply.runtime.js", () => ({
         if (entry.kind === "item") {
           await params.replyOptions?.onItemEvent?.({
             kind: entry.itemKind,
+            itemId: entry.itemId,
+            toolCallId: entry.toolCallId,
             progressText: entry.progressText,
             summary: entry.summary,
             title: entry.title,
@@ -681,8 +1013,188 @@ vi.mock("../reply.runtime.js", () => ({
             status: entry.status,
             meta: entry.meta,
           });
+        } else if (entry.kind === "command_output") {
+          await params.replyOptions?.onCommandOutput?.({
+            itemId: entry.itemId,
+            toolCallId: entry.toolCallId,
+            phase: entry.phase,
+            title: entry.title,
+            name: entry.name,
+            status: entry.status,
+            exitCode: entry.exitCode,
+          });
+        } else if (entry.kind === "tool_start") {
+          await params.replyOptions?.onToolStart?.({
+            itemId: entry.itemId,
+            toolCallId: entry.toolCallId,
+            name: entry.name,
+            phase: entry.phase,
+            args: entry.args,
+            detailMode: entry.detailMode,
+          });
+        } else if (entry.kind === "patch") {
+          await params.replyOptions?.onPatchSummary?.({
+            itemId: entry.itemId,
+            toolCallId: entry.toolCallId,
+            phase: entry.phase,
+            title: entry.title,
+            name: entry.name,
+            added: entry.added,
+            modified: entry.modified,
+            deleted: entry.deleted,
+            summary: entry.summary,
+          });
+        } else if (entry.kind === "concurrent_items") {
+          await Promise.all(
+            entry.progressTexts.map((progressText) =>
+              Promise.resolve(params.replyOptions?.onItemEvent?.({ progressText })),
+            ),
+          );
+        } else if (entry.kind === "assistant_start") {
+          await params.replyOptions?.onAssistantMessageStart?.();
+        } else if (entry.kind === "reasoning") {
+          await params.replyOptions?.onReasoningStream?.({
+            text: entry.text,
+            isReasoningSnapshot: entry.isReasoningSnapshot,
+          });
+        } else if (entry.kind === "reasoning_end") {
+          await params.replyOptions?.onReasoningEnd?.();
         } else {
           await params.replyOptions?.onPartialReply?.({ text: entry.text });
+        }
+      }
+    } else {
+      for (const progressText of mockedProgressEvents) {
+        await params.replyOptions?.onItemEvent?.({ progressText });
+      }
+    }
+    for (const entry of mockedDispatchSequence) {
+      const transformed = params.dispatcherOptions.transformReplyPayload
+        ? params.dispatcherOptions.transformReplyPayload(entry.payload)
+        : entry.payload;
+      if (!transformed) {
+        continue;
+      }
+      const deliverPayload = params.dispatcherOptions.beforeDeliver
+        ? await params.dispatcherOptions.beforeDeliver(transformed, { kind: entry.kind })
+        : transformed;
+      if (!deliverPayload) {
+        continue;
+      }
+      mockedQueuedDispatchCounts[entry.kind] += 1;
+      try {
+        await params.dispatcherOptions.deliver(deliverPayload, { kind: entry.kind });
+      } catch (error) {
+        if (!mockedDispatcherCapturesDeliveryErrors) {
+          throw error;
+        }
+        mockedQueuedDispatchCounts[entry.kind] -= 1;
+      }
+    }
+    return {
+      queuedFinal: false,
+      counts: { ...mockedQueuedDispatchCounts },
+    };
+  },
+  dispatchInboundMessage: async (params: {
+    replyOptions?: {
+      disableBlockStreaming?: boolean;
+      suppressDefaultToolProgressMessages?: boolean;
+      onAssistantMessageStart?: () => Promise<void> | void;
+      onReasoningEnd?: () => Promise<void> | void;
+      onReasoningStream?: (payload?: {
+        text?: string;
+        isReasoningSnapshot?: boolean;
+      }) => Promise<void> | void;
+      onItemEvent?: (payload: {
+        kind?: string;
+        itemId?: string;
+        progressText?: string;
+        summary?: string;
+        title?: string;
+        name?: string;
+        phase?: string;
+        status?: string;
+        meta?: string;
+      }) => Promise<void> | void;
+      onToolStart?: (payload: {
+        itemId?: string;
+        toolCallId?: string;
+        name: string;
+        phase?: string;
+        args?: Record<string, unknown>;
+        detailMode?: "explain" | "raw";
+      }) => Promise<void> | void;
+      onPatchSummary?: (payload: {
+        itemId?: string;
+        toolCallId?: string;
+        phase?: string;
+        title?: string;
+        name?: string;
+        added?: string[];
+        modified?: string[];
+        deleted?: string[];
+        summary?: string;
+      }) => Promise<void> | void;
+      onPartialReply?: (payload: { text: string }) => Promise<void> | void;
+    };
+    dispatcher: {
+      deliver: (payload: TestReplyPayload, info: { kind: TestReplyDispatchKind }) => Promise<void>;
+    };
+  }) => {
+    capturedReplyOptions = params.replyOptions;
+    if (mockedReplyOptionEvents.length > 0) {
+      for (const entry of mockedReplyOptionEvents) {
+        if (entry.kind === "item") {
+          await params.replyOptions?.onItemEvent?.({
+            kind: entry.itemKind,
+            itemId: entry.itemId,
+            progressText: entry.progressText,
+            summary: entry.summary,
+            title: entry.title,
+            name: entry.name,
+            phase: entry.phase,
+            status: entry.status,
+            meta: entry.meta,
+          });
+        } else if (entry.kind === "tool_start") {
+          await params.replyOptions?.onToolStart?.({
+            itemId: entry.itemId,
+            toolCallId: entry.toolCallId,
+            name: entry.name,
+            phase: entry.phase,
+            args: entry.args,
+            detailMode: entry.detailMode,
+          });
+        } else if (entry.kind === "patch") {
+          await params.replyOptions?.onPatchSummary?.({
+            itemId: entry.itemId,
+            toolCallId: entry.toolCallId,
+            phase: entry.phase,
+            title: entry.title,
+            name: entry.name,
+            added: entry.added,
+            modified: entry.modified,
+            deleted: entry.deleted,
+            summary: entry.summary,
+          });
+        } else if (entry.kind === "concurrent_items") {
+          await Promise.all(
+            entry.progressTexts.map((progressText) =>
+              Promise.resolve(params.replyOptions?.onItemEvent?.({ progressText })),
+            ),
+          );
+        } else if (entry.kind === "partial") {
+          await params.replyOptions?.onPartialReply?.({ text: entry.text });
+        } else if (entry.kind === "assistant_start") {
+          await params.replyOptions?.onAssistantMessageStart?.();
+        } else if (entry.kind === "reasoning") {
+          await params.replyOptions?.onReasoningStream?.({
+            text: entry.text,
+            isReasoningSnapshot: entry.isReasoningSnapshot,
+          });
+        } else {
+          await params.replyOptions?.onReasoningEnd?.();
         }
       }
     } else {
@@ -695,9 +1207,7 @@ vi.mock("../reply.runtime.js", () => ({
     }
     return {
       queuedFinal: false,
-      counts: {
-        final: countFinalDispatches(),
-      },
+      counts: { ...mockedQueuedDispatchCounts },
     };
   },
 }));
@@ -718,7 +1228,9 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     deliverRepliesMock.mockReset();
     finalizeSlackPreviewEditMock.mockReset();
     postMessageMock.mockClear();
+    chatUpdateMock.mockClear();
     recordInboundSessionMock.mockReset();
+    recordSlackThreadParticipationMock.mockReset();
     updateLastRouteMock.mockReset();
     appendSlackStreamMock.mockReset();
     startSlackStreamMock.mockReset();
@@ -732,12 +1244,17 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     mockedBlockStreamingEnabled = false;
     mockedSlackStreamingMode = "partial";
     mockedSlackDraftMode = "append";
+    mockedPinnedMainDmOwner = undefined;
     capturedReplyOptions = undefined;
     capturedStatusReactionOptions = undefined;
     capturedTyping = undefined;
     mockedReplyThreadTs = THREAD_TS;
     mockedReplyThreadTsSequence = undefined;
+    mockedSlackReplyBlocks = undefined;
+    mockedSlackIsThreadReply = true;
     mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+    mockedQueuedDispatchCounts = { tool: 0, block: 0, final: 0 };
+    mockedDispatcherCapturesDeliveryErrors = false;
     mockedProgressEvents = [];
     mockedReplyOptionEvents = [];
 
@@ -751,7 +1268,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       pendingText: "",
     });
     appendSlackStreamMock.mockResolvedValue(undefined);
-    stopSlackStreamMock.mockResolvedValue(undefined);
+    stopSlackStreamMock.mockResolvedValue({});
+    emitSlackMessageSentHooksMock.mockClear();
   });
 
   it("falls back to normal delivery when preview finalize fails", async () => {
@@ -760,6 +1278,47 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("uses the relay identity when the agent has no explicit Slack identity", async () => {
+    const relayIdentity = { username: "Nik Team Claw" };
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ relayIdentity }));
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT, { identity: relayIdentity });
+  });
+
+  it("does not use native Slack streaming when a custom identity is active", async () => {
+    mockedNativeStreaming = true;
+    const relayIdentity = { username: "Nik Team Claw" };
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ relayIdentity }));
+
+    expect(startSlackStreamMock).not.toHaveBeenCalled();
+    expect(createSlackDraftStreamMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT, { identity: relayIdentity });
+  });
+
+  it("does not create a Slack thread for top-level messages when replyToMode is off", async () => {
+    mockedSlackStreamingMode = "off";
+    mockedSlackIsThreadReply = false;
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ replyToMode: "off" }));
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT, { replyThreadTs: undefined });
+  });
+
+  it("stays in an existing Slack thread when replyToMode is off", async () => {
+    mockedSlackStreamingMode = "off";
+    mockedSlackIsThreadReply = true;
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({ replyToMode: "off" }));
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT, { replyThreadTs: THREAD_TS });
   });
 
   it("passes accepted Slack bot messages through the shared bot loop guard", async () => {
@@ -924,7 +1483,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
   });
 
-  it("updates non-main DM last-route metadata on the prepared thread session", async () => {
+  it("updates non-main DM last-route metadata on the prepared direct session", async () => {
+    mockedPinnedMainDmOwner = "U2";
     await dispatchPreparedSlackMessage(
       createPreparedSlackMessage({
         cfg: { session: { dmScope: "per-channel-peer" } },
@@ -943,14 +1503,14 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         },
         ctxPayload: {
           MessageThreadId: "500.000",
-          SessionKey: "agent:main:slack:direct:u1:thread:500.000",
+          SessionKey: "agent:main:slack:direct:u1",
         },
       }),
     );
 
     expect(updateLastRouteMock).toHaveBeenCalledWith({
       storePath: "/tmp/openclaw-store.json",
-      sessionKey: "agent:main:slack:direct:u1:thread:500.000",
+      sessionKey: "agent:main:slack:direct:u1",
       deliveryContext: {
         channel: "slack",
         to: "user:U1",
@@ -959,7 +1519,49 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       },
       ctx: {
         MessageThreadId: "500.000",
-        SessionKey: "agent:main:slack:direct:u1:thread:500.000",
+        SessionKey: "agent:main:slack:direct:u1",
+      },
+    });
+  });
+
+  it("uses DM transport thread metadata for last-route updates", async () => {
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        isDirectMessage: true,
+        message: {
+          channel: "D123",
+          user: "U1",
+          ts: "701.000",
+          thread_ts: "701.000",
+        },
+        route: {
+          agentId: "main",
+          mainSessionKey: "agent:main:main",
+          sessionKey: "agent:main:main",
+          lastRoutePolicy: "main",
+        },
+        ctxPayload: {
+          MessageThreadId: undefined,
+          ReplyToId: "701.000",
+          TransportThreadId: "701.000",
+          SessionKey: "agent:main:main",
+        },
+      }),
+    );
+
+    expect(updateLastRouteMock).toHaveBeenCalledWith({
+      storePath: "/tmp/openclaw-store.json",
+      sessionKey: "agent:main:main",
+      deliveryContext: {
+        channel: "slack",
+        to: "user:U1",
+        accountId: "default",
+        threadId: "701.000",
+      },
+      ctx: {
+        ReplyToId: "701.000",
+        TransportThreadId: "701.000",
+        SessionKey: "agent:main:main",
       },
     });
   });
@@ -982,7 +1584,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
         },
         ctxPayload: {
           MessageThreadId: "600.000",
-          SessionKey: "agent:main:main:thread:600.000",
+          SessionKey: "agent:main:main",
         },
       }),
     );
@@ -998,7 +1600,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       },
       ctx: {
         MessageThreadId: "600.000",
-        SessionKey: "agent:main:main:thread:600.000",
+        SessionKey: "agent:main:main",
       },
     });
   });
@@ -1024,8 +1626,87 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       messageId: "171234.567",
       text: "✅",
     });
+    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(1);
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "preview message_sent", {
+      content: "✅",
+      success: true,
+      messageId: "171234.567",
+      sessionKeyForInternalHooks: "agent:agent-1:slack:C123",
+    });
     expect(deliverRepliesMock).not.toHaveBeenCalled();
     expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("does not clear a finalized Slack draft when a later tool warning is delivered", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedDispatchSequence = [
+      { kind: "final", payload: { text: "answer" } },
+      { kind: "final", payload: { text: "⚠️ Apply Patch failed", isError: true } },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { mode: "partial", preview: { toolProgress: false } } },
+      }),
+    );
+
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "preview edit params", {
+      channelId: "C123",
+      messageId: "171234.567",
+      text: "answer",
+    });
+    const delivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expect(delivered.replies).toEqual([{ text: "⚠️ Apply Patch failed", isError: true }]);
+    expect(draftStream.seal).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse draft cleanup after a normally delivered final reply", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: { text: "answer", mediaUrl: "https://example.com/final.png" },
+      },
+      { kind: "final", payload: { text: "late cleanup failed", isError: true } },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(2);
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    const firstDelivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expect(firstDelivered.replies).toEqual([
+      { text: "answer", mediaUrl: "https://example.com/final.png" },
+    ]);
+    const lateDelivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 1, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expect(lateDelivered.replies).toEqual([{ text: "late cleanup failed", isError: true }]);
   });
 
   it("suppresses block streaming when Slack draft preview streaming is active", async () => {
@@ -1094,6 +1775,8 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     );
 
     expect(capturedReplyOptions?.disableBlockStreaming).toBe(true);
+    expect(capturedReplyOptions?.allowProgressCallbacksWhenSourceDeliverySuppressed).toBe(true);
+    expect(capturedReplyOptions?.allowToolLifecycleWhenProgressHidden).toBe(true);
     expectRecordFields(requireRecord(capturedStatusReactionOptions, "status reaction options"), {
       enabled: true,
       initialEmoji: "eyes",
@@ -1116,6 +1799,105 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
 
     expect(draftStream.update).toHaveBeenCalledWith(
       "Shelling\n• ran &lt;!here&gt; &lt;@U123&gt; \\*bold\\* \\`code\\` &amp; done",
+    );
+  });
+
+  it("shows reasoning text in Slack progress draft previews", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "tool_start", name: "exec" },
+      { kind: "item", itemKind: "analysis", title: "Reasoning" },
+      { kind: "reasoning", text: "Reading" },
+      { kind: "reasoning", text: " the Slack handler" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling" } } },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      ["Shelling", "• exec", "• Reading the Slack handler"].join("\n"),
+    );
+    const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
+    expect(updates.join("\n")).not.toContain("Reasoning");
+  });
+
+  it("replaces Slack reasoning snapshots instead of appending duplicates", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "tool_start", name: "exec" },
+      { kind: "reasoning", text: "<think>Checking </think>", isReasoningSnapshot: true },
+      {
+        kind: "reasoning",
+        text: "<think>Reading\n\nChecking </think>",
+        isReasoningSnapshot: true,
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling" } } },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      ["Shelling", "• exec", "• Reading Checking"].join("\n"),
+    );
+    const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
+    expect(updates.join("\n")).not.toContain("Checking Reading");
+  });
+
+  it("extracts mm:think reasoning snapshots for Slack progress draft previews", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "reasoning",
+        text: "<mm:think>Reading\nChecking</mm:think>",
+        isReasoningSnapshot: true,
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling" } } },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      ["Shelling", "• Reading Checking"].join("\n"),
+    );
+    const updates = draftStream.update.mock.calls.map((call) => String(call[0]));
+    expect(updates.join("\n")).toContain("Reading Checking");
+  });
+
+  it("keeps plain Slack reasoning content that starts with Thinking", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      {
+        kind: "reasoning",
+        text: "Thinking about Slack preview state",
+        isReasoningSnapshot: true,
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling" } } },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      ["Shelling", "• Thinking about Slack preview state"].join("\n"),
     );
   });
 
@@ -1168,6 +1950,951 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.update).toHaveBeenLastCalledWith(
       ["Shelling", "• tool one", "• tool two"].join("\n"),
     );
+  });
+
+  it("renders rich status-final progress drafts as legacy Slack section blocks and finalizes once", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+    mockedReplyOptionEvents = [
+      { kind: "item", progressText: "tool one" },
+      { kind: "partial", text: "partial answer" },
+      { kind: "item", progressText: "tool two" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling", render: "rich" } } },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith({
+      text: ["Shelling", "• tool one", "• tool two"].join("\n"),
+      blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "*Shelling*" },
+        },
+        {
+          type: "section",
+          fields: [
+            { type: "mrkdwn", text: "• *Update*" },
+            { type: "mrkdwn", text: "—" },
+          ],
+        },
+        {
+          type: "section",
+          fields: [
+            { type: "mrkdwn", text: "• *Update*" },
+            { type: "mrkdwn", text: "—" },
+          ],
+        },
+      ],
+    });
+    expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "preview edit params", {
+      channelId: "C123",
+      messageId: "171234.567",
+      text: FINAL_REPLY_TEXT,
+    });
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(draftStream.clear).not.toHaveBeenCalled();
+  });
+
+  it("keeps unlabeled rich Slack progress drafts as legacy section blocks", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+    mockedReplyOptionEvents = [
+      { kind: "item", progressText: "tool one" },
+      { kind: "partial", text: "partial answer" },
+      { kind: "item", progressText: "tool two" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { render: "rich" } } },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith({
+      text: ["Thinking", "• tool one", "• tool two"].join("\n"),
+      blocks: [
+        {
+          type: "section",
+          fields: [
+            { type: "mrkdwn", text: "• *Update*" },
+            { type: "mrkdwn", text: "—" },
+          ],
+        },
+        {
+          type: "section",
+          fields: [
+            { type: "mrkdwn", text: "• *Update*" },
+            { type: "mrkdwn", text: "—" },
+          ],
+        },
+      ],
+    });
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it("mandatory E2E: streams native Slack progress with the newest meaningful plan title when no explicit label exists", async () => {
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [
+        { kind: "item", progressText: "tool one" },
+        { kind: "item", progressText: "tool two" },
+        { kind: "item", progressText: "tool three" },
+      ],
+    });
+
+    expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+    expectNativeProgressStart([
+      planUpdate("tool one"),
+      taskUpdate("item_1", "tool one", "in_progress"),
+    ]);
+    expectNativeProgressAppend(0, [
+      planUpdate("tool two"),
+      taskUpdate("item_1", "tool one", "in_progress"),
+      taskUpdate("item_2", "tool two", "in_progress"),
+    ]);
+    expectNativeProgressAppend(2, [
+      planUpdate("tool three"),
+      taskUpdate("item_1", "tool one", "complete"),
+      taskUpdate("item_2", "tool two", "complete"),
+      taskUpdate("item_3", "tool three", "complete"),
+    ]);
+    expect(stopSlackStreamMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("starts native Slack progress on a single tool item before final text and completes it once", async () => {
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [{ kind: "item", progressText: "slow tool" }],
+    });
+
+    expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+    expectNativeProgressStart([
+      planUpdate("slow tool"),
+      taskUpdate("item_1", "slow tool", "in_progress"),
+    ]);
+    expectNativeProgressAppend(0, [
+      planUpdate("slow tool"),
+      taskUpdate("item_1", "slow tool", "complete"),
+    ]);
+    expect(startSlackStreamMock.mock.invocationCallOrder[0]).toBeLessThan(
+      appendSlackStreamMock.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(stopSlackStreamMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("emits message_sent only once for native progress final replies (no double emit)", async () => {
+    // In native-progress mode the final answer is delivered through
+    // deliverNormally -> deliverReplies, which owns the message_sent emit. The
+    // dispatch-level stream finalizer must NOT also emit for the same final
+    // answer (regression for the streamedFinalContent double-emit bug).
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [{ kind: "item", progressText: "slow tool" }],
+    });
+
+    // Final routed through deliverReplies (the owner of the emit here)...
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+    // ...and the stream WAS finalized, so the old code would have double-emitted.
+    expect(stopSlackStreamMock).toHaveBeenCalledTimes(1);
+    // The dispatch-level finalizer must not emit (deliverReplies already does).
+    expect(emitSlackMessageSentHooksMock).not.toHaveBeenCalled();
+  });
+
+  it("emits message_sent exactly once via the finalizer for a plain text-stream final reply", async () => {
+    // Plain text-stream mode (no native progress card): the final answer is
+    // flushed through the text stream and never goes through deliverReplies, so
+    // the dispatch finalizer owns the single message_sent emit. This is the
+    // positive counterpart to the native-progress no-double-emit regression.
+    mockedNativeStreaming = true;
+    mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+    startSlackStreamMock.mockResolvedValueOnce({
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: true,
+      pendingText: "",
+    });
+    stopSlackStreamMock.mockResolvedValueOnce({ messageId: "171234.567" });
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        isDirectMessage: true,
+        message: { channel: "D123" },
+        route: { sessionKey: "agent:agent-1:slack:direct:u123" },
+        ctxPayload: {
+          SessionKey: "agent:agent-1:slack:direct:u123:thread:thread-1",
+          To: "user:U123",
+          OriginatingTo: "user:U123",
+        },
+      }),
+    );
+
+    // The final was flushed through the stream, not deliverReplies.
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(stopSlackStreamMock).toHaveBeenCalledTimes(1);
+    // The finalizer emits exactly once, with success and the delivered Slack ts,
+    // and threads the canonical session key (mirrors the P2 fix in replies.ts:
+    // the dispatch finalizer emit must also carry session correlation).
+    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(1);
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "finalizer message_sent", {
+      content: FINAL_REPLY_TEXT,
+      success: true,
+      messageId: "171234.567",
+      to: "user:U123",
+      sessionKeyForInternalHooks: "agent:agent-1:slack:direct:u123:thread:thread-1",
+    });
+  });
+
+  it("emits message_sent for every final payload appended to one text stream", async () => {
+    mockedNativeStreaming = true;
+    mockedDispatchSequence = [
+      { kind: "final", payload: { text: "answer" } },
+      { kind: "final", payload: { text: "late warning", isError: true } },
+    ];
+    startSlackStreamMock.mockResolvedValueOnce({
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: true,
+      pendingText: "",
+    });
+    stopSlackStreamMock.mockResolvedValueOnce({ messageId: "171234.890" });
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(2);
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "first final message_sent", {
+      content: "answer",
+      success: true,
+      messageId: "171234.890",
+    });
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 1, "second final message_sent", {
+      content: "late warning",
+      success: true,
+      messageId: "171234.890",
+    });
+  });
+
+  it("emits message_sent exactly once when stopSlackStream throws and the pending stream falls back", async () => {
+    // The combined fallback send defers hooks so dispatch can preserve the
+    // original final-payload boundary.
+    mockedNativeStreaming = true;
+    const session = {
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: false,
+      pendingText: FINAL_REPLY_TEXT,
+    };
+    startSlackStreamMock.mockResolvedValueOnce(session);
+    stopSlackStreamMock.mockRejectedValueOnce(
+      new TestSlackStreamNotDeliveredError(FINAL_REPLY_TEXT, "user_not_found"),
+    );
+    deliverRepliesMock.mockResolvedValueOnce({
+      messageId: "171234.901",
+      channelId: "C123",
+    });
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(1);
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "fallback message_sent", {
+      content: FINAL_REPLY_TEXT,
+      success: true,
+    });
+    expect(
+      requireRecord(
+        requireMockCall(emitSlackMessageSentHooksMock, 0, "fallback message_sent")[0],
+        "fallback message_sent",
+      ),
+    ).not.toHaveProperty("messageId");
+  });
+
+  it("emits message_sent for a tool-only stream fallback", async () => {
+    mockedNativeStreaming = true;
+    mockedDispatchSequence = [{ kind: "tool", payload: { text: "tool output" } }];
+    const session = {
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: false,
+      pendingText: "tool output",
+    };
+    startSlackStreamMock.mockResolvedValueOnce(session);
+    stopSlackStreamMock.mockRejectedValueOnce(
+      new TestSlackStreamNotDeliveredError("tool output", "user_not_found"),
+    );
+    deliverRepliesMock.mockResolvedValueOnce({
+      messageId: "171234.902",
+      channelId: "C123",
+    });
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, "tool output");
+    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(1);
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "tool fallback message_sent", {
+      content: "tool output",
+      success: true,
+    });
+    expect(
+      requireRecord(
+        requireMockCall(emitSlackMessageSentHooksMock, 0, "tool fallback message_sent")[0],
+        "tool fallback message_sent",
+      ),
+    ).not.toHaveProperty("messageId");
+  });
+
+  it("emits acknowledged finals before a pending stream suffix falls back", async () => {
+    mockedNativeStreaming = true;
+    mockedDispatchSequence = [
+      { kind: "final", payload: { text: "already visible" } },
+      { kind: "final", payload: { text: "still buffered" } },
+    ];
+    const session = {
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: true,
+      pendingText: "",
+    };
+    startSlackStreamMock.mockResolvedValueOnce(session);
+    appendSlackStreamMock.mockImplementationOnce(async () => {
+      session.pendingText = "\nstill buffered";
+    });
+    stopSlackStreamMock.mockRejectedValueOnce(
+      new TestSlackStreamNotDeliveredError("still buffered", "user_not_found"),
+    );
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(2);
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "acknowledged message_sent", {
+      content: "already visible",
+      success: true,
+    });
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 1, "fallback message_sent", {
+      content: "still buffered",
+      success: true,
+    });
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, "still buffered");
+    expect(stopSlackStreamMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("finalizes buffered finals natively before attempting fallback delivery", async () => {
+    mockedNativeStreaming = true;
+    mockedDispatchSequence = [
+      { kind: "final", payload: { text: "already visible" } },
+      { kind: "final", payload: { text: "buffered second" } },
+      { kind: "final", payload: { text: "failing third" } },
+    ];
+    const session = {
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: true,
+      pendingText: "",
+    };
+    startSlackStreamMock.mockResolvedValueOnce(session);
+    appendSlackStreamMock
+      .mockImplementationOnce(async () => {
+        session.pendingText = "\nbuffered second";
+      })
+      .mockImplementationOnce(async () => {
+        session.pendingText += "\nfailing third";
+        throw new TestSlackStreamNotDeliveredError(
+          "buffered second\nfailing third",
+          "user_not_found",
+        );
+      });
+    stopSlackStreamMock.mockResolvedValueOnce({ messageId: "171234.999" });
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(stopSlackStreamMock).toHaveBeenCalledTimes(1);
+    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(3);
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "first final message_sent", {
+      content: "already visible",
+      messageId: "171234.999",
+      success: true,
+    });
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 1, "second final message_sent", {
+      content: "buffered second",
+      messageId: "171234.999",
+      success: true,
+    });
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 2, "third final message_sent", {
+      content: "failing third",
+      messageId: "171234.999",
+      success: true,
+    });
+  });
+
+  it("emits one terminal failure per buffered final when native stop and fallback fail", async () => {
+    mockedNativeStreaming = true;
+    mockedDispatchSequence = [
+      { kind: "final", payload: { text: "already visible" } },
+      { kind: "final", payload: { text: "buffered second" } },
+      { kind: "final", payload: { text: "failing third" } },
+    ];
+    const session = {
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: true,
+      pendingText: "",
+    };
+    startSlackStreamMock.mockResolvedValueOnce(session);
+    appendSlackStreamMock
+      .mockImplementationOnce(async () => {
+        session.pendingText = "\nbuffered second";
+      })
+      .mockImplementationOnce(async () => {
+        session.pendingText += "\nfailing third";
+        throw new TestSlackStreamNotDeliveredError(
+          "buffered second\nfailing third",
+          "user_not_found",
+        );
+      });
+    deliverRepliesMock.mockRejectedValueOnce(new Error("fallback send failed"));
+    stopSlackStreamMock.mockRejectedValueOnce(
+      new TestSlackStreamNotDeliveredError("buffered second\nfailing third", "user_not_found"),
+    );
+
+    await expect(dispatchPreparedSlackMessage(createPreparedSlackMessage())).rejects.toThrowError(
+      "slack-stream not delivered: user_not_found",
+    );
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, "buffered second\nfailing third");
+    expect(stopSlackStreamMock).toHaveBeenCalledTimes(1);
+    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(3);
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "acknowledged message_sent", {
+      content: "already visible",
+      success: true,
+    });
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 1, "buffered message_sent", {
+      content: "buffered second",
+      error: "fallback send failed",
+      success: false,
+    });
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 2, "failed-append message_sent", {
+      content: "failing third",
+      error: "fallback send failed",
+      success: false,
+    });
+  });
+
+  it("removes all failed buffered finals from production-style delivery counts", async () => {
+    mockedNativeStreaming = true;
+    mockedDispatcherCapturesDeliveryErrors = true;
+    mockedDispatchSequence = [
+      { kind: "final", payload: { text: "first buffered" } },
+      { kind: "final", payload: { text: "second buffered" } },
+    ];
+    const session = {
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: false,
+      pendingText: "first buffered",
+    };
+    startSlackStreamMock.mockResolvedValueOnce(session);
+    appendSlackStreamMock.mockImplementationOnce(async () => {
+      session.pendingText += "\nsecond buffered";
+      throw new TestSlackStreamNotDeliveredError(session.pendingText, "user_not_found");
+    });
+    stopSlackStreamMock.mockRejectedValueOnce(
+      new TestSlackStreamNotDeliveredError("first buffered\nsecond buffered", "user_not_found"),
+    );
+    deliverRepliesMock.mockRejectedValueOnce(new Error("fallback send failed"));
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { messages: { statusReactions: { enabled: true } } },
+        ackReactionMessageTs: "171234.111",
+        ackReactionPromise: Promise.resolve(true),
+      }),
+    );
+
+    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(2);
+    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
+    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
+  });
+
+  it("removes all failed buffered tools from production-style delivery counts", async () => {
+    mockedNativeStreaming = true;
+    mockedDispatcherCapturesDeliveryErrors = true;
+    mockedDispatchSequence = [
+      { kind: "tool", payload: { text: "first tool" } },
+      { kind: "tool", payload: { text: "second tool" } },
+    ];
+    const session = {
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: false,
+      pendingText: "first tool",
+    };
+    startSlackStreamMock.mockResolvedValueOnce(session);
+    appendSlackStreamMock.mockImplementationOnce(async () => {
+      session.pendingText += "\nsecond tool";
+      throw new TestSlackStreamNotDeliveredError(session.pendingText, "user_not_found");
+    });
+    stopSlackStreamMock.mockRejectedValueOnce(
+      new TestSlackStreamNotDeliveredError("first tool\nsecond tool", "user_not_found"),
+    );
+    deliverRepliesMock.mockRejectedValueOnce(new Error("fallback send failed"));
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: { messages: { statusReactions: { enabled: true } } },
+        ackReactionMessageTs: "171234.111",
+        ackReactionPromise: Promise.resolve(true),
+      }),
+    );
+
+    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(2);
+    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
+    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a buffered final acknowledged when a later block flushes the stream", async () => {
+    mockedNativeStreaming = true;
+    mockedDispatchSequence = [
+      { kind: "final", payload: { text: "buffered final" } },
+      { kind: "block", payload: { text: "flushes both" } },
+      { kind: "final", payload: { text: "pending tail" } },
+    ];
+    const session = {
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: false,
+      pendingText: "buffered final",
+    };
+    startSlackStreamMock.mockResolvedValueOnce(session);
+    appendSlackStreamMock
+      .mockImplementationOnce(async () => {
+        session.delivered = true;
+        session.pendingText = "";
+      })
+      .mockImplementationOnce(async () => {
+        session.pendingText = "\npending tail";
+      });
+    stopSlackStreamMock.mockRejectedValueOnce(
+      new TestSlackStreamNotDeliveredError("pending tail", "user_not_found"),
+    );
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(3);
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "flushed final message_sent", {
+      content: "buffered final",
+      success: true,
+    });
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 1, "flushed block message_sent", {
+      content: "flushes both",
+      success: true,
+    });
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, "pending tail");
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 2, "fallback final message_sent", {
+      content: "pending tail",
+      success: true,
+    });
+  });
+
+  it("emits message_sent for each payload when an append flush falls back", async () => {
+    // appendSlackStream throwing SlackStreamNotDeliveredError mid-stream routes
+    // all buffered text through deliverReplies; the finalizer must not also emit.
+    mockedNativeStreaming = true;
+    mockedDispatchSequence = [
+      { kind: "block", payload: { text: "first buffered" } },
+      { kind: "final", payload: { text: "second flushes" } },
+    ];
+    const session = {
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: false,
+      pendingText: "first buffered",
+    };
+    startSlackStreamMock.mockResolvedValueOnce(session);
+    appendSlackStreamMock.mockImplementationOnce(async () => {
+      session.pendingText += "\nsecond flushes";
+      throw new TestSlackStreamNotDeliveredError(session.pendingText, "user_not_found");
+    });
+    stopSlackStreamMock.mockRejectedValueOnce(
+      new TestSlackStreamNotDeliveredError("first buffered\nsecond flushes", "user_not_found"),
+    );
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, "first buffered\nsecond flushes");
+    expect(stopSlackStreamMock).toHaveBeenCalledTimes(1);
+    expect(emitSlackMessageSentHooksMock).toHaveBeenCalledTimes(2);
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 0, "fallback block message_sent", {
+      content: "first buffered",
+      success: true,
+    });
+    expectMockCallArgFields(emitSlackMessageSentHooksMock, 1, "fallback final message_sent", {
+      content: "second flushes",
+      success: true,
+    });
+  });
+
+  it("does not start a text stream for native progress mode when no progress card exists", async () => {
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [],
+    });
+
+    expect(startSlackStreamMock).not.toHaveBeenCalled();
+    expect(appendSlackStreamMock).not.toHaveBeenCalled();
+    expect(stopSlackStreamMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("starts native Slack progress from the first running tool callback before final text", async () => {
+    const taskId = expect.stringMatching(/^exec_call_1_[a-f0-9]{8}$/);
+
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [
+        {
+          kind: "tool_start",
+          itemId: "exec-call-1",
+          toolCallId: "tool-call-1",
+          name: "bash",
+          phase: "start",
+        },
+      ],
+    });
+
+    expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+    expectNativeProgressStart([planUpdate("bash"), taskUpdate(taskId, "bash", "in_progress")]);
+    expectNativeProgressAppend(0, [planUpdate("bash"), taskUpdate(taskId, "bash", "complete")]);
+    expect(startSlackStreamMock.mock.invocationCallOrder[0]).toBeLessThan(
+      appendSlackStreamMock.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("reuses native Slack progress task identity across command item and output events", async () => {
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [
+        {
+          kind: "item",
+          itemId: "tool:call-1",
+          toolCallId: "call-1",
+          itemKind: "command",
+          name: "bash",
+          phase: "update",
+          status: "running",
+          progressText: "install dependencies",
+        },
+        {
+          kind: "command_output",
+          itemId: "tool:call-1-output",
+          toolCallId: "call-1",
+          name: "bash",
+          phase: "end",
+          exitCode: 0,
+        },
+      ],
+    });
+
+    const taskUpdates = collectNativeTaskUpdates();
+    expect([...new Set(taskUpdates.map((task) => task.id))]).toEqual([
+      expect.stringMatching(/^command_call_1_[a-f0-9]{8}$/),
+    ]);
+    expect(taskUpdates.at(0)?.id).toEqual(expect.stringMatching(/^command_call_1_[a-f0-9]{8}$/));
+    expect(taskUpdates).toContainEqual(
+      taskUpdate(taskUpdates.at(0)?.id, "bash — completed", "complete"),
+    );
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("keeps final fallback in the planned thread when native Slack progress start fails", async () => {
+    startSlackStreamMock.mockRejectedValueOnce(new Error("start stream failed"));
+    mockedReplyThreadTsSequence = [THREAD_TS, undefined];
+
+    await dispatchNativeProgressScenario({
+      replyToMode: "first",
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [{ kind: "item", progressText: "slow tool" }],
+    });
+
+    expect(startSlackStreamMock).toHaveBeenCalledTimes(1);
+    expect(appendSlackStreamMock).not.toHaveBeenCalled();
+    expect(stopSlackStreamMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("marks native Slack progress tasks as error when final text is an error", async () => {
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: "tool failed", isError: true },
+      events: [{ kind: "item", progressText: "failing tool" }],
+    });
+
+    expectNativeProgressStart([
+      planUpdate("failing tool"),
+      taskUpdate("item_1", "failing tool", "in_progress"),
+    ]);
+    expectNativeProgressAppend(0, [
+      planUpdate("failing tool"),
+      taskUpdate("item_1", "failing tool", "error"),
+    ]);
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    const deliverParams = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expectRecordFields(deliverParams, { replyThreadTs: THREAD_TS });
+    expect(deliverParams.replies).toEqual([{ text: "tool failed", isError: true }]);
+  });
+
+  it("completes a native Slack progress plan even when no final text is sent", async () => {
+    await dispatchNativeProgressScenario({
+      events: [{ kind: "concurrent_items", progressTexts: ["tool one", "tool two", "tool three"] }],
+    });
+
+    expectNativeProgressStart([
+      planUpdate("tool three"),
+      taskUpdate("item_1", "tool one", "in_progress"),
+      taskUpdate("item_2", "tool two", "in_progress"),
+      taskUpdate("item_3", "tool three", "in_progress"),
+    ]);
+    expect(appendSlackStreamMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expectMockCallArgFields(stopSlackStreamMock, 0, "native progress stream stop", {
+      chunks: [
+        planUpdate("tool three"),
+        taskUpdate("item_1", "tool one", "complete"),
+        taskUpdate("item_2", "tool two", "complete"),
+        taskUpdate("item_3", "tool three", "complete"),
+      ],
+    });
+  });
+
+  it("mandatory E2E: preserves an explicit configured native Slack progress plan title", async () => {
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      progress: { label: "Shelling", nativeTaskCards: true, render: "rich" },
+      events: [
+        { kind: "item", progressText: "tool one" },
+        { kind: "item", progressText: "tool two" },
+        { kind: "item", progressText: "tool three" },
+      ],
+    });
+
+    expect(createSlackDraftStreamMock).not.toHaveBeenCalled();
+    expectNativeProgressStart([
+      planUpdate("Shelling"),
+      taskUpdate("item_1", "tool one", "in_progress"),
+    ]);
+    expectNativeProgressAppend(2, [
+      planUpdate("Shelling"),
+      taskUpdate("item_1", "tool one", "complete"),
+      taskUpdate("item_2", "tool two", "complete"),
+      taskUpdate("item_3", "tool three", "complete"),
+    ]);
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("passes configured native progress max line chars into stream chunks", async () => {
+    const taskId = expect.stringMatching(/^exec_call_1_[a-f0-9]{8}$/);
+
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      progress: { label: "Shelling", maxLineChars: 12, nativeTaskCards: true, render: "rich" },
+      events: [
+        {
+          kind: "tool_start",
+          itemId: "exec-call-1",
+          toolCallId: "tool-call-1",
+          name: "bash",
+          phase: "start",
+          args: { command: "1234567890abcdefghijklmnopqrstuvwxyz" },
+        },
+      ],
+    });
+
+    expectNativeProgressStart([
+      planUpdate("Shelling"),
+      taskUpdate(taskId, "bash — 12345…uvwxyz", "in_progress"),
+    ]);
+    expectNativeProgressAppend(0, [
+      planUpdate("Shelling"),
+      taskUpdate(taskId, "bash — 12345…uvwxyz", "complete"),
+    ]);
+  });
+
+  it("preserves patch item identity in native Slack progress task updates", async () => {
+    const taskId = expect.stringMatching(/^patch_item_1_[a-f0-9]{8}$/);
+
+    await dispatchNativeProgressScenario({
+      finalPayload: { text: FINAL_REPLY_TEXT },
+      events: [
+        {
+          kind: "patch",
+          itemId: "patch:item-1",
+          toolCallId: "patch-call-1",
+          name: "apply_patch",
+          phase: "end",
+          summary: "updated Slack progress tests",
+        },
+      ],
+    });
+
+    expectNativeProgressStart([
+      planUpdate("updated Slack progress tests"),
+      taskUpdate(taskId, "updated Slack progress tests", "in_progress"),
+    ]);
+    expectNativeProgressAppend(0, [
+      planUpdate("updated Slack progress tests"),
+      taskUpdate(taskId, "updated Slack progress tests", "complete"),
+    ]);
+  });
+
+  it("preserves the last rich Slack progress lines after a draft boundary status update", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+    mockedReplyOptionEvents = [
+      { kind: "item", progressText: "tool one" },
+      { kind: "item", progressText: "tool two" },
+      { kind: "assistant_start" },
+      { kind: "partial", text: "partial answer" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Shelling", render: "rich" } } },
+      }),
+    );
+
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(draftStream.update).toHaveBeenLastCalledWith({
+      text: ["Shelling", "• tool one", "• tool two"].join("\n"),
+      blocks: [
+        {
+          type: "section",
+          text: { type: "mrkdwn", text: "*Shelling*" },
+        },
+        {
+          type: "section",
+          fields: [
+            { type: "mrkdwn", text: "• *Update*" },
+            { type: "mrkdwn", text: "—" },
+          ],
+        },
+        {
+          type: "section",
+          fields: [
+            { type: "mrkdwn", text: "• *Update*" },
+            { type: "mrkdwn", text: "—" },
+          ],
+        },
+      ],
+    });
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves text Slack progress lines after a draft boundary status update", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "item", progressText: "tool one" },
+      { kind: "item", progressText: "tool two" },
+      { kind: "assistant_start" },
+      { kind: "partial", text: "partial answer" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: "Working" } } },
+      }),
+    );
+
+    expect(draftStream.forceNewMessage).not.toHaveBeenCalled();
+    expect(draftStream.update).toHaveBeenLastCalledWith(
+      ["Working", "• tool one", "• tool two"].join("\n"),
+    );
+  });
+
+  it("forces a new draft message on assistant boundaries in partial mode", async () => {
+    const draftStream = createDraftStreamStub();
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedSlackStreamingMode = "partial";
+    mockedSlackDraftMode = "replace";
+    mockedDispatchSequence = [];
+    mockedReplyOptionEvents = [
+      { kind: "partial", text: "first chunk" },
+      { kind: "assistant_start" },
+      { kind: "partial", text: "second chunk" },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage({}));
+
+    expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
   });
 
   it("can hide raw Slack command progress text by config", async () => {
@@ -1237,6 +2964,54 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.update).not.toHaveBeenCalled();
   });
 
+  it("preserves hidden-title rich Slack progress drafts when the label is hidden", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedSlackStreamingMode = "progress";
+    mockedSlackDraftMode = "status_final";
+    mockedDispatchSequence = [{ kind: "final", payload: { text: FINAL_REPLY_TEXT } }];
+    mockedReplyOptionEvents = [
+      { kind: "item", progressText: "tool one" },
+      { kind: "partial", text: "partial answer" },
+      { kind: "item", progressText: "tool two" },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        accountConfig: { streaming: { progress: { label: false, render: "rich" } } },
+      }),
+    );
+
+    expect(draftStream.update).toHaveBeenLastCalledWith({
+      text: ["• tool one", "• tool two"].join("\n"),
+      blocks: [
+        {
+          type: "section",
+          fields: [
+            { type: "mrkdwn", text: "• *Update*" },
+            { type: "mrkdwn", text: "—" },
+          ],
+        },
+        {
+          type: "section",
+          fields: [
+            { type: "mrkdwn", text: "• *Update*" },
+            { type: "mrkdwn", text: "—" },
+          ],
+        },
+      ],
+    });
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+  });
+
   it("suppresses standalone Slack tool progress when partial preview lines are disabled", async () => {
     mockedSlackStreamingMode = "partial";
     mockedSlackDraftMode = "replace";
@@ -1289,6 +3064,98 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(deliverRepliesMock).not.toHaveBeenCalled();
   });
 
+  it("suppresses reasoning payloads in the non-streaming delivery path", async () => {
+    mockedNativeStreaming = false;
+    mockedDispatchSequence = [
+      { kind: "block", payload: { text: "Reasoning:\n_hidden_", isReasoning: true } },
+      { kind: "final", payload: { text: FINAL_REPLY_TEXT } },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
+  it("does not count suppressed reasoning-only payloads as delivered", async () => {
+    mockedNativeStreaming = false;
+    mockedDispatchSequence = [
+      { kind: "final", payload: { text: "Reasoning:\n_hidden_", isReasoning: true } },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        cfg: {
+          messages: {
+            statusReactions: { enabled: true },
+          },
+        },
+        ackReactionMessageTs: "171234.111",
+        ackReactionPromise: Promise.resolve(true),
+      }),
+    );
+
+    expect(deliverRepliesMock).not.toHaveBeenCalled();
+    expect(statusReactionControllerMock.setDone).not.toHaveBeenCalled();
+    expect(statusReactionControllerMock.restoreInitial).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not consume first-reply delivery state for suppressed reasoning payloads", async () => {
+    mockedNativeStreaming = false;
+    mockedReplyThreadTsSequence = [THREAD_TS, undefined];
+    mockedDispatchSequence = [
+      { kind: "block", payload: { text: "hidden", isReasoning: true } },
+      { kind: "final", payload: { text: FINAL_REPLY_TEXT } },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        replyToMode: "first",
+      }),
+    );
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT, { replyThreadTs: THREAD_TS });
+  });
+
+  it("suppresses reasoning payloads in non-streaming delivery when mixed with tool payloads", async () => {
+    mockedNativeStreaming = false;
+    mockedDispatchSequence = [
+      { kind: "tool", payload: { text: "tool result" } },
+      { kind: "block", payload: { text: "Let me think about this...", isReasoning: true } },
+      { kind: "block", payload: { text: "I need to consider...", isReasoning: true } },
+      { kind: "final", payload: { text: FINAL_REPLY_TEXT } },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(2);
+    expectDeliverReplyCall(0, "tool result");
+    expectDeliverReplyCall(1, FINAL_REPLY_TEXT);
+  });
+
+  it("suppresses reasoning payloads via deliverNormally fallback from streaming errors", async () => {
+    mockedNativeStreaming = true;
+    mockedDispatchSequence = [
+      { kind: "block", payload: { text: "Let me analyze...", isReasoning: true } },
+      { kind: "final", payload: { text: FINAL_REPLY_TEXT } },
+    ];
+    startSlackStreamMock.mockRejectedValueOnce(new Error("stream setup failed"));
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    for (const call of deliverRepliesMock.mock.calls) {
+      const params = (call as unknown[])[0] as {
+        replies: Array<{ isReasoning?: boolean }>;
+      };
+      for (const reply of params.replies) {
+        expect(reply.isReasoning).not.toBe(true);
+      }
+    }
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expectDeliverReplyCall(0, FINAL_REPLY_TEXT);
+  });
+
   it("keeps same-content tool and final payloads distinct after preview fallback", async () => {
     mockedDispatchSequence = [
       { kind: "tool", payload: { text: SAME_TEXT } },
@@ -1330,6 +3197,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       seal: vi.fn(noopAsync),
     };
     createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
     mockedDispatchSequence = [
       {
         kind: "final",
@@ -1344,6 +3212,275 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
     expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the preview and sends media-only for TTS supplement finals", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    mockedSlackReplyBlocks = [
+      {
+        type: "section",
+        text: { type: "mrkdwn", text: "Spoken answer" },
+      },
+    ];
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedReplyThreadTsSequence = [undefined];
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: {
+          mediaUrl: "https://example.com/tts.mp3",
+          audioAsVoice: true,
+          spokenText: "Spoken answer",
+          ttsSupplement: { spokenText: "Spoken answer" },
+        },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(draftStream.flush).toHaveBeenCalledTimes(1);
+    expect(draftStream.clear).not.toHaveBeenCalled();
+    expectMockCallArgFields(finalizeSlackPreviewEditMock, 0, "preview edit params", {
+      channelId: "C123",
+      messageId: "171234.567",
+      text: "Spoken answer",
+      blocks: mockedSlackReplyBlocks,
+    });
+    const delivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expectRecordFields(delivered, { replyThreadTs: THREAD_TS });
+    expect(delivered.replies).toEqual([
+      {
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      },
+    ]);
+  });
+
+  it("defers hooks and suppresses duplicate TTS finals when flush creates the preview id", async () => {
+    let flushed = false;
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(async () => {
+        flushed = true;
+      }),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+      messageId: () => (flushed ? "171234.567" : undefined),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedSlackIsThreadReply = false;
+    mockedReplyThreadTsSequence = [undefined, undefined];
+    const payload = {
+      text: "Spoken answer",
+      mediaUrl: "https://example.com/tts.mp3",
+      audioAsVoice: true,
+      spokenText: "Spoken answer",
+      ttsSupplement: { spokenText: "Spoken answer" },
+    };
+    mockedDispatchSequence = [
+      { kind: "final", payload },
+      { kind: "final", payload },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        message: { thread_ts: undefined },
+        replyToMode: "first",
+      }),
+    );
+
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    const delivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expectRecordFields(delivered, { replyThreadTs: THREAD_TS });
+    expect(emitSlackMessageSentHooksMock).not.toHaveBeenCalled();
+  });
+
+  it("suppresses duplicate TTS supplement finals after preview finalization", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    finalizeSlackPreviewEditMock.mockResolvedValueOnce(undefined);
+    mockedSlackIsThreadReply = false;
+    mockedReplyThreadTsSequence = [undefined];
+    const payload = {
+      text: "Spoken answer",
+      mediaUrl: "https://example.com/tts.mp3",
+      audioAsVoice: true,
+      spokenText: "Spoken answer",
+      ttsSupplement: { spokenText: "Spoken answer" },
+    };
+    mockedDispatchSequence = [
+      { kind: "final", payload },
+      { kind: "final", payload },
+    ];
+
+    await dispatchPreparedSlackMessage(
+      createPreparedSlackMessage({
+        message: { thread_ts: undefined },
+        replyToMode: "first",
+      }),
+    );
+
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    const delivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expectRecordFields(delivered, { replyThreadTs: THREAD_TS });
+    expect(delivered.replies).toEqual([
+      {
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      },
+    ]);
+  });
+
+  it("falls back with visible text when TTS supplement preview finalization fails", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedReplyThreadTsSequence = [undefined];
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: {
+          mediaUrl: "https://example.com/tts.mp3",
+          audioAsVoice: true,
+          spokenText: "Spoken answer",
+          ttsSupplement: { spokenText: "Spoken answer" },
+        },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(finalizeSlackPreviewEditMock).toHaveBeenCalledTimes(1);
+    expect(draftStream.discardPending).toHaveBeenCalled();
+    expect(draftStream.clear).toHaveBeenCalledTimes(1);
+    const delivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expectRecordFields(delivered, { replyThreadTs: THREAD_TS });
+    expect(delivered.replies).toEqual([
+      {
+        text: "Spoken answer",
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      },
+    ]);
+  });
+
+  it("falls back with visible text when TTS supplement preview has no message id", async () => {
+    const draftStream = {
+      ...createDraftStreamStub(),
+      flush: vi.fn(noopAsync),
+      clear: vi.fn(noopAsync),
+      discardPending: vi.fn(noopAsync),
+      seal: vi.fn(noopAsync),
+      messageId: () => undefined,
+    };
+    createSlackDraftStreamMock.mockReturnValueOnce(draftStream);
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: {
+          mediaUrl: "https://example.com/tts.mp3",
+          audioAsVoice: true,
+          spokenText: "Spoken answer",
+          ttsSupplement: { spokenText: "Spoken answer" },
+        },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+    expect(draftStream.discardPending).toHaveBeenCalled();
+    const delivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expect(delivered.replies).toEqual([
+      {
+        text: "Spoken answer",
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: { spokenText: "Spoken answer" },
+      },
+    ]);
+  });
+
+  it("keeps already-delivered TTS supplements audio-only without a draft preview", async () => {
+    mockedSlackStreamingMode = "off";
+    mockedBlockStreamingEnabled = true;
+    mockedDispatchSequence = [
+      {
+        kind: "final",
+        payload: {
+          mediaUrl: "https://example.com/tts.mp3",
+          audioAsVoice: true,
+          spokenText: "Spoken answer",
+          ttsSupplement: {
+            spokenText: "Spoken answer",
+            visibleTextAlreadyDelivered: true,
+          },
+        },
+      },
+    ];
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(finalizeSlackPreviewEditMock).not.toHaveBeenCalled();
+    const delivered = requireRecord(
+      requireMockCall(deliverRepliesMock, 0, "deliver replies")[0],
+      "deliver replies params",
+    );
+    expect(delivered.replies).toEqual([
+      {
+        mediaUrl: "https://example.com/tts.mp3",
+        audioAsVoice: true,
+        spokenText: "Spoken answer",
+        ttsSupplement: {
+          spokenText: "Spoken answer",
+          visibleTextAlreadyDelivered: true,
+        },
+      },
+    ]);
   });
 
   it("does not flush draft previews for error finals before normal delivery", async () => {
@@ -1393,6 +3530,67 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(session.stopped).toBe(true);
   });
 
+  it("routes pending native stream text through chunked sender for unexpected finalize failures", async () => {
+    mockedNativeStreaming = true;
+    const session = {
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: false,
+      pendingText: FINAL_REPLY_TEXT,
+    };
+    startSlackStreamMock.mockResolvedValueOnce(session);
+    stopSlackStreamMock.mockRejectedValueOnce(
+      new TestSlackStreamNotDeliveredError(
+        FINAL_REPLY_TEXT,
+        "method_not_supported_for_channel_type",
+      ),
+    );
+
+    await dispatchPreparedSlackMessage(createPreparedSlackMessage());
+
+    expect(postMessageMock).not.toHaveBeenCalled();
+    expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
+    expect(deliverRepliesMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        replyThreadTs: THREAD_TS,
+        replies: [expect.objectContaining({ text: FINAL_REPLY_TEXT })],
+      }),
+    );
+    expect(session.stopped).toBe(true);
+  });
+
+  it("fails dispatch when an unexpected finalize fallback cannot deliver a buffered tail", async () => {
+    mockedNativeStreaming = true;
+    const session = {
+      channel: "C123",
+      threadTs: THREAD_TS,
+      stopped: false,
+      delivered: true,
+      pendingText: "buffered tail",
+    };
+    startSlackStreamMock.mockResolvedValueOnce(session);
+    stopSlackStreamMock.mockRejectedValueOnce(
+      new TestSlackStreamNotDeliveredError(
+        "buffered tail",
+        "method_not_supported_for_channel_type",
+      ),
+    );
+    deliverRepliesMock.mockRejectedValueOnce(new Error("fallback send failed"));
+
+    await expect(dispatchPreparedSlackMessage(createPreparedSlackMessage())).rejects.toThrowError(
+      "slack-stream not delivered: method_not_supported_for_channel_type",
+    );
+
+    expectDeliverReplyCall(0, "buffered tail");
+    expect(recordSlackThreadParticipationMock).toHaveBeenCalledWith(
+      expect.any(String),
+      "C123",
+      THREAD_TS,
+      expect.any(Object),
+    );
+  });
+
   it("routes all pending native stream text through chunked sender when an append flush fails", async () => {
     mockedNativeStreaming = true;
     mockedDispatchSequence = [
@@ -1411,13 +3609,16 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       session.pendingText += "\nsecond flushes";
       throw new TestSlackStreamNotDeliveredError(session.pendingText, "user_not_found");
     });
+    stopSlackStreamMock.mockRejectedValueOnce(
+      new TestSlackStreamNotDeliveredError("first buffered\nsecond flushes", "user_not_found"),
+    );
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage());
 
     expect(postMessageMock).not.toHaveBeenCalled();
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, "first buffered\nsecond flushes");
-    expect(stopSlackStreamMock).not.toHaveBeenCalled();
+    expect(stopSlackStreamMock).toHaveBeenCalledTimes(1);
   });
 
   it("forwards oversized pending stream text to the chunked sender intact (chunking is the sender's responsibility)", async () => {
@@ -1466,6 +3667,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
       session.pendingText += "\nsecond payload";
       throw new Error("network socket closed");
     });
+    stopSlackStreamMock.mockRejectedValueOnce(new Error("stop failed"));
 
     await dispatchPreparedSlackMessage(createPreparedSlackMessage());
 
@@ -1473,11 +3675,11 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     // payload (so the earlier buffered chunk is not dropped).
     expect(deliverRepliesMock).toHaveBeenCalledTimes(1);
     expectDeliverReplyCall(0, "first buffered\nsecond payload");
-    // Session was marked fallback-delivered by deliverPendingStreamFallback,
-    // so finalize skips stopSlackStream.
+    // Session was retired after fallback, so finalization cannot resend the
+    // Slack SDK's retained private buffer.
     expect(session.pendingText).toBe("");
     expect(session.stopped).toBe(true);
-    expect(stopSlackStreamMock).not.toHaveBeenCalled();
+    expect(stopSlackStreamMock).toHaveBeenCalledTimes(1);
     // No raw postMessage path was invoked.
     expect(postMessageMock).not.toHaveBeenCalled();
   });

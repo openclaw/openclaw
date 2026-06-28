@@ -1,3 +1,5 @@
+// Telegram plugin module implements polling lease behavior.
+import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 
 const TELEGRAM_POLLING_LEASES_KEY = Symbol.for("openclaw.telegram.pollingLeases");
@@ -25,6 +27,12 @@ type AcquireTelegramPollingLeaseOpts = {
   token: string;
   accountId: string;
   abortSignal?: AbortSignal;
+  waitMs?: number;
+};
+
+type ReleaseStoppedTelegramPollingLeaseOpts = {
+  token: string;
+  accountId: string;
   waitMs?: number;
 };
 
@@ -58,12 +66,16 @@ async function waitForPreviousRelease(params: {
   if (params.signal?.aborted) {
     return "aborted";
   }
+  if (params.waitMs <= 0) {
+    return "timeout";
+  }
 
   let timer: ReturnType<typeof setTimeout> | undefined;
   let abortListener: (() => void) | undefined;
   try {
+    const waitMs = resolveTimerTimeoutMs(params.waitMs, DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS, 0);
     const timeout = new Promise<"timeout">((resolve) => {
-      timer = setTimeout(() => resolve("timeout"), Math.max(0, params.waitMs));
+      timer = setTimeout(() => resolve("timeout"), waitMs);
       timer.unref?.();
     });
     const aborted = new Promise<"aborted">((resolve) => {
@@ -182,6 +194,33 @@ export async function acquireTelegramPollingLease(
       replacedStoppingPrevious: true,
     });
   }
+}
+
+export async function releaseStoppedTelegramPollingLease(
+  opts: ReleaseStoppedTelegramPollingLeaseOpts,
+): Promise<boolean> {
+  const registry = pollingLeaseRegistry();
+  const fingerprint = fingerprintTelegramBotToken(opts.token);
+  const existing = registry.get(fingerprint);
+  if (!existing || existing.accountId !== opts.accountId) {
+    return false;
+  }
+
+  if (!existing.abortSignal?.aborted) {
+    return false;
+  }
+
+  const waitResult = await waitForPreviousRelease({
+    done: existing.done,
+    waitMs: opts.waitMs ?? DEFAULT_TELEGRAM_POLLING_LEASE_WAIT_MS,
+  });
+  if (waitResult === "released" || registry.get(fingerprint) !== existing) {
+    return false;
+  }
+
+  registry.delete(fingerprint);
+  existing.resolveDone();
+  return true;
 }
 
 export function resetTelegramPollingLeasesForTests(): void {

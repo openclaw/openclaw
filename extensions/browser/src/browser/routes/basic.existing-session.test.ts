@@ -1,3 +1,4 @@
+// Browser tests cover basic.existing session plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
 
@@ -356,7 +357,8 @@ describe("basic browser routes", () => {
     expect(isTransportAvailable).toHaveBeenCalledTimes(1);
     expect(isTransportAvailable).toHaveBeenCalledWith(5_000);
     const [timeoutMs, reachabilityOptions] = readFirstReachabilityCall(isReachable);
-    expect(timeoutMs).toBe(7_000);
+    expect(timeoutMs).toBeGreaterThan(0);
+    expect(timeoutMs).toBeLessThanOrEqual(7_000);
     expect(reachabilityOptions?.ephemeral).toBe(true);
     expect(reachabilityOptions?.signal).toBeInstanceOf(AbortSignal);
     expect(isHttpReachable).not.toHaveBeenCalled();

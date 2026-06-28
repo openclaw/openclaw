@@ -1,13 +1,16 @@
+// Defines external auth contracts for provider plugins.
 import type { AuthProfileStore, OAuthCredential } from "../agents/auth-profiles/types.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
+/** Context for resolving synthetic provider credentials from config. */
 export type ProviderResolveSyntheticAuthContext = {
   config?: OpenClawConfig;
   provider: string;
   providerConfig?: ModelProviderConfig;
 };
 
+/** Synthetic provider credential returned by plugin auth helpers. */
 export type ProviderSyntheticAuthResult = {
   apiKey: string;
   source: string;
@@ -15,7 +18,8 @@ export type ProviderSyntheticAuthResult = {
   expiresAt?: number;
 };
 
-export type ProviderResolveExternalOAuthProfilesContext = {
+/** Context for resolving external provider auth profiles. */
+export type ProviderResolveExternalAuthProfilesContext = {
   config?: OpenClawConfig;
   agentDir?: string;
   workspaceDir?: string;
@@ -23,13 +27,16 @@ export type ProviderResolveExternalOAuthProfilesContext = {
   store: AuthProfileStore;
 };
 
-export type ProviderResolveExternalAuthProfilesContext =
-  ProviderResolveExternalOAuthProfilesContext;
+/** OAuth-specific external auth profile resolution context. */
+export type ProviderResolveExternalOAuthProfilesContext =
+  ProviderResolveExternalAuthProfilesContext;
 
-export type ProviderExternalOAuthProfile = {
+/** External auth profile credential resolved for a provider. */
+export type ProviderExternalAuthProfile = {
   profileId: string;
   credential: OAuthCredential;
   persistence?: "runtime-only" | "persisted";
 };
 
-export type ProviderExternalAuthProfile = ProviderExternalOAuthProfile;
+/** OAuth-specific provider external auth profile alias. */
+export type ProviderExternalOAuthProfile = ProviderExternalAuthProfile;

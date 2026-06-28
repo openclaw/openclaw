@@ -1,3 +1,4 @@
+// Comfy provider module implements model/runtime integration.
 import type {
   GeneratedVideoAsset,
   VideoGenerationProvider,
@@ -5,12 +6,12 @@ import type {
 } from "openclaw/plugin-sdk/video-generation";
 import {
   DEFAULT_COMFY_MODEL,
-  _setComfyFetchGuardForTesting,
+  setComfyFetchGuardForTesting,
   isComfyCapabilityConfigured,
   runComfyWorkflow,
 } from "./workflow-runtime.js";
 
-export { _setComfyFetchGuardForTesting };
+export { setComfyFetchGuardForTesting };
 
 function toComfyInputImage(inputImage?: VideoGenerationSourceAsset) {
   if (!inputImage) {

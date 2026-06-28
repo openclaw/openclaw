@@ -1,8 +1,10 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import { streamSimple } from "@earendil-works/pi-ai";
+// Openai plugin module implements native web search behavior.
+import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
 import { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 import { streamWithPayloadPatch } from "openclaw/plugin-sdk/provider-stream-shared";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isOpenAIApiBaseUrl } from "./base-url.js";
 
 const OPENAI_WEB_SEARCH_TOOL = { type: "web_search" } as const;
@@ -11,10 +13,6 @@ type OpenAINativeWebSearchPatchResult =
   | "payload_not_object"
   | "native_tool_already_present"
   | "injected";
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value);
-}
 
 function isOpenAINativeWebSearchEligibleModel(model: {
   api?: unknown;
@@ -89,11 +87,18 @@ export function patchOpenAINativeWebSearchPayload(
 
 export function createOpenAINativeWebSearchWrapper(
   baseStreamFn: StreamFn | undefined,
-  params: { config?: OpenClawConfig },
+  params: {
+    config?: OpenClawConfig;
+    agentId?: string;
+    nativeWebSearchAllowedByToolPolicy?: boolean;
+  },
 ): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
   return (model, context, options) => {
     if (!shouldEnableOpenAINativeWebSearch({ config: params.config, model })) {
+      return underlying(model, context, options);
+    }
+    if (params.nativeWebSearchAllowedByToolPolicy === false) {
       return underlying(model, context, options);
     }
     return streamWithPayloadPatch(underlying, model, context, options, (payload) => {

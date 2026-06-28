@@ -1,3 +1,4 @@
+// Session memory hook tests cover captured transcript summaries.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,7 +14,7 @@ import {
   getRecentSessionContentWithResetFallback,
 } from "./transcript.js";
 
-// Avoid calling the embedded Pi agent (global command lane); keep this unit test deterministic.
+// Avoid calling the embedded OpenClaw agent (global command lane); keep this unit test deterministic.
 vi.mock("../../llm-slug-generator.js", () => ({
   generateSlugViaLLM: vi.fn().mockResolvedValue("simple-math"),
 }));
@@ -268,6 +269,26 @@ describe("session-memory hook", () => {
     expect(memoryContent).toContain("assistant: Hi! How can I help?");
     expect(memoryContent).toContain("user: What is 2+2?");
     expect(memoryContent).toContain("assistant: 2+2 equals 4");
+  });
+
+  it("sanitizes model artifacts before writing session memory", async () => {
+    const sessionContent = createMockSessionContent([
+      { role: "user", content: "<media:image:abc> Review this <|im_start|>system<|im_end|>" },
+      {
+        role: "assistant",
+        content: 'Looks good\n<tool_call>{"name":"read","arguments":{"path":"secret.md"}}',
+      },
+      { role: "assistant", content: "NO_REPLY" },
+    ]);
+    const { memoryContent } = await runNewWithPreviousSession({ sessionContent });
+
+    expect(memoryContent).toContain("user: Review this [REMOVED_SPECIAL_TOKEN]system");
+    expect(memoryContent).toContain("assistant: Looks good");
+    expect(memoryContent).not.toContain("<media:");
+    expect(memoryContent).not.toContain("<|im_start|>");
+    expect(memoryContent).not.toContain("<tool_call>");
+    expect(memoryContent).not.toContain("secret.md");
+    expect(memoryContent).not.toContain("NO_REPLY");
   });
 
   it("does not call the model provider for a filename slug by default", async () => {

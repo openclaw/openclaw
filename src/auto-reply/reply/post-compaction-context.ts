@@ -1,11 +1,12 @@
+// Loads post-compaction context summaries for continuation prompts.
 import fs from "node:fs";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentContextLimits } from "../../agents/agent-scope.js";
 import { resolveCronStyleNow } from "../../agents/current-time.js";
-import { resolveUserTimezone } from "../../agents/date-time.js";
+import { formatDateStamp, resolveUserTimezone } from "../../agents/date-time.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { openRootFile } from "../../infra/boundary-file-read.js";
-import { normalizeLowercaseStringOrEmpty } from "../../shared/string-coerce.js";
 
 const MAX_CONTEXT_CHARS = 1800;
 const DEFAULT_POST_COMPACTION_SECTIONS = ["Session Startup", "Red Lines"];
@@ -38,22 +39,6 @@ function matchesSectionSet(sectionNames: string[], expectedSections: string[]): 
   }
 
   return counts.size === 0;
-}
-
-function formatDateStamp(nowMs: number, timezone: string): string {
-  const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).formatToParts(new Date(nowMs));
-  const year = parts.find((p) => p.type === "year")?.value;
-  const month = parts.find((p) => p.type === "month")?.value;
-  const day = parts.find((p) => p.type === "day")?.value;
-  if (year && month && day) {
-    return `${year}-${month}-${day}`;
-  }
-  return new Date(nowMs).toISOString().slice(0, 10);
 }
 
 /**
@@ -94,28 +79,21 @@ export async function readPostCompactionContext(
       }
     })();
 
-    // Extract configured sections from AGENTS.md (default: Session Startup + Red Lines).
-    // An explicit empty array disables post-compaction context injection entirely.
     const configuredSections = cfg?.agents?.defaults?.compaction?.postCompactionSections;
-    const sectionNames = Array.isArray(configuredSections)
-      ? configuredSections
-      : DEFAULT_POST_COMPACTION_SECTIONS;
-
-    if (sectionNames.length === 0) {
+    if (!Array.isArray(configuredSections) || configuredSections.length === 0) {
       return null;
     }
+    const sectionNames = configuredSections;
 
     const foundSectionNames: string[] = [];
     let sections = extractSections(content, sectionNames, foundSectionNames);
 
-    // Fall back to legacy section names ("Every Session" / "Safety") when using
-    // defaults and the current headings aren't found — preserves compatibility
-    // with older AGENTS.md templates. The fallback also applies when the user
-    // explicitly configures the default pair, so that pinning the documented
-    // defaults never silently changes behavior vs. leaving the field unset.
-    const isDefaultSections =
-      !Array.isArray(configuredSections) ||
-      matchesSectionSet(configuredSections, DEFAULT_POST_COMPACTION_SECTIONS);
+    // Legacy "Every Session" / "Safety" fallback is preserved only for users
+    // who explicitly opt in to the documented default section pair.
+    const isDefaultSections = matchesSectionSet(
+      configuredSections,
+      DEFAULT_POST_COMPACTION_SECTIONS,
+    );
     if (sections.length === 0 && isDefaultSections) {
       sections = extractSections(content, LEGACY_POST_COMPACTION_SECTIONS, foundSectionNames);
     }

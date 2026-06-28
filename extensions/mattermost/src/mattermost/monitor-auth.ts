@@ -1,3 +1,4 @@
+// Mattermost plugin module implements monitor auth behavior.
 import { parseAccessGroupAllowFromEntry } from "openclaw/plugin-sdk/access-groups";
 import {
   type ChannelIngressDecision,
@@ -6,7 +7,10 @@ import {
   resolveStableChannelMessageIngress,
   type StableChannelIngressIdentityParams,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeLowercaseStringOrEmpty,
+  uniqueStrings,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedMattermostAccount } from "./accounts.js";
 import type { MattermostChannel } from "./client.js";
 import type { OpenClawConfig } from "./runtime-api.js";
@@ -54,7 +58,20 @@ export function normalizeMattermostAllowList(entries: Array<string | number>): s
   const normalized = entries
     .map((entry) => normalizeMattermostAllowEntry(String(entry)))
     .filter(Boolean);
-  return Array.from(new Set(normalized));
+  return uniqueStrings(normalized);
+}
+
+export function formatMattermostDirectMessageDropLog(params: {
+  senderId: string;
+  dmPolicy: string;
+  reasonCode?: string;
+}): string {
+  const reason = params.reasonCode ? ` reason=${params.reasonCode}` : "";
+  const hint =
+    params.dmPolicy === "open" && params.reasonCode === "dm_policy_not_allowlisted"
+      ? " hint=add-allowFrom-wildcard"
+      : "";
+  return `mattermost: drop dm sender=${params.senderId} (dmPolicy=${params.dmPolicy}${reason}${hint})`;
 }
 
 export function isMattermostSenderAllowed(params: {
@@ -247,12 +264,12 @@ export async function authorizeMattermostCommandInvocation(params: {
     hasControlCommand,
   } = params;
 
-  if (!channelInfo) {
+  if (!channelInfo?.type) {
     return {
       ok: false,
       denyReason: "unknown-channel",
       commandAuthorized: false,
-      channelInfo: null,
+      channelInfo,
       kind: "channel",
       chatType: "channel",
       channelName: "",

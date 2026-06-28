@@ -1,7 +1,8 @@
+// Doctor config-flow tests cover config repair, migration, stripping, and validation orchestration.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { loadAndMaybeMigrateDoctorConfig } from "./doctor-config-flow.js";
 import {
   getDoctorConfigInputForTest,
@@ -11,6 +12,9 @@ import {
 type TerminalNote = (message: string, title?: string) => void;
 
 const terminalNoteMock = vi.hoisted(() => vi.fn<TerminalNote>());
+const callGatewayMock = vi.hoisted(() => vi.fn());
+const runDoctorRepairSequenceMock = vi.hoisted(() => vi.fn());
+const collectDoctorPreviewNotesParamsMock = vi.hoisted(() => vi.fn());
 const collectImplicitFallbackClobberWarningsMock = vi.hoisted(() =>
   vi.fn<(cfg: unknown) => string[]>(() => []),
 );
@@ -222,9 +226,30 @@ const legacyConfigMigrationForTest = vi.hoisted(() => {
   };
 });
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: terminalNoteMock,
 }));
+
+vi.mock("../gateway/call.js", () => ({
+  callGateway: (opts: unknown) => callGatewayMock(opts),
+}));
+
+vi.mock("./doctor/repair-sequencing.js", async () => {
+  const actual = await vi.importActual<typeof import("./doctor/repair-sequencing.js")>(
+    "./doctor/repair-sequencing.js",
+  );
+  return {
+    ...actual,
+    runDoctorRepairSequence: (params: unknown) => {
+      if (runDoctorRepairSequenceMock.getMockImplementation()) {
+        return runDoctorRepairSequenceMock(params);
+      }
+      return actual.runDoctorRepairSequence(
+        params as Parameters<typeof actual.runDoctorRepairSequence>[0],
+      );
+    },
+  };
+});
 
 vi.mock("../config/plugin-auto-enable.js", () => ({
   applyPluginAutoEnable: vi.fn(
@@ -637,6 +662,58 @@ vi.mock("./doctor/shared/stale-plugin-config.js", () => ({
   })),
 }));
 
+vi.mock("./doctor/shared/plugin-tool-allowlist-warnings.js", () => ({
+  collectBundledProviderAllowlistPolicyWarnings: vi.fn(() => []),
+  collectPluginToolAllowlistWarnings: vi.fn(() => []),
+}));
+
+vi.mock("../doctor-plugin-registry.js", () => ({
+  maybeRepairManagedNpmOpenClawPeerLinks: vi.fn(async () => undefined),
+  maybeRepairStaleManagedNpmBundledPlugins: vi.fn(() => undefined),
+}));
+
+vi.mock("../doctor-auth-oauth-sidecar.js", () => ({
+  maybeRepairLegacyOAuthSidecarProfiles: vi.fn(async () => ({
+    detected: [],
+    changes: [],
+    warnings: [],
+  })),
+}));
+
+vi.mock("./doctor/shared/context-engine-host-compat.js", () => ({
+  maybeRepairContextEngineHostCompatibility: vi.fn(async ({ cfg }) => ({
+    config: cfg,
+    changes: [],
+  })),
+}));
+
+vi.mock("./doctor/shared/missing-configured-plugin-install.js", () => ({
+  repairMissingConfiguredPluginInstalls: vi.fn(async ({ cfg }) => ({
+    config: cfg,
+    changes: [],
+    warnings: [],
+    failedPluginIds: [],
+  })),
+}));
+
+vi.mock("./doctor/shared/active-tool-schema-warnings.js", () => ({
+  collectActiveToolSchemaProjectionWarnings: vi.fn(() => []),
+}));
+
+vi.mock("./doctor/shared/plugin-dependency-cleanup.js", () => ({
+  cleanupLegacyPluginDependencyState: vi.fn(async () => ({
+    changes: [],
+    warnings: [],
+  })),
+}));
+
+vi.mock("./doctor/shared/stale-oauth-profile-shadows.js", () => ({
+  repairStaleOAuthProfileShadows: vi.fn(async () => ({
+    changes: [],
+    warnings: [],
+  })),
+}));
+
 vi.mock("./doctor/channel-capabilities.js", () => {
   const byChannel = {
     googlechat: {
@@ -654,7 +731,7 @@ vi.mock("./doctor/channel-capabilities.js", () => {
     msteams: {
       dmAllowFromMode: "topOnly",
       groupModel: "hybrid",
-      groupAllowFromFallbackToAllowFrom: false,
+      groupAllowFromFallbackToAllowFrom: true,
       warnOnEmptyGroupSenderAllowlist: true,
     },
     zalouser: {
@@ -675,6 +752,7 @@ vi.mock("./doctor/channel-capabilities.js", () => {
       channelName && channelName in byChannel
         ? byChannel[channelName as keyof typeof byChannel]
         : fallback,
+    resolveDoctorChannelAccountIds: () => undefined,
   };
 });
 
@@ -690,7 +768,7 @@ vi.mock("../plugins/doctor-contract-registry.js", () => {
     return Boolean(
       talk &&
       ["voiceId", "voiceAliases", "modelId", "outputFormat", "apiKey"].some((key) =>
-        Object.prototype.hasOwnProperty.call(talk, key),
+        Object.hasOwn(talk, key),
       ),
     );
   }
@@ -864,6 +942,14 @@ vi.mock("./doctor/shared/legacy-config-issues.js", async () => {
 });
 
 vi.mock("../plugins/setup-registry.js", () => ({
+  resolvePluginSetupCliBackend: vi.fn(() => undefined),
+  resolvePluginSetupRegistry: vi.fn(() => ({
+    providers: [],
+    cliBackends: [],
+    configMigrations: [],
+    autoEnableProbes: [],
+    diagnostics: [],
+  })),
   resolvePluginSetupAutoEnableReasons: vi.fn(() => []),
   runPluginSetupConfigMigrations: vi.fn(({ config }: { config: unknown }) => ({
     config,
@@ -1097,65 +1183,71 @@ vi.mock("./doctor/shared/preview-warnings.js", () => {
     ];
   }
 
-  return {
-    collectDoctorPreviewWarnings: vi.fn(
-      async ({
-        cfg,
-      }: {
-        cfg: {
-          channels?: Record<string, unknown>;
-          plugins?: { enabled?: boolean; entries?: Record<string, { enabled?: boolean }> };
-        };
-        doctorFixCommand: string;
-      }) => {
-        const warnings: string[] = [];
-        const telegram = asRecord(cfg.channels?.telegram);
-        if (telegram) {
-          const telegramBlocked =
-            cfg.plugins?.enabled === false || cfg.plugins?.entries?.telegram?.enabled === false;
-          if (telegramBlocked) {
-            warnings.push(
-              cfg.plugins?.enabled === false
-                ? "- channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally. Fix plugin enablement before relying on setup guidance for this channel."
-                : '- channels.telegram: channel is configured, but plugin "telegram" is disabled by plugins.entries.telegram.enabled=false. Fix plugin enablement before relying on setup guidance for this channel.',
-            );
-          } else {
+  async function collectWarnings({
+    cfg,
+  }: {
+    cfg: {
+      channels?: Record<string, unknown>;
+      plugins?: { enabled?: boolean; entries?: Record<string, { enabled?: boolean }> };
+    };
+    doctorFixCommand: string;
+  }): Promise<string[]> {
+    const warnings: string[] = [];
+    const telegram = asRecord(cfg.channels?.telegram);
+    if (telegram) {
+      const telegramBlocked =
+        cfg.plugins?.enabled === false || cfg.plugins?.entries?.telegram?.enabled === false;
+      if (telegramBlocked) {
+        warnings.push(
+          cfg.plugins?.enabled === false
+            ? "- channels.telegram: channel is configured, but plugins.enabled=false blocks channel plugins globally. Fix plugin enablement before relying on setup guidance for this channel."
+            : '- channels.telegram: channel is configured, but plugin "telegram" is disabled by plugins.entries.telegram.enabled=false. Fix plugin enablement before relying on setup guidance for this channel.',
+        );
+      } else {
+        warnings.push(
+          ...telegramFirstTimeWarnings({
+            account: telegram,
+            prefix: "channels.telegram",
+          }),
+        );
+        const accounts = asRecord(telegram.accounts);
+        for (const [accountId, accountRaw] of Object.entries(accounts ?? {})) {
+          const account = asRecord(accountRaw);
+          if (account) {
             warnings.push(
               ...telegramFirstTimeWarnings({
-                account: telegram,
-                prefix: "channels.telegram",
+                account,
+                parent: telegram,
+                prefix: `channels.telegram.accounts.${accountId}`,
               }),
             );
-            const accounts = asRecord(telegram.accounts);
-            for (const [accountId, accountRaw] of Object.entries(accounts ?? {})) {
-              const account = asRecord(accountRaw);
-              if (account) {
-                warnings.push(
-                  ...telegramFirstTimeWarnings({
-                    account,
-                    parent: telegram,
-                    prefix: `channels.telegram.accounts.${accountId}`,
-                  }),
-                );
-              }
-            }
           }
         }
-        const imessage = asRecord(cfg.channels?.imessage);
-        if (imessage?.groupPolicy === "allowlist" && !hasStringEntries(imessage.groupAllowFrom)) {
-          warnings.push(
-            '- channels.imessage.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped.',
-          );
-        }
-        return warnings;
-      },
-    ),
+      }
+    }
+    const imessage = asRecord(cfg.channels?.imessage);
+    if (imessage?.groupPolicy === "allowlist" && !hasStringEntries(imessage.groupAllowFrom)) {
+      warnings.push(
+        '- channels.imessage.groupPolicy is "allowlist" but groupAllowFrom is empty — this channel does not fall back to allowFrom, so all group messages will be silently dropped.',
+      );
+    }
+    return warnings;
+  }
+
+  return {
+    collectDoctorPreviewNotes: vi.fn(async (params) => {
+      collectDoctorPreviewNotesParamsMock(params);
+      return {
+        infoNotes: [],
+        warningNotes: await collectWarnings(params),
+      };
+    }),
   };
 });
 
 vi.mock("./doctor-config-preflight.js", async () => {
-  const fs = await import("node:fs/promises");
-  const path = await import("node:path");
+  const fsLocal = await import("node:fs/promises");
+  const pathLocal = await import("node:path");
   const {
     collectRelevantDoctorPluginIds,
     listPluginDoctorLegacyConfigRules,
@@ -1167,8 +1259,8 @@ vi.mock("./doctor-config-preflight.js", async () => {
   function resolveConfigPath() {
     const stateDir =
       process.env.OPENCLAW_STATE_DIR ||
-      (process.env.HOME ? path.join(process.env.HOME, ".openclaw") : "");
-    return process.env.OPENCLAW_CONFIG_PATH || path.join(stateDir, "openclaw.json");
+      (process.env.HOME ? pathLocal.join(process.env.HOME, ".openclaw") : "");
+    return process.env.OPENCLAW_CONFIG_PATH || pathLocal.join(stateDir, "openclaw.json");
   }
 
   function normalizeDiscordStreamingCompat(cfg: Record<string, unknown>): Record<string, unknown> {
@@ -1218,7 +1310,10 @@ vi.mock("./doctor-config-preflight.js", async () => {
       let exists = injected?.exists ?? false;
       if (!injected) {
         try {
-          parsed = JSON.parse(await fs.readFile(configPath, "utf-8")) as Record<string, unknown>;
+          parsed = JSON.parse(await fsLocal.readFile(configPath, "utf-8")) as Record<
+            string,
+            unknown
+          >;
           exists = true;
         } catch {
           parsed = {};
@@ -1351,7 +1446,9 @@ vi.mock("./doctor-config-analysis.js", () => {
 });
 
 vi.mock("./doctor-state-migrations.js", () => ({
+  autoMigrateLegacyState: vi.fn(async () => ({ changes: [], warnings: [] })),
   autoMigrateLegacyStateDir: vi.fn(async () => ({ changes: [], warnings: [] })),
+  autoMigrateLegacyTaskStateSidecars: vi.fn(async () => ({ changes: [], warnings: [] })),
 }));
 
 function resetTerminalNoteMock() {
@@ -1396,8 +1493,23 @@ type RepairedDiscordPolicy = {
 };
 
 describe("doctor config flow", () => {
+  beforeAll(async () => {
+    await Promise.all([
+      import("../config/plugin-auto-enable.js"),
+      import("./doctor/repair-sequencing.js"),
+      import("./doctor/shared/channel-doctor.js"),
+      import("./doctor/shared/legacy-config-issues.js"),
+      import("./doctor/shared/plugin-tool-allowlist-warnings.js"),
+      import("./doctor/shared/preview-warnings.js"),
+    ]);
+  });
+
   beforeEach(() => {
     terminalNoteMock.mockClear();
+    callGatewayMock.mockReset();
+    callGatewayMock.mockResolvedValue({});
+    runDoctorRepairSequenceMock.mockReset();
+    collectDoctorPreviewNotesParamsMock.mockClear();
     collectImplicitFallbackClobberWarningsMock.mockClear();
     collectImplicitFallbackClobberWarningsMock.mockReturnValue([]);
     noteImplicitFallbackClobberWarningsMock.mockClear();
@@ -1407,7 +1519,7 @@ describe("doctor config flow", () => {
     const result = await runDoctorConfigWithInput({
       config: {
         gateway: { auth: { mode: "token", token: 123 } },
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
       },
       run: loadAndMaybeMigrateDoctorConfig,
     });
@@ -1415,6 +1527,138 @@ describe("doctor config flow", () => {
     expect((result.cfg as Record<string, unknown>).gateway).toEqual({
       auth: { mode: "token", token: 123 },
     });
+  });
+
+  it("collects plugin blocker previews from the pre-auto-enable config", async () => {
+    await runDoctorConfigWithInput({
+      config: {
+        plugins: {
+          allow: ["existing-plugin"],
+        },
+        tools: {
+          alsoAllow: ["browser"],
+        },
+      },
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(collectDoctorPreviewNotesParamsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["existing-plugin", "browser"],
+          }),
+        }),
+        activationSourceConfig: expect.objectContaining({
+          plugins: expect.objectContaining({
+            allow: ["existing-plugin"],
+          }),
+        }),
+      }),
+    );
+  });
+
+  it("reloads gateway secrets and refreshes auth status after auth profile repairs", async () => {
+    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
+      state: params.state,
+      changeNotes: ["Migrated 1 sidecar-backed Codex OAuth profile."],
+      warningNotes: [],
+      authProfilesRepaired: true,
+    }));
+
+    await runDoctorConfigWithInput({
+      config: {},
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "secrets.reload",
+      params: {},
+      timeoutMs: 3000,
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
+  });
+
+  it("keeps doctor repair silent when gateway secrets reload fails", async () => {
+    callGatewayMock.mockRejectedValueOnce(new Error("gateway unavailable"));
+    runDoctorRepairSequenceMock.mockImplementation(async (params: { state: unknown }) => ({
+      state: params.state,
+      changeNotes: ["Removed stale OAuth auth profile shadow openai-codex."],
+      warningNotes: [],
+      authProfilesRepaired: true,
+    }));
+
+    await expect(
+      runDoctorConfigWithInput({
+        config: {},
+        repair: true,
+        run: loadAndMaybeMigrateDoctorConfig,
+      }),
+    ).resolves.toBeTruthy();
+
+    expect(callGatewayMock).toHaveBeenNthCalledWith(1, {
+      method: "secrets.reload",
+      params: {},
+      timeoutMs: 3000,
+    });
+    expect(callGatewayMock).toHaveBeenNthCalledWith(2, {
+      method: "models.authStatus",
+      params: { refresh: true },
+      timeoutMs: 3000,
+    });
+  });
+
+  it("previews and repairs hooks token reuse of gateway auth", async () => {
+    const config = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: "shared-gateway-token-1234567890",
+        },
+      },
+      hooks: {
+        enabled: true,
+        token: "shared-gateway-token-1234567890",
+      },
+    };
+    const previewNotes = resetTerminalNoteMock();
+    const preview = await runDoctorConfigWithInput({
+      config,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(preview.shouldWriteConfig).toBe(false);
+    expect(preview.cfg.hooks?.token).toBe("shared-gateway-token-1234567890");
+    expect(
+      previewNotes.mock.calls.some(
+        ([message, title]) =>
+          title === "Doctor changes preview" &&
+          message.includes("Rotated hooks.token because it reused active Gateway"),
+      ),
+    ).toBe(true);
+    expect(
+      previewNotes.mock.calls.some(
+        ([message, title]) =>
+          title === "Doctor" &&
+          message.includes("openclaw doctor --fix") &&
+          message.includes("rotate hooks.token"),
+      ),
+    ).toBe(true);
+
+    const repair = await runDoctorConfigWithInput({
+      config,
+      repair: true,
+      run: loadAndMaybeMigrateDoctorConfig,
+    });
+
+    expect(repair.shouldWriteConfig).toBe(true);
+    expect(repair.cfg.hooks?.token).toMatch(/^[0-9a-f]{48}$/);
+    expect(repair.cfg.hooks?.token).not.toBe("shared-gateway-token-1234567890");
   });
 
   it("does not warn on mutable account allowlists when dangerous name matching is inherited", async () => {
@@ -1486,6 +1730,38 @@ describe("doctor config flow", () => {
     expect(warning).toContain("/virtual/.openclaw/workspace/skills/linear-webhook");
     expect(warning).toContain("/virtual/.openclaw/hooks/transforms");
     expect(warning).toContain("move custom transforms there or remove hooks.transformsDir");
+  });
+
+  it("warns when internal hook entries include unsupported loader keys", async () => {
+    const doctorWarnings = await collectDoctorWarnings({
+      hooks: {
+        internal: {
+          entries: {
+            "custom-hook": {
+              enabled: true,
+              handler: "./hooks/custom.ts",
+              extraDirs: ["./hooks"],
+              env: { OPENCLAW_CUSTOM_HOOK: "1" },
+            },
+            "valid-hook": {
+              enabled: true,
+              paths: ["./tracked"],
+            },
+            "null-hook": null,
+          },
+        },
+      },
+    });
+
+    const warning = doctorWarnings.join("\n");
+    expect(warning).toContain("hooks.internal.entries.custom-hook:");
+    expect(warning).toContain(
+      "unsupported loader keys handler, extraDirs will not load hook modules",
+    );
+    expect(warning).toContain("bootstrap-extra-files for session bootstrap content");
+    expect(warning).toContain("Doctor cannot rewrite this automatically");
+    expect(warning).not.toContain("hooks.internal.entries.valid-hook");
+    expect(warning).not.toContain("hooks.internal.entries.null-hook");
   });
 
   it("does not warn about sender-based group allowlist for googlechat", async () => {
@@ -1678,7 +1954,7 @@ describe("doctor config flow", () => {
       config: {
         bridge: { bind: "auto" },
         gateway: { auth: { mode: "token", token: "ok", extra: true } },
-        agents: { list: [{ id: "pi" }] },
+        agents: { list: [{ id: "openclaw" }] },
         session: {
           maintenance: {
             rotateBytes: "10mb",
@@ -1714,8 +1990,9 @@ describe("doctor config flow", () => {
     expect(
       ((browser.profiles as Record<string, { driver?: string }>)?.chromeLive ?? {}).driver,
     ).toBe("existing-session");
-    expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser"]);
+    expect(result.cfg.plugins?.allow).toEqual(["telegram", "browser", "codex"]);
     expect(result.cfg.plugins?.entries?.browser?.enabled).toBe(true);
+    expect(result.cfg.plugins?.entries?.codex?.enabled).toBe(true);
   });
 
   it("preserves commitments config on repair", async () => {
@@ -1734,7 +2011,7 @@ describe("doctor config flow", () => {
       enabled: true,
       maxPerDay: 2,
     });
-  });
+  }, 300_000);
 
   it("preserves discord streaming intent while stripping unsupported keys on repair", async () => {
     const result = await runDoctorConfigWithInput({
@@ -2704,6 +2981,19 @@ describe("doctor config flow", () => {
                     voiceId: "voice-123",
                     modelId: "eleven_v3",
                   },
+                },
+                realtime: {
+                  provider: "openai",
+                  providers: {
+                    openai: {
+                      model: "gpt-realtime",
+                    },
+                  },
+                  model: "gpt-realtime",
+                  voice: "cedar",
+                  mode: "realtime",
+                  transport: "gateway-relay",
+                  brain: "agent-consult",
                 },
               },
             },

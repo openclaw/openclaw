@@ -1,3 +1,5 @@
+// Config write flow helpers commit control-plane config edits, detect auth
+// changes, write restart sentinels, and schedule gateway restarts when required.
 import { isDeepStrictEqual } from "node:util";
 import {
   createConfigIO,
@@ -12,7 +14,7 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
-import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime.js";
+import { getActiveSecretsRuntimeSnapshot } from "../../secrets/runtime-state.js";
 import { resolveEffectiveSharedGatewayAuth, resolveGatewayAuth } from "../auth.js";
 import { buildGatewayReloadPlan } from "../config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../config-reload-settings.js";
@@ -27,6 +29,7 @@ export type ConfigWriteOptions = Awaited<
   ReturnType<typeof readConfigFileSnapshotForWrite>
 >["writeOptions"];
 
+/** Resolves the on-disk config path used in config method responses. */
 export function resolveGatewayConfigPath(snapshot?: Pick<ConfigWriteSnapshot, "path">): string {
   return snapshot?.path ?? createConfigIO().configPath;
 }
@@ -49,6 +52,7 @@ function normalizeTrustedProxyAuthForCompare(auth: ReturnType<typeof resolveGate
   };
 }
 
+/** Compares the effective shared Gateway auth surface that active clients use. */
 export function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawConfig): boolean {
   const prevResolvedAuth = resolveGatewayAuth({
     authConfig: prev.gateway?.auth,
@@ -92,6 +96,7 @@ export function didSharedGatewayAuthChange(prev: OpenClawConfig, next: OpenClawC
   return prevAuth.mode !== nextAuth.mode || !isDeepStrictEqual(prevAuth.secret, nextAuth.secret);
 }
 
+/** Compares against the active secrets-expanded config when one is available. */
 export function didActiveSharedGatewayAuthChange(params: {
   fallbackPrev: OpenClawConfig;
   next: OpenClawConfig;
@@ -127,19 +132,40 @@ function queueSharedGatewayAuthGenerationRefresh(
   });
 }
 
-function shouldScheduleDirectConfigRestart(params: {
+function isNoopConfigReloadPlan(plan: ReturnType<typeof buildGatewayReloadPlan>): boolean {
+  return (
+    !plan.restartGateway &&
+    plan.hotReasons.length === 0 &&
+    !plan.reloadHooks &&
+    !plan.restartGmailWatcher &&
+    !plan.restartCron &&
+    !plan.restartHeartbeat &&
+    !plan.restartHealthMonitor &&
+    !plan.reloadPlugins &&
+    !plan.disposeMcpRuntimes &&
+    plan.restartChannels.size === 0
+  );
+}
+
+function resolveConfigRestartRequirement(params: {
   changedPaths: string[];
   nextConfig: OpenClawConfig;
-}): boolean {
+}): { requiresRestart: boolean; scheduleDirectRestart: boolean } {
   const reloadSettings = resolveGatewayReloadSettings(params.nextConfig);
-  if (reloadSettings.mode === "off") {
-    return true;
-  }
   const plan = buildGatewayReloadPlan(params.changedPaths);
-  if (reloadSettings.mode === "hot" && plan.restartGateway) {
-    return true;
+  if (isNoopConfigReloadPlan(plan)) {
+    return { requiresRestart: false, scheduleDirectRestart: false };
   }
-  return false;
+  if (reloadSettings.mode === "off") {
+    return { requiresRestart: true, scheduleDirectRestart: true };
+  }
+  if (reloadSettings.mode === "restart") {
+    return { requiresRestart: true, scheduleDirectRestart: false };
+  }
+  if (plan.restartGateway) {
+    return { requiresRestart: true, scheduleDirectRestart: reloadSettings.mode === "hot" };
+  }
+  return { requiresRestart: false, scheduleDirectRestart: false };
 }
 
 function resolveConfigRestartRequest(params: unknown): {
@@ -175,6 +201,7 @@ function buildConfigRestartSentinelPayload(params: {
   kind: RestartSentinelPayload["kind"];
   mode: string;
   configPath: string;
+  requiresRestart: boolean;
   sessionKey: string | undefined;
   deliveryContext: ReturnType<typeof extractDeliveryInfo>["deliveryContext"];
   threadId: ReturnType<typeof extractDeliveryInfo>["threadId"];
@@ -192,41 +219,52 @@ function buildConfigRestartSentinelPayload(params: {
     stats: {
       mode: params.mode,
       root: params.configPath,
+      requiresRestart: params.requiresRestart,
     },
   };
 }
 
-async function tryWriteRestartSentinelPayload(
-  payload: RestartSentinelPayload,
-): Promise<string | null> {
+async function tryWriteRestartSentinelPayload(payload: RestartSentinelPayload): Promise<boolean> {
   try {
-    return await writeRestartSentinel(payload);
+    await writeRestartSentinel(payload);
+    return true;
   } catch {
-    return null;
+    return false;
   }
 }
 
+/** Persists a gateway config write and returns follow-up work that must run after response. */
 export async function commitGatewayConfigWrite(params: {
   snapshot: ConfigWriteSnapshot;
   writeOptions: ConfigWriteOptions;
   nextConfig: OpenClawConfig;
   context?: GatewayRequestContext;
   disconnectSharedAuthClients?: boolean;
-}): Promise<{ path: string; queueFollowUp: () => void }> {
-  await replaceConfigFile({
+}): Promise<{ path: string; config: OpenClawConfig; queueFollowUp: () => void }> {
+  const result = await replaceConfigFile({
     nextConfig: params.nextConfig,
-    writeOptions: params.writeOptions,
+    writeOptions: {
+      ...params.writeOptions,
+      runtimeRefresh: {
+        ...params.writeOptions.runtimeRefresh,
+        includeAuthStoreRefs: false,
+      },
+    },
     afterWrite: { mode: "auto" },
   });
   return {
     path: resolveGatewayConfigPath(params.snapshot),
+    config: result.nextConfig,
     queueFollowUp: () => {
-      queueSharedGatewayAuthGenerationRefresh(true, params.nextConfig, params.context);
+      // Defer generation refresh/disconnect until after the RPC response so
+      // the writer receives the success payload before its connection is closed.
+      queueSharedGatewayAuthGenerationRefresh(true, result.nextConfig, params.context);
       queueSharedGatewayAuthDisconnect(Boolean(params.disconnectSharedAuthClients), params.context);
     },
   };
 }
 
+/** Builds restart sentinel/queue state for config.patch and config.apply writes. */
 export async function resolveGatewayConfigRestartWriteResult(params: {
   requestParams: unknown;
   kind: RestartSentinelPayload["kind"];
@@ -238,25 +276,27 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
   context?: GatewayRequestContext;
 }): Promise<{
   payload: RestartSentinelPayload;
-  sentinelPath: string | null;
+  sentinelPersisted: boolean;
   restart: ReturnType<typeof scheduleGatewaySigusr1Restart> | undefined;
 }> {
   const { sessionKey, note, restartDelayMs, deliveryContext, threadId } =
     resolveConfigRestartRequest(params.requestParams);
+  const restartRequirement = resolveConfigRestartRequirement({
+    changedPaths: params.changedPaths,
+    nextConfig: params.nextConfig,
+  });
   const payload = buildConfigRestartSentinelPayload({
     kind: params.kind,
     mode: params.mode,
     configPath: params.configPath,
+    requiresRestart: restartRequirement.requiresRestart,
     sessionKey,
     deliveryContext,
     threadId,
     note,
   });
-  const sentinelPath = await tryWriteRestartSentinelPayload(payload);
-  const restart = shouldScheduleDirectConfigRestart({
-    changedPaths: params.changedPaths,
-    nextConfig: params.nextConfig,
-  })
+  const sentinelPersisted = await tryWriteRestartSentinelPayload(payload);
+  const restart = restartRequirement.scheduleDirectRestart
     ? scheduleGatewaySigusr1Restart({
         delayMs: restartDelayMs,
         reason: params.mode,
@@ -273,5 +313,5 @@ export async function resolveGatewayConfigRestartWriteResult(params: {
       `${params.mode} restart coalesced ${formatControlPlaneActor(params.actor)} delayMs=${restart.delayMs}`,
     );
   }
-  return { payload, sentinelPath, restart };
+  return { payload, sentinelPersisted, restart };
 }

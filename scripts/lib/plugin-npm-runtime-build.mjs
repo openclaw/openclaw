@@ -1,3 +1,4 @@
+// Builds package-local runtime dist files for publishable bundled plugins.
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -6,6 +7,10 @@ import {
   collectPluginSourceEntries,
   collectTopLevelPublicSurfaceEntries,
 } from "./bundled-plugin-build-entries.mjs";
+import {
+  listMissingPackageStaticAssetSources,
+  runPackageAssetBuild,
+} from "./plugin-npm-runtime-assets.mjs";
 import { copyStaticExtensionAssetsForPackage } from "./static-extension-assets.mjs";
 
 const env = {
@@ -16,8 +21,12 @@ function readJsonFile(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+/** Return whether a plugin package publishes through an artifact release workflow. */
 export function isPublishablePluginPackage(packageJson) {
-  return packageJson.openclaw?.release?.publishToNpm === true;
+  return (
+    packageJson.openclaw?.release?.publishToNpm === true ||
+    packageJson.openclaw?.release?.publishToClawHub === true
+  );
 }
 
 function normalizePackageEntry(value) {
@@ -87,6 +96,7 @@ function packageRelativePathExists(packageDir, relativePath) {
   return fs.existsSync(path.join(packageDir, relativePath));
 }
 
+/** List extension package dirs whose package metadata enables artifact publishing. */
 export function listPublishablePluginPackageDirs(params = {}) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const extensionsRoot = path.join(repoRoot, "extensions");
@@ -103,12 +113,14 @@ export function listPublishablePluginPackageDirs(params = {}) {
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/** List package-local runtime output files expected from a runtime build plan. */
 export function listPluginNpmRuntimeBuildOutputs(plan) {
   return Object.keys(plan.entry)
     .map((entryKey) => `./dist/${entryKey}.js`)
     .toSorted((left, right) => left.localeCompare(right));
 }
 
+/** Resolve package `files` entries needed for runtime build outputs and plugin metadata. */
 export function resolvePluginNpmRuntimePackageFiles(plan) {
   const merged = new Set(
     Array.isArray(plan.packageJson.files)
@@ -118,6 +130,9 @@ export function resolvePluginNpmRuntimePackageFiles(plan) {
   merged.add("dist/**");
   if (packageRelativePathExists(plan.packageDir, "openclaw.plugin.json")) {
     merged.add("openclaw.plugin.json");
+  }
+  if (packageRelativePathExists(plan.packageDir, "npm-shrinkwrap.json")) {
+    merged.add("npm-shrinkwrap.json");
   }
   if (packageRelativePathExists(plan.packageDir, "README.md")) {
     merged.add("README.md");
@@ -151,6 +166,7 @@ function resolveOpenClawPeerRange(packageJson, rootPackageJson) {
   );
 }
 
+/** Resolve package peer dependency metadata for the OpenClaw plugin API. */
 export function resolvePluginNpmRuntimePackagePeerMetadata(plan) {
   const openclawPeerRange = resolveOpenClawPeerRange(plan.packageJson, plan.rootPackageJson);
   if (!openclawPeerRange) {
@@ -176,6 +192,7 @@ export function resolvePluginNpmRuntimePackagePeerMetadata(plan) {
   };
 }
 
+/** Resolve the package-local runtime build plan for one publishable plugin package. */
 export function resolvePluginNpmRuntimeBuildPlan(params) {
   const repoRoot = path.resolve(params.repoRoot ?? ".");
   const packageDir = resolvePackageDir(repoRoot, params.packageDir);
@@ -240,6 +257,7 @@ export function resolvePluginNpmRuntimeBuildPlan(params) {
   };
 }
 
+/** Build package-local runtime files and static assets for one plugin package. */
 export async function buildPluginNpmRuntime(params) {
   const plan = resolvePluginNpmRuntimeBuildPlan(params);
   if (!plan) {
@@ -261,27 +279,56 @@ export async function buildPluginNpmRuntime(params) {
     outDir: plan.outDir,
     platform: "node",
   });
+  const assetBuildCommand = runPackageAssetBuild(plan);
+  const missingStaticAssets = listMissingPackageStaticAssetSources(plan);
+  if (missingStaticAssets.length > 0) {
+    throw new Error(
+      `${plan.pluginDir} missing static asset source(s): ${missingStaticAssets.join(", ")}`,
+    );
+  }
   const copiedStaticAssets = copyStaticExtensionAssetsForPackage({
     rootDir: plan.repoRoot,
     pluginDir: plan.pluginDir,
   });
   return {
     ...plan,
+    assetBuildCommand,
     copiedStaticAssets,
   };
 }
 
-function parseArgs(argv) {
-  const packageDir = argv[0];
-  if (!packageDir) {
-    throw new Error("usage: node scripts/lib/plugin-npm-runtime-build.mjs <package-dir>");
+function usage() {
+  return "usage: node scripts/lib/plugin-npm-runtime-build.mjs <package-dir>";
+}
+
+function readPackageDirArg(argv) {
+  const args = argv[0] === "--" ? argv.slice(1) : argv;
+  const packageDir = args[0];
+  if (packageDir === "--help" || packageDir === "-h") {
+    return { help: true, packageDir: "" };
+  }
+  if (!packageDir || packageDir.startsWith("-")) {
+    throw new Error(usage());
+  }
+  const extraArg = args[1];
+  if (extraArg) {
+    throw new Error(`unexpected plugin npm runtime build argument: ${extraArg}`);
   }
   return { packageDir };
 }
 
+export function parseArgs(argv) {
+  return readPackageDirArg(argv);
+}
+
 if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
   try {
-    const { packageDir } = parseArgs(process.argv.slice(2));
+    const args = parseArgs(process.argv.slice(2));
+    if (args.help) {
+      console.log(usage());
+      process.exit(0);
+    }
+    const { packageDir } = args;
     const result = await buildPluginNpmRuntime({ packageDir });
     if (result) {
       console.error(

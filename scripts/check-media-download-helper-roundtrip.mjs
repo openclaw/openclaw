@@ -1,6 +1,7 @@
 #!/usr/bin/env node
+// Checks extension media downloads keep helper-read/save calls close together.
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const WINDOW_LINES = 80;
 const READ_HELPER_RE = /\b(?:readRemoteMediaBuffer|fetchRemoteMedia)\s*\(/;
@@ -14,6 +15,7 @@ function listTrackedExtensionSources() {
     .split("\n")
     .filter(Boolean)
     .filter((file) => file.includes("/src/"))
+    .filter((file) => existsSync(file))
     .filter((file) => !isTestOrFixture(file));
 }
 

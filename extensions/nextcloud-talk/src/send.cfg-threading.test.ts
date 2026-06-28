@@ -1,4 +1,5 @@
-import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-message";
+// Nextcloud Talk tests cover send.cfg threading plugin behavior.
+import { verifyChannelMessageAdapterCapabilityProofs } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createSendCfgThreadingRuntime,
   expectProvidedCfgSkipsRuntimeLoad,
@@ -309,5 +310,177 @@ describe("nextcloud-talk send cfg threading", () => {
 
     expect(hoisted.loadConfig).not.toHaveBeenCalled();
     expect(hoisted.resolveNextcloudTalkAccount).not.toHaveBeenCalled();
+  });
+
+  it("uses provided cfg for sendReaction and posts the reaction payload", async () => {
+    const cfg = { source: "provided" } as const;
+    fetchMock.mockResolvedValueOnce(new Response("{}", { status: 200 }));
+
+    const result = await sendReactionNextcloudTalk("room:ops", "m-1", "👍", {
+      cfg,
+      accountId: "work",
+    });
+
+    expectProvidedCfgSkipsRuntimeLoad({
+      loadConfig: hoisted.loadConfig,
+      resolveAccount: hoisted.resolveNextcloudTalkAccount,
+      cfg,
+      accountId: "work",
+    });
+    expect(hoisted.generateNextcloudTalkSignature).toHaveBeenCalledWith({
+      body: "👍",
+      secret: "secret-value",
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      "https://nextcloud.example.com/ocs/v2.php/apps/spreed/api/v1/bot/ops/reaction/m-1",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "OCS-APIRequest": "true",
+          "X-Nextcloud-Talk-Bot-Random": "r",
+          "X-Nextcloud-Talk-Bot-Signature": "s",
+        },
+        body: JSON.stringify({ reaction: "👍" }),
+      },
+    );
+    expect(result).toEqual({ ok: true });
+  });
+
+  it("surfaces sendReaction HTTP failures", async () => {
+    fetchMock.mockResolvedValueOnce(new Response("forbidden", { status: 403 }));
+
+    await expect(
+      sendReactionNextcloudTalk("room:ops", "m-1", "👍", {
+        cfg: { source: "provided" },
+        accountId: "work",
+      }),
+    ).rejects.toThrow("Nextcloud Talk reaction failed: 403 forbidden");
+  });
+});
+
+describe("nextcloud-talk send bounded response reads", () => {
+  const fetchMock = vi.fn<typeof fetch>();
+  const account = {
+    accountId: "default",
+    baseUrl: "https://nextcloud.example.com",
+    secret: "secret-value",
+  };
+
+  // Builds a streaming body with NO content-length so only the streaming byte
+  // cap can stop it. `chunks` chunks of `chunkBytes` each => total may exceed cap.
+  function streamingResponse(params: {
+    status: number;
+    chunkBytes: number;
+    chunks: number;
+    contentType: string;
+    fill?: number;
+  }): Response {
+    let remaining = params.chunks;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (remaining <= 0) {
+          controller.close();
+          return;
+        }
+        remaining -= 1;
+        controller.enqueue(new Uint8Array(params.chunkBytes).fill(params.fill ?? 0x7b));
+      },
+    });
+    return new Response(stream, {
+      status: params.status,
+      headers: { "content-type": params.contentType },
+    });
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal("fetch", fetchMock);
+    hoisted.mockFetchGuard.mockImplementation(async (p: { url: string; init?: RequestInit }) => {
+      const response = await globalThis.fetch(p.url, p.init);
+      return { response, release: async () => {}, finalUrl: p.url };
+    });
+    hoisted.resolveNextcloudTalkAccount.mockReset();
+    hoisted.resolveNextcloudTalkAccount.mockReturnValue(account);
+    hoisted.record.mockReset();
+    hoisted.generateNextcloudTalkSignature.mockClear();
+  });
+
+  afterEach(() => {
+    fetchMock.mockReset();
+    hoisted.mockFetchGuard.mockReset();
+    vi.unstubAllGlobals();
+  });
+
+  it("keeps the unknown receipt when a success body exceeds the JSON byte cap", async () => {
+    // 17 MiB streamed as 200-OK JSON with no content-length: over the 16 MiB cap.
+    fetchMock.mockResolvedValueOnce(
+      streamingResponse({
+        status: 200,
+        chunkBytes: 1024 * 1024,
+        chunks: 17,
+        contentType: "application/json",
+      }),
+    );
+
+    const result = await sendMessageNextcloudTalk("room:abc", "hello", {
+      cfg: { source: "provided" },
+    });
+
+    // Over-limit success body must not throw and must fall back to the unknown receipt.
+    expect(result.messageId).toBe("unknown");
+    expect(result.timestamp).toBeUndefined();
+  });
+
+  it("bounds an oversized error body into a short send-failure snippet", async () => {
+    fetchMock.mockResolvedValueOnce(
+      streamingResponse({
+        status: 400,
+        chunkBytes: 1024 * 1024,
+        chunks: 17,
+        contentType: "text/plain",
+      }),
+    );
+
+    await expect(
+      sendMessageNextcloudTalk("room:abc", "hello", { cfg: { source: "provided" } }),
+    ).rejects.toThrow(/Nextcloud Talk: bad request/);
+  });
+
+  it("bounds an oversized reaction error body into a short snippet", async () => {
+    fetchMock.mockResolvedValueOnce(
+      streamingResponse({
+        status: 500,
+        chunkBytes: 1024 * 1024,
+        chunks: 17,
+        contentType: "text/plain",
+      }),
+    );
+
+    let caught: unknown;
+    try {
+      await sendReactionNextcloudTalk("room:abc", "m-1", "👍", { cfg: { source: "provided" } });
+    } catch (error) {
+      caught = error;
+    }
+
+    expect(caught).toBeInstanceOf(Error);
+    // The collapsed snippet caps the message far below the streamed 17 MiB body.
+    expect((caught as Error).message.length).toBeLessThan(4_000);
+  });
+
+  it("still parses a normal small success body", async () => {
+    fetchMock.mockResolvedValueOnce(
+      new Response(JSON.stringify({ ocs: { data: { id: 99, timestamp: 1_700_000_000 } } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    const result = await sendMessageNextcloudTalk("room:abc", "hello", {
+      cfg: { source: "provided" },
+    });
+
+    expect(result.messageId).toBe("99");
+    expect(result.timestamp).toBe(1_700_000_000);
   });
 });

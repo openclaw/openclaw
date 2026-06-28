@@ -42,6 +42,8 @@ openclaw gateway run
     - `openclaw onboard --mode local` and `openclaw setup` are expected to write `gateway.mode=local`. If the file exists but `gateway.mode` is missing, treat that as a broken or clobbered config and repair it instead of assuming local mode implicitly.
     - If the file exists and `gateway.mode` is missing, the Gateway treats that as suspicious config damage and refuses to "guess local" for you.
     - Binding beyond loopback without auth is blocked (safety guardrail).
+    - `lan`, `tailnet`, and `custom` currently resolve over IPv4-only BYOH paths.
+    - IPv6-only BYOH is not natively supported on this path today. Use an IPv4 sidecar or proxy if the host itself is IPv6-only.
     - `SIGUSR1` triggers an in-process restart when authorized (`commands.restart` is enabled by default; set `commands.restart: false` to block manual restart, while gateway tool/config apply/update remain allowed).
     - `SIGINT`/`SIGTERM` handlers stop the gateway process, but they don't restore any custom terminal state. If you wrap the CLI with a TUI or raw-mode input, restore the terminal before exit.
 
@@ -54,7 +56,7 @@ openclaw gateway run
   WebSocket port (default comes from config/env; usually `18789`).
 </ParamField>
 <ParamField path="--bind <loopback|lan|tailnet|auto|custom>" type="string">
-  Listener bind mode.
+  Listener bind mode. `lan`, `tailnet`, and `custom` currently resolve over IPv4-only paths.
 </ParamField>
 <ParamField path="--auth <token|password>" type="string">
   Auth mode override.
@@ -73,6 +75,9 @@ openclaw gateway run
 </ParamField>
 <ParamField path="--tailscale-reset-on-exit" type="boolean">
   Reset Tailscale serve/funnel config on shutdown.
+</ParamField>
+<ParamField path="--bind custom + gateway.customBindHost" type="string">
+  Expects an IPv4 address today. For IPv6-only BYOH, place an IPv4 sidecar or proxy in front of the Gateway and point OpenClaw at that IPv4 endpoint.
 </ParamField>
 <ParamField path="--allow-unconfigured" type="boolean">
   Allow gateway start without `gateway.mode=local` in config. Bypasses the startup guard for ad-hoc/dev bootstrap only; does not write or repair the config file.
@@ -122,11 +127,14 @@ openclaw gateway restart --force
 Inline `--password` can be exposed in local process listings. Prefer `--password-file`, env, or a SecretRef-backed `gateway.auth.password`.
 </Warning>
 
-### Startup profiling
+### Gateway profiling
 
 - Set `OPENCLAW_GATEWAY_STARTUP_TRACE=1` to log phase timings during Gateway startup, including per-phase `eventLoopMax` delay and plugin lookup-table timings for installed-index, manifest registry, startup planning, and owner-map work.
+- Set `OPENCLAW_GATEWAY_RESTART_TRACE=1` to log restart-scoped `restart trace:` lines for restart signal handling, active-work drain, shutdown phases, next start, ready timing, and memory metrics.
 - Set `OPENCLAW_DIAGNOSTICS=timeline` with `OPENCLAW_DIAGNOSTICS_TIMELINE_PATH=<path>` to write a best-effort JSONL startup diagnostics timeline for external QA harnesses. You can also enable the flag with `diagnostics.flags: ["timeline"]` in config; the path is still env-provided. Add `OPENCLAW_DIAGNOSTICS_EVENT_LOOP=1` to include event-loop samples.
-- Run `pnpm test:startup:gateway -- --runs 5 --warmup 1` to benchmark Gateway startup. The benchmark records first process output, `/healthz`, `/readyz`, startup trace timings, event-loop delay, and plugin lookup-table timing details.
+- Run `pnpm build` first, then `pnpm test:startup:gateway -- --runs 5 --warmup 1` to benchmark Gateway startup against the built CLI entry. The benchmark records first process output, `/healthz`, `/readyz`, startup trace timings, event-loop delay, and plugin lookup-table timing details.
+- Run `pnpm build` first, then `pnpm test:restart:gateway -- --case skipChannels --runs 1 --restarts 5` to benchmark in-process Gateway restart against the built CLI entry on macOS or Linux. The restart benchmark uses SIGUSR1, enables both startup and restart traces in the child process, and records next `/healthz`, next `/readyz`, downtime, ready timing, CPU, RSS, and restart trace metrics.
+- Treat `/healthz` as liveness and `/readyz` as usable readiness. Trace lines and benchmark output are for owner attribution; do not treat one trace span or one sample as a complete performance conclusion.
 
 ## Query a running Gateway
 
@@ -157,9 +165,14 @@ When you set `--url`, the CLI does not fall back to config or environment creden
 
 ```bash
 openclaw gateway health --url ws://127.0.0.1:18789
+openclaw gateway health --port 18789
 ```
 
 The HTTP `/healthz` endpoint is a liveness probe: it returns once the server can answer HTTP. The HTTP `/readyz` endpoint is stricter and stays red while startup plugin sidecars, channels, or configured hooks are still settling. Local or authenticated detailed readiness responses include an `eventLoop` diagnostic block with event-loop delay, event-loop utilization, CPU core ratio, and a `degraded` flag.
+
+<ParamField path="--port <port>" type="number">
+  Target a local loopback Gateway on this port. This overrides `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_PORT` for the health call.
+</ParamField>
 
 ### `gateway usage-cost`
 
@@ -168,11 +181,19 @@ Fetch usage-cost summaries from session logs.
 ```bash
 openclaw gateway usage-cost
 openclaw gateway usage-cost --days 7
+openclaw gateway usage-cost --agent work --json
+openclaw gateway usage-cost --all-agents
 openclaw gateway usage-cost --json
 ```
 
 <ParamField path="--days <days>" type="number" default="30">
   Number of days to include.
+</ParamField>
+<ParamField path="--agent <id>" type="string">
+  Scope the cost summary to one configured agent id.
+</ParamField>
+<ParamField path="--all-agents" type="boolean">
+  Aggregate the cost summary across all configured agents. Cannot be combined with `--agent`.
 </ParamField>
 
 ### `gateway stability`
@@ -296,6 +317,7 @@ openclaw gateway status --require-rpc
     - `gateway status` resolves configured auth SecretRefs for probe auth when possible.
     - If a required auth SecretRef is unresolved in this command path, `gateway status --json` reports `rpc.authWarning` when probe connectivity/auth fails; pass `--token`/`--password` explicitly or resolve the secret source first.
     - If the probe succeeds, unresolved auth-ref warnings are suppressed to avoid false positives.
+    - When probing is enabled, JSON output includes `gateway.version` when the running Gateway reports it; `--require-rpc` can fall back to the `status.runtimeVersion` RPC payload if the follow-up handshake probe cannot provide version metadata.
     - Use `--require-rpc` in scripts and automation when a listening service is not enough and you need read-scope RPC calls to be healthy too.
     - `--deep` adds a best-effort scan for extra launchd/systemd/schtasks installs. When multiple gateway-like services are detected, human output prints cleanup hints and warns that most setups should run one gateway per machine.
     - `--deep` also reports a recent Gateway supervisor restart handoff when the service process exited cleanly for an external supervisor restart.
@@ -325,13 +347,18 @@ If you pass `--url`, that explicit target is added ahead of both. Human output l
 - `Local loopback`
 
 <Note>
-If multiple gateways are reachable, it prints all of them. Multiple gateways are supported when you use isolated profiles/ports (e.g., a rescue bot), but most installs still run a single gateway.
+If multiple probe targets are reachable, it prints all of them. An SSH tunnel, TLS/proxy URL, and configured remote URL can all point at the same gateway even when their transport ports differ; `multiple_gateways` is reserved for distinct or identity-ambiguous reachable gateways. Multiple gateways are supported when you use isolated profiles (e.g., a rescue bot), but most installs still run a single gateway.
 </Note>
 
 ```bash
 openclaw gateway probe
 openclaw gateway probe --json
+openclaw gateway probe --port 18789
 ```
+
+<ParamField path="--port <port>" type="number">
+  Use this port for the local loopback probe target and SSH tunnel remote port. Without `--url`, this selects the local loopback target instead of configured gateway environment URL, environment port, or remote targets.
+</ParamField>
 
 <AccordionGroup>
   <Accordion title="Interpretation">
@@ -370,7 +397,7 @@ openclaw gateway probe --json
   </Accordion>
   <Accordion title="Common warning codes">
     - `ssh_tunnel_failed`: SSH tunnel setup failed; the command fell back to direct probes.
-    - `multiple_gateways`: more than one target was reachable; this is unusual unless you intentionally run isolated profiles, such as a rescue bot.
+    - `multiple_gateways`: distinct gateway identities were reachable, or OpenClaw could not prove reachable targets are the same gateway. An SSH tunnel, proxy URL, or configured remote URL to the same gateway does not trigger this warning.
     - `auth_secretref_unresolved`: a configured auth SecretRef could not be resolved for a failed target.
     - `probe_scope_limited`: WebSocket connect succeeded, but the read probe was limited by missing `operator.read`.
 

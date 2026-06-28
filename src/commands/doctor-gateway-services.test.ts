@@ -1,3 +1,4 @@
+// Doctor gateway service tests cover service audit diagnostics and duplicate gateway service reporting.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -96,7 +97,7 @@ vi.mock("../daemon/systemd.js", () => ({
   uninstallLegacySystemdUnits: mocks.uninstallLegacySystemdUnits,
 }));
 
-vi.mock("../terminal/note.js", () => ({
+vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: mocks.note,
 }));
 
@@ -109,6 +110,9 @@ vi.mock("./doctor-gateway-auth-token.js", () => ({
 }));
 
 import {
+  detectExtraGatewayServiceIssues,
+  extraGatewayServiceToHealthFinding,
+  extraGatewayServiceToRepairEffects,
   maybeRepairGatewayServiceConfig,
   maybeScanExtraGatewayServices,
 } from "./doctor-gateway-services.js";
@@ -148,8 +152,8 @@ function mockProcessPlatform(platform: NodeJS.Platform) {
   });
 }
 
-async function runRepair(cfg: OpenClawConfig) {
-  await maybeRepairGatewayServiceConfig(cfg, "local", makeDoctorIo(), makeDoctorPrompts());
+async function runRepair(cfg: OpenClawConfig, options: { allowExecSecretRefs?: boolean } = {}) {
+  await maybeRepairGatewayServiceConfig(cfg, "local", makeDoctorIo(), makeDoctorPrompts(), options);
 }
 
 async function runNonInteractiveRepair(params: {
@@ -368,6 +372,37 @@ describe("maybeRepairGatewayServiceConfig", () => {
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 
+  it("passes exec SecretRef policy into service token resolution", async () => {
+    setupGatewayTokenRepairScenario();
+
+    const cfg: OpenClawConfig = {
+      gateway: {
+        auth: {
+          mode: "token",
+          token: {
+            source: "exec",
+            provider: "execmain",
+            id: "gateway/token",
+          },
+        },
+      },
+      secrets: {
+        providers: {
+          execmain: {
+            source: "exec",
+            command: process.execPath,
+          },
+        },
+      },
+    };
+
+    await runRepair(cfg, { allowExecSecretRefs: true });
+
+    expect(mocks.resolveGatewayAuthTokenForService).toHaveBeenCalledWith(cfg, process.env, {
+      allowExecSecretRefs: true,
+    });
+  });
+
   it("does not duplicate gateway runtime warnings already emitted by the node install plan", async () => {
     const nvmNode = "/home/orin/.nvm/versions/node/v22.22.2/bin/node";
     mocks.readCommand.mockResolvedValue({
@@ -376,7 +411,7 @@ describe("maybeRepairGatewayServiceConfig", () => {
     });
     mocks.buildGatewayInstallPlan.mockImplementation(async ({ warn }) => {
       warn?.(
-        "System Node 20.20.2 at /usr/bin/node is below the required Node 22.16+. Using /home/orin/.nvm/versions/node/v22.22.2/bin/node for the daemon.",
+        "System Node 20.20.2 at /usr/bin/node is below the required Node 22.19+. Using /home/orin/.nvm/versions/node/v22.22.2/bin/node for the daemon.",
         "Gateway runtime",
       );
       return {
@@ -544,13 +579,14 @@ describe("maybeRepairGatewayServiceConfig", () => {
       installEntrypoint:
         "/Users/test/Library/pnpm/global/5/node_modules/.pnpm/openclaw@2026.3.12/node_modules/openclaw/dist/index.js",
       realpath: async (value: string) => {
-        if (value.includes("/global/5/node_modules/openclaw/")) {
-          return value.replace(
+        const normalized = value.replaceAll("\\", "/").replace(/^[A-Z]:/i, "");
+        if (normalized.includes("/global/5/node_modules/openclaw/")) {
+          return normalized.replace(
             "/global/5/node_modules/openclaw/",
             "/global/5/node_modules/.pnpm/openclaw@2026.3.12/node_modules/openclaw/",
           );
         }
-        return value;
+        return normalized;
       },
     });
 
@@ -1155,6 +1191,83 @@ describe("maybeScanExtraGatewayServices", () => {
       "system",
     );
     expectNoteContaining("custom-gateway.service", "Other gateway-like services detected");
+  });
+
+  it("threads deep scans through structured extra gateway service detection", async () => {
+    mocks.findExtraGatewayServices.mockResolvedValue([]);
+
+    await detectExtraGatewayServiceIssues({ deep: true });
+
+    expect(mocks.findExtraGatewayServices).toHaveBeenCalledWith(process.env, { deep: true });
+  });
+
+  it("maps intentional extra gateway services to informational structured findings", () => {
+    expect(
+      extraGatewayServiceToHealthFinding({
+        platform: "linux",
+        label: "custom-gateway.service",
+        detail: "unit: /etc/systemd/system/custom-gateway.service",
+        scope: "system",
+        legacy: false,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-services/extra",
+        severity: "info",
+        source: "linux",
+        target: "custom-gateway.service",
+      }),
+    );
+  });
+
+  it("keeps legacy gateway services warning-level", () => {
+    expect(
+      extraGatewayServiceToHealthFinding({
+        platform: "linux",
+        label: "openclaw-gateway.service",
+        detail: "legacy unit",
+        scope: "user",
+        legacy: true,
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        checkId: "core/doctor/gateway-services/extra",
+        severity: "warning",
+        source: "linux",
+        target: "openclaw-gateway.service",
+      }),
+    );
+  });
+
+  it("maps legacy gateway services to dry-run cleanup effects", () => {
+    expect(
+      extraGatewayServiceToRepairEffects({
+        platform: "linux",
+        label: "clawdbot-gateway.service",
+        detail: "unit: /home/test/.config/systemd/user/clawdbot-gateway.service",
+        scope: "user",
+        legacy: true,
+      }),
+    ).toEqual([
+      {
+        kind: "service",
+        action: "would-remove-legacy-gateway-service",
+        target: "clawdbot-gateway.service",
+        dryRunSafe: false,
+      },
+    ]);
+  });
+
+  it("does not report cleanup effects for intentional extra gateway services", () => {
+    expect(
+      extraGatewayServiceToRepairEffects({
+        platform: "linux",
+        label: "custom-gateway.service",
+        detail: "unit: /etc/systemd/system/custom-gateway.service",
+        scope: "system",
+        legacy: false,
+      }),
+    ).toEqual([]);
   });
 
   it("removes legacy Linux user systemd services", async () => {

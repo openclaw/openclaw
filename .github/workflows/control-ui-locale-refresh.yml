@@ -23,8 +23,8 @@ permissions:
   contents: write
 
 concurrency:
-  group: control-ui-locale-refresh
-  cancel-in-progress: false
+  group: control-ui-locale-refresh-${{ github.event_name == 'push' && github.ref || github.event_name == 'workflow_dispatch' && format('manual-{0}', github.run_id) || github.event_name == 'release' && format('release-{0}', github.event.release.tag_name) || format('{0}-{1}', github.event_name, github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
 jobs:
   plan:
@@ -35,7 +35,7 @@ jobs:
       locales_json: ${{ steps.plan.outputs.locales_json }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -112,7 +112,7 @@ jobs:
     name: Refresh ${{ matrix.locale }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           persist-credentials: true
           submodules: false
@@ -137,8 +137,10 @@ jobs:
         env:
           OPENAI_API_KEY: ${{ secrets.OPENCLAW_DOCS_I18N_OPENAI_API_KEY || secrets.OPENAI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          OPENCLAW_CONTROL_UI_I18N_MODEL: ${{ vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
+          OPENCLAW_CONTROL_UI_I18N_PROVIDER: ${{ secrets.ANTHROPIC_API_KEY != '' && 'anthropic' || 'openai' }}
+          OPENCLAW_CONTROL_UI_I18N_MODEL: ${{ secrets.ANTHROPIC_API_KEY != '' && 'claude-opus-4-8' || vars.OPENCLAW_CI_OPENAI_MODEL_BARE }}
           OPENCLAW_CONTROL_UI_I18N_THINKING: low
+          OPENCLAW_CONTROL_UI_I18N_AUTH_OPTIONAL: "1"
           LOCALE: ${{ matrix.locale }}
         run: node --import tsx scripts/control-ui-i18n.ts sync --locale "${LOCALE}" --write
 

@@ -1,3 +1,6 @@
+/**
+ * Tests plugin SDK migration runtime facades and migration helper behavior.
+ */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -38,6 +41,7 @@ describe("withCachedMigrationConfigRuntime", () => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: null,
+          persistedHash: "test-persisted-hash",
           snapshot: {} as never,
           nextConfig: runtimeConfig,
           afterWrite: { mode: "auto" },
@@ -52,6 +56,7 @@ describe("withCachedMigrationConfigRuntime", () => {
         return {
           path: "/tmp/openclaw.json",
           previousHash: null,
+          persistedHash: "test-persisted-hash",
           snapshot: {} as never,
           nextConfig: runtimeConfig,
           afterWrite: { mode: "auto" },

@@ -1,3 +1,4 @@
+// Deprecation compatibility tests cover doctor warnings and repairs for deprecated config.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import {
@@ -11,8 +12,10 @@ const datePattern = /^\d{4}-\d{2}-\d{2}$/u;
 
 const requiredDoctorCompatCodes = [
   "doctor-agent-runtime-embedded-harness",
+  "doctor-agent-embedded-pi-config",
   "doctor-plugin-install-config-ledger",
   "doctor-bundled-plugin-load-paths",
+  "doctor-bundled-provider-discovery-allowlist",
   "doctor-message-queue-steering-modes",
   "doctor-web-search-plugin-config",
   "doctor-web-fetch-plugin-config",

@@ -1,3 +1,4 @@
+// Microsoft Foundry plugin module implements cli behavior.
 import { execFile, execFileSync, spawn } from "node:child_process";
 import {
   normalizeOptionalString,
@@ -85,7 +86,7 @@ export function isAzCliInstalled(): boolean {
 
 export function getLoggedInAccount(): AzAccount | null {
   try {
-    return JSON.parse(execAz(["account", "show", "--output", "json"])) as AzAccount;
+    return parseAzJson(execAz(["account", "show", "--output", "json"]), "account") as AzAccount;
   } catch {
     return null;
   }
@@ -93,8 +94,9 @@ export function getLoggedInAccount(): AzAccount | null {
 
 export function listSubscriptions(): AzAccount[] {
   try {
-    const subs = JSON.parse(
+    const subs = parseAzJson(
       execAz(["account", "list", "--output", "json", "--all"]),
+      "subscriptions",
     ) as AzAccount[];
     return subs.filter((sub) => sub.state === "Enabled");
   } catch {
@@ -102,20 +104,28 @@ export function listSubscriptions(): AzAccount[] {
   }
 }
 
+function parseAzJson(raw: string, label: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    throw new Error(`Azure CLI returned malformed ${label} JSON.`);
+  }
+}
+
 type AccessTokenParams = {
+  scope?: string;
   subscriptionId?: string;
   tenantId?: string;
 };
 
 function buildAccessTokenArgs(params?: AccessTokenParams): string[] {
-  const args = [
-    "account",
-    "get-access-token",
-    "--resource",
-    COGNITIVE_SERVICES_RESOURCE,
-    "--output",
-    "json",
-  ];
+  const args = ["account", "get-access-token"];
+  if (params?.scope) {
+    args.push("--scope", params.scope);
+  } else {
+    args.push("--resource", COGNITIVE_SERVICES_RESOURCE);
+  }
+  args.push("--output", "json");
   if (params?.subscriptionId) {
     args.push("--subscription", params.subscriptionId);
   } else if (params?.tenantId) {
@@ -125,13 +135,16 @@ function buildAccessTokenArgs(params?: AccessTokenParams): string[] {
 }
 
 export function getAccessTokenResult(params?: AccessTokenParams): AzAccessToken {
-  return JSON.parse(execAz(buildAccessTokenArgs(params))) as AzAccessToken;
+  return parseAzJson(execAz(buildAccessTokenArgs(params)), "access token") as AzAccessToken;
 }
 
 export async function getAccessTokenResultAsync(
   params?: AccessTokenParams,
 ): Promise<AzAccessToken> {
-  return JSON.parse(await execAzAsync(buildAccessTokenArgs(params))) as AzAccessToken;
+  return parseAzJson(
+    await execAzAsync(buildAccessTokenArgs(params)),
+    "access token",
+  ) as AzAccessToken;
 }
 
 export async function azLoginDeviceCode(): Promise<void> {

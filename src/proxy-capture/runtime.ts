@@ -1,3 +1,4 @@
+// Proxy capture runtime coordinates capture sessions, proxy startup, and storage.
 import { randomUUID } from "node:crypto";
 import { URL } from "node:url";
 import { normalizeRequestInitHeadersForFetch } from "../infra/fetch-headers.js";
@@ -40,6 +41,8 @@ const SENSITIVE_CAPTURE_HEADER_NAME_FRAGMENTS = [
   "session",
 ];
 
+// Runtime capture records HTTP/fetch and websocket events into the SQLite store,
+// redacting sensitive headers and persisting bodies in capture_blobs.
 type GlobalFetchPatchedState = {
   originalFetch: typeof globalThis.fetch;
 };
@@ -54,7 +57,7 @@ type DebugProxyCaptureStoreLike = Pick<
 >;
 
 export type DebugProxyCaptureRuntimeDeps = {
-  getStore?: (dbPath: string, blobDir: string) => DebugProxyCaptureStoreLike;
+  getStore?: () => DebugProxyCaptureStoreLike;
   closeStore?: typeof closeDebugProxyCaptureStore;
   persistEventPayload?: (
     store: DebugProxyCaptureStoreLike,
@@ -129,6 +132,8 @@ function redactedCaptureHeaders(
     headers instanceof Headers ? Array.from(headers.entries()) : Object.entries(headers);
   const redacted: Record<string, string> = {};
   for (const [name, value] of entries) {
+    // Header names are matched exactly and by sensitive fragments because
+    // providers use many token/key naming variants.
     redacted[name] = isSensitiveCaptureHeaderName(name) ? REDACTED_CAPTURE_HEADER_VALUE : value;
   }
   return redacted;
@@ -171,9 +176,12 @@ function installDebugProxyGlobalFetchPatch(
   if (fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY]) {
     return;
   }
-  const originalFetch = fetchTarget.fetch.bind(fetchTarget);
+  // Patch only once per target and keep the original fetch for deterministic
+  // teardown in tests and nested capture sessions.
+  const fetchImpl = fetchTarget.fetch;
+  const originalFetch = fetchImpl.bind(fetchTarget);
   fetchTarget[DEBUG_PROXY_FETCH_PATCH_KEY] = { originalFetch };
-  fetchTarget.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+  const patchedFetch = async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = resolveUrlString(input);
     const normalizedInit = normalizeRequestInitHeadersForFetch(init);
     try {
@@ -213,7 +221,7 @@ function installDebugProxyGlobalFetchPatch(
       return response;
     } catch (error) {
       if (url && /^https?:/i.test(url)) {
-        const store = runtime.getStore(settings.dbPath, settings.blobDir);
+        const store = runtime.getStore();
         const parsed = new URL(url);
         store.recordEvent({
           sessionId: settings.sessionId,
@@ -238,7 +246,13 @@ function installDebugProxyGlobalFetchPatch(
       }
       throw error;
     }
-  }) as typeof globalThis.fetch;
+  };
+  const mockState = (fetchImpl as typeof globalThis.fetch & { mock?: unknown }).mock;
+  if (typeof mockState === "object" && mockState !== null) {
+    // Preserve Vitest mock metadata when patching mocked fetch targets.
+    (patchedFetch as typeof globalThis.fetch & { mock?: unknown }).mock = mockState;
+  }
+  fetchTarget.fetch = patchedFetch as typeof globalThis.fetch;
 }
 
 function uninstallDebugProxyGlobalFetchPatch(deps: DebugProxyCaptureRuntimeDeps = {}): void {
@@ -264,19 +278,19 @@ export function initializeDebugProxyCapture(
   if (!settings.enabled) {
     return;
   }
-  resolveRuntimeDeps(deps).getStore(settings.dbPath, settings.blobDir).upsertSession({
+  resolveRuntimeDeps(deps).getStore().upsertSession({
     id: settings.sessionId,
     startedAt: Date.now(),
     mode,
     sourceScope: "openclaw",
     sourceProcess: settings.sourceProcess,
     proxyUrl: settings.proxyUrl,
-    dbPath: settings.dbPath,
-    blobDir: settings.blobDir,
   });
   installDebugProxyGlobalFetchPatch(settings, deps);
 }
 
+// Finalization closes the session and restores the fetch patch before closing
+// the cached store, preventing later normal requests from being captured.
 export function finalizeDebugProxyCapture(
   resolved?: DebugProxySettings,
   deps: DebugProxyCaptureRuntimeDeps = {},
@@ -286,7 +300,7 @@ export function finalizeDebugProxyCapture(
     return;
   }
   const runtime = resolveRuntimeDeps(deps);
-  runtime.getStore(settings.dbPath, settings.blobDir).endSession(settings.sessionId);
+  runtime.getStore().endSession(settings.sessionId);
   uninstallDebugProxyGlobalFetchPatch(deps);
   runtime.closeStore();
 }
@@ -310,7 +324,7 @@ export function captureHttpExchange(
     return;
   }
   const runtime = resolveRuntimeDeps(deps);
-  const store = runtime.getStore(settings.dbPath, settings.blobDir);
+  const store = runtime.getStore();
   const flowId = params.flowId ?? randomUUID();
   const url = new URL(params.url);
   const requestBody =
@@ -348,6 +362,8 @@ export function captureHttpExchange(
     typeof params.response.clone === "function" &&
     typeof params.response.arrayBuffer === "function";
   if (!cloneable) {
+    // Some Response-like objects cannot be cloned. Still record status/headers
+    // rather than forcing capture to consume or mutate the original response.
     store.recordEvent({
       ...createHttpCaptureEventBase({
         settings,
@@ -398,7 +414,7 @@ export function captureHttpExchange(
         ...responsePayload,
       });
     })
-    .catch((error) => {
+    .catch((error: unknown) => {
       store.recordEvent({
         ...createHttpCaptureEventBase({
           settings,
@@ -415,6 +431,8 @@ export function captureHttpExchange(
     });
 }
 
+// Websocket seams call this directly because Node fetch patching cannot observe
+// frame traffic.
 export function captureWsEvent(params: {
   url: string;
   direction: "outbound" | "inbound" | "local";
@@ -429,7 +447,7 @@ export function captureWsEvent(params: {
   if (!settings.enabled) {
     return;
   }
-  const store = getDebugProxyCaptureStore(settings.dbPath, settings.blobDir);
+  const store = getDebugProxyCaptureStore();
   const url = new URL(params.url);
   const payload = persistEventPayload(store, {
     data: params.payload,

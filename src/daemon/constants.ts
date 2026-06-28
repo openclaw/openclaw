@@ -1,4 +1,5 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+/** Cross-platform daemon service names, labels, and profile-aware descriptions. */
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 // Default service labels (canonical + legacy compatibility)
 export const GATEWAY_LAUNCH_AGENT_LABEL = "ai.openclaw.gateway";
@@ -6,6 +7,7 @@ export const GATEWAY_SYSTEMD_SERVICE_NAME = "openclaw-gateway";
 export const GATEWAY_WINDOWS_TASK_NAME = "OpenClaw Gateway";
 export const GATEWAY_SERVICE_MARKER = "openclaw";
 export const GATEWAY_SERVICE_KIND = "gateway";
+export const GATEWAY_SERVICE_RUNTIME_PID_ENV = "OPENCLAW_GATEWAY_SERVICE_PID";
 const NODE_LAUNCH_AGENT_LABEL = "ai.openclaw.node";
 const NODE_SYSTEMD_SERVICE_NAME = "openclaw-node";
 const NODE_WINDOWS_TASK_NAME = "OpenClaw Node";
@@ -17,6 +19,7 @@ export const LEGACY_GATEWAY_SYSTEMD_SERVICE_NAMES: string[] = ["clawdbot-gateway
 export function normalizeGatewayProfile(profile?: string): string | null {
   const trimmed = profile?.trim();
   if (!trimmed || normalizeLowercaseStringOrEmpty(trimmed) === "default") {
+    // The default profile keeps the historical unqualified service names.
     return null;
   }
   return trimmed;

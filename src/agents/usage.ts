@@ -1,5 +1,11 @@
-import { asFiniteNumber } from "../shared/number-coercion.js";
+/**
+ * Token usage normalization helpers.
+ * Converts provider-specific usage shapes into OpenClaw's normalized input,
+ * output, cache, reasoning, and total token accounting fields.
+ */
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 
+/** Provider/SDK usage payload variants accepted by usage normalization. */
 export type UsageLike = {
   input?: number;
   output?: number;
@@ -17,6 +23,10 @@ export type UsageLike = {
   completion_tokens?: number;
   cache_read_input_tokens?: number;
   cache_creation_input_tokens?: number;
+  reasoningTokens?: number;
+  reasoning_tokens?: number;
+  completion_tokens_details?: { reasoning_tokens?: number };
+  output_tokens_details?: { reasoning_tokens?: number };
   // Moonshot/Kimi uses cached_tokens for cache read count (explicit caching API).
   cached_tokens?: number;
   // OpenAI Responses reports cached prompt reuse here.
@@ -37,14 +47,26 @@ export type UsageLike = {
   };
 };
 
+/** Normalized token counts used by runtime accounting. */
 export type NormalizedUsage = {
   input?: number;
   output?: number;
   cacheRead?: number;
   cacheWrite?: number;
+  reasoningTokens?: number;
   total?: number;
 };
 
+/** OpenAI chat-completions compatible usage shape. */
+export type OpenAiChatCompletionsUsage = {
+  prompt_tokens: number;
+  completion_tokens: number;
+  total_tokens: number;
+  prompt_tokens_details?: { cached_tokens: number };
+  completion_tokens_details?: { reasoning_tokens: number };
+};
+
+/** Assistant usage snapshot with token counts and computed cost buckets. */
 export type AssistantUsageSnapshot = {
   input: number;
   output: number;
@@ -60,6 +82,7 @@ export type AssistantUsageSnapshot = {
   };
 };
 
+/** Build a zeroed assistant usage snapshot. */
 export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
   return {
     input: 0,
@@ -77,13 +100,19 @@ export function makeZeroUsageSnapshot(): AssistantUsageSnapshot {
   };
 }
 
+/** Return true when any normalized usage bucket is positive. */
 export function hasNonzeroUsage(usage?: NormalizedUsage | null): usage is NormalizedUsage {
   if (!usage) {
     return false;
   }
-  return [usage.input, usage.output, usage.cacheRead, usage.cacheWrite, usage.total].some(
-    (v) => typeof v === "number" && Number.isFinite(v) && v > 0,
-  );
+  return [
+    usage.input,
+    usage.output,
+    usage.cacheRead,
+    usage.cacheWrite,
+    usage.reasoningTokens,
+    usage.total,
+  ].some((v) => typeof v === "number" && Number.isFinite(v) && v > 0);
 }
 
 const normalizeTokenCount = (value: unknown): number | undefined => {
@@ -97,6 +126,7 @@ const normalizeTokenCount = (value: unknown): number | undefined => {
   return Math.min(Math.trunc(numeric), Number.MAX_SAFE_INTEGER);
 };
 
+/** Normalize provider-specific token usage fields into OpenClaw usage buckets. */
 export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefined {
   if (!raw) {
     return undefined;
@@ -125,7 +155,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     raw.input_tokens_details?.cached_tokens !== undefined ||
     raw.prompt_tokens_details?.cached_tokens !== undefined;
 
-  // Some providers (pi-ai OpenAI-format) pre-subtract cached_tokens from
+  // Some providers (shared model runtime OpenAI-format) pre-subtract cached_tokens from
   // prompt/input totals upstream, while OpenAI-style prompt/input aliases
   // include cached tokens in the reported prompt total. Normalize both cases
   // to uncached input tokens so downstream prompt-token math does not double-
@@ -148,6 +178,12 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
   const cacheWrite = normalizeTokenCount(
     raw.cacheWrite ?? raw.cache_write ?? raw.cache_creation_input_tokens,
   );
+  const reasoningTokens = normalizeTokenCount(
+    raw.reasoningTokens ??
+      raw.reasoning_tokens ??
+      raw.completion_tokens_details?.reasoning_tokens ??
+      raw.output_tokens_details?.reasoning_tokens,
+  );
   const total = normalizeTokenCount(raw.total ?? raw.totalTokens ?? raw.total_tokens);
 
   if (
@@ -155,6 +191,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     output === undefined &&
     cacheRead === undefined &&
     cacheWrite === undefined &&
+    reasoningTokens === undefined &&
     total === undefined
   ) {
     return undefined;
@@ -165,6 +202,7 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
     output,
     cacheRead,
     cacheWrite,
+    ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
     total,
   };
 }
@@ -177,12 +215,15 @@ export function normalizeUsage(raw?: UsageLike | null): NormalizedUsage | undefi
  *
  * `total_tokens` is the greater of the component sum and aggregate `total` when
  * present, so a partial breakdown cannot discard a valid upstream total.
+ *
+ * `prompt_tokens_details.cached_tokens` is emitted when `cacheRead > 0` so
+ * downstream chat-completions clients can compute the cache-aware blended
+ * cost. Field name and shape match OpenAI's documented usage breakdown:
+ * https://platform.openai.com/docs/guides/prompt-caching
  */
-export function toOpenAiChatCompletionsUsage(usage: NormalizedUsage | undefined): {
-  prompt_tokens: number;
-  completion_tokens: number;
-  total_tokens: number;
-} {
+export function toOpenAiChatCompletionsUsage(
+  usage: NormalizedUsage | undefined,
+): OpenAiChatCompletionsUsage {
   const input = usage?.input ?? 0;
   const output = usage?.output ?? 0;
   const cacheRead = usage?.cacheRead ?? 0;
@@ -197,13 +238,19 @@ export function toOpenAiChatCompletionsUsage(usage: NormalizedUsage | undefined)
   const totalTokens =
     aggregateTotal !== undefined ? Math.max(componentTotal, aggregateTotal) : componentTotal;
 
+  const reasoningTokens = normalizeTokenCount(usage?.reasoningTokens);
   return {
     prompt_tokens: promptTokens,
     completion_tokens: completionTokens,
     total_tokens: totalTokens,
+    ...(cacheRead > 0 ? { prompt_tokens_details: { cached_tokens: cacheRead } } : {}),
+    ...(reasoningTokens !== undefined
+      ? { completion_tokens_details: { reasoning_tokens: reasoningTokens } }
+      : {}),
   };
 }
 
+/** Derive prompt/context tokens from normalized input and cache buckets. */
 export function derivePromptTokens(usage?: {
   input?: number;
   cacheRead?: number;
@@ -219,6 +266,7 @@ export function derivePromptTokens(usage?: {
   return sum > 0 ? sum : undefined;
 }
 
+/** Resolve context prompt tokens from explicit override, last call, or aggregate usage. */
 export function deriveContextPromptTokens(params: {
   lastCallUsage?: NormalizedUsage;
   promptTokens?: number;
@@ -232,6 +280,7 @@ export function deriveContextPromptTokens(params: {
   return derivePromptTokens(params.lastCallUsage) ?? derivePromptTokens(params.usage);
 }
 
+/** Derive the session prompt-token snapshot stored for context display. */
 export function deriveSessionTotalTokens(params: {
   usage?: {
     input?: number;

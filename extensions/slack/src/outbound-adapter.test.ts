@@ -1,3 +1,4 @@
+// Slack tests cover outbound adapter plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const sendMessageSlackMock = vi.hoisted(() => vi.fn());
@@ -6,8 +7,7 @@ vi.mock("./send.js", () => ({
   sendMessageSlack: (...args: unknown[]) => sendMessageSlackMock(...args),
 }));
 
-let slackOutbound: typeof import("./outbound-adapter.js").slackOutbound;
-({ slackOutbound } = await import("./outbound-adapter.js"));
+const { slackOutbound } = await import("./outbound-adapter.js");
 
 describe("slackOutbound", () => {
   const cfg = {

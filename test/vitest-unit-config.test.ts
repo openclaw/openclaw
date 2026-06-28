@@ -1,3 +1,4 @@
+// Vitest unit config tests validate unit test project configuration.
 import { afterEach, describe, expect, it } from "vitest";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
@@ -5,7 +6,6 @@ import {
   createUnitVitestConfig,
   createUnitVitestConfigWithOptions,
   loadExtraExcludePatternsFromEnv,
-  loadIncludePatternsFromEnv,
   resolveDefaultUnitCoverageIncludePatterns,
 } from "./vitest/vitest.unit.config.ts";
 
@@ -20,27 +20,6 @@ function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable
 
 afterEach(() => {
   patternFiles.cleanup();
-});
-
-describe("loadIncludePatternsFromEnv", () => {
-  it("returns null when no include file is configured", () => {
-    expect(loadIncludePatternsFromEnv({})).toBeNull();
-  });
-
-  it("loads include patterns from a JSON file", () => {
-    const filePath = patternFiles.writePatternFile("include.json", [
-      "src/infra/update-runner.test.ts",
-      42,
-      "",
-      "ui/src/ui/views/chat.test.ts",
-    ]);
-
-    expect(
-      loadIncludePatternsFromEnv({
-        OPENCLAW_VITEST_INCLUDE_FILE: filePath,
-      }),
-    ).toEqual(["src/infra/update-runner.test.ts", "ui/src/ui/views/chat.test.ts"]);
-  });
 });
 
 describe("loadExtraExcludePatternsFromEnv", () => {
@@ -102,11 +81,35 @@ describe("unit vitest config", () => {
     const unitConfig = createUnitVitestConfigWithOptions(
       {},
       {
+        argv: ["node", "vitest", "run", "src/commitments/store.test.ts"],
+      },
+    );
+    const testConfig = requireTestConfig(unitConfig);
+    expect(testConfig.include).toEqual(["src/commitments/store.test.ts"]);
+    expect(testConfig.passWithNoTests).toBeUndefined();
+  });
+
+  it("lets root Vitest project runs skip unit files owned by excluded projects", () => {
+    const unitConfig = createUnitVitestConfigWithOptions(
+      {},
+      {
         argv: ["node", "vitest", "run", "src/config/channel-configured.test.ts"],
       },
     );
     const testConfig = requireTestConfig(unitConfig);
     expect(testConfig.include).toEqual(["src/config/channel-configured.test.ts"]);
+    expect(testConfig.passWithNoTests).toBe(true);
+  });
+
+  it("lets unrelated root Vitest projects skip when CLI filters match no unit files", () => {
+    const unitConfig = createUnitVitestConfigWithOptions(
+      {},
+      {
+        argv: ["node", "vitest", "run", "extensions/browser/index.test.ts"],
+      },
+    );
+    const testConfig = requireTestConfig(unitConfig);
+    expect(testConfig.include).toEqual([]);
     expect(testConfig.passWithNoTests).toBe(true);
   });
 
@@ -132,14 +135,26 @@ describe("unit vitest config", () => {
     expect(testConfig.exclude).toContain("src/security/**");
   });
 
-  it("scopes default coverage to source files owned by the unit lane", () => {
+  it("skips default coverage source discovery when coverage is disabled", () => {
     const unitConfig = createUnitVitestConfig({});
+    const testConfig = requireTestConfig(unitConfig);
+
+    expect(testConfig.coverage?.include).toBeUndefined();
+  });
+
+  it("scopes default coverage to source files owned by the unit lane", () => {
+    const unitConfig = createUnitVitestConfigWithOptions(
+      {},
+      {
+        argv: ["node", "vitest", "run", "--coverage"],
+      },
+    );
     const testConfig = requireTestConfig(unitConfig);
     const coverageInclude = testConfig.coverage?.include;
     expect(coverageInclude).toContain("src/commitments/runtime.ts");
     expect(coverageInclude).toContain("src/media-generation/runtime-shared.ts");
     expect(coverageInclude).toContain("src/web-search/runtime.ts");
-    expect(coverageInclude).not.toContain("src/markdown/render.ts");
+    expect(coverageInclude).not.toContain("packages/markdown-core/src/render.ts");
     expect(coverageInclude).not.toContain("src/security/audit-workspace-skills.ts");
   });
 

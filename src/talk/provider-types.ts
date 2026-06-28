@@ -1,3 +1,4 @@
+// Talk provider types describe realtime voice provider configuration and APIs.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkTransport } from "./talk-events.js";
 
@@ -62,6 +63,8 @@ export type RealtimeVoiceBridgeEvent = {
   direction: "client" | "server";
   type: string;
   detail?: string;
+  itemId?: string;
+  responseId?: string;
 };
 
 export type RealtimeVoiceBridgeCallbacks = {

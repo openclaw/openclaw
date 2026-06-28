@@ -1,20 +1,29 @@
+// Ollama tests cover embedding provider plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createStreamingResponse } from "../../test-support/streaming-error-response.js";
 
-const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
-  fetchWithSsrFGuardMock: vi.fn(async ({ init, url }: { init?: RequestInit; url: string }) => ({
-    response: await fetch(url, init),
-    release: async () => {},
-  })),
+const { fetchConfiguredLocalOriginWithSsrFGuardMock } = vi.hoisted(() => ({
+  fetchConfiguredLocalOriginWithSsrFGuardMock: vi.fn(
+    async ({ init, url }: { init?: RequestInit; url: string }) => ({
+      response: await fetch(url, init),
+      release: async () => {},
+    }),
+  ),
 }));
 
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
-  fetchWithSsrFGuard: fetchWithSsrFGuardMock,
+  fetchWithSsrFGuard: vi.fn(),
   formatErrorMessage: (error: unknown) => (error instanceof Error ? error.message : String(error)),
-  ssrfPolicyFromHttpBaseUrlAllowedHostname: (baseUrl: string) => {
+  ssrfPolicyFromHttpBaseUrlAllowedOrigin: (baseUrl: string) => {
     const parsed = new URL(baseUrl);
-    return { allowedHostnames: [parsed.hostname] };
+    return { allowedOrigins: [parsed.origin] };
   },
+}));
+
+// Import-resolution gating for this private helper is covered in sdk-alias.test.ts.
+vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
+  fetchConfiguredLocalOriginWithSsrFGuard: fetchConfiguredLocalOriginWithSsrFGuardMock,
 }));
 
 let createOllamaEmbeddingProvider: typeof import("./embedding-provider.js").createOllamaEmbeddingProvider;
@@ -26,7 +35,7 @@ beforeAll(async () => {
 });
 
 beforeEach(() => {
-  fetchWithSsrFGuardMock.mockClear();
+  fetchConfiguredLocalOriginWithSsrFGuardMock.mockClear();
 });
 
 afterEach(() => {
@@ -65,6 +74,36 @@ function readFirstEmbeddingInput(fetchMock: ReturnType<typeof mockEmbeddingFetch
   const init = firstFetchInit(fetchMock);
   const body = readEmbeddingRequestBody(init);
   return body.input;
+}
+
+function firstGuardedFetchCall(): Record<string, unknown> {
+  const call = fetchConfiguredLocalOriginWithSsrFGuardMock.mock.calls[0]?.[0];
+  if (!call || typeof call !== "object") {
+    throw new Error("expected guarded fetch call");
+  }
+  return call as Record<string, unknown>;
+}
+
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
 }
 
 function expectEmbeddingFetch(
@@ -107,6 +146,69 @@ describe("ollama embedding provider", () => {
     });
     expect(vector[0]).toBeCloseTo(0.6, 5);
     expect(vector[1]).toBeCloseTo(0.8, 5);
+  });
+
+  it("applies outputDimensionality before normalizing vectors", async () => {
+    mockEmbeddingFetch([3, 4, 12]);
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "unknown-embedder",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+      outputDimensionality: 2,
+    });
+
+    const vector = await provider.embedQuery("hi");
+
+    expect(vector).toHaveLength(2);
+    expect(vector[0]).toBeCloseTo(0.6, 5);
+    expect(vector[1]).toBeCloseTo(0.8, 5);
+  });
+
+  it("marks the configured Ollama origin for managed-proxy direct routing", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434/v1" },
+    });
+
+    await provider.embedQuery("hello");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(firstGuardedFetchCall()).toMatchObject({
+      url: "http://127.0.0.1:11434/api/embed",
+      policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
+      configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
+      auditContext: "ollama-memory-embedding",
+    });
+  });
+
+  it("passes cloud Ollama origins through the guarded fetch contract", async () => {
+    const fetchMock = mockEmbeddingFetch([1, 0]);
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "https://ollama.com" },
+    });
+
+    await provider.embedQuery("hello");
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(firstGuardedFetchCall()).toMatchObject({
+      url: "https://ollama.com/api/embed",
+      policy: { allowedOrigins: ["https://ollama.com"] },
+      configuredLocalOriginBaseUrl: "https://ollama.com",
+      auditContext: "ollama-memory-embedding",
+    });
   });
 
   it("resolves configured base URL and headers without sending local marker auth", async () => {
@@ -249,6 +351,125 @@ describe("ollama embedding provider", () => {
     await expect(provider.embedBatch(["a", "bb", "ccc"])).resolves.toHaveLength(3);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(inputs).toEqual([["a", "bb", "ccc"]]);
+    expect(firstGuardedFetchCall()).toMatchObject({
+      url: "http://127.0.0.1:11434/api/embed",
+      policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
+      configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
+      auditContext: "ollama-memory-embedding",
+    });
+  });
+
+  it("bounds embed error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedResponse(`${"ollama embed unavailable ".repeat(1024)}tail`, {
+      status: 503,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => tracked.response),
+    );
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    let error: unknown;
+    try {
+      await provider.embedQuery("hello");
+    } catch (err) {
+      error = err;
+    }
+
+    expect(String(error)).toContain("Ollama embed HTTP 503");
+    expect(String(error)).toContain("ollama embed unavailable");
+    expect(String(error)).not.toContain("tail");
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
+  });
+
+  it("reports malformed embed JSON with a provider-owned error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("{not json", {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await expect(provider.embedQuery("hello")).rejects.toThrow(
+      "Ollama embed response: malformed JSON response",
+    );
+  });
+
+  it("bounds successful embed JSON bodies before parsing", async () => {
+    const streamed = createStreamingResponse({
+      chunkCount: 32,
+      chunkSize: 1024 * 1024,
+      text: "x",
+      headers: { "content-type": "application/json" },
+    });
+    const jsonSpy = vi.spyOn(streamed.response, "json").mockRejectedValue(new Error("unbounded"));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => streamed.response),
+    );
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await expect(provider.embedQuery("hello")).rejects.toThrow(
+      "Ollama embed response: JSON response exceeds 16777216 bytes",
+    );
+
+    expect(streamed.getReadCount()).toBeLessThan(32);
+    expect(streamed.wasCanceled()).toBe(true);
+    expect(jsonSpy).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-number embedding values instead of zeroing them", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(JSON.stringify({ embeddings: [["0.1", 0.2]] }), {
+            status: 200,
+            headers: { "content-type": "application/json" },
+          }),
+      ),
+    );
+
+    const { provider } = await createOllamaEmbeddingProvider({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+    });
+
+    await expect(provider.embedQuery("hello")).rejects.toThrow(
+      "Ollama embed response contains a non-number embedding value",
+    );
   });
 
   it("uses a retrieval query prefix for qwen3 embedding queries", async () => {
@@ -491,6 +712,23 @@ describe("ollama embedding provider", () => {
     const init = firstFetchInit(fetchMock);
     const headers = init?.headers as Record<string, string> | undefined;
     expect(headers?.Authorization).toBeUndefined();
+  });
+
+  it("includes outputDimensionality in the memory embedding cache identity", async () => {
+    const result = await ollamaMemoryEmbeddingProviderAdapter.create({
+      config: {} as OpenClawConfig,
+      provider: "ollama",
+      model: "nomic-embed-text",
+      fallback: "none",
+      remote: { baseUrl: "http://127.0.0.1:11434" },
+      outputDimensionality: 2,
+    });
+
+    expect(result.runtime?.cacheKeyData).toMatchObject({
+      provider: "ollama",
+      model: "nomic-embed-text",
+      outputDimensionality: 2,
+    });
   });
 
   it("marks inline memory batches as local-server timeout work", async () => {

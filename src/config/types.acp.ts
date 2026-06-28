@@ -1,4 +1,5 @@
-import type { AcpSessionUpdateTag } from "../acp/runtime/types.js";
+// Defines ACP session and runtime configuration types.
+import type { AcpSessionUpdateTag } from "@openclaw/acp-core/runtime/types";
 
 export type AcpDispatchConfig = {
   /** Master switch for ACP turn dispatch in the reply pipeline. */
@@ -40,6 +41,8 @@ export type AcpConfig = {
   dispatch?: AcpDispatchConfig;
   /** Backend id registered by ACP runtime plugin (for example: acpx). */
   backend?: string;
+  /** Fallback backend ids tried when the primary backend fails with UNAVAILABLE. */
+  fallbacks?: string[];
   defaultAgent?: string;
   allowedAgents?: string[];
   maxConcurrentSessions?: number;

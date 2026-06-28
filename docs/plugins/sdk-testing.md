@@ -20,7 +20,8 @@ plugins.
 ## Test utilities
 
 These test-helper subpaths are repo-local source entrypoints for OpenClaw's own
-bundled plugin tests. They are not package exports for third-party plugins.
+bundled plugin tests. They are not package exports for third-party plugins, and
+they may import Vitest or other repo-only test dependencies.
 
 **Plugin API mock import:** `openclaw/plugin-sdk/plugin-test-api`
 
@@ -46,7 +47,8 @@ bundled plugin tests. They are not package exports for third-party plugins.
 
 **Node builtin mock import:** `openclaw/plugin-sdk/test-node-mocks`
 
-Prefer the focused subpaths below for new plugin tests. The broad
+Inside the OpenClaw repo, prefer the focused subpaths below for new bundled
+plugin tests. The broad
 `openclaw/plugin-sdk/testing` barrel is legacy compatibility only.
 Repo guardrails reject new real imports from `plugin-sdk/testing` and
 `plugin-sdk/test-utils`; those names remain only as deprecated compatibility
@@ -100,6 +102,7 @@ import { mockNodeBuiltinModule } from "openclaw/plugin-sdk/test-node-mocks";
 | `registerProviderPlugins`                            | Capture provider registrations across multiple plugins. Import from `plugin-sdk/plugin-test-runtime`                                     |
 | `requireRegisteredProvider`                          | Assert that a provider collection contains an id. Import from `plugin-sdk/plugin-test-runtime`                                           |
 | `createRuntimeEnv`                                   | Build a mocked CLI/plugin runtime environment. Import from `plugin-sdk/plugin-test-runtime`                                              |
+| `createPluginRuntimeMock`                            | Build a mocked plugin runtime surface. Import from `plugin-sdk/plugin-test-runtime`                                                      |
 | `createPluginSetupWizardStatus`                      | Build setup status helpers for channel plugins. Import from `plugin-sdk/plugin-test-runtime`                                             |
 | `describeOpenAIProviderRuntimeContract`              | Install provider-family runtime contract checks. Import from `plugin-sdk/provider-test-contracts`                                        |
 | `expectPassthroughReplayPolicy`                      | Assert provider replay policies pass through provider-owned tools and metadata. Import from `plugin-sdk/provider-test-contracts`         |
@@ -211,11 +214,10 @@ entry to declare `kind: "memory"`.
 
 ### Testing runtime config access
 
-Prefer the shared plugin runtime mock from `openclaw/plugin-sdk/channel-test-helpers`
-when testing bundled channel plugins. Its deprecated `runtime.config.loadConfig()` and
-`runtime.config.writeConfigFile(...)` mocks throw by default so tests catch new
-usage of compatibility APIs. Override those mocks only when the test is
-explicitly covering legacy compatibility behavior.
+Prefer the shared plugin runtime mock from `openclaw/plugin-sdk/plugin-test-runtime`.
+Its deprecated `runtime.config.loadConfig()` and `runtime.config.writeConfigFile(...)`
+mocks throw by default so tests catch new usage of compatibility APIs. Override
+those mocks only when the test is explicitly covering legacy compatibility behavior.
 
 ### Unit testing a channel plugin
 

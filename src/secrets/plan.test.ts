@@ -1,3 +1,4 @@
+/** Tests secrets plan normalization, target validation, and ref conversion. */
 import { describe, expect, it } from "vitest";
 import {
   INVALID_EXEC_SECRET_REF_IDS,
@@ -90,6 +91,26 @@ describe("secrets plan validation", () => {
           ref: { source: "env", provider: "default", id: "TALK_API_KEY" },
         },
       ],
+    });
+    expect(isValid).toBe(true);
+  });
+
+  it("accepts plugin-managed exec provider upserts in plan files", () => {
+    const isValid = isSecretsApplyPlan({
+      version: 1,
+      protocolVersion: 1,
+      generatedAt: "2026-02-28T00:00:00.000Z",
+      generatedBy: "manual",
+      providerUpserts: {
+        "team-secrets": {
+          source: "exec",
+          pluginIntegration: {
+            pluginId: "acme-secrets",
+            integrationId: "secret-store",
+          },
+        },
+      },
+      targets: [],
     });
     expect(isValid).toBe(true);
   });

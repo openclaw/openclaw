@@ -1,3 +1,4 @@
+// Discord plugin module implements client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { RetryConfig, RetryRunner } from "openclaw/plugin-sdk/retry-runtime";
@@ -22,6 +23,8 @@ export type DiscordClientOpts = {
   accountId?: string;
   rest?: RequestClient;
   retry?: RetryConfig;
+  signal?: AbortSignal;
+  timeoutMs?: number;
   verbose?: boolean;
 };
 
@@ -76,15 +79,18 @@ function resolveRest(
   cfg: OpenClawConfig,
   rest?: RequestClient,
   proxyFetch?: typeof fetch,
+  signal?: AbortSignal,
+  timeoutMs?: number,
 ) {
   if (rest) {
     return rest;
   }
   const resolvedProxyFetch = proxyFetch ?? resolveDiscordProxyFetchForAccount(account, cfg);
-  return createDiscordRequestClient(
-    token,
-    resolvedProxyFetch ? { fetch: resolvedProxyFetch } : undefined,
-  );
+  return createDiscordRequestClient(token, {
+    ...(resolvedProxyFetch ? { fetch: resolvedProxyFetch } : {}),
+    ...(signal ? { signal } : {}),
+    ...(timeoutMs !== undefined ? { timeout: timeoutMs } : {}),
+  });
 }
 
 function resolveAccountWithoutToken(params: {
@@ -120,7 +126,15 @@ export function createDiscordRestClient(opts: DiscordClientOpts) {
       accountId: account.accountId,
       fallbackToken: account.token,
     });
-  const rest = resolveRest(token, account, resolvedCfg, opts.rest, proxyContext.proxyFetch);
+  const rest = resolveRest(
+    token,
+    account,
+    resolvedCfg,
+    opts.rest,
+    proxyContext.proxyFetch,
+    opts.signal,
+    opts.timeoutMs,
+  );
   return { token, rest, account };
 }
 

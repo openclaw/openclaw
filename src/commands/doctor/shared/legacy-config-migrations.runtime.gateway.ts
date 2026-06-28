@@ -1,3 +1,5 @@
+// Legacy gateway runtime config migrations for bind modes, WebChat, and Control UI origins.
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import {
   buildDefaultControlUiAllowedOrigins,
   hasConfiguredControlUiAllowedOrigins,
@@ -11,7 +13,6 @@ import {
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
-import { normalizeOptionalLowercaseString } from "../../../shared/string-coerce.js";
 
 const GATEWAY_BIND_RULE: LegacyConfigRule = {
   path: ["gateway", "bind"],
@@ -21,10 +22,19 @@ const GATEWAY_BIND_RULE: LegacyConfigRule = {
   requireSourceLiteral: true,
 };
 
+const GATEWAY_WEBCHAT_RULE: LegacyConfigRule = {
+  path: ["gateway", "webchat"],
+  message: 'gateway.webchat is retired. Run "openclaw doctor --fix".',
+};
+
 function isLegacyGatewayBindHostAlias(value: unknown): boolean {
+  return normalizeLegacyGatewayBindHostAlias(value) !== null;
+}
+
+function normalizeLegacyGatewayBindHostAlias(value: unknown): "lan" | "loopback" | null {
   const normalized = normalizeOptionalLowercaseString(value);
   if (!normalized) {
-    return false;
+    return null;
   }
   if (
     normalized === "auto" ||
@@ -33,25 +43,51 @@ function isLegacyGatewayBindHostAlias(value: unknown): boolean {
     normalized === "tailnet" ||
     normalized === "custom"
   ) {
-    return false;
+    return null;
   }
-  return (
+  if (
     normalized === "0.0.0.0" ||
     normalized === "::" ||
     normalized === "[::]" ||
-    normalized === "*" ||
+    normalized === "*"
+  ) {
+    return "lan";
+  }
+  if (
     normalized === "127.0.0.1" ||
     normalized === "localhost" ||
     normalized === "::1" ||
     normalized === "[::1]"
-  );
+  ) {
+    return "loopback";
+  }
+  return null;
 }
 
 function escapeControlForLog(value: string): string {
   return value.replace(/\r/g, "\\r").replace(/\n/g, "\\n").replace(/\t/g, "\\t");
 }
 
+/** Legacy config migration specs for gateway runtime config. */
 export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec[] = [
+  defineLegacyConfigMigration({
+    id: "gateway.webchat-remove",
+    describe: "Remove retired WebChat gateway config",
+    legacyRules: [GATEWAY_WEBCHAT_RULE],
+    apply: (raw, changes) => {
+      const gateway = getRecord(raw.gateway);
+      if (!gateway || !Object.hasOwn(gateway, "webchat")) {
+        return;
+      }
+      delete gateway.webchat;
+      if (Object.keys(gateway).length > 0) {
+        raw.gateway = gateway;
+      } else {
+        delete raw.gateway;
+      }
+      changes.push("Removed retired gateway.webchat config.");
+    },
+  }),
   defineLegacyConfigMigration({
     id: "gateway.controlUi.allowedOrigins-seed-for-non-loopback",
     describe: "Seed gateway.controlUi.allowedOrigins for existing non-loopback gateway installs",
@@ -60,7 +96,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       if (!gateway) {
         return;
       }
-      const bind = gateway.bind;
+      const bind = normalizeLegacyGatewayBindHostAlias(gateway.bind) ?? gateway.bind;
       if (!isGatewayNonLoopbackBindMode(bind)) {
         return;
       }
@@ -107,22 +143,7 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       if (!normalized) {
         return;
       }
-      let mapped: "lan" | "loopback" | undefined;
-      if (
-        normalized === "0.0.0.0" ||
-        normalized === "::" ||
-        normalized === "[::]" ||
-        normalized === "*"
-      ) {
-        mapped = "lan";
-      } else if (
-        normalized === "127.0.0.1" ||
-        normalized === "localhost" ||
-        normalized === "::1" ||
-        normalized === "[::1]"
-      ) {
-        mapped = "loopback";
-      }
+      const mapped = normalizeLegacyGatewayBindHostAlias(bindRaw);
 
       if (!mapped || normalized === mapped) {
         return;

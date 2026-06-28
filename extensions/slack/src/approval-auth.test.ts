@@ -1,5 +1,6 @@
+// Slack tests cover approval auth plugin behavior.
 import { describe, expect, it } from "vitest";
-import { slackApprovalAuth } from "./approval-auth.js";
+import { isSlackApprovalAuthorizedSender, slackApprovalAuth } from "./approval-auth.js";
 
 describe("slackApprovalAuth", () => {
   it("authorizes general Slack approvers from allowFrom and defaultTo", () => {
@@ -26,7 +27,25 @@ describe("slackApprovalAuth", () => {
     expect(
       slackApprovalAuth.authorizeActorAction({
         cfg,
+        senderId: "u123owner",
+        action: "approve",
+        approvalKind: "plugin",
+      }),
+    ).toEqual({ authorized: true });
+
+    expect(
+      slackApprovalAuth.authorizeActorAction({
+        cfg,
         senderId: "U345DEFAULT",
+        action: "approve",
+        approvalKind: "plugin",
+      }),
+    ).toEqual({ authorized: true });
+
+    expect(
+      slackApprovalAuth.authorizeActorAction({
+        cfg,
+        senderId: "u345default",
         action: "approve",
         approvalKind: "plugin",
       }),
@@ -55,5 +74,52 @@ describe("slackApprovalAuth", () => {
       authorized: false,
       reason: "❌ You are not authorized to approve exec requests on Slack.",
     });
+  });
+
+  it("canonicalizes configured plugin approver ids before matching uppercase senders", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          allowFrom: ["slack:u123owner"],
+          defaultTo: "user:u345default",
+        },
+      },
+    };
+
+    for (const senderId of ["U123OWNER", "U345DEFAULT"]) {
+      expect(
+        slackApprovalAuth.authorizeActorAction({
+          cfg,
+          senderId,
+          action: "approve",
+          approvalKind: "plugin",
+        }),
+      ).toEqual({ authorized: true });
+    }
+  });
+
+  it("allows same-chat plugin approval when no concrete Slack approvers are configured", () => {
+    const cfg = {
+      channels: {
+        slack: {
+          allowFrom: ["*"],
+        },
+      },
+    };
+
+    expect(
+      slackApprovalAuth.authorizeActorAction({
+        cfg,
+        senderId: "U123OWNER",
+        action: "approve",
+        approvalKind: "plugin",
+      }),
+    ).toEqual({ authorized: true });
+    expect(
+      isSlackApprovalAuthorizedSender({
+        cfg,
+        senderId: "U123OWNER",
+      }),
+    ).toBe(true);
   });
 });

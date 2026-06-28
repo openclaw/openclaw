@@ -1,3 +1,12 @@
+// Lobster plugin module implements lobster tool behavior.
+import {
+  optionalNonNegativeIntegerSchema,
+  optionalPositiveIntegerSchema,
+} from "openclaw/plugin-sdk/channel-actions";
+import {
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+} from "openclaw/plugin-sdk/param-readers";
 import { Type } from "typebox";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import {
@@ -65,13 +74,9 @@ function readOptionalTrimmedString(value: unknown, fieldName: string): string | 
 }
 
 function readOptionalNumber(value: unknown, fieldName: string): number | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (typeof value !== "number" || !Number.isInteger(value)) {
-    throw new Error(`${fieldName} must be an integer`);
-  }
-  return value;
+  return readNonNegativeIntegerParam({ [fieldName]: value }, fieldName, {
+    message: `${fieldName} must be a non-negative integer`,
+  });
 }
 
 function readOptionalBoolean(value: unknown, fieldName: string): boolean | undefined {
@@ -230,13 +235,13 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
             "Relative working directory (optional). Must stay within the gateway working directory.",
         }),
       ),
-      timeoutMs: Type.Optional(Type.Number()),
-      maxStdoutBytes: Type.Optional(Type.Number()),
+      timeoutMs: optionalPositiveIntegerSchema(),
+      maxStdoutBytes: optionalPositiveIntegerSchema(),
       flowControllerId: Type.Optional(Type.String()),
       flowGoal: Type.Optional(Type.String()),
       flowStateJson: Type.Optional(Type.String()),
       flowId: Type.Optional(Type.String()),
-      flowExpectedRevision: Type.Optional(Type.Number()),
+      flowExpectedRevision: optionalNonNegativeIntegerSchema(),
       flowCurrentStep: Type.Optional(Type.String()),
       flowWaitingStep: Type.Optional(Type.String()),
     }),
@@ -250,9 +255,8 @@ export function createLobsterTool(api: OpenClawPluginApi, options?: LobsterToolO
       }
 
       const cwd = resolveLobsterCwd(params.cwd);
-      const timeoutMs = typeof params.timeoutMs === "number" ? params.timeoutMs : 20_000;
-      const maxStdoutBytes =
-        typeof params.maxStdoutBytes === "number" ? params.maxStdoutBytes : 512_000;
+      const timeoutMs = readPositiveIntegerParam(params, "timeoutMs") ?? 20_000;
+      const maxStdoutBytes = readPositiveIntegerParam(params, "maxStdoutBytes") ?? 512_000;
 
       if (api.runtime?.version && api.logger?.debug) {
         api.logger.debug(`lobster plugin runtime=${api.runtime.version}`);

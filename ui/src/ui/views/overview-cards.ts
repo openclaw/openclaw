@@ -1,9 +1,18 @@
+// Control UI view renders overview cards screen content.
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { html, nothing, type TemplateResult } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { t } from "../../i18n/index.ts";
+import { isCronJobActiveFailure } from "../cron-status.ts";
 import { formatCost, formatTokens, formatRelativeTimestamp } from "../format.ts";
 import { isMonitoredAuthProvider } from "../model-auth-helpers.ts";
 import { formatNextRun } from "../presenter.ts";
+import {
+  collectQuotaWindows,
+  formatQuotaReset,
+  type QuotaWindowSummary,
+} from "../provider-quota-summary.ts";
+import { resolveSessionDisplayName } from "../session-display.ts";
 import type {
   SessionsUsageResult,
   SessionsListResult,
@@ -50,6 +59,39 @@ function renderStatCard(card: StatCard, onNavigate: (tab: string) => void) {
   `;
 }
 
+function renderProviderQuotaCard(windows: QuotaWindowSummary[]): StatCard | null {
+  const primary = windows[0];
+  if (!primary) {
+    return null;
+  }
+  const reset = formatQuotaReset(primary.resetAt);
+  const primaryHint = [primary.displayName, primary.label, reset ? `reset ${reset}` : null].filter(
+    Boolean,
+  );
+  const secondary = windows.find(
+    (entry) => entry.displayName !== primary.displayName || entry.label !== primary.label,
+  );
+  const secondaryHint = secondary
+    ? `${[secondary.displayName, secondary.label].filter(Boolean).join(" · ")} ${t(
+        "overview.cards.modelAuthUsageLeft",
+        {
+          pct: String(secondary.remaining),
+        },
+      )}`
+    : null;
+  const valueClass = primary.remaining <= 10 ? "danger" : primary.remaining <= 25 ? "warn" : "";
+
+  return {
+    kind: "quota",
+    tab: "usage",
+    label: t("tabs.usage"),
+    value: html`<span class=${valueClass}
+      >${t("overview.cards.modelAuthUsageLeft", { pct: String(primary.remaining) })}</span
+    >`,
+    hint: [primaryHint.join(" · "), secondaryHint].filter(Boolean).join(" · "),
+  };
+}
+
 function renderSkeletonCards() {
   // Render 4 skeletons — matching the always-present cards (cost, sessions,
   // skills, cron). The Model Auth card is conditional on OAuth providers
@@ -92,7 +134,11 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   const cronEnabled = props.cronStatus?.enabled ?? null;
   const cronNext = props.cronStatus?.nextWakeAtMs ?? null;
   const cronJobCount = props.cronJobs.length;
-  const failedCronCount = props.cronJobs.filter((j) => j.state?.lastStatus === "error").length;
+  const failedCronCount = props.cronJobs.filter(isCronJobActiveFailure).length;
+  const authLoading = props.modelAuthStatus === null;
+  const authProviders = props.modelAuthStatus?.providers ?? [];
+  const monitoredProviders = authProviders.filter(isMonitoredAuthProvider);
+  const quotaCard = renderProviderQuotaCard(collectQuotaWindows(monitoredProviders));
 
   const cronValue =
     cronEnabled == null
@@ -138,6 +184,9 @@ export function renderOverviewCards(props: OverviewCardsProps) {
       hint: cronHint,
     },
   ];
+  if (quotaCard) {
+    cards.splice(1, 0, quotaCard);
+  }
 
   // Model auth card — show providers whose auth needs monitoring.
   // See isMonitoredAuthProvider for the exact predicate.
@@ -147,9 +196,6 @@ export function renderOverviewCards(props: OverviewCardsProps) {
   // card's N/A-placeholder pattern. Still hidden entirely for api-key-only
   // setups post-load (nothing to monitor), which accepts a one-time hide
   // rather than the recurring load-time layout shift.
-  const authLoading = props.modelAuthStatus === null;
-  const authProviders = props.modelAuthStatus?.providers ?? [];
-  const monitoredProviders = authProviders.filter(isMonitoredAuthProvider);
   if (authLoading) {
     cards.push({
       kind: "auth",
@@ -178,14 +224,12 @@ export function renderOverviewCards(props: OverviewCardsProps) {
     // Hidden for windows with plenty of headroom to keep the hint readable;
     // shown when a window is below 25% to signal urgency.
     const formatReset = (resetAt: number | undefined, pctLeft: number): string | null => {
-      if (!resetAt || !Number.isFinite(resetAt) || pctLeft >= 25) {
+      const timestampMs = asDateTimestampMs(resetAt);
+      if (timestampMs === undefined || pctLeft >= 25) {
         return null;
       }
-      const d = new Date(resetAt);
-      if (Number.isNaN(d.getTime())) {
-        return null;
-      }
-      const withinADay = resetAt - Date.now() < 24 * 60 * 60 * 1000;
+      const d = new Date(timestampMs);
+      const withinADay = timestampMs - Date.now() < 24 * 60 * 60 * 1000;
       return withinADay
         ? d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" })
         : d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -244,7 +288,7 @@ export function renderOverviewCards(props: OverviewCardsProps) {
                 (s) => html`
                   <li class="ov-recent__row">
                     <span class="ov-recent__key"
-                      >${blurDigits(s.displayName || s.label || s.key)}</span
+                      >${blurDigits(resolveSessionDisplayName(s.key, s))}</span
                     >
                     <span class="ov-recent__model">${s.model ?? ""}</span>
                     <span class="ov-recent__time"

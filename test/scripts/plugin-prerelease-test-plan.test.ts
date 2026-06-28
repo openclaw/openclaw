@@ -1,3 +1,4 @@
+// Plugin Prerelease Test Plan tests cover plugin prerelease test plan script behavior.
 import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
@@ -9,6 +10,9 @@ import {
   assertPluginPrereleaseTestPlanComplete,
   createPluginPrereleaseTestPlan,
 } from "../../scripts/lib/plugin-prerelease-test-plan.mjs";
+
+const CHECKOUT_V6 = "actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10";
+const UPLOAD_ARTIFACT_V7 = "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a";
 
 function readCiWorkflow() {
   return parse(readFileSync(".github/workflows/ci.yml", "utf8"));
@@ -51,6 +55,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       "plugins-offline",
       "plugins",
       "kitchen-sink-plugin",
+      "kitchen-sink-rpc",
       "plugin-update",
       "config-reload",
       "gateway-network",
@@ -116,6 +121,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(script).toContain("npm:@openclaw/kitchen-sink@beta");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@latest");
     expect(script).toContain("clawhub:@openclaw/kitchen-sink@beta");
+    expect(script).toContain("OPENCLAW_KITCHEN_SINK_PLUGIN_MAX_MEMORY_MIB");
     expect(script).toContain(
       "npm-to-clawhub|clawhub:@openclaw/kitchen-sink@latest|openclaw-kitchen-sink-fixture|clawhub|success|basic||${KITCHEN_SINK_NPM_SPEC}",
     );
@@ -158,8 +164,44 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(readFileSync("scripts/e2e/lib/clawhub-fixture-server.cjs", "utf8")).toContain(
       "X-ClawHub-Artifact-Sha256",
     );
-    expect(script).toContain("docker stats --no-stream");
+    expect(script).toContain("docker_e2e_sample_stats_until_exit");
+    expect(script).toContain("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs");
     expect(sweepScript).toContain("scan_logs_for_unexpected_errors");
+  });
+
+  it("keeps kitchen-sink RPC coverage package-backed and resource-guarded", () => {
+    const lane = getDockerLane("kitchen-sink-rpc");
+    const script = readFileSync("scripts/e2e/kitchen-sink-rpc-docker.sh", "utf8");
+    const walkScript = readFileSync("scripts/e2e/kitchen-sink-rpc-walk.mjs", "utf8");
+
+    expect(lane).toMatchObject({
+      command: "OPENCLAW_SKIP_DOCKER_BUILD=1 pnpm test:docker:kitchen-sink-rpc",
+      e2eImageKind: "functional",
+      live: false,
+      name: "kitchen-sink-rpc",
+      resources: ["service", "npm"],
+      retryPatterns: [],
+      retries: 0,
+      stateScenario: "empty",
+      timeoutMs: 1_500_000,
+      weight: 3,
+    });
+    expect(script).toContain("OPENCLAW_ENTRY=/app/openclaw.mjs");
+    expect(script).toContain("OPENCLAW_KITCHEN_SINK_COMMAND_MAX_RSS_MIB");
+    expect(script).toContain("docker_e2e_sample_stats_until_exit");
+    expect(script).toContain("scripts/e2e/lib/docker-stats/assert-resource-ceiling.mjs");
+    expect(script).toContain("node scripts/e2e/kitchen-sink-rpc-walk.mjs");
+    expect(script).not.toContain("--import tsx");
+    expect(walkScript).toContain("commands.list");
+    expect(walkScript).toContain("tools.invoke");
+    expect(walkScript).toContain("tts.providers");
+    expect(walkScript).toContain("plugins.uiDescriptors");
+    expect(walkScript).toContain("loadCallGatewayModule(options.runner)");
+    expect(walkScript).toContain("usesBuiltOpenClawEntry(runner)");
+    expect(walkScript).toContain('"gateway"');
+    expect(walkScript).toContain('"call"');
+    expect(walkScript).not.toContain("src/gateway/call.ts");
+    expect(walkScript).toContain("^call(?:\\.runtime)?");
   });
 
   it("keeps the generic plugin Docker lane as an external install contract canary", () => {
@@ -236,15 +278,16 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
       permissions: {
         contents: "read",
       },
-      "runs-on": "blacksmith-8vcpu-ubuntu-2404",
+      "runs-on":
+        "${{ github.event_name == 'workflow_dispatch' && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}",
       steps: [
         {
           name: "Checkout",
-          uses: "actions/checkout@v6",
+          uses: CHECKOUT_V6,
           with: {
             "fetch-depth": 1,
             "fetch-tags": false,
-            "persist-credentials": false,
+            "persist-credentials": true,
             ref: "${{ needs.preflight.outputs.checkout_revision }}",
             submodules: false,
           },
@@ -290,11 +333,14 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.docs_scope.outputs.docs_changed }}",
       OPENCLAW_CI_DOCS_ONLY:
         "${{ github.event_name == 'workflow_dispatch' && 'false' || steps.docs_scope.outputs.docs_only }}",
+      OPENCLAW_CI_EVENT_NAME: "${{ github.event_name }}",
       OPENCLAW_CI_REPOSITORY: "${{ github.repository }}",
       OPENCLAW_CI_RUN_ANDROID:
-        "${{ github.event_name == 'workflow_dispatch' && inputs.include_android && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
+        "${{ github.event_name == 'workflow_dispatch' && (inputs.release_gate || inputs.include_android) && 'true' || steps.changed_scope.outputs.run_android || 'false' }}",
       OPENCLAW_CI_RUN_CONTROL_UI_I18N:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_control_ui_i18n || 'false' }}",
+      OPENCLAW_CI_RUN_IOS_BUILD:
+        "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_ios_build || 'false' }}",
       OPENCLAW_CI_RUN_MACOS:
         "${{ github.event_name == 'workflow_dispatch' && 'true' || steps.changed_scope.outputs.run_macos || 'false' }}",
       OPENCLAW_CI_RUN_NODE:
@@ -313,10 +359,14 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(manifestEnv).not.toHaveProperty("OPENCLAW_CI_FULL_RELEASE_VALIDATION");
     expect(manifestScript).toContain("includeReleaseOnlyPluginShards: false");
     expect(manifestScript).not.toContain("plugin-prerelease-test-plan.mjs");
-    expect(workflow.jobs["check-shard"].strategy.matrix.include[3]).toEqual({
+    expect(
+      workflow.jobs["check-shard"].strategy.matrix.include.find(
+        (entry) => entry.check_name === "check-dependencies",
+      ),
+    ).toEqual({
       check_name: "check-dependencies",
       task: "dependencies",
-      runner: "ubuntu-24.04",
+      runner: "blacksmith-4vcpu-ubuntu-2404",
     });
     expect(
       workflow.jobs["check-shard"].steps.find((step) => step.name === "Run check shard").run,
@@ -412,7 +462,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     ).toEqual({
       if: "always()",
       name: "Upload plugin inspector advisory artifacts",
-      uses: "actions/upload-artifact@v7",
+      uses: UPLOAD_ARTIFACT_V7,
       with: {
         "if-no-files-found": "warn",
         name: "plugin-inspector-advisory",
@@ -467,26 +517,108 @@ describe("scripts/lib/plugin-prerelease-test-plan.mjs", () => {
     expect(releaseChecksWorkflow.concurrency).toEqual({
       group:
         "openclaw-release-checks-${{ inputs.expected_sha || inputs.ref }}-${{ inputs.rerun_group }}",
-      "cancel-in-progress": false,
+      "cancel-in-progress": "${{ startsWith(github.ref, 'refs/heads/tideclaw/alpha/') }}",
     });
     expect(fullReleaseWorkflow.concurrency).toEqual({
       group: "full-release-validation-${{ inputs.ref }}-${{ inputs.rerun_group }}",
-      "cancel-in-progress": "${{ inputs.ref == 'main' && inputs.rerun_group == 'all' }}",
+      "cancel-in-progress":
+        "${{ (inputs.ref == 'main' && inputs.rerun_group == 'all') || startsWith(inputs.ref, 'tideclaw/alpha/') }}",
     });
     expect(releaseChecksWorkflow.jobs.resolve_target["runs-on"]).toBe("ubuntu-24.04");
     expect(releaseChecksWorkflow.jobs.prepare_release_package["runs-on"]).toBe("ubuntu-24.04");
     expect(releaseChecksWorkflow.jobs.summary["runs-on"]).toBe("ubuntu-24.04");
     for (const jobName of [
       "resolve_target",
+      "docker_runtime_assets_preflight",
       "normal_ci",
       "plugin_prerelease",
       "release_checks",
-      "prepare_release_package",
       "npm_telegram",
       "summary",
     ]) {
       expect(fullReleaseWorkflow.jobs[jobName]["runs-on"]).toBe("ubuntu-24.04");
     }
+    expect(fullReleaseWorkflow.jobs.normal_ci["timeout-minutes"]).toBe(
+      "${{ inputs.release_profile != 'minimum' && 240 || 60 }}",
+    );
+    expect(fullReleaseWorkflow.jobs.normal_ci.needs).toEqual([
+      "resolve_target",
+      "docker_runtime_assets_preflight",
+    ]);
+    expect(fullReleaseWorkflow.jobs.normal_ci.if).toContain(
+      "needs.resolve_target.result == 'success'",
+    );
+    expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.if).toBe(
+      "inputs.rerun_group == 'all'",
+    );
+    expect(fullReleaseWorkflow.jobs.docker_runtime_assets_preflight["timeout-minutes"]).toBe(20);
+    const dockerPreflightStep = fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.find(
+      (step) => step.name === "Verify Docker runtime-assets prune path",
+    );
+    expect(dockerPreflightStep).toBeDefined();
+    expect(dockerPreflightStep?.run).toContain("docker build");
+    expect(dockerPreflightStep?.run).toContain("--target runtime-assets");
+    expect(dockerPreflightStep?.run).toContain("timeout --kill-after=30s 15m docker build");
+    expect(dockerPreflightStep?.run).toContain(
+      '--build-arg OPENCLAW_EXTENSIONS="diagnostics-otel,codex"',
+    );
+    expect(
+      fullReleaseWorkflow.jobs.docker_runtime_assets_preflight.steps.some(
+        (step) => step.name === "Build and smoke test final Docker runtime image",
+      ),
+    ).toBe(false);
+    expect(fullReleaseWorkflow.jobs.plugin_prerelease["timeout-minutes"]).toBe(
+      "${{ inputs.release_profile == 'full' && 300 || inputs.release_profile == 'stable' && 240 || 60 }}",
+    );
+    expect(fullReleaseWorkflow.jobs.release_checks["timeout-minutes"]).toBe(
+      "${{ inputs.release_profile != 'minimum' && 240 || 60 }}",
+    );
+    const fullReleaseSource = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
+    expect(
+      fullReleaseSource.match(/has failed child jobs before the workflow completed/gu)?.length,
+    ).toBeGreaterThanOrEqual(3);
+    expect(fullReleaseSource).toContain(
+      "npm-telegram-beta-e2e.yml has failed child jobs before the workflow completed; cancelling the remaining run.",
+    );
+  });
+
+  it("keeps runtime tool coverage blocking in release checks", () => {
+    const releaseChecksSource = readFileSync(
+      ".github/workflows/openclaw-release-checks.yml",
+      "utf8",
+    );
+    const releaseChecksWorkflow = parse(releaseChecksSource);
+    const runtimeToolCoverage = releaseChecksWorkflow.jobs.runtime_tool_coverage_release_checks;
+
+    expect(runtimeToolCoverage["continue-on-error"]).toBeUndefined();
+    expect(runtimeToolCoverage.needs).toEqual([
+      "resolve_target",
+      "qa_lab_runtime_parity_release_checks",
+    ]);
+    expect(runtimeToolCoverage.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Enforce standard runtime tool coverage",
+          run: expect.stringContaining("pnpm openclaw qa coverage"),
+        }),
+      ]),
+    );
+    expect(runtimeToolCoverage.steps).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "Enforce standard runtime tool coverage",
+          run: expect.stringContaining(
+            "--summary .artifacts/qa-e2e/runtime-parity-standard/qa-suite-summary.json",
+          ),
+        }),
+      ]),
+    );
+    expect(releaseChecksWorkflow.jobs.summary.needs).toContain(
+      "runtime_tool_coverage_release_checks",
+    );
+    expect(releaseChecksSource).toContain(
+      '"runtime_tool_coverage_release_checks=${{ needs.runtime_tool_coverage_release_checks.result }}"',
+    );
   });
 
   it("keeps the live-ish availability check redacted", () => {

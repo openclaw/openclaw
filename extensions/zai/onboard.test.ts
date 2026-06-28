@@ -1,16 +1,35 @@
+// Zai tests cover onboard plugin behavior.
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { AuthStorage, ModelRegistry } from "openclaw/plugin-sdk/agent-sessions";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { expectProviderOnboardPreservesPrimary } from "openclaw/plugin-sdk/provider-test-contracts";
-import { describe, expect, it } from "vitest";
-import { ZAI_CODING_CN_BASE_URL, ZAI_GLOBAL_BASE_URL } from "./model-definitions.js";
+import { beforeAll, describe, expect, it } from "vitest";
+import {
+  ZAI_CODING_CN_BASE_URL,
+  ZAI_CODING_GLOBAL_BASE_URL,
+  ZAI_GLOBAL_BASE_URL,
+} from "./model-definitions.js";
 import { applyZaiConfig, applyZaiProviderConfig } from "./onboard.js";
 
 describe("zai onboard", () => {
+  let defaultCfg: ReturnType<typeof applyZaiConfig>;
+  let cnFlashCfg: ReturnType<typeof applyZaiConfig>;
+  let cnFlashxCfg: ReturnType<typeof applyZaiConfig>;
+
+  beforeAll(() => {
+    defaultCfg = applyZaiConfig({});
+    cnFlashCfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId: "glm-4.7-flash" });
+    cnFlashxCfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId: "glm-4.7-flashx" });
+  });
+
   it("adds zai provider with correct settings", () => {
-    const cfg = applyZaiConfig({});
-    expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_GLOBAL_BASE_URL);
-    expect(cfg.models?.providers?.zai?.api).toBe("openai-completions");
-    const ids = cfg.models?.providers?.zai?.models?.map((m) => m.id);
+    expect(defaultCfg.models?.providers?.zai?.baseUrl).toBe(ZAI_GLOBAL_BASE_URL);
+    expect(defaultCfg.models?.providers?.zai?.api).toBe("openai-completions");
+    const ids = defaultCfg.models?.providers?.zai?.models?.map((m) => m.id);
     expect(ids).toEqual([
+      "glm-5.2",
       "glm-5.1",
       "glm-5",
       "glm-5-turbo",
@@ -25,14 +44,88 @@ describe("zai onboard", () => {
       "glm-4.5-flash",
       "glm-4.5v",
     ]);
+    expect(
+      defaultCfg.models?.providers?.zai?.models?.find((model) => model.id === "glm-5.2"),
+    ).toMatchObject({
+      contextWindow: 1_000_000,
+      maxTokens: 131_072,
+    });
+    expect(
+      defaultCfg.models?.providers?.zai?.models?.find((model) => model.id === "glm-5.2"),
+    ).not.toHaveProperty("baseUrl");
+  });
+
+  it("resolves GLM-5.2 through the selected Coding Plan or custom endpoint", async () => {
+    for (const [name, cfg, expectedBaseUrl] of [
+      ["coding-cn", applyZaiConfig({}, { endpoint: "coding-cn" }), ZAI_CODING_CN_BASE_URL],
+      [
+        "custom",
+        applyZaiConfig({
+          models: {
+            providers: {
+              zai: {
+                baseUrl: "https://proxy.example.test/zai",
+                api: "openai-completions",
+                models: [],
+              },
+            },
+          },
+        }),
+        "https://proxy.example.test/zai",
+      ],
+    ] as const) {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-zai-${name}-`));
+      try {
+        const modelsPath = path.join(dir, "models.json");
+        await fs.writeFile(
+          modelsPath,
+          JSON.stringify({
+            ...cfg.models,
+            providers: {
+              ...cfg.models?.providers,
+              zai: { ...cfg.models?.providers?.zai, apiKey: "test-key" },
+            },
+          }),
+        );
+        const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
+        expect(registry.getError()).toBeUndefined();
+        expect(registry.find("zai", "glm-5.2")?.baseUrl).toBe(expectedBaseUrl);
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    }
   });
 
   it("supports CN endpoint for supported coding models", () => {
-    for (const modelId of ["glm-4.7-flash", "glm-4.7-flashx"] as const) {
-      const cfg = applyZaiConfig({}, { endpoint: "coding-cn", modelId });
+    for (const [modelId, cfg] of [
+      ["glm-4.7-flash", cnFlashCfg],
+      ["glm-4.7-flashx", cnFlashxCfg],
+    ] as const) {
       expect(cfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_CN_BASE_URL);
       expect(resolveAgentModelPrimaryValue(cfg.agents?.defaults?.model)).toBe(`zai/${modelId}`);
     }
+  });
+
+  it("defaults Coding Plan endpoints to GLM-5.2 without changing the general API default", () => {
+    const codingCfg = applyZaiConfig({}, { endpoint: "coding-global" });
+    const existingCodingCfg = applyZaiConfig({
+      models: {
+        providers: {
+          zai: {
+            baseUrl: `${ZAI_CODING_GLOBAL_BASE_URL}/`,
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      },
+    });
+
+    expect(resolveAgentModelPrimaryValue(defaultCfg.agents?.defaults?.model)).toBe("zai/glm-5.1");
+    expect(codingCfg.models?.providers?.zai?.baseUrl).toBe(ZAI_CODING_GLOBAL_BASE_URL);
+    expect(resolveAgentModelPrimaryValue(codingCfg.agents?.defaults?.model)).toBe("zai/glm-5.2");
+    expect(resolveAgentModelPrimaryValue(existingCodingCfg.agents?.defaults?.model)).toBe(
+      "zai/glm-5.2",
+    );
   });
 
   it("does not overwrite existing primary model in provider-only mode", () => {

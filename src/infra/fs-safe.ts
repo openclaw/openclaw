@@ -1,3 +1,4 @@
+// Re-exports fs-safe helpers with OpenClaw defaults and wrappers.
 import "./fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -23,6 +24,7 @@ export {
 } from "@openclaw/fs-safe/advanced";
 export { isPathInside } from "@openclaw/fs-safe/path";
 export { pathExists, pathExistsSync } from "@openclaw/fs-safe/advanced";
+export { movePathToTrash, type MovePathToTrashOptions } from "@openclaw/fs-safe/advanced";
 export { readLocalFileFromRoots, resolveLocalPathFromRootsSync } from "@openclaw/fs-safe/advanced";
 export {
   appendRegularFile,
@@ -30,6 +32,7 @@ export {
   readRegularFile,
   readRegularFileSync,
   resolveRegularFileAppendFlags,
+  statRegularFile,
   statRegularFileSync,
 } from "@openclaw/fs-safe/advanced";
 export {
@@ -39,6 +42,7 @@ export {
   root,
   type OpenResult,
   type ReadResult,
+  type Root,
 } from "@openclaw/fs-safe/root";
 export { sanitizeUntrustedFileName } from "@openclaw/fs-safe/advanced";
 export {

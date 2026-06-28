@@ -1,9 +1,11 @@
+// Signal plugin module implements install signal cli behavior.
 import { createWriteStream } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { runPluginCommandWithTimeout } from "openclaw/plugin-sdk/run-command";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { CONFIG_DIR, extractArchive, resolveBrewExecutable } from "openclaw/plugin-sdk/setup-tools";
@@ -29,6 +31,7 @@ type ReleaseResponse = {
 const MAX_SIGNAL_CLI_ARCHIVE_BYTES = 256 * 1024 * 1024;
 const SIGNAL_CLI_DOWNLOAD_TIMEOUT_MS = 5 * 60_000;
 const SIGNAL_CLI_RELEASE_INFO_TIMEOUT_MS = 30_000;
+const CONTENT_LENGTH_RE = /^\d+$/;
 
 export type SignalInstallResult = {
   ok: boolean;
@@ -103,7 +106,7 @@ export function pickAsset(
   }
 
   if (platform === "darwin") {
-    return byName(/macos|osx|darwin/) || archives[0];
+    return byName(/macos|osx|darwin/);
   }
 
   if (platform === "win32") {
@@ -136,7 +139,10 @@ export async function downloadToFile(
 
     const rawLength = response.headers.get("content-length");
     if (rawLength !== null) {
-      const declaredLength = Number(rawLength);
+      const trimmedLength = rawLength.trim();
+      const declaredLength = CONTENT_LENGTH_RE.test(trimmedLength)
+        ? Number(trimmedLength)
+        : Number.NaN;
       if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
         throw new Error(
           `signal-cli archive exceeds the ${maxBytes}-byte download cap (declared ${declaredLength}).`,
@@ -223,7 +229,7 @@ async function installSignalCliViaBrew(runtime: RuntimeEnv): Promise<SignalInsta
     return {
       ok: false,
       error:
-        `No native signal-cli build is available for ${process.arch}. ` +
+        `No native signal-cli build is available for ${process.platform}/${process.arch}. ` +
         "Install Homebrew (https://brew.sh) and try again, or install signal-cli manually.",
     };
   }
@@ -297,7 +303,14 @@ export async function installSignalCliFromRelease(
         error: `Failed to fetch release info (${response.status})`,
       };
     }
-    payload = (await response.json()) as ReleaseResponse;
+    try {
+      payload = await readProviderJsonResponse<ReleaseResponse>(response, "signal.release-info");
+    } catch {
+      return {
+        ok: false,
+        error: "Failed to parse signal-cli release info.",
+      };
+    }
   } finally {
     await release();
   }
@@ -360,9 +373,9 @@ export async function installSignalCli(runtime: RuntimeEnv): Promise<SignalInsta
   }
 
   // The official signal-cli GitHub releases only ship a native binary for
-  // x86-64 Linux.  On other architectures (arm64, armv7, etc.) we delegate
-  // to Homebrew which builds from source and bundles the JRE automatically.
-  const hasNativeRelease = process.platform !== "linux" || process.arch === "x64";
+  // x86-64 Linux.  Other platforms use Homebrew instead of guessing from
+  // unrelated release archives.
+  const hasNativeRelease = process.platform === "linux" && process.arch === "x64";
 
   if (hasNativeRelease) {
     return installSignalCliFromRelease(runtime);

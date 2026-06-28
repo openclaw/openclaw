@@ -1,14 +1,17 @@
+// Plugin Npm Release script supports OpenClaw repository automation.
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { normalizeOptionalString } from "../../src/shared/string-coerce.ts";
+import { normalizeOptionalString } from "../../packages/normalization-core/src/string-coerce.js";
+import { validateExternalCodePluginPackageJson } from "../../packages/plugin-package-contract/src/index.ts";
 import { parseReleaseVersion } from "../openclaw-npm-release-check.ts";
-import { resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
+import { collectReleaseVersionFloorErrors, resolveNpmPublishPlan } from "./npm-publish-plan.mjs";
 
 export type PluginPackageJson = {
   name?: string;
   version?: string;
+  type?: string;
   private?: boolean;
   repository?:
     | string
@@ -22,6 +25,14 @@ export type PluginPackageJson = {
       defaultChoice?: string;
       minHostVersion?: string;
       npmSpec?: string;
+    };
+    compat?: {
+      pluginApi?: string;
+      minGatewayVersion?: string;
+    };
+    build?: {
+      openclawVersion?: string;
+      pluginSdkVersion?: string;
     };
     release?: {
       publishToNpm?: boolean;
@@ -70,15 +81,21 @@ export type PublishablePluginPackageCandidate<
   extensionId: string;
   packageDir: string;
   packageJson: TPackageJson;
+  readmeText?: string;
 };
 
 export const OPENCLAW_PLUGIN_NPM_REPOSITORY_URL = "https://github.com/openclaw/openclaw";
 
-// oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Release helper preserves caller-specific package.json shape.
-function readPluginPackageJson<TPackageJson extends PluginPackageJson = PluginPackageJson>(
-  path: string,
-): TPackageJson {
-  return JSON.parse(readFileSync(path, "utf8")) as TPackageJson;
+function readPluginPackageJson(path: string): unknown {
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function readOptionalTextFile(path: string): string | undefined {
+  try {
+    return readFileSync(path, "utf8");
+  } catch {
+    return undefined;
+  }
 }
 
 export function collectExtensionPackageJsonCandidates<
@@ -98,7 +115,8 @@ export function collectExtensionPackageJsonCandidates<
       candidates.push({
         extensionId: dir.name,
         packageDir,
-        packageJson: readPluginPackageJson<TPackageJson>(packageJsonPath),
+        packageJson: readPluginPackageJson(packageJsonPath) as TPackageJson,
+        readmeText: readOptionalTextFile(join(absolutePackageDir, "README.md")),
       });
     } catch {
       continue;
@@ -117,7 +135,7 @@ export function resolvePublishablePluginVersion(params: {
   const parsedVersion = parseReleaseVersion(version);
   if (parsedVersion === null) {
     params.validationErrors.push(
-      `${params.extensionId}: package.json version must match YYYY.M.D, YYYY.M.D-N, YYYY.M.D-alpha.N, or YYYY.M.D-beta.N; found "${version}".`,
+      `${params.extensionId}: package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "${version}".`,
     );
     return null;
   }
@@ -168,23 +186,23 @@ export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs 
       continue;
     }
     if (arg === "--plugins") {
-      selection = parsePluginReleaseSelection(argv[index + 1]);
+      selection = parsePluginReleaseSelection(readRequiredArgValue(argv, index, arg, true));
       pluginsFlagProvided = true;
       index += 1;
       continue;
     }
     if (arg === "--selection-mode") {
-      selectionMode = parsePluginReleaseSelectionMode(argv[index + 1]);
+      selectionMode = parsePluginReleaseSelectionMode(readRequiredArgValue(argv, index, arg));
       index += 1;
       continue;
     }
     if (arg === "--base-ref") {
-      baseRef = argv[index + 1];
+      baseRef = readRequiredArgValue(argv, index, arg);
       index += 1;
       continue;
     }
     if (arg === "--head-ref") {
-      headRef = argv[index + 1];
+      headRef = readRequiredArgValue(argv, index, arg);
       index += 1;
       continue;
     }
@@ -213,6 +231,21 @@ export function parsePluginReleaseArgs(argv: string[]): ParsedPluginReleaseArgs 
   return { selection, selectionMode, pluginsFlagProvided, baseRef, headRef };
 }
 
+function readRequiredArgValue(
+  argv: string[],
+  index: number,
+  flag: string,
+  allowBlank = false,
+): string {
+  const value = argv[index + 1];
+  const missingValue =
+    value === undefined || value.startsWith("--") || (!allowBlank && value.trim() === "");
+  if (missingValue) {
+    throw new Error(`${flag} requires a value.`);
+  }
+  return value;
+}
+
 export function collectPublishablePluginPackageErrors(
   candidate: PublishablePluginPackageCandidate,
 ): string[] {
@@ -235,6 +268,12 @@ export function collectPublishablePluginPackageErrors(
   if (packageJson.private === true) {
     errors.push("package.json private must not be true.");
   }
+  if (packageJson.type !== "module") {
+    errors.push('package.json type must be "module" so built .js runtime entries load as ESM.');
+  }
+  if (!candidate.readmeText?.trim()) {
+    errors.push("README.md must exist and contain package documentation.");
+  }
   if (repositoryUrl !== OPENCLAW_PLUGIN_NPM_REPOSITORY_URL) {
     errors.push(
       `package.json repository.url must be "${OPENCLAW_PLUGIN_NPM_REPOSITORY_URL}" so npm provenance can validate GitHub trusted publishing; found "${repositoryUrl || "<missing>"}".`,
@@ -244,7 +283,7 @@ export function collectPublishablePluginPackageErrors(
     errors.push("package.json version must be non-empty.");
   } else if (parseReleaseVersion(packageVersion) === null) {
     errors.push(
-      `package.json version must match YYYY.M.D, YYYY.M.D-N, YYYY.M.D-alpha.N, or YYYY.M.D-beta.N; found "${packageVersion}".`,
+      `package.json version must match YYYY.M.PATCH, YYYY.M.PATCH-N, YYYY.M.PATCH-alpha.N, or YYYY.M.PATCH-beta.N; found "${packageVersion}".`,
     );
   }
   if (!Array.isArray(extensions) || extensions.length === 0) {
@@ -256,6 +295,9 @@ export function collectPublishablePluginPackageErrors(
   if (!installNpmSpec) {
     errors.push("openclaw.install.npmSpec must be a non-empty string for publishable plugins.");
   }
+  errors.push(
+    ...validateExternalCodePluginPackageJson(packageJson).issues.map((issue) => issue.message),
+  );
 
   return errors;
 }
@@ -455,6 +497,31 @@ export function resolveChangedPublishablePluginPackages(params: {
   return params.plugins.filter((plugin) => changed.has(plugin.extensionId));
 }
 
+export function collectPluginReleaseVersionFloorErrors(
+  plugins: readonly Pick<PublishablePluginPackage, "packageName" | "version">[],
+): string[] {
+  return plugins.flatMap((plugin) =>
+    collectReleaseVersionFloorErrors(plugin.version).map(
+      (error) => `${plugin.packageName}@${plugin.version}: ${error}`,
+    ),
+  );
+}
+
+export function assertPluginReleaseVersionFloors(
+  plugins: readonly Pick<PublishablePluginPackage, "packageName" | "version">[],
+  label: string,
+): void {
+  const errors = collectPluginReleaseVersionFloorErrors(plugins);
+  if (errors.length === 0) {
+    return;
+  }
+  throw new Error(
+    `${label} rejected plugin versions below the release floor:\n${errors
+      .map((error) => `- ${error}`)
+      .join("\n")}`,
+  );
+}
+
 function isPluginVersionPublished(packageName: string, version: string): boolean {
   const tempDir = mkdtempSync(join(tmpdir(), "openclaw-plugin-npm-view-"));
   const userconfigPath = join(tempDir, "npmrc");
@@ -510,6 +577,12 @@ export function collectPluginReleasePlan(params?: {
               changedExtensionIds,
             })
           : allPublishable;
+
+  const explicitPublishSelection =
+    params?.selectionMode !== undefined || (params?.selection?.length ?? 0) > 0;
+  if (explicitPublishSelection) {
+    assertPluginReleaseVersionFloors(selectedPublishable, "Plugin NPM release plan");
+  }
 
   const all = selectedPublishable.map((plugin) =>
     Object.assign({}, plugin, {

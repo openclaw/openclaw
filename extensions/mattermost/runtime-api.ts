@@ -31,7 +31,7 @@ export {
   isTrustedProxyAddress,
 } from "openclaw/plugin-sdk/core";
 export { buildComputedAccountStatusSnapshot } from "openclaw/plugin-sdk/channel-status";
-export { createAccountStatusSink } from "openclaw/plugin-sdk/channel-lifecycle";
+export { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
 export { buildAgentMediaPayload } from "openclaw/plugin-sdk/agent-media-payload";
 export {
   listSkillCommandsForAgents,
@@ -46,17 +46,20 @@ export {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 export { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-export { loadSessionStore, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+export { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 export { formatInboundFromLabel } from "openclaw/plugin-sdk/channel-inbound";
 export { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
-export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-message";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
 export { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 export { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+// Legacy map-helper exports stay for older plugin consumers. New message-turn
+// code should use createChannelHistoryWindow.
 export {
   DEFAULT_GROUP_HISTORY_LIMIT,
+  createChannelHistoryWindow,
   buildPendingHistoryContextFromMap,
   clearHistoryEntriesIfEnabled,
   recordPendingHistoryEntryIfEnabled,

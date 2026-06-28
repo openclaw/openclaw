@@ -1,30 +1,37 @@
+// Xai tests cover x search plugin behavior.
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createXSearchTool } from "./x-search.js";
 
+function jsonResponse(payload: unknown, init: ResponseInit = {}): Response {
+  return new Response(JSON.stringify(payload), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+    ...init,
+  });
+}
+
 function installXSearchFetch(payload?: Record<string, unknown>) {
   const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
-    Promise.resolve({
-      ok: true,
-      json: () =>
-        Promise.resolve(
-          payload ?? {
-            output: [
-              {
-                type: "message",
-                content: [
-                  {
-                    type: "output_text",
-                    text: "Found X posts",
-                    annotations: [{ type: "url_citation", url: "https://x.com/openclaw/status/1" }],
-                  },
-                ],
-              },
-            ],
-            citations: ["https://x.com/openclaw/status/1"],
-          },
-        ),
-    } as Response),
+    Promise.resolve(
+      jsonResponse(
+        payload ?? {
+          output: [
+            {
+              type: "message",
+              content: [
+                {
+                  type: "output_text",
+                  text: "Found X posts",
+                  annotations: [{ type: "url_citation", url: "https://x.com/openclaw/status/1" }],
+                },
+              ],
+            },
+          ],
+          citations: ["https://x.com/openclaw/status/1"],
+        },
+      ),
+    ),
   );
   global.fetch = withFetchPreconnect(mockFetch);
   return mockFetch;
@@ -72,6 +79,34 @@ afterEach(() => {
 });
 
 describe("xai x_search tool", () => {
+  it("describes query as the required instruction for the Grok X-search agent", () => {
+    const tool = createXSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-key", // pragma: allowlist secret
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const parameters = tool?.parameters as
+      | { properties?: { query?: { description?: string } } }
+      | undefined;
+    const queryDescription = parameters?.properties?.query?.description;
+
+    expect(queryDescription).toContain("Natural-language instruction");
+    expect(queryDescription).toContain("Grok X-search agent");
+    expect(queryDescription).toContain("meaningful and non-empty");
+    expect(queryDescription).not.toContain("allowed_x_handles");
+  });
+
   it("enables x_search when runtime config carries the shared xAI key", () => {
     const tool = createXSearchTool({
       config: {},
@@ -288,6 +323,73 @@ describe("xai x_search tool", () => {
     });
 
     expect(firstAuthorizationHeader(mockFetch)).toBe("Bearer xai-plugin-key");
+  });
+
+  it("reports malformed x_search JSON as a provider error", async () => {
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+      Promise.resolve(
+        new Response("{ nope", {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+    const tool = createXSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-key", // pragma: allowlist secret
+                },
+                xSearch: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await expect(
+      tool?.execute?.("x-search:malformed-json", {
+        query: "malformed x_search response probe",
+      }),
+    ).rejects.toThrow("xAI X search failed: malformed JSON response");
+  });
+
+  it("rejects x_search success JSON without answer text", async () => {
+    const mockFetch = vi.fn((_input?: unknown, _init?: unknown) =>
+      Promise.resolve(jsonResponse({ output: [] })),
+    );
+    global.fetch = withFetchPreconnect(mockFetch);
+    const tool = createXSearchTool({
+      config: {
+        plugins: {
+          entries: {
+            xai: {
+              config: {
+                webSearch: {
+                  apiKey: "xai-plugin-key", // pragma: allowlist secret
+                },
+                xSearch: {
+                  enabled: true,
+                },
+              },
+            },
+          },
+        },
+      },
+    });
+
+    await expect(
+      tool?.execute?.("x-search:missing-text", {
+        query: "malformed x_search missing text probe",
+      }),
+    ).rejects.toThrow("xAI X search failed: malformed JSON response");
   });
 
   it("prefers the active runtime config for shared xAI keys", async () => {

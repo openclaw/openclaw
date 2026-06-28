@@ -6,7 +6,7 @@ read_when:
 title: "Gradium"
 ---
 
-[Gradium](https://gradium.ai) is a bundled text-to-speech provider for OpenClaw. The plugin can render normal audio replies (WAV), voice-note-compatible Opus output, and 8 kHz u-law audio for telephony surfaces.
+[Gradium](https://gradium.ai) is a text-to-speech provider for OpenClaw. The plugin can render normal audio replies (WAV), voice-note-compatible Opus output, and 8 kHz u-law audio for telephony surfaces.
 
 | Property      | Value                                |
 | ------------- | ------------------------------------ |
@@ -14,6 +14,15 @@ title: "Gradium"
 | Auth          | `GRADIUM_API_KEY` or config `apiKey` |
 | Base URL      | `https://api.gradium.ai` (default)   |
 | Default voice | `Emma` (`YTpq7expH9539ERJ`)          |
+
+## Install plugin
+
+Install the official plugin, then restart Gateway:
+
+```bash
+openclaw plugins install @openclaw/gradium-speech
+openclaw gateway restart
+```
 
 ## Setup
 
@@ -57,7 +66,7 @@ The plugin checks the resolved `apiKey` first and falls back to the `GRADIUM_API
       provider: "gradium",
       providers: {
         gradium: {
-          voiceId: "YTpq7expH9539ERJ",
+          speakerVoiceId: "YTpq7expH9539ERJ",
           // apiKey: "${GRADIUM_API_KEY}",
           // baseUrl: "https://api.gradium.ai",
         },
@@ -67,11 +76,11 @@ The plugin checks the resolved `apiKey` first and falls back to the `GRADIUM_API
 }
 ```
 
-| Key                                      | Type   | Description                                                                                   |
-| ---------------------------------------- | ------ | --------------------------------------------------------------------------------------------- |
-| `messages.tts.providers.gradium.apiKey`  | string | Resolved API key. Supports `${ENV}` and secret refs.                                          |
-| `messages.tts.providers.gradium.baseUrl` | string | Override the API origin. Trailing slashes are stripped. Defaults to `https://api.gradium.ai`. |
-| `messages.tts.providers.gradium.voiceId` | string | Default voice id used when no directive override is present.                                  |
+| Key                                             | Type   | Description                                                                                   |
+| ----------------------------------------------- | ------ | --------------------------------------------------------------------------------------------- |
+| `messages.tts.providers.gradium.apiKey`         | string | Resolved API key. Supports `${ENV}` and secret refs.                                          |
+| `messages.tts.providers.gradium.baseUrl`        | string | Override the API origin. Trailing slashes are stripped. Defaults to `https://api.gradium.ai`. |
+| `messages.tts.providers.gradium.speakerVoiceId` | string | Default voice id used when no directive override is present.                                  |
 
 The output audio format is selected automatically by the runtime based on the target surface and is not configurable from `openclaw.json`. See [Output](#output) below.
 
@@ -91,7 +100,7 @@ Default voice: Emma.
 
 ### Per-message voice override
 
-When the active speech policy allows voice overrides, you can switch voices inline using a directive token. All of these resolve to the same `voiceId` override:
+When the active speech policy allows voice overrides, you can switch voices inline using a directive token. Use `speakerVoiceId` for provider-native voice ids.
 
 ```text
 /voice:LFZvm12tW_z0xfGo

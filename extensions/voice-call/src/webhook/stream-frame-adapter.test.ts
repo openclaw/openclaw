@@ -1,3 +1,4 @@
+// Voice Call tests cover stream frame adapter plugin behavior.
 import { describe, expect, it } from "vitest";
 import { TelnyxStreamFrameAdapter, TwilioStreamFrameAdapter } from "./stream-frame-adapter.js";
 
@@ -39,6 +40,22 @@ describe("TwilioStreamFrameAdapter", () => {
     expect(
       adapter.parseInbound(JSON.stringify({ event: "start", start: { streamSid: "MZ-only" } })),
     ).toEqual({ kind: "ignored" });
+    expect(
+      adapter.parseInbound(JSON.stringify({ event: "media", media: { payload: "AAA@@@" } })),
+    ).toEqual({ kind: "ignored" });
+  });
+
+  it("ignores partial numeric media timestamps", () => {
+    const adapter = new TwilioStreamFrameAdapter();
+
+    expect(
+      adapter.parseInbound(
+        JSON.stringify({
+          event: "media",
+          media: { payload: "AAA=", timestamp: "20ms" },
+        }),
+      ),
+    ).toEqual({ kind: "media", payloadBase64: "AAA=" });
   });
 
   it("serializes outbound frames with the streamSid captured at start", () => {
@@ -174,6 +191,9 @@ describe("TelnyxStreamFrameAdapter", () => {
     const adapter = new TelnyxStreamFrameAdapter();
     expect(adapter.parseInbound("not json")).toEqual({ kind: "ignored" });
     expect(adapter.parseInbound(JSON.stringify({ event: "media" }))).toEqual({ kind: "ignored" });
+    expect(
+      adapter.parseInbound(JSON.stringify({ event: "media", media: { payload: "AAA@@@" } })),
+    ).toEqual({ kind: "ignored" });
     expect(adapter.parseInbound(JSON.stringify({ event: "something-else" }))).toEqual({
       kind: "ignored",
     });

@@ -1,3 +1,4 @@
+// Control UI chat module implements run controls behavior.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { icons } from "../icons.ts";
@@ -14,14 +15,15 @@ export type ChatRunControlsProps = {
   onNewSession: () => void;
   onSend: () => void;
   onStoreDraft: (draft: string) => void;
+  showSecondary?: boolean;
 };
 
 export function renderChatRunControls(props: ChatRunControlsProps) {
+  const showSecondary = props.showSecondary ?? true;
   return html`
     <div class="agent-chat__toolbar-right">
-      ${props.canAbort
-        ? nothing
-        : html`
+      ${showSecondary && !props.canAbort
+        ? html`
             <button
               class="btn btn--ghost"
               @click=${props.onNewSession}
@@ -29,18 +31,24 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
               aria-label=${t("chat.runControls.newSession")}
             >
               ${icons.plus}
+              <span class="agent-chat__control-label">${t("chat.runControls.newSession")}</span>
             </button>
-          `}
-      <button
-        class="btn btn--ghost"
-        @click=${props.onExport}
-        title=${t("chat.runControls.export")}
-        aria-label=${t("chat.runControls.exportChat")}
-        ?disabled=${!props.hasMessages}
-      >
-        ${icons.download}
-      </button>
-
+          `
+        : nothing}
+      ${showSecondary
+        ? html`
+            <button
+              class="btn btn--ghost"
+              @click=${props.onExport}
+              title=${t("chat.runControls.export")}
+              aria-label=${t("chat.runControls.exportChat")}
+              ?disabled=${!props.hasMessages}
+            >
+              ${icons.download}
+              <span class="agent-chat__control-label">${t("chat.runControls.export")}</span>
+            </button>
+          `
+        : nothing}
       ${props.canAbort
         ? html`
             <button
@@ -56,6 +64,7 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
               aria-label=${t("chat.runControls.queueMessage")}
             >
               ${icons.send}
+              <span class="agent-chat__control-label">${t("chat.runControls.queue")}</span>
             </button>
             <button
               class="chat-send-btn chat-send-btn--stop"
@@ -64,6 +73,7 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
               aria-label=${t("chat.runControls.stopGenerating")}
             >
               ${icons.stop}
+              <span class="agent-chat__control-label">${t("chat.runControls.stop")}</span>
             </button>
           `
         : html`
@@ -82,6 +92,9 @@ export function renderChatRunControls(props: ChatRunControlsProps) {
                 : t("chat.runControls.sendMessage")}
             >
               ${icons.send}
+              <span class="agent-chat__control-label"
+                >${props.isBusy ? t("chat.runControls.queue") : t("chat.runControls.send")}</span
+              >
             </button>
           `}
     </div>

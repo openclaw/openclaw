@@ -1,3 +1,4 @@
+/** Tests plugin-specific runtime config secret collectors. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginOrigin } from "../plugins/types.js";
@@ -198,6 +199,64 @@ describe("collectPluginConfigAssignments", () => {
       throw new Error("expected acpx mcp env config");
     }
     expect(env.API_KEY).toBe("resolved-key-value");
+  });
+
+  it("resolves array SecretRef assignments via apply callback", () => {
+    loadPluginManifestRegistryForPluginRegistryMock.mockReturnValue({
+      plugins: [
+        {
+          id: "array-plugin",
+          origin: "config",
+          providers: [],
+          legacyPluginIds: [],
+          configContracts: {
+            secretInputs: {
+              paths: [{ path: "servers.*.env.API_KEY", expected: "string" }],
+            },
+          },
+        },
+      ],
+      diagnostics: [],
+    });
+    const config = asConfig({
+      plugins: {
+        entries: {
+          "array-plugin": {
+            enabled: true,
+            config: {
+              servers: [
+                { env: { API_KEY: envRef("FIRST") } },
+                { env: { API_KEY: envRef("SECOND") } },
+              ],
+            },
+          },
+        },
+      },
+    });
+    const context = makeContext(config);
+
+    collectPluginConfigAssignments({
+      config,
+      defaults: undefined,
+      context,
+      loadablePluginOrigins: loadablePluginOrigins([["array-plugin", "config"]]),
+    });
+
+    const assignment = context.assignments.find((entry) =>
+      entry.path.endsWith("servers[1].env.API_KEY"),
+    );
+    if (!assignment) {
+      throw new Error("expected array plugin assignment");
+    }
+
+    assignment.apply("resolved-second");
+
+    const entries = config.plugins?.entries as Record<string, Record<string, unknown>>;
+    const pluginConfig = entries["array-plugin"]?.config as {
+      servers?: Array<{ env?: Record<string, unknown> }>;
+    };
+    expect(pluginConfig.servers?.[1]?.env?.API_KEY).toBe("resolved-second");
+    expect(pluginConfig.servers?.[0]?.env?.API_KEY).toEqual(envRef("FIRST"));
   });
 
   it("collects across multiple acpx servers only", () => {

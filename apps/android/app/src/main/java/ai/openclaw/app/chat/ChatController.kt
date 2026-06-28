@@ -1,6 +1,7 @@
 package ai.openclaw.app.chat
 
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.gateway.parseChatSendAck
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -17,13 +18,23 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
-class ChatController(
+class ChatController internal constructor(
   private val scope: CoroutineScope,
-  private val session: GatewaySession,
   private val json: Json,
-  private val supportsChatSubscribe: Boolean,
+  private val requestGateway: suspend (method: String, paramsJson: String?) -> String,
 ) {
+  constructor(
+    scope: CoroutineScope,
+    session: GatewaySession,
+    json: Json,
+  ) : this(
+    scope = scope,
+    json = json,
+    requestGateway = { method, paramsJson -> session.request(method, paramsJson) },
+  )
+
   private var appliedMainSessionKey = "main"
   private val _sessionKey = MutableStateFlow("main")
   val sessionKey: StateFlow<String> = _sessionKey.asStateFlow()
@@ -33,6 +44,9 @@ class ChatController(
 
   private val _messages = MutableStateFlow<List<ChatMessage>>(emptyList())
   val messages: StateFlow<List<ChatMessage>> = _messages.asStateFlow()
+
+  private val _historyLoading = MutableStateFlow(false)
+  val historyLoading: StateFlow<Boolean> = _historyLoading.asStateFlow()
 
   private val _errorText = MutableStateFlow<String?>(null)
   val errorText: StateFlow<String?> = _errorText.asStateFlow()
@@ -58,27 +72,38 @@ class ChatController(
 
   private val pendingRuns = mutableSetOf<String>()
   private val pendingRunTimeoutJobs = ConcurrentHashMap<String, Job>()
+
+  // Preserve sent messages locally until chat.history includes the gateway-confirmed copy.
+  private val optimisticMessagesByRunId = LinkedHashMap<String, ChatMessage>()
   private val pendingRunTimeoutMs = 120_000L
+
+  // Drops stale history responses after session switches or refresh races.
+  private val historyLoadGeneration = AtomicLong(0)
 
   private var lastHealthPollAtMs: Long? = null
 
+  /** Clears transient chat state when the operator gateway session disconnects. */
   fun onDisconnected(message: String) {
     _healthOk.value = false
-    // Not an error; keep connection status in the UI pill.
     _errorText.value = null
     clearPendingRuns()
     pendingToolCallsById.clear()
     publishPendingToolCalls()
     _streamingAssistantText.value = null
+    _historyLoading.value = false
     _sessionId.value = null
   }
 
+  /** Loads a chat session, normalizing "main" to the current gateway-provided main session key. */
   fun load(sessionKey: String) {
     val key = normalizeRequestedSessionKey(sessionKey)
-    _sessionKey.value = key
-    scope.launch { bootstrap(forceHealth = true, refreshSessions = true) }
+    val generation = beginHistoryLoad(key, clearMessages = key != _sessionKey.value)
+    scope.launch {
+      bootstrap(sessionKey = key, generation = generation, forceHealth = true, refreshSessions = true)
+    }
   }
 
+  /** Rebinds chat to a new canonical main session key after gateway hello/agent changes. */
   fun applyMainSessionKey(mainSessionKey: String) {
     val trimmed = mainSessionKey.trim()
     if (trimmed.isEmpty()) return
@@ -90,32 +115,66 @@ class ChatController(
       )
     appliedMainSessionKey = nextState.appliedMainSessionKey
     if (_sessionKey.value == nextState.currentSessionKey) return
-    _sessionKey.value = nextState.currentSessionKey
-    scope.launch { bootstrap(forceHealth = true, refreshSessions = true) }
+    val generation = beginHistoryLoad(nextState.currentSessionKey, clearMessages = true)
+    scope.launch {
+      bootstrap(
+        sessionKey = nextState.currentSessionKey,
+        generation = generation,
+        forceHealth = true,
+        refreshSessions = true,
+      )
+    }
   }
 
+  /** Refreshes current chat history and session list without clearing optimistic messages first. */
   fun refresh() {
-    scope.launch { bootstrap(forceHealth = true, refreshSessions = true) }
+    val key = normalizeRequestedSessionKey(_sessionKey.value)
+    val generation = beginHistoryLoad(key, clearMessages = false)
+    scope.launch {
+      bootstrap(sessionKey = key, generation = generation, forceHealth = true, refreshSessions = true)
+    }
   }
 
   fun refreshSessions(limit: Int? = null) {
     scope.launch { fetchSessions(limit = limit) }
   }
 
+  /** Persists the normalized thinking level used for subsequent chat sends. */
   fun setThinkingLevel(thinkingLevel: String) {
     val normalized = normalizeThinking(thinkingLevel)
     if (normalized == _thinkingLevel.value) return
     _thinkingLevel.value = normalized
   }
 
+  /** Switches to another gateway chat session and starts a fresh history load. */
   fun switchSession(sessionKey: String) {
     val key = normalizeRequestedSessionKey(sessionKey)
     if (key.isEmpty()) return
     if (key == _sessionKey.value) return
+    val generation = beginHistoryLoad(key, clearMessages = true)
+    scope.launch {
+      bootstrap(sessionKey = key, generation = generation, forceHealth = true, refreshSessions = false)
+    }
+  }
+
+  private fun beginHistoryLoad(
+    key: String,
+    clearMessages: Boolean,
+  ): Long {
+    val generation = historyLoadGeneration.incrementAndGet()
     _sessionKey.value = key
-    // Keep the thread switch path lean: history + health are needed immediately,
-    // but the session list is usually unchanged and can refresh on explicit pull-to-refresh.
-    scope.launch { bootstrap(forceHealth = true, refreshSessions = false) }
+    _errorText.value = null
+    _healthOk.value = false
+    clearPendingRuns()
+    pendingToolCallsById.clear()
+    publishPendingToolCalls()
+    _streamingAssistantText.value = null
+    _sessionId.value = null
+    _historyLoading.value = true
+    if (clearMessages) {
+      _messages.value = emptyList()
+    }
+    return generation
   }
 
   private fun normalizeRequestedSessionKey(sessionKey: String): String {
@@ -125,6 +184,7 @@ class ChatController(
     return key
   }
 
+  /** Queues a chat send without waiting for gateway acceptance. */
   fun sendMessage(
     message: String,
     thinkingLevel: String,
@@ -139,6 +199,7 @@ class ChatController(
     }
   }
 
+  /** Sends a chat message and returns once the gateway accepts or rejects the request. */
   suspend fun sendMessageAwaitAcceptance(
     message: String,
     thinkingLevel: String,
@@ -156,7 +217,7 @@ class ChatController(
     val sessionKey = _sessionKey.value
     val thinking = normalizeThinking(thinkingLevel)
 
-    // Optimistic user message.
+    // Optimistic user message keeps the composer responsive while chat.send and history refresh complete.
     val userContent =
       buildList {
         add(ChatMessageContent(type = "text", text = text))
@@ -171,14 +232,16 @@ class ChatController(
           )
         }
       }
-    _messages.value =
-      _messages.value +
+    val optimisticMessage =
       ChatMessage(
         id = UUID.randomUUID().toString(),
         role = "user",
         content = userContent,
         timestampMs = System.currentTimeMillis(),
+        idempotencyKey = "$runId:user",
       )
+    optimisticMessagesByRunId[runId] = optimisticMessage
+    _messages.value = _messages.value + optimisticMessage
 
     armPendingRunTimeout(runId)
     synchronized(pendingRuns) {
@@ -215,9 +278,12 @@ class ChatController(
             )
           }
         }
-      val res = session.request("chat.send", params.toString())
-      val actualRunId = parseRunId(res) ?: runId
+      val res = requestGateway("chat.send", params.toString())
+      val ack = parseChatSendAck(json, res)
+      val actualRunId = ack.runId ?: runId
       if (actualRunId != runId) {
+        // Gateway may return a canonical run id; move all pending bookkeeping to that id.
+        optimisticMessagesByRunId[actualRunId] = optimisticMessagesByRunId.remove(runId) ?: optimisticMessage
         clearPendingRun(runId)
         armPendingRunTimeout(actualRunId)
         synchronized(pendingRuns) {
@@ -225,14 +291,33 @@ class ChatController(
           _pendingRunCount.value = pendingRuns.size
         }
       }
-      true
+      if (ack.isTerminal) {
+        clearPendingRun(actualRunId)
+        removeOptimisticMessage(actualRunId)
+        pendingToolCallsById.clear()
+        publishPendingToolCalls()
+        _streamingAssistantText.value = null
+        if (ack.isTerminalSuccess) {
+          refreshCurrentHistoryBestEffort()
+          true
+        } else {
+          // Terminal timeout/error means the gateway did not accept a runnable turn.
+          // Surface failed acceptance instead of letting a cleared composer look successful.
+          _errorText.value = "Chat failed before the run started; try again."
+          false
+        }
+      } else {
+        true
+      }
     } catch (err: Throwable) {
       clearPendingRun(runId)
+      removeOptimisticMessage(runId)
       _errorText.value = err.message
       false
     }
   }
 
+  /** Sends best-effort abort requests for every currently pending gateway run. */
   fun abort() {
     val runIds =
       synchronized(pendingRuns) {
@@ -247,7 +332,7 @@ class ChatController(
               put("sessionKey", JsonPrimitive(_sessionKey.value))
               put("runId", JsonPrimitive(runId))
             }
-          session.request("chat.abort", params.toString())
+          requestGateway("chat.abort", params.toString())
         } catch (_: Throwable) {
           // best-effort
         }
@@ -264,7 +349,6 @@ class ChatController(
         scope.launch { pollHealthIfNeeded(force = false) }
       }
       "health" -> {
-        // If we receive a health snapshot, the gateway is reachable.
         _healthOk.value = true
       }
       "seqGap" -> {
@@ -275,6 +359,17 @@ class ChatController(
         if (payloadJson.isNullOrBlank()) return
         handleChatEvent(payloadJson)
       }
+      "sessions.changed" -> {
+        if (payloadJson.isNullOrBlank()) {
+          refreshSessionsForCurrentWindow()
+        } else {
+          handleSessionsChangedEvent(payloadJson)
+        }
+      }
+      "session.message" -> {
+        if (payloadJson.isNullOrBlank()) return
+        handleSessionMessageEvent(payloadJson)
+      }
       "agent" -> {
         if (payloadJson.isNullOrBlank()) return
         handleAgentEvent(payloadJson)
@@ -283,27 +378,24 @@ class ChatController(
   }
 
   private suspend fun bootstrap(
+    sessionKey: String,
+    generation: Long,
     forceHealth: Boolean,
     refreshSessions: Boolean,
   ) {
-    _errorText.value = null
-    _healthOk.value = false
-    clearPendingRuns()
-    pendingToolCallsById.clear()
-    publishPendingToolCalls()
-    _streamingAssistantText.value = null
-    _sessionId.value = null
-
-    val key = _sessionKey.value
     try {
-      if (supportsChatSubscribe) {
-        session.sendNodeEvent("chat.subscribe", """{"sessionKey":"$key"}""")
-      }
-
-      val historyJson = session.request("chat.history", """{"sessionKey":"$key"}""")
-      val history = parseHistory(historyJson, sessionKey = key, previousMessages = _messages.value)
-      _messages.value = history.messages
+      val historyJson =
+        requestGateway(
+          "chat.history",
+          buildJsonObject { put("sessionKey", JsonPrimitive(sessionKey)) }.toString(),
+        )
+      if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return
+      val history = parseHistory(historyJson, sessionKey = sessionKey, previousMessages = _messages.value)
+      updateSessionFromHistory(history)
+      prunePersistedOptimisticMessages(history.messages)
+      _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
       _sessionId.value = history.sessionId
+      _historyLoading.value = false
       history.thinkingLevel
         ?.trim()
         ?.takeIf { it.isNotEmpty() }
@@ -314,7 +406,9 @@ class ChatController(
         fetchSessions(limit = 50)
       }
     } catch (err: Throwable) {
+      if (!isCurrentHistoryLoad(sessionKey, _sessionKey.value, generation, historyLoadGeneration.get())) return
       _errorText.value = err.message
+      _historyLoading.value = false
     }
   }
 
@@ -326,11 +420,15 @@ class ChatController(
           put("includeUnknown", JsonPrimitive(false))
           if (limit != null && limit > 0) put("limit", JsonPrimitive(limit))
         }
-      val res = session.request("sessions.list", params.toString())
+      val res = requestGateway("sessions.list", params.toString())
       _sessions.value = parseSessions(res)
     } catch (_: Throwable) {
       // best-effort
     }
+  }
+
+  private fun refreshSessionsForCurrentWindow() {
+    scope.launch { fetchSessions(limit = _sessions.value.size.takeIf { it > 0 } ?: 100) }
   }
 
   private suspend fun pollHealthIfNeeded(force: Boolean) {
@@ -339,7 +437,7 @@ class ChatController(
     if (!force && last != null && now - last < 10_000) return
     lastHealthPollAtMs = now
     try {
-      session.request("health", null)
+      requestGateway("health", null)
       _healthOk.value = true
     } catch (_: Throwable) {
       _healthOk.value = false
@@ -358,7 +456,7 @@ class ChatController(
     val state = payload["state"].asStringOrNull()
     when (state) {
       "delta" -> {
-        // Only show streaming text for runs we initiated
+        // Only show streaming text for runs we initiated in this controller.
         if (!isPending) return
         val text = parseAssistantDeltaText(payload)
         if (!text.isNullOrEmpty()) {
@@ -369,16 +467,42 @@ class ChatController(
         if (state == "error") {
           _errorText.value = payload["errorMessage"].asStringOrNull() ?: "Chat failed"
         }
-        if (runId != null) clearPendingRun(runId) else clearPendingRuns()
+        if (runId != null) {
+          clearPendingRun(runId)
+        } else {
+          clearPendingRuns(clearOptimisticMessages = false)
+        }
         pendingToolCallsById.clear()
         publishPendingToolCalls()
         _streamingAssistantText.value = null
         scope.launch {
           try {
+            val currentSessionKey = _sessionKey.value
+            val currentGeneration = historyLoadGeneration.get()
             val historyJson =
-              session.request("chat.history", """{"sessionKey":"${_sessionKey.value}"}""")
-            val history = parseHistory(historyJson, sessionKey = _sessionKey.value, previousMessages = _messages.value)
-            _messages.value = history.messages
+              requestGateway(
+                "chat.history",
+                buildJsonObject { put("sessionKey", JsonPrimitive(currentSessionKey)) }.toString(),
+              )
+            if (
+              !isCurrentHistoryLoad(
+                currentSessionKey,
+                _sessionKey.value,
+                currentGeneration,
+                historyLoadGeneration.get(),
+              )
+            ) {
+              return@launch
+            }
+            val history =
+              parseHistory(
+                historyJson,
+                sessionKey = currentSessionKey,
+                previousMessages = _messages.value,
+              )
+            updateSessionFromHistory(history)
+            prunePersistedOptimisticMessages(history.messages)
+            _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
             _sessionId.value = history.sessionId
             history.thinkingLevel
               ?.trim()
@@ -391,6 +515,30 @@ class ChatController(
       }
     }
   }
+
+  private fun handleSessionsChangedEvent(payloadJson: String) {
+    val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
+    if (payload["reason"].asStringOrNull() == "delete") {
+      removeSessionEntry(payload["sessionKey"].asStringOrNull() ?: payload["key"].asStringOrNull())
+      return
+    }
+    val entry = parseEventSessionEntry(payload)
+    if (entry != null) {
+      upsertSessionEntry(entry)
+    } else {
+      refreshSessionsForCurrentWindow()
+    }
+  }
+
+  private fun handleSessionMessageEvent(payloadJson: String) {
+    val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
+    val entry = parseEventSessionEntry(payload)
+    if (entry != null) {
+      upsertSessionEntry(entry)
+    }
+  }
+
+  private fun parseEventSessionEntry(payload: JsonObject): ChatSessionEntry? = payload["session"].asObjectOrNull()?.let(::parseSessionEntry) ?: parseSessionEntry(payload)
 
   private fun handleAgentEvent(payloadJson: String) {
     val payload = json.parseToJsonElement(payloadJson).asObjectOrNull() ?: return
@@ -471,6 +619,7 @@ class ChatController(
           }
         if (!stillPending) return@launch
         clearPendingRun(runId)
+        removeOptimisticMessage(runId)
         _errorText.value = "Timed out waiting for a reply; try again or refresh."
       }
   }
@@ -483,14 +632,70 @@ class ChatController(
     }
   }
 
-  private fun clearPendingRuns() {
+  private fun clearPendingRuns(clearOptimisticMessages: Boolean = true) {
     for ((_, job) in pendingRunTimeoutJobs) {
       job.cancel()
     }
     pendingRunTimeoutJobs.clear()
+    if (clearOptimisticMessages) {
+      optimisticMessagesByRunId.clear()
+    }
     synchronized(pendingRuns) {
       pendingRuns.clear()
       _pendingRunCount.value = 0
+    }
+  }
+
+  private fun removeOptimisticMessage(runId: String) {
+    val message = optimisticMessagesByRunId.remove(runId) ?: return
+    _messages.value = _messages.value.filterNot { it.id == message.id }
+  }
+
+  private fun prunePersistedOptimisticMessages(incoming: List<ChatMessage>) {
+    val retained =
+      retainUnmatchedOptimisticMessages(
+        incoming = incoming,
+        optimistic = optimisticMessagesByRunId.values,
+      ).toSet()
+    optimisticMessagesByRunId.entries.removeAll { entry -> entry.value !in retained }
+  }
+
+  private fun refreshCurrentHistoryBestEffort() {
+    scope.launch {
+      try {
+        val currentSessionKey = _sessionKey.value
+        val currentGeneration = historyLoadGeneration.get()
+        val historyJson =
+          requestGateway(
+            "chat.history",
+            buildJsonObject { put("sessionKey", JsonPrimitive(currentSessionKey)) }.toString(),
+          )
+        if (
+          !isCurrentHistoryLoad(
+            currentSessionKey,
+            _sessionKey.value,
+            currentGeneration,
+            historyLoadGeneration.get(),
+          )
+        ) {
+          return@launch
+        }
+        val history =
+          parseHistory(
+            historyJson,
+            sessionKey = currentSessionKey,
+            previousMessages = _messages.value,
+          )
+        prunePersistedOptimisticMessages(history.messages)
+        _messages.value = mergeOptimisticMessages(incoming = history.messages, optimistic = optimisticMessagesByRunId.values)
+        _sessionId.value = history.sessionId
+        history.thinkingLevel
+          ?.trim()
+          ?.takeIf { it.isNotEmpty() }
+          ?.let { _thinkingLevel.value = it }
+      } catch (_: Throwable) {
+        // best-effort
+      }
     }
   }
 
@@ -502,19 +707,21 @@ class ChatController(
     val root = json.parseToJsonElement(historyJson).asObjectOrNull() ?: return ChatHistory(sessionKey, null, null, emptyList())
     val sid = root["sessionId"].asStringOrNull()
     val thinkingLevel = root["thinkingLevel"].asStringOrNull()
+    val sessionInfo = root["sessionInfo"].asObjectOrNull()?.let { parseSessionEntry(it, fallbackKey = sessionKey) }
     val array = root["messages"].asArrayOrNull() ?: JsonArray(emptyList())
 
     val messages =
       array.mapNotNull { item ->
         val obj = item.asObjectOrNull() ?: return@mapNotNull null
         val role = obj["role"].asStringOrNull() ?: return@mapNotNull null
-        val content = obj["content"].asArrayOrNull()?.mapNotNull(::parseMessageContent) ?: emptyList()
+        val content = parseChatMessageContents(obj)
         val ts = obj["timestamp"].asLongOrNull()
         ChatMessage(
           id = UUID.randomUUID().toString(),
           role = role,
           content = content,
           timestampMs = ts,
+          idempotencyKey = obj["idempotencyKey"].asStringOrNull(),
         )
       }
 
@@ -523,47 +730,77 @@ class ChatController(
       sessionId = sid,
       thinkingLevel = thinkingLevel,
       messages = reconcileMessageIds(previous = previousMessages, incoming = messages),
+      sessionInfo = sessionInfo,
     )
-  }
-
-  private fun parseMessageContent(el: JsonElement): ChatMessageContent? {
-    val obj = el.asObjectOrNull() ?: return null
-    val type = obj["type"].asStringOrNull() ?: "text"
-    return if (type == "text") {
-      ChatMessageContent(type = "text", text = obj["text"].asStringOrNull())
-    } else {
-      ChatMessageContent(
-        type = type,
-        mimeType = obj["mimeType"].asStringOrNull(),
-        fileName = obj["fileName"].asStringOrNull(),
-        base64 = obj["content"].asStringOrNull(),
-      )
-    }
   }
 
   private fun parseSessions(jsonString: String): List<ChatSessionEntry> {
     val root = json.parseToJsonElement(jsonString).asObjectOrNull() ?: return emptyList()
     val sessions = root["sessions"].asArrayOrNull() ?: return emptyList()
-    return sessions.mapNotNull { item ->
-      val obj = item.asObjectOrNull() ?: return@mapNotNull null
-      val key = obj["key"].asStringOrNull()?.trim().orEmpty()
-      if (key.isEmpty()) return@mapNotNull null
-      val updatedAt = obj["updatedAt"].asLongOrNull()
-      val displayName = obj["displayName"].asStringOrNull()?.trim()
-      ChatSessionEntry(key = key, updatedAtMs = updatedAt, displayName = displayName)
-    }
+    return sessions.mapNotNull { item -> parseSessionEntry(item.asObjectOrNull()) }
   }
 
-  private fun parseRunId(resJson: String): String? =
-    try {
-      json
-        .parseToJsonElement(resJson)
-        .asObjectOrNull()
-        ?.get("runId")
+  private fun parseSessionEntry(
+    obj: JsonObject?,
+    fallbackKey: String? = null,
+  ): ChatSessionEntry? {
+    if (obj == null) return null
+    val key =
+      obj["key"]
         .asStringOrNull()
-    } catch (_: Throwable) {
-      null
-    }
+        ?.trim()
+        .orEmpty()
+        .ifEmpty {
+          obj["sessionKey"]
+            .asStringOrNull()
+            ?.trim()
+            .orEmpty()
+        }.ifEmpty { fallbackKey?.trim().orEmpty() }
+    if (key.isEmpty()) return null
+    return ChatSessionEntry(
+      key = key,
+      updatedAtMs = obj["updatedAt"].asLongOrNull(),
+      displayName = obj["displayName"].asStringOrNull()?.trim(),
+      totalTokens = obj["totalTokens"].asLongOrNull(),
+      totalTokensFresh = obj["totalTokensFresh"].asBooleanOrNull(),
+      contextTokens = obj["contextTokens"].asLongOrNull(),
+      hasContextUsageMetadata =
+        "totalTokens" in obj ||
+          "totalTokensFresh" in obj ||
+          "contextTokens" in obj,
+    )
+  }
+
+  private fun updateSessionFromHistory(history: ChatHistory) {
+    val info = history.sessionInfo ?: return
+    upsertSessionEntry(info, preserveExistingContextUsageWithoutTotal = true)
+  }
+
+  private fun upsertSessionEntry(
+    entry: ChatSessionEntry,
+    preserveExistingContextUsageWithoutTotal: Boolean = false,
+  ) {
+    val current = _sessions.value
+    val index = current.indexOfFirst { it.key == entry.key }
+    _sessions.value =
+      if (index >= 0) {
+        current.toMutableList().also {
+          it[index] =
+            mergeChatSessionEntry(
+              existing = it[index],
+              next = entry,
+              preserveExistingContextUsageWithoutTotal = preserveExistingContextUsageWithoutTotal,
+            )
+        }
+      } else {
+        listOf(entry) + current
+      }
+  }
+
+  private fun removeSessionEntry(sessionKey: String?) {
+    val key = sessionKey?.trim()?.takeIf { it.isNotEmpty() } ?: return
+    _sessions.value = _sessions.value.filterNot { it.key == key }
+  }
 
   private fun normalizeThinking(raw: String): String =
     when (raw.trim().lowercase()) {
@@ -574,11 +811,58 @@ class ChatController(
     }
 }
 
+internal fun isCurrentHistoryLoad(
+  requestedSessionKey: String,
+  currentSessionKey: String,
+  requestGeneration: Long,
+  activeGeneration: Long,
+): Boolean = requestedSessionKey == currentSessionKey && requestGeneration == activeGeneration
+
+/**
+ * Convert gateway chat content parts into Android UI content parts.
+ */
+internal fun parseChatMessageContent(el: JsonElement): ChatMessageContent? {
+  val obj = el.asObjectOrNull() ?: return null
+  return when (obj["type"].asStringOrNull() ?: "text") {
+    "text", "input_text", "output_text" ->
+      ChatMessageContent(
+        type = "text",
+        text = obj["text"].asStringOrNull() ?: obj["content"].asStringOrNull(),
+      )
+
+    "image" ->
+      ChatMessageContent(
+        type = "image",
+        mimeType = obj["mimeType"].asStringOrNull(),
+        fileName = obj["fileName"].asStringOrNull(),
+        base64 = obj["content"].asStringOrNull()?.takeIf { it.isNotBlank() },
+      )
+
+    else -> null
+  }
+}
+
+internal fun parseChatMessageContents(obj: JsonObject): List<ChatMessageContent> {
+  obj["content"].asArrayOrNull()?.let { content ->
+    return content.mapNotNull(::parseChatMessageContent)
+  }
+  obj["content"].asStringOrNull()?.let { text ->
+    return listOf(ChatMessageContent(type = "text", text = text))
+  }
+  obj["text"].asStringOrNull()?.let { text ->
+    return listOf(ChatMessageContent(type = "text", text = text))
+  }
+  return emptyList()
+}
+
 internal data class MainSessionState(
   val currentSessionKey: String,
   val appliedMainSessionKey: String,
 )
 
+/**
+ * Rewrite only the active "main" alias when the gateway publishes a new canonical main session key.
+ */
 internal fun applyMainSessionKey(
   currentSessionKey: String,
   appliedMainSessionKey: String,
@@ -596,6 +880,9 @@ internal fun applyMainSessionKey(
   )
 }
 
+/**
+ * Keep Compose item identity stable across history refreshes by matching existing messages to incoming copies.
+ */
 internal fun reconcileMessageIds(
   previous: List<ChatMessage>,
   incoming: List<ChatMessage>,
@@ -620,11 +907,73 @@ internal fun reconcileMessageIds(
   }
 }
 
+internal fun mergeOptimisticMessages(
+  incoming: List<ChatMessage>,
+  optimistic: Collection<ChatMessage>,
+): List<ChatMessage> {
+  if (optimistic.isEmpty()) return incoming
+
+  val missingOptimistic = retainUnmatchedOptimisticMessages(incoming = incoming, optimistic = optimistic)
+  if (missingOptimistic.isEmpty()) return incoming
+
+  return (incoming + missingOptimistic).sortedWith(compareBy<ChatMessage> { it.timestampMs ?: Long.MAX_VALUE }.thenBy { it.id })
+}
+
+internal fun retainUnmatchedOptimisticMessages(
+  incoming: List<ChatMessage>,
+  optimistic: Collection<ChatMessage>,
+): List<ChatMessage> {
+  if (optimistic.isEmpty()) return emptyList()
+
+  val unmatchedIncoming = incoming.toMutableList()
+  return optimistic.filter { message ->
+    val matchIndex =
+      unmatchedIncoming.indexOfFirst { incomingMessage ->
+        incomingMessageConsumesOptimistic(incomingMessage, message)
+      }
+    if (matchIndex >= 0) {
+      unmatchedIncoming.removeAt(matchIndex)
+      false
+    } else {
+      true
+    }
+  }
+}
+
+/**
+ * Message identity used only for refresh reconciliation; it avoids exposing gateway ids as UI keys.
+ */
 internal fun messageIdentityKey(message: ChatMessage): String? {
+  val idempotencyKey = message.idempotencyKey?.trim().orEmpty()
+  if (idempotencyKey.isNotEmpty()) {
+    return listOf(message.role.trim().lowercase(), idempotencyKey).joinToString(separator = "|")
+  }
+  val contentKey = messageContentIdentityKey(message) ?: return null
+  val timestamp = message.timestampMs?.toString().orEmpty()
+  if (timestamp.isEmpty() && contentKey.isEmpty()) return null
+  return listOf(contentKey, timestamp).joinToString(separator = "|")
+}
+
+private fun optimisticMessageIdentityKey(message: ChatMessage): String? = messageContentIdentityKey(message)
+
+private fun incomingMessageConsumesOptimistic(
+  incoming: ChatMessage,
+  optimistic: ChatMessage,
+): Boolean {
+  val optimisticIdempotencyKey = optimistic.idempotencyKey?.trim().orEmpty()
+  if (optimisticIdempotencyKey.isNotEmpty()) {
+    return incoming.idempotencyKey?.trim() == optimisticIdempotencyKey
+  }
+  if (optimisticMessageIdentityKey(incoming) != optimisticMessageIdentityKey(optimistic)) return false
+  val incomingTimestamp = incoming.timestampMs ?: return false
+  val optimisticTimestamp = optimistic.timestampMs ?: return true
+  return incomingTimestamp >= optimisticTimestamp
+}
+
+private fun messageContentIdentityKey(message: ChatMessage): String? {
   val role = message.role.trim().lowercase()
   if (role.isEmpty()) return null
 
-  val timestamp = message.timestampMs?.toString().orEmpty()
   val contentFingerprint =
     message.content.joinToString(separator = "\u001E") { part ->
       listOf(
@@ -642,8 +991,7 @@ internal fun messageIdentityKey(message: ChatMessage): String? {
       ).joinToString(separator = "\u001F")
     }
 
-  if (timestamp.isEmpty() && contentFingerprint.isEmpty()) return null
-  return listOf(role, timestamp, contentFingerprint).joinToString(separator = "|")
+  return listOf(role, contentFingerprint).joinToString(separator = "|")
 }
 
 private fun JsonElement?.asObjectOrNull(): JsonObject? = this as? JsonObject
@@ -662,3 +1010,44 @@ private fun JsonElement?.asLongOrNull(): Long? =
     is JsonPrimitive -> content.toLongOrNull()
     else -> null
   }
+
+private fun JsonElement?.asBooleanOrNull(): Boolean? =
+  when (this) {
+    is JsonPrimitive -> content.toBooleanStrictOrNull()
+    else -> null
+  }
+
+internal fun mergeChatSessionEntry(
+  existing: ChatSessionEntry,
+  next: ChatSessionEntry,
+  preserveExistingContextUsageWithoutTotal: Boolean = false,
+): ChatSessionEntry {
+  val preserveExistingContextUsage = preserveExistingContextUsageWithoutTotal && next.totalTokens == null
+  return existing.copy(
+    updatedAtMs = next.updatedAtMs ?: existing.updatedAtMs,
+    displayName = next.displayName ?: existing.displayName,
+    totalTokens =
+      when {
+        preserveExistingContextUsage -> existing.totalTokens
+        next.hasContextUsageMetadata -> next.totalTokens
+        else -> null
+      },
+    totalTokensFresh =
+      when {
+        preserveExistingContextUsage -> existing.totalTokensFresh
+        next.hasContextUsageMetadata -> next.totalTokensFresh
+        else -> null
+      },
+    contextTokens =
+      when {
+        preserveExistingContextUsage -> next.contextTokens ?: existing.contextTokens
+        next.hasContextUsageMetadata -> next.contextTokens
+        else -> null
+      },
+    hasContextUsageMetadata =
+      when {
+        preserveExistingContextUsage -> existing.hasContextUsageMetadata || next.contextTokens != null
+        else -> next.hasContextUsageMetadata
+      },
+  )
+}

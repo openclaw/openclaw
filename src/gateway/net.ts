@@ -1,8 +1,18 @@
+// Gateway network address helpers.
+// Normalizes host/IP inputs and classifies local/private gateway requests.
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
+import {
+  isCanonicalDottedDecimalIPv4,
+  isIpInCidr,
+  isLoopbackIpAddress,
+  isPrivateOrLoopbackIpAddress,
+  normalizeIpAddress,
+} from "@openclaw/net-policy/ip";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBindMode } from "../config/types.gateway.js";
 import {
-  __resetContainerEnvironmentCacheForTest,
+  resetContainerEnvironmentCacheForTest,
   isContainerEnvironment,
 } from "../infra/container-environment.js";
 import {
@@ -12,19 +22,8 @@ import {
   type NetworkInterfacesSnapshot,
 } from "../infra/network-interfaces.js";
 import { pickPrimaryTailnetIPv4 } from "../infra/tailnet.js";
-import {
-  isCanonicalDottedDecimalIPv4,
-  isIpInCidr,
-  isLoopbackIpAddress,
-  isPrivateOrLoopbackIpAddress,
-  normalizeIpAddress,
-} from "../shared/net/ip.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
 
-/**
- * Pick the primary non-internal IPv4 address (LAN IP).
- * Prefers common interface names (en0, eth0) then falls back to any external IPv4.
- */
+/** Pick the primary non-internal IPv4 address, preferring common LAN interface names. */
 export function pickPrimaryLanIPv4(): string | undefined {
   return pickMatchingExternalInterfaceAddress(readNetworkInterfaces(), {
     family: "IPv4",
@@ -32,10 +31,12 @@ export function pickPrimaryLanIPv4(): string | undefined {
   });
 }
 
+/** Normalize a raw Host header for gateway origin and local-request checks. */
 export function normalizeHostHeader(hostHeader?: string): string {
   return normalizeLowercaseStringOrEmpty(hostHeader);
 }
 
+/** Extract hostname from a Host header while preserving unbracketed IPv6 hosts. */
 export function resolveHostName(hostHeader?: string): string {
   const host = normalizeHostHeader(hostHeader);
   if (!host) {
@@ -57,17 +58,6 @@ export function resolveHostName(hostHeader?: string): string {
 
 export function isLoopbackAddress(ip: string | undefined): boolean {
   return isLoopbackIpAddress(ip);
-}
-
-export function isLocalInterfaceAddress(
-  ip: string | undefined,
-  snapshot?: NetworkInterfacesSnapshot,
-): boolean {
-  return (
-    (arguments.length >= 2
-      ? resolveLocalInterfaceAddressMatch(ip, snapshot)
-      : resolveLocalInterfaceAddressMatch(ip)) === true
-  );
 }
 
 export function resolveLocalInterfaceAddressMatch(
@@ -244,7 +234,7 @@ export function resolveRequestClientIp(
 
 export {
   isContainerEnvironment,
-  __resetContainerEnvironmentCacheForTest as __resetContainerCacheForTest,
+  resetContainerEnvironmentCacheForTest as __resetContainerCacheForTest,
 };
 
 /**
@@ -476,8 +466,8 @@ function parseHostForAddressChecks(
  *
  * Returns true if the URL is secure for transmitting data:
  * - wss:// (TLS) is always secure
- * - ws:// is secure only for loopback addresses by default
- * - optional break-glass: private ws:// can be enabled for trusted networks
+ * - ws:// is secure for loopback, private IP literals, .local, and Tailnet hosts
+ * - optional break-glass: other private-DNS ws:// hostnames can be enabled for trusted networks
  *
  * All other ws:// URLs are considered insecure because both credentials
  * AND chat/conversation data would be exposed to network interception.
@@ -509,11 +499,15 @@ export function isSecureWebSocketUrl(
     return false;
   }
 
-  // Default policy stays strict: loopback-only plaintext ws://.
+  // Default policy allows local/Tailnet endpoints that cannot be given public TLS
+  // without extra operator setup. Public DNS hostnames still require wss://.
   if (isLoopbackHost(parsed.hostname)) {
     return true;
   }
-  // Optional break-glass for trusted private-network overlays.
+  if (isTrustedPlaintextWebSocketHost(parsed.hostname)) {
+    return true;
+  }
+  // Optional break-glass for trusted private-DNS overlays.
   if (opts?.allowPrivateWs) {
     if (isPrivateOrLoopbackHost(parsed.hostname)) {
       return true;
@@ -527,4 +521,12 @@ export function isSecureWebSocketUrl(
     return net.isIP(hostForIpCheck) === 0;
   }
   return false;
+}
+
+function isTrustedPlaintextWebSocketHost(hostname: string): boolean {
+  if (isPrivateOrLoopbackHost(hostname)) {
+    return true;
+  }
+  const normalized = normalizeLowercaseStringOrEmpty(hostname).replace(/\.+$/, "");
+  return normalized.endsWith(".local") || normalized.endsWith(".ts.net");
 }

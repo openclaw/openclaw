@@ -1,3 +1,5 @@
+// web_search late-binding tests cover runtime config and provider metadata
+// selection at execution time.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createWebSearchTool } from "./web-search.js";
 
@@ -5,7 +7,7 @@ const mocks = vi.hoisted(() => ({
   runWebSearch: vi.fn(),
   resolveManifestContractOwnerPluginId: vi.fn(),
   getActiveRuntimeWebToolsMetadata: vi.fn(),
-  getActiveSecretsRuntimeSnapshot: vi.fn(),
+  getActiveSecretsRuntimeConfigSnapshot: vi.fn(),
 }));
 
 vi.mock("../../web-search/runtime.js", () => ({
@@ -21,8 +23,8 @@ vi.mock("../../secrets/runtime-web-tools-state.js", () => ({
   getActiveRuntimeWebToolsMetadata: mocks.getActiveRuntimeWebToolsMetadata,
 }));
 
-vi.mock("../../secrets/runtime.js", () => ({
-  getActiveSecretsRuntimeSnapshot: mocks.getActiveSecretsRuntimeSnapshot,
+vi.mock("../../secrets/runtime-state.js", () => ({
+  getActiveSecretsRuntimeConfigSnapshot: mocks.getActiveSecretsRuntimeConfigSnapshot,
 }));
 
 type RunWebSearchParams = {
@@ -33,18 +35,8 @@ type RunWebSearchParams = {
   };
 };
 
-type ProviderResolutionParams = {
-  value?: string;
-};
-
 function firstRunWebSearchParams(): RunWebSearchParams | undefined {
   return mocks.runWebSearch.mock.calls[0]?.[0] as RunWebSearchParams | undefined;
-}
-
-function firstProviderResolutionParams(): ProviderResolutionParams | undefined {
-  return mocks.resolveManifestContractOwnerPluginId.mock.calls[0]?.[0] as
-    | ProviderResolutionParams
-    | undefined;
 }
 
 describe("web_search late-bound runtime fallback", () => {
@@ -58,8 +50,8 @@ describe("web_search late-bound runtime fallback", () => {
     mocks.resolveManifestContractOwnerPluginId.mockReturnValue(undefined);
     mocks.getActiveRuntimeWebToolsMetadata.mockReset();
     mocks.getActiveRuntimeWebToolsMetadata.mockReturnValue(null);
-    mocks.getActiveSecretsRuntimeSnapshot.mockReset();
-    mocks.getActiveSecretsRuntimeSnapshot.mockReturnValue(null);
+    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReset();
+    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue(null);
   });
 
   it("falls back to options.runtimeWebSearch when active runtime web tools metadata is absent", async () => {
@@ -79,7 +71,7 @@ describe("web_search late-bound runtime fallback", () => {
     expect(firstRunWebSearchParams()?.runtimeWebSearch?.selectedProvider).toBe("brave");
   });
 
-  it("falls back to options.config when getActiveSecretsRuntimeSnapshot is null", async () => {
+  it("falls back to options.config when getActiveSecretsRuntimeConfigSnapshot is null", async () => {
     const fallbackConfig = {
       tools: { web: { search: { provider: "brave" } } },
     };
@@ -104,7 +96,7 @@ describe("web_search late-bound runtime fallback", () => {
 
     await tool?.execute("call-search", { query: "openclaw" }, undefined);
 
-    expect(firstProviderResolutionParams()?.value).toBe("brave");
+    expect(mocks.resolveManifestContractOwnerPluginId).not.toHaveBeenCalled();
     expect(firstRunWebSearchParams()?.preferRuntimeProviders).toBe(true);
   });
 
@@ -120,7 +112,7 @@ describe("web_search late-bound runtime fallback", () => {
     expect(firstRunWebSearchParams()?.preferRuntimeProviders).toBe(true);
   });
 
-  it("does not prefer runtime providers when the configured provider is a bundled manifest owner", async () => {
+  it("keeps runtime provider discovery enabled when configured search provider has a manifest owner", async () => {
     mocks.resolveManifestContractOwnerPluginId.mockReturnValue("openclaw-bundled-brave");
     const config = {
       tools: { web: { search: { provider: "brave" } } },
@@ -132,10 +124,13 @@ describe("web_search late-bound runtime fallback", () => {
 
     await tool?.execute("call-search", { query: "openclaw" }, undefined);
 
-    expect(firstRunWebSearchParams()?.preferRuntimeProviders).toBe(false);
+    expect(mocks.resolveManifestContractOwnerPluginId).not.toHaveBeenCalled();
+    expect(firstRunWebSearchParams()?.preferRuntimeProviders).toBe(true);
   });
 
   it("prefers active runtime metadata over options.runtimeWebSearch when present", async () => {
+    // Active runtime metadata reflects the newest credential snapshot; fallback
+    // options only cover tools created before that state exists.
     mocks.getActiveRuntimeWebToolsMetadata.mockReturnValue({
       search: {
         selectedProvider: "perplexity",
@@ -161,7 +156,9 @@ describe("web_search late-bound runtime fallback", () => {
   });
 
   it("honors late-bound disabled search config at execute time", async () => {
-    mocks.getActiveSecretsRuntimeSnapshot.mockReturnValue({
+    // A long-lived tool must still observe an operator disabling web_search
+    // before the next call is dispatched.
+    mocks.getActiveSecretsRuntimeConfigSnapshot.mockReturnValue({
       config: { tools: { web: { search: { enabled: false } } } },
     });
     const tool = createWebSearchTool({

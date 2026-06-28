@@ -1,6 +1,9 @@
+// Plugin-provided node.invoke policy adapter.
+// Lets plugin policies gate dangerous node commands before transport dispatch.
 import { randomUUID } from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
-import { DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS } from "../infra/plugin-approvals.js";
+import { resolvePluginApprovalTimeoutMs } from "../infra/plugin-approvals.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type {
@@ -8,10 +11,12 @@ import type {
   OpenClawPluginNodeInvokePolicyResult,
   OpenClawPluginNodeInvokeTransportResult,
 } from "../plugins/types.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type { NodeSession } from "./node-registry.js";
+import { resolveApprovalRequestRecipientConnIds } from "./server-methods/approval-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
 
+// Plugin node.invoke policies are the last gateway-side guard before a
+// plugin-declared dangerous node command reaches the node transport.
 function parseScopes(client: GatewayClient | null): string[] {
   return Array.isArray(client?.connect?.scopes)
     ? client.connect.scopes.filter((scope): scope is string => typeof scope === "string")
@@ -29,6 +34,8 @@ function parsePayload(payloadJSON: string | null | undefined, payload: unknown):
   }
 }
 
+// Dangerous commands must have an explicit policy. Without this check, a plugin
+// could mark a command dangerous but rely on the gateway default allow path.
 function findDangerousPluginNodeCommand(registry: PluginRegistry | null, command: string) {
   const normalizedCommand = command.trim();
   if (!normalizedCommand) {
@@ -53,10 +60,7 @@ function createApprovalRuntime(params: {
   }
   return {
     async request(input) {
-      const timeoutMs =
-        typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs)
-          ? input.timeoutMs
-          : DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS;
+      const timeoutMs = resolvePluginApprovalTimeoutMs(input.timeoutMs);
       const request: PluginApprovalRequestPayload = {
         pluginId: params.pluginId,
         title: input.title.slice(0, 80),
@@ -68,6 +72,10 @@ function createApprovalRuntime(params: {
         sessionKey: normalizeOptionalString(input.sessionKey) ?? null,
       };
       const record = manager.create(request, timeoutMs, `plugin:${randomUUID()}`);
+      record.requestedByConnId = params.client?.connId ?? null;
+      record.requestedByDeviceId = params.client?.connect?.device?.id ?? null;
+      record.requestedByClientId = params.client?.connect?.client?.id ?? null;
+      record.requestedByDeviceTokenAuth = params.client?.isDeviceTokenAuth === true;
       const decisionPromise = manager.register(record, timeoutMs);
       const requestEvent = {
         id: record.id,
@@ -75,11 +83,31 @@ function createApprovalRuntime(params: {
         createdAtMs: record.createdAtMs,
         expiresAtMs: record.expiresAtMs,
       };
-      params.context.broadcast("plugin.approval.requested", requestEvent, {
-        dropIfSlow: true,
+      const approvalClientConnIds = resolveApprovalRequestRecipientConnIds({
+        context: params.context,
+        record,
+        excludeConnId: params.client?.connId,
       });
+      // Approval requests are routed to eligible operator clients only. Falling
+      // back to broadcast is safe because the event payload carries no secret.
+      if (approvalClientConnIds) {
+        params.context.broadcastToConnIds(
+          "plugin.approval.requested",
+          requestEvent,
+          approvalClientConnIds,
+          {
+            dropIfSlow: true,
+          },
+        );
+      } else {
+        params.context.broadcast("plugin.approval.requested", requestEvent, {
+          dropIfSlow: true,
+        });
+      }
       const hasApprovalClients =
-        params.context.hasExecApprovalClients?.(params.client?.connId) ?? false;
+        approvalClientConnIds !== null
+          ? approvalClientConnIds.size > 0
+          : (params.context.hasExecApprovalClients?.(params.client?.connId) ?? false);
       if (!hasApprovalClients) {
         manager.expire(record.id, "no-approval-route");
         return { id: record.id, decision: null };
@@ -90,6 +118,7 @@ function createApprovalRuntime(params: {
   };
 }
 
+/** Applies the registered plugin policy for a node.invoke command, if one exists. */
 export async function applyPluginNodeInvokePolicy(params: {
   context: GatewayRequestContext;
   client: GatewayClient | null;
@@ -118,6 +147,8 @@ export async function applyPluginNodeInvokePolicy(params: {
   const invokeNode: OpenClawPluginNodeInvokePolicyContext["invokeNode"] = async (
     override = {},
   ): Promise<OpenClawPluginNodeInvokeTransportResult> => {
+    // Policies invoke the real node through this narrowed transport wrapper so
+    // they can retry/override params without getting direct registry access.
     const res = await params.context.nodeRegistry.invoke({
       nodeId: params.nodeSession.nodeId,
       command: params.command,

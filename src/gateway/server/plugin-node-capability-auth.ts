@@ -1,3 +1,4 @@
+// Plugin node capability auth lets node-issued route capabilities supplement normal bearer gateway auth.
 import type { IncomingMessage } from "node:http";
 import type { AuthRateLimiter } from "../auth-rate-limit.js";
 import {
@@ -12,6 +13,9 @@ import {
 } from "../plugin-node-capability.js";
 import type { GatewayWsClient } from "./ws-types.js";
 
+/**
+ * Authorizes plugin HTTP routes that can be reached by node-issued capabilities.
+ */
 export async function authorizePluginNodeCapabilityRequest(params: {
   req: IncomingMessage;
   auth: ResolvedGatewayAuth;
@@ -41,6 +45,8 @@ export async function authorizePluginNodeCapabilityRequest(params: {
   let lastAuthFailure: GatewayAuthResult | null = null;
   const token = getBearerToken(req);
   if (token) {
+    // Bearer gateway auth wins when present; capability auth is only a fallback
+    // for nodes that already proved ownership over the route surface.
     const authResult = await authorizeHttpGatewayConnect({
       auth: { ...auth, allowTailscale: false },
       connectAuth: { token, password: token },

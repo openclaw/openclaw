@@ -1,3 +1,5 @@
+// CLI audio runner tests cover prompt/language templating and command execution
+// options for local transcription binaries.
 import fs from "node:fs/promises";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
@@ -79,6 +81,57 @@ describe("media-understanding CLI audio entry", () => {
     expect(options).toEqual({
       timeoutMs: 60_000,
       maxBuffer: CLI_OUTPUT_MAX_BUFFER,
+    });
+  });
+
+  it("treats sherpa structured JSON with empty text as empty output", async () => {
+    runExecMock.mockResolvedValueOnce({
+      stdout:
+        '{"lang":"","emotion":"","event":"","text":"","timestamps":[],"durations":[],"tokens":[],"ys_log_probs":[],"words":[]}',
+      stderr: "",
+    });
+
+    await withAudioFixture("openclaw-cli-audio-empty-sherpa", async ({ ctx, cache }) => {
+      const result = await runCliEntry({
+        capability: "audio",
+        entry: {
+          type: "cli",
+          command: "sherpa-onnx-offline",
+          args: ["{{MediaPath}}"],
+        },
+        cfg: { tools: { media: { audio: {} } } } as OpenClawConfig,
+        ctx,
+        attachmentIndex: 0,
+        cache,
+        config: {} as never,
+      });
+
+      expect(result).toBeNull();
+    });
+  });
+
+  it("extracts sherpa text from the final structured output line", async () => {
+    runExecMock.mockResolvedValueOnce({
+      stdout: 'loading model\n{"text":"sherpa transcript","tokens":["sherpa","transcript"]}\n',
+      stderr: "",
+    });
+
+    await withAudioFixture("openclaw-cli-audio-sherpa-json", async ({ ctx, cache }) => {
+      const result = await runCliEntry({
+        capability: "audio",
+        entry: {
+          type: "cli",
+          command: "sherpa-onnx-offline",
+          args: ["{{MediaPath}}"],
+        },
+        cfg: { tools: { media: { audio: {} } } } as OpenClawConfig,
+        ctx,
+        attachmentIndex: 0,
+        cache,
+        config: {} as never,
+      });
+
+      expect(result?.text).toBe("sherpa transcript");
     });
   });
 });

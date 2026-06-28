@@ -1,10 +1,17 @@
+// Discord plugin module implements model picker behavior.
 export {
   buildDiscordModelPickerCustomId,
   buildDiscordModelPickerProviderItems,
+  computeAlphaBuckets,
+  findModelBucketId,
+  findProviderBucketId,
+  findProviderBucketLocation,
   DISCORD_COMPONENT_MAX_BUTTONS_PER_ROW,
   DISCORD_COMPONENT_MAX_ROWS,
   DISCORD_COMPONENT_MAX_SELECT_OPTIONS,
   DISCORD_CUSTOM_ID_MAX_CHARS,
+  DISCORD_MODEL_PICKER_BUCKET_THRESHOLD,
+  DISCORD_MODEL_PICKER_BUCKET_TARGET_SIZE,
   DISCORD_MODEL_PICKER_CUSTOM_ID_KEY,
   DISCORD_MODEL_PICKER_MODEL_PAGE_SIZE,
   DISCORD_MODEL_PICKER_PROVIDER_PAGE_SIZE,
@@ -14,9 +21,11 @@ export {
   loadDiscordModelPickerData,
   parseDiscordModelPickerCustomId,
   parseDiscordModelPickerData,
+  resolveDiscordModelPickerPageForModel,
 } from "./model-picker.state.js";
 export type {
   DiscordModelPickerAction,
+  DiscordModelPickerBucket,
   DiscordModelPickerCommandContext,
   DiscordModelPickerModelPage,
   DiscordModelPickerPage,

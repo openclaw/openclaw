@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements monitor inbox.append upsert support behavior.
 import "./monitor-inbox.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
 import {
@@ -71,6 +72,29 @@ describe("append upsert handling (#20952)", () => {
           message: { conversation: "bad timestamp" },
           messageTimestamp: Number.NaN,
           pushName: "BadTs",
+        },
+      ],
+    });
+    await settleInboundWork();
+
+    expect(onMessage).not.toHaveBeenCalled();
+
+    await listener.close();
+  });
+
+  it("skips append messages with non-decimal string timestamps", async () => {
+    const onMessage = vi.fn(async () => {});
+    const { listener, sock } = await startInboxMonitor(onMessage);
+
+    const recentTs = Math.floor(Date.now() / 1000) - 5;
+    sock.ev.emit("messages.upsert", {
+      type: "append",
+      messages: [
+        {
+          key: { id: "hex-1", fromMe: false, remoteJid: "120363@g.us" },
+          message: { conversation: "hex timestamp" },
+          messageTimestamp: `0x${recentTs.toString(16)}`,
+          pushName: "HexTs",
         },
       ],
     });

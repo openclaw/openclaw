@@ -1,4 +1,4 @@
-import { getModel, type Api, type Model } from "@earendil-works/pi-ai";
+// Openai tests cover openai provider plugin behavior.
 import OpenAI from "openai";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it } from "vitest";
@@ -20,10 +20,6 @@ type LiveModelCase = {
   textVerbosity: "low" | "medium";
 };
 
-function findOpenAIModel(modelId: string): Model<Api> | null {
-  return (getModel("openai", modelId as never) as Model<Api> | undefined) ?? null;
-}
-
 function resolveLiveModelCase(modelId: string): LiveModelCase {
   switch (modelId) {
     case "chat-latest":
@@ -40,9 +36,9 @@ function resolveLiveModelCase(modelId: string): LiveModelCase {
     case "gpt-5.5":
       return {
         modelId,
-        templateId: "gpt-5.4",
-        templateName: "GPT-5.4",
-        cost: { input: 5, output: 30, cacheRead: 0, cacheWrite: 0 },
+        templateId: "gpt-5.5",
+        templateName: "GPT-5.5",
+        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
         contextWindow: 1_000_000,
         maxTokens: 128_000,
         reasoning: true,
@@ -130,10 +126,6 @@ describeLive("buildOpenAIProvider live", () => {
           if (providerId !== "openai") {
             return null;
           }
-          const exactModel = findOpenAIModel(id);
-          if (exactModel) {
-            return exactModel;
-          }
           if (id === liveCase.templateId) {
             return {
               id: liveCase.templateId,
@@ -191,6 +183,6 @@ describeLive("buildOpenAIProvider live", () => {
 
       expect(response.output_text.trim()).toMatch(/^OK[.!]?$/);
     },
-    30_000,
+    180_000,
   );
 });

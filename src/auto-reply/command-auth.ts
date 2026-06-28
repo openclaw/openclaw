@@ -1,3 +1,9 @@
+/** Command authorization helpers for owner and allowlist checks. */
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   getLoadedChannelPluginById,
   listLoadedChannelPlugins,
@@ -7,16 +13,12 @@ import type { ChannelId } from "../channels/plugins/types.public.js";
 import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
-import { normalizeStringEntries } from "../shared/string-normalization.js";
-import {
   INTERNAL_MESSAGE_CHANNEL,
   isInternalMessageChannel,
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
+import { isNativeCommandTurn, resolveCommandTurnContext } from "./command-turn-context.js";
+import { shouldUseFromAsSenderFallback } from "./sender-identity.js";
 import type { MsgContext } from "./templating.js";
 
 export type CommandAuthorization = {
@@ -459,32 +461,6 @@ function resolveCommandSenderAuthorization(params: {
   return params.commandAuthorized && (params.isOwnerForCommands || params.nativeCommandAuthorized);
 }
 
-function isConversationLikeIdentity(value: string): boolean {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return false;
-  }
-  if (normalized.startsWith("chat_id:")) {
-    return true;
-  }
-  return /(^|:)(channel|group|thread|topic|room|space|spaces):/.test(normalized);
-}
-
-function shouldUseFromAsSenderFallback(params: {
-  from?: string | null;
-  chatType?: string | null;
-}): boolean {
-  const from = normalizeOptionalString(params.from) ?? "";
-  if (!from) {
-    return false;
-  }
-  const chatType = normalizeLowercaseStringOrEmpty(params.chatType);
-  if (chatType && chatType !== "direct") {
-    return false;
-  }
-  return !isConversationLikeIdentity(from);
-}
-
 function resolveSenderCandidates(params: {
   plugin?: ChannelPlugin;
   providerId?: ChannelId;
@@ -699,9 +675,7 @@ export function resolveCommandAuthorization(params: {
     Array.isArray(ctx.GatewayClientScopes) &&
     ctx.GatewayClientScopes.includes("operator.admin");
   const ownerAllowlistConfigured = ownerState.ownerAllowAll || ownerState.explicitOwners.length > 0;
-  const senderIsOwner = ctx.ForceSenderIsOwnerFalse
-    ? false
-    : senderIsOwnerByIdentity || senderIsOwnerByScope || ownerState.ownerAllowAll;
+  const senderIsOwner = senderIsOwnerByIdentity || senderIsOwnerByScope || ownerState.ownerAllowAll;
   const requireOwner = enforceOwner || ownerAllowlistConfigured;
   const isOwnerForCommands = !requireOwner
     ? true
@@ -711,7 +685,7 @@ export function resolveCommandAuthorization(params: {
         ? senderIsOwner
         : senderIsOwnerByScope || Boolean(matchedCommandOwner);
   const nativeCommandAuthorized =
-    commandAuthorized && ctx.CommandSource === "native" && !requireOwner;
+    commandAuthorized && isNativeCommandTurn(resolveCommandTurnContext(ctx)) && !requireOwner;
   const isAuthorizedSender = resolveCommandSenderAuthorization({
     commandAuthorized,
     enforceOwnerForCommands: enforceOwner,

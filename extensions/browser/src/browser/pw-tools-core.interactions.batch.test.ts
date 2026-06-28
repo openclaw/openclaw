@@ -1,3 +1,4 @@
+// Browser tests cover pw tools core.interactions.batch plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let page: {
@@ -14,6 +15,8 @@ const getPageForTargetId = vi.fn(async () => {
 const ensurePageState = vi.fn(() => {});
 const assertPageNavigationCompletedSafely = vi.fn(async () => {});
 const forceDisconnectPlaywrightForTarget = vi.fn(async () => {});
+const isBrowserObservedDialogBlockedError = vi.fn(() => false);
+const markObservedDialogsHandledRemotelyForPage = vi.fn(() => ({}));
 const refLocator = vi.fn(() => {
   throw new Error("test: refLocator should not be called");
 });
@@ -27,6 +30,8 @@ vi.mock("./pw-session.js", () => ({
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
+  isBrowserObservedDialogBlockedError,
+  markObservedDialogsHandledRemotelyForPage,
   refLocator,
   restoreRoleRefsForTarget,
 }));
@@ -38,7 +43,7 @@ vi.mock("./pw-tools-core.snapshot.js", () => ({
 
 const { batchViaPlaywright } = await import("./pw-tools-core.interactions.js");
 
-function firstEvaluateCall(): [unknown, { fnBody?: string; timeoutMs?: number }] {
+function firstEvaluateCall(): [unknown, { fnSource?: string; timeoutMs?: number }] {
   if (!page) {
     throw new Error("expected test page");
   }
@@ -46,7 +51,7 @@ function firstEvaluateCall(): [unknown, { fnBody?: string; timeoutMs?: number }]
   if (!call) {
     throw new Error("expected page.evaluate call");
   }
-  return call as [unknown, { fnBody?: string; timeoutMs?: number }];
+  return call as [unknown, { fnSource?: string; timeoutMs?: number }];
 }
 
 describe("batchViaPlaywright", () => {
@@ -69,7 +74,7 @@ describe("batchViaPlaywright", () => {
     expect(result).toEqual({ results: [{ ok: true }] });
     const [evaluateFn, evaluateOptions] = firstEvaluateCall();
     expect(typeof evaluateFn).toBe("function");
-    expect(evaluateOptions?.fnBody).toBe("() => 1");
+    expect(evaluateOptions?.fnSource).toBe("() => 1");
     expect(evaluateOptions?.timeoutMs).toBe(4500);
   });
 

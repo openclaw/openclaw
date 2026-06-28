@@ -1,3 +1,4 @@
+// Qa Matrix plugin module implements e2ee client behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -16,6 +17,12 @@ import type {
   MatrixVerificationSummary,
   MessageEventContent,
 } from "@openclaw/matrix/test-api.js";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateEntry,
+  PluginStateKeyedStore,
+  PluginStateSyncKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { buildMatrixQaMessageContent } from "./client.js";
 import { findMatrixQaObservedEventMatch, normalizeMatrixQaObservedEvent } from "./events.js";
 import type { MatrixQaObservedEvent } from "./events.js";
@@ -42,6 +49,144 @@ const MATRIX_QA_E2EE_SYNC_FILTER = {
     ephemeral: { not_types: ["m.receipt"] },
   },
 };
+
+type MatrixQaPluginStateValue = {
+  createdAt: number;
+  expiresAt?: number;
+  value: unknown;
+};
+
+const matrixQaPluginStateNamespaces = new Map<string, Map<string, MatrixQaPluginStateValue>>();
+
+function resolveMatrixQaPluginStateNamespaceKey(options: OpenKeyedStoreOptions): string {
+  return `${options.env?.OPENCLAW_STATE_DIR ?? ""}\0${options.namespace}`;
+}
+
+function resolveMatrixQaPluginStateRows(
+  options: OpenKeyedStoreOptions,
+): Map<string, MatrixQaPluginStateValue> {
+  const namespaceKey = resolveMatrixQaPluginStateNamespaceKey(options);
+  let rows = matrixQaPluginStateNamespaces.get(namespaceKey);
+  if (!rows) {
+    rows = new Map();
+    matrixQaPluginStateNamespaces.set(namespaceKey, rows);
+  }
+  return rows;
+}
+
+function pruneMatrixQaExpiredPluginState(rows: Map<string, MatrixQaPluginStateValue>): void {
+  const now = Date.now();
+  for (const [key, row] of rows) {
+    if (row.expiresAt !== undefined && row.expiresAt <= now) {
+      rows.delete(key);
+    }
+  }
+}
+
+function enforceMatrixQaPluginStateLimit(
+  rows: Map<string, MatrixQaPluginStateValue>,
+  maxEntries: number,
+  nextKey: string,
+): void {
+  if (rows.has(nextKey)) {
+    return;
+  }
+  while (rows.size >= maxEntries) {
+    const oldest = [...rows.entries()].toSorted(
+      (a, b) => a[1].createdAt - b[1].createdAt || a[0].localeCompare(b[0]),
+    )[0]?.[0];
+    if (!oldest) {
+      return;
+    }
+    rows.delete(oldest);
+  }
+}
+
+function createMatrixQaPluginStateSyncKeyedStore<T>(
+  options: OpenKeyedStoreOptions,
+): PluginStateSyncKeyedStore<T> {
+  const rows = resolveMatrixQaPluginStateRows(options);
+  const resolveExpiresAt = (ttlMs?: number) => {
+    const effectiveTtlMs = ttlMs ?? options.defaultTtlMs;
+    return effectiveTtlMs === undefined ? undefined : Date.now() + effectiveTtlMs;
+  };
+  const register = (key: string, value: T, opts?: { ttlMs?: number }) => {
+    pruneMatrixQaExpiredPluginState(rows);
+    enforceMatrixQaPluginStateLimit(rows, options.maxEntries, key);
+    rows.set(key, {
+      createdAt: rows.get(key)?.createdAt ?? Date.now(),
+      expiresAt: resolveExpiresAt(opts?.ttlMs),
+      value,
+    });
+  };
+  return {
+    register,
+    registerIfAbsent(key, value, opts) {
+      pruneMatrixQaExpiredPluginState(rows);
+      if (rows.has(key)) {
+        return false;
+      }
+      register(key, value, opts);
+      return true;
+    },
+    update(key, updateValue, opts) {
+      pruneMatrixQaExpiredPluginState(rows);
+      const next = updateValue(rows.get(key)?.value as T | undefined);
+      if (next === undefined) {
+        return false;
+      }
+      register(key, next, opts);
+      return true;
+    },
+    lookup(key) {
+      pruneMatrixQaExpiredPluginState(rows);
+      return rows.get(key)?.value as T | undefined;
+    },
+    consume(key) {
+      pruneMatrixQaExpiredPluginState(rows);
+      const value = rows.get(key)?.value as T | undefined;
+      rows.delete(key);
+      return value;
+    },
+    delete(key) {
+      pruneMatrixQaExpiredPluginState(rows);
+      return rows.delete(key);
+    },
+    entries() {
+      pruneMatrixQaExpiredPluginState(rows);
+      return [...rows.entries()].map(([key, row]): PluginStateEntry<T> => {
+        const entry: PluginStateEntry<T> = {
+          key,
+          value: row.value as T,
+          createdAt: row.createdAt,
+        };
+        if (row.expiresAt !== undefined) {
+          entry.expiresAt = row.expiresAt;
+        }
+        return entry;
+      });
+    },
+    clear() {
+      rows.clear();
+    },
+  };
+}
+
+function createMatrixQaPluginStateKeyedStore<T>(
+  options: OpenKeyedStoreOptions,
+): PluginStateKeyedStore<T> {
+  const syncStore = createMatrixQaPluginStateSyncKeyedStore<T>(options);
+  return {
+    register: async (...args) => syncStore.register(...args),
+    registerIfAbsent: async (...args) => syncStore.registerIfAbsent(...args),
+    update: async (...args) => syncStore.update?.(...args) ?? false,
+    lookup: async (...args) => syncStore.lookup(...args),
+    consume: async (...args) => syncStore.consume(...args),
+    delete: async (...args) => syncStore.delete(...args),
+    entries: async () => syncStore.entries(),
+    clear: async () => syncStore.clear(),
+  };
+}
 
 function shouldRecordMatrixQaObservedEventUpdate(params: {
   next: MatrixQaObservedEvent;
@@ -140,7 +285,7 @@ export type MatrixQaE2eeScenarioClient = {
   }>;
 };
 
-async function loadMatrixQaE2eeRuntime(): Promise<MatrixQaE2eeRuntime> {
+export async function loadMatrixQaE2eeRuntime(): Promise<MatrixQaE2eeRuntime> {
   const { loadQaRunnerBundledPluginTestApi } =
     await import("openclaw/plugin-sdk/qa-runner-runtime");
   return loadQaRunnerBundledPluginTestApi<MatrixQaE2eeRuntime>("matrix");
@@ -192,6 +337,20 @@ async function createMatrixQaE2eeMatrixClient(params: MatrixQaE2eeClientParams) 
     outputDir: params.outputDir,
     scenarioId: params.scenarioId,
   });
+  runtime.setMatrixRuntime({
+    config: {
+      current: () => ({}),
+      mutateConfigFile: async () => ({}),
+      replaceConfigFile: async () => ({}),
+    },
+    state: {
+      resolveStateDir: () => params.outputDir,
+      openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+        createMatrixQaPluginStateKeyedStore<T>(options),
+      openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+        createMatrixQaPluginStateSyncKeyedStore<T>(options),
+    },
+  } as never);
   return new runtime.MatrixClient(params.baseUrl, params.accessToken, {
     autoBootstrapCrypto: false,
     cryptoDatabasePrefix: storage.cryptoDatabasePrefix,
@@ -202,7 +361,7 @@ async function createMatrixQaE2eeMatrixClient(params: MatrixQaE2eeClientParams) 
     password: params.password,
     recoveryKeyPath: storage.recoveryKeyPath,
     ssrfPolicy: { allowPrivateNetwork: true },
-    storagePath: storage.storagePath,
+    storageRootDir: path.dirname(storage.storagePath),
     syncFilter: MATRIX_QA_E2EE_SYNC_FILTER,
     userId: params.userId,
   });
@@ -339,8 +498,8 @@ export async function createMatrixQaE2eeScenarioClient(
     async requestVerification(opts) {
       return await requireCrypto().requestVerification(opts);
     },
-    async resetRoomKeyBackup(params) {
-      return await client.resetRoomKeyBackup(params);
+    async resetRoomKeyBackup(paramsLocal) {
+      return await client.resetRoomKeyBackup(paramsLocal);
     },
     async restoreRoomKeyBackup(opts) {
       return await client.restoreRoomKeyBackup(opts);
@@ -420,9 +579,10 @@ export async function runMatrixQaE2eeBootstrap(
   }
 }
 
-export const __testing = {
+export const testing = {
   MATRIX_QA_E2EE_SYNC_FILTER,
   buildMatrixQaE2eeStoragePaths,
   findMatrixQaObservedEventMatch,
   shouldRecordMatrixQaObservedEventUpdate,
 };
+export { testing as __testing };

@@ -86,8 +86,18 @@ on:
         required: false
         default: ""
         type: string
+      advisory:
+        description: Treat failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
+      advisory:
+        description: Treat failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
       ref:
         description: Public OpenClaw ref to validate (tag, branch, or full commit SHA)
         required: true
@@ -183,14 +193,14 @@ concurrency:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
-  PNPM_VERSION: "11.0.8"
   OPENCLAW_REPOSITORY: openclaw/openclaw
   TSX_VERSION: "4.21.0"
-  OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.4' }}
+  OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.5' }}
 
 jobs:
   prepare:
     runs-on: ubuntu-24.04
+    continue-on-error: ${{ inputs.advisory }}
     outputs:
       baseline_file_name: ${{ steps.baseline_metadata.outputs.file_name }}
       baseline_spec: ${{ steps.baseline.outputs.value }}
@@ -322,37 +332,37 @@ jobs:
           esac
 
       - name: Checkout workflow repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: ${{ env.OPENCLAW_REPOSITORY }}
           ref: ${{ steps.workflow_ref.outputs.value }}
           path: workflow
           fetch-depth: 1
-          persist-credentials: false
+          persist-credentials: true
 
       - name: Checkout public source ref
         if: inputs.candidate_artifact_name == ''
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: ${{ env.OPENCLAW_REPOSITORY }}
           ref: ${{ inputs.ref }}
           path: source
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
           submodules: recursive
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
-        with:
-          version: ${{ env.PNPM_VERSION }}
-          run_install: false
-
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: pnpm
-          cache-dependency-path: ${{ inputs.candidate_artifact_name == '' && 'source/pnpm-lock.yaml' || 'workflow/pnpm-lock.yaml' }}
+
+      - name: Setup pnpm
+        uses: ./workflow/.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-file: ${{ inputs.candidate_artifact_name == '' && 'source/package.json' || 'workflow/package.json' }}
+          lockfile-path: ${{ inputs.candidate_artifact_name == '' && 'source/pnpm-lock.yaml' || 'workflow/pnpm-lock.yaml' }}
+          use-actions-cache: ${{ inputs.candidate_artifact_name == '' && 'true' || 'false' }}
 
       - name: Ensure pnpm store cache directory exists
         run: mkdir -p "$(pnpm store path --silent)"
@@ -369,14 +379,14 @@ jobs:
 
       - name: Download current-run candidate artifact
         if: inputs.candidate_artifact_name != '' && inputs.candidate_artifact_run_id == ''
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ inputs.candidate_artifact_name }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package
 
       - name: Download previous-run candidate artifact
         if: inputs.candidate_artifact_name != '' && inputs.candidate_artifact_run_id != ''
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ inputs.candidate_artifact_name }}
           run-id: ${{ inputs.candidate_artifact_run_id }}
@@ -397,12 +407,28 @@ jobs:
           const path = require("node:path");
 
           const packageDir = process.env.PACKAGE_DIR;
+          function resolveTarballFileName(value, label) {
+            const fileName = typeof value === "string" ? value.trim() : "";
+            if (
+              !fileName.endsWith(".tgz") ||
+              fileName.includes("\0") ||
+              fileName !== path.basename(fileName) ||
+              fileName !== path.win32.basename(fileName)
+            ) {
+              throw new Error(`${label} must be a local .tgz filename.`);
+            }
+            return fileName;
+          }
           const requestedFileName = process.env.INPUT_CANDIDATE_FILE_NAME.trim();
           const files = fs.readdirSync(packageDir).filter((file) => file.endsWith(".tgz"));
-          const candidateFileName = requestedFileName || (files.length === 1 ? files[0] : "");
-          if (!candidateFileName) {
+          const selectedCandidateFileName = requestedFileName || (files.length === 1 ? files[0] : "");
+          if (!selectedCandidateFileName) {
             throw new Error(`Expected exactly one candidate .tgz in ${packageDir}; found ${files.length}.`);
           }
+          const candidateFileName = resolveTarballFileName(
+            selectedCandidateFileName,
+            "candidate_file_name",
+          );
           if (!fs.existsSync(path.join(packageDir, candidateFileName))) {
             throw new Error(`Provided candidate artifact does not contain ${candidateFileName}.`);
           }
@@ -441,7 +467,7 @@ jobs:
           OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline
         run: |
           mkdir -p "${OUTPUT_DIR}"
-          npm pack --ignore-scripts --json "${BASELINE_SPEC}" --pack-destination "${OUTPUT_DIR}" > "${OUTPUT_DIR}/pack.json"
+          timeout --preserve-status 300s npm pack --ignore-scripts --json "${BASELINE_SPEC}" --pack-destination "${OUTPUT_DIR}" > "${OUTPUT_DIR}/pack.json"
 
       - name: Capture candidate metadata
         id: candidate_metadata
@@ -464,16 +490,27 @@ jobs:
         run: |
           node <<'NODE' >>"$GITHUB_OUTPUT"
           const fs = require("node:fs");
+          const path = require("node:path");
+          function resolveTarballFileName(value, label) {
+            const fileName = typeof value === "string" ? value.trim() : "";
+            if (
+              !fileName.endsWith(".tgz") ||
+              fileName.includes("\0") ||
+              fileName !== path.basename(fileName) ||
+              fileName !== path.win32.basename(fileName)
+            ) {
+              throw new Error(`${label} must be a local .tgz filename.`);
+            }
+            return fileName;
+          }
           const payload = JSON.parse(fs.readFileSync(process.env.BASELINE_PACK_JSON, "utf8"));
           const entry = Array.isArray(payload) ? payload.at(-1) : null;
-          if (!entry?.filename) {
-            throw new Error("Baseline npm pack did not produce a filename.");
-          }
-          process.stdout.write(`file_name=${entry.filename}\n`);
+          const fileName = resolveTarballFileName(entry?.filename, "Baseline npm pack filename");
+          process.stdout.write(`file_name=${fileName}\n`);
           NODE
 
       - name: Upload candidate artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-cross-os-release-checks-candidate-${{ github.run_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package/${{ steps.candidate_metadata.outputs.file_name }}
@@ -481,7 +518,7 @@ jobs:
 
       - name: Upload baseline artifact
         if: ${{ inputs.mode != 'fresh' }}
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline/${{ steps.baseline_metadata.outputs.file_name }}
@@ -513,6 +550,7 @@ jobs:
   cross_os_release_checks:
     name: "${{ matrix.display_name }} / ${{ matrix.suite_label }}"
     needs: prepare
+    continue-on-error: ${{ inputs.advisory }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
@@ -520,37 +558,75 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout workflow repo
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: ${{ env.OPENCLAW_REPOSITORY }}
           ref: ${{ needs.prepare.outputs.workflow_ref }}
           path: workflow
           fetch-depth: 1
-          persist-credentials: false
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1
-        with:
-          version: ${{ env.PNPM_VERSION }}
-          run_install: false
+          persist-credentials: true
 
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      - name: Setup pnpm
+        uses: ./workflow/.github/actions/setup-pnpm-store-cache
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-file: workflow/package.json
+          lockfile-path: workflow/pnpm-lock.yaml
+          use-actions-cache: "false"
+
       - name: Download candidate artifact
-        uses: actions/download-artifact@v8
+        id: download_candidate
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: openclaw-cross-os-release-checks-candidate-${{ github.run_id }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate
+
+      - name: Retry candidate artifact download
+        if: ${{ steps.download_candidate.outcome == 'failure' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: openclaw-cross-os-release-checks-candidate-${{ github.run_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate
 
       - name: Download baseline artifact
         if: ${{ matrix.suite == 'packaged-upgrade' }}
-        uses: actions/download-artifact@v8
+        id: download_baseline
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline
+
+      - name: Retry baseline artifact download
+        if: ${{ matrix.suite == 'packaged-upgrade' && steps.download_baseline.outcome == 'failure' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline
+
+      - name: Verify release-check inputs
+        shell: bash
+        env:
+          CANDIDATE_TGZ: ${{ runner.temp }}/openclaw-cross-os-release-checks/candidate/${{ needs.prepare.outputs.candidate_file_name }}
+          BASELINE_TGZ: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline/${{ needs.prepare.outputs.baseline_file_name }}
+          OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}
+          SUITE: ${{ matrix.suite }}
+        run: |
+          mkdir -p "${OUTPUT_DIR}"
+          if [[ ! -f "${CANDIDATE_TGZ}" ]]; then
+            echo "::error::candidate artifact missing: ${CANDIDATE_TGZ}"
+            exit 1
+          fi
+          if [[ "${SUITE}" == "packaged-upgrade" ]] && [[ ! -f "${BASELINE_TGZ}" ]]; then
+            echo "::error::baseline artifact missing: ${BASELINE_TGZ}"
+            exit 1
+          fi
 
       - name: Run cross-OS release checks
         shell: bash
@@ -602,12 +678,13 @@ jobs:
           if [[ -f "${SUMMARY_PATH}" ]]; then
             cat "${SUMMARY_PATH}" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "No summary generated." >> "$GITHUB_STEP_SUMMARY"
+            mkdir -p "$(dirname "${SUMMARY_PATH}")"
+            echo "No summary generated." | tee "${SUMMARY_PATH}" >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload release-check artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: openclaw-cross-os-release-checks-${{ matrix.artifact_name }}-${{ matrix.suite }}-${{ github.run_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}

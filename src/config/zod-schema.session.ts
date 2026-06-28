@@ -1,7 +1,8 @@
+// Defines session-related Zod schema fragments for config parsing.
+import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { parseByteSize } from "../cli/parse-bytes.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
-import { normalizeStringifiedOptionalString } from "../shared/string-coerce.js";
 import { ElevatedAllowFromSchema } from "./zod-schema.agent-runtime.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import {
@@ -59,6 +60,8 @@ export const SessionSchema = z
     writeLock: z
       .object({
         acquireTimeoutMs: z.number().int().positive().optional(),
+        staleMs: z.number().int().positive().optional(),
+        maxHoldMs: z.number().int().positive().optional(),
       })
       .strict()
       .optional(),
@@ -150,11 +153,17 @@ export const SessionSchema = z
   .strict()
   .optional();
 
+const ResponseUsageModeSchema = z.enum(["on", "off", "tokens", "full"]);
+
 export const MessagesSchema = z
   .object({
     messagePrefix: z.string().optional(),
     visibleReplies: VisibleRepliesSchema.optional(),
     responsePrefix: z.string().optional(),
+    usageTemplate: z.union([z.string(), z.record(z.string(), z.unknown())]).optional(),
+    responseUsage: z
+      .union([ResponseUsageModeSchema, z.record(z.string(), ResponseUsageModeSchema)])
+      .optional(),
     groupChat: GroupChatSchema,
     queue: QueueSchema,
     inbound: InboundDebounceSchema,
@@ -172,6 +181,9 @@ export const MessagesSchema = z
             tool: z.string().optional(),
             coding: z.string().optional(),
             web: z.string().optional(),
+            deploy: z.string().optional(),
+            build: z.string().optional(),
+            concierge: z.string().optional(),
             done: z.string().optional(),
             error: z.string().optional(),
             stallSoft: z.string().optional(),

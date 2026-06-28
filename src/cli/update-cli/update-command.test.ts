@@ -1,3 +1,4 @@
+// Update command tests cover update command orchestration and filesystem effects.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -6,12 +7,15 @@ import {
   buildGatewayInstallEntrypointCandidates as resolveGatewayInstallEntrypointCandidates,
   resolveGatewayInstallEntrypoint,
 } from "../../daemon/gateway-entrypoint.js";
+import type { UpdateRunResult } from "../../infra/update-runner.js";
 import {
   buildInvalidConfigPostCoreUpdateResult,
   collectMissingPluginInstallPayloads,
+  formatPostUpdateGatewayRecoveryInstructions,
   recoverInstalledLaunchAgentAfterUpdate,
   recoverLaunchAgentAndRecheckGatewayHealth,
   resolvePostCoreUpdateChildStdio,
+  resolvePostUpdateServiceStateReadEnv,
   resolvePostInstallDoctorEnv,
   shouldPrepareUpdatedInstallRestart,
   resolveUpdatedGatewayRestartPort,
@@ -75,7 +79,7 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
     ).toBe(false);
   });
 
-  it("keeps non-package updates tied to the loaded service state", () => {
+  it("keeps non-package updates tied to the matching loaded service state", () => {
     expect(
       shouldPrepareUpdatedInstallRestart({
         updateMode: "git",
@@ -88,6 +92,26 @@ describe("shouldPrepareUpdatedInstallRestart", () => {
         updateMode: "git",
         serviceInstalled: true,
         serviceLoaded: true,
+        serviceMatchesUpdateRoot: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldPrepareUpdatedInstallRestart({
+        updateMode: "git",
+        serviceInstalled: true,
+        serviceLoaded: true,
+        serviceMatchesUpdateRoot: true,
+      }),
+    ).toBe(true);
+  });
+
+  it("prepares git restart when this update stopped the managed service", () => {
+    expect(
+      shouldPrepareUpdatedInstallRestart({
+        updateMode: "git",
+        serviceInstalled: true,
+        serviceLoaded: false,
+        serviceStoppedForUpdate: true,
       }),
     ).toBe(true);
   });
@@ -112,6 +136,53 @@ describe("resolveUpdatedGatewayRestartPort", () => {
         serviceEnv: {},
       }),
     ).toBe(19000);
+  });
+});
+
+describe("resolvePostUpdateServiceStateReadEnv", () => {
+  it("keeps package restart preparation anchored to the pre-update service env", () => {
+    const processEnv = {
+      OPENCLAW_STATE_DIR: "/source/state",
+      OPENCLAW_CONFIG_PATH: "/source/openclaw.json",
+    } as NodeJS.ProcessEnv;
+    const prePackageServiceEnv = {
+      OPENCLAW_STATE_DIR: "/managed/state",
+      OPENCLAW_CONFIG_PATH: "/managed/openclaw.json",
+    } as NodeJS.ProcessEnv;
+
+    expect(
+      resolvePostUpdateServiceStateReadEnv({
+        updateMode: "npm",
+        processEnv,
+        prePackageServiceEnv,
+      }),
+    ).toBe(prePackageServiceEnv);
+  });
+
+  it("keeps git updates tied to the caller environment", () => {
+    const processEnv = { OPENCLAW_STATE_DIR: "/source/state" } as NodeJS.ProcessEnv;
+    const prePackageServiceEnv = { OPENCLAW_STATE_DIR: "/managed/state" } as NodeJS.ProcessEnv;
+
+    expect(
+      resolvePostUpdateServiceStateReadEnv({
+        updateMode: "git",
+        processEnv,
+        prePackageServiceEnv,
+      }),
+    ).toBe(processEnv);
+  });
+
+  it("uses the managed service environment for git updates stopped by this updater", () => {
+    const processEnv = { OPENCLAW_STATE_DIR: "/source/state" } as NodeJS.ProcessEnv;
+    const preManagedServiceEnv = { OPENCLAW_STATE_DIR: "/managed/state" } as NodeJS.ProcessEnv;
+
+    expect(
+      resolvePostUpdateServiceStateReadEnv({
+        updateMode: "git",
+        processEnv,
+        preManagedServiceEnv,
+      }),
+    ).toBe(preManagedServiceEnv);
   });
 });
 
@@ -348,6 +419,52 @@ describe("shouldUseLegacyProcessRestartAfterUpdate", () => {
     expect(shouldUseLegacyProcessRestartAfterUpdate({ updateMode: "unknown" })).toBe(true);
   });
 });
+
+describe("formatPostUpdateGatewayRecoveryInstructions", () => {
+  const result: UpdateRunResult = {
+    status: "error",
+    mode: "git",
+    steps: [],
+    durationMs: 0,
+  };
+
+  it("uses systemd wording on Linux instead of macOS LaunchAgent instructions", () => {
+    const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "linux");
+
+    expect(line).toContain("the systemd user service");
+    expect(line).toContain("openclaw gateway restart");
+    expect(line).toContain("openclaw gateway install --force");
+    expect(line).toContain("openclaw gateway status --deep");
+    expect(line).not.toContain("Linux reports");
+    expect(line).not.toContain("macOS");
+    expect(line).not.toContain("LaunchAgent");
+  });
+
+  it("keeps LaunchAgent recovery wording on macOS", () => {
+    const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "darwin");
+
+    expect(line).toContain("the LaunchAgent is installed but not loaded");
+    expect(line).toContain("logged-in macOS user session");
+  });
+
+  it("uses Windows service-manager wording on Windows", () => {
+    const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "win32");
+
+    expect(line).toContain("the gateway Scheduled Task or Windows login item");
+    expect(line).not.toContain("LaunchAgent");
+    expect(line).not.toContain("Startup-folder");
+  });
+
+  it("uses generic service-manager wording for unsupported Node platforms", () => {
+    const [line] = formatPostUpdateGatewayRecoveryInstructions(result, "freebsd");
+
+    expect(line).toContain("local service manager");
+    expect(line).not.toContain("systemd");
+    expect(line).not.toContain("LaunchAgent");
+    expect(line).not.toContain("Scheduled Task");
+  });
+});
+
 describe("recoverInstalledLaunchAgentAfterUpdate", () => {
   it("re-bootstraps an installed-but-not-loaded macOS LaunchAgent after update", async () => {
     const service = {} as never;
@@ -591,7 +708,7 @@ describe("updatePluginsAfterCoreUpdate (invalid config end-to-end)", () => {
           "Plugin post-update convergence skipped because the config is invalid; refusing to restart the gateway with an unverified plugin set.",
         guidance: [
           "Run `openclaw doctor` to inspect the config validation errors.",
-          "Once the config parses, rerun `openclaw update`.",
+          "Once the config parses, rerun `openclaw update repair`.",
         ],
       },
     ]);
@@ -610,7 +727,7 @@ describe("buildInvalidConfigPostCoreUpdateResult", () => {
     const built = buildInvalidConfigPostCoreUpdateResult();
     expect(built.guidance).toStrictEqual([
       "Run `openclaw doctor` to inspect the config validation errors.",
-      "Once the config parses, rerun `openclaw update`.",
+      "Once the config parses, rerun `openclaw update repair`.",
     ]);
     expect(built.result.warnings).toStrictEqual([
       {

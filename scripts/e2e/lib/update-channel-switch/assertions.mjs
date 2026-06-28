@@ -1,3 +1,4 @@
+// Assertions for update-channel switch E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { legacyPackageAcceptanceCompat } from "../package-compat.mjs";
@@ -87,6 +88,13 @@ function writeWorkspacePnpmConfig(file, keptPatches) {
     lines[allowUnusedIndex] = "allowUnusedPatches: true";
   }
 
+  const minimumReleaseAgeIndex = lines.findIndex((line) => /^minimumReleaseAge:\s*/.test(line));
+  if (minimumReleaseAgeIndex === -1) {
+    lines.push("minimumReleaseAge: 0");
+  } else {
+    lines[minimumReleaseAgeIndex] = "minimumReleaseAge: 0";
+  }
+
   fs.writeFileSync(file, `${lines.join("\n")}${hadTrailingNewline ? "\n" : ""}`);
 }
 
@@ -128,6 +136,7 @@ function prepareGitFixture(root) {
     writeWorkspacePnpmConfig(pnpmWorkspacePath, keptPatches);
   } else {
     pnpmConfig.allowUnusedPatches = true;
+    pnpmConfig.minimumReleaseAge = 0;
     if (Object.keys(keptPatches).length > 0) {
       pnpmConfig.patchedDependencies = keptPatches;
     } else {

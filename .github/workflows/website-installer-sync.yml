@@ -37,8 +37,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - name: Install ShellCheck
         run: sudo apt-get update -y && sudo apt-get install -y shellcheck
 
@@ -71,20 +70,17 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - name: install.sh in Docker
         run: |
-          docker run --rm \
-            -e OPENCLAW_NO_ONBOARD=1 \
-            -e OPENCLAW_NO_PROMPT=1 \
+          timeout --kill-after=30s 20m docker run --rm \
             -v "$PWD/scripts/install.sh:/tmp/install.sh:ro" \
             node:24-bookworm-slim \
-            bash -lc 'bash /tmp/install.sh --no-prompt --no-onboard --version latest && openclaw --version'
+            bash -lc 'bash /tmp/install.sh --version latest && openclaw --version'
 
       - name: install-cli.sh in Docker
         run: |
-          docker run --rm \
+          timeout --kill-after=30s 20m docker run --rm \
             -e OPENCLAW_NO_ONBOARD=1 \
             -e OPENCLAW_NO_PROMPT=1 \
             -v "$PWD/scripts/install-cli.sh:/tmp/install-cli.sh:ro" \
@@ -92,13 +88,12 @@ jobs:
             bash -lc 'apt-get update -y && apt-get install -y curl && bash /tmp/install-cli.sh --prefix /tmp/openclaw --no-onboard --version latest && /tmp/openclaw/bin/openclaw --version'
 
   macos-installer:
-    runs-on: macos-latest
+    runs-on: macos-15
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 24
 
@@ -117,10 +112,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
       - name: Setup Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: 24
 
@@ -134,20 +128,29 @@ jobs:
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' && inputs.sync_website)
     runs-on: ubuntu-24.04
+    env:
+      OPENCLAW_GH_TOKEN: ${{ secrets.OPENCLAW_GH_TOKEN }}
     steps:
+      - name: Skip website sync without token
+        if: env.OPENCLAW_GH_TOKEN == ''
+        run: echo "OPENCLAW_GH_TOKEN is not configured; installer verification passed, skipping website sync."
+
       - name: Checkout OpenClaw
-        uses: actions/checkout@v6
+        if: env.OPENCLAW_GH_TOKEN != ''
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           path: openclaw
 
       - name: Checkout openclaw.ai
-        uses: actions/checkout@v6
+        if: env.OPENCLAW_GH_TOKEN != ''
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           repository: openclaw/openclaw.ai
-          token: ${{ secrets.OPENCLAW_GH_TOKEN }}
+          token: ${{ env.OPENCLAW_GH_TOKEN }}
           path: openclaw.ai
 
       - name: Sync installer scripts
+        if: env.OPENCLAW_GH_TOKEN != ''
         run: |
           cp openclaw/scripts/install.sh openclaw.ai/public/install.sh
           cp openclaw/scripts/install-cli.sh openclaw.ai/public/install-cli.sh
@@ -156,6 +159,7 @@ jobs:
           chmod +x openclaw.ai/public/install.sh openclaw.ai/public/install-cli.sh
 
       - name: Check for changes
+        if: env.OPENCLAW_GH_TOKEN != ''
         id: changes
         working-directory: openclaw.ai
         run: |
@@ -167,13 +171,13 @@ jobs:
 
       - name: Setup Bun
         if: steps.changes.outputs.changed == 'true'
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: latest
 
       - name: Setup Node.js
         if: steps.changes.outputs.changed == 'true'
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
         with:
           node-version: "24"
 

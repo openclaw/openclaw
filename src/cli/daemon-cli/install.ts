@@ -1,3 +1,5 @@
+// Gateway service installer: writes config defaults, resolves credentials, and installs service definitions.
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveNodeStartupTlsEnvironment } from "../../bootstrap/node-startup-env.js";
 import { buildGatewayInstallPlan } from "../../commands/daemon-install-helpers.js";
 import {
@@ -8,6 +10,7 @@ import {
 import { resolveGatewayInstallToken } from "../../commands/gateway-install-token.js";
 import { resolveFutureConfigActionBlock } from "../../config/future-version-guard.js";
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
+import { replaceConfigFile } from "../../config/mutate.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
@@ -21,7 +24,6 @@ import {
   normalizeEnvVarKey,
 } from "../../infra/host-env-security.js";
 import { defaultRuntime } from "../../runtime.js";
-import { normalizeOptionalString } from "../../shared/string-coerce.js";
 import { formatCliCommand } from "../command-format.js";
 import { formatInvalidConfigPort, formatInvalidPortOption } from "../error-format.js";
 import { buildDaemonServiceSnapshot, installDaemonServiceAndEmit } from "./response.js";
@@ -32,12 +34,24 @@ import {
 } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
 
+/** Merge safe existing service environment into the current install invocation environment. */
 export function mergeInstallInvocationEnv(params: {
   env: NodeJS.ProcessEnv;
   existingServiceEnv?: Record<string, string>;
+  platform?: NodeJS.Platform;
 }): NodeJS.ProcessEnv {
+  const platform = params.platform ?? process.platform;
+  const normalizeInstallEnvKey = (key: string) => (platform === "win32" ? key.toUpperCase() : key);
+  const currentEnv: NodeJS.ProcessEnv = {};
+  for (const [rawKey, rawValue] of Object.entries(params.env)) {
+    const key = normalizeEnvVarKey(rawKey, { portable: true });
+    if (!key || isDangerousHostEnvVarName(key)) {
+      continue;
+    }
+    currentEnv[normalizeInstallEnvKey(key)] = rawValue;
+  }
   if (!params.existingServiceEnv || Object.keys(params.existingServiceEnv).length === 0) {
-    return params.env;
+    return currentEnv;
   }
   const preservedServiceEnv: NodeJS.ProcessEnv = {};
   for (const [rawKey, rawValue] of Object.entries(params.existingServiceEnv)) {
@@ -49,7 +63,7 @@ export function mergeInstallInvocationEnv(params: {
     if (upper === OPENCLAW_WRAPPER_ENV_KEY) {
       const value = rawValue.trim();
       if (value) {
-        preservedServiceEnv[OPENCLAW_WRAPPER_ENV_KEY] = value;
+        preservedServiceEnv[normalizeInstallEnvKey(OPENCLAW_WRAPPER_ENV_KEY)] = value;
       }
       continue;
     }
@@ -61,6 +75,8 @@ export function mergeInstallInvocationEnv(params: {
     ) {
       continue;
     }
+    // Existing service env may contain host-specific secrets or loader overrides; keep only
+    // portable, non-dangerous values and let the current shell override them.
     if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
       continue;
     }
@@ -68,21 +84,22 @@ export function mergeInstallInvocationEnv(params: {
     if (!value) {
       continue;
     }
-    preservedServiceEnv[key] = value;
+    preservedServiceEnv[normalizeInstallEnvKey(key)] = value;
   }
   return {
     ...preservedServiceEnv,
-    ...params.env,
+    ...currentEnv,
   };
 }
 
+/** Install or refresh the managed Gateway service. */
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
   if (failIfNixDaemonInstallMode(fail)) {
     return;
   }
 
-  const { snapshot: configSnapshot, writeOptions: configWriteOptions } =
+  let { snapshot: configSnapshot, writeOptions: configWriteOptions } =
     await readConfigFileSnapshotForWrite();
   const futureBlock = resolveFutureConfigActionBlock({
     action: "install or rewrite the gateway service",
@@ -92,7 +109,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     fail(`Gateway install blocked: ${futureBlock.message}`, futureBlock.hints);
     return;
   }
-  const cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
+  let cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
   const portOverride = parsePort(opts.port);
   if (opts.port !== undefined && portOverride === null) {
     fail(formatInvalidPortOption("--port"));
@@ -121,11 +138,38 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       return;
     }
   }
+  if (configSnapshot.valid && cfg.gateway?.mode === undefined) {
+    const baseConfig = configSnapshot.sourceConfig ?? configSnapshot.config;
+    await replaceConfigFile({
+      nextConfig: {
+        ...baseConfig,
+        gateway: {
+          ...baseConfig.gateway,
+          mode: "local",
+        },
+      },
+      snapshot: configSnapshot,
+      writeOptions: {
+        baseSnapshot: configSnapshot,
+        ...configWriteOptions,
+        skipRuntimeSnapshotRefresh: true,
+      },
+      afterWrite: { mode: "auto" },
+    });
+    const refreshed = await readConfigFileSnapshotForWrite();
+    configSnapshot = refreshed.snapshot;
+    configWriteOptions = refreshed.writeOptions;
+    cfg = configSnapshot.valid ? configSnapshot.sourceConfig : configSnapshot.config;
+    const message = "No gateway.mode found. Set gateway.mode=local for managed gateway install.";
+    if (json) {
+      warnings.push(message);
+    } else {
+      defaultRuntime.log(message);
+    }
+  }
 
   const service = resolveGatewayService();
-  let loaded = false;
-  let existingServiceEnv: Record<string, string> | undefined;
-  let existingServiceCommand: GatewayServiceCommandConfig | null = null;
+  let loaded;
   try {
     loaded = await service.isLoaded({ env: process.env });
   } catch (err) {
@@ -136,8 +180,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       return;
     }
   }
-  existingServiceCommand = await service.readCommand(process.env).catch(() => null);
-  existingServiceEnv = existingServiceCommand?.environment;
+  const existingServiceCommand = await service.readCommand(process.env).catch(() => null);
+  const existingServiceEnv: Record<string, string> | undefined =
+    existingServiceCommand?.environment;
   const installEnv = mergeInstallInvocationEnv({
     env: process.env,
     existingServiceEnv,
@@ -225,6 +270,13 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       },
       config: cfg,
     });
+  const warn = (message: string) => {
+    if (json) {
+      warnings.push(message);
+    } else {
+      defaultRuntime.log(message);
+    }
+  };
 
   await installDaemonServiceAndEmit({
     serviceNoun: "Gateway",
@@ -236,6 +288,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       await service.install({
         env: installEnv,
         stdout,
+        warn,
         programArguments,
         workingDirectory,
         environment,

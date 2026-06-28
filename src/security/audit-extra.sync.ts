@@ -1,3 +1,10 @@
+// Runs synchronous extra security audit checks.
+import {
+  normalizeOptionalLowercaseString,
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { isDangerousNetworkMode, normalizeNetworkMode } from "../agents/sandbox/network-mode.js";
 import { resolveSandboxToolPolicyForAgent } from "../agents/sandbox/tool-policy.js";
@@ -6,22 +13,18 @@ import { getBlockedBindReason } from "../agents/sandbox/validate-sandbox-securit
 import { isToolAllowedByPolicies } from "../agents/tool-policy-match.js";
 import { resolveToolProfilePolicy } from "../agents/tool-policy.js";
 import { formatCliCommand } from "../cli/command-format.js";
+import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentToolsConfig } from "../config/types.tools.js";
-import { resolveGatewayAuth } from "../gateway/auth.js";
+import { resolveGatewayAuth, type ResolvedGatewayAuth } from "../gateway/auth.js";
 import { resolveAllowedAgentIds } from "../gateway/hooks-policy.js";
 import {
   DEFAULT_DANGEROUS_NODE_COMMANDS,
   listDangerousPluginNodeCommands,
   resolveNodeCommandAllowlist,
 } from "../gateway/node-command-policy.js";
-import {
-  normalizeOptionalLowercaseString,
-  normalizeOptionalString,
-  normalizeStringifiedOptionalString,
-} from "../shared/string-coerce.js";
 import { collectAuditModelRefs } from "./audit-model-refs.js";
-import { pickSandboxToolPolicy } from "./audit-tool-policy.js";
+import { pickSandboxToolPolicy } from "../agents/sandbox-tool-policy.js";
 
 /**
  * Synchronous security audit collector functions.
@@ -35,6 +38,24 @@ export type SecurityAuditFinding = {
   title: string;
   detail: string;
   remediation?: string;
+};
+
+export type HooksHardeningAuditOptions = {
+  gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
+};
+
+export type GatewayHttpNoAuthAuditOptions = {
+  gatewayAuthOverride?: Pick<GatewayAuthConfig, "mode" | "token" | "password">;
+};
+
+type GatewayAuthSharedSecretLabel = "gateway auth token" | "gateway auth password";
+type GatewayAuthSharedSecretReuse = {
+  label: GatewayAuthSharedSecretLabel;
+  source: "config" | "override";
+};
+type ActiveGatewaySharedSecret = {
+  label: GatewayAuthSharedSecretLabel;
+  value?: string;
 };
 
 // --------------------------------------------------------------------------
@@ -64,6 +85,84 @@ function isGatewayRemotelyExposed(cfg: OpenClawConfig): boolean {
   }
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
   return tailscaleMode === "serve" || tailscaleMode === "funnel";
+}
+
+function formatGatewayAuthDisplayLabel(label: GatewayAuthSharedSecretLabel): string {
+  if (label === "gateway auth password") {
+    return "Gateway password";
+  }
+  return "Gateway token";
+}
+
+function formatHooksTokenReuseDetail(reusedGatewayAuthLabel: GatewayAuthSharedSecretLabel): string {
+  if (reusedGatewayAuthLabel === "gateway auth password") {
+    return "hooks.token matches gateway.auth password; compromise of hooks expands blast radius to Gateway password auth.";
+  }
+  return "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.";
+}
+
+function listActiveGatewaySharedSecrets(auth: ResolvedGatewayAuth): ActiveGatewaySharedSecret[] {
+  if (auth.mode === "token") {
+    return [{ label: "gateway auth token", value: auth.token }];
+  }
+  if (auth.mode === "password" || auth.mode === "trusted-proxy") {
+    return [{ label: "gateway auth password", value: auth.password }];
+  }
+  return [];
+}
+
+function findGatewayAuthLabelMatchingHooksToken(params: {
+  hooksToken: string;
+  auth: ResolvedGatewayAuth;
+}): GatewayAuthSharedSecretLabel | undefined {
+  return listActiveGatewaySharedSecrets(params.auth).find(
+    (candidate) => normalizeOptionalString(candidate.value) === params.hooksToken,
+  )?.label;
+}
+
+function findHooksTokenGatewayAuthReuse(params: {
+  hooksToken: string;
+  configGatewayAuth: ResolvedGatewayAuth;
+  overrideGatewayAuth?: ResolvedGatewayAuth;
+}): GatewayAuthSharedSecretReuse | undefined {
+  const configReuseLabel = findGatewayAuthLabelMatchingHooksToken({
+    hooksToken: params.hooksToken,
+    auth: params.configGatewayAuth,
+  });
+  if (configReuseLabel) {
+    return { label: configReuseLabel, source: "config" };
+  }
+
+  const overrideReuseLabel = params.overrideGatewayAuth
+    ? findGatewayAuthLabelMatchingHooksToken({
+        hooksToken: params.hooksToken,
+        auth: params.overrideGatewayAuth,
+      })
+    : undefined;
+  if (!overrideReuseLabel) {
+    return undefined;
+  }
+  return { label: overrideReuseLabel, source: "override" };
+}
+
+function formatHooksTokenReuseRemediation(reuse: GatewayAuthSharedSecretReuse): string {
+  if (reuse.source === "override") {
+    return "Rotate hooks.token or the runtime Gateway shared-secret auth value used for this audit; doctor can only repair reuse that is present in persisted config or process env.";
+  }
+  return `Run ${formatCliCommand("openclaw doctor --fix")} to rotate a persisted hooks.token, then update external hook senders to use the new hook token.`;
+}
+
+function hasResolvedGatewayHttpAuth(auth: ResolvedGatewayAuth): boolean {
+  if (auth.mode === "token") {
+    return Boolean(normalizeOptionalString(auth.token));
+  }
+  if (auth.mode === "password") {
+    return Boolean(normalizeOptionalString(auth.password));
+  }
+  if (auth.mode === "trusted-proxy") {
+    return true;
+  }
+  return false;
 }
 
 const LEGACY_MODEL_PATTERNS: Array<{ id: string; re: RegExp; label: string }> = [
@@ -124,8 +223,40 @@ function listKnownNodeCommands(cfg: OpenClawConfig): Set<string> {
     },
   };
   const out = new Set<string>();
-  for (const platform of ["ios", "android", "macos", "linux", "windows", "unknown"]) {
-    const allow = resolveNodeCommandAllowlist(baseCfg, { platform });
+  const platformNodes = [
+    { platform: "ios", deviceFamily: "iPhone" },
+    { platform: "android", deviceFamily: "Android" },
+    {
+      platform: "macos",
+      deviceFamily: "Mac",
+      approvedCommands: [
+        "system.run",
+        "system.run.prepare",
+        "system.which",
+        "browser.proxy",
+        "screen.snapshot",
+      ],
+    },
+    {
+      platform: "linux",
+      deviceFamily: "Linux",
+      approvedCommands: ["system.run", "system.run.prepare", "system.which", "browser.proxy"],
+    },
+    {
+      platform: "windows",
+      deviceFamily: "Windows",
+      approvedCommands: [
+        "system.run",
+        "system.run.prepare",
+        "system.which",
+        "browser.proxy",
+        "screen.snapshot",
+      ],
+    },
+    { platform: "unknown" },
+  ];
+  for (const node of platformNodes) {
+    const allow = resolveNodeCommandAllowlist(baseCfg, node);
     for (const cmd of allow) {
       const normalized = normalizeNodeCommand(cmd);
       if (normalized) {
@@ -251,20 +382,34 @@ function suggestKnownNodeCommands(unknown: string, known: Set<string>): string[]
     .map((r) => r.cmd);
 }
 
-function listGroupPolicyOpen(cfg: OpenClawConfig): string[] {
+function listOpenInboundPolicies(cfg: OpenClawConfig): string[] {
   const out: string[] = [];
   const channels = cfg.channels as Record<string, unknown> | undefined;
   if (!channels || typeof channels !== "object") {
     return out;
   }
+
+  const inspectSection = (section: Record<string, unknown>, basePath: string) => {
+    if (section.groupPolicy === "open") {
+      out.push(`${basePath}.groupPolicy`);
+    }
+    const dm = section.dm;
+    const legacyDmPolicy =
+      dm && typeof dm === "object" ? (dm as Record<string, unknown>).policy : undefined;
+    const dmPolicy = section.dmPolicy ?? legacyDmPolicy;
+    if (dmPolicy === "open") {
+      out.push(`${basePath}.${section.dmPolicy == null ? "dm.policy" : "dmPolicy"}`);
+    }
+  };
+
   for (const [channelId, value] of Object.entries(channels)) {
     if (!value || typeof value !== "object") {
       continue;
     }
     const section = value as Record<string, unknown>;
-    if (section.groupPolicy === "open") {
-      out.push(`channels.${channelId}.groupPolicy`);
-    }
+    // Root policy can govern an implicit/default env-backed account. Named account overrides
+    // do not prove this scope is inactive, so audit it independently.
+    inspectSection(section, `channels.${channelId}`);
     const accounts = section.accounts;
     if (accounts && typeof accounts === "object") {
       for (const [accountId, accountVal] of Object.entries(accounts)) {
@@ -272,9 +417,7 @@ function listGroupPolicyOpen(cfg: OpenClawConfig): string[] {
           continue;
         }
         const acc = accountVal as Record<string, unknown>;
-        if (acc.groupPolicy === "open") {
-          out.push(`channels.${channelId}.accounts.${accountId}.groupPolicy`);
-        }
+        inspectSection(acc, `channels.${channelId}.accounts.${accountId}`);
       }
     }
   }
@@ -465,6 +608,7 @@ export function collectSecretsInConfigFindings(cfg: OpenClawConfig): SecurityAud
 export function collectHooksHardeningFindings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
+  options: HooksHardeningAuditOptions = {},
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   if (cfg.hooks?.enabled !== true) {
@@ -481,31 +625,31 @@ export function collectHooksHardeningFindings(
     });
   }
 
-  const gatewayAuth = resolveGatewayAuth({
+  const configGatewayAuth = resolveGatewayAuth({
     authConfig: cfg.gateway?.auth,
     tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
     env,
   });
-  const openclawGatewayToken =
-    typeof env.OPENCLAW_GATEWAY_TOKEN === "string" && env.OPENCLAW_GATEWAY_TOKEN.trim()
-      ? env.OPENCLAW_GATEWAY_TOKEN.trim()
-      : null;
-  const gatewayToken =
-    gatewayAuth.mode === "token" &&
-    typeof gatewayAuth.token === "string" &&
-    gatewayAuth.token.trim()
-      ? gatewayAuth.token.trim()
-      : openclawGatewayToken
-        ? openclawGatewayToken
-        : null;
-  if (token && gatewayToken && token === gatewayToken) {
+  const overrideGatewayAuth = options.gatewayAuthOverride
+    ? resolveGatewayAuth({
+        authConfig: cfg.gateway?.auth,
+        authOverride: options.gatewayAuthOverride,
+        tailscaleMode: cfg.gateway?.tailscale?.mode ?? "off",
+        env,
+      })
+    : undefined;
+  const reusedGatewayAuth = findHooksTokenGatewayAuthReuse({
+    hooksToken: token,
+    configGatewayAuth,
+    overrideGatewayAuth,
+  });
+  if (reusedGatewayAuth) {
     findings.push({
       checkId: "hooks.token_reuse_gateway_token",
       severity: "critical",
-      title: "Hooks token reuses the Gateway token",
-      detail:
-        "hooks.token matches gateway.auth token; compromise of hooks expands blast radius to the Gateway API.",
-      remediation: "Use a separate hooks.token dedicated to hook ingress.",
+      title: `Hooks token reuses the ${formatGatewayAuthDisplayLabel(reusedGatewayAuth.label)}`,
+      detail: formatHooksTokenReuseDetail(reusedGatewayAuth.label),
+      remediation: formatHooksTokenReuseRemediation(reusedGatewayAuth),
     });
   }
 
@@ -547,9 +691,9 @@ export function collectHooksHardeningFindings(
       severity: remoteExposure ? "critical" : "warn",
       title: "Hook agent routing allows any configured agent",
       detail:
-        "hooks.allowedAgentIds is unset or includes '*', so authenticated hook callers may route to any configured agent id.",
+        "hooks.allowedAgentIds is unset or includes '*', so authenticated hook callers may route to any configured agent id, including the default agent when agentId is omitted.",
       remediation:
-        'Set hooks.allowedAgentIds to an explicit allowlist (for example, ["hooks", "main"]) or [] to deny explicit agent routing.',
+        'Set hooks.allowedAgentIds to an explicit allowlist (for example, ["hooks", "main"]) or [] to deny hook agent routing.',
     });
   }
 
@@ -610,20 +754,28 @@ export function collectGatewayHttpSessionKeyOverrideFindings(
 export function collectGatewayHttpNoAuthFindings(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv,
+  options: GatewayHttpNoAuthAuditOptions = {},
 ): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
   const tailscaleMode = cfg.gateway?.tailscale?.mode ?? "off";
-  const auth = resolveGatewayAuth({ authConfig: cfg.gateway?.auth, tailscaleMode, env });
-  if (auth.mode !== "none") {
+  const auth = resolveGatewayAuth({
+    authConfig: cfg.gateway?.auth,
+    authOverride: options.gatewayAuthOverride,
+    tailscaleMode,
+    env,
+  });
+  if (hasResolvedGatewayHttpAuth(auth)) {
     return findings;
   }
 
   const chatCompletionsEnabled = cfg.gateway?.http?.endpoints?.chatCompletions?.enabled === true;
   const responsesEnabled = cfg.gateway?.http?.endpoints?.responses?.enabled === true;
+  const adminHttpRpcEnabled = cfg.plugins?.entries?.["admin-http-rpc"]?.enabled === true;
   const enabledEndpoints = [
     "/tools/invoke",
     chatCompletionsEnabled ? "/v1/chat/completions" : null,
     responsesEnabled ? "/v1/responses" : null,
+    adminHttpRpcEnabled ? "/api/v1/admin/rpc" : null,
   ].filter((entry): entry is string => Boolean(entry));
 
   const remoteExposure = isGatewayRemotelyExposed(cfg);
@@ -635,7 +787,7 @@ export function collectGatewayHttpNoAuthFindings(
       `gateway.auth.mode="none" leaves ${enabledEndpoints.join(", ")} callable without a shared secret. ` +
       "Treat this as trusted-local only and avoid exposing the gateway beyond loopback.",
     remediation:
-      "Set gateway.auth.mode to token/password (recommended). If you intentionally keep mode=none, keep gateway.bind=loopback and disable optional HTTP endpoints.",
+      "Set gateway.auth.mode to token/password (recommended). If you intentionally keep mode=none, keep gateway.bind=loopback and disable optional HTTP endpoints/plugins.",
   });
 
   return findings;
@@ -869,7 +1021,7 @@ export function collectNodeDangerousAllowCommandFindings(
     return findings;
   }
 
-  const allow = new Set(allowRaw.map(normalizeNodeCommand).filter(Boolean));
+  const allow = new Set(normalizeUniqueStringEntries(allowRaw.map(normalizeNodeCommand)));
   if (allow.size === 0) {
     return findings;
   }
@@ -1021,8 +1173,8 @@ export function collectModelHygieneFindings(cfg: OpenClawConfig): SecurityAuditF
 
 export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAuditFinding[] {
   const findings: SecurityAuditFinding[] = [];
-  const openGroups = listGroupPolicyOpen(cfg);
-  if (openGroups.length === 0) {
+  const openInboundPolicies = listOpenInboundPolicies(cfg);
+  if (openInboundPolicies.length === 0) {
     return findings;
   }
 
@@ -1031,11 +1183,12 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
     findings.push({
       checkId: "security.exposure.open_groups_with_elevated",
       severity: "critical",
-      title: "Open groupPolicy with elevated tools enabled",
+      title: "Open group/DM policy with elevated tools enabled",
       detail:
-        `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
-        "With tools.elevated enabled, a prompt injection in those rooms can become a high-impact incident.",
-      remediation: `Set groupPolicy="allowlist" and keep elevated allowlists extremely tight.`,
+        `Found inbound policy="open" at:\n${openInboundPolicies.map((p) => `- ${p}`).join("\n")}\n` +
+        "With tools.elevated enabled, a prompt injection in those conversations can become a high-impact incident.",
+      remediation:
+        'Set each listed group/DM policy to "allowlist" and keep elevated allowlists extremely tight.',
     });
   }
 
@@ -1045,13 +1198,13 @@ export function collectExposureMatrixFindings(cfg: OpenClawConfig): SecurityAudi
     findings.push({
       checkId: "security.exposure.open_groups_with_runtime_or_fs",
       severity: hasRuntimeRisk ? "critical" : "warn",
-      title: "Open groupPolicy with runtime/filesystem tools exposed",
+      title: "Open group/DM policy with runtime/filesystem tools exposed",
       detail:
-        `Found groupPolicy="open" at:\n${openGroups.map((p) => `- ${p}`).join("\n")}\n` +
+        `Found inbound policy="open" at:\n${openInboundPolicies.map((p) => `- ${p}`).join("\n")}\n` +
         `Risky tool exposure contexts:\n${riskyContexts.map((line) => `- ${line}`).join("\n")}\n` +
-        "Prompt injection in open groups can trigger command/file actions in these contexts.",
+        "Prompt injection in open conversations can trigger command/file actions in these contexts.",
       remediation:
-        'For open groups, prefer tools.profile="messaging" (or deny group:runtime/group:fs), set tools.fs.workspaceOnly=true, and use agents.defaults.sandbox.mode="all" for exposed agents.',
+        'For open groups or DMs, prefer tools.profile="messaging" (or deny group:runtime/group:fs), set tools.fs.workspaceOnly=true, and use agents.defaults.sandbox.mode="all" for exposed agents.',
     });
   }
 

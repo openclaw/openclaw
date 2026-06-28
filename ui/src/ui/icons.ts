@@ -1,3 +1,4 @@
+// Control UI module implements icons behavior.
 import { html, type TemplateResult } from "lit";
 
 // Lucide-style SVG icons
@@ -15,6 +16,17 @@ export const icons = {
       <line x1="12" x2="12" y1="20" y2="10" />
       <line x1="18" x2="18" y1="20" y2="4" />
       <line x1="6" x2="6" y1="20" y2="16" />
+    </svg>
+  `,
+  activity: html`
+    <svg viewBox="0 0 24 24">
+      <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+    </svg>
+  `,
+  clock: html`
+    <svg viewBox="0 0 24 24">
+      <circle cx="12" cy="12" r="10" />
+      <polyline points="12 6 12 12 16 14" />
     </svg>
   `,
   link: html`
@@ -122,6 +134,45 @@ export const icons = {
     </svg>
   `,
   check: html` <svg viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5" /></svg> `,
+  play: html` <svg viewBox="0 0 24 24"><polygon points="6 3 20 12 6 21 6 3" /></svg> `,
+  archive: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="20" height="5" x="2" y="3" rx="1" />
+      <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+      <path d="M10 12h4" />
+    </svg>
+  `,
+  archiveRestore: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="20" height="5" x="2" y="3" rx="1" />
+      <path d="M4 8v11a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8" />
+      <path d="m9 15 3-3 3 3" />
+      <path d="M12 12v6" />
+    </svg>
+  `,
+  alertTriangle: html`
+    <svg viewBox="0 0 24 24">
+      <path d="m21.73 18-8-14a2 2 0 0 0-3.46 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3" />
+      <path d="M12 9v4" />
+      <path d="M12 17h.01" />
+    </svg>
+  `,
+  layoutComfortable: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="16" height="5" x="4" y="4" rx="1.5" />
+      <rect width="16" height="5" x="4" y="15" rx="1.5" />
+      <line x1="7" x2="16" y1="7" y2="7" />
+      <line x1="7" x2="16" y1="18" y2="18" />
+    </svg>
+  `,
+  layoutCompact: html`
+    <svg viewBox="0 0 24 24">
+      <rect width="16" height="3" x="4" y="4" rx="1" />
+      <rect width="16" height="3" x="4" y="9" rx="1" />
+      <rect width="16" height="3" x="4" y="14" rx="1" />
+      <rect width="16" height="3" x="4" y="19" rx="1" />
+    </svg>
+  `,
   arrowDown: html`
     <svg viewBox="0 0 24 24">
       <path d="M12 5v14" />
@@ -452,6 +503,13 @@ export const icons = {
       <path d="M10 10l-3 2 3 2" stroke-linecap="round" stroke-linejoin="round" />
     </svg>
   `,
+  panelRightClose: html`
+    <svg viewBox="0 0 24 24">
+      <rect x="3" y="3" width="18" height="18" rx="2" />
+      <path d="M15 3v18" stroke-linecap="round" />
+      <path d="M8 10l3 2-3 2" stroke-linecap="round" stroke-linejoin="round" />
+    </svg>
+  `,
   maximize: html`
     <svg viewBox="0 0 24 24">
       <polyline points="15 3 21 3 21 9" />
@@ -474,23 +532,4 @@ export type IconName = keyof typeof icons;
 
 export function icon(name: IconName): TemplateResult {
   return icons[name];
-}
-
-export function renderIcon(name: IconName, className = "nav-item__icon"): TemplateResult {
-  return html`<span class=${className} aria-hidden="true">${icons[name]}</span>`;
-}
-
-// Legacy function for compatibility
-export function renderEmojiIcon(
-  iconContent: string | TemplateResult,
-  className: string,
-): TemplateResult {
-  return html`<span class=${className} aria-hidden="true">${iconContent}</span>`;
-}
-
-export function setEmojiIcon(target: HTMLElement | null, icon: string): void {
-  if (!target) {
-    return;
-  }
-  target.textContent = icon;
 }

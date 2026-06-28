@@ -1,3 +1,4 @@
+// Setup wizard tests cover end-to-end onboarding prompt flows.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -508,6 +509,35 @@ describe("runSetupWizard", () => {
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
   });
+
+  it("shows setup duration expectations before the security acknowledgement", async () => {
+    const note: WizardPrompter["note"] = vi.fn(async () => {});
+    const confirm = vi.fn(async () => true) as unknown as WizardPrompter["confirm"];
+    const prompter = buildWizardPrompter({ note, confirm });
+    const runtime = createRuntime({ throwsOnExit: true });
+
+    await runSetupWizard(
+      {
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    const calls = getWizardNoteCalls(note);
+    expect(calls[0]?.[1]).toBe("Setup timeline");
+    expect(calls[0]?.[0]).toContain("model/auth, workspace, Gateway, channels");
+    expect(calls[0]?.[0]).toContain("openclaw configure");
+    expect(calls[1]?.[1]).toBe("Security disclaimer");
+  });
+
   it("persists skipBootstrap and skips workspace bootstrap creation when requested", async () => {
     ensureWorkspaceAndSessions.mockClear();
     replaceConfigFile.mockClear();
@@ -550,7 +580,7 @@ describe("runSetupWizard", () => {
     );
     expectRecordFields(
       replaceParams.writeOptions,
-      { allowConfigSizeDrop: true },
+      { allowConfigSizeDrop: false },
       "config replacement write options",
     );
     expect(getMockCallArg(ensureWorkspaceAndSessions, 0, 0, "workspace setup")).toBe(workspaceDir);
@@ -559,6 +589,89 @@ describe("runSetupWizard", () => {
       getMockCallArg(ensureWorkspaceAndSessions, 0, 2, "workspace setup"),
       { skipBootstrap: true },
       "workspace setup options",
+    );
+  });
+
+  it("allows size-drop writes for pending plugin install record migration", async () => {
+    replaceConfigFile.mockClear();
+    readConfigFileSnapshot.mockResolvedValueOnce({
+      path: "/tmp/.openclaw/openclaw.json",
+      exists: true,
+      raw: "{}",
+      parsed: {},
+      resolved: {},
+      valid: true,
+      config: {
+        plugins: {
+          installs: {
+            demo: { source: "npm", spec: "@openclaw/demo-plugin" },
+          },
+        },
+      },
+      issues: [],
+      warnings: [],
+      legacyIssues: [],
+    });
+
+    const workspaceDir = await makeCaseDir("plugin-install-migration-");
+    const select = vi.fn(async ({ options }: WizardSelectParams<unknown>) => {
+      const values = options.map((option) => option.value);
+      if (values.includes("keep")) {
+        return "keep";
+      }
+      if (values.includes("quickstart")) {
+        return "quickstart";
+      }
+      if (values.includes("__skip__")) {
+        return "__skip__";
+      }
+      return values[0];
+    }) as unknown as WizardPrompter["select"];
+    const prompter = buildWizardPrompter({ select });
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipBootstrap: true,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        workspace: workspaceDir,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(replaceConfigFile).toHaveBeenCalledTimes(3);
+    const migrationParams = requireRecord(
+      getMockCallArg(replaceConfigFile, 0, 0, "migration config replacement"),
+      "migration config replacement params",
+    );
+    expect(
+      requireRecord(migrationParams.nextConfig, "migration next config").plugins,
+    ).toBeUndefined();
+    const migrationWriteOptions = expectRecordFields(
+      migrationParams.writeOptions,
+      { allowConfigSizeDrop: true },
+      "migration config replacement write options",
+    );
+    expect(migrationWriteOptions.unsetPaths).toContainEqual(["plugins", "installs"]);
+
+    const replaceParams = requireRecord(
+      getMockCallArg(replaceConfigFile, 2, 0, "config replacement"),
+      "config replacement params",
+    );
+    expect(requireRecord(replaceParams.nextConfig, "next config").plugins).toBeUndefined();
+    expectRecordFields(
+      replaceParams.writeOptions,
+      { allowConfigSizeDrop: false },
+      "config replacement write options",
     );
   });
 
@@ -854,6 +967,92 @@ describe("runSetupWizard", () => {
     );
   });
 
+  it("forwards provider-specific auth flags to applyAuthChoice opts", async () => {
+    applyAuthChoice.mockReset();
+    applyAuthChoice.mockResolvedValueOnce({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "openai/gpt-5.5",
+            },
+          },
+        },
+      },
+    });
+
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "openai-chatgpt-api-key",
+        openaiApiKey: "sk-flag-value",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+        skipHooks: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledTimes(1);
+    const call = getMockCallArg(applyAuthChoice, 0, 0, "openai auth choice");
+    const opts = (call as { opts?: Record<string, unknown> }).opts ?? {};
+    expect(opts.openaiApiKey).toBe("sk-flag-value");
+  });
+
+  it("passes preserveExistingDefaultModel to applyAuthChoice to protect existing default model", async () => {
+    applyAuthChoice.mockReset();
+    applyAuthChoice.mockResolvedValueOnce({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "google/gemini-3.1-pro-preview",
+            },
+          },
+        },
+      },
+    });
+
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "google-api-key",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledTimes(1);
+    const call = getMockCallArg(applyAuthChoice, 0, 0, "google auth choice");
+    // Preserve the user's existing default model when a new provider is
+    // configured through the setup wizard, matching the contract already
+    // used in configure.gateway-auth.ts. Without this flag, configuring a
+    // paid Google Gemini key would silently overwrite the user's default
+    // model, causing existing heartbeat turns to consume paid API quota.
+    expect((call as { preserveExistingDefaultModel?: boolean }).preserveExistingDefaultModel).toBe(
+      true,
+    );
+  });
+
   it("shows plugin compatibility notices for an existing valid config", async () => {
     buildPluginCompatibilitySnapshotNotices.mockReturnValue([
       {
@@ -1060,23 +1259,72 @@ describe("runSetupWizard", () => {
     expect(matchingQuickStartNotes.length).toBeGreaterThan(0);
   });
 
+  it("localizes the quickstart summary", async () => {
+    const previousPort = process.env.OPENCLAW_GATEWAY_PORT;
+    const previousLocale = process.env.OPENCLAW_LOCALE;
+    process.env.OPENCLAW_GATEWAY_PORT = "18791";
+    process.env.OPENCLAW_LOCALE = "zh-CN";
+    const note: WizardPrompter["note"] = vi.fn(async () => {});
+    const prompter = buildWizardPrompter({ note });
+    const runtime = createRuntime();
+
+    try {
+      await runSetupWizard(
+        {
+          acceptRisk: true,
+          flow: "quickstart",
+          authChoice: "skip",
+          installDaemon: false,
+          skipProviders: true,
+          skipSkills: true,
+          skipSearch: true,
+          skipHealth: true,
+          skipUi: true,
+        },
+        runtime,
+        prompter,
+      );
+    } finally {
+      if (previousPort === undefined) {
+        delete process.env.OPENCLAW_GATEWAY_PORT;
+      } else {
+        process.env.OPENCLAW_GATEWAY_PORT = previousPort;
+      }
+      if (previousLocale === undefined) {
+        delete process.env.OPENCLAW_LOCALE;
+      } else {
+        process.env.OPENCLAW_LOCALE = previousLocale;
+      }
+    }
+
+    const calls = (note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+    const matchingQuickStartNotes = calls.filter(
+      (call) =>
+        call?.[1] === "QuickStart" &&
+        typeof call?.[0] === "string" &&
+        call[0].includes("Gateway 端口：18791") &&
+        call[0].includes("Tailscale 暴露方式：关闭"),
+    );
+    expect(matchingQuickStartNotes.length).toBeGreaterThan(0);
+  });
+
   it("uses manifest setup metadata for post-auth model policy without loading provider runtime", async () => {
     promptDefaultModel.mockClear();
     resolvePluginProvidersRuntime.mockClear();
     resolveManifestProviderAuthChoice.mockReturnValue({
       pluginId: "openai",
-      providerId: "openai-codex",
+      providerId: "openai",
       methodId: "oauth",
-      choiceId: "openai-codex",
-      choiceLabel: "OpenAI Codex Browser Login",
+      choiceId: "openai",
+      choiceLabel: "ChatGPT/Codex Browser Login",
     });
     resolvePluginSetupProvider.mockReturnValue({
-      id: "openai-codex",
+      id: "openai",
       label: "OpenAI Codex",
       auth: [
         {
           id: "oauth",
-          label: "OpenAI Codex Browser Login",
+          label: "ChatGPT/Codex Browser Login",
           kind: "oauth",
           wizard: {
             modelSelection: {
@@ -1087,7 +1335,7 @@ describe("runSetupWizard", () => {
         },
       ],
     });
-    promptAuthChoiceGrouped.mockResolvedValueOnce("openai-codex");
+    promptAuthChoiceGrouped.mockResolvedValueOnce("openai");
     const prompter = buildWizardPrompter({});
     const runtime = createRuntime();
 
@@ -1108,7 +1356,7 @@ describe("runSetupWizard", () => {
     expectRecordFields(
       getMockCallArg(resolvePluginSetupProvider, 0, 0, "plugin setup provider"),
       {
-        provider: "openai-codex",
+        provider: "openai",
         pluginIds: ["openai"],
       },
       "plugin setup provider params",

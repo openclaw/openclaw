@@ -1,3 +1,4 @@
+// Synology Chat plugin module implements channel mocks behavior.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { Mock } from "vitest";
 import { vi } from "vitest";
@@ -18,7 +19,7 @@ export const dispatchReplyWithBufferedBlockDispatcher: Mock<
 export const finalizeInboundContextMock: Mock<
   (ctx: Record<string, unknown>) => Record<string, unknown>
 > = vi.fn((ctx) => ctx);
-export const buildChannelTurnContextMock: Mock<
+export const buildChannelInboundEventContextMock: Mock<
   (params: {
     channel: string;
     accountId?: string;
@@ -141,7 +142,7 @@ vi.mock("./runtime.js", () => ({
         resolveStorePath: vi.fn(() => "/tmp/openclaw/synology-chat-sessions.json"),
         recordInboundSession: vi.fn(async () => undefined),
       },
-      turn: {
+      inbound: {
         run: vi.fn(async (params) => {
           const input = await params.adapter.ingest(params.raw);
           if (!input) {
@@ -168,7 +169,7 @@ vi.mock("./runtime.js", () => ({
             routeSessionKey: resolved.routeSessionKey,
           };
         }),
-        buildContext: buildChannelTurnContextMock,
+        buildContext: buildChannelInboundEventContextMock,
       },
     },
   })),

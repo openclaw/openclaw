@@ -1,29 +1,14 @@
-import { existsSync, readFileSync, readdirSync } from "node:fs";
-import { join } from "node:path";
+// Plugin Contract Test Plan tests cover plugin contract test plan script behavior.
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createPluginContractTestShards } from "../../scripts/lib/plugin-contract-test-plan.mjs";
+import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
+import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 
 function listContractTests(rootDir = "src/plugins/contracts"): string[] {
-  if (!existsSync(rootDir)) {
-    return [];
-  }
-
-  const files: string[] = [];
-  const visit = (dir: string) => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) {
-        visit(path);
-        continue;
-      }
-      if (entry.isFile() && entry.name.endsWith(".test.ts")) {
-        files.push(path.replaceAll("\\", "/"));
-      }
-    }
-  };
-
-  visit(rootDir);
-  return files.toSorted((a, b) => a.localeCompare(b));
+  const files = listGitTrackedFiles({ pathspecs: rootDir });
+  expect(files).not.toBeNull();
+  return (files ?? []).filter((line) => line.endsWith(".test.ts"));
 }
 
 describe("scripts/lib/plugin-contract-test-plan.mjs", () => {
@@ -40,7 +25,7 @@ describe("scripts/lib/plugin-contract-test-plan.mjs", () => {
   });
 
   it("splits plugin contracts into focused shards", () => {
-    const suffixes = ["a", "b", "c", "d"];
+    const suffixes = ["a", "b"];
 
     expect(
       createPluginContractTestShards().map((shard) => ({
@@ -66,12 +51,28 @@ describe("scripts/lib/plugin-contract-test-plan.mjs", () => {
     expect(new Set(actual).size).toBe(actual.length);
   });
 
+  it("uses git-tracked files without walking contract directories", () => {
+    const payload = expectNoNodeFsScans<{
+      files: number;
+      shards: number;
+    }>(`
+      const { createPluginContractTestShards } = await import("./scripts/lib/plugin-contract-test-plan.mjs");
+      const shards = createPluginContractTestShards();
+      return {
+        files: shards.reduce((total, shard) => total + shard.includePatterns.length, 0),
+        shards: shards.length,
+      };
+    `);
+    expect(payload.shards).toBe(2);
+    expect(payload.files).toBeGreaterThan(0);
+  });
+
   it("keeps plugin registration contract files spread across checks", () => {
     for (const shard of createPluginContractTestShards()) {
       const registrationFiles = shard.includePatterns.filter((pattern) =>
         pattern.includes("/plugin-registration."),
       );
-      expect(registrationFiles.length).toBeLessThanOrEqual(7);
+      expect(registrationFiles.length).toBeLessThanOrEqual(14);
     }
   });
 });

@@ -1,28 +1,32 @@
+// Outbound payload planning normalizes reply payloads into sendable text,
+// media, presentation, interactive, and mirror projections.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { parseReplyDirectives } from "../../auto-reply/reply/reply-directives.js";
+import {
+  mergeReactionDirectiveChannelData,
+  parseReplyDirectives,
+} from "../../auto-reply/reply/reply-directives.js";
 import {
   formatBtwTextForExternalDelivery,
   isRenderablePayload,
   shouldSuppressReasoningPayload,
 } from "../../auto-reply/reply/reply-payloads.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
-import { resolveSilentReplySettings } from "../../config/silent-reply.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   hasInteractiveReplyBlocks,
   hasMessagePresentationBlocks,
   hasReplyChannelData,
   hasReplyPayloadContent,
+  normalizeInteractiveReply,
+  normalizeMessagePresentation,
   type InteractiveReply,
   type MessagePresentation,
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
-import {
-  resolveSilentReplyRewriteText,
-  type SilentReplyConversationType,
-} from "../../shared/silent-reply-policy.js";
-import { resolvePendingSpawnedChildren } from "./pending-spawn-query.js";
+import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
+import { stripUnsupportedCitationControlMarkers } from "../../shared/text/citation-control-markers.js";
 
+/** Runtime-ready outbound payload after text/media/rich-content normalization. */
 export type NormalizedOutboundPayload = {
   text: string;
   mediaUrls: string[];
@@ -35,6 +39,7 @@ export type NormalizedOutboundPayload = {
   hookContent?: string;
 };
 
+/** JSON-safe outbound payload projection used for envelopes and diagnostics. */
 export type OutboundPayloadJson = {
   text: string;
   mediaUrl: string | null;
@@ -46,6 +51,7 @@ export type OutboundPayloadJson = {
   channelData?: Record<string, unknown>;
 };
 
+/** Prepared payload entry that keeps source indexing plus reusable projections. */
 export type OutboundPayloadPlan = {
   sourceIndex: number;
   payload: ReplyPayload;
@@ -60,21 +66,83 @@ type OutboundPayloadPlanContext = {
   sessionKey?: string;
   surface?: string;
   conversationType?: SilentReplyConversationType;
-  /**
-   * When true, bare silent payloads are dropped instead of being rewritten to
-   * visible fallback text. Set by callers that know the parent session has at
-   * least one pending spawned child whose completion will deliver the real
-   * reply. If omitted, the outbound plan consults the registered runtime query
-   * (see `pending-spawn-query.ts`).
-   */
-  hasPendingSpawnedChildren?: boolean;
   extractMarkdownImages?: boolean;
 };
 
+/** Text/media projection used to mirror outbound replies into session state. */
 export type OutboundPayloadMirror = {
   text: string;
   mediaUrls: string[];
 };
+
+type MirrorTextBlock = MessagePresentation["blocks"][number] | InteractiveReply["blocks"][number];
+
+function collectBlockMirrorText(
+  blocks: readonly MirrorTextBlock[],
+  options: { includeContext?: boolean } = {},
+): string[] {
+  const lines: string[] = [];
+  for (const block of blocks) {
+    if (
+      (block.type === "text" || (options.includeContext === true && block.type === "context")) &&
+      block.text.trim()
+    ) {
+      lines.push(block.text.trim());
+      continue;
+    }
+    if (block.type === "buttons") {
+      for (const button of block.buttons) {
+        if (button.label.trim()) {
+          lines.push(button.label.trim());
+        }
+      }
+      continue;
+    }
+    if (block.type === "select") {
+      if (block.placeholder?.trim()) {
+        lines.push(block.placeholder.trim());
+      }
+      for (const option of block.options) {
+        if (option.label.trim()) {
+          lines.push(option.label.trim());
+        }
+      }
+    }
+  }
+  return lines;
+}
+
+function collectPresentationMirrorText(presentation: MessagePresentation | undefined): string[] {
+  if (!presentation) {
+    return [];
+  }
+  const lines: string[] = [];
+  if (presentation.title?.trim()) {
+    lines.push(presentation.title.trim());
+  }
+  lines.push(...collectBlockMirrorText(presentation.blocks, { includeContext: true }));
+  return lines;
+}
+
+function collectInteractiveMirrorText(interactive: InteractiveReply | undefined): string[] {
+  if (!interactive) {
+    return [];
+  }
+  return collectBlockMirrorText(interactive.blocks);
+}
+
+function resolveOutboundMirrorText(entry: OutboundPayloadPlan): string {
+  const text = entry.parts.text.trim() ? entry.parts.text : entry.payload.text;
+  if (text?.trim()) {
+    return text;
+  }
+  const presentation = normalizeMessagePresentation(entry.payload.presentation);
+  const interactive = normalizeInteractiveReply(entry.payload.interactive);
+  return [
+    ...collectPresentationMirrorText(presentation),
+    ...collectInteractiveMirrorText(interactive),
+  ].join("\n");
+}
 
 function isSuppressedRelayStatusText(text: string): boolean {
   const normalized = text.trim();
@@ -151,13 +219,17 @@ function createOutboundPayloadPlanEntry(
     explicitMediaUrls,
     explicitMediaUrl ? [explicitMediaUrl] : undefined,
   );
-  const parsedText = parsed.text ?? "";
+  const strippedText = stripUnsupportedCitationControlMarkers(parsed.text ?? "");
+  const strippedParsed =
+    strippedText === (parsed.text ?? "") ? parsed : parseReplyDirectives(strippedText);
+  const parsedText = strippedParsed.text ?? "";
   if (isSuppressedRelayStatusText(parsedText) && mergedMedia.length === 0) {
     return null;
   }
-  const isSilent = parsed.isSilent && mergedMedia.length === 0;
+  const isSilent = strippedParsed.isSilent && mergedMedia.length === 0;
   const hasMultipleMedia = (explicitMediaUrls?.length ?? 0) > 1;
   const resolvedMediaUrl = hasMultipleMedia ? undefined : explicitMediaUrl;
+  const channelData = mergeReactionDirectiveChannelData(payload.channelData, parsed.reaction);
   const normalizedPayload: ReplyPayload = {
     ...payload,
     text:
@@ -171,6 +243,7 @@ function createOutboundPayloadPlanEntry(
     replyToTag: payload.replyToTag || parsed.replyToTag,
     replyToCurrent: payload.replyToCurrent || parsed.replyToCurrent,
     audioAsVoice: Boolean(payload.audioAsVoice || parsed.audioAsVoice),
+    ...(channelData ? { channelData } : {}),
   };
   if (!isRenderablePayload(normalizedPayload) && !isSilent) {
     return null;
@@ -185,6 +258,7 @@ function createOutboundPayloadPlanEntry(
   };
 }
 
+/** Builds the canonical outbound payload plan shared by delivery projections. */
 export function createOutboundPayloadPlan(
   payloads: readonly ReplyPayload[],
   context: OutboundPayloadPlanContext = {},
@@ -192,14 +266,6 @@ export function createOutboundPayloadPlan(
   // Intentionally scoped to channel-agnostic normalization and projection inputs.
   // Transport concerns (queueing, hooks, retries), channel transforms, and
   // heartbeat-specific token semantics remain outside this plan boundary.
-  const resolvedSilentReplySettings = resolveSilentReplySettings({
-    cfg: context.cfg,
-    sessionKey: context.sessionKey,
-    surface: context.surface,
-    conversationType: context.conversationType,
-  });
-  const hasPendingSpawnedChildren =
-    context.hasPendingSpawnedChildren ?? resolvePendingSpawnedChildren(context.sessionKey);
   const prepared: IndexedPreparedOutboundPayloadPlanEntry[] = [];
   for (const [sourceIndex, payload] of payloads.entries()) {
     const entry = createOutboundPayloadPlanEntry(payload, {
@@ -210,16 +276,6 @@ export function createOutboundPayloadPlan(
     }
     prepared.push({ ...entry, sourceIndex });
   }
-  const hasVisibleNonSilentContent = prepared.some((entry) => {
-    if (entry.isSilent) {
-      return false;
-    }
-    const parts = resolveSendableOutboundReplyParts(entry.payload);
-    return hasReplyPayloadContent(
-      { ...entry.payload, text: parts.text, mediaUrls: parts.mediaUrls },
-      { hasChannelData: entry.hasChannelData },
-    );
-  });
   const plan: OutboundPayloadPlan[] = [];
   for (const entry of prepared) {
     if (!entry.isSilent) {
@@ -233,58 +289,18 @@ export function createOutboundPayloadPlan(
       });
       continue;
     }
-    if (
-      hasVisibleNonSilentContent ||
-      resolvedSilentReplySettings.policy === "allow" ||
-      hasPendingSpawnedChildren
-    ) {
-      continue;
-    }
-    if (!resolvedSilentReplySettings.rewrite) {
-      const visibleSilentPayload: ReplyPayload = {
-        ...entry.payload,
-        text: entry.payload.text?.trim() || "NO_REPLY",
-      };
-      if (!isRenderablePayload(visibleSilentPayload)) {
-        continue;
-      }
-      plan.push({
-        sourceIndex: entry.sourceIndex,
-        payload: visibleSilentPayload,
-        parts: resolveSendableOutboundReplyParts(visibleSilentPayload),
-        hasPresentation: entry.hasPresentation,
-        hasInteractive: entry.hasInteractive,
-        hasChannelData: entry.hasChannelData,
-      });
-      continue;
-    }
-    const visibleSilentPayload: ReplyPayload = {
-      ...entry.payload,
-      text: resolveSilentReplyRewriteText({
-        seed: `${context.sessionKey ?? context.surface ?? "silent-reply"}:${entry.payload.text ?? ""}`,
-      }),
-    };
-    if (!isRenderablePayload(visibleSilentPayload)) {
-      continue;
-    }
-    plan.push({
-      sourceIndex: entry.sourceIndex,
-      payload: visibleSilentPayload,
-      parts: resolveSendableOutboundReplyParts(visibleSilentPayload),
-      hasPresentation: entry.hasPresentation,
-      hasInteractive: entry.hasInteractive,
-      hasChannelData: entry.hasChannelData,
-    });
   }
   return plan;
 }
 
+/** Projects a payload plan back to normalized reply payloads for delivery. */
 export function projectOutboundPayloadPlanForDelivery(
   plan: readonly OutboundPayloadPlan[],
 ): ReplyPayload[] {
   return plan.map((entry) => entry.payload);
 }
 
+/** Projects a payload plan into runtime transport payload summaries. */
 export function projectOutboundPayloadPlanForOutbound(
   plan: readonly OutboundPayloadPlan[],
 ): NormalizedOutboundPayload[] {
@@ -313,6 +329,7 @@ export function projectOutboundPayloadPlanForOutbound(
   return normalizedPayloads;
 }
 
+/** Projects a payload plan into JSON-safe envelope/debug payloads. */
 export function projectOutboundPayloadPlanForJson(
   plan: readonly OutboundPayloadPlan[],
 ): OutboundPayloadJson[] {
@@ -333,53 +350,64 @@ export function projectOutboundPayloadPlanForJson(
   return normalized;
 }
 
+/** Projects a payload plan into text/media content for session mirroring. */
 export function projectOutboundPayloadPlanForMirror(
   plan: readonly OutboundPayloadPlan[],
 ): OutboundPayloadMirror {
   return {
     text: plan
-      .map((entry) => entry.payload.text)
+      .map(resolveOutboundMirrorText)
       .filter((text): text is string => Boolean(text))
       .join("\n"),
     mediaUrls: plan.flatMap((entry) => entry.parts.mediaUrls),
   };
 }
 
+/** Summarizes one reply payload for channel transport and hook processing. */
 export function summarizeOutboundPayloadForTransport(
   payload: ReplyPayload,
 ): NormalizedOutboundPayload {
   const parts = resolveSendableOutboundReplyParts(payload);
-  const spokenText = payload.spokenText?.trim() ? payload.spokenText : undefined;
+  const text = stripUnsupportedCitationControlMarkers(parts.text);
+  const strippedSpokenText =
+    typeof payload.spokenText === "string"
+      ? stripUnsupportedCitationControlMarkers(payload.spokenText)
+      : undefined;
+  const spokenText = strippedSpokenText?.trim() ? strippedSpokenText : undefined;
   return {
-    text: parts.text,
+    text,
     mediaUrls: parts.mediaUrls,
     audioAsVoice: payload.audioAsVoice === true ? true : undefined,
     presentation: payload.presentation,
     delivery: payload.delivery,
     interactive: payload.interactive,
     channelData: payload.channelData,
-    ...(parts.text || !spokenText ? {} : { hookContent: spokenText }),
+    ...(text || !spokenText ? {} : { hookContent: spokenText }),
   };
 }
 
+/** Normalizes reply payloads for direct delivery using the shared plan. */
 export function normalizeReplyPayloadsForDelivery(
   payloads: readonly ReplyPayload[],
 ): ReplyPayload[] {
   return projectOutboundPayloadPlanForDelivery(createOutboundPayloadPlan(payloads));
 }
 
+/** Normalizes reply payloads into runtime outbound transport payloads. */
 export function normalizeOutboundPayloads(
   payloads: readonly ReplyPayload[],
 ): NormalizedOutboundPayload[] {
   return projectOutboundPayloadPlanForOutbound(createOutboundPayloadPlan(payloads));
 }
 
+/** Normalizes reply payloads into JSON-safe outbound envelope payloads. */
 export function normalizeOutboundPayloadsForJson(
   payloads: readonly ReplyPayload[],
 ): OutboundPayloadJson[] {
   return projectOutboundPayloadPlanForJson(createOutboundPayloadPlan(payloads));
 }
 
+/** Formats normalized outbound payload text and attachments for logs. */
 export function formatOutboundPayloadLog(
   payload: Pick<NormalizedOutboundPayload, "text" | "channelData"> & {
     mediaUrls: readonly string[];
@@ -390,7 +418,7 @@ export function formatOutboundPayloadLog(
     lines.push(payload.text.trimEnd());
   }
   for (const url of payload.mediaUrls) {
-    lines.push(`MEDIA:${url}`);
+    lines.push(`Attachment: ${url}`);
   }
   return lines.join("\n");
 }

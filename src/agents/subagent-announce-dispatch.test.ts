@@ -1,3 +1,5 @@
+// Subagent announce dispatch tests lock down direct-vs-steer ordering for
+// progress updates and completion messages.
 import { describe, expect, it, vi } from "vitest";
 import {
   mapSteerOutcomeToDeliveryResult,
@@ -6,14 +8,14 @@ import {
 
 describe("mapSteerOutcomeToDeliveryResult", () => {
   it("maps steered to delivered", () => {
-    expect(mapSteerOutcomeToDeliveryResult("steered")).toEqual({
+    expect(mapSteerOutcomeToDeliveryResult({ status: "steered" })).toEqual({
       delivered: true,
       path: "steered",
     });
   });
 
   it("maps none to not-delivered", () => {
-    expect(mapSteerOutcomeToDeliveryResult("none")).toEqual({
+    expect(mapSteerOutcomeToDeliveryResult({ status: "none" })).toEqual({
       delivered: false,
       path: "none",
     });
@@ -25,7 +27,7 @@ describe("runSubagentAnnounceDispatch", () => {
     steerOutcome: "none" | "steered";
     directDelivered?: boolean;
   }) {
-    const steer = vi.fn(async () => params.steerOutcome);
+    const steer = vi.fn(async () => ({ status: params.steerOutcome }) as const);
     const direct = vi.fn(async () => ({
       delivered: params.directDelivered ?? true,
       path: "direct" as const,
@@ -63,7 +65,7 @@ describe("runSubagentAnnounceDispatch", () => {
   });
 
   it("uses direct-first ordering for completion mode", async () => {
-    const steer = vi.fn(async () => "steered" as const);
+    const steer = vi.fn(async () => ({ status: "steered" }) as const);
     const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
 
     const result = await runSubagentAnnounceDispatch({
@@ -81,7 +83,7 @@ describe("runSubagentAnnounceDispatch", () => {
   });
 
   it("falls back to steering when completion direct send fails", async () => {
-    const steer = vi.fn(async () => "steered" as const);
+    const steer = vi.fn(async () => ({ status: "steered" }) as const);
     const direct = vi.fn(async () => ({
       delivered: false,
       path: "direct" as const,
@@ -103,8 +105,40 @@ describe("runSubagentAnnounceDispatch", () => {
     ]);
   });
 
+  it("does not fallback-steer after terminal completion direct failure", async () => {
+    const steer = vi.fn(async () => ({ status: "steered" }) as const);
+    const direct = vi.fn(async () => ({
+      delivered: false,
+      path: "direct" as const,
+      error: "media send may have partially succeeded",
+      terminal: true,
+    }));
+
+    // Terminal direct failures can represent partial media delivery; fallback
+    // steering would risk duplicate or contradictory completion messages.
+    const result = await runSubagentAnnounceDispatch({
+      expectsCompletionMessage: true,
+      steer,
+      direct,
+    });
+
+    expect(direct).toHaveBeenCalledTimes(1);
+    expect(steer).not.toHaveBeenCalled();
+    expect(result.delivered).toBe(false);
+    expect(result.path).toBe("direct");
+    expect(result.error).toBe("media send may have partially succeeded");
+    expect(result.phases).toEqual([
+      {
+        phase: "direct-primary",
+        delivered: false,
+        path: "direct",
+        error: "media send may have partially succeeded",
+      },
+    ]);
+  });
+
   it("returns direct failure when completion fallback steering cannot deliver", async () => {
-    const steer = vi.fn(async () => "none" as const);
+    const steer = vi.fn(async () => ({ status: "none" }) as const);
     const direct = vi.fn(async () => ({
       delivered: false,
       path: "direct" as const,
@@ -127,7 +161,7 @@ describe("runSubagentAnnounceDispatch", () => {
   });
 
   it("does not fall through to direct delivery when non-completion steering drops the new item", async () => {
-    const steer = vi.fn(async () => "dropped" as const);
+    const steer = vi.fn(async () => ({ status: "dropped" }) as const);
     const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
 
     const result = await runSubagentAnnounceDispatch({
@@ -147,7 +181,7 @@ describe("runSubagentAnnounceDispatch", () => {
 
   it("preserves direct failure when completion dispatch aborts before fallback steering", async () => {
     const controller = new AbortController();
-    const steer = vi.fn(async () => "steered" as const);
+    const steer = vi.fn(async () => ({ status: "steered" }) as const);
     const direct = vi.fn(async () => {
       controller.abort();
       return {
@@ -180,7 +214,7 @@ describe("runSubagentAnnounceDispatch", () => {
   });
 
   it("returns none immediately when signal is already aborted", async () => {
-    const steer = vi.fn(async () => "none" as const);
+    const steer = vi.fn(async () => ({ status: "none" }) as const);
     const direct = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
     const controller = new AbortController();
     controller.abort();

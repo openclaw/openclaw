@@ -1,5 +1,7 @@
+// Resolves and checks packaged Control UI assets.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
 import * as controlUiFsRuntime from "./control-ui-assets.fs.runtime.js";
@@ -11,7 +13,7 @@ export function resolveControlUiDistIndexPathForRoot(root: string): string {
   return path.join(root, ...CONTROL_UI_DIST_PATH_SEGMENTS);
 }
 
-export type ControlUiDistIndexHealth = {
+type ControlUiDistIndexHealth = {
   indexPath: string | null;
   exists: boolean;
 };
@@ -138,7 +140,7 @@ export async function resolveControlUiDistIndexPath(
   return null;
 }
 
-export type ControlUiRootResolveOptions = {
+type ControlUiRootResolveOptions = {
   argv1?: string;
   moduleUrl?: string;
   cwd?: string;
@@ -268,17 +270,14 @@ export function isPackageProvenControlUiRootSync(
   return pathsMatchByRealpathOrResolve(root, packageDistRoot);
 }
 
-export type EnsureControlUiAssetsResult = {
+type EnsureControlUiAssetsResult = {
   ok: boolean;
   built: boolean;
   message?: string;
 };
 
 function summarizeCommandOutput(text: string): string | undefined {
-  const lines = text
-    .split(/\r?\n/g)
-    .map((l) => l.trim())
-    .filter(Boolean);
+  const lines = normalizeStringEntries(text.split(/\r?\n/g));
   if (!lines.length) {
     return undefined;
   }

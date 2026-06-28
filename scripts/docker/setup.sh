@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
+source "$ROOT_DIR/scripts/lib/host-timeout.sh"
 COMPOSE_FILE="$ROOT_DIR/docker-compose.yml"
 EXTRA_COMPOSE_FILE="$ROOT_DIR/docker-compose.extra.yml"
 IMAGE_NAME="${OPENCLAW_IMAGE:-openclaw:local}"
@@ -14,11 +15,28 @@ DOCKER_SOCKET_PATH="${OPENCLAW_DOCKER_SOCKET:-}"
 TIMEZONE="${OPENCLAW_TZ:-}"
 RAW_SKIP_ONBOARDING="${OPENCLAW_SKIP_ONBOARDING:-}"
 SKIP_ONBOARDING=""
+DOCKER_PULL_TIMEOUT="${OPENCLAW_DOCKER_SETUP_PULL_TIMEOUT:-600s}"
+OFFLINE_MODE=""
+DEFAULT_SANDBOX_IMAGE="openclaw-sandbox:bookworm-slim"
+DEFAULT_SANDBOX_BROWSER_IMAGE="openclaw-sandbox-browser:bookworm-slim"
+SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH="2026-05-12-cdp-relay-auth"
 
 fail() {
   echo "ERROR: $*" >&2
   exit 1
 }
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --offline)
+      OFFLINE_MODE="1"
+      ;;
+    *)
+      fail "Unknown option: $1"
+      ;;
+  esac
+  shift
+done
 
 require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
@@ -31,6 +49,19 @@ run_docker_build() {
   # Dockerfile uses BuildKit-only syntax (RUN --mount=type=cache). Force
   # BuildKit so hosts defaulting to the legacy builder do not fail.
   docker_build_exec "$@"
+}
+
+run_docker_pull() {
+  local image="$1"
+  openclaw_host_timeout_cmd "$DOCKER_PULL_TIMEOUT" docker pull "$image"
+}
+
+require_local_docker_image() {
+  local image="$1"
+  if docker image inspect "$image" >/dev/null 2>&1; then
+    return 0
+  fi
+  fail "Offline Docker setup requires preloaded image $image. Load it with 'docker load -i <image.tar>' before running scripts/docker/setup.sh --offline."
 }
 
 is_truthy_value() {
@@ -140,8 +171,16 @@ sync_gateway_config() {
   fi
 }
 
+run_compose_one_off() {
+  local -a run_args=(run)
+  if [[ -n "$OFFLINE_MODE" ]]; then
+    run_args+=(--pull never)
+  fi
+  docker compose "${COMPOSE_ARGS[@]}" "${run_args[@]}" "$@"
+}
+
 run_prestart_gateway() {
-  docker compose "${COMPOSE_ARGS[@]}" run --rm --no-deps "$@"
+  run_compose_one_off --rm --no-deps "$@"
 }
 
 run_prestart_cli() {
@@ -168,7 +207,11 @@ run_runtime_cli() {
   shift 2
 
   local -a compose_args
-  local -a run_args=(run --rm)
+  local -a run_args=(run)
+  if [[ -n "$OFFLINE_MODE" ]]; then
+    run_args+=(--pull never)
+  fi
+  run_args+=(--rm)
 
   case "$compose_scope" in
     current) compose_args=("${COMPOSE_ARGS[@]}") ;;
@@ -183,6 +226,181 @@ run_runtime_cli() {
   esac
 
   docker compose "${compose_args[@]}" "${run_args[@]}" openclaw-cli "$@"
+}
+
+run_gateway_up() {
+  local compose_scope="${1:-current}"
+  shift
+
+  local -a compose_args
+  local -a up_args=(up -d)
+
+  case "$compose_scope" in
+    current) compose_args=("${COMPOSE_ARGS[@]}") ;;
+    base) compose_args=("${BASE_COMPOSE_ARGS[@]}") ;;
+    *) fail "Unknown gateway compose scope: $compose_scope" ;;
+  esac
+
+  if [[ -n "$OFFLINE_MODE" ]]; then
+    up_args+=(--pull never --no-build)
+  fi
+  up_args+=("$@")
+
+  docker compose "${compose_args[@]}" "${up_args[@]}" openclaw-gateway
+}
+
+resolve_offline_sandbox_images() {
+  local agents_json sandbox_tools_json
+  agents_json="$(run_prestart_cli config get agents --json 2>/dev/null || true)"
+  if [[ -z "$agents_json" ]]; then
+    agents_json="{}"
+  fi
+  sandbox_tools_json="$(
+    run_prestart_cli config get tools.sandbox.tools --json 2>/dev/null || true
+  )"
+  if [[ -z "$sandbox_tools_json" ]]; then
+    sandbox_tools_json="{}"
+  fi
+
+  printf '%s' "$agents_json" | run_prestart_gateway \
+    -T --entrypoint node openclaw-gateway -e '
+const fs = require("node:fs");
+const agents = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
+const globalToolPolicy = JSON.parse(process.argv[3] || "{}");
+const defaultSandbox = agents?.defaults?.sandbox ?? {};
+const defaultDockerImage = defaultSandbox?.docker?.image ?? process.argv[1];
+const defaultBrowserImage = defaultSandbox?.browser?.image ?? process.argv[2];
+const images = new Set();
+const configuredEntries = Array.isArray(agents?.list)
+  ? agents.list.filter((entry) => entry !== null && typeof entry === "object")
+  : [];
+const entries = configuredEntries.length > 0 ? configuredEntries : [{ sandbox: {} }];
+
+const matchesBrowser = (rawPattern) => {
+  const pattern = String(rawPattern ?? "").trim().toLowerCase();
+  if (pattern === "group:openclaw" || pattern === "group:ui") {
+    return true;
+  }
+  if (!pattern) {
+    return false;
+  }
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${escaped.replaceAll("*", ".*")}$`).test("browser");
+};
+const permitsBrowser = (entry) => {
+  const agentPolicy = entry?.tools?.sandbox?.tools ?? {};
+  const allow = Array.isArray(agentPolicy.allow)
+    ? agentPolicy.allow
+    : Array.isArray(globalToolPolicy?.allow)
+      ? globalToolPolicy.allow
+      : undefined;
+  const alsoAllow = Array.isArray(agentPolicy.alsoAllow)
+    ? agentPolicy.alsoAllow
+    : Array.isArray(globalToolPolicy?.alsoAllow)
+      ? globalToolPolicy.alsoAllow
+      : undefined;
+  const deny = Array.isArray(agentPolicy.deny)
+    ? agentPolicy.deny
+    : Array.isArray(globalToolPolicy?.deny)
+      ? globalToolPolicy.deny
+      : undefined;
+
+  // Browser is absent from the default allowlist and present in the default
+  // denylist. Explicit allow patterns re-enable it unless an explicit deny wins.
+  const explicitAllows = [...(allow ?? []), ...(alsoAllow ?? [])];
+  const allowedByAllowlist = Array.isArray(allow)
+    ? allow.length === 0 || explicitAllows.some(matchesBrowser)
+    : (alsoAllow ?? []).some(matchesBrowser);
+  const denied = Array.isArray(deny)
+    ? deny.some(matchesBrowser)
+    : !explicitAllows.some(matchesBrowser);
+  return allowedByAllowlist && !denied;
+};
+
+for (const entry of entries) {
+  const sandbox = entry?.sandbox ?? {};
+  const mode = sandbox.mode ?? "non-main";
+  const backend = (
+    sandbox.backend?.trim() ||
+    defaultSandbox.backend?.trim() ||
+    "docker"
+  ).toLowerCase();
+  if (mode === "off" || backend !== "docker") {
+    continue;
+  }
+
+  // Setup writes defaults scope=agent. Explicit per-agent scope still wins,
+  // and shared scope intentionally ignores per-agent Docker/browser overrides.
+  const scope = sandbox.scope ?? "agent";
+  const agentDocker = scope === "shared" ? undefined : sandbox.docker;
+  images.add(`sandbox\t${agentDocker?.image ?? defaultDockerImage}`);
+
+  const agentBrowser = scope === "shared" ? undefined : sandbox.browser;
+  const browserEnabled = agentBrowser?.enabled ?? defaultSandbox?.browser?.enabled ?? false;
+  if (browserEnabled && permitsBrowser(entry)) {
+    images.add(`browser\t${agentBrowser?.image ?? defaultBrowserImage}`);
+  }
+}
+process.stdout.write([...images].join("\n"));
+' "$DEFAULT_SANDBOX_IMAGE" "$DEFAULT_SANDBOX_BROWSER_IMAGE" "$sandbox_tools_json"
+}
+
+validate_offline_sandbox_prerequisites() {
+  if [[ ! -S "$DOCKER_SOCKET_PATH" ]]; then
+    fail "Offline sandbox setup requires a Docker socket at $DOCKER_SOCKET_PATH."
+  fi
+
+  local sandbox_images
+  sandbox_images="$(resolve_offline_sandbox_images)"
+  local -a sandbox_image_errors=()
+  local image_kind sandbox_image browser_contract
+  while IFS=$'\t' read -r image_kind sandbox_image; do
+    [[ -n "$image_kind" ]] || continue
+    case "$image_kind" in
+      sandbox)
+        if ! docker --host "unix://$DOCKER_SOCKET_PATH" image inspect "$sandbox_image" >/dev/null 2>&1; then
+          sandbox_image_errors+=("$sandbox_image (missing)")
+        fi
+        ;;
+      browser)
+        if ! browser_contract="$(
+          docker --host "unix://$DOCKER_SOCKET_PATH" image inspect \
+            -f '{{ index .Config.Labels "org.openclaw.sandbox-browser.contract" }}' \
+            "$sandbox_image" 2>/dev/null
+        )"; then
+          sandbox_image_errors+=("$sandbox_image (missing)")
+        elif [[ "$browser_contract" != "$SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH" ]]; then
+          sandbox_image_errors+=(
+            "$sandbox_image (browser contract=${browser_contract:-missing}, expected=$SANDBOX_BROWSER_IMAGE_CONTRACT_EPOCH)"
+          )
+        fi
+        ;;
+      *)
+        fail "Unknown offline sandbox image kind: $image_kind"
+        ;;
+    esac
+  done <<<"$sandbox_images"
+
+  if [[ ${#sandbox_image_errors[@]} -gt 0 ]]; then
+    echo "WARNING: offline Docker setup cannot use required sandbox images:" >&2
+    local sandbox_image_error
+    for sandbox_image_error in "${sandbox_image_errors[@]}"; do
+      echo "  - $sandbox_image_error" >&2
+    done
+    echo "  Load them with 'docker load -i <sandbox-image.tar>' before enabling sandboxed agents." >&2
+    fail "Offline sandbox prerequisites are incomplete; sandbox configuration was not changed."
+  fi
+
+  echo "Using preloaded sandbox images:"
+  while IFS=$'\t' read -r _ sandbox_image; do
+    if [[ -n "$sandbox_image" ]]; then
+      echo "  - $sandbox_image"
+    fi
+  done <<<"$sandbox_images"
+
+  if ! run_compose_one_off --rm --entrypoint docker openclaw-gateway --version >/dev/null 2>&1; then
+    fail "Offline sandbox setup requires Docker CLI in $IMAGE_NAME."
+  fi
 }
 
 contains_disallowed_chars() {
@@ -204,9 +422,6 @@ validate_mount_path_value() {
   if contains_disallowed_chars "$value"; then
     fail "$label contains unsupported control characters."
   fi
-  if [[ "$value" =~ [[:space:]] ]]; then
-    fail "$label cannot contain whitespace."
-  fi
 }
 
 validate_named_volume() {
@@ -223,9 +438,16 @@ validate_mount_spec() {
   fi
   # Keep mount specs strict to avoid YAML structure injection.
   # Expected format: source:target[:options]
-  if [[ ! "$mount" =~ ^[^[:space:],:]+:[^[:space:],:]+(:[^[:space:],:]+)?$ ]]; then
-    fail "Invalid mount format '$mount'. Expected source:target[:options] without spaces."
+  if [[ ! "$mount" =~ ^[^,:]+:[^,:]+(:[^,:]+)?$ ]]; then
+    fail "Invalid mount format '$mount'. Expected source:target[:options] without commas or control characters."
   fi
+}
+
+quote_yaml_string() {
+  local value="$1"
+  value="${value//\\/\\\\}"
+  value="${value//\"/\\\"}"
+  printf '"%s"' "$value"
 }
 
 require_cmd docker
@@ -296,7 +518,8 @@ export OPENCLAW_BRIDGE_PORT="${OPENCLAW_BRIDGE_PORT:-18790}"
 export OPENCLAW_GATEWAY_BIND="${OPENCLAW_GATEWAY_BIND:-lan}"
 export OPENCLAW_DISABLE_BONJOUR="${OPENCLAW_DISABLE_BONJOUR:-}"
 export OPENCLAW_IMAGE="$IMAGE_NAME"
-export OPENCLAW_DOCKER_APT_PACKAGES="${OPENCLAW_DOCKER_APT_PACKAGES:-}"
+export OPENCLAW_IMAGE_APT_PACKAGES="${OPENCLAW_IMAGE_APT_PACKAGES-${OPENCLAW_DOCKER_APT_PACKAGES:-}}"
+export OPENCLAW_IMAGE_PIP_PACKAGES="${OPENCLAW_IMAGE_PIP_PACKAGES:-}"
 export OPENCLAW_EXTENSIONS="${OPENCLAW_EXTENSIONS:-}"
 export OPENCLAW_INSTALL_BROWSER="${OPENCLAW_INSTALL_BROWSER:-}"
 export OPENCLAW_EXTRA_MOUNTS="$EXTRA_MOUNTS"
@@ -373,15 +596,15 @@ YAML
     validate_mount_spec "$gateway_config_mount"
     validate_mount_spec "$gateway_workspace_mount"
     validate_mount_spec "$gateway_auth_profile_secret_mount"
-    printf '      - %s\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$gateway_auth_profile_secret_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$gateway_home_mount")" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$gateway_config_mount")" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$gateway_workspace_mount")" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$gateway_auth_profile_secret_mount")" >>"$EXTRA_COMPOSE_FILE"
   fi
 
   for mount in "$@"; do
     validate_mount_spec "$mount"
-    printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$mount")" >>"$EXTRA_COMPOSE_FILE"
   done
 
   cat >>"$EXTRA_COMPOSE_FILE" <<'YAML'
@@ -390,15 +613,15 @@ YAML
 YAML
 
   if [[ -n "$home_volume" ]]; then
-    printf '      - %s\n' "$gateway_home_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$gateway_config_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$gateway_workspace_mount" >>"$EXTRA_COMPOSE_FILE"
-    printf '      - %s\n' "$gateway_auth_profile_secret_mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$gateway_home_mount")" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$gateway_config_mount")" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$gateway_workspace_mount")" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$gateway_auth_profile_secret_mount")" >>"$EXTRA_COMPOSE_FILE"
   fi
 
   for mount in "$@"; do
     validate_mount_spec "$mount"
-    printf '      - %s\n' "$mount" >>"$EXTRA_COMPOSE_FILE"
+    printf '      - %s\n' "$(quote_yaml_string "$mount")" >>"$EXTRA_COMPOSE_FILE"
   done
 
   if [[ -n "$home_volume" && "$home_volume" != *"/"* ]]; then
@@ -500,7 +723,8 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_IMAGE \
   OPENCLAW_EXTRA_MOUNTS \
   OPENCLAW_HOME_VOLUME \
-  OPENCLAW_DOCKER_APT_PACKAGES \
+  OPENCLAW_IMAGE_APT_PACKAGES \
+  OPENCLAW_IMAGE_PIP_PACKAGES \
   OPENCLAW_EXTENSIONS \
   OPENCLAW_INSTALL_BROWSER \
   OPENCLAW_SANDBOX \
@@ -519,10 +743,14 @@ upsert_env "$ENV_FILE" \
   OPENCLAW_OTEL_PRELOADED \
   OPENCLAW_SKIP_ONBOARDING
 
-if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
+if [[ -n "$OFFLINE_MODE" ]]; then
+  require_local_docker_image "$IMAGE_NAME"
+  echo "==> Using preloaded Docker image: $IMAGE_NAME"
+elif [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
   echo "==> Building Docker image: $IMAGE_NAME"
   run_docker_build \
-    --build-arg "OPENCLAW_DOCKER_APT_PACKAGES=${OPENCLAW_DOCKER_APT_PACKAGES}" \
+    --build-arg "OPENCLAW_IMAGE_APT_PACKAGES=${OPENCLAW_IMAGE_APT_PACKAGES}" \
+    --build-arg "OPENCLAW_IMAGE_PIP_PACKAGES=${OPENCLAW_IMAGE_PIP_PACKAGES}" \
     --build-arg "OPENCLAW_EXTENSIONS=${OPENCLAW_EXTENSIONS}" \
     --build-arg "OPENCLAW_INSTALL_BROWSER=${OPENCLAW_INSTALL_BROWSER}" \
     --build-arg "OPENCLAW_INSTALL_DOCKER_CLI=${OPENCLAW_INSTALL_DOCKER_CLI:-}" \
@@ -531,7 +759,7 @@ if [[ "$IMAGE_NAME" == "openclaw:local" ]]; then
     "$ROOT_DIR"
 else
   echo "==> Pulling Docker image: $IMAGE_NAME"
-  if ! docker pull "$IMAGE_NAME"; then
+  if ! run_docker_pull "$IMAGE_NAME"; then
     echo "ERROR: Failed to pull image $IMAGE_NAME. Please check the image name and your access permissions." >&2
     exit 1
   fi
@@ -551,6 +779,7 @@ echo "==> Fixing data-directory permissions"
 # (.openclaw/) inside the workspace gets chowned, not the user's project files.
 run_prestart_gateway --user root --entrypoint sh openclaw-gateway -c \
   'find /home/node/.openclaw -xdev -exec chown node:node {} +; \
+   chown node:node /home/node/.config; \
    find /home/node/.config/openclaw -xdev -exec chown node:node {} +; \
    [ -d /home/node/.openclaw/workspace/.openclaw ] && chown -R node:node /home/node/.openclaw/workspace/.openclaw || true'
 
@@ -569,11 +798,17 @@ else
   else
     echo "Bonjour/mDNS advertising: explicitly enabled (OPENCLAW_DISABLE_BONJOUR=$OPENCLAW_DISABLE_BONJOUR)."
   fi
-  echo "Gateway token: $OPENCLAW_GATEWAY_TOKEN"
+  echo "Gateway token: stored in Docker environment/config (not printed)."
   echo "Tailscale exposure: Off (use host-level tailnet/Tailscale setup separately)."
   echo "Install Gateway daemon: No (managed by Docker Compose)"
   echo ""
-  run_prestart_cli onboard --mode local --no-install-daemon
+  run_prestart_cli onboard \
+    --mode local \
+    --no-install-daemon \
+    --gateway-auth token \
+    --gateway-token-ref-env OPENCLAW_GATEWAY_TOKEN \
+    --skip-ui \
+    --suppress-gateway-token-output
 fi
 
 echo ""
@@ -590,9 +825,15 @@ echo "Discord (bot token):"
 echo "  ${COMPOSE_HINT} run --rm openclaw-cli channels add --channel discord --token <token>"
 echo "Docs: https://docs.openclaw.ai/channels"
 
+if [[ -n "$SANDBOX_ENABLED" && -n "$OFFLINE_MODE" ]]; then
+  echo ""
+  echo "==> Sandbox preflight"
+  validate_offline_sandbox_prerequisites
+fi
+
 echo ""
 echo "==> Starting gateway"
-docker compose "${COMPOSE_ARGS[@]}" up -d openclaw-gateway
+run_gateway_up current
 
 # --- Sandbox setup (opt-in via OPENCLAW_SANDBOX=1) ---
 if [[ -n "$SANDBOX_ENABLED" ]]; then
@@ -600,13 +841,19 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   echo "==> Sandbox setup"
 
   sandbox_dockerfile="$ROOT_DIR/scripts/docker/sandbox/Dockerfile"
-  if [[ -f "$sandbox_dockerfile" ]]; then
-    echo "Building sandbox image: openclaw-sandbox:bookworm-slim"
+  if [[ -z "$OFFLINE_MODE" && ! -S "$DOCKER_SOCKET_PATH" ]]; then
+    echo "WARNING: OPENCLAW_SANDBOX enabled but Docker socket not found at $DOCKER_SOCKET_PATH." >&2
+    echo "  Sandbox requires Docker socket access. Skipping sandbox setup." >&2
+    SANDBOX_ENABLED=""
+  fi
+
+  if [[ -n "$SANDBOX_ENABLED" && -z "$OFFLINE_MODE" && -f "$sandbox_dockerfile" ]]; then
+    echo "Building sandbox image: $DEFAULT_SANDBOX_IMAGE"
     run_docker_build \
-      -t "openclaw-sandbox:bookworm-slim" \
+      -t "$DEFAULT_SANDBOX_IMAGE" \
       -f "$sandbox_dockerfile" \
       "$ROOT_DIR"
-  else
+  elif [[ -n "$SANDBOX_ENABLED" && -z "$OFFLINE_MODE" ]]; then
     echo "WARNING: sandbox Dockerfile not found at $sandbox_dockerfile" >&2
     echo "  Sandbox config will be applied but no sandbox image will be built." >&2
     echo "  Agent exec may fail if the configured sandbox image does not exist." >&2
@@ -615,7 +862,8 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   # Defense-in-depth: verify Docker CLI in the running image before enabling
   # sandbox. This avoids claiming sandbox is enabled when the image cannot
   # launch sandbox containers.
-  if ! docker compose "${COMPOSE_ARGS[@]}" run --rm --entrypoint docker openclaw-gateway --version >/dev/null 2>&1; then
+  if [[ -n "$SANDBOX_ENABLED" && -z "$OFFLINE_MODE" ]] &&
+    ! run_compose_one_off --rm --entrypoint docker openclaw-gateway --version >/dev/null 2>&1; then
     echo "WARNING: Docker CLI not found inside the container image." >&2
     echo "  Sandbox requires Docker CLI. Rebuild with --build-arg OPENCLAW_INSTALL_DOCKER_CLI=1" >&2
     echo "  or use a local build (OPENCLAW_IMAGE=openclaw:local). Skipping sandbox setup." >&2
@@ -628,27 +876,21 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
   # Mount Docker socket via a dedicated compose overlay. This overlay is
   # created only after sandbox prerequisites pass, so the socket is never
   # exposed when sandbox cannot actually run.
-  if [[ -S "$DOCKER_SOCKET_PATH" ]]; then
-    SANDBOX_COMPOSE_FILE="$ROOT_DIR/docker-compose.sandbox.yml"
-    cat >"$SANDBOX_COMPOSE_FILE" <<YAML
+  SANDBOX_COMPOSE_FILE="$ROOT_DIR/docker-compose.sandbox.yml"
+  cat >"$SANDBOX_COMPOSE_FILE" <<YAML
 services:
   openclaw-gateway:
     volumes:
-      - ${DOCKER_SOCKET_PATH}:/var/run/docker.sock
+      - $(quote_yaml_string "${DOCKER_SOCKET_PATH}:/var/run/docker.sock")
 YAML
-    if [[ -n "${DOCKER_GID:-}" ]]; then
-      cat >>"$SANDBOX_COMPOSE_FILE" <<YAML
+  if [[ -n "${DOCKER_GID:-}" ]]; then
+    cat >>"$SANDBOX_COMPOSE_FILE" <<YAML
     group_add:
       - "${DOCKER_GID}"
 YAML
-    fi
-    COMPOSE_ARGS+=("-f" "$SANDBOX_COMPOSE_FILE")
-    echo "==> Sandbox: added Docker socket mount"
-  else
-    echo "WARNING: OPENCLAW_SANDBOX enabled but Docker socket not found at $DOCKER_SOCKET_PATH." >&2
-    echo "  Sandbox requires Docker socket access. Skipping sandbox setup." >&2
-    SANDBOX_ENABLED=""
   fi
+  COMPOSE_ARGS+=("-f" "$SANDBOX_COMPOSE_FILE")
+  echo "==> Sandbox: added Docker socket mount"
 fi
 
 if [[ -n "$SANDBOX_ENABLED" ]]; then
@@ -674,7 +916,7 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
     echo "Sandbox enabled: mode=non-main, scope=agent, workspaceAccess=none"
     echo "Docs: https://docs.openclaw.ai/gateway/sandboxing"
     # Restart gateway with sandbox compose overlay to pick up socket mount + config.
-    docker compose "${COMPOSE_ARGS[@]}" up -d openclaw-gateway
+    run_gateway_up current
   else
     echo "WARNING: Sandbox config was partially applied. Check errors above." >&2
     echo "  Skipping gateway restart to avoid exposing Docker socket without a full sandbox policy." >&2
@@ -688,7 +930,7 @@ if [[ -n "$SANDBOX_ENABLED" ]]; then
       rm -f "$SANDBOX_COMPOSE_FILE"
     fi
     # Ensure gateway service definition is reset without sandbox overlay mount.
-    docker compose "${BASE_COMPOSE_ARGS[@]}" up -d --force-recreate openclaw-gateway
+    run_gateway_up base --force-recreate
   fi
 else
   # Keep reruns deterministic: if sandbox is not active for this run, reset
@@ -708,8 +950,8 @@ echo "Gateway running with host port mapping."
 echo "Access from tailnet devices via the host's tailnet IP."
 echo "Config: $OPENCLAW_CONFIG_DIR"
 echo "Workspace: $OPENCLAW_WORKSPACE_DIR"
-echo "Token: $OPENCLAW_GATEWAY_TOKEN"
+echo "Token: stored in Docker environment/config (not printed)."
 echo ""
 echo "Commands:"
 echo "  ${COMPOSE_HINT} logs -f openclaw-gateway"
-echo "  ${COMPOSE_HINT} exec openclaw-gateway node dist/index.js health --token \"$OPENCLAW_GATEWAY_TOKEN\""
+echo "  ${COMPOSE_HINT} exec openclaw-gateway sh -lc 'node dist/index.js health --token \"\$OPENCLAW_GATEWAY_TOKEN\"'"

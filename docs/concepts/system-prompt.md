@@ -6,7 +6,7 @@ read_when:
 title: "System prompt"
 ---
 
-OpenClaw builds a custom system prompt for every agent run. The prompt is **OpenClaw-owned** and does not use the pi-coding-agent default prompt.
+OpenClaw builds a custom system prompt for every agent run. The prompt is **OpenClaw-owned** and does not use a runtime default prompt.
 
 The prompt is assembled by OpenClaw and injected into each agent run.
 
@@ -56,7 +56,7 @@ The prompt is intentionally compact and uses fixed sections:
 - **OpenClaw Self-Update**: how to inspect config safely with
   `config.schema.lookup`, patch config with `config.patch`, replace the full
   config with `config.apply`, and run `update.run` only on explicit user
-  request. The owner-only `gateway` tool also refuses to rewrite
+  request. The agent-facing `gateway` tool also refuses to rewrite
   `tools.exec.ask` / `tools.exec.security`, including legacy `tools.bash.*`
   aliases that normalize to those protected exec paths.
 - **Workspace**: working directory (`agents.defaults.workspace`).
@@ -127,10 +127,10 @@ OpenClaw can render smaller system prompts for sub-agents. The runtime sets a
 When `promptMode=minimal`, extra injected prompts are labeled **Subagent
 Context** instead of **Group Chat Context**.
 
-For channel auto-reply runs, OpenClaw can omit the generic **Silent Replies**
-section when the direct/group chat context already includes the resolved
-conversation-specific `NO_REPLY` behavior. This avoids repeating token mechanics
-in both the global system prompt and channel context.
+For channel auto-reply runs, OpenClaw omits the generic **Silent Replies**
+section when direct, group, or message-tool-only context owns the visible-reply
+contract. Only old automatic group/channel mode should show `NO_REPLY`; direct
+chats and message-tool-only replies do not receive silent-token guidance.
 
 ## Prompt snapshots
 
@@ -166,7 +166,8 @@ PR.
 
 ## Workspace bootstrap injection
 
-Bootstrap files are trimmed and appended under **Project Context** so the model sees identity and profile context without needing explicit reads:
+Bootstrap files are resolved from the active workspace, then routed to the
+prompt surface that matches their lifetime:
 
 - `AGENTS.md`
 - `SOUL.md`
@@ -177,41 +178,51 @@ Bootstrap files are trimmed and appended under **Project Context** so the model 
 - `BOOTSTRAP.md` (only on brand-new workspaces)
 - `MEMORY.md` when present
 
-All of these files are **injected into the context window** on every turn unless
-a file-specific gate applies. `HEARTBEAT.md` is omitted on normal runs when
-heartbeats are disabled for the default agent or
-`agents.defaults.heartbeat.includeSystemPromptSection` is false. Keep injected
-files concise, especially `MEMORY.md`. `MEMORY.md` is intended to stay a
-curated long-term summary; detailed daily notes belong in `memory/*.md` where
-`memory_search` and `memory_get` can retrieve them on demand. Oversized
-`MEMORY.md` files increase prompt usage and can be partially injected because of
-the bootstrap file limits below.
+On the native Codex harness, OpenClaw avoids repeating stable workspace files
+in every user turn. Codex loads `AGENTS.md` through its own project-doc
+discovery. `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, and `USER.md` are forwarded as
+Codex developer instructions. The compact OpenClaw skills list is also forwarded
+as turn-scoped collaboration developer instructions. `HEARTBEAT.md` content is
+not injected; heartbeat turns get a collaboration-mode note pointing to the file
+when it exists and is non-empty. `MEMORY.md` content from the configured agent
+workspace is not pasted into every native Codex turn; when memory tools are
+available for that workspace, Codex turns get a small workspace-memory note in
+turn-scoped collaboration developer instructions and should use `memory_search`
+or `memory_get` when durable memory is relevant. If tools are disabled, memory
+search is unavailable, or the active workspace differs from the agent memory
+workspace, `MEMORY.md` falls back to the normal bounded turn-context path. Active
+`BOOTSTRAP.md` content keeps the normal turn-context role for now.
 
-When a session runs on the native Codex harness, Codex loads `AGENTS.md`
-through its own project-doc discovery. OpenClaw still resolves the remaining
-bootstrap files and forwards them as Codex config instructions, so `SOUL.md`,
-`TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`, `BOOTSTRAP.md`, and
-`MEMORY.md` keep the same workspace-context role without duplicating
-`AGENTS.md`.
+On non-Codex harnesses, bootstrap files continue to be composed into the
+OpenClaw prompt according to their existing gates. `HEARTBEAT.md` is omitted on
+normal runs when heartbeats are disabled for the default agent or
+`agents.defaults.heartbeat.includeSystemPromptSection` is false. Keep injected
+files concise, especially non-Codex `MEMORY.md`. `MEMORY.md` is intended to stay
+a curated long-term summary; detailed daily notes belong in `memory/*.md` where
+`memory_search` and `memory_get` can retrieve them on demand. Oversized
+non-Codex `MEMORY.md` files increase prompt usage and can be partially injected
+because of the bootstrap file limits below.
 
 <Note>
 `memory/*.md` daily files are **not** part of the normal bootstrap Project Context. On ordinary turns they are accessed on demand via the `memory_search` and `memory_get` tools, so they do not count against the context window unless the model explicitly reads them. Bare `/new` and `/reset` turns are the exception: the runtime can prepend recent daily memory as a one-shot startup-context block for that first turn.
 </Note>
 
 Large files are truncated with a marker. The max per-file size is controlled by
-`agents.defaults.bootstrapMaxChars` (default: 12000). Total injected bootstrap
+`agents.defaults.bootstrapMaxChars` (default: 20000). Total injected bootstrap
 content across files is capped by `agents.defaults.bootstrapTotalMaxChars`
 (default: 60000). Missing files inject a short missing-file marker. When truncation
 occurs, OpenClaw can inject a concise system-prompt warning notice; control this with
 `agents.defaults.bootstrapPromptTruncationWarning` (`off`, `once`, `always`;
-default: `once`). Detailed raw/injected counts stay in diagnostics such as
+default: `always`). Detailed raw/injected counts stay in diagnostics such as
 `/context`, `/status`, doctor, and logs.
 
-For memory files, truncation is not data loss: the file remains intact on disk,
-but the model only sees the shortened injected copy until it reads or searches
-memory directly. If `MEMORY.md` is repeatedly truncated, distill it into a
-shorter durable summary and move detailed history into `memory/*.md`, or
-intentionally raise the bootstrap limits.
+For memory files, truncation is not data loss: the file remains intact on disk.
+On native Codex, `MEMORY.md` is read on demand through memory tools when
+available, with bounded prompt fallback when tools cannot run. On other
+harnesses, the model only sees the shortened injected copy until it reads or
+searches memory directly. If `MEMORY.md` is repeatedly truncated there, distill
+it into a shorter durable summary and move detailed history into `memory/*.md`,
+or intentionally raise the bootstrap limits.
 
 Sub-agent sessions only inject `AGENTS.md` and `TOOLS.md` (other bootstrap files
 are filtered out to keep the sub-agent context small).
@@ -244,10 +255,20 @@ See [Date & Time](/date-time) for full behavior details.
 ## Skills
 
 When eligible skills exist, OpenClaw injects a compact **available skills list**
-(`formatSkillsForPrompt`) that includes the **file path** for each skill. The
-prompt instructs the model to use `read` to load the SKILL.md at the listed
-location (workspace, managed, or bundled). If no skills are eligible, the
-Skills section is omitted.
+(`formatSkillsForPrompt`) that includes the **file path** and content-derived
+`<version>` marker for each skill. The prompt instructs the model to use `read`
+to load the SKILL.md at the listed location (workspace, managed, or bundled),
+and to re-read a skill when its `<version>` differs from a previous turn. If no
+skills are eligible, the Skills section is omitted.
+
+Native Codex turns receive this list as turn-scoped collaboration developer
+instructions instead of per-turn user input, except lightweight cron turns that
+preserve the exact scheduled prompt. Other harnesses keep the normal prompt
+section.
+
+The location can point at a nested skill, such as
+`skills/personal/foo/SKILL.md`. Nesting is only organizational; the prompt still
+uses the flat skill name from `SKILL.md` frontmatter.
 
 Eligibility includes skill metadata gates, runtime environment/config checks,
 and the effective agent skill allowlist when `agents.defaults.skills` or
@@ -263,6 +284,7 @@ that guidance directly in every tool description.
     <name>...</name>
     <description>...</description>
     <location>...</location>
+    <version>sha256:...</version>
   </skill>
 </available_skills>
 ```
@@ -293,9 +315,15 @@ The same section also includes the OpenClaw source location. Git checkouts expos
 source root so the agent can inspect code directly. Package installs include the GitHub
 source URL and tell the agent to review source there whenever the docs are incomplete or
 stale. The prompt also notes the public docs mirror, community Discord, and ClawHub
-([https://clawhub.ai](https://clawhub.ai)) for skills discovery. It tells the model to
-consult docs first for OpenClaw behavior, commands, configuration, or architecture, and to
-run `openclaw status` itself when possible (asking the user only when it lacks access).
+([https://clawhub.ai](https://clawhub.ai)) for skills discovery. It frames docs as the
+authority for OpenClaw self-knowledge before the model understands how OpenClaw works,
+including memory/daily notes, sessions, tools, Gateway, config, commands, or project
+context. The prompt tells the model to use local docs (or the docs mirror when local docs
+are unavailable) first, and to treat AGENTS.md, project context, workspace/profile/memory
+notes, and `memory_search` as instruction context or user memory rather than OpenClaw
+design or implementation knowledge. If docs are silent or stale, the model should say so
+and inspect source. The prompt also tells the model to run `openclaw status` itself when
+possible, asking the user only when it lacks access.
 For configuration specifically, it points agents to the `gateway` tool action
 `config.schema.lookup` for exact field-level docs and constraints, then to
 `docs/gateway/configuration.md` and `docs/gateway/configuration-reference.md`

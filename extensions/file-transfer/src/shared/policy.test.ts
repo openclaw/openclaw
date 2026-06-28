@@ -1,3 +1,4 @@
+// File Transfer tests cover policy plugin behavior.
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -157,6 +158,46 @@ describe("evaluateFilePolicy — denyPaths always wins", () => {
     });
     expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
     expect(r.ok ? "" : r.reason).toMatch(/deny/);
+  });
+
+  it("treats globstar slash as zero or more directories in denyPaths", () => {
+    withConfig({
+      n1: {
+        allowReadPaths: ["~/Downloads/**"],
+        denyPaths: ["~/Downloads/**/*.pem"],
+      },
+    });
+    const r = evaluateFilePolicy({
+      nodeId: "n1",
+      kind: "read",
+      path: path.join(os.homedir(), "Downloads", "key.pem"),
+    });
+    expectResultFields(r, { ok: false, code: "POLICY_DENIED", askable: false });
+  });
+
+  it("preserves minimatch brace semantics in denyPaths", () => {
+    withConfig({
+      n1: {
+        allowReadPaths: ["~/Downloads/**"],
+        denyPaths: ["~/Downloads/**/*.{pem,key}", "**/.{ssh,aws}/**"],
+      },
+    });
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "n1",
+        kind: "read",
+        path: path.join(os.homedir(), "Downloads", "api.key"),
+      }),
+      { ok: false, code: "POLICY_DENIED", askable: false },
+    );
+    expectResultFields(
+      evaluateFilePolicy({
+        nodeId: "n1",
+        kind: "read",
+        path: path.join(os.homedir(), "Downloads", ".aws", "credentials"),
+      }),
+      { ok: false, code: "POLICY_DENIED", askable: false },
+    );
   });
 
   it("denies even with ask=always (denyPaths is hard)", () => {

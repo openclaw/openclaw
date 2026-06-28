@@ -1,12 +1,82 @@
 # OpenClaw iOS Changelog
 
-## 2026.5.12 - 2026-05-12
+## 2026.6.10 - 2026-06-21
 
 Maintenance update for the current OpenClaw beta release.
+
+- Improved notification cleanup, Watch app compatibility, and native file input handling.
+
+## 2026.6.9 - 2026-06-20
+
+Maintenance update for the current OpenClaw release.
+
+- Added Apple Watch controls for common agent actions.
+- Improved Gateway setup, notification settings, and share-extension identity handling.
+- Updated the Watch app integration for current Xcode compatibility.
+
+## 2026.6.2 - 2026-06-02
+
+OpenClaw is now available on iPhone.
+
+Connect to your OpenClaw Gateway to chat with your assistant, use realtime Talk mode, review approvals, share content from iOS, and bring device capabilities like camera, location, screen, and notifications into your private automation workflows.
+
+## 2026.6.1 - 2026-06-01
+
+Maintenance update for the current OpenClaw release.
+
+- Added hosted push relay defaults, realtime Talk playback, and safer WebSocket ping handling for mobile sessions.
+- Updated App Store screenshots to cover Gateway pairing, Command, Chat, Talk, Agent, and Settings flows.
+- Highlighted realtime Talk relay, Gateway connection status, node capabilities, push wake, and privacy controls.
+
+## 2026.5.28 - 2026-05-28
+
+Maintenance update for the current OpenClaw release.
+
+## 2026.5.27 - 2026-05-27
+
+Maintenance update for the current OpenClaw release.
+
+## 2026.5.26 - 2026-05-26
+
+Maintenance update for the current OpenClaw release.
+
+## 2026.5.25 - 2026-05-25
+
+Maintenance update for the current OpenClaw release.
+
+## 2026.5.24 - 2026-05-24
+
+Maintenance update for the current OpenClaw release.
+
+## 2026.5.22 - 2026-05-22
+
+Maintenance update for the current OpenClaw release.
+
+## 2026.5.21 - 2026-05-21
+
+Maintenance update for the current OpenClaw release.
+
+- Added realtime Gateway Talk relay support for iOS voice sessions, including OpenAI realtime provider and voice selection controls. Thanks @Solvely-Colin.
+
+## 2026.5.20 - 2026-05-20
+
+Maintenance update for the current OpenClaw release.
+
+## 2026.5.19 - 2026-05-19
+
+Maintenance update for the current OpenClaw release.
+
+## 2026.5.17 - 2026-05-17
+
+Maintenance update for the current OpenClaw release.
+
+## 2026.5.12 - 2026-05-12
+
+Maintenance update for the current OpenClaw release.
 
 ## 2026.5.10 - 2026-05-10
 
-Maintenance update for the current OpenClaw beta release.
+Maintenance update for the current OpenClaw release.
 
 - Gateway connections now recover after a trusted Gateway certificate changes by refreshing the stored certificate pin during reconnect.
 
@@ -72,7 +142,7 @@ Maintenance update for the current OpenClaw release.
 
 ## 2026.4.19 - 2026-04-19
 
-Maintenance update for the current OpenClaw beta release.
+Maintenance update for the current OpenClaw release.
 
 ## 2026.4.18 - 2026-04-18
 
@@ -80,11 +150,11 @@ Maintenance update for the current OpenClaw release.
 
 ## 2026.4.15 - 2026-04-15
 
-Maintenance update for the current OpenClaw beta release.
+Maintenance update for the current OpenClaw release.
 
 ## 2026.4.14 - 2026-04-14
 
-Maintenance update for the current OpenClaw beta release.
+Maintenance update for the current OpenClaw release.
 
 ## 2026.4.12 - 2026-04-12
 

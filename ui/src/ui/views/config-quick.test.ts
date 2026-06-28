@@ -38,7 +38,7 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     fastMode: false,
     onModelChange: vi.fn(),
     onThinkingChange: vi.fn(),
-    onFastModeToggle: vi.fn(),
+    onFastModeChange: vi.fn(),
     channels: [],
     onChannelConfigure: vi.fn(),
     automation: {
@@ -64,10 +64,12 @@ function createProps(overrides: Partial<QuickSettingsProps> = {}): QuickSettings
     hasCustomTheme: false,
     customThemeLabel: null,
     borderRadius: 50,
+    textScale: 100,
     setTheme: vi.fn(),
     onOpenCustomThemeImport: vi.fn(),
     setThemeMode: vi.fn(),
     setBorderRadius: vi.fn(),
+    setTextScale: vi.fn(),
     userAvatar: null,
     onUserAvatarChange: vi.fn(),
     configObject: {},
@@ -131,6 +133,44 @@ describe("renderQuickSettings", () => {
     expect(container.querySelectorAll(".qs-card--span-all")).toHaveLength(1);
   });
 
+  it("shows the current bootstrap default when config omits the explicit limit", () => {
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ configObject: {} })), container);
+
+    const stat = Array.from(container.querySelectorAll<HTMLElement>(".qs-profile-stat")).find(
+      (candidate) =>
+        candidate.querySelector(".qs-profile-stat__label")?.textContent?.trim() ===
+        "Bootstrap Per File",
+    );
+    expect(stat?.querySelector(".qs-profile-stat__value")?.textContent?.trim()).toBe(
+      "20,000 chars",
+    );
+  });
+
+  it("keeps auto as a first-class quick settings fast mode", () => {
+    const onFastModeChange = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ fastMode: "auto", onFastModeChange })), container);
+
+    const row = expectRowByLabel(container, "Fast mode");
+    const buttons = Array.from(row.querySelectorAll<HTMLButtonElement>("button"));
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual([
+      "Auto",
+      "Fast",
+      "Standard",
+    ]);
+    expect(row.querySelector(".qs-segmented__btn--active")?.textContent?.trim()).toBe("Auto");
+
+    expectButtonByText(row, "Auto").click();
+    expect(onFastModeChange).not.toHaveBeenCalled();
+
+    expectButtonByText(row, "Standard").click();
+
+    expect(onFastModeChange).toHaveBeenCalledWith(false);
+  });
+
   it("lets operators change browser and tool profile from Security quick settings", () => {
     const onBrowserEnabledToggle = vi.fn();
     const onToolProfileChange = vi.fn();
@@ -170,6 +210,22 @@ describe("renderQuickSettings", () => {
       "qs-segmented__btn--compact",
       "qs-segmented__btn--active",
     ]);
+  });
+
+  it("lets operators change text size from Appearance quick settings", () => {
+    const setTextScale = vi.fn();
+    const container = document.createElement("div");
+
+    render(renderQuickSettings(createProps({ textScale: 125, setTextScale })), container);
+
+    const textSizeRow = expectRowByLabel(container, "Text size");
+    const active = Array.from(textSizeRow.querySelectorAll("button")).find((button) =>
+      button.classList.contains("qs-segmented__btn--active"),
+    );
+    expect(active?.textContent?.trim()).toBe("XL");
+
+    expectButtonByText(textSizeRow, "XXL").click();
+    expect(setTextScale).toHaveBeenCalledWith(140);
   });
 
   it("keeps the local user name fixed and shows the assistant identity", () => {
@@ -238,7 +294,7 @@ describe("renderQuickSettings", () => {
     );
 
     expect(container.querySelector(".qs-assistant-avatar")?.getAttribute("src")).toBe(
-      "apple-touch-icon.png",
+      "/apple-touch-icon.png",
     );
     expect(expectAssistantAvatarSource(container)).toEqual({
       label: "IDENTITY.md",

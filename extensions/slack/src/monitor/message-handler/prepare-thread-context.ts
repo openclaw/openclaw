@@ -1,6 +1,7 @@
+// Slack plugin module implements prepare thread context behavior.
 import { formatInboundEnvelope } from "openclaw/plugin-sdk/channel-inbound";
 import { runTasksWithConcurrency } from "openclaw/plugin-sdk/concurrency-runtime";
-import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-contracts";
+import type { ContextVisibilityMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import {
   filterSupplementalContextItems,
@@ -9,7 +10,7 @@ import {
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackAllowListMatch } from "../allow-list.js";
-import { readSessionUpdatedAt } from "../config.runtime.js";
+import { readSessionUpdatedAt, resolveChannelResetConfig } from "../config.runtime.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMediaResult } from "../media-types.js";
 import { resolveSlackThreadHistory, type SlackThreadStarter } from "../thread.js";
@@ -21,6 +22,7 @@ import {
   resolveSlackThreadHistoryFilterPolicy,
   shouldIncludeBotThreadStarterContext,
 } from "./prepare-thread-context-root.js";
+import { resolveSlackTimestampMs } from "./timestamp.js";
 
 type SlackMediaModule = typeof import("../media.js");
 let slackMediaModulePromise: Promise<SlackMediaModule> | undefined;
@@ -33,12 +35,48 @@ function loadSlackMediaModule(): Promise<SlackMediaModule> {
 type SlackThreadContextData = {
   threadStarterBody: string | undefined;
   threadHistoryBody: string | undefined;
-  threadSessionPreviousTimestamp: number | undefined;
+  shouldSeedInitialThreadContext: boolean;
   threadLabel: string | undefined;
   threadStarterMedia: SlackMediaResult[] | null;
 };
 
 const SLACK_THREAD_CONTEXT_USER_LOOKUP_CONCURRENCY = 4;
+
+type SlackSessionResetFreshness = {
+  state: "missing" | "fresh" | "stale";
+};
+
+type SlackSessionFreshnessRuntime = {
+  session?: {
+    resolveEntryResetFreshness?: (params: {
+      storePath?: string;
+      sessionKey: string;
+      sessionCfg?: OpenClawConfig["session"];
+      resetType: "thread";
+      resetOverride?: ReturnType<typeof resolveChannelResetConfig>;
+    }) => SlackSessionResetFreshness;
+  };
+};
+
+function resolveSlackThreadSessionFreshness(params: {
+  ctx: SlackMonitorContext;
+  storePath: string;
+  sessionKey: string;
+}): SlackSessionResetFreshness | undefined {
+  // Gateway startup supplies the full channel runtime, but the public surface
+  // intentionally keeps non-context helpers untyped for external plugins.
+  const runtime = params.ctx.channelRuntime as SlackSessionFreshnessRuntime | undefined;
+  return runtime?.session?.resolveEntryResetFreshness?.({
+    storePath: params.storePath,
+    sessionKey: params.sessionKey,
+    sessionCfg: params.ctx.cfg.session,
+    resetType: "thread",
+    resetOverride: resolveChannelResetConfig({
+      sessionCfg: params.ctx.cfg.session,
+      channel: "slack",
+    }),
+  });
+}
 
 function isSlackThreadContextSenderAllowed(params: {
   allowFromLower: string[];
@@ -103,6 +141,7 @@ export async function resolveSlackThreadContextData(params: {
   roomLabel: string;
   storePath: string;
   sessionKey: string;
+  forceInitialHistory?: boolean;
   allowFromLower: string[];
   allowNameMatching: boolean;
   contextVisibilityMode: ContextVisibilityMode;
@@ -120,15 +159,38 @@ export async function resolveSlackThreadContextData(params: {
 
   let threadStarterBody: string | undefined;
   let threadHistoryBody: string | undefined;
-  let threadSessionPreviousTimestamp: number | undefined;
   let threadLabel: string | undefined;
   let threadStarterMedia: SlackMediaResult[] | null = null;
+  const threadSessionFreshness =
+    params.isThreadReply && params.threadTs
+      ? resolveSlackThreadSessionFreshness({
+          ctx: params.ctx,
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+        })
+      : undefined;
+  const threadSessionPreviousTimestamp =
+    params.isThreadReply && params.threadTs && !threadSessionFreshness
+      ? readSessionUpdatedAt({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+        })
+      : undefined;
+  const shouldSeedInitialThreadContext = Boolean(
+    params.isThreadReply &&
+    params.threadTs &&
+    (threadSessionFreshness
+      ? threadSessionFreshness.state !== "fresh"
+      : threadSessionPreviousTimestamp === undefined),
+  );
+  const shouldLoadInitialThreadHistory =
+    shouldSeedInitialThreadContext || params.forceInitialHistory === true;
 
   if (!params.isThreadReply || !params.threadTs) {
     return {
       threadStarterBody,
       threadHistoryBody,
-      threadSessionPreviousTimestamp,
+      shouldSeedInitialThreadContext,
       threadLabel,
       threadStarterMedia,
     };
@@ -186,14 +248,9 @@ export async function resolveSlackThreadContextData(params: {
     threadLabel = `Slack thread ${params.roomLabel}`;
   }
 
-  threadSessionPreviousTimestamp = readSessionUpdatedAt({
-    storePath: params.storePath,
-    sessionKey: params.sessionKey,
-  });
-  const isNewThreadSession = !threadSessionPreviousTimestamp;
   const includeBotStarterAsRootContext = shouldIncludeBotThreadStarterContext({
     starterIsCurrentBot,
-    isNewThreadSession,
+    isNewThreadSession: shouldSeedInitialThreadContext,
     hasStarterText: Boolean(starter?.text),
   });
 
@@ -213,7 +270,7 @@ export async function resolveSlackThreadContextData(params: {
 
   const threadInitialHistoryLimit = params.account.config?.thread?.initialHistoryLimit ?? 20;
 
-  if (threadInitialHistoryLimit > 0 && !threadSessionPreviousTimestamp) {
+  if (threadInitialHistoryLimit > 0 && shouldLoadInitialThreadHistory) {
     const currentBotRootTs = starter?.ts ?? params.threadTs;
     const threadHistory = await resolveSlackThreadHistory({
       channelId: params.message.channel,
@@ -306,7 +363,7 @@ export async function resolveSlackThreadContextData(params: {
           formatInboundEnvelope({
             channel: "Slack",
             from: `${msgSenderName} (${role})`,
-            timestamp: historyMsg.ts ? Math.round(Number(historyMsg.ts) * 1000) : undefined,
+            timestamp: resolveSlackTimestampMs(historyMsg.ts),
             body: msgWithId,
             chatType: "channel",
             envelope: params.envelopeOptions,
@@ -325,7 +382,7 @@ export async function resolveSlackThreadContextData(params: {
   return {
     threadStarterBody,
     threadHistoryBody,
-    threadSessionPreviousTimestamp,
+    shouldSeedInitialThreadContext,
     threadLabel,
     threadStarterMedia,
   };

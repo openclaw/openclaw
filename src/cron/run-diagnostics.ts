@@ -1,5 +1,7 @@
+/** Builds bounded, redacted diagnostics for cron run logs and UI surfaces. */
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
 import type {
   CronRunDiagnostic,
   CronRunDiagnostics,
@@ -66,6 +68,8 @@ function tailText(value: string, maxChars: number): string {
   if (value.length <= maxChars) {
     return value;
   }
+  // Exec output often ends with the actionable failure; keep the tail when
+  // bounding diagnostic text for run logs and control surfaces.
   return value.slice(value.length - maxChars);
 }
 
@@ -95,6 +99,7 @@ function trimSummary(value: string | undefined): string | undefined {
   return `${normalized.slice(0, MAX_SUMMARY_CHARS - 1)}…`;
 }
 
+/** Returns the operator-facing summary for persisted cron diagnostics. */
 export function summarizeCronRunDiagnostics(
   diagnostics: CronRunDiagnostics | undefined,
 ): string | undefined {
@@ -104,6 +109,7 @@ export function summarizeCronRunDiagnostics(
   return trimSummary(diagnostics.summary ?? diagnostics.entries[0]?.message);
 }
 
+/** Normalizes untrusted cron diagnostic payloads into bounded, redacted entries. */
 export function normalizeCronRunDiagnostics(
   value: unknown,
   opts?: { nowMs?: () => number },
@@ -140,6 +146,8 @@ export function normalizeCronRunDiagnostics(
       ...(entry.truncated === true || normalized.truncated ? { truncated: true } : {}),
     });
     if (entries.length > MAX_ENTRIES) {
+      // Keep the latest diagnostics because late tool/exec failures usually
+      // explain the final cron result better than setup noise.
       entries.shift();
     }
   }
@@ -154,6 +162,7 @@ export function normalizeCronRunDiagnostics(
   return { ...(summary ? { summary } : {}), entries };
 }
 
+/** Merges cron diagnostics while choosing the highest-severity latest summary. */
 export function mergeCronRunDiagnostics(
   ...values: Array<CronRunDiagnostics | undefined>
 ): CronRunDiagnostics | undefined {
@@ -173,6 +182,8 @@ export function mergeCronRunDiagnostics(
       const severity =
         entryCandidate?.severity === "error" ? 2 : entryCandidate?.severity === "warn" ? 1 : 0;
       const order = entries.length + normalized.entries.length;
+      // Summary text is operator-facing; prefer severe diagnostics, then the
+      // newest diagnostic at the same severity so retries surface current cause.
       if (
         !summaryCandidate ||
         severity > summaryCandidate.severity ||
@@ -189,6 +200,7 @@ export function mergeCronRunDiagnostics(
   });
 }
 
+/** Converts an arbitrary thrown cron error into a redacted diagnostic entry. */
 export function createCronRunDiagnosticsFromError(
   source: CronRunDiagnosticSource,
   error: unknown,
@@ -218,11 +230,13 @@ export function createCronRunDiagnosticsFromError(
   );
 }
 
+/** Extracts failed exec details from tool metadata into cron diagnostics. */
 export function createCronRunDiagnosticsFromExecDetails(
   details: unknown,
   opts?: {
     nowMs?: () => number;
     toolName?: string;
+    finalStatus?: "ok" | "error" | "skipped";
   },
 ): CronRunDiagnostics | undefined {
   if (!isRecord(details)) {
@@ -247,7 +261,7 @@ export function createCronRunDiagnosticsFromExecDetails(
         {
           ts: opts?.nowMs?.() ?? Date.now(),
           source: "exec",
-          severity: status === "failed" ? "error" : "warn",
+          severity: opts?.finalStatus === "ok" ? "warn" : status === "failed" ? "error" : "warn",
           message,
           toolName: opts?.toolName,
           exitCode,
@@ -258,6 +272,7 @@ export function createCronRunDiagnosticsFromExecDetails(
   );
 }
 
+/** Extracts tool-call failure diagnostics from an agent reply payload. */
 export function createCronRunDiagnosticsFromToolPayload(
   payload: unknown,
   opts?: { nowMs?: () => number; finalStatus?: "ok" | "error" | "skipped" },
@@ -269,13 +284,17 @@ export function createCronRunDiagnosticsFromToolPayload(
   const detailsDiagnostics = createCronRunDiagnosticsFromExecDetails(payload.details, {
     nowMs: opts?.nowMs,
     toolName,
+    finalStatus: opts?.finalStatus,
   });
   const isError = payload.isError === true;
   const text = typeof payload.text === "string" ? payload.text : undefined;
+  const isNonTerminalToolWarning =
+    opts?.finalStatus === "ok" &&
+    getReplyPayloadMetadata(payload)?.nonTerminalToolErrorWarning === true;
   const textDiagnostics =
     isError && text
       ? createCronRunDiagnosticsFromError("tool", text, {
-          severity: "error",
+          severity: isNonTerminalToolWarning || opts?.finalStatus === "ok" ? "warn" : "error",
           nowMs: opts?.nowMs,
           toolName,
         })
@@ -283,6 +302,7 @@ export function createCronRunDiagnosticsFromToolPayload(
   return mergeCronRunDiagnostics(detailsDiagnostics, textDiagnostics);
 }
 
+/** Extracts cron run diagnostics from agent result payloads and metadata. */
 export function createCronRunDiagnosticsFromAgentResult(
   result: unknown,
   opts?: { nowMs?: () => number; finalStatus?: "ok" | "error" | "skipped" },

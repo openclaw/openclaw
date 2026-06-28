@@ -68,6 +68,11 @@ on:
         required: false
         default: ""
         type: string
+      codex_plugin_spec:
+        description: Optional Codex plugin install spec for the live package lane; blank packs extensions/codex from the selected ref
+        required: false
+        default: ""
+        type: string
       include_live_suites:
         description: Whether to run live-provider coverage
         required: false
@@ -97,8 +102,23 @@ on:
           - beta
           - stable
           - full
+      use_github_hosted_runners:
+        description: Use GitHub-hosted runners instead of Blacksmith runners
+        required: false
+        default: false
+        type: boolean
+      advisory:
+        description: Treat failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
   workflow_call:
     inputs:
+      advisory:
+        description: Treat failures as advisory for the caller
+        required: false
+        default: false
+        type: boolean
       ref:
         description: Ref, tag, or SHA to validate
         required: true
@@ -163,6 +183,11 @@ on:
         required: false
         default: ""
         type: string
+      codex_plugin_spec:
+        description: Optional Codex plugin install spec for the live package lane; blank packs extensions/codex from the selected ref
+        required: false
+        default: ""
+        type: string
       include_live_suites:
         description: Whether to run live-provider coverage
         required: false
@@ -188,6 +213,11 @@ on:
         required: false
         default: stable
         type: string
+      use_github_hosted_runners:
+        description: Use GitHub-hosted runners instead of Blacksmith runners
+        required: false
+        default: true
+        type: boolean
     secrets:
       OPENAI_API_KEY:
         required: false
@@ -198,6 +228,8 @@ on:
       ANTHROPIC_API_KEY_OLD:
         required: false
       ANTHROPIC_API_TOKEN:
+        required: false
+      FACTORY_API_KEY:
         required: false
       BYTEPLUS_API_KEY:
         required: false
@@ -288,7 +320,6 @@ permissions:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   NODE_VERSION: "24.15.0"
-  PNPM_VERSION: "11.0.8"
 
 jobs:
   validate_selected_ref:
@@ -298,7 +329,7 @@ jobs:
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
     steps:
       - name: Checkout workflow repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           fetch-depth: 0
 
@@ -310,9 +341,6 @@ jobs:
         run: |
           set -euo pipefail
           trusted_reason=""
-
-          git fetch --no-tags origin '+refs/heads/*:refs/remotes/origin/*'
-          git fetch --tags origin '+refs/tags/*:refs/tags/*'
 
           # Resolve here instead of in actions/checkout so short SHAs work too.
           if ! selected_sha="$(git rev-parse --verify "${INPUT_REF}^{commit}")"; then
@@ -392,6 +420,7 @@ jobs:
               add_suite live-cache
 
               add_profile_suite native-live-src-agents "stable full"
+              add_profile_suite native-live-src-agents-zai-coding "stable full"
               add_profile_suite native-live-src-gateway-core "beta minimum stable full"
               add_profile_suite native-live-src-gateway-profiles-anthropic "stable full"
               add_profile_suite native-live-src-gateway-profiles-anthropic-smoke "stable"
@@ -452,10 +481,40 @@ jobs:
           fi
           exit 1
 
+  plan_release_workflow_matrices:
+    needs: validate_selected_ref
+    runs-on: ubuntu-24.04
+    outputs:
+      docker_e2e_count: ${{ steps.plan.outputs.docker_e2e_count }}
+      docker_e2e_matrix: ${{ steps.plan.outputs.docker_e2e_matrix }}
+      docker_e2e_omitted_json: ${{ steps.plan.outputs.docker_e2e_omitted_json }}
+      live_models_count: ${{ steps.plan.outputs.live_models_count }}
+      live_models_matrix: ${{ steps.plan.outputs.live_models_matrix }}
+      live_models_omitted_json: ${{ steps.plan.outputs.live_models_omitted_json }}
+    steps:
+      - name: Checkout trusted release harness
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Plan release workflow matrices
+        id: plan
+        env:
+          DOCKER_LANES: ${{ inputs.docker_lanes }}
+          INCLUDE_LIVE_SUITES: ${{ inputs.include_live_suites }}
+          INCLUDE_RELEASE_PATH_SUITES: ${{ inputs.include_release_path_suites }}
+          LIVE_MODEL_PROVIDERS: ${{ inputs.live_model_providers }}
+          LIVE_SUITE_FILTER: ${{ inputs.live_suite_filter }}
+          RELEASE_TEST_PROFILE: ${{ inputs.release_test_profile }}
+        run: node scripts/plan-release-workflow-matrix.mjs >> "$GITHUB_OUTPUT"
+
   validate_release_live_cache:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'live-cache')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: 20
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -464,7 +523,7 @@ jobs:
       OPENCLAW_LIVE_TEST: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -473,7 +532,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate live cache credentials
@@ -505,13 +563,14 @@ jobs:
   validate_repo_e2e:
     needs: validate_selected_ref
     if: inputs.include_repo_e2e && inputs.live_suite_filter == ''
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
     env:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -520,7 +579,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build dist for repo E2E
@@ -528,13 +586,17 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build
 
+      - name: Install Playwright Chromium
+        run: pnpm --dir ui exec playwright install --with-deps chromium
+
       - name: Run repo E2E suite
         run: pnpm test:e2e
 
   validate_special_e2e:
     needs: validate_selected_ref
     if: inputs.include_repo_e2e && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'openshell-e2e')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -547,12 +609,11 @@ jobs:
             requires_repo_e2e: true
             requires_live_suites: false
     env:
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENCLAW_E2E_WORKERS: "1"
       OPENCLAW_VITEST_MAX_WORKERS: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -561,7 +622,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Build dist for special E2E
@@ -582,8 +642,73 @@ jobs:
           set -euo pipefail
           case "${{ matrix.suite_id }}" in
             openshell-e2e)
+              echo "OPENCLAW_E2E_OPENSHELL_CONFIG_HOME=$HOME/.config" >> "$GITHUB_ENV"
               ;;
           esac
+
+      - name: Install OpenShell CLI
+        if: |
+          (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id) &&
+          matrix.suite_id == 'openshell-e2e'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export OPENSHELL_VERSION=v0.0.68
+          curl -LsSf https://raw.githubusercontent.com/NVIDIA/OpenShell/d64542f69d06694cbd203b64929d286dd0533bbb/install.sh | sh
+          openshell --version
+
+      - name: Bootstrap OpenShell gateway
+        if: |
+          (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id) &&
+          matrix.suite_id == 'openshell-e2e'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mtls_dir="$HOME/.config/openshell/gateways/openshell/mtls"
+          gateway_tls_dir="$RUNNER_TEMP/openshell-gateway-certs"
+          fallback_pid=""
+          if ! openshell --gateway openshell sandbox list >/dev/null 2>&1; then
+            rm -rf "$gateway_tls_dir"
+            openshell-gateway generate-certs \
+              --output-dir "$gateway_tls_dir" \
+              --server-san 127.0.0.1 \
+              --server-san localhost \
+              --server-san host.openshell.internal
+            rm -rf "$mtls_dir"
+            mkdir -p "$mtls_dir"
+            cp "$gateway_tls_dir/ca.crt" "$mtls_dir/ca.crt"
+            cp "$gateway_tls_dir/client/tls.crt" "$mtls_dir/tls.crt"
+            cp "$gateway_tls_dir/client/tls.key" "$mtls_dir/tls.key"
+            openshell gateway remove openshell >/dev/null 2>&1 || true
+            OPENSHELL_LOCAL_TLS_DIR="$gateway_tls_dir" nohup openshell-gateway \
+              --bind-address 0.0.0.0 \
+              --port 17670 \
+              --drivers docker \
+              --tls-cert "$gateway_tls_dir/server/tls.crt" \
+              --tls-key "$gateway_tls_dir/server/tls.key" \
+              --tls-client-ca "$mtls_dir/ca.crt" \
+              >"$RUNNER_TEMP/openshell-gateway.log" 2>&1 &
+            fallback_pid=$!
+            echo "OPENCLAW_OPENSHELL_FALLBACK_PID=$fallback_pid" >> "$GITHUB_ENV"
+            for _ in $(seq 1 30); do
+              if openshell gateway add --local --name openshell https://127.0.0.1:17670; then
+                break
+              fi
+              sleep 1
+            done
+            openshell gateway select openshell
+            for _ in $(seq 1 60); do
+              if openshell --gateway openshell sandbox list >/dev/null 2>&1; then
+                break
+              fi
+              sleep 1
+            done
+          fi
+          if [[ -z "$fallback_pid" ]]; then
+            echo "OPENCLAW_OPENSHELL_FALLBACK_PID=" >> "$GITHUB_ENV"
+          fi
+          openshell --gateway openshell sandbox list >/dev/null
+          openshell gateway list
 
       - name: Validate suite credentials
         if: inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id
@@ -604,78 +729,32 @@ jobs:
           (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id)
         run: ${{ matrix.command }}
 
+      - name: Stop fallback OpenShell gateway
+        if: always() && matrix.suite_id == 'openshell-e2e'
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -n "${OPENCLAW_OPENSHELL_FALLBACK_PID:-}" ]]; then
+            kill "$OPENCLAW_OPENSHELL_FALLBACK_PID" 2>/dev/null || true
+          fi
+
   validate_docker_e2e:
-    needs: [validate_selected_ref, prepare_docker_e2e_image]
-    if: inputs.include_release_path_suites && inputs.docker_lanes == ''
+    needs: [validate_selected_ref, prepare_docker_e2e_image, plan_release_workflow_matrices]
+    if: inputs.include_release_path_suites && inputs.docker_lanes == '' && needs.plan_release_workflow_matrices.outputs.docker_e2e_count != '0'
     name: Docker E2E (${{ matrix.label }})
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - chunk_id: core
-            label: core
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: package-update-openai
-            label: package/update OpenAI install
-            timeout_minutes: 20
-            profiles: beta minimum stable full
-          - chunk_id: package-update-anthropic
-            label: package/update Anthropic install
-            timeout_minutes: 60
-            profiles: beta minimum stable full
-          - chunk_id: package-update-core
-            label: package/update core
-            timeout_minutes: 60
-            profiles: beta minimum stable full
-          - chunk_id: plugins-runtime-plugins
-            label: plugins/runtime plugins
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-services
-            label: plugins/runtime services
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-a
-            label: plugins/runtime install A
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-b
-            label: plugins/runtime install B
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-c
-            label: plugins/runtime install C
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-d
-            label: plugins/runtime install D
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-e
-            label: plugins/runtime install E
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-f
-            label: plugins/runtime install F
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-g
-            label: plugins/runtime install G
-            timeout_minutes: 60
-            profiles: stable full
-          - chunk_id: plugins-runtime-install-h
-            label: plugins/runtime install H
-            timeout_minutes: 60
-            profiles: stable full
+      matrix: ${{ fromJson(needs.plan_release_workflow_matrices.outputs.docker_e2e_matrix) }}
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
@@ -723,6 +802,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
       OPENCLAW_DOCKER_ALL_RELEASE_PROFILE: ${{ inputs.release_test_profile }}
+      OPENCLAW_CODEX_NPM_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ inputs.published_upgrade_survivor_baselines }}
@@ -733,33 +813,33 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness
 
       - name: Log in to GHCR for shared Docker E2E image
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Setup Node environment
         if: contains(matrix.profiles, inputs.release_test_profile)
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
@@ -794,7 +874,7 @@ jobs:
 
       - name: Download OpenClaw Docker E2E package
         if: contains(matrix.profiles, inputs.release_test_profile) && steps.plan.outputs.needs_package == '1'
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
           path: .artifacts/docker-e2e-package
@@ -821,15 +901,35 @@ jobs:
         run: |
           set -euo pipefail
           credentials=",$CREDENTIALS,"
-          if [[ "$credentials" == *",openai,"* ]]; then
-            [[ -n "${OPENAI_API_KEY:-}" ]] || {
-              echo "OPENAI_API_KEY is required for selected Docker E2E lanes." >&2
-              exit 1
-            }
-          fi
-          if [[ "$credentials" == *",anthropic,"* && -z "${ANTHROPIC_API_TOKEN:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
-            echo "ANTHROPIC_API_TOKEN or ANTHROPIC_API_KEY is required for selected Docker E2E lanes." >&2
+          require_any() {
+            local label="$1"
+            shift
+            local key
+            for key in "$@"; do
+              if [[ -n "${!key:-}" ]]; then
+                return 0
+              fi
+            done
+            echo "Missing credential for ${label}: expected one of $*" >&2
             exit 1
+          }
+          if [[ "$credentials" == *",openai,"* ]]; then
+            require_any OpenAI OPENAI_API_KEY
+          fi
+          if [[ "$credentials" == *",codex,"* ]]; then
+            require_any Codex OPENCLAW_CODEX_AUTH_JSON
+          fi
+          if [[ "$credentials" == *",anthropic,"* ]]; then
+            require_any Anthropic ANTHROPIC_API_TOKEN ANTHROPIC_API_KEY OPENCLAW_CLAUDE_CREDENTIALS_JSON OPENCLAW_CLAUDE_JSON
+          fi
+          if [[ "$credentials" == *",factory,"* ]]; then
+            require_any Factory FACTORY_API_KEY
+          fi
+          if [[ "$credentials" == *",gemini,"* ]]; then
+            require_any Gemini GEMINI_API_KEY GOOGLE_API_KEY OPENCLAW_GEMINI_SETTINGS_JSON
+          fi
+          if [[ "$credentials" == *",opencode,"* ]]; then
+            require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY
           fi
 
       - name: Run Docker E2E chunk
@@ -861,29 +961,31 @@ jobs:
           summary=".artifacts/docker-tests/release-${DOCKER_E2E_CHUNK}/summary.json"
           if [[ ! -f "$summary" ]]; then
             echo "Docker chunk summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
           node .release-harness/scripts/docker-e2e.mjs summary "$summary" "Docker E2E chunk: ${DOCKER_E2E_CHUNK:-unknown}" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Docker E2E chunk artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: docker-e2e-${{ matrix.chunk_id }}
           path: .artifacts/docker-tests/
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   plan_docker_lane_groups:
     needs: validate_selected_ref
     if: inputs.docker_lanes != ''
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404' }}
     timeout-minutes: 5
     outputs:
       groups_json: ${{ steps.groups.outputs.groups_json }}
     steps:
       - name: Checkout trusted release harness
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
 
@@ -903,7 +1005,8 @@ jobs:
     needs: [validate_selected_ref, prepare_docker_e2e_image, plan_docker_lane_groups]
     if: inputs.docker_lanes != ''
     name: Docker E2E targeted lanes (${{ matrix.group.label }})
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     strategy:
       fail-fast: false
@@ -915,6 +1018,7 @@ jobs:
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
       ANTHROPIC_API_TOKEN: ${{ secrets.ANTHROPIC_API_TOKEN }}
       ANTHROPIC_API_KEY_OLD: ${{ secrets.ANTHROPIC_API_KEY_OLD }}
+      FACTORY_API_KEY: ${{ secrets.FACTORY_API_KEY }}
       BYTEPLUS_API_KEY: ${{ secrets.BYTEPLUS_API_KEY }}
       CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
       DEEPINFRA_API_KEY: ${{ secrets.DEEPINFRA_API_KEY }}
@@ -961,6 +1065,7 @@ jobs:
       OPENCLAW_DOCKER_E2E_PACKAGE_ARTIFACT_NAME: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
       OPENCLAW_DOCKER_E2E_SELECTED_SHA: ${{ needs.validate_selected_ref.outputs.selected_sha }}
+      OPENCLAW_CODEX_NPM_PLUGIN_SPEC: ${{ inputs.codex_plugin_spec }}
       OPENCLAW_CURRENT_PACKAGE_TGZ: .artifacts/docker-e2e-package/openclaw-current.tgz
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: ${{ inputs.published_upgrade_survivor_baseline }}
       OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: ${{ matrix.group.published_upgrade_survivor_baselines || inputs.published_upgrade_survivor_baselines }}
@@ -970,30 +1075,30 @@ jobs:
       DOCKER_E2E_LANES: ${{ matrix.group.docker_lanes }}
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
+          persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
+          persist-credentials: false
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness
 
       - name: Log in to GHCR for shared Docker E2E image
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
@@ -1030,7 +1135,7 @@ jobs:
 
       - name: Download OpenClaw Docker E2E package
         if: steps.plan.outputs.needs_package == '1'
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
           path: .artifacts/docker-e2e-package
@@ -1056,15 +1161,35 @@ jobs:
         run: |
           set -euo pipefail
           credentials=",$CREDENTIALS,"
-          if [[ "$credentials" == *",openai,"* ]]; then
-            [[ -n "${OPENAI_API_KEY:-}" ]] || {
-              echo "OPENAI_API_KEY is required for selected Docker E2E lanes." >&2
-              exit 1
-            }
-          fi
-          if [[ "$credentials" == *",anthropic,"* && -z "${ANTHROPIC_API_TOKEN:-}" && -z "${ANTHROPIC_API_KEY:-}" ]]; then
-            echo "ANTHROPIC_API_TOKEN or ANTHROPIC_API_KEY is required for selected Docker E2E lanes." >&2
+          require_any() {
+            local label="$1"
+            shift
+            local key
+            for key in "$@"; do
+              if [[ -n "${!key:-}" ]]; then
+                return 0
+              fi
+            done
+            echo "Missing credential for ${label}: expected one of $*" >&2
             exit 1
+          }
+          if [[ "$credentials" == *",openai,"* ]]; then
+            require_any OpenAI OPENAI_API_KEY
+          fi
+          if [[ "$credentials" == *",codex,"* ]]; then
+            require_any Codex OPENCLAW_CODEX_AUTH_JSON
+          fi
+          if [[ "$credentials" == *",anthropic,"* ]]; then
+            require_any Anthropic ANTHROPIC_API_TOKEN ANTHROPIC_API_KEY OPENCLAW_CLAUDE_CREDENTIALS_JSON OPENCLAW_CLAUDE_JSON
+          fi
+          if [[ "$credentials" == *",factory,"* ]]; then
+            require_any Factory FACTORY_API_KEY
+          fi
+          if [[ "$credentials" == *",gemini,"* ]]; then
+            require_any Gemini GEMINI_API_KEY GOOGLE_API_KEY OPENCLAW_GEMINI_SETTINGS_JSON
+          fi
+          if [[ "$credentials" == *",opencode,"* ]]; then
+            require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY
           fi
 
       - name: Run targeted Docker E2E lanes
@@ -1096,23 +1221,24 @@ jobs:
           summary=".artifacts/docker-tests/targeted-${{ steps.plan.outputs.artifact_suffix }}/summary.json"
           if [[ ! -f "$summary" ]]; then
             echo "Docker targeted summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
           node .release-harness/scripts/docker-e2e.mjs summary "$summary" "Docker E2E targeted lanes" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload targeted Docker E2E artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: docker-e2e-${{ steps.plan.outputs.artifact_suffix }}
           path: .artifacts/docker-tests/
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   validate_docker_openwebui:
     needs: [validate_selected_ref, prepare_docker_e2e_image]
     if: inputs.include_openwebui && !inputs.include_release_path_suites && inputs.docker_lanes == ''
     name: Docker E2E (openwebui)
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -1126,30 +1252,28 @@ jobs:
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
           path: .release-harness
 
       - name: Log in to GHCR for shared Docker E2E image
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Validate Open WebUI credentials
@@ -1178,7 +1302,7 @@ jobs:
 
       - name: Download OpenClaw Docker E2E package
         if: steps.plan.outputs.needs_package == '1'
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
           path: .artifacts/docker-e2e-package
@@ -1224,22 +1348,23 @@ jobs:
           summary=".artifacts/docker-tests/release-openwebui/summary.json"
           if [[ ! -f "$summary" ]]; then
             echo "Docker Open WebUI summary missing: \`$summary\`" >> "$GITHUB_STEP_SUMMARY"
-            exit 0
+            exit 1
           fi
           node .release-harness/scripts/docker-e2e.mjs summary "$summary" "Docker E2E chunk: openwebui" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload Open WebUI Docker E2E artifacts
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: docker-e2e-openwebui
           path: .artifacts/docker-tests/
-          if-no-files-found: ignore
+          if-no-files-found: error
 
   prepare_docker_e2e_image:
     needs: validate_selected_ref
     if: inputs.include_release_path_suites || inputs.include_openwebui || inputs.docker_lanes != ''
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ inputs.release_test_profile == 'full' && 90 || 60 }}
     permissions:
       actions: read
@@ -1260,13 +1385,13 @@ jobs:
       OPENCLAW_DOCKER_E2E_REPO_ROOT: ${{ github.workspace }}
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted release harness
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -1308,19 +1433,18 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Download current-run OpenClaw Docker E2E package
         if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_name != '' && inputs.package_artifact_run_id == ''
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ inputs.package_artifact_name }}
           path: .artifacts/docker-e2e-package
 
       - name: Download previous-run OpenClaw Docker E2E package
         if: steps.plan.outputs.needs_package == '1' && inputs.package_artifact_run_id != ''
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
           path: .artifacts/docker-e2e-package
@@ -1370,7 +1494,7 @@ jobs:
 
       - name: Upload OpenClaw Docker E2E package
         if: steps.plan.outputs.needs_package == '1' && (inputs.package_artifact_name == '' || inputs.package_artifact_run_id != '')
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ inputs.package_artifact_name || 'docker-e2e-package' }}
           path: .artifacts/docker-e2e-package/openclaw-current.tgz
@@ -1399,11 +1523,10 @@ jobs:
 
       - name: Log in to GHCR
         if: steps.plan.outputs.needs_e2e_image == '1'
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Check existing shared Docker E2E images
         id: image_exists
@@ -1448,42 +1571,78 @@ jobs:
 
       - name: Setup Docker builder
         if: steps.image_exists.outputs.needs_build == '1'
-        uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
         with:
           max-cache-size-mb: 800000
 
       - name: Build and push bare Docker E2E image
         if: steps.plan.outputs.needs_bare_image == '1' && steps.image_exists.outputs.bare_exists != '1'
-        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
-        with:
-          context: .
-          file: ./scripts/e2e/Dockerfile
-          target: bare
-          platforms: linux/amd64
-          tags: ${{ steps.image.outputs.bare_image }}
-          sbom: true
-          provenance: mode=max
-          push: true
+        shell: bash
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.bare_image }}
+        run: |
+          set -euo pipefail
+          build_cmd=(
+            docker buildx build
+            --file ./scripts/e2e/Dockerfile
+            --target bare
+            --platform linux/amd64
+            --tag "$IMAGE_REF"
+            --sbom=true
+            --provenance=mode=max
+            --push
+            .
+          )
+          for attempt in 1 2 3 4; do
+            if "${build_cmd[@]}"; then
+              exit 0
+            fi
+            if [[ "$attempt" == "4" ]]; then
+              echo "::error::Failed to build Docker E2E bare image after ${attempt} attempts"
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 20))
+            echo "Docker E2E bare image build failed; retrying in ${sleep_seconds}s (${attempt}/4)."
+            sleep "$sleep_seconds"
+          done
 
       - name: Build and push functional Docker E2E image
         if: steps.plan.outputs.needs_functional_image == '1' && steps.image_exists.outputs.functional_exists != '1'
-        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
-        with:
-          context: .
-          file: ./scripts/e2e/Dockerfile
-          target: functional
-          build-contexts: |
-            openclaw_package=.artifacts/docker-e2e-package
-          platforms: linux/amd64
-          tags: ${{ steps.image.outputs.functional_image }}
-          sbom: true
-          provenance: mode=max
-          push: true
+        shell: bash
+        env:
+          IMAGE_REF: ${{ steps.image.outputs.functional_image }}
+        run: |
+          set -euo pipefail
+          build_cmd=(
+            docker buildx build
+            --file ./scripts/e2e/Dockerfile
+            --target functional
+            --build-context openclaw_package=.artifacts/docker-e2e-package
+            --platform linux/amd64
+            --tag "$IMAGE_REF"
+            --sbom=true
+            --provenance=mode=max
+            --push
+            .
+          )
+          for attempt in 1 2 3 4; do
+            if "${build_cmd[@]}"; then
+              exit 0
+            fi
+            if [[ "$attempt" == "4" ]]; then
+              echo "::error::Failed to build Docker E2E functional image after ${attempt} attempts"
+              exit 1
+            fi
+            sleep_seconds=$((attempt * 20))
+            echo "Docker E2E functional image build failed; retrying in ${sleep_seconds}s (${attempt}/4)."
+            sleep "$sleep_seconds"
+          done
 
   prepare_live_test_image:
     needs: validate_selected_ref
     if: inputs.include_live_suites && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-') || startsWith(inputs.live_suite_filter, 'docker-live-models'))
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 60
     permissions:
       contents: read
@@ -1495,7 +1654,7 @@ jobs:
       DOCKER_BUILD_RECORD_UPLOAD: "false"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
@@ -1508,16 +1667,18 @@ jobs:
         run: |
           set -euo pipefail
           repository="${GITHUB_REPOSITORY,,}"
-          live_image="ghcr.io/${repository}-live-test:${SELECTED_SHA}"
+          live_image_extensions="matrix,acpx"
+          live_image_tag_suffix="${live_image_extensions//,/-}"
+          live_image="ghcr.io/${repository}-live-test:${SELECTED_SHA}-${live_image_tag_suffix}"
           echo "live_image=${live_image}" >> "$GITHUB_OUTPUT"
+          echo "live_image_extensions=${live_image_extensions}" >> "$GITHUB_OUTPUT"
           echo "Shared live-test image: \`${live_image}\`" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Log in to GHCR
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Check existing shared live-test image
         id: image_exists
@@ -1533,7 +1694,7 @@ jobs:
 
       - name: Setup Docker builder
         if: steps.image_exists.outputs.exists != '1'
-        uses: useblacksmith/setup-docker-builder@722e97d12b1d06a961800dd6c05d79d951ad3c80 # v1
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
         with:
           max-cache-size-mb: 800000
 
@@ -1545,7 +1706,7 @@ jobs:
           file: ./Dockerfile
           target: build
           build-args: |
-            OPENCLAW_EXTENSIONS=matrix
+            OPENCLAW_EXTENSIONS=${{ steps.image.outputs.live_image_extensions }}
           platforms: linux/amd64
           tags: ${{ steps.image.outputs.live_image }}
           sbom: true
@@ -1554,41 +1715,14 @@ jobs:
 
   validate_live_models_docker:
     name: Docker live models (${{ matrix.provider_label }})
-    needs: [validate_selected_ref, prepare_live_test_image]
-    if: inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    needs: [validate_selected_ref, prepare_live_test_image, plan_release_workflow_matrices]
+    if: inputs.include_live_suites && inputs.live_model_providers == '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models') && needs.plan_release_workflow_matrices.outputs.live_models_count != '0'
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - provider_label: Anthropic
-            providers: anthropic
-            profiles: stable full
-          - provider_label: Google
-            providers: google
-            profiles: stable full
-          - provider_label: MiniMax
-            providers: minimax
-            profiles: stable full
-          - provider_label: OpenAI
-            providers: openai
-            profiles: beta minimum stable full
-          - provider_label: OpenCode
-            providers: opencode-go
-            profiles: full
-          - provider_label: OpenRouter
-            providers: openrouter
-            profiles: full
-          - provider_label: xAI
-            providers: xai
-            profiles: full
-          - provider_label: Z.ai
-            providers: zai
-            profiles: full
-          - provider_label: Fireworks
-            providers: fireworks
-            profiles: full
+      matrix: ${{ fromJson(needs.plan_release_workflow_matrices.outputs.live_models_matrix) }}
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       OPENAI_BASE_URL: ${{ secrets.OPENAI_BASE_URL }}
@@ -1625,21 +1759,22 @@ jobs:
       FIREWORKS_API_KEY: ${{ secrets.FIREWORKS_API_KEY }}
       OPENCLAW_LIVE_PROVIDERS: ${{ matrix.providers }}
       OPENCLAW_LIVE_IMAGE: ${{ needs.prepare_live_test_image.outputs.live_image }}
-      OPENCLAW_LIVE_MAX_MODELS: "6"
+      OPENCLAW_LIVE_MODELS: ${{ matrix.models || 'modern' }}
+      OPENCLAW_LIVE_MAX_MODELS: ${{ matrix.max_models || '6' }}
       OPENCLAW_LIVE_MODEL_TIMEOUT_MS: "45000"
       OPENCLAW_SKIP_DOCKER_BUILD: "1"
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live Docker harness
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -1650,7 +1785,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
@@ -1659,15 +1793,16 @@ jobs:
 
       - name: Log in to GHCR
         if: contains(matrix.profiles, inputs.release_test_profile)
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Validate provider credential
         if: contains(matrix.profiles, inputs.release_test_profile)
         shell: bash
+        env:
+          LIVE_MODEL_PROVIDERS: ${{ matrix.providers }}
         run: |
           set -euo pipefail
 
@@ -1684,10 +1819,11 @@ jobs:
             exit 1
           }
 
-          case "${{ matrix.providers }}" in
+          case "${LIVE_MODEL_PROVIDERS}" in
             anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
             google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
             minimax) require_any MiniMax MINIMAX_API_KEY ;;
+            moonshot) require_any Moonshot MOONSHOT_API_KEY KIMI_API_KEY ;;
             openai) require_any OpenAI OPENAI_API_KEY ;;
             opencode-go) require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY ;;
             openrouter) require_any OpenRouter OPENROUTER_API_KEY ;;
@@ -1695,7 +1831,7 @@ jobs:
             zai) require_any Z.ai ZAI_API_KEY Z_AI_API_KEY ;;
             fireworks) require_any Fireworks FIREWORKS_API_KEY ;;
             *)
-              echo "Unhandled live model provider shard: ${{ matrix.providers }}" >&2
+              echo "Unhandled live model provider shard: ${LIVE_MODEL_PROVIDERS}" >&2
               exit 1
               ;;
           esac
@@ -1708,7 +1844,8 @@ jobs:
     name: Docker live models (selected providers)
     needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && inputs.live_model_providers != '' && (inputs.live_suite_filter == '' || inputs.live_suite_filter == 'docker-live-models')
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: 45
     env:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -1752,13 +1889,13 @@ jobs:
       OPENCLAW_VITEST_MAX_WORKERS: "2"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live Docker harness
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -1768,7 +1905,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Normalize provider allowlist
@@ -1776,12 +1912,11 @@ jobs:
         run: |
           set -euo pipefail
 
-          all_providers=(anthropic google minimax openai opencode-go openrouter xai zai fireworks)
+          all_providers=(anthropic google minimax moonshot openai opencode-go openrouter xai zai fireworks)
 
           normalize_provider() {
             local value="${1,,}"
             case "$value" in
-              z.ai|z-ai) echo "zai" ;;
               opencode|opencode-go) echo "opencode-go" ;;
               open-router|openrouter) echo "openrouter" ;;
               *) echo "$value" ;;
@@ -1834,11 +1969,10 @@ jobs:
         run: bash scripts/ci-hydrate-live-auth.sh
 
       - name: Log in to GHCR
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Validate provider credentials
         shell: bash
@@ -1864,6 +1998,7 @@ jobs:
               anthropic) require_any Anthropic ANTHROPIC_API_KEY ANTHROPIC_API_KEY_OLD ANTHROPIC_API_TOKEN ;;
               google) require_any Google GEMINI_API_KEY GOOGLE_API_KEY ;;
               minimax) require_any MiniMax MINIMAX_API_KEY ;;
+              moonshot) require_any Moonshot MOONSHOT_API_KEY KIMI_API_KEY ;;
               openai) require_any OpenAI OPENAI_API_KEY ;;
               opencode-go) require_any OpenCode OPENCODE_API_KEY OPENCODE_ZEN_API_KEY ;;
               openrouter) require_any OpenRouter OPENROUTER_API_KEY ;;
@@ -1883,7 +2018,8 @@ jobs:
   validate_live_provider_suites:
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || (startsWith(inputs.live_suite_filter, 'native-live-') && !startsWith(inputs.live_suite_filter, 'native-live-extensions-media') && inputs.live_suite_filter != 'native-live-extensions-a-k'))
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -1895,9 +2031,15 @@ jobs:
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
+          - suite_id: native-live-src-agents-zai-coding
+            label: Native live Z.AI Coding Plan
+            command: ZAI_CODING_LIVE_TEST=1 node .release-harness/scripts/test-live-shard.mjs native-live-src-agents-zai-coding
+            timeout_minutes: 15
+            profile_env_only: false
+            profiles: stable full
           - suite_id: native-live-src-gateway-core
             label: Native live gateway core
-            command: node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-core
+            command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-core
             timeout_minutes: 60
             profile_env_only: false
             profiles: beta minimum stable full
@@ -1911,7 +2053,7 @@ jobs:
           - suite_id: native-live-src-gateway-profiles-anthropic-opus
             suite_group: native-live-src-gateway-profiles-anthropic
             label: Native live gateway profiles Anthropic Opus
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-4-7,anthropic/claude-opus-4-6 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-opus-4-8 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
             advisory: true
@@ -1919,26 +2061,26 @@ jobs:
           - suite_id: native-live-src-gateway-profiles-anthropic-sonnet-haiku
             suite_group: native-live-src-gateway-profiles-anthropic
             label: Native live gateway profiles Anthropic Sonnet/Haiku
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 30
             profile_env_only: false
             advisory: true
             profiles: full
           - suite_id: native-live-src-gateway-profiles-google
             label: Native live gateway profiles Google
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=google OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview,google/gemini-3-flash-preview node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=google OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-minimax
             label: Native live gateway profiles MiniMax
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
           - suite_id: native-live-src-gateway-profiles-openai
             label: Native live gateway profiles OpenAI
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
+            command: OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=180000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-profiles
             timeout_minutes: 60
             profile_env_only: false
             profiles: beta minimum stable full
@@ -2017,7 +2159,7 @@ jobs:
             profiles: full
           - suite_id: native-live-src-gateway-backends
             label: Native live gateway backends
-            command: node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends
+            command: OPENCLAW_LIVE_CODEX_HARNESS=1 OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key node .release-harness/scripts/test-live-shard.mjs native-live-src-gateway-backends
             timeout_minutes: 60
             profile_env_only: false
             profiles: stable full
@@ -2119,14 +2261,14 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live shard harness
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-anthropic' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-anthropic-')) || (inputs.live_suite_filter == 'native-live-src-gateway-profiles-opencode-go' && startsWith(matrix.suite_id, 'native-live-src-gateway-profiles-opencode-go-')))
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -2137,7 +2279,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
@@ -2154,27 +2295,15 @@ jobs:
           fi
           case "${{ matrix.suite_id }}" in
             live-cli-backend-docker)
-              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4" >> "$GITHUB_ENV"
-              # Keep the release-blocking CI lane on Codex API-key auth. The
-              # staged auth-file path remains supported for local maintainer
-              # reruns, but it can hang on stale subscription/session state in
-              # an otherwise healthy release run.
-              echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
-              # Replace the staged config.toml with a minimal CI-safe config so
-              # the repo stays trusted for MCP/tool use without inheriting
-              # maintainer-local provider/profile overrides that do not exist
-              # inside CI.
-              # Codex's workspace-write sandbox relies on user namespaces that
-              # this Docker lane does not provide, so run Codex unsandboxed
-              # inside the already-isolated container to keep MCP cron/tool
-              # execution representative instead of failing on nested sandbox
-              # setup.
-              echo 'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
-              echo 'OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS=["exec","resume","{sessionId}","-c","sandbox_mode=\"danger-full-access\"","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
+              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6" >> "$GITHUB_ENV"
+              if [[ -n "${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+                echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=subscription" >> "$GITHUB_ENV"
+              else
+                echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
+              fi
               echo "OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
-              echo "OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1" >> "$GITHUB_ENV"
               ;;
             live-codex-harness-docker)
               # Keep CI on the API-key path for now. The staged Codex auth secret
@@ -2202,6 +2331,7 @@ jobs:
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
           OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
+        shell: bash
         run: |
           set +e
           bash .release-harness/scripts/ci-live-command-retry.sh
@@ -2220,7 +2350,8 @@ jobs:
     name: Docker live suites (${{ matrix.label }})
     needs: [validate_selected_ref, prepare_live_test_image]
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'live-'))
-    runs-on: blacksmith-32vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-32vcpu-ubuntu-2404' }}
     timeout-minutes: ${{ matrix.timeout_minutes }}
     strategy:
       fail-fast: false
@@ -2228,49 +2359,49 @@ jobs:
         include:
           - suite_id: live-gateway-docker
             label: Docker live gateway OpenAI
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_GATEWAY_THINKING=off OPENCLAW_LIVE_GATEWAY_PROVIDERS=openai OPENCLAW_LIVE_GATEWAY_MODELS=openai/gpt-5.5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 40
             profile_env_only: false
             profiles: beta minimum stable full
           - suite_id: live-gateway-anthropic-docker
             label: Docker live gateway Anthropic
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_GATEWAY_THINKING=low OPENCLAW_LIVE_GATEWAY_PROVIDERS=anthropic OPENCLAW_LIVE_GATEWAY_MODELS=anthropic/claude-sonnet-4-6,anthropic/claude-haiku-4-5 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=600000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 40
             profile_env_only: false
             profiles: stable full
           - suite_id: live-gateway-google-docker
             label: Docker live gateway Google
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=google OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview,google/gemini-3-flash-preview OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=google OPENCLAW_LIVE_GATEWAY_MODELS=google/gemini-3.1-pro-preview OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 40
             profile_env_only: false
             profiles: stable full
           - suite_id: live-gateway-minimax-docker
             label: Docker live gateway MiniMax
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MAX_MODELS=1 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=minimax,minimax-portal OPENCLAW_LIVE_GATEWAY_MODELS=minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7 OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 40
             profile_env_only: false
             profiles: stable full
           - suite_id: live-gateway-advisory-docker-deepseek-fireworks
             suite_group: live-gateway-advisory-docker
             label: Docker live gateway advisory DeepSeek/Fireworks
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=deepseek,fireworks OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 40
             profile_env_only: false
             advisory: true
             profiles: full
           - suite_id: live-gateway-advisory-docker-opencode-openrouter
             suite_group: live-gateway-advisory-docker
             label: Docker live gateway advisory OpenCode/OpenRouter
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=opencode-go,openrouter OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 40
             profile_env_only: false
             advisory: true
             profiles: full
           - suite_id: live-gateway-advisory-docker-xai-zai
             suite_group: live-gateway-advisory-docker
             label: Docker live gateway advisory xAI/Z.ai
-            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=30000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=60000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 25m bash .release-harness/scripts/test-live-gateway-models-docker.sh
-            timeout_minutes: 30
+            command: OPENCLAW_LIVE_GATEWAY_PROVIDERS=xai,zai OPENCLAW_LIVE_GATEWAY_MAX_MODELS=2 OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=90000 OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=180000 OPENCLAW_LIVE_DOCKER_REPO_ROOT="$GITHUB_WORKSPACE" timeout --foreground --kill-after=30s 35m bash .release-harness/scripts/test-live-gateway-models-docker.sh
+            timeout_minutes: 40
             profile_env_only: false
             advisory: true
             profiles: full
@@ -2352,14 +2483,14 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live shard harness
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -2370,7 +2501,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
@@ -2379,11 +2509,10 @@ jobs:
 
       - name: Log in to GHCR
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ github.token }}
+        run: bash .release-harness/scripts/ci-docker-login-ghcr.sh
+        env:
+          GHCR_USERNAME: ${{ github.actor }}
+          GITHUB_TOKEN: ${{ github.token }}
 
       - name: Configure suite-specific env
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'live-gateway-advisory-docker' && startsWith(matrix.suite_id, 'live-gateway-advisory-docker-')))
@@ -2395,14 +2524,15 @@ jobs:
           fi
           case "${{ matrix.suite_id }}" in
             live-cli-backend-docker)
-              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=codex-cli/gpt-5.4" >> "$GITHUB_ENV"
-              echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
-              echo 'OPENCLAW_LIVE_CLI_BACKEND_ARGS=["exec","--json","--color","never","--sandbox","danger-full-access","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
-              echo 'OPENCLAW_LIVE_CLI_BACKEND_RESUME_ARGS=["exec","resume","{sessionId}","-c","sandbox_mode=\"danger-full-access\"","-c","service_tier=\"fast\"","--skip-git-repo-check"]' >> "$GITHUB_ENV"
+              echo "OPENCLAW_LIVE_CLI_BACKEND_MODEL=claude-cli/claude-sonnet-4-6" >> "$GITHUB_ENV"
+              if [[ -n "${OPENCLAW_CLAUDE_CREDENTIALS_JSON:-}" || -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]]; then
+                echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=subscription" >> "$GITHUB_ENV"
+              else
+                echo "OPENCLAW_LIVE_CLI_BACKEND_AUTH=api-key" >> "$GITHUB_ENV"
+              fi
               echo "OPENCLAW_LIVE_CLI_BACKEND_DEBUG=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_CLI_BACKEND_LOG_OUTPUT=1" >> "$GITHUB_ENV"
               echo "OPENCLAW_TEST_CONSOLE=1" >> "$GITHUB_ENV"
-              echo "OPENCLAW_LIVE_CLI_BACKEND_USE_CI_SAFE_CODEX_CONFIG=1" >> "$GITHUB_ENV"
               ;;
             live-codex-harness-docker)
               echo "OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key" >> "$GITHUB_ENV"
@@ -2424,6 +2554,7 @@ jobs:
         env:
           OPENCLAW_LIVE_COMMAND: ${{ matrix.command }}
           OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
+        shell: bash
         run: |
           set +e
           bash .release-harness/scripts/ci-live-command-retry.sh
@@ -2442,7 +2573,8 @@ jobs:
     name: Live media suites (${{ matrix.label }})
     needs: validate_selected_ref
     if: inputs.include_live_suites && !inputs.live_models_only && (inputs.live_suite_filter == '' || startsWith(inputs.live_suite_filter, 'native-live-extensions-media') || inputs.live_suite_filter == 'native-live-extensions-a-k')
-    runs-on: blacksmith-8vcpu-ubuntu-2404
+    continue-on-error: ${{ inputs.advisory }}
+    runs-on: ${{ inputs.use_github_hosted_runners && 'ubuntu-24.04' || 'blacksmith-8vcpu-ubuntu-2404' }}
     container:
       image: ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04
       credentials:
@@ -2565,14 +2697,14 @@ jobs:
     steps:
       - name: Checkout selected ref
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ needs.validate_selected_ref.outputs.selected_sha }}
           fetch-depth: 1
 
       - name: Checkout trusted live shard harness
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.sha }}
           fetch-depth: 1
@@ -2591,7 +2723,6 @@ jobs:
         uses: ./.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
-          pnpm-version: ${{ env.PNPM_VERSION }}
           install-bun: "true"
 
       - name: Hydrate live auth/profile inputs
@@ -2611,6 +2742,7 @@ jobs:
         if: contains(matrix.profiles, inputs.release_test_profile) && (inputs.live_suite_filter == '' || inputs.live_suite_filter == matrix.suite_id || (inputs.live_suite_filter == 'native-live-extensions-media-video' && startsWith(matrix.suite_id, 'native-live-extensions-media-video-')))
         env:
           OPENCLAW_LIVE_SUITE_ADVISORY: ${{ matrix.advisory }}
+        shell: bash
         run: |
           set +e
           ${{ matrix.command }}

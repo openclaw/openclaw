@@ -26,17 +26,28 @@ openclaw doctor
     Accept defaults without prompting (including restart/service/sandbox repair steps when applicable).
 
   </Tab>
-  <Tab title="--repair">
+  <Tab title="--fix">
     ```bash
-    openclaw doctor --repair
+    openclaw doctor --fix
     ```
 
     Apply recommended repairs without prompting (repairs + restarts where safe).
 
   </Tab>
-  <Tab title="--repair --force">
+  <Tab title="--lint">
     ```bash
-    openclaw doctor --repair --force
+    openclaw doctor --lint
+    openclaw doctor --lint --json
+    ```
+
+    Run structured health checks for CI or preflight automation. This mode is
+    read-only: it does not prompt, repair, migrate config, restart services, or
+    touch state.
+
+  </Tab>
+  <Tab title="--fix --force">
+    ```bash
+    openclaw doctor --fix --force
     ```
 
     Apply aggressive repairs too (overwrites custom supervisor configs).
@@ -66,6 +77,60 @@ If you want to review changes before writing, open the config file first:
 cat ~/.openclaw/openclaw.json
 ```
 
+## Read-only lint mode
+
+`openclaw doctor --lint` is the automation-friendly sibling of
+`openclaw doctor --fix`. Both use doctor health checks, but their posture is
+different:
+
+| Mode                     | Prompts   | Writes config/state     | Output                 | Use it for                      |
+| ------------------------ | --------- | ----------------------- | ---------------------- | ------------------------------- |
+| `openclaw doctor`        | yes       | no                      | friendly health report | a human checking status         |
+| `openclaw doctor --fix`  | sometimes | yes, with repair policy | friendly repair log    | applying approved repairs       |
+| `openclaw doctor --lint` | no        | no                      | structured findings    | CI, preflight, and review gates |
+
+Modernized health checks may provide an optional `repair()` implementation.
+`doctor --fix` applies those repairs when they exist and continues to use the
+existing doctor repair flow for checks that have not migrated yet.
+The structured repair contract also separates repair reporting from detection:
+`detect()` reports current findings, while `repair()` can report changes,
+config/file diffs, and non-file side effects. That keeps the migration path open
+for future `doctor --fix --dry-run` and diff output without making lint checks
+plan mutations.
+
+Examples:
+
+```bash
+openclaw doctor --lint
+openclaw doctor --lint --severity-min warning
+openclaw doctor --lint --json
+openclaw doctor --lint --all
+openclaw doctor --lint --only core/doctor/gateway-config --json
+```
+
+JSON output includes:
+
+- `ok`: whether any visible finding met the selected severity threshold
+- `checksRun`: number of health checks executed
+- `checksSkipped`: checks skipped by the selected profile, `--only`, or `--skip`
+- `findings`: structured diagnostics with `checkId`, `severity`, `message`, and
+  optional `path`, `line`, `column`, `ocPath`, and `fixHint`
+
+Exit codes:
+
+- `0`: no findings at or above the selected threshold
+- `1`: one or more findings met the selected threshold
+- `2`: command/runtime failure before lint findings could be emitted
+
+Use `--severity-min info|warning|error` to control both what is printed and what
+causes a non-zero lint exit. Use `--all` to run the complete lint inventory,
+including deeper opt-in checks excluded from the default automation set. Use `--only <id>` for narrow preflight gates and
+`--skip <id>` to temporarily exclude a noisy check while keeping the rest of the
+lint run active.
+Lint-output options such as `--json`, `--severity-min`, `--all`, `--only`, and
+`--skip` must be paired with `--lint`; regular doctor and repair runs reject
+them.
+
 ## What it does (summary)
 
 <AccordionGroup>
@@ -81,12 +146,12 @@ cat ~/.openclaw/openclaw.json
     - Talk config migration from legacy flat `talk.*` fields into `talk.provider` + `talk.providers.<provider>`.
     - Browser migration checks for legacy Chrome extension configs and Chrome MCP readiness.
     - OpenCode provider override warnings (`models.providers.opencode` / `models.providers.opencode-go`).
-    - Codex OAuth shadowing warnings (`models.providers.openai-codex`).
+    - Legacy OpenAI Codex provider/profile migration (`openai-codex` → `openai`) and shadowing warnings for stale `models.providers.openai-codex`.
     - OAuth TLS prerequisites check for OpenAI Codex OAuth profiles.
     - Plugin/tool allowlist warnings when `plugins.allow` is restrictive but tool policy still asks for wildcard or plugin-owned tools.
     - Legacy on-disk state migration (sessions/agent dir/WhatsApp auth).
     - Legacy plugin manifest contract key migration (`speechProviders`, `realtimeTranscriptionProviders`, `realtimeVoiceProviders`, `mediaUnderstandingProviders`, `imageGenerationProviders`, `videoGenerationProviders`, `webFetchProviders`, `webSearchProviders` → `contracts`).
-    - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, simple `notify: true` webhook fallback jobs).
+    - Legacy cron store migration (`jobId`, `schedule.cron`, top-level delivery/payload fields, payload `provider`, `notify: true` webhook fallback jobs).
     - Legacy whole-agent runtime-policy cleanup; provider/model runtime policy is the active route selector.
     - Stale plugin config cleanup when plugins are enabled; when `plugins.enabled=false`, stale plugin references are treated as inert containment config and are preserved.
 
@@ -98,7 +163,6 @@ cat ~/.openclaw/openclaw.json
     - State integrity and permissions checks (sessions, transcripts, state dir).
     - Config file permission checks (chmod 600) when running locally.
     - Model auth health: checks OAuth expiry, can refresh expiring tokens, and reports auth-profile cooldown/disabled states.
-    - Extra workspace dir detection (`~/openclaw`).
 
   </Accordion>
   <Accordion title="Gateway, services, and supervisors">
@@ -109,7 +173,7 @@ cat ~/.openclaw/openclaw.json
     - Channel status warnings (probed from the running gateway).
     - Channel-specific permission checks live under `openclaw channels capabilities`; for example, Discord voice channel permissions are audited with `openclaw channels capabilities --channel discord --target channel:<channel-id>`.
     - WhatsApp responsiveness checks for degraded Gateway event-loop health with local TUI clients still running; `--fix` stops only verified local TUI clients.
-    - Codex route repair for legacy `openai-codex/*` model refs in primary models, fallbacks, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and session route pins; `--fix` rewrites them to `openai/*`, removes stale session/whole-agent runtime pins, and leaves canonical OpenAI agent refs on the default Codex harness.
+    - Codex route repair for legacy `openai-codex/*` model refs in primary models, fallbacks, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and session route pins; `--fix` rewrites them to `openai/*`, migrates `openai-codex:*` auth profiles/order to `openai:*`, removes stale session/whole-agent runtime pins, and leaves canonical OpenAI agent refs on the default Codex harness.
     - Supervisor config audit (launchd/systemd/schtasks) with optional repair.
     - Embedded proxy environment cleanup for gateway services that captured shell `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` values during install or update.
     - Gateway runtime best-practice checks (Node vs Bun, version-manager paths).
@@ -172,9 +236,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     Doctor also warns when `plugins.allow` is non-empty and tool policy uses
     wildcard or plugin-owned tool entries. `tools.allow: ["*"]` only matches tools
     from plugins that actually load; it does not bypass the exclusive plugin
-    allowlist. Doctor writes `plugins.bundledDiscovery: "compat"` for migrated
-    legacy allowlist configs to preserve existing bundled provider behavior, and
-    then points to the stricter `"allowlist"` setting.
+    allowlist.
 
   </Accordion>
   <Accordion title="2. Legacy config key migrations">
@@ -195,7 +257,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `routing.groupChat.historyLimit` → `messages.groupChat.historyLimit`
     - `routing.groupChat.mentionPatterns` → `messages.groupChat.mentionPatterns`
     - `channels.telegram.requireMention` → `channels.telegram.groups."*".requireMention`
-    - configured-channel configs missing visible reply policy → `messages.groupChat.visibleReplies: "message_tool"`
+    - remove retired `channels.webchat` and `gateway.webchat`
     - `routing.queue` → `messages.queue`
     - `routing.bindings` → top-level `bindings`
     - `routing.agents`/`routing.defaultAgentId` → `agents.list` + `agents.list[].default`
@@ -205,6 +267,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `routing.transcribeAudio` → `tools.media.audio.models`
     - `messages.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `messages.tts.providers.<provider>`
     - `messages.tts.provider: "edge"` and `messages.tts.providers.edge` → `messages.tts.provider: "microsoft"` and `messages.tts.providers.microsoft`
+    - TTS speaker selection fields (`voice`/`voiceName`/`voiceId`) → `speakerVoice`/`speakerVoiceId`
     - `channels.discord.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.voice.tts.providers.<provider>`
     - `channels.discord.accounts.<id>.voice.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `channels.discord.accounts.<id>.voice.tts.providers.<provider>`
     - `plugins.entries.voice-call.config.tts.<provider>` (`openai`/`elevenlabs`/`microsoft`/`edge`) → `plugins.entries.voice-call.config.tts.providers.<provider>`
@@ -218,7 +281,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - `identity` → `agents.list[].identity`
     - `agent.*` → `agents.defaults` + `tools.*` (tools/elevated/exec/sandbox/subagents)
     - `agent.model`/`allowedModels`/`modelAliases`/`modelFallbacks`/`imageModelFallbacks` → `agents.defaults.models` + `agents.defaults.model.primary/fallbacks` + `agents.defaults.imageModel.primary/fallbacks`
-    - remove `agents.defaults.llm`; use `models.providers.<id>.timeoutSeconds` for slow provider/model timeouts
+    - remove `agents.defaults.llm`; use `models.providers.<id>.timeoutSeconds` for slow provider/model timeouts, and keep the agent/run timeout above that value when the whole run must last longer
     - `browser.ssrfPolicy.allowPrivateNetwork` → `browser.ssrfPolicy.dangerouslyAllowPrivateNetwork`
     - `browser.profiles.*.driver: "extension"` → `"existing-session"`
     - remove `browser.relayBindHost` (legacy extension relay setting)
@@ -232,7 +295,7 @@ That stages grounded durable candidates into the short-term dreaming store while
 
   </Accordion>
   <Accordion title="2b. OpenCode provider overrides">
-    If you've added `models.providers.opencode`, `opencode-zen`, or `opencode-go` manually, it overrides the built-in OpenCode catalog from `@earendil-works/pi-ai`. That can force models onto the wrong API or zero out costs. Doctor warns so you can remove the override and restore per-model API routing + costs.
+    If you've added `models.providers.opencode`, `opencode-zen`, or `opencode-go` manually, it overrides the built-in OpenCode catalog from `openclaw/plugin-sdk/llm`. That can force models onto the wrong API or zero out costs. Doctor warns so you can remove the override and restore per-model API routing + costs.
   </Accordion>
   <Accordion title="2c. Browser migration and Chrome MCP readiness">
     If your browser config still points at the removed Chrome extension path, doctor normalizes it to the current host-local Chrome MCP attach model:
@@ -265,12 +328,12 @@ That stages grounded durable candidates into the short-term dreaming store while
     If you previously added legacy OpenAI transport settings under `models.providers.openai-codex`, they can shadow the built-in Codex OAuth provider path that newer releases use automatically. Doctor warns when it sees those old transport settings alongside Codex OAuth so you can remove or rewrite the stale transport override and get the built-in routing/fallback behavior back. Custom proxies and header-only overrides are still supported and do not trigger this warning.
   </Accordion>
   <Accordion title="2f. Codex route repair">
-    Doctor checks for legacy `openai-codex/*` model refs. Native Codex harness routing uses canonical `openai/*` model refs; OpenAI agent turns go through the Codex app-server harness instead of the OpenClaw PI OpenAI path.
+    Doctor checks for legacy `openai-codex/*` model refs. Native Codex harness routing uses canonical `openai/*` model refs; OpenAI agent turns go through the Codex app-server harness instead of the OpenClaw OpenAI provider path.
 
-    In `--fix` / `--repair` mode, doctor rewrites affected default-agent and per-agent refs, including primary models, fallbacks, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and stale persisted session route state:
+    In `--fix` / `--repair` mode, doctor rewrites affected default-agent and per-agent refs, including primary models, fallbacks, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, and stale persisted session route state:
 
     - `openai-codex/gpt-*` becomes `openai/gpt-*`.
-    - Codex intent moves to provider/model-scoped `agentRuntime.id: "codex"` entries for repaired agent model refs so `openai-codex:...` auth profiles can still be selected after the model ref becomes `openai/*`.
+    - Codex intent moves to provider/model-scoped `agentRuntime.id: "codex"` entries for repaired agent model refs.
     - Stale whole-agent runtime config and persisted session runtime pins are removed because runtime selection is provider/model-scoped.
     - Existing provider/model runtime policy is preserved unless the repaired legacy model ref needs Codex routing to keep the old auth path.
     - Existing model fallback lists are preserved with their legacy entries rewritten; copied per-model settings move from the legacy key to the canonical `openai/*` key.
@@ -312,15 +375,17 @@ That stages grounded durable candidates into the short-term dreaming store while
     - top-level payload fields (`message`, `model`, `thinking`, ...) → `payload`
     - top-level delivery fields (`deliver`, `channel`, `to`, `provider`, ...) → `delivery`
     - payload `provider` delivery aliases → explicit `delivery.channel`
-    - simple legacy `notify: true` webhook fallback jobs → explicit `delivery.mode="webhook"` with `delivery.to=cron.webhook`
+    - legacy `notify: true` webhook fallback jobs → explicit webhook delivery from `cron.webhook` when set; announce jobs keep their chat delivery and get `delivery.completionDestination`. When `cron.webhook` is unset, the inert top-level `notify` marker is removed for no-target jobs (existing delivery, including announce, is preserved) since runtime delivery never reads it
 
-    Doctor only auto-migrates `notify: true` jobs when it can do so without changing behavior. If a job combines legacy notify fallback with an existing non-webhook delivery mode, doctor warns and leaves that job for manual review.
+    The Gateway also sanitizes malformed cron rows at load time so valid jobs keep running. Raw malformed rows are copied to `jobs-quarantine.json` next to the active store before they are removed from `jobs.json`; doctor reports quarantined rows so you can review or repair them manually.
+
+    Gateway startup normalizes the runtime projection and ignores the top-level `notify` marker, but leaves the persisted cron config for doctor repair. When `cron.webhook` is unset, doctor removes the inert marker for jobs with no migration target (`delivery.mode` none/absent, an unusable webhook target, or existing announce/chat delivery), leaving the existing delivery untouched, so repeated `doctor --fix` runs no longer re-warn about the same job. If `cron.webhook` is set but not a valid HTTP(S) URL, doctor still warns and leaves the marker so you can fix the URL.
 
     On Linux, doctor also warns when the user's crontab still invokes legacy `~/.openclaw/bin/ensure-whatsapp.sh`. That host-local script is not maintained by current OpenClaw and can write false `Gateway inactive` messages to `~/.openclaw/logs/whatsapp-health.log` when cron cannot reach the systemd user bus. Remove the stale crontab entry with `crontab -e`; use `openclaw channels status --probe`, `openclaw doctor`, and `openclaw gateway status` for current health checks.
 
   </Accordion>
   <Accordion title="3c. Session lock cleanup">
-    Doctor scans every agent session directory for stale write-lock files — files left behind when a session exited abnormally. For each lock file found it reports: the path, PID, whether the PID is still alive, lock age, and whether it is considered stale (dead PID, older than 30 minutes, or a live PID that can be proven to belong to a non-OpenClaw process). In `--fix` / `--repair` mode it removes stale lock files automatically; otherwise it prints a note and instructs you to rerun with `--fix`.
+    Doctor scans every agent session directory for stale write-lock files — files left behind when a session exited abnormally. For each lock file found it reports: the path, PID, whether the PID is still alive, lock age, and whether it is considered stale (dead PID, malformed owner metadata, older than 30 minutes, or a live PID that can be proven to belong to a non-OpenClaw process). In `--fix` / `--repair` mode it removes locks with dead, orphaned, recycled, malformed-old, or non-OpenClaw owners automatically. Old locks that are still owned by a live OpenClaw process are reported but left in place so doctor does not cut off an active transcript writer.
   </Accordion>
   <Accordion title="3d. Session transcript branch repair">
     Doctor scans agent session JSONL files for the duplicated branch shape created by the 2026.4.24 prompt transcript rewrite bug: an abandoned user turn with OpenClaw internal runtime context plus an active sibling containing the same visible user prompt. In `--fix` / `--repair` mode, doctor backs up each affected file next to the original and rewrites the transcript to the active branch so gateway history and memory readers no longer see duplicate turns.
@@ -334,6 +399,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - **State dir permissions**: verifies writability; offers to repair permissions (and emits a `chown` hint when owner/group mismatch is detected).
     - **macOS cloud-synced state dir**: warns when state resolves under iCloud Drive (`~/Library/Mobile Documents/com~apple~CloudDocs/...`) or `~/Library/CloudStorage/...` because sync-backed paths can cause slower I/O and lock/sync races.
     - **Linux SD or eMMC state dir**: warns when state resolves to an `mmcblk*` mount source, because SD or eMMC-backed random I/O can be slower and wear faster under session and credential writes.
+    - **Linux volatile state dir**: warns when state resolves to `tmpfs` or `ramfs`, because sessions, credentials, config, and SQLite state with its WAL/journal sidecars will disappear on reboot. Docker `overlay` mounts are intentionally not flagged because their writable layers persist across host reboots while the container remains.
     - **Session dirs missing**: `sessions/` and the session store directory are required to persist history and avoid `ENOENT` crashes.
     - **Transcript mismatch**: warns when recent session entries have missing transcript files.
     - **Main session "1-line JSONL"**: flags when the main transcript has only one line (history is not accumulating).
@@ -351,6 +417,8 @@ That stages grounded durable candidates into the short-term dreaming store while
 
     - short cooldowns (rate limits/timeouts/auth failures)
     - longer disables (billing/credit failures)
+
+    Legacy Codex OAuth profiles whose tokens live in macOS Keychain (older onboarding before the file-based sidecar layout) are repaired only by doctor. Run `openclaw doctor --fix` once from an interactive terminal to migrate Keychain-backed legacy tokens inline into `auth-profiles.json`; after that, embedded turns (Telegram, cron, sub-agent dispatch) resolve them as canonical OpenAI OAuth profiles.
 
   </Accordion>
   <Accordion title="6. Hooks model validation">
@@ -403,14 +471,14 @@ That stages grounded durable candidates into the short-term dreaming store while
   <Accordion title="10. systemd linger (Linux)">
     If running as a systemd user service, doctor ensures lingering is enabled so the gateway stays alive after logout.
   </Accordion>
-  <Accordion title="11. Workspace status (skills, plugins, and legacy dirs)">
+  <Accordion title="11. Workspace status (skills, plugins, and TaskFlows)">
     Doctor prints a summary of the workspace state for the default agent:
 
     - **Skills status**: counts eligible, missing-requirements, and allowlist-blocked skills.
-    - **Legacy workspace dirs**: warns when `~/openclaw` or other legacy workspace directories exist alongside the current workspace.
     - **Plugin status**: counts enabled/disabled/errored plugins; lists plugin IDs for any errors; reports bundle plugin capabilities.
     - **Plugin compatibility warnings**: flags plugins that have compatibility issues with the current runtime.
     - **Plugin diagnostics**: surfaces any load-time warnings or errors emitted by the plugin registry.
+    - **TaskFlow recovery**: surfaces suspicious managed TaskFlows that need manual inspection or cancellation.
 
   </Accordion>
   <Accordion title="11b. Bootstrap file size">
@@ -454,7 +522,7 @@ That stages grounded durable candidates into the short-term dreaming store while
     - **QMD backend**: probes whether the `qmd` binary is available and startable. If not, prints fix guidance including the npm package and a manual binary path option.
     - **Explicit local provider**: checks for a local model file or a recognized remote/downloadable model URL. If missing, suggests switching to a remote provider.
     - **Explicit remote provider** (`openai`, `voyage`, etc.): verifies an API key is present in the environment or auth store. Prints actionable fix hints if missing.
-    - **Auto provider**: checks local model availability first, then tries each remote provider in auto-selection order.
+    - **Legacy auto provider**: treats `memorySearch.provider: "auto"` as OpenAI, checks OpenAI readiness, and `doctor --fix` rewrites it to `provider: "openai"`.
 
     When a cached gateway probe result is available (gateway was healthy at the time of the check), doctor cross-references its result with the CLI-visible config and notes any discrepancy. Doctor does not start a fresh embedding ping on the default path; use the deep memory status command when you want a live provider check.
 
@@ -471,8 +539,8 @@ That stages grounded durable candidates into the short-term dreaming store while
 
     - `openclaw doctor` prompts before rewriting supervisor config.
     - `openclaw doctor --yes` accepts the default repair prompts.
-    - `openclaw doctor --repair` applies recommended fixes without prompts.
-    - `openclaw doctor --repair --force` overwrites custom supervisor configs.
+    - `openclaw doctor --fix` applies recommended fixes without prompts (`--repair` is an alias).
+    - `openclaw doctor --fix --force` overwrites custom supervisor configs.
     - `OPENCLAW_SERVICE_REPAIR_POLICY=external` keeps doctor read-only for gateway service lifecycle. It still reports service health and runs non-service repairs, but skips service install/start/restart/bootstrap, supervisor config rewrites, and legacy service cleanup because an external supervisor owns that lifecycle.
     - On Linux, doctor does not rewrite command/entrypoint metadata while the matching systemd gateway unit is active. It also ignores inactive non-legacy extra gateway-like units during the duplicate-service scan so companion service files do not create cleanup noise.
     - If token auth requires a token and `gateway.auth.token` is SecretRef-managed, doctor service install/repair validates the SecretRef but does not persist resolved plaintext token values into supervisor service environment metadata.

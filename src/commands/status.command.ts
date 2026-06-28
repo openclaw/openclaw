@@ -1,13 +1,18 @@
-import { withProgress } from "../cli/progress.js";
+// Main `openclaw status` command orchestrator.
+// It routes all/json/deep modes, collects scan/runtime state, and delegates formatting to report builders.
+
 import {
   normalizePairingConnectRequestId,
   readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
   type ConnectPairingRequiredReason,
-} from "../gateway/protocol/connect-error-details.js";
-import { type RuntimeEnv } from "../runtime.js";
+} from "../../packages/gateway-protocol/src/connect-error-details.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { withProgress } from "../cli/progress.js";
+import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
+import { readRestartSentinel } from "../infra/restart-sentinel.js";
+import type { RuntimeEnv } from "../runtime.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import { sanitizeTerminalText } from "../terminal/safe-text.js";
 import { runStatusJsonCommand } from "./status-json-command.ts";
 import { buildStatusOverviewSurfaceFromScan } from "./status-overview-surface.ts";
 import {
@@ -17,6 +22,7 @@ import {
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
 } from "./status-runtime-shared.ts";
+import { formatUpdateRestartStatusValue } from "./status-update-restart.ts";
 import { buildStatusCommandReportData } from "./status.command-report-data.ts";
 import { buildStatusCommandReportLines } from "./status.command-report.ts";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.ts";
@@ -28,9 +34,6 @@ const statusScanFastJsonModuleLoader = createLazyImportLoader(
 const statusAllModuleLoader = createLazyImportLoader(() => import("./status-all.js"));
 const statusCommandTextRuntimeLoader = createLazyImportLoader(
   () => import("./status.command.text-runtime.js"),
-);
-const statusGatewayConnectionRuntimeLoader = createLazyImportLoader(
-  () => import("./status.gateway-connection.runtime.js"),
 );
 const statusNodeModeModuleLoader = createLazyImportLoader(() => import("./status.node-mode.js"));
 
@@ -50,14 +53,11 @@ function loadStatusCommandTextRuntime() {
   return statusCommandTextRuntimeLoader.load();
 }
 
-function loadStatusGatewayConnectionRuntime() {
-  return statusGatewayConnectionRuntimeLoader.load();
-}
-
 function loadStatusNodeModeModule() {
   return statusNodeModeModuleLoader.load();
 }
 
+/** Extracts device-pairing recovery context from structured gateway errors or legacy message text. */
 export function resolvePairingRecoveryContext(params: {
   error?: string | null;
   closeReason?: string | null;
@@ -77,6 +77,7 @@ export function resolvePairingRecoveryContext(params: {
         : null,
     };
   }
+  // Older gateways only exposed pairing details in close/error text; keep status recovery helpful there.
   const source = [params.error, params.closeReason]
     .filter((part) => typeof part === "string" && part.trim().length > 0)
     .join(" ");
@@ -91,6 +92,26 @@ export function resolvePairingRecoveryContext(params: {
   };
 }
 
+function normalizeStatusWrapperPath(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : null;
+}
+
+function resolveServiceWrapperContextHint(params: {
+  serviceWrapperPath?: string | null;
+  cliWrapperPath?: string | null;
+}): string | null {
+  const serviceWrapperPath = normalizeStatusWrapperPath(params.serviceWrapperPath);
+  if (!serviceWrapperPath) {
+    return null;
+  }
+  if (normalizeStatusWrapperPath(params.cliWrapperPath) === serviceWrapperPath) {
+    return null;
+  }
+  return `The installed gateway service uses ${OPENCLAW_WRAPPER_ENV_KEY} (${sanitizeTerminalText(serviceWrapperPath)}), but this CLI process is not running with that same wrapper. Missing-secret diagnostics may describe the current CLI process rather than the installed gateway service context.`;
+}
+
+/** Runs `openclaw status`, including JSON/all routing and optional deep probes. */
 export async function statusCommand(
   opts: {
     json?: boolean;
@@ -103,6 +124,7 @@ export async function statusCommand(
   runtime: RuntimeEnv,
 ) {
   if (opts.all && !opts.json) {
+    // Human `--all` has a dedicated report path; JSON `--all` stays on the JSON schema.
     await loadStatusAllModule().then(({ statusAllCommand }) =>
       statusAllCommand(runtime, { timeoutMs: opts.timeoutMs }),
     );
@@ -226,7 +248,8 @@ export async function statusCommand(
   });
 
   if (opts.verbose) {
-    const { buildGatewayConnectionDetails } = await loadStatusGatewayConnectionRuntime();
+    // Verbose status prints the raw gateway target resolution before the report tables.
+    const { buildGatewayConnectionDetails } = await import("../gateway/call.js");
     const details = buildGatewayConnectionDetails({ config: scan.cfg });
     logGatewayConnectionDetails({
       runtime,
@@ -239,9 +262,17 @@ export async function statusCommand(
   const tableWidth = getTerminalTableWidth();
 
   if (secretDiagnostics.length > 0) {
+    // Secret diagnostics are already redacted by the scanner; show them before the main report.
     runtime.log(theme.warn("Secret diagnostics:"));
     for (const entry of secretDiagnostics) {
       runtime.log(`- ${entry}`);
+    }
+    const wrapperContextHint = resolveServiceWrapperContextHint({
+      serviceWrapperPath: daemon.wrapperPath,
+      cliWrapperPath: process.env[OPENCLAW_WRAPPER_ENV_KEY],
+    });
+    if (wrapperContextHint) {
+      runtime.log(theme.warn(wrapperContextHint));
     }
     runtime.log("");
   }
@@ -283,6 +314,15 @@ export async function statusCommand(
     nodeService: nodeDaemon,
     nodeOnlyGateway,
   });
+  const updateRestartValue = formatUpdateRestartStatusValue(
+    (await readRestartSentinel().catch(() => null))?.payload,
+    {
+      ok,
+      warn,
+      muted,
+      formatTimeAgo,
+    },
+  );
   const lines = await buildStatusCommandReportLines(
     await buildStatusCommandReportData({
       opts,
@@ -322,6 +362,7 @@ export async function statusCommand(
       updateValue: updateSurface.updateAvailable
         ? warn(`available · ${updateSurface.updateLine}`)
         : updateSurface.updateLine,
+      updateRestartValue,
     }),
   );
   for (const line of lines) {

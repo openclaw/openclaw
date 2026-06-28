@@ -1,11 +1,12 @@
-import type { Api, Model } from "@earendil-works/pi-ai";
+// Amazon Bedrock Mantle tests cover mantle anthropic plugin behavior.
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import {
   createMantleAnthropicStreamFn,
   resolveMantleAnthropicBaseUrl,
 } from "./mantle-anthropic.runtime.js";
 
-function createTestModel(): Model<Api> {
+function createTestModel(overrides: Partial<Model> = {}): Model {
   return {
     id: "anthropic.claude-opus-4-7",
     name: "Claude Opus 4.7",
@@ -20,7 +21,8 @@ function createTestModel(): Model<Api> {
     cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
     contextWindow: 1_000_000,
     maxTokens: 128_000,
-  } as Model<Api>;
+    ...overrides,
+  } as Model;
 }
 
 function createTestDeps() {
@@ -47,7 +49,7 @@ function mockCallArg(mock: { mock: { calls: unknown[][] } }, index = 0, argIndex
 
 function expectFirstStreamCall(
   deps: ReturnType<typeof createTestDeps>,
-  model: Model<Api>,
+  model: Model,
   context: unknown,
 ) {
   expect(mockCallArg(deps.stream, 0, 0)).toBe(model);
@@ -109,6 +111,69 @@ describe("createMantleAnthropicStreamFn", () => {
     const streamOptions = firstStreamOptions(deps);
     expect(streamOptions.temperature).toBeUndefined();
     expect(streamOptions.thinkingEnabled).toBe(false);
+  });
+
+  it("defaults Mythos Preview to adaptive high effort", () => {
+    const model = createTestModel({
+      id: "anthropic.claude-mythos-preview",
+      name: "Claude Mythos Preview",
+      reasoning: true,
+      params: { canonicalModelId: "claude-mythos-preview" },
+    });
+    const context = { messages: [] };
+    const deps = createTestDeps();
+    deps.stream.mockReturnValue({ kind: "anthropic-stream" } as never);
+
+    void createMantleAnthropicStreamFn(deps)(model, context, {
+      apiKey: "bedrock-bearer-token",
+    });
+
+    expectFirstStreamCall(deps, model, context);
+    const streamOptions = firstStreamOptions(deps);
+    expect(streamOptions.thinkingEnabled).toBe(true);
+    expect(streamOptions.effort).toBe("high");
+  });
+
+  it("clamps unsupported Mythos Preview max effort to high", () => {
+    const model = createTestModel({
+      id: "anthropic.claude-mythos-preview",
+      name: "Claude Mythos Preview",
+      reasoning: true,
+      params: { canonicalModelId: "claude-mythos-preview" },
+    });
+    const context = { messages: [] };
+    const deps = createTestDeps();
+    deps.stream.mockReturnValue({ kind: "anthropic-stream" } as never);
+
+    void createMantleAnthropicStreamFn(deps)(model, context, {
+      apiKey: "bedrock-bearer-token",
+      reasoning: "max",
+    });
+
+    expectFirstStreamCall(deps, model, context);
+    const streamOptions = firstStreamOptions(deps);
+    expect(streamOptions.thinkingEnabled).toBe(true);
+    expect(streamOptions.effort).toBe("high");
+  });
+
+  it("maps Mythos Preview minimal reasoning to low effort", () => {
+    const model = createTestModel({
+      id: "anthropic.claude-mythos-preview",
+      name: "Claude Mythos Preview",
+      reasoning: true,
+      params: { canonicalModelId: "claude-mythos-preview" },
+    });
+    const deps = createTestDeps();
+    deps.stream.mockReturnValue({ kind: "anthropic-stream" } as never);
+
+    void createMantleAnthropicStreamFn(deps)(model, { messages: [] }, {
+      apiKey: "bedrock-bearer-token",
+      reasoning: "minimal",
+    });
+
+    const streamOptions = firstStreamOptions(deps);
+    expect(streamOptions.thinkingEnabled).toBe(true);
+    expect(streamOptions.effort).toBe("low");
   });
 
   it("normalizes Mantle provider URLs to the Anthropic endpoint", () => {

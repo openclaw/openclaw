@@ -1,3 +1,4 @@
+// Msteams tests cover graph plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Mock shared.js to avoid transitive runtime-api imports that pull in uninstalled packages.
@@ -31,6 +32,25 @@ vi.mock("../runtime.js", () => ({
     },
     channel: {
       media: {
+        saveResponseMedia: vi.fn(
+          async (
+            response: Response,
+            options?: { fallbackContentType?: string; maxBytes?: number },
+          ) => {
+            const length = Number(response.headers.get("content-length"));
+            if (
+              Number.isFinite(length) &&
+              options?.maxBytes !== undefined &&
+              length > options.maxBytes
+            ) {
+              throw new Error("content length exceeds maxBytes");
+            }
+            return {
+              path: "/tmp/saved.png",
+              contentType: options?.fallbackContentType ?? "image/png",
+            };
+          },
+        ),
         saveMediaBuffer: vi.fn(async (_buf: Buffer, ct: string) => ({
           path: "/tmp/saved.png",
           contentType: ct ?? "image/png",

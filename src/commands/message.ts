@@ -1,3 +1,12 @@
+/** CLI entrypoint for channel message actions. */
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../packages/gateway-protocol/src/client-info.js";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { CHANNEL_MESSAGE_ACTION_NAMES } from "../channels/plugins/message-action-names.js";
 import type { ChannelMessageActionName } from "../channels/plugins/types.public.js";
@@ -8,25 +17,42 @@ import { resolveMessageSecretScope } from "../cli/message-secret-scope.js";
 import { createOutboundSendDeps, type CliDeps } from "../cli/outbound-send-deps.js";
 import { withProgress } from "../cli/progress.js";
 import { getRuntimeConfig } from "../config/config.js";
-import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../gateway/protocol/client-info.js";
 import type { OutboundSendDeps } from "../infra/outbound/deliver.js";
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "../shared/string-coerce.js";
+
+function extractMessageId(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object") {
+    return undefined;
+  }
+  const record = payload as Record<string, unknown>;
+  const direct = normalizeOptionalString(record.messageId);
+  if (direct) {
+    return direct;
+  }
+  const result = record.result;
+  if (result && typeof result === "object") {
+    const nested = normalizeOptionalString((result as Record<string, unknown>).messageId);
+    if (nested) {
+      return nested;
+    }
+  }
+  return undefined;
+}
 
 function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>>) {
+  const messageId = extractMessageId(result.payload);
   return {
     action: result.action,
     channel: result.channel,
     dryRun: result.dryRun,
     handledBy: result.handledBy,
+    ...(messageId ? { messageId } : {}),
     payload: result.payload,
   };
 }
 
+/** Resolves config/secrets, runs a channel message action, then renders JSON or text. */
 export async function messageCommand(
   opts: Record<string, unknown>,
   deps: CliDeps,
@@ -68,8 +94,9 @@ export async function messageCommand(
   const action = actionMatch as ChannelMessageActionName;
 
   const outboundDeps: OutboundSendDeps = createOutboundSendDeps(deps);
-  const senderIsOwner = typeof opts.senderIsOwner === "boolean" ? opts.senderIsOwner : true;
 
+  // Keep the gateway client identity explicit so channel plugins can distinguish
+  // CLI-originated owner actions from background gateway work.
   const run = async () =>
     await runMessageAction({
       cfg,
@@ -77,7 +104,7 @@ export async function messageCommand(
       params: opts,
       deps: outboundDeps,
       agentId: resolveDefaultAgentId(cfg),
-      senderIsOwner,
+      senderIsOwner: opts.senderIsOwner !== false,
       gateway: {
         clientName: GATEWAY_CLIENT_NAMES.CLI,
         mode: GATEWAY_CLIENT_MODES.CLI,

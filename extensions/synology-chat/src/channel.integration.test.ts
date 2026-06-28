@@ -1,7 +1,7 @@
-import type { IncomingMessage, ServerResponse } from "node:http";
+// Synology Chat tests cover channel.integration plugin behavior.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  buildChannelTurnContextMock,
+  buildChannelInboundEventContextMock,
   dispatchReplyWithBufferedBlockDispatcher,
   finalizeInboundContextMock,
   registerPluginHttpRouteMock,
@@ -9,12 +9,6 @@ import {
   setSynologyRuntimeConfigForTest,
 } from "./channel.test-mocks.js";
 import { makeFormBody, makeReq, makeRes } from "./test-http-utils.js";
-
-type _RegisteredRoute = {
-  path: string;
-  accountId: string;
-  handler: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
-};
 
 let createSynologyChatPlugin: typeof import("./channel.js").createSynologyChatPlugin;
 
@@ -55,7 +49,7 @@ describe("Synology channel wiring integration", () => {
   beforeEach(() => {
     registerPluginHttpRouteMock.mockClear();
     dispatchReplyWithBufferedBlockDispatcher.mockClear();
-    buildChannelTurnContextMock.mockClear();
+    buildChannelInboundEventContextMock.mockClear();
     finalizeInboundContextMock.mockClear();
     resolveAgentRouteMock.mockClear();
     setSynologyRuntimeConfigForTest({});
@@ -107,8 +101,8 @@ describe("Synology channel wiring integration", () => {
     const res = makeRes();
     await registered.handler(req, res);
 
-    expect(res._status).toBe(403);
-    expect(res._body).toContain("not authorized");
+    expect(res.status).toBe(403);
+    expect(res.body).toContain("not authorized");
     expect(dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     abortController.abort();
     await started;
@@ -182,8 +176,8 @@ describe("Synology channel wiring integration", () => {
     const betaRes = makeRes();
     await betaRoute.handler(betaReq, betaRes);
 
-    expect(alphaRes._status).toBe(204);
-    expect(betaRes._status).toBe(204);
+    expect(alphaRes.status).toBe(204);
+    expect(betaRes.status).toBe(204);
     expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(2);
     expect(finalizeInboundContextMock).toHaveBeenCalledTimes(2);
 

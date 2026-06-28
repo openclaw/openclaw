@@ -1,3 +1,4 @@
+// Slack plugin module implements channels behavior.
 import type { SlackEventMiddlewareArgs } from "@slack/bolt";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
 import { mutateConfigFile } from "openclaw/plugin-sdk/config-mutation";
@@ -20,15 +21,15 @@ export function registerSlackChannelEvents(params: {
 }) {
   const { ctx, trackEvent } = params;
 
-  const enqueueChannelSystemEvent = (params: {
+  const enqueueChannelSystemEvent = (paramsLocal: {
     kind: "created" | "renamed";
     channelId: string | undefined;
     channelName: string | undefined;
   }) => {
     if (
       !ctx.isChannelAllowed({
-        channelId: params.channelId,
-        channelName: params.channelName,
+        channelId: paramsLocal.channelId,
+        channelName: paramsLocal.channelName,
         channelType: "channel",
       })
     ) {
@@ -36,17 +37,16 @@ export function registerSlackChannelEvents(params: {
     }
 
     const label = resolveSlackChannelLabel({
-      channelId: params.channelId,
-      channelName: params.channelName,
+      channelId: paramsLocal.channelId,
+      channelName: paramsLocal.channelName,
     });
     const sessionKey = ctx.resolveSlackSystemEventSessionKey({
-      channelId: params.channelId,
+      channelId: paramsLocal.channelId,
       channelType: "channel",
     });
-    enqueueSystemEvent(`Slack channel ${params.kind}: ${label}.`, {
+    enqueueSystemEvent(`Slack channel ${paramsLocal.kind}: ${label}.`, {
       sessionKey,
-      contextKey: `slack:channel:${params.kind}:${params.channelId ?? params.channelName ?? "unknown"}`,
-      trusted: false,
+      contextKey: `slack:channel:${paramsLocal.kind}:${paramsLocal.channelId ?? paramsLocal.channelName ?? "unknown"}`,
     });
   };
 

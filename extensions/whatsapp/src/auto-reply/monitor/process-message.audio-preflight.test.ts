@@ -1,4 +1,6 @@
+// Whatsapp tests cover process message.audio preflight plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestWebAudioInboundMessage } from "../../inbound/test-message.test-helper.js";
 
 // Mock the lazy-loaded audio preflight runtime boundary
 const transcribeFirstAudioMock = vi.fn();
@@ -59,13 +61,14 @@ vi.mock("./last-route.js", () => ({
 }));
 
 vi.mock("./message-line.js", () => ({
-  buildInboundLine: (params: { msg: { body: string } }) => params.msg.body,
+  buildInboundLine: (params: { msg: WebInboundMsg }) => params.msg.payload.body,
 }));
 
 vi.mock("./runtime-api.js", () => ({
   buildHistoryContextFromEntries: (_p: { currentMessage: string }) => _p.currentMessage,
   createChannelMessageReplyPipeline: () => ({ onModelSelected: undefined }),
   formatInboundEnvelope: (p: { body: string }) => p.body,
+  isControlCommandMessage: () => false,
   logVerbose: () => {},
   normalizeE164: (v: string) => v,
   readStoreAllowFromForDmPolicy: async () => [],
@@ -92,19 +95,19 @@ vi.mock("./inbound-dispatch.js", () => ({
     combinedBody: string;
     commandAuthorized?: boolean;
     commandBody?: string;
-    msg: { body: string; mediaPath?: string; mediaType?: string };
+    msg: WebInboundMsg;
     mediaTranscribedIndexes?: number[];
     rawBody?: string;
     transcript?: string;
   }) => ({
     Body: params.combinedBody,
-    BodyForAgent: params.bodyForAgent ?? params.msg.body,
+    BodyForAgent: params.bodyForAgent ?? params.msg.payload.body,
     CommandAuthorized: params.commandAuthorized,
-    CommandBody: params.commandBody ?? params.msg.body,
-    MediaPath: params.msg.mediaPath,
-    MediaType: params.msg.mediaType,
+    CommandBody: params.commandBody ?? params.msg.payload.body,
+    MediaPath: params.msg.payload.media?.path,
+    MediaType: params.msg.payload.media?.type,
     MediaTranscribedIndexes: params.mediaTranscribedIndexes,
-    RawBody: params.rawBody ?? params.msg.body,
+    RawBody: params.rawBody ?? params.msg.payload.body,
     Transcript: params.transcript,
   }),
   dispatchWhatsAppBufferedReply: vi.fn(async () => true),
@@ -124,19 +127,32 @@ const flushMicrotasks = async () => {
   await Promise.resolve();
 };
 
-function makeAudioMsg(overrides: Partial<WebInboundMsg> = {}): WebInboundMsg {
-  return {
-    id: "msg-1",
-    from: "+15550000002",
-    to: "+15550000001",
-    body: "<media:audio>",
-    chatType: "direct",
-    mediaType: "audio/ogg; codecs=opus",
-    mediaPath: "/tmp/voice.ogg",
-    timestamp: 1700000000,
-    accountId: "default",
-    ...overrides,
-  } as WebInboundMsg;
+type AudioMessageOverrides = Partial<WebInboundMsg> & {
+  body?: string;
+  mediaPath?: string;
+  mediaType?: string;
+};
+
+function makeAudioMsg(overrides: AudioMessageOverrides = {}): WebInboundMsg {
+  const { body, mediaPath, mediaType, event, payload, platform, ...messageOverrides } = overrides;
+  const resolvedMediaPath = Object.hasOwn(overrides, "mediaPath") ? mediaPath : "/tmp/voice.ogg";
+  const resolvedMediaType = Object.hasOwn(overrides, "mediaType")
+    ? mediaType
+    : "audio/ogg; codecs=opus";
+  return createTestWebAudioInboundMessage({
+    event,
+    payload: {
+      body: body ?? "<media:audio>",
+      media: {
+        type: resolvedMediaType,
+        path: resolvedMediaPath,
+        ...payload?.media,
+      },
+      ...payload,
+    },
+    platform,
+    ...messageOverrides,
+  }) as WebInboundMsg;
 }
 
 function makeRoute(overrides: Partial<TestRoute> = {}): TestRoute {
@@ -149,7 +165,7 @@ function makeRoute(overrides: Partial<TestRoute> = {}): TestRoute {
   } as TestRoute;
 }
 
-function makeParams(msgOverrides: Partial<WebInboundMsg> = {}) {
+function makeParams(msgOverrides: AudioMessageOverrides = {}) {
   return {
     cfg: {
       tools: { media: { audio: { enabled: true } } },

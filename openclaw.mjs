@@ -9,8 +9,10 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const MIN_NODE_MAJOR = 22;
-const MIN_NODE_MINOR = 12;
+const MIN_NODE_MINOR = 19;
 const MIN_NODE_VERSION = `${MIN_NODE_MAJOR}.${MIN_NODE_MINOR}`;
+const MIN_COMPILE_CACHE_NODE_24_MINOR = 15;
+const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
 const parseNodeVersion = (rawVersion) => {
   const [majorRaw = "0", minorRaw = "0"] = rawVersion.split(".");
@@ -23,6 +25,15 @@ const parseNodeVersion = (rawVersion) => {
 const isSupportedNodeVersion = (version) =>
   version.major > MIN_NODE_MAJOR ||
   (version.major === MIN_NODE_MAJOR && version.minor >= MIN_NODE_MINOR);
+
+const isNodeVersionAffectedByCompileCacheDeadlock = (rawVersion) => {
+  const version = parseNodeVersion(rawVersion);
+  return version.major === 24 && version.minor < MIN_COMPILE_CACHE_NODE_24_MINOR;
+};
+
+const shouldSkipCompileCacheForWindowsNode24 = () =>
+  process.platform === "win32" &&
+  isNodeVersionAffectedByCompileCacheDeadlock(process.versions.node);
 
 const ensureSupportedNodeVersion = () => {
   if (isSupportedNodeVersion(parseNodeVersion(process.versions.node))) {
@@ -40,6 +51,10 @@ const ensureSupportedNodeVersion = () => {
 };
 
 ensureSupportedNodeVersion();
+
+if (tryOutputLauncherVersion(process.argv)) {
+  process.exit(0);
+}
 
 const isSourceCheckoutLauncher = () =>
   existsSync(new URL("./.git", import.meta.url)) ||
@@ -90,6 +105,7 @@ const respawnSignals =
     : ["SIGTERM", "SIGINT", "SIGHUP", "SIGQUIT"];
 const respawnSignalExitGraceMs = 1_000;
 const respawnSignalForceKillGraceMs = 1_000;
+const respawnSignalHardExitGraceMs = 1_000;
 
 const runRespawnedChild = (command, args, env) => {
   const child = spawn(command, args, {
@@ -103,6 +119,7 @@ const runRespawnedChild = (command, args, env) => {
   // a child that ignores SIGTERM cannot keep the launcher alive indefinitely.
   let signalExitTimer = null;
   let signalForceKillTimer = null;
+  let signalHardExitTimer = null;
   const detach = () => {
     for (const [signal, listener] of listeners) {
       process.off(signal, listener);
@@ -115,6 +132,10 @@ const runRespawnedChild = (command, args, env) => {
     if (signalForceKillTimer) {
       clearTimeout(signalForceKillTimer);
       signalForceKillTimer = null;
+    }
+    if (signalHardExitTimer) {
+      clearTimeout(signalHardExitTimer);
+      signalHardExitTimer = null;
     }
   };
   const forceKillChild = () => {
@@ -132,7 +153,10 @@ const runRespawnedChild = (command, args, env) => {
     }
     signalForceKillTimer = setTimeout(() => {
       forceKillChild();
-      process.exit(1);
+      signalHardExitTimer = setTimeout(() => {
+        process.exit(1);
+      }, respawnSignalHardExitGraceMs);
+      signalHardExitTimer.unref?.();
     }, respawnSignalForceKillGraceMs);
     signalForceKillTimer.unref?.();
   };
@@ -181,10 +205,12 @@ const runRespawnedChild = (command, args, env) => {
 };
 
 const respawnWithoutCompileCacheIfNeeded = () => {
-  if (!isSourceCheckoutLauncher()) {
+  const needsDisabledCompileCacheRespawn =
+    isSourceCheckoutLauncher() || shouldSkipCompileCacheForWindowsNode24();
+  if (!needsDisabledCompileCacheRespawn) {
     return false;
   }
-  if (process.env.OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED === "1") {
+  if (process.env[COMPILE_CACHE_DISABLED_RESPAWNED_ENV] === "1") {
     return false;
   }
   if (!module.getCompileCacheDir?.() && !isNodeCompileCacheRequested()) {
@@ -193,7 +219,7 @@ const respawnWithoutCompileCacheIfNeeded = () => {
   const env = {
     ...process.env,
     NODE_DISABLE_COMPILE_CACHE: "1",
-    OPENCLAW_SOURCE_COMPILE_CACHE_RESPAWNED: "1",
+    [COMPILE_CACHE_DISABLED_RESPAWNED_ENV]: "1",
   };
   delete env.NODE_COMPILE_CACHE;
   return runRespawnedChild(
@@ -204,7 +230,11 @@ const respawnWithoutCompileCacheIfNeeded = () => {
 };
 
 const respawnWithPackagedCompileCacheIfNeeded = () => {
-  if (isSourceCheckoutLauncher() || isNodeCompileCacheDisabled()) {
+  if (
+    isSourceCheckoutLauncher() ||
+    isNodeCompileCacheDisabled() ||
+    shouldSkipCompileCacheForWindowsNode24()
+  ) {
     return false;
   }
   if (process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED === "1") {
@@ -238,7 +268,8 @@ if (
   !waitingForCompileCacheRespawn &&
   module.enableCompileCache &&
   !isNodeCompileCacheDisabled() &&
-  !isSourceCheckoutLauncher()
+  !isSourceCheckoutLauncher() &&
+  !shouldSkipCompileCacheForWindowsNode24()
 ) {
   try {
     module.enableCompileCache(resolvePackagedCompileCacheDirectory());
@@ -247,25 +278,37 @@ if (
   }
 }
 
+const getErrorMessage = (err) =>
+  err && typeof err === "object" && "message" in err && typeof err.message === "string"
+    ? err.message
+    : "";
+
 const isModuleNotFoundError = (err) =>
   err && typeof err === "object" && "code" in err && err.code === "ERR_MODULE_NOT_FOUND";
 
 const isDirectModuleNotFoundError = (err, specifier) => {
-  if (!isModuleNotFoundError(err)) {
-    return false;
-  }
+  const message = getErrorMessage(err);
+  const bunSpecifierMiss =
+    message.includes(`Cannot find module '${specifier}'`) ||
+    message.includes(`Cannot find module "${specifier}"`);
+  const launcherPath = fileURLToPath(import.meta.url);
+  const bunLauncherImporterMiss =
+    message.includes(` from '${launcherPath}'`) || message.includes(` from "${launcherPath}"`);
 
   const expectedUrl = new URL(specifier, import.meta.url);
-  if ("url" in err && err.url === expectedUrl.href) {
-    return true;
+  const expectedPath = fileURLToPath(expectedUrl);
+  const nodePathMiss =
+    message.includes(`Cannot find module '${expectedPath}'`) ||
+    message.includes(`Cannot find module "${expectedPath}"`);
+
+  if (isModuleNotFoundError(err)) {
+    if (err && typeof err === "object" && "url" in err && err.url === expectedUrl.href) {
+      return true;
+    }
+    return nodePathMiss || (bunSpecifierMiss && bunLauncherImporterMiss);
   }
 
-  const message = "message" in err && typeof err.message === "string" ? err.message : "";
-  const expectedPath = fileURLToPath(expectedUrl);
-  return (
-    message.includes(`Cannot find module '${expectedPath}'`) ||
-    message.includes(`Cannot find module "${expectedPath}"`)
-  );
+  return bunSpecifierMiss && bunLauncherImporterMiss;
 };
 
 const installProcessWarningFilter = async () => {
@@ -328,25 +371,354 @@ const buildMissingEntryErrorMessage = async () => {
 const isBareRootHelpInvocation = (argv) =>
   argv.length === 3 && (argv[2] === "--help" || argv[2] === "-h");
 
-const isBrowserHelpInvocation = (argv) =>
-  argv.length === 4 && argv[2] === "browser" && (argv[3] === "--help" || argv[3] === "-h");
+const LAUNCHER_HELP_FLAGS = new Set(["-h", "--help"]);
+const LAUNCHER_ROOT_BOOLEAN_FLAGS = new Set(["--dev", "--no-color"]);
+const LAUNCHER_ROOT_VALUE_FLAGS = new Set(["--profile", "--log-level", "--container"]);
+const LAUNCHER_PRECOMPUTED_COMMAND_HELP = {
+  browser: { command: "browser", metadataKey: "browserHelpText" },
+  secrets: { command: "secrets", metadataKey: "secretsHelpText" },
+  nodes: { command: "nodes", metadataKey: "nodesHelpText" },
+};
+const LAUNCHER_PRECOMPUTED_SUBCOMMAND_HELP = new Set([
+  "doctor",
+  "gateway",
+  "models",
+  "plugins",
+  "sessions",
+  "tasks",
+]);
+
+const isLauncherRootOptionValueToken = (arg) => {
+  if (!arg || arg === "--") {
+    return false;
+  }
+  if (!arg.startsWith("-")) {
+    return true;
+  }
+  return /^-\d+(?:\.\d+)?$/.test(arg);
+};
+
+const consumeLauncherRootOptionToken = (args, index) => {
+  const arg = args[index];
+  if (!arg) {
+    return 0;
+  }
+  if (LAUNCHER_ROOT_BOOLEAN_FLAGS.has(arg)) {
+    return 1;
+  }
+  if (
+    arg.startsWith("--profile=") ||
+    arg.startsWith("--log-level=") ||
+    arg.startsWith("--container=")
+  ) {
+    return 1;
+  }
+  if (LAUNCHER_ROOT_VALUE_FLAGS.has(arg)) {
+    return isLauncherRootOptionValueToken(args[index + 1]) ? 2 : 1;
+  }
+  return 0;
+};
+
+const hasLauncherContainerTarget = (argv) => {
+  if (normalizeLauncherMetadataValue(process.env.OPENCLAW_CONTAINER)) {
+    return true;
+  }
+  const args = argv.slice(2);
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      return false;
+    }
+    if (arg === "--container" || arg.startsWith("--container=")) {
+      return true;
+    }
+  }
+  return false;
+};
+
+const resolvePrecomputedCommandHelpByName = (commandName) => {
+  if (Object.hasOwn(LAUNCHER_PRECOMPUTED_COMMAND_HELP, commandName)) {
+    return LAUNCHER_PRECOMPUTED_COMMAND_HELP[commandName];
+  }
+  if (LAUNCHER_PRECOMPUTED_SUBCOMMAND_HELP.has(commandName)) {
+    return {
+      command: commandName,
+      metadataKey: "subcommandHelpText",
+      subcommandKey: commandName,
+    };
+  }
+  return null;
+};
+
+const resolvePrecomputedCommandHelp = (argv) => {
+  const args = argv.slice(2);
+  let commandHelp = null;
+  let sawHelp = false;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (!arg || arg === "--") {
+      return null;
+    }
+    if (!commandHelp) {
+      const consumed = consumeLauncherRootOptionToken(args, index);
+      if (consumed > 0) {
+        index += consumed - 1;
+        continue;
+      }
+      if (arg.startsWith("-")) {
+        return null;
+      }
+      commandHelp = resolvePrecomputedCommandHelpByName(arg);
+      if (!commandHelp) {
+        return null;
+      }
+      continue;
+    }
+    if (LAUNCHER_HELP_FLAGS.has(arg)) {
+      sawHelp = true;
+      continue;
+    }
+    return null;
+  }
+
+  return commandHelp && sawHelp ? commandHelp : null;
+};
 
 const isHelpFastPathDisabled = () =>
   process.env.OPENCLAW_DISABLE_CLI_STARTUP_HELP_FAST_PATH === "1";
 
-const loadPrecomputedHelpText = (key) => {
+const normalizeLauncherHomeValue = (value) => {
+  const trimmed = value?.trim();
+  return trimmed && trimmed !== "undefined" && trimmed !== "null" ? trimmed : undefined;
+};
+
+const resolveLauncherOsHomeDir = () =>
+  normalizeLauncherHomeValue(process.env.HOME) ??
+  normalizeLauncherHomeValue(process.env.USERPROFILE) ??
+  os.homedir();
+
+const resolveLauncherHomeDir = () => {
+  const explicit = normalizeLauncherHomeValue(process.env.OPENCLAW_HOME);
+  const rawHome =
+    explicit && (explicit === "~" || explicit.startsWith("~/") || explicit.startsWith("~\\"))
+      ? explicit.replace(/^~(?=$|[\\/])/, resolveLauncherOsHomeDir())
+      : (explicit ?? resolveLauncherOsHomeDir());
+  return path.resolve(rawHome);
+};
+
+const resolveLauncherUserPath = (input) => {
+  if (input === "~") {
+    return resolveLauncherHomeDir();
+  }
+  if (input.startsWith("~/") || input.startsWith("~\\")) {
+    return path.join(resolveLauncherHomeDir(), input.slice(2));
+  }
+  return path.resolve(input);
+};
+
+const resolveLauncherConfigPaths = () => {
+  const explicit = process.env.OPENCLAW_CONFIG_PATH?.trim();
+  if (explicit) {
+    return [resolveLauncherUserPath(explicit)];
+  }
+  const stateOverride = process.env.OPENCLAW_STATE_DIR?.trim();
+  if (stateOverride) {
+    const stateDir = resolveLauncherUserPath(stateOverride);
+    return [path.join(stateDir, "openclaw.json"), path.join(stateDir, "clawdbot.json")];
+  }
+  const homeDir = resolveLauncherHomeDir();
+  return [
+    path.join(homeDir, ".openclaw", "openclaw.json"),
+    path.join(homeDir, ".openclaw", "clawdbot.json"),
+    path.join(homeDir, ".clawdbot", "openclaw.json"),
+    path.join(homeDir, ".clawdbot", "clawdbot.json"),
+  ];
+};
+
+const shouldDeferRootHelpToRuntimeEntry = () => {
+  if (
+    process.env.OPENCLAW_BUNDLED_PLUGINS_DIR?.trim() ||
+    process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS?.trim()
+  ) {
+    return true;
+  }
+  for (const configPath of resolveLauncherConfigPaths()) {
+    try {
+      const raw = readFileSync(configPath, "utf8");
+      return /\bplugins\b|\$include\b/.test(raw);
+    } catch {
+      continue;
+    }
+  }
+  return false;
+};
+
+const loadPrecomputedHelpText = (key, subkey) => {
   try {
     const raw = readFileSync(new URL("./dist/cli-startup-metadata.json", import.meta.url), "utf8");
     const parsed = JSON.parse(raw);
-    const value = parsed?.[key];
+    const value = subkey ? parsed?.[key]?.[subkey] : parsed?.[key];
     return typeof value === "string" && value.length > 0 ? value : null;
   } catch {
     return null;
   }
 };
 
+function tryOutputLauncherVersion(argv) {
+  try {
+    if (normalizeLauncherMetadataValue(process.env.OPENCLAW_CONTAINER)) {
+      return false;
+    }
+    if (!isLauncherVersionFastPathArgv(argv)) {
+      return false;
+    }
+    const version = resolveLauncherVersion();
+    const commit = resolveLauncherCommit();
+    process.stdout.write(commit ? `OpenClaw ${version} (${commit})\n` : `OpenClaw ${version}\n`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isLauncherVersionFastPathArgv(argv) {
+  return argv.length === 3 && (argv[2] === "--version" || argv[2] === "-V" || argv[2] === "-v");
+}
+
+function normalizeLauncherMetadataValue(value) {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed && trimmed !== "undefined" && trimmed !== "null" ? trimmed : undefined;
+}
+
+function readLauncherJson(relativePath) {
+  try {
+    return JSON.parse(readFileSync(new URL(relativePath, import.meta.url), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function resolveLauncherVersion() {
+  const packageJson = readLauncherJson("./package.json");
+  const packageVersion = normalizeLauncherMetadataValue(packageJson?.version);
+  if (packageVersion) {
+    return packageVersion;
+  }
+  const buildInfo = readLauncherJson("./dist/build-info.json");
+  const buildVersion = normalizeLauncherMetadataValue(buildInfo?.version);
+  if (buildVersion) {
+    return buildVersion;
+  }
+  return normalizeLauncherMetadataValue(process.env.OPENCLAW_BUNDLED_VERSION) ?? "0.0.0";
+}
+
+function resolveLauncherCommit() {
+  const envCommit = formatLauncherCommit(process.env.GIT_COMMIT ?? process.env.GIT_SHA);
+  if (envCommit) {
+    return envCommit;
+  }
+  return (
+    readLauncherGitCommit() ??
+    formatLauncherCommit(readLauncherJson("./dist/build-info.json")?.commit) ??
+    formatLauncherCommit(readLauncherJson("./package.json")?.gitHead) ??
+    formatLauncherCommit(readLauncherJson("./package.json")?.githead)
+  );
+}
+
+function formatLauncherCommit(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const match = value.trim().match(/[0-9a-fA-F]{7,40}/);
+  return match ? match[0].slice(0, 7).toLowerCase() : null;
+}
+
+function readLauncherGitCommit() {
+  try {
+    const gitPath = fileURLToPath(new URL("./.git", import.meta.url));
+    const headPath = resolveLauncherGitHeadPath(gitPath);
+    if (!headPath) {
+      return null;
+    }
+    const head = readFileSync(headPath, "utf8").trim();
+    if (!head) {
+      return null;
+    }
+    if (!head.startsWith("ref:")) {
+      return formatLauncherCommit(head);
+    }
+    const ref = head.replace(/^ref:\s*/i, "").trim();
+    if (!ref.startsWith("refs/") || path.isAbsolute(ref) || ref.split("/").includes("..")) {
+      return null;
+    }
+    const refsBase = resolveLauncherGitRefsBase(headPath);
+    const refPath = path.resolve(refsBase, ref);
+    const rel = path.relative(refsBase, refPath);
+    if (!rel || rel.startsWith("..") || path.isAbsolute(rel)) {
+      return null;
+    }
+    try {
+      return formatLauncherCommit(readFileSync(refPath, "utf8"));
+    } catch {
+      return readLauncherPackedRef(refsBase, ref);
+    }
+  } catch {
+    return null;
+  }
+}
+
+function resolveLauncherGitHeadPath(gitPath) {
+  try {
+    if (statSync(gitPath).isDirectory()) {
+      return path.join(gitPath, "HEAD");
+    }
+    const raw = readFileSync(gitPath, "utf8").trim();
+    if (!raw.startsWith("gitdir:")) {
+      return null;
+    }
+    return path.join(
+      path.resolve(path.dirname(gitPath), raw.slice("gitdir:".length).trim()),
+      "HEAD",
+    );
+  } catch {
+    return null;
+  }
+}
+
+function resolveLauncherGitRefsBase(headPath) {
+  const gitDir = path.dirname(headPath);
+  try {
+    const commonDir = readFileSync(path.join(gitDir, "commondir"), "utf8").trim();
+    return commonDir ? path.resolve(gitDir, commonDir) : gitDir;
+  } catch {
+    return gitDir;
+  }
+}
+
+function readLauncherPackedRef(refsBase, ref) {
+  try {
+    const packedRefs = readFileSync(path.join(refsBase, "packed-refs"), "utf8");
+    for (const line of packedRefs.split("\n")) {
+      if (!line || line.startsWith("#") || line.startsWith("^")) {
+        continue;
+      }
+      const [commit, packedRef] = line.trim().split(/\s+/, 2);
+      if (packedRef === ref) {
+        return formatLauncherCommit(commit);
+      }
+    }
+  } catch {
+    // fall through
+  }
+  return null;
+}
+
 const tryOutputBareRootHelp = async () => {
   if (!isBareRootHelpInvocation(process.argv)) {
+    return false;
+  }
+  if (shouldDeferRootHelpToRuntimeEntry()) {
     return false;
   }
   const precomputed = loadPrecomputedHelpText("rootHelpText");
@@ -358,7 +730,7 @@ const tryOutputBareRootHelp = async () => {
     try {
       const mod = await import(specifier);
       if (typeof mod.outputRootHelp === "function") {
-        mod.outputRootHelp();
+        await mod.outputRootHelp();
         return true;
       }
     } catch (err) {
@@ -371,11 +743,18 @@ const tryOutputBareRootHelp = async () => {
   return false;
 };
 
-const tryOutputBrowserHelp = () => {
-  if (!isBrowserHelpInvocation(process.argv)) {
+const tryOutputPrecomputedCommandHelp = () => {
+  const commandHelp = resolvePrecomputedCommandHelp(process.argv);
+  if (!commandHelp) {
     return false;
   }
-  const precomputed = loadPrecomputedHelpText("browserHelpText");
+  if (hasLauncherContainerTarget(process.argv)) {
+    return false;
+  }
+  if (commandHelp.command === "nodes" && shouldDeferRootHelpToRuntimeEntry()) {
+    return false;
+  }
+  const precomputed = loadPrecomputedHelpText(commandHelp.metadataKey, commandHelp.subcommandKey);
   if (!precomputed) {
     return false;
   }
@@ -386,7 +765,7 @@ const tryOutputBrowserHelp = () => {
 if (!waitingForCompileCacheRespawn) {
   if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {
     // OK
-  } else if (!isHelpFastPathDisabled() && tryOutputBrowserHelp()) {
+  } else if (!isHelpFastPathDisabled() && tryOutputPrecomputedCommandHelp()) {
     // OK
   } else {
     await installProcessWarningFilter();

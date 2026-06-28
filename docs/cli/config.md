@@ -31,7 +31,7 @@ openclaw config get browser.executablePath
 openclaw config set browser.executablePath "/usr/bin/google-chrome"
 openclaw config set browser.profiles.work.executablePath "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 openclaw config set agents.defaults.heartbeat.every "2h"
-openclaw config set agents.list[0].tools.exec.node "node-id-or-name"
+openclaw config set 'agents.list[0].tools.exec.node' "node-id-or-name"
 openclaw config set agents.defaults.models '{"openai/gpt-5.4":{}}' --strict-json --merge
 openclaw config set channels.discord.token --ref-provider default --ref-source env --ref-id DISCORD_BOT_TOKEN
 openclaw config set secrets.providers.vaultfile --provider-source file --provider-path /etc/openclaw/secrets.json --provider-mode json
@@ -73,29 +73,31 @@ openclaw config schema > openclaw.schema.json
 
 ### Paths
 
-Paths use dot or bracket notation:
+Paths use dot or bracket notation. Quote bracket-notation paths in shell examples so shells such as zsh do not expand `[0]` as a glob before OpenClaw receives the path:
 
 ```bash
 openclaw config get agents.defaults.workspace
-openclaw config get agents.list[0].id
+openclaw config get 'agents.list[0].id'
 ```
 
 Use the agent list index to target a specific agent:
 
 ```bash
 openclaw config get agents.list
-openclaw config set agents.list[1].tools.exec.node "node-id-or-name"
+openclaw config set 'agents.list[1].tools.exec.node' "node-id-or-name"
 ```
 
 ## Values
 
-Values are parsed as JSON5 when possible; otherwise they are treated as strings. Use `--strict-json` to require JSON5 parsing. `--json` remains supported as a legacy alias.
+Values are parsed as JSON5 when possible; otherwise they are treated as strings. Use `--strict-json` to require standard JSON parsing with no string fallback. `--json` remains supported as a legacy alias for `--strict-json`.
 
 ```bash
 openclaw config set agents.defaults.heartbeat.every "0m"
 openclaw config set gateway.port 19001 --strict-json
 openclaw config set channels.whatsapp.groups '["*"]' --strict-json
 ```
+
+When `--strict-json` is enabled, JSON5-only syntax such as comments, trailing commas, or unquoted object keys is rejected. Omit `--strict-json` for JSON5 value parsing with raw-string fallback.
 
 `config get <path> --json` prints the raw value as JSON instead of terminal-formatted text.
 
@@ -334,7 +336,7 @@ openclaw config set channels.discord.token \
     - `checks.resolvabilityComplete`: whether resolvability checks ran to completion (false when exec refs are skipped)
     - `refsChecked`: number of refs actually resolved during dry-run
     - `skippedExecRefs`: number of exec refs skipped because `--allow-exec` was not set
-    - `errors`: structured schema/resolvability failures when `ok=false`
+    - `errors`: structured missing-path, schema, or resolvability failures when `ok=false`
 
   </Accordion>
 </AccordionGroup>
@@ -346,7 +348,7 @@ openclaw config set channels.discord.token \
   ok: boolean,
   operations: number,
   configPath: string,
-  inputModes: ["value" | "json" | "builder", ...],
+  inputModes: ["value" | "json" | "builder" | "unset", ...],
   checks: {
     schema: boolean,
     resolvability: boolean,
@@ -356,7 +358,7 @@ openclaw config set channels.discord.token \
   skippedExecRefs: number,
   errors?: [
     {
-      kind: "schema" | "resolvability",
+      kind: "missing-path" | "schema" | "resolvability",
       message: string,
       ref?: string, // present for resolvability errors
     },

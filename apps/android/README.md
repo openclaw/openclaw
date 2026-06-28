@@ -32,7 +32,7 @@ cd apps/android
 ./gradlew :app:installPlayDebug
 ./gradlew :app:testPlayDebugUnitTest
 cd ../..
-bun run android:bundle:release
+pnpm android:release:archive
 ```
 
 Third-party debug flavor:
@@ -44,10 +44,50 @@ cd apps/android
 ./gradlew :app:testThirdPartyDebugUnitTest
 ```
 
-`bun run android:bundle:release` auto-bumps Android `versionName`/`versionCode` in `apps/android/app/build.gradle.kts`, then builds two signed release bundles:
+Android release archives use the pinned version in `apps/android/version.json`. Update it with:
 
-- Play build: `apps/android/build/release-bundles/openclaw-<version>-play-release.aab`
-- Third-party build: `apps/android/build/release-bundles/openclaw-<version>-third-party-release.aab`
+```bash
+pnpm android:version
+pnpm android:version:check
+pnpm android:version:pin -- --from-gateway
+pnpm android:version:pin -- --version 2026.6.5 --version-code 2026060501
+```
+
+Release-owner signing sync:
+
+```bash
+pnpm android:release:signing:plan
+MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:sync:pull
+MATCH_PASSWORD=<signing repo password> pnpm android:release:signing:check
+```
+
+The signing sync pulls encrypted Android upload-key assets from the shared `apps-signing` repo and materializes decrypted files under `apps/android/build/release-signing/`.
+
+Generate raw Google Play screenshots:
+
+```bash
+pnpm android:screenshots
+```
+
+To make screenshot capture own emulator startup, pass a named AVD:
+
+```bash
+ANDROID_SCREENSHOT_AVD=OpenClaw_QA_API35 pnpm android:screenshots
+```
+
+The screenshot script uses one connected ADB device when available. If none is
+connected and `ANDROID_SCREENSHOT_AVD` is set, it boots that emulator
+headlessly, waits for Android to finish booting, disables animations, captures
+the screenshots, then shuts down the emulator it started.
+
+`pnpm android:release:archive` builds signed release artifacts into `apps/android/build/release-artifacts/` and writes `.sha256` checksum files:
+
+- Play build: `openclaw-<version>-play-release.aab`
+- Third-party build: `openclaw-<version>-third-party-release.apk`
+
+`pnpm android:bundle:release` is an alias for the same Fastlane archive lane.
+
+See `apps/android/VERSIONING.md` and `apps/android/fastlane/SETUP.md` for the release workflow.
 
 Flavor-specific direct Gradle tasks:
 
@@ -209,15 +249,17 @@ Why these matter:
 
 - Google Play treats SMS and Call Log access as highly restricted. In most cases, Play only allows them for the default SMS app, default Phone app, default Assistant, or a narrow policy exception.
 - Review usually involves a `Permissions Declaration Form`, policy justification, and demo video evidence in Play Console.
-- If we want a Play-safe build, these should be the first permissions removed behind a dedicated product flavor / variant.
+- The Play build removes these behind the `play` flavor.
+- Photo library access is also removed from the Play build. Use third-party builds for `photos.latest`.
 
 Current OpenClaw Android implication:
 
-- APK / sideload build can keep SMS and Call Log features.
-- Google Play build should exclude SMS send/search and Call Log search unless the product is intentionally positioned and approved as a default-handler exception case.
+- APK / sideload build can keep SMS, Call Log, and recent-photo features.
+- Google Play build excludes SMS send/search, Call Log search, and recent-photo access unless the product is intentionally positioned and approved under the relevant policy exception.
 - The repo now ships this split as Android product flavors:
-  - `play`: removes `READ_SMS`, `SEND_SMS`, and `READ_CALL_LOG`, and hides SMS / Call Log surfaces in onboarding, settings, and advertised node capabilities.
-  - `thirdParty`: keeps the full permission set and the existing SMS / Call Log functionality.
+  - `play`: removes `READ_SMS`, `SEND_SMS`, `READ_CALL_LOG`, `READ_MEDIA_IMAGES`, `READ_MEDIA_VISUAL_USER_SELECTED`, and `READ_EXTERNAL_STORAGE`; hides SMS, Call Log, and Photos surfaces in onboarding, settings, and advertised node capabilities.
+  - Installed-app listing is user controlled. `device.apps` is advertised only after the user enables **Settings > Phone Capabilities > Installed Apps**. The command defaults to launcher-visible apps and does not require `QUERY_ALL_PACKAGES`.
+  - `thirdParty`: keeps the full permission set and the existing SMS / Call Log / Photos functionality.
 
 Policy links:
 
@@ -251,13 +293,14 @@ Pre-req checklist:
 4) Open the app **Screen** tab and keep it active during the run (canvas/A2UI commands require the canvas WebView attached there).
 5) Grant runtime permissions for capabilities you expect to pass (camera/mic/location/notification listener/location, etc.).
 6) No interactive system dialogs should be pending before test start.
-7) Canvas host is enabled and reachable from the device (do not run gateway with `OPENCLAW_SKIP_CANVAS_HOST=1`; startup logs should include `canvas host mounted at .../__openclaw__/`).
-8) Local operator test client pairing is approved. If first run fails with `pairing required`, approve latest pending device pairing request, then rerun:
-9) For A2UI checks, keep the app on **Screen** tab; the node now auto-refreshes canvas capability once on first A2UI reachability failure (TTL-safe retry).
+7) Canvas host is enabled and reachable from the device for remote Canvas checks (do not run gateway with `OPENCLAW_SKIP_CANVAS_HOST=1`; startup logs should include `canvas host mounted at .../__openclaw__/`).
+8) Local operator test client pairing is approved. If first run fails with `pairing required`, preview the latest pending request, approve the printed request ID, then rerun:
+9) For A2UI checks, keep the app on **Screen** tab; the node uses its bundled app-owned A2UI page for message application.
 
 ```bash
 openclaw devices list
-openclaw devices approve --latest
+openclaw devices approve --latest   # preview only; copy the requestId from output
+openclaw devices approve <requestId>
 ```
 
 Run:
@@ -283,9 +326,9 @@ What it does:
 Common failure quick-fixes:
 
 - `pairing required` before tests start:
-  - approve pending device pairing (`openclaw devices approve --latest`) and rerun.
-- `A2UI host not reachable` / `A2UI_HOST_NOT_CONFIGURED`:
-  - ensure the Canvas plugin host is running and reachable, keep the app on the **Screen** tab. The app refreshes the Canvas plugin surface URL once before failing; if it still fails, reconnect app and rerun.
+  - list pending requests (`openclaw devices list`), then approve with the exact ID (`openclaw devices approve <requestId>`) and rerun.
+- `A2UI host not reachable` / `A2UI_HOST_UNAVAILABLE`:
+  - keep the app foregrounded on the **Screen** tab and rerun. A2UI commands use the bundled app-owned A2UI page; the Gateway Canvas host is still needed for remote Canvas checks, but not for A2UI message application.
 - `NODE_BACKGROUND_UNAVAILABLE: canvas unavailable`:
   - app is not effectively ready for canvas commands; keep app foregrounded and **Screen** tab active.
 

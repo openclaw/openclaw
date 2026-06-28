@@ -27,9 +27,13 @@ Use this page after the base [Codex harness](/plugins/codex-harness) is working.
 - The target Codex app-server must be able to see the expected marketplace,
   plugin, and app inventory.
 
-`codexPlugins` has no effect on PI runs, normal OpenAI provider runs, ACP
+`codexPlugins` has no effect on OpenClaw runs, normal OpenAI provider runs, ACP
 conversation bindings, or other harnesses because those paths do not create
 Codex app-server threads with native `apps` config.
+
+OpenAI-side Codex access, app availability, and workspace app/plugin controls
+come from the signed-in Codex account. For the OpenAI account and admin model,
+see [Using Codex with your ChatGPT plan](https://help.openai.com/en/articles/11369540-using-codex-with-your-chatgpt-plan).
 
 ## Quickstart
 
@@ -81,8 +85,35 @@ config looks like this:
 }
 ```
 
-After changing `codexPlugins`, use `/new`, `/reset`, or restart the gateway so
-future Codex harness sessions start with the updated app set.
+After changing `codexPlugins`, new Codex conversations pick up the updated app
+set automatically. Use `/new` or `/reset` to refresh the current conversation.
+A gateway restart is not required for plugin enable or disable changes.
+
+## Manage plugins from chat
+
+Use `/codex plugins` when you want to inspect or change configured native Codex
+plugins from the same chat where you operate the Codex harness:
+
+```text
+/codex plugins
+/codex plugins list
+/codex plugins disable google-calendar
+/codex plugins enable google-calendar
+```
+
+`/codex plugins` is an alias for `/codex plugins list`. The list output shows
+the configured plugin keys, on/off state, Codex plugin name, and marketplace
+from `plugins.entries.codex.config.codexPlugins.plugins`.
+
+`enable` and `disable` write only to OpenClaw config at
+`~/.openclaw/openclaw.json`; they do not edit `~/.codex/config.toml` or install
+new Codex plugins. Only the owner or a gateway client with the
+`operator.admin` scope can change plugin state.
+
+Enabling a configured plugin also turns on the global
+`codexPlugins.enabled` switch. If the plugin was written disabled because
+migration returned `auth_required`, reauthorize the app in Codex before enabling
+it in OpenClaw.
 
 ## How native plugin setup works
 
@@ -110,7 +141,10 @@ check after migration. Codex harness session setup then computes a restrictive
 thread app config for the enabled and accessible plugin apps.
 
 Thread app config is computed when OpenClaw establishes a Codex harness session
-or replaces a stale Codex thread binding. It is not recomputed on every turn.
+or replaces a stale Codex thread binding. It is not recomputed on every turn, so
+`/codex plugins enable` and `/codex plugins disable` affect new Codex
+conversations. Use `/new` or `/reset` when the current conversation should pick
+up the updated app set.
 
 ## V1 support boundary
 
@@ -166,11 +200,12 @@ enabled.
 
 OpenClaw sets app-level `destructive_enabled` from the effective global or
 per-plugin `allow_destructive_actions` policy and lets Codex enforce
-destructive tool metadata from its native app tool annotations. The `_default`
-app config is disabled with `open_world_enabled: false`. Enabled plugin apps
-are emitted with `open_world_enabled: true`; OpenClaw does not expose a separate
-plugin open-world policy knob and does not maintain per-plugin destructive
-tool-name deny lists.
+destructive tool metadata from its native app tool annotations. `true`,
+`"auto"`, and `"always"` set `destructive_enabled: true`; `false` sets it
+false. The `_default` app config is disabled with `open_world_enabled: false`.
+Enabled plugin apps are emitted with `open_world_enabled: true`; OpenClaw does
+not expose a separate plugin open-world policy knob and does not maintain
+per-plugin destructive tool-name deny lists.
 
 Tool approval mode is automatic by default for plugin apps so non-destructive
 read tools can run without a same-thread approval UI. Destructive tools remain
@@ -187,6 +222,13 @@ plugins, while unsafe schemas and ambiguous ownership still fail closed:
 - When policy is `false`, OpenClaw returns a deterministic decline.
 - When policy is `true`, OpenClaw auto-accepts only safe schemas it can map to
   an approval response, such as a boolean approve field.
+- When policy is `"auto"`, OpenClaw exposes destructive plugin actions to
+  Codex but turns ownership-proven MCP approval elicitations into OpenClaw
+  plugin approvals before returning the Codex approval response.
+- When policy is `"always"`, OpenClaw uses the same Codex write/destructive
+  gating as `"auto"`, clears durable Codex per-tool approval overrides for the
+  app before the thread starts, and only offers one-shot approval or denial so
+  durable approvals cannot suppress later write-action prompts.
 - Missing plugin identity, ambiguous ownership, a missing turn id, a wrong turn
   id, or an unsafe elicitation schema declines instead of prompting.
 
@@ -228,14 +270,15 @@ apps until ownership and readiness are known.
 **`app_ownership_ambiguous`:** app inventory only matched by display name, so
 the app is not exposed to the Codex thread.
 
-**Config changed but the agent cannot see the plugin:** use `/new`, `/reset`, or
-restart the gateway. Existing Codex thread bindings keep the app config they
-started with until OpenClaw establishes a new harness session or replaces a
-stale binding.
+**Config changed but the agent cannot see the plugin:** use `/codex plugins
+list` to confirm the configured state, then use `/new` or `/reset`. Existing
+Codex thread bindings keep the app config they started with until OpenClaw
+establishes a new harness session or replaces a stale binding.
 
 **Destructive action is declined:** check the global and per-plugin
-`allow_destructive_actions` values. Even when policy is true, unsafe elicitation
-schemas and ambiguous plugin identity still fail closed.
+`allow_destructive_actions` values. Even when policy is true, `"auto"`, or
+`"always"`, unsafe elicitation schemas and ambiguous plugin identity still fail
+closed.
 
 ## Related
 

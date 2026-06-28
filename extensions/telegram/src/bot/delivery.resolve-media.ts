@@ -1,3 +1,4 @@
+// Telegram plugin module implements delivery.resolve media behavior.
 import path from "node:path";
 import { GrammyError } from "grammy";
 import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
@@ -177,7 +178,12 @@ function resolveTrustedLocalTelegramRoot(
   }
   for (const rootDir of trustedLocalFileRoots ?? []) {
     const relativePath = path.relative(rootDir, filePath);
-    if (relativePath === "" || relativePath.startsWith("..") || path.isAbsolute(relativePath)) {
+    if (
+      relativePath === "" ||
+      relativePath === ".." ||
+      relativePath.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relativePath)
+    ) {
       continue;
     }
     return { rootDir, relativePath };

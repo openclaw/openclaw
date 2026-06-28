@@ -1,3 +1,4 @@
+// Slack tests cover provider.reconnect plugin behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   gracefulStopSlackApp,
@@ -103,15 +104,14 @@ describe("slack socket reconnect helpers", () => {
     });
   });
 
-  it("formats recoverable disconnects as a single reconnect status line", () => {
+  it("formats recoverable disconnects beyond the former cap as unlimited", () => {
     expect(
       formatSlackSocketReconnectMessage({
         event: "disconnect",
-        attempt: 1,
-        maxAttempts: 12,
+        attempt: 13,
         delayMs: 2_340,
       }),
-    ).toBe("slack socket disconnected (disconnect); reconnecting in 2s (attempt 1/12)");
+    ).toBe("slack socket disconnected (disconnect); reconnecting in 2s (attempt 13/∞)");
   });
 
   it("formats missing and unserializable socket errors without leaking undefined", () => {
@@ -145,13 +145,12 @@ describe("slack socket reconnect helpers", () => {
   it("formats socket start retries with an explicit reason field", () => {
     expect(
       formatSlackSocketStartRetryMessage({
-        attempt: 1,
-        maxAttempts: 12,
+        attempt: 13,
         delayMs: 2_340,
         error: undefined,
       }),
     ).toBe(
-      'slack socket mode failed to start; retry 1/12 in 2s reason="Slack Socket Mode start failed without error detail"',
+      'slack socket mode failed to start; retry 13/∞ in 2s reason="Slack Socket Mode start failed without error detail"',
     );
   });
 
@@ -159,13 +158,12 @@ describe("slack socket reconnect helpers", () => {
     expect(
       formatSlackSocketStartRetryMessage({
         attempt: 1,
-        maxAttempts: 12,
         delayMs: 2_340,
         error: undefined,
         sdkContext: "socket-mode:SlackWebSocket:1 Failed to retrieve WSS URL",
       }),
     ).toBe(
-      'slack socket mode failed to start; retry 1/12 in 2s reason="Slack Socket Mode start failed without error detail; last SDK log: socket-mode:SlackWebSocket:1 Failed to retrieve WSS URL"',
+      'slack socket mode failed to start; retry 1/∞ in 2s reason="Slack Socket Mode start failed without error detail; last SDK log: socket-mode:SlackWebSocket:1 Failed to retrieve WSS URL"',
     );
   });
 
@@ -252,9 +250,9 @@ describe("slack socket reconnect helpers", () => {
     const err = new Error("missing_scope");
     const app = {
       receiver: { client },
-      start: vi.fn().mockImplementation(async () => {
+      start: vi.fn().mockImplementation(() => {
         client.emit("unable_to_socket_mode_start", err);
-        throw undefined;
+        throw new Error();
       }),
     };
 

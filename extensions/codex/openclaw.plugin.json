@@ -1,11 +1,12 @@
 {
   "id": "codex",
   "name": "Codex",
-  "description": "Codex app-server harness and Codex-managed GPT model catalog.",
+  "description": "OpenClaw Codex app-server harness and model provider plugin with a Codex-managed GPT catalog.",
   "providers": ["codex"],
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
-    "migrationProviders": ["codex"]
+    "migrationProviders": ["codex"],
+    "webSearchProviders": ["codex"]
   },
   "mediaUnderstandingProviderMetadata": {
     "codex": {
@@ -100,7 +101,7 @@
             "default": false
           },
           "allow_destructive_actions": {
-            "type": "boolean",
+            "oneOf": [{ "type": "boolean" }, { "const": "auto" }, { "const": "always" }],
             "default": true
           },
           "plugins": {
@@ -120,7 +121,7 @@
                   "type": "string"
                 },
                 "allow_destructive_actions": {
-                  "type": "boolean"
+                  "oneOf": [{ "type": "boolean" }, { "const": "auto" }, { "const": "always" }]
                 }
               }
             }
@@ -133,8 +134,7 @@
         "properties": {
           "mode": {
             "type": "string",
-            "enum": ["yolo", "guardian"],
-            "default": "yolo"
+            "enum": ["yolo", "guardian"]
           },
           "transport": {
             "type": "string",
@@ -152,14 +152,21 @@
             ]
           },
           "url": { "type": "string" },
-          "authToken": { "type": "string" },
+          "authToken": { "type": ["string", "object"] },
           "headers": {
             "type": "object",
-            "additionalProperties": { "type": "string" }
+            "additionalProperties": { "type": ["string", "object"] }
           },
           "clearEnv": {
             "type": "array",
             "items": { "type": "string" }
+          },
+          "remoteWorkspaceRoot": {
+            "type": "string"
+          },
+          "codeModeOnly": {
+            "type": "boolean",
+            "default": false
           },
           "requestTimeoutMs": {
             "type": "number",
@@ -170,6 +177,11 @@
             "type": "number",
             "minimum": 1,
             "default": 60000
+          },
+          "postToolRawAssistantCompletionIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 300000
           },
           "approvalPolicy": {
             "type": "string",
@@ -184,11 +196,70 @@
             "enum": ["user", "auto_review", "guardian_subagent"]
           },
           "serviceTier": { "type": ["string", "null"] },
+          "networkProxy": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enabled": {
+                "type": "boolean",
+                "default": false
+              },
+              "profileName": { "type": "string" },
+              "baseProfile": {
+                "type": "string",
+                "enum": ["read-only", "workspace"]
+              },
+              "mode": {
+                "type": "string",
+                "enum": ["limited", "full"]
+              },
+              "domains": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "enum": ["allow", "deny"]
+                }
+              },
+              "unixSockets": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string",
+                  "enum": ["allow", "none"]
+                }
+              },
+              "proxyUrl": { "type": "string" },
+              "socksUrl": { "type": "string" },
+              "enableSocks5": { "type": "boolean" },
+              "enableSocks5Udp": { "type": "boolean" },
+              "allowUpstreamProxy": { "type": "boolean" },
+              "allowLocalBinding": { "type": "boolean" },
+              "dangerouslyAllowNonLoopbackProxy": { "type": "boolean" },
+              "dangerouslyAllowAllUnixSockets": { "type": "boolean" }
+            }
+          },
           "defaultWorkspaceDir": {
             "type": "string"
+          },
+          "experimental": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "sandboxExecServer": {
+                "type": "boolean",
+                "default": false
+              }
+            }
           }
         }
       }
+    }
+  },
+  "configContracts": {
+    "secretInputs": {
+      "paths": [
+        { "path": "appServer.authToken", "expected": "string" },
+        { "path": "appServer.headers.*", "expected": "string" }
+      ]
     }
   },
   "uiHints": {
@@ -272,7 +343,7 @@
     },
     "codexPlugins.allow_destructive_actions": {
       "label": "Allow Destructive Plugin Actions",
-      "help": "Default policy for plugin app write or destructive action elicitations. Defaults to true.",
+      "help": "Default policy for plugin app write or destructive action elicitations. Use true to accept safe schemas without prompting, false to decline, auto to ask through plugin approvals when Codex requires approval, or always to ask for every write/destructive action without durable approval.",
       "advanced": true
     },
     "codexPlugins.plugins": {
@@ -287,7 +358,7 @@
     },
     "appServer.mode": {
       "label": "Execution Mode",
-      "help": "Use yolo for unchained local execution or guardian for Codex guardian-reviewed approvals.",
+      "help": "Legacy Codex app-server preset. Prefer tools.exec.mode=auto for normalized Guardian-reviewed approvals.",
       "advanced": true
     },
     "appServer.transport": {
@@ -319,11 +390,22 @@
     "appServer.headers": {
       "label": "Headers",
       "help": "Additional headers sent to the WebSocket app-server.",
+      "sensitive": true,
       "advanced": true
     },
     "appServer.clearEnv": {
       "label": "Clear Environment",
       "help": "Environment variable names removed from the spawned stdio app-server process after overrides are applied.",
+      "advanced": true
+    },
+    "appServer.remoteWorkspaceRoot": {
+      "label": "Remote Workspace Root",
+      "help": "Remote Codex app-server workspace root used to project OpenClaw cwd suffixes before starting Codex threads.",
+      "advanced": true
+    },
+    "appServer.codeModeOnly": {
+      "label": "Code Mode Only",
+      "help": "Expose Codex's code-mode-only tool surface. OpenClaw dynamic tools remain available through Codex nested tool calls.",
       "advanced": true
     },
     "appServer.requestTimeoutMs": {
@@ -333,7 +415,12 @@
     },
     "appServer.turnCompletionIdleTimeoutMs": {
       "label": "Turn Completion Idle Timeout",
-      "help": "Maximum quiet time after a turn-scoped Codex app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
+      "help": "Maximum quiet time after Codex accepts a turn or after a turn-scoped app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
+      "advanced": true
+    },
+    "appServer.postToolRawAssistantCompletionIdleTimeoutMs": {
+      "label": "Post-Tool Continuation Idle Timeout",
+      "help": "Completion-idle and progress guard after a tool handoff, native tool completion, or post-tool raw assistant progress while waiting for turn/completed. Defaults to 300000 ms when unset.",
       "advanced": true
     },
     "appServer.approvalPolicy": {
@@ -356,9 +443,94 @@
       "help": "Optional Codex app-server service tier. Use priority, flex, or null. Legacy fast is accepted as priority.",
       "advanced": true
     },
+    "appServer.networkProxy": {
+      "label": "Network Proxy",
+      "help": "Enable Codex permissions-profile networking for app-server commands.",
+      "advanced": true
+    },
+    "appServer.networkProxy.enabled": {
+      "label": "Network Proxy Enabled",
+      "help": "When enabled, OpenClaw defines a Codex permissions profile and selects it with default_permissions instead of sandbox fields.",
+      "advanced": true
+    },
+    "appServer.networkProxy.profileName": {
+      "label": "Network Proxy Profile",
+      "help": "Optional stable Codex permissions profile name. Leave unset to use a generated openclaw-network fingerprint name.",
+      "advanced": true
+    },
+    "appServer.networkProxy.baseProfile": {
+      "label": "Network Proxy Base",
+      "help": "Filesystem access used by the generated profile. Defaults to read-only for read-only sandboxes and workspace otherwise.",
+      "advanced": true
+    },
+    "appServer.networkProxy.domains": {
+      "label": "Network Domains",
+      "help": "Domain allow and deny rules for Codex sandboxed networking.",
+      "advanced": true
+    },
+    "appServer.networkProxy.unixSockets": {
+      "label": "Unix Sockets",
+      "help": "Unix socket allow and none rules for Codex sandboxed networking.",
+      "advanced": true
+    },
+    "appServer.networkProxy.proxyUrl": {
+      "label": "HTTP Proxy URL",
+      "help": "HTTP listener URL used by Codex sandboxed networking.",
+      "advanced": true
+    },
+    "appServer.networkProxy.socksUrl": {
+      "label": "SOCKS Proxy URL",
+      "help": "SOCKS listener URL used by Codex sandboxed networking.",
+      "advanced": true
+    },
+    "appServer.networkProxy.enableSocks5": {
+      "label": "Enable SOCKS5",
+      "help": "Expose SOCKS5 support for the generated Codex permissions profile.",
+      "advanced": true
+    },
+    "appServer.networkProxy.enableSocks5Udp": {
+      "label": "Enable SOCKS5 UDP",
+      "help": "Allow UDP over the SOCKS5 listener when SOCKS5 is enabled.",
+      "advanced": true
+    },
+    "appServer.networkProxy.allowUpstreamProxy": {
+      "label": "Allow Upstream Proxy",
+      "help": "Allow Codex sandboxed networking to chain through inherited HTTP(S)_PROXY or ALL_PROXY settings.",
+      "advanced": true
+    },
+    "appServer.networkProxy.allowLocalBinding": {
+      "label": "Allow Local Binding",
+      "help": "Permit broader local and private-network access through Codex sandboxed networking.",
+      "advanced": true
+    },
+    "appServer.networkProxy.mode": {
+      "label": "Network Mode",
+      "help": "Codex sandboxed networking mode for subprocess traffic.",
+      "advanced": true
+    },
+    "appServer.networkProxy.dangerouslyAllowNonLoopbackProxy": {
+      "label": "Allow Non-Loopback Proxy",
+      "help": "Permit non-loopback bind addresses for Codex sandboxed networking listeners.",
+      "advanced": true
+    },
+    "appServer.networkProxy.dangerouslyAllowAllUnixSockets": {
+      "label": "Allow All Unix Sockets",
+      "help": "Bypass Codex's Unix socket allowlist for tightly controlled environments.",
+      "advanced": true
+    },
     "appServer.defaultWorkspaceDir": {
       "label": "Default Workspace",
       "help": "Workspace used by /codex bind when --cwd is omitted.",
+      "advanced": true
+    },
+    "appServer.experimental": {
+      "label": "Experimental",
+      "help": "Experimental Codex app-server integrations.",
+      "advanced": true
+    },
+    "appServer.experimental.sandboxExecServer": {
+      "label": "Sandbox Exec Server",
+      "help": "Route native Codex execution through an OpenClaw sandbox-backed exec-server when OpenClaw sandboxing is active.",
       "advanced": true
     }
   }

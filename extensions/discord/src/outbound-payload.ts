@@ -1,3 +1,4 @@
+// Discord plugin module implements outbound payload behavior.
 import {
   attachChannelToResult,
   type ChannelOutboundAdapter,
@@ -17,8 +18,61 @@ import { createDiscordPayloadSendContext } from "./outbound-send-context.js";
 import { createDiscordSendReceipt } from "./send.receipt.js";
 import type { DiscordSendComponents, DiscordSendEmbeds } from "./send.shared.js";
 
+type DiscordOutboundPayloadContext = Parameters<
+  NonNullable<ChannelOutboundAdapter["sendPayload"]>
+>[0];
+type DiscordPayloadSendContext = Awaited<ReturnType<typeof createDiscordPayloadSendContext>>;
+
+function createDiscordUnknownPayloadResult(target: string) {
+  return {
+    messageId: "",
+    channelId: target,
+    receipt: createDiscordSendReceipt({
+      platformMessageIds: [],
+      channelId: target,
+      kind: "unknown",
+    }),
+  };
+}
+
+function resolveDiscordDeliveryOptions(
+  ctx: DiscordOutboundPayloadContext,
+  sendContext: DiscordPayloadSendContext,
+) {
+  return {
+    replyTo: sendContext.resolveReplyTo(),
+    accountId: ctx.accountId ?? undefined,
+    silent: ctx.silent ?? undefined,
+    cfg: ctx.cfg,
+  };
+}
+
+function resolveDiscordFormattedDeliveryOptions(
+  ctx: DiscordOutboundPayloadContext,
+  sendContext: DiscordPayloadSendContext,
+) {
+  return {
+    ...resolveDiscordDeliveryOptions(ctx, sendContext),
+    ...sendContext.formatting,
+  };
+}
+
+function resolveDiscordMediaDeliveryOptions(
+  ctx: DiscordOutboundPayloadContext,
+  sendContext: DiscordPayloadSendContext,
+  mediaUrl: string,
+) {
+  return {
+    mediaUrl,
+    mediaAccess: ctx.mediaAccess,
+    mediaLocalRoots: ctx.mediaLocalRoots,
+    mediaReadFile: ctx.mediaReadFile,
+    ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
+  };
+}
+
 export async function sendDiscordOutboundPayload(params: {
-  ctx: Parameters<NonNullable<ChannelOutboundAdapter["sendPayload"]>>[0];
+  ctx: DiscordOutboundPayloadContext;
   fallbackAdapter: ChannelOutboundAdapter;
 }): Promise<Awaited<ReturnType<NonNullable<ChannelOutboundAdapter["sendPayload"]>>>> {
   const ctx = params.ctx;
@@ -30,13 +84,14 @@ export async function sendDiscordOutboundPayload(params: {
   const sendContext = await createDiscordPayloadSendContext(ctx);
 
   if (payload.audioAsVoice && mediaUrls.length > 0) {
+    // audioAsVoice emits one logical Discord reply across voice/text/media sends.
+    // Capture before helper calls consume implicit single-use reply targets.
+    const voiceReplyTo = sendContext.resolveReplyTo();
     let lastResult = await sendContext.withRetry(
       async () =>
         await sendContext.sendVoice(sendContext.target, mediaUrls[0], {
-          cfg: ctx.cfg,
-          replyTo: sendContext.resolveReplyTo(),
-          accountId: ctx.accountId ?? undefined,
-          silent: ctx.silent ?? undefined,
+          ...resolveDiscordDeliveryOptions(ctx, sendContext),
+          replyTo: voiceReplyTo,
         }),
     );
     if (payload.text?.trim()) {
@@ -44,11 +99,8 @@ export async function sendDiscordOutboundPayload(params: {
         async () =>
           await sendContext.send(sendContext.target, payload.text, {
             verbose: false,
-            replyTo: sendContext.resolveReplyTo(),
-            accountId: ctx.accountId ?? undefined,
-            silent: ctx.silent ?? undefined,
-            cfg: ctx.cfg,
-            ...sendContext.formatting,
+            ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
+            replyTo: voiceReplyTo,
           }),
       );
     }
@@ -57,15 +109,8 @@ export async function sendDiscordOutboundPayload(params: {
         async () =>
           await sendContext.send(sendContext.target, "", {
             verbose: false,
-            mediaUrl,
-            mediaAccess: ctx.mediaAccess,
-            mediaLocalRoots: ctx.mediaLocalRoots,
-            mediaReadFile: ctx.mediaReadFile,
-            replyTo: sendContext.resolveReplyTo(),
-            accountId: ctx.accountId ?? undefined,
-            silent: ctx.silent ?? undefined,
-            cfg: ctx.cfg,
-            ...sendContext.formatting,
+            ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
+            replyTo: voiceReplyTo,
           }),
       );
     }
@@ -91,15 +136,7 @@ export async function sendDiscordOutboundPayload(params: {
       const result = await sendPayloadMediaSequenceOrFallback({
         text: payload.text ?? "",
         mediaUrls,
-        fallbackResult: {
-          messageId: "",
-          channelId: sendContext.target,
-          receipt: createDiscordSendReceipt({
-            platformMessageIds: [],
-            channelId: sendContext.target,
-            kind: "unknown",
-          }),
-        },
+        fallbackResult: createDiscordUnknownPayloadResult(sendContext.target),
         sendNoMedia: async () =>
           await sendContext.withRetry(
             async () =>
@@ -108,11 +145,7 @@ export async function sendDiscordOutboundPayload(params: {
                 components: nativeComponents,
                 embeds,
                 filename,
-                replyTo: sendContext.resolveReplyTo(),
-                accountId: ctx.accountId ?? undefined,
-                silent: ctx.silent ?? undefined,
-                cfg: ctx.cfg,
-                ...sendContext.formatting,
+                ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
               }),
           ),
         send: async ({ text, mediaUrl, isFirst }) =>
@@ -120,18 +153,10 @@ export async function sendDiscordOutboundPayload(params: {
             async () =>
               await sendContext.send(sendContext.target, text, {
                 verbose: false,
-                mediaUrl,
-                mediaAccess: ctx.mediaAccess,
-                mediaLocalRoots: ctx.mediaLocalRoots,
-                mediaReadFile: ctx.mediaReadFile,
+                ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
                 components: isFirst ? nativeComponents : undefined,
                 embeds: isFirst ? embeds : undefined,
                 filename: isFirst ? filename : undefined,
-                replyTo: sendContext.resolveReplyTo(),
-                accountId: ctx.accountId ?? undefined,
-                silent: ctx.silent ?? undefined,
-                cfg: ctx.cfg,
-                ...sendContext.formatting,
               }),
           ),
       });
@@ -150,24 +175,12 @@ export async function sendDiscordOutboundPayload(params: {
   const result = await sendPayloadMediaSequenceOrFallback({
     text: payload.text ?? "",
     mediaUrls,
-    fallbackResult: {
-      messageId: "",
-      channelId: sendContext.target,
-      receipt: createDiscordSendReceipt({
-        platformMessageIds: [],
-        channelId: sendContext.target,
-        kind: "unknown",
-      }),
-    },
+    fallbackResult: createDiscordUnknownPayloadResult(sendContext.target),
     sendNoMedia: async () =>
       await sendContext.withRetry(
         async () =>
           await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
-            replyTo: sendContext.resolveReplyTo(),
-            accountId: ctx.accountId ?? undefined,
-            silent: ctx.silent ?? undefined,
-            cfg: ctx.cfg,
-            ...sendContext.formatting,
+            ...resolveDiscordFormattedDeliveryOptions(ctx, sendContext),
           }),
       ),
     send: async ({ text, mediaUrl, isFirst }) => {
@@ -175,15 +188,7 @@ export async function sendDiscordOutboundPayload(params: {
         return await sendContext.withRetry(
           async () =>
             await sendDiscordComponentMessageLazy(sendContext.target, componentSpec, {
-              mediaUrl,
-              mediaAccess: ctx.mediaAccess,
-              mediaLocalRoots: ctx.mediaLocalRoots,
-              mediaReadFile: ctx.mediaReadFile,
-              replyTo: sendContext.resolveReplyTo(),
-              accountId: ctx.accountId ?? undefined,
-              silent: ctx.silent ?? undefined,
-              cfg: ctx.cfg,
-              ...sendContext.formatting,
+              ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
             }),
         );
       }
@@ -191,15 +196,7 @@ export async function sendDiscordOutboundPayload(params: {
         async () =>
           await sendContext.send(sendContext.target, text, {
             verbose: false,
-            mediaUrl,
-            mediaAccess: ctx.mediaAccess,
-            mediaLocalRoots: ctx.mediaLocalRoots,
-            mediaReadFile: ctx.mediaReadFile,
-            replyTo: sendContext.resolveReplyTo(),
-            accountId: ctx.accountId ?? undefined,
-            silent: ctx.silent ?? undefined,
-            cfg: ctx.cfg,
-            ...sendContext.formatting,
+            ...resolveDiscordMediaDeliveryOptions(ctx, sendContext, mediaUrl),
           }),
       );
     },

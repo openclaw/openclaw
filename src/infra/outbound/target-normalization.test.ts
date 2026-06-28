@@ -1,4 +1,7 @@
+// Covers target input normalization, provider plugin normalizers, resolver
+// caching, and id-like lookup heuristics.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
 
 const getLoadedChannelPluginMock = vi.hoisted(() => vi.fn());
@@ -13,7 +16,7 @@ let maybeResolvePluginMessagingTarget: TargetNormalizationModule["maybeResolvePl
 let normalizeChannelTargetInput: TargetNormalizationModule["normalizeChannelTargetInput"];
 let resolveNormalizedTargetInput: TargetNormalizationModule["resolveNormalizedTargetInput"];
 let normalizeTargetForProvider: TargetNormalizationModule["normalizeTargetForProvider"];
-let resetTargetNormalizerCacheForTests: TargetNormalizationModule["__testing"]["resetTargetNormalizerCacheForTests"];
+let resetTargetNormalizerCacheForTests: TargetNormalizationModule["testing"]["resetTargetNormalizerCacheForTests"];
 
 vi.mock("../../channels/plugins/registry-loaded-read.js", () => ({
   getLoadedChannelPluginForRead: (...args: unknown[]) => getLoadedChannelPluginMock(...args),
@@ -38,7 +41,7 @@ beforeAll(async () => {
     resolveNormalizedTargetInput,
   } = await import("./target-normalization.js"));
   ({
-    __testing: { resetTargetNormalizerCacheForTests },
+    testing: { resetTargetNormalizerCacheForTests },
   } = await import("./target-normalization.js"));
 });
 
@@ -264,6 +267,7 @@ describe("maybeResolvePluginMessagingTarget", () => {
       kind: "group",
       display: "general",
       source: "normalized",
+      resolutionSource: "plugin",
     });
 
     expect(resolveTarget).toHaveBeenCalledWith({
@@ -324,5 +328,28 @@ describe("buildTargetResolverSignature", () => {
     const second = buildTargetResolverSignature("workspace");
 
     expect(first).not.toBe(second);
+  });
+
+  it("partitions prepared runtime plugins from pinned and replacement plugin cache entries", () => {
+    const firstPlugin = {
+      messaging: {
+        targetResolver: {},
+      },
+    } as ChannelPlugin;
+    const replacementPlugin = {
+      messaging: {
+        targetResolver: {},
+      },
+    } as ChannelPlugin;
+    getLoadedChannelPluginMock.mockReturnValue(firstPlugin);
+
+    const pinned = buildTargetResolverSignature("workspace");
+    const prepared = buildTargetResolverSignature("workspace", firstPlugin);
+    const samePrepared = buildTargetResolverSignature("workspace", firstPlugin);
+    const replacementPrepared = buildTargetResolverSignature("workspace", replacementPlugin);
+
+    expect(prepared).not.toBe(pinned);
+    expect(samePrepared).toBe(prepared);
+    expect(replacementPrepared).not.toBe(prepared);
   });
 });

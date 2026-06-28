@@ -1,17 +1,16 @@
 {
   "name": "@openclaw/codex",
-  "version": "2026.5.12-beta.1",
-  "description": "OpenClaw Codex harness and model provider plugin",
+  "version": "2026.6.10",
+  "description": "OpenClaw Codex app-server harness and model provider plugin with a Codex-managed GPT catalog.",
   "repository": {
     "type": "git",
     "url": "https://github.com/openclaw/openclaw"
   },
   "type": "module",
   "dependencies": {
-    "@earendil-works/pi-coding-agent": "0.74.0",
-    "@openai/codex": "0.130.0",
-    "ajv": "8.20.0",
-    "ws": "8.20.0",
+    "@openai/codex": "0.139.0",
+    "typebox": "1.1.39",
+    "ws": "8.21.0",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -24,17 +23,26 @@
     "install": {
       "npmSpec": "@openclaw/codex",
       "defaultChoice": "npm",
-      "minHostVersion": ">=2026.5.1-beta.1"
+      "minHostVersion": ">=2026.5.1-beta.1",
+      "requiredPlatformPackages": [
+        "@openai/codex-linux-x64",
+        "@openai/codex-linux-arm64",
+        "@openai/codex-darwin-x64",
+        "@openai/codex-darwin-arm64",
+        "@openai/codex-win32-x64",
+        "@openai/codex-win32-arm64"
+      ]
     },
     "compat": {
-      "pluginApi": ">=2026.5.12-beta.1"
+      "pluginApi": ">=2026.6.10"
     },
     "build": {
-      "openclawVersion": "2026.5.12-beta.1"
+      "openclawVersion": "2026.6.10"
     },
     "release": {
       "publishToClawHub": true,
-      "publishToNpm": true
+      "publishToNpm": true,
+      "bundleRuntimeDependencies": false
     }
   }
 }

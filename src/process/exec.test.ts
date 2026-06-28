@@ -1,33 +1,40 @@
+// Exec tests cover command execution, output capture, and cancellation behavior.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import process from "node:process";
+import { promisify } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OPENCLAW_CLI_ENV_VALUE } from "../infra/openclaw-exec-env.js";
+import { MAX_TIMER_TIMEOUT_MS } from "../shared/number-coercion.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
+const execFileMock = vi.hoisted(() => vi.fn());
+const execFilePromiseMock = vi.hoisted(() => vi.fn());
 
 let attachChildProcessBridge: typeof import("./child-process-bridge.js").attachChildProcessBridge;
 let resolveCommandEnv: typeof import("./exec.js").resolveCommandEnv;
 let resolveProcessExitCode: typeof import("./exec.js").resolveProcessExitCode;
+let runExec: typeof import("./exec.js").runExec;
 let runCommandWithTimeout: typeof import("./exec.js").runCommandWithTimeout;
 let shouldSpawnWithShell: typeof import("./exec.js").shouldSpawnWithShell;
 
-async function loadExecModules(options?: { mockSpawn?: boolean }) {
+async function loadExecModules(options?: { mockSpawn?: boolean; mockExecFile?: boolean }) {
   vi.resetModules();
-  if (options?.mockSpawn) {
+  if (options?.mockSpawn || options?.mockExecFile) {
     vi.doMock("node:child_process", async () => {
       const actual =
         await vi.importActual<typeof import("node:child_process")>("node:child_process");
       return {
         ...actual,
-        spawn: spawnMock,
+        spawn: options?.mockSpawn ? spawnMock : actual.spawn,
+        execFile: options?.mockExecFile ? execFileMock : actual.execFile,
       };
     });
   } else {
     vi.doUnmock("node:child_process");
   }
   ({ attachChildProcessBridge } = await import("./child-process-bridge.js"));
-  ({ resolveCommandEnv, resolveProcessExitCode, runCommandWithTimeout, shouldSpawnWithShell } =
+  ({ resolveCommandEnv, resolveProcessExitCode, runCommandWithTimeout, runExec, shouldSpawnWithShell } =
     await import("./exec.js"));
 }
 
@@ -83,6 +90,9 @@ describe("runCommandWithTimeout", () => {
   beforeEach(async () => {
     vi.useRealTimers();
     spawnMock.mockReset();
+    execFileMock.mockReset();
+    execFilePromiseMock.mockReset();
+    delete (execFileMock as { [promisify.custom]?: unknown })[promisify.custom];
     await loadExecModules();
   });
 
@@ -118,6 +128,42 @@ describe("runCommandWithTimeout", () => {
     expect(resolved.OPENCLAW_CLI).toBe(OPENCLAW_CLI_ENV_VALUE);
   });
 
+  it("collapses case-insensitive duplicate env keys on Windows", () => {
+    const resolved = resolveCommandEnv({
+      argv: ["node", "script.js"],
+      platform: "win32",
+      baseEnv: {
+        Path: "C:\\base\\bin",
+        OPENCLAW_BASE_ENV: "base",
+      },
+      env: {
+        PATH: "C:\\override\\bin",
+        OPENCLAW_TEST_ENV: "ok",
+      },
+    });
+
+    expect(resolved.Path).toBeUndefined();
+    expect(resolved.PATH).toBe("C:\\override\\bin");
+    expect(resolved.OPENCLAW_BASE_ENV).toBe("base");
+    expect(resolved.OPENCLAW_TEST_ENV).toBe("ok");
+  });
+
+  it("preserves case-distinct env keys outside Windows", () => {
+    const resolved = resolveCommandEnv({
+      argv: ["node", "script.js"],
+      platform: "linux",
+      baseEnv: {
+        Path: "/base/bin",
+      },
+      env: {
+        PATH: "/override/bin",
+      },
+    });
+
+    expect(resolved.Path).toBe("/base/bin");
+    expect(resolved.PATH).toBe("/override/bin");
+  });
+
   it("suppresses npm fund prompts for npm argv", () => {
     const resolved = resolveCommandEnv({
       argv: ["npm", "--version"],
@@ -126,6 +172,23 @@ describe("runCommandWithTimeout", () => {
 
     expect(resolved.NPM_CONFIG_FUND).toBe("false");
     expect(resolved.npm_config_fund).toBe("false");
+  });
+
+  it("caps oversized execFile timeouts", async () => {
+    execFilePromiseMock.mockResolvedValue({ stdout: Buffer.from("ok"), stderr: Buffer.from("") });
+    (execFileMock as { [promisify.custom]?: typeof execFilePromiseMock })[promisify.custom] =
+      execFilePromiseMock;
+    await loadExecModules({ mockExecFile: true });
+
+    await expect(
+      runExec("node", ["--version"], { timeoutMs: Number.MAX_SAFE_INTEGER }),
+    ).resolves.toEqual({ stdout: "ok", stderr: "" });
+
+    expect(execFilePromiseMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.any(Array),
+      expect.objectContaining({ timeout: MAX_TIMER_TIMEOUT_MS }),
+    );
   });
 
   it("infers success for shimmed Windows commands when exit codes are missing", () => {
@@ -156,6 +219,29 @@ describe("runCommandWithTimeout", () => {
     ).toBeNull();
   });
 
+  it("does not spawn when the abort signal is already aborted", async () => {
+    await loadExecModules({ mockSpawn: true });
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await runCommandWithTimeout(createSilentIdleArgv(), {
+      timeoutMs: 2_000,
+      signal: controller.signal,
+    });
+
+    expect(spawnMock).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      stdout: "",
+      stderr: "",
+      code: null,
+      signal: null,
+      killed: false,
+      termination: "signal",
+      noOutputTimedOut: false,
+    });
+    expect(result.code).not.toBe(0);
+  });
+
   it.runIf(process.platform !== "win32")(
     "kills command when no output timeout elapses",
     { timeout: 5_000 },
@@ -174,7 +260,7 @@ describe("runCommandWithTimeout", () => {
       const result = await resultPromise;
       expect(result.termination).toBe("no-output-timeout");
       expect(result.noOutputTimedOut).toBe(true);
-      expect(result.code).not.toBe(0);
+      expect(result.code).toBe(124);
     },
   );
 
@@ -195,7 +281,50 @@ describe("runCommandWithTimeout", () => {
       const result = await resultPromise;
       expect(result.termination).toBe("timeout");
       expect(result.noOutputTimedOut).toBe(false);
-      expect(result.code).not.toBe(0);
+      expect(result.code).toBe(124);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "caps oversized process timeouts before arming timers",
+    async () => {
+      vi.useFakeTimers();
+      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const child = createKilledChild();
+      spawnMock.mockReturnValue(child);
+      await loadExecModules({ mockSpawn: true });
+
+      const resultPromise = runCommandWithTimeout(createSilentIdleArgv(), {
+        timeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      child.emit("exit", 0, null);
+      child.emit("close", 0, null);
+      const result = await resultPromise;
+      expect(result.termination).toBe("exit");
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "caps oversized no-output timeouts before arming timers",
+    async () => {
+      vi.useFakeTimers();
+      const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
+      const child = createKilledChild();
+      spawnMock.mockReturnValue(child);
+      await loadExecModules({ mockSpawn: true });
+
+      const resultPromise = runCommandWithTimeout(createSilentIdleArgv(), {
+        timeoutMs: 1_000,
+        noOutputTimeoutMs: Number.MAX_SAFE_INTEGER,
+      });
+
+      expect(timeoutSpy).toHaveBeenCalledWith(expect.any(Function), MAX_TIMER_TIMEOUT_MS);
+      child.emit("exit", 0, null);
+      child.emit("close", 0, null);
+      const result = await resultPromise;
+      expect(result.termination).toBe("exit");
     },
   );
 

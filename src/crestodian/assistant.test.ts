@@ -1,7 +1,8 @@
+// Crestodian assistant tests cover assistant-driven rescue message generation.
 import { describe, expect, it, vi } from "vitest";
 import type { RunCliAgentParams } from "../agents/cli-runner/types.js";
-import type { RunEmbeddedPiAgentParams } from "../agents/pi-embedded-runner/run/params.js";
-import type { EmbeddedPiRunResult } from "../agents/pi-embedded.js";
+import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
+import type { EmbeddedAgentRunResult } from "../agents/embedded-agent.js";
 import { selectCrestodianLocalPlannerBackends } from "./assistant-backends.js";
 import {
   buildCrestodianAssistantUserPrompt,
@@ -116,12 +117,12 @@ describe("Crestodian assistant", () => {
 
   it("uses Claude CLI first for configless planning", async () => {
     const runCliAgent = vi.fn(
-      async (_params: RunCliAgentParams): Promise<EmbeddedPiRunResult> => ({
+      async (_params: RunCliAgentParams): Promise<EmbeddedAgentRunResult> => ({
         payloads: [{ text: '{"reply":"Checking the shell.","command":"status"}' }],
         meta: { durationMs: 0 },
       }),
     );
-    const runEmbeddedPiAgent = vi.fn();
+    const runEmbeddedAgent = vi.fn();
 
     const result = await planCrestodianCommandWithLocalRuntime({
       input: "what is going on",
@@ -131,7 +132,7 @@ describe("Crestodian assistant", () => {
       }),
       deps: {
         runCliAgent,
-        runEmbeddedPiAgent,
+        runEmbeddedAgent,
         createTempDir: async () => "/tmp/crestodian-planner",
         removeTempDir: async () => {},
       },
@@ -141,12 +142,12 @@ describe("Crestodian assistant", () => {
     }
     expect(result.command).toBe("status");
     expect(result.reply).toBe("Checking the shell.");
-    expect(result.modelLabel).toBe("claude-cli/claude-opus-4-7");
+    expect(result.modelLabel).toBe("claude-cli/claude-opus-4-8");
 
     expect(runCliAgent).toHaveBeenCalledTimes(1);
     const firstCliCall = firstMockArg(runCliAgent);
     expect(firstCliCall.provider).toBe("claude-cli");
-    expect(firstCliCall.model).toBe("claude-opus-4-7");
+    expect(firstCliCall.model).toBe("claude-opus-4-8");
     expect(firstCliCall.cleanupCliLiveSessionOnRunEnd).toBe(true);
     const firstCliConfig = requireRecord(firstCliCall.config);
     const firstCliAgents = requireRecord(firstCliConfig.agents);
@@ -154,7 +155,7 @@ describe("Crestodian assistant", () => {
     expect(firstCliDefaults.cliBackends).toBeUndefined();
     expect(firstCliCall.extraSystemPrompt).toBeTypeOf("string");
     expect(firstCliCall.extraSystemPrompt).toContain("Do not use tools, shell commands");
-    expect(runEmbeddedPiAgent).not.toHaveBeenCalled();
+    expect(runEmbeddedAgent).not.toHaveBeenCalled();
   });
 
   it("selects local planner backends without execution state", () => {
@@ -165,9 +166,9 @@ describe("Crestodian assistant", () => {
           codex: { command: "codex", found: true },
         }),
       ).map((backend) => backend.kind),
-    ).toEqual(["claude-cli", "codex-app-server", "codex-cli"]);
+    ).toEqual(["claude-cli", "codex-app-server"]);
 
-    const [codexAppServer, codexCli] = selectCrestodianLocalPlannerBackends(
+    const [codexAppServer] = selectCrestodianLocalPlannerBackends(
       overview({
         codex: { command: "codex", found: true },
       }),
@@ -182,21 +183,14 @@ describe("Crestodian assistant", () => {
     expect(codexAppServerDefaults.workspace).toBe("/tmp/workspace");
     expect(codexAppServerModel.primary).toBe("openai/gpt-5.5");
     expect(codexAppServerCodexEntry.enabled).toBe(true);
-
-    const codexCliConfig = requireRecord(codexCli?.buildConfig("/tmp/workspace"));
-    const codexCliAgents = requireRecord(codexCliConfig.agents);
-    const codexCliDefaults = requireRecord(codexCliAgents.defaults);
-    const codexCliModel = requireRecord(codexCliDefaults.model);
-    expect(codexCliDefaults.workspace).toBe("/tmp/workspace");
-    expect(codexCliModel.primary).toBe("codex-cli/gpt-5.5");
   });
 
   it("falls back to Codex app-server when Claude CLI planning fails", async () => {
     const runCliAgent = vi.fn(async () => {
       throw new Error("claude unavailable");
     });
-    const runEmbeddedPiAgent = vi.fn(
-      async (_params: RunEmbeddedPiAgentParams): Promise<EmbeddedPiRunResult> => ({
+    const runEmbeddedAgent = vi.fn(
+      async (_params: RunEmbeddedAgentParams): Promise<EmbeddedAgentRunResult> => ({
         meta: {
           durationMs: 0,
           finalAssistantVisibleText: '{"reply":"Codex planner online.","command":"gateway status"}',
@@ -212,7 +206,7 @@ describe("Crestodian assistant", () => {
       }),
       deps: {
         runCliAgent,
-        runEmbeddedPiAgent,
+        runEmbeddedAgent,
         createTempDir: async () => "/tmp/crestodian-planner",
         removeTempDir: async () => {},
       },
@@ -224,8 +218,8 @@ describe("Crestodian assistant", () => {
     expect(result.reply).toBe("Codex planner online.");
     expect(result.modelLabel).toBe("openai/gpt-5.5 via codex");
 
-    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
-    const firstEmbeddedCall = firstMockArg(runEmbeddedPiAgent);
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    const firstEmbeddedCall = firstMockArg(runEmbeddedAgent);
     expect(firstEmbeddedCall.provider).toBe("openai");
     expect(firstEmbeddedCall.model).toBe("gpt-5.5");
     expect(firstEmbeddedCall.agentHarnessId).toBe("codex");
@@ -242,17 +236,11 @@ describe("Crestodian assistant", () => {
     expect(embeddedCodexEntry.enabled).toBe(true);
   });
 
-  it("uses Codex CLI if the app-server planner is not usable", async () => {
-    const runCliAgent = vi.fn(async (params: RunCliAgentParams): Promise<EmbeddedPiRunResult> => {
-      if (params.provider === "codex-cli") {
-        return {
-          payloads: [{ text: '{"reply":"CLI fallback.","command":"models"}' }],
-          meta: { durationMs: 0 },
-        };
-      }
+  it("does not fall back to Codex CLI if the app-server planner is not usable", async () => {
+    const runCliAgent = vi.fn(async (): Promise<EmbeddedAgentRunResult> => {
       throw new Error("unexpected cli provider");
     });
-    const runEmbeddedPiAgent = vi.fn(async () => {
+    const runEmbeddedAgent = vi.fn(async () => {
       throw new Error("codex app-server unavailable");
     });
 
@@ -263,23 +251,14 @@ describe("Crestodian assistant", () => {
       }),
       deps: {
         runCliAgent,
-        runEmbeddedPiAgent,
+        runEmbeddedAgent,
         createTempDir: async () => "/tmp/crestodian-planner",
         removeTempDir: async () => {},
       },
     });
-    if (result === null) {
-      throw new Error("Expected planner result");
-    }
-    expect(result.command).toBe("models");
-    expect(result.reply).toBe("CLI fallback.");
-    expect(result.modelLabel).toBe("codex-cli/gpt-5.5");
+    expect(result).toBeNull();
 
-    expect(runEmbeddedPiAgent).toHaveBeenCalledTimes(1);
-    expect(runCliAgent).toHaveBeenCalledTimes(1);
-    const firstCliCall = firstMockArg(runCliAgent);
-    expect(firstCliCall.provider).toBe("codex-cli");
-    expect(firstCliCall.model).toBe("gpt-5.5");
-    expect(firstCliCall.cleanupCliLiveSessionOnRunEnd).toBe(true);
+    expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
+    expect(runCliAgent).not.toHaveBeenCalled();
   });
 });

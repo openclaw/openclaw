@@ -1,4 +1,5 @@
-import type { Message } from "@grammyjs/types";
+// Telegram plugin module implements bot handlers.media behavior.
+import type { Message } from "grammy/types";
 import { MediaFetchError } from "openclaw/plugin-sdk/media-runtime";
 
 export function isMediaSizeLimitError(err: unknown): boolean {
@@ -16,12 +17,6 @@ export function hasInboundMedia(msg: Message): boolean {
     (Array.isArray(msg.photo) && msg.photo.length > 0) ||
     Boolean(msg.video ?? msg.video_note ?? msg.document ?? msg.audio ?? msg.voice ?? msg.sticker)
   );
-}
-
-export function hasReplyTargetMedia(msg: Message): boolean {
-  const externalReply = (msg as Message & { external_reply?: Message }).external_reply;
-  const replyTarget = msg.reply_to_message ?? externalReply;
-  return Boolean(replyTarget && hasInboundMedia(replyTarget));
 }
 
 export function resolveInboundMediaFileId(msg: Message): string | undefined {

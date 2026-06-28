@@ -1,9 +1,13 @@
+// Imessage tests cover coalesce plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   combineIMessagePayloads,
+  IMESSAGE_URL_BALLOON_BUNDLE_ID,
+  isStandaloneIMessageUrlPreviewPayload,
   MAX_COALESCED_ATTACHMENTS,
   MAX_COALESCED_ENTRIES,
   MAX_COALESCED_TEXT_CHARS,
+  shouldCombineIMessagePayloadBucket,
 } from "./coalesce.js";
 import type { IMessagePayload } from "./types.js";
 
@@ -33,19 +37,29 @@ describe("combineIMessagePayloads", () => {
     expect(result.guid).toBe("solo");
   });
 
-  it("merges Dump + URL split-send into one payload anchored on the first GUID", () => {
-    const text = makePayload({ text: "Dump", guid: "row-1", created_at: "2025-01-01T00:00:00Z" });
-    const balloon = makePayload({
+  it("merges two same-sender rows into one payload anchored on the first GUID", () => {
+    const first = makePayload({
+      id: 41,
+      text: "summarize",
+      guid: "row-1",
+      created_at: "2025-01-01T00:00:00Z",
+    });
+    const second = makePayload({
+      id: 42,
       text: "https://example.com/article",
       guid: "row-2",
       created_at: "2025-01-01T00:00:01.500Z",
     });
-    const merged = combineIMessagePayloads([text, balloon]);
+    const merged = combineIMessagePayloads([first, second]);
 
-    expect(merged.text).toBe("Dump https://example.com/article");
+    expect(merged.text).toBe("summarize https://example.com/article");
     expect(merged.guid).toBe("row-1");
     expect(merged.created_at).toBe("2025-01-01T00:00:01.500Z");
     expect(merged.coalescedMessageGuids).toEqual(["row-1", "row-2"]);
+    expect(merged.coalescedCatchupCursor).toEqual({
+      lastSeenMs: Date.parse("2025-01-01T00:00:01.500Z"),
+      lastSeenRowid: 42,
+    });
   });
 
   it("preserves attachments instead of dropping them on merge", () => {
@@ -86,7 +100,7 @@ describe("combineIMessagePayloads", () => {
     const payloads = Array.from({ length: 6 }, (_, i) =>
       makePayload({
         guid: `row-${i}`,
-        attachments: Array.from({ length: 5 }, (_, j) => ({
+        attachments: Array.from({ length: 5 }, (_Local, j) => ({
           original_path: `/tmp/${i}-${j}.jpg`,
           mime_type: "image/jpeg",
         })),
@@ -99,7 +113,12 @@ describe("combineIMessagePayloads", () => {
 
   it("keeps first + most recent when entry count exceeds the cap, but tracks every GUID", () => {
     const payloads = Array.from({ length: 25 }, (_, i) =>
-      makePayload({ text: `msg ${i}`, guid: `row-${i}` }),
+      makePayload({
+        id: i,
+        text: `msg ${i}`,
+        guid: `row-${i}`,
+        created_at: new Date(Date.UTC(2025, 0, 1, 0, 0, i)).toISOString(),
+      }),
     );
     const merged = combineIMessagePayloads(payloads);
 
@@ -141,5 +160,89 @@ describe("combineIMessagePayloads", () => {
 
   it("respects the documented entry cap value", () => {
     expect(MAX_COALESCED_ENTRIES).toBeGreaterThan(1);
+  });
+});
+
+describe("isStandaloneIMessageUrlPreviewPayload", () => {
+  it("matches URL balloon rows that only carry the preview URL", () => {
+    expect(
+      isStandaloneIMessageUrlPreviewPayload(
+        makePayload({
+          text: "https://example.com/article",
+          balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("matches scheme-less www URL preview rows", () => {
+    expect(
+      isStandaloneIMessageUrlPreviewPayload(
+        makePayload({
+          text: "www.example.com/article",
+          balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match already-complete URL balloon messages with text context", () => {
+    expect(
+      isStandaloneIMessageUrlPreviewPayload(
+        makePayload({
+          text: "summarize https://example.com/article",
+          balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
+        }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not match non-URL balloon payloads", () => {
+    expect(
+      isStandaloneIMessageUrlPreviewPayload(
+        makePayload({
+          text: "https://example.com/article",
+          balloon_bundle_id: "com.apple.messages.HandwritingProvider",
+        }),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe("shouldCombineIMessagePayloadBucket", () => {
+  it("combines a command row with a structurally marked URL balloon row", () => {
+    const command = makePayload({ text: "summarize", guid: "row-1" });
+    const preview = makePayload({
+      text: "https://example.com/article",
+      guid: "row-2",
+      balloon_bundle_id: IMESSAGE_URL_BALLOON_BUNDLE_ID,
+    });
+
+    expect(shouldCombineIMessagePayloadBucket([command, preview], true)).toBe(true);
+  });
+
+  it("keeps ordinary buffered rows separate once the bridge emits balloon metadata", () => {
+    const first = makePayload({ text: "first thought", guid: "row-1" });
+    const second = makePayload({ text: "second thought", guid: "row-2" });
+
+    expect(shouldCombineIMessagePayloadBucket([first, second], true)).toBe(false);
+  });
+
+  it("keeps non-URL balloon rows separate", () => {
+    const first = makePayload({ text: "first thought", guid: "row-1" });
+    const second = makePayload({
+      text: "second thought",
+      guid: "row-2",
+      balloon_bundle_id: "com.apple.messages.HandwritingProvider",
+    });
+
+    expect(shouldCombineIMessagePayloadBucket([first, second], false)).toBe(false);
+  });
+
+  it("falls back to combining old bridge buckets with no balloon metadata", () => {
+    const command = makePayload({ text: "summarize", guid: "row-1" });
+    const url = makePayload({ text: "https://example.com/article", guid: "row-2" });
+
+    expect(shouldCombineIMessagePayloadBucket([command, url], false)).toBe(true);
   });
 });

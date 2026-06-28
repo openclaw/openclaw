@@ -1,23 +1,29 @@
+// Whatsapp tests cover process message plugin behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { WhatsAppSendResult } from "../../inbound/send-result.js";
+import { createAcceptedWhatsAppSendResult } from "../../inbound/send-result.test-helper.js";
+import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 
 // Hoisted mocks used across tests so vi.mock factories can reference them.
-const { resolvePolicyMock, buildContextMock, runMessageReceivedMock, trackBackgroundTaskMock } =
-  vi.hoisted(() => ({
-    resolvePolicyMock: vi.fn(),
-    buildContextMock: vi.fn(),
-    runMessageReceivedMock: vi.fn(async () => undefined),
-    trackBackgroundTaskMock: vi.fn(),
-  }));
-
-function acceptedSendResult(kind: "media" | "text", id: string): WhatsAppSendResult {
-  return {
-    kind,
-    messageId: id,
-    keys: [{ id }],
-    providerAccepted: true,
-  };
-}
+const {
+  resolvePolicyMock,
+  buildContextMock,
+  isControlCommandMessageMock,
+  dispatchBufferedReplyMock,
+  runMessageReceivedMock,
+  shouldComputeCommandAuthorizedMock,
+  trackBackgroundTaskMock,
+} = vi.hoisted(() => ({
+  resolvePolicyMock: vi.fn(),
+  buildContextMock: vi.fn(),
+  isControlCommandMessageMock: vi.fn(() => false),
+  dispatchBufferedReplyMock: vi.fn(async () => ({
+    queuedFinal: false,
+    counts: { tool: 0, block: 0, final: 0 },
+  })),
+  runMessageReceivedMock: vi.fn(async () => undefined),
+  shouldComputeCommandAuthorizedMock: vi.fn(() => false),
+  trackBackgroundTaskMock: vi.fn(),
+}));
 
 vi.mock("../../inbound-policy.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../inbound-policy.js")>();
@@ -33,10 +39,7 @@ vi.mock("./inbound-dispatch.js", async (importOriginal) => {
   return {
     ...actual,
     buildWhatsAppInboundContext: buildContextMock,
-    dispatchWhatsAppBufferedReply: async () => ({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    }),
+    dispatchWhatsAppBufferedReply: dispatchBufferedReplyMock,
     resolveWhatsAppDmRouteTarget: () => null,
     resolveWhatsAppResponsePrefix: () => undefined,
     updateWhatsAppMainLastRoute: () => {},
@@ -131,7 +134,8 @@ vi.mock("./runtime-api.js", async (importOriginal) => {
       previousTimestamp: undefined,
     }),
     resolvePinnedMainDmOwnerFromAllowlist: () => null,
-    shouldComputeCommandAuthorized: () => false,
+    isControlCommandMessage: isControlCommandMessageMock,
+    shouldComputeCommandAuthorized: shouldComputeCommandAuthorizedMock,
     shouldLogVerbose: () => false,
   };
 });
@@ -169,19 +173,44 @@ function makePolicy(account: ReturnType<typeof makeAccount>) {
 
 const GROUP_JID = "123@g.us";
 
-const baseMsg = {
-  id: "msg1",
-  from: GROUP_JID,
-  to: "+15550001111",
-  conversationId: GROUP_JID,
-  accountId: "default",
-  chatId: GROUP_JID,
-  chatType: "group" as const,
-  body: "hi",
-  sendComposing: async () => {},
-  reply: async () => acceptedSendResult("text", "r1"),
-  sendMedia: async () => acceptedSendResult("media", "m1"),
-};
+function makeBaseMsg(overrides: { body?: string } = {}) {
+  const body = overrides.body ?? "hi";
+  return createTestWebInboundMessage({
+    event: {
+      id: "msg1",
+      timestamp: 1710000000,
+    },
+    payload: {
+      body,
+    },
+    platform: {
+      chatJid: GROUP_JID,
+      recipientJid: "+15550001111",
+      senderJid: "15550002222@s.whatsapp.net",
+      senderE164: "+15550002222",
+      senderName: "Alice",
+      sendComposing: async () => {},
+      reply: async () => createAcceptedWhatsAppSendResult("text", "r1"),
+      sendMedia: async () => createAcceptedWhatsAppSendResult("media", "m1"),
+    },
+    admission: {
+      accountId: "default",
+      conversation: {
+        kind: "group",
+        id: GROUP_JID,
+      },
+      sender: {
+        id: "+15550002222",
+      },
+      senderAccess: {
+        reasonCode: "group_policy_allowed",
+      },
+    },
+    group: {
+      subject: "Test Group",
+    },
+  });
+}
 
 const baseRoute = {
   agentId: "main",
@@ -193,10 +222,10 @@ const baseRoute = {
   matchedBy: "default",
 };
 
-function callProcessMessage(overrides: { cfg?: unknown } = {}) {
+function callProcessMessage(overrides: { cfg?: unknown; msg?: unknown } = {}) {
   return processMessage({
     cfg: (overrides.cfg ?? {}) as never,
-    msg: baseMsg as never,
+    msg: (overrides.msg ?? makeBaseMsg()) as never,
     route: baseRoute as never,
     groupHistoryKey: "whatsapp:default:group:123@g.us",
     groupHistories: new Map(),
@@ -232,8 +261,13 @@ function mockCallArg(mockFn: ReturnType<typeof vi.fn>, label: string, callIndex 
 describe("processMessage group system prompt wiring", () => {
   beforeEach(() => {
     buildContextMock.mockReset();
+    dispatchBufferedReplyMock.mockClear();
+    isControlCommandMessageMock.mockReset();
+    isControlCommandMessageMock.mockReturnValue(false);
     resolvePolicyMock.mockReset();
     runMessageReceivedMock.mockClear();
+    shouldComputeCommandAuthorizedMock.mockReset();
+    shouldComputeCommandAuthorizedMock.mockReturnValue(false);
     trackBackgroundTaskMock.mockClear();
     clearInternalHooks();
     buildContextMock.mockImplementation(
@@ -262,6 +296,53 @@ describe("processMessage group system prompt wiring", () => {
         }
       ).groupSystemPrompt,
     ).toBe("from config");
+  });
+
+  it("marks detected WhatsApp slash messages as text command turns", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    isControlCommandMessageMock.mockReturnValue(true);
+    shouldComputeCommandAuthorizedMock.mockReturnValue(true);
+
+    await callProcessMessage({
+      msg: makeBaseMsg({ body: "/status" }),
+    });
+
+    expect(shouldComputeCommandAuthorizedMock).toHaveBeenCalledWith("/status", {});
+    expect(isControlCommandMessageMock).toHaveBeenCalledWith("/status", {});
+    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
+      commandBody: "/status",
+      commandAuthorized: true,
+      commandTurn: {
+        kind: "text-slash",
+        source: "text",
+        authorized: true,
+        body: "/status",
+      },
+      rawBody: "/status",
+    });
+  });
+
+  it("checks auth for inline command tokens without marking them as command-source turns", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    isControlCommandMessageMock.mockReturnValue(false);
+    shouldComputeCommandAuthorizedMock.mockReturnValue(true);
+
+    await callProcessMessage({
+      msg: makeBaseMsg({ body: "please inspect `/tmp/foo`" }),
+    });
+
+    expect(buildContextMock.mock.calls[0][0]).toMatchObject({
+      commandBody: "please inspect `/tmp/foo`",
+      commandAuthorized: true,
+      commandTurn: {
+        kind: "normal",
+        source: "message",
+        authorized: false,
+        body: "please inspect `/tmp/foo`",
+      },
+      rawBody: "please inspect `/tmp/foo`",
+    });
+    expect(buildContextMock.mock.calls[0][0].commandSource).toBeUndefined();
   });
 
   it("fires message_received hooks with canonical WhatsApp correlation fields", async () => {
@@ -406,5 +487,45 @@ describe("processMessage group system prompt wiring", () => {
     expect(mockCallArg(trackBackgroundTaskMock, "trackBackgroundTask", 0, 1)).toBeInstanceOf(
       Promise,
     );
+  });
+
+  it("drops blocked admission before session record and reply dispatch", async () => {
+    resolvePolicyMock.mockReturnValue(makePolicy(makeAccount()));
+    buildContextMock.mockImplementationOnce(() => ({
+      Body: "hi",
+      RawBody: "hi",
+      CommandBody: "hi",
+      SessionKey: baseRoute.sessionKey,
+      Provider: "whatsapp",
+      Surface: "whatsapp",
+    }));
+
+    const result = await callProcessMessage({
+      msg: createTestWebInboundMessage({
+        admission: {
+          ingress: {
+            admission: "drop",
+            decision: "block",
+            reasonCode: "dm_policy_not_allowlisted",
+          },
+          senderAccess: {
+            allowed: false,
+            decision: "block",
+            reasonCode: "dm_policy_not_allowlisted",
+          },
+          activationAccess: {
+            allowed: false,
+            shouldSkip: true,
+            reasonCode: "dm_policy_not_allowlisted",
+          },
+        },
+      }),
+    });
+
+    expect(result).toBe(false);
+    expect(buildContextMock).not.toHaveBeenCalled();
+    expect(trackBackgroundTaskMock).not.toHaveBeenCalled();
+    expect(dispatchBufferedReplyMock).not.toHaveBeenCalled();
+    expect(runMessageReceivedMock).not.toHaveBeenCalled();
   });
 });

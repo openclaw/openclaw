@@ -1,29 +1,35 @@
+// Tavily API module exposes the plugin public contract.
+import type { WebSearchProviderPlugin } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import {
-  createWebSearchProviderContractFields,
-  type WebSearchProviderPlugin,
-} from "openclaw/plugin-sdk/provider-web-search-contract";
+  buildTavilyWebSearchProviderBase,
+  TAVILY_GENERIC_SEARCH_DESCRIPTION,
+  TAVILY_GENERIC_SEARCH_SCHEMA,
+} from "./web-search-shared.js";
+
+type TavilySearchProviderModule = typeof import("./src/tavily-search-provider.js");
+
+let tavilySearchProviderModulePromise: Promise<TavilySearchProviderModule> | undefined;
+
+function loadTavilySearchProviderModule(): Promise<TavilySearchProviderModule> {
+  tavilySearchProviderModulePromise ??= import("./src/tavily-search-provider.js");
+  return tavilySearchProviderModulePromise;
+}
 
 export function createTavilyWebSearchProvider(): WebSearchProviderPlugin {
-  const credentialPath = "plugins.entries.tavily.config.webSearch.apiKey";
-
   return {
-    id: "tavily",
-    label: "Tavily Search",
-    hint: "Structured results with domain filters and AI answer summaries",
-    onboardingScopes: ["text-inference"],
-    credentialLabel: "Tavily API key",
-    envVars: ["TAVILY_API_KEY"],
-    placeholder: "tvly-...",
-    signupUrl: "https://tavily.com/",
-    docsUrl: "https://docs.openclaw.ai/tools/tavily",
-    autoDetectOrder: 70,
-    credentialPath,
-    ...createWebSearchProviderContractFields({
-      credentialPath,
-      searchCredential: { type: "scoped", scopeId: "tavily" },
-      configuredCredential: { pluginId: "tavily" },
-      selectionPluginId: "tavily",
+    ...buildTavilyWebSearchProviderBase(),
+    createTool: (ctx) => ({
+      description: TAVILY_GENERIC_SEARCH_DESCRIPTION,
+      parameters: TAVILY_GENERIC_SEARCH_SCHEMA,
+      execute: async (args) => {
+        const { createTavilyWebSearchProvider: createRuntimeProvider } =
+          await loadTavilySearchProviderModule();
+        const tool = createRuntimeProvider().createTool(ctx);
+        if (!tool) {
+          throw new Error("Tavily web_search provider did not create a runtime tool.");
+        }
+        return await tool.execute(args);
+      },
     }),
-    createTool: () => null,
   };
 }

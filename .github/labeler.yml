@@ -10,6 +10,11 @@
           - "extensions/file-transfer/**"
           - "docs/nodes/index.md"
           - "docs/plugins/sdk-runtime.md"
+"plugin: pixverse":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/pixverse/**"
+          - "docs/providers/pixverse.md"
 "channel: discord":
   - changed-files:
       - any-glob-to-any-file:
@@ -36,6 +41,12 @@
       - any-glob-to-any-file:
           - "extensions/google-meet/**"
           - "docs/plugins/google-meet.md"
+"plugin: workboard":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/workboard/**"
+          - "docs/plugins/workboard.md"
+          - "docs/plugins/reference/workboard.md"
 "plugin: migrate-hermes":
   - changed-files:
       - any-glob-to-any-file:
@@ -92,6 +103,11 @@
       - any-glob-to-any-file:
           - "extensions/qqbot/**"
           - "docs/channels/qqbot.md"
+"channel: raft":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/raft/**"
+          - "docs/channels/raft.md"
 "channel: qa-channel":
   - changed-files:
       - any-glob-to-any-file:
@@ -101,7 +117,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/qa-lab/**"
+          - "qa/scenarios/**"
+          - "docs/maturity/**"
           - "docs/concepts/qa-e2e-automation.md"
+          - "docs/concepts/personal-agent-benchmark-pack.md"
           - "docs/channels/qa-channel.md"
 "channel: signal":
   - changed-files:
@@ -113,6 +132,11 @@
       - any-glob-to-any-file:
           - "extensions/slack/**"
           - "docs/channels/slack.md"
+"channel: sms":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/sms/**"
+          - "docs/channels/sms.md"
 "channel: synology-chat":
   - changed-files:
       - any-glob-to-any-file:
@@ -147,6 +171,10 @@
       - any-glob-to-any-file:
           - "extensions/zalo/**"
           - "docs/channels/zalo.md"
+"channel: zaloclawbot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "docs/channels/zaloclawbot.md"
 "channel: zalouser":
   - changed-files:
       - any-glob-to-any-file:
@@ -175,7 +203,7 @@
           - "ui/**"
           - "src/gateway/control-ui.ts"
           - "src/gateway/control-ui-shared.ts"
-          - "src/gateway/protocol/**"
+          - "packages/gateway-protocol/src/**"
           - "src/gateway/server-methods/chat.ts"
           - "src/infra/control-ui-assets.ts"
 
@@ -183,6 +211,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "src/gateway/**"
+          - "packages/gateway-protocol/src/**"
           - "src/daemon/**"
           - "docs/gateway/**"
 
@@ -223,12 +252,12 @@
           - "src/agents/sandbox*.ts"
           - "src/commands/sandbox*.ts"
           - "src/cli/sandbox-cli.ts"
-          - "src/docker-setup.test.ts"
+          - "src/docker-setup.e2e.test.ts"
           - "src/config/**/*sandbox*"
           - "docs/cli/sandbox.md"
           - "docs/gateway/sandbox*.md"
           - "docs/install/docker.md"
-          - "docs/multi-agent-sandbox-tools.md"
+          - "docs/tools/multi-agent-sandbox-tools.md"
 
 "agents":
   - changed-files:
@@ -241,9 +270,13 @@
           - ".github/workflows/opengrep-*.yml"
           - ".semgrepignore"
           - "docs/cli/security.md"
-          - "docs/gateway/security.md"
+          - "docs/gateway/security/**"
           - "security/**"
 
+"extensions: admin-http-rpc":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/admin-http-rpc/**"
 "extensions: copilot-proxy":
   - changed-files:
       - any-glob-to-any-file:
@@ -264,6 +297,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/lobster/**"
+"extensions: llama-cpp":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/llama-cpp/**"
 "extensions: memory-core":
   - changed-files:
       - any-glob-to-any-file:
@@ -280,6 +317,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/oc-path/**"
+"extensions: policy":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/policy/**"
+          - "docs/cli/policy.md"
 "extensions: open-prose":
   - changed-files:
       - any-glob-to-any-file:
@@ -326,6 +368,11 @@
       - any-glob-to-any-file:
           - "extensions/deepinfra/**"
           - "docs/providers/deepinfra.md"
+"extensions: gmi":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/gmi/**"
+          - "docs/providers/gmi.md"
 "extensions: tencent":
   - changed-files:
       - any-glob-to-any-file:
@@ -376,6 +423,17 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/codex/**"
+"extensions: codex-supervisor":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/codex-supervisor/**"
+          - "docs/plugins/reference/codex-supervisor.md"
+          - "docs/specs/claw-supervisor.md"
+"extensions: copilot":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/copilot/**"
+          - "docs/plugins/copilot.md"
 "extensions: kimi-coding":
   - changed-files:
       - any-glob-to-any-file:
@@ -396,6 +454,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/nvidia/**"
+"extensions: novita":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/novita/**"
+          - "docs/providers/novita.md"
 "extensions: phone-control":
   - changed-files:
       - any-glob-to-any-file:
@@ -474,6 +537,7 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/diffs/**"
+          - "extensions/diffs-language-pack/**"
 "extensions: elevenlabs":
   - changed-files:
       - any-glob-to-any-file:
@@ -518,6 +582,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/openshell/**"
+"extensions: parallel":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/parallel/**"
 "extensions: perplexity":
   - changed-files:
       - any-glob-to-any-file:

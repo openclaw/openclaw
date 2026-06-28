@@ -1,5 +1,10 @@
+/**
+ * Sandbox filesystem bridge implementation.
+ *
+ * Resolves container paths to mounted host paths and executes guarded reads, writes, stats, renames, and deletes.
+ */
 import fs from "node:fs";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,
@@ -13,6 +18,7 @@ import {
 } from "./fs-bridge-mutation-helper.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
 import { buildStatPlan, type SandboxFsCommandPlan } from "./fs-bridge-shell-command-plans.js";
+import { parseSandboxStatMtimeMs, parseSandboxStatSize } from "./fs-bridge-stat-parse.js";
 import type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 import {
   buildSandboxFsMounts,
@@ -30,6 +36,7 @@ type RunCommandOptions = {
 
 export type { SandboxFsBridge, SandboxFsStat, SandboxResolvedPath } from "./fs-bridge.types.js";
 
+/** Create the filesystem bridge for local Docker-style mounted sandboxes. */
 export function createSandboxFsBridge(params: {
   sandbox: SandboxFsBridgeContext;
 }): SandboxFsBridge {
@@ -47,6 +54,8 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     const mountsByContainer = [...this.mounts].toSorted(
       (a, b) => b.containerRoot.length - a.containerRoot.length,
     );
+    // Longest mount first keeps nested agent/skill mounts from being claimed by
+    // the broader workspace root during symlink and mutation safety checks.
     this.pathGuard = new SandboxFsPathGuard({
       mountsByContainer,
       runCommand: (script, options) => this.runCommand(script, options),
@@ -207,12 +216,10 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
     }
     const text = result.stdout.toString("utf8").trim();
     const [typeRaw, sizeRaw, mtimeRaw] = text.split("|");
-    const size = Number.parseInt(sizeRaw ?? "0", 10);
-    const mtime = Number.parseInt(mtimeRaw ?? "0", 10) * 1000;
     return {
       type: coerceStatType(typeRaw),
-      size: Number.isFinite(size) ? size : 0,
-      mtimeMs: Number.isFinite(mtime) ? mtime : 0,
+      size: parseSandboxStatSize(sizeRaw),
+      mtimeMs: parseSandboxStatMtimeMs(mtimeRaw),
     };
   }
 
@@ -254,6 +261,8 @@ class SandboxFsBridgeImpl implements SandboxFsBridge {
   ): Promise<SandboxBackendCommandResult> {
     await this.pathGuard.assertPathChecks(plan.checks);
     if (plan.recheckBeforeCommand) {
+      // Mutations that can create or swap path parents re-run the anchored
+      // checks immediately before command execution to close TOCTOU gaps.
       await this.pathGuard.assertPathChecks(plan.checks);
     }
     return await this.runCommand(plan.script, {

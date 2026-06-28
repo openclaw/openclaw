@@ -1,11 +1,18 @@
+// Public file-oriented media-understanding runtime for image, audio, video, and
+// structured extraction calls outside normal channel message handling.
 import path from "node:path";
+import { kindFromMime, mimeTypeFromFilePath } from "@openclaw/media-core/mime";
+import type { OpenClawConfig } from "../config/types.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
+import { DEFAULT_MAX_BYTES } from "./defaults.constants.js";
+import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
   normalizeMediaProviderId,
 } from "./provider-registry.js";
+import { resolveMediaRuntimeTimeoutMs } from "./resolve.js";
 import { findDecisionReason, normalizeDecisionReason } from "./runner.entries.js";
 import {
   buildProviderRegistry,
@@ -44,20 +51,87 @@ const KIND_BY_CAPABILITY: Record<MediaUnderstandingCapability, MediaUnderstandin
 function resolveDecisionFailureReason(
   decision: Awaited<ReturnType<typeof runCapability>>["decision"],
 ): string | undefined {
+  // runCapability stores detailed failed-attempt reasons; file APIs expose the
+  // first normalized reason as the thrown error message.
   return normalizeDecisionReason(findDecisionReason(decision, "failed"));
 }
 
-function buildFileContext(params: { filePath: string; mime?: string }) {
+function buildFileContext(params: {
+  filePath: string;
+  mediaUrl?: string;
+  mime?: string;
+  capability?: MediaUnderstandingCapability;
+  scopeContext?: {
+    sessionKey?: string;
+    channel?: string;
+    chatType?: string;
+  };
+}) {
+  // Runtime file calls reuse message-context media plumbing so scope, local roots, and
+  // remote URL handling stay identical to normal channel-triggered media understanding.
+  const scopeFields = {
+    ...(params.scopeContext?.sessionKey ? { SessionKey: params.scopeContext.sessionKey } : {}),
+    ...(params.scopeContext?.channel
+      ? { Provider: params.scopeContext.channel, Surface: params.scopeContext.channel }
+      : {}),
+    ...(params.scopeContext?.chatType ? { ChatType: params.scopeContext.chatType } : {}),
+  };
+  const remoteRef =
+    params.mediaUrl ??
+    (isRemoteMediaReference(params.filePath) ? params.filePath.trim() : undefined);
+  const extensionMime = remoteRef ? mimeTypeFromFilePath(remoteRef) : undefined;
+  const extensionKind = kindFromMime(extensionMime);
+  const mediaType =
+    params.mime ??
+    (remoteRef && params.capability && extensionKind === params.capability
+      ? `${params.capability}/*`
+      : extensionMime) ??
+    (remoteRef && params.capability ? `${params.capability}/*` : undefined);
+  if (remoteRef) {
+    return {
+      MediaUrl: remoteRef,
+      MediaType: mediaType,
+      ...scopeFields,
+    };
+  }
   return {
     MediaPath: params.filePath,
-    MediaType: params.mime,
+    MediaType: mediaType,
+    ...scopeFields,
   };
+}
+
+function isRemoteMediaReference(value: string): boolean {
+  return /^https?:\/\//i.test(value.trim());
+}
+
+function concreteMime(mime: string | undefined): string | undefined {
+  const normalized = mime?.trim();
+  if (!normalized || normalized.endsWith("/*")) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function resolveFileLocalRoots(filePath: string): string[] | undefined {
+  return isRemoteMediaReference(filePath) ? undefined : [path.dirname(filePath)];
+}
+
+function basenameFromMediaReference(value: string): string {
+  if (isRemoteMediaReference(value)) {
+    try {
+      const url = new URL(value);
+      return path.basename(url.pathname) || "image";
+    } catch {}
+  }
+  return path.basename(value);
 }
 
 function hasStructuredImageInput(input: ExtractStructuredWithModelParams["input"]): boolean {
   return input.some((entry) => entry.type === "image");
 }
 
+/** Runs media understanding for one local file or remote URL and returns the first matching output. */
 export async function runMediaUnderstandingFile(
   params: RunMediaUnderstandingFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
@@ -92,7 +166,11 @@ export async function runMediaUnderstandingFile(
           },
         }
       : params.cfg;
-  const ctx = buildFileContext(params);
+  const ctx = buildFileContext({
+    ...params,
+    capability: params.capability,
+    scopeContext: params.scopeContext,
+  });
   const attachments = normalizeMediaAttachments(ctx);
   if (attachments.length === 0) {
     return {
@@ -113,7 +191,7 @@ export async function runMediaUnderstandingFile(
 
   const providerRegistry = buildProviderRegistry(undefined, cfg);
   const cache = createMediaAttachmentCache(attachments, {
-    localPathRoots: [path.dirname(params.filePath)],
+    localPathRoots: params.mediaUrl ? undefined : resolveFileLocalRoots(params.filePath),
     ssrfPolicy: cfg.tools?.web?.fetch?.ssrfPolicy,
   });
 
@@ -125,6 +203,7 @@ export async function runMediaUnderstandingFile(
       attachments: cache,
       media: attachments,
       agentDir: params.agentDir,
+      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
       providerRegistry,
       config,
       activeModel: params.activeModel,
@@ -154,22 +233,36 @@ export async function runMediaUnderstandingFile(
   }
 }
 
+/** Describes one image file or URL through the configured image-understanding pipeline. */
 export async function describeImageFile(
   params: DescribeImageFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
   return await runMediaUnderstandingFile({ ...params, capability: "image" });
 }
 
+/** Describes one image with an explicit provider/model, bypassing configured media model selection. */
 export async function describeImageFileWithModel(params: DescribeImageFileWithModelParams) {
-  const timeoutMs = params.timeoutMs ?? 30_000;
+  const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
   const provider = providerRegistry.get(normalizeMediaProviderId(params.provider));
-  const buffer = (await readLocalFileSafely({ filePath: params.filePath })).buffer;
+  const image = await readImageDescriptionInput({
+    filePath: params.filePath,
+    mediaUrl: params.mediaUrl,
+    mime: params.mime,
+    cfg: params.cfg,
+    timeoutMs,
+  });
+  const normalizedImage = await normalizeImageDescriptionInput({
+    buffer: image.buffer,
+    fileName: image.fileName,
+    mime: image.mime,
+    maxBytes: DEFAULT_MAX_BYTES.image,
+  });
   const describeImage = provider?.describeImage ?? describeImageWithModel;
   return await describeImage({
-    buffer,
-    fileName: path.basename(params.filePath),
-    mime: params.mime,
+    buffer: normalizedImage.buffer,
+    fileName: image.fileName,
+    mime: normalizedImage.mime,
     provider: params.provider,
     model: params.model,
     prompt: params.prompt,
@@ -177,11 +270,52 @@ export async function describeImageFileWithModel(params: DescribeImageFileWithMo
     timeoutMs,
     cfg: params.cfg,
     agentDir: params.agentDir ?? "",
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
   });
 }
 
+async function readImageDescriptionInput(params: {
+  filePath: string;
+  mediaUrl?: string;
+  mime?: string;
+  cfg: OpenClawConfig;
+  timeoutMs: number;
+}): Promise<{ buffer: Buffer; fileName: string; mime?: string }> {
+  const remoteRef =
+    params.mediaUrl ??
+    (isRemoteMediaReference(params.filePath) ? params.filePath.trim() : undefined);
+  if (!remoteRef) {
+    return {
+      buffer: (await readLocalFileSafely({ filePath: params.filePath })).buffer,
+      fileName: basenameFromMediaReference(params.filePath),
+      mime: params.mime,
+    };
+  }
+  const attachments = normalizeMediaAttachments(
+    buildFileContext({ ...params, capability: "image" }),
+  );
+  const cache = createMediaAttachmentCache(attachments, {
+    ssrfPolicy: params.cfg.tools?.web?.fetch?.ssrfPolicy,
+  });
+  try {
+    const media = await cache.getBuffer({
+      attachmentIndex: 0,
+      maxBytes: DEFAULT_MAX_BYTES.image,
+      timeoutMs: params.timeoutMs,
+    });
+    return {
+      buffer: media.buffer,
+      fileName: media.fileName || basenameFromMediaReference(remoteRef),
+      mime: concreteMime(params.mime) ?? media.mime,
+    };
+  } finally {
+    await cache.cleanup();
+  }
+}
+
+/** Runs provider-backed structured extraction for multimodal text/image input. */
 export async function extractStructuredWithModel(params: ExtractStructuredWithModelParams) {
-  const timeoutMs = params.timeoutMs ?? 30_000;
+  const timeoutMs = resolveMediaRuntimeTimeoutMs(params.timeoutMs);
   if (!hasStructuredImageInput(params.input)) {
     throw new Error("Structured extraction requires at least one image input.");
   }
@@ -209,12 +343,14 @@ export async function extractStructuredWithModel(params: ExtractStructuredWithMo
   });
 }
 
+/** Describes one video file or URL through the configured video-understanding pipeline. */
 export async function describeVideoFile(
   params: DescribeVideoFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {
   return await runMediaUnderstandingFile({ ...params, capability: "video" });
 }
 
+/** Transcribes one audio file or URL through the configured audio-understanding pipeline. */
 export async function transcribeAudioFile(
   params: TranscribeAudioFileParams,
 ): Promise<RunMediaUnderstandingFileResult> {

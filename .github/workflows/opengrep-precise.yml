@@ -41,10 +41,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 1
+          fetch-depth: 2
           fetch-tags: false
           persist-credentials: false
           submodules: false
@@ -58,11 +58,11 @@ jobs:
       - name: Install opengrep
         env:
           # Pin both the install script (by commit SHA) and the binary version.
-          # The script SHA must match the v1.19.0 release tag in opengrep/opengrep
+          # The script SHA must match the v1.22.0 release tag in opengrep/opengrep
           # so a compromised or force-pushed `main` cannot RCE in our CI runner.
           # Bump both together when upgrading.
-          OPENGREP_VERSION: v1.19.0
-          OPENGREP_INSTALL_SHA: 9a4c0a68220618441608cd2bad4ff2eddccf8113
+          OPENGREP_VERSION: v1.22.0
+          OPENGREP_INSTALL_SHA: f458d7f0d52cc58eae1ca3cf3d5caf101e637519
         run: |
           curl -fsSL "https://raw.githubusercontent.com/opengrep/opengrep/${OPENGREP_INSTALL_SHA}/install.sh" \
             | bash -s -- -v "$OPENGREP_VERSION"
@@ -74,6 +74,7 @@ jobs:
       - name: Run opengrep on PR diff
         env:
           OPENCLAW_OPENGREP_BASE_REF: ${{ github.event.pull_request.base.sha }}...HEAD
+          OPENCLAW_OPENGREP_MERGE_HEAD_FIRST_PARENT: "1"
         # Findings from precise rules block this workflow. Pull requests scan
         # changed first-party source paths only so findings stay attributable to
         # the PR diff. Test/fixture/QA path exclusions live in `.semgrepignore`
@@ -83,7 +84,7 @@ jobs:
           scripts/run-opengrep.sh --changed --sarif --error
 
       - name: Upload SARIF to GitHub Code Scanning
-        uses: github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@8aad20d150bbac5944a9f9d289da16a4b0d87c1e
         # Only upload if the scan actually produced a SARIF file.
         if: always() && hashFiles('.opengrep-out/precise.sarif') != ''
         with:
@@ -92,9 +93,9 @@ jobs:
 
       - name: Upload SARIF as workflow artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: opengrep-pr-diff-sarif
           path: .opengrep-out/precise.sarif
-          if-no-files-found: warn
+          if-no-files-found: error
           retention-days: 30

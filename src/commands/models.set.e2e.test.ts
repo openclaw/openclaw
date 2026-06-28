@@ -1,3 +1,4 @@
+// Models set e2e tests cover persisted model selection updates through command handlers.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -9,8 +10,17 @@ vi.mock("./models/shared.js", async () => {
   const actual = await vi.importActual<typeof import("./models/shared.js")>("./models/shared.js");
   return {
     ...actual,
-    updateConfig: async (mutator: (cfg: Record<string, unknown>) => Record<string, unknown>) => {
-      const next = mutator(structuredClone(mocks.currentConfig));
+    updateConfig: async (
+      mutator: (
+        cfg: Record<string, unknown>,
+        context: {
+          runtimeConfig: Record<string, unknown>;
+        },
+      ) => Record<string, unknown>,
+    ) => {
+      const sourceConfig = structuredClone(mocks.currentConfig);
+      const runtimeConfig = structuredClone(mocks.currentConfig);
+      const next = mutator(sourceConfig, { runtimeConfig });
       mocks.writtenConfig = next;
       return next;
     },

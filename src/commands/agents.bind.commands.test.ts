@@ -1,5 +1,7 @@
+// Agent bind command tests cover channel bindings, plugin metadata, and command output.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelId, ChannelPlugin } from "../channels/plugins/types.public.js";
+import type { RuntimeEnv } from "../runtime.js";
 import {
   loadFreshAgentsBindCommandModuleForTest,
   readConfigFileSnapshotMock,
@@ -47,6 +49,7 @@ function createBindingResolverTestPlugin(params: {
   id: ChannelId;
   config: Partial<ChannelPlugin["config"]>;
   resolveBindingAccountId?: NonNullable<ChannelPlugin["setup"]>["resolveBindingAccountId"];
+  forceAccountBinding?: boolean;
 }): BindingResolverTestPlugin {
   return {
     id: params.id,
@@ -56,6 +59,7 @@ function createBindingResolverTestPlugin(params: {
       selectionLabel: params.id,
       docsPath: `/channels/${params.id}`,
       blurb: "test stub.",
+      ...(params.forceAccountBinding ? { forceAccountBinding: true } : {}),
     },
     capabilities: { chatTypes: ["direct"] },
     config: {
@@ -93,6 +97,14 @@ vi.mock("../channels/plugins/bundled.js", () => {
       "telegram",
       createBindingResolverTestPlugin({ id: "telegram", config: { listAccountIds: () => [] } }),
     ],
+    [
+      "whatsapp",
+      createBindingResolverTestPlugin({
+        id: "whatsapp",
+        config: { listAccountIds: () => ["default", "biz"] },
+        forceAccountBinding: true,
+      }),
+    ],
   ]);
   return {
     getBundledChannelSetupPlugin: (channel: string) => {
@@ -105,6 +117,21 @@ vi.mock("../channels/plugins/bundled.js", () => {
 let agentsBindCommand: typeof import("./agents.commands.bind.js").agentsBindCommand;
 let agentsBindingsCommand: typeof import("./agents.commands.bind.js").agentsBindingsCommand;
 let agentsUnbindCommand: typeof import("./agents.commands.bind.js").agentsUnbindCommand;
+
+type JsonTestRuntime = RuntimeEnv & {
+  writeStdout: ReturnType<typeof vi.fn>;
+  writeJson: ReturnType<typeof vi.fn>;
+};
+
+function createJsonTestRuntime(): JsonTestRuntime {
+  return {
+    log: vi.fn(),
+    error: vi.fn(),
+    exit: vi.fn(),
+    writeStdout: vi.fn(),
+    writeJson: vi.fn(),
+  };
+}
 
 describe("agents bind/unbind commands", () => {
   beforeAll(async () => {
@@ -160,6 +187,22 @@ describe("agents bind/unbind commands", () => {
     expect(runtime.exit).not.toHaveBeenCalled();
   });
 
+  it("uses a wildcard account binding for multi-account channels", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+
+    await agentsBindCommand({ bind: ["whatsapp"] }, runtime);
+
+    expect(writeConfigFileMock).toHaveBeenCalledTimes(1);
+    const writtenConfig = firstWrittenConfig();
+    expect(writtenConfig?.bindings).toStrictEqual([
+      { type: "route", agentId: "main", match: { channel: "whatsapp", accountId: "*" } },
+    ]);
+    expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
   it("binds manifest-known external channels without loading plugin runtime", async () => {
     readConfigFileSnapshotMock.mockResolvedValue({
       ...baseConfigSnapshot,
@@ -201,6 +244,26 @@ describe("agents bind/unbind commands", () => {
       { agentId: "main", match: { channel: "matrix" } },
     ]);
     expect(runtime.exit).not.toHaveBeenCalled();
+  });
+
+  it("reports empty unbind-all as JSON without text logs", async () => {
+    readConfigFileSnapshotMock.mockResolvedValue({
+      ...baseConfigSnapshot,
+      config: {},
+    });
+    const jsonRuntime = createJsonTestRuntime();
+
+    await agentsUnbindCommand({ agent: "main", all: true, json: true }, jsonRuntime);
+
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expect(jsonRuntime.log).not.toHaveBeenCalled();
+    expect(jsonRuntime.writeJson.mock.calls[0]?.[0]).toStrictEqual({
+      agentId: "main",
+      removed: [],
+      missing: [],
+      conflicts: [],
+    });
+    expect(jsonRuntime.exit).not.toHaveBeenCalled();
   });
 
   it("reports ownership conflicts during unbind and exits 1", async () => {

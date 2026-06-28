@@ -1,3 +1,8 @@
+/**
+ * Runtime external auth profile overlays.
+ * Combines provider plugin auth profiles with scoped external CLI credentials
+ * and decides which runtime profiles may be persisted back to the store.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderExternalAuthProfile } from "../../plugins/provider-external-auth.types.js";
 import { resolveExternalAuthProfilesWithPlugins } from "../../plugins/provider-runtime.js";
@@ -7,10 +12,9 @@ import * as externalCliSync from "./external-cli-sync.js";
 import {
   areOAuthCredentialsEquivalent,
   overlayRuntimeExternalOAuthProfiles,
-  shouldPersistRuntimeExternalOAuthProfile,
   type RuntimeExternalOAuthProfile,
 } from "./oauth-shared.js";
-import type { AuthProfileStore, OAuthCredential } from "./types.js";
+import type { AuthProfileStore } from "./types.js";
 
 type ExternalAuthProfileMap = Map<string, ProviderExternalAuthProfile>;
 type ResolveExternalAuthProfiles = typeof resolveExternalAuthProfilesWithPlugins;
@@ -23,7 +27,8 @@ type ExternalCliOverlayOptions = {
 
 let resolveExternalAuthProfilesForRuntime: ResolveExternalAuthProfiles | undefined;
 
-export const __testing = {
+/** Test-only resolver injection for provider external auth profiles. */
+export const testing = {
   resetResolveExternalAuthProfilesForTest(): void {
     resolveExternalAuthProfilesForRuntime = undefined;
   },
@@ -89,7 +94,8 @@ function resolveExternalAuthProfileMap(params: {
   return resolved;
 }
 
-function listRuntimeExternalAuthProfiles(params: {
+/** List runtime-only and persisted external auth profiles for this store. */
+export function listRuntimeExternalAuthProfiles(params: {
   store: AuthProfileStore;
   agentDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -121,6 +127,11 @@ function hasPersistableExternalCliSyncCandidate(
   return false;
 }
 
+function hasScopedExternalCliOverlay(params?: ExternalCliOverlayOptions): boolean {
+  return Boolean(params?.externalCliProviderIds || params?.externalCliProfileIds);
+}
+
+/** Overlay external auth profiles onto a cloned auth store for runtime use. */
 export function overlayExternalAuthProfiles(
   store: AuthProfileStore,
   params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalCliOverlayOptions,
@@ -131,36 +142,12 @@ export function overlayExternalAuthProfiles(
     env: params?.env,
     externalCli: params,
   });
-  return overlayRuntimeExternalOAuthProfiles(store, profiles);
-}
-
-export function shouldPersistExternalAuthProfile(params: {
-  store: AuthProfileStore;
-  profileId: string;
-  credential: OAuthCredential;
-  agentDir?: string;
-  env?: NodeJS.ProcessEnv;
-  config?: OpenClawConfig;
-  externalCliProviderIds?: Iterable<string>;
-  externalCliProfileIds?: Iterable<string>;
-}): boolean {
-  const profiles = listRuntimeExternalAuthProfiles({
-    store: params.store,
-    agentDir: params.agentDir,
-    env: params.env,
-    externalCli: {
-      config: params.config,
-      externalCliProviderIds: params.externalCliProviderIds,
-      externalCliProfileIds: params.externalCliProfileIds,
-    },
-  });
-  return shouldPersistRuntimeExternalOAuthProfile({
-    profileId: params.profileId,
-    credential: params.credential,
-    profiles,
+  return overlayRuntimeExternalOAuthProfiles(store, profiles, {
+    runtimeExternalProfileIdsAuthoritative: !hasScopedExternalCliOverlay(params),
   });
 }
 
+/** Persist safe external CLI OAuth profiles that own their local profile slot. */
 export function syncPersistedExternalCliAuthProfiles(
   store: AuthProfileStore,
   params?: { agentDir?: string; env?: NodeJS.ProcessEnv } & ExternalCliOverlayOptions,
@@ -192,6 +179,4 @@ export function syncPersistedExternalCliAuthProfiles(
   return next ?? store;
 }
 
-// Compat aliases while file/function naming catches up.
-export const overlayExternalOAuthProfiles = overlayExternalAuthProfiles;
-export const shouldPersistExternalOAuthProfile = shouldPersistExternalAuthProfile;
+export { testing as __testing };

@@ -1,4 +1,5 @@
-import type { AgentToolResult } from "@earendil-works/pi-agent-core";
+// Discord plugin module implements runtime.moderation behavior.
+import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import {
   type ActionGate,
   jsonResult,

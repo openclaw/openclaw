@@ -1,17 +1,18 @@
-import type { StreamFn } from "@earendil-works/pi-agent-core";
-import {
-  getApiProvider,
-  registerApiProvider,
-  type Api,
-  type StreamOptions,
-} from "@earendil-works/pi-ai";
+/**
+ * Registers caller-supplied custom API stream functions with the LLM registry.
+ */
+import { getApiProvider, registerApiProvider } from "../llm/api-registry.js";
+import type { Api, StreamOptions } from "../llm/types.js";
+import type { StreamFn } from "./runtime/index.js";
 
 const CUSTOM_API_SOURCE_PREFIX = "openclaw-custom-api:";
 
-export function getCustomApiRegistrySourceId(api: Api): string {
+/** Returns the registry source id used for a custom API stream function. */
+function getCustomApiRegistrySourceId(api: Api): string {
   return `${CUSTOM_API_SOURCE_PREFIX}${api}`;
 }
 
+/** Registers a custom API stream function when no provider already owns it. */
 export function ensureCustomApiRegistered(api: Api, streamFn: StreamFn): boolean {
   if (getApiProvider(api)) {
     return false;

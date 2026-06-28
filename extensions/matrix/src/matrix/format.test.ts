@@ -1,3 +1,4 @@
+// Matrix tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
 import { markdownToMatrixHtml, renderMarkdownToMatrixHtmlWithMentions } from "./format.js";
 
@@ -208,6 +209,18 @@ describe("markdownToMatrixHtml", () => {
     });
 
     expect(result.html).toBe("<p>hello @alice:example.org/path</p>");
+    expect(result.mentions).toStrictEqual({});
+  });
+
+  it("does not emit mentions for filename-embedded mxids with trailing hyphens", async () => {
+    const result = await renderMarkdownToMatrixHtmlWithMentions({
+      markdown: "read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt",
+      client: createMentionClient(),
+    });
+
+    expect(result.html).toBe(
+      "<p>read matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt</p>",
+    );
     expect(result.mentions).toStrictEqual({});
   });
 

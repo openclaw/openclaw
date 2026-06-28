@@ -1,3 +1,4 @@
+// Slack plugin module implements target parsing behavior.
 import {
   buildMessagingTarget,
   ensureTargetId,
@@ -6,7 +7,7 @@ import {
   type MessagingTarget,
   type MessagingTargetKind,
   type MessagingTargetParseOptions,
-} from "openclaw/plugin-sdk/messaging-targets";
+} from "openclaw/plugin-sdk/channel-targets";
 
 export type SlackTargetKind = MessagingTargetKind;
 
@@ -58,6 +59,12 @@ export function resolveSlackChannelId(raw: string): string {
 
 export function normalizeSlackMessagingTarget(raw: string): string | undefined {
   return parseSlackTarget(raw, { defaultKind: "channel" })?.normalized;
+}
+
+export function slackTargetsMatch(left: string, right: string): boolean {
+  const leftTarget = normalizeSlackMessagingTarget(left);
+  const rightTarget = normalizeSlackMessagingTarget(right);
+  return Boolean(leftTarget && rightTarget && leftTarget === rightTarget);
 }
 
 export function looksLikeSlackTargetId(raw: string): boolean {

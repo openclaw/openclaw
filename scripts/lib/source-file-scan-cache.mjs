@@ -1,6 +1,9 @@
+// Caches source file discovery and bounded-concurrency reads for guard scripts.
 import { promises as fs } from "node:fs";
 import path from "node:path";
 
+const DEFAULT_SOURCE_FILE_READ_CONCURRENCY = 32;
+export const DEFAULT_SOURCE_FILE_MAX_BYTES = 2 * 1024 * 1024;
 const scanCache = new Map();
 
 function normalizeRepoPath(repoRoot, filePath) {
@@ -9,7 +12,7 @@ function normalizeRepoPath(repoRoot, filePath) {
 
 async function walkFiles(params, rootDir) {
   const out = [];
-  let entries = [];
+  let entries;
   try {
     entries = await fs.readdir(rootDir, { withFileTypes: true });
   } catch (error) {
@@ -34,7 +37,70 @@ async function walkFiles(params, rootDir) {
   return out;
 }
 
+function normalizeConcurrency(value) {
+  if (!Number.isInteger(value) || value < 1) {
+    return DEFAULT_SOURCE_FILE_READ_CONCURRENCY;
+  }
+  return value;
+}
+
+function normalizeMaxFileBytes(value) {
+  if (!Number.isInteger(value) || value < 1) {
+    return DEFAULT_SOURCE_FILE_MAX_BYTES;
+  }
+  return value;
+}
+
+function assertSourceFileWithinLimit(relativeFile, bytes, maxFileBytes) {
+  if (bytes <= maxFileBytes) {
+    return;
+  }
+  throw new Error(
+    `source scan file exceeds ${maxFileBytes} byte limit: ${relativeFile} (${bytes} bytes)`,
+  );
+}
+
+async function readBoundedSourceFile(params, filePath, readFile, statFile, maxFileBytes) {
+  const relativeFile = normalizeRepoPath(params.repoRoot, filePath);
+  const stat = await statFile(filePath);
+  assertSourceFileWithinLimit(relativeFile, stat.size, maxFileBytes);
+  const content = await readFile(filePath, "utf8");
+  assertSourceFileWithinLimit(relativeFile, Buffer.byteLength(content, "utf8"), maxFileBytes);
+  return {
+    filePath,
+    relativeFile,
+    content,
+  };
+}
+
+/**
+ * Maps items with bounded worker concurrency while preserving input order.
+ */
+export async function mapWithConcurrency(items, concurrency, mapper) {
+  const out = Array.from({ length: items.length });
+  const workerCount = Math.min(normalizeConcurrency(concurrency), items.length);
+  let nextIndex = 0;
+
+  async function worker() {
+    for (;;) {
+      const index = nextIndex;
+      nextIndex += 1;
+      if (index >= items.length) {
+        return;
+      }
+      out[index] = await mapper(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return out;
+}
+
+/**
+ * Collects sorted source files and cached contents for configured scan roots.
+ */
 export async function collectSourceFileContents(params) {
+  const useCache = !params.readFile;
   const cacheKey = JSON.stringify({
     repoRoot: params.repoRoot,
     scanRoots: params.scanRoots,
@@ -42,10 +108,13 @@ export async function collectSourceFileContents(params) {
     ignoredDirNames: [...params.ignoredDirNames].toSorted((left, right) =>
       left.localeCompare(right),
     ),
+    maxFileBytes: normalizeMaxFileBytes(params.maxFileBytes),
   });
-  const cached = scanCache.get(cacheKey);
-  if (cached) {
-    return await cached;
+  if (useCache) {
+    const cached = scanCache.get(cacheKey);
+    if (cached) {
+      return await cached;
+    }
   }
 
   const promise = (async () => {
@@ -61,20 +130,23 @@ export async function collectSourceFileContents(params) {
         ),
       );
 
-    return await Promise.all(
-      files.map(async (filePath) => ({
-        filePath,
-        relativeFile: normalizeRepoPath(params.repoRoot, filePath),
-        content: await fs.readFile(filePath, "utf8"),
-      })),
+    const readFile = params.readFile ?? fs.readFile;
+    const statFile = params.statFile ?? fs.stat;
+    const maxFileBytes = normalizeMaxFileBytes(params.maxFileBytes);
+    return await mapWithConcurrency(files, params.maxConcurrentReads, async (filePath) =>
+      readBoundedSourceFile(params, filePath, readFile, statFile, maxFileBytes),
     );
   })();
 
-  scanCache.set(cacheKey, promise);
+  if (useCache) {
+    scanCache.set(cacheKey, promise);
+  }
   try {
     return await promise;
   } catch (error) {
-    scanCache.delete(cacheKey);
+    if (useCache) {
+      scanCache.delete(cacheKey);
+    }
     throw error;
   }
 }

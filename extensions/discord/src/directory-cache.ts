@@ -1,3 +1,4 @@
+// Discord plugin module implements directory cache behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -111,6 +112,6 @@ export function resolveDiscordDirectoryUserId(params: {
   return cache.get(withoutDiscriminator);
 }
 
-export function __resetDiscordDirectoryCacheForTest(): void {
+export function resetDiscordDirectoryCacheForTest(): void {
   DIRECTORY_HANDLE_CACHE.clear();
 }

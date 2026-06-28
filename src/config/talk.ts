@@ -1,5 +1,9 @@
+// Normalizes talk-mode config for voice and channel interactions.
+import {
+  normalizeFastMode,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeThinkLevel } from "../auto-reply/thinking.js";
-import { normalizeFastMode, normalizeOptionalString } from "../shared/string-coerce.js";
 import { isRecord } from "../utils.js";
 import type {
   ResolvedTalkConfig,
@@ -107,6 +111,14 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
     normalized.model = model;
   }
   const voice = normalizeOptionalString(source.voice);
+  const speakerVoice = normalizeOptionalString(source.speakerVoice) ?? voice;
+  const speakerVoiceId = normalizeOptionalString(source.speakerVoiceId);
+  if (speakerVoice) {
+    normalized.speakerVoice = speakerVoice;
+  }
+  if (speakerVoiceId) {
+    normalized.speakerVoiceId = speakerVoiceId;
+  }
   if (voice) {
     normalized.voice = voice;
   }
@@ -132,6 +144,12 @@ function normalizeTalkRealtimeConfig(value: unknown): TalkRealtimeConfig | undef
   ) {
     normalized.brain = source.brain;
   }
+  if (
+    source.consultRouting === "provider-direct" ||
+    source.consultRouting === "force-agent-consult"
+  ) {
+    normalized.consultRouting = source.consultRouting;
+  }
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
@@ -148,6 +166,10 @@ function activeProviderFromTalk(talk: TalkConfig): string | undefined {
   return providerIds.length === 1 ? providerIds[0] : undefined;
 }
 
+/**
+ * Normalize persisted Talk config into the canonical provider/providers shape.
+ * Legacy flat provider fields are ignored here so core config stays provider-agnostic.
+ */
 export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -173,7 +195,7 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
     typeof rawConsultFastMode === "boolean" || typeof rawConsultFastMode === "string"
       ? normalizeFastMode(rawConsultFastMode)
       : undefined;
-  if (consultFastMode !== undefined) {
+  if (typeof consultFastMode === "boolean") {
     normalized.consultFastMode = consultFastMode;
   }
   const silenceTimeoutMs = normalizeSilenceTimeoutMs(source.silenceTimeoutMs);
@@ -196,6 +218,7 @@ export function normalizeTalkSection(value: TalkConfig | undefined): TalkConfig 
   return Object.keys(normalized).length > 0 ? normalized : undefined;
 }
 
+/** Return a config copy with `talk` normalized when a valid Talk section is present. */
 export function normalizeTalkConfig(config: OpenClawConfig): OpenClawConfig {
   if (!config.talk) {
     return config;
@@ -210,6 +233,10 @@ export function normalizeTalkConfig(config: OpenClawConfig): OpenClawConfig {
   };
 }
 
+/**
+ * Resolve the single active Talk speech provider and its provider-owned config.
+ * Ambiguous multi-provider config stays unresolved until `talk.provider` names one.
+ */
 export function resolveActiveTalkProviderConfig(
   talk: TalkConfig | undefined,
 ): ResolvedTalkConfig | undefined {
@@ -227,6 +254,10 @@ export function resolveActiveTalkProviderConfig(
   };
 }
 
+/**
+ * Build the gateway `talk.config` payload from persisted config.
+ * The response includes canonical provider data plus the resolved provider when selection is unambiguous.
+ */
 export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | undefined {
   if (!isRecord(value)) {
     return undefined;
@@ -260,6 +291,8 @@ export function buildTalkConfigResponse(value: unknown): TalkConfigResponse | un
     payload.realtime = normalized.realtime;
   }
 
+  // Keep legacy flat ElevenLabs fields readable for clients while migration moves writes to
+  // talk.provider/providers; normalizeTalkSection intentionally excludes those provider details.
   const resolved =
     resolveActiveTalkProviderConfig(normalized) ??
     (legacyCompat ? { provider: "elevenlabs", config: legacyCompat } : undefined);

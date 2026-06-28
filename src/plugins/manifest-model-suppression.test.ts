@@ -1,11 +1,14 @@
+// Verifies manifest-driven model suppression behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
+  resolvePluginMetadataSnapshot: vi.fn(),
 }));
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: mocks.resolvePluginMetadataSnapshot,
 }));
 
 import {
@@ -49,6 +52,10 @@ describe("manifest model suppression", () => {
           },
         },
       ]),
+    );
+    mocks.resolvePluginMetadataSnapshot.mockImplementation(
+      (params?: Parameters<typeof mocks.loadPluginMetadataSnapshot>[0]) =>
+        mocks.loadPluginMetadataSnapshot(params),
     );
   });
 
@@ -188,6 +195,13 @@ describe("manifest model suppression", () => {
       resolveManifestBuiltInModelSuppression({
         provider: "qwen",
         id: "qwen3.6-plus",
+        env: process.env,
+      })?.suppress,
+    ).toBe(true);
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "qwen",
+        id: "qwen3.6-plus",
         baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         env: process.env,
       }),
@@ -225,6 +239,47 @@ describe("manifest model suppression", () => {
             providers: {
               modelstudio: {
                 api: "openai-completions",
+                baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
+                models: [],
+              },
+            },
+          },
+        },
+        env: process.env,
+      }),
+    ).toBeUndefined();
+  });
+
+  it("does not apply provider api conditional suppressions when a configured provider omits api", () => {
+    mocks.loadPluginMetadataSnapshot.mockReturnValue(
+      createMetadataSnapshot([
+        {
+          id: "qwen",
+          providers: ["modelstudio"],
+          modelCatalog: {
+            suppressions: [
+              {
+                provider: "modelstudio",
+                model: "qwen3.6-plus",
+                when: {
+                  baseUrlHosts: ["coding-intl.dashscope.aliyuncs.com"],
+                  providerConfigApiIn: ["qwen", "modelstudio"],
+                },
+              },
+            ],
+          },
+        },
+      ]),
+    );
+
+    expect(
+      resolveManifestBuiltInModelSuppression({
+        provider: "modelstudio",
+        id: "qwen3.6-plus",
+        config: {
+          models: {
+            providers: {
+              modelstudio: {
                 baseUrl: "https://coding-intl.dashscope.aliyuncs.com/v1",
                 models: [],
               },

@@ -1,21 +1,13 @@
+// Model list row tests cover rendered row construction for model listing output.
 import { describe, expect, it, vi } from "vitest";
 import type { ModelRow } from "./list.types.js";
 
 const mocks = vi.hoisted(() => ({
+  normalizeProviderResolvedModelWithPlugin: vi.fn(() => undefined),
   shouldSuppressBuiltInModel: vi.fn(() => {
     throw new Error("runtime model suppression should be skipped");
   }),
   shouldSuppressBuiltInModelFromManifest: vi.fn(() => false),
-  loadProviderCatalogModelsForList: vi.fn().mockResolvedValue([
-    {
-      id: "gpt-5.5",
-      name: "gpt-5.5",
-      provider: "codex",
-      api: "openai-codex-responses",
-      baseUrl: "https://chatgpt.com/backend-api",
-      input: ["text"],
-    },
-  ]),
 }));
 
 vi.mock("../../agents/model-suppression.js", () => ({
@@ -23,11 +15,11 @@ vi.mock("../../agents/model-suppression.js", () => ({
   shouldSuppressBuiltInModelFromManifest: mocks.shouldSuppressBuiltInModelFromManifest,
 }));
 
-vi.mock("./list.provider-catalog.js", () => ({
-  loadProviderCatalogModelsForList: mocks.loadProviderCatalogModelsForList,
+vi.mock("../../plugins/provider-runtime.js", () => ({
+  normalizeProviderResolvedModelWithPlugin: mocks.normalizeProviderResolvedModelWithPlugin,
 }));
 
-import { appendProviderCatalogRows } from "./list.rows.js";
+import { appendConfiguredProviderRows, appendProviderCatalogRows } from "./list.rows.js";
 
 const authIndex = {
   hasProviderAuth: (provider: string) => provider === "codex",
@@ -50,6 +42,20 @@ describe("appendProviderCatalogRows", () => {
     await appendProviderCatalogRows({
       rows,
       seenKeys: new Set(),
+      catalogModels: [
+        {
+          id: "gpt-5.5",
+          name: "gpt-5.5",
+          provider: "codex",
+          api: "openai-chatgpt-responses",
+          baseUrl: "https://chatgpt.com/backend-api",
+          input: ["text"],
+          reasoning: false,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 4096,
+        },
+      ],
       context: {
         cfg: {
           agents: { defaults: { model: { primary: "codex/gpt-5.5" } } },
@@ -68,11 +74,13 @@ describe("appendProviderCatalogRows", () => {
     expect(mocks.shouldSuppressBuiltInModelFromManifest).toHaveBeenCalledWith({
       provider: "codex",
       id: "gpt-5.5",
+      baseUrl: "https://chatgpt.com/backend-api",
       config: {
         agents: { defaults: { model: { primary: "codex/gpt-5.5" } } },
         models: { providers: {} },
       },
     });
+    expect(mocks.normalizeProviderResolvedModelWithPlugin).not.toHaveBeenCalled();
     const row = requireOnlyRow(rows);
     expect(row.key).toBe("codex/gpt-5.5");
     expect(row.available).toBe(true);
@@ -80,22 +88,26 @@ describe("appendProviderCatalogRows", () => {
   });
 
   it("applies manifest suppression when runtime model-suppression hooks are skipped", async () => {
-    mocks.loadProviderCatalogModelsForList.mockResolvedValueOnce([
-      {
-        id: "gpt-5.3-codex-spark",
-        name: "GPT-5.3 Codex Spark",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        input: ["text", "image"],
-      },
-    ]);
     mocks.shouldSuppressBuiltInModelFromManifest.mockReturnValueOnce(true);
     const rows: ModelRow[] = [];
 
     await appendProviderCatalogRows({
       rows,
       seenKeys: new Set(),
+      catalogModels: [
+        {
+          id: "gpt-5.3-codex-spark",
+          name: "GPT-5.3 Codex Spark",
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          input: ["text", "image"],
+          reasoning: false,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 4096,
+        },
+      ],
       context: {
         cfg: {
           agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
@@ -117,6 +129,7 @@ describe("appendProviderCatalogRows", () => {
     expect(mocks.shouldSuppressBuiltInModelFromManifest).toHaveBeenCalledWith({
       provider: "openai",
       id: "gpt-5.3-codex-spark",
+      baseUrl: "https://api.openai.com/v1",
       config: {
         agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
         models: { providers: {} },
@@ -126,21 +139,25 @@ describe("appendProviderCatalogRows", () => {
   });
 
   it("uses Codex auth availability for configured canonical OpenAI rows", async () => {
-    mocks.loadProviderCatalogModelsForList.mockResolvedValueOnce([
-      {
-        id: "gpt-5.5",
-        name: "GPT-5.5",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        input: ["text", "image"],
-      },
-    ]);
     const rows: ModelRow[] = [];
 
     await appendProviderCatalogRows({
       rows,
       seenKeys: new Set(),
+      catalogModels: [
+        {
+          id: "gpt-5.5",
+          name: "GPT-5.5",
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          input: ["text", "image"],
+          reasoning: false,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+          contextWindow: 8192,
+          maxTokens: 4096,
+        },
+      ],
       context: {
         cfg: {
           agents: { defaults: { model: { primary: "openai/gpt-5.5" } } },
@@ -173,5 +190,55 @@ describe("appendProviderCatalogRows", () => {
     expect(row.key).toBe("openai/gpt-5.5");
     expect(row.available).toBe(true);
     expect(row.tags).toEqual(["configured"]);
+  });
+});
+
+describe("appendConfiguredProviderRows", () => {
+  it("keeps provider normalization for configured provider models", async () => {
+    mocks.normalizeProviderResolvedModelWithPlugin.mockReturnValueOnce({
+      provider: "anthropic",
+      id: "claude-sonnet-4-6",
+      name: "Claude Sonnet 4.6",
+      input: ["text", "image"],
+      contextWindow: 200_000,
+    } as never);
+    const rows: ModelRow[] = [];
+
+    await appendConfiguredProviderRows({
+      rows,
+      seenKeys: new Set(),
+      context: {
+        cfg: {
+          models: {
+            providers: {
+              anthropic: {
+                api: "anthropic-messages",
+                baseUrl: "https://api.anthropic.com",
+                models: [
+                  {
+                    id: "claude-sonnet-4-6",
+                    name: "Claude Sonnet 4.6",
+                    reasoning: false,
+                    input: ["text"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 200_000,
+                    maxTokens: 8192,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        authIndex,
+        configuredByKey: new Map(),
+        discoveredKeys: new Set(),
+        filter: { provider: "anthropic", local: false },
+        skipRuntimeModelSuppression: true,
+      },
+    });
+
+    expect(mocks.normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledOnce();
+    expect(requireOnlyRow(rows).input).toBe("text+image");
   });
 });

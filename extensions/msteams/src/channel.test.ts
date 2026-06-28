@@ -1,3 +1,4 @@
+// Msteams tests cover channel plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { MSTeamsConfigSchema } from "../config-api.js";
@@ -94,6 +95,70 @@ describe("msteams config schema", () => {
       expect(res.data.teams?.team123?.replyStyle).toBe("thread");
       expect(res.data.teams?.team123?.channels?.chan456?.replyStyle).toBe("top-level");
     }
+  });
+
+  it("accepts Teams SDK cloud and serviceUrl configuration", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      cloud: "USGovDoD",
+      serviceUrl: "https://smba.infra.dod.teams.microsoft.us/teams",
+    });
+
+    expect(res.success).toBe(true);
+    if (res.success) {
+      expect(res.data.cloud).toBe("USGovDoD");
+      expect(res.data.serviceUrl).toBe("https://smba.infra.dod.teams.microsoft.us/teams");
+    }
+  });
+
+  it("rejects unsupported Teams serviceUrl hosts", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      cloud: "USGovDoD",
+      serviceUrl: "https://dod.example.mil/teams",
+    });
+
+    expect(res.success).toBe(false);
+  });
+
+  it("accepts China cloud without a configured global serviceUrl", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      cloud: "China",
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("accepts Azure China Bot Framework serviceUrl hosts", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      cloud: "China",
+      serviceUrl: "https://msteams.botframework.azure.cn/teams",
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("rejects non-China serviceUrl hosts when China cloud is configured", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      cloud: "China",
+      serviceUrl: "https://smba.trafficmanager.net/teams",
+    });
+
+    expect(res.success).toBe(false);
+  });
+
+  it("rejects Azure China Bot Framework serviceUrl hosts without China cloud", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      serviceUrl: "https://msteams.botframework.azure.cn/teams",
+    });
+
+    expect(res.success).toBe(false);
+  });
+
+  it("requires serviceUrl with non-public Teams clouds", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      cloud: "USGov",
+    });
+
+    expect(res.success).toBe(false);
   });
 
   it("rejects invalid replyStyle", () => {

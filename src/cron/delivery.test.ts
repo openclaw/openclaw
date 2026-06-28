@@ -1,3 +1,4 @@
+// Cron delivery tests cover delivery execution and status recording.
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
@@ -270,6 +271,33 @@ describe("resolveFailureDestination", () => {
     expect(plan).toBeNull();
   });
 
+  it("keeps a failure destination matching a threaded primary chat without that thread", () => {
+    const plan = resolveFailureDestination(
+      makeCronJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "-1001234567890",
+          threadId: 42,
+          accountId: "bot-a",
+          failureDestination: {
+            mode: "announce",
+            channel: "telegram",
+            to: "-1001234567890",
+            accountId: "bot-a",
+          },
+        },
+      }),
+      undefined,
+    );
+    expect(plan).toEqual({
+      mode: "announce",
+      channel: "telegram",
+      to: "-1001234567890",
+      accountId: "bot-a",
+    });
+  });
+
   it("returns null when provider-prefixed failure destination matches a provider-prefixed primary target", () => {
     const plan = resolveFailureDestination(
       makeCronJob({
@@ -355,6 +383,33 @@ describe("resolveFailureDestination", () => {
       channel: "last",
       to: undefined,
       accountId: undefined,
+    });
+  });
+
+  it("keeps inherited announce targets when a job clears only failure destination mode", () => {
+    const plan = resolveFailureDestination(
+      makeCronJob({
+        delivery: {
+          mode: "announce",
+          channel: "telegram",
+          to: "111",
+          failureDestination: {
+            mode: undefined,
+          },
+        },
+      }),
+      {
+        channel: "signal",
+        to: "group-abc",
+        accountId: "global-account",
+        mode: "announce",
+      },
+    );
+    expect(plan).toEqual({
+      mode: "announce",
+      channel: "signal",
+      to: "group-abc",
+      accountId: "global-account",
     });
   });
 

@@ -1,3 +1,5 @@
+// Memory Core plugin module implements hybrid behavior.
+import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyMMRToHybridResults, type MMRConfig, DEFAULT_MMR_CONFIG } from "./mmr.js";
 import {
   applyTemporalDecayToHybridResults,
@@ -28,11 +30,7 @@ type HybridKeywordResult = {
 };
 
 export function buildFtsQuery(raw: string): string | null {
-  const tokens =
-    raw
-      .match(/[\p{L}\p{N}_]+/gu)
-      ?.map((t) => t.trim())
-      .filter(Boolean) ?? [];
+  const tokens = normalizeStringEntries(raw.match(/[\p{L}\p{N}_]+/gu) ?? []);
   if (tokens.length === 0) {
     return null;
   }

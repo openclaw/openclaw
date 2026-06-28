@@ -1,3 +1,4 @@
+// Msteams tests cover graph group management plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
@@ -27,8 +28,8 @@ vi.mock("./graph.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./conversation-store-fs.js", () => ({
-  createMSTeamsConversationStoreFs: () => ({
+vi.mock("./conversation-store-state.js", () => ({
+  createMSTeamsConversationStoreState: () => ({
     findPreferredDmByUserId: mockState.findPreferredDmByUserId,
   }),
 }));

@@ -1,3 +1,13 @@
+/**
+ * Internal runtime event prompt formatting.
+ * Sanitizes background task completion events into protected runtime-context
+ * blocks or plain prompt text.
+ */
+import {
+  formatGeneratedAttachmentLines,
+  mediaUrlsFromGeneratedAttachments,
+  type AgentGeneratedAttachment,
+} from "./generated-attachments.js";
 import {
   AGENT_INTERNAL_EVENT_TYPE_TASK_COMPLETION,
   type AgentInternalEventSource,
@@ -20,11 +30,15 @@ type AgentTaskCompletionInternalEvent = {
   status: AgentInternalEventStatus;
   statusLabel: string;
   result: string;
+  attachments?: AgentGeneratedAttachment[];
   mediaUrls?: string[];
   statsLine?: string;
   replyInstruction: string;
 };
 
+type TaskCompletionPromptMode = "plain" | "protected";
+
+/** Internal event variants that can be rendered into agent prompt context. */
 export type AgentInternalEvent = AgentTaskCompletionInternalEvent;
 
 export { INTERNAL_RUNTIME_CONTEXT_BEGIN, INTERNAL_RUNTIME_CONTEXT_END };
@@ -41,6 +55,16 @@ function sanitizeMultilineField(value: string, fallback: string): string {
   return sanitized || fallback;
 }
 
+function sanitizeMediaDirectiveValue(value: string): string | null {
+  let singleLine = "";
+  for (const char of escapeInternalRuntimeContextDelimiters(value).replace(/\r?\n/g, " ")) {
+    const code = char.charCodeAt(0);
+    singleLine += code < 32 || code === 127 ? " " : char;
+  }
+  const sanitized = singleLine.trim();
+  return sanitized || null;
+}
+
 function formatChildResultDataBlock(value: string): string {
   return (
     wrapPromptDataBlock({
@@ -50,15 +74,40 @@ function formatChildResultDataBlock(value: string): string {
   );
 }
 
-function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): string {
+function formatGeneratedMediaDirectiveLines(event: AgentTaskCompletionInternalEvent): string[] {
+  const mediaUrls = Array.from(
+    new Set(
+      [...(event.mediaUrls ?? []), ...mediaUrlsFromGeneratedAttachments(event.attachments)]
+        .map(sanitizeMediaDirectiveValue)
+        .filter((value): value is string => value !== null),
+    ),
+  );
+  if (mediaUrls.length === 0) {
+    return [];
+  }
+  return ["Generated media:", ...mediaUrls.map((mediaUrl) => `MEDIA:${mediaUrl}`)];
+}
+
+function formatTaskCompletionEvent(
+  event: AgentTaskCompletionInternalEvent,
+  mode: TaskCompletionPromptMode,
+): string {
   const sessionKey = sanitizeSingleLineField(event.childSessionKey, "unknown");
   const sessionId = sanitizeSingleLineField(event.childSessionId ?? "unknown", "unknown");
   const announceType = sanitizeSingleLineField(event.announceType, "unknown");
   const taskLabel = sanitizeSingleLineField(event.taskLabel, "unnamed task");
   const statusLabel = sanitizeSingleLineField(event.statusLabel, event.status);
   const result = formatChildResultDataBlock(event.result);
-  const lines = [
-    "[Internal task completion event]",
+  const attachmentLines = formatGeneratedAttachmentLines(event.attachments);
+  const mediaDirectiveLines = formatGeneratedMediaDirectiveLines(event);
+  const lines =
+    mode === "protected"
+      ? ["[Internal task completion event]"]
+      : [
+          "A background task completed. Use this result to reply to the user in your normal assistant voice.",
+          "",
+        ];
+  lines.push(
     `source: ${event.source}`,
     `session_key: ${sessionKey}`,
     `session_id: ${sessionId}`,
@@ -67,40 +116,25 @@ function formatTaskCompletionEvent(event: AgentTaskCompletionInternalEvent): str
     `status: ${statusLabel}`,
     "",
     result,
-  ];
+  );
+  if (attachmentLines.length > 0) {
+    lines.push("", ...attachmentLines);
+  }
+  if (mediaDirectiveLines.length > 0) {
+    lines.push("", ...mediaDirectiveLines);
+  }
   if (event.statsLine?.trim()) {
     lines.push("", sanitizeMultilineField(event.statsLine, ""));
   }
-  lines.push("", "Action:", sanitizeMultilineField(event.replyInstruction, ""));
+  lines.push(
+    "",
+    mode === "protected" ? "Action:" : "Instruction:",
+    sanitizeMultilineField(event.replyInstruction, ""),
+  );
   return lines.join("\n");
 }
 
-function formatTaskCompletionEventForPlainPrompt(event: AgentTaskCompletionInternalEvent): string {
-  const sessionKey = sanitizeSingleLineField(event.childSessionKey, "unknown");
-  const sessionId = sanitizeSingleLineField(event.childSessionId ?? "unknown", "unknown");
-  const announceType = sanitizeSingleLineField(event.announceType, "unknown");
-  const taskLabel = sanitizeSingleLineField(event.taskLabel, "unnamed task");
-  const statusLabel = sanitizeSingleLineField(event.statusLabel, event.status);
-  const result = formatChildResultDataBlock(event.result);
-  const lines = [
-    "A background task completed. Use this result to reply to the user in your normal assistant voice.",
-    "",
-    `source: ${event.source}`,
-    `session_key: ${sessionKey}`,
-    `session_id: ${sessionId}`,
-    `type: ${announceType}`,
-    `task: ${taskLabel}`,
-    `status: ${statusLabel}`,
-    "",
-    result,
-  ];
-  if (event.statsLine?.trim()) {
-    lines.push("", sanitizeMultilineField(event.statsLine, ""));
-  }
-  lines.push("", "Instruction:", sanitizeMultilineField(event.replyInstruction, ""));
-  return lines.join("\n");
-}
-
+/** Format internal runtime events for the protected runtime-context prompt block. */
 export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]): string {
   if (!events || events.length === 0) {
     return "";
@@ -108,7 +142,7 @@ export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]
   const blocks = events
     .map((event) => {
       if (event.type === "task_completion") {
-        return formatTaskCompletionEvent(event);
+        return formatTaskCompletionEvent(event, "protected");
       }
       return "";
     })
@@ -126,6 +160,7 @@ export function formatAgentInternalEventsForPrompt(events?: AgentInternalEvent[]
   ].join("\n");
 }
 
+/** Format internal runtime events for plain prompts that lack context delimiters. */
 export function formatAgentInternalEventsForPlainPrompt(events?: AgentInternalEvent[]): string {
   if (!events || events.length === 0) {
     return "";
@@ -133,7 +168,7 @@ export function formatAgentInternalEventsForPlainPrompt(events?: AgentInternalEv
   return events
     .map((event) => {
       if (event.type === "task_completion") {
-        return formatTaskCompletionEventForPlainPrompt(event);
+        return formatTaskCompletionEvent(event, "plain");
       }
       return "";
     })

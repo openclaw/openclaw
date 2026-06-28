@@ -1,3 +1,4 @@
+// Codex tests cover plugin thread config plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { CodexAppInventoryCache } from "./app-inventory-cache.js";
 import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./config.js";
@@ -72,6 +73,7 @@ describe("Codex plugin thread config", () => {
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
       allowDestructiveActions: true,
+      destructiveApprovalMode: "allow",
       mcpServerNames: ["google-calendar"],
     });
     expect(config.diagnostics).toStrictEqual([]);
@@ -106,6 +108,9 @@ describe("Codex plugin thread config", () => {
     expect(
       pluginOverrideDisabled.policyContext.apps["google-calendar-app"]?.allowDestructiveActions,
     ).toBe(false);
+    expect(
+      pluginOverrideDisabled.policyContext.apps["google-calendar-app"]?.destructiveApprovalMode,
+    ).toBe("deny");
 
     const pluginOverrideEnabled = await buildReadyGoogleCalendarThreadConfig({
       codexPlugins: {
@@ -133,6 +138,409 @@ describe("Codex plugin thread config", () => {
     expect(
       pluginOverrideEnabled.policyContext.apps["google-calendar-app"]?.allowDestructiveActions,
     ).toBe(true);
+    expect(
+      pluginOverrideEnabled.policyContext.apps["google-calendar-app"]?.destructiveApprovalMode,
+    ).toBe("allow");
+  });
+
+  it("exposes destructive app access while marking auto approval mode", async () => {
+    const config = await buildReadyGoogleCalendarThreadConfig({
+      codexPlugins: {
+        enabled: true,
+        allow_destructive_actions: "auto",
+        plugins: {
+          "google-calendar": {
+            marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+            pluginName: "google-calendar",
+          },
+        },
+      },
+    });
+
+    const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
+    expect(apps?.["google-calendar-app"]).toEqual({
+      enabled: true,
+      destructive_enabled: true,
+      open_world_enabled: true,
+      default_tools_approval_mode: "auto",
+    });
+    expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "auto",
+    });
+  });
+
+  it("exposes destructive app access while clearing only durable approval overrides for always mode", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [appInfo("google-calendar-app", true)],
+        nextCursor: null,
+      }),
+    });
+    let configReadCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginDetail(
+          "google-calendar",
+          [appSummary("google-calendar-app")],
+          ["google-calendar"],
+        );
+      }
+      if (method === "config/read") {
+        configReadCount += 1;
+        if (configReadCount > 1) {
+          return {
+            config: {
+              apps: {
+                "google-calendar-app": {
+                  tools: {
+                    "calendar/read": {
+                      enabled: false,
+                    },
+                  },
+                },
+              },
+            },
+          };
+        }
+        return {
+          config: {
+            apps: {
+              "google-calendar-app": {
+                tools: {
+                  "calendar/create": {
+                    approval_mode: "approve",
+                    enabled: false,
+                  },
+                  "calendar/read": {
+                    enabled: false,
+                  },
+                  "calendar/update": {
+                    approvalMode: "approve",
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      if (method === "config/value/write") {
+        return {};
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          allow_destructive_actions: "always",
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request,
+    });
+
+    const apps = config.configPatch?.apps as Record<string, unknown> | undefined;
+    expect(apps?.["google-calendar-app"]).toEqual({
+      enabled: true,
+      destructive_enabled: true,
+      open_world_enabled: true,
+      default_tools_approval_mode: "auto",
+    });
+    expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "always",
+    });
+    expect(request).toHaveBeenCalledWith("config/read", { includeLayers: false });
+    expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(2);
+    expect(request).toHaveBeenCalledWith("config/value/write", {
+      keyPath: 'apps."google-calendar-app".tools."calendar/create".approval_mode',
+      value: null,
+      mergeStrategy: "replace",
+    });
+    expect(request).toHaveBeenCalledWith("config/value/write", {
+      keyPath: 'apps."google-calendar-app".tools."calendar/update".approval_mode',
+      value: null,
+      mergeStrategy: "replace",
+    });
+    expect(request).not.toHaveBeenCalledWith("config/value/write", {
+      keyPath: 'apps."google-calendar-app".tools',
+      value: null,
+      mergeStrategy: "replace",
+    });
+  });
+
+  it("omits always policy apps when cwd effective approval overrides remain after cleanup", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [appInfo("google-calendar-app", true)],
+        nextCursor: null,
+      }),
+    });
+    let configReadCount = 0;
+    const request = vi.fn(async (method: string) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginDetail(
+          "google-calendar",
+          [appSummary("google-calendar-app")],
+          ["google-calendar"],
+        );
+      }
+      if (method === "config/read") {
+        configReadCount += 1;
+        return {
+          config: {
+            apps: {
+              "google-calendar-app": {
+                tools: {
+                  "calendar/create": {
+                    approval_mode: "approve",
+                    source: configReadCount === 1 ? "user" : "project",
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      if (method === "config/value/write") {
+        return { status: "ok" };
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          allow_destructive_actions: "always",
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      configCwd: "/repo/project",
+      nowMs: 1,
+      request,
+    });
+
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
+    });
+    expect(config.policyContext.apps).toStrictEqual({});
+    expect(request).toHaveBeenCalledWith("config/read", {
+      includeLayers: false,
+      cwd: "/repo/project",
+    });
+    expect(request.mock.calls.filter(([method]) => method === "config/read")).toHaveLength(2);
+    expect(config.diagnostics).toStrictEqual([
+      {
+        code: "approval_overrides_clear_failed",
+        plugin: {
+          configKey: "google-calendar",
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          pluginName: "google-calendar",
+          enabled: true,
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "always",
+        },
+        message:
+          "Could not clear durable Codex app approval overrides for google-calendar-app: effective approval overrides remain for calendar/create",
+      },
+    ]);
+  });
+
+  it("omits always policy apps when approval override writes are overridden", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [appInfo("google-calendar-app", true)],
+        nextCursor: null,
+      }),
+    });
+    const request = vi.fn(async (method: string) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginDetail(
+          "google-calendar",
+          [appSummary("google-calendar-app")],
+          ["google-calendar"],
+        );
+      }
+      if (method === "config/read") {
+        return {
+          config: {
+            apps: {
+              "google-calendar-app": {
+                tools: {
+                  "calendar/create": {
+                    approval_mode: "approve",
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      if (method === "config/value/write") {
+        return { status: "okOverridden" };
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          allow_destructive_actions: "always",
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      configCwd: "/repo/project",
+      nowMs: 1,
+      request,
+    });
+
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
+    });
+    expect(config.policyContext.apps).toStrictEqual({});
+    expect(config.diagnostics).toStrictEqual([
+      {
+        code: "approval_overrides_clear_failed",
+        plugin: {
+          configKey: "google-calendar",
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          pluginName: "google-calendar",
+          enabled: true,
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "always",
+        },
+        message:
+          "Could not clear durable Codex app approval overrides for google-calendar-app: approval override for calendar/create is controlled by another config layer",
+      },
+    ]);
+  });
+
+  it("omits always policy apps when durable approval override cleanup fails", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [appInfo("google-calendar-app", true)],
+        nextCursor: null,
+      }),
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          allow_destructive_actions: "always",
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail(
+            "google-calendar",
+            [appSummary("google-calendar-app")],
+            ["google-calendar"],
+          );
+        }
+        if (method === "config/read") {
+          throw new Error("readonly config");
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
+    });
+    expect(config.policyContext.apps).toStrictEqual({});
+    expect(config.diagnostics).toStrictEqual([
+      {
+        code: "approval_overrides_clear_failed",
+        plugin: {
+          configKey: "google-calendar",
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          pluginName: "google-calendar",
+          enabled: true,
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "always",
+        },
+        message:
+          "Could not clear durable Codex app approval overrides for google-calendar-app: readonly config",
+      },
+    ]);
   });
 
   it("builds a restrictive app config when native plugin support is disabled", async () => {
@@ -215,9 +623,11 @@ describe("Codex plugin thread config", () => {
 
   it("waits for the initial app inventory before exposing plugin apps", async () => {
     const appCache = new CodexAppInventoryCache();
-    const request = vi.fn(async (method: string) => {
+    const appListParams: v2.AppsListParams[] = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
       if (method === "app/list") {
-        return { data: [appInfo("google-calendar-app", true)], nextCursor: null };
+        appListParams.push(params as v2.AppsListParams);
+        return { data: [appInfo("google-calendar-app", true, false)], nextCursor: null };
       }
       if (method === "plugin/list") {
         return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
@@ -264,12 +674,131 @@ describe("Codex plugin thread config", () => {
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
       allowDestructiveActions: true,
+      destructiveApprovalMode: "allow",
       mcpServerNames: [],
     });
     expect(config.diagnostics).toStrictEqual([]);
     expect(
       request.mock.calls.reduce((count, [method]) => count + (method === "app/list" ? 1 : 0), 0),
     ).toBe(1);
+    expect(appListParams).toEqual([
+      {
+        cursor: undefined,
+        limit: 100,
+        forceRefetch: true,
+      },
+    ]);
+  });
+
+  it("re-enables an OpenClaw-allowed app even when app/list reports it disabled", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [appInfo("google-calendar-app", true, false)],
+        nextCursor: null,
+      }),
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(config.inventory?.records[0]?.apps).toStrictEqual([
+      {
+        id: "google-calendar-app",
+        name: "google-calendar-app",
+        accessible: true,
+        enabled: false,
+        needsAuth: false,
+      },
+    ]);
+    expect(config.configPatch?.apps).toMatchObject({
+      "google-calendar-app": {
+        enabled: true,
+      },
+    });
+    expect(config.diagnostics).toStrictEqual([]);
+  });
+
+  it("refreshes missing app inventory when plugin activation becomes unnecessary", async () => {
+    const appCache = new CodexAppInventoryCache();
+    const appListParams: v2.AppsListParams[] = [];
+    let pluginListCalls = 0;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "plugin/list") {
+        pluginListCalls += 1;
+        const active = pluginListCalls > 1;
+        return pluginList([
+          pluginSummary("google-calendar", { installed: active, enabled: active }),
+        ]);
+      }
+      if (method === "plugin/read") {
+        return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+      }
+      if (method === "app/list") {
+        appListParams.push(params as v2.AppsListParams);
+        return {
+          data: [appInfo("google-calendar-app", true)],
+          nextCursor: null,
+        } satisfies v2.AppsListResponse;
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      request,
+    });
+
+    expect(config.configPatch?.apps).toMatchObject({
+      "google-calendar-app": {
+        enabled: true,
+      },
+    });
+    expect(request.mock.calls.map(([method]) => method)).not.toContain("plugin/install");
+    expect(appListParams).toEqual([
+      {
+        cursor: undefined,
+        limit: 100,
+        forceRefetch: true,
+      },
+    ]);
   });
 
   it("does not expose plugin apps missing from the app inventory snapshot", async () => {
@@ -328,8 +857,134 @@ describe("Codex plugin thread config", () => {
           pluginName: "google-calendar",
           enabled: true,
           allowDestructiveActions: true,
+          destructiveApprovalMode: "allow",
         },
-        message: "google-calendar-app is not accessible or enabled for google-calendar.",
+        message: "google-calendar-app is not accessible for google-calendar.",
+      },
+    ]);
+  });
+
+  it("does not expose apps for plugins that OpenClaw policy leaves disabled", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [appInfo("google-calendar-app", true)],
+        nextCursor: null,
+      }),
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              enabled: false,
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
+    });
+    expect(config.policyContext.apps).toStrictEqual({});
+    expect(config.diagnostics).toStrictEqual([]);
+  });
+
+  it("force-refreshes app inventory when proven plugin apps are not ready", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () => ({
+        data: [],
+        nextCursor: null,
+      }),
+    });
+    const appListParams: v2.AppsListParams[] = [];
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+      }
+      if (method === "plugin/read") {
+        return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+      }
+      if (method === "app/list") {
+        appListParams.push(params as v2.AppsListParams);
+        return {
+          data: [appInfo("google-calendar-app", true)],
+          nextCursor: null,
+        } satisfies v2.AppsListResponse;
+      }
+      throw new Error(`unexpected request ${method}`);
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request,
+    });
+
+    expect(config.configPatch?.apps).toEqual({
+      _default: {
+        enabled: false,
+        destructive_enabled: false,
+        open_world_enabled: false,
+      },
+      "google-calendar-app": {
+        enabled: true,
+        destructive_enabled: true,
+        open_world_enabled: true,
+        default_tools_approval_mode: "auto",
+      },
+    });
+    expect(config.policyContext.apps["google-calendar-app"]).toEqual({
+      configKey: "google-calendar",
+      marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+      pluginName: "google-calendar",
+      allowDestructiveActions: true,
+      destructiveApprovalMode: "allow",
+      mcpServerNames: [],
+    });
+    expect(config.diagnostics).toStrictEqual([]);
+    expect(appListParams).toEqual([
+      {
+        cursor: undefined,
+        limit: 100,
+        forceRefetch: true,
       },
     ]);
   });
@@ -412,6 +1067,7 @@ describe("Codex plugin thread config", () => {
       marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
       pluginName: "google-calendar",
       allowDestructiveActions: true,
+      destructiveApprovalMode: "allow",
       mcpServerNames: [],
     });
     expect(config.diagnostics).toStrictEqual([]);
@@ -441,6 +1097,65 @@ describe("Codex plugin thread config", () => {
         forceRefetch: true,
       },
     ]);
+  });
+
+  it("installs an unconfigured remote plugin before waiting for app inventory", async () => {
+    const appCache = new CodexAppInventoryCache();
+    let installed = false;
+    const request = vi.fn(async (method: string, params?: unknown) => {
+      if (method === "plugin/list") {
+        return pluginList([pluginSummary("google-calendar", { installed, enabled: installed })]);
+      }
+      if (method === "plugin/read") {
+        return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+      }
+      if (method === "plugin/install") {
+        installed = true;
+        return { authPolicy: "ON_USE", appsNeedingAuth: [] } satisfies v2.PluginInstallResponse;
+      }
+      if (method === "skills/list") {
+        return { data: [] } satisfies v2.SkillsListResponse;
+      }
+      if (method === "hooks/list") {
+        return { data: [] } satisfies v2.HooksListResponse;
+      }
+      if (method === "config/mcpServer/reload") {
+        return {};
+      }
+      if (method === "app/list") {
+        return {
+          data: [appInfo("google-calendar-app", true, installed)],
+          nextCursor: null,
+        } satisfies v2.AppsListResponse;
+      }
+      throw new Error(`unexpected request ${method}: ${JSON.stringify(params)}`);
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      request,
+    });
+
+    expect(config.configPatch?.apps).toMatchObject({
+      "google-calendar-app": {
+        enabled: true,
+      },
+    });
+    const methods = request.mock.calls.map(([method]) => method);
+    expect(methods.indexOf("plugin/install")).toBeGreaterThan(-1);
+    expect(methods.indexOf("app/list")).toBeGreaterThan(methods.indexOf("plugin/install"));
   });
 
   it("surfaces critical post-install refresh failures and keeps plugin apps disabled", async () => {
@@ -545,8 +1260,75 @@ describe("Codex plugin thread config", () => {
       },
     });
     expect(config.policyContext.apps).toStrictEqual({});
+    expect(config.policyContext.pluginAppIds).toStrictEqual({
+      "google-calendar": ["google-calendar-app"],
+    });
     expect(config.diagnostics.map((diagnostic) => diagnostic.code)).toStrictEqual([
       "app_inventory_missing",
+    ]);
+  });
+
+  it("fails closed when app inventory entries are malformed", async () => {
+    const appCache = new CodexAppInventoryCache();
+    await appCache.refreshNow({
+      key: "runtime",
+      nowMs: 0,
+      request: async () =>
+        ({
+          data: [{ ...appInfo("google-calendar-app", true), id: "" }] as unknown as v2.AppInfo[],
+          nextCursor: null,
+        }) satisfies v2.AppsListResponse,
+    });
+
+    const config = await buildCodexPluginThreadConfig({
+      pluginConfig: {
+        codexPlugins: {
+          enabled: true,
+          plugins: {
+            "google-calendar": {
+              marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+              pluginName: "google-calendar",
+            },
+          },
+        },
+      },
+      appCache,
+      appCacheKey: "runtime",
+      nowMs: 1,
+      request: async (method) => {
+        if (method === "plugin/list") {
+          return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+        }
+        if (method === "plugin/read") {
+          return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+        }
+        throw new Error(`unexpected request ${method}`);
+      },
+    });
+
+    expect(config.configPatch).toEqual({
+      apps: {
+        _default: {
+          enabled: false,
+          destructive_enabled: false,
+          open_world_enabled: false,
+        },
+      },
+    });
+    expect(config.policyContext.apps).toStrictEqual({});
+    expect(config.diagnostics).toStrictEqual([
+      {
+        code: "app_not_ready",
+        plugin: {
+          configKey: "google-calendar",
+          marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME,
+          pluginName: "google-calendar",
+          enabled: true,
+          allowDestructiveActions: true,
+          destructiveApprovalMode: "allow",
+        },
+        message: "google-calendar-app is not accessible for google-calendar.",
+      },
     ]);
   });
 
@@ -568,7 +1350,6 @@ describe("Codex plugin thread config", () => {
       pluginConfig: { codexPlugins: { enabled: true } },
       appCacheKey: "runtime-b",
     });
-
     expect(second).toBe(first);
     expect(third).not.toBe(second);
   });
@@ -624,11 +1405,11 @@ describe("Codex plugin thread config", () => {
   it("merges app config with native hook config", () => {
     expect(
       mergeCodexThreadConfigs(
-        { "features.codex_hooks": true, hooks: { PreToolUse: [] } },
+        { "features.hooks": true, hooks: { PreToolUse: [] } },
         { apps: { _default: { enabled: false } } },
       ),
     ).toEqual({
-      "features.codex_hooks": true,
+      "features.hooks": true,
       hooks: { PreToolUse: [] },
       apps: { _default: { enabled: false } },
     });

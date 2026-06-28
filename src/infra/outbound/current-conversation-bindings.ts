@@ -1,12 +1,21 @@
-import fs from "node:fs";
-import path from "node:path";
+// Generic current-conversation bindings persist lightweight conversation ->
+// session links for plugin channels without a custom binding adapter.
+import {
+  asDateTimestampMs,
+  isFutureDateTimestampMs,
+  resolveExpiresAtMsFromDurationMs,
+} from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeConversationText } from "../../acp/conversation-id.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
-import { resolveStateDir } from "../../config/paths.js";
-import { loadJsonFile } from "../../infra/json-file.js";
-import { saveJsonFile } from "../../plugin-sdk/json-store.js";
 import { getActivePluginChannelRegistryFromState } from "../../plugins/runtime-channel-state.js";
-import { normalizeOptionalLowercaseString } from "../../shared/string-coerce.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../kysely-sync.js";
 import { normalizeConversationRef } from "./session-binding-normalization.js";
 import type {
   ConversationRef,
@@ -16,13 +25,13 @@ import type {
   SessionBindingUnbindInput,
 } from "./session-binding.types.js";
 
-type PersistedCurrentConversationBindingsFile = {
-  version: 1;
-  bindings: SessionBindingRecord[];
-};
-
-const CURRENT_BINDINGS_FILE_VERSION = 1;
 const CURRENT_BINDINGS_ID_PREFIX = "generic:";
+const CURRENT_BINDING_CONVERSATION_KIND = "current";
+
+type CurrentConversationBindingDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "current_conversation_bindings"
+>;
 
 let bindingsLoaded = false;
 const bindingsByConversationKey = new Map<string, SessionBindingRecord>();
@@ -41,24 +50,117 @@ function buildBindingId(ref: ConversationRef): string {
   return `${CURRENT_BINDINGS_ID_PREFIX}${buildConversationKey(ref)}`;
 }
 
-function resolveBindingsFilePath(env: NodeJS.ProcessEnv = process.env): string {
-  return path.join(resolveStateDir(env), "bindings", "current-conversations.json");
-}
-
 function isBindingExpired(record: SessionBindingRecord, now = Date.now()): boolean {
-  return typeof record.expiresAt === "number" && Number.isFinite(record.expiresAt)
-    ? record.expiresAt <= now
-    : false;
+  if (record.expiresAt === undefined) {
+    return false;
+  }
+  const expiresAt = asDateTimestampMs(record.expiresAt);
+  if (expiresAt === undefined) {
+    return true;
+  }
+  const nowMs = asDateTimestampMs(now);
+  return nowMs !== undefined && !isFutureDateTimestampMs(expiresAt, { nowMs });
 }
 
-function toPersistedFile(): PersistedCurrentConversationBindingsFile {
-  const bindings = [...bindingsByConversationKey.values()]
+function normalizePersistedBindingRecord(
+  record: SessionBindingRecord,
+): SessionBindingRecord | null {
+  if (!record?.bindingId || !record?.conversation?.conversationId || isBindingExpired(record)) {
+    return null;
+  }
+  const conversation = normalizeConversationRef(record.conversation);
+  const targetSessionKey = record.targetSessionKey?.trim() ?? "";
+  if (!targetSessionKey) {
+    return null;
+  }
+  return {
+    ...record,
+    bindingId: buildBindingId(conversation),
+    targetSessionKey,
+    conversation,
+  };
+}
+
+function openBindingDatabase() {
+  return openOpenClawStateDatabase();
+}
+
+function bindingRowsToRecords(rows: Array<{ record_json: string }>): SessionBindingRecord[] {
+  return rows.flatMap((row) => {
+    try {
+      const parsed = JSON.parse(row.record_json) as SessionBindingRecord;
+      const normalized = normalizePersistedBindingRecord(parsed);
+      return normalized ? [normalized] : [];
+    } catch {
+      return [];
+    }
+  });
+}
+
+function readPersistedBindings(): SessionBindingRecord[] {
+  const database = openBindingDatabase();
+  const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(database.db);
+  const now = Date.now();
+  executeSqliteQuerySync(
+    database.db,
+    bindingDb
+      .deleteFrom("current_conversation_bindings")
+      .where("expires_at", "is not", null)
+      .where("expires_at", "<=", now),
+  );
+  const rows = executeSqliteQuerySync(
+    database.db,
+    bindingDb
+      .selectFrom("current_conversation_bindings")
+      .select(["record_json"])
+      .orderBy("binding_id", "asc"),
+  ).rows;
+  return bindingRowsToRecords(rows);
+}
+
+function targetAgentIdForSessionKey(targetSessionKey: string): string {
+  return resolveAgentIdFromSessionKey(targetSessionKey);
+}
+
+function writePersistedBindings(): void {
+  const records = [...bindingsByConversationKey.values()]
     .filter((record) => !isBindingExpired(record))
     .toSorted((a, b) => a.bindingId.localeCompare(b.bindingId));
-  return {
-    version: CURRENT_BINDINGS_FILE_VERSION,
-    bindings,
-  };
+  const updatedAt = Date.now();
+  runOpenClawStateWriteTransaction(({ db }) => {
+    const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
+    executeSqliteQuerySync(db, bindingDb.deleteFrom("current_conversation_bindings"));
+    if (records.length === 0) {
+      return;
+    }
+    executeSqliteQuerySync(
+      db,
+      bindingDb.insertInto("current_conversation_bindings").values(
+        records.map((record) => {
+          const conversation = normalizeConversationRef(record.conversation);
+          return {
+            binding_key: buildConversationKey(conversation),
+            binding_id: record.bindingId,
+            target_agent_id: targetAgentIdForSessionKey(record.targetSessionKey),
+            target_session_id: null,
+            target_session_key: record.targetSessionKey,
+            channel: conversation.channel,
+            account_id: conversation.accountId,
+            conversation_kind: CURRENT_BINDING_CONVERSATION_KIND,
+            parent_conversation_id: conversation.parentConversationId ?? null,
+            conversation_id: conversation.conversationId,
+            target_kind: record.targetKind,
+            status: record.status,
+            bound_at: record.boundAt,
+            expires_at: record.expiresAt ?? null,
+            metadata_json: record.metadata ? JSON.stringify(record.metadata) : null,
+            record_json: JSON.stringify(record),
+            updated_at: updatedAt,
+          };
+        }),
+      ),
+    );
+  });
 }
 
 function loadBindingsIntoMemory(): void {
@@ -67,30 +169,9 @@ function loadBindingsIntoMemory(): void {
   }
   bindingsLoaded = true;
   bindingsByConversationKey.clear();
-  const parsed = loadJsonFile(resolveBindingsFilePath()) as
-    | PersistedCurrentConversationBindingsFile
-    | undefined;
-  const bindings = parsed?.version === CURRENT_BINDINGS_FILE_VERSION ? parsed.bindings : [];
-  for (const record of bindings ?? []) {
-    if (!record?.bindingId || !record?.conversation?.conversationId || isBindingExpired(record)) {
-      continue;
-    }
-    const conversation = normalizeConversationRef(record.conversation);
-    const targetSessionKey = record.targetSessionKey?.trim() ?? "";
-    if (!targetSessionKey) {
-      continue;
-    }
-    bindingsByConversationKey.set(buildConversationKey(conversation), {
-      ...record,
-      bindingId: buildBindingId(conversation),
-      targetSessionKey,
-      conversation,
-    });
+  for (const record of readPersistedBindings()) {
+    bindingsByConversationKey.set(buildConversationKey(record.conversation), record);
   }
-}
-
-function persistBindingsToDisk(): void {
-  saveJsonFile(resolveBindingsFilePath(), toPersistedFile());
 }
 
 function pruneExpiredBinding(key: string): SessionBindingRecord | null {
@@ -103,7 +184,7 @@ function pruneExpiredBinding(key: string): SessionBindingRecord | null {
     return record;
   }
   bindingsByConversationKey.delete(key);
-  persistBindingsToDisk();
+  writePersistedBindings();
   return null;
 }
 
@@ -134,6 +215,7 @@ function resolveChannelSupportsCurrentConversationBinding(channel: string): bool
   return false;
 }
 
+/** Reports generic current-conversation binding support for plugin-owned channels. */
 export function getGenericCurrentConversationBindingCapabilities(params: {
   channel: string;
   accountId: string;
@@ -150,6 +232,7 @@ export function getGenericCurrentConversationBindingCapabilities(params: {
   };
 }
 
+/** Stores or replaces the current-conversation binding for a normalized conversation ref. */
 export async function bindGenericCurrentConversation(
   input: SessionBindingBindInput,
 ): Promise<SessionBindingRecord | null> {
@@ -159,11 +242,24 @@ export async function bindGenericCurrentConversation(
     return null;
   }
   loadBindingsIntoMemory();
-  const now = Date.now();
+  const rawNow = Date.now();
+  const now = asDateTimestampMs(rawNow);
+  if (now === undefined) {
+    return null;
+  }
   const ttlMs =
     typeof input.ttlMs === "number" && Number.isFinite(input.ttlMs)
       ? Math.max(0, Math.floor(input.ttlMs))
       : undefined;
+  const expiresAt =
+    ttlMs === undefined
+      ? undefined
+      : ttlMs === 0
+        ? now
+        : resolveExpiresAtMsFromDurationMs(ttlMs, { nowMs: rawNow });
+  if (ttlMs !== undefined && expiresAt === undefined) {
+    return null;
+  }
   const key = buildConversationKey(conversation);
   const existing = pruneExpiredBinding(key);
   const record: SessionBindingRecord = {
@@ -173,7 +269,7 @@ export async function bindGenericCurrentConversation(
     conversation,
     status: "active",
     boundAt: now,
-    ...(ttlMs != null ? { expiresAt: now + ttlMs } : {}),
+    ...(expiresAt !== undefined ? { expiresAt } : {}),
     metadata: {
       ...existing?.metadata,
       ...input.metadata,
@@ -181,16 +277,18 @@ export async function bindGenericCurrentConversation(
     },
   };
   bindingsByConversationKey.set(key, record);
-  persistBindingsToDisk();
+  writePersistedBindings();
   return record;
 }
 
+/** Resolves a current-conversation binding and prunes it if its TTL has expired. */
 export function resolveGenericCurrentConversationBinding(
   ref: ConversationRef,
 ): SessionBindingRecord | null {
   return pruneExpiredBinding(buildConversationKey(ref));
 }
 
+/** Lists non-expired current-conversation bindings owned by one target session. */
 export function listGenericCurrentConversationBindingsBySession(
   targetSessionKey: string,
 ): SessionBindingRecord[] {
@@ -206,6 +304,7 @@ export function listGenericCurrentConversationBindingsBySession(
   return results;
 }
 
+/** Persists last-activity metadata for an existing generic current-conversation binding. */
 export function touchGenericCurrentConversationBinding(bindingId: string, at = Date.now()): void {
   loadBindingsIntoMemory();
   if (!bindingId.startsWith(CURRENT_BINDINGS_ID_PREFIX)) {
@@ -223,9 +322,10 @@ export function touchGenericCurrentConversationBinding(bindingId: string, at = D
       lastActivityAt: at,
     },
   });
-  persistBindingsToDisk();
+  writePersistedBindings();
 }
 
+/** Removes generic current-conversation bindings by binding id or target session key. */
 export async function unbindGenericCurrentConversationBindings(
   input: SessionBindingUnbindInput,
 ): Promise<SessionBindingRecord[]> {
@@ -239,7 +339,7 @@ export async function unbindGenericCurrentConversationBindings(
     if (record) {
       bindingsByConversationKey.delete(key);
       removed.push(record);
-      persistBindingsToDisk();
+      writePersistedBindings();
     }
     return removed;
   }
@@ -255,12 +355,12 @@ export async function unbindGenericCurrentConversationBindings(
     removed.push(record);
   }
   if (removed.length > 0) {
-    persistBindingsToDisk();
+    writePersistedBindings();
   }
   return removed;
 }
 
-export const __testing = {
+export const testing = {
   resetCurrentConversationBindingsForTests(params?: {
     deletePersistedFile?: boolean;
     env?: NodeJS.ProcessEnv;
@@ -268,13 +368,14 @@ export const __testing = {
     bindingsLoaded = false;
     bindingsByConversationKey.clear();
     if (params?.deletePersistedFile) {
-      const filePath = resolveBindingsFilePath(params.env);
-      try {
-        fs.rmSync(filePath, { force: true });
-      } catch {
-        // ignore test cleanup failures
-      }
+      runOpenClawStateWriteTransaction(
+        ({ db }) => {
+          const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
+          executeSqliteQuerySync(db, bindingDb.deleteFrom("current_conversation_bindings"));
+        },
+        params.env ? { env: params.env } : undefined,
+      );
     }
   },
-  resolveBindingsFilePath,
 };
+export { testing as __testing };

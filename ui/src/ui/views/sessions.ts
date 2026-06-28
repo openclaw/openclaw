@@ -1,9 +1,13 @@
+// Control UI view renders sessions screen content.
 import { html, nothing } from "lit";
 import { t } from "../../i18n/index.ts";
 import { formatRelativeTimestamp, parseSessionKeyParts } from "../format.ts";
 import { icons } from "../icons.ts";
 import { pathForTab } from "../navigation.ts";
 import { formatSessionTokens } from "../presenter.ts";
+import { formatGoalDetail, formatGoalSummary } from "../session-goal.ts";
+import { sessionModelMatchesDefaults } from "../session-model-defaults.ts";
+import { isSessionRunActive } from "../session-run-state.ts";
 import { normalizeLowercaseStringOrEmpty, normalizeOptionalString } from "../string-coerce.ts";
 import {
   formatInheritedThinkingLabel,
@@ -15,6 +19,7 @@ import type {
   GatewaySessionRow,
   SessionRunStatus,
   GatewayThinkingLevelOption,
+  FastMode,
   SessionCompactionCheckpoint,
   SessionsListResult,
 } from "../types.ts";
@@ -62,7 +67,7 @@ export type SessionsProps = {
     patch: {
       label?: string | null;
       thinkingLevel?: string | null;
-      fastMode?: boolean | null;
+      fastMode?: FastMode | null;
       verboseLevel?: string | null;
       reasoningLevel?: string | null;
     },
@@ -73,6 +78,9 @@ export type SessionsProps = {
   onDeselectAll: () => void;
   onDeleteSelected: () => void;
   onNavigateToChat?: (sessionKey: string) => void;
+  workboardSessionKeys?: Set<string>;
+  workboardBusySessionKey?: string | null;
+  onAddToWorkboard?: (session: GatewaySessionRow) => void | Promise<void>;
   onToggleCheckpointDetails: (sessionKey: string) => void;
   onBranchFromCheckpoint: (sessionKey: string, checkpointId: string) => void | Promise<void>;
   onRestoreCheckpoint: (sessionKey: string, checkpointId: string) => void | Promise<void>;
@@ -80,7 +88,7 @@ export type SessionsProps = {
 
 const DEFAULT_THINK_LEVELS = ["off", "minimal", "low", "medium", "high"] as const;
 const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
-const FAST_LEVEL_VALUES = ["", "on", "off"] as const;
+const FAST_LEVEL_VALUES = ["", "auto", "on", "off"] as const;
 const REASONING_LEVELS = ["", "off", "on", "stream"] as const;
 const PAGE_SIZES = [10, 25, 50, 100] as const;
 
@@ -88,36 +96,24 @@ function getAgentIdentity(
   agentIdentityById: Record<string, AgentIdentityResult>,
   agentId: string,
 ): AgentIdentityResult | null {
-  return Object.prototype.hasOwnProperty.call(agentIdentityById, agentId)
-    ? (agentIdentityById[agentId] ?? null)
-    : null;
-}
-
-function rowMatchesSessionDefaults(
-  row: GatewaySessionRow,
-  defaults: SessionsListResult["defaults"] | undefined,
-): boolean {
-  return (
-    (!row.modelProvider || row.modelProvider === defaults?.modelProvider) &&
-    (!row.model || row.model === defaults?.model)
-  );
+  return Object.hasOwn(agentIdentityById, agentId) ? (agentIdentityById[agentId] ?? null) : null;
 }
 
 function resolveThinkLevelOptions(
   row: GatewaySessionRow,
   defaults?: SessionsListResult["defaults"],
 ): readonly { value: string; label: string }[] {
-  const sessionModelMatchesDefaults = rowMatchesSessionDefaults(row, defaults);
+  const modelMatchesDefaults = sessionModelMatchesDefaults(row, defaults);
   const defaultLabel = formatInheritedThinkingLabel(
-    row.thinkingDefault ?? (sessionModelMatchesDefaults ? defaults?.thinkingDefault : undefined),
+    row.thinkingDefault ?? (modelMatchesDefaults ? defaults?.thinkingDefault : undefined),
   );
   const options: readonly GatewayThinkingLevelOption[] = row.thinkingLevels?.length
     ? row.thinkingLevels
-    : sessionModelMatchesDefaults && defaults?.thinkingLevels?.length
+    : modelMatchesDefaults && defaults?.thinkingLevels?.length
       ? defaults.thinkingLevels
       : (row.thinkingOptions?.length
           ? row.thinkingOptions
-          : sessionModelMatchesDefaults && defaults?.thinkingOptions?.length
+          : modelMatchesDefaults && defaults?.thinkingOptions?.length
             ? defaults.thinkingOptions
             : DEFAULT_THINK_LEVELS
         ).map((label) => ({
@@ -196,8 +192,11 @@ function resolveSessionStatusBadge(row: GatewaySessionRow): {
   label: string;
   tone: "live" | "idle" | "done" | "failed" | "muted";
 } {
-  if (row.hasActiveRun === true || row.status === "running") {
+  if (isSessionRunActive(row)) {
     return { label: t("sessionsView.statusLive"), tone: "live" };
+  }
+  if (row.status === "running" && row.hasActiveRun === false) {
+    return { label: t("sessionsView.statusIdle"), tone: "idle" };
   }
   if (row.status) {
     const tone = row.status === "done" ? "done" : ("failed" as const);
@@ -247,8 +246,18 @@ function filterRows(
     const displayName = normalizeLowercaseStringOrEmpty(row.displayName);
     const runtime = normalizeLowercaseStringOrEmpty(resolveAgentRuntimeLabel(row.agentRuntime));
     const status = normalizeLowercaseStringOrEmpty(row.status);
-    const liveState =
-      row.hasActiveRun === true ? "live running" : row.hasActiveRun === false ? "idle" : "";
+    const goal = row.goal
+      ? normalizeLowercaseStringOrEmpty(
+          `${row.goal.objective} ${row.goal.status} ${formatGoalSummary(row.goal)} ${
+            row.goal.lastStatusNote ?? ""
+          }`,
+        )
+      : "";
+    const liveState = isSessionRunActive(row)
+      ? "live running"
+      : row.hasActiveRun === false
+        ? "idle"
+        : "";
     if (
       key.includes(q) ||
       label.includes(q) ||
@@ -256,6 +265,7 @@ function filterRows(
       displayName.includes(q) ||
       runtime.includes(q) ||
       status.includes(q) ||
+      goal.includes(q) ||
       liveState.includes(q)
     ) {
       return true;
@@ -378,6 +388,22 @@ function formatRuntimeMs(runtimeMs: number | undefined): string | null {
   return remainingMinutes > 0 ? `${hours}h ${remainingMinutes}m` : `${hours}h`;
 }
 
+function renderSessionGoalChip(goal: GatewaySessionRow["goal"]) {
+  if (!goal) {
+    return nothing;
+  }
+  return html`
+    <span
+      class="session-goal-chip session-goal-chip--${goal.status}"
+      title=${formatGoalDetail(goal)}
+      aria-label=${formatGoalDetail(goal)}
+    >
+      <span class="session-goal-chip__label">${formatGoalSummary(goal)}</span>
+      <span class="session-goal-chip__objective">${goal.objective}</span>
+    </span>
+  `;
+}
+
 function sessionDetailItems(params: {
   row: GatewaySessionRow;
   updated: string;
@@ -398,6 +424,10 @@ function sessionDetailItems(params: {
     }
   };
   add(t("sessionsView.status"), row.status);
+  if (row.goal) {
+    details.push({ label: t("sessionsView.goal"), value: formatGoalDetail(row.goal) });
+  }
+  add(t("sessionsView.goalNote"), row.goal?.lastStatusNote);
   add(t("sessionsView.model"), row.model);
   add(t("sessionsView.provider"), row.modelProvider);
   add(t("sessionsView.runtime"), formatRuntimeMs(row.runtimeMs));
@@ -698,13 +728,14 @@ export function renderSessions(props: SessionsProps) {
                 <th>${t("sessionsView.fast")}</th>
                 <th>${t("sessionsView.verbose")}</th>
                 <th>${t("sessionsView.reasoning")}</th>
+                <th>${t("sessionsView.actions")}</th>
               </tr>
             </thead>
             <tbody>
               ${paginated.length === 0
                 ? html`
                     <tr>
-                      <td colspan="13" class="data-table-empty-cell">
+                      <td colspan="14" class="data-table-empty-cell">
                         ${emptyBecauseFiltered
                           ? html`
                               <div class="data-table-empty-state" role="status" aria-live="polite">
@@ -765,7 +796,14 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
     resolveThinkLevelOptions(row, props.result?.defaults),
     thinking,
   );
-  const fastMode = row.fastMode === true ? "on" : row.fastMode === false ? "off" : "";
+  const fastMode =
+    row.fastMode === "auto"
+      ? "auto"
+      : row.fastMode === true
+        ? "on"
+        : row.fastMode === false
+          ? "off"
+          : "";
   const fastLevels = withCurrentLabeledOption(buildFastLevelOptions(), fastMode);
   const verbose = row.verboseLevel ?? "";
   const verboseLevels = withCurrentLabeledOption(buildVerboseLevelOptions(), verbose);
@@ -802,6 +840,8 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       : null;
   const keyCellTitle = friendlyKeyLabel ?? row.key;
   const canLink = row.kind !== "global";
+  const captured = props.workboardSessionKeys?.has(row.key) === true;
+  const captureBusy = props.workboardBusySessionKey === row.key;
   const chatUrl = canLink
     ? `${pathForTab("chat", props.basePath)}?session=${encodeURIComponent(row.key)}`
     : null;
@@ -906,7 +946,11 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
       <td>
         <span class="data-table-badge ${badgeClass}">${row.kind}</span>
       </td>
-      <td class="session-status-col">${renderSessionStatusBadge(row)}</td>
+      <td class="session-status-col">
+        <div class="session-status-stack">
+          ${renderSessionStatusBadge(row)} ${renderSessionGoalChip(row.goal)}
+        </div>
+      </td>
       <td class="session-runtime-cell">
         <span class="mono">${resolveAgentRuntimeLabel(row.agentRuntime)}</span>
       </td>
@@ -960,7 +1004,9 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           style="padding: 6px 10px; font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius-sm); min-width: 90px;"
           @change=${(e: Event) => {
             const value = (e.target as HTMLSelectElement).value;
-            props.onPatch(row.key, { fastMode: value === "" ? null : value === "on" });
+            props.onPatch(row.key, {
+              fastMode: value === "" ? null : value === "auto" ? "auto" : value === "on",
+            });
           }}
         >
           ${fastLevels.map(
@@ -1005,11 +1051,30 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
           )}
         </select>
       </td>
+      <td>
+        ${props.onAddToWorkboard && canLink
+          ? html`
+              <button
+                class="icon-btn"
+                title=${captured
+                  ? t("sessionsView.openWorkboardCard")
+                  : t("sessionsView.addToWorkboard")}
+                ?disabled=${props.loading || captureBusy}
+                @click=${(event: MouseEvent) => {
+                  event.stopPropagation();
+                  void props.onAddToWorkboard?.(row);
+                }}
+              >
+                ${captured ? icons.check : icons.plus}
+              </button>
+            `
+          : nothing}
+      </td>
     </tr>`,
     ...(isExpanded && hasCheckpoints
       ? [
           html`<tr id=${detailsId} class="session-checkpoint-details-row">
-            <td colspan="13">
+            <td colspan="14">
               <div class="session-details-panel">
                 <div class="session-details-panel__hero">
                   <div>
@@ -1024,7 +1089,7 @@ function renderRows(row: GatewaySessionRow, props: SessionsProps) {
                       : nothing}
                   </div>
                   <div class="session-details-panel__badges">
-                    ${renderSessionStatusBadge(row)}
+                    ${renderSessionStatusBadge(row)} ${renderSessionGoalChip(row.goal)}
                     <span class="data-table-badge ${badgeClass}">${row.kind}</span>
                   </div>
                 </div>

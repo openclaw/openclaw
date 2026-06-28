@@ -5,20 +5,28 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveDefaultAgentId,
   resolveAgentWorkspaceDir,
   resolveAgentDir,
 } from "../agents/agent-scope.js";
+import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import { runEmbeddedPiAgent } from "../agents/pi-embedded.js";
 import { resolveAgentTimeoutMs } from "../agents/timeout.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import {
+  extractLeadingHttpStatus,
+  parseApiErrorPayload,
+} from "../shared/assistant-error-format.js";
 
 const log = createSubsystemLogger("llm-slug-generator");
 const DEFAULT_SLUG_GENERATOR_TIMEOUT_MS = 15_000;
+const PROVIDER_ERROR_PREFIX_RE =
+  /^(?:provider\s+)?(?:api|llm|model|openai|anthropic|codex|gateway)\s+(?:request\s+)?(?:error|failed|failure)\b/i;
+const PROVIDER_ERROR_DETAIL_RE =
+  /\b(?:insufficient[_ -]?quota|quota (?:exceeded|exhausted)|exceeded your current quota|payment required|insufficient credits|credit balance|insufficient[_ -]?(?:balance|funds)|rate[_ -]?limit(?:ed)?|too many requests|invalid[_ -]?api[_ -]?key|incorrect api key|authentication failed|oauth token refresh failed|missing (?:token|projectid|credentials)|google cloud credentials|re-?authenticate|unauthorized|forbidden|permission_error|billing hard limit|spend(?:ing)? limit)\b/i;
 
 function resolveSlugGeneratorTimeoutMs(cfg: OpenClawConfig): number {
   const configuredTimeoutSeconds = cfg.agents?.defaults?.timeoutSeconds;
@@ -26,6 +34,37 @@ function resolveSlugGeneratorTimeoutMs(cfg: OpenClawConfig): number {
     return DEFAULT_SLUG_GENERATOR_TIMEOUT_MS;
   }
   return resolveAgentTimeoutMs({ cfg });
+}
+
+function isErrorSlugPayload(payload: { text?: string; isError?: boolean } | undefined): boolean {
+  if (!payload) {
+    return false;
+  }
+  if (payload.isError === true) {
+    return true;
+  }
+  const text = payload.text?.trim();
+  if (!text) {
+    return false;
+  }
+  if (parseApiErrorPayload(text)) {
+    return true;
+  }
+  const leadingStatus = extractLeadingHttpStatus(text);
+  if (leadingStatus) {
+    if ([401, 402, 403, 429].includes(leadingStatus.code)) {
+      return true;
+    }
+    if (
+      leadingStatus.code === 400 &&
+      (parseApiErrorPayload(leadingStatus.rest) ||
+        PROVIDER_ERROR_PREFIX_RE.test(leadingStatus.rest) ||
+        PROVIDER_ERROR_DETAIL_RE.test(leadingStatus.rest))
+    ) {
+      return true;
+    }
+  }
+  return PROVIDER_ERROR_PREFIX_RE.test(text) || PROVIDER_ERROR_DETAIL_RE.test(text);
 }
 
 /**
@@ -59,7 +98,7 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
     });
     const timeoutMs = resolveSlugGeneratorTimeoutMs(params.cfg);
 
-    const result = await runEmbeddedPiAgent({
+    const result = await runEmbeddedAgent({
       sessionId: `slug-generator-${Date.now()}`,
       sessionKey: "temp:slug-generator",
       agentId,
@@ -73,18 +112,26 @@ Reply with ONLY the slug, nothing else. Examples: "vendor-pitch", "api-design", 
       timeoutMs,
       runId: `slug-gen-${Date.now()}`,
       cleanupBundleMcpOnRunEnd: true,
+      // Internal helper run: route failures lane-local so an upstream 400/billing
+      // here cannot poison the shared profile (#71709).
+      authProfileFailurePolicy: "local",
     });
 
     // Extract text from payloads
     if (result.payloads && result.payloads.length > 0) {
-      const text = result.payloads[0]?.text;
+      const payload = result.payloads[0];
+      const text = payload?.text;
       if (text) {
+        if (isErrorSlugPayload(payload)) {
+          return null;
+        }
         // Clean up the response - extract just the slug
         const slug = normalizeLowercaseStringOrEmpty(text)
           .replace(/[^a-z0-9-]/g, "-")
           .replace(/-+/g, "-")
-          .replace(/^-|-$/g, "")
-          .slice(0, 30); // Max 30 chars
+          .replace(/^-+|-+$/g, "")
+          .slice(0, 30)
+          .replace(/^-+|-+$/g, ""); // Max 30 chars
 
         return slug || null;
       }

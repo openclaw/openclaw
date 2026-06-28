@@ -1,6 +1,7 @@
+// Resolves command executables and wrapper policy paths for exec approvals.
 import fs from "node:fs";
 import path from "node:path";
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { matchesExecAllowlistPattern } from "./exec-allowlist-pattern.js";
 import type { ExecAllowlistEntry } from "./exec-approvals.types.js";
 import { resolveExecWrapperTrustPlan } from "./exec-wrapper-trust-plan.js";
@@ -145,8 +146,9 @@ export function resolveCommandResolutionFromArgv(
   argv: string[],
   cwd?: string,
   env?: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
 ): CommandResolution | null {
-  const plan = resolveExecWrapperTrustPlan(argv);
+  const plan = resolveExecWrapperTrustPlan(argv, undefined, platform);
   const effectiveArgv = plan.argv;
   const rawExecutable = effectiveArgv[0]?.trim();
   if (!rawExecutable) {
@@ -184,6 +186,18 @@ function resolveExecutableCandidatePathFromResolution(
   });
 }
 
+export function resolveExecutableTrustPath(
+  resolution: ExecutableResolution | null | undefined,
+  cwd?: string,
+): string | undefined {
+  const realPath = resolution?.resolvedRealPath?.trim();
+  if (realPath) {
+    return realPath;
+  }
+  const candidatePath = resolveExecutableCandidatePathFromResolution(resolution, cwd);
+  return tryResolveRealpath(candidatePath) ?? candidatePath;
+}
+
 export function resolveExecutionTargetResolution(
   resolution: CommandResolution | ExecutableResolution | null,
 ): ExecutableResolution | null {
@@ -212,6 +226,16 @@ export function resolveExecutionTargetCandidatePath(
   );
 }
 
+export function resolveExecutionTargetTrustPath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolveExecutableTrustPath(
+    isCommandResolution(resolution) ? resolution.execution : resolution,
+    cwd,
+  );
+}
+
 export function resolvePolicyTargetCandidatePath(
   resolution: CommandResolution | ExecutableResolution | null,
   cwd?: string,
@@ -222,11 +246,28 @@ export function resolvePolicyTargetCandidatePath(
   );
 }
 
+export function resolvePolicyTargetTrustPath(
+  resolution: CommandResolution | ExecutableResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolveExecutableTrustPath(
+    isCommandResolution(resolution) ? resolution.policy : resolution,
+    cwd,
+  );
+}
+
 export function resolveApprovalAuditCandidatePath(
   resolution: CommandResolution | null,
   cwd?: string,
 ): string | undefined {
   return resolvePolicyTargetCandidatePath(resolution, cwd);
+}
+
+export function resolveApprovalAuditTrustPath(
+  resolution: CommandResolution | null,
+  cwd?: string,
+): string | undefined {
+  return resolvePolicyTargetTrustPath(resolution, cwd);
 }
 
 /** @deprecated Use resolveExecutionTargetCandidatePath. */
@@ -358,7 +399,10 @@ export function matchAllowlist(
   if (!resolution?.resolvedPath) {
     return null;
   }
-  const resolvedPath = resolution.resolvedPath;
+  const trustPath = resolution.resolvedRealPath?.trim() || resolution.resolvedPath;
+  if (!trustPath) {
+    return null;
+  }
   let pathOnlyMatch: ExecAllowlistEntry | null = null;
   for (const entry of entries) {
     const pattern = entry.pattern?.trim();
@@ -366,7 +410,7 @@ export function matchAllowlist(
       continue;
     }
     const patternMatches = hasPathSelector(pattern)
-      ? matchesExecAllowlistPattern(pattern, resolvedPath)
+      ? matchesExecAllowlistPattern(pattern, trustPath)
       : pattern !== "*" && matchesExecutableBasenamePattern(pattern, resolution);
     if (!patternMatches) {
       continue;

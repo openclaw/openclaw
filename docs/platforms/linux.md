@@ -14,7 +14,7 @@ Native Linux companion apps are planned. Contributions are welcome if you want t
 
 ## Beginner quick path (VPS)
 
-1. Install Node 24 (recommended; Node 22 LTS, currently `22.16+`, still works for compatibility)
+1. Install Node 24 (recommended; Node 22 LTS, currently `22.19+`, still works for compatibility)
 2. `npm i -g openclaw@latest`
 3. `openclaw onboard --install-daemon`
 4. From your laptop: `ssh -N -L 18789:127.0.0.1:18789 <user>@<host>`
@@ -86,6 +86,7 @@ RestartSec=5
 TimeoutStopSec=30
 TimeoutStartSec=30
 SuccessExitStatus=0 143
+OOMPolicy=continue
 KillMode=control-group
 
 [Install]
@@ -129,6 +130,11 @@ cat /proc/<child-pid>/oom_score_adj
 
 Expected value for covered children is `1000`. The Gateway process should keep
 its normal score, usually `0`.
+
+The recommended systemd unit also sets `OOMPolicy=continue`. This keeps the
+Gateway unit alive when a transient child process is selected by the OOM killer;
+the child command/session can fail and report its error without systemd marking
+the entire gateway service failed and restarting all channels.
 
 This does not replace normal memory tuning. If a VPS or container repeatedly
 kills children, increase the memory limit, reduce concurrency, or add stronger

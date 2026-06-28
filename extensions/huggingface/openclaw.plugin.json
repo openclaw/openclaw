@@ -1,5 +1,6 @@
 {
   "id": "huggingface",
+  "icon": "https://cdn.simpleicons.org/huggingface",
   "activation": {
     "onStartup": false
   },
@@ -12,8 +13,13 @@
       }
     }
   },
-  "providerAuthEnvVars": {
-    "huggingface": ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"]
+  "setup": {
+    "providers": [
+      {
+        "id": "huggingface",
+        "envVars": ["HUGGINGFACE_HUB_TOKEN", "HF_TOKEN"]
+      }
+    ]
   },
   "providerAuthChoices": [
     {

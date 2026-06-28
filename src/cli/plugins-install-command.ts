@@ -1,14 +1,24 @@
+// Plugin install command implementation for bundled, npm, path, git, ClawHub, and hook packs.
 import fs from "node:fs";
-import { collectChannelDoctorStaleConfigMutations } from "../commands/doctor/shared/channel-doctor.js";
-import { assertConfigWriteAllowedInCurrentMode, readConfigFileSnapshot } from "../config/config.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import { theme } from "../../packages/terminal-core/src/theme.js";
+import {
+  assertConfigWriteAllowedInCurrentMode,
+  readConfigFileSnapshotForWrite,
+} from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { installHooksFromNpmSpec, installHooksFromPath } from "../hooks/install.js";
+import {
+  installHooksFromNpmSpec,
+  installHooksFromPath,
+  type InstallHooksResult,
+} from "../hooks/install.js";
 import { resolveArchiveKind } from "../infra/archive.js";
 import { parseClawHubPluginSpec } from "../infra/clawhub.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { type BundledPluginSource, findBundledPluginSource } from "../plugins/bundled-sources.js";
 import { buildClawHubPluginInstallRecordFields } from "../plugins/clawhub-install-records.js";
-import { installPluginFromClawHub } from "../plugins/clawhub.js";
+import { CLAWHUB_INSTALL_ERROR_CODE, installPluginFromClawHub } from "../plugins/clawhub.js";
 import { installPluginFromGitSpec, parseGitPluginSpec } from "../plugins/git-install.js";
 import { resolveDefaultPluginExtensionsDir } from "../plugins/install-paths.js";
 import type { InstallSafetyOverrides } from "../plugins/install-security-scan.js";
@@ -18,6 +28,7 @@ import {
   installPluginFromNpmSpec,
   installPluginFromPath,
 } from "../plugins/install.js";
+import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-records.js";
 import {
   installPluginFromMarketplace,
   resolveMarketplaceInstallShortcut,
@@ -31,8 +42,8 @@ import {
 import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trace.js";
 import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { theme } from "../terminal/theme.js";
-import { shortenHomePath } from "../utils.js";
+import { resolveUserPath, shortenHomePath } from "../utils.js";
+import { resolveClawHubRiskAcknowledgementCliOptions } from "./clawhub-risk-acknowledgement.js";
 import { formatCliCommand } from "./command-format.js";
 import { looksLikeLocalInstallSpec } from "./install-spec.js";
 import { resolvePinnedNpmInstallRecordForCli } from "./npm-resolution.js";
@@ -54,8 +65,29 @@ import {
   parseNpmPackPrefixPath,
   parseNpmPrefixSpec,
 } from "./plugins-command-helpers.js";
-import { persistHookPackInstall, persistPluginInstall } from "./plugins-install-persist.js";
-import type { ConfigSnapshotForInstallPersist } from "./plugins-install-persist.js";
+import {
+  persistHookPackInstall,
+  persistPluginInstall,
+  resolveInstallConfigMutationPreflights,
+  selectInstallMutationWriteOptions,
+  supportsInstallConfigSingleTopLevelIncludeShape,
+  type ConfigMutationPreflight,
+  type ConfigSnapshotForInstallPersist,
+} from "./plugins-install-persist.js";
+import { listPersistedBundledPluginRecoveryLocations } from "./plugins-location-bridges.js";
+
+type ConfigSnapshotForInstallExecution = ConfigSnapshotForInstallPersist & {
+  hookMutation: ConfigMutationPreflight;
+  pluginMutation: ConfigMutationPreflight;
+};
+
+function isClawHubBlockedCliFailure(result: { code?: string; warning?: string }): boolean {
+  return (
+    result.code === CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_DOWNLOAD_BLOCKED &&
+    typeof result.warning === "string" &&
+    result.warning.trim().length > 0
+  );
+}
 
 function resolveInstallMode(force?: boolean): "install" | "update" {
   return force ? "update" : "install";
@@ -63,9 +95,34 @@ function resolveInstallMode(force?: boolean): "install" | "update" {
 
 function resolveInstallSafetyOverrides(overrides: InstallSafetyOverrides): InstallSafetyOverrides {
   return {
+    config: overrides.config,
     dangerouslyForceUnsafeInstall: overrides.dangerouslyForceUnsafeInstall,
+    trustedSourceLinkedOfficialInstall: overrides.trustedSourceLinkedOfficialInstall,
   };
 }
+
+async function probeHookPackFromNpmSpec(
+  params: Parameters<typeof installHooksFromNpmSpec>[0],
+): Promise<InstallHooksResult> {
+  try {
+    return await installHooksFromNpmSpec(params);
+  } catch (error) {
+    return { ok: false, error: formatErrorMessage(error) };
+  }
+}
+
+async function probeHookPackFromPath(
+  params: Parameters<typeof installHooksFromPath>[0],
+): Promise<InstallHooksResult> {
+  try {
+    return await installHooksFromPath(params);
+  } catch (error) {
+    return { ok: false, error: formatErrorMessage(error) };
+  }
+}
+
+const DEPRECATED_DANGEROUS_FORCE_UNSAFE_INSTALL_WARNING =
+  "--dangerously-force-unsafe-install is deprecated and no longer affects plugin installs because built-in install-time dangerous-code scanning has been removed. Configure security.installPolicy for operator-owned install decisions.";
 
 function findTrustedCatalogPackageInstall(packageName: string):
   | {
@@ -93,12 +150,33 @@ function findTrustedCatalogPackageInstall(packageName: string):
   };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
 function isEmptyRecord(value: Record<string, unknown>): boolean {
   return Object.keys(value).length === 0;
+}
+
+function supportsPluginRecoveryIncludeShape(parsed: Record<string, unknown>): boolean {
+  if (Object.hasOwn(parsed, "$include")) {
+    return false;
+  }
+  return supportsInstallConfigSingleTopLevelIncludeShape(parsed.plugins);
+}
+
+function resolveFullyBlockedConfigMutationReason(
+  snapshot: ConfigSnapshotForInstallExecution,
+): string | null {
+  if (snapshot.pluginMutation.mode !== "blocked" || snapshot.hookMutation.mode !== "blocked") {
+    return null;
+  }
+  if (snapshot.pluginMutation.reason === snapshot.hookMutation.reason) {
+    return snapshot.pluginMutation.reason;
+  }
+  return `Config plugin and hook mutations are both blocked. ${snapshot.pluginMutation.reason} ${snapshot.hookMutation.reason}`;
+}
+
+function assertPluginConfigMutationAllowed(preflight: ConfigMutationPreflight): void {
+  if (preflight.mode === "blocked") {
+    throw buildInvalidPluginInstallConfigError(preflight.reason);
+  }
 }
 
 function hasValidBundledPluginConfig(params: {
@@ -142,12 +220,14 @@ function prepareConfigForDisabledBundledInstall(
 }
 
 async function installBundledPluginSource(params: {
-  snapshot: ConfigSnapshotForInstallPersist;
+  snapshot: ConfigSnapshotForInstallExecution;
   rawSpec: string;
   bundledSource: BundledPluginSource;
   warning: string;
+  invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
 }) {
+  // Bundled plugins with required config are recorded but not enabled until config validates.
   const existingEntry = params.snapshot.config.plugins?.entries?.[params.bundledSource.pluginId];
   const shouldEnable = hasValidBundledPluginConfig({
     bundledSource: params.bundledSource,
@@ -161,8 +241,8 @@ async function installBundledPluginSource(params: {
     : `Installed bundled plugin "${params.bundledSource.pluginId}" without enabling it because it requires configuration first. Configure it, then run \`openclaw plugins enable ${params.bundledSource.pluginId}\`.`;
   await persistPluginInstall({
     snapshot: {
+      ...params.snapshot,
       config: configBase,
-      baseHash: params.snapshot.baseHash,
     },
     pluginId: params.bundledSource.pluginId,
     install: {
@@ -172,19 +252,24 @@ async function installBundledPluginSource(params: {
       installPath: params.bundledSource.localPath,
     },
     enable: shouldEnable,
+    invalidateRuntimeCache: params.invalidateRuntimeCache,
     warningMessage: [params.warning, configWarning].filter(Boolean).join("\n"),
     runtime: params.runtime,
   });
 }
 
 async function tryInstallHookPackFromLocalPath(params: {
-  snapshot: ConfigSnapshotForInstallPersist;
+  snapshot: ConfigSnapshotForInstallExecution;
   resolvedPath: string;
   installMode: "install" | "update";
   safetyOverrides?: InstallSafetyOverrides;
   link?: boolean;
+  expectedPackageKind?: "hook-only";
   runtime?: RuntimeEnv;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (params.snapshot.hookMutation.mode === "blocked") {
+    return { ok: false, error: params.snapshot.hookMutation.reason };
+  }
   if (params.link) {
     const stat = fs.statSync(params.resolvedPath);
     if (!stat.isDirectory()) {
@@ -198,15 +283,17 @@ async function tryInstallHookPackFromLocalPath(params: {
       ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
       path: params.resolvedPath,
       dryRun: true,
+      ...(params.expectedPackageKind ? { expectedPackageKind: params.expectedPackageKind } : {}),
     });
     if (!probe.ok) {
       return probe;
     }
 
     const existing = params.snapshot.config.hooks?.internal?.load?.extraDirs ?? [];
-    const merged = Array.from(new Set([...existing, params.resolvedPath]));
+    const merged = uniqueStrings([...existing, params.resolvedPath]);
     await persistHookPackInstall({
       snapshot: {
+        ...params.snapshot,
         config: {
           ...params.snapshot.config,
           hooks: {
@@ -221,7 +308,6 @@ async function tryInstallHookPackFromLocalPath(params: {
             },
           },
         },
-        baseHash: params.snapshot.baseHash,
       },
       hookPackId: probe.hookPackId,
       hooks: probe.hooks,
@@ -241,6 +327,7 @@ async function tryInstallHookPackFromLocalPath(params: {
     ...resolveInstallSafetyOverrides(params.safetyOverrides ?? {}),
     path: params.resolvedPath,
     mode: params.installMode,
+    ...(params.expectedPackageKind ? { expectedPackageKind: params.expectedPackageKind } : {}),
     logger: createHookPackInstallLogger(params.runtime),
   });
   if (!result.ok) {
@@ -264,17 +351,23 @@ async function tryInstallHookPackFromLocalPath(params: {
 }
 
 async function tryInstallHookPackFromNpmSpec(params: {
-  snapshot: ConfigSnapshotForInstallPersist;
+  snapshot: ConfigSnapshotForInstallExecution;
   installMode: "install" | "update";
   spec: string;
   pin?: boolean;
   expectedIntegrity?: string;
+  expectedPackageKind?: "hook-only";
   runtime?: RuntimeEnv;
 }): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (params.snapshot.hookMutation.mode === "blocked") {
+    return { ok: false, error: params.snapshot.hookMutation.reason };
+  }
   const result = await installHooksFromNpmSpec({
+    config: params.snapshot.config,
     spec: params.spec,
     mode: params.installMode,
     ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
+    ...(params.expectedPackageKind ? { expectedPackageKind: params.expectedPackageKind } : {}),
     logger: createHookPackInstallLogger(params.runtime),
   });
   if (!result.ok) {
@@ -301,7 +394,7 @@ async function tryInstallHookPackFromNpmSpec(params: {
 }
 
 async function tryInstallPluginOrHookPackFromNpmSpec(params: {
-  snapshot: ConfigSnapshotForInstallPersist;
+  snapshot: ConfigSnapshotForInstallExecution;
   installMode: "install" | "update";
   spec: string;
   pin?: boolean;
@@ -311,8 +404,52 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
   expectedPluginId?: string;
   expectedIntegrity?: string;
   trustedSourceLinkedOfficialInstall?: boolean;
+  invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
 }): Promise<{ ok: true } | { ok: false }> {
+  const fullyBlockedReason = resolveFullyBlockedConfigMutationReason(params.snapshot);
+  if (fullyBlockedReason) {
+    (params.runtime ?? defaultRuntime).error(fullyBlockedReason);
+    return { ok: false };
+  }
+  if (
+    params.snapshot.pluginMutation.mode === "blocked" ||
+    params.snapshot.hookMutation.mode === "blocked"
+  ) {
+    const hookProbe = await probeHookPackFromNpmSpec({
+      config: params.snapshot.config,
+      spec: params.spec,
+      mode: params.installMode,
+      inspection: "package-kind",
+      ...(params.expectedIntegrity ? { expectedIntegrity: params.expectedIntegrity } : {}),
+      logger: createHookPackInstallLogger(params.runtime),
+    });
+    if (hookProbe.ok && hookProbe.packageKind === "hook-only") {
+      if (params.snapshot.hookMutation.mode === "blocked") {
+        (params.runtime ?? defaultRuntime).error(params.snapshot.hookMutation.reason);
+        return { ok: false };
+      }
+      const hookFallback = await tryInstallHookPackFromNpmSpec({
+        snapshot: params.snapshot,
+        installMode: params.installMode,
+        spec: params.spec,
+        pin: params.pin,
+        expectedIntegrity: hookProbe.npmResolution?.integrity ?? params.expectedIntegrity,
+        expectedPackageKind: "hook-only",
+        runtime: params.runtime,
+      });
+      if (hookFallback.ok) {
+        return { ok: true };
+      }
+      (params.runtime ?? defaultRuntime).error(hookFallback.error);
+      return { ok: false };
+    }
+    if (params.snapshot.pluginMutation.mode === "blocked") {
+      (params.runtime ?? defaultRuntime).error(params.snapshot.pluginMutation.reason);
+      return { ok: false };
+    }
+  }
+
   const result = await installPluginFromNpmSpec({
     ...params.safetyOverrides,
     mode: params.installMode,
@@ -326,7 +463,7 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
     logger: createPluginInstallLogger(params.runtime),
   });
   if (!result.ok) {
-    if (isTerminalPluginInstallSecurityFailure(result.code)) {
+    if (isTerminalPluginInstallFailure(result.code)) {
       (params.runtime ?? defaultRuntime).error(result.error);
       return { ok: false };
     }
@@ -342,6 +479,7 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
           rawSpec: params.spec,
           bundledSource: bundledFallbackPlan.bundledSource,
           warning: bundledFallbackPlan.warning,
+          invalidateRuntimeCache: params.invalidateRuntimeCache,
           runtime: params.runtime,
         });
         return { ok: true };
@@ -377,17 +515,19 @@ async function tryInstallPluginOrHookPackFromNpmSpec(params: {
     snapshot: params.snapshot,
     pluginId: result.pluginId,
     install: installRecord,
+    invalidateRuntimeCache: params.invalidateRuntimeCache,
     runtime: params.runtime,
   });
   return { ok: true };
 }
 
 async function tryInstallPluginFromNpmPackArchive(params: {
-  snapshot: ConfigSnapshotForInstallPersist;
+  snapshot: ConfigSnapshotForInstallExecution;
   installMode: "install" | "update";
   archivePath: string;
   safetyOverrides: InstallSafetyOverrides;
   extensionsDir: string;
+  invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
 }): Promise<{ ok: true } | { ok: false }> {
   const result = await installPluginFromNpmPackArchive({
@@ -425,17 +565,19 @@ async function tryInstallPluginFromNpmPackArchive(params: {
       ...(result.npmResolution?.shasum ? { npmShasum: result.npmResolution.shasum } : {}),
       ...(result.npmTarballName ? { npmTarballName: result.npmTarballName } : {}),
     },
+    invalidateRuntimeCache: params.invalidateRuntimeCache,
     runtime: params.runtime,
   });
   return { ok: true };
 }
 
 async function tryInstallPluginFromGitSpec(params: {
-  snapshot: ConfigSnapshotForInstallPersist;
+  snapshot: ConfigSnapshotForInstallExecution;
   installMode: "install" | "update";
   spec: string;
   safetyOverrides: InstallSafetyOverrides;
   extensionsDir: string;
+  invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
 }): Promise<{ ok: true } | { ok: false }> {
   const result = await installPluginFromGitSpec({
@@ -463,21 +605,24 @@ async function tryInstallPluginFromGitSpec(params: {
       gitRef: result.git.ref,
       gitCommit: result.git.commit,
     },
+    invalidateRuntimeCache: params.invalidateRuntimeCache,
     runtime: params.runtime,
   });
   return { ok: true };
 }
 
-function isTerminalPluginInstallSecurityFailure(code?: string): boolean {
+function isTerminalPluginInstallFailure(code?: string): boolean {
   return (
     code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_BLOCKED ||
-    code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED
+    code === PLUGIN_INSTALL_ERROR_CODE.SECURITY_SCAN_FAILED ||
+    code === PLUGIN_INSTALL_ERROR_CODE.UNSUPPORTED_PLAIN_FILE_PLUGIN
   );
 }
 
 function isAllowedPluginRecoveryIssue(
   issue: { path?: string; message?: string },
   request: PluginInstallRequestContext,
+  ownedLoadPaths: ReadonlySet<string>,
 ): boolean {
   const pluginId = request.bundledPluginId?.trim();
   if (!pluginId) {
@@ -486,12 +631,13 @@ function isAllowedPluginRecoveryIssue(
   return (
     (issue.path === `channels.${pluginId}` &&
       issue.message === `unknown channel id: ${pluginId}`) ||
-    (issue.path === "plugins.load.paths" &&
+    isOwnedMissingPluginLoadPathIssue(issue, ownedLoadPaths) ||
+    (issue.path === `plugins.entries.${pluginId}` &&
       typeof issue.message === "string" &&
-      issue.message.includes("plugin path not found")) ||
-    (issue.path === "plugins" &&
+      issue.message.includes("requires compiled runtime output")) ||
+    (issue.path === "tools.web.search.provider" &&
       typeof issue.message === "string" &&
-      issue.message.includes("requires compiled runtime output"))
+      issue.message.includes(`plugin "${pluginId}"`))
   );
 }
 
@@ -501,10 +647,135 @@ function buildInvalidPluginInstallConfigError(message: string): Error {
   return error;
 }
 
+function extractMissingPluginLoadPath(issue: { path?: string; message?: string }): string | null {
+  if (issue.path !== "plugins.load.paths" || typeof issue.message !== "string") {
+    return null;
+  }
+  const marker = "plugin path not found:";
+  const markerIndex = issue.message.indexOf(marker);
+  if (markerIndex < 0) {
+    return null;
+  }
+  const value = issue.message.slice(markerIndex + marker.length).trim();
+  return value || null;
+}
+
+function collectRequestedPluginInstallPaths(
+  cfg: OpenClawConfig,
+  installRecords: Awaited<ReturnType<typeof loadInstalledPluginIndexInstallRecords>>,
+  request: PluginInstallRequestContext,
+  env: NodeJS.ProcessEnv = process.env,
+): Set<string> {
+  const pluginId = request.bundledPluginId?.trim();
+  if (!pluginId) {
+    return new Set();
+  }
+  const paths = new Set<string>();
+  const record = installRecords[pluginId] ?? cfg.plugins?.installs?.[pluginId];
+  for (const value of [record?.sourcePath, record?.installPath]) {
+    if (typeof value === "string" && value.trim()) {
+      paths.add(resolveUserPath(value, env));
+    }
+  }
+  return paths;
+}
+
+function isOwnedMissingPluginLoadPathIssue(
+  issue: { path?: string; message?: string },
+  ownedLoadPaths: ReadonlySet<string>,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  const missingPath = extractMissingPluginLoadPath(issue);
+  return missingPath !== null && ownedLoadPaths.has(resolveUserPath(missingPath, env));
+}
+
+async function collectRequestedPluginLocationBridgePaths(
+  request: PluginInstallRequestContext,
+  env: NodeJS.ProcessEnv,
+): Promise<Set<string>> {
+  const pluginId = request.bundledPluginId?.trim();
+  if (!pluginId) {
+    return new Set();
+  }
+  const locations = await listPersistedBundledPluginRecoveryLocations({ env });
+  return new Set(
+    locations
+      .filter((location) => location.pluginId === pluginId)
+      .flatMap((location) => location.loadPaths.map((loadPath) => resolveUserPath(loadPath, env))),
+  );
+}
+
+function removeOwnedMissingPluginLoadPaths(
+  cfg: OpenClawConfig,
+  issues: readonly { path?: string; message?: string }[],
+  ownedLoadPaths: ReadonlySet<string>,
+  env: NodeJS.ProcessEnv = process.env,
+): OpenClawConfig {
+  const missingPaths = new Set<string>();
+  for (const issue of issues) {
+    const missingPath = extractMissingPluginLoadPath(issue);
+    if (!missingPath) {
+      continue;
+    }
+    const resolved = resolveUserPath(missingPath, env);
+    if (ownedLoadPaths.has(resolved)) {
+      missingPaths.add(resolved);
+    }
+  }
+  const paths = cfg.plugins?.load?.paths;
+  if (missingPaths.size === 0 || !Array.isArray(paths)) {
+    return cfg;
+  }
+  const nextPaths = paths.filter(
+    (entry) => typeof entry !== "string" || !missingPaths.has(resolveUserPath(entry, env)),
+  );
+  if (nextPaths.length === paths.length) {
+    return cfg;
+  }
+  return {
+    ...cfg,
+    plugins: {
+      ...cfg.plugins,
+      load: {
+        ...cfg.plugins?.load,
+        paths: nextPaths,
+      },
+    },
+  };
+}
+
+async function resolveRequestedPluginInstallPaths(
+  cfg: OpenClawConfig,
+  issues: readonly { path?: string; message?: string }[],
+  request: PluginInstallRequestContext,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<Set<string>> {
+  if (!issues.some((issue) => extractMissingPluginLoadPath(issue) !== null)) {
+    return new Set();
+  }
+  const installRecords = await loadInstalledPluginIndexInstallRecords();
+  const ownedLoadPaths = collectRequestedPluginInstallPaths(cfg, installRecords, request, env);
+  const stillNeedsLocationBridge = issues.some(
+    (issue) =>
+      extractMissingPluginLoadPath(issue) !== null &&
+      !isOwnedMissingPluginLoadPathIssue(issue, ownedLoadPaths, env),
+  );
+  if (stillNeedsLocationBridge) {
+    // The persisted bundled registry proves this plugin previously owned its
+    // removed core path; do not infer ownership from the requested id alone.
+    for (const loadPath of await collectRequestedPluginLocationBridgePaths(request, env)) {
+      ownedLoadPaths.add(loadPath);
+    }
+  }
+  return ownedLoadPaths;
+}
+
 async function loadConfigFromSnapshotForInstall(
   request: PluginInstallRequestContext,
-  snapshot: Awaited<ReturnType<typeof readConfigFileSnapshot>>,
-): Promise<ConfigSnapshotForInstallPersist> {
+  prepared: Awaited<ReturnType<typeof readConfigFileSnapshotForWrite>>,
+): Promise<ConfigSnapshotForInstallExecution> {
+  const { snapshot, writeOptions } = prepared;
+  const mutationWriteOptions = selectInstallMutationWriteOptions(writeOptions);
   if (resolvePluginInstallInvalidConfigPolicy(request) !== "allow-plugin-recovery") {
     throw buildInvalidPluginInstallConfigError(
       "Config invalid; run `openclaw doctor --fix` before installing plugins.",
@@ -516,58 +787,95 @@ async function loadConfigFromSnapshotForInstall(
       "Config file could not be parsed; run `openclaw doctor` to repair it.",
     );
   }
+  const ownedLoadPaths = await resolveRequestedPluginInstallPaths(
+    snapshot.config,
+    snapshot.issues,
+    request,
+    process.env,
+  );
   if (
     snapshot.legacyIssues.length > 0 ||
     snapshot.issues.length === 0 ||
-    snapshot.issues.some((issue) => !isAllowedPluginRecoveryIssue(issue, request))
+    snapshot.issues.some((issue) => !isAllowedPluginRecoveryIssue(issue, request, ownedLoadPaths))
   ) {
     const pluginLabel = request.bundledPluginId ?? "the requested plugin";
     throw buildInvalidPluginInstallConfigError(
       `Config invalid outside the plugin recovery path for ${pluginLabel}; run \`openclaw doctor --fix\` before reinstalling it.`,
     );
   }
-  let nextConfig = snapshot.config;
-  for (const mutation of await collectChannelDoctorStaleConfigMutations(snapshot.config, {
-    env: process.env,
-  })) {
-    nextConfig = mutation.config;
+  if (!supportsPluginRecoveryIncludeShape(parsed)) {
+    throw buildInvalidPluginInstallConfigError(
+      "Config plugin recovery uses an unsupported $include shape; use a single-file top-level plugins include or run `openclaw doctor --fix` before reinstalling it.",
+    );
   }
+  const { hookMutation, pluginMutation } = resolveInstallConfigMutationPreflights({
+    parsed,
+    snapshotPath: snapshot.path,
+    writeOptions: mutationWriteOptions,
+  });
+  assertPluginConfigMutationAllowed(pluginMutation);
+  const nextConfig = removeOwnedMissingPluginLoadPaths(
+    snapshot.config,
+    snapshot.issues,
+    ownedLoadPaths,
+    process.env,
+  );
   return {
     config: nextConfig,
     baseHash: snapshot.hash,
+    writeOptions: mutationWriteOptions,
+    hookMutation,
+    pluginMutation,
   };
 }
 
 export async function loadConfigForInstall(
   request: PluginInstallRequestContext,
-): Promise<ConfigSnapshotForInstallPersist> {
-  const snapshot = await tracePluginLifecyclePhaseAsync(
+): Promise<ConfigSnapshotForInstallExecution> {
+  const prepared = await tracePluginLifecyclePhaseAsync(
     "config read",
-    () => readConfigFileSnapshot(),
+    () => readConfigFileSnapshotForWrite(),
     { command: "install" },
   );
+  const { snapshot, writeOptions } = prepared;
+  const mutationWriteOptions = selectInstallMutationWriteOptions(writeOptions);
   if (snapshot.valid) {
+    const parsed = (snapshot.parsed ?? {}) as Record<string, unknown>;
+    const { hookMutation, pluginMutation } = resolveInstallConfigMutationPreflights({
+      parsed,
+      snapshotPath: snapshot.path,
+      writeOptions: mutationWriteOptions,
+    });
+    if (request.installKind === "plugin") {
+      assertPluginConfigMutationAllowed(pluginMutation);
+    }
     return {
       config: snapshot.sourceConfig,
       baseHash: snapshot.hash,
+      writeOptions: mutationWriteOptions,
+      hookMutation,
+      pluginMutation,
     };
   }
-  return loadConfigFromSnapshotForInstall(request, snapshot);
+  return loadConfigFromSnapshotForInstall(request, prepared);
 }
 
 export async function runPluginInstallCommand(params: {
   raw: string;
   opts: InstallSafetyOverrides & {
+    acknowledgeClawHubRisk?: boolean;
     force?: boolean;
     link?: boolean;
     pin?: boolean;
     marketplace?: string;
   };
+  invalidateRuntimeCache?: boolean;
   runtime?: RuntimeEnv;
 }) {
   assertConfigWriteAllowedInCurrentMode();
 
   const runtime = params.runtime ?? defaultRuntime;
+  const invalidateRuntimeCache = params.invalidateRuntimeCache ?? true;
   const shorthand = !params.opts.marketplace
     ? await tracePluginLifecyclePhaseAsync(
         "marketplace shortcut resolution",
@@ -586,6 +894,9 @@ export async function runPluginInstallCommand(params: {
     marketplace:
       params.opts.marketplace ?? (shorthand?.ok ? shorthand.marketplaceSource : undefined),
   };
+  if (opts.dangerouslyForceUnsafeInstall) {
+    runtime.log(theme.warn(DEPRECATED_DANGEROUS_FORCE_UNSAFE_INSTALL_WARNING));
+  }
   if (opts.marketplace) {
     if (opts.link) {
       runtime.error(
@@ -626,6 +937,8 @@ export async function runPluginInstallCommand(params: {
     );
     return runtime.exit(1);
   }
+  const npmPackPath = parseNpmPackPrefixPath(raw);
+  const clawhubSpec = parseClawHubPluginSpec(raw);
   const requestResolution = resolvePluginInstallRequestContext({
     rawSpec: raw,
     marketplace: opts.marketplace,
@@ -634,7 +947,41 @@ export async function runPluginInstallCommand(params: {
     runtime.error(requestResolution.error);
     return runtime.exit(1);
   }
-  const request = requestResolution.request;
+  let request = requestResolution.request;
+  const resolved = request.resolvedPath ?? request.normalizedSpec;
+  const resolvesToLocalPath = fs.existsSync(resolved);
+  if (!resolvesToLocalPath && (gitSpec || npmPackPath !== null || clawhubSpec)) {
+    request = { ...request, installKind: "plugin" };
+  }
+  const bundledPreNpmPlan = resolvesToLocalPath
+    ? null
+    : resolveBundledInstallPlanBeforeNpm({
+        rawSpec: raw,
+        findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
+      });
+  const officialExternalPlan = resolvesToLocalPath
+    ? null
+    : resolveOfficialExternalInstallPlanBeforeNpm({
+        rawSpec: raw,
+        findOfficialExternalPlugin: (pluginId) => {
+          const entry = getOfficialExternalPluginCatalogEntry(pluginId);
+          const resolvedPluginId = entry ? resolveOfficialExternalPluginId(entry) : undefined;
+          const install = entry ? resolveOfficialExternalPluginInstall(entry) : null;
+          const npmSpec = install?.npmSpec;
+          return resolvedPluginId && npmSpec
+            ? {
+                pluginId: resolvedPluginId,
+                npmSpec,
+                ...(install.expectedIntegrity
+                  ? { expectedIntegrity: install.expectedIntegrity }
+                  : {}),
+              }
+            : undefined;
+        },
+      });
+  if (bundledPreNpmPlan || officialExternalPlan) {
+    request = { ...request, installKind: "plugin" };
+  }
   const snapshot = await loadConfigForInstall(request).catch((error: unknown) => {
     runtime.error(formatErrorMessage(error));
     return null;
@@ -644,7 +991,7 @@ export async function runPluginInstallCommand(params: {
   }
   const cfg = snapshot.config;
   const installMode = resolveInstallMode(opts.force);
-  const safetyOverrides = resolveInstallSafetyOverrides(opts);
+  const safetyOverrides = resolveInstallSafetyOverrides({ ...opts, config: cfg });
   const extensionsDir = resolveDefaultPluginExtensionsDir();
 
   if (opts.marketplace) {
@@ -657,7 +1004,9 @@ export async function runPluginInstallCommand(params: {
       logger: createPluginInstallLogger(runtime),
     });
     if (!result.ok) {
-      runtime.error(result.error);
+      if (!isClawHubBlockedCliFailure(result)) {
+        runtime.error(result.error);
+      }
       return runtime.exit(1);
     }
 
@@ -672,26 +1021,64 @@ export async function runPluginInstallCommand(params: {
         marketplaceSource: result.marketplaceSource,
         marketplacePlugin: result.marketplacePlugin,
       },
+      invalidateRuntimeCache,
       runtime,
     });
     return;
   }
 
-  const resolved = request.resolvedPath ?? request.normalizedSpec;
   if (fs.existsSync(resolved)) {
+    const fullyBlockedReason = resolveFullyBlockedConfigMutationReason(snapshot);
+    if (fullyBlockedReason) {
+      runtime.error(fullyBlockedReason);
+      return runtime.exit(1);
+    }
+    if (snapshot.pluginMutation.mode === "blocked" || snapshot.hookMutation.mode === "blocked") {
+      const hookProbe = await probeHookPackFromPath({
+        ...safetyOverrides,
+        path: resolved,
+        mode: installMode,
+        inspection: "package-kind",
+      });
+      if (hookProbe.ok && hookProbe.packageKind === "hook-only") {
+        if (snapshot.hookMutation.mode === "blocked") {
+          runtime.error(snapshot.hookMutation.reason);
+          return runtime.exit(1);
+        }
+        const hookFallback = await tryInstallHookPackFromLocalPath({
+          snapshot,
+          installMode,
+          resolvedPath: resolved,
+          safetyOverrides,
+          ...(opts.link ? { link: true } : {}),
+          expectedPackageKind: "hook-only",
+          runtime,
+        });
+        if (hookFallback.ok) {
+          return;
+        }
+        runtime.error(hookFallback.error);
+        return runtime.exit(1);
+      }
+      if (snapshot.pluginMutation.mode === "blocked") {
+        runtime.error(snapshot.pluginMutation.reason);
+        return runtime.exit(1);
+      }
+    }
     if (opts.link) {
       const existing = cfg.plugins?.load?.paths ?? [];
-      const merged = Array.from(new Set([...existing, resolved]));
+      const merged = uniqueStrings([...existing, resolved]);
       const probe = await installPluginFromPath({
         ...safetyOverrides,
         mode: installMode,
         path: resolved,
         dryRun: true,
+        allowSourceTypeScriptEntries: true,
         extensionsDir,
         logger: createPluginInstallLogger(runtime),
       });
       if (!probe.ok) {
-        if (isTerminalPluginInstallSecurityFailure(probe.code)) {
+        if (isTerminalPluginInstallFailure(probe.code)) {
           runtime.error(probe.error);
           return runtime.exit(1);
         }
@@ -712,6 +1099,7 @@ export async function runPluginInstallCommand(params: {
 
       await persistPluginInstall({
         snapshot: {
+          ...snapshot,
           config: {
             ...cfg,
             plugins: {
@@ -722,7 +1110,6 @@ export async function runPluginInstallCommand(params: {
               },
             },
           },
-          baseHash: snapshot.baseHash,
         },
         pluginId: probe.pluginId,
         install: {
@@ -731,6 +1118,7 @@ export async function runPluginInstallCommand(params: {
           installPath: resolved,
           version: probe.version,
         },
+        invalidateRuntimeCache,
         successMessage: `Linked plugin path: ${shortenHomePath(resolved)}`,
         runtime,
       });
@@ -745,7 +1133,7 @@ export async function runPluginInstallCommand(params: {
       logger: createPluginInstallLogger(runtime),
     });
     if (!result.ok) {
-      if (isTerminalPluginInstallSecurityFailure(result.code)) {
+      if (isTerminalPluginInstallFailure(result.code)) {
         runtime.error(result.error);
         return runtime.exit(1);
       }
@@ -773,6 +1161,7 @@ export async function runPluginInstallCommand(params: {
         installPath: result.targetDir,
         version: result.version,
       },
+      invalidateRuntimeCache,
       runtime,
     });
     return;
@@ -805,6 +1194,7 @@ export async function runPluginInstallCommand(params: {
       safetyOverrides,
       allowBundledFallback: false,
       extensionsDir,
+      invalidateRuntimeCache,
       ...(officialNpmTrust
         ? {
             expectedPluginId: officialNpmTrust.pluginId,
@@ -822,7 +1212,6 @@ export async function runPluginInstallCommand(params: {
     return;
   }
 
-  const npmPackPath = parseNpmPackPrefixPath(raw);
   if (npmPackPath !== null) {
     if (!npmPackPath) {
       runtime.error(
@@ -836,6 +1225,7 @@ export async function runPluginInstallCommand(params: {
       archivePath: npmPackPath,
       safetyOverrides,
       extensionsDir,
+      invalidateRuntimeCache,
       runtime,
     });
     if (!npmPackResult.ok) {
@@ -851,6 +1241,7 @@ export async function runPluginInstallCommand(params: {
       spec: raw,
       safetyOverrides,
       extensionsDir,
+      invalidateRuntimeCache,
       runtime,
     });
     if (!gitResult.ok) {
@@ -877,10 +1268,6 @@ export async function runPluginInstallCommand(params: {
     return runtime.exit(1);
   }
 
-  const bundledPreNpmPlan = resolveBundledInstallPlanBeforeNpm({
-    rawSpec: raw,
-    findBundledSource: (lookup) => findBundledPluginSource({ lookup }),
-  });
   if (bundledPreNpmPlan) {
     await tracePluginLifecyclePhaseAsync(
       "install execution",
@@ -890,6 +1277,7 @@ export async function runPluginInstallCommand(params: {
           rawSpec: raw,
           bundledSource: bundledPreNpmPlan.bundledSource,
           warning: bundledPreNpmPlan.warning,
+          invalidateRuntimeCache,
           runtime,
         }),
       {
@@ -901,22 +1289,6 @@ export async function runPluginInstallCommand(params: {
     return;
   }
 
-  const officialExternalPlan = resolveOfficialExternalInstallPlanBeforeNpm({
-    rawSpec: raw,
-    findOfficialExternalPlugin: (pluginId) => {
-      const entry = getOfficialExternalPluginCatalogEntry(pluginId);
-      const resolvedPluginId = entry ? resolveOfficialExternalPluginId(entry) : undefined;
-      const install = entry ? resolveOfficialExternalPluginInstall(entry) : null;
-      const npmSpec = install?.npmSpec;
-      return resolvedPluginId && npmSpec
-        ? {
-            pluginId: resolvedPluginId,
-            npmSpec,
-            ...(install.expectedIntegrity ? { expectedIntegrity: install.expectedIntegrity } : {}),
-          }
-        : undefined;
-    },
-  });
   if (officialExternalPlan) {
     const npmResult = await tryInstallPluginOrHookPackFromNpmSpec({
       snapshot,
@@ -929,6 +1301,7 @@ export async function runPluginInstallCommand(params: {
       expectedPluginId: officialExternalPlan.pluginId,
       expectedIntegrity: officialExternalPlan.expectedIntegrity,
       trustedSourceLinkedOfficialInstall: true,
+      invalidateRuntimeCache,
       runtime,
     });
     if (!npmResult.ok) {
@@ -937,17 +1310,22 @@ export async function runPluginInstallCommand(params: {
     return;
   }
 
-  const clawhubSpec = parseClawHubPluginSpec(raw);
   if (clawhubSpec) {
     const result = await installPluginFromClawHub({
       ...safetyOverrides,
+      ...resolveClawHubRiskAcknowledgementCliOptions({
+        acknowledgeClawHubRisk: opts.acknowledgeClawHubRisk,
+        action: "installing",
+      }),
       mode: installMode,
       spec: raw,
       extensionsDir,
       logger: createPluginInstallLogger(runtime),
     });
     if (!result.ok) {
-      runtime.error(result.error);
+      if (!isClawHubBlockedCliFailure(result)) {
+        runtime.error(result.error);
+      }
       return runtime.exit(1);
     }
 
@@ -959,6 +1337,7 @@ export async function runPluginInstallCommand(params: {
         spec: raw,
         installPath: result.targetDir,
       },
+      invalidateRuntimeCache,
       runtime,
     });
     return;
@@ -976,6 +1355,7 @@ export async function runPluginInstallCommand(params: {
     safetyOverrides,
     allowBundledFallback: true,
     extensionsDir,
+    invalidateRuntimeCache,
     ...(officialNpmTrust
       ? {
           expectedPluginId: officialNpmTrust.pluginId,

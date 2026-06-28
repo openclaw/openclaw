@@ -1,4 +1,5 @@
-import type { MessageReceipt } from "openclaw/plugin-sdk/channel-message";
+// Feishu type declarations define plugin contracts.
+import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/core";
 import type { FeishuConfigSchema, FeishuAccountConfigSchema, z } from "./config-schema.js";
 import type { MentionTarget } from "./mention-target.types.js";
@@ -35,6 +36,7 @@ export type FeishuMessageContext = {
   chatId: string;
   messageId: string;
   replyTargetMessageId?: string;
+  typingTargetMessageId?: string;
   suppressReplyTarget?: boolean;
   senderId: string;
   senderOpenId: string;
@@ -96,6 +98,10 @@ export type FeishuToolsConfig = {
   drive?: boolean;
   perm?: boolean;
   scopes?: boolean;
+  /** Bitable/Base operations (default: true). */
+  bitable?: boolean;
+  /** @deprecated Use bitable. */
+  base?: boolean;
 };
 
 export type DynamicAgentCreationConfig = {

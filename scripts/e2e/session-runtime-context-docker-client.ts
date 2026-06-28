@@ -5,11 +5,11 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import {
-  queueRuntimeContextForNextTurn,
+  buildRuntimeContextCustomMessage,
   resolveRuntimeContextPromptParts,
-} from "../../dist/agents/pi-embedded-runner/run/runtime-context-prompt.js";
+} from "../../dist/agents/embedded-agent-runner/run/runtime-context-prompt.js";
 
 type TranscriptEntry = {
   type?: string;
@@ -26,6 +26,10 @@ function assert(condition: unknown, message: string): asserts condition {
   if (!condition) {
     throw new Error(message);
   }
+}
+
+function setEnvValue(key: string, value: string): void {
+  Reflect.set(process.env, key, value);
 }
 
 async function readJsonl(filePath: string): Promise<TranscriptEntry[]> {
@@ -74,20 +78,8 @@ async function verifyRuntimeContextTranscriptShape(root: string) {
     "runtime context was not extracted",
   );
 
-  await queueRuntimeContextForNextTurn({
-    runtimeContext: promptSubmission.runtimeContext,
-    session: {
-      sendCustomMessage: async (message, options) => {
-        assert(options?.deliverAs === "nextTurn", "runtime context was not queued for next turn");
-        sessionManager.appendCustomMessageEntry(
-          message.customType,
-          message.content,
-          message.display,
-          message.details,
-        );
-      },
-    },
-  });
+  const runtimeContextMessage = buildRuntimeContextCustomMessage(promptSubmission.runtimeContext);
+  assert(runtimeContextMessage, "runtime custom message was not built");
   sessionManager.appendMessage({
     role: "user",
     content: promptSubmission.prompt,
@@ -101,11 +93,14 @@ async function verifyRuntimeContextTranscriptShape(root: string) {
 
   const entries = await readJsonl(sessionFile);
   const customEntry = entries.find((entry) => entry.type === "custom_message");
-  assert(customEntry, "hidden runtime custom message was not persisted");
-  assert(customEntry.customType === "openclaw.runtime-context", "unexpected custom message type");
-  assert(customEntry.display === false, "runtime custom message should be hidden");
+  assert(!customEntry, "runtime custom message should not be persisted without its user turn");
   assert(
-    customEntry.content?.includes("secret docker context"),
+    runtimeContextMessage.customType === "openclaw.runtime-context",
+    "unexpected custom message type",
+  );
+  assert(!runtimeContextMessage.display, "runtime custom message should be hidden");
+  assert(
+    runtimeContextMessage.content.includes("secret docker context"),
     "runtime custom message lost context",
   );
 
@@ -224,7 +219,7 @@ async function verifyDoctorRepair(root: string) {
     `doctor --fix failed\nstdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
   );
   const entries = await readJsonl(sessionFile);
-  const ids = entries.map((entry) => (entry as { id?: string }).id).filter(Boolean);
+  const ids = entries.map((entryValue) => (entryValue as { id?: string }).id).filter(Boolean);
   assert(
     JSON.stringify(ids) ===
       JSON.stringify(["broken-session", "parent", "plain-user", "plain-assistant"]),
@@ -232,7 +227,7 @@ async function verifyDoctorRepair(root: string) {
   );
   assert(
     entries.every(
-      (entry) => !messageText(entry.message?.content).includes("secret doctor context"),
+      (entryLocal) => !messageText(entryLocal.message?.content).includes("secret doctor context"),
     ),
     "doctor repair left runtime context in active transcript",
   );
@@ -244,9 +239,10 @@ async function verifyDoctorRepair(root: string) {
 
 async function main() {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-runtime-context-"));
-  process.env.HOME = root;
-  process.env.OPENCLAW_STATE_DIR = path.join(root, ".openclaw");
-  process.env.OPENCLAW_CONFIG_PATH = path.join(process.env.OPENCLAW_STATE_DIR, "openclaw.json");
+  const stateDir = path.join(root, ".openclaw");
+  setEnvValue("HOME", root);
+  setEnvValue("OPENCLAW_STATE_DIR", stateDir);
+  setEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
   try {
     await verifyRuntimeContextTranscriptShape(root);
     await verifyDoctorRepair(root);

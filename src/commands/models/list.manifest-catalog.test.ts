@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+// Model manifest catalog tests cover loading model catalog entries from plugin manifests.
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   loadPluginMetadataSnapshot: vi.fn(),
@@ -15,6 +16,7 @@ vi.mock("../../plugins/plugin-registry.js", () => ({
 
 vi.mock("../../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: mocks.loadPluginMetadataSnapshot,
 }));
 
 const moonshotPlugin = {
@@ -48,6 +50,10 @@ const openrouterPlugin = {
 };
 
 describe("loadStaticManifestCatalogRowsForList", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("loads only static manifest catalog rows without a provider filter", async () => {
     const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
     const index = { plugins: [], diagnostics: [] };
@@ -67,6 +73,7 @@ describe("loadStaticManifestCatalogRowsForList", () => {
       }).map((row) => row.ref),
     ).toEqual(["moonshot/kimi-k2.6"]);
     expect(mocks.loadPluginMetadataSnapshot).toHaveBeenCalledWith({
+      allowWorkspaceScopedCurrent: true,
       config: {},
       env: process.env,
     });
@@ -90,5 +97,27 @@ describe("loadStaticManifestCatalogRowsForList", () => {
         cfg: {},
       }).map((row) => row.ref),
     ).toEqual(["moonshot/kimi-k2.6", "openrouter/auto"]);
+  });
+
+  it("uses an injected metadata snapshot instead of loading metadata again", async () => {
+    const { loadStaticManifestCatalogRowsForList } = await import("./list.manifest-catalog.js");
+    const metadataSnapshot = {
+      index: { plugins: [], diagnostics: [] },
+      manifestRegistry: {
+        plugins: [moonshotPlugin],
+        diagnostics: [],
+      },
+      plugins: [moonshotPlugin],
+    };
+
+    expect(
+      loadStaticManifestCatalogRowsForList({
+        cfg: {},
+        metadataSnapshot: metadataSnapshot as unknown as Parameters<
+          typeof loadStaticManifestCatalogRowsForList
+        >[0]["metadataSnapshot"],
+      }).map((row) => row.ref),
+    ).toEqual(["moonshot/kimi-k2.6"]);
+    expect(mocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 });

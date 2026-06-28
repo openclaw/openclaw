@@ -2,22 +2,39 @@
 // Keep heavyweight tool construction out of this module so harness imports can
 // register quickly inside gateway startup and Docker e2e runs.
 
-import type { EmbeddedRunAttemptResult } from "../agents/pi-embedded-runner/run/types.js";
+import type {
+  CodexBundleMcpThreadConfig,
+  LoadCodexBundleMcpThreadConfigParams,
+} from "../agents/codex-mcp-config.types.js";
+import type { EmbeddedRunAttemptResult } from "../agents/embedded-agent-runner/run/types.js";
 import {
-  abortEmbeddedPiRun,
+  abortAndDrainEmbeddedAgentRun,
+  abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
-  queueEmbeddedPiMessageWithOutcome,
+  queueEmbeddedAgentMessageWithOutcome,
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
-  type EmbeddedPiQueueMessageOptions,
-} from "../agents/pi-embedded-runner/runs.js";
+  type AbortAndDrainEmbeddedAgentRunResult,
+  type EmbeddedAgentQueueMessageOptions,
+} from "../agents/embedded-agent-runner/runs.js";
+import type { SandboxFsBridge } from "../agents/sandbox/fs-bridge.js";
 import { formatToolDetail, resolveToolDisplay } from "../agents/tool-display.js";
+import type { ImageContent } from "../llm/types.js";
 import { redactToolDetail } from "../logging/redact.js";
+import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { truncateUtf16Safe } from "../utils.js";
 
+/** Default truncation limit for user-facing tool progress output. */
 export const TOOL_PROGRESS_OUTPUT_MAX_CHARS = 8_000;
 
-export type { AgentMessage } from "@earendil-works/pi-agent-core";
+export { FAST_MODE_AUTO_PROGRESS_KIND } from "../auto-reply/reply-payload.js";
+export {
+  isDeliveredMessageToolOnlySourceReplyResult,
+  isDeliveredMessagingToolResult,
+} from "../agents/embedded-agent-message-tool-source-reply.js";
+export { formatFastModeAutoProgressText, resolveFastModeForElapsed } from "../shared/fast-mode.js";
+export type { AgentMessage } from "../agents/runtime/index.js";
+export type { FastModeAutoProgressState } from "../shared/fast-mode.js";
 export type {
   AgentHarness,
   AgentHarnessAttemptParams,
@@ -33,17 +50,44 @@ export type {
   AgentHarnessSupportContext,
 } from "../agents/harness/types.js";
 export type {
+  AgentHarnessUserInputAnswers,
+  AgentHarnessUserInputOption,
+  AgentHarnessUserInputPromptOptions,
+  AgentHarnessUserInputQuestion,
+} from "../agents/harness/user-input-bridge.js";
+export type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
-} from "../agents/pi-embedded-runner/run/types.js";
-export type { ContextEngine as HarnessContextEngine } from "../context-engine/types.js";
-export type { CompactEmbeddedPiSessionParams } from "../agents/pi-embedded-runner/compact.js";
-export type { EmbeddedPiCompactResult } from "../agents/pi-embedded-runner/types.js";
+} from "../agents/embedded-agent-runner/run/types.js";
+export type {
+  ContextEngine as HarnessContextEngine,
+  ContextEngineHostCapability,
+  ContextEngineOperation,
+  ContextEngineProjection,
+} from "../context-engine/types.js";
+export type {
+  CompactEmbeddedAgentSessionParams,
+  /** @deprecated Use CompactEmbeddedAgentSessionParams. */
+  CompactEmbeddedAgentSessionParams as CompactEmbeddedPiSessionParams,
+} from "../agents/embedded-agent-runner/compact.js";
+export type {
+  EmbeddedAgentCompactResult,
+  /** @deprecated Use EmbeddedAgentCompactResult. */
+  EmbeddedAgentCompactResult as EmbeddedPiCompactResult,
+} from "../agents/embedded-agent-runner/types.js";
 export type { AnyAgentTool } from "../agents/tools/common.js";
-export type { MessagingToolSend } from "../agents/pi-embedded-messaging.types.js";
+export type {
+  MessagingToolSend,
+  MessagingToolSourceReplyPayload,
+} from "../agents/embedded-agent-messaging.types.js";
 export type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 export type { AgentApprovalEventData, AgentEventPayload } from "../infra/agent-events.js";
 export type { ExecApprovalDecision } from "../infra/exec-approvals.js";
+export type {
+  ExecAutoReviewDecision,
+  ExecAutoReviewInput,
+  ExecAutoReviewer,
+} from "../infra/exec-auto-review.js";
 export type { NormalizedUsage } from "../agents/usage.js";
 export type {
   AgentToolResultMiddleware,
@@ -64,6 +108,7 @@ export type {
 } from "../plugins/codex-app-server-extension-types.js";
 export type {
   NativeHookRelayEvent,
+  NativeHookRelayProcessResponse,
   NativeHookRelayProvider,
   NativeHookRelayRegistrationHandle,
 } from "../agents/harness/native-hook-relay.js";
@@ -71,12 +116,17 @@ export type {
 export { VERSION as OPENCLAW_VERSION } from "../version.js";
 export { formatErrorMessage } from "../infra/errors.js";
 export { formatApprovalDisplayPath } from "../infra/approval-display-paths.js";
+export { buildAgentHookContextChannelFields } from "../plugins/hook-agent-context.js";
 export { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 export { runAgentCleanupStep } from "../agents/run-cleanup-timeout.js";
-export { log as embeddedAgentLog } from "../agents/pi-embedded-runner/logger.js";
+export { log as embeddedAgentLog } from "../agents/embedded-agent-runner/logger.js";
 export { buildAgentRuntimePlan } from "../agents/runtime-plan/build.js";
-export { classifyEmbeddedPiRunResultForModelFallback } from "../agents/pi-embedded-runner/result-fallback-classifier.js";
-export { resolveEmbeddedAgentRuntime } from "../agents/pi-embedded-runner/runtime.js";
+export {
+  classifyEmbeddedAgentRunResultForModelFallback,
+  /** @deprecated Use classifyEmbeddedAgentRunResultForModelFallback. */
+  classifyEmbeddedAgentRunResultForModelFallback as classifyEmbeddedPiRunResultForModelFallback,
+} from "../agents/embedded-agent-runner/result-fallback-classifier.js";
+export { resolveEmbeddedAgentRuntime } from "../agents/agent-runtime-id.js";
 export { resolveUserPath } from "../utils.js";
 export { callGatewayTool } from "../agents/tools/gateway.js";
 export type { NodeListNode } from "../agents/tools/nodes-utils.js";
@@ -90,11 +140,16 @@ export {
   HEARTBEAT_RESPONSE_TOOL_NAME,
   normalizeHeartbeatToolResponse,
 } from "../auto-reply/heartbeat-tool-response.js";
-export { isMessagingTool, isMessagingToolSendAction } from "../agents/pi-embedded-messaging.js";
+export { isMessagingTool, isMessagingToolSendAction } from "../agents/embedded-agent-messaging.js";
 export {
+  extractMessagingToolSend,
+  extractMessagingToolSendResult,
+  extractToolErrorMessage,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
-} from "../agents/pi-embedded-subscribe.tools.js";
+  isToolResultError,
+  sanitizeToolResult,
+} from "../agents/embedded-agent-subscribe.tools.js";
 export { normalizeUsage } from "../agents/usage.js";
 export { resolveOpenClawAgentDir } from "./agent-dir-compat.js";
 export {
@@ -104,14 +159,39 @@ export {
 } from "../agents/agent-scope.js";
 export { resolveModelAuthMode } from "../agents/model-auth.js";
 export { supportsModelTools } from "../agents/model-tool-support.js";
-export { resolveAttemptSpawnWorkspaceDir } from "../agents/pi-embedded-runner/run/attempt.thread-helpers.js";
-export { buildEmbeddedAttemptToolRunContext } from "../agents/pi-embedded-runner/run/attempt.tool-run-context.js";
+export { isAgentToolReplaySafe } from "../agents/tool-replay-safety.js";
+export { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 export {
-  abortEmbeddedPiRun as abortAgentHarnessRun,
+  buildAgentHarnessUserInputAnswers,
+  deliverAgentHarnessUserInputPrompt,
+  emptyAgentHarnessUserInputAnswers,
+  formatAgentHarnessUserInputPrompt,
+  normalizeAgentHarnessUserInputAnswer,
+} from "../agents/harness/user-input-bridge.js";
+export {
+  buildSkillWorkshopPromptSection,
+  SKILL_WORKSHOP_TOOL_NAME,
+} from "../agents/skill-workshop-prompt.js";
+export { resolveAttemptFsWorkspaceOnly } from "../agents/embedded-agent-runner/run/attempt.prompt-helpers.js";
+export { resolveAttemptSpawnWorkspaceDir } from "../agents/embedded-agent-runner/run/attempt.thread-helpers.js";
+export { buildEmbeddedAttemptToolRunContext } from "../agents/embedded-agent-runner/run/attempt.tool-run-context.js";
+export {
+  applyEmbeddedAttemptToolsAllow,
+  resolveEmbeddedAttemptToolConstructionPlan,
+} from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+export { getPluginToolMeta } from "../plugins/tools.js";
+export {
+  attachModelProviderRequestTransport,
+  getModelProviderRequestTransport,
+} from "../agents/provider-request-config.js";
+export {
+  abortAndDrainEmbeddedAgentRun as abortAndDrainAgentHarnessRun,
+  abortEmbeddedAgentRun as abortAgentHarnessRun,
   clearActiveEmbeddedRun,
   resolveActiveEmbeddedRunSessionId,
   setActiveEmbeddedRun,
 };
+export type { AbortAndDrainEmbeddedAgentRunResult as AbortAndDrainAgentHarnessRunResult };
 
 /**
  * @deprecated Active-run queueing is an internal runtime concern. This legacy
@@ -122,31 +202,121 @@ export {
 export function queueAgentHarnessMessage(
   sessionId: string,
   text: string,
-  options?: EmbeddedPiQueueMessageOptions,
+  options?: EmbeddedAgentQueueMessageOptions,
 ): boolean {
-  return queueEmbeddedPiMessageWithOutcome(sessionId, text, options).queued;
+  return queueEmbeddedAgentMessageWithOutcome(sessionId, text, options).queued;
 }
 export { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 export {
   logAgentRuntimeToolDiagnostics,
   normalizeAgentRuntimeTools,
 } from "../agents/runtime-plan/tools.js";
-export { normalizeProviderToolSchemas } from "../agents/pi-embedded-runner/tool-schema-runtime.js";
+export {
+  filterProviderNormalizableTools,
+  inspectRuntimeToolInputSchemas,
+  projectRuntimeToolInputSchema,
+  type RuntimeToolInputSchemaJson,
+  type RuntimeToolInputSchemaProjection,
+  type RuntimeToolSchemaDiagnostic,
+} from "../agents/tool-schema-projection.js";
+export type {
+  CodexBundleMcpThreadConfig,
+  LoadCodexBundleMcpThreadConfigParams,
+} from "../agents/codex-mcp-config.types.js";
+export { normalizeProviderToolSchemas } from "../agents/embedded-agent-runner/tool-schema-runtime.js";
+
+/** Detect prompt image references and load them through the same limits used by embedded runs. */
+export async function detectAndLoadAgentHarnessPromptImages(params: {
+  prompt: string;
+  workspaceDir: string;
+  model: { input?: string[] };
+  existingImages?: ImageContent[];
+  imageOrder?: PromptImageOrderEntry[];
+  config?: import("../config/types.openclaw.js").OpenClawConfig;
+  workspaceOnly?: boolean;
+  localRoots?: readonly string[];
+  sandbox?: { root: string; bridge: SandboxFsBridge };
+}): Promise<{
+  images: ImageContent[];
+  detectedRefs: Array<{ raw: string; resolved: string; type: "path" | "media-uri" }>;
+  loadedCount: number;
+  skippedCount: number;
+}> {
+  const [{ resolveImageSanitizationLimits }, { detectAndLoadPromptImages }, { MAX_IMAGE_BYTES }] =
+    await Promise.all([
+      import("../agents/image-sanitization.js"),
+      import("../agents/embedded-agent-runner/run/images.js"),
+      import("@openclaw/media-core/constants"),
+    ]);
+
+  return detectAndLoadPromptImages({
+    prompt: params.prompt,
+    workspaceDir: params.workspaceDir,
+    model: params.model,
+    existingImages: params.existingImages,
+    imageOrder: params.imageOrder,
+    maxBytes: MAX_IMAGE_BYTES,
+    maxDimensionPx: resolveImageSanitizationLimits(params.config).maxDimensionPx,
+    workspaceOnly: params.workspaceOnly,
+    localRoots: params.localRoots,
+    sandbox: params.sandbox,
+  });
+}
+
+/** Load Codex bundle MCP thread config without forcing the heavy config module into SDK imports. */
+export async function loadCodexBundleMcpThreadConfig(
+  params: LoadCodexBundleMcpThreadConfigParams,
+): Promise<CodexBundleMcpThreadConfig> {
+  const { loadCodexBundleMcpThreadConfig: load } = await import("../agents/codex-mcp-config.js");
+  return load(params);
+}
 export { resolveSandboxContext } from "../agents/sandbox.js";
-export { resolveBootstrapContextForRun } from "../agents/bootstrap-files.js";
-export type { EmbeddedContextFile } from "../agents/pi-embedded-helpers/types.js";
+export type { SandboxContext, SandboxWorkspaceAccess } from "../agents/sandbox.js";
+export {
+  hasSandboxBindContainerPathAliases,
+  hasSandboxBindReadonlyHostShadows,
+  resolveWritableSandboxBindHostRoots,
+} from "../agents/sandbox/fs-paths.js";
+export {
+  buildBootstrapContextForFiles,
+  resolveBootstrapContextForRun,
+  resolveBootstrapFilesForRun,
+} from "../agents/bootstrap-files.js";
+export type { EmbeddedContextFile } from "../agents/embedded-agent-helpers/types.js";
 export { isSubagentSessionKey } from "../routing/session-key.js";
 export {
   acquireSessionWriteLock,
   resolveSessionWriteLockAcquireTimeoutMs,
+  resolveSessionWriteLockOptions,
   type SessionWriteLockAcquireTimeoutConfig,
 } from "../agents/session-write-lock.js";
+/**
+ * @deprecated Use appendSessionTranscriptMessageByIdentity from
+ * openclaw/plugin-sdk/session-transcript-runtime so transcript writes target a
+ * session identity instead of an active JSONL transcript file.
+ */
 export { appendSessionTranscriptMessage } from "../config/sessions/transcript-append.js";
+/**
+ * @deprecated Use publishSessionTranscriptUpdateByIdentity from
+ * openclaw/plugin-sdk/session-transcript-runtime so transcript updates target
+ * a session identity instead of an active JSONL transcript file.
+ */
 export { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 export {
+  consumeAdjustedParamsForToolCall,
+  consumePreExecutionBlockedToolCall,
+  finalizeToolTerminalPresentation,
+  getBeforeToolCallPolicyDiagnosticState,
+  hasBeforeToolCallPolicy,
   isToolWrappedWithBeforeToolCallHook,
+  requestDeferredPluginToolApproval,
+  runBeforeToolCallHook,
+  setBeforeToolCallDiagnosticsEnabled,
   wrapToolWithBeforeToolCallHook,
-} from "../agents/pi-tools.before-tool-call.js";
+  type BeforeToolCallPolicyDiagnosticState,
+  type DeferredPluginToolApproval,
+} from "../agents/agent-tools.before-tool-call.js";
+export { isReplaySafeToolCall } from "../agents/tool-mutation.js";
 export {
   resolveAgentHarnessBeforePromptBuildResult,
   runAgentHarnessAfterCompactionHook,
@@ -154,6 +324,10 @@ export {
 } from "../agents/harness/prompt-compaction-hook-helpers.js";
 export { createCodexAppServerToolResultExtensionRunner } from "../agents/harness/codex-app-server-extensions.js";
 export { createAgentToolResultMiddlewareRunner } from "../agents/harness/tool-result-middleware.js";
+export {
+  assertContextEngineHostSupport,
+  CODEX_APP_SERVER_CONTEXT_ENGINE_HOST,
+} from "../context-engine/host-compat.js";
 export {
   assembleHarnessContextEngine,
   bootstrapHarnessContextEngine,
@@ -163,11 +337,36 @@ export {
   isActiveHarnessContextEngine,
   runHarnessContextEngineMaintenance,
 } from "../agents/harness/context-engine-lifecycle.js";
+// Plugin-owned (`ownsCompaction`) compaction safety timeout. Exposed on the
+// agent-harness-runtime surface so plugin harnesses such as Codex bound their
+// own `ContextEngine.compact()` calls with the exact same finite, host-resolved
+// timeout the built-in embedded-agent runner uses — one shared implementation, no
+// copy-pasted watchdog.
+export {
+  compactWithSafetyTimeout,
+  compactContextEngineWithSafetyTimeout,
+  resolveCompactionTimeoutMs,
+} from "../agents/embedded-agent-runner/compaction-safety-timeout.js";
+export {
+  estimateRenderedLlmBoundaryTokenPressure,
+  formatPrePromptPrecheckLog,
+  PREEMPTIVE_OVERFLOW_ERROR_TEXT,
+  shouldPreemptivelyCompactBeforePrompt,
+  type LlmBoundaryTokenPressure,
+  type PreemptiveCompactionDecision,
+} from "../agents/embedded-agent-runner/run/preemptive-compaction.js";
+export { resolveContextEngineOwnerPluginId } from "../context-engine/registry.js";
 export {
   runAgentHarnessAfterToolCallHook,
   runAgentHarnessBeforeMessageWriteHook,
 } from "../agents/harness/hook-helpers.js";
 export {
+  awaitAgentEndSideEffects,
+  runAgentEndSideEffects,
+} from "../agents/harness/agent-end-side-effects.js";
+export {
+  awaitAgentHarnessAgentEndHook,
+  getAgentHarnessHookRunner,
   runAgentHarnessBeforeAgentFinalizeHook,
   runAgentHarnessAgentEndHook,
   runAgentHarnessLlmInputHook,
@@ -175,15 +374,19 @@ export {
 } from "../agents/harness/lifecycle-hook-helpers.js";
 export {
   buildNativeHookRelayCommand,
-  __testing as nativeHookRelayTesting,
+  hasNativeHookRelayInvocation,
+  invokeNativeHookRelay,
+  resolveNativeHookRelayDeferredToolApproval,
+  testing as nativeHookRelayTesting,
   registerNativeHookRelay,
 } from "../agents/harness/native-hook-relay.js";
 
 /**
- * Derive the same compact user-facing tool detail that Pi uses for progress logs.
+ * Derive the same compact user-facing tool detail that embedded OpenClaw uses for progress logs.
  */
 export type ToolProgressDetailMode = "explain" | "raw";
 
+/** Infer compact display metadata for one tool invocation from its name and arguments. */
 export function inferToolMetaFromArgs(
   toolName: string,
   args: unknown,
@@ -212,6 +415,7 @@ export function formatToolProgressOutput(
   return `${truncateUtf16Safe(redacted, maxChars)}\n...(truncated)...`;
 }
 
+/** Inputs used to classify a finished harness turn with little or no visible assistant output. */
 export type AgentHarnessTerminalOutcomeInput = {
   assistantTexts: readonly string[];
   reasoningText?: string | null;
@@ -220,6 +424,7 @@ export type AgentHarnessTerminalOutcomeInput = {
   turnCompleted: boolean;
 };
 
+/** Terminal fallback classification emitted by agent harness adapters. */
 export type AgentHarnessTerminalOutcomeClassification = NonNullable<
   EmbeddedRunAttemptResult["agentHarnessResultClassification"]
 >;
@@ -229,7 +434,7 @@ export type AgentHarnessTerminalOutcomeClassification = NonNullable<
  * should advance fallback. Deliberate silent replies such as NO_REPLY count as
  * intentional output, while whitespace-only text remains fallback-eligible.
  * This is intentionally SDK-level so plugin harness adapters such as Codex
- * preserve the same OpenClaw-owned fallback signals as the built-in PI path
+ * preserve the same OpenClaw-owned fallback signals as the built-in OpenClaw path
  * without re-implementing terminal-result policy.
  */
 export function classifyAgentHarnessTerminalOutcome(

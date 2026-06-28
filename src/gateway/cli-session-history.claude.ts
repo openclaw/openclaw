@@ -1,6 +1,10 @@
+// Claude CLI session history importer.
+// Converts Claude project JSONL into OpenClaw transcript-compatible messages.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   isToolCallBlock,
   isToolResultBlock,
@@ -8,8 +12,7 @@ import {
   type ToolContentBlock,
 } from "../chat/tool-content.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { normalizeOptionalString } from "../shared/string-coerce.js";
-import { attachOpenClawTranscriptMeta } from "./session-utils.fs.js";
+import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
 export const CLAUDE_CLI_PROVIDER = "claude-cli";
 const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
@@ -63,10 +66,6 @@ export function resolveClaudeCliBindingSessionId(
   return legacyClaudeSessionId || undefined;
 }
 
-function resolveFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function resolveTimestampMs(value: unknown): number | undefined {
   if (typeof value !== "string") {
     return undefined;
@@ -79,10 +78,10 @@ function resolveClaudeCliUsage(raw: ClaudeCliUsage) {
   if (!raw || typeof raw !== "object") {
     return undefined;
   }
-  const input = resolveFiniteNumber(raw.input_tokens);
-  const output = resolveFiniteNumber(raw.output_tokens);
-  const cacheRead = resolveFiniteNumber(raw.cache_read_input_tokens);
-  const cacheWrite = resolveFiniteNumber(raw.cache_creation_input_tokens);
+  const input = asFiniteNumber(raw.input_tokens);
+  const output = asFiniteNumber(raw.output_tokens);
+  const cacheRead = asFiniteNumber(raw.cache_read_input_tokens);
+  const cacheWrite = asFiniteNumber(raw.cache_creation_input_tokens);
   if (
     input === undefined &&
     output === undefined &&
@@ -120,6 +119,8 @@ function normalizeClaudeCliContent(
     const block = cloneJsonValue(item as ToolContentBlock);
     const type = typeof block.type === "string" ? block.type : "";
     if (type === "tool_use") {
+      // Claude stores tool calls as `tool_use` with `input`; OpenClaw history
+      // expects `toolcall` plus `arguments` so replay remains provider-neutral.
       const id = normalizeOptionalString(block.id) ?? "";
       const name = normalizeOptionalString(block.name) ?? "";
       if (id && name) {
@@ -279,6 +280,17 @@ export function resolveClaudeCliSessionFilePath(params: {
   cliSessionId: string;
   homeDir?: string;
 }): string | undefined {
+  const sessionId = params.cliSessionId.trim();
+  if (
+    !sessionId ||
+    sessionId === "." ||
+    sessionId === ".." ||
+    path.isAbsolute(sessionId) ||
+    sessionId.includes("/") ||
+    sessionId.includes("\\")
+  ) {
+    return undefined;
+  }
   const projectsDir = resolveClaudeProjectsDir(params.homeDir);
   let projectEntries: fs.Dirent[];
   try {
@@ -291,7 +303,12 @@ export function resolveClaudeCliSessionFilePath(params: {
     if (!entry.isDirectory()) {
       continue;
     }
-    const candidate = path.join(projectsDir, entry.name, `${params.cliSessionId}.jsonl`);
+    const projectDir = path.join(projectsDir, entry.name);
+    const candidate = path.resolve(projectDir, `${sessionId}.jsonl`);
+    const resolvedProjectDir = path.resolve(projectDir);
+    if (!candidate.startsWith(`${resolvedProjectDir}${path.sep}`)) {
+      continue;
+    }
     if (fs.existsSync(candidate)) {
       return candidate;
     }
@@ -299,6 +316,7 @@ export function resolveClaudeCliSessionFilePath(params: {
   return undefined;
 }
 
+/** Reads visible messages for a bound Claude CLI session. */
 export function readClaudeCliSessionMessages(params: {
   cliSessionId: string;
   homeDir?: string;
@@ -418,6 +436,8 @@ export function readClaudeCliFallbackSeed(params: {
     }
 
     if (isCompactBoundary(parsed)) {
+      // Compact boundaries split Claude history into context windows. Keep the
+      // latest summary plus only post-boundary turns for fallback seeding.
       lastSummary = pendingSummary;
       pendingSummary = undefined;
       lastBoundaryFallback = extractCompactBoundaryFallbackText(parsed) ?? lastBoundaryFallback;

@@ -1,5 +1,8 @@
-import { normalizeLowercaseStringOrEmpty } from "../shared/string-coerce.js";
+// Resolves shell inline-command flags across shell families.
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
+// Shell inline-command parsing recognizes POSIX, cmd, and PowerShell command
+// flags so approval surfaces can distinguish wrapper argv from executed text.
 export const POSIX_INLINE_COMMAND_FLAGS = new Set(["-lc", "-c", "--command"]);
 
 function expandPowerShellSwitchPrefixForms(match: string, smallestMatch: string): string[] {
@@ -135,7 +138,8 @@ function isPosixShortOption(token: string, option: string): boolean {
   return hasOption;
 }
 
-function advancePosixInlineOptionScan(token: string): number {
+/** Return how many argv tokens a POSIX shell option consumes while scanning. */
+export function advancePosixInlineOptionScan(token: string): number {
   const combinedValueCount = combinedSeparateValueOptionCount(token);
   if (combinedValueCount > 0) {
     return 1 + combinedValueCount;
@@ -150,6 +154,7 @@ function isPowerShellOptionToken(token: string): boolean {
   return token.startsWith("-") || /^\/[A-Za-z][A-Za-z0-9]*$/.test(token);
 }
 
+/** Find the inline command payload for a shell wrapper argv. */
 export function resolveInlineCommandMatch(
   argv: string[],
   flags: ReadonlySet<string>,
@@ -211,6 +216,23 @@ export function resolveInlineCommandMatch(
   return { command: null, valueTokenIndex: null };
 }
 
+/** Return true when an inline shell payload directly dispatches positional args. */
+export function isDirectShellPositionalCarrierCommand(command: string): boolean {
+  const trimmed = command.trim();
+  if (trimmed.length === 0) {
+    return false;
+  }
+
+  const shellWhitespace = String.raw`[^\S\r\n]+`;
+  const positionalZero = String.raw`(?:\$(?:0|\{0\})|"\$(?:0|\{0\})")`;
+  const positionalArg = String.raw`(?:\$(?:[@*]|[1-9]|\{[@*1-9]\})|"\$(?:[@*]|[1-9]|\{[@*1-9]\})")`;
+  return new RegExp(
+    `^(?:exec${shellWhitespace}(?:--${shellWhitespace})?)?${positionalZero}(?:${shellWhitespace}${positionalArg})*$`,
+    "u",
+  ).test(trimmed);
+}
+
+/** Find the PowerShell inline command payload and value token index. */
 export function resolvePowerShellInlineCommandMatch(argv: string[]): {
   command: string | null;
   valueTokenIndex: number | null;
@@ -223,16 +245,19 @@ export function resolvePowerShellInlineCommandMatch(argv: string[]): {
   });
 }
 
+/** Return true when a PowerShell flag consumes the rest of argv as command text. */
 export function isPowerShellInlineRestCommandFlag(token: string): boolean {
   return POWERSHELL_INLINE_REST_COMMAND_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
 }
 
+/** Return true when a PowerShell flag treats the next token as script file text. */
 export function isPowerShellInlineFileCommandFlag(token: string): boolean {
   return POWERSHELL_INLINE_FILE_FLAGS.has(normalizeLowercaseStringOrEmpty(token));
 }
 
+/** Detect POSIX interactive startup before an inline command flag. */
 export function hasPosixInteractiveStartupBeforeInlineCommand(
-  argv: string[],
+  argv: readonly string[],
   flags: ReadonlySet<string>,
 ): boolean {
   let sawInteractiveMode = false;
@@ -259,8 +284,9 @@ export function hasPosixInteractiveStartupBeforeInlineCommand(
   return false;
 }
 
+/** Detect POSIX login startup before an inline command flag. */
 export function hasPosixLoginStartupBeforeInlineCommand(
-  argv: string[],
+  argv: readonly string[],
   flags: ReadonlySet<string>,
 ): boolean {
   let sawLoginMode = false;
@@ -287,6 +313,7 @@ export function hasPosixLoginStartupBeforeInlineCommand(
   return false;
 }
 
+/** Detect fish init-command options that run before the inline command. */
 export function hasFishInitCommandOption(argv: string[]): boolean {
   for (let i = 1; i < argv.length; i += 1) {
     const token = argv[i]?.trim();
@@ -311,6 +338,7 @@ export function hasFishInitCommandOption(argv: string[]): boolean {
   return false;
 }
 
+/** Detect fish attached `-cCOMMAND` forms that should not be rebound. */
 export function hasFishAttachedCommandOption(argv: string[]): boolean {
   for (let i = 1; i < argv.length; i += 1) {
     const token = argv[i]?.trim();
