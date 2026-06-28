@@ -1304,7 +1304,7 @@ describe("doctor health contributions", () => {
         expect.objectContaining({
           checkId: "core/doctor/tool-result-cap",
           path: "agents.defaults.contextLimits.toolResultMaxChars",
-          target: "agents.writer",
+          target: "agents.list.writer",
         }),
       ]),
     });

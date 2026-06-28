@@ -823,9 +823,9 @@ async function collectToolResultCapFindings(
       path:
         entry.contextLimits?.toolResultMaxChars === undefined
           ? "agents.defaults.contextLimits.toolResultMaxChars"
-          : `agents.${normalizedAgentId}.contextLimits.toolResultMaxChars`,
+          : `agents.list.${normalizedAgentId}.contextLimits.toolResultMaxChars`,
       scopeLabel: `agent "${normalizedAgentId}"`,
-      target: `agents.${normalizedAgentId}`,
+      target: `agents.list.${normalizedAgentId}`,
     });
   }
   if (targets.length === 0) {
