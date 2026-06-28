@@ -1280,6 +1280,10 @@ describe("continuation-tracer :: reason/task text privacy", () => {
     ]);
     for (const [index, span] of spans.entries()) {
       const attrs = span.options?.attributes;
+      expect(attrs).toBeDefined();
+      if (!attrs) {
+        throw new Error(`missing attributes for span ${span.name}`);
+      }
       expectSafeReasonAttributes(attrs, reasons[index]);
       expectNoAttributeValueContains(attrs, sentinel);
     }
