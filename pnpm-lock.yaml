@@ -1160,6 +1160,12 @@ importers:
         specifier: 2026.5.28
         version: 2026.5.28
 
+  extensions/nearai:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/nextcloud-talk:
     dependencies:
       zod:
