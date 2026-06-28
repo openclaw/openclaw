@@ -56,12 +56,16 @@ Scope intent:
 - `channels.qqbot.clientSecret`
 - `channels.slack.accounts.*.appToken`
 - `channels.slack.accounts.*.botToken`
+- `channels.slack.accounts.*.relay.authToken`
 - `channels.slack.accounts.*.signingSecret`
 - `channels.slack.accounts.*.userToken`
 - `channels.slack.appToken`
 - `channels.slack.botToken`
+- `channels.slack.relay.authToken`
 - `channels.slack.signingSecret`
 - `channels.slack.userToken`
+- `channels.sms.accounts.*.authToken`
+- `channels.sms.authToken`
 - `channels.telegram.accounts.*.botToken`
 - `channels.telegram.accounts.*.webhookSecret`
 - `channels.telegram.botToken`
@@ -91,11 +95,15 @@ Scope intent:
 - `models.providers.*.request.tls.passphrase`
 - `plugins.entries.acpx.config.mcpServers.*.env.*`
 - `plugins.entries.brave.config.webSearch.apiKey`
+- `plugins.entries.codex.config.appServer.authToken`
+- `plugins.entries.codex.config.appServer.headers.*`
 - `plugins.entries.exa.config.webSearch.apiKey`
 - `plugins.entries.firecrawl.config.webSearch.apiKey`
+- `plugins.entries.google-meet.config.realtime.providers.*.apiKey`
 - `plugins.entries.google.config.webSearch.apiKey`
 - `plugins.entries.minimax.config.webSearch.apiKey`
 - `plugins.entries.moonshot.config.webSearch.apiKey`
+- `plugins.entries.parallel.config.webSearch.apiKey`
 - `plugins.entries.perplexity.config.webSearch.apiKey`
 - `plugins.entries.tavily.config.webSearch.apiKey`
 - `plugins.entries.voice-call.config.realtime.providers.*.apiKey`
@@ -103,13 +111,17 @@ Scope intent:
 - `plugins.entries.voice-call.config.tts.providers.*.apiKey`
 - `plugins.entries.voice-call.config.twilio.authToken`
 - `plugins.entries.xai.config.webSearch.apiKey`
-- `profiles.*.keyRef` (`type: "api_key"`; unsupported when `auth.profiles.<id>.mode = "oauth"`)
-- `profiles.*.tokenRef` (`type: "token"`; unsupported when `auth.profiles.<id>.mode = "oauth"`)
 - `skills.entries.*.apiKey`
 - `talk.providers.*.apiKey`
+- `talk.realtime.providers.*.apiKey`
 - `tools.web.fetch.firecrawl.apiKey`
 - `tools.web.search.*.apiKey`
 - `tools.web.search.apiKey`
+
+### `auth-profiles.json` targets (`secrets configure` + `secrets apply` + `secrets audit`)
+
+- `profiles.*.keyRef` (`type: "api_key"`; unsupported when `auth.profiles.<id>.mode = "oauth"`)
+- `profiles.*.tokenRef` (`type: "token"`; unsupported when `auth.profiles.<id>.mode = "oauth"`)
 
 [//]: # "secretref-supported-list-end"
 
