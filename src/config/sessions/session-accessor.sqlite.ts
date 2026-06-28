@@ -36,6 +36,10 @@ import {
 import { formatSessionArchiveTimestamp } from "./artifacts.js";
 import type {
   ExactSessionEntry,
+  ForkSessionEntryFromParentTargetParams,
+  ForkSessionEntryFromParentTargetResult,
+  ForkSessionFromParentTranscriptParams,
+  ForkSessionFromParentTranscriptResult,
   LatestTranscriptAssistantMessage,
   LatestTranscriptMessage,
   LatestTranscriptAssistantText,
@@ -61,6 +65,7 @@ import type {
   SessionTranscriptTurnMessageAppend,
   SessionTranscriptTurnWriteContext,
   SessionTranscriptWriteScope,
+  SessionParentForkDecision,
   TranscriptEvent,
   TranscriptMessageAppendOptions,
   TranscriptMessageAppendResult,
@@ -81,9 +86,19 @@ import {
 import type { ResetSessionEntryLifecycleMutation } from "./store.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { serializeJsonlLines } from "./transcript-jsonl.js";
+import {
+  isSessionTranscriptLeafControl,
+  mergeSessionTranscriptVisiblePathWithOpaqueAppendPath,
+  scanSessionTranscriptTree,
+  selectSessionTranscriptTreePathNodes,
+} from "./transcript-tree.js";
 import { resolveVisibleTranscriptAppendParentId } from "./transcript-visible-events.js";
 import type { SessionCompactionCheckpoint, SessionEntry } from "./types.js";
-import { mergeSessionEntry, mergeSessionEntryPreserveActivity } from "./types.js";
+import {
+  mergeSessionEntry,
+  mergeSessionEntryPreserveActivity,
+  resolveFreshSessionTotalTokens,
+} from "./types.js";
 
 type SessionSqliteDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -131,6 +146,16 @@ type SqliteCheckpointTranscriptForkSource = {
   sessionId: string;
   leafId?: string;
   totalTokens?: number;
+};
+
+type SqliteParentForkSourceTranscript = {
+  appendMode?: "side";
+  appendParentId: string | null;
+  branchEntries: TranscriptEvent[];
+  cwd?: string;
+  labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }>;
+  leafId: string | null;
+  preserveLeafControl: boolean;
 };
 
 /** Result from SQLite compaction checkpoint branch or restore operations. */
@@ -393,6 +418,164 @@ export async function patchSqliteSessionEntryTarget(
     }, toDatabaseOptions(resolved));
     return result;
   });
+}
+
+/** Forks one parent SQLite transcript into a new child transcript. */
+export async function forkSqliteSessionTranscriptFromParent(
+  params: ForkSessionFromParentTranscriptParams,
+): Promise<ForkSessionFromParentTranscriptResult> {
+  const resolved = resolveSqliteScope({
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionKey: params.sessionKey,
+    storePath: params.storePath,
+  });
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    let result: ForkSessionFromParentTranscriptResult = { status: "failed" };
+    runOpenClawAgentWriteTransaction((database) => {
+      result = forkSqliteParentTranscriptInTransaction(database, resolved, {
+        parentEntry: params.parentEntry,
+        parentSessionKey: params.parentSessionKey,
+        targetSessionKey: params.sessionKey,
+      });
+    }, toDatabaseOptions(resolved));
+    return result;
+  });
+}
+
+/** Forks parent context into a child session entry using SQLite rows only. */
+export async function forkSqliteSessionEntryFromParentTarget(
+  params: ForkSessionEntryFromParentTargetParams,
+): Promise<ForkSessionEntryFromParentTargetResult> {
+  const resolved = resolveSqliteStoreScope(params.storePath);
+  const parentTarget = normalizeSqliteLifecycleTarget(params.parentTarget);
+  const sessionTarget = normalizeSqliteLifecycleTarget(params.sessionTarget);
+  return await runExclusiveSqliteSessionWrite(resolved, async () => {
+    const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
+    const parent = resolveSqliteLifecyclePrimaryEntry(database, parentTarget);
+    if (!parent?.entry.sessionId) {
+      return { status: "missing-parent" };
+    }
+
+    const existing = resolveSqliteLifecyclePrimaryEntry(database, sessionTarget);
+    const base = existing?.entry ?? params.fallbackEntry;
+    if (!base) {
+      return { status: "missing-entry" };
+    }
+
+    if (params.skipForkWhen?.(cloneSessionEntry(base))) {
+      const sessionEntry = await persistSqliteParentForkSkipPatch({
+        entry: base,
+        params,
+        sessionTarget,
+        patch: params.skipPatch?.(cloneSessionEntry(base)),
+        resolved,
+      });
+      return {
+        status: "skipped",
+        reason: "existing-entry",
+        parentEntry: cloneSessionEntry(parent.entry),
+        sessionEntry,
+      };
+    }
+
+    const decision = resolveSqliteParentForkDecision(parent.entry);
+    if (decision.status === "skip") {
+      const patch = params.decisionSkipPatch?.({
+        decision,
+        entry: cloneSessionEntry(base),
+        parentEntry: cloneSessionEntry(parent.entry),
+      });
+      const sessionEntry = await persistSqliteParentForkSkipPatch({
+        entry: base,
+        params,
+        sessionTarget,
+        patch,
+        resolved,
+      });
+      return {
+        status: "skipped",
+        reason: "decision-skip",
+        parentEntry: cloneSessionEntry(parent.entry),
+        sessionEntry,
+        decision,
+      };
+    }
+
+    let result: ForkSessionEntryFromParentTargetResult = { status: "failed" };
+    runOpenClawAgentWriteTransaction((writeDatabase) => {
+      const freshParent = resolveSqliteLifecyclePrimaryEntry(writeDatabase, parentTarget)?.entry;
+      if (!freshParent?.sessionId) {
+        result = { status: "missing-parent" };
+        return;
+      }
+      const freshExisting = resolveSqliteLifecyclePrimaryEntry(writeDatabase, sessionTarget);
+      const freshBase = freshExisting?.entry ?? params.fallbackEntry;
+      if (!freshBase) {
+        result = { status: "missing-entry" };
+        return;
+      }
+      const fork = forkSqliteParentTranscriptInTransaction(writeDatabase, resolved, {
+        parentEntry: freshParent,
+        parentSessionKey: parentTarget.canonicalKey,
+        targetSessionKey: sessionTarget.canonicalKey,
+      });
+      if (fork.status !== "created") {
+        result =
+          fork.status === "missing-parent" ? { status: "missing-parent" } : { status: "failed" };
+        return;
+      }
+      const patch = params.patch?.({
+        decision,
+        entry: cloneSessionEntry(freshBase),
+        fork: fork.transcript,
+        parentEntry: cloneSessionEntry(freshParent),
+      });
+      const next = mergeSessionEntry(freshBase, {
+        ...patch,
+        forkedFromParent: true,
+        sessionFile: fork.transcript.sessionFile,
+        sessionId: fork.transcript.sessionId,
+      });
+      deleteSqliteLifecycleTargetRows(writeDatabase, sessionTarget);
+      writeSessionEntry(writeDatabase, sessionTarget.canonicalKey, next);
+      applySqliteSessionEntryMaintenance(writeDatabase, {
+        activeSessionKey: sessionTarget.canonicalKey,
+        archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+        skipMaintenance: true,
+      });
+      result = {
+        status: "forked",
+        decision,
+        fork: fork.transcript,
+        parentEntry: cloneSessionEntry(freshParent),
+        sessionEntry: cloneSessionEntry(next),
+      };
+    }, toDatabaseOptions(resolved));
+    return result;
+  });
+}
+
+async function persistSqliteParentForkSkipPatch(params: {
+  entry: SessionEntry;
+  params: ForkSessionEntryFromParentTargetParams;
+  sessionTarget: { canonicalKey: string; storeKeys: string[] };
+  patch: Partial<SessionEntry> | null | undefined;
+  resolved: ResolvedSqliteScope;
+}): Promise<SessionEntry> {
+  if (!params.patch) {
+    return cloneSessionEntry(params.entry);
+  }
+  const next = mergeSessionEntry(params.entry, params.patch);
+  runOpenClawAgentWriteTransaction((database) => {
+    deleteSqliteLifecycleTargetRows(database, params.sessionTarget);
+    writeSessionEntry(database, params.sessionTarget.canonicalKey, next);
+    applySqliteSessionEntryMaintenance(database, {
+      activeSessionKey: params.sessionTarget.canonicalKey,
+      archiveDirectory: resolveSqliteTranscriptArchiveDirectory(params.resolved),
+      skipMaintenance: true,
+    });
+  }, toDatabaseOptions(params.resolved));
+  return cloneSessionEntry(next);
 }
 
 /** Updates an existing entry in the additive SQLite session store. */
@@ -1601,6 +1784,17 @@ function resolveSqliteLifecyclePrimaryEntry(
   return freshest ?? undefined;
 }
 
+function normalizeSqliteLifecycleTarget(target: { canonicalKey: string; storeKeys: string[] }): {
+  canonicalKey: string;
+  storeKeys: string[];
+} {
+  const canonicalKey = normalizeSqliteSessionKey(target.canonicalKey);
+  return {
+    canonicalKey,
+    storeKeys: uniqueStrings([canonicalKey, ...target.storeKeys.map(normalizeSqliteSessionKey)]),
+  };
+}
+
 function deleteSqliteSessionEntryRows(database: OpenClawAgentDatabase, sessionKey: string): void {
   const db = getSessionKysely(database.db);
   executeSqliteQuerySync(
@@ -2434,6 +2628,253 @@ function deleteSqliteTranscriptEventsInTransaction(
     db.deleteFrom("transcript_events").where("session_id", "=", sessionId),
   );
   return (result.numAffectedRows ?? 0n) > 0n;
+}
+
+const DEFAULT_PARENT_FORK_MAX_TOKENS = 100_000;
+
+function formatParentForkTooLargeMessage(params: {
+  parentTokens: number;
+  maxTokens: number;
+}): string {
+  return (
+    `Parent context is too large to fork (${params.parentTokens}/${params.maxTokens} tokens); ` +
+    "starting with isolated context instead."
+  );
+}
+
+function resolveSqliteParentForkDecision(parentEntry: SessionEntry): SessionParentForkDecision {
+  const maxTokens = DEFAULT_PARENT_FORK_MAX_TOKENS;
+  const parentTokens = resolveFreshSessionTotalTokens(parentEntry);
+  if (typeof parentTokens === "number" && parentTokens > maxTokens) {
+    return {
+      status: "skip",
+      reason: "parent-too-large",
+      maxTokens,
+      parentTokens,
+      message: formatParentForkTooLargeMessage({ parentTokens, maxTokens }),
+    };
+  }
+  return {
+    status: "fork",
+    maxTokens,
+    ...(typeof parentTokens === "number" ? { parentTokens } : {}),
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function generateParentForkEntryId(existingIds: Set<string>): string {
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    const id = randomUUID().slice(0, 8);
+    if (!existingIds.has(id)) {
+      existingIds.add(id);
+      return id;
+    }
+  }
+  const id = randomUUID();
+  existingIds.add(id);
+  return id;
+}
+
+function hasAssistantEntry(entries: readonly TranscriptEvent[]): boolean {
+  return entries.some(
+    (entry) =>
+      isRecord(entry) &&
+      entry.type === "message" &&
+      isRecord(entry.message) &&
+      entry.message.role === "assistant",
+  );
+}
+
+function collectParentForkBranchLabels(params: {
+  allEntries: readonly TranscriptEvent[];
+  pathEntryIds: Set<string>;
+}): Array<{ targetId: string; label: string; timestamp: string }> {
+  const labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }> = [];
+  for (const entry of params.allEntries) {
+    if (
+      isRecord(entry) &&
+      entry.type === "label" &&
+      typeof entry.label === "string" &&
+      typeof entry.targetId === "string" &&
+      typeof entry.id === "string" &&
+      !params.pathEntryIds.has(entry.id) &&
+      params.pathEntryIds.has(entry.targetId) &&
+      typeof entry.timestamp === "string"
+    ) {
+      labelsToWrite.push({
+        targetId: entry.targetId,
+        label: entry.label,
+        timestamp: entry.timestamp,
+      });
+    }
+  }
+  return labelsToWrite;
+}
+
+function readSqliteParentForkSourceTranscript(
+  database: OpenClawAgentDatabase,
+  parentSessionId: string,
+): SqliteParentForkSourceTranscript | null {
+  const fileEntries = loadSqliteTranscriptEventsFromDatabase(database, parentSessionId);
+  if (fileEntries.length === 0) {
+    return null;
+  }
+  const header = fileEntries.find(
+    (entry): entry is Record<string, unknown> => isRecord(entry) && entry.type === "session",
+  );
+  const entries = fileEntries.filter((entry) => !(isRecord(entry) && entry.type === "session"));
+  const tree = scanSessionTranscriptTree(entries);
+  const visiblePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
+  const appendPath = selectSessionTranscriptTreePathNodes(tree, tree.appendParentId);
+  const mergedPath = mergeSessionTranscriptVisiblePathWithOpaqueAppendPath({
+    visiblePath,
+    appendPath,
+    appendParentId: tree.appendParentId,
+  });
+  const branchEntries = mergedPath.nodes.flatMap((node) => {
+    if (!isRecord(node.entry)) {
+      return [];
+    }
+    const parentId = node.selectedParentId;
+    return [node.entry.parentId === parentId ? node.entry : { ...node.entry, parentId }];
+  });
+  const pathEntryIds = new Set(
+    branchEntries.flatMap((entry) =>
+      isRecord(entry) && typeof entry.id === "string" ? [entry.id] : [],
+    ),
+  );
+  const lastLeafUpdateNode = tree.nodes.findLast((node) => node.leafId !== undefined);
+  const lastLeafUpdateEntry = lastLeafUpdateNode?.entry;
+  return {
+    appendParentId: mergedPath.appendParentId,
+    ...(lastLeafUpdateNode?.appendMode ? { appendMode: lastLeafUpdateNode.appendMode } : {}),
+    branchEntries,
+    cwd: typeof header?.cwd === "string" ? header.cwd : undefined,
+    labelsToWrite: collectParentForkBranchLabels({ allEntries: entries, pathEntryIds }),
+    leafId: tree.leafId,
+    preserveLeafControl: isSessionTranscriptLeafControl(lastLeafUpdateEntry),
+  };
+}
+
+function buildParentForkLabelEntries(params: {
+  labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }>;
+  pathEntryIds: Set<string>;
+  lastEntryId: string | null;
+}): TranscriptEvent[] {
+  let parentId = params.lastEntryId;
+  const labelEntries: TranscriptEvent[] = [];
+  for (const { targetId, label, timestamp } of params.labelsToWrite) {
+    const labelEntry = {
+      type: "label",
+      id: generateParentForkEntryId(params.pathEntryIds),
+      parentId,
+      timestamp,
+      targetId,
+      label,
+    };
+    params.pathEntryIds.add(labelEntry.id);
+    labelEntries.push(labelEntry);
+    parentId = labelEntry.id;
+  }
+  return labelEntries;
+}
+
+function writeSqliteParentForkTranscriptInTransaction(
+  database: OpenClawAgentDatabase,
+  targetScope: ResolvedTranscriptScope,
+  params: {
+    parentSessionFile: string;
+    source: SqliteParentForkSourceTranscript;
+  },
+): void {
+  const timestamp = new Date().toISOString();
+  const pathEntries = params.source.branchEntries;
+  const pathEntryIds = new Set(
+    pathEntries.flatMap((entry) =>
+      isRecord(entry) && typeof entry.id === "string" ? [entry.id] : [],
+    ),
+  );
+  const lastPathEntry = pathEntries.at(-1);
+  const lastPathEntryId =
+    isRecord(lastPathEntry) && typeof lastPathEntry.id === "string" ? lastPathEntry.id : null;
+  const labelEntries = buildParentForkLabelEntries({
+    labelsToWrite: params.source.labelsToWrite,
+    pathEntryIds,
+    lastEntryId: lastPathEntryId,
+  });
+  const leafEntry = params.source.preserveLeafControl
+    ? {
+        type: "leaf",
+        id: generateParentForkEntryId(pathEntryIds),
+        parentId: (labelEntries.at(-1) as { id?: string } | undefined)?.id ?? lastPathEntryId,
+        timestamp,
+        targetId: params.source.leafId,
+        appendParentId: params.source.appendParentId,
+        ...(params.source.appendMode ? { appendMode: params.source.appendMode } : {}),
+      }
+    : null;
+  appendTranscriptEventInTransaction(database, targetScope, {
+    ...createSessionTranscriptHeader({
+      cwd: params.source.cwd,
+      sessionId: targetScope.sessionId,
+    }),
+    parentSession: params.parentSessionFile,
+  });
+  for (const event of [...pathEntries, ...labelEntries, ...(leafEntry ? [leafEntry] : [])]) {
+    appendTranscriptEventInTransaction(database, targetScope, event);
+  }
+}
+
+function forkSqliteParentTranscriptInTransaction(
+  database: OpenClawAgentDatabase,
+  resolved: ResolvedSqliteScope,
+  params: {
+    parentEntry: SessionEntry;
+    parentSessionKey: string;
+    targetSessionKey: string;
+  },
+): ForkSessionFromParentTranscriptResult {
+  if (!params.parentEntry.sessionId) {
+    return { status: "missing-parent" };
+  }
+  const source = readSqliteParentForkSourceTranscript(database, params.parentEntry.sessionId);
+  if (!source) {
+    return { status: "failed" };
+  }
+  const sessionId = randomUUID();
+  const targetScope = {
+    ...resolved,
+    sessionId,
+    sessionKey: normalizeSqliteSessionKey(params.targetSessionKey),
+  };
+  const parentSessionFile = formatSqliteTranscriptTarget({
+    ...resolved,
+    sessionId: params.parentEntry.sessionId,
+    sessionKey: normalizeSqliteSessionKey(params.parentSessionKey),
+  });
+  const sessionFile = formatSqliteTranscriptTarget(targetScope);
+  const shouldPersistBranch = source.preserveLeafControl || hasAssistantEntry(source.branchEntries);
+  if (shouldPersistBranch) {
+    writeSqliteParentForkTranscriptInTransaction(database, targetScope, {
+      parentSessionFile,
+      source,
+    });
+  } else {
+    appendTranscriptEventInTransaction(database, targetScope, {
+      ...createSessionTranscriptHeader({ cwd: source.cwd, sessionId }),
+      parentSession: parentSessionFile,
+    });
+  }
+  return {
+    status: "created",
+    transcript: {
+      sessionFile,
+      sessionId,
+    },
+  };
 }
 
 function branchSqliteCompactionCheckpointSessionInTransaction(
