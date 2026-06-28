@@ -757,6 +757,7 @@ export async function deleteSqliteSessionEntryLifecycle(
 
 /** Applies exact lifecycle removals/upserts using SQLite session rows. */
 export async function applySqliteSessionEntryLifecycleMutation(params: {
+  agentId?: string;
   storePath: string;
   removals?: Iterable<SessionEntryLifecycleRemoval>;
   upserts?: Iterable<SessionEntryLifecycleUpsert>;
@@ -769,7 +770,11 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
   };
   captureArtifactCleanupError?: boolean;
 }): Promise<SessionEntryLifecycleMutationResult> {
-  const resolved = resolveSqliteStoreScope(params.storePath);
+  const resolved = resolveSqliteScope({
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    sessionKey: "",
+    storePath: params.storePath,
+  });
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
     const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
     const store = readSqliteSessionEntryStore(database);

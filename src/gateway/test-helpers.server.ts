@@ -37,6 +37,7 @@ import { resetLogger, setLoggerOverride } from "../logging.js";
 import { clearGatewaySubagentRuntime } from "../plugins/runtime/gateway-bindings.js";
 import {
   DEFAULT_AGENT_ID,
+  normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
   toAgentStoreSessionKey,
@@ -213,13 +214,15 @@ export async function writeSessionStore(params: {
   if (!storePath) {
     throw new Error("writeSessionStore requires testState.sessionStorePath");
   }
-  const agentId = params.agentId ?? DEFAULT_AGENT_ID;
-  const upserts: Array<{ sessionKey: string; entry: SessionEntry }> = [];
+  const upsertsByAgentId = new Map<string, Array<{ sessionKey: string; entry: SessionEntry }>>();
   for (const [requestKey, entry] of Object.entries(params.entries)) {
     const rawKey = requestKey.trim();
     if (typeof entry.sessionId !== "string" || entry.sessionId.trim().length === 0) {
       continue;
     }
+    const agentId = normalizeAgentId(
+      params.agentId ?? parseAgentSessionKey(rawKey)?.agentId ?? DEFAULT_AGENT_ID,
+    );
     const storeKey =
       rawKey === "global" || rawKey === "unknown"
         ? rawKey
@@ -228,6 +231,7 @@ export async function writeSessionStore(params: {
             requestKey,
             mainKey: params.mainKey,
           });
+    const upserts = upsertsByAgentId.get(agentId) ?? [];
     upserts.push({
       sessionKey: storeKey,
       entry: {
@@ -241,17 +245,26 @@ export async function writeSessionStore(params: {
         }),
       },
     });
+    upsertsByAgentId.set(agentId, upserts);
   }
   clearSessionStoreCacheForTest();
   await persistTestSessionConfig();
   await fs.mkdir(path.dirname(storePath), { recursive: true });
-  const removals = listSessionEntries({ storePath }).map(({ sessionKey }) => ({ sessionKey }));
-  await applySessionEntryLifecycleMutation({
-    storePath,
-    removals,
-    upserts,
-    skipMaintenance: true,
-  });
+  if (upsertsByAgentId.size === 0) {
+    upsertsByAgentId.set(normalizeAgentId(params.agentId ?? DEFAULT_AGENT_ID), []);
+  }
+  for (const [agentId, upserts] of upsertsByAgentId) {
+    const removals = listSessionEntries({ agentId, storePath }).map(({ sessionKey }) => ({
+      sessionKey,
+    }));
+    await applySessionEntryLifecycleMutation({
+      agentId,
+      storePath,
+      removals,
+      upserts,
+      skipMaintenance: true,
+    });
+  }
   clearSessionStoreCacheForTest();
 }
 
