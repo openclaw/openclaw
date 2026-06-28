@@ -36,6 +36,14 @@ on:
         description: Approved OpenClaw Release Publish workflow run id
         required: false
         type: string
+      publish_auth_mode:
+        description: npm publish auth mode for manual recovery; default keeps trusted publisher provenance
+        required: false
+        default: trusted-publisher
+        type: choice
+        options:
+          - trusted-publisher
+          - token
 
 concurrency:
   group: plugin-npm-release-${{ github.event_name == 'workflow_dispatch' && inputs.ref || github.ref }}
@@ -288,7 +296,7 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
-          OPENCLAW_NPM_PUBLISH_AUTH_MODE: trusted-publisher
+          OPENCLAW_NPM_PUBLISH_AUTH_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.publish_auth_mode || 'trusted-publisher' }}
         run: bash scripts/plugin-npm-publish.sh --publish "${{ matrix.plugin.packageDir }}"
 
       - name: Verify published runtime
