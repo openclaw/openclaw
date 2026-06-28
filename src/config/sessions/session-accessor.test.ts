@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { onSessionTranscriptUpdate } from "../../sessions/transcript-events.js";
 import {
   applyRestartRecoveryLifecycle,
@@ -33,12 +33,23 @@ import { replaceSqliteTranscriptEvents } from "./session-accessor.sqlite.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
 import type { SessionEntry } from "./types.js";
 
+const cleanupArchivedSessionTranscriptsMock = vi.hoisted(() => vi.fn(async () => {}));
+
+vi.mock("../../gateway/session-archive.runtime.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../gateway/session-archive.runtime.js")>();
+  return {
+    ...actual,
+    cleanupArchivedSessionTranscripts: cleanupArchivedSessionTranscriptsMock,
+  };
+});
+
 describe("session accessor seam", () => {
   let tempDir: string;
   let storePath: string;
   let transcriptPath: string;
 
   beforeEach(() => {
+    cleanupArchivedSessionTranscriptsMock.mockReset();
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-session-accessor-"));
     storePath = path.join(tempDir, "sessions.json");
     transcriptPath = path.join(tempDir, "session.jsonl");
@@ -774,6 +785,50 @@ describe("session accessor seam", () => {
       status: "running",
       updatedAt: 20,
     });
+  });
+
+  it("captures SQLite archived transcript cleanup failures when requested", async () => {
+    const cleanupError = new Error("cleanup failed");
+    cleanupArchivedSessionTranscriptsMock.mockRejectedValueOnce(cleanupError);
+    const scope = {
+      sessionId: "session-1",
+      sessionKey: "agent:main:cleanup",
+      storePath,
+    };
+    await upsertSessionEntry(scope, {
+      sessionId: scope.sessionId,
+      updatedAt: 10,
+    });
+    await appendTranscriptMessage(scope, {
+      cwd: tempDir,
+      message: { role: "user", content: "cleanup me" },
+    });
+
+    const result = await applySessionEntryLifecycleMutation({
+      storePath,
+      removals: [
+        {
+          archiveRemovedTranscript: true,
+          expectedSessionId: scope.sessionId,
+          sessionKey: scope.sessionKey,
+        },
+      ],
+      cleanupArchivedTranscripts: {
+        rules: [{ action: "delete", olderThanMs: 0 }],
+        nowMs: Date.now(),
+      },
+      captureArtifactCleanupError: true,
+      skipMaintenance: true,
+    });
+
+    expect(result.removedEntries).toBe(1);
+    expect(result.archivedTranscriptDirectories).toHaveLength(1);
+    expect(result.artifactCleanupError).toBe(cleanupError);
+    expect(cleanupArchivedSessionTranscriptsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        directories: result.archivedTranscriptDirectories,
+      }),
+    );
   });
 
   it("persists reset lifecycle entry changes with transcript replay and archive", async () => {
