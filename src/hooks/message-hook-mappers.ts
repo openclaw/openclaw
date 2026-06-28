@@ -58,6 +58,14 @@ export type CanonicalInboundMessageHookContext = {
   mediaPaths?: string[];
   mediaUrls?: string[];
   mediaTypes?: string[];
+  mediaRemoteHost?: string;
+  mediaStagingPending?: boolean;
+  originalMediaPath?: string;
+  originalMediaUrl?: string;
+  originalMediaType?: string;
+  originalMediaPaths?: string[];
+  originalMediaUrls?: string[];
+  originalMediaTypes?: string[];
   originatingChannel?: string;
   originatingTo?: string;
   guildId?: string;
@@ -88,6 +96,27 @@ export type CanonicalSentMessageHookContext = {
 
 function readNonBlankString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
+function assignRemoteMediaStagingMetadata(
+  target: Record<string, unknown>,
+  canonical: CanonicalInboundMessageHookContext,
+) {
+  const metadata = {
+    mediaRemoteHost: canonical.mediaRemoteHost,
+    mediaStagingPending: canonical.mediaStagingPending,
+    originalMediaPath: canonical.originalMediaPath,
+    originalMediaUrl: canonical.originalMediaUrl,
+    originalMediaType: canonical.originalMediaType,
+    originalMediaPaths: canonical.originalMediaPaths,
+    originalMediaUrls: canonical.originalMediaUrls,
+    originalMediaTypes: canonical.originalMediaTypes,
+  };
+  for (const [key, value] of Object.entries(metadata)) {
+    if (value !== undefined) {
+      target[key] = value;
+    }
+  }
 }
 
 export function deriveInboundMessageHookContext(
@@ -406,6 +435,9 @@ export function toPluginInboundClaimEvent(
       topicName: canonical.topicName,
     },
   };
+  if (event.metadata) {
+    assignRemoteMediaStagingMetadata(event.metadata, canonical);
+  }
   assignTraceFields(event, canonical.trace);
   return event;
 }
@@ -455,6 +487,9 @@ export function toPluginMessageReceivedEvent(
       topicName: canonical.topicName,
     },
   };
+  if (event.metadata) {
+    assignRemoteMediaStagingMetadata(event.metadata, canonical);
+  }
   assignTraceFields(event, canonical.trace);
   return event;
 }
@@ -478,7 +513,7 @@ export function toPluginMessageSentEvent(
 export function toInternalMessageReceivedContext(
   canonical: CanonicalInboundMessageHookContext,
 ): MessageReceivedHookContext {
-  return {
+  const context: MessageReceivedHookContext = {
     from: canonical.from,
     content: canonical.content,
     timestamp: canonical.timestamp,
@@ -506,6 +541,10 @@ export function toInternalMessageReceivedContext(
       topicName: canonical.topicName,
     },
   };
+  if (context.metadata) {
+    assignRemoteMediaStagingMetadata(context.metadata, canonical);
+  }
+  return context;
 }
 
 export function toInternalMessageTranscribedContext(
