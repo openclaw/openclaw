@@ -2620,7 +2620,7 @@ export function resolveSessionTranscriptReadTarget(
   }
   const entrySessionFile = scope.sessionEntry?.sessionFile?.trim();
   const entryMarker = parseSqliteSessionFileMarker(entrySessionFile);
-  if (entryMarker && entryMarker.sessionId === scope.sessionId) {
+  if (entrySessionFile && entryMarker && entryMarker.sessionId === scope.sessionId) {
     return {
       agentId: scope.agentId ?? entryMarker.agentId,
       sessionFile: entrySessionFile,
