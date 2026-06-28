@@ -34,6 +34,7 @@ vi.mock("./session-utils.js", () => ({
     store: {},
     entry: undefined,
     canonicalKey: "session-1",
+    storeKeys: ["session-1"],
     legacyKey: undefined,
   })),
 }));
@@ -60,14 +61,17 @@ describe("agent event handler", () => {
       showAlerts: true,
       useIndicator: true,
     });
-    vi.mocked(loadSessionEntry).mockReset().mockReturnValue({
-      cfg: {},
-      storePath: "/tmp/sessions.json",
-      store: {},
-      entry: undefined,
-      canonicalKey: "session-1",
-      legacyKey: undefined,
-    });
+    vi.mocked(loadSessionEntry)
+      .mockReset()
+      .mockReturnValue({
+        cfg: {},
+        storePath: "/tmp/sessions.json",
+        store: {},
+        entry: undefined,
+        canonicalKey: "session-1",
+        storeKeys: ["session-1"],
+        legacyKey: undefined,
+      });
     vi.mocked(loadGatewaySessionRow).mockReset().mockReturnValue(null);
     persistGatewaySessionLifecycleEventMock.mockReset().mockResolvedValue(undefined);
     resetAgentRunContextForTest();
@@ -1493,6 +1497,7 @@ describe("agent event handler", () => {
       store: {},
       entry: { sessionId: "session-1", verboseLevel: "on", updatedAt: 1_500 },
       canonicalKey: "session-1",
+      storeKeys: ["session-1"],
       legacyKey: undefined,
     });
 
@@ -1531,6 +1536,7 @@ describe("agent event handler", () => {
       store: {},
       entry: { sessionId: "session-1", verboseLevel: "off", updatedAt: 1_500 },
       canonicalKey: "session-1",
+      storeKeys: ["session-1"],
       legacyKey: undefined,
     });
 
@@ -2102,6 +2108,7 @@ describe("agent event handler", () => {
         ],
       },
       canonicalKey: "session-recovery",
+      storeKeys: ["session-recovery"],
       legacyKey: undefined,
     });
     const {
@@ -2170,6 +2177,7 @@ describe("agent event handler", () => {
         ],
       },
       canonicalKey: "session-recovery",
+      storeKeys: ["session-recovery"],
       legacyKey: undefined,
     });
     const markTrackedRunTerminalPersisted = vi.fn();
@@ -2260,6 +2268,7 @@ describe("agent event handler", () => {
         restartRecoveryRuns,
       },
       canonicalKey: "session-recovery",
+      storeKeys: ["session-recovery"],
       legacyKey: undefined,
     });
     vi.mocked(loadGatewaySessionRow).mockReturnValue({
@@ -2330,6 +2339,7 @@ describe("agent event handler", () => {
         restartRecoveryRuns,
       },
       canonicalKey: "session-recovery",
+      storeKeys: ["session-recovery"],
       legacyKey: undefined,
     });
     let currentRow = {
@@ -2419,6 +2429,7 @@ describe("agent event handler", () => {
         status: "running",
       },
       canonicalKey: "session-recovery",
+      storeKeys: ["session-recovery"],
       legacyKey: undefined,
     });
     let currentRow = {
@@ -2541,6 +2552,7 @@ describe("agent event handler", () => {
         ],
       },
       canonicalKey: "session-recovery",
+      storeKeys: ["session-recovery"],
       legacyKey: undefined,
     });
     registerAgentRunContext("shared-run", {
@@ -2633,6 +2645,7 @@ describe("agent event handler", () => {
         ],
       },
       canonicalKey: "session-recovery",
+      storeKeys: ["session-recovery"],
       legacyKey: undefined,
     });
     resetAgentRunContextForTest();

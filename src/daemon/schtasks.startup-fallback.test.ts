@@ -676,6 +676,22 @@ describe("Windows startup fallback", () => {
     });
   });
 
+  it("removes hidden Startup-folder entries when the caller env lacks the marker", async () => {
+    await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
+      schtasksResponses.push({ code: 0, stdout: "", stderr: "" });
+      const startupEntryPath = resolveStartupEntryPath(env, "vbs");
+      await fs.mkdir(path.dirname(startupEntryPath), { recursive: true });
+      await fs.writeFile(startupEntryPath, 'CreateObject("WScript.Shell")\n', "utf8");
+
+      await uninstallScheduledTask({
+        env,
+        stdout: new PassThrough(),
+      });
+
+      await expect(fs.access(startupEntryPath)).rejects.toThrow();
+    });
+  });
+
   it("reports runtime from the gateway listener when using the Startup fallback", async () => {
     await withWindowsEnv("openclaw-win-startup-", async ({ env }) => {
       addStartupFallbackMissingResponses();

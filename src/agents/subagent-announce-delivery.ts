@@ -285,6 +285,18 @@ async function resolveActiveWakeWithRetries(
       outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
       continue;
     }
+    if (
+      outcome.reason === "source_reply_delivery_mode_mismatch" &&
+      currentOptions.sourceReplyDeliveryMode !== undefined
+    ) {
+      // Active requester runs own their final delivery mode. Direct-completion
+      // policy must not make an already-running automatic parent unreachable.
+      const activeRunOptions = { ...currentOptions };
+      delete activeRunOptions.sourceReplyDeliveryMode;
+      currentOptions = activeRunOptions;
+      outcome = await resolveQueueEmbeddedAgentMessageOutcome(sessionId, message, currentOptions);
+      continue;
+    }
     if (outcome.reason === "compacting") {
       const remainingDeliveryTimeoutMs =
         compactionDeadlineMs === undefined ? undefined : compactionDeadlineMs - Date.now();
@@ -652,6 +664,46 @@ function hasVisibleGatewayAgentPayload(response: unknown): boolean {
   const result = getGatewayAgentResult(response);
   return Boolean(
     result && (hasVisibleAgentPayload(result) || hasMessagingToolDeliveryEvidence(result)),
+  );
+}
+
+function hasVisibleNonSilentGatewayAgentPayload(response: unknown): boolean {
+  const result = getGatewayAgentResult(response);
+  if (!result) {
+    return false;
+  }
+  if (hasMessagingToolDeliveryEvidence(result)) {
+    return true;
+  }
+  const payloads = Array.isArray(result.payloads) ? result.payloads : [];
+  return payloads.some(isVisibleNonSilentGatewayAgentPayload);
+}
+
+function isVisibleNonSilentGatewayAgentPayload(payload: unknown): boolean {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return false;
+  }
+  const record = payload as {
+    text?: unknown;
+    mediaUrl?: unknown;
+    mediaUrls?: unknown;
+    presentation?: unknown;
+    interactive?: unknown;
+    channelData?: unknown;
+  };
+  if (
+    record.mediaUrl ||
+    (Array.isArray(record.mediaUrls) && record.mediaUrls.length > 0) ||
+    record.presentation ||
+    record.interactive ||
+    record.channelData
+  ) {
+    return true;
+  }
+  return (
+    typeof record.text === "string" &&
+    record.text.trim() !== "" &&
+    !isSilentReplyPayloadText(record.text, SILENT_REPLY_TOKEN)
   );
 }
 
@@ -1602,13 +1654,21 @@ async function sendSubagentAnnounceDirectly(params: {
         error: "completion agent did not use the message tool for message-tool-only delivery",
       };
     }
+    const hasVisibleCompletionReply =
+      hasVisibleNonSilentGatewayAgentPayload(directAnnounceResponse);
+    const hasCompletionSideEffect =
+      hasGatewayAgentCompletionSideEffectEvidence(directAnnounceResponse);
+    const hasIntentionalSilentCompletionReply =
+      hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse);
+    const acceptsIntentionalSilentCompletion =
+      hasIntentionalSilentCompletionReply && !isSubagentCompletion;
     if (
       params.expectsCompletionMessage &&
       !shouldDeliverAgentFinal &&
       !requiresMessageToolDelivery &&
-      !hasVisibleGatewayAgentPayload(directAnnounceResponse) &&
-      !hasGatewayAgentCompletionSideEffectEvidence(directAnnounceResponse) &&
-      !hasIntentionalSilentGatewayAgentPayload(directAnnounceResponse)
+      !hasVisibleCompletionReply &&
+      !hasCompletionSideEffect &&
+      !acceptsIntentionalSilentCompletion
     ) {
       return {
         delivered: false,

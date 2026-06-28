@@ -122,7 +122,7 @@ export function createBlockReplyPipeline(params: {
   const bufferedKeys = new Set<string>();
   const bufferedPayloadKeys = new Set<string>();
   const bufferedPayloads: ReplyPayload[] = [];
-  const streamedTextFragments: string[] = [];
+  const streamedTextFragmentsByMessage = new Map<number | undefined, string[]>();
   let bufferedAssistantMessageIndex: number | undefined;
   let sendChain: Promise<void> = Promise.resolve();
   let aborted = false;
@@ -188,7 +188,10 @@ export function createBlockReplyPipeline(params: {
           sentMediaUrls.add(mediaUrl);
         }
         if (!isStatusNotice && reply.trimmedText) {
-          streamedTextFragments.push(reply.trimmedText);
+          const assistantMessageIndex = getReplyPayloadMetadata(payload)?.assistantMessageIndex;
+          const fragments = streamedTextFragmentsByMessage.get(assistantMessageIndex) ?? [];
+          fragments.push(reply.trimmedText);
+          streamedTextFragmentsByMessage.set(assistantMessageIndex, fragments);
         }
         if (!isStatusNotice) {
           didStream = true;
@@ -330,7 +333,7 @@ export function createBlockReplyPipeline(params: {
       if (sentContentKeys.has(payloadKey)) {
         return true;
       }
-      if (!didStream || streamedTextFragments.length === 0) {
+      if (!didStream) {
         return false;
       }
       const reply = resolveSendableOutboundReplyParts(payload);
@@ -338,7 +341,13 @@ export function createBlockReplyPipeline(params: {
         return false;
       }
       const normalize = (text: string) => text.replace(/\s+/g, "");
-      return normalize(streamedTextFragments.join("")) === normalize(reply.trimmedText);
+      const target = normalize(reply.trimmedText);
+      for (const fragments of streamedTextFragmentsByMessage.values()) {
+        if (fragments.length > 0 && normalize(fragments.join("")) === target) {
+          return true;
+        }
+      }
+      return false;
     },
     getSentMediaUrls: () => Array.from(sentMediaUrls),
   };

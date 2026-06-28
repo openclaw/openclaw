@@ -111,7 +111,6 @@ class TalkModeManager internal constructor(
     private const val tag = "TalkMode"
     private const val realtimeSampleRateHz = 24_000
     private const val realtimeAudioFrameMs = 100
-    private const val listenWatchdogMs = 12_000L
     private const val chatFinalWaitMs = 45_000L
     private const val maxCachedRunCompletions = 128
     private const val maxConversationEntries = 40

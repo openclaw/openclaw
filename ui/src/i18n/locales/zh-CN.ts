@@ -63,7 +63,6 @@ export const zh_CN: TranslationMap = {
     docs: "文档",
     theme: "主题",
     colorMode: "颜色模式",
-    colorModeOption: "颜色模式：{mode}",
     resources: "资源",
     search: "搜索",
     save: "保存",
@@ -1404,6 +1403,7 @@ export const zh_CN: TranslationMap = {
     jaJP: "日本語（Japanese）",
     ko: "한국어（Korean）",
     fr: "Français（French）",
+    hi: "हिन्दी（印地语）",
     ar: "العربية（阿拉伯语）",
     it: "Italiano（意大利语）",
     tr: "Türkçe（Turkish）",
@@ -1414,6 +1414,7 @@ export const zh_CN: TranslationMap = {
     vi: "Tiếng Việt（越南语）",
     nl: "Nederlands（荷兰语）",
     fa: "فارسی（波斯语）",
+    ru: "Русский（俄语）",
   },
   cron: {
     quickCreate: {

@@ -711,13 +711,21 @@ export function handleMessageUpdate(
   if (isPhasePendingOpenAiResponsesTextItem) {
     return;
   }
+  // Subagents have no live consumer; their final result is delivered from
+  // message_end. Keep accumulating deltaBuffer, but skip per-chunk visible-text
+  // parsing so long parallel subagent streams do not monopolize the event loop.
+  const skipLiveStream = ctx.params.suppressLiveStreamOutput === true;
   const shouldUsePhaseAwareBlockReply = Boolean(deliveryPhase);
 
   if (chunk) {
     ctx.state.deltaBuffer += chunk;
-    if (!shouldUsePhaseAwareBlockReply) {
+    if (!skipLiveStream && !shouldUsePhaseAwareBlockReply) {
       appendBlockReplyChunk(ctx, chunk);
     }
+  }
+
+  if (skipLiveStream) {
+    return;
   }
 
   if (!suppressMessageToolOnlySourceReplyOutput && ctx.state.streamReasoning) {

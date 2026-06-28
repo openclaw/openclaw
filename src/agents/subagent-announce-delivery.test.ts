@@ -229,6 +229,8 @@ async function deliverDiscordDirectMessageCompletion(params: {
   callGateway: typeof runtimeCallGateway;
   sendMessage?: typeof runtimeSendMessage;
   internalEvents?: AgentInternalEvent[];
+  isActive?: boolean;
+  queueEmbeddedAgentMessageWithOutcome?: QueueEmbeddedAgentMessageWithOutcome;
   sourceTool?: string;
 }) {
   const origin = {
@@ -240,10 +242,13 @@ async function deliverDiscordDirectMessageCompletion(params: {
     callGateway: params.callGateway,
     getRequesterSessionActivity: () => ({
       sessionId: "requester-session-dm",
-      isActive: false,
+      isActive: params.isActive === true,
     }),
     getRuntimeConfig: () => ({}) as never,
     sendMessage: params.sendMessage ?? runtimeSendMessage,
+    ...(params.queueEmbeddedAgentMessageWithOutcome
+      ? { queueEmbeddedAgentMessageWithOutcome: params.queueEmbeddedAgentMessageWithOutcome }
+      : {}),
   });
 
   return deliverSubagentAnnouncement({
@@ -1543,7 +1548,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
   );
 
-  it("accepts session-only completion handoff when the in-process agent intentionally replies NO_REPLY", async () => {
+  it("accepts non-subagent session-only completion handoff when the in-process agent intentionally replies NO_REPLY", async () => {
     const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
       result: {
         payloads: [{ text: "NO_REPLY" }],
@@ -1567,11 +1572,53 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expectsCompletionMessage: true,
       bestEffortDeliver: true,
       directIdempotencyKey: "announce-local-silent",
+      sourceTool: "agent_harness_task",
     });
 
     expectRecordFields(result, {
       delivered: true,
       path: "direct",
+    });
+    expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
+      deliver: false,
+      channel: undefined,
+      to: undefined,
+      bestEffortDeliver: true,
+    });
+  });
+
+  it("rejects session-only subagent completion handoff when the parent only replies NO_REPLY", async () => {
+    const dispatchGatewayMethodInProcess = createInProcessGatewayMock({
+      result: {
+        payloads: [{ text: "NO_REPLY" }],
+      },
+    });
+    testing.setDepsForTest({
+      dispatchGatewayMethodInProcess,
+      getRequesterSessionActivity: () => ({
+        sessionId: "requester-session-local",
+        isActive: false,
+      }),
+      getRuntimeConfig: () => ({}) as never,
+    });
+
+    const result = await deliverSubagentAnnouncement({
+      requesterSessionKey: "agent:main:local-session",
+      targetRequesterSessionKey: "agent:main:local-session",
+      triggerMessage: "child done",
+      steerMessage: "child done",
+      requesterIsSubagent: false,
+      expectsCompletionMessage: true,
+      bestEffortDeliver: true,
+      directIdempotencyKey: "announce-local-subagent-silent",
+      sourceTool: "subagent_announce",
+    });
+
+    expectRecordFields(result, {
+      delivered: false,
+      path: "direct",
+      reason: "visible_reply_missing",
+      error: "completion agent did not produce a visible reply",
     });
     expectInProcessAgentParams(dispatchGatewayMethodInProcess, {
       deliver: false,
@@ -4830,6 +4877,58 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sourceReplyDeliveryMode: "message_tool_only",
     });
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("retries active direct subagent completion wake without forced message-tool mode", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [{ text: "The subagent is done: child completion output" }],
+        didSendViaMessagingTool: true,
+      },
+    });
+    const queueEmbeddedAgentMessageWithOutcome = createQueueOutcomeSequenceMock([
+      "source_reply_delivery_mode_mismatch",
+      true,
+    ]);
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      isActive: true,
+      queueEmbeddedAgentMessageWithOutcome,
+      sourceTool: "subagent_announce",
+      internalEvents: [
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:worker:subagent:child",
+          childSessionId: "child-session-id",
+          announceType: "subagent task",
+          taskLabel: "direct completion active wake",
+          status: "ok",
+          statusLabel: "completed successfully",
+          result: "child completion output",
+          replyInstruction: "Summarize the result.",
+        },
+      ],
+    });
+
+    expectRecordFields(result, {
+      delivered: true,
+      path: "steered",
+    });
+    expect(queueEmbeddedAgentMessageWithOutcome).toHaveBeenCalledTimes(2);
+    expectRecordFields(mockCallArg(queueEmbeddedAgentMessageWithOutcome, 0, 2), {
+      sourceReplyDeliveryMode: "message_tool_only",
+      waitForTranscriptCommit: true,
+    });
+    const retryOptions = mockCallArg(queueEmbeddedAgentMessageWithOutcome, 1, 2);
+    expectRecordFields(retryOptions, {
+      waitForTranscriptCommit: true,
+    });
+    expect(
+      (retryOptions as { sourceReplyDeliveryMode?: unknown }).sourceReplyDeliveryMode,
+    ).toBeUndefined();
+    expect(callGateway).not.toHaveBeenCalled();
   });
 
   it("falls back to the external requester route when completion origin is internal", async () => {

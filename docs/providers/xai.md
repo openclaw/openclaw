@@ -29,10 +29,11 @@ Use the path that matches your OpenClaw install state:
     openclaw onboard --install-daemon
     ```
 
-    On a VPS or over SSH, use device-code during onboarding:
+    On a VPS or over SSH, select xAI OAuth directly; OpenClaw uses device-code
+    verification and does not require a localhost callback:
 
     ```bash
-    openclaw onboard --install-daemon --auth-choice xai-device-code
+    openclaw onboard --install-daemon --auth-choice xai-oauth
     ```
 
     OAuth does not require an xAI API key. OpenClaw does not require the Grok
@@ -46,13 +47,6 @@ Use the path that matches your OpenClaw install state:
 
     ```bash
     openclaw models auth login --provider xai --method oauth
-    ```
-
-    Use the device-code flow instead when the Gateway runs over SSH, Docker, or
-    a VPS and a localhost browser callback is awkward:
-
-    ```bash
-    openclaw models auth login --provider xai --device-code
     ```
 
     To make Grok the default model after signing in, apply it separately:
@@ -86,8 +80,7 @@ Use the path that matches your OpenClaw install state:
 
 <Note>
 OpenClaw uses the xAI Responses API as the bundled xAI transport. The same
-credential from `openclaw models auth login --provider xai --method oauth`,
-`openclaw models auth login --provider xai --device-code`, or
+credential from `openclaw models auth login --provider xai --method oauth` or
 `openclaw models auth login --provider xai --method api-key` can also power first-class
 `web_search`, `x_search`, remote `code_execution`, and xAI image/video generation.
 Speech and transcription currently require `XAI_API_KEY` or provider config.
@@ -102,8 +95,9 @@ and, by default, `x_search` through an operator xAI Responses proxy.
 
 ## OAuth troubleshooting
 
-- If browser OAuth cannot reach `127.0.0.1:56121`, use
-  `openclaw models auth login --provider xai --device-code`.
+- For SSH, Docker, VPS, or other remote setups, use
+  `openclaw models auth login --provider xai --method oauth`; xAI OAuth uses
+  device-code verification instead of a localhost callback.
 - If sign-in succeeds but Grok is not the default model, run
   `openclaw models set xai/grok-4.3`.
 - To inspect saved xAI auth profiles, run:
@@ -117,9 +111,9 @@ and, by default, `x_search` through an operator xAI Responses proxy.
   eligible, try the API-key path or check the subscription on xAI's side.
 
 <Tip>
-Use `xai-device-code` when signing in from SSH, Docker, or a VPS. OpenClaw
-prints an xAI URL and short code; finish sign-in in any local browser while the
-remote process polls xAI for the completed token exchange.
+Use `xai-oauth` when signing in from SSH, Docker, or a VPS. OpenClaw prints an
+xAI URL and short code; finish sign-in in any local browser while the remote
+process polls xAI for the completed token exchange.
 </Tip>
 
 ## Built-in catalog
@@ -498,12 +492,10 @@ Legacy aliases still normalize to the canonical bundled ids:
 
   <Accordion title="Known limits">
     - xAI auth can use an API key, environment variable, plugin config fallback,
-      browser OAuth, or device-code OAuth with an eligible xAI account. Browser
-      OAuth uses a local callback on `127.0.0.1:56121`; for remote hosts, use
-      `xai-device-code` unless you want to forward that port before opening the
-      sign-in URL. xAI decides which accounts can receive OAuth API tokens, and
-      the consent page may show Grok Build even though OpenClaw does not require
-      the Grok Build app.
+      or OAuth with an eligible xAI account. OAuth uses device-code verification
+      without a localhost callback. xAI decides which accounts can receive OAuth
+      API tokens, and the consent page may show Grok Build even though OpenClaw
+      does not require the Grok Build app.
     - OpenClaw does not currently expose the xAI multi-agent model family. xAI
       serves these models through the Responses API, but they do not accept the
       client-side or custom tools used by OpenClaw's shared agent loop. See the
