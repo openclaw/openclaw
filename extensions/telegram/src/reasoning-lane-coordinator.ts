@@ -73,6 +73,10 @@ export function splitTelegramReasoningText(
     return {};
   }
 
+  if (isReasoning !== true) {
+    return { answerText: text };
+  }
+
   const trimmed = text.trim();
   if (isPartialReasoningTagPrefix(trimmed)) {
     return {};
