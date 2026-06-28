@@ -60,6 +60,33 @@ function responseFromReaderText(text: string, releaseLock: () => void): Response
   } as Response;
 }
 
+function streamingProxyErrorResponse(params: { chunkCount: number; chunkSize: number }): {
+  response: Response;
+  getReadCount: () => number;
+} {
+  let reads = 0;
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (reads >= params.chunkCount) {
+        controller.close();
+        return;
+      }
+      reads += 1;
+      controller.enqueue(encoder.encode("a".repeat(params.chunkSize)));
+    },
+  });
+
+  return {
+    response: new Response(stream, {
+      status: 502,
+      statusText: "Bad Gateway",
+      headers: { "Content-Type": "application/json" },
+    }),
+    getReadCount: () => reads,
+  };
+}
+
 describe("streamProxy", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -166,6 +193,30 @@ describe("streamProxy", () => {
     await released;
 
     expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops reading oversized proxy error JSON responses", async () => {
+    const streamed = streamingProxyErrorResponse({ chunkCount: 20, chunkSize: 1024 * 1024 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => streamed.response),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(events.at(-1)?.type).toBe("error");
+    await expect(stream.result()).resolves.toMatchObject({
+      stopReason: "error",
+      errorMessage: "Proxy error: 502 Bad Gateway",
+    });
+    expect(streamed.getReadCount()).toBeLessThan(20);
   });
 
   it("returns an error result when EOF arrives without a terminal event", async () => {
