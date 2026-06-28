@@ -475,4 +475,30 @@ describe("requestFeishuApi — token-invalid retry (issue #97287)", () => {
     });
     expect(request).toHaveBeenCalledTimes(1);
   });
+
+  it("invokes onTokenInvalid and retries when SDK fulfills with a token-invalid body", async () => {
+    const onTokenInvalid = vi.fn();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ code: 99991663, msg: "Invalid access token" })
+      .mockResolvedValueOnce({ code: 0, data: { message_id: "om_after_refresh" } });
+
+    const result = await requestFeishuApi(request, "prefix", {
+      ...NO_DELAY,
+      onTokenInvalid,
+    });
+
+    expect(result).toEqual({ code: 0, data: { message_id: "om_after_refresh" } });
+    expect(onTokenInvalid).toHaveBeenCalledTimes(1);
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("rejects fulfilled token-invalid bodies when no onTokenInvalid hook is supplied", async () => {
+    const request = vi.fn().mockResolvedValue({ code: 99991664, msg: "Access token missing" });
+
+    await expect(requestFeishuApi(request, "prefix", NO_DELAY)).rejects.toMatchObject({
+      response: { data: { code: 99991664 } },
+    });
+    expect(request).toHaveBeenCalledTimes(1);
+  });
 });

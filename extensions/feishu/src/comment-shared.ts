@@ -245,6 +245,13 @@ async function runFeishuRateLimitLoop<T>(
     }
     try {
       const result = await request();
+      const fulfilledTokenInvalid = getFeishuTokenInvalidCodeFromResponse(result);
+      if (fulfilledTokenInvalid !== undefined) {
+        throw Object.assign(
+          new Error(`Request fulfilled with token-invalid code ${fulfilledTokenInvalid}`),
+          { response: { status: 200, data: result } },
+        );
+      }
       // Feishu SDK may fulfill with a rate-limit body (e.g. { code: 11232, ... })
       // instead of throwing. Classify before returning so retry covers both shapes.
       const fulfilledRateLimit = getFeishuSendRateLimitCodeFromResponse(result);
