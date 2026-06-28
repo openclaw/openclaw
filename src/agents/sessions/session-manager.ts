@@ -2235,8 +2235,10 @@ export class SessionManager {
     }
     appendTranscriptMessageSync(scope, {
       cwd: this.cwd,
+      eventId: entry.id,
       message: entry.message,
       now: Date.parse(entry.timestamp),
+      parentId: entry.parentId,
     });
   }
 

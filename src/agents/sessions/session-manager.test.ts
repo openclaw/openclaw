@@ -69,7 +69,7 @@ describe("SessionManager.open", () => {
       expect.objectContaining({ content: "question", role: "user" }),
     ]);
 
-    sessionManager.appendMessage({
+    const assistantId = sessionManager.appendMessage({
       role: "assistant",
       content: [{ type: "text", text: "answer" }],
       api: "openai-responses",
@@ -108,6 +108,8 @@ describe("SessionManager.open", () => {
         type: "message",
       }),
       expect.objectContaining({
+        id: assistantId,
+        parentId: expect.any(String),
         message: expect.objectContaining({
           content: [{ type: "text", text: "answer" }],
           role: "assistant",
