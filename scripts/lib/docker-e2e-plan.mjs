@@ -28,6 +28,7 @@ export const DEFAULT_RESOURCE_LIMITS = {
   "live:gemini": 4,
   "live:opencode": 4,
   "live:openai": 1,
+  "live:telegram": 1,
   npm: 5,
   service: 7,
 };
@@ -74,6 +75,7 @@ function sanitizeLaneNameSuffix(value) {
 
 const UPGRADE_SURVIVOR_SCENARIOS = [
   "base",
+  "acpx-openclaw-tools-bridge",
   "feishu-channel",
   "bootstrap-persona",
   "channel-post-core-restore",
@@ -182,6 +184,17 @@ function supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec) {
   return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 23 }) >= 0;
 }
 
+function supportsUpgradeSurvivorAcpToolsBridge(baselineSpec) {
+  if (!baselineSpec) {
+    return true;
+  }
+  const version = parsePublishedReleaseVersion(baselineSpec);
+  if (!version) {
+    return true;
+  }
+  return comparePublishedReleaseVersion(version, { year: 2026, month: 4, patch: 22 }) >= 0;
+}
+
 function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScenarios = "") {
   const baselineSpecs = parseUpgradeSurvivorBaselineSpecs(rawBaselineSpecs);
   const scenarios = parseUpgradeSurvivorScenarios(rawScenarios);
@@ -198,8 +211,10 @@ function expandUpgradeSurvivorBaselineLanes(poolLanes, rawBaselineSpecs, rawScen
       matrixScenarios
         .filter(
           (scenario) =>
-            scenario !== "plugin-deps-cleanup" ||
-            supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec),
+            (scenario !== "plugin-deps-cleanup" ||
+              supportsUpgradeSurvivorPluginDependencyCleanup(baselineSpec)) &&
+            (scenario !== "acpx-openclaw-tools-bridge" ||
+              supportsUpgradeSurvivorAcpToolsBridge(baselineSpec)),
         )
         .map((scenario) => {
           const suffixParts = [
@@ -350,6 +365,9 @@ function laneCredentialRequirements(poolLane) {
   }
   if (resources.includes("live:opencode")) {
     credentials.push("opencode");
+  }
+  if (resources.includes("live:telegram")) {
+    credentials.push("telegram");
   }
   return credentials;
 }

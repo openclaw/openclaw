@@ -68,6 +68,16 @@ describe("applyJobPatch delivery merge", () => {
     expect(job.delivery).toEqual({ mode: "announce" });
   });
 
+  it("preserves implicit delivery when clearing an absent override", () => {
+    const job = makeJob({ delivery: undefined });
+
+    applyJobPatch(job, {
+      delivery: { channel: null },
+    });
+
+    expect(job.delivery).toBeUndefined();
+  });
+
   it("clears nullable failure destination fields", () => {
     const job = makeJob({
       delivery: {

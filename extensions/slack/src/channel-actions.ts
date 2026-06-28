@@ -15,6 +15,16 @@ type SlackActionInvoke = (
 
 let slackActionRuntimePromise: Promise<typeof import("./action-runtime.runtime.js")> | undefined;
 
+const SLACK_TOOL_DELIVERY_ACTIONS = new Set([
+  "deleteMessage",
+  "editMessage",
+  "pinMessage",
+  "react",
+  "sendMessage",
+  "unpinMessage",
+  "uploadFile",
+]);
+
 async function loadSlackActionRuntime() {
   slackActionRuntimePromise ??= import("./action-runtime.runtime.js");
   return await slackActionRuntimePromise;
@@ -42,6 +52,8 @@ export function createSlackActions(
   return {
     describeMessageTool: describeSlackMessageTool,
     extractToolSend: ({ args }) => extractSlackToolSend(args),
+    isToolDeliveryAction: ({ args }) =>
+      typeof args.action === "string" && SLACK_TOOL_DELIVERY_ACTIONS.has(args.action),
     prepareSendPayload: ({ ctx, payload }) => (ctx.action === "send" ? payload : null),
     handleAction: async (ctx) => {
       return await handleSlackMessageAction({

@@ -3,14 +3,14 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { MediaUnderstandingSkipError } from "../../../packages/media-understanding-common/src/errors.js";
 import { AcpRuntimeError } from "../../acp/runtime/errors.js";
 import type { AcpSessionStoreEntry } from "../../acp/runtime/session-meta.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
-import type { MediaUnderstandingSkipError } from "../../media-understanding/errors.js";
+import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
 import {
-  resolveAgentAttachments,
   resolveAgentTurnAttachments,
   resolveInlineAgentImageAttachments,
 } from "./agent-turn-attachments.js";
@@ -81,7 +81,9 @@ const ttsMocks = vi.hoisted(() => ({
 }));
 
 const mediaUnderstandingMocks = vi.hoisted(() => ({
-  applyMediaUnderstanding: vi.fn(async (_params: unknown) => undefined),
+  applyMediaUnderstanding: vi.fn<
+    (_params: unknown) => Promise<ApplyMediaUnderstandingResult | undefined>
+  >(async () => undefined),
 }));
 
 const acpAttachmentBuffers = vi.hoisted(() => new Map<string, Buffer>());
@@ -693,6 +695,34 @@ describe("tryDispatchAcpReply", () => {
     expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
   });
 
+  it("skips media understanding for cached stickers while preserving their attachment", async () => {
+    setReadyAcpResolution();
+    mockVisibleTextTurn("cached sticker");
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
+    const stickerPath = path.join(tempDir, "sticker.webp");
+    try {
+      await fs.writeFile(stickerPath, "image-bytes");
+
+      await runDispatch({
+        bodyForAgent: "[Sticker] Cached description",
+        ctxOverrides: {
+          MediaPath: stickerPath,
+          MediaPaths: [stickerPath],
+          MediaType: "image/webp",
+          MediaTypes: ["image/webp"],
+          Sticker: { cachedDescription: "Cached description" },
+          StickerMediaIncluded: true,
+          SkipStickerMediaUnderstanding: true,
+        },
+      });
+
+      expect(mediaUnderstandingMocks.applyMediaUnderstanding).not.toHaveBeenCalled();
+      expect(managerMocks.runTurn).toHaveBeenCalled();
+    } finally {
+      await fs.rm(tempDir, { recursive: true, force: true });
+    }
+  });
+
   it("passes the ACP agent directory to media understanding", async () => {
     setReadyAcpResolution();
     mockVisibleTextTurn("image turn");
@@ -729,60 +759,6 @@ describe("tryDispatchAcpReply", () => {
           "media understanding",
         ).agentDir,
       ).toBe(agentDir);
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
-  });
-
-  it("forwards normalized image attachments into agent runtime turns", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "dispatch-acp-"));
-    const imagePath = path.join(tempDir, "inbound.png");
-    try {
-      await fs.writeFile(imagePath, "image-bytes");
-      const attachments = await resolveAgentAttachments({
-        cfg: createAcpTestConfig({
-          channels: {
-            imessage: {
-              attachmentRoots: [tempDir],
-            },
-          },
-        }),
-        ctx: buildTestCtx({
-          Provider: "imessage",
-          Surface: "imessage",
-          MediaPath: imagePath,
-          MediaType: "image/png",
-        }),
-        runtime: {
-          MediaAttachmentCache: class {
-            async getBuffer() {
-              return {
-                buffer: Buffer.from("image-bytes"),
-                mime: "image/png",
-                fileName: "inbound.png",
-                size: "image-bytes".length,
-              };
-            }
-          } as unknown as typeof import("./dispatch-acp-media.runtime.js").MediaAttachmentCache,
-          isMediaUnderstandingSkipError: (_error: unknown): _error is MediaUnderstandingSkipError =>
-            false,
-          normalizeAttachments: (ctx) => [
-            {
-              path: ctx.MediaPath,
-              mime: ctx.MediaType,
-              index: 0,
-            },
-          ],
-          resolveMediaAttachmentLocalRoots: () => [tempDir],
-        },
-      });
-
-      expect(attachments).toEqual([
-        {
-          mediaType: "image/png",
-          data: Buffer.from("image-bytes").toString("base64"),
-        },
-      ]);
     } finally {
       await fs.rm(tempDir, { recursive: true, force: true });
     }
@@ -1215,6 +1191,47 @@ describe("tryDispatchAcpReply", () => {
       {
         mediaType: "image/png",
         data: image.data,
+      },
+    ]);
+  });
+
+  it("forwards media-understanding PDF page images alongside current image attachments", async () => {
+    setReadyAcpResolution();
+    const currentPath = "/tmp/openclaw-current-image.png";
+    const currentImage = Buffer.from("current-image");
+    const pdfPage = {
+      type: "image" as const,
+      mimeType: "image/png",
+      data: Buffer.from("pdf-page").toString("base64"),
+      attachmentIndex: 1,
+    };
+    acpAttachmentBuffers.set(currentPath, currentImage);
+    mediaUnderstandingMocks.applyMediaUnderstanding.mockResolvedValueOnce({
+      outputs: [],
+      decisions: [],
+      extractedFileImages: [pdfPage],
+      appliedImage: false,
+      appliedAudio: false,
+      appliedVideo: false,
+      appliedFile: true,
+    });
+
+    await runDispatch({
+      bodyForAgent: "describe current image and scanned PDF",
+      ctxOverrides: {
+        MediaPath: currentPath,
+        MediaType: "image/png",
+      },
+    });
+
+    expect(runTurnCall().attachments).toEqual([
+      {
+        mediaType: "image/png",
+        data: currentImage.toString("base64"),
+      },
+      {
+        mediaType: "image/png",
+        data: pdfPage.data,
       },
     ]);
   });

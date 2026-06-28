@@ -13,7 +13,8 @@ import { defaultRuntime } from "../../runtime.js";
 import { shortenHomeInString } from "../../utils.js";
 import { formatCliCommand } from "../command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
-import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
+import { quoteCliArg } from "../quote-cli-arg.js";
+import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
 import {
@@ -132,13 +133,6 @@ function isPendingApprovalState(
   return state === "pending-approval" || state === "pending-reapproval";
 }
 
-function quoteCliArg(value: string): string {
-  if (/^[A-Za-z0-9_/:=.,@%+-]+$/.test(value)) {
-    return value;
-  }
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
-
 function formatPendingApprovalCommand(raw: unknown, opts: NodesRpcOpts): string | null {
   const requestId = normalizeOptionalString(raw);
   if (!requestId) {
@@ -150,16 +144,6 @@ function formatPendingApprovalCommand(raw: unknown, opts: NodesRpcOpts): string 
     args.push("--timeout", timeout);
   }
   return formatCliCommand(args.map(quoteCliArg).join(" "));
-}
-
-function formatConnectionFlagReminder(opts: NodesRpcOpts): string | null {
-  const flags = [
-    normalizeOptionalString(opts.url) ? "--url" : null,
-    normalizeOptionalString(opts.token) ? "--token" : null,
-  ].filter((flag) => flag !== null);
-  return flags.length > 0
-    ? `Reuse the same ${flags.join("/")} option${flags.length === 1 ? "" : "s"} when rerunning.`
-    : null;
 }
 
 function parseSinceMs(raw: unknown, label: string): number | undefined {

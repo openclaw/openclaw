@@ -8,7 +8,7 @@ import type { StreamFn } from "./runtime/index.js";
 const CUSTOM_API_SOURCE_PREFIX = "openclaw-custom-api:";
 
 /** Returns the registry source id used for a custom API stream function. */
-export function getCustomApiRegistrySourceId(api: Api): string {
+function getCustomApiRegistrySourceId(api: Api): string {
   return `${CUSTOM_API_SOURCE_PREFIX}${api}`;
 }
 

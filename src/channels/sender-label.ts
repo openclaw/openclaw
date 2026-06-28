@@ -30,30 +30,3 @@ export function resolveSenderLabel(params: SenderLabelParams): string | null {
   }
   return display || idPart || null;
 }
-
-/** Returns de-duplicated sender label candidates for matching and search. */
-export function listSenderLabelCandidates(params: SenderLabelParams): string[] {
-  const candidates = new Set<string>();
-  const { name, username, tag, e164, id } = normalizeSenderLabelParams(params);
-
-  if (name) {
-    candidates.add(name);
-  }
-  if (username) {
-    candidates.add(username);
-  }
-  if (tag) {
-    candidates.add(tag);
-  }
-  if (e164) {
-    candidates.add(e164);
-  }
-  if (id) {
-    candidates.add(id);
-  }
-  const resolved = resolveSenderLabel(params);
-  if (resolved) {
-    candidates.add(resolved);
-  }
-  return Array.from(candidates);
-}

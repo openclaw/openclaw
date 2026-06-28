@@ -120,9 +120,10 @@ openclaw sessions cleanup --json
 
 - Scope note: `openclaw sessions cleanup` maintains session stores, transcripts, and trajectory sidecars. It does not prune cron run history, which is managed by `cron.runLog.keepLines` in [Cron configuration](/automation/cron-jobs#configuration) and explained in [Cron maintenance](/automation/cron-jobs#maintenance).
 - Cleanup also prunes unreferenced primary transcripts, compaction checkpoints, and trajectory sidecars older than `session.maintenance.pruneAfter`; files still referenced by `sessions.json` are preserved.
+- Cleanup reports short-lived gateway model-run probe cleanup separately as `modelRunPruned`. This only matches strict explicit keys shaped like `agent:*:explicit:model-run-<uuid>`. The fixed retention is `24h`, but it is pressure-gated: it only removes stale probe rows when session-entry maintenance/cap pressure is reached. When it runs, model-run cleanup happens before global stale cleanup and capping.
 
 - `--dry-run`: preview how many entries would be pruned/capped without writing.
-  - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) so you can see what would be kept vs removed.
+  - In text mode, dry-run prints a per-session action table (`Action`, `Key`, `Age`, `Model`, `Flags`) plus a summary grouped by session label so you can see what would be kept vs removed.
 - `--enforce`: apply maintenance even when `session.maintenance.mode` is `warn`.
 - `--fix-missing`: remove entries whose transcript files are missing or header-only/empty, even if they would not normally age/count out yet.
 - `--fix-dm-scope`: when `session.dmScope` is `main`, retire stale peer-keyed direct-DM rows left behind by earlier `per-peer`, `per-channel-peer`, or `per-account-channel-peer` routing. Use `--dry-run` first; applying the cleanup removes those rows from `sessions.json` and preserves their transcripts as deleted archives.
@@ -168,11 +169,62 @@ traffic. Use `--store <path>` for explicit offline repair of a store file.
 }
 ```
 
-Related:
+## Compact a session
 
-- Session config: [Configuration reference](/gateway/config-agents#session)
+Reclaim context budget for a wedged or oversized session. `openclaw sessions compact <key>` is the first-class wrapper around the `sessions.compact` gateway RPC and requires a running gateway.
+
+```bash
+openclaw sessions compact "agent:main:main"
+openclaw sessions compact "agent:main:main" --max-lines 200
+openclaw sessions compact "agent:work:main" --agent work --json
+```
+
+- Without `--max-lines`, the gateway LLM-summarizes the transcript. This can be slow, so the default `--timeout` is `180000` ms.
+- With `--max-lines <n>`, it truncates to the last `n` transcript lines and archives the prior transcript as a `.bak` sidecar.
+- `--agent <id>`: agent that owns the session; required for `global` keys.
+- `--url` / `--token` / `--password`: gateway connection overrides.
+- `--timeout <ms>`: RPC timeout in milliseconds.
+- `--json`: print the raw RPC payload.
+
+The command exits non-zero when the gateway reports a failed compaction or is unreachable, so crons and scripts never mistake a silent no-op for success.
+
+> Note: `openclaw agent --message '/compact ...'` is **not** a compaction path. Slash commands from the CLI are rejected by the authorized-sender check; that invocation exits non-zero with guidance pointing here instead of silently no-opping.
+
+### sessions.compact RPC
+
+`openclaw gateway call sessions.compact --params '<json>'` accepts:
+
+| Field      | Type        | Required | Description                                                |
+| ---------- | ----------- | -------- | ---------------------------------------------------------- |
+| `key`      | string      | yes      | Session key to compact (for example `agent:main:main`).    |
+| `agentId`  | string      | no       | Agent id that owns the session (for `global` keys).        |
+| `maxLines` | integer ≥ 1 | no       | Truncate to the last N lines instead of LLM summarization. |
+
+Example LLM-summarize response:
+
+```json
+{
+  "ok": true,
+  "key": "agent:main:main",
+  "compacted": true,
+  "result": { "tokensBefore": 243868, "tokensAfter": 34941 }
+}
+```
+
+Example truncate response (`--max-lines 200`):
+
+```json
+{
+  "ok": true,
+  "key": "agent:main:main",
+  "compacted": true,
+  "archived": "/home/user/.openclaw/agents/main/sessions/transcripts/<id>.jsonl.bak",
+  "kept": 200
+}
+```
 
 ## Related
 
+- Session config: [Configuration reference](/gateway/config-agents#session)
 - [CLI reference](/cli)
 - [Session management](/concepts/session)

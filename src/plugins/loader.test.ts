@@ -2,7 +2,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
-import { listAgentHarnessIds } from "../agents/harness/registry.js";
+import { applyBootstrapHookOverrides } from "../agents/bootstrap-hooks.js";
+import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
+import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import {
@@ -31,7 +33,7 @@ import { withEnv } from "../test-utils/env.js";
 import { buildPluginApi } from "./api-builder.js";
 import { clearPluginCommands } from "./command-registry-state.js";
 import { getPluginCommandSpecs } from "./command-specs.js";
-import { listCompactionProviderIds } from "./compaction-provider.js";
+import { getCompactionProvider } from "./compaction-provider.js";
 import {
   getEmbeddingProvider,
   listEmbeddingProviders,
@@ -53,9 +55,11 @@ import {
   claimPluginInteractiveCallbackDedupe,
   commitPluginInteractiveCallbackDedupe,
 } from "./interactive-state.js";
+import { warnWhenAllowlistIsOpen } from "./loader-provenance.js";
 import {
   testing,
   clearPluginLoaderCache,
+  loadOpenClawPluginCliRegistry,
   loadOpenClawPlugins,
   type PluginLoadOptions,
   PluginLoadReentryError,
@@ -97,6 +101,8 @@ import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
   listImportedRuntimePluginIds,
+  pinActivePluginChannelRegistry,
+  releasePinnedPluginChannelRegistry,
   setActivePluginRegistry,
 } from "./runtime.js";
 import {
@@ -112,6 +118,10 @@ type PluginStartupTraceDetail = {
   name: string;
   metrics: ReadonlyArray<readonly [string, number | string]>;
 };
+
+function listRegisteredAgentHarnessIdsForTest(): string[] {
+  return listRegisteredAgentHarnesses().map((entry) => entry.harness.id);
+}
 
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
@@ -187,6 +197,59 @@ function updatePluginManifest(plugin: Pick<TempPlugin, "dir">, patch: Record<str
 
 function memoryPluginBody(id: string) {
   return `module.exports = { id: ${JSON.stringify(id)}, kind: "memory", register() {} };`;
+}
+
+function setupBundledDreamingMemoryPlugins(params?: {
+  selectedId?: string;
+  selectedKind?: unknown;
+  coreBody?: string;
+}) {
+  const selectedId = params?.selectedId ?? "memory-lancedb";
+  const bundledDir = makeTempDir();
+  const memoryCoreDir = path.join(bundledDir, "memory-core");
+  const selectedMemoryDir = path.join(bundledDir, selectedId);
+  mkdirSafe(memoryCoreDir);
+  mkdirSafe(selectedMemoryDir);
+  writePlugin({
+    id: "memory-core",
+    dir: memoryCoreDir,
+    filename: "index.cjs",
+    body: params?.coreBody ?? memoryPluginBody("memory-core"),
+  });
+  writePlugin({
+    id: selectedId,
+    dir: selectedMemoryDir,
+    filename: "index.cjs",
+    body:
+      params?.selectedKind === "utility"
+        ? `module.exports = { id: ${JSON.stringify(selectedId)}, kind: "utility", register() {} };`
+        : memoryPluginBody(selectedId),
+  });
+  const openSchema = { type: "object", additionalProperties: true };
+  fs.writeFileSync(
+    path.join(memoryCoreDir, "openclaw.plugin.json"),
+    JSON.stringify(
+      { id: "memory-core", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  fs.writeFileSync(
+    path.join(selectedMemoryDir, "openclaw.plugin.json"),
+    JSON.stringify(
+      {
+        id: selectedId,
+        kind: params?.selectedKind ?? "memory",
+        configSchema: openSchema,
+      },
+      null,
+      2,
+    ),
+    "utf-8",
+  );
+  process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
+  return { bundledDir, selectedId };
 }
 
 const RESERVED_ADMIN_PLUGIN_METHOD = "config.plugin.inspect";
@@ -2719,7 +2782,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       },
       onlyPluginIds: ["codex-harness"],
     });
-    expect(listAgentHarnessIds()).toEqual(["codex"]);
+    expect(listRegisteredAgentHarnessIdsForTest()).toEqual(["codex"]);
 
     loadOpenClawPlugins({
       cache: false,
@@ -2730,7 +2793,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
         },
       },
     });
-    expect(listAgentHarnessIds()).toStrictEqual([]);
+    expect(listRegisteredAgentHarnessIdsForTest()).toStrictEqual([]);
   });
 
   it("rejects malformed plugin agent harness registrations", () => {
@@ -2761,7 +2824,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
       onlyPluginIds: ["bad-harness"],
     });
 
-    expect(listAgentHarnessIds()).toStrictEqual([]);
+    expect(listRegisteredAgentHarnessIdsForTest()).toStrictEqual([]);
     const diagnostic = registry.diagnostics.find(
       (entry) =>
         entry.level === "error" &&
@@ -2908,6 +2971,163 @@ module.exports = { id: "throws-after-import", register() {} };`,
     await triggerInternalHook(event);
     expect(event.messages).toEqual(["plugin-config-visible"]);
     expect(event.context).toStrictEqual({});
+
+    clearInternalHooks();
+  });
+
+  it("preserves plugin hook context mutations for bootstrap hooks", async () => {
+    useNoBundledPlugins();
+    const plugin = writePlugin({
+      id: "hook-bootstrap-mutation",
+      filename: "hook-bootstrap-mutation.cjs",
+      body: `module.exports = {
+        id: "hook-bootstrap-mutation",
+        register(api) {
+          api.registerHook(
+            "agent:bootstrap",
+            (event) => {
+              event.context.bootstrapFiles = [
+                {
+                  name: "AGENTS.md",
+                  path: "/tmp/override-AGENTS.md",
+                  content: "override bootstrap rules",
+                  missing: false,
+                },
+              ];
+            },
+            { name: "hook-bootstrap-mutation" },
+          );
+        },
+      };`,
+    });
+
+    clearInternalHooks();
+
+    loadRegistryFromSinglePlugin({
+      plugin,
+      pluginConfig: {
+        allow: ["hook-bootstrap-mutation"],
+      },
+      options: {
+        onlyPluginIds: ["hook-bootstrap-mutation"],
+      },
+    });
+
+    const updated = await applyBootstrapHookOverrides({
+      files: [
+        {
+          name: "AGENTS.md",
+          path: "/tmp/base-AGENTS.md",
+          content: "base bootstrap rules",
+          missing: false,
+        } satisfies WorkspaceBootstrapFile,
+      ],
+      workspaceDir: "/tmp",
+      sessionKey: "agent:main:subagent:test-bootstrap",
+    });
+
+    expect(updated).toEqual([
+      {
+        name: "AGENTS.md",
+        path: "/tmp/override-AGENTS.md",
+        content: "override bootstrap rules",
+        missing: false,
+      },
+    ]);
+
+    clearInternalHooks();
+  });
+
+  it("runs consecutive plugin hook handlers with shared mutable context but isolated plugin config", async () => {
+    useNoBundledPlugins();
+    const first = writePlugin({
+      id: "hook-context-first",
+      filename: "hook-context-first.cjs",
+      body: `module.exports = {
+        id: "hook-context-first",
+        register(api) {
+          api.registerHook(
+            "gateway:startup",
+            (event) => {
+              event.messages.push("first-config=" + event.context.pluginConfig?.marker);
+              event.context.note = "mutation-from-first";
+            },
+            { name: "hook-context-first" },
+          );
+        },
+      };`,
+    });
+    const second = writePlugin({
+      id: "hook-context-second",
+      filename: "hook-context-second.cjs",
+      body: `module.exports = {
+        id: "hook-context-second",
+        register(api) {
+          api.registerHook(
+            "gateway:startup",
+            (event) => {
+              event.messages.push(
+                "second-config=" + String(event.context.pluginConfig?.marker ?? "none"),
+              );
+              event.messages.push("note=" + String(event.context.note ?? "missing-note"));
+            },
+            { name: "hook-context-second" },
+          );
+        },
+      };`,
+    });
+    for (const plugin of [first, second]) {
+      fs.writeFileSync(
+        path.join(plugin.dir, "openclaw.plugin.json"),
+        JSON.stringify(
+          {
+            id: plugin.id,
+            configSchema: { type: "object" },
+          },
+          null,
+          2,
+        ),
+        "utf-8",
+      );
+    }
+
+    clearInternalHooks();
+
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir: first.dir,
+      onlyPluginIds: ["hook-context-first", "hook-context-second"],
+      config: {
+        plugins: {
+          load: { paths: [first.file, second.file] },
+          allow: ["hook-context-first", "hook-context-second"],
+          entries: {
+            "hook-context-first": {
+              config: {
+                marker: "visible-to-first",
+              },
+            },
+            "hook-context-second": {
+              config: {
+                marker: "visible-to-second",
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const event = createInternalHookEvent("gateway", "startup", "gateway:startup");
+    await triggerInternalHook(event);
+
+    expect(event.messages).toEqual([
+      "first-config=visible-to-first",
+      "second-config=visible-to-second",
+      "note=mutation-from-first",
+    ]);
+    expect(event.context).toEqual({
+      note: "mutation-from-first",
+    });
 
     clearInternalHooks();
   });
@@ -4101,7 +4321,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
     resetGlobalHookRunner();
   });
 
-  it("preserves the gateway-bindable hook runner across later default-mode activating loads", () => {
+  it("keeps pinned gateway hooks and later default-mode hooks dispatchable together", () => {
     useNoBundledPlugins();
     const gatewayPlugin = writePlugin({
       id: "gateway-hook-surface",
@@ -4136,30 +4356,85 @@ module.exports = { id: "throws-after-import", register() {} };`,
         allowGatewaySubagentBinding: true,
       },
     });
-    expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
-    expect(expectGlobalHookRunner(getGlobalHookRunner()).hasHooks("subagent_ended")).toBe(true);
+    // The gateway pins its boot registry to the channel/http surfaces; the
+    // pin is what keeps gateway lifecycle hooks live across later swaps.
+    pinActivePluginChannelRegistry(gatewayRegistry);
+    try {
+      expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
+      expect(expectGlobalHookRunner(getGlobalHookRunner()).hasHooks("subagent_ended")).toBe(true);
 
-    const defaultRegistry = loadOpenClawPlugins({
-      workspaceDir: defaultPlugin.dir,
-      config: {
-        plugins: {
-          load: { paths: [defaultPlugin.file] },
-          allow: ["default-hook-surface"],
-          entries: {
-            "default-hook-surface": {
-              enabled: true,
-              hooks: { allowConversationAccess: true },
+      const defaultRegistry = loadOpenClawPlugins({
+        workspaceDir: defaultPlugin.dir,
+        config: {
+          plugins: {
+            load: { paths: [defaultPlugin.file] },
+            allow: ["default-hook-surface"],
+            entries: {
+              "default-hook-surface": {
+                enabled: true,
+                hooks: { allowConversationAccess: true },
+              },
             },
           },
         },
-      },
+      });
+
+      expect(getActivePluginRegistry()).toBe(defaultRegistry);
+      expect(getGlobalPluginRegistry()).toBe(defaultRegistry);
+      // Regression guard for #91918: the runner must see the union of live
+      // registries, not just whichever registry initialized it last.
+      const globalHookRunner = expectGlobalHookRunner(getGlobalHookRunner());
+      expect(globalHookRunner.hasHooks("subagent_ended")).toBe(true);
+      expect(globalHookRunner.hasHooks("message_sent")).toBe(true);
+    } finally {
+      releasePinnedPluginChannelRegistry(gatewayRegistry);
+    }
+  });
+
+  it("drops hooks of replaced unpinned registries from the global runner", () => {
+    useNoBundledPlugins();
+    const firstPlugin = writePlugin({
+      id: "retired-hook-surface",
+      filename: "retired-hook-surface.cjs",
+      body: `module.exports = { id: "retired-hook-surface", register(api) {
+        api.on("subagent_ended", () => undefined);
+      } };`,
+    });
+    const secondPlugin = writePlugin({
+      id: "replacing-hook-surface",
+      filename: "replacing-hook-surface.cjs",
+      body: `module.exports = { id: "replacing-hook-surface", register(api) {
+        api.on("message_sent", () => undefined);
+      } };`,
     });
 
-    expect(getActivePluginRegistry()).toBe(defaultRegistry);
-    expect(getGlobalPluginRegistry()).toBe(gatewayRegistry);
+    loadOpenClawPlugins({
+      workspaceDir: firstPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [firstPlugin.file] },
+          allow: ["retired-hook-surface"],
+          entries: { "retired-hook-surface": { enabled: true } },
+        },
+      },
+    });
+    expect(expectGlobalHookRunner(getGlobalHookRunner()).hasHooks("subagent_ended")).toBe(true);
+
+    // A second activation retires the unpinned first registry entirely; its
+    // hooks must drop instead of dispatching stale config closures.
+    loadOpenClawPlugins({
+      workspaceDir: secondPlugin.dir,
+      config: {
+        plugins: {
+          load: { paths: [secondPlugin.file] },
+          allow: ["replacing-hook-surface"],
+          entries: { "replacing-hook-surface": { enabled: true } },
+        },
+      },
+    });
     const globalHookRunner = expectGlobalHookRunner(getGlobalHookRunner());
-    expect(globalHookRunner.hasHooks("subagent_ended")).toBe(true);
-    expect(globalHookRunner.hasHooks("message_sent")).toBe(false);
+    expect(globalHookRunner.hasHooks("message_sent")).toBe(true);
+    expect(globalHookRunner.hasHooks("subagent_ended")).toBe(false);
   });
 
   it.each([
@@ -4897,7 +5172,7 @@ module.exports = { id: "throws-after-import", register() {} };`,
             pluginId: "compaction-provider-malformed",
             message: 'compaction provider "broken-compaction" registration missing summarize',
           });
-          expect(listCompactionProviderIds()).not.toContain("broken-compaction");
+          expect(getCompactionProvider("broken-compaction")).toBeUndefined();
         },
       },
       {
@@ -7820,6 +8095,151 @@ module.exports = {
       },
       {
         label:
+          "loads dreaming engine through a restrictive allowlist when selected memory slot enables dreaming",
+        loadRegistry: () => {
+          const { selectedId } = setupBundledDreamingMemoryPlugins();
+
+          return loadOpenClawPlugins({
+            cache: false,
+            config: {
+              plugins: {
+                allow: [selectedId],
+                slots: { memory: selectedId },
+                entries: {
+                  [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
+                },
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const core = registry.plugins.find((entry) => entry.id === "memory-core");
+          const lance = registry.plugins.find((entry) => entry.id === "memory-lancedb");
+          expect(core?.status).toBe("loaded");
+          expect(core?.enabled).toBe(true);
+          expect(lance?.status).toBe("loaded");
+          expect(lance?.memorySlotSelected).toBe(true);
+        },
+      },
+      {
+        label: "keeps restrictive allowlist dreaming sidecar in manifest-only snapshots",
+        loadRegistry: () => {
+          const { selectedId } = setupBundledDreamingMemoryPlugins({
+            coreBody: `throw new Error("manifest-only snapshot should not import memory-core");`,
+          });
+
+          return loadOpenClawPlugins({
+            cache: false,
+            activate: false,
+            loadModules: false,
+            config: {
+              plugins: {
+                allow: [selectedId],
+                slots: { memory: selectedId },
+                entries: {
+                  [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
+                },
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const core = registry.plugins.find((entry) => entry.id === "memory-core");
+          const lance = registry.plugins.find((entry) => entry.id === "memory-lancedb");
+          expect(core?.status).toBe("loaded");
+          expect(lance?.status).toBe("loaded");
+          expect(lance?.memorySlotSelected).toBe(true);
+        },
+      },
+      {
+        label: "keeps denied dreaming sidecars fail-closed under restrictive allowlists",
+        loadRegistry: () => {
+          const { selectedId } = setupBundledDreamingMemoryPlugins({
+            coreBody: `throw new Error("denied memory-core should not load");`,
+          });
+
+          return loadOpenClawPlugins({
+            cache: false,
+            config: {
+              plugins: {
+                allow: [selectedId],
+                deny: ["memory-core"],
+                slots: { memory: selectedId },
+                entries: {
+                  [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
+                },
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const core = registry.plugins.find((entry) => entry.id === "memory-core");
+          const lance = registry.plugins.find((entry) => entry.id === "memory-lancedb");
+          expect(core?.status).toBe("disabled");
+          expect(core?.error).toBe("blocked by denylist");
+          expect(lance?.status).toBe("loaded");
+        },
+      },
+      {
+        label: "keeps explicitly disabled dreaming sidecars fail-closed",
+        loadRegistry: () => {
+          const { selectedId } = setupBundledDreamingMemoryPlugins({
+            coreBody: `throw new Error("disabled memory-core should not load");`,
+          });
+
+          return loadOpenClawPlugins({
+            cache: false,
+            config: {
+              plugins: {
+                allow: [selectedId],
+                slots: { memory: selectedId },
+                entries: {
+                  "memory-core": { enabled: false },
+                  [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
+                },
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const core = registry.plugins.find((entry) => entry.id === "memory-core");
+          const lance = registry.plugins.find((entry) => entry.id === "memory-lancedb");
+          expect(core?.status).toBe("disabled");
+          expect(core?.error).toBe("disabled in config");
+          expect(lance?.status).toBe("loaded");
+        },
+      },
+      {
+        label: "does not authorize dreaming sidecars for non-memory selected slots",
+        loadRegistry: () => {
+          const { selectedId } = setupBundledDreamingMemoryPlugins({
+            selectedKind: "utility",
+            coreBody: `throw new Error("non-memory selected slot should not load memory-core");`,
+          });
+
+          return loadOpenClawPlugins({
+            cache: false,
+            config: {
+              plugins: {
+                allow: [selectedId],
+                slots: { memory: selectedId },
+                entries: {
+                  [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
+                },
+              },
+            },
+          });
+        },
+        assert: (registry: ReturnType<typeof loadOpenClawPlugins>) => {
+          const core = registry.plugins.find((entry) => entry.id === "memory-core");
+          const selected = registry.plugins.find((entry) => entry.id === "memory-lancedb");
+          expect(core?.status).toBe("disabled");
+          expect(core?.error).toBe("not in allowlist");
+          expect(selected?.status).toBe("loaded");
+        },
+      },
+      {
+        label:
           "loads dreaming engine alongside a different memory slot plugin when dreaming is enabled",
         loadRegistry: () => {
           const bundledDir = makeTempDir();
@@ -8018,6 +8438,27 @@ module.exports = {
     ] as const;
 
     runRegistryScenarios(scenarios, ({ loadRegistry }) => loadRegistry());
+  });
+
+  it("loads dreaming sidecar metadata through a restrictive selected-memory allowlist", async () => {
+    const { selectedId } = setupBundledDreamingMemoryPlugins();
+
+    const registry = await loadOpenClawPluginCliRegistry({
+      cache: false,
+      config: {
+        plugins: {
+          allow: [selectedId],
+          slots: { memory: selectedId },
+          entries: {
+            [selectedId]: { enabled: true, config: { dreaming: { enabled: true } } },
+          },
+        },
+      },
+    });
+
+    expect(registry.plugins.map((entry) => entry.id)).toEqual(["memory-core", selectedId]);
+    expect(registry.plugins.find((entry) => entry.id === "memory-core")?.status).toBe("loaded");
+    expect(registry.plugins.find((entry) => entry.id === selectedId)?.status).toBe("loaded");
   });
 
   it("resolves duplicate plugin ids by source precedence", () => {
@@ -8343,6 +8784,207 @@ module.exports = {
         label: scenario.label,
       });
     });
+  });
+
+  it("warns when plugins.allow entries do not match any discovered plugin ids", () => {
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+    const { workspaceDir } = writeWorkspacePlugin({
+      id: "warn-mismatch-allow-plugin",
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          enabled: true,
+          // User configured a channel-style id that does not match the real plugin id.
+          allow: ["warn-mismatch-allow-channel"],
+        },
+      },
+    });
+    const emptyWarnings = warnings.filter((msg) => msg.includes("plugins.allow is empty"));
+    const mismatchWarnings = warnings.filter((msg) =>
+      msg.includes("do not match any discovered plugin ids"),
+    );
+    expect(emptyWarnings, "should not emit empty-allowlist warning").toHaveLength(0);
+    expect(mismatchWarnings, "should emit mismatch warning once").toHaveLength(1);
+    expect(mismatchWarnings[0]).toContain(`"warn-mismatch-allow-channel"`);
+    expect(mismatchWarnings[0]).toContain("warn-mismatch-allow-plugin");
+    expect(mismatchWarnings[0]).toContain("Use the plugin id");
+  });
+
+  it("stays quiet when plugins.allow contains at least one matching plugin id", () => {
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+    const { workspaceDir } = writeWorkspacePlugin({
+      id: "warn-partial-allow-plugin",
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          enabled: true,
+          // Allow contains one real plugin id plus a stray channel-style entry.
+          allow: ["warn-partial-allow-plugin", "warn-partial-allow-channel"],
+        },
+      },
+    });
+    const openAllowWarnings = warnings.filter(
+      (msg) =>
+        msg.includes("plugins.allow is empty") ||
+        msg.includes("do not match any discovered plugin ids"),
+    );
+    expect(openAllowWarnings, "should not emit allowlist warning when one id matches").toHaveLength(
+      0,
+    );
+  });
+
+  it("stays quiet when plugins.allow matches only bundled plugin ids, even while workspace/global plugins are present", () => {
+    // Regression for Codex P2 feedback on #68389: the mismatch warning should be computed
+    // against the full discovered plugin set (bundled + workspace + global), not only the
+    // workspace/global subset that the warning talks about. An allowlist that intentionally
+    // trusts bundled ids like ["telegram"] is valid and must not trip the mismatch path just
+    // because some unrelated non-bundled plugin happens to be auto-discoverable.
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+    writeBundledPlugin({
+      id: "warn-bundled-allow-only-plugin",
+      body: simplePluginBody("warn-bundled-allow-only-plugin"),
+    });
+    const { workspaceDir } = writeWorkspacePlugin({
+      id: "warn-noise-workspace-plugin",
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          enabled: true,
+          // Allowlist intentionally only trusts a bundled plugin id.
+          allow: ["warn-bundled-allow-only-plugin"],
+        },
+      },
+    });
+    const openAllowWarnings = warnings.filter(
+      (msg) =>
+        msg.includes("plugins.allow is empty") ||
+        msg.includes("do not match any discovered plugin ids"),
+    );
+    expect(
+      openAllowWarnings,
+      "bundled-only allowlists should not trip the mismatch warning",
+    ).toHaveLength(0);
+  });
+
+  it("includes actionable plugins.allow remediation hints in the open allowlist warning", () => {
+    useNoBundledPlugins();
+    clearPluginLoaderCache();
+
+    const { workspaceDir } = writeWorkspacePlugin({
+      id: "warn-open-allow-remediation",
+    });
+    const warnings: string[] = [];
+    loadOpenClawPlugins({
+      cache: false,
+      workspaceDir,
+      logger: createWarningLogger(warnings),
+      config: {
+        plugins: {
+          enabled: true,
+        },
+      },
+    });
+
+    const openAllowWarning = warnings.find((msg) => msg.includes("plugins.allow is empty"));
+    expect(openAllowWarning).toBeDefined();
+    expect(openAllowWarning).toContain('"warn-open-allow-remediation"');
+    expect(openAllowWarning).toContain('"plugins": { "allow": [');
+    expect(openAllowWarning).toContain("openclaw plugins list --enabled --verbose");
+    expect(openAllowWarning).toContain("openclaw plugins inspect warn-open-allow-remediation");
+  });
+
+  it("includes actionable plugins.allow remediation hints in the untracked-provenance warning", () => {
+    useNoBundledPlugins();
+    const stateDir = makeTempDir();
+    withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => {
+      const globalDir = path.join(stateDir, "extensions", "warn-untracked-remediation");
+      mkdirSafe(globalDir);
+      writePlugin({
+        id: "warn-untracked-remediation",
+        body: simplePluginBody("warn-untracked-remediation"),
+        dir: globalDir,
+        filename: "index.cjs",
+      });
+
+      const warnings: string[] = [];
+      const registry = loadOpenClawPlugins({
+        cache: false,
+        logger: createWarningLogger(warnings),
+        config: {
+          plugins: {
+            enabled: true,
+          },
+        },
+      });
+
+      const untrackedWarning = warnings.find(
+        (msg) =>
+          msg.includes("warn-untracked-remediation") &&
+          msg.includes("loaded without install/load-path provenance"),
+      );
+      expect(untrackedWarning).toBeDefined();
+      expect(untrackedWarning).toContain('"warn-untracked-remediation"');
+      expect(untrackedWarning).toContain("openclaw plugins inspect warn-untracked-remediation");
+      expect(untrackedWarning).toContain("reinstall from a trusted source");
+
+      const diagnostic = registry.diagnostics.find(
+        (entry) =>
+          entry.pluginId === "warn-untracked-remediation" &&
+          entry.message.includes("loaded without install/load-path provenance"),
+      );
+      expect(diagnostic?.message).toContain('"warn-untracked-remediation"');
+      expect(diagnostic?.message).toContain("openclaw plugins inspect warn-untracked-remediation");
+      expect(diagnostic?.message).toContain("reinstall from a trusted source");
+    });
+  });
+
+  it("omits the truncated plugins.allow snippet when more than six plugins are discovered", () => {
+    const ids = Array.from({ length: 8 }, (_, index) => `discovered-plugin-${index + 1}`);
+    const warnings: string[] = [];
+    const seenWarningKeys = new Set<string>();
+    const cache = {
+      hasOpenAllowlistWarning(key: string) {
+        return seenWarningKeys.has(key);
+      },
+      recordOpenAllowlistWarning(key: string) {
+        seenWarningKeys.add(key);
+      },
+    };
+    warnWhenAllowlistIsOpen({
+      emitWarning: true,
+      logger: createWarningLogger(warnings),
+      pluginsEnabled: true,
+      allow: [],
+      warningCacheKey: "truncated",
+      warningCache: cache,
+      discoverablePlugins: ids.map((id) => ({ id, source: `/tmp/${id}`, origin: "global" })),
+    });
+
+    expect(warnings).toHaveLength(1);
+    const message = warnings[0] ?? "";
+    expect(message).toContain("plugins.allow is empty");
+    expect(message).toContain("(+2 more)");
+    expect(message).not.toContain('"plugins": { "allow": [');
+    expect(message).toContain("openclaw plugins list --enabled --verbose");
+    expect(message).toContain("openclaw plugins inspect <id>");
   });
 
   it("handles workspace-discovered plugins according to trust and precedence", () => {

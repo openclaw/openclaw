@@ -3,7 +3,9 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
   AgentsListResultSchema,
+  SkillsDetailResultSchema,
   SkillsProposalInspectResultSchema,
+  SkillsProposalRequestRevisionResultSchema,
   ToolsEffectiveResultSchema,
 } from "./agents-models-skills.js";
 
@@ -147,5 +149,59 @@ describe("SkillsProposalInspectResultSchema", () => {
     };
 
     expect(Value.Check(SkillsProposalInspectResultSchema, result)).toBe(true);
+  });
+});
+
+describe("SkillsProposalRequestRevisionResultSchema", () => {
+  it.each(["started", "in_flight", "ok", "timeout", "error"])(
+    "accepts forwarded chat.send ack status %s",
+    (status) => {
+      expect(
+        Value.Check(SkillsProposalRequestRevisionResultSchema, {
+          runId: "run-revision",
+          status,
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("rejects unknown forwarded chat.send ack statuses", () => {
+    expect(
+      Value.Check(SkillsProposalRequestRevisionResultSchema, {
+        runId: "run-revision",
+        status: "queued",
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("SkillsDetailResultSchema", () => {
+  it("accepts official ClawHub skill publisher metadata", () => {
+    const result = {
+      skill: {
+        slug: "tao-setup-nvidia-gpu-host",
+        displayName: "TAO Setup NVIDIA GPU Host",
+        summary: "Prepare an NVIDIA GPU host for TAO workflows.",
+        tags: { gpu: "GPU" },
+        channel: "official",
+        isOfficial: true,
+        createdAt: 1_700_000_000,
+        updatedAt: 1_700_010_000,
+      },
+      latestVersion: {
+        version: "1.0.0",
+        createdAt: 1_700_010_000,
+      },
+      owner: {
+        handle: "nvidia",
+        displayName: "NVIDIA",
+        image: "https://example.test/nvidia.png",
+        official: true,
+        channel: "official",
+        isOfficial: true,
+      },
+    };
+
+    expect(Value.Check(SkillsDetailResultSchema, result)).toBe(true);
   });
 });

@@ -23,7 +23,6 @@ import {
   normalizeAgentModelRefForConfig,
 } from "../config/model-input.js";
 import { CONFIG_PATH } from "../config/paths.js";
-import { isBlockedObjectKey } from "../config/prototype-keys.js";
 import { isPluginPackagingRuntimeOutputInvalidConfigSnapshot } from "../config/recovery-policy.js";
 import { redactConfigObject } from "../config/redact-snapshot.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
@@ -42,8 +41,12 @@ import {
   validateConfigObjectRawWithPlugins,
 } from "../config/validation.js";
 import { SecretProviderSchema } from "../config/zod-schema.core.js";
-import { danger, info, success } from "../globals.js";
+import { diffConfigPaths } from "../gateway/config-diff.js";
+import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
+import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
+import { danger, info, success, warn } from "../globals.js";
 import { parseStrictPositiveInteger } from "../infra/parse-finite-number.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { defaultRuntime } from "../runtime.js";
@@ -999,6 +1002,114 @@ function pruneInactiveGatewayAuthCredentials(params: {
 
 function toDotPath(path: PathSegment[]): string {
   return path.join(".");
+}
+
+const RESTART_HINT = "Restart the gateway to apply.";
+const HOT_RELOAD_HINT = "Change will apply without restarting the gateway.";
+const NO_RELOAD_HINT = "No gateway restart needed.";
+
+function isPluginEntryConfigPath(path: string): boolean {
+  // CLI hints are operator guidance. Keep plugin entry writes conservative
+  // because the CLI cannot prove every plugin's reload metadata is loaded.
+  return path === "plugins.entries" || path.startsWith("plugins.entries.");
+}
+
+function configApplyHintForPaths(paths: string[], afterConfig: OpenClawConfig): string {
+  if (paths.length === 0) {
+    return RESTART_HINT;
+  }
+  if (paths.some(isPluginEntryConfigPath)) {
+    return RESTART_HINT;
+  }
+  const plan = buildGatewayReloadPlan(paths);
+  if (plan.restartGateway) {
+    return RESTART_HINT;
+  }
+  if (plan.hotReasons.length > 0) {
+    const { mode } = resolveGatewayReloadSettings(afterConfig);
+    if (mode === "off" || mode === "restart") {
+      return RESTART_HINT;
+    }
+    return HOT_RELOAD_HINT;
+  }
+  return NO_RELOAD_HINT;
+}
+
+function configApplyHintForOperations(
+  operations: ReadonlyArray<{ requestedPath?: PathSegment[] }>,
+  beforeConfig: OpenClawConfig,
+  afterConfig: OpenClawConfig,
+): string {
+  const requestedPaths: string[] = [];
+  for (const operation of operations) {
+    if (!operation.requestedPath) {
+      return RESTART_HINT;
+    }
+    requestedPaths.push(toDotPath(operation.requestedPath));
+  }
+  return configApplyHintForPaths(
+    expandActualChangedPathsWithRequestedDescendants(
+      diffConfigPaths(beforeConfig, afterConfig),
+      requestedPaths,
+      beforeConfig,
+      afterConfig,
+    ),
+    afterConfig,
+  );
+}
+
+function expandActualChangedPathsWithRequestedDescendants(
+  actualChangedPaths: string[],
+  requestedPaths: string[],
+  beforeConfig: OpenClawConfig,
+  afterConfig: OpenClawConfig,
+): string[] {
+  const expanded = new Set<string>();
+  for (const actualPath of actualChangedPaths) {
+    const requestedDescendants = requestedPaths.filter(
+      (requestedPath) => requestedPath !== actualPath && requestedPath.startsWith(`${actualPath}.`),
+    );
+    if (requestedDescendants.length > 0) {
+      for (const requestedPath of requestedDescendants) {
+        expanded.add(requestedPath);
+      }
+      continue;
+    }
+    for (const expandedPath of expandWholeValueChangePath(actualPath, beforeConfig, afterConfig)) {
+      expanded.add(expandedPath);
+    }
+  }
+  return [...expanded];
+}
+
+function expandWholeValueChangePath(
+  actualPath: string,
+  beforeConfig: OpenClawConfig,
+  afterConfig: OpenClawConfig,
+): string[] {
+  const path = actualPath === "<root>" ? [] : actualPath.split(".");
+  const before = getAtPath(beforeConfig, path);
+  const after = getAtPath(afterConfig, path);
+  if (before.found && !after.found) {
+    return collectChangedLeafPaths(before.value, actualPath);
+  }
+  if (!before.found && after.found) {
+    return collectChangedLeafPaths(after.value, actualPath);
+  }
+  return [actualPath];
+}
+
+function collectChangedLeafPaths(value: unknown, prefix: string): string[] {
+  if (!isPlainRecord(value)) {
+    return [prefix];
+  }
+  const entries = Object.entries(value);
+  if (entries.length === 0) {
+    return [prefix];
+  }
+  return entries.flatMap(([key, child]) =>
+    collectChangedLeafPaths(child, prefix ? `${prefix}.${key}` : key),
+  );
 }
 
 function parseSecretRefSource(raw: string, label: string): SecretRefSource {
@@ -2011,6 +2122,9 @@ async function runConfigOperations(params: {
   // instead of snapshot.config (runtime-merged with defaults).
   // This prevents runtime defaults from leaking into the written config file (issue #6070)
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+  const currentConfigForApplyHint = normalizeConfigMutationModelRefs(
+    structuredClone(snapshot.resolved) as OpenClawConfig,
+  );
   const mutationSchema = await loadConfigMutationSchema();
   const unsetPaths: PathSegment[][] = [];
   const explicitSetPaths: PathSegment[][] = [];
@@ -2197,16 +2311,16 @@ async function runConfigOperations(params: {
   if (params.successMode === "set" && operations.length === 1) {
     const operation = operations[0];
     const action = operation?.mutation === "delete" ? "Removed" : "Updated";
-    runtime.log(
-      info(`${action} ${toDotPath(operation?.requestedPath ?? [])}. Restart the gateway to apply.`),
-    );
+    const hint = configApplyHintForOperations(operations, currentConfigForApplyHint, nextConfig);
+    runtime.log(info(`${action} ${toDotPath(operation?.requestedPath ?? [])}. ${hint}`));
     return;
   }
+  const hint = configApplyHintForOperations(operations, currentConfigForApplyHint, nextConfig);
   if (params.successMode === "set") {
-    runtime.log(info(`Updated ${operations.length} config paths. Restart the gateway to apply.`));
+    runtime.log(info(`Updated ${operations.length} config paths. ${hint}`));
     return;
   }
-  runtime.log(info(`Applied ${operations.length} config update(s). Restart the gateway to apply.`));
+  runtime.log(info(`Applied ${operations.length} config update(s). ${hint}`));
 }
 
 function handleConfigMutationError(params: {
@@ -2367,6 +2481,9 @@ export async function runConfigUnset(opts: {
     // instead of snapshot.config (runtime-merged with defaults).
     // This prevents runtime defaults from leaking into the written config file (issue #6070)
     const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
+    const currentConfigForApplyHint = normalizeConfigMutationModelRefs(
+      structuredClone(snapshot.resolved) as OpenClawConfig,
+    );
     const unsetResult = unsetAtPath(next, parsedPath);
     if (!unsetResult.removed) {
       if (cliOptions.dryRun && cliOptions.json) {
@@ -2414,7 +2531,12 @@ export async function runConfigUnset(opts: {
         ? {}
         : { writeOptions: { unsetPaths: [parsedPath] } }),
     });
-    runtime.log(info(`Removed ${opts.path}. Restart the gateway to apply.`));
+    const hint = configApplyHintForOperations(
+      [buildUnsetOperation(parsedPath)],
+      currentConfigForApplyHint,
+      normalizeConfigMutationModelRefs(structuredClone(next) as OpenClawConfig),
+    );
+    runtime.log(info(`Removed ${opts.path}. ${hint}`));
   } catch (err) {
     handleConfigMutationError({ err, runtime, options: cliOptions });
   }
@@ -2497,10 +2619,17 @@ export async function runConfigValidate(opts: { json?: boolean; runtime?: Runtim
       return;
     }
 
+    const warnings = normalizeConfigIssues(snapshot.warnings);
     if (opts.json) {
-      writeRuntimeJson(runtime, { valid: true, path: outputPath }, 0);
+      writeRuntimeJson(runtime, { valid: true, path: outputPath, warnings }, 0);
     } else {
       runtime.log(success(`Config valid: ${shortPath}`));
+      if (warnings.length > 0) {
+        runtime.log(warn(`${warnings.length} warning(s):`));
+        for (const line of formatConfigIssueLines(warnings, warn("!"), { normalizeRoot: true })) {
+          runtime.log(`  ${line}`);
+        }
+      }
     }
   } catch (err) {
     if (opts.json) {

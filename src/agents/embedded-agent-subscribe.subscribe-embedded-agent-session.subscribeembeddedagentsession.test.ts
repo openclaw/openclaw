@@ -359,6 +359,29 @@ describe("subscribeEmbeddedAgentSession", () => {
     },
   );
 
+  it("suppressLiveStreamOutput skips per-chunk preview but still delivers final text", () => {
+    const onAgentEvent = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run",
+      onAgentEvent,
+      suppressLiveStreamOutput: true,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "Hello ");
+    emitAssistantTextDelta(emit, "world");
+
+    // No live preview events while suppressed (the per-chunk parsing path is skipped).
+    expect(extractAgentEventPayloads(onAgentEvent.mock.calls)).toHaveLength(0);
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "Hello world" }],
+    } as AssistantMessage;
+    emit({ type: "message_end", message: assistantMessage });
+    expectSingleAgentEventText(onAgentEvent.mock.calls, "Hello world");
+  });
+
   it("blocks local MEDIA urls from case-variant tool names in verbose output", async () => {
     const onToolResult = vi.fn();
     const { emit } = createSubscribedHarness({
@@ -964,6 +987,20 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(payloads).toHaveLength(1);
     expect(payloads[0]?.text).toBe("Visible answer");
     expect(payloads[0]?.delta).toBe("Visible answer");
+  });
+
+  it("replaces leaked MiniMax reasoning when its orphan close arrives in a later delta", () => {
+    const { emit, onAgentEvent } = createAgentEventHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta(emit, "private chain");
+    emitAssistantTextDelta(emit, "</mm:think>Visible answer");
+
+    const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
+    expect(payloads).toMatchObject([
+      { text: "private chain", delta: "private chain" },
+      { text: "Visible answer", delta: "", replace: true },
+    ]);
   });
 
   it("replaces malformed streamed reasoning when orphan close tags split across deltas", () => {

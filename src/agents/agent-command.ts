@@ -26,6 +26,7 @@ import {
   registerAgentRunContext,
   withAgentRunLifecycleGeneration,
 } from "../infra/agent-events.js";
+import { isDiagnosticsEnabled, emitTrustedDiagnosticEvent } from "../infra/diagnostic-events.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import {
   resolveAgentDeliveryPlan,
@@ -67,6 +68,7 @@ import {
   isDeliverableMessageChannel,
   resolveMessageChannel,
 } from "../utils/message-channel.js";
+import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import { resolveAgentRuntimeConfig } from "./agent-runtime-config.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
@@ -86,7 +88,10 @@ import {
 import { isStoredCredentialCompatibleWithAuthProvider } from "./auth-profiles/order.js";
 import { clearSessionAuthProfileOverride } from "./auth-profiles/session-override.js";
 import { ensureAuthProfileStore } from "./auth-profiles/store.js";
-import { createAgentAttemptLifecycleCallbacks } from "./command/attempt-callbacks.js";
+import {
+  createAgentAttemptLifecycleCallbacks,
+  type AgentAttemptLifecycleState,
+} from "./command/attempt-callbacks.js";
 import {
   persistSessionEntry as persistSessionEntryBase,
   prependInternalEventContext,
@@ -97,7 +102,10 @@ import { resolveAgentRunContext } from "./command/run-context.js";
 import { resolveSession } from "./command/session.js";
 import type { AgentCommandIngressOpts, AgentCommandOpts } from "./command/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import { classifyEmbeddedAgentRunResultForModelFallback } from "./embedded-agent-runner/result-fallback-classifier.js";
+import {
+  classifyEmbeddedAgentRunResultForModelFallback,
+  mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
+} from "./embedded-agent-runner/result-fallback-classifier.js";
 import { resolveFastModeState } from "./fast-mode.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { resolveAvailableAgentHarnessPolicy } from "./harness/selection.js";
@@ -131,6 +139,7 @@ import {
 } from "./run-termination.js";
 import { normalizeSpawnedRunMetadata } from "./spawned-context.js";
 import { resolveAgentTimeoutMs } from "./timeout.js";
+import { hasNonzeroUsage } from "./usage.js";
 import { ensureAgentWorkspace } from "./workspace.js";
 
 const log = createSubsystemLogger("agents/agent-command");
@@ -615,7 +624,13 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     throw new Error("Message (--message) is required");
   }
   const rawExplicitSessionKey = opts.sessionKey?.trim();
-  if (!opts.to && !opts.sessionId && !rawExplicitSessionKey && !opts.agentId) {
+  const requestedSessionId = opts.sessionId?.trim() || undefined;
+  const rawTo = opts.to?.trim();
+  const toSessionKey =
+    !rawExplicitSessionKey && !requestedSessionId && classifySessionKeyShape(rawTo) === "agent"
+      ? rawTo
+      : undefined;
+  if (!opts.to && !requestedSessionId && !rawExplicitSessionKey && !opts.agentId) {
     throw new Error(
       "Pass --to <E.164>, --session-key, --session-id, or --agent to choose a session",
     );
@@ -647,12 +662,14 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     classifySessionKeyShape(rawExplicitSessionKey) === "legacy_or_alias" &&
     !isUnscopedSessionKeySentinel(rawExplicitSessionKey),
   );
-  const explicitSessionKey = resolveExplicitAgentCommandSessionKey({
-    rawExplicitSessionKey,
-    agentIdOverride,
-    shouldScopeDefaultAgentKey,
-    cfg,
-  });
+  const explicitSessionKey =
+    toSessionKey ??
+    resolveExplicitAgentCommandSessionKey({
+      rawExplicitSessionKey,
+      agentIdOverride,
+      shouldScopeDefaultAgentKey,
+      cfg,
+    });
   if (explicitSessionKey && classifySessionKeyShape(explicitSessionKey) === "malformed_agent") {
     throw new Error(
       `Invalid --session-key "${explicitSessionKey}". Agent-prefixed session keys must use agent:<agent-id>:<session-key>.`,
@@ -698,10 +715,13 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
   });
   const runTimeoutOverrideMs = hasExplicitTimeoutOption ? timeoutMs : undefined;
 
+  const commandOpts = toSessionKey
+    ? { ...opts, to: undefined, sessionKey: explicitSessionKey }
+    : opts;
   const sessionResolution = resolveSession({
     cfg,
-    to: opts.to,
-    sessionId: opts.sessionId,
+    to: commandOpts.to,
+    sessionId: commandOpts.sessionId,
     sessionKey: explicitSessionKey,
     agentId: agentIdOverride,
     clone: false,
@@ -791,6 +811,7 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
     opts.transcriptMessage ?? resolveInternalEventTranscriptBody(message, opts.internalEvents);
 
   return {
+    opts: commandOpts,
     body,
     transcriptBody,
     cfg,
@@ -826,15 +847,17 @@ async function prepareAgentCommandExecution(opts: AgentCommandOpts, runtime: Run
 }
 
 async function agentCommandInternal(
-  opts: AgentCommandOpts,
+  initialOpts: AgentCommandOpts,
   runtime: RuntimeEnv = defaultRuntime,
   deps?: CliDeps,
 ) {
   const resolvedDeps = await resolveAgentCommandDeps(deps);
-  const isRawModelRun = opts.modelRun === true || opts.promptMode === "none";
-  const suppressVisibleSessionEffects = opts.sessionEffects === "internal";
-  const preserveUserFacingSessionModelState = opts.preserveUserFacingSessionModelState === true;
-  const prepared = await prepareAgentCommandExecution(opts, runtime);
+  const isRawModelRun = initialOpts.modelRun === true || initialOpts.promptMode === "none";
+  const suppressVisibleSessionEffects = initialOpts.sessionEffects === "internal";
+  const preserveUserFacingSessionModelState =
+    initialOpts.preserveUserFacingSessionModelState === true;
+  const prepared = await prepareAgentCommandExecution(initialOpts, runtime);
+  const opts = prepared.opts;
   const {
     body,
     transcriptBody,
@@ -871,6 +894,7 @@ async function agentCommandInternal(
   assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
   const effectiveCwd = cwd ? resolveUserPath(cwd) : workspaceDir;
   let sessionEntry = prepared.sessionEntry;
+  let sessionReboundDuringRun = false;
   let trackedRestartRecoveryDeliveryContext = false;
   let currentRunDeliveryContext: DeliveryContext | undefined;
 
@@ -1079,7 +1103,7 @@ async function agentCommandInternal(
               sessionFile: internalSessionFile,
             }
           : sessionEntry;
-        sessionEntry = await attemptExecutionRuntime.persistAcpTurnTranscript({
+        const transcriptResult = await attemptExecutionRuntime.persistAcpTurnTranscript({
           body,
           transcriptBody,
           finalText: finalTextRaw,
@@ -1093,6 +1117,7 @@ async function agentCommandInternal(
           sessionCwd: resolveAcpSessionCwd(acpResolution.meta) ?? workspaceDir,
           config: cfg,
         });
+        sessionEntry = transcriptResult.sessionEntry;
         if (internalSessionFile) {
           sessionEntry = prepared.sessionEntry;
         }
@@ -1406,6 +1431,11 @@ async function agentCommandInternal(
             groupChannel: runContext.groupChannel ?? sessionEntry?.groupChannel,
             groupSubject: sessionEntry?.subject,
             parentSessionKey: sessionEntry?.parentSessionKey ?? sessionKey,
+            directUserIds: [
+              sessionEntry?.origin?.nativeDirectUserId,
+              sessionEntry?.origin?.from,
+              sessionEntry?.origin?.to,
+            ],
           })
         : null;
     const normalizedChannelOverride = channelModelOverride
@@ -1652,7 +1682,7 @@ async function agentCommandInternal(
       : sessionFile;
 
     const startedAt = Date.now();
-    const attemptLifecycleState = {
+    const attemptLifecycleState: AgentAttemptLifecycleState = {
       currentTurnUserMessagePersisted: false,
       lifecycleFinishing: false,
       lifecycleEnded: false,
@@ -1706,6 +1736,52 @@ async function agentCommandInternal(
         },
       });
     };
+    const resolveLifecycleResultError = (
+      runResult: AgentAttemptResult,
+      includeErrorPayload: boolean,
+    ) =>
+      attemptLifecycleState.lifecycleError ??
+      (includeErrorPayload
+        ? runResult.payloads?.find(
+            (payload) => payload.isError === true && typeof payload.text === "string",
+          )?.text
+        : undefined) ??
+      (runResult.meta.error ? "Agent run failed" : undefined);
+    const emitLifecycleResultError = (
+      runResult: AgentAttemptResult,
+      fallbackExhausted: boolean,
+    ) => {
+      if (attemptLifecycleState.lifecycleEnded) {
+        return;
+      }
+      attemptLifecycleState.lifecycleEnded = true;
+      const error =
+        resolveLifecycleResultError(runResult, fallbackExhausted) ??
+        (fallbackExhausted ? "All model fallback candidates failed" : "Agent run failed");
+      emitAgentEvent({
+        runId,
+        lifecycleGeneration,
+        stream: "lifecycle",
+        data: {
+          phase: "error",
+          startedAt,
+          endedAt: Date.now(),
+          error,
+          ...(runResult.meta.stopReason ? { stopReason: runResult.meta.stopReason } : {}),
+          ...(runResult.meta.livenessState ? { livenessState: runResult.meta.livenessState } : {}),
+          ...(runResult.meta.timeoutPhase ? { timeoutPhase: runResult.meta.timeoutPhase } : {}),
+          ...(typeof runResult.meta.providerStarted === "boolean"
+            ? { providerStarted: runResult.meta.providerStarted }
+            : {}),
+          ...(typeof runResult.meta.aborted === "boolean"
+            ? { aborted: runResult.meta.aborted }
+            : {}),
+          ...(runResult.meta.replayInvalid === true ? { replayInvalid: true } : {}),
+          ...(runResult.meta.yielded === true ? { yielded: true } : {}),
+          ...(fallbackExhausted ? { fallbackExhaustedFailure: true } : {}),
+        },
+      });
+    };
     const emitLifecyclePostTurnError = (error: unknown) => {
       if (attemptLifecycleState.lifecycleEnded) {
         return;
@@ -1733,9 +1809,11 @@ async function agentCommandInternal(
     let result: AgentAttemptResult;
     let fallbackProvider = provider;
     let fallbackModel = model;
+    let fallbackExhausted = false;
     const MAX_LIVE_SWITCH_RETRIES = 5;
     let liveSwitchRetries = 0;
     let autoFallbackPrimaryProbeInterruptedByLiveSwitch = false;
+    const fastModeStartedAtMs = Date.now();
     const fallbackTrajectoryRecorder = createTrajectoryRuntimeRecorder({
       cfg,
       runId,
@@ -1798,8 +1876,12 @@ async function agentCommandInternal(
               model: modelLocal,
               result: resultLocal,
             }),
+          mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
           abortSignal: opts.abortSignal,
           run: async (providerOverride, modelOverride, runOptions) => {
+            attemptLifecycleState.lifecycleError = undefined;
+            attemptLifecycleState.lifecycleFinishing = false;
+            attemptLifecycleState.lifecycleEnded = false;
             const isAutoFallbackPrimaryProbeCandidate =
               autoFallbackPrimaryProbe &&
               providerOverride === autoFallbackPrimaryProbe.provider &&
@@ -1822,6 +1904,14 @@ async function agentCommandInternal(
               provider: providerOverride,
               model: modelOverride,
             });
+            const fastModeState = resolveFastModeState({
+              cfg,
+              provider: providerOverride,
+              model: modelOverride,
+              agentId: sessionAgentId,
+              sessionEntry,
+            });
+            const fastMode = opts.fastMode ?? fastModeState.mode;
             return attemptExecutionRuntime.runAgentAttempt({
               providerOverride,
               modelOverride,
@@ -1838,13 +1928,13 @@ async function agentCommandInternal(
               body,
               isFallbackRetry,
               resolvedThinkLevel,
-              fastMode: resolveFastModeState({
-                cfg,
-                provider: providerOverride,
-                model: modelOverride,
-                agentId: sessionAgentId,
-                sessionEntry,
-              }).enabled,
+              fastMode,
+              fastModeStartedAtMs,
+              fastModeAutoOnSeconds:
+                fastMode === "auto"
+                  ? (opts.fastModeAutoOnSeconds ?? fastModeState.fastAutoOnSeconds)
+                  : fastModeState.fastAutoOnSeconds,
+              isFinalFallbackAttempt: runOptions?.isFinalFallbackAttempt,
               timeoutMs,
               runTimeoutOverrideMs,
               runId,
@@ -1873,7 +1963,7 @@ async function agentCommandInternal(
                 lifecycleGeneration = nextLifecycleGeneration;
               },
               onAgentEvent: attemptLifecycleCallbacks.onAgentEvent,
-              deferTerminalLifecycleEnd: true,
+              deferTerminalLifecycle: true,
             });
           },
         });
@@ -1883,7 +1973,9 @@ async function agentCommandInternal(
         }
         fallbackProvider = fallbackResult.provider;
         fallbackModel = fallbackResult.model;
+        fallbackExhausted = fallbackResult.outcome === "exhausted";
         if (
+          !fallbackExhausted &&
           autoFallbackPrimaryProbe &&
           !autoFallbackPrimaryProbeInterruptedByLiveSwitch &&
           sessionEntry &&
@@ -1940,7 +2032,9 @@ async function agentCommandInternal(
             },
           };
         }
-        emitLifecycleFinishing(result);
+        if (!fallbackExhausted) {
+          emitLifecycleFinishing(result);
+        }
         break;
       } catch (err) {
         if (err instanceof LiveSessionModelSwitchError) {
@@ -2078,7 +2172,9 @@ async function agentCommandInternal(
             opts.bootstrapContextRunKind !== "heartbeat" &&
             !opts.internalEvents?.length,
           preserveRuntimeModel:
-            opts.bootstrapContextRunKind === "heartbeat" || preserveUserFacingSessionModelState,
+            fallbackExhausted ||
+            opts.bootstrapContextRunKind === "heartbeat" ||
+            preserveUserFacingSessionModelState,
           preserveUserFacingSessionModelState,
         });
         sessionEntry = sessionStore[sessionKey] ?? sessionEntry;
@@ -2089,7 +2185,10 @@ async function agentCommandInternal(
         transcriptPersistenceRunner === "embedded" ||
         (transcriptPersistenceRunner === undefined &&
           Boolean(result.meta.finalAssistantVisibleText?.trim()));
-      if (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill) {
+      if (
+        !sessionReboundDuringRun &&
+        (transcriptPersistenceRunner === "cli" || embeddedAssistantGapFill)
+      ) {
         let persistedCliTurnTranscript = false;
         try {
           const transcriptSessionEntry: SessionEntry | undefined = suppressVisibleSessionEffects
@@ -2103,7 +2202,7 @@ async function agentCommandInternal(
                 sessionFile: effectiveSessionFile,
               }
             : sessionEntry;
-          sessionEntry = await attemptExecutionRuntime.persistCliTurnTranscript({
+          const transcriptResult = await attemptExecutionRuntime.persistCliTurnTranscript({
             body,
             transcriptBody,
             result,
@@ -2118,10 +2217,12 @@ async function agentCommandInternal(
             config: cfg,
             embeddedAssistantGapFill,
           });
+          sessionEntry = transcriptResult.sessionEntry;
+          sessionReboundDuringRun = transcriptResult.kind === "session-rebound";
           if (suppressVisibleSessionEffects) {
             sessionEntry = prepared.sessionEntry;
           }
-          persistedCliTurnTranscript = true;
+          persistedCliTurnTranscript = transcriptResult.kind === "persisted";
         } catch (error) {
           log.warn(
             `Turn transcript persistence failed for ${sessionKey ?? sessionId}: ${error instanceof Error ? error.message : String(error)}`,
@@ -2163,6 +2264,7 @@ async function agentCommandInternal(
         sessionStore &&
         sessionKey &&
         !suppressVisibleSessionEffects &&
+        !sessionReboundDuringRun &&
         payloads.length > 0 &&
         !isSubagentSessionKey(sessionKey)
       ) {
@@ -2239,7 +2341,8 @@ async function agentCommandInternal(
         sessionStore &&
         sessionKey &&
         !isSubagentSessionKey(sessionKey) &&
-        !suppressVisibleSessionEffects
+        !suppressVisibleSessionEffects &&
+        !sessionReboundDuringRun
       ) {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
         const noPendingTextForThisRun =
@@ -2260,14 +2363,23 @@ async function agentCommandInternal(
         }
       }
 
-      emitLifecycleEnd(result);
+      if (fallbackExhausted || resolveLifecycleResultError(result, false)) {
+        emitLifecycleResultError(result, fallbackExhausted);
+      } else {
+        emitLifecycleEnd(result);
+      }
       return deliveryResult;
     } catch (error) {
       emitLifecyclePostTurnError(error);
       throw error;
     }
   } finally {
-    if (trackedRestartRecoveryDeliveryContext && sessionStore && sessionKey) {
+    if (
+      !sessionReboundDuringRun &&
+      trackedRestartRecoveryDeliveryContext &&
+      sessionStore &&
+      sessionKey
+    ) {
       try {
         const entry = sessionStore[sessionKey] ?? sessionEntry;
         if (entry?.restartRecoveryDeliveryContext && entry.restartRecoveryDeliveryRunId === runId) {
@@ -2333,6 +2445,83 @@ export async function agentCommand(
   );
 }
 
+/** Resolve the channel label for model.usage diagnostics from ingress run options. */
+function ingressDiagnosticChannel(opts: AgentCommandIngressOpts): string {
+  return opts.runContext?.messageChannel ?? opts.messageChannel ?? opts.channel ?? "http";
+}
+
+/**
+ * Emit a model.usage diagnostic event after an ingress agent run completes.
+ *
+ * Unlike channel/cron paths which emit model.usage in runReplyAgent /
+ * finalizeCronRun, the ingress path has no such existing emission — without
+ * this every diagnostics consumer (Langfuse bridge, @openclaw/diagnostics-otel,
+ * diagnostics-prometheus) sees usage/cost only for webchat/cli/cron turns
+ * and is blind to HTTP API traffic (POST /v1/responses, POST /v1/chat/completions,
+ * and node-event dispatch).
+ */
+function emitIngressModelUsageDiagnostic(
+  result: NonNullable<Awaited<ReturnType<typeof agentCommandInternal>>>,
+  opts: AgentCommandIngressOpts,
+): void {
+  const cfg = getRuntimeConfig();
+  if (!isDiagnosticsEnabled(cfg)) {
+    return;
+  }
+  const agentMeta = result.meta?.agentMeta;
+  const usage = agentMeta?.usage;
+  if (!agentMeta || !hasNonzeroUsage(usage)) {
+    return;
+  }
+
+  const providerUsed = agentMeta.provider ?? "";
+  const modelUsed = agentMeta.model ?? "";
+  const input = usage.input ?? 0;
+  const output = usage.output ?? 0;
+  const cacheRead = usage.cacheRead ?? 0;
+  const cacheWrite = usage.cacheWrite ?? 0;
+  const usagePromptTokens = input + cacheRead + cacheWrite;
+  const totalTokens = usage.total ?? usagePromptTokens + output;
+  const hasBillableUsageBuckets =
+    usage.input !== undefined ||
+    usage.output !== undefined ||
+    usage.cacheRead !== undefined ||
+    usage.cacheWrite !== undefined;
+  const costConfig = resolveModelCostConfig({
+    provider: providerUsed,
+    model: modelUsed,
+    config: cfg,
+  });
+  const costUsd = hasBillableUsageBuckets
+    ? estimateUsageCost({ usage, cost: costConfig })
+    : undefined;
+
+  emitTrustedDiagnosticEvent({
+    type: "model.usage",
+    sessionKey: opts.sessionKey,
+    sessionId: agentMeta.sessionId,
+    channel: ingressDiagnosticChannel(opts),
+    agentId: opts.agentId,
+    provider: providerUsed,
+    model: modelUsed,
+    usage: {
+      input,
+      output,
+      cacheRead,
+      cacheWrite,
+      promptTokens: usagePromptTokens,
+      total: totalTokens,
+    },
+    lastCallUsage: agentMeta.lastCallUsage,
+    context: {
+      limit: agentMeta.contextTokens,
+      ...(agentMeta.promptTokens !== undefined ? { used: agentMeta.promptTokens } : {}),
+    },
+    costUsd,
+    durationMs: result.meta?.durationMs,
+  });
+}
+
 /** Runs an agent turn from an inbound channel/gateway ingress context. */
 export async function agentCommandFromIngress(
   opts: AgentCommandIngressOpts,
@@ -2344,8 +2533,8 @@ export async function agentCommandFromIngress(
   }
   const lifecycleGeneration =
     opts.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(opts.runId ?? "");
-  return await withAgentRunLifecycleGeneration(lifecycleGeneration, () =>
-    agentCommandInternal(
+  return await withAgentRunLifecycleGeneration(lifecycleGeneration, async () => {
+    const result = await agentCommandInternal(
       {
         ...opts,
         lifecycleGeneration,
@@ -2353,14 +2542,22 @@ export async function agentCommandFromIngress(
       },
       runtime,
       deps,
-    ),
-  );
+    );
+
+    if (result) {
+      emitIngressModelUsageDiagnostic(result, opts);
+    }
+
+    return result;
+  });
 }
 
 export const testing = {
   resolveAgentRuntimeConfig,
   prepareAgentCommandExecution,
   resolveExplicitAgentCommandSessionKey,
+  ingressDiagnosticChannel,
+  emitIngressModelUsageDiagnostic,
 };
 
 /** @deprecated Use `testing`. */

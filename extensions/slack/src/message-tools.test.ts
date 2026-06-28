@@ -1,6 +1,7 @@
 // Slack tests cover message tools plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
+import { createSlackActions } from "./channel-actions.js";
 import { listSlackMessageActions } from "./message-actions.js";
 import { describeSlackMessageTool } from "./message-tool-api.js";
 
@@ -24,6 +25,16 @@ function requireSchemaProperty(
 }
 
 describe("Slack message tools", () => {
+  it("classifies provider-native mutation actions", () => {
+    const actions = createSlackActions("slack");
+    for (const action of ["sendMessage", "editMessage", "deleteMessage", "pinMessage"]) {
+      expect(actions.isToolDeliveryAction?.({ args: { action } })).toBe(true);
+    }
+    for (const action of ["readMessages", "listPins", "downloadFile"]) {
+      expect(actions.isToolDeliveryAction?.({ args: { action } })).toBe(false);
+    }
+  });
+
   it("describes configured Slack message actions without loading channel runtime", () => {
     const discovery = describeSlackMessageTool({
       cfg: {

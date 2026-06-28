@@ -1,4 +1,5 @@
 // Memory Core tests cover tools plugin behavior.
+import type { MemorySearchRuntimeDebug } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   getMemoryCloseMockCalls,
@@ -11,9 +12,13 @@ import {
   setMemoryCustomStatus,
   setMemorySearchImpl,
   setMemorySearchManagerImpl,
-} from "./memory-tool-manager-mock.js";
+} from "./memory-tool-manager.test-mocks.js";
 import { createMemorySearchTool, testing as memoryToolsTesting } from "./tools.js";
-import { MemoryGetSchema, MemorySearchSchema } from "./tools.shared.js";
+import {
+  buildMemorySearchUnavailableResult,
+  MemoryGetSchema,
+  MemorySearchSchema,
+} from "./tools.shared.js";
 import {
   asOpenClawConfig,
   createMemorySearchToolOrThrow,
@@ -117,6 +122,37 @@ describe("memory_search unavailable payloads", () => {
       error: "openai embeddings failed: 429 insufficient_quota",
       warning: "Memory search is unavailable because the embedding provider quota is exhausted.",
       action: "Top up or switch embedding provider, then retry memory_search.",
+    });
+  });
+
+  it("returns explicit unavailable metadata for missing node:sqlite failures", async () => {
+    const error =
+      "SQLite support is unavailable in this Node runtime (missing node:sqlite). No such built-in module: node:sqlite";
+    setMemorySearchImpl(async () => {
+      throw new Error(error);
+    });
+
+    const tool = createMemorySearchToolOrThrow();
+    const result = await tool.execute("missing-node-sqlite", { query: "hello" });
+    expectUnavailableMemorySearchDetails(result.details, {
+      error,
+      warning:
+        "Memory search is unavailable because this OpenClaw Node runtime does not provide SQLite support.",
+      action:
+        "Run OpenClaw with a Node runtime that includes node:sqlite, then retry memory_search.",
+    });
+  });
+
+  it("keeps explicit unavailable metadata overrides for missing node:sqlite reasons", () => {
+    const result = buildMemorySearchUnavailableResult("missing node:sqlite", {
+      warning: "custom warning",
+      action: "custom action",
+    });
+
+    expectUnavailableMemorySearchDetails(result, {
+      error: "missing node:sqlite",
+      warning: "custom warning",
+      action: "custom action",
     });
   });
 
@@ -346,6 +382,95 @@ describe("memory_search unavailable payloads", () => {
     expect(searchCalls).toBe(2);
   });
 
+  it("merges qmd runtime debug across zero-hit retry attempts", async () => {
+    setMemoryBackend("qmd");
+    let searchCalls = 0;
+    setMemorySearchImpl(async (opts) => {
+      searchCalls += 1;
+      if (searchCalls === 1) {
+        opts?.onDebug?.({
+          backend: "qmd",
+          configuredMode: "search",
+          effectiveMode: "search",
+          qmd: {
+            collectionValidation: {
+              cacheState: "hit",
+              elapsedMs: 2,
+              collectionCount: 2,
+              listCalls: 0,
+              showCalls: 0,
+            },
+            multiCollectionProbe: {
+              cacheState: "hit",
+              elapsedMs: 1,
+              supported: true,
+            },
+          },
+        });
+        return [];
+      }
+      opts?.onDebug?.({
+        backend: "qmd",
+        configuredMode: "search",
+        effectiveMode: "query",
+        fallback: "unsupported-search-flags",
+        qmd: {
+          searchPlan: {
+            command: "query",
+            collectionCount: 2,
+            groupCount: 2,
+            sources: ["memory", "sessions"],
+          },
+        },
+      });
+      return [
+        {
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          score: 0.9,
+          snippet: "Thread-hidden codename: ORBIT-22.",
+          source: "memory" as const,
+        },
+      ];
+    });
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { backend: "qmd", citations: "off" },
+      },
+    });
+    const result = await tool.execute("zero-hit-debug-retry", {
+      query: "hidden thread codename",
+    });
+    const details = result.details as {
+      debug?: {
+        effectiveMode?: string;
+        fallback?: string;
+        qmd?: MemorySearchRuntimeDebug["qmd"];
+      };
+    };
+
+    expect(searchCalls).toBe(2);
+    expect(details.debug?.effectiveMode).toBe("query");
+    expect(details.debug?.fallback).toBe("unsupported-search-flags");
+    expect(details.debug?.qmd?.collectionValidation).toMatchObject({
+      cacheState: "hit",
+      collectionCount: 2,
+    });
+    expect(details.debug?.qmd?.multiCollectionProbe).toMatchObject({
+      cacheState: "hit",
+      supported: true,
+    });
+    expect(details.debug?.qmd?.searchPlan).toEqual({
+      command: "query",
+      collectionCount: 2,
+      groupCount: 2,
+      sources: ["memory", "sessions"],
+    });
+  });
+
   it("returns unavailable metadata when the index identity is paused", async () => {
     let searchCalls = 0;
     setMemorySearchImpl(async () => {
@@ -387,6 +512,14 @@ describe("memory_search unavailable payloads", () => {
         configuredMode: opts.qmdSearchModeOverride ?? "query",
         effectiveMode: "query",
         fallback: "unsupported-search-flags",
+        qmd: {
+          searchPlan: {
+            command: "query",
+            collectionCount: 2,
+            groupCount: 2,
+            sources: ["memory", "sessions"],
+          },
+        },
       });
       return [
         {
@@ -435,6 +568,18 @@ describe("memory_search unavailable payloads", () => {
         fallback?: unknown;
         hits?: unknown;
         searchMs?: number;
+        toolMs?: number;
+        managerMs?: number;
+        outsideSearchMs?: number;
+        managerCacheState?: unknown;
+        qmd?: {
+          searchPlan?: {
+            command?: unknown;
+            collectionCount?: unknown;
+            groupCount?: unknown;
+            sources?: unknown;
+          };
+        };
       };
     };
     expect(details.mode).toBe("query");
@@ -444,6 +589,94 @@ describe("memory_search unavailable payloads", () => {
     expect(details.debug?.fallback).toBe("unsupported-search-flags");
     expect(details.debug?.hits).toBe(1);
     expect(details.debug?.searchMs).toBeGreaterThanOrEqual(0);
+    expect(details.debug?.toolMs).toBeGreaterThanOrEqual(details.debug?.searchMs ?? 0);
+    expect(details.debug?.outsideSearchMs).toBeGreaterThanOrEqual(0);
+    expect(details.debug?.managerMs).toBeGreaterThanOrEqual(0);
+    expect(details.debug?.managerCacheState).toBeUndefined();
+    expect(details.debug?.qmd?.searchPlan).toEqual({
+      command: "query",
+      collectionCount: 2,
+      groupCount: 2,
+      sources: ["memory", "sessions"],
+    });
+  });
+
+  it("includes manager acquisition timing and cache-state debug payload", async () => {
+    setMemorySearchManagerImpl(
+      async () =>
+        ({
+          manager: {
+            search: vi.fn(async () => {
+              return [
+                {
+                  path: "MEMORY.md",
+                  startLine: 1,
+                  endLine: 2,
+                  score: 0.9,
+                  snippet: "ramen",
+                  source: "memory",
+                },
+              ];
+            }),
+            readFile: vi.fn(),
+            status: vi.fn(() => ({
+              backend: "qmd",
+              provider: "qmd",
+              model: "qmd",
+              requestedProvider: "qmd",
+              files: 0,
+              chunks: 0,
+              dirty: false,
+              workspaceDir: "/tmp/workspace",
+              dbPath: "/tmp/workspace/index.sqlite",
+              sources: ["memory"],
+              sourceCounts: [{ source: "memory", files: 0, chunks: 0 }],
+            })),
+            sync: vi.fn(async () => {}),
+            probeEmbeddingAvailability: vi.fn(async () => ({ ok: true })),
+            probeVectorAvailability: vi.fn(async () => true),
+          },
+          debug: {
+            managerMs: 17,
+            managerCacheState: "cached-full-hit",
+          },
+        }) as any,
+    );
+    setMemorySearchImpl(async () => [
+      {
+        path: "MEMORY.md",
+        startLine: 1,
+        endLine: 2,
+        score: 0.9,
+        snippet: "ramen",
+        source: "memory",
+      },
+    ]);
+
+    const tool = createMemorySearchToolOrThrow({
+      config: {
+        agents: { list: [{ id: "main", default: true }] },
+        memory: { backend: "qmd" },
+      },
+    });
+    const result = await tool.execute("manager-debug", { query: "favorite food" });
+    const details = result.details as {
+      debug?: {
+        backend?: string;
+        managerMs?: number;
+        toolMs?: number;
+        outsideSearchMs?: number;
+        managerCacheState?: string;
+        hits?: number;
+        searchMs?: number;
+      };
+    };
+
+    expect(details.debug?.backend).toBe("qmd");
+    expect(details.debug?.managerMs).toBe(17);
+    expect(details.debug?.toolMs).toBeGreaterThanOrEqual(details.debug?.searchMs ?? 0);
+    expect(details.debug?.outsideSearchMs).toBeGreaterThanOrEqual(0);
+    expect(details.debug?.managerCacheState).toBe("cached-full-hit");
   });
 });
 

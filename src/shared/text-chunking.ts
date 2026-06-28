@@ -16,7 +16,7 @@ export function avoidTrailingHighSurrogateBreak(text: string, start: number, end
     return end;
   }
   const adjusted = end - 1;
-  return adjusted > start ? adjusted : end;
+  return adjusted > start ? adjusted : end + 1;
 }
 
 export function chunkTextByBreakResolver(

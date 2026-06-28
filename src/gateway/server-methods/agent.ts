@@ -146,7 +146,6 @@ import {
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import {
   canonicalizeSpawnedByForAgent,
-  loadGatewaySessionRow,
   loadSessionEntry,
   migrateAndPruneGatewaySessionStoreKey,
   resolveGatewaySessionStoreTarget,
@@ -163,6 +162,7 @@ import {
   waitForTerminalGatewayDedupe,
 } from "./agent-wait-dedupe.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./attachment-normalize.js";
+import { emitSessionsChanged } from "./session-change-event.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -461,9 +461,15 @@ async function resolveBareSessionResetResult(params: {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
     sessionEntry: params.sessionEntry,
-    request: params.request,
+    request: {
+      ...params.request,
+      channel: deliveryPlan.resolvedChannel,
+      to: deliveryPlan.resolvedTo ?? deliveryPlan.baseDelivery.to,
+      accountId: deliveryPlan.resolvedAccountId ?? deliveryPlan.baseDelivery.accountId,
+      threadId: deliveryPlan.resolvedThreadId,
+    },
     bestEffortDeliver,
-    deliveryTargetMode: deliveryPlan.deliveryTargetMode,
+    deliveryTargetMode: deliveryPlan.deliveryTargetMode ?? deliveryPlan.baseDelivery.mode,
     originMessageChannel: params.originMessageChannel ?? deliveryPlan.resolvedChannel,
     runId: params.runId,
     assertCurrent: params.assertCurrent,
@@ -560,92 +566,6 @@ function requestGroupMatchesTrusted(params: {
     return true;
   }
   return Boolean(params.trustedGroupId && requestGroupId === params.trustedGroupId);
-}
-
-function emitSessionsChanged(
-  context: Pick<
-    GatewayRequestHandlerOptions["context"],
-    "broadcastToConnIds" | "getSessionEventSubscriberConnIds"
-  >,
-  payload: { sessionKey?: string; agentId?: string; reason: string },
-) {
-  const connIds = context.getSessionEventSubscriberConnIds();
-  if (connIds.size === 0) {
-    return;
-  }
-  const sessionRow = payload.sessionKey
-    ? loadGatewaySessionRow(
-        payload.sessionKey,
-        payload.sessionKey === "global" && payload.agentId
-          ? { agentId: payload.agentId }
-          : undefined,
-      )
-    : null;
-  // Unscoped global updates must not leak one agent's goal into another agent's UI row.
-  const omitUnscopedGlobalGoal = payload.sessionKey === "global" && !payload.agentId;
-  context.broadcastToConnIds(
-    "sessions.changed",
-    {
-      ...payload,
-      ts: Date.now(),
-      ...(sessionRow
-        ? {
-            updatedAt: sessionRow.updatedAt ?? undefined,
-            sessionId: sessionRow.sessionId,
-            kind: sessionRow.kind,
-            channel: sessionRow.channel,
-            subject: sessionRow.subject,
-            groupChannel: sessionRow.groupChannel,
-            space: sessionRow.space,
-            chatType: sessionRow.chatType,
-            origin: sessionRow.origin,
-            spawnedBy: sessionRow.spawnedBy,
-            spawnedWorkspaceDir: sessionRow.spawnedWorkspaceDir,
-            spawnedCwd: sessionRow.spawnedCwd,
-            forkedFromParent: sessionRow.forkedFromParent,
-            spawnDepth: sessionRow.spawnDepth,
-            subagentRole: sessionRow.subagentRole,
-            subagentControlScope: sessionRow.subagentControlScope,
-            label: sessionRow.label,
-            displayName: sessionRow.displayName,
-            deliveryContext: sessionRow.deliveryContext,
-            parentSessionKey: sessionRow.parentSessionKey,
-            childSessions: sessionRow.childSessions,
-            thinkingLevel: sessionRow.thinkingLevel,
-            fastMode: sessionRow.fastMode,
-            verboseLevel: sessionRow.verboseLevel,
-            traceLevel: sessionRow.traceLevel,
-            reasoningLevel: sessionRow.reasoningLevel,
-            elevatedLevel: sessionRow.elevatedLevel,
-            sendPolicy: sessionRow.sendPolicy,
-            systemSent: sessionRow.systemSent,
-            abortedLastRun: sessionRow.abortedLastRun,
-            inputTokens: sessionRow.inputTokens,
-            outputTokens: sessionRow.outputTokens,
-            lastChannel: sessionRow.lastChannel,
-            lastTo: sessionRow.lastTo,
-            lastAccountId: sessionRow.lastAccountId,
-            lastThreadId: sessionRow.lastThreadId,
-            totalTokens: sessionRow.totalTokens,
-            totalTokensFresh: sessionRow.totalTokensFresh,
-            ...(omitUnscopedGlobalGoal ? {} : { goal: sessionRow.goal ?? null }),
-            contextTokens: sessionRow.contextTokens,
-            estimatedCostUsd: sessionRow.estimatedCostUsd,
-            responseUsage: sessionRow.responseUsage,
-            modelProvider: sessionRow.modelProvider,
-            model: sessionRow.model,
-            status: sessionRow.status,
-            startedAt: sessionRow.startedAt,
-            endedAt: sessionRow.endedAt,
-            runtimeMs: sessionRow.runtimeMs,
-            compactionCheckpointCount: sessionRow.compactionCheckpointCount,
-            latestCompactionCheckpoint: sessionRow.latestCompactionCheckpoint,
-          }
-        : {}),
-    },
-    connIds,
-    { dropIfSlow: true },
-  );
 }
 
 type GatewayAgentTaskTerminalStatus = Extract<
@@ -1382,7 +1302,16 @@ export const agentHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const requestedSessionKeyRaw = normalizeOptionalString(request.sessionKey);
+    const requestedSessionKeyParam = normalizeOptionalString(request.sessionKey);
+    const requestedSessionId = normalizeOptionalString(request.sessionId);
+    const requestedToRaw = normalizeOptionalString(request.to);
+    const sessionKeyFromTo =
+      !requestedSessionKeyParam &&
+      !requestedSessionId &&
+      classifySessionKeyShape(requestedToRaw) === "agent"
+        ? requestedToRaw
+        : undefined;
+    const requestedSessionKeyRaw = requestedSessionKeyParam ?? sessionKeyFromTo;
     if (
       requestedSessionKeyRaw &&
       classifySessionKeyShape(requestedSessionKeyRaw) === "malformed_agent"
@@ -1456,7 +1385,6 @@ export const agentHandlers: GatewayRequestHandlers = {
         return;
       }
     }
-    const requestedSessionId = normalizeOptionalString(request.sessionId);
     let requestedSessionKey =
       requestedSessionKeyRaw ??
       (!requestedSessionId
@@ -1599,7 +1527,7 @@ export const agentHandlers: GatewayRequestHandlers = {
 
       const voiceWakeTrigger = normalizeOptionalString(request.voiceWakeTrigger) ?? "";
       const replyTo = normalizeOptionalString(request.replyTo) ?? "";
-      const to = normalizeOptionalString(request.to) ?? "";
+      const to = sessionKeyFromTo ? "" : (requestedToRaw ?? "");
       const explicitVoiceWakeSessionTarget =
         !agentId && requestedSessionKeyRaw
           ? (() => {
@@ -1750,7 +1678,7 @@ export const agentHandlers: GatewayRequestHandlers = {
               sessionKey: resetResult.key,
               agentId: deliverySession?.agentId ?? agentId,
               sessionEntry: deliverySession?.entry,
-              request,
+              request: sessionKeyFromTo ? { ...request, to: undefined } : request,
               runId,
               assertCurrent: () => assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration),
             });
@@ -1919,7 +1847,7 @@ export const agentHandlers: GatewayRequestHandlers = {
         };
         const requestDeliveryHint = normalizeDeliveryContext({
           channel: request.channel?.trim(),
-          to: request.to?.trim(),
+          to,
           accountId: request.accountId?.trim(),
           // Pass threadId directly — normalizeDeliveryContext handles both
           // string and numeric threadIds (e.g., Matrix uses integers).
@@ -2342,11 +2270,10 @@ export const agentHandlers: GatewayRequestHandlers = {
       }
 
       const wantsDelivery = request.deliver === true;
-      const explicitTo =
-        normalizeOptionalString(request.replyTo) ?? normalizeOptionalString(request.to);
+      const explicitTo = replyTo || to || undefined;
       const explicitThreadId = normalizeOptionalString(request.threadId);
       const turnSourceChannel = normalizeOptionalString(request.channel);
-      const turnSourceTo = normalizeOptionalString(request.to);
+      const turnSourceTo = to || undefined;
       const turnSourceAccountId = normalizeOptionalString(request.accountId);
       const deliveryPlan = await resolveAgentDeliveryPlanWithSessionRoute({
         cfg: cfgForAgent ?? cfg,
@@ -2370,7 +2297,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       let resolvedTo = deliveryPlan.resolvedTo;
       let effectivePlan = deliveryPlan;
       let deliveryDowngradeReason: string | null = null;
-      let deliveryTargetResolutionError: Error | undefined;
+      let deliveryTargetResolutionError: Error | undefined = deliveryPlan.targetResolutionError;
 
       if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
         const cfgResolved = cfgForAgent ?? cfg;
@@ -2396,6 +2323,27 @@ export const agentHandlers: GatewayRequestHandlers = {
           }
           deliveryDowngradeReason = String(err);
         }
+      }
+
+      if (wantsDelivery && deliveryTargetResolutionError) {
+        if (!bestEffortDeliver) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, String(deliveryTargetResolutionError)),
+          );
+          return;
+        }
+        deliveryDowngradeReason = String(deliveryTargetResolutionError);
+        resolvedChannel = INTERNAL_MESSAGE_CHANNEL;
+        deliveryTargetMode = undefined;
+        resolvedTo = undefined;
+        effectivePlan = {
+          ...deliveryPlan,
+          resolvedChannel,
+          resolvedTo,
+          deliveryTargetMode,
+        };
       }
 
       if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {
@@ -2754,6 +2702,7 @@ export const agentHandlers: GatewayRequestHandlers = {
               acpTurnSource: request.acpTurnSource,
               internalEvents: request.internalEvents,
               inputProvenance,
+              senderIsOwner: clientHasAdminScope(client),
               sessionEffects,
               skipInitialSessionTouch: skipAgentInitialSessionTouch,
               preserveUserFacingSessionModelState,

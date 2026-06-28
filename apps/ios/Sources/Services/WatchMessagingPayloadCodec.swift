@@ -151,6 +151,55 @@ enum WatchMessagingPayloadCodec {
         return payload
     }
 
+    static func encodeAppSnapshotPayload(
+        _ message: OpenClawWatchAppSnapshotMessage) -> [String: Any]
+    {
+        var payload: [String: Any] = [
+            "type": OpenClawWatchPayloadType.appSnapshot.rawValue,
+            "gatewayStatusText": message.gatewayStatusText,
+            "gatewayConnected": message.gatewayConnected,
+            "agentName": message.agentName,
+            "sessionKey": message.sessionKey,
+            "talkStatusText": message.talkStatusText,
+            "talkEnabled": message.talkEnabled,
+            "talkListening": message.talkListening,
+            "talkSpeaking": message.talkSpeaking,
+            "pendingApprovalCount": message.pendingApprovalCount,
+        ]
+        if let agentAvatarURL = nonEmpty(message.agentAvatarURL) {
+            payload["agentAvatarUrl"] = agentAvatarURL
+        }
+        if let agentAvatarText = nonEmpty(message.agentAvatarText) {
+            payload["agentAvatarText"] = agentAvatarText
+        }
+        if let gatewayStableID = nonEmpty(message.gatewayStableID) {
+            payload["gatewayStableID"] = gatewayStableID
+        }
+        if let sentAtMs = message.sentAtMs {
+            payload["sentAtMs"] = sentAtMs
+        }
+        if let chatItems = message.chatItems {
+            payload["chatItems"] = chatItems.map { item in
+                var encoded: [String: Any] = [
+                    "id": item.id,
+                    "role": item.role,
+                    "text": item.text,
+                ]
+                if let timestampMs = item.timestampMs {
+                    encoded["timestampMs"] = timestampMs
+                }
+                return encoded
+            }
+        }
+        if let chatStatusText = nonEmpty(message.chatStatusText) {
+            payload["chatStatusText"] = chatStatusText
+        }
+        if let snapshotId = nonEmpty(message.snapshotId) {
+            payload["snapshotId"] = snapshotId
+        }
+        return payload
+    }
+
     static func parseQuickReplyPayload(
         _ payload: [String: Any],
         transport: String) -> WatchQuickReplyEvent?
@@ -213,6 +262,48 @@ enum WatchMessagingPayloadCodec {
         let sentAtMs = (payload["sentAtMs"] as? Int) ?? (payload["sentAtMs"] as? NSNumber)?.intValue
         return WatchExecApprovalSnapshotRequestEvent(
             requestId: requestId,
+            sentAtMs: sentAtMs,
+            transport: transport)
+    }
+
+    static func parseAppSnapshotRequestPayload(
+        _ payload: [String: Any],
+        transport: String) -> WatchAppSnapshotRequestEvent?
+    {
+        guard (payload["type"] as? String) == OpenClawWatchPayloadType.appSnapshotRequest.rawValue else {
+            return nil
+        }
+        let requestId = self.nonEmpty(payload["requestId"] as? String) ?? UUID().uuidString
+        let sentAtMs = (payload["sentAtMs"] as? Int) ?? (payload["sentAtMs"] as? NSNumber)?.intValue
+        return WatchAppSnapshotRequestEvent(
+            requestId: requestId,
+            sentAtMs: sentAtMs,
+            transport: transport)
+    }
+
+    static func parseAppCommandPayload(
+        _ payload: [String: Any],
+        transport: String) -> WatchAppCommandEvent?
+    {
+        guard (payload["type"] as? String) == OpenClawWatchPayloadType.appCommand.rawValue else {
+            return nil
+        }
+        guard let rawCommand = nonEmpty(payload["command"] as? String),
+              let command = OpenClawWatchAppCommand(rawValue: rawCommand)
+        else {
+            return nil
+        }
+        let commandId = self.nonEmpty(payload["commandId"] as? String) ?? UUID().uuidString
+        let sessionKey = self.nonEmpty(payload["sessionKey"] as? String)
+        let gatewayStableID = self.nonEmpty(payload["gatewayStableID"] as? String)
+        let text = self.nonEmpty(payload["text"] as? String)
+        let sentAtMs = (payload["sentAtMs"] as? Int) ?? (payload["sentAtMs"] as? NSNumber)?.intValue
+        return WatchAppCommandEvent(
+            commandId: commandId,
+            command: command,
+            sessionKey: sessionKey,
+            gatewayStableID: gatewayStableID,
+            text: text,
             sentAtMs: sentAtMs,
             transport: transport)
     }

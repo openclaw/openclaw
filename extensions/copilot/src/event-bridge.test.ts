@@ -15,6 +15,15 @@ const REGISTERED_EVENT_TYPES = [
   "assistant.usage",
   "tool.execution_start",
   "tool.execution_complete",
+  "session.plan_changed",
+  "exit_plan_mode.requested",
+  "exit_plan_mode.completed",
+  "subagent.started",
+  "subagent.completed",
+  "subagent.failed",
+  "session.compaction_start",
+  "session.compaction_complete",
+  "session.idle",
   "session.error",
   "abort",
 ] as const;
@@ -139,6 +148,50 @@ describe("attachEventBridge", () => {
     );
 
     expect(bridge.snapshot().assistantTexts).toEqual(["hello"]);
+  });
+
+  it("ignores child assistant and usage events but keeps child tool side effects", async () => {
+    const session = createFakeSession();
+    const onAssistantDelta = vi.fn();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onAssistantDelta,
+    });
+
+    session.emit("assistant.message_delta", {
+      ...makeEvent("assistant.message_delta", { deltaContent: "child", messageId: "child-msg" }),
+      agentId: "child-1",
+    } as SessionEvent);
+    session.emit(
+      "assistant.message_delta",
+      makeEvent("assistant.message_delta", { deltaContent: "root", messageId: "root-msg" }),
+    );
+    session.emit("tool.execution_start", {
+      ...makeEvent("tool.execution_start", { toolCallId: "child-call", toolName: "write" }),
+      agentId: "child-1",
+    } as SessionEvent);
+    session.emit("tool.execution_complete", {
+      ...makeEvent("tool.execution_complete", {
+        result: { content: "child write" },
+        success: true,
+        toolCallId: "child-call",
+      }),
+      agentId: "child-1",
+    } as SessionEvent);
+    session.emit("assistant.usage", {
+      ...makeEvent("assistant.usage", { inputTokens: 99, outputTokens: 99 }),
+      agentId: "child-1",
+    } as SessionEvent);
+
+    expect(bridge.snapshot().assistantTexts).toEqual(["root"]);
+    expect(bridge.snapshot().startedCount).toBe(0);
+    expect(bridge.snapshot().toolMetas).toEqual([
+      { toolName: "write" },
+      { meta: "child write", toolName: "write" },
+    ]);
+    await bridge.awaitDeltaChain();
+    expect(onAssistantDelta).toHaveBeenCalledTimes(1);
   });
 
   it("interleaved messageIds produce two ordered assistantTexts entries", () => {
@@ -452,6 +505,97 @@ describe("attachEventBridge", () => {
     });
   });
 
+  it("projects Copilot plan events through the generic plan stream", async () => {
+    const session = createFakeSession();
+    const onAgentEvent = vi.fn().mockResolvedValue(undefined);
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onAgentEvent,
+    });
+
+    session.emit(
+      "session.plan_changed",
+      makeEvent("session.plan_changed", { operation: "update" }),
+    );
+    session.emit(
+      "exit_plan_mode.requested",
+      makeEvent("exit_plan_mode.requested", {
+        actions: ["approve", "edit"],
+        planContent: "# Plan\n- inspect\n- patch",
+        recommendedAction: "approve",
+        requestId: "request-1",
+        summary: "Plan ready",
+      }),
+    );
+    session.emit(
+      "exit_plan_mode.completed",
+      makeEvent("exit_plan_mode.completed", {
+        approved: true,
+        requestId: "request-1",
+        selectedAction: "approve",
+      }),
+    );
+
+    await bridge.awaitAgentEventChain();
+
+    expect(onAgentEvent).toHaveBeenCalledTimes(3);
+    expect(onAgentEvent).toHaveBeenNthCalledWith(1, {
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "copilot-sdk",
+        operation: "update",
+      },
+    });
+    expect(onAgentEvent).toHaveBeenNthCalledWith(2, {
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan updated",
+        source: "copilot-sdk",
+        explanation: "Plan ready",
+        steps: ["# Plan", "inspect", "patch"],
+        actions: ["approve", "edit"],
+        requestId: "request-1",
+        recommendedAction: "approve",
+      },
+    });
+    expect(onAgentEvent).toHaveBeenNthCalledWith(3, {
+      stream: "plan",
+      data: {
+        phase: "update",
+        title: "Plan decision",
+        source: "copilot-sdk",
+        requestId: "request-1",
+        approved: true,
+        selectedAction: "approve",
+      },
+    });
+  });
+
+  it("forwards native Copilot subagent lifecycle events to the adapter", () => {
+    const session = createFakeSession();
+    const onNativeSubagentEvent = vi.fn();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onNativeSubagentEvent,
+    });
+    const event = makeEvent("subagent.started", {
+      agentDescription: "inspect the repository",
+      agentDisplayName: "Researcher",
+      agentName: "researcher",
+      toolCallId: "call-1",
+    });
+
+    session.emit("subagent.started", event);
+
+    expect(onNativeSubagentEvent).toHaveBeenCalledWith(event);
+    bridge.detach();
+  });
+
   it("preserves all-zero usage snapshot after an invalid assistant.usage event", () => {
     const session = createFakeSession();
     const bridge = attachEventBridge(session, {
@@ -603,6 +747,160 @@ describe("attachEventBridge", () => {
 
     expect(bridge.snapshot().completedCount).toBe(1);
     expect(bridge.snapshot().toolMetas).toEqual([]);
+  });
+
+  it("serializes compaction callbacks and clears active compaction state on completion", async () => {
+    const session = createFakeSession();
+    const calls: string[] = [];
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onCompactionStart: () => {
+        calls.push("start");
+      },
+      onCompactionComplete: ({ success }) => {
+        calls.push(`complete:${success}`);
+      },
+    });
+
+    session.emit("session.compaction_start", makeEvent("session.compaction_start", {}));
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { success: false }),
+    );
+    session.emit("session.compaction_start", makeEvent("session.compaction_start", {}));
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { success: true }),
+    );
+    await bridge.awaitCompactionChain();
+
+    expect(calls).toEqual(["start", "complete:false", "start", "complete:true"]);
+    expect(bridge.isCompacting()).toBe(false);
+  });
+
+  it("waits for an active compaction and its completion callback", async () => {
+    const session = createFakeSession();
+    const complete = vi.fn();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onCompactionComplete: complete,
+    });
+
+    session.emit("session.compaction_start", makeEvent("session.compaction_start", {}));
+    const completion = bridge.awaitCompactionCompletion();
+    await flushAsync();
+
+    expect(bridge.hasObservedCompaction()).toBe(true);
+    expect(complete).not.toHaveBeenCalled();
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { messagesRemoved: 3, success: true }),
+    );
+    await completion;
+
+    expect(complete).toHaveBeenCalledWith({ messagesRemoved: 3, success: true });
+    expect(bridge.isCompacting()).toBe(false);
+  });
+
+  it("waits for the SDK terminal idle event", async () => {
+    const session = createFakeSession();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+    });
+
+    const idle = bridge.awaitSessionIdle();
+    await flushAsync();
+    session.emit("session.idle", makeEvent("session.idle", {}));
+    await idle;
+
+    expect(bridge.hasObservedSessionIdle()).toBe(true);
+  });
+
+  it("ignores subagent idle events while waiting for the root session", async () => {
+    const session = createFakeSession();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+    });
+
+    const idle = bridge.awaitSessionIdle();
+    session.emit("session.idle", {
+      ...makeEvent("session.idle", {}),
+      agentId: "subagent-1",
+    });
+    await flushAsync();
+    expect(bridge.hasObservedSessionIdle()).toBe(false);
+
+    session.emit("session.idle", makeEvent("session.idle", {}));
+    await idle;
+    expect(bridge.hasObservedSessionIdle()).toBe(true);
+  });
+
+  it("keeps compaction pending after an abort until the SDK reports completion", async () => {
+    const session = createFakeSession();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+    });
+
+    session.emit("session.compaction_start", makeEvent("session.compaction_start", {}));
+    const completion = bridge.awaitCompactionCompletion();
+    session.emit("abort", makeEvent("abort", { reason: "tool yield" }));
+    await flushAsync();
+
+    expect(bridge.isCompacting()).toBe(true);
+    session.emit(
+      "session.compaction_complete",
+      makeEvent("session.compaction_complete", { success: false }),
+    );
+    await completion;
+
+    expect(bridge.isCompacting()).toBe(false);
+  });
+
+  it("settles an active compaction wait before terminal teardown", async () => {
+    const session = createFakeSession();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+    });
+
+    session.emit("session.compaction_start", makeEvent("session.compaction_start", {}));
+    const completion = bridge.awaitCompactionCompletion();
+    bridge.settleCompactionWait();
+
+    await completion;
+    expect(bridge.isCompacting()).toBe(false);
+  });
+
+  it("ignores subagent compaction events when tracking the root session", async () => {
+    const session = createFakeSession();
+    const onCompactionStart = vi.fn();
+    const onCompactionComplete = vi.fn();
+    const bridge = attachEventBridge(session, {
+      getSdkSessionId: () => "sdk-session-id",
+      isAborted: () => false,
+      onCompactionStart,
+      onCompactionComplete,
+    });
+
+    session.emit("session.compaction_start", {
+      ...makeEvent("session.compaction_start", {}),
+      agentId: "subagent-1",
+    });
+    session.emit("session.compaction_complete", {
+      ...makeEvent("session.compaction_complete", { success: true }),
+      agentId: "subagent-1",
+    });
+    await bridge.awaitCompactionCompletion();
+
+    expect(bridge.hasObservedCompaction()).toBe(false);
+    expect(bridge.isCompacting()).toBe(false);
+    expect(onCompactionStart).not.toHaveBeenCalled();
+    expect(onCompactionComplete).not.toHaveBeenCalled();
   });
 
   it("session.error populates streamError with errorCode or errorType only when not aborted", () => {
