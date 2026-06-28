@@ -333,7 +333,7 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
         channelLabel: "Matrix",
         accountId: "ops",
       }),
-    ).toBe("Matrix:matrix:ops:setup");
+    ).toBeUndefined();
     expect(
       capability.native?.describeDeliveryCapabilities({
         cfg: {} as never,
@@ -425,10 +425,10 @@ describe("createApproverRestrictedNativeApprovalCapability", () => {
       }),
     );
     expect(split.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
-    expect(split.describePluginApprovalSetup).toBe(describeExecApprovalSetup);
+    expect(split.describePluginApprovalSetup).toBeUndefined();
     expect(split.nativeRuntime).toBe(nativeRuntime);
     expect(legacy.describeExecApprovalSetup).toBe(describeExecApprovalSetup);
-    expect(legacy.describePluginApprovalSetup).toBe(describeExecApprovalSetup);
+    expect(legacy.describePluginApprovalSetup).toBeUndefined();
   });
 });
 
