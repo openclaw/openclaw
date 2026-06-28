@@ -286,12 +286,13 @@ export function resolveSessionFilePath(
   const sessionsDir = resolveSessionsDir(opts);
   const candidate = entry?.sessionFile?.trim();
   if (candidate) {
-    if (!candidate.startsWith(SQLITE_TRANSCRIPT_TARGET_PREFIX)) {
-      try {
-        return resolvePathWithinSessionsDir(sessionsDir, candidate, { agentId: opts?.agentId });
-      } catch {
-        // Keep handlers alive when persisted metadata is stale/corrupt.
-      }
+    if (candidate.startsWith(SQLITE_TRANSCRIPT_TARGET_PREFIX)) {
+      return candidate;
+    }
+    try {
+      return resolvePathWithinSessionsDir(sessionsDir, candidate, { agentId: opts?.agentId });
+    } catch {
+      // Keep handlers alive when persisted metadata is stale/corrupt.
     }
   }
   return resolveSessionTranscriptPathInDir(sessionId, sessionsDir);

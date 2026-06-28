@@ -1259,9 +1259,9 @@ describe("embedded attempt session lock lifecycle", () => {
     });
     (
       staleManager as unknown as {
-        rewriteFile: () => void;
+        replacePersistedTranscript: () => void;
       }
-    ).rewriteFile();
+    ).replacePersistedTranscript();
 
     const reopened = SessionManager.open(sessionFile, dir, dir);
     expect(reopened.getSessionName()).toBe("session title");
@@ -1396,9 +1396,9 @@ describe("embedded attempt session lock lifecycle", () => {
     });
     (
       staleManager as unknown as {
-        rewriteFile: () => void;
+        replacePersistedTranscript: () => void;
       }
-    ).rewriteFile();
+    ).replacePersistedTranscript();
 
     const reopened = SessionManager.open(sessionFile, dir, dir);
     expect(reopened.getEntry(deliveryId)).toMatchObject({

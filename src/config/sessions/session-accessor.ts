@@ -2618,16 +2618,32 @@ export function resolveSessionTranscriptReadTarget(
       ...(scope.sessionKey ? { sessionKey: scope.sessionKey } : {}),
     };
   }
+  const entrySessionFile = scope.sessionEntry?.sessionFile?.trim();
+  const entryMarker = parseSqliteSessionFileMarker(entrySessionFile);
+  if (entryMarker && entryMarker.sessionId === scope.sessionId) {
+    return {
+      agentId: scope.agentId ?? entryMarker.agentId,
+      sessionFile: entrySessionFile,
+      sessionId: scope.sessionId,
+      ...(scope.sessionKey ? { sessionKey: scope.sessionKey } : {}),
+    };
+  }
   const agentId = scope.agentId ?? resolveAgentIdFromSessionKey(scope.sessionKey);
   if (!agentId) {
     throw new Error(`Cannot resolve transcript scope without an agent id: ${scope.sessionKey}`);
   }
-  const storePath =
-    resolveConcreteReadStorePath(scope.storePath) ??
-    resolveStorePath(getRuntimeConfig().session?.store, {
+  const storePath = resolveConcreteReadStorePath(scope.storePath);
+  if (!storePath) {
+    const fileEntry = entrySessionFile?.startsWith("sqlite:") ? undefined : scope.sessionEntry;
+    return {
       agentId,
-      env: scope.env,
-    });
+      sessionFile: resolveSessionFilePath(scope.sessionId, fileEntry, {
+        agentId,
+      }),
+      sessionId: scope.sessionId,
+      ...(scope.sessionKey ? { sessionKey: scope.sessionKey } : {}),
+    };
+  }
   const resolvedStoreEntry =
     scope.sessionEntry || !scope.sessionKey
       ? undefined
