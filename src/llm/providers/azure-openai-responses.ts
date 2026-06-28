@@ -1,6 +1,7 @@
 // Azure OpenAI Responses provider adapts Azure deployments to Responses API streams.
 import OpenAI, { AzureOpenAI } from "openai";
 import type { ResponseCreateParamsStreaming } from "openai/resources/responses/responses.js";
+import { buildGuardedModelFetch } from "../../agents/provider-transport-fetch.js";
 import { isOpenAICompatibleAzureResponsesBaseUrl } from "../../shared/azure-openai-responses-client-compat.js";
 import { getEnvApiKey } from "../env-api-keys.js";
 import type {
@@ -198,6 +199,7 @@ function createClient(
   }
 
   const { baseUrl, apiVersion } = resolveAzureConfig(model, options);
+  const guardedFetch = buildGuardedModelFetch({ ...model, baseUrl });
 
   if (isOpenAICompatibleAzureResponsesBaseUrl(baseUrl)) {
     return new OpenAI({
@@ -205,6 +207,7 @@ function createClient(
       dangerouslyAllowBrowser: true,
       defaultHeaders: headers,
       baseURL: baseUrl,
+      fetch: guardedFetch,
     });
   }
 
@@ -214,6 +217,7 @@ function createClient(
     dangerouslyAllowBrowser: true,
     defaultHeaders: headers,
     baseURL: baseUrl,
+    fetch: guardedFetch,
   });
 }
 
