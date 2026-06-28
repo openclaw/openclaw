@@ -1,5 +1,6 @@
 // Defines MCP server and tool approval configuration types.
 export type McpCodexToolApprovalMode = "auto" | "prompt" | "approve";
+export type McpRuntimeScope = "session" | "shared";
 
 export type McpServerCodexConfig = {
   /** OpenClaw agent ids that should receive this server in Codex app-server threads. */
@@ -81,7 +82,15 @@ export type McpConfig = {
   /** Named MCP server definitions managed by OpenClaw. */
   servers?: Record<string, McpServerConfig>;
   /**
-   * Idle TTL for session-scoped bundled MCP runtimes, in milliseconds.
+   * Bundled MCP runtime ownership scope.
+   *
+   * Defaults to "session". Set "shared" only for single-tenant deployments
+   * where sessions with the same workspace/config may reuse MCP clients and
+   * child processes.
+   */
+  runtimeScope?: McpRuntimeScope;
+  /**
+   * Idle TTL for bundled MCP runtimes, in milliseconds.
    *
    * Defaults to 10 minutes. Set to 0 to disable idle eviction.
    */

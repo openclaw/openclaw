@@ -465,6 +465,7 @@ const McpServerSchema = z
 const McpConfigSchema = z
   .object({
     servers: z.record(z.string(), McpServerSchema).optional(),
+    runtimeScope: z.enum(["session", "shared"]).optional(),
     sessionIdleTtlMs: z.number().finite().min(0).optional(),
   })
   .strict()
