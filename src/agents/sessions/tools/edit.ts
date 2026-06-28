@@ -78,6 +78,9 @@ type LegacyEditToolInput = Record<string, unknown> & {
 
 const EDIT_MISMATCH_MESSAGE = "Could not find the exact text in";
 const EDIT_MISMATCH_HINT_LIMIT = 800;
+const EDIT_MISMATCH_CANDIDATE_LIMIT = 3;
+const EDIT_MISMATCH_SCAN_LINE_LIMIT = 2000;
+const EDIT_MISMATCH_LINE_DISPLAY_LIMIT = 140;
 
 /**
  * Pluggable operations for the edit tool.
@@ -173,16 +176,165 @@ function didEditLikelyApply(params: {
   );
 }
 
-function appendMismatchHint(error: Error, currentContent: string): Error {
+function appendMismatchHint(error: Error, currentContent: string, edits: Edit[]): Error {
   const snippet =
     currentContent.length <= EDIT_MISMATCH_HINT_LIMIT
       ? currentContent
       : `${currentContent.slice(0, EDIT_MISMATCH_HINT_LIMIT)}\n... (truncated)`;
-  const enhanced = new Error(`${error.message}\nCurrent file contents:\n${snippet}`, {
-    cause: error,
-  });
+  const candidateHint = formatMismatchCandidateHint(error, currentContent, edits);
+  const enhanced = new Error(
+    [
+      error.message,
+      ...(candidateHint ? [candidateHint] : []),
+      `Current file contents:\n${snippet}`,
+    ].join("\n"),
+    {
+      cause: error,
+    },
+  );
   enhanced.stack = error.stack;
   return enhanced;
+}
+
+function formatMismatchCandidateHint(error: Error, currentContent: string, edits: Edit[]): string {
+  const edit = edits[resolveMismatchEditIndex(error, edits.length)];
+  if (!edit?.oldText) {
+    return "";
+  }
+  const expectedLine = selectMismatchExpectedLine(edit.oldText);
+  if (!expectedLine) {
+    return "";
+  }
+
+  const candidates = findClosestMismatchLines(currentContent, expectedLine);
+  if (candidates.length === 0) {
+    return "";
+  }
+
+  return [
+    "Closest candidate lines for oldText:",
+    ...candidates.flatMap((candidate) => {
+      const expected = formatDiagnosticLine(expectedLine);
+      const found = formatDiagnosticLine(candidate.text);
+      return [
+        `- line ${candidate.lineNumber}:`,
+        `  expected: ${expected}`,
+        `  found:    ${found}`,
+        `  diff:     ${formatDifferenceMarker(expectedLine, candidate.text)}`,
+        `  hint:     ${formatMismatchHint(expectedLine, candidate.text)}`,
+      ];
+    }),
+  ].join("\n");
+}
+
+function resolveMismatchEditIndex(error: Error, editCount: number): number {
+  if (editCount <= 1) {
+    return 0;
+  }
+  const index = error.message.match(/\bedits\[(\d+)\]/u)?.[1];
+  if (!index) {
+    return 0;
+  }
+  const parsed = Number(index);
+  return Number.isInteger(parsed) && parsed >= 0 && parsed < editCount ? parsed : 0;
+}
+
+function selectMismatchExpectedLine(oldText: string): string {
+  const lines = normalizeToLF(oldText).split("\n");
+  const nonEmpty = lines.filter((line) => line.trim().length > 0);
+  const candidates = nonEmpty.length > 0 ? nonEmpty : lines;
+  return candidates.slice().sort((a, b) => b.trim().length - a.trim().length)[0] ?? "";
+}
+
+function findClosestMismatchLines(
+  currentContent: string,
+  expectedLine: string,
+): Array<{ lineNumber: number; text: string; score: number }> {
+  return normalizeToLF(currentContent)
+    .split("\n")
+    .slice(0, EDIT_MISMATCH_SCAN_LINE_LIMIT)
+    .map((line, index) => ({
+      lineNumber: index + 1,
+      text: line,
+      score: lineDistanceScore(expectedLine, line),
+    }))
+    .filter((candidate) => candidate.text.length > 0)
+    .sort((a, b) => a.score - b.score || a.lineNumber - b.lineNumber)
+    .slice(0, EDIT_MISMATCH_CANDIDATE_LIMIT);
+}
+
+function lineDistanceScore(expected: string, found: string): number {
+  if (expected === found) {
+    return 0;
+  }
+  const expectedTrimmed = expected.trim();
+  const foundTrimmed = found.trim();
+  const whitespacePenalty = expectedTrimmed === foundTrimmed ? 0 : 10;
+  return levenshteinDistance(expectedTrimmed, foundTrimmed) + whitespacePenalty;
+}
+
+function levenshteinDistance(left: string, right: string): number {
+  const a = left.slice(0, EDIT_MISMATCH_LINE_DISPLAY_LIMIT);
+  const b = right.slice(0, EDIT_MISMATCH_LINE_DISPLAY_LIMIT);
+  const previous = Array.from({ length: b.length + 1 }, (_value, index) => index);
+  const current = Array.from({ length: b.length + 1 }, () => 0);
+  for (let i = 1; i <= a.length; i++) {
+    current[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const substitution = previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1);
+      current[j] = Math.min(previous[j] + 1, current[j - 1] + 1, substitution);
+    }
+    previous.splice(0, previous.length, ...current);
+  }
+  return previous[b.length] ?? 0;
+}
+
+function formatDiagnosticLine(line: string): string {
+  const truncated =
+    line.length <= EDIT_MISMATCH_LINE_DISPLAY_LIMIT
+      ? line
+      : `${line.slice(0, EDIT_MISMATCH_LINE_DISPLAY_LIMIT)}...`;
+  return JSON.stringify(truncated);
+}
+
+function formatDifferenceMarker(expected: string, found: string): string {
+  if (expected === found) {
+    return "(line matches; surrounding oldText differs)";
+  }
+  const maxLength = Math.min(
+    Math.max(expected.length, found.length),
+    EDIT_MISMATCH_LINE_DISPLAY_LIMIT,
+  );
+  if (maxLength === 0) {
+    return "(empty lines)";
+  }
+  let marker = "";
+  for (let i = 0; i < maxLength; i++) {
+    marker += expected[i] === found[i] ? " " : "^";
+  }
+  return marker.trimEnd() || "(only trailing whitespace differs)";
+}
+
+function leadingWhitespaceLength(line: string): number {
+  return line.match(/^[ \t]*/u)?.[0].length ?? 0;
+}
+
+function formatMismatchHint(expected: string, found: string): string {
+  if (expected === found) {
+    return "line matches; surrounding oldText differs";
+  }
+  if (expected.trim() === found.trim()) {
+    const expectedIndent = leadingWhitespaceLength(expected);
+    const foundIndent = leadingWhitespaceLength(found);
+    if (expectedIndent !== foundIndent) {
+      return `indentation differs (expected ${expectedIndent} leading whitespace chars, found ${foundIndent})`;
+    }
+    return "whitespace differs";
+  }
+  if (expected.replace(/\\/g, "") === found.replace(/\\/g, "")) {
+    return "backslash escaping differs";
+  }
+  return "nearest text differs";
 }
 
 type RenderableEditArgs = {
@@ -490,7 +642,7 @@ export function createEditToolDefinition(
             };
           }
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
-            throw appendMismatchHint(normalizedError, currentContent);
+            throw appendMismatchHint(normalizedError, currentContent, realEdits);
           }
           // Terminal no-op: the edit matched but produced identical content.
           if (normalizedError instanceof EditNoChangeError) {

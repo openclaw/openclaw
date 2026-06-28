@@ -30,6 +30,15 @@ describe("edit tool", () => {
     return filePath;
   }
 
+  async function expectRejectedMessage(run: Promise<unknown>): Promise<string> {
+    try {
+      await run;
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+    throw new Error("Expected edit call to reject");
+  }
+
   it("adds current file contents to exact-match mismatch errors", async () => {
     const filePath = await createTempFile("actual current content");
     const tool = createEditTool(tmpDir);
@@ -44,6 +53,57 @@ describe("edit tool", () => {
         undefined,
       ),
     ).rejects.toThrow(/Current file contents:\nactual current content/);
+  });
+
+  it("shows closest candidate lines when oldText misses by indentation", async () => {
+    const filePath = await createTempFile("function run() {\n  return total + 1;\n}\n");
+    const tool = createEditTool(tmpDir);
+
+    const message = await expectRejectedMessage(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "    return total + 1;", newText: "    return total + 2;" }],
+        },
+        undefined,
+      ),
+    );
+
+    expect(message).toContain("Closest candidate lines for oldText:");
+    expect(message).toContain("- line 2:");
+    expect(message).toContain('expected: "    return total + 1;"');
+    expect(message).toContain('found:    "  return total + 1;"');
+    expect(message).toContain(
+      "hint:     indentation differs (expected 4 leading whitespace chars, found 2)",
+    );
+    expect(message).toContain("Current file contents:");
+  });
+
+  it("renders escaped oldText differences in mismatch candidates", async () => {
+    const filePath = await createTempFile(String.raw`const regex = "\\bword";` + "\n");
+    const tool = createEditTool(tmpDir);
+
+    const message = await expectRejectedMessage(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [
+            {
+              oldText: String.raw`const regex = "\bword";`,
+              newText: String.raw`const regex = "\\bother";`,
+            },
+          ],
+        },
+        undefined,
+      ),
+    );
+
+    expect(message).toContain("Closest candidate lines for oldText:");
+    expect(message).toContain(String.raw`expected: "const regex = \"\\bword\";"`);
+    expect(message).toContain(String.raw`found:    "const regex = \"\\\\bword\";"`);
+    expect(message).toContain("hint:     backslash escaping differs");
   });
 
   it("recovers success after a post-write throw when the edit already applied", async () => {
