@@ -14,8 +14,12 @@ import {
 } from "./embedded-agent-utils.js";
 
 function makeAssistantMessage(
-  message: Omit<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason"> &
+  message: Omit<
+    AssistantMessage,
+    "api" | "provider" | "model" | "usage" | "stopReason" | "content"
+  > &
     Partial<Pick<AssistantMessage, "api" | "provider" | "model" | "usage" | "stopReason">> & {
+      content: unknown;
       phase?: "commentary" | "final_answer";
     },
 ): AssistantMessage {
@@ -33,7 +37,7 @@ function makeAssistantMessage(
     },
     stopReason: "stop",
     ...message,
-  };
+  } as unknown as AssistantMessage;
 }
 
 describe("extractAssistantText", () => {
