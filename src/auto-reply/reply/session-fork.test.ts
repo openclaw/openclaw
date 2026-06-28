@@ -10,7 +10,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { replaceSqliteTranscriptEvents } from "../../config/sessions/session-accessor.sqlite.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { forkSessionEntryFromParent } from "./session-fork.js";
+import { forkSessionEntryFromParent, resolveParentForkDecision } from "./session-fork.js";
 
 const roots: string[] = [];
 
@@ -212,6 +212,50 @@ describe("forkSessionEntryFromParent", () => {
       forkedFromParent: true,
       sessionId: "",
       updatedAt: expect.any(Number),
+    });
+  });
+
+  it("skips stale-token SQLite parents using transcript usage estimates", async () => {
+    const root = makeRoot("openclaw-session-fork-stale-large-");
+    const storePath = path.join(root, "sessions.json");
+    const parentEntry = {
+      sessionId: "parent-session",
+      totalTokens: 1,
+      totalTokensFresh: false,
+      updatedAt: 1,
+    };
+    await replaceSqliteTranscriptEvents(
+      {
+        agentId: "main",
+        sessionId: parentEntry.sessionId,
+        sessionKey: "agent:main:main",
+        storePath,
+      },
+      [
+        {
+          type: "session",
+          version: 3,
+          id: parentEntry.sessionId,
+          timestamp: "2026-06-27T00:00:00.000Z",
+          cwd: root,
+        },
+        {
+          type: "message",
+          id: "large-answer",
+          parentId: null,
+          timestamp: "2026-06-27T00:00:01.000Z",
+          message: {
+            role: "assistant",
+            content: "x".repeat(420_000),
+          },
+        },
+      ],
+    );
+
+    await expect(resolveParentForkDecision({ parentEntry, storePath })).resolves.toMatchObject({
+      status: "skip",
+      reason: "parent-too-large",
+      parentTokens: expect.any(Number),
     });
   });
 });
