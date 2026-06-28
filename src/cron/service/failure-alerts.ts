@@ -1,6 +1,7 @@
 /** Resolves and emits cron failure-alert notifications. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveFailoverReasonFromError } from "../../agents/failover-error.js";
+import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 import type { CronFailureNotificationDelivery, CronJob, CronMessageChannel } from "../types.js";
 import type { CronServiceState } from "./state.js";
 
@@ -113,7 +114,7 @@ function emitFailureAlert(
   },
 ) {
   const safeJobName = params.job.name || params.job.id;
-  const truncatedError = (params.error?.trim() || "unknown reason").slice(0, 200);
+  const truncatedError = truncateUtf16Safe(params.error?.trim() || "unknown reason", 200);
   const errorReason =
     params.status === "error" && typeof params.error === "string"
       ? (resolveFailoverReasonFromError(params.error, params.provider) ?? undefined)
