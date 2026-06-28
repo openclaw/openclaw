@@ -640,8 +640,14 @@ function sessionMessagesContainIdempotencyKey(
   );
 }
 
-function flushSessionManagerFile(sessionManager: ReturnType<typeof guardSessionManager>): void {
-  (sessionManager as unknown as { rewriteFile?: () => void }).rewriteFile?.();
+function flushSessionManagerTranscript(
+  sessionManager: ReturnType<typeof guardSessionManager>,
+): void {
+  (
+    sessionManager as unknown as {
+      replacePersistedTranscript?: () => void;
+    }
+  ).replacePersistedTranscript?.();
 }
 
 function repairAttemptToolUseResultPairing(
@@ -4329,7 +4335,7 @@ export async function runEmbeddedAttempt(
                 activeSessionManager.appendMessage(
                   redactedUserMessage as Parameters<typeof activeSessionManager.appendMessage>[0],
                 );
-                flushSessionManagerFile(activeSessionManager);
+                flushSessionManagerTranscript(activeSessionManager);
               });
               activeSession.agent.state.messages =
                 activeSessionManager.buildSessionContext().messages;

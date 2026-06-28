@@ -877,16 +877,24 @@ function resolveTranscriptUsageFallback(params: {
   const agentId = parsed?.agentId
     ? normalizeAgentId(parsed.agentId)
     : normalizeAgentId(params.agentId ?? resolveDefaultAgentId(params.cfg));
-  const snapshot = readScopedRecentSessionUsageFromTranscript(
-    {
-      agentId,
-      sessionEntry: entry,
-      sessionId: entry.sessionId,
-      sessionKey: params.key,
-      storePath: params.storePath,
-    },
-    typeof params.maxTranscriptBytes === "number" ? params.maxTranscriptBytes : 256 * 1024,
-  );
+  const storePath =
+    resolveConcreteSessionStorePath(params.storePath) ??
+    resolveStorePath(params.cfg.session?.store, { agentId });
+  let snapshot: ReturnType<typeof readScopedRecentSessionUsageFromTranscript> = null;
+  try {
+    snapshot = readScopedRecentSessionUsageFromTranscript(
+      {
+        agentId,
+        sessionEntry: entry,
+        sessionId: entry.sessionId,
+        sessionKey: params.key,
+        storePath,
+      },
+      typeof params.maxTranscriptBytes === "number" ? params.maxTranscriptBytes : 256 * 1024,
+    );
+  } catch {
+    snapshot = null;
+  }
   if (!snapshot) {
     return null;
   }
@@ -1181,6 +1189,14 @@ function isStorePathTemplate(store?: string): boolean {
   return typeof store === "string" && store.includes("{agentId}");
 }
 
+function resolveConcreteSessionStorePath(storePath: string | undefined): string | undefined {
+  const trimmed = storePath?.trim();
+  if (!trimmed || trimmed === "(multiple)" || isStorePathTemplate(trimmed)) {
+    return undefined;
+  }
+  return trimmed;
+}
+
 function normalizeFallbackList(values: readonly string[]): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
@@ -1354,13 +1370,17 @@ function loadGatewaySessionLookupStore(
   clone: boolean | undefined,
   agentId?: string,
 ): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    listAccessorSessionEntries({
-      ...(agentId ? { agentId } : {}),
-      ...(clone === false ? { clone: false } : {}),
-      storePath,
-    }).map(({ sessionKey, entry }) => [sessionKey, entry]),
-  );
+  try {
+    return Object.fromEntries(
+      listAccessorSessionEntries({
+        ...(agentId ? { agentId } : {}),
+        ...(clone === false ? { clone: false } : {}),
+        storePath,
+      }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+    );
+  } catch {
+    return {};
+  }
 }
 
 function resolveGatewaySessionStoreLookup(params: {

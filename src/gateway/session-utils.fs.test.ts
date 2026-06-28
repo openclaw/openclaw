@@ -126,7 +126,11 @@ function appendBlockedUserMessage(
       },
     },
   } as Parameters<typeof sessionManager.appendMessage>[0]);
-  (sessionManager as unknown as { rewriteFile?: () => void }).rewriteFile?.();
+  (
+    sessionManager as unknown as {
+      replacePersistedTranscript?: () => void;
+    }
+  ).replacePersistedTranscript?.();
   return messageId;
 }
 

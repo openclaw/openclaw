@@ -1544,7 +1544,7 @@ export class SessionManager {
           this.sessionId = header?.id ?? createSessionId();
           migrateToCurrentVersion(this.fileEntries, recovered.fileEntriesByOriginalIndex);
           this.buildIndex();
-          this.rewriteFile();
+          this.replacePersistedTranscript();
           this.recoveredCorruptHeader = true;
           this.flushed = true;
           return;
@@ -1553,7 +1553,7 @@ export class SessionManager {
         const explicitPath = this.sessionFile;
         this.newSession();
         this.sessionFile = explicitPath;
-        this.rewriteFile();
+        this.replacePersistedTranscript();
         this.flushed = true;
         return;
       }
@@ -1567,7 +1567,7 @@ export class SessionManager {
       );
       this.buildIndex();
       if (migrated) {
-        this.rewriteFile();
+        this.replacePersistedTranscript();
       }
 
       this.flushed = true;
@@ -1972,7 +1972,7 @@ export class SessionManager {
     );
   }
 
-  private rewriteFile(options?: {
+  private replacePersistedTranscript(options?: {
     publishSnapshot?: boolean;
     leafAppendParentId?: string | null;
     leafAppendMode?: "side";
@@ -2141,7 +2141,7 @@ export class SessionManager {
     this.buildIndex();
     this.leafId = this.resolveCanonicalParentId(replacementParentId);
     this.appendParentId = replacementParentId;
-    this.rewriteFile();
+    this.replacePersistedTranscript();
     return removedEntries.length;
   }
 
@@ -2393,7 +2393,7 @@ export class SessionManager {
       return { publishedEntries: [{ kind: "id", id: leafEntry.id }] };
     }
     if (!this.flushed || !hasAssistant) {
-      this.rewriteFile({
+      this.replacePersistedTranscript({
         publishSnapshot: false,
         leafAppendParentId: sideBranchParentId,
         leafAppendMode: "side",
@@ -2966,7 +2966,7 @@ export class SessionManager {
         (e) => e.type === "message" && e.message.role === "assistant",
       );
       if (hasAssistant) {
-        this.rewriteFile();
+        this.replacePersistedTranscript();
         this.flushed = true;
       } else {
         this.flushed = false;

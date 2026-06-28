@@ -146,8 +146,12 @@ export async function isCliBindingFlushed(
   return false;
 }
 
-function flushSessionManagerFile(sessionManager: SessionManager): void {
-  (sessionManager as unknown as { rewriteFile?: () => void }).rewriteFile?.();
+function flushSessionManagerTranscript(sessionManager: SessionManager): void {
+  (
+    sessionManager as unknown as {
+      replacePersistedTranscript?: () => void;
+    }
+  ).replacePersistedTranscript?.();
 }
 
 function buildHandledReplyPayloads(reply?: ReplyPayload) {
@@ -786,7 +790,7 @@ export async function runPreparedCliAgent(
       sessionManager.appendMessage(
         redactedUserMessage as Parameters<typeof sessionManager.appendMessage>[0],
       );
-      flushSessionManagerFile(sessionManager);
+      flushSessionManagerTranscript(sessionManager);
     } catch (err) {
       log.warn(
         `before_agent_run block: failed to persist redacted CLI user message: ${formatErrorMessage(

@@ -1,5 +1,4 @@
 // SQLite transcript markers are storage targets, not filesystem paths.
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { resolveSessionFilePath } from "./paths.js";
 import { loadSessionEntry, upsertSessionEntry } from "./session-accessor.js";
@@ -9,13 +8,13 @@ import { useTempSessionsFixture } from "./test-helpers.js";
 describe("SQLite sessionFile markers", () => {
   const fixture = useTempSessionsFixture("sqlite-session-file-marker-");
 
-  it("keeps generic session path resolution filesystem-only", () => {
+  it("preserves SQLite markers for transcript target resolution", () => {
     const marker = "sqlite:main:sess-1:/tmp/openclaw/agents/main/agent/openclaw-agent.sqlite";
     const sessionsDir = "/tmp/openclaw/agents/main/sessions";
 
     const resolved = resolveSessionFilePath("sess-1", { sessionFile: marker }, { sessionsDir });
 
-    expect(resolved).toBe(path.join(sessionsDir, "sess-1.jsonl"));
+    expect(resolved).toBe(marker);
   });
 
   it("does not downgrade matching SQLite markers when resolving runtime session files", async () => {
