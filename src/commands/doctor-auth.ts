@@ -234,6 +234,9 @@ async function resolveAuthIssueHint(
   if (issue.reasonCode === "invalid_expires") {
     return "Invalid token expires metadata. Set a future Unix ms timestamp or remove expires.";
   }
+  if (issue.reasonCode === "malformed_api_key") {
+    return "Paste the API key value, not an OpenClaw onboarding command.";
+  }
   const providerHint = await formatAuthDoctorHint({
     cfg,
     store,
@@ -307,29 +310,34 @@ async function noteAuthProfileHealthForTarget(params: {
   });
 
   const findIssues = () =>
-    summary.profiles.filter(
-      (profile) =>
+    summary.profiles.filter((profile) => {
+      if (profile.type === "api_key") {
+        return profile.status === "missing";
+      }
+      return (
         (profile.type === "oauth" || profile.type === "token") &&
         (profile.status === "expired" ||
           profile.status === "expiring" ||
-          profile.status === "missing"),
-    );
+          profile.status === "missing")
+      );
+    });
 
   let issues = findIssues();
   if (issues.length === 0) {
     return;
   }
 
-  const shouldRefresh = await params.prompter.confirmAutoFix({
-    message: "Refresh expiring OAuth tokens now? (static tokens need re-auth)",
-    initialValue: true,
-  });
+  const refreshTargets = issues.filter(
+    (issue) => issue.type === "oauth" && ["expired", "expiring", "missing"].includes(issue.status),
+  );
+  const shouldRefresh =
+    refreshTargets.length > 0 &&
+    (await params.prompter.confirmAutoFix({
+      message: "Refresh expiring OAuth tokens now? (static tokens need re-auth)",
+      initialValue: true,
+    }));
 
   if (shouldRefresh) {
-    const refreshTargets = issues.filter(
-      (issue) =>
-        issue.type === "oauth" && ["expired", "expiring", "missing"].includes(issue.status),
-    );
     const errors: string[] = [];
     for (const profile of refreshTargets) {
       try {
