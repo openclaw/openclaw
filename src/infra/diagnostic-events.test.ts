@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   emitDiagnosticEvent,
   emitInternalDiagnosticEvent,
+  emitInternalDiagnosticEventWithPrivateData,
   emitTrustedDiagnosticEvent,
   emitTrustedDiagnosticEventWithPrivateData,
   emitTrustedSecurityEvent,
@@ -840,6 +841,48 @@ describe("diagnostic-events", () => {
         systemPrompt: "secret system",
       },
     });
+  });
+
+  it("forwards lifecycle privateData to the trusted grant channel while public listeners stay clean", () => {
+    const publicEvents: DiagnosticEventPayload[] = [];
+    const trusted: Array<{ type: string; clientContext: unknown }> = [];
+    onDiagnosticEvent((event) => {
+      publicEvents.push(event);
+    });
+    // `onTrustedInternalDiagnosticEvent` is the grant-backed channel diagnostics
+    // exporters receive through `ctx.internalDiagnostics.onEvent`. The carrying
+    // emit is *untrusted* (the public payload still reaches `onDiagnosticEvent`),
+    // yet dispatch forwards `privateData` to trusted listeners regardless — the
+    // mechanic that keeps the public lifecycle contract unchanged.
+    onTrustedInternalDiagnosticEvent((event, _metadata, privateData) => {
+      trusted.push({
+        type: event.type,
+        clientContext: (privateData as { clientContext?: unknown }).clientContext,
+      });
+    });
+
+    const clientContext = { schemaVersion: "agentweave.context.v1", agentId: "Conductor" };
+    // Seeded run: the lifecycle event stays public, the bag rides privateData.
+    emitInternalDiagnosticEventWithPrivateData(
+      { type: "session.state", sessionKey: "k", sessionId: "s1", state: "processing" },
+      { clientContext },
+    );
+    emitInternalDiagnosticEventWithPrivateData(
+      { type: "message.queued", sessionId: "s1", source: "dispatch" },
+      { clientContext },
+    );
+
+    // The public payload never carries the bag (privacy/cardinality contract).
+    expect(JSON.stringify(publicEvents)).not.toContain("Conductor");
+    expect(publicEvents.map((e) => e.type)).toEqual(["session.state", "message.queued"]);
+    for (const event of publicEvents) {
+      expect((event as Record<string, unknown>).clientContext).toBeUndefined();
+    }
+    // The trusted listener receives it on both lifecycle events.
+    expect(trusted).toEqual([
+      { type: "session.state", clientContext },
+      { type: "message.queued", clientContext },
+    ]);
   });
 
   it("skips event enrichment and subscribers when diagnostics are disabled", () => {

@@ -80,6 +80,11 @@ import {
   clearAgentRunContext,
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
+import { normalizeDiagnosticClientContext } from "../../infra/diagnostic-client-context.js";
+import {
+  clearRunClientContext,
+  setRunClientContext,
+} from "../../infra/diagnostic-run-attribution.js";
 import { formatUncaughtError, readErrorName } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlanWithSessionRoute,
@@ -952,6 +957,11 @@ function dispatchAgentRunFromGateway(params: {
     })
     .finally(() => {
       clearAgentRunContext(params.runId, params.ingressOpts.lifecycleGeneration);
+      // Authoritative release of this run's diagnostic attribution: the gateway is
+      // the sole seeder, so it owns teardown for every path — including a run that
+      // fails or is rejected before it ever emits an idle lifecycle event. The
+      // emitter-side idle/replacement clears are prompt-release optimizations.
+      clearRunClientContext(params.runId.trim());
       params.cleanupAbortController();
     });
 }
@@ -1041,6 +1051,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       inputProvenance?: InputProvenance;
       workspaceDir?: string;
       voiceWakeTrigger?: string;
+      clientContext?: unknown;
     };
     const allowModelOverride = resolveAllowModelOverrideFromClient(client);
     const canUseInternalRuntimeHandoff = resolveCanUseInternalRuntimeHandoff(client);
@@ -2659,6 +2670,17 @@ export const agentHandlers: GatewayRequestHandlers = {
           }
           const execApprovalFollowupElevatedDefaults =
             execApprovalFollowupRuntimeHandoff?.bashElevated;
+
+          // Bind any caller-supplied opaque context to this run by runId, so the
+          // run's message.queued / session.state events carry it for plugins to
+          // interpret — and a concurrent same-session run cannot overwrite it.
+          // Trim to match the run handle's effective id (agent-command derives
+          // runId = opts.runId?.trim()), or seed/resolve keys would diverge.
+          // No-op when absent or out of bounds.
+          setRunClientContext(
+            runId.trim(),
+            normalizeDiagnosticClientContext(request.clientContext),
+          );
 
           dispatchAgentRunFromGateway({
             ingressOpts: {

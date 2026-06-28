@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { TalkBrain, TalkEventType, TalkMode, TalkTransport } from "../talk/talk-events.js";
+import type { DiagnosticClientContext } from "./diagnostic-client-context.js";
 import {
   formatDiagnosticTraceparent,
   getActiveDiagnosticTraceContext,
@@ -796,6 +797,10 @@ export type DiagnosticToolCallContent = Readonly<{
 export type DiagnosticEventPrivateData = Readonly<{
   modelContent?: DiagnosticModelCallContent;
   toolContent?: DiagnosticToolCallContent;
+  // Opaque, caller-supplied attribution bag seeded onto the run. Withheld from
+  // public listeners (it rides the trusted privateData channel, not the event
+  // payload) so lifecycle events keep their queue/state-only public contract.
+  clientContext?: DiagnosticClientContext;
 }>;
 
 type DiagnosticEventListener = (
@@ -1199,6 +1204,24 @@ export function emitDiagnosticEventWithTrustedTraceContext(event: DiagnosticEven
 /** Emits an untrusted diagnostic event tagged as internal dispatcher provenance. */
 export function emitInternalDiagnosticEvent(event: DiagnosticEventInput) {
   emitDiagnosticEventWithTrust(event, false, { internal: true });
+}
+
+/**
+ * Emit an internal, untrusted event that additionally carries `privateData` to
+ * trusted listeners only. The event payload reaches public subscribers exactly
+ * as the matching {@link emitInternalDiagnosticEvent} call would; the
+ * `privateData` argument is withheld from them by {@link dispatchDiagnosticEvent}.
+ * Used for lifecycle events (`session.state` / `message.queued`) that must keep
+ * their public payload unchanged but forward opt-in attribution
+ * (`clientContext`) to trusted observers via {@link onTrustedInternalDiagnosticEvent}
+ * — the grant-backed channel diagnostics exporters receive through
+ * `ctx.internalDiagnostics.onEvent`.
+ */
+export function emitInternalDiagnosticEventWithPrivateData(
+  event: DiagnosticEventInput,
+  privateData: DiagnosticEventPrivateData,
+) {
+  emitDiagnosticEventWithTrust(event, false, { internal: true, privateData });
 }
 
 /** Returns the latest diagnostic event sequence number assigned in this process. */

@@ -6,10 +6,12 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   areDiagnosticsEnabledForProcess,
   emitInternalDiagnosticEvent as emitDiagnosticEvent,
+  emitInternalDiagnosticEventWithPrivateData,
   isDiagnosticsEnabled,
   type DiagnosticPhaseSnapshot,
   type DiagnosticLivenessWarningReason,
 } from "../infra/diagnostic-events.js";
+import { clearRunClientContext, getRunClientContext } from "../infra/diagnostic-run-attribution.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
 import {
   getCurrentDiagnosticPhase,
@@ -670,6 +672,9 @@ export function logMessageQueued(params: {
   sessionKey?: string;
   channel?: string;
   source: string;
+  // Internal: the emitting run, used only to resolve that run's clientContext for
+  // the trusted channel. Never added to the public event payload.
+  runId?: string;
 }) {
   if (!areDiagnosticsEnabledForProcess()) {
     return;
@@ -687,14 +692,23 @@ export function logMessageQueued(params: {
       } source=${params.source} queueDepth=${state.queueDepth} sessionState=${state.state}`,
     );
   }
-  emitDiagnosticEvent({
-    type: "message.queued",
+  const queuedEvent = {
+    type: "message.queued" as const,
     sessionId: state.sessionId,
     sessionKey: state.sessionKey,
     channel: params.channel,
     source: params.source,
     queueDepth: state.queueDepth,
-  });
+  };
+  // clientContext is resolved by the emitting run's id and rides the trusted
+  // privateData channel (onTrustedInternalDiagnosticEvent), never the public
+  // payload — keeps the event's public contract unchanged.
+  const clientContext = getRunClientContext(params.runId);
+  if (clientContext) {
+    emitInternalDiagnosticEventWithPrivateData(queuedEvent, { clientContext });
+  } else {
+    emitDiagnosticEvent(queuedEvent);
+  }
   markActivity();
 }
 
@@ -879,6 +893,9 @@ export function logSessionStateChange(
   params: SessionRef & {
     state: SessionStateValue;
     reason?: string;
+    // Internal: the emitting run, used only to resolve that run's clientContext
+    // for the trusted channel. Never added to the public event payload.
+    runId?: string;
   },
 ) {
   if (!areDiagnosticsEnabledForProcess()) {
@@ -908,15 +925,31 @@ export function logSessionStateChange(
       }`,
     );
   }
-  emitDiagnosticEvent({
-    type: "session.state",
+  const stateEvent = {
+    type: "session.state" as const,
     sessionId: state.sessionId,
     sessionKey: state.sessionKey,
     prevState,
     state: params.state,
     reason: params.reason,
     queueDepth: state.queueDepth,
-  });
+  };
+  // clientContext is resolved by the emitting run's id and rides the trusted
+  // privateData channel (onTrustedInternalDiagnosticEvent), never the public
+  // payload — keeps the event's public contract unchanged.
+  const clientContext = getRunClientContext(params.runId);
+  if (clientContext) {
+    emitInternalDiagnosticEventWithPrivateData(stateEvent, { clientContext });
+  } else {
+    emitDiagnosticEvent(stateEvent);
+  }
+  // Prompt-release optimization: idle is the run's terminal lifecycle event, so
+  // drop its registry entry now rather than waiting for the gateway's dispatch
+  // .finally (the authoritative owner). The idle event emitted above still
+  // carries the completing run's context. Idempotent with the gateway clear.
+  if (params.state === "idle") {
+    clearRunClientContext(params.runId);
+  }
   markActivity();
 }
 
