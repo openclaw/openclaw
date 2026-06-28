@@ -927,6 +927,10 @@ const TOOLING_SOURCE_TEST_TARGETS = new Map([
   ],
   ["scripts/e2e/mcp-client-temp-state.ts", ["test/scripts/mcp-channels-harness.test.ts"]],
   [
+    "scripts/e2e/cron-cli-docker.sh",
+    ["test/scripts/docker-build-helper.test.ts", "test/scripts/docker-e2e-observability.test.ts"],
+  ],
+  [
     "scripts/e2e/cron-mcp-cleanup-docker.sh",
     [
       "test/scripts/docker-build-helper.test.ts",
@@ -2156,6 +2160,22 @@ export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_TIMEOUT_MS = String(900_000)
 export const DEFAULT_TEST_PROJECTS_VITEST_NO_OUTPUT_HEARTBEAT_MS = String(
   DEFAULT_VITEST_NO_OUTPUT_HEARTBEAT_MS,
 );
+
+export function formatNoChangedTestTargetLines(skippedBroadFallbackPaths) {
+  if (skippedBroadFallbackPaths.length === 0) {
+    return ["[test] no changed test targets; skipping Vitest."];
+  }
+
+  return [
+    "[test] no precise changed test targets; skipping Vitest.",
+    `[test] ${skippedBroadFallbackPaths.length} changed path${
+      skippedBroadFallbackPaths.length === 1 ? "" : "s"
+    } require broad Vitest fallback:`,
+    ...skippedBroadFallbackPaths.map((changedPath) => `[test]   ${changedPath}`),
+    "[test] run `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` for broad coverage.",
+  ];
+}
+
 const EXPLICIT_SOURCE_FULL_IMPORT_GRAPH_THRESHOLD = 12;
 const GATEWAY_SERVER_FULL_SUITE_TARGET_CHUNK_COUNT = 4;
 const GATEWAY_SERVER_BACKED_HTTP_TEST_TARGETS = new Set([
