@@ -745,7 +745,7 @@ async function emitToolResultOutput(params: {
         toolName: rawToolName,
         result,
         builtinToolNames: ctx.builtinToolNames,
-      }).catch((err) => {
+      }).catch((err: unknown) => {
         ctx.log.warn(`failed to persist read tool image media: ${String(err)}`);
         return undefined;
       })));
