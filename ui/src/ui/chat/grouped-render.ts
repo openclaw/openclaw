@@ -1367,6 +1367,40 @@ function renderAssistantAttachmentStatusCard(params: {
   `;
 }
 
+function renderAssistantAttachmentActions(attachmentUrl: string, label: string) {
+  return html`
+    <div class="chat-assistant-attachment-card__actions">
+      <a
+        class="chat-assistant-attachment-card__action"
+        href=${attachmentUrl}
+        target="_blank"
+        rel="noreferrer"
+      >
+        <span aria-hidden="true">${icons.externalLink}</span>
+        <span>Open</span>
+      </a>
+      <a
+        class="chat-assistant-attachment-card__action"
+        href=${attachmentUrl}
+        download=${label}
+        target="_blank"
+        rel="noreferrer"
+      >
+        <span aria-hidden="true">${icons.download}</span>
+        <span>Download</span>
+      </a>
+    </div>
+  `;
+}
+
+function isPdfAttachment(attachment: AttachmentItem["attachment"]): boolean {
+  const mimeType = attachment.mimeType?.trim().toLowerCase() ?? "";
+  if (mimeType === "application/pdf") {
+    return true;
+  }
+  return /\.pdf(?:$|[?#])/i.test(attachment.url.trim()) || /\.pdf$/i.test(attachment.label.trim());
+}
+
 function renderAssistantAttachments(
   attachments: AttachmentItem[],
   localMediaPreviewRoots: readonly string[],
@@ -1430,6 +1464,9 @@ function renderAssistantAttachments(
                       ${availability.reason}
                     </div>`
                   : nothing}
+              ${attachmentUrl
+                ? renderAssistantAttachmentActions(attachmentUrl, attachment.label)
+                : nothing}
             </div>
           `;
         }
@@ -1445,13 +1482,10 @@ function renderAssistantAttachments(
           return html`
             <div class="chat-assistant-attachment-card chat-assistant-attachment-card--video">
               <video controls preload="metadata" src=${attachmentUrl}></video>
-              <a
-                class="chat-assistant-attachment-card__link"
-                href=${attachmentUrl}
-                target="_blank"
-                rel="noreferrer"
-                >${attachment.label}</a
-              >
+              <div class="chat-assistant-attachment-card__header">
+                <span class="chat-assistant-attachment-card__title">${attachment.label}</span>
+              </div>
+              ${renderAssistantAttachmentActions(attachmentUrl, attachment.label)}
             </div>
           `;
         }
@@ -1464,15 +1498,29 @@ function renderAssistantAttachments(
           });
         }
         return html`
-          <div class="chat-assistant-attachment-card">
-            <span class="chat-assistant-attachment-card__icon">${icons.paperclip}</span>
-            <a
-              class="chat-assistant-attachment-card__link"
-              href=${attachmentUrl}
-              target="_blank"
-              rel="noreferrer"
-              >${attachment.label}</a
-            >
+          <div class="chat-assistant-attachment-card chat-assistant-attachment-card--document">
+            <div class="chat-assistant-attachment-card__header">
+              <span class="chat-assistant-attachment-card__icon">${icons.paperclip}</span>
+              <span class="chat-assistant-attachment-card__title">${attachment.label}</span>
+              ${attachment.mimeType
+                ? html`<span class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
+                    >${attachment.mimeType}</span
+                  >`
+                : nothing}
+            </div>
+            ${isPdfAttachment(attachment)
+              ? html`
+                  <object
+                    class="chat-assistant-attachment-card__pdf"
+                    data=${attachmentUrl}
+                    type="application/pdf"
+                    aria-label=${attachment.label}
+                  >
+                    <span>Preview unavailable.</span>
+                  </object>
+                `
+              : nothing}
+            ${renderAssistantAttachmentActions(attachmentUrl, attachment.label)}
           </div>
         `;
       })}
