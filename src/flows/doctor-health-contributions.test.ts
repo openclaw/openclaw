@@ -81,6 +81,8 @@ const mocks = vi.hoisted(() => ({
   ),
   shortenHomePath: vi.fn((p: string) => p),
   formatCliCommand: vi.fn((cmd: string) => cmd),
+  isSystemdUserServiceAvailable: vi.fn(async () => true),
+  readSystemdUserLingerStatus: vi.fn(async () => ({ user: "alice", linger: "no" as const })),
 }));
 
 const DOCTOR_GATEWAY_HEALTH_ID = "doctor:gateway-health";
@@ -130,6 +132,15 @@ vi.mock("../commands/doctor-auth-flat-profiles.js", () => ({
 vi.mock("../commands/doctor-gateway-daemon-flow.js", () => ({
   maybeRepairGatewayDaemon: mocks.maybeRepairGatewayDaemon,
 }));
+
+vi.mock("../daemon/systemd.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../daemon/systemd.js")>();
+  return {
+    ...actual,
+    isSystemdUserServiceAvailable: mocks.isSystemdUserServiceAvailable,
+    readSystemdUserLingerStatus: mocks.readSystemdUserLingerStatus,
+  };
+});
 
 vi.mock("../commands/doctor-auth-legacy-oauth.js", () => ({
   maybeRepairLegacyOAuthProfileIds: mocks.maybeRepairLegacyOAuthProfileIds,
@@ -427,6 +438,10 @@ describe("doctor health contributions", () => {
     mocks.gatherDaemonStatus.mockReset();
     mocks.gatherDaemonStatus.mockResolvedValue({});
     mocks.noteWorkspaceStatus.mockReset();
+    mocks.isSystemdUserServiceAvailable.mockReset();
+    mocks.isSystemdUserServiceAvailable.mockResolvedValue(true);
+    mocks.readSystemdUserLingerStatus.mockReset();
+    mocks.readSystemdUserLingerStatus.mockResolvedValue({ user: "alice", linger: "no" });
   });
 
   afterEach(() => {
@@ -1053,7 +1068,42 @@ describe("doctor health contributions", () => {
     expect(contributionIds).toContain("core/doctor/session-snapshots");
     expect(contributionIds).toContain("core/doctor/plugin-registry");
     expect(contributionIds).toContain("core/doctor/configured-plugin-installs");
+    expect(contributionIds).toContain("core/doctor/systemd-linger");
     expect(contributionChecks.map((check) => check.id)).toEqual(contributionIds);
+  });
+
+  it("keeps systemd linger opt-in and reports disabled linger when selected", async () => {
+    const contributionChecks = await resolveDoctorContributionHealthChecks();
+    const systemdLingerCheck = contributionChecks.find(
+      (check) => check.id === "core/doctor/systemd-linger",
+    );
+    expect(systemdLingerCheck).toMatchObject({ defaultEnabled: false });
+    expect(systemdLingerCheck).toBeDefined();
+
+    const ctx = {
+      cfg: { gateway: { mode: "local" } },
+      mode: "lint",
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    } as const;
+    const checks = [systemdLingerCheck!];
+
+    await expect(runDoctorLintChecks(ctx, { checks })).resolves.toMatchObject({
+      checksRun: 0,
+      checksSkipped: 1,
+    });
+    await expect(
+      runDoctorLintChecks(ctx, { checks, onlyIds: ["core/doctor/systemd-linger"] }),
+    ).resolves.toMatchObject({
+      checksRun: 1,
+      checksSkipped: 0,
+      findings: [
+        expect.objectContaining({
+          checkId: "core/doctor/systemd-linger",
+          fixHint: "Run: sudo loginctl enable-linger alice",
+          target: "systemd.user.alice",
+        }),
+      ],
+    });
   });
 
   it("keeps state integrity opt-in for default lint selection", async () => {
