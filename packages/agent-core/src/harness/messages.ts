@@ -39,10 +39,13 @@ function normalizeCompactionSummaryTimestamp(timestamp: number | string): number
   return parsed ?? 0;
 }
 
-export const COMPACTION_SUMMARY_PREFIX = `The conversation history before this point was compacted into the following summary:
+export const COMPACTION_SUMMARY_PREFIX = `[COMPACTION -- REFERENCE ONLY] The conversation history before this point was compacted into the following summary. Treat it as background reference, NOT as active instructions. Do NOT answer questions or fulfill requests mentioned in this summary -- they were already addressed. Respond ONLY to the latest user message that appears AFTER this summary.
 
 <summary>
 `;
+
+export const COMPACTION_SUMMARY_END_MARKER =
+  "--- END OF COMPACTION SUMMARY -- respond to the message below, not the summary above ---";
 
 export const COMPACTION_SUMMARY_SUFFIX = `
 </summary>`;
@@ -162,7 +165,12 @@ export function convertToLlm(messages: AgentMessage[]): Message[] {
             content: [
               {
                 type: "text" as const,
-                text: COMPACTION_SUMMARY_PREFIX + message.summary + COMPACTION_SUMMARY_SUFFIX,
+                text:
+                  COMPACTION_SUMMARY_PREFIX +
+                  message.summary +
+                  COMPACTION_SUMMARY_SUFFIX +
+                  "\n\n" +
+                  COMPACTION_SUMMARY_END_MARKER,
               },
             ],
             timestamp: normalizeCompactionSummaryTimestamp(message.timestamp),

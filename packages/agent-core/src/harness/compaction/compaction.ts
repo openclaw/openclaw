@@ -136,6 +136,10 @@ export interface CompactionSettings {
   reserveTokens: number;
   /** Approximate recent-context tokens to keep after compaction. */
   keepRecentTokens: number;
+  /** Maximum passes for multi-pass compaction. @default 3 */
+  maxPasses?: number;
+  /** Minimum token reduction fraction to count as progress. @default 0.05 */
+  progressThreshold?: number;
 }
 
 /** Default compaction settings used by the harness. */
@@ -427,6 +431,38 @@ export function findCutPoint(
     }
     cutIndex--;
   }
+
+  // -- User message anchoring --------------------------------------------------
+  // Ensure the last user message is included in the tail, preventing the
+  // "active task lost" bug after compaction.
+  // Ported from Hermes: _ensure_last_user_message_in_tail()
+  const lastUserIdx = findLastMessageIndex(
+    entries,
+    startIndex,
+    cutIndex,
+    (msg) => msg.role === "user",
+  );
+  if (lastUserIdx >= 0 && lastUserIdx < cutIndex && lastUserIdx - startIndex >= 3) {
+    cutIndex = lastUserIdx;
+  }
+
+  // -- Assistant message anchoring ---------------------------------------------
+  // Ensure the last assistant message with visible text content is in the
+  // tail, preventing the "can't see the output" bug.
+  // Ported from Hermes: _ensure_last_assistant_message_in_tail()
+  const lastAssistantIdx = findLastMessageIndex(
+    entries,
+    startIndex,
+    cutIndex,
+    (msg) => msg.role === "assistant" && hasVisibleContent(msg),
+  );
+  if (lastAssistantIdx >= 0 && lastAssistantIdx < cutIndex && lastAssistantIdx - startIndex >= 3) {
+    cutIndex = lastAssistantIdx;
+  }
+
+  // Safety floor: ensure at least one entry can be summarized.
+  cutIndex = Math.max(cutIndex, startIndex + 1);
+
   const cutEntry = entries[cutIndex];
   const isUserMessage = cutEntry.type === "message" && cutEntry.message.role === "user";
   const turnStartIndex = isUserMessage ? -1 : findTurnStartIndex(entries, cutIndex, startIndex);
@@ -436,6 +472,51 @@ export function findCutPoint(
     turnStartIndex,
     isSplitTurn: !isUserMessage && turnStartIndex !== -1,
   };
+}
+
+/**
+ * Find the last message entry matching a predicate, searching backward
+ * from `end` (exclusive) to `start` (inclusive).
+ *
+ * Uses (entry.message as HarnessMessage) to access the role, matching
+ * the existing pattern in findValidCutPoints.
+ */
+function findLastMessageIndex(
+  entries: SessionTreeEntry[],
+  start: number,
+  end: number,
+  predicate: (msg: HarnessMessage) => boolean,
+): number {
+  for (let i = end - 1; i >= start; i--) {
+    const entry = entries[i];
+    if (entry.type === "message") {
+      const msg = entry.message as HarnessMessage;
+      if (predicate(msg)) {
+        return i;
+      }
+    }
+  }
+  return -1;
+}
+
+/**
+ * Check if a HarnessMessage has visible text content (not just tool
+ * calls or thinking blocks).
+ */
+function hasVisibleContent(msg: HarnessMessage): boolean {
+  const content = (msg as { content?: string | Array<{ type: string; text?: string }> }).content;
+  if (!content) {
+    return false;
+  }
+  if (typeof content === "string") {
+    return content.length > 0;
+  }
+  if (Array.isArray(content)) {
+    return content.some(
+      (c) => c.type === "text" && typeof c.text === "string" && c.text.length > 0,
+    );
+  }
+  return false;
 }
 
 export const SUMMARIZATION_SYSTEM_PROMPT = `You are a context summarization assistant. Your task is to read a conversation between a user and an AI coding assistant, then produce a structured summary following the exact format specified.

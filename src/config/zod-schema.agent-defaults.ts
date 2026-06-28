@@ -200,6 +200,8 @@ export const AgentDefaultsSchema = z
         truncateAfterCompaction: z.boolean().optional(),
         maxActiveTranscriptBytes: NonNegativeByteSizeSchema.optional(),
         notifyUser: z.boolean().optional(),
+        maxPasses: z.number().int().min(1).max(10).optional(),
+        progressThreshold: z.number().gt(0).lt(1).optional(),
       })
       .strict()
       .optional(),
