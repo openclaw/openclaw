@@ -28,7 +28,12 @@ const MAX_IMAGE_RESULTS = 4;
 const MB = 1024 * 1024;
 const SUPPORTED_MODELS = [
   DEFAULT_MODEL,
+  "google/gemini-3.1-flash-image",
+  "google/gemini-3-pro-image",
   "google/gemini-3-pro-image-preview",
+  "google/gemini-2.5-flash-image",
+  "openai/gpt-5-image",
+  "openai/gpt-5-image-mini",
   "openai/gpt-5.4-image-2",
 ] as const;
 const SUPPORTED_ASPECT_RATIOS = [

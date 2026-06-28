@@ -100,7 +100,13 @@ describe("openrouter image generation provider", () => {
     expect(provider.id).toBe("openrouter");
     expect(provider.label).toBe("OpenRouter");
     expect(provider.defaultModel).toBe("google/gemini-3.1-flash-image-preview");
+    expect(provider.models).toContain("google/gemini-3.1-flash-image");
+    expect(provider.models).toContain("google/gemini-3-pro-image");
     expect(provider.models).toContain("google/gemini-3-pro-image-preview");
+    expect(provider.models).toContain("google/gemini-2.5-flash-image");
+    expect(provider.models).toContain("openai/gpt-5-image");
+    expect(provider.models).toContain("openai/gpt-5-image-mini");
+    expect(provider.models).toContain("openai/gpt-5.4-image-2");
     expect(provider.capabilities.generate.maxCount).toBe(4);
     expect(provider.capabilities.generate.supportsAspectRatio).toBe(true);
     expect(provider.capabilities.edit.enabled).toBe(true);
