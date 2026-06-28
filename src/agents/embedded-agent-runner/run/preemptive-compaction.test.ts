@@ -453,6 +453,43 @@ describe("preemptive-compaction", () => {
     expect(responsesResult.route).toBe("compact_only");
   });
 
+  it("budgets Completions-shaped tool payloads before accepting lightweight small-context fits", () => {
+    const tools = Array.from({ length: 6 }, (_, index) => makeSmallClientTool(index));
+    const rawResult = shouldPreemptivelyCompactBeforePrompt({
+      messages: [],
+      systemPrompt: "",
+      prompt: "run scheduled task",
+      contextMode: "lightweight",
+      contextTokenBudget: 4_096,
+      reserveTokens: 20_000,
+      tools,
+      llmBoundaryTokenPressure: {
+        estimatedPromptTokens: 3_250,
+        source: "reported_lightweight_cron",
+      },
+    });
+    const completionsResult = shouldPreemptivelyCompactBeforePrompt({
+      messages: [],
+      systemPrompt: "",
+      prompt: "run scheduled task",
+      contextMode: "lightweight",
+      contextTokenBudget: 4_096,
+      reserveTokens: 20_000,
+      tools,
+      toolSchemaPayload: "openai-completions",
+      llmBoundaryTokenPressure: {
+        estimatedPromptTokens: 3_250,
+        source: "reported_lightweight_cron",
+      },
+    });
+
+    expect(rawResult.route).toBe("fits");
+    expect(completionsResult.toolSchemaTokens).toBeGreaterThan(rawResult.toolSchemaTokens ?? 0);
+    expect(completionsResult.promptBudgetBeforeReserve).toBeLessThan(3_250);
+    expect(completionsResult.shouldCompact).toBe(true);
+    expect(completionsResult.route).toBe("compact_only");
+  });
+
   it("keeps lightweight shared-history prompts on the shared prompt floor", () => {
     const result = shouldPreemptivelyCompactBeforePrompt({
       messages: [makeAssistantHistory("existing shared heartbeat conversation")],

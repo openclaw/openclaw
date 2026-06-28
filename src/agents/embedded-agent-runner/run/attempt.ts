@@ -652,13 +652,21 @@ function repairAttemptToolUseResultPairing(
   });
 }
 
-function usesOpenAIResponsesToolPayload(api: unknown): boolean {
-  return (
+function resolveOpenAIToolSchemaPayload(
+  api: unknown,
+): "openai-completions" | "openai-responses" | undefined {
+  if (api === "openai-completions") {
+    return "openai-completions";
+  }
+  if (
     api === "openai-responses" ||
     api === "azure-openai-responses" ||
     api === "openai-chatgpt-responses" ||
     api === "openclaw-openai-responses-transport"
-  );
+  ) {
+    return "openai-responses";
+  }
+  return undefined;
 }
 
 function shouldPreservePromptErrorAfterCleanupError(params: {
@@ -4612,6 +4620,7 @@ export async function runEmbeddedAttempt(
             systemPrompt: systemPromptForHook,
             prompt: llmBoundaryPromptForPrecheck,
           });
+          const toolSchemaPayloadForPrecheck = resolveOpenAIToolSchemaPayload(params.model.api);
           let preemptiveCompaction = null;
           const shouldSkipPrecheck =
             skipPromptSubmission ||
@@ -4637,8 +4646,8 @@ export async function runEmbeddedAttempt(
               contextTokenBudget,
               reserveTokens,
               tools: [...effectiveTools, ...clientToolDefs],
-              ...(usesOpenAIResponsesToolPayload(params.model.api)
-                ? { toolSchemaPayload: "openai-responses" }
+              ...(toolSchemaPayloadForPrecheck
+                ? { toolSchemaPayload: toolSchemaPayloadForPrecheck }
                 : {}),
               toolResultMaxChars: promptToolResultMaxChars,
               llmBoundaryTokenPressure: {

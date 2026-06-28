@@ -39,7 +39,7 @@ type ToolSchemaTokenPressureSource = {
   description?: unknown;
   parameters?: unknown;
 };
-type ToolSchemaTokenPressurePayload = "raw" | "openai-responses";
+type ToolSchemaTokenPressurePayload = "raw" | "openai-completions" | "openai-responses";
 
 /** Pre-prompt routing decision plus the budget facts used to explain it in logs and session state. */
 export type PreemptiveCompactionDecision = {
@@ -168,24 +168,26 @@ function estimateToolSchemaTokenPressure(
   if (!tools?.length) {
     return 0;
   }
-  const payload =
-    payloadShape === "openai-responses"
-      ? buildOpenAIResponsesToolPressurePayload(tools)
-      : tools.map((tool) => ({
+  const providerPayload =
+    payloadShape === "raw"
+      ? tools.map((tool) => ({
           name: tool.name,
           description: tool.description,
           parameters: tool.parameters,
-        }));
+        }))
+      : buildOpenAIToolPressurePayload(tools, payloadShape);
   return Math.max(
     0,
     Math.ceil(
-      estimateJsonPayloadTokenPressure(payload, JSON_PAYLOAD_CHARS_PER_TOKEN) * SAFETY_MARGIN,
+      estimateJsonPayloadTokenPressure(providerPayload, JSON_PAYLOAD_CHARS_PER_TOKEN) *
+        SAFETY_MARGIN,
     ),
   );
 }
 
-function buildOpenAIResponsesToolPressurePayload(
+function buildOpenAIToolPressurePayload(
   tools: readonly ToolSchemaTokenPressureSource[],
+  payloadShape: Exclude<ToolSchemaTokenPressurePayload, "raw">,
 ): unknown[] {
   const projection = projectOpenAITools(
     tools.map((tool) => ({
@@ -194,15 +196,28 @@ function buildOpenAIResponsesToolPressurePayload(
       parameters: tool.parameters ?? {},
     })),
   );
-  return sortToolPressurePayloadByName(projection.tools).map((tool) => ({
-    type: "function",
-    name: tool.name,
-    description: tool.description,
-    // Native Responses paths can strict-normalize schemas; use that upper-bound
-    // payload so small-window fits leave room for provider tool wrappers.
-    parameters: normalizeOpenAIStrictToolParameters(tool.parameters, true),
-    strict: true,
-  }));
+  return sortToolPressurePayloadByName(projection.tools).map((tool) => {
+    if (payloadShape === "openai-completions") {
+      return {
+        type: "function",
+        function: {
+          name: tool.name,
+          description: tool.description,
+          parameters: normalizeOpenAIStrictToolParameters(tool.parameters, false),
+          strict: false,
+        },
+      };
+    }
+    return {
+      type: "function",
+      name: tool.name,
+      description: tool.description,
+      // Native Responses paths can strict-normalize schemas; use that upper-bound
+      // payload so small-window fits leave room for provider tool wrappers.
+      parameters: normalizeOpenAIStrictToolParameters(tool.parameters, true),
+      strict: true,
+    };
+  });
 }
 
 function compareToolText(left: string | undefined, right: string | undefined): number {
