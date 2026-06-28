@@ -784,6 +784,25 @@ describe("RequestClient", () => {
     ]);
   });
 
+  it("bounds gzip-compressed REST response bodies after decompression", async () => {
+    const body = gzipSync(Buffer.from(JSON.stringify({ data: "x".repeat(8 * 1024 * 1024) })));
+    const client = new RequestClient("test-token", {
+      queueRequests: false,
+      fetch: async () =>
+        new Response(body, {
+          status: 200,
+          headers: {
+            "Content-Encoding": "gzip",
+            "Content-Type": "application/json",
+          },
+        }),
+    });
+
+    await expect(client.get("/channels/c1/messages")).rejects.toThrow(
+      /Discord REST response body exceeds 8388608 bytes/,
+    );
+  });
+
   it("does not double-decompress responses fetch has already decoded", async () => {
     const client = new RequestClient("test-token", {
       queueRequests: false,

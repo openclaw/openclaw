@@ -97,13 +97,16 @@ const defaultLaneOptions: Record<RestRequestPriority, { staleAfterMs?: number; w
 const DISCORD_REST_RESPONSE_BODY_MAX_BYTES = 8 * 1024 * 1024;
 const GZIP_MAGIC = [0x1f, 0x8b] as const;
 
+function createResponseBodyOverflowError(size: number | "decompressed output"): Error {
+  return new Error(
+    `Discord REST response body exceeds ${DISCORD_REST_RESPONSE_BODY_MAX_BYTES} bytes (received ${size})`,
+  );
+}
+
 async function readResponseBodyText(response: Response, idleTimeoutMs: number): Promise<string> {
   const buffer = await readResponseWithLimit(response, DISCORD_REST_RESPONSE_BODY_MAX_BYTES, {
     chunkTimeoutMs: idleTimeoutMs,
-    onOverflow: ({ size }) =>
-      new Error(
-        `Discord REST response body exceeds ${DISCORD_REST_RESPONSE_BODY_MAX_BYTES} bytes (received ${size})`,
-      ),
+    onOverflow: ({ size }) => createResponseBodyOverflowError(size),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`Discord REST response stalled: no data received for ${chunkTimeoutMs}ms`),
   });
@@ -126,9 +129,26 @@ function decodeResponseBody(buffer: Buffer): string {
     return "";
   }
   if (buffer[0] === GZIP_MAGIC[0] && buffer[1] === GZIP_MAGIC[1]) {
-    return gunzipSync(buffer).toString("utf8");
+    try {
+      return gunzipSync(buffer, {
+        maxOutputLength: DISCORD_REST_RESPONSE_BODY_MAX_BYTES,
+      }).toString("utf8");
+    } catch (err: unknown) {
+      if (isZlibMaxOutputLengthError(err)) {
+        throw createResponseBodyOverflowError("decompressed output");
+      }
+      throw err;
+    }
   }
   return buffer.toString("utf8");
+}
+
+function isZlibMaxOutputLengthError(err: unknown): boolean {
+  return (
+    err instanceof RangeError &&
+    "code" in err &&
+    (err as { code?: unknown }).code === "ERR_BUFFER_TOO_LARGE"
+  );
 }
 
 function escapeMultipartQuotedValue(value: string): string {
