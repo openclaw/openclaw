@@ -788,31 +788,23 @@ export function scheduleFollowupDrain(
             run: runTrustedFollowup,
           });
           if (collectDrainResult === "empty") {
-            const summaryOnly = previewRestorableQueueSummaryPrompt({
-              state: queue,
-              noun: "message",
-            });
-            const summaryOnlyPrompt = summaryOnly.prompt;
+            const summaryOnly = createQueueSummaryDelivery({ queue });
             const run = queue.lastRun;
-            if (summaryOnlyPrompt && run) {
-              await runWithDeferredSummaryRestore(summaryOnly.restore, async () => {
-                await runWithSummarySourceCleanup(queue, async () => {
-                  await runTrustedFollowup({
-                    prompt: summaryOnlyPrompt,
-                    run,
-                    enqueuedAt: Date.now(),
-                    allowDuringGatewayDrain: queueWasAcceptedBeforeGatewayDrain(
-                      queue.lastEnqueuedAt,
-                    ),
-                    ...collectSummaryRuntimeMetadata([]),
-                    ...collectQueuedImages(queue.items),
-                  });
+            if (summaryOnly && run) {
+              await runQueueSummaryDelivery(queue, summaryOnly, async () => {
+                await runTrustedFollowup({
+                  prompt: summaryOnly.prompt,
+                  run,
+                  enqueuedAt: Date.now(),
+                  allowDuringGatewayDrain: queueWasAcceptedBeforeGatewayDrain(
+                    queue.lastEnqueuedAt,
+                  ),
+                  ...collectRuntimeMetadata(summaryOnly.sources),
+                  ...collectQueuedImages(queue.items),
                 });
               });
-              clearFollowupQueueSummaryState(queue);
               continue;
             }
-            summaryOnly.restore?.();
             break;
           }
           if (collectDrainResult === "drained") {
@@ -820,30 +812,23 @@ export function scheduleFollowupDrain(
           }
 
           const items = queue.items.slice();
-          const summaryResult = previewRestorableQueueSummaryPrompt({
-            state: queue,
-            noun: "message",
-          });
-          const summary = summaryResult.prompt;
+          const summaryDelivery = createQueueSummaryDelivery({ queue });
+          const summary = summaryDelivery?.prompt;
           const contextGroups = splitCollectItemsByDeliveryContext(items);
           if (contextGroups.length === 0) {
             const run = queue.lastRun;
-            if (!summary || !run) {
-              summaryResult.restore?.();
+            if (!summaryDelivery || !run) {
               break;
             }
-            await runWithDeferredSummaryRestore(summaryResult.restore, async () => {
-              await runWithSummarySourceCleanup(queue, async () => {
-                await runTrustedFollowup({
-                  prompt: summary,
-                  run,
-                  enqueuedAt: Date.now(),
-                  allowDuringGatewayDrain: queueWasAcceptedBeforeGatewayDrain(queue.lastEnqueuedAt),
-                  ...collectSummaryRuntimeMetadata([]),
-                });
+            await runQueueSummaryDelivery(queue, summaryDelivery, async () => {
+              await runTrustedFollowup({
+                prompt: summaryDelivery.prompt,
+                run,
+                enqueuedAt: Date.now(),
+                allowDuringGatewayDrain: queueWasAcceptedBeforeGatewayDrain(queue.lastEnqueuedAt),
+                ...collectRuntimeMetadata(summaryDelivery.sources),
               });
             });
-            clearFollowupQueueSummaryState(queue);
             continue;
           }
 
@@ -876,39 +861,30 @@ export function scheduleFollowupDrain(
                 allowDuringGatewayDrain: groupItems.some(shouldRunFollowupDuringGatewayDrain),
               });
             };
-            if (pendingSummary) {
-              await runWithDeferredSummaryRestore(summaryResult.restore, async () => {
-                await runWithSummarySourceCleanup(queue, drainGroup);
-              });
+            if (pendingSummary && summaryDelivery) {
+              await runQueueSummaryDelivery(queue, summaryDelivery, drainGroup);
             } else {
               await drainGroup();
             }
             removeQueuedItemsByRef(queue.items, groupItems);
             if (pendingSummary) {
-              clearFollowupQueueSummaryState(queue);
               pendingSummary = undefined;
             }
           }
           continue;
         }
 
-        const summaryResult = previewRestorableQueueSummaryPrompt({
-          state: queue,
-          noun: "message",
-        });
-        const summaryPrompt = summaryResult.prompt;
-        if (summaryPrompt) {
+        const summaryDelivery = createQueueSummaryDelivery({ queue });
+        if (summaryDelivery) {
           const run = queue.lastRun;
           if (!run) {
-            summaryResult.restore?.();
             break;
           }
-          if (
-            !(await runWithDeferredSummaryRestore(summaryResult.restore, async () =>
-              drainNextQueueItem(queue.items, async (item) => {
-                await runWithSummarySourceCleanup(queue, async () => {
+          let drained = false;
+          await runQueueSummaryDelivery(queue, summaryDelivery, async () => {
+            drained = await drainNextQueueItem(queue.items, async (item) => {
                   await runTrustedFollowup({
-                    prompt: summaryPrompt,
+                    prompt: summaryDelivery.prompt,
                     run,
                     enqueuedAt: Date.now(),
                     allowDuringGatewayDrain: shouldRunFollowupDuringGatewayDrain(item),
@@ -916,16 +892,14 @@ export function scheduleFollowupDrain(
                     originatingTo: item.originatingTo,
                     originatingAccountId: item.originatingAccountId,
                     originatingThreadId: item.originatingThreadId,
-                    ...collectSummaryRuntimeMetadata([item]),
+                    ...collectRuntimeMetadata([item], summaryDelivery.sources.at(-1)),
                     ...collectQueuedImages([item]),
                   });
-                });
-              }),
-            ))
-          ) {
+            });
+          });
+          if (!drained) {
             break;
           }
-          clearFollowupQueueSummaryState(queue);
           continue;
         }
 
