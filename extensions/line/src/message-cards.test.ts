@@ -23,6 +23,8 @@ import {
   messageAction,
 } from "./template-messages.js";
 
+const lineLoneHighSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
+
 describe("createConfirmTemplate", () => {
   it("truncates text to 240 characters", () => {
     const longText = "x".repeat(300);
@@ -277,7 +279,6 @@ describe("flex cards", () => {
 });
 
 describe("action label/data surrogate-safe truncation", () => {
-  const loneHighSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
   // 19 ASCII chars + 😀 (U+1F600, two UTF-16 code units) = 21 code units; a raw
   // .slice(0, 20) would keep the first 19 chars plus the lone high surrogate.
   const labelWithEmoji = "1234567890123456789😀";
@@ -286,7 +287,7 @@ describe("action label/data surrogate-safe truncation", () => {
     const action = messageAction(labelWithEmoji) as { label: string };
 
     expect(action.label).toBe("1234567890123456789");
-    expect(loneHighSurrogate.test(action.label)).toBe(false);
+    expect(lineLoneHighSurrogate.test(action.label)).toBe(false);
   });
 
   it("messageAction leaves a short ASCII label unchanged", () => {
@@ -299,7 +300,7 @@ describe("action label/data surrogate-safe truncation", () => {
     const action = uriAction(labelWithEmoji, "https://example.com") as { label: string };
 
     expect(action.label).toBe("1234567890123456789");
-    expect(loneHighSurrogate.test(action.label)).toBe(false);
+    expect(lineLoneHighSurrogate.test(action.label)).toBe(false);
   });
 
   it("postbackAction truncates label and data on surrogate boundaries", () => {
@@ -311,9 +312,9 @@ describe("action label/data surrogate-safe truncation", () => {
     };
 
     expect(action.label).toBe("1234567890123456789");
-    expect(loneHighSurrogate.test(action.label)).toBe(false);
+    expect(lineLoneHighSurrogate.test(action.label)).toBe(false);
     expect(action.data).toBe("d".repeat(299));
-    expect(loneHighSurrogate.test(action.data)).toBe(false);
+    expect(lineLoneHighSurrogate.test(action.data)).toBe(false);
   });
 
   it("postbackAction truncates displayText on surrogate boundaries but keeps undefined", () => {
@@ -324,7 +325,7 @@ describe("action label/data surrogate-safe truncation", () => {
     const withoutDisplay = postbackAction("Label", "data") as { displayText?: string };
 
     expect(withDisplay.displayText).toBe("t".repeat(299));
-    expect(loneHighSurrogate.test(withDisplay.displayText ?? "")).toBe(false);
+    expect(lineLoneHighSurrogate.test(withDisplay.displayText ?? "")).toBe(false);
     expect(withoutDisplay.displayText).toBeUndefined();
   });
 
@@ -336,9 +337,9 @@ describe("action label/data surrogate-safe truncation", () => {
     };
 
     expect(action.label).toBe("1234567890123456789");
-    expect(loneHighSurrogate.test(action.label)).toBe(false);
+    expect(lineLoneHighSurrogate.test(action.label)).toBe(false);
     expect(action.data).toBe("d".repeat(299));
-    expect(loneHighSurrogate.test(action.data)).toBe(false);
+    expect(lineLoneHighSurrogate.test(action.data)).toBe(false);
   });
 
   it("/card action command uses surrogate-safe labels and postback data", async () => {
@@ -363,9 +364,9 @@ describe("action label/data surrogate-safe truncation", () => {
     const action = result.channelData.line.flexMessage.contents.footer.contents[0].action;
 
     expect(action.label).toBe("1234567890123456789");
-    expect(loneHighSurrogate.test(action.label)).toBe(false);
+    expect(lineLoneHighSurrogate.test(action.label)).toBe(false);
     expect(action.data).toBe(`k=${"d".repeat(297)}`);
-    expect(loneHighSurrogate.test(action.data)).toBe(false);
+    expect(lineLoneHighSurrogate.test(action.data)).toBe(false);
   });
 
   it("media control postback labels truncate on surrogate boundaries", () => {
@@ -384,7 +385,7 @@ describe("action label/data surrogate-safe truncation", () => {
       .find((button) => button.action?.data === "extra")?.action;
 
     expect(extraAction?.label).toBe("x".repeat(14));
-    expect(loneHighSurrogate.test(extraAction?.label ?? "")).toBe(false);
+    expect(lineLoneHighSurrogate.test(extraAction?.label ?? "")).toBe(false);
   });
 });
 
