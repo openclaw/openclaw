@@ -37,4 +37,18 @@ describe("oauth refresh failure hints", () => {
       reason: "invalid_grant",
     });
   });
+
+  it("classifies expired Claude CLI OAuth 401 failures", () => {
+    expect(
+      classifyOAuthRefreshFailure(
+        "Provider claude-cli failed: Failed to authenticate. API Error: 401 Invalid authentication credentials",
+      ),
+    ).toEqual({
+      provider: "claude-cli",
+      reason: "sign_in_again",
+    });
+    expect(buildOAuthRefreshFailureLoginCommand("claude-cli")).toBe(
+      "openclaw models auth login --provider claude-cli",
+    );
+  });
 });

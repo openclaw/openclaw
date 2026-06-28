@@ -957,20 +957,6 @@ function buildExternalRunFailureReply(
   if (authProfileFailoverFailure) {
     return { text: authProfileFailoverFailure, isGenericRunnerFailure: false };
   }
-  const providerRequestError = classifyProviderRequestError(error ?? normalizedMessage);
-  if (providerRequestError) {
-    return {
-      text: providerRequestError.userMessage,
-      isGenericRunnerFailure: false,
-    };
-  }
-  const missingApiKeyFailure = buildMissingApiKeyFailureText({
-    message: normalizedMessage,
-    error,
-  });
-  if (missingApiKeyFailure) {
-    return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
-  }
   const oauthRefreshFailure =
     classifyOAuthRefreshFailureError(error) ?? classifyOAuthRefreshFailure(normalizedMessage);
   if (oauthRefreshFailure) {
@@ -985,6 +971,20 @@ function buildExternalRunFailureReply(
       text: `⚠️ Model login failed on the gateway${oauthRefreshFailure.provider ? ` for ${oauthRefreshFailure.provider}` : ""}. Please try again. If this keeps happening, re-auth with \`${loginCommand}\`.`,
       isGenericRunnerFailure: false,
     };
+  }
+  const providerRequestError = classifyProviderRequestError(error ?? normalizedMessage);
+  if (providerRequestError) {
+    return {
+      text: providerRequestError.userMessage,
+      isGenericRunnerFailure: false,
+    };
+  }
+  const missingApiKeyFailure = buildMissingApiKeyFailureText({
+    message: normalizedMessage,
+    error,
+  });
+  if (missingApiKeyFailure) {
+    return { text: missingApiKeyFailure, isGenericRunnerFailure: false };
   }
   if (options?.isHeartbeat) {
     return { text: HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT, isGenericRunnerFailure: false };
@@ -3131,8 +3131,22 @@ export async function runAgentTurnWithFallback(params: {
           : isBillingErrorMessage(message);
       const isContextOverflow = !isBilling && isLikelyContextOverflowError(message);
       const isCompactionFailure = !isBilling && isCompactionFailureError(message);
+      const externalRunFailureReply =
+        !isBilling && !shouldSurfaceToControlUi
+          ? buildExternalRunFailureReply(
+              { message, error: err },
+              {
+                includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
+                isHeartbeat: params.isHeartbeat,
+              },
+            )
+          : undefined;
       const providerRequestError =
-        !isBilling && !shouldSurfaceToControlUi ? classifyProviderRequestError(err) : undefined;
+        !isBilling && !shouldSurfaceToControlUi && !externalRunFailureReply?.isGenericRunnerFailure
+          ? undefined
+          : !isBilling && !shouldSurfaceToControlUi
+            ? classifyProviderRequestError(err)
+            : undefined;
       const isTransientHttp = isTransientHttpError(message);
 
       // Drain/restart aborts stay silent and defer to post-restart
@@ -3261,20 +3275,6 @@ export async function runAgentTurnWithFallback(params: {
         ? sanitizeUserFacingText(message, { errorContext: true })
         : message;
       const trimmedMessage = safeMessage.replace(/\.\s*$/, "");
-      const externalRunFailureReply =
-        !isBilling &&
-        !(isRateLimit && !isOverloadedErrorMessage(message)) &&
-        !rateLimitOrOverloadedCopy &&
-        !isContextOverflow &&
-        !shouldSurfaceToControlUi
-          ? buildExternalRunFailureReply(
-              { message, error: err },
-              {
-                includeDetails: isVerboseFailureDetailEnabled(params.resolvedVerboseLevel),
-                isHeartbeat: params.isHeartbeat,
-              },
-            )
-          : undefined;
       const genericFallbackText = params.isHeartbeat
         ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
         : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
@@ -3292,7 +3292,10 @@ export async function runAgentTurnWithFallback(params: {
       const userVisibleFallbackText = resolveExternalRunFailureTextForConversation({
         text: fallbackText,
         sessionCtx: params.sessionCtx,
-        isGenericRunnerFailure: externalRunFailureReply?.isGenericRunnerFailure ?? false,
+        isGenericRunnerFailure:
+          fallbackText === externalRunFailureReply?.text
+            ? externalRunFailureReply.isGenericRunnerFailure
+            : false,
         cfg: params.followupRun.run.config,
       });
       const abortedSignal =

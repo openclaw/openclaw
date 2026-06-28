@@ -40,11 +40,23 @@ function isOAuthRefreshFailureMessage(message: string): boolean {
   return (
     lower.includes("oauth token refresh failed") ||
     lower.includes("access token could not be refreshed") ||
-    lower.includes("authentication session could not be refreshed automatically")
+    lower.includes("authentication session could not be refreshed automatically") ||
+    isClaudeCliExpiredOAuthMessage(lower)
+  );
+}
+
+function isClaudeCliExpiredOAuthMessage(lowerMessage: string): boolean {
+  return (
+    lowerMessage.includes("claude-cli") &&
+    lowerMessage.includes("401") &&
+    lowerMessage.includes("invalid authentication credentials")
   );
 }
 
 function extractOAuthRefreshFailureProvider(message: string): string | null {
+  if (isClaudeCliExpiredOAuthMessage(message.toLowerCase())) {
+    return "claude-cli";
+  }
   const provider = message.match(OAUTH_REFRESH_FAILURE_PROVIDER_RE)?.[1]?.trim();
   return provider && provider.length > 0 ? provider : null;
 }
@@ -75,6 +87,9 @@ export function classifyOAuthRefreshFailureReason(
   }
   if (lower.includes("expired or revoked") || lower.includes("revoked")) {
     return "revoked";
+  }
+  if (isClaudeCliExpiredOAuthMessage(lower)) {
+    return "sign_in_again";
   }
   return null;
 }
