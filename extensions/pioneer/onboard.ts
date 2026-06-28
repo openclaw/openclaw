@@ -13,11 +13,9 @@ import {
 } from "./models.js";
 
 function applyPioneerProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
-  const models = { ...cfg.agents?.defaults?.models };
-  models[PIONEER_DEFAULT_MODEL_REF] = {
-    ...models[PIONEER_DEFAULT_MODEL_REF],
-    alias: models[PIONEER_DEFAULT_MODEL_REF]?.alias ?? "Pioneer",
-  };
+  // Use a provider wildcard so all live-discovered Pioneer models are visible
+  // in the model picker without needing to enumerate them in the allowlist.
+  const models = { ...cfg.agents?.defaults?.models, "pioneer/*": {} };
 
   return applyProviderConfigWithModelCatalog(cfg, {
     agentModels: models,

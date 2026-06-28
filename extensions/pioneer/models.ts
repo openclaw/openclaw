@@ -9,8 +9,8 @@ const PIONEER_MANIFEST_PROVIDER = buildManifestModelProviderConfig({
 });
 
 export const PIONEER_BASE_URL = PIONEER_MANIFEST_PROVIDER.baseUrl;
-export const PIONEER_DEFAULT_MODEL_ID = "claude-sonnet-4-6";
-export const PIONEER_DEFAULT_MODEL_REF = `pioneer/${PIONEER_DEFAULT_MODEL_ID}`;
+export const PIONEER_DEFAULT_MODEL_ID = "pioneer/auto";
+export const PIONEER_DEFAULT_MODEL_REF = PIONEER_DEFAULT_MODEL_ID;
 export const PIONEER_MODEL_CATALOG: ModelDefinitionConfig[] = PIONEER_MANIFEST_PROVIDER.models;
 
 export function buildPioneerModelDefinition(
