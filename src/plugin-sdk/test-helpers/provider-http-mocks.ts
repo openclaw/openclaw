@@ -208,45 +208,83 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: providerHttpMocks.resolveApiKeyForProviderMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => {
-  const actual = await importActual<typeof import("../provider-http.js")>();
-  return {
-    // Keep the byte-bounded JSON reader REAL so success-path reads exercise the
-    // streaming size cap (readResponseWithLimit) under test instead of a stub.
-    readProviderJsonResponse: actual.readProviderJsonResponse,
-    assertOkOrThrowHttpError: providerHttpMocks.assertOkOrThrowHttpErrorMock,
-    assertOkOrThrowProviderError: providerHttpMocks.assertOkOrThrowProviderErrorMock,
-    createProviderOperationDeadline: ({
-      label,
-      timeoutMs,
-    }: {
-      label: string;
-      timeoutMs?: number;
-    }) => ({
-      label,
-      timeoutMs,
-    }),
-    createProviderOperationTimeoutResolver:
-      ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
-      () =>
-        defaultTimeoutMs,
-    executeProviderOperationWithRetry: providerHttpMocks.executeProviderOperationWithRetryMock,
-    fetchProviderDownloadResponse: providerHttpMocks.fetchProviderDownloadResponseMock,
-    fetchProviderOperationResponse: providerHttpMocks.fetchProviderOperationResponseMock,
-    fetchWithTimeout: providerHttpMocks.fetchWithTimeoutMock,
-    fetchWithTimeoutGuarded: providerHttpMocks.fetchWithTimeoutGuardedMock,
-    pollProviderOperationJson: providerHttpMocks.pollProviderOperationJsonMock,
-    postJsonRequest: providerHttpMocks.postJsonRequestMock,
-    postMultipartRequest: providerHttpMocks.postMultipartRequestMock,
-    providerOperationRetryConfig: (_stage: string) => true,
-    resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
+vi.mock("openclaw/plugin-sdk/provider-http", () => ({
+  assertOkOrThrowHttpError: providerHttpMocks.assertOkOrThrowHttpErrorMock,
+  assertOkOrThrowProviderError: providerHttpMocks.assertOkOrThrowProviderErrorMock,
+  createProviderOperationDeadline: ({
+    label,
+    timeoutMs,
+  }: {
+    label: string;
+    timeoutMs?: number;
+  }) => ({
+    label,
+    timeoutMs,
+  }),
+  createProviderOperationTimeoutResolver:
+    ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
+    () =>
       defaultTimeoutMs,
-    resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
-    sanitizeConfiguredModelProviderRequest:
-      providerHttpMocks.sanitizeConfiguredModelProviderRequestMock,
-    waitProviderOperationPollInterval: async () => {},
-  };
-});
+  executeProviderOperationWithRetry: providerHttpMocks.executeProviderOperationWithRetryMock,
+  fetchProviderDownloadResponse: providerHttpMocks.fetchProviderDownloadResponseMock,
+  fetchProviderOperationResponse: providerHttpMocks.fetchProviderOperationResponseMock,
+  fetchWithTimeout: providerHttpMocks.fetchWithTimeoutMock,
+  fetchWithTimeoutGuarded: providerHttpMocks.fetchWithTimeoutGuardedMock,
+  pollProviderOperationJson: providerHttpMocks.pollProviderOperationJsonMock,
+  postJsonRequest: providerHttpMocks.postJsonRequestMock,
+  postMultipartRequest: providerHttpMocks.postMultipartRequestMock,
+  readProviderJsonResponse: async <T>(
+    response: Response,
+    label: string,
+    opts?: { maxBytes?: number },
+  ): Promise<T> => {
+    const maxBytes = opts?.maxBytes ?? 16 * 1024 * 1024;
+    if (!response.body) {
+      try {
+        return (await response.json()) as T;
+      } catch (cause) {
+        throw new Error(`${label}: malformed JSON response`, { cause });
+      }
+    }
+    const reader = response.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let totalBytes = 0;
+    try {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) {
+          break;
+        }
+        totalBytes += value.byteLength;
+        if (totalBytes > maxBytes) {
+          await reader.cancel();
+          throw new Error(`${label}: JSON response exceeds ${maxBytes} bytes`);
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    const body = new Uint8Array(totalBytes);
+    let offset = 0;
+    for (const chunk of chunks) {
+      body.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    try {
+      return JSON.parse(new TextDecoder().decode(body)) as T;
+    } catch (cause) {
+      throw new Error(`${label}: malformed JSON response`, { cause });
+    }
+  },
+  providerOperationRetryConfig: (_stage: string) => true,
+  resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
+    defaultTimeoutMs,
+  resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
+  sanitizeConfiguredModelProviderRequest:
+    providerHttpMocks.sanitizeConfiguredModelProviderRequestMock,
+  waitProviderOperationPollInterval: async () => {},
+}));
 
 export function getProviderHttpMocks(): ProviderHttpMocks {
   return providerHttpMocks;

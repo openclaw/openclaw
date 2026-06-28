@@ -207,4 +207,65 @@ describe("codex cli node sessions", () => {
       }),
     ).rejects.toThrow("Codex CLI node command returned malformed payloadJSON.");
   });
+
+  it("keeps Codex history session previews on UTF-16 code point boundaries", async () => {
+    const sessionId = "019e2007-1f7e-7eb1-a42b-8c01f4b9b5ce";
+    const text = `${"a".repeat(136)}🤖tail`;
+    await fs.writeFile(
+      path.join(tempDir, "history.jsonl"),
+      JSON.stringify({ session_id: sessionId, ts: 1778678322, text }),
+    );
+
+    const command = createCodexCliSessionNodeHostCommands().find(
+      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
+    );
+    const raw = await command?.handle(JSON.stringify({ filter: "", limit: 5 }));
+    const parsed = JSON.parse(raw ?? "{}") as {
+      sessions?: Array<{ lastMessage?: string }>;
+    };
+
+    expect(parsed.sessions?.[0]?.lastMessage).toBe(`${"a".repeat(136)}...`);
+    expect(parsed.sessions?.[0]?.lastMessage).not.toContain("\ud83e");
+    expect(parsed.sessions?.[0]?.lastMessage).not.toContain("\udd16");
+  });
+
+  it("keeps Codex session-file previews on UTF-16 code point boundaries", async () => {
+    const sessionId = "019e23d1-f33d-78e3-959e-0f56f30a5248";
+    const sessionDir = path.join(tempDir, "sessions", "2026", "05", "14");
+    const sessionFile = path.join(sessionDir, `rollout-2026-05-14T00-10-22-${sessionId}.jsonl`);
+    const text = `${"b".repeat(136)}🤖tail`;
+
+    await fs.mkdir(sessionDir, { recursive: true });
+    await fs.writeFile(
+      sessionFile,
+      [
+        JSON.stringify({
+          timestamp: "2026-05-14T00:10:23.618Z",
+          type: "session_meta",
+          payload: { id: sessionId, cwd: "/tmp/codex-work" },
+        }),
+        JSON.stringify({
+          timestamp: "2026-05-14T00:10:23.619Z",
+          type: "response_item",
+          payload: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text }],
+          },
+        }),
+      ].join("\n"),
+    );
+
+    const command = createCodexCliSessionNodeHostCommands().find(
+      (entry) => entry.command === CODEX_CLI_SESSIONS_LIST_COMMAND,
+    );
+    const raw = await command?.handle(JSON.stringify({ filter: "", limit: 5 }));
+    const parsed = JSON.parse(raw ?? "{}") as {
+      sessions?: Array<{ lastMessage?: string }>;
+    };
+
+    expect(parsed.sessions?.[0]?.lastMessage).toBe(`${"b".repeat(136)}...`);
+    expect(parsed.sessions?.[0]?.lastMessage).not.toContain("\ud83e");
+    expect(parsed.sessions?.[0]?.lastMessage).not.toContain("\udd16");
+  });
 });
