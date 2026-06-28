@@ -16,9 +16,9 @@ afterEach(() => {
 });
 
 describe("transcript events", () => {
-  it("emits trimmed archive file updates", () => {
+  it("emits trimmed archive file updates only to internal listeners", () => {
     const listener = vi.fn();
-    cleanup.push(onSessionTranscriptUpdate(listener));
+    cleanup.push(onInternalSessionTranscriptUpdate(listener));
 
     emitSessionTranscriptUpdate({ sessionFile: "  /tmp/session.jsonl  " });
 
@@ -26,23 +26,45 @@ describe("transcript events", () => {
     expect(listener).toHaveBeenCalledWith({ sessionFile: "/tmp/session.jsonl" });
   });
 
-  it("includes optional session metadata when provided", () => {
-    const listener = vi.fn();
-    cleanup.push(onSessionTranscriptUpdate(listener));
+  it("does not expose file-only archive updates to public listeners", () => {
+    const publicListener = vi.fn();
+    const internalListener = vi.fn();
+    cleanup.push(onSessionTranscriptUpdate(publicListener));
+    cleanup.push(onInternalSessionTranscriptUpdate(internalListener));
 
     emitSessionTranscriptUpdate({
       sessionFile: "  /tmp/session.jsonl  ",
       sessionKey: "  agent:main:main  ",
       agentId: "  main  ",
+      sessionId: "  sess-1  ",
       message: { role: "assistant", content: "hi" },
       messageId: "  msg-1  ",
       messageSeq: 2,
     });
 
-    expect(listener).toHaveBeenCalledWith({
-      sessionFile: "/tmp/session.jsonl",
+    expect(publicListener).toHaveBeenCalledWith({
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+      },
       sessionKey: "agent:main:main",
       agentId: "main",
+      sessionId: "sess-1",
+      message: { role: "assistant", content: "hi" },
+      messageId: "msg-1",
+      messageSeq: 2,
+    });
+    expect(internalListener).toHaveBeenCalledWith({
+      sessionFile: "/tmp/session.jsonl",
+      target: {
+        agentId: "main",
+        sessionId: "sess-1",
+        sessionKey: "agent:main:main",
+      },
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      sessionId: "sess-1",
       message: { role: "assistant", content: "hi" },
       messageId: "msg-1",
       messageSeq: 2,
@@ -101,7 +123,7 @@ describe("transcript events", () => {
     });
   });
 
-  it("derives target identity from public file updates", () => {
+  it("derives public target identity from legacy-shaped internal updates", () => {
     const listener = vi.fn();
     cleanup.push(onSessionTranscriptUpdate(listener));
 
@@ -112,7 +134,6 @@ describe("transcript events", () => {
     });
 
     expect(listener).toHaveBeenCalledWith({
-      sessionFile: "/tmp/session.jsonl",
       target: {
         agentId: "main",
         sessionId: "sess-1",
@@ -124,24 +145,27 @@ describe("transcript events", () => {
     });
   });
 
-  it("keeps public global file updates on the compatibility shape", () => {
-    const listener = vi.fn();
-    cleanup.push(onSessionTranscriptUpdate(listener));
+  it("drops public global file updates without target identity", () => {
+    const publicListener = vi.fn();
+    const internalListener = vi.fn();
+    cleanup.push(onSessionTranscriptUpdate(publicListener));
+    cleanup.push(onInternalSessionTranscriptUpdate(internalListener));
 
     emitSessionTranscriptUpdate({
       sessionFile: "/tmp/session.jsonl",
       sessionKey: "global",
     });
 
-    expect(listener).toHaveBeenCalledWith({
+    expect(publicListener).not.toHaveBeenCalled();
+    expect(internalListener).toHaveBeenCalledWith({
       sessionFile: "/tmp/session.jsonl",
       sessionKey: "global",
     });
   });
 
-  it("drops invalid message sequence values", () => {
+  it("drops invalid message sequence values on internal file updates", () => {
     const listener = vi.fn();
-    cleanup.push(onSessionTranscriptUpdate(listener));
+    cleanup.push(onInternalSessionTranscriptUpdate(listener));
 
     emitSessionTranscriptUpdate({
       sessionFile: "/tmp/session.jsonl",
@@ -167,8 +191,8 @@ describe("transcript events", () => {
       throw new Error("boom");
     });
     const second = vi.fn();
-    cleanup.push(onSessionTranscriptUpdate(first));
-    cleanup.push(onSessionTranscriptUpdate(second));
+    cleanup.push(onInternalSessionTranscriptUpdate(first));
+    cleanup.push(onInternalSessionTranscriptUpdate(second));
 
     expect(emitSessionTranscriptUpdate({ sessionFile: "/tmp/session.jsonl" })).toBeUndefined();
     expect(first).toHaveBeenCalledTimes(1);

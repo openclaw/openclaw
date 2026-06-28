@@ -195,17 +195,7 @@ describe("session accessor boundary guard", () => {
   });
 
   it("ratchets only explicit file-backed SDK session compatibility exports", () => {
-    expect(allowedSessionStoreRuntimeFileBackedCompatExports).toEqual(
-      new Set([
-        "loadSessionStore",
-        "readLatestAssistantTextFromSessionTranscript",
-        "resolveAndPersistSessionFile",
-        "resolveSessionFilePath",
-        "resolveSessionStoreEntry",
-        "saveSessionStore",
-        "updateSessionStore",
-      ]),
-    );
+    expect(allowedSessionStoreRuntimeFileBackedCompatExports).toEqual(new Set([]));
   });
 
   it("collects file-backed SDK session compatibility exports", () => {
