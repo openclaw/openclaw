@@ -126,7 +126,15 @@ function sanitizeOpenAISdkSseResponse(
               buffer += decoder.decode();
               const data = buffer.trim();
               if (data) {
-                controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+                // Guard against double-wrapping: some OpenAI-compatible gateways
+                // return application/json content-type with SSE-formatted body
+                // (data: {...}\n\n). If the body already starts with an SSE field,
+                // pass it through as-is instead of prefixing another data: wrapper.
+                if (/^(?::|(?:data|event|id|retry)(?::|[\r\n]))/mu.test(data)) {
+                  controller.enqueue(encoder.encode(`${data}\n\n`));
+                } else {
+                  controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+                }
               }
               controller.enqueue(encoder.encode("data: [DONE]\n\n"));
               controller.close();

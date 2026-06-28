@@ -1193,6 +1193,40 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("passes through already-SSE-formatted bodies returned with application/json content-type", async () => {
+    // Regression: some OpenAI-compatible gateways return application/json content-type
+    // with SSE-formatted body (data: {...}\n\n). The JSON synthesis path must not
+    // double-wrap the data: prefix. (#96497)
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response('data: {"ok": true}\n\n', {
+        headers: { "content-type": "application/json; charset=utf-8" },
+      }),
+      finalUrl: "https://custom-gateway.example.com/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "minimax-m3",
+      provider: "hetu",
+      api: "openai-completions",
+      baseUrl: "https://custom-gateway.example.com/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://custom-gateway.example.com/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "minimax-m3", stream: true }),
+      },
+    );
+    const items = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(items).toEqual([{ ok: true }]);
+  });
+
   it("does not clone Request bodies while checking for streaming JSON fallbacks", async () => {
     const cloneSpy = vi.spyOn(Request.prototype, "clone");
     fetchWithSsrFGuardMock.mockResolvedValue({
