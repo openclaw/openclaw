@@ -65,7 +65,8 @@ export async function runNodeAttach(params: {
   const url = `${gw.tls ? "wss" : "ws"}://${gw.host ?? "127.0.0.1"}:${gw.port ?? 18789}`;
 
   // Connect as the paired node. caps/commands are intentionally omitted so the approved surface is
-  // preserved (they are optional + the token is the auth — we are not re-requesting pairing).
+  // preserved, but the attach permission must be declared on this live connection so gateway
+  // reconciliation can intersect it with the stored owner approval.
   const client = new GatewayClient({
     url,
     token: token || undefined,
@@ -76,6 +77,7 @@ export async function runNodeAttach(params: {
     mode: GATEWAY_CLIENT_MODES.NODE,
     role: "node",
     scopes: [],
+    permissions: { attach: true },
     deviceIdentity: loadOrCreateDeviceIdentity(),
     tlsFingerprint: gw.tlsFingerprint,
     onEvent: () => {},

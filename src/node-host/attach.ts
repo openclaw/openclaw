@@ -37,41 +37,65 @@ export async function prepareNodeAttach(params: {
   homeDir?: string;
 }): Promise<NodeAttachLaunch> {
   const { client, cwd, nowMs, homeDir } = params;
-  const grant = (await client.request("node.attachGrant", {})) as {
-    sessionKey: string;
-    token: string;
-    expiresAtMs: number;
-  };
-  const { messages } = (await client.request("node.attachHydrate", {
-    grantToken: grant.token,
-  })) as { messages: HydrationMessage[] };
-  // Fresh local cli session id; hydrate the gateway conversation under it so --resume picks it up.
-  const cliSessionId = randomUUID();
-  const transcriptPath = hydrateClaudeCliTranscript({
-    messages: Array.isArray(messages) ? messages : [],
-    sessionId: cliSessionId,
-    cwd,
-    nowMs,
-    homeDir,
-  });
-  const forwarder = await startNodeAttachForwarder({ client });
-  return {
-    sessionKey: grant.sessionKey,
-    cliSessionId,
-    forwarder,
-    // The harness's MCP client points at the LOCAL forwarder; the token rides the env placeholder so
-    // it never lands in argv or a durable config, mirroring the gateway-host launcher (PR2).
-    mcpConfig: {
-      mcpServers: {
-        openclaw: {
-          type: "http",
-          url: forwarder.url,
-          headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
+  let grant:
+    | {
+        sessionKey: string;
+        token: string;
+        expiresAtMs: number;
+      }
+    | undefined;
+  let forwarder: NodeAttachForwarder | undefined;
+  try {
+    grant = (await client.request("node.attachGrant", {})) as {
+      sessionKey: string;
+      token: string;
+      expiresAtMs: number;
+    };
+    const { messages } = (await client.request("node.attachHydrate", {
+      grantToken: grant.token,
+    })) as { messages: HydrationMessage[] };
+    // Fresh local cli session id; hydrate the gateway conversation under it so --resume picks it up.
+    const cliSessionId = randomUUID();
+    const transcriptPath = hydrateClaudeCliTranscript({
+      messages: Array.isArray(messages) ? messages : [],
+      sessionId: cliSessionId,
+      cwd,
+      nowMs,
+      homeDir,
+    });
+    forwarder = await startNodeAttachForwarder({ client });
+    return {
+      sessionKey: grant.sessionKey,
+      cliSessionId,
+      forwarder,
+      // The harness's MCP client points at the LOCAL forwarder; the token rides the env placeholder so
+      // it never lands in argv or a durable config, mirroring the gateway-host launcher (PR2).
+      mcpConfig: {
+        mcpServers: {
+          openclaw: {
+            type: "http",
+            url: forwarder.url,
+            headers: { Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}" },
+          },
         },
       },
-    },
-    env: { OPENCLAW_MCP_TOKEN: grant.token, OPENCLAW_MCP_SESSION_KEY: grant.sessionKey },
-    launchArgs: transcriptPath ? ["--resume", cliSessionId] : ["--session-id", cliSessionId],
-    transcriptPath,
-  };
+      env: { OPENCLAW_MCP_TOKEN: grant.token, OPENCLAW_MCP_SESSION_KEY: grant.sessionKey },
+      launchArgs: transcriptPath ? ["--resume", cliSessionId] : ["--session-id", cliSessionId],
+      transcriptPath,
+    };
+  } catch (error) {
+    try {
+      await forwarder?.close();
+    } catch {
+      // best-effort cleanup
+    }
+    if (grant?.token) {
+      try {
+        await client.request("node.attachRevoke", { grantToken: grant.token });
+      } catch {
+        // best-effort cleanup; preserve the original setup failure
+      }
+    }
+    throw error;
+  }
 }

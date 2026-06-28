@@ -71,4 +71,26 @@ describe("prepareNodeAttach (PR5 conduit + PR7 hydration integration)", () => {
     expect(launch.launchArgs).toEqual(["--session-id", launch.cliSessionId]);
     expect(launch.transcriptPath).toBeUndefined();
   });
+
+  it("revokes the grant when setup fails after minting it", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "node.attachGrant") {
+        return { sessionKey: "agent:main", token: "tok-fail", expiresAtMs: 9e12 };
+      }
+      if (method === "node.attachHydrate") {
+        throw new Error("hydrate failed");
+      }
+      return {};
+    });
+
+    await expect(
+      prepareNodeAttach({
+        client: { request },
+        cwd: "/work/proj",
+        nowMs: 1e6,
+      }),
+    ).rejects.toThrow("hydrate failed");
+
+    expect(request).toHaveBeenCalledWith("node.attachRevoke", { grantToken: "tok-fail" });
+  });
 });

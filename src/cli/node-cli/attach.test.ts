@@ -66,7 +66,8 @@ describe("runNodeAttach (node conduit launcher)", () => {
       expect.objectContaining({ client: mockClient, cwd: "/work", nowMs: 1_000 }),
     );
     // connects as the paired node over its own link: url from the node-host config (ws + default
-    // host/port), the node's token as auth, role node, identity from the config — not re-declared.
+    // host/port), the node's token as auth, role node, and live attach permission declared so
+    // reconciliation can make the stored approval effective for this connection.
     expect(vi.mocked(GatewayClient)).toHaveBeenCalledWith(
       expect.objectContaining({
         url: "ws://127.0.0.1:18789",
@@ -75,6 +76,7 @@ describe("runNodeAttach (node conduit launcher)", () => {
         instanceId: "node-1",
         clientDisplayName: "node-1",
         scopes: [],
+        permissions: { attach: true },
       }),
     );
     await plan.close();
