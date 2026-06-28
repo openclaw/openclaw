@@ -4435,10 +4435,11 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored1 = readSessionStoreFast(storePath);
-    expect(stored1[sessionKey].goal.tokenStart).toBe(100);
-    expect(stored1[sessionKey].goal.tokenStartFresh).toBe(true);
-    expect(stored1[sessionKey].goal.tokensUsed).toBe(0);
-    expect(stored1[sessionKey].goal.status).toBe("active");
+    const storedEntry1 = stored1[sessionKey];
+    expect(storedEntry1?.goal?.tokenStart).toBe(100);
+    expect(storedEntry1?.goal?.tokenStartFresh).toBe(true);
+    expect(storedEntry1?.goal?.tokensUsed).toBe(0);
+    expect(storedEntry1?.goal?.status).toBe("active");
 
     await persistSessionUsageUpdate({
       storePath,
@@ -4449,9 +4450,10 @@ describe("persistSessionUsageUpdate", () => {
     });
 
     const stored2 = readSessionStoreFast(storePath);
-    expect(stored2[sessionKey].goal.tokenStart).toBe(100);
-    expect(stored2[sessionKey].goal.tokensUsed).toBe(25);
-    expect(stored2[sessionKey].goal.status).toBe("budget_limited");
+    const storedEntry2 = stored2[sessionKey];
+    expect(storedEntry2?.goal?.tokenStart).toBe(100);
+    expect(storedEntry2?.goal?.tokensUsed).toBe(25);
+    expect(storedEntry2?.goal?.status).toBe("budget_limited");
   });
 
   it("uses lastCallUsage cache counters when available", async () => {

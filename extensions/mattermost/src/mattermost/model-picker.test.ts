@@ -232,6 +232,7 @@ describe("Mattermost model picker", () => {
           providerOverride: "anthropic",
           modelOverride: "claude-sonnet-4-5",
           sessionId: "parent-session",
+          updatedAt: 1,
         },
       });
       await upsertSessionEntry({
@@ -241,6 +242,7 @@ describe("Mattermost model picker", () => {
         entry: {
           parentSessionKey,
           sessionId: "child-session",
+          updatedAt: 2,
         },
       });
       await upsertSessionEntry({
@@ -251,6 +253,7 @@ describe("Mattermost model picker", () => {
           providerOverride: "openai",
           modelOverride: "gpt-5",
           sessionId: "direct-session",
+          updatedAt: 3,
         },
       });
       const cfg: OpenClawConfig = {

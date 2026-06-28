@@ -73,7 +73,6 @@ async function createSqliteMirrorTarget(prefix: string, options: { sessionId?: s
   const storePath = path.join(root, "openclaw-agent.sqlite");
   await upsertSessionEntry({
     agentId,
-    sessionId,
     sessionKey,
     storePath,
     entry: {

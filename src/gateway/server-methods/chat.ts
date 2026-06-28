@@ -1933,7 +1933,11 @@ function findSourceReplyTranscriptMirrorByMetadataInEvents(params: {
 }
 
 async function transcriptExists(scope: SessionTranscriptWriteScope): Promise<boolean> {
-  return (await loadTranscriptEvents(scope).catch(() => [])).length > 0;
+  const sessionId = scope.sessionId;
+  if (!sessionId) {
+    return false;
+  }
+  return (await loadTranscriptEvents({ ...scope, sessionId }).catch(() => [])).length > 0;
 }
 
 async function appendAssistantTranscriptMessage(params: {

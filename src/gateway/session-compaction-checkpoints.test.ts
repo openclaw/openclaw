@@ -303,7 +303,7 @@ describe("session-compaction-checkpoints", () => {
         role: "assistant",
         content: "sqlite rows are active",
         timestamp: 2,
-      } as AssistantMessage,
+      } as unknown as AssistantMessage,
       now: Date.parse("2026-06-26T12:00:02.000Z"),
     });
 
@@ -374,7 +374,7 @@ describe("session-compaction-checkpoints", () => {
         role: "assistant",
         content: "checkpoint branch source",
         timestamp: 2,
-      } as AssistantMessage,
+      } as unknown as AssistantMessage,
       now: Date.parse("2026-06-26T12:00:02.000Z"),
     });
     const sourceLeafId = requireNonEmptyString(
@@ -492,7 +492,7 @@ describe("session-compaction-checkpoints", () => {
         role: "assistant",
         content: "entry id boundary message",
         timestamp: 2,
-      } as AssistantMessage,
+      } as unknown as AssistantMessage,
       now: Date.parse("2026-06-26T12:00:02.000Z"),
     });
     const sourceEntryId = requireNonEmptyString(
@@ -613,7 +613,6 @@ describe("session-compaction-checkpoints", () => {
     await upsertSessionEntry(
       {
         agentId: MAIN_AGENT_ID,
-        sessionId,
         sessionKey,
         storePath,
       },

@@ -410,8 +410,15 @@ describe("rewriteTranscriptEntriesInRuntimeTranscript", () => {
       });
 
       const branchMessages = (await loadTranscriptEvents(scope))
-        .filter((entry) => entry.type === "message")
-        .map((entry) => entry.message as AgentMessage);
+        .filter(
+          (entry): entry is { message: AgentMessage; type: "message" } =>
+            typeof entry === "object" &&
+            entry !== null &&
+            "message" in entry &&
+            "type" in entry &&
+            entry.type === "message",
+        )
+        .map((entry) => entry.message);
       expect(branchMessages.map((message) => message.role)).toEqual([
         "user",
         "toolResult",

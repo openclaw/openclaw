@@ -240,7 +240,14 @@ async function readSessionMessages(params: {
   storePath: string;
 }) {
   return (await loadTranscriptEvents(params))
-    .filter((entry) => entry.type === "message")
+    .filter(
+      (entry): entry is { message: unknown; type: "message" } =>
+        typeof entry === "object" &&
+        entry !== null &&
+        "message" in entry &&
+        "type" in entry &&
+        entry.type === "message",
+    )
     .map((entry) => entry.message);
 }
 

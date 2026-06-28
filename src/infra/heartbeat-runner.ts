@@ -1740,9 +1740,6 @@ export async function runHeartbeatOnce(opts: {
         fallbackEntry: {
           sessionId: sessionKey.replace(/:/g, "_"),
           updatedAt: startedAt,
-          createdAt: startedAt,
-          messageCount: 0,
-          lastMessageAt: startedAt,
           heartbeatTaskState: {},
         },
         preserveActivity: true,
