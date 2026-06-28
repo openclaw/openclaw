@@ -1279,8 +1279,8 @@ describe("continuation-tracer :: reason/task text privacy", () => {
       "continuation.work.fire",
     ]);
     for (const [index, span] of spans.entries()) {
-      const attrs = span.options?.attributes as ContinuationSpanAttrs;
-      expectSafeReasonAttributes(attrs, reasons[index]!);
+      const attrs = span.options?.attributes;
+      expectSafeReasonAttributes(attrs, reasons[index]);
       expectNoAttributeValueContains(attrs, sentinel);
     }
   });
