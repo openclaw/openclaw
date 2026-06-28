@@ -2580,6 +2580,10 @@ export function createConfigIO(
       });
     await preCommitRuntimePreflight(resolveRuntimePreflightSourceConfig(stampedOutputConfig));
 
+    if (options.baseSnapshot) {
+      await assertBaseSnapshotStillCurrent(snapshot, configPath, deps.fs);
+    }
+
     const pluginInstallConfigMigration =
       ensureShippedPluginInstallConfigRecordsMigratedForWrite(snapshot);
     let configCommitted = false;
