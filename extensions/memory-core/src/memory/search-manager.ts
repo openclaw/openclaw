@@ -527,7 +527,9 @@ async function getBuiltinMemorySearchManager(params: {
 
 class BorrowedMemoryManager implements MemorySearchManager {
   readonly probeVectorStoreAvailability?: () => Promise<boolean>;
-  readonly getSearchTimeoutMs?: () => number;
+  readonly getSearchTimeoutMs?: (opts?: {
+    qmdSearchModeOverride?: "query" | "search" | "vsearch";
+  }) => number;
 
   constructor(private readonly inner: MemorySearchManager) {
     if (inner.probeVectorStoreAvailability) {
