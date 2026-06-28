@@ -96,9 +96,7 @@ describe("session-memory transcript extraction", () => {
 
     // Role word embedded as part of a sentence → preserved.
     expect(
-      sanitizeSessionMemoryTranscriptText(
-        "The user submitted a form and the assistant confirmed.",
-      ),
+      sanitizeSessionMemoryTranscriptText("The user submitted a form and the assistant confirmed."),
     ).toBe("The user submitted a form and the assistant confirmed.");
 
     // Role word as a standalone line with leading/trailing whitespace → stripped.
