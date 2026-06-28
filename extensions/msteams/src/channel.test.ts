@@ -629,6 +629,67 @@ describe("msteams account config", () => {
     expect(listMSTeamsAccountIds(cfg)).toEqual(["default", "secondary"]);
   });
 
+  it("resolves display-style account keys through their canonical account ids", () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          tenantId: "tenant-id",
+          webhook: { path: "/api/messages" },
+          accounts: {
+            "Support Bot": {
+              appId: "support-app-id",
+              appPassword: "support-secret",
+              webhook: { port: 3979 },
+            },
+          },
+          defaultAccount: "Support Bot",
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(listMSTeamsAccountIds(cfg)).toEqual(["support-bot"]);
+
+    for (const accountId of ["Support Bot", "support-bot"]) {
+      expect(resolveMSTeamsAccountConfig(cfg, accountId)).toMatchObject({
+        appId: "support-app-id",
+        appPassword: "support-secret",
+        tenantId: "tenant-id",
+        webhook: { port: 3979, path: "/api/messages" },
+      });
+      expect(resolveMSTeamsAccount({ cfg, accountId })).toMatchObject({
+        accountId: "support-bot",
+        configured: true,
+        enabled: true,
+      });
+    }
+  });
+
+  it("keeps legacy root credentials as the implicit default account", () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          appId: "legacy-app-id",
+          appPassword: "legacy-secret",
+          tenantId: "tenant-id",
+          webhook: { port: 3978, path: "/api/messages" },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    expect(listMSTeamsAccountIds(cfg)).toEqual(["default"]);
+    expect(resolveMSTeamsAccountConfig(cfg)).toMatchObject({
+      appId: "legacy-app-id",
+      appPassword: "legacy-secret",
+      tenantId: "tenant-id",
+      webhook: { port: 3978, path: "/api/messages" },
+    });
+    expect(resolveMSTeamsAccount({ cfg })).toMatchObject({
+      accountId: "default",
+      configured: true,
+      enabled: true,
+    });
+  });
+
   it("inherits shared webhook path but not identity or port for named accounts", () => {
     const cfg = {
       channels: {

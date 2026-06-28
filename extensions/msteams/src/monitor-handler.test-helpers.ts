@@ -182,6 +182,7 @@ export function createMSTeamsMessageHandlerDeps(params?: {
   return {
     cfg: params?.cfg ?? {},
     runtime: (params?.runtime ?? { error: vi.fn() }) as RuntimeEnv,
+    accountId: "default",
     appId: "test-app-id",
     app,
     tokenProvider: {

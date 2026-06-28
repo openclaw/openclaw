@@ -4,7 +4,6 @@ import {
   resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-helpers";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import type { MSTeamsConfig, OpenClawConfig } from "../runtime-api.js";
 import { resolveMSTeamsCredentials } from "./token.js";
 
@@ -23,6 +22,7 @@ export type ResolvedMSTeamsAccount = {
 const IDENTITY_FIELDS = ["appId", "appPassword"] as const;
 
 const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("msteams", {
+  normalizeAccountId,
   implicitDefaultAccount: {
     channelKeys: ["appId", "appPassword"],
     envVars: ["MSTEAMS_APP_ID", "MSTEAMS_APP_PASSWORD", "MSTEAMS_TENANT_ID"],
@@ -34,6 +34,21 @@ export const resolveDefaultMSTeamsAccountId = resolveDefaultAccountId;
 
 function accountDefinesIdentity(account: Partial<MSTeamsConfig> | undefined): boolean {
   return Boolean(account?.appId || account?.appPassword || account?.webhook?.port);
+}
+
+function resolveMSTeamsAccountEntry(
+  accounts: Record<string, Partial<MSTeamsConfig>> | undefined,
+  accountId: string,
+): Partial<MSTeamsConfig> | undefined {
+  if (!accounts) {
+    return undefined;
+  }
+  for (const [key, value] of Object.entries(accounts)) {
+    if (normalizeAccountId(key) === accountId) {
+      return value;
+    }
+  }
+  return undefined;
 }
 
 function isAccountScopedChannelConfig(
@@ -84,11 +99,12 @@ export function resolveMSTeamsAccountConfig(
 ): MSTeamsConfig {
   const resolvedAccountId = normalizeAccountId(accountId ?? resolveDefaultMSTeamsAccountId(cfg));
   const channelConfig = cfg.channels?.msteams as MSTeamsMultiAccountConfig | undefined;
-  const account = resolveAccountEntry(channelConfig?.accounts, resolvedAccountId);
+  const account = resolveMSTeamsAccountEntry(channelConfig?.accounts, resolvedAccountId);
   const merged = resolveMergedAccountConfig<MSTeamsConfig>({
     channelConfig,
     accounts: channelConfig?.accounts,
     accountId: resolvedAccountId,
+    normalizeAccountId,
     omitKeys: ["defaultAccount"],
     nestedObjectKeys: [
       "webhook",
@@ -152,7 +168,7 @@ export function inspectMSTeamsAccount(params: {
     hasIdentity:
       account.accountId === DEFAULT_ACCOUNT_ID ||
       accountDefinesIdentity(
-        resolveAccountEntry(
+        resolveMSTeamsAccountEntry(
           (params.cfg.channels?.msteams as MSTeamsMultiAccountConfig | undefined)?.accounts,
           account.accountId,
         ),

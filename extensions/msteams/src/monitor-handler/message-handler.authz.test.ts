@@ -745,7 +745,8 @@ describe("msteams monitor handler authz", () => {
         },
       } as OpenClawConfig,
       {
-        createInboundDebouncer: createInboundDebouncerSpy,
+        createInboundDebouncer:
+          createInboundDebouncerSpy as PluginRuntime["channel"]["debounce"]["createInboundDebouncer"],
       },
     );
 

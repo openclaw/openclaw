@@ -44,6 +44,7 @@ function createDeps(): MSTeamsMessageHandlerDeps {
   return {
     cfg: {} as OpenClawConfig,
     runtime: { error: vi.fn() } as unknown as RuntimeEnv,
+    accountId: "default",
     appId: "test-app",
     app: {} as MSTeamsMessageHandlerDeps["app"],
     tokenProvider: {
