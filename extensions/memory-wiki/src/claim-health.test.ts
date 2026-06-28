@@ -116,4 +116,51 @@ describe("assessClaimFreshness", () => {
     expect(freshness.lastTouchedAt).toBe("2026-01-05T00:00:00.000Z");
     expect(freshness.daysSinceTouch).toBe(105);
   });
+
+  it("falls back to page freshness when claim and evidence timestamps are absent", () => {
+    const page = createPage({
+      relativePath: "entities/gamma.md",
+      title: "Gamma",
+      contradictions: [],
+    });
+    page.updatedAt = "2026-04-20T00:00:00.000Z";
+    const claim: WikiClaim = {
+      text: "Gamma was written through wiki_apply without per-claim timestamps.",
+      evidence: [{ kind: "session", sourceId: "session-1" }],
+    };
+
+    const freshness = assessClaimFreshness({
+      page,
+      claim,
+      now: new Date("2026-04-25T00:00:00.000Z"),
+    });
+
+    expect(freshness.level).toBe("fresh");
+    expect(freshness.lastTouchedAt).toBe("2026-04-20T00:00:00.000Z");
+    expect(freshness.daysSinceTouch).toBe(5);
+  });
+
+  it("keeps malformed claim timestamps unknown instead of using page freshness", () => {
+    const page = createPage({
+      relativePath: "entities/delta.md",
+      title: "Delta",
+      contradictions: [],
+    });
+    page.updatedAt = "2026-04-20T00:00:00.000Z";
+    const claim: WikiClaim = {
+      text: "Delta has malformed claim freshness metadata.",
+      updatedAt: "not-a-date",
+      evidence: [],
+    };
+
+    const freshness = assessClaimFreshness({
+      page,
+      claim,
+      now: new Date("2026-04-25T00:00:00.000Z"),
+    });
+
+    expect(freshness.level).toBe("unknown");
+    expect(freshness.lastTouchedAt).toBeUndefined();
+    expect(freshness.reason).toBe("missing updatedAt");
+  });
 });
