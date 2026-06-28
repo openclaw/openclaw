@@ -185,6 +185,9 @@ export async function prepareEmbeddedAttemptAgentSession(input: {
     onDeliveredSourceReply: markSourceReplyDelivered,
   });
   input.markStage("agent-session");
+  if (attempt.onBeforeToolCallingRound) {
+    activeSession.agent.onBeforeToolCallingRound = attempt.onBeforeToolCallingRound;
+  }
 
   return {
     activeSession,

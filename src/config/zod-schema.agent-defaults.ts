@@ -10,6 +10,7 @@ import {
   AgentToolModelSchema,
   MemorySearchSchema,
   AgentRunRetriesConfigSchema,
+  IterationBudgetConfigSchema,
 } from "./zod-schema.agent-runtime.js";
 import {
   BlockStreamingChunkSchema,
@@ -205,6 +206,7 @@ export const AgentDefaultsSchema = z
       .strict()
       .optional(),
     runRetries: AgentRunRetriesConfigSchema.optional(),
+    iterationBudget: IterationBudgetConfigSchema.optional(),
     embeddedAgent: EmbeddedAgentConfigSchema.optional(),
     thinkingDefault: z
       .union([

@@ -496,3 +496,112 @@ describe("agent defaults schema", () => {
     expectSchemaFailurePath(AgentDefaultsSchema.safeParse({ contextTokens: 0 }), "contextTokens");
   });
 });
+
+describe("iterationBudget schema", () => {
+  describe("AgentDefaultsSchema", () => {
+    it("accepts valid iterationBudget with all fields", () => {
+      expectSchemaSuccess(
+        AgentDefaultsSchema.safeParse({
+          iterationBudget: {
+            enabled: true,
+            maxIterations: 90,
+            subagentMaxIterations: 50,
+            forceSummaryOnExhaustion: true,
+          },
+        }),
+      );
+    });
+
+    it("accepts iterationBudget with only enabled", () => {
+      expectSchemaSuccess(
+        AgentDefaultsSchema.safeParse({
+          iterationBudget: { enabled: true },
+        }),
+      );
+    });
+
+    it("accepts empty iterationBudget object", () => {
+      expectSchemaSuccess(
+        AgentDefaultsSchema.safeParse({
+          iterationBudget: {},
+        }),
+      );
+    });
+
+    it("rejects maxIterations=0 (must be positive)", () => {
+      expectSchemaFailurePath(
+        AgentDefaultsSchema.safeParse({
+          iterationBudget: { maxIterations: 0 },
+        }),
+        "iterationBudget.maxIterations",
+      );
+    });
+
+    it("rejects negative maxIterations", () => {
+      expectSchemaFailurePath(
+        AgentDefaultsSchema.safeParse({
+          iterationBudget: { maxIterations: -1 },
+        }),
+        "iterationBudget.maxIterations",
+      );
+    });
+
+    it("rejects non-integer maxIterations", () => {
+      expectSchemaFailurePath(
+        AgentDefaultsSchema.safeParse({
+          iterationBudget: { maxIterations: 1.5 },
+        }),
+        "iterationBudget.maxIterations",
+      );
+    });
+
+    it("rejects unknown keys in iterationBudget (strict)", () => {
+      expectSchemaFailurePath(
+        AgentDefaultsSchema.safeParse({
+          iterationBudget: { enabled: true, unknownField: 42 },
+        }),
+        "iterationBudget",
+      );
+    });
+  });
+
+  describe("AgentEntrySchema", () => {
+    it("accepts per-agent iterationBudget override", () => {
+      expectSchemaSuccess(
+        AgentEntrySchema.safeParse({
+          id: "main",
+          iterationBudget: { maxIterations: 120 },
+        }),
+      );
+    });
+
+    it("accepts per-agent iterationBudget with enabled=false", () => {
+      expectSchemaSuccess(
+        AgentEntrySchema.safeParse({
+          id: "main",
+          iterationBudget: { enabled: false },
+        }),
+      );
+    });
+
+    it("rejects subagentMaxIterations=0 in per-agent entry", () => {
+      expectSchemaFailurePath(
+        AgentEntrySchema.safeParse({
+          id: "main",
+          iterationBudget: { subagentMaxIterations: 0 },
+        }),
+        "iterationBudget.subagentMaxIterations",
+      );
+    });
+
+    it("rejects negative subagentMaxIterations in per-agent entry", () => {
+      expectSchemaFailurePath(
+        AgentEntrySchema.safeParse({
+          id: "main",
+          iterationBudget: { subagentMaxIterations: -5 },
+        }),
+        "iterationBudget.subagentMaxIterations",
+      );
+    });
+  });
+});

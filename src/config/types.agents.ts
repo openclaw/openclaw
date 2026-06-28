@@ -146,6 +146,8 @@ export type AgentConfig = {
   };
   /** Optional outer run loop retry boundaries. */
   runRetries?: AgentDefaultsConfig["runRetries"];
+  /** Optional per-agent iteration budget overrides. */
+  iterationBudget?: AgentDefaultsConfig["iterationBudget"];
   /** Optional per-agent embedded OpenClaw overrides. */
   embeddedAgent?: {
     /** Optional per-agent execution contract override. */

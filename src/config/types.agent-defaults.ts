@@ -125,6 +125,17 @@ export type AgentRunRetriesConfig = {
   max?: number;
 };
 
+export type IterationBudgetConfig = {
+  /** Enable per-agent iteration budgeting (default: false). */
+  enabled?: boolean;
+  /** Max LLM iterations for a parent agent run (default: 90). */
+  maxIterations?: number;
+  /** Max LLM iterations for a subagent run (default: 50). */
+  subagentMaxIterations?: number;
+  /** When budget is exhausted, inject a summary-request prompt before stopping (default: true). */
+  forceSummaryOnExhaustion?: boolean;
+};
+
 export type CliBackendConfig = {
   /** CLI command to execute (absolute path or on PATH). */
   command: string;
@@ -335,6 +346,8 @@ export type AgentDefaultsConfig = {
   compaction?: AgentCompactionConfig;
   /** Outer run loop retry iteration boundaries. */
   runRetries?: AgentRunRetriesConfig;
+  /** Per-agent iteration budget (consume/refund counter for LLM loop iterations). */
+  iterationBudget?: IterationBudgetConfig;
   /** Embedded OpenClaw runner hardening and compatibility controls. */
   embeddedAgent?: {
     /**

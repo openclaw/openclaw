@@ -1359,4 +1359,118 @@ describe("resolveAgentSkillsFilter", () => {
     expect(resolveAgentSkillsFilter(cfg, "writer")).toStrictEqual([]);
   });
 });
+describe("iterationBudget config resolution", () => {
+  describe("merge behavior", () => {
+    it("merges iterationBudget from defaults with per-agent overrides", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            iterationBudget: {
+              enabled: true,
+              maxIterations: 90,
+              subagentMaxIterations: 50,
+              forceSummaryOnExhaustion: true,
+            },
+          },
+          list: [{ id: "main", iterationBudget: { maxIterations: 120 } }],
+        },
+      };
+      const resolved = resolveAgentConfig(cfg, "main");
+      expect(resolved?.iterationBudget).toEqual({
+        enabled: true,
+        maxIterations: 120,
+        subagentMaxIterations: 50,
+        forceSummaryOnExhaustion: true,
+      });
+    });
+
+    it("uses global defaults when agent entry has no iterationBudget", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            iterationBudget: {
+              enabled: true,
+              maxIterations: 90,
+              subagentMaxIterations: 50,
+              forceSummaryOnExhaustion: true,
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      };
+      const resolved = resolveAgentConfig(cfg, "main");
+      expect(resolved?.iterationBudget).toEqual({
+        enabled: true,
+        maxIterations: 90,
+        subagentMaxIterations: 50,
+        forceSummaryOnExhaustion: true,
+      });
+    });
+
+    it("per-agent enabled=false overrides global enabled=true", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            iterationBudget: {
+              enabled: true,
+              maxIterations: 90,
+              subagentMaxIterations: 50,
+              forceSummaryOnExhaustion: true,
+            },
+          },
+          list: [{ id: "main", iterationBudget: { enabled: false } }],
+        },
+      };
+      const resolved = resolveAgentConfig(cfg, "main");
+      expect(resolved?.iterationBudget?.enabled).toBe(false);
+      expect(resolved?.iterationBudget?.maxIterations).toBe(90);
+    });
+
+    it("resolves subagentMaxIterations separately from maxIterations", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            iterationBudget: {
+              enabled: true,
+              maxIterations: 90,
+              subagentMaxIterations: 50,
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      };
+      const resolved = resolveAgentConfig(cfg, "main");
+      expect(resolved?.iterationBudget?.maxIterations).toBe(90);
+      expect(resolved?.iterationBudget?.subagentMaxIterations).toBe(50);
+    });
+  });
+
+  describe("missing config", () => {
+    it("returns undefined iterationBudget when no section in config", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          list: [{ id: "main" }],
+        },
+      };
+      const resolved = resolveAgentConfig(cfg, "main");
+      expect(resolved?.iterationBudget).toBeUndefined();
+    });
+
+    it("returns undefined for unknown agent id", () => {
+      const cfg: OpenClawConfig = {
+        agents: {
+          defaults: {
+            iterationBudget: {
+              enabled: true,
+              maxIterations: 90,
+            },
+          },
+          list: [{ id: "main" }],
+        },
+      };
+      const resolved = resolveAgentConfig(cfg, "nonexistent");
+      expect(resolved).toBeUndefined();
+    });
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

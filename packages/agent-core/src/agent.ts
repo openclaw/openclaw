@@ -225,6 +225,8 @@ export class Agent {
     context: AfterToolCallContext,
     signal?: AbortSignal,
   ) => Promise<AfterToolCallResult | undefined>;
+  /** Optional iteration budget callback: return false to stop. */
+  public onBeforeToolCallingRound?: (round: number) => boolean | Promise<boolean>;
   public prepareNextTurn?: (
     signal?: AbortSignal,
   ) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
@@ -487,6 +489,7 @@ export class Agent {
       beforeToolCall: this.beforeToolCall,
       resolveDeferredTool: this.resolveDeferredTool,
       afterToolCall: this.afterToolCall,
+      onBeforeToolCallingRound: this.onBeforeToolCallingRound,
       prepareNextTurn: this.prepareNextTurn
         ? async () => await this.prepareNextTurn?.(this.signal)
         : undefined,
