@@ -59,6 +59,12 @@ export type StatusPluginHealthSnapshot = {
   runtimeToolQuarantines?: RuntimeToolQuarantineRecord[];
   compatibilityNotices?: PluginCompatibilityHealthNotice[];
   channelPluginFailures?: ChannelPluginFailureRecord[];
+  // Plugin ids confirmed loaded in the active runtime registry (status "loaded").
+  // Lets detailed status separate runtime-loaded plugins from installed/discovered
+  // inventory (the disk scan marks config-enabled plugins "loaded" before runtime
+  // load). Absent on hand-built/compact snapshots, where detailed rendering falls
+  // back to the merged status filter.
+  runtimeLoadedPluginIds?: string[];
 };
 
 /** Keeps the first record per key; later duplicates are dropped. */
@@ -146,6 +152,9 @@ export function mergeStatusPluginHealthSnapshots(
       ...(installed.compatibilityNotices ?? []),
       ...(runtime.compatibilityNotices ?? []),
     ]),
+    // Runtime-loaded provenance is a runtime-side fact; the installed disk scan
+    // cannot confirm it, so it never contributes here.
+    runtimeLoadedPluginIds: runtime.runtimeLoadedPluginIds,
   };
 }
 
@@ -235,10 +244,22 @@ function byLocale(left: string, right: string): number {
 }
 
 export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot): string {
-  const loaded = snapshot.plugins
-    .filter((plugin) => plugin.status === "loaded")
-    .map((plugin) => plugin.id)
-    .toSorted(byLocale);
+  const statusLoaded = snapshot.plugins.filter((plugin) => plugin.status === "loaded");
+  // "Loaded" must mean runtime-confirmed loaded. When the snapshot carries runtime
+  // provenance, render that authoritative id set directly (it spans all live
+  // registry surfaces, so a plugin live only via a pinned surface still lists even
+  // when it is absent from the merged records); installed-but-not-active is then
+  // the status-loaded records the runtime did not load. Fall back to the raw
+  // status when provenance is absent (hand-built/compact snapshots).
+  const runtimeLoadedIds = snapshot.runtimeLoadedPluginIds;
+  const runtimeLoaded = runtimeLoadedIds ? new Set(runtimeLoadedIds) : undefined;
+  const loaded = (runtimeLoadedIds ?? statusLoaded.map((plugin) => plugin.id)).toSorted(byLocale);
+  const installedNotActive = runtimeLoaded
+    ? statusLoaded
+        .filter((plugin) => !runtimeLoaded.has(plugin.id))
+        .map((plugin) => plugin.id)
+        .toSorted(byLocale)
+    : [];
   const disabled = snapshot.plugins.filter((plugin) => plugin.status === "disabled").length;
   const errors = snapshot.plugins
     .filter((plugin) => plugin.status === "error")
@@ -265,6 +286,15 @@ export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot)
     `Loaded: ${loaded.length}${loaded.length > 0 ? ` (${formatPluginList(loaded, 8)})` : ""}`,
     `Disabled: ${disabled}`,
   ];
+
+  if (installedNotActive.length > 0) {
+    // Installed/discovered plugins not loaded in the runtime registry. Neutral
+    // inventory, not an error: the gateway only starts the plugins its startup
+    // plan requires, so configured-but-not-started is a normal steady state.
+    lines.push(
+      `Installed (not active): ${installedNotActive.length} (${formatPluginList(installedNotActive, 8)})`,
+    );
+  }
 
   if (errors.length > 0) {
     lines.push(
