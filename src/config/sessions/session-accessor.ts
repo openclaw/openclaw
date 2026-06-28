@@ -37,6 +37,8 @@ import {
   deleteSqliteSessionEntryLifecycle,
   listSqliteSessionEntries,
   appendSqliteTranscriptMessageSync,
+  forkSqliteSessionEntryFromParentTarget,
+  forkSqliteSessionTranscriptFromParent,
   loadExactSqliteSessionEntry,
   loadLatestSqliteAssistantText,
   loadLatestSqliteAssistantMessage,
@@ -541,6 +543,83 @@ export type SessionCompactionCheckpointTranscriptForkResult =
   | { status: "missing-boundary" }
   | { status: "failed" };
 
+/** Decision made before inheriting parent context into a child session. */
+export type SessionParentForkDecision =
+  | {
+      status: "fork";
+      maxTokens: number;
+      parentTokens?: number;
+    }
+  | {
+      status: "skip";
+      reason: "parent-too-large";
+      maxTokens: number;
+      parentTokens: number;
+      message: string;
+    };
+
+/** SQLite transcript identity created for a child fork. */
+export type ParentForkedSessionTranscript = {
+  sessionFile: string;
+  sessionId: string;
+};
+
+export type ForkSessionFromParentTranscriptResult =
+  | {
+      status: "created";
+      transcript: ParentForkedSessionTranscript;
+    }
+  | { status: "missing-parent" }
+  | { status: "failed" };
+
+export type ForkSessionFromParentTranscriptParams = {
+  agentId?: string;
+  parentEntry: SessionEntry;
+  parentSessionKey: string;
+  sessionKey: string;
+  storePath: string;
+};
+
+export type ForkSessionEntryFromParentTargetResult =
+  | {
+      status: "forked";
+      fork: ParentForkedSessionTranscript;
+      parentEntry: SessionEntry;
+      sessionEntry: SessionEntry;
+      decision: Extract<SessionParentForkDecision, { status: "fork" }>;
+    }
+  | {
+      status: "skipped";
+      reason: "existing-entry" | "decision-skip";
+      parentEntry?: SessionEntry;
+      sessionEntry: SessionEntry;
+      decision?: SessionParentForkDecision;
+    }
+  | { status: "missing-entry" }
+  | { status: "missing-parent" }
+  | { status: "failed" };
+
+export type ForkSessionEntryFromParentTargetParams = {
+  agentId?: string;
+  decisionSkipPatch?: (params: {
+    decision: Extract<SessionParentForkDecision, { status: "skip" }>;
+    entry: SessionEntry;
+    parentEntry: SessionEntry;
+  }) => Partial<SessionEntry> | null;
+  fallbackEntry?: SessionEntry;
+  parentTarget: SessionLifecycleStoreTarget;
+  patch?: (params: {
+    entry: SessionEntry;
+    parentEntry: SessionEntry;
+    fork: ParentForkedSessionTranscript;
+    decision: Extract<SessionParentForkDecision, { status: "fork" }>;
+  }) => Partial<SessionEntry>;
+  sessionTarget: SessionLifecycleStoreTarget;
+  skipForkWhen?: (entry: SessionEntry) => boolean;
+  skipPatch?: (entry: SessionEntry) => Partial<SessionEntry> | null;
+  storePath: string;
+};
+
 /** Result of applying a checkpoint branch or restore mutation to session storage. */
 export type SessionCompactionCheckpointMutationResult =
   | {
@@ -1026,6 +1105,26 @@ export async function patchSessionEntryWithKey(
 ): Promise<SessionEntryPatchResult | null> {
   const entry = await patchSqliteSessionEntry(scope, update, options);
   return entry ? { sessionKey: normalizeStoreSessionKey(scope.sessionKey), entry } : null;
+}
+
+/**
+ * Copies one parent transcript into a new child transcript target.
+ * This is for guarded callers that already own the eventual entry commit.
+ */
+export async function forkSessionFromParentTranscript(
+  params: ForkSessionFromParentTranscriptParams,
+): Promise<ForkSessionFromParentTranscriptResult> {
+  return await forkSqliteSessionTranscriptFromParent(params);
+}
+
+/**
+ * Forks parent transcript content and persists the child entry/alias cleanup in
+ * one storage-owned operation.
+ */
+export async function forkSessionEntryFromParentTarget(
+  params: ForkSessionEntryFromParentTargetParams,
+): Promise<ForkSessionEntryFromParentTargetResult> {
+  return await forkSqliteSessionEntryFromParentTarget(params);
 }
 
 /**
