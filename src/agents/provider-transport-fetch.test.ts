@@ -1193,6 +1193,50 @@ describe("buildGuardedModelFetch", () => {
     expect(items).toEqual([{ ok: true }]);
   });
 
+  it("passes SSE-shaped bodies through unchanged under JSON content-type (#96497)", async () => {
+    // A misconfigured OpenAI-compatible gateway can return a standard SSE body
+    // (`data: {...}\n\n`) under a `application/json` content-type. Wrapping that
+    // body as a single `data:` frame would yield `data: data: {...}` and break
+    // the OpenAI SDK stream parser. Pass SSE-shaped buffers through unchanged.
+    const sseBody =
+      `data: ${JSON.stringify({ choices: [{ delta: { content: "hi" } }] })}\n\n` +
+      `data: ${JSON.stringify({ choices: [{ delta: { content: " there" } }] })}\n\n`;
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(sseBody, {
+        headers: { "content-type": "application/json; charset=utf-8" },
+      }),
+      finalUrl: "https://openrouter.ai/api/v1/chat/completions",
+      release: vi.fn(async () => undefined),
+    });
+    const model = {
+      id: "moonshotai/kimi-k2.6",
+      provider: "openrouter",
+      api: "openai-completions",
+      baseUrl: "https://openrouter.ai/api/v1",
+    } as unknown as Model<"openai-completions">;
+
+    const response = await buildGuardedModelFetch(model)(
+      "https://openrouter.ai/api/v1/chat/completions",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: "moonshotai/kimi-k2.6", stream: true }),
+      },
+    );
+    const items: unknown[] = [];
+    for await (const item of Stream.fromSSEResponse(response, new AbortController())) {
+      items.push(item);
+    }
+
+    expect(response.headers.get("content-type")).toContain("text/event-stream");
+    // The two original SSE frames should be parsed back as two distinct items,
+    // not collapsed into a single broken `data: data: {...}` frame.
+    expect(items).toEqual([
+      { choices: [{ delta: { content: "hi" } }] },
+      { choices: [{ delta: { content: " there" } }] },
+    ]);
+  });
+
   it("does not clone Request bodies while checking for streaming JSON fallbacks", async () => {
     const cloneSpy = vi.spyOn(Request.prototype, "clone");
     fetchWithSsrFGuardMock.mockResolvedValue({

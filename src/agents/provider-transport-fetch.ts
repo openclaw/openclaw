@@ -126,7 +126,16 @@ function sanitizeOpenAISdkSseResponse(
               buffer += decoder.decode();
               const data = buffer.trim();
               if (data) {
-                controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+                // Some OpenAI-compatible gateways return SSE-formatted bodies
+                // under a non-SSE content-type (e.g. `application/json`).
+                // Wrapping such bodies as a single `data:` frame produces
+                // `data: data: {...}` and breaks the OpenAI SDK stream parser.
+                // Pass SSE-shaped bodies through with their original framing.
+                if (classifyOpenAISdkStreamBodyPrefix(data) === "sse") {
+                  controller.enqueue(encoder.encode(`${data}\n\n`));
+                } else {
+                  controller.enqueue(encoder.encode(`data: ${data}\n\n`));
+                }
               }
               controller.enqueue(encoder.encode("data: [DONE]\n\n"));
               controller.close();
