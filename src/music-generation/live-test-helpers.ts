@@ -1,3 +1,4 @@
+// Live-test helpers for music generation provider configuration.
 import type { OpenClawConfig } from "../config/types.js";
 import {
   parseLiveCsvFilter,

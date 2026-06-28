@@ -1,3 +1,4 @@
+// Memory Core plugin module implements manager search behavior.
 import type { DatabaseSync } from "node:sqlite";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {
@@ -9,9 +10,8 @@ import {
   normalizeStringEntriesLower,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { vectorToBlob } from "./vector-blob.js";
 
-const vectorToBlob = (embedding: number[]): Buffer =>
-  Buffer.from(new Float32Array(embedding).buffer);
 const FTS_QUERY_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
 const SHORT_CJK_TRIGRAM_RE = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u3131-\u3163]/u;
 const VECTOR_KNN_OVERSAMPLE_FACTOR = 8;
@@ -93,6 +93,16 @@ function readCount(row: { count?: number | bigint } | undefined): number {
   return 0;
 }
 
+function resolveProviderModels(primary: string, aliases: string[] | undefined): string[] {
+  return Array.from(new Set([primary, ...(aliases ?? []).filter(Boolean)]));
+}
+
+function buildModelFilter(column: string, models: string[]): string {
+  return models.length === 1
+    ? `${column} = ?`
+    : `${column} IN (${models.map(() => "?").join(", ")})`;
+}
+
 function planKeywordSearch(params: {
   query: string;
   ftsTokenizer?: "unicode61" | "trigram";
@@ -130,6 +140,7 @@ export async function searchVector(params: {
   db: DatabaseSync;
   vectorTable: string;
   providerModel: string;
+  providerModelAliases?: string[];
   queryVec: number[];
   limit: number;
   snippetMaxChars: number;
@@ -140,12 +151,14 @@ export async function searchVector(params: {
   if (params.queryVec.length === 0 || params.limit <= 0) {
     return [];
   }
+  const providerModels = resolveProviderModels(params.providerModel, params.providerModelAliases);
+  const vectorModelFilter = buildModelFilter("c.model", providerModels);
   if (await params.ensureVectorReady(params.queryVec.length)) {
     // Use sqlite-vec's native KNN (MATCH ? AND k = ?) for candidate selection,
     // which runs in ~O(log N + k) via the vec0 index, instead of the previous
     // full-table scan over vec_distance_cosine(). Keep vec_distance_cosine() in
     // the SELECT so `score = 1 - dist` stays in the cosine [0, 1] range the
-    // downstream merge/minScore pipeline expects. (chunks_vec is created with
+    // downstream merge/minScore pipeline expects. (memory_index_chunks_vec is created with
     // sqlite-vec's default L2 distance, so v.distance cannot be used directly
     // for scoring.)
     const qBlob = vectorToBlob(params.queryVec);
@@ -156,8 +169,8 @@ export async function searchVector(params: {
             `       c.source,\n` +
             `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
             `  FROM ${params.vectorTable} v\n` +
-            `  JOIN chunks c ON c.id = v.id\n` +
-            ` WHERE v.embedding MATCH ? AND k = ? AND c.model = ?${params.sourceFilterVec.sql}\n` +
+            `  JOIN memory_index_chunks c ON c.id = v.id\n` +
+            ` WHERE v.embedding MATCH ? AND k = ? AND ${vectorModelFilter}${params.sourceFilterVec.sql}\n` +
             ` ORDER BY dist ASC\n` +
             ` LIMIT ?`,
         )
@@ -165,7 +178,7 @@ export async function searchVector(params: {
           qBlob,
           qBlob,
           candidateLimit,
-          params.providerModel,
+          ...providerModels,
           ...params.sourceFilterVec.params,
           params.limit,
         ) as Array<{
@@ -184,9 +197,9 @@ export async function searchVector(params: {
       const matchingChunkCount = readCount(
         params.db
           .prepare(
-            `SELECT COUNT(*) AS count FROM chunks c WHERE c.model = ?${params.sourceFilterVec.sql}`,
+            `SELECT COUNT(*) AS count FROM memory_index_chunks c WHERE ${vectorModelFilter}${params.sourceFilterVec.sql}`,
           )
-          .get(params.providerModel, ...params.sourceFilterVec.params) as
+          .get(...providerModels, ...params.sourceFilterVec.params) as
           | { count?: number | bigint }
           | undefined,
       );
@@ -216,6 +229,7 @@ export async function searchVector(params: {
   return await searchChunksByEmbedding({
     db: params.db,
     providerModel: params.providerModel,
+    providerModelAliases: params.providerModelAliases,
     sourceFilter: params.sourceFilterChunks,
     queryVec: params.queryVec,
     limit: params.limit,
@@ -226,6 +240,7 @@ export async function searchVector(params: {
 async function searchChunksByEmbedding(params: {
   db: DatabaseSync;
   providerModel: string;
+  providerModelAliases?: string[];
   sourceFilter: { sql: string; params: SearchSource[] };
   queryVec: number[];
   limit: number;
@@ -234,13 +249,15 @@ async function searchChunksByEmbedding(params: {
   if (params.limit <= 0) {
     return [];
   }
+  const providerModels = resolveProviderModels(params.providerModel, params.providerModelAliases);
+  const modelFilter = buildModelFilter("model", providerModels);
   // Keep batches bounded instead of calling `.all()` across the entire chunks
   // table, and do not hold a sqlite iterator open across the setImmediate yield
   // below. The rowid cursor keeps memory bounded without OFFSET rescans.
   const stmt = params.db.prepare(
     `SELECT rowid, id, path, start_line, end_line, text, embedding, source\n` +
-      `  FROM chunks\n` +
-      ` WHERE model = ? AND rowid > ?${params.sourceFilter.sql}\n` +
+      `  FROM memory_index_chunks\n` +
+      ` WHERE ${modelFilter} AND rowid > ?${params.sourceFilter.sql}\n` +
       ` ORDER BY rowid ASC\n` +
       ` LIMIT ?`,
   );
@@ -259,7 +276,7 @@ async function searchChunksByEmbedding(params: {
   let lastRowid = 0;
   while (true) {
     const batch = stmt.all(
-      params.providerModel,
+      ...providerModels,
       lastRowid,
       ...params.sourceFilter.params,
       FALLBACK_VECTOR_BATCH_SIZE,
@@ -307,7 +324,6 @@ async function searchChunksByEmbedding(params: {
 export async function searchKeyword(params: {
   db: DatabaseSync;
   ftsTable: string;
-  providerModel: string | undefined;
   query: string;
   ftsTokenizer?: "unicode61" | "trigram";
   limit: number;
@@ -329,9 +345,9 @@ export async function searchKeyword(params: {
     return [];
   }
 
-  // When providerModel is undefined (FTS-only mode), search all models
-  const modelClause = params.providerModel ? " AND model = ?" : "";
-  const modelParams = params.providerModel ? [params.providerModel] : [];
+  // Lexical FTS is model-agnostic (issue #48300), but old databases may
+  // already contain orphaned FTS rows from prior model-scoped cleanup.
+  const liveChunkClause = ` AND EXISTS (SELECT 1 FROM memory_index_chunks c WHERE c.id = ${params.ftsTable}.id)`;
   const substringClause = plan.substringTerms.map(() => " AND text LIKE ? ESCAPE '\\'").join("");
   const substringParams = plan.substringTerms.map((term) => `%${escapeLikePattern(term)}%`);
 
@@ -353,14 +369,13 @@ export async function searchKeyword(params: {
           `SELECT id, path, source, start_line, end_line, text,\n` +
             `       bm25(${params.ftsTable}) AS rank\n` +
             `  FROM ${params.ftsTable}\n` +
-            ` WHERE ${params.ftsTable} MATCH ?${substringClause}${modelClause}${params.sourceFilter.sql}\n` +
+            ` WHERE ${params.ftsTable} MATCH ?${substringClause}${liveChunkClause}${params.sourceFilter.sql}\n` +
             ` ORDER BY rank ASC\n` +
             ` LIMIT ?`,
         )
         .all(
           plan.matchQuery,
           ...substringParams,
-          ...modelParams,
           ...params.sourceFilter.params,
           params.limit,
         ) as typeof rows;
@@ -380,15 +395,10 @@ export async function searchKeyword(params: {
           `SELECT id, path, source, start_line, end_line, text,\n` +
             `       0 AS rank\n` +
             `  FROM ${params.ftsTable}\n` +
-            ` WHERE 1=1${fallbackLikeClause}${modelClause}${params.sourceFilter.sql}\n` +
+            ` WHERE 1=1${fallbackLikeClause}${liveChunkClause}${params.sourceFilter.sql}\n` +
             ` LIMIT ?`,
         )
-        .all(
-          ...fallbackLikeParams,
-          ...modelParams,
-          ...params.sourceFilter.params,
-          params.limit,
-        ) as typeof rows;
+        .all(...fallbackLikeParams, ...params.sourceFilter.params, params.limit) as typeof rows;
     }
   } else {
     rows = params.db
@@ -396,15 +406,10 @@ export async function searchKeyword(params: {
         `SELECT id, path, source, start_line, end_line, text,\n` +
           `       0 AS rank\n` +
           `  FROM ${params.ftsTable}\n` +
-          ` WHERE 1=1${substringClause}${modelClause}${params.sourceFilter.sql}\n` +
+          ` WHERE 1=1${substringClause}${liveChunkClause}${params.sourceFilter.sql}\n` +
           ` LIMIT ?`,
       )
-      .all(
-        ...substringParams,
-        ...modelParams,
-        ...params.sourceFilter.params,
-        params.limit,
-      ) as typeof rows;
+      .all(...substringParams, ...params.sourceFilter.params, params.limit) as typeof rows;
   }
 
   return rows.map((row) => {

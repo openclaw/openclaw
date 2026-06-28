@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for compact tool display formatting.
+ * Ensures tool names, actions, and details stay readable and redacted.
+ */
 import { describe, expect, it } from "vitest";
 import { resolveToolSearchCodeDisplayTarget } from "./tool-display-common.js";
 import { resolveExecDetail } from "./tool-display-exec.js";
@@ -156,6 +160,23 @@ describe("tool display details", () => {
         }),
       ),
     ).toBe('for "latest Kimi model", "latest Gemini model", "latest Claude model"…');
+  });
+
+  it("formats Parallel's native objective + search_queries shape", () => {
+    expect(
+      formatToolDetail(
+        resolveToolDisplay({
+          name: "web_search",
+          args: {
+            objective: "Find the OpenClaw repository on GitHub",
+            search_queries: ["openclaw github", "openclaw repository"],
+            count: 5,
+          },
+        }),
+      ),
+    ).toBe(
+      'for "Find the OpenClaw repository on GitHub", "openclaw github", "openclaw repository" (top 5)',
+    );
   });
 
   it("summarizes exec commands with context", () => {
@@ -540,6 +561,28 @@ describe("compactRawCommand middle truncation", () => {
 
     expect(result).not.toContain("AKIDABCDEFGHIJKLMNOP1234567890");
     expect(result).toContain("AKIDAB…7890");
+  });
+
+  it("does not split a surrogate pair when the head boundary lands on an emoji", () => {
+    // The one-line form is 140 UTF-16 units. With the default maxLength=120 the head
+    // slice ends at index 59, but the 😀 emoji (U+1F600, a surrogate pair) occupies
+    // indices 58-59 — so a raw .slice(0, 59) would keep the high surrogate and drop
+    // its low half, leaving a lone surrogate that renders as the replacement char.
+    const emoji = String.fromCodePoint(0x1f600);
+    // Unknown binary so resolveExecDetail returns the compact raw form directly.
+    const longCommand = `/opt/custom/bin/run ${"a".repeat(38)}${emoji}${"b".repeat(80)}`;
+    const result = resolveExecDetail({ command: longCommand });
+
+    expect(result).toBeDefined();
+    // The whole emoji is dropped at the boundary rather than half of it.
+    expect(result).not.toContain(emoji);
+    // No dangling/lone surrogate code units remain in the rendered detail.
+    expect(result).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(result).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+    // Start and end of the command are still preserved around the ellipsis.
+    expect(result).toContain("/opt/custom/bin/run");
+    expect(result).toContain("…");
+    expect(result).toMatch(/b{4}$/);
   });
 });
 

@@ -15,6 +15,7 @@ import type {
 } from "../../llm/types.js";
 import { EventStream } from "../../llm/utils/event-stream.js";
 import { parseStreamingJson } from "../../llm/utils/json-parse.js";
+import { readProviderJsonResponse } from "../provider-http-errors.js";
 
 type StreamingToolCall = ToolCall & { partialJson?: string };
 
@@ -181,13 +182,14 @@ export function streamProxy(
       if (!response.ok) {
         let errorMessage = `Proxy error: ${response.status} ${response.statusText}`;
         try {
-          const errorData = (await response.json()) as { error?: string };
+          const errorData = await readProviderJsonResponse<{ error?: string }>(
+            response,
+            "Proxy error response",
+          );
           if (errorData.error) {
             errorMessage = `Proxy error: ${errorData.error}`;
           }
-        } catch {
-          // Couldn't parse error response
-        }
+        } catch {}
         throw new Error(errorMessage);
       }
 
@@ -256,6 +258,9 @@ export function streamProxy(
       });
       stream.end();
     } finally {
+      try {
+        reader?.releaseLock();
+      } catch {}
       if (options.signal) {
         options.signal.removeEventListener("abort", abortHandler);
       }

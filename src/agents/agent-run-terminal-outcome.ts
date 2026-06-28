@@ -1,5 +1,10 @@
+/** Normalizes agent run wait/liveness/timeout metadata into sticky terminal outcomes. */
 import { formatBlockedLivenessError, isBlockedLivenessState } from "../shared/agent-liveness.js";
-import { AGENT_RUN_ABORTED_ERROR, isAbortedAgentStopReason } from "./run-termination.js";
+import {
+  AGENT_RUN_ABORTED_ERROR,
+  AGENT_RUN_RESTART_ABORT_STOP_REASON,
+  isAbortedAgentStopReason,
+} from "./run-termination.js";
 import {
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
@@ -7,10 +12,10 @@ import {
 } from "./run-timeout-attribution.js";
 
 /** Wait status reported by agent run terminal wait paths. */
-export type AgentRunWaitStatus = "ok" | "error" | "timeout";
+type AgentRunWaitStatus = "ok" | "error" | "timeout";
 
 /** Normalized terminal reason for an agent run. */
-export type AgentRunTerminalReason =
+type AgentRunTerminalReason =
   | "completed"
   | "hard_timeout"
   | "timed_out"
@@ -33,7 +38,7 @@ export type AgentRunTerminalOutcome = {
 };
 
 /** Raw terminal input collected from run wait/liveness/timeout paths. */
-export type AgentRunTerminalInput = {
+type AgentRunTerminalInput = {
   status: AgentRunWaitStatus;
   error?: unknown;
   stopReason?: unknown;
@@ -45,7 +50,7 @@ export type AgentRunTerminalInput = {
 };
 
 /** Terminal wait input where pending/unknown status may still be present. */
-export type AgentRunTerminalWaitInput = Omit<AgentRunTerminalInput, "status"> & {
+type AgentRunTerminalWaitInput = Omit<AgentRunTerminalInput, "status"> & {
   status?: unknown;
 };
 
@@ -60,13 +65,13 @@ function asNonEmptyString(value: unknown): string | undefined {
 }
 
 /** True when a timeout phase should be treated as a hard agent-run timeout. */
-export function isHardAgentRunTimeoutPhase(value: unknown): value is AgentRunTimeoutPhase {
+function isHardAgentRunTimeoutPhase(value: unknown): value is AgentRunTimeoutPhase {
   const phase = normalizeAgentRunTimeoutPhase(value);
   return phase !== undefined && HARD_TIMEOUT_PHASES.has(phase);
 }
 
 /** True when an existing outcome is a hard timeout. */
-export function isHardAgentRunTimeoutOutcome(
+function isHardAgentRunTimeoutOutcome(
   outcome: AgentRunTerminalOutcome | undefined | null,
 ): boolean {
   return outcome?.reason === "hard_timeout";
@@ -98,15 +103,17 @@ export function buildAgentRunTerminalOutcome(
   const timeoutPhase = normalizeAgentRunTimeoutPhase(input.timeoutPhase);
   const providerStarted = normalizeProviderStarted(input.providerStarted);
   const rawError = asNonEmptyString(input.error);
+  const restartCancelled = stopReason === AGENT_RUN_RESTART_ABORT_STOP_REASON;
   // Queue and gateway-draining timeouts are wait-layer uncertainty. Provider
   // errors need explicit timeout attribution; providerStarted only proves reach.
   const hardTimeout =
     isHardAgentRunTimeoutPhase(timeoutPhase) ||
-    (input.status === "timeout" && providerStarted === true);
-  const aborted = isAbortedAgentStopReason(stopReason);
+    (!restartCancelled && input.status === "timeout" && providerStarted === true);
+  const aborted = isAbortedAgentStopReason(stopReason) && !restartCancelled;
   // ACP/model `stop` can be a normal successful finish. Treat rpc/stop as
   // cancellation only for non-success terminal payloads from abort paths.
-  const cancelled = input.status !== "ok" && isCancellationStopReason(stopReason);
+  const cancelled =
+    restartCancelled || (input.status !== "ok" && isCancellationStopReason(stopReason));
   const blocked = isBlockedLivenessState(livenessState);
   const error = hardTimeout
     ? rawError
@@ -152,6 +159,7 @@ export function buildAgentRunTerminalOutcome(
 }
 
 /** Builds a terminal outcome from a wait result, ignoring pending/unknown status. */
+/** Builds a terminal outcome from wait paths where status may still be pending/unknown. */
 export function buildAgentRunTerminalOutcomeFromWaitResult(
   wait: AgentRunTerminalWaitInput | undefined,
 ): AgentRunTerminalOutcome | undefined {
@@ -184,6 +192,7 @@ function completedBeforeOrAtTimeout(params: {
 }
 
 /** Merges terminal outcomes while preserving cancellation and hard-timeout ownership. */
+/** Merges later terminal observations without overwriting sticky cancellation/hard-timeout state. */
 export function mergeAgentRunTerminalOutcome(
   current: AgentRunTerminalOutcome | undefined,
   incoming: AgentRunTerminalOutcome,

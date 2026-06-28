@@ -1,3 +1,4 @@
+/** Scans auth-profile stores for plaintext credentials, SecretRefs, and OAuth tokens. */
 import { isNonEmptyString, isRecord } from "./shared.js";
 import { listAuthProfileSecretTargetEntries } from "./target-registry.js";
 

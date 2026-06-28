@@ -1,3 +1,4 @@
+// OpenAI completions tests cover chat completion stream adaptation.
 import type { ChatCompletionChunk } from "openai/resources/chat/completions.js";
 import { describe, expect, it, vi } from "vitest";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../agents/system-prompt-cache-boundary.js";
@@ -117,6 +118,275 @@ function makeFinishChunk(
 }
 
 describe("OpenAI-compatible completions params", () => {
+  it("skips unreadable schemas while preserving healthy official OpenAI tools", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICompletions(
+      model,
+      {
+        ...context,
+        tools: [
+          {
+            name: "broken",
+            description: "Broken",
+            parameters: {
+              type: "object",
+              get properties(): never {
+                throw new Error("properties exploded");
+              },
+            },
+          },
+          {
+            name: "lookup",
+            description: "Lookup",
+            parameters: {},
+          },
+        ],
+      },
+      {
+        apiKey: "sk-test",
+        toolChoice: { type: "function", function: { name: "lookup" } },
+        onPayload(payload) {
+          capturedPayload = payload as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload?.tools).toEqual([
+      {
+        type: "function",
+        function: {
+          name: "lookup",
+          description: "Lookup",
+          parameters: {},
+          strict: false,
+        },
+      },
+    ]);
+    expect(capturedPayload?.tool_choice).toEqual({
+      type: "function",
+      function: { name: "lookup" },
+    });
+  });
+
+  it("fails locally when a pinned official OpenAI tool is unreadable", async () => {
+    const stream = streamOpenAICompletions(
+      model,
+      {
+        ...context,
+        tools: [
+          {
+            name: "broken",
+            description: "Broken tool.",
+            get parameters(): never {
+              throw new Error("parameters exploded");
+            },
+          },
+        ],
+      },
+      {
+        apiKey: "sk-test",
+        toolChoice: { type: "function", function: { name: "broken" } },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain('requested unavailable tool "broken"');
+  });
+
+  it("preserves the empty tools marker for tool history after quarantining every schema", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const stream = streamOpenAICompletions(
+      model,
+      {
+        messages: [
+          {
+            role: "assistant",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_abc",
+                name: "lookup",
+                arguments: {},
+              },
+            ],
+          },
+          {
+            role: "toolResult",
+            content: [{ type: "text", text: "done" }],
+            toolCallId: "call_abc",
+          },
+          ...context.messages,
+        ],
+        tools: [
+          {
+            name: "broken",
+            description: "Broken tool.",
+            get parameters(): never {
+              throw new Error("parameters exploded");
+            },
+          },
+        ],
+      } as never,
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedPayload = payload as Record<string, unknown>;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload?.tools).toEqual([]);
+  });
+
+  it("replays update_plan-style empty non-image tool results as no output", async () => {
+    let capturedMessages:
+      | Array<{ role?: string; content?: unknown; tool_call_id?: string }>
+      | undefined;
+    const stream = streamOpenAICompletions(
+      model,
+      {
+        messages: [
+          {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "call_plan", name: "update_plan", arguments: {} }],
+            timestamp: 1,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_plan",
+            toolName: "update_plan",
+            content: [],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } as never,
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: typeof capturedMessages }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedMessages?.find((message) => message.role === "tool")).toMatchObject({
+      role: "tool",
+      content: "(no output)",
+      tool_call_id: "call_plan",
+    });
+  });
+
+  it("preserves image-bearing tool results with image placeholders and attachments", async () => {
+    let capturedMessages:
+      | Array<{ role?: string; content?: unknown; tool_call_id?: string }>
+      | undefined;
+    const stream = streamOpenAICompletions(
+      { ...model, input: ["text", "image"] },
+      {
+        messages: [
+          {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "call_shot", name: "screenshot", arguments: {} }],
+            timestamp: 1,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_shot",
+            toolName: "screenshot",
+            content: [{ type: "image", mimeType: "image/png", data: "aW1n" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } as never,
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: typeof capturedMessages }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedMessages?.find((message) => message.role === "tool")).toMatchObject({
+      role: "tool",
+      content: "(see attached image)",
+      tool_call_id: "call_shot",
+    });
+    expect(capturedMessages?.find((message) => Array.isArray(message.content))).toMatchObject({
+      role: "user",
+      content: [
+        { type: "text", text: "Attached image(s) from tool result:" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
+      ],
+    });
+  });
+
+  it("does not reread an unreadable tool inventory length", async () => {
+    let capturedPayload: Record<string, unknown> | undefined;
+    const tools = new Proxy([], {
+      get(target, property, receiver) {
+        if (property === "length") {
+          throw new Error("length exploded");
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+    const stream = streamOpenAICompletions(model, { ...context, tools } as never, {
+      apiKey: "sk-test",
+      onPayload(payload) {
+        capturedPayload = payload as Record<string, unknown>;
+        throw new Error("stop before network");
+      },
+    });
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedPayload).not.toHaveProperty("tools");
+  });
+
   it("clamps requested max tokens to the model output cap", async () => {
     let capturedMaxTokens: unknown;
     const stream = streamOpenAICompletions(createModel(32_000), context, {
@@ -292,6 +562,82 @@ describe("OpenAI-compatible completions params", () => {
           text: "Dynamic suffix",
         },
       ],
+    });
+  });
+
+  it("adds reasoning_content replay fields for Xiaomi MiMo assistant tool history", async () => {
+    let capturedMessages: unknown;
+    const stream = streamOpenAICompletions(
+      {
+        ...createModel(32_000),
+        id: "mimo-v2.5-pro",
+        name: "MiMo V2.5 Pro",
+        provider: "xiaomi",
+        baseUrl: "https://api.xiaomimimo.com/v1",
+        reasoning: true,
+      },
+      {
+        messages: [
+          {
+            role: "user",
+            content: "search first",
+            timestamp: 1,
+          },
+          {
+            role: "assistant",
+            api: "openai-completions",
+            provider: "xiaomi",
+            model: "mimo-v2.5-pro",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            content: [
+              {
+                type: "toolCall",
+                id: "call_search",
+                name: "search",
+                arguments: { query: "MiMo docs" },
+              },
+            ],
+            timestamp: 2,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_search",
+            toolName: "search",
+            content: [{ type: "text", text: "ok" }],
+            isError: false,
+            timestamp: 3,
+          },
+          {
+            role: "user",
+            content: "continue",
+            timestamp: 4,
+          },
+        ],
+      },
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: unknown }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    const messages = capturedMessages as Array<Record<string, unknown>>;
+    expect(messages.find((message) => message.role === "assistant")).toMatchObject({
+      role: "assistant",
+      reasoning_content: "",
     });
   });
 });
@@ -566,6 +912,174 @@ describe("openai-completions stop-reason tool-call guard", () => {
 
     expect(visibleText).toBe("");
     expect(result.content.some((block) => block.type === "thinking")).toBe(false);
+  });
+
+  it("seals the native reasoning block before the answer text begins", async () => {
+    // deepseek streams reasoning_content, then switches to content with no
+    // boundary event; thinking_end must precede the answer so channels do not
+    // merge the answer into the reasoning block.
+    mockChunksRef.chunks = [
+      {
+        id: "chatcmpl-test",
+        choices: [{ index: 0, delta: { reasoning_content: "Let me think." } }],
+      },
+      {
+        id: "chatcmpl-test",
+        choices: [{ index: 0, delta: { reasoning_content: " Still thinking." } }],
+      },
+      makeTextChunk("The answer"),
+      makeTextChunk(" is 42."),
+      makeFinishChunk("stop"),
+    ];
+
+    const stream = streamOpenAICompletions(reasoningModel, context, {
+      apiKey: "sk-test",
+      reasoningEffort: "medium",
+    });
+    const eventTypes: string[] = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    const thinkingEndIndex = eventTypes.indexOf("thinking_end");
+    const textStartIndex = eventTypes.indexOf("text_start");
+    const firstTextDeltaIndex = eventTypes.indexOf("text_delta");
+    expect(thinkingEndIndex).toBeGreaterThanOrEqual(0);
+    expect(textStartIndex).toBeGreaterThanOrEqual(0);
+    expect(thinkingEndIndex).toBeLessThan(textStartIndex);
+    expect(thinkingEndIndex).toBeLessThan(firstTextDeltaIndex);
+    // thinking_end is emitted exactly once even though the block is also
+    // visited by the end-of-stream finish loop.
+    expect(eventTypes.filter((type) => type === "thinking_end")).toHaveLength(1);
+
+    expect(result.content).toContainEqual({
+      type: "thinking",
+      thinking: "Let me think. Still thinking.",
+      thinkingSignature: "reasoning_content",
+    });
+    expect(result.content).toContainEqual({ type: "text", text: "The answer is 42." });
+  });
+
+  it("seals the native reasoning block before a following tool call", async () => {
+    mockChunksRef.chunks = [
+      {
+        id: "chatcmpl-test",
+        choices: [{ index: 0, delta: { reasoning_content: "I should call a tool." } }],
+      },
+      makeToolCallChunk("call_1", "bash", '{"cmd":"ls"}'),
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const stream = streamOpenAICompletions(reasoningModel, context, {
+      apiKey: "sk-test",
+      reasoningEffort: "medium",
+    });
+    const eventTypes: string[] = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      eventTypes.push(event.type);
+    }
+    await stream.result();
+
+    const thinkingEndIndex = eventTypes.indexOf("thinking_end");
+    const toolCallStartIndex = eventTypes.indexOf("toolcall_start");
+    expect(thinkingEndIndex).toBeGreaterThanOrEqual(0);
+    expect(toolCallStartIndex).toBeGreaterThanOrEqual(0);
+    expect(thinkingEndIndex).toBeLessThan(toolCallStartIndex);
+    expect(eventTypes.filter((type) => type === "thinking_end")).toHaveLength(1);
+  });
+
+  it("attaches encrypted reasoning details to the matching streamed tool call", async () => {
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_1", "first", '{"value":1}'),
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 1,
+                  id: "call_2",
+                  function: { name: "second", arguments: '{"value":2}' },
+                  type: "function",
+                },
+              ],
+              reasoning_details: [
+                {
+                  type: "reasoning.encrypted",
+                  id: "call_1",
+                  data: "encrypted",
+                },
+              ],
+            } as OpenAICompatibleDelta & {
+              reasoning_details: Array<Record<string, string>>;
+            },
+          },
+        ],
+      },
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, {
+      apiKey: "sk-test",
+    });
+    const result = await stream.result();
+    const toolCalls = result.content.filter((block) => block.type === "toolCall");
+
+    expect(toolCalls).toHaveLength(2);
+    expect(toolCalls[0]).toMatchObject({
+      id: "call_1",
+      thoughtSignature: JSON.stringify({
+        type: "reasoning.encrypted",
+        id: "call_1",
+        data: "encrypted",
+      }),
+    });
+    expect(toolCalls[1]).not.toHaveProperty("thoughtSignature");
+  });
+
+  it("keeps one native reasoning block when content and reasoning co-occur", async () => {
+    mockChunksRef.chunks = [
+      {
+        id: "chatcmpl-test",
+        choices: [{ index: 0, delta: { reasoning_content: "First thought." } }],
+      },
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              content: "Visible text that shares the reasoning chunk.",
+              reasoning_content: " Second thought.",
+            },
+          },
+        ],
+      },
+      makeTextChunk(" Final answer."),
+      makeFinishChunk("stop"),
+    ];
+
+    const stream = streamOpenAICompletions(reasoningModel, context, {
+      apiKey: "sk-test",
+      reasoningEffort: "medium",
+    });
+    const eventTypes: string[] = [];
+    for await (const event of stream as AsyncIterable<{ type: string }>) {
+      eventTypes.push(event.type);
+    }
+    const result = await stream.result();
+
+    expect(eventTypes.filter((type) => type === "thinking_start")).toHaveLength(1);
+    expect(eventTypes.filter((type) => type === "thinking_end")).toHaveLength(1);
+    expect(eventTypes.indexOf("thinking_end")).toBeLessThan(eventTypes.indexOf("text_start"));
+    expect(result.content).toContainEqual({
+      type: "thinking",
+      thinking: "First thought. Second thought.",
+      thinkingSignature: "reasoning_content",
+    });
   });
 
   it("promotes silent tool_calls with finish_reason stop to toolUse", async () => {

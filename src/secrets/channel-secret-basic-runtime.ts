@@ -1,3 +1,4 @@
+/** Basic channel secret runtime helpers for account/root credential collection. */
 import { coerceSecretRef } from "../config/types.secrets.js";
 import {
   collectSecretInputAssignment,
@@ -114,6 +115,7 @@ export function hasConfiguredSecretInputValue(
 }
 
 /** Collects a simple channel field from the channel root and explicit account overrides. */
+/** Collects root/account channel field SecretRef assignments for one credential path. */
 export function collectSimpleChannelFieldAssignments(params: {
   channelKey: string;
   field: string;

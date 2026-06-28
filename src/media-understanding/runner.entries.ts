@@ -1,3 +1,5 @@
+// Media-understanding entry execution handles provider/CLI attempts, auth
+// rotation, output extraction, and decision summaries.
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -5,6 +7,12 @@ import {
   normalizeNullableString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { MediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import { extractGeminiResponse } from "../../packages/media-understanding-common/src/output-extract.js";
+import {
+  estimateBase64Size,
+  resolveVideoMaxBase64Bytes,
+} from "../../packages/media-understanding-common/src/video.js";
 import {
   collectProviderApiKeysForExecution,
   executeWithApiKeyRotation,
@@ -17,6 +25,7 @@ import {
 } from "../agents/provider-request-config.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import { applyTemplate } from "../auto-reply/templating.js";
+import { formatCliCommand } from "../cli/command-format.js";
 import type { ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import type {
   MediaUnderstandingConfig,
@@ -27,6 +36,11 @@ import { writeExternalFileWithinRoot } from "../infra/fs-safe.js";
 import { resolveProxyFetchFromEnv } from "../infra/net/proxy-fetch.js";
 import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { runFfmpeg } from "../media/media-services.js";
+import {
+  getOfficialExternalPluginCatalogManifest,
+  listOfficialExternalProviderCatalogEntries,
+} from "../plugins/official-external-plugin-catalog.js";
+import { resolveOfficialExternalPluginRepairHint } from "../plugins/official-external-plugin-repair-hints.js";
 import { runExec } from "../process/exec.js";
 import { providerOperationRetryConfig } from "../provider-runtime/operation-retry.js";
 import { MediaAttachmentCache } from "./attachments.js";
@@ -35,11 +49,10 @@ import {
   DEFAULT_TIMEOUT_SECONDS,
   MIN_AUDIO_FILE_BYTES,
 } from "./defaults.constants.js";
-import { MediaUnderstandingSkipError } from "./errors.js";
 import { fileExists } from "./fs.js";
 import { normalizeImageDescriptionInput } from "./image-input-normalize.js";
 import { describeImageWithModel } from "./image-runtime.js";
-import { extractGeminiResponse } from "./output-extract.js";
+import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
 import { normalizeMediaExecutionProviderId } from "./provider-id.js";
 import { getMediaUnderstandingProvider, normalizeMediaProviderId } from "./provider-registry.js";
 import { resolveMaxBytes, resolveMaxChars, resolvePrompt, resolveTimeoutMs } from "./resolve.js";
@@ -50,9 +63,8 @@ import type {
   MediaUnderstandingOutput,
   MediaUnderstandingProvider,
 } from "./types.js";
-import { estimateBase64Size, resolveVideoMaxBase64Bytes } from "./video.js";
 
-export type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
+type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
 type ResolveApiKeyForProvider = typeof import("../agents/model-auth.js").resolveApiKeyForProvider;
 type RequireApiKey = typeof import("../agents/model-auth.js").requireApiKey;
 type IsProviderAuthError = typeof import("../agents/model-auth.js").isProviderAuthError;
@@ -442,7 +454,15 @@ type ProviderExecutionAuth =
       providerConfig?: ModelProviderConfig;
     };
 
+function resolveProviderExecutionAuthModelApi(params: {
+  capability: MediaUnderstandingCapability;
+  providerId: string;
+}): string | undefined {
+  return resolveOpenAiAudioAuthModelApi(params);
+}
+
 async function resolveProviderExecutionAuth(params: {
+  capability: MediaUnderstandingCapability;
   providerId: string;
   provider?: MediaUnderstandingProvider;
   cfg: OpenClawConfig;
@@ -451,6 +471,10 @@ async function resolveProviderExecutionAuth(params: {
   workspaceDir?: string;
 }): Promise<ProviderExecutionAuth> {
   const providerConfig = params.cfg.models?.providers?.[params.providerId];
+  const modelApi = resolveProviderExecutionAuthModelApi({
+    capability: params.capability,
+    providerId: params.providerId,
+  });
   const literalApiKey = resolveLiteralProviderApiKey({
     cfg: params.cfg,
     providerId: params.providerId,
@@ -519,6 +543,7 @@ async function resolveProviderExecutionAuth(params: {
       preferredProfile: params.entry.preferredProfile,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
+      modelApi,
     });
     const apiKey = requireApiKey(auth, params.providerId);
     return {
@@ -546,6 +571,7 @@ async function resolveProviderExecutionAuth(params: {
 }
 
 async function resolveProviderExecutionContext(params: {
+  capability: MediaUnderstandingCapability;
   providerId: string;
   provider?: MediaUnderstandingProvider;
   cfg: OpenClawConfig;
@@ -555,6 +581,7 @@ async function resolveProviderExecutionContext(params: {
   workspaceDir?: string;
 }) {
   const auth = await resolveProviderExecutionAuth({
+    capability: params.capability,
     providerId: params.providerId,
     provider: params.provider,
     cfg: params.cfg,
@@ -645,6 +672,53 @@ function assertMinAudioSize(params: { size: number; attachmentIndex: number }): 
   );
 }
 
+/**
+ * Build an actionable hint suffix for "provider not available" errors.
+ *
+ * Restricts the hint to ids that are owned by the official external
+ * provider catalog — NOT the combined channel/plugin catalog — so a media
+ * provider id like `feishu` (an official channel, not a media provider)
+ * never emits a misleading install hint from a media-provider error.
+ *
+ * Tier 1: provider id is owned by an official external provider entry that
+ *   declares a `contracts.mediaUnderstandingProviders` block listing the
+ *   id — emit the catalog-backed install + registry refresh + doctor fix
+ *   commands.
+ * Tier 2: empty string — keeps the legacy message verbatim for ids that
+ *   are not in the provider catalog (channel ids, plugin ids, unknown
+ *   ids, internal ids, etc.). Newly externalized media providers must
+ *   register with the official external provider catalog to receive the
+ *   actionable hint.
+ */
+export function formatMissingProviderHint(providerId: string): string {
+  const trimmed = providerId.trim();
+  if (!trimmed) {
+    return "";
+  }
+  // Look up the id only in catalog entries that declare
+  // `contracts.mediaUnderstandingProviders`. This ensures the install hint
+  // only fires for provider packages that actually own the missing
+  // media-understanding capability. Providers that have a generic `providers[]`
+  // catalog entry but no media-understanding contract (e.g. Amazon Bedrock)
+  // will not emit misleading hints.
+  const providerEntry = listOfficialExternalProviderCatalogEntries().find((entry) => {
+    const manifest = getOfficialExternalPluginCatalogManifest(entry);
+    const mediaProviders = manifest?.contracts?.mediaUnderstandingProviders ?? [];
+    return mediaProviders.some((mediaId) => mediaId === trimmed);
+  });
+  if (!providerEntry) {
+    return "";
+  }
+  // `resolveOfficialExternalPluginRepairHint` is contract-agnostic but we
+  // already validated ownership via the provider-only catalog, so the
+  // returned hint is for the correct provider entry.
+  const catalogHint = resolveOfficialExternalPluginRepairHint(trimmed);
+  if (!catalogHint) {
+    return "";
+  }
+  return ` Install the official external plugin with: ${formatCliCommand(catalogHint.installCommand)}, then run ${formatCliCommand("openclaw plugins registry --refresh")} and stop and start the gateway service, or run ${formatCliCommand(catalogHint.doctorFixCommand)} to repair automatically.`;
+}
+
 /** Executes one provider-backed media-understanding entry for one attachment. */
 export async function runProviderEntry(params: {
   capability: MediaUnderstandingCapability;
@@ -720,7 +794,9 @@ export async function runProviderEntry(params: {
 
   const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
   if (!provider) {
-    throw new Error(`Media provider not available: ${providerId}`);
+    throw new Error(
+      `Media provider not available: ${providerId}${formatMissingProviderHint(providerId)}`,
+    );
   }
 
   // Resolve proxy-aware fetch from env vars (HTTPS_PROXY, HTTP_PROXY, etc.)
@@ -740,6 +816,7 @@ export async function runProviderEntry(params: {
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
     const { auth, baseUrl, headers, request } = await resolveProviderExecutionContext({
+      capability,
       providerId,
       provider,
       cfg,
@@ -822,6 +899,7 @@ export async function runProviderEntry(params: {
     );
   }
   const { auth, baseUrl, headers, request } = await resolveProviderExecutionContext({
+    capability,
     providerId,
     provider,
     cfg,

@@ -1,3 +1,4 @@
+// Provides temporary filesystem cases for security audit tests.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";

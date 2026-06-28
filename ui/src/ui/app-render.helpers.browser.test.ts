@@ -1,3 +1,4 @@
+// Control UI tests cover app render behavior.
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { t } from "../i18n/index.ts";
@@ -135,6 +136,48 @@ describe("chat header controls (browser)", () => {
     }
   });
 
+  // Proves the pill is wired into renderChatControls — the surface that actually ships — not the
+  // orphaned session-select wrapper that chat.test.ts exercises. (Live re-render when authStatus
+  // arrives is enforced by the renderGuardedChatControls dep list and verified via screenshot.)
+  it("renders the provider quota pill in the desktop composer controls when usage data is present", async () => {
+    const state = createState();
+    state.modelAuthStatusResult = {
+      ts: 0,
+      providers: [
+        {
+          provider: "openai",
+          displayName: "Codex",
+          status: "ok",
+          profiles: [{ profileId: "codex", type: "oauth", status: "ok" }],
+          usage: {
+            windows: [
+              { label: "3h", usedPercent: 18 },
+              { label: "Week", usedPercent: 72 },
+            ],
+          },
+        },
+      ],
+    };
+    const container = document.createElement("div");
+    render(renderChatControls(state), container);
+    await Promise.resolve();
+
+    const quota = requireElement(
+      container.querySelector<HTMLAnchorElement>('[data-chat-provider-usage="true"]'),
+      "quota pill",
+    );
+    expect(quota.getAttribute("href")).toBe("/usage");
+    expect(quota.getAttribute("title")).toContain("Codex");
+  });
+
+  it("omits the quota pill from the desktop composer controls when no usage data is present", async () => {
+    const container = document.createElement("div");
+    render(renderChatControls(createState()), container);
+    await Promise.resolve();
+
+    expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();
+  });
+
   it("renders explicit hover tooltip metadata for the color mode buttons", async () => {
     const container = document.createElement("div");
     render(renderTopbarThemeModeToggle(createState({ themeMode: "system" })), container);
@@ -147,11 +190,7 @@ describe("chat header controls (browser)", () => {
     expect(buttons).toHaveLength(3);
 
     const labels = buttons.map((button) => button.getAttribute("data-tooltip"));
-    expect(labels).toEqual([
-      t("common.colorModeOption", { mode: t("common.system") }),
-      t("common.colorModeOption", { mode: t("common.light") }),
-      t("common.colorModeOption", { mode: t("common.dark") }),
-    ]);
+    expect(labels).toEqual([t("common.system"), t("common.light"), t("common.dark")]);
 
     for (const button of buttons) {
       expect(button.getAttribute("title")).toBe(button.getAttribute("data-tooltip"));

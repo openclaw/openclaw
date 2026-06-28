@@ -29,7 +29,10 @@ import {
 ```
 
 - `buildChannelInboundEventContext(...)`: project normalized channel facts into
-  the prompt/session context.
+  the prompt/session context. Use `channelContext` to pass channel-owned
+  sender/chat metadata through to plugin hook `ctx.channelContext`; augment
+  `PluginHookChannelSenderContext` or `PluginHookChannelChatContext` from this
+  subpath for channel-specific fields.
 - `runChannelInboundEvent(...)`: run ingest, classify, preflight, resolve,
   record, dispatch, and finalize for one inbound platform event.
 - `dispatchChannelInboundReply(...)`: record and dispatch an already assembled

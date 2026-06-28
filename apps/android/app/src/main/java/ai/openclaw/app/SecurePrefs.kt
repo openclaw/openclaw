@@ -42,6 +42,7 @@ class SecurePrefs(
     private const val notificationsForwardingSessionKeyKey = "notifications.forwarding.sessionKey"
     private const val installedAppsSharingEnabledKey = "device.apps.sharing.enabled"
     private const val voiceMicEnabledKey = "voice.micEnabled"
+    private const val appearanceThemeModeKey = "appearance.themeMode"
   }
 
   private val appContext = context.applicationContext
@@ -180,6 +181,10 @@ class SecurePrefs(
 
   private val _speakerEnabled = MutableStateFlow(plainPrefs.getBoolean("voice.speakerEnabled", true))
   val speakerEnabled: StateFlow<Boolean> = _speakerEnabled
+
+  private val _appearanceThemeMode =
+    MutableStateFlow(AppearanceThemeMode.fromRawValue(plainPrefs.getString(appearanceThemeModeKey, null)))
+  val appearanceThemeMode: StateFlow<AppearanceThemeMode> = _appearanceThemeMode
 
   fun setLastDiscoveredStableId(value: String) {
     val trimmed = value.trim()
@@ -388,12 +393,6 @@ class SecurePrefs(
     return stored?.takeIf { it.isNotEmpty() }
   }
 
-  /** Saves the paired gateway token under the current Android instance id. */
-  fun saveGatewayToken(token: String) {
-    val key = "gateway.token.${_instanceId.value}"
-    securePrefs.edit { putString(key, token.trim()) }
-  }
-
   /** Loads the bootstrap token used during gateway setup and device-token handoff. */
   fun loadGatewayBootstrapToken(): String? {
     val key = "gateway.bootstrapToken.${_instanceId.value}"
@@ -523,6 +522,11 @@ class SecurePrefs(
   fun setSpeakerEnabled(value: Boolean) {
     plainPrefs.edit { putBoolean("voice.speakerEnabled", value) }
     _speakerEnabled.value = value
+  }
+
+  fun setAppearanceThemeMode(mode: AppearanceThemeMode) {
+    plainPrefs.edit { putString(appearanceThemeModeKey, mode.rawValue) }
+    _appearanceThemeMode.value = mode
   }
 
   private fun loadNotificationForwardingPackages(): Set<String> {

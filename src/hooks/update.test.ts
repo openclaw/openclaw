@@ -1,3 +1,4 @@
+// Hook update tests cover updating installed hook records and config.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookNpmIntegrityDriftParams } from "./install.js";
@@ -113,14 +114,22 @@ describe("updateNpmInstalledHookPacks", () => {
       },
     });
 
+    const config = createHookInstallConfig({
+      hookId: "demo-hooks",
+      spec: "@openclaw/demo-hooks",
+    });
     const result = await updateNpmInstalledHookPacks({
-      config: createHookInstallConfig({
-        hookId: "demo-hooks",
-        spec: "@openclaw/demo-hooks",
-      }),
+      config,
       hookIds: ["demo-hooks"],
     });
 
+    expect(installHooksFromNpmSpecMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config,
+        expectedHookPackId: "demo-hooks",
+        mode: "update",
+      }),
+    );
     expect(result.changed).toBe(true);
     expect(result.config.hooks?.internal?.installs?.["demo-hooks"]).toEqual({
       source: "npm",

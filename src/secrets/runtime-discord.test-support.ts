@@ -1,3 +1,4 @@
+/** Test bootstrap shim for Discord runtime-secret surface coverage. */
 import { vi } from "vitest";
 import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
 

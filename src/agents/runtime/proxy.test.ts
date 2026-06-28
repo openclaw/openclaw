@@ -1,3 +1,5 @@
+// Runtime proxy tests cover SSE parsing, terminal error handling, and request
+// payload scrubbing before proxying model streams.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Context, Model, Usage } from "../../llm/types.js";
 import { streamProxy } from "./proxy.js";
@@ -40,12 +42,59 @@ function responseFromText(text: string): Response {
   );
 }
 
+function responseFromReaderText(text: string, releaseLock: () => void): Response {
+  const chunks: Array<ReadableStreamReadResult<Uint8Array>> = [
+    { done: false, value: new TextEncoder().encode(text) },
+    { done: true, value: undefined },
+  ];
+  const reader = {
+    read: async () => chunks.shift() ?? { done: true, value: undefined },
+    cancel: async () => undefined,
+    releaseLock,
+  } as ReadableStreamDefaultReader<Uint8Array>;
+
+  return {
+    ok: true,
+    status: 200,
+    body: { getReader: () => reader },
+  } as Response;
+}
+
+function streamingProxyErrorResponse(params: { chunkCount: number; chunkSize: number }): {
+  response: Response;
+  getReadCount: () => number;
+} {
+  let reads = 0;
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (reads >= params.chunkCount) {
+        controller.close();
+        return;
+      }
+      reads += 1;
+      controller.enqueue(encoder.encode("a".repeat(params.chunkSize)));
+    },
+  });
+
+  return {
+    response: new Response(stream, {
+      status: 502,
+      statusText: "Bad Gateway",
+      headers: { "Content-Type": "application/json" },
+    }),
+    getReadCount: () => reads,
+  };
+}
+
 describe("streamProxy", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
   it("flushes a final SSE frame without a trailing newline", async () => {
+    // Provider proxies can close immediately after the last SSE frame; the
+    // parser still has to emit the terminal done event.
     const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
       responseFromText(
         `data: ${JSON.stringify({
@@ -113,6 +162,61 @@ describe("streamProxy", () => {
       sessionId: "run-session",
       promptCacheKey: "stable-cache-key",
     });
+  });
+
+  it("releases the proxy response reader after a terminal stream", async () => {
+    let resolveReleased: (() => void) | undefined;
+    const released = new Promise<void>((resolve) => {
+      resolveReleased = resolve;
+    });
+    const releaseLock = vi.fn(() => {
+      resolveReleased?.();
+    });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        responseFromReaderText(
+          `data: ${JSON.stringify({
+            type: "done",
+            reason: "stop",
+            usage,
+          })}\n\n`,
+          releaseLock,
+        ),
+      ),
+    );
+
+    await streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    }).result();
+    await released;
+
+    expect(releaseLock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops reading oversized proxy error JSON responses", async () => {
+    const streamed = streamingProxyErrorResponse({ chunkCount: 20, chunkSize: 1024 * 1024 });
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => streamed.response),
+    );
+
+    const stream = streamProxy(model, context, {
+      authToken: "token",
+      proxyUrl: "https://proxy.example",
+    });
+    const events = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+
+    expect(events.at(-1)?.type).toBe("error");
+    await expect(stream.result()).resolves.toMatchObject({
+      stopReason: "error",
+      errorMessage: "Proxy error: 502 Bad Gateway",
+    });
+    expect(streamed.getReadCount()).toBeLessThan(20);
   });
 
   it("returns an error result when EOF arrives without a terminal event", async () => {

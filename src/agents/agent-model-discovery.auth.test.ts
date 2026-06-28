@@ -1,3 +1,4 @@
+/** Tests model discovery auth storage, SecretRef placeholders, and env-backed credentials. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,18 +12,6 @@ import { writePersistedAuthProfileStoreRaw } from "./auth-profiles/sqlite.js";
 
 vi.mock("./model-auth-env-vars.js", () => ({
   listProviderEnvAuthLookupKeys: () => ["mistral", "workspace-cloud"],
-  resolveProviderEnvApiKeyCandidates: () => ({
-    mistral: ["MISTRAL_API_KEY"],
-  }),
-  resolveProviderEnvAuthEvidence: () => ({
-    "workspace-cloud": [
-      {
-        type: "local-file-with-env",
-        credentialMarker: "workspace-cloud-local-credentials",
-        source: "workspace cloud credentials",
-      },
-    ],
-  }),
   resolveProviderEnvAuthLookupMaps: () => ({
     aliasMap: {},
     envCandidateMap: {

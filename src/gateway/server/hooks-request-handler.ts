@@ -1,3 +1,4 @@
+// Hook request handler validates hook tokens, applies mappings, dedupes requests, and dispatches wake or agent work.
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -30,6 +31,7 @@ import {
   resolveHookSessionKey,
   resolveHookTargetAgentId,
 } from "../hooks.js";
+import { sendJson } from "../http-common.js";
 import { resolveRequestClientIp } from "../net.js";
 import { DEDUPE_MAX, DEDUPE_TTL_MS } from "../server-constants.js";
 
@@ -61,12 +63,6 @@ type HookReplayScope = {
   idempotencyKey?: string;
   dispatchScope: Record<string, unknown>;
 };
-
-function sendJson(res: ServerResponse, status: number, body: unknown) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify(body));
-}
 
 function resolveMappedHookExternalContentSource(params: {
   subPath: string;

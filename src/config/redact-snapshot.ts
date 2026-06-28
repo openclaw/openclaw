@@ -1,3 +1,4 @@
+// Redacts runtime config snapshots before diagnostics or UI exposure.
 import {
   hasSensitiveUrlHintTag,
   isSensitiveUrlConfigPath,
@@ -441,7 +442,7 @@ export function redactConfigSnapshot(
     redactedRaw &&
     shouldFallbackToStructuredRawRedaction({
       redactedRaw,
-      originalConfig: snapshot.config,
+      originalConfig: snapshot.parsed ?? snapshot.config,
       restoreParsed: (parsed) =>
         withRestoreWarningsSuppressed(() =>
           restoreRedactedValues(parsed, snapshot.config, uiHints),

@@ -1,3 +1,4 @@
+/** Defines unsupported secret-ref surfaces and operator-facing policy messages. */
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import { isRecord } from "../utils.js";
 

@@ -1,3 +1,4 @@
+// Formats provider usage summaries for CLI and status output.
 import { clampPercent } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot, UsageSummary, UsageWindow } from "./provider-usage.types.js";
 

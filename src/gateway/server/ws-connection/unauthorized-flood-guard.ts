@@ -1,16 +1,17 @@
+// Unauthorized flood guard rate-limits repeated unauthorized role errors on one WebSocket connection.
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
 import { ErrorCodes, type ErrorShape } from "../../../../packages/gateway-protocol/src/index.js";
 
 /**
  * Per-connection guard that suppresses noisy unauthorized-role retries.
  */
-export type UnauthorizedFloodGuardOptions = {
+type UnauthorizedFloodGuardOptions = {
   closeAfter?: number;
   logEvery?: number;
 };
 
 /** Decision returned after recording one unauthorized role failure. */
-export type UnauthorizedFloodDecision = {
+type UnauthorizedFloodDecision = {
   shouldClose: boolean;
   shouldLog: boolean;
   count: number;

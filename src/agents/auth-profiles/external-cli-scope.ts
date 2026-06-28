@@ -1,3 +1,8 @@
+/**
+ * External CLI auth discovery scope extraction from config.
+ * Collects provider/profile ids from configured models, runtimes, auth order,
+ * and agent defaults to limit CLI credential probing.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   resolveAgentModelFallbackValues,
@@ -56,6 +61,7 @@ function addExternalCliRuntimeScope(out: Set<string>, value: string | undefined)
     normalized === "codex" ||
     normalized === "codex-cli" ||
     normalized === "codex-app-server" ||
+    normalized === "google-gemini-cli" ||
     normalized === "openai" ||
     normalized === "minimax" ||
     normalized === "minimax-cli" ||

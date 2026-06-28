@@ -1,4 +1,7 @@
+// Chat abort tests protect in-flight run tracking, stop-command parsing, provider
+// abort fanout, history snapshots, and cleanup of buffered streaming state.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import {
   abortChatRunById,
   abortChatRunsForProvider,
@@ -233,6 +236,69 @@ describe("registerChatAbortController", () => {
     });
     expect(chatAbortControllers.get("run-internal-agent")?.controlUiVisible).toBe(false);
   });
+
+  it("retains completed registrations until terminal persistence succeeds", async () => {
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId: "run-persisting",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+    });
+    let resolvePersistence: () => void = () => undefined;
+    const persistence = new Promise<void>((resolve) => {
+      resolvePersistence = resolve;
+    });
+    if (!registration.entry) {
+      throw new Error("expected registered entry");
+    }
+    registration.entry.projectSessionActive = false;
+    registration.entry.projectSessionTerminalPersistence = persistence;
+
+    registration.cleanup();
+
+    expect(chatAbortControllers.has("run-persisting")).toBe(true);
+    resolvePersistence();
+    await persistence;
+    await Promise.resolve();
+    expect(chatAbortControllers.has("run-persisting")).toBe(false);
+  });
+
+  it("retains registrations when terminal lifecycle was observed before caller cleanup", () => {
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId: "run-awaiting-terminal",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+    });
+
+    if (!registration.entry) {
+      throw new Error("expected registered entry");
+    }
+    registration.entry.projectSessionTerminalPending = true;
+    registration.cleanup();
+
+    expect(chatAbortControllers.has("run-awaiting-terminal")).toBe(true);
+    expect(registration.entry?.registrationCleanupRequested).toBe(true);
+  });
+
+  it("force-cleans registrations when dispatch fails before lifecycle starts", () => {
+    const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+    const registration = registerChatAbortController({
+      chatAbortControllers,
+      runId: "run-before-dispatch",
+      sessionId: "sess-1",
+      sessionKey: "main",
+      timeoutMs: 60_000,
+    });
+
+    registration.cleanup({ force: true });
+
+    expect(chatAbortControllers.has("run-before-dispatch")).toBe(false);
+  });
 });
 
 describe("abortChatRunById", () => {
@@ -344,6 +410,18 @@ describe("abortChatRunById", () => {
     expect(entry.controller.signal.aborted).toBe(true);
     expect(entry.controller.signal.reason).toBeInstanceOf(Error);
     expect((entry.controller.signal.reason as Error).name).toBe("TimeoutError");
+  });
+
+  it("tags restart abort signals with a restart-specific reason", () => {
+    const runId = "run-restart";
+    const sessionKey = "main";
+    const entry = createActiveEntry(sessionKey);
+    const ops = createOps({ runId, entry });
+
+    const result = abortChatRunById(ops, { runId, sessionKey, stopReason: "restart" });
+
+    expect(result).toEqual({ aborted: true });
+    expect(isAgentRunRestartAbortReason(entry.controller.signal.reason)).toBe(true);
   });
 
   it("preserves partial message even when abort listeners clear buffers synchronously", () => {

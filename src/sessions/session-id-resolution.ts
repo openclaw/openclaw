@@ -1,3 +1,4 @@
+// Session id resolution helpers resolve user-provided session references.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
 import { toAgentRequestSessionKey } from "../routing/session-key.js";
@@ -14,7 +15,7 @@ type NormalizedSessionIdMatch = {
   isStructural: boolean;
 };
 
-export type SessionIdMatchSelection =
+type SessionIdMatchSelection =
   | { kind: "none" }
   | { kind: "ambiguous"; sessionKeys: string[] }
   | { kind: "selected"; sessionKey: string };

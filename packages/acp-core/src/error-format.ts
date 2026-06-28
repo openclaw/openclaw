@@ -1,3 +1,4 @@
+// ACP Core helper module supports error format behavior.
 const SECRET_PATTERNS: RegExp[] = [
   /\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CARD[_-]?NUMBER|CARD[_-]?CVC|CARD[_-]?CVV|CVC|CVV|SECURITY[_-]?CODE|PAYMENT[_-]?CREDENTIAL|SHARED[_-]?PAYMENT[_-]?TOKEN)\b\s*[=:]\s*(["']?)([^\s"'\\]+)\1/g,
   /\b[A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CARD[_-]?NUMBER|CARD[_-]?CVC|CARD[_-]?CVV|CVC|CVV|SECURITY[_-]?CODE|PAYMENT[_-]?CREDENTIAL|SHARED[_-]?PAYMENT[_-]?TOKEN)\b\s*[=:]\s*\\+(["'])([^\s"'\\]+)\\+\1/g,
@@ -74,7 +75,9 @@ export function stringifyNonErrorCause(value: unknown): string {
     return String(value);
   }
   try {
-    return JSON.stringify(value);
+    // JSON.stringify returns undefined (not a string) for functions/symbols/undefined; fall back to
+    // a tag string so this `string`-typed helper never leaks undefined (matches src/infra/errors.ts).
+    return JSON.stringify(value) ?? Object.prototype.toString.call(value);
   } catch {
     return Object.prototype.toString.call(value);
   }

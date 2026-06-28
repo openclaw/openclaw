@@ -1,21 +1,16 @@
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+// Doctor scanner and repair for subagent allowlists that reference missing agents.
 import { listAgentIds } from "../../../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { normalizeAgentId } from "../../../routing/session-key.js";
+import { normalizeAgentId, normalizeOptionalAgentId } from "../../../routing/session-key.js";
 
 export type StaleSubagentAllowlistHit = {
+  /** Config path containing the stale allowAgents entry. */
   pathLabel: string;
+  /** Original configured agent id. */
   agentId: string;
+  /** Normalized agent id used for matching configured targets. */
   normalizedAgentId: string;
 };
-
-function normalizeOptionalAgentId(value: string | undefined | null): string | undefined {
-  const trimmed = normalizeOptionalString(value) ?? "";
-  if (!trimmed) {
-    return undefined;
-  }
-  return normalizeAgentId(trimmed);
-}
 
 function collectConfiguredSubagentTargetIds(cfg: OpenClawConfig): Set<string> {
   const ids = new Set<string>(listAgentIds(cfg));
@@ -80,6 +75,7 @@ function collectStaleAllowlistEntries(params: {
   return hits;
 }
 
+/** Find subagent allowlist entries not backed by configured agent or ACP targets. */
 export function scanStaleSubagentAllowlistReferences(
   cfg: OpenClawConfig,
 ): StaleSubagentAllowlistHit[] {
@@ -105,6 +101,7 @@ export function scanStaleSubagentAllowlistReferences(
   return hits;
 }
 
+/** Format warnings for stale subagent allowlist entries. */
 export function collectStaleSubagentAllowlistWarnings(params: {
   hits: readonly StaleSubagentAllowlistHit[];
   doctorFixCommand: string;
@@ -131,6 +128,7 @@ function filterAllowAgents(params: {
   });
 }
 
+/** Remove stale subagent allowlist entries while preserving valid targets and wildcards. */
 export function maybeRepairStaleSubagentAllowlists(cfg: OpenClawConfig): {
   config: OpenClawConfig;
   changes: string[];

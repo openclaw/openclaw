@@ -1,3 +1,4 @@
+// Exposes cross-platform permission inspection helpers with fs-safe defaults.
 import "./fs-safe-defaults.js";
 
 // Permission inspection facades expose fs-safe POSIX and Windows ACL helpers

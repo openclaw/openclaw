@@ -1,7 +1,7 @@
+/** Persists, inspects, and refreshes the installed plugin index in the state database. */
 import { existsSync, readFileSync } from "node:fs";
 import { z } from "zod";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -14,6 +14,7 @@ import { hashJson } from "./installed-plugin-index-hash.js";
 import { resolveCompatRegistryVersion } from "./installed-plugin-index-policy.js";
 import { clearLoadInstalledPluginIndexInstallRecordsCache } from "./installed-plugin-index-record-cache.js";
 import {
+  resolveInstalledPluginIndexStateDatabaseOptions,
   resolveInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
@@ -40,6 +41,7 @@ export {
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
 
+/** Freshness state for the persisted installed plugin index. */
 export type InstalledPluginIndexStoreState = "missing" | "fresh" | "stale";
 
 export type InstalledPluginIndexStoreInspection = {
@@ -194,26 +196,6 @@ type InstalledPluginIndexSqliteRow = {
   diagnostics_json: string;
 };
 
-function resolveStateDatabaseOptions(
-  options: InstalledPluginIndexStoreOptions = {},
-): OpenClawStateDatabaseOptions {
-  if (options.filePath) {
-    return {
-      ...(options.env ? { env: options.env } : {}),
-      path: options.filePath,
-    };
-  }
-  if (options.stateDir) {
-    return {
-      env: {
-        ...(options.env ?? process.env),
-        OPENCLAW_STATE_DIR: options.stateDir,
-      },
-    };
-  }
-  return options.env ? { env: options.env } : {};
-}
-
 function isExplicitLegacyJsonStorePath(options: InstalledPluginIndexStoreOptions): boolean {
   return Boolean(options.filePath && options.filePath.endsWith(".json"));
 }
@@ -307,7 +289,9 @@ function readPersistedInstalledPluginIndexFromSqlite(
     return null;
   }
   try {
-    const database = openOpenClawStateDatabase(resolveStateDatabaseOptions(options));
+    const database = openOpenClawStateDatabase(
+      resolveInstalledPluginIndexStateDatabaseOptions(options),
+    );
     const row = database.db
       .prepare(
         `
@@ -377,7 +361,7 @@ function writePersistedInstalledPluginIndexToSqlite(
       warning: persisted.warning,
       updated_at_ms: now,
     });
-  }, resolveStateDatabaseOptions(options));
+  }, resolveInstalledPluginIndexStateDatabaseOptions(options));
 }
 
 export async function readPersistedInstalledPluginIndex(

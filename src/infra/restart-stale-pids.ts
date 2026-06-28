@@ -1,3 +1,4 @@
+// Finds and cleans stale gateway process ids.
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -186,6 +187,15 @@ export function getSelfAndAncestorPidsSync(spawnTimeoutMs = SPAWN_TIMEOUT_MS): S
   return pids;
 }
 
+function getExcludedGatewayPidsSync(spawnTimeoutMs: number, protectedPid?: number): Set<number> {
+  const excluded = getSelfAndAncestorPidsSync(spawnTimeoutMs);
+  if (typeof protectedPid === "number" && Number.isSafeInteger(protectedPid) && protectedPid > 0) {
+    // A reparented service can become a sibling and disappear from the ancestor walk.
+    excluded.add(protectedPid);
+  }
+  return excluded;
+}
+
 /**
  * Parse raw PIDs from lsof -Fpc stdout, excluding the current
  * process and its ancestors (see `getSelfAndAncestorPidsSync` for the full
@@ -256,12 +266,16 @@ function verifyGatewayPidByArgvSync(pid: number, spawnTimeoutMs: number): boolea
   return args != null && isGatewayArgv(args, { allowGatewayBinary: true });
 }
 
-function parsePidsFromLsofOutput(stdout: string, spawnTimeoutMs: number): number[] {
+function parsePidsFromLsofOutput(
+  stdout: string,
+  spawnTimeoutMs: number,
+  protectedPid?: number,
+): number[] {
   // Deduplicate: dual-stack listeners (IPv4 + IPv6) cause lsof to emit the
   // same PID twice. Return each PID at most once to avoid double-killing.
   // Exclude self and ancestors — terminating any ancestor cascade-kills the
   // caller via the supervisor, recreating the #68451 restart loop.
-  const excluded = getSelfAndAncestorPidsSync(spawnTimeoutMs);
+  const excluded = getExcludedGatewayPidsSync(spawnTimeoutMs, protectedPid);
   const pids: number[] = [];
   for (const entry of parseLsofEntries(stdout)) {
     if (excluded.has(entry.pid)) {
@@ -284,8 +298,8 @@ function parsePidsFromLsofOutput(stdout: string, spawnTimeoutMs: number): number
  * and its ancestors (same invariant as the lsof path — see
  * `getSelfAndAncestorPidsSync`).
  */
-function filterVerifiedWindowsGatewayPids(rawPids: number[]): number[] {
-  const excluded = getSelfAndAncestorPidsSync();
+function filterVerifiedWindowsGatewayPids(rawPids: number[], protectedPid?: number): number[] {
+  const excluded = getExcludedGatewayPidsSync(SPAWN_TIMEOUT_MS, protectedPid);
   return uniqueValues(rawPids)
     .filter((pid) => Number.isFinite(pid) && pid > 0 && !excluded.has(pid))
     .filter((pid) => {
@@ -297,8 +311,9 @@ function filterVerifiedWindowsGatewayPids(rawPids: number[]): number[] {
 function filterVerifiedWindowsGatewayPidsResult(
   rawPids: number[],
   processArgsResult: (pid: number) => WindowsProcessArgsResult,
+  protectedPid?: number,
 ): WindowsListeningPidsResult {
-  const excluded = getSelfAndAncestorPidsSync();
+  const excluded = getExcludedGatewayPidsSync(SPAWN_TIMEOUT_MS, protectedPid);
   const verified: number[] = [];
   for (const pid of uniqueValues(rawPids)) {
     if (!Number.isFinite(pid) || pid <= 0 || excluded.has(pid)) {
@@ -315,32 +330,34 @@ function filterVerifiedWindowsGatewayPidsResult(
   return { ok: true, pids: verified };
 }
 
-function findVerifiedWindowsGatewayPidsOnPortSync(port: number): number[] {
-  return filterVerifiedWindowsGatewayPids(readWindowsListeningPidsOnPortSync(port));
+function findVerifiedWindowsGatewayPidsOnPortSync(port: number, protectedPid?: number): number[] {
+  return filterVerifiedWindowsGatewayPids(readWindowsListeningPidsOnPortSync(port), protectedPid);
 }
 
-function findVerifiedWindowsGatewayPidsOnPortResultSync(port: number): WindowsListeningPidsResult {
+function findVerifiedWindowsGatewayPidsOnPortResultSync(
+  port: number,
+  protectedPid?: number,
+): WindowsListeningPidsResult {
   const result = readWindowsListeningPidsResultSync(port);
   if (!result.ok) {
     return result;
   }
-  return filterVerifiedWindowsGatewayPidsResult(result.pids, (pid) =>
-    readWindowsProcessArgsResultSync(pid),
+  return filterVerifiedWindowsGatewayPidsResult(
+    result.pids,
+    (pid) => readWindowsProcessArgsResultSync(pid),
+    protectedPid,
   );
 }
 
-/**
- * Find PIDs of gateway processes listening on the given port using synchronous lsof.
- * Returns only PIDs that belong to openclaw gateway processes (not the current process).
- */
-export function findGatewayPidsOnPortSync(
+function findGatewayPidsOnPortWithProtectedPidSync(
   port: number,
-  spawnTimeoutMs = SPAWN_TIMEOUT_MS,
+  spawnTimeoutMs: number,
+  protectedPid?: number,
 ): number[] {
   if (process.platform === "win32") {
     // Use the shared Windows port inspection (PowerShell / netstat) with
     // command-line verification to find only openclaw gateway processes.
-    return findVerifiedWindowsGatewayPidsOnPortSync(port);
+    return findVerifiedWindowsGatewayPidsOnPortSync(port, protectedPid);
   }
   const lsof = resolveLsofCommandSync();
   const res = spawnSync(lsof, ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fpc"], {
@@ -367,7 +384,18 @@ export function findGatewayPidsOnPortSync(
     );
     return [];
   }
-  return parsePidsFromLsofOutput(res.stdout, spawnTimeoutMs);
+  return parsePidsFromLsofOutput(res.stdout, spawnTimeoutMs, protectedPid);
+}
+
+/**
+ * Find PIDs of gateway processes listening on the given port using synchronous lsof.
+ * Returns only PIDs that belong to openclaw gateway processes (not the current process).
+ */
+export function findGatewayPidsOnPortSync(
+  port: number,
+  spawnTimeoutMs = SPAWN_TIMEOUT_MS,
+): number[] {
+  return findGatewayPidsOnPortWithProtectedPidSync(port, spawnTimeoutMs);
 }
 
 /**
@@ -585,23 +613,31 @@ function waitForPortFreeSync(port: number): void {
  *
  * Called before service restart commands to prevent port conflicts.
  */
-export function cleanStaleGatewayProcessesSync(portOverride?: number): number[] {
+type CleanStaleGatewayProcessesOptions = {
+  protectedPid?: number;
+};
+
+export function cleanStaleGatewayProcessesSync(
+  portOverride?: number,
+  options?: CleanStaleGatewayProcessesOptions,
+): number[] {
   try {
     const port =
       typeof portOverride === "number" && Number.isFinite(portOverride) && portOverride > 0
         ? Math.floor(portOverride)
         : resolveGatewayPort(undefined, process.env);
+    const protectedPid = options?.protectedPid;
     const stalePids =
       process.platform === "win32"
         ? (() => {
-            const result = findVerifiedWindowsGatewayPidsOnPortResultSync(port);
+            const result = findVerifiedWindowsGatewayPidsOnPortResultSync(port, protectedPid);
             if (result.ok) {
               return result.pids;
             }
             waitForPortFreeSync(port);
             return [];
           })()
-        : findGatewayPidsOnPortSync(port);
+        : findGatewayPidsOnPortWithProtectedPidSync(port, SPAWN_TIMEOUT_MS, protectedPid);
     if (stalePids.length === 0) {
       return [];
     }

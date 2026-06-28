@@ -1,8 +1,15 @@
+/**
+ * Live prompt-cache regression runner.
+ *
+ * This orchestrates provider cache lanes, baseline comparisons, and live drift
+ * handling for expensive provider-backed cache validation.
+ */
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
 import type { AssistantMessage, Message, Tool } from "../llm/types.js";
+import { extractAssistantText } from "./embedded-agent-utils.js";
 import {
   LIVE_CACHE_REGRESSION_BASELINE,
   type LiveCacheFloor,
@@ -12,7 +19,6 @@ import {
   buildStableCachePrefix,
   completeSimpleWithLiveTimeout,
   computeCacheHitRate,
-  extractAssistantText,
   isLiveCachePrerequisiteSkip,
   type LiveResolvedModel,
   type LiveResolvedModelPool,
@@ -69,7 +75,9 @@ type LiveCacheRegressionResult = {
   warnings: string[];
 };
 type LiveCacheRegressionSummary = LiveCacheRegressionResult["summary"];
-type LiveCacheProviderResolver = (params: LiveCacheProviderConfig) => Promise<LiveResolvedModelPool>;
+type LiveCacheProviderResolver = (
+  params: LiveCacheProviderConfig,
+) => Promise<LiveResolvedModelPool>;
 
 class CacheProbeTextMismatchError extends Error {
   constructor(
@@ -183,6 +191,7 @@ function shouldRetryCacheProbeText(params: {
   const responseTextLower = normalizeLowercaseStringOrEmpty(params.text);
   const suffixLower = normalizeLowercaseStringOrEmpty(params.suffix);
   const markerLower = `cache-ok ${suffixLower}`;
+  // Live providers sometimes return near-miss text on the first attempt.
   return (
     (!responseTextLower.includes(markerLower) || !responseTextLower.includes(suffixLower)) &&
     params.attempt <= LIVE_CACHE_RESPONSE_RETRIES
@@ -209,6 +218,7 @@ function shouldAcceptEmptyCacheProbe(params: {
   if (params.text.trim().length > 0) {
     return false;
   }
+  // Empty text is acceptable only when provider usage proves the cache lane ran.
   return (
     (params.usage.input ?? 0) > 0 ||
     (params.usage.cacheRead ?? 0) > 0 ||
@@ -449,6 +459,7 @@ async function runRepeatedLane(params: {
   const warmup = await run(`${suffixBase}-warmup`);
   const hitA = await run(`${suffixBase}-hit-a`);
   const hitB = await run(`${suffixBase}-hit-b`);
+  // Keep the stronger hit sample; live provider cache accounting can vary by call.
   const best = (hitA.usage.cacheRead ?? 0) >= (hitB.usage.cacheRead ?? 0) ? hitA : hitB;
   return { best, warmup };
 }
@@ -500,6 +511,7 @@ function assertAgainstBaseline(params: {
 }) {
   const floor = resolveBaselineFloor(params.provider, params.lane);
   const recordRegression = (message: string) => {
+    // OpenAI cache floors are currently watch-only; Anthropic misses fail.
     if (floor?.warnOnly) {
       params.warnings.push(message);
     } else {
@@ -600,6 +612,7 @@ async function runRepeatedLaneWithBaselineRetry(params: {
       });
     } catch (error) {
       if (error instanceof CacheProbeTextMismatchError && attempt <= LIVE_CACHE_LANE_RETRIES) {
+        // Retry a whole lane once so response-text drift does not hide cache regressions.
         logLiveCache(
           `${params.providerTag} ${params.lane} response mismatch; retrying lane once: ${error.message}`,
         );
@@ -679,6 +692,7 @@ async function runAnthropicCacheLane(params: {
     } catch (error) {
       lastError = error;
       if (shouldSkipAnthropicCacheProviderDrift(error) && index + 1 < keys.length) {
+        // Anthropic keys can drift independently; try the next live key before skipping.
         logLiveCache(`anthropic ${params.lane} account drift; retrying with next key`);
         continue;
       }
@@ -726,6 +740,7 @@ async function runAnthropicDisabledCacheLane(params: {
   }
 }
 
+/** Internal seams used by unit tests for baseline and retry decisions. */
 export const testing = {
   assertAgainstBaseline,
   evaluateAgainstBaseline,
@@ -737,6 +752,7 @@ export const testing = {
   shouldRetryBaselineFindings,
 };
 
+/** Runs all live prompt-cache lanes and returns hard regressions plus warn-only drift. */
 export async function runLiveCacheRegression(): Promise<LiveCacheRegressionResult> {
   const pngBase64 = (await fs.readFile(LIVE_TEST_PNG_URL)).toString("base64");
   const runToken = randomUUID().slice(0, 13);

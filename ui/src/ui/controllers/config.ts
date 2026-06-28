@@ -1,3 +1,4 @@
+// Control UI controller manages config gateway state.
 import { applyMergePatch } from "../../../../src/config/merge-patch.ts";
 import type { GatewayBrowserClient } from "../gateway.ts";
 import type { ConfigSchemaResponse, ConfigSnapshot, ConfigUiHints } from "../types.ts";
@@ -37,12 +38,14 @@ export type ConfigState = {
   configActiveSection: string | null;
   configActiveSubsection: string | null;
   pendingUpdateExpectedVersion: string | null;
+  pendingUpdateHandoff: boolean;
   updateStatusBanner: { tone: "danger" | "warn" | "info"; text: string } | null;
   lastError: string | null;
   chatError?: string | null;
 };
 
 const autoAllowlistedPluginIdsByState = new WeakMap<ConfigState, Set<string>>();
+const UPDATE_HANDOFF_STARTED_REASON = "managed-service-handoff-started";
 
 export type LoadConfigOptions = {
   discardPendingChanges?: boolean;
@@ -182,13 +185,23 @@ function serializeFormForSubmit(state: ConfigState): string {
 type ConfigSubmitMethod = "config.set" | "config.apply";
 type ConfigSubmitBusyKey = "configSaving" | "configApplying";
 
-function resolveUpdateStatusBanner(params: { status?: string; reason?: string }): {
+function resolveUpdateStatusBanner(params: {
+  status?: string;
+  reason?: string;
+  handoff?: { command?: string; message?: string };
+}): {
   tone: "danger" | "warn" | "info";
   text: string;
 } {
   const status = (params.status ?? "error").trim() || "error";
   const reason = (params.reason ?? "unexpected-error").trim() || "unexpected-error";
   const tone = status === "skipped" ? "warn" : "danger";
+  const handoffCommand = params.handoff?.command?.trim();
+  const handoffMessage = params.handoff?.message?.trim();
+  const handoffUnavailableGuidance = handoffCommand
+    ? `Run \`${handoffCommand}\` from a shell outside the Gateway process.`
+    : (handoffMessage ??
+      "OpenClaw could not find a safe supervisor handoff. Run `openclaw update` from a shell outside the Gateway process.");
   const guidance =
     {
       dirty: "Commit or stash changes, then retry.",
@@ -206,6 +219,7 @@ function resolveUpdateStatusBanner(params: { status?: string; reason?: string })
         "The update was not applied because gateway restarts are disabled. Enable restarts in config, then retry — or run `openclaw update` from the CLI.",
       "restart-unavailable":
         "This global install cannot be safely replaced while restarts are disabled and no supervisor is present.",
+      "managed-service-handoff-unavailable": handoffUnavailableGuidance,
       "restart-unhealthy":
         "The replacement process never became healthy. The previous process stayed up so you can recover.",
       "doctor-failed": "Doctor repair failed. Run `openclaw doctor --non-interactive` and retry.",
@@ -282,22 +296,37 @@ export async function runUpdate(state: ConfigState) {
     const res = await state.client.request<{
       ok?: boolean;
       result?: { status?: string; reason?: string; after?: { version?: string | null } };
+      handoff?: { status?: string; command?: string; message?: string };
     }>("update.run", {
       sessionKey: state.applySessionKey,
     });
     const status = res.result?.status ?? (res.ok === true ? "ok" : "error");
+    const handoffStarted =
+      res.ok === true &&
+      status === "skipped" &&
+      res.result?.reason === UPDATE_HANDOFF_STARTED_REASON &&
+      res.handoff?.status === "started";
+    if (handoffStarted) {
+      state.pendingUpdateExpectedVersion = res.result?.after?.version ?? null;
+      state.pendingUpdateHandoff = true;
+      return;
+    }
     if (status === "ok" && res.ok === true) {
       state.pendingUpdateExpectedVersion = res.result?.after?.version ?? null;
+      state.pendingUpdateHandoff = false;
       return;
     }
     state.pendingUpdateExpectedVersion = null;
+    state.pendingUpdateHandoff = false;
     state.updateStatusBanner = resolveUpdateStatusBanner({
       status,
       reason: res.result?.reason,
+      handoff: res.handoff,
     });
   } catch (err) {
     state.lastError = String(err);
     state.pendingUpdateExpectedVersion = null;
+    state.pendingUpdateHandoff = false;
   } finally {
     state.updateRunning = false;
   }

@@ -1,8 +1,8 @@
+// Tracks inbound message ids to avoid duplicate reply runs.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { logVerbose, shouldLogVerbose } from "../../globals.js";
 import { resolveGlobalDedupeCache, type DedupeCache } from "../../infra/dedupe.js";
 import { channelRouteDedupeKey } from "../../plugin-sdk/channel-route.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
@@ -73,22 +73,6 @@ export function buildInboundDedupeKey(ctx: MsgContext): string | null {
     threadId: ctx.MessageThreadId,
   });
   return JSON.stringify([sessionScope, routeKey, messageId]);
-}
-
-export function shouldSkipDuplicateInbound(
-  ctx: MsgContext,
-  opts?: { cache?: DedupeCache; now?: number },
-): boolean {
-  const key = buildInboundDedupeKey(ctx);
-  if (!key) {
-    return false;
-  }
-  const cache = opts?.cache ?? inboundDedupeCache;
-  const skipped = cache.check(key, opts?.now);
-  if (skipped && shouldLogVerbose()) {
-    logVerbose(`inbound dedupe: skipped ${key}`);
-  }
-  return skipped;
 }
 
 export function claimInboundDedupe(

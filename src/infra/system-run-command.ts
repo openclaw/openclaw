@@ -1,3 +1,4 @@
+// Normalizes and validates system-run commands before approval binding.
 import {
   extractShellWrapperCommand,
   hasEnvManipulationBeforeShellWrapper,
@@ -181,14 +182,6 @@ export function validateSystemRunCommandConsistency(params: {
     commandText: display.commandText,
     previewText: display.previewText,
   };
-}
-
-/** Resolve system-run command fields with strict rawCommand matching. */
-export function resolveSystemRunCommand(params: {
-  command?: unknown;
-  rawCommand?: unknown;
-}): ResolvedSystemRunCommand {
-  return resolveSystemRunCommandWithMode(params, false);
 }
 
 /** Resolve request command fields while accepting the legacy shell-preview text. */

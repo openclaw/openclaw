@@ -1,3 +1,4 @@
+/** Shared CLI runner test doubles for supervisor, bootstrap, and heartbeat seams. */
 import type { Mock } from "vitest";
 import { beforeEach, vi } from "vitest";
 import type { requestHeartbeat } from "../infra/heartbeat-wake.js";
@@ -69,6 +70,8 @@ setCliRunnerExecuteTestDeps({
         wait: async () => {
           const exit = await wait();
           if (params.captureOutput === false) {
+            // Production streams stdout/stderr through callbacks; replay captured
+            // output once so tests cover streaming and captured-output paths.
             if (!stdoutDelivered && exit.stdout) {
               params.onStdout?.(exit.stdout);
             }
@@ -82,7 +85,6 @@ setCliRunnerExecuteTestDeps({
     },
     cancel: vi.fn(),
     cancelScope: vi.fn(),
-    reconcileOrphans: vi.fn(),
     getRecord: vi.fn(),
   }),
   enqueueSystemEvent: (

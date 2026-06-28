@@ -1,3 +1,4 @@
+// Projects task and task-flow records into domain views for status surfaces.
 import type {
   TaskFlowDetail,
   TaskFlowView,

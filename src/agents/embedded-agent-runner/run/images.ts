@@ -1,3 +1,6 @@
+/**
+ * Detects, resolves, and loads prompt image references for model input.
+ */
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -80,7 +83,7 @@ const MEDIA_URI_REGEX = /\bmedia:\/\/inbound\/([^\]\s/\\]+)/;
 /**
  * Result of detecting an image reference in text.
  */
-export interface DetectedImageRef {
+interface DetectedImageRef {
   /** The raw matched string from the prompt */
   raw: string;
   /** The type of reference */

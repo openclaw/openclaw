@@ -1,3 +1,4 @@
+/** Tests secrets runtime fast-path decisions and skip conditions. */
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";

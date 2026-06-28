@@ -1,6 +1,10 @@
+// Covers outbound target resolver id heuristics, directory cache/live fallback,
+// ambiguity modes, display formatting, and plugin normalized fallbacks.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelDirectoryEntry } from "../../channels/plugins/types.js";
+import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 type TargetResolverModule = typeof import("./target-resolver.js");
 
 let resetDirectoryCache: TargetResolverModule["resetDirectoryCache"];
@@ -126,6 +130,253 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(mocks.listGroupsLive).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves configured directory entries before rejecting reserved literal targets", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      ...createChannelTestPluginBase({
+        id: "telegram",
+        label: "Telegram",
+        capabilities: { chatTypes: ["direct", "group", "channel"] },
+      }),
+      directory: {
+        listPeers: mocks.listPeers,
+        listPeersLive: mocks.listPeersLive,
+        listGroups: mocks.listGroups,
+        listGroupsLive: mocks.listGroupsLive,
+      },
+      messaging: {
+        targetResolver: {
+          reservedLiterals: ["current", "self", "this", "me"],
+          hint: "<chatId>",
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    });
+    mocks.listGroups.mockResolvedValue([
+      {
+        kind: "group",
+        id: "-1002458651455",
+        name: "Current x jerry Channel",
+        handle: "@current",
+      } satisfies ChannelDirectoryEntry,
+    ]);
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "telegram",
+      input: "current",
+    });
+
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.target.to).toBe("-1002458651455");
+      expect(result.target.source).toBe("directory");
+    }
+    expect(mocks.listGroups).toHaveBeenCalled();
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+  });
+
+  it("keeps reserved literals on the directory path before id-like plugin normalization", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      ...createChannelTestPluginBase({
+        id: "telegram",
+        label: "Telegram",
+        capabilities: { chatTypes: ["direct", "group", "channel"] },
+      }),
+      directory: {
+        listPeers: mocks.listPeers,
+        listPeersLive: mocks.listPeersLive,
+        listGroups: mocks.listGroups,
+        listGroupsLive: mocks.listGroupsLive,
+      },
+      messaging: {
+        normalizeTarget: (raw: string) =>
+          raw === "current" || raw === "telegram:current" ? "telegram:@current" : raw,
+        targetResolver: {
+          looksLikeId: (raw: string) => raw === "current" || raw === "telegram:current",
+          reservedLiterals: ["current", "self", "this", "me"],
+          hint: "<chatId>",
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    });
+    mocks.listGroups.mockResolvedValueOnce([
+      { kind: "group", id: "room-1", name: "current" } satisfies ChannelDirectoryEntry,
+    ]);
+
+    const hit = await resolveMessagingTarget({
+      cfg,
+      channel: "telegram",
+      input: "current",
+    });
+
+    expect(hit.ok).toBe(true);
+    if (hit.ok) {
+      expect(hit.target.to).toBe("room-1");
+      expect(hit.target.source).toBe("directory");
+    }
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+
+    resetDirectoryCache();
+    mocks.listGroups.mockResolvedValueOnce([
+      { kind: "group", id: "room-1", name: "current" } satisfies ChannelDirectoryEntry,
+    ]);
+
+    const prefixedHit = await resolveMessagingTarget({
+      cfg,
+      channel: "telegram",
+      input: "telegram:current",
+    });
+
+    expect(prefixedHit.ok).toBe(true);
+    if (prefixedHit.ok) {
+      expect(prefixedHit.target.to).toBe("room-1");
+      expect(prefixedHit.target.source).toBe("directory");
+    }
+
+    resetDirectoryCache();
+    mocks.listGroups.mockResolvedValueOnce([]);
+    mocks.listGroupsLive.mockResolvedValueOnce([]);
+
+    const miss = await resolveMessagingTarget({
+      cfg,
+      channel: "telegram",
+      input: "current",
+    });
+
+    expect(miss.ok).toBe(false);
+    if (!miss.ok) {
+      expect(miss.error.message).toContain('Reserved target "current"');
+      expect(miss.error.message).toContain("Telegram");
+    }
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+  });
+
+  it("rejects reserved literal targets after directory miss", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      ...createChannelTestPluginBase({
+        id: "telegram",
+        label: "Telegram",
+        capabilities: { chatTypes: ["direct", "group", "channel"] },
+      }),
+      directory: {
+        listPeers: mocks.listPeers,
+        listPeersLive: mocks.listPeersLive,
+        listGroups: mocks.listGroups,
+        listGroupsLive: mocks.listGroupsLive,
+      },
+      messaging: {
+        targetResolver: {
+          reservedLiterals: ["current", "self", "this", "me"],
+          hint: "<chatId>",
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    });
+    mocks.listGroups.mockResolvedValue([]);
+    mocks.listGroupsLive.mockResolvedValue([]);
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "telegram",
+      input: "current",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toContain('Reserved target "current"');
+      expect(result.error.message).toContain("Telegram");
+    }
+    expect(mocks.listGroups).toHaveBeenCalled();
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+  });
+
+  it("requires exact directory matches before preserving reserved literal targets", async () => {
+    mocks.getChannelPlugin.mockReturnValue({
+      ...createChannelTestPluginBase({
+        id: "telegram",
+        label: "Telegram",
+        capabilities: { chatTypes: ["direct", "group", "channel"] },
+      }),
+      directory: {
+        listPeers: mocks.listPeers,
+        listPeersLive: mocks.listPeersLive,
+        listGroups: mocks.listGroups,
+        listGroupsLive: mocks.listGroupsLive,
+      },
+      messaging: {
+        targetResolver: {
+          reservedLiterals: ["current", "self", "this", "me"],
+          hint: "<chatId>",
+          resolveTarget: mocks.resolveTarget,
+        },
+      },
+    });
+    mocks.listGroups.mockResolvedValue([
+      { kind: "group", id: "memes-room", name: "memes" } satisfies ChannelDirectoryEntry,
+    ]);
+    mocks.listGroupsLive.mockResolvedValue([]);
+
+    const result = await resolveMessagingTarget({
+      cfg,
+      channel: "telegram",
+      input: "me",
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toContain('Reserved target "me"');
+      expect(result.error.message).toContain("Telegram");
+    }
+    expect(mocks.resolveTarget).not.toHaveBeenCalled();
+  });
+
+  it("does not reuse directory cache entries across prepared plugin runtimes", async () => {
+    const firstListGroups = vi
+      .fn()
+      .mockResolvedValue([
+        { kind: "group", id: "first-id", name: "support" } satisfies ChannelDirectoryEntry,
+      ]);
+    const replacementListGroups = vi
+      .fn()
+      .mockResolvedValue([
+        { kind: "group", id: "replacement-id", name: "support" } satisfies ChannelDirectoryEntry,
+      ]);
+    const firstPlugin = {
+      ...createChannelTestPluginBase({
+        id: "richchat",
+        capabilities: { chatTypes: ["group"] },
+      }),
+      directory: { listGroups: firstListGroups },
+      messaging: { targetResolver: {} },
+    } satisfies ChannelPlugin;
+    const replacementPlugin = {
+      ...createChannelTestPluginBase({
+        id: "richchat",
+        capabilities: { chatTypes: ["group"] },
+      }),
+      directory: { listGroups: replacementListGroups },
+      messaging: { targetResolver: {} },
+    } satisfies ChannelPlugin;
+
+    const first = await expectOkResolution({
+      cfg,
+      channel: "richchat",
+      input: "support",
+      plugin: firstPlugin,
+    });
+    const replacement = await expectOkResolution({
+      cfg,
+      channel: "richchat",
+      input: "support",
+      plugin: replacementPlugin,
+    });
+
+    expect(first.target.to).toBe("first-id");
+    expect(replacement.target.to).toBe("replacement-id");
+    expect(firstListGroups).toHaveBeenCalledOnce();
+    expect(replacementListGroups).toHaveBeenCalledOnce();
+  });
+
   it("skips directory lookup for direct ids", async () => {
     const result = await expectOkResolution({
       cfg,
@@ -169,6 +420,37 @@ describe("resolveMessagingTarget (directory fallback)", () => {
     expect(firstMockArg(mocks.resolveTarget, "target resolver").input).toBe(
       "dthcxgoxhifn3pwh65cut3ud3w",
     );
+    expect(mocks.listGroups).not.toHaveBeenCalled();
+    expect(mocks.listGroupsLive).not.toHaveBeenCalled();
+  });
+
+  it("defaults bare id-like targets to user for direct-only channel plugins", async () => {
+    const directOnlyPlugin = {
+      ...createChannelTestPluginBase({
+        id: "openclaw-weixin",
+        capabilities: { chatTypes: ["direct"] },
+      }),
+      messaging: {
+        targetResolver: {
+          looksLikeId: (raw: string) => raw.endsWith("@im.wechat"),
+        },
+      },
+    } satisfies ChannelPlugin;
+
+    const result = await expectOkResolution({
+      cfg,
+      channel: "openclaw-weixin",
+      input: "wxid_abc123@im.wechat",
+      plugin: directOnlyPlugin,
+    });
+
+    expect(result.target).toEqual({
+      to: "wxid_abc123@im.wechat",
+      kind: "user",
+      display: "wxid_abc123@im.wechat",
+      source: "normalized",
+      resolutionSource: "normalized",
+    });
     expect(mocks.listGroups).not.toHaveBeenCalled();
     expect(mocks.listGroupsLive).not.toHaveBeenCalled();
   });

@@ -1,3 +1,4 @@
+/** Discovers auth-profile store paths that may contain secret refs. */
 import fs from "node:fs";
 import path from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";

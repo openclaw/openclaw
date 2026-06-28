@@ -1,3 +1,5 @@
+// Approval shared helpers normalize pending exec/plugin approval lookups,
+// decision payloads, turn-source routing, and gateway error responses.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -116,6 +118,17 @@ function normalizeApprovalIdentity(value: string | null | undefined): string | n
   return normalizeOptionalString(value) ?? null;
 }
 
+function normalizeApprovalIdentities(values: readonly string[] | null | undefined): string[] {
+  const normalized = new Set<string>();
+  for (const value of values ?? []) {
+    const identity = normalizeApprovalIdentity(value);
+    if (identity) {
+      normalized.add(identity);
+    }
+  }
+  return [...normalized];
+}
+
 /** Checks whether a client can observe or resolve an approval record. */
 export function isApprovalRecordVisibleToClient<TPayload>(params: {
   record: ExecApprovalRecord<TPayload>;
@@ -130,6 +143,14 @@ export function isApprovalRecordVisibleToClient<TPayload>(params: {
   const requestedByClientId = normalizeApprovalIdentity(params.record.requestedByClientId);
   const hasApprovalsScope = scopes.includes(APPROVALS_SCOPE);
   if (hasApprovalsScope && params.client?.internal?.approvalRuntime === true) {
+    return true;
+  }
+
+  const approvalReviewerDeviceIds = normalizeApprovalIdentities(
+    params.record.approvalReviewerDeviceIds,
+  );
+  const clientDeviceId = normalizeApprovalIdentity(params.client?.connect?.device?.id);
+  if (hasApprovalsScope && clientDeviceId && approvalReviewerDeviceIds.includes(clientDeviceId)) {
     return true;
   }
 
@@ -183,6 +204,16 @@ export function bindApprovalRequesterMetadata<TPayload>(params: {
   params.record.requestedByDeviceId = params.client?.connect?.device?.id ?? null;
   params.record.requestedByClientId = params.client?.connect?.client?.id ?? null;
   params.record.requestedByDeviceTokenAuth = params.client?.isDeviceTokenAuth === true;
+}
+
+export function bindApprovalReviewerDeviceIds<TPayload>(params: {
+  record: ExecApprovalRecord<TPayload>;
+  deviceIds?: readonly string[] | null;
+}): void {
+  const deviceIds = normalizeApprovalIdentities(params.deviceIds);
+  if (deviceIds.length > 0) {
+    params.record.approvalReviewerDeviceIds = deviceIds;
+  }
 }
 
 /** Registers an approval record and converts manager registration errors to gateway errors. */

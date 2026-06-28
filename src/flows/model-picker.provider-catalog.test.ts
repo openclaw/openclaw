@@ -1,3 +1,4 @@
+// Model picker provider catalog tests cover catalog-driven provider options.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -21,6 +22,18 @@ function textModel(id: string, name: string): ModelDefinitionConfig {
 }
 
 const providerDiscoveryMocks = vi.hoisted(() => ({
+  providerMatchesFilter: vi.fn(
+    ({
+      provider,
+      providerFilter,
+    }: {
+      provider: Pick<ProviderPlugin, "id" | "aliases" | "hookAliases">;
+      providerFilter: string;
+    }) =>
+      [provider.id, ...(provider.aliases ?? []), ...(provider.hookAliases ?? [])].some(
+        (providerId) => providerId.trim().toLowerCase() === providerFilter,
+      ),
+  ),
   resolveRuntimePluginDiscoveryProviders: vi.fn<() => Promise<ProviderPlugin[]>>(),
   runProviderCatalog: vi.fn(
     async ({ provider, ...ctx }: { provider: ProviderPlugin } & Record<string, unknown>) =>

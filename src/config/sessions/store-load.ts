@@ -1,3 +1,4 @@
+// Session store loading normalizes persisted records, migrations, maintenance, and caches.
 import fs from "node:fs";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -33,6 +34,8 @@ import { resolveMaintenanceConfig } from "./store-maintenance-runtime.js";
 import {
   capEntryCount,
   pruneStaleEntries,
+  pruneStaleModelRunEntries,
+  shouldRunModelRunPrune,
   shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
@@ -119,6 +122,7 @@ function normalizePendingFinalDeliveryFields(entry: SessionEntry): SessionEntry 
       return;
     }
     if (next === entry) {
+      // Copy-on-write keeps unchanged entries referentially stable for cache reuse.
       next = { ...entry };
     }
     if (value === undefined) {
@@ -182,6 +186,7 @@ function normalizePluginExtensions(entry: SessionEntry): SessionEntry {
 
   let changed = false;
   const normalizedExtensions: Record<string, Record<string, PluginJsonValue>> = {};
+  // Plugin state is an external boundary; only JSON-safe keyed records are persisted back.
   for (const [rawPluginId, rawPluginState] of Object.entries(entry.pluginExtensions)) {
     const pluginId = normalizeRecordKey(rawPluginId);
     if (!pluginId || !isRecord(rawPluginState)) {
@@ -427,14 +432,30 @@ export function loadSessionStore(
   const migrated = applySessionStoreMigrations(store);
   const normalized = normalizeSessionStore(store);
   if (hydratedPromptRefs || migrated || normalized) {
+    // Any in-memory repair invalidates the original serialized bytes for future write projection.
     serializedFromDisk = undefined;
   }
   if (opts.runMaintenance) {
     const maintenance = opts.maintenanceConfig ?? resolveMaintenanceConfig();
     const beforeCount = Object.keys(store).length;
+    let modelRunPruned = 0;
     let pruned = 0;
     let capped = 0;
-    if (maintenance.mode === "enforce" && beforeCount > maintenance.maxEntries) {
+    if (maintenance.mode === "enforce") {
+      const preserveSessionKeys = collectSessionMaintenancePreserveKeys();
+      if (
+        shouldRunModelRunPrune({
+          maintenance,
+          entryCount: beforeCount,
+        })
+      ) {
+        modelRunPruned = pruneStaleModelRunEntries(store, maintenance.modelRunPruneAfterMs, {
+          log: false,
+          preserveKeys: preserveSessionKeys,
+        });
+      }
+    }
+    if (maintenance.mode === "enforce" && Object.keys(store).length > maintenance.maxEntries) {
       const preserveSessionKeys = collectSessionMaintenancePreserveKeys();
       pruned = pruneStaleEntries(store, maintenance.pruneAfterMs, {
         log: false,
@@ -452,12 +473,13 @@ export function loadSessionStore(
         : 0;
     }
     const afterCount = Object.keys(store).length;
-    if (pruned > 0 || capped > 0) {
+    if (modelRunPruned > 0 || pruned > 0 || capped > 0) {
       serializedFromDisk = undefined;
       log.info("applied load-time maintenance to session store", {
         storePath,
         before: beforeCount,
         after: afterCount,
+        modelRunPruned,
         pruned,
         capped,
         maxEntries: maintenance.maxEntries,

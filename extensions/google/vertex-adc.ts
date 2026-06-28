@@ -1,7 +1,9 @@
+// Google plugin module implements vertex adc behavior.
 import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { gunzipSync } from "node:zlib";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -26,6 +28,13 @@ type GoogleVertexAuthorizedUserToken = {
 type GoogleVertexAdcToken = {
   token: string;
   expiresAtMs: number;
+};
+
+type GoogleOauthTokenResponsePayload = {
+  access_token?: unknown;
+  expires_in?: unknown;
+  error?: unknown;
+  error_description?: unknown;
 };
 
 const GCP_VERTEX_CREDENTIALS_MARKER = "gcp-vertex-credentials";
@@ -90,6 +99,17 @@ export function isGoogleVertexCredentialsMarker(
   apiKey: string | undefined,
 ): apiKey is undefined | typeof GCP_VERTEX_CREDENTIALS_MARKER {
   return apiKey === undefined || apiKey === GCP_VERTEX_CREDENTIALS_MARKER;
+}
+
+function hasGoogleVertexProjectEnv(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(
+    normalizeOptionalString(env.GOOGLE_CLOUD_PROJECT) ||
+    normalizeOptionalString(env.GCLOUD_PROJECT),
+  );
+}
+
+function hasGoogleVertexLocationEnv(env: NodeJS.ProcessEnv): boolean {
+  return Boolean(normalizeOptionalString(env.GOOGLE_CLOUD_LOCATION));
 }
 
 function resolveGoogleApplicationCredentialsPath(
@@ -182,6 +202,16 @@ export function hasGoogleVertexAuthorizedUserAdcSync(
   return false;
 }
 
+export function resolveGoogleVertexConfigApiKey(
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  return hasGoogleVertexProjectEnv(env) &&
+    hasGoogleVertexLocationEnv(env) &&
+    hasGoogleVertexAuthorizedUserAdcSync(env)
+    ? GCP_VERTEX_CREDENTIALS_MARKER
+    : undefined;
+}
+
 async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
   credentialsPath: string;
   credentials: GoogleAuthorizedUserCredentials;
@@ -216,15 +246,16 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body,
   });
-  const payload = (await response.json().catch(() => undefined)) as
-    | { access_token?: unknown; expires_in?: unknown; error?: unknown; error_description?: unknown }
-    | undefined;
+  const payload = await readGoogleOauthTokenResponsePayload(response);
   if (!response.ok) {
     const description = normalizeOptionalString(payload?.error_description);
     const code = normalizeOptionalString(payload?.error);
     throw new Error(
       `Google Vertex ADC token refresh failed: ${response.status}${code ? ` ${code}` : ""}${description ? ` (${description})` : ""}`,
     );
+  }
+  if (!payload) {
+    throw new Error("Google Vertex ADC token refresh response could not be parsed as JSON.");
   }
   const token = normalizeOptionalString(payload?.access_token);
   if (!token) {
@@ -241,6 +272,45 @@ async function refreshGoogleVertexAuthorizedUserAccessToken(params: {
     };
   }
   return token;
+}
+
+async function readGoogleOauthTokenResponsePayload(
+  response: Response,
+): Promise<GoogleOauthTokenResponsePayload | undefined> {
+  const bytes = Buffer.from(await response.arrayBuffer());
+  const text = decodeGoogleOauthTokenResponseBody(bytes, response.headers.get("content-encoding"));
+  if (!text.trim()) {
+    return undefined;
+  }
+  try {
+    return JSON.parse(text) as GoogleOauthTokenResponsePayload;
+  } catch {
+    return undefined;
+  }
+}
+
+function decodeGoogleOauthTokenResponseBody(bytes: Buffer, contentEncoding: string | null): string {
+  if (shouldGunzipGoogleOauthTokenResponse(bytes, contentEncoding)) {
+    try {
+      return gunzipSync(bytes).toString("utf8");
+    } catch {
+      return bytes.toString("utf8");
+    }
+  }
+  return bytes.toString("utf8");
+}
+
+function shouldGunzipGoogleOauthTokenResponse(
+  bytes: Buffer,
+  contentEncoding: string | null,
+): boolean {
+  if (bytes[0] === 0x1f && bytes[1] === 0x8b) {
+    return true;
+  }
+  return (contentEncoding ?? "")
+    .split(",")
+    .map((encoding) => encoding.trim().toLowerCase())
+    .includes("gzip");
 }
 
 async function resolveGoogleVertexAccessTokenViaGoogleAuth(): Promise<string> {

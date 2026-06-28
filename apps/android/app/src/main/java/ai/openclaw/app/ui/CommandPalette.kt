@@ -5,6 +5,7 @@ import ai.openclaw.app.GatewayModelSummary
 import ai.openclaw.app.MainViewModel
 import ai.openclaw.app.ui.design.ClawEmptyState
 import ai.openclaw.app.ui.design.ClawPanel
+import ai.openclaw.app.ui.design.ClawPlainIconButton
 import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSeparatedColumn
 import ai.openclaw.app.ui.design.ClawTextField
@@ -94,7 +95,11 @@ internal fun CommandPalette(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(9.dp),
           ) {
-            CommandIconButton(icon = Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Close search", onClick = onDismiss)
+            ClawPlainIconButton(
+              icon = Icons.AutoMirrored.Filled.ArrowBack,
+              contentDescription = "Close search",
+              onClick = onDismiss,
+            )
             Text(text = "Search", style = ClawTheme.type.title, color = ClawTheme.colors.text, modifier = Modifier.weight(1f), textAlign = TextAlign.Center)
             CommandAvatar(text = "OC")
           }
@@ -263,19 +268,6 @@ private fun CommandSessionListRow(
 }
 
 @Composable
-private fun CommandIconButton(
-  icon: ImageVector,
-  contentDescription: String,
-  onClick: () -> Unit,
-) {
-  Surface(onClick = onClick, modifier = Modifier.size(ClawTheme.spacing.touchTarget), shape = CircleShape, color = Color.Transparent, contentColor = ClawTheme.colors.text) {
-    Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = contentDescription, modifier = Modifier.size(18.dp))
-    }
-  }
-}
-
-@Composable
 private fun CommandAvatar(text: String) {
   Surface(
     modifier = Modifier.size(34.dp),
@@ -297,17 +289,15 @@ private fun CommandSectionLabel(title: String) {
   }
 }
 
-/** Builds provider quick-action metadata from current gateway/catalog state. */
-private fun providerCommandSubtitle(
+internal fun providerCommandSubtitle(
   isConnected: Boolean,
   providers: List<GatewayModelProviderSummary>,
   models: List<GatewayModelSummary>,
 ): String {
-  if (!isConnected) return "Connect Gateway to load models"
-  val readyProviderCount = providers.count { modelProviderReady(it.status) }
+  if (!isConnected) return "Connect Gateway to view providers"
+  val readyProviderCount = providerRows(providers = providers, models = models).count { it.ready }
   if (readyProviderCount > 0) return "$readyProviderCount providers ready"
-  if (models.isNotEmpty()) return "${models.size} models available"
-  return "Configure model access"
+  return "No ready providers"
 }
 
 /** Falls back to the canonical main-session label when gateway display names are blank. */

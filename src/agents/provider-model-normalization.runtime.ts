@@ -1,4 +1,10 @@
+/**
+ * Runtime bridge for provider-owned model id normalization hooks. Source and
+ * built artifacts can resolve different extensions, so this module probes both
+ * once and caches the result.
+ */
 import { createRequire } from "node:module";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 
 type ProviderRuntimeModule = Pick<
   typeof import("../plugins/provider-runtime.js"),
@@ -38,6 +44,7 @@ function loadProviderRuntime(): ProviderRuntimeModule | null {
 /** Normalizes provider model ids through plugin runtime hooks when available. */
 export function normalizeProviderModelIdWithRuntime(params: {
   provider: string;
+  plugins?: readonly Pick<PluginManifestRecord, "modelIdNormalization">[];
   context: {
     provider: string;
     modelId: string;

@@ -1,3 +1,4 @@
+// Filesystem primitives used by legacy state migration code.
 import fs from "node:fs";
 import JSON5 from "json5";
 

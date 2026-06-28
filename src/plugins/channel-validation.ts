@@ -1,3 +1,4 @@
+// Validates channel plugin metadata from manifests and config.
 import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,

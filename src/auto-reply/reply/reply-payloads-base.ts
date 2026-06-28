@@ -1,7 +1,8 @@
+// Defines base reply payload helpers shared by delivery and dedupe logic.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ReplyToMode } from "../../config/types.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
+import { copyReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import type { ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { extractReplyToTag } from "./reply-tags.js";
@@ -31,6 +32,11 @@ function resolveReplyThreadingForPayload(params: {
   currentMessageId?: string;
   replyThreading?: ReplyThreadingPolicy;
 }): ReplyPayload {
+  const payload = normalizeOptionalString(params.payload.replyToId)
+    ? setReplyPayloadMetadata(copyReplyPayloadMetadata(params.payload, { ...params.payload }), {
+        replyToIdExplicit: true,
+      })
+    : params.payload;
   const implicitReplyToId = normalizeOptionalString(params.implicitReplyToId);
   const currentMessageId = normalizeOptionalString(params.currentMessageId);
   const allowImplicitReplyToCurrentMessage = resolveImplicitCurrentMessageReplyAllowance(
@@ -39,13 +45,13 @@ function resolveReplyThreadingForPayload(params: {
   );
 
   let resolved: ReplyPayload =
-    params.payload.replyToId ||
-    params.payload.replyToCurrent === false ||
+    payload.replyToId ||
+    payload.replyToCurrent === false ||
     !implicitReplyToId ||
     !allowImplicitReplyToCurrentMessage
-      ? params.payload
-      : copyReplyPayloadMetadata(params.payload, {
-          ...params.payload,
+      ? payload
+      : copyReplyPayloadMetadata(payload, {
+          ...payload,
           replyToId: implicitReplyToId,
         });
 

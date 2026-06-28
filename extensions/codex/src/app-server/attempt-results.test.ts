@@ -1,3 +1,4 @@
+// Codex tests cover attempt results plugin behavior.
 import type { EmbeddedRunAttemptResult } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { describe, expect, it } from "vitest";
 import {
@@ -60,14 +61,25 @@ describe("Codex app-server attempt results", () => {
       buildCodexAppServerPromptTimeoutOutcome({
         result: createResult(),
         turnCompletionIdleTimedOut: true,
+        turnWatchTimeoutKind: "progress",
       }),
     ).toBeUndefined();
     expect(
       buildCodexAppServerPromptTimeoutOutcome({
         result: createResult({
-          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
+          toolMetas: [{ toolName: "exec" }],
         }),
         turnCompletionIdleTimedOut: true,
+        turnWatchTimeoutKind: "terminal",
+      }),
+    ).toBeUndefined();
+    expect(
+      buildCodexAppServerPromptTimeoutOutcome({
+        result: createResult({
+          itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+        }),
+        turnCompletionIdleTimedOut: true,
+        turnWatchTimeoutKind: "completion",
       }),
     ).toEqual({
       message:
@@ -82,6 +94,7 @@ describe("Codex app-server attempt results", () => {
           },
         }),
         turnCompletionIdleTimedOut: true,
+        turnWatchTimeoutKind: "completion",
       }),
     ).toEqual({
       message:
@@ -95,10 +108,13 @@ describe("Codex app-server attempt results", () => {
           assistantTexts: ["I am changing the data model now..."],
         }),
         turnCompletionIdleTimedOut: true,
+        turnWatchTimeoutKind: "completion",
       }),
     ).toEqual({
       message:
         "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.",
+      replayInvalid: true,
+      livenessState: "abandoned",
     });
     expect(
       buildCodexAppServerPromptTimeoutOutcome({
@@ -106,10 +122,13 @@ describe("Codex app-server attempt results", () => {
           toolMetas: [{ toolName: "exec" }],
         }),
         turnCompletionIdleTimedOut: true,
+        turnWatchTimeoutKind: "completion",
       }),
     ).toEqual({
       message:
-        "Codex stopped before confirming the turn was complete. The response may be incomplete; retry if needed.",
+        "Codex stopped before confirming the turn was complete. Some work may already have been performed; verify the current state before retrying.",
+      replayInvalid: true,
+      livenessState: "abandoned",
     });
   });
 

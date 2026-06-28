@@ -1,3 +1,4 @@
+// Channel inbound contracts define plugin ingress payloads and reply dispatch metadata.
 import {
   buildChannelInboundEventContext,
   finalizeChannelInboundContext,
@@ -35,6 +36,11 @@ export {
   resolveEnvelopeFormatOptions,
 } from "../auto-reply/envelope.js";
 export type { EnvelopeFormatOptions } from "../auto-reply/envelope.js";
+export type {
+  PluginHookChannelChatContext,
+  PluginHookChannelContext,
+  PluginHookChannelSenderContext,
+} from "../plugins/hook-types.js";
 export {
   buildMentionRegexes,
   matchesMentionPatterns,

@@ -30,6 +30,21 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+// Clone captured content so private diagnostic payloads never alias live runtime
+// objects (tool params/results, model messages) that callers keep mutating.
+export function cloneDiagnosticContentValue(value: unknown): unknown {
+  try {
+    return structuredClone(value);
+  } catch {
+    try {
+      const serialized = JSON.stringify(value);
+      return serialized === undefined ? null : (JSON.parse(serialized) as unknown);
+    } catch {
+      return String(value);
+    }
+  }
+}
+
 function withDerivedFields(
   policy: Omit<DiagnosticModelContentCapturePolicy, "anyModelContent">,
 ): DiagnosticModelContentCapturePolicy {

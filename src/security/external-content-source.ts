@@ -1,3 +1,4 @@
+// Normalizes source identifiers for externally supplied content.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** Hook session sources that carry untrusted external content into agent prompts. */

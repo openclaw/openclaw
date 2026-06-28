@@ -1,3 +1,5 @@
+import { avoidTrailingHighSurrogateBreak } from "./chunk-text.js";
+// Markdown Core module implements render aware chunking behavior.
 import {
   chunkMarkdownIR,
   sliceMarkdownIR,
@@ -46,12 +48,22 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
     return [];
   }
 
+  // Callers pass Infinity to mean "no size cap" (e.g. a media caption that must not be
+  // split). resolveIntegerOption rejects non-finite values and would fall back to 1,
+  // shattering the text into one chunk per character; emit the whole IR as one chunk.
+  if (options.limit === Number.POSITIVE_INFINITY) {
+    return [{ source: options.ir, rendered: options.renderChunk(options.ir) }];
+  }
+
   const normalizedLimit = resolveIntegerOption(options.limit, 1, { min: 1 });
-  const pending = chunkMarkdownIR(options.ir, normalizedLimit);
+  // Treat the pending worklist as a stack so each dequeue/enqueue stays O(1).
+  // The initial reverse keeps the final order stable while avoiding shift/unshift
+  // moving every remaining chunk for long messages.
+  const pending = chunkMarkdownIR(options.ir, normalizedLimit).toReversed();
   const finalized: MarkdownIR[] = [];
 
   while (pending.length > 0) {
-    const chunk = pending.shift();
+    const chunk = pending.pop();
     if (!chunk) {
       continue;
     }
@@ -68,7 +80,12 @@ export function renderMarkdownIRChunksWithinLimit<TRendered>(
       finalized.push(chunk);
       continue;
     }
-    pending.unshift(...split);
+    for (let index = split.length - 1; index >= 0; index -= 1) {
+      const next = split[index];
+      if (next) {
+        pending.push(next);
+      }
+    }
   }
 
   return coalesceWhitespaceOnlyMarkdownIRChunks(finalized, normalizedLimit, options).map(
@@ -119,10 +136,11 @@ function findLargestChunkTextLengthWithinRenderedLimit<TRendered>(
   // Rendered length is not guaranteed to be monotonic after escaping/link or
   // file-reference rewriting, so test exact candidates from longest to shortest.
   for (let candidateLength = currentTextLength - 1; candidateLength >= 1; candidateLength -= 1) {
-    const candidate = sliceMarkdownIR(chunk, 0, candidateLength);
+    const safeCandidateLength = avoidTrailingHighSurrogateBreak(chunk.text, 0, candidateLength);
+    const candidate = sliceMarkdownIR(chunk, 0, safeCandidateLength);
     const rendered = options.renderChunk(candidate);
     if (options.measureRendered(rendered) <= renderedLimit) {
-      return candidateLength;
+      return safeCandidateLength;
     }
   }
   return 0;
@@ -207,7 +225,7 @@ function findMarkdownIRPreservedSplitIndex(text: string, start: number, limit: n
   if (lastAnyWhitespaceBreak > start) {
     return resolveWhitespaceBreak(lastAnyWhitespaceBreak, lastAnyWhitespaceRunStart);
   }
-  return maxEnd;
+  return avoidTrailingHighSurrogateBreak(text, start, maxEnd);
 }
 
 function splitMarkdownIRPreserveWhitespace(ir: MarkdownIR, limit: number): MarkdownIR[] {

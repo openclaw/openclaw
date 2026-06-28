@@ -1,10 +1,13 @@
-import { spawnSync } from "node:child_process";
+// Plugin Gateway Gauntlet tests cover plugin gateway gauntlet script behavior.
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  buildObservationGuardFailures,
   createGauntletPrebuildCommand,
   hasGauntletWorkRows,
   parseArgs,
@@ -16,6 +19,8 @@ import {
   buildGauntletPrebuildEnv,
   collectGatewayCpuObservations,
   collectMetricObservations,
+  collectPluginsWithRequiredEntries,
+  collectRequiredPluginEntries,
   collectQaBaselineRegressionObservations,
   detectCommandDiagnosticFailure,
   discoverBundledPluginManifests,
@@ -33,6 +38,7 @@ describe("plugin gateway gauntlet helpers", () => {
 
   afterEach(async () => {
     vi.restoreAllMocks();
+    vi.unstubAllEnvs();
     await fs.rm(repoRoot, { recursive: true, force: true });
   });
 
@@ -57,7 +63,13 @@ describe("plugin gateway gauntlet helpers", () => {
         scenarioIds: ["channel-chat-baseline"],
         startedAt: "2026-05-30T00:00:00.000Z",
       },
-      scenarios: [{ name: "channel-chat-baseline", status: "pass", steps: [] }],
+      scenarios: [
+        {
+          name: "channel-chat-baseline",
+          status: "pass",
+          steps: [{ name: "mock step", status: "pass" }],
+        },
+      ],
     };
   }
 
@@ -79,6 +91,20 @@ describe("plugin gateway gauntlet helpers", () => {
       await delay(25);
     }
     throw new Error("condition was not met before timeout");
+  }
+
+  async function waitForClose(child: ReturnType<typeof spawn>, timeoutMs = 5_000) {
+    return await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
+      (resolve, reject) => {
+        const timer = setTimeout(() => {
+          reject(new Error("child did not close before timeout"));
+        }, timeoutMs);
+        child.once("close", (code, signal) => {
+          clearTimeout(timer);
+          resolve({ code, signal });
+        });
+      },
+    );
   }
 
   it("stops parsing options after the argument terminator", () => {
@@ -103,6 +129,61 @@ describe("plugin gateway gauntlet helpers", () => {
       pluginIds: ["telegram"],
       qaScenarios: ["channel-chat-baseline"],
     });
+  });
+
+  it("rejects duplicate repeatable selectors", () => {
+    expect(() => parseArgs(["--plugin", "telegram", "--plugin", "telegram"])).toThrow(
+      "Duplicate --plugin value: telegram",
+    );
+    expect(() =>
+      parseArgs([
+        "--qa-scenario",
+        "channel-chat-baseline",
+        "--qa-scenario",
+        "channel-chat-baseline",
+      ]),
+    ).toThrow("Duplicate --qa-scenario value: channel-chat-baseline");
+
+    vi.stubEnv("OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS", "telegram,discord");
+    expect(() => parseArgs(["--plugin", "telegram"])).toThrow(
+      "Duplicate --plugin value: telegram",
+    );
+  });
+
+  it("rejects duplicate single-value controls", () => {
+    expect(() =>
+      parseArgs(["--output-dir", ".artifacts/one", "--output-dir", ".artifacts/two"]),
+    ).toThrow("--output-dir was provided more than once");
+    expect(() => parseArgs(["--shard-total", "2", "--shard-total", "3"])).toThrow(
+      "--shard-total was provided more than once",
+    );
+  });
+
+  it("rejects valued flags followed by another option", () => {
+    for (const flag of [
+      "--repo-root",
+      "--output-dir",
+      "--plugin",
+      "--shard-total",
+      "--shard-index",
+      "--limit",
+      "--qa-scenario",
+      "--qa-plugin-chunk-size",
+      "--cpu-core-warn",
+      "--hot-wall-warn-ms",
+      "--max-rss-warn-mb",
+      "--wall-anomaly-multiplier",
+      "--rss-anomaly-multiplier",
+      "--qa-cpu-regression-multiplier",
+      "--qa-wall-regression-multiplier",
+      "--command-timeout-ms",
+      "--build-timeout-ms",
+      "--qa-timeout-ms",
+    ]) {
+      for (const value of ["--skip-qa", "-h"]) {
+        expect(() => parseArgs([flag, value])).toThrow(`Missing value for ${flag}`);
+      }
+    }
   });
 
   it("discovers bundled plugin manifests into lifecycle matrix rows", async () => {
@@ -151,6 +232,7 @@ describe("plugin gateway gauntlet helpers", () => {
       name: "alpha",
       onboardingScopes: ["models"],
       providers: ["openai"],
+      requiredPlugins: [],
       runtimeSlashAliases: [{ name: "alpha", kind: "runtime-slash", cliCommand: "plugins" }],
       skills: [],
     });
@@ -211,6 +293,49 @@ describe("plugin gateway gauntlet helpers", () => {
     );
     expect(() => selectPluginEntries(entries, { ids: ["missing"] })).toThrow(
       "Unknown bundled plugin id(s): missing",
+    );
+  });
+
+  it("collects required plugin support outside the selected shard", () => {
+    const entries = [
+      { id: "alpha", requiredPlugins: ["beta"] },
+      { id: "beta", requiredPlugins: ["gamma"] },
+      { id: "gamma" },
+      { id: "delta" },
+    ];
+    const selected = selectPluginEntries(entries, {
+      ids: ["alpha"],
+      shardTotal: 2,
+      shardIndex: 0,
+    });
+
+    expect(collectRequiredPluginEntries(entries, selected).map((entry) => entry.id)).toEqual([
+      "gamma",
+      "beta",
+    ]);
+    expect(collectPluginsWithRequiredEntries(entries, selected).map((entry) => entry.id)).toEqual([
+      "gamma",
+      "beta",
+      "alpha",
+    ]);
+  });
+
+  it("rejects missing bundled plugin requirements", () => {
+    const entries = [{ id: "alpha", requiredPlugins: ["missing"] }];
+
+    expect(() => collectRequiredPluginEntries(entries, entries)).toThrow(
+      'Bundled plugin "alpha" requires unknown bundled plugin "missing"',
+    );
+  });
+
+  it("rejects bundled plugin requirement cycles", () => {
+    const entries = [
+      { id: "alpha", requiredPlugins: ["beta"] },
+      { id: "beta", requiredPlugins: ["alpha"] },
+    ];
+
+    expect(() => collectRequiredPluginEntries(entries, [entries[0]])).toThrow(
+      "Bundled plugin dependency cycle detected: alpha -> beta -> alpha",
     );
   });
 
@@ -484,6 +609,26 @@ describe("plugin gateway gauntlet helpers", () => {
     await expect(fs.readFile(row.logPath, "utf8")).resolves.toContain("[spawn error] ENOENT");
   });
 
+  it("clamps oversized measured command timers before scheduling", async () => {
+    const logDir = path.join(repoRoot, "logs");
+    const row = await runMeasuredCommandLive({
+      cwd: repoRoot,
+      env: process.env,
+      logDir,
+      command: process.execPath,
+      args: ["-e", "setTimeout(() => process.exit(0), 25)"],
+      label: "oversized-timeout",
+      phase: "probe",
+      timeoutKillGraceMs: Number.MAX_SAFE_INTEGER,
+      timeoutMs: Number.MAX_SAFE_INTEGER,
+      timeMode: "none",
+    });
+
+    expect(row.status).toBe(0);
+    expect(row.timedOut).toBe(false);
+    await expect(fs.readFile(row.logPath, "utf8")).resolves.not.toContain("ETIMEDOUT");
+  });
+
   it.runIf(process.platform !== "win32")(
     "kills timed-out measured command process groups when the leader exits first",
     async () => {
@@ -541,6 +686,66 @@ setInterval(() => {}, 1000);
           process.kill(grandchildPid, "SIGKILL");
         }
       }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "lets timed-out measured command descendants drain during kill grace",
+    async () => {
+      const logDir = path.join(repoRoot, "logs");
+      const scriptPath = path.join(repoRoot, "leader-exits-drain.mjs");
+      const readyPath = path.join(repoRoot, "grandchild.ready");
+      const drainedPath = path.join(repoRoot, "grandchild.drained");
+      await fs.writeFile(
+        scriptPath,
+        `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const grandchildScript = [
+  "const fs = require('node:fs');",
+  "process.on('SIGTERM', () => {",
+  "  setTimeout(() => {",
+  "    fs.writeFileSync(process.argv[3], 'drained');",
+  "    process.exit(0);",
+  "  }, 50);",
+  "});",
+  "fs.writeFileSync(process.argv[2], 'ready');",
+  "setInterval(() => {}, 1000);",
+].join("\\n");
+spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[2], process.argv[3]], {
+  stdio: "ignore",
+});
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+        "utf8",
+      );
+
+      const rowPromise = runMeasuredCommand({
+        cwd: repoRoot,
+        env: process.env,
+        logDir,
+        command: process.execPath,
+        args: [scriptPath, readyPath, drainedPath],
+        label: "timeout-leader-drain",
+        phase: "probe",
+        timeoutKillGraceMs: 1_000,
+        timeoutMs: 500,
+        timeMode: "none",
+      });
+
+      await waitFor(() =>
+        fs
+          .access(readyPath)
+          .then(() => true)
+          .catch(() => false),
+      );
+      const row = await rowPromise;
+
+      expect(row.timedOut).toBe(true);
+      expect(row.spawnError?.code).toBe("ETIMEDOUT");
+      await expect(fs.readFile(drainedPath, "utf8")).resolves.toBe("drained");
     },
   );
 
@@ -604,6 +809,196 @@ setInterval(() => {}, 1000);
     expect(row.status).toBe(0);
     expect(process.listenerCount("SIGTERM")).toBe(before);
   });
+
+  it.runIf(process.platform !== "win32")(
+    "cleans parent-terminated measured process groups when the leader exits first",
+    async () => {
+      const logDir = path.join(repoRoot, "logs");
+      const harnessPath = path.join(repoRoot, "parent-termination-harness.mjs");
+      const scriptPath = path.join(repoRoot, "parent-termination-leader.mjs");
+      const grandchildPidPath = path.join(repoRoot, "grandchild.pid");
+      const grandchildReadyPath = path.join(repoRoot, "grandchild.ready");
+      let grandchildPid = 0;
+
+      await fs.writeFile(
+        scriptPath,
+        `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const grandchildScript = [
+  "const fs = require('node:fs');",
+  "process.on('SIGTERM', () => {});",
+  "process.on('SIGHUP', () => {});",
+  "fs.writeFileSync(process.argv[2], 'ready');",
+  "setInterval(() => {}, 1000);",
+].join("\\n");
+const grandchild = spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[3]], {
+  stdio: "ignore",
+});
+fs.writeFileSync(process.argv[2], String(grandchild.pid));
+process.on("SIGTERM", () => process.exit(0));
+setInterval(() => {}, 1000);
+`,
+        "utf8",
+      );
+      await fs.writeFile(
+        harnessPath,
+        `
+import { runMeasuredCommandLive } from ${JSON.stringify(
+          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mjs")).href,
+        )};
+
+await runMeasuredCommandLive({
+  cwd: ${JSON.stringify(repoRoot)},
+  env: process.env,
+  logDir: ${JSON.stringify(logDir)},
+  command: process.execPath,
+  args: [${JSON.stringify(scriptPath)}, ${JSON.stringify(grandchildPidPath)}, ${JSON.stringify(
+    grandchildReadyPath,
+  )}],
+  label: "parent-termination-leader-exits",
+  phase: "probe",
+  timeoutKillGraceMs: 25,
+  timeoutMs: 60_000,
+  timeMode: "none",
+});
+`,
+        "utf8",
+      );
+
+      const harness = spawn(process.execPath, [harnessPath], {
+        cwd: repoRoot,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      try {
+        await waitFor(async () => {
+          try {
+            await fs.access(grandchildReadyPath);
+            return true;
+          } catch {
+            return false;
+          }
+        });
+        grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+        expect(isProcessAlive(grandchildPid)).toBe(true);
+
+        harness.kill("SIGTERM");
+        await expect(waitForClose(harness)).resolves.toEqual({ code: null, signal: "SIGTERM" });
+        await waitFor(() => !isProcessAlive(grandchildPid));
+      } finally {
+        if (grandchildPid && isProcessAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
+        }
+        if (harness.pid && isProcessAlive(harness.pid)) {
+          harness.kill("SIGKILL");
+        }
+      }
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
+    "rethrows parent termination received during timeout cleanup",
+    async () => {
+      const logDir = path.join(repoRoot, "logs");
+      const harnessPath = path.join(repoRoot, "timeout-parent-termination-harness.mjs");
+      const scriptPath = path.join(repoRoot, "timeout-parent-termination-leader.mjs");
+      const grandchildPidPath = path.join(repoRoot, "timeout-grandchild.pid");
+      const grandchildReadyPath = path.join(repoRoot, "timeout-grandchild.ready");
+      const leaderExitedPath = path.join(repoRoot, "timeout-leader.exited");
+      let grandchildPid = 0;
+
+      await fs.writeFile(
+        scriptPath,
+        `
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+
+const grandchildScript = [
+  "const fs = require('node:fs');",
+  "process.on('SIGTERM', () => {});",
+  "process.on('SIGHUP', () => {});",
+  "fs.writeFileSync(process.argv[2], 'ready');",
+  "setInterval(() => {}, 1000);",
+].join("\\n");
+const grandchild = spawn(process.execPath, ["-e", grandchildScript, "child", process.argv[3]], {
+  stdio: "ignore",
+});
+fs.writeFileSync(process.argv[2], String(grandchild.pid));
+process.on("SIGTERM", () => {
+  fs.writeFileSync(process.argv[4], "exited");
+  process.exit(0);
+});
+setInterval(() => {}, 1000);
+`,
+        "utf8",
+      );
+      await fs.writeFile(
+        harnessPath,
+        `
+import fs from "node:fs";
+import { setTimeout as delay } from "node:timers/promises";
+import { runMeasuredCommandLive } from ${JSON.stringify(
+          pathToFileURL(path.resolve("scripts/check-plugin-gateway-gauntlet.mjs")).href,
+        )};
+
+const promise = runMeasuredCommandLive({
+  cwd: ${JSON.stringify(repoRoot)},
+  env: process.env,
+  logDir: ${JSON.stringify(logDir)},
+  command: process.execPath,
+  args: [${JSON.stringify(scriptPath)}, ${JSON.stringify(grandchildPidPath)}, ${JSON.stringify(
+    grandchildReadyPath,
+  )}, ${JSON.stringify(leaderExitedPath)}],
+  label: "timeout-parent-termination",
+  phase: "probe",
+  timeoutKillGraceMs: 1_000,
+  timeoutMs: 1_000,
+  timeMode: "none",
+});
+for (let attempt = 0; attempt < 200 && !fs.existsSync(${JSON.stringify(
+          leaderExitedPath,
+        )}); attempt += 1) {
+  await delay(25);
+}
+if (!fs.existsSync(${JSON.stringify(leaderExitedPath)})) {
+  process.exit(2);
+}
+await delay(100);
+process.kill(process.pid, "SIGTERM");
+await promise;
+process.exit(7);
+`,
+        "utf8",
+      );
+
+      const harness = spawn(process.execPath, [harnessPath], {
+        cwd: repoRoot,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+      try {
+        await waitFor(async () => {
+          try {
+            await fs.access(grandchildReadyPath);
+            return true;
+          } catch {
+            return false;
+          }
+        });
+        grandchildPid = Number.parseInt(await fs.readFile(grandchildPidPath, "utf8"), 10);
+
+        await expect(waitForClose(harness)).resolves.toEqual({ code: null, signal: "SIGTERM" });
+        await waitFor(() => !isProcessAlive(grandchildPid));
+      } finally {
+        if (grandchildPid && isProcessAlive(grandchildPid)) {
+          process.kill(grandchildPid, "SIGKILL");
+        }
+        if (harness.pid && isProcessAlive(harness.pid)) {
+          harness.kill("SIGKILL");
+        }
+      }
+    },
+  );
 
   it("bounds captured output from live measured commands", async () => {
     const logDir = path.join(repoRoot, "logs");
@@ -751,6 +1146,168 @@ setInterval(() => {}, 1000);
     expect(result.stderr).toContain("--limit must be a positive integer");
   });
 
+  it("documents gauntlet guardrail options and env defaults in help", () => {
+    const result = spawnSync(
+      process.execPath,
+      [path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"), "--help"],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    for (const text of [
+      "--wall-anomaly-multiplier",
+      "--rss-anomaly-multiplier",
+      "--qa-cpu-regression-multiplier",
+      "--qa-wall-regression-multiplier",
+      "--command-timeout-ms",
+      "--build-timeout-ms",
+      "--qa-timeout-ms",
+      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_IDS",
+      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_TOTAL",
+      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_INDEX",
+      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_FAIL_ON_OBSERVATION",
+      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_KEEP_RUN_ROOT",
+      "OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES",
+    ]) {
+      expect(result.stdout).toContain(text);
+    }
+  });
+
+  it("fails once when skip-prebuild leaves plugin lifecycle probes without a built entry", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    await writeManifest("acpx", "openclaw.plugin.json", JSON.stringify({ id: "acpx" }));
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-qa",
+        "--plugin",
+        "acpx",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).not.toContain("Cannot find module");
+    expect(result.stderr).not.toContain("[plugin-gauntlet] acpx install");
+    expect(result.stdout).toContain("failure missing-built-entry");
+
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.rows).toEqual([]);
+    expect(summary.failures).toEqual([]);
+    expect(summary.guardFailures).toEqual([
+      {
+        kind: "missing-built-entry",
+        message:
+          "dist/entry.js is missing; run without --skip-prebuild or build the gauntlet runtime first.",
+      },
+    ]);
+  });
+
+  it("allows skip-prebuild slash-only dry runs when selected plugins have no slash probes", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    await writeManifest("acpx", "openclaw.plugin.json", JSON.stringify({ id: "acpx" }));
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-qa",
+        "--allow-empty",
+        "--plugin",
+        "acpx",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).not.toContain("missing-built-entry");
+
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.rows).toEqual([]);
+    expect(summary.guardFailures).toEqual([]);
+  });
+
+  it("parses observation failure mode from CLI and env", () => {
+    expect(parseArgs(["--fail-on-observation", "--allow-empty"])).toMatchObject({
+      allowEmpty: true,
+      failOnObservation: true,
+    });
+
+    vi.stubEnv("OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_FAIL_ON_OBSERVATION", "1");
+    expect(parseArgs(["--allow-empty"])).toMatchObject({
+      allowEmpty: true,
+      failOnObservation: true,
+    });
+  });
+
+  it("promotes gauntlet observations to guard failures when requested", () => {
+    const observations = [
+      { kind: "phase-rss-high", phase: "qa:rpc", pluginId: "kitchen", maxRssMb: 2048 },
+    ];
+
+    expect(buildObservationGuardFailures(observations, false)).toEqual([]);
+    expect(buildObservationGuardFailures(observations, true)).toEqual([
+      {
+        kind: "observation:phase-rss-high",
+        message: "Gauntlet observation threshold exceeded: phase-rss-high",
+        observation: observations[0],
+      },
+    ]);
+  });
+
+  it("does not promote setup and first cold-start observations to guard failures", () => {
+    const observations = [
+      { kind: "phase-rss-high", phase: "prebuild", maxRssMb: 2214 },
+      {
+        kind: "phase-wall-anomaly",
+        phase: "lifecycle:install",
+        pluginId: "acpx",
+        wallMs: 17_148,
+        coldStart: true,
+      },
+      {
+        kind: "phase-wall-anomaly",
+        phase: "lifecycle:install",
+        pluginId: "steady-plugin",
+        wallMs: 17_148,
+      },
+    ];
+
+    expect(buildObservationGuardFailures(observations, true)).toEqual([
+      {
+        kind: "observation:phase-wall-anomaly",
+        message: "Gauntlet observation threshold exceeded: phase-wall-anomaly",
+        observation: observations[2],
+      },
+    ]);
+  });
+
   it("cleans the isolated run root after an explicitly empty dry run", async () => {
     const outputDir = path.join(repoRoot, "artifacts");
     const result = spawnSync(
@@ -780,6 +1337,36 @@ setInterval(() => {}, 1000);
     expect(summary.guardFailures).toEqual([]);
     expect(summary.isolatedRunRootPreserved).toBe(false);
     await expect(fs.stat(summary.isolatedRunRoot)).rejects.toHaveProperty("code", "ENOENT");
+  });
+
+  it("does not parse QA summary limit env when QA is skipped", () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-slash-help",
+        "--skip-qa",
+        "--allow-empty",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES: "not-a-number",
+        },
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("failures=0");
   });
 
   it("probes plugin-owned slash help while the plugin is installed", async () => {
@@ -944,13 +1531,19 @@ setInterval(() => {}, 1000);
     ]);
   });
 
-  it("carries bounded build ids into QA run-node chunks", async () => {
+  it("carries required plugin build ids and enables dependencies in QA chunks", async () => {
     const outputDir = path.join(repoRoot, "artifacts");
     const qaSummaryJson = JSON.stringify(
       minimalQaSuiteSummary({ gatewayCpuCoreRatio: 0, wallMs: 1 }),
     );
-    await writeManifest("alpha", "openclaw.plugin.json", JSON.stringify({ id: "alpha" }));
+    await writeManifest(
+      "alpha",
+      "openclaw.plugin.json",
+      JSON.stringify({ id: "alpha", requiresPlugins: ["beta"] }),
+    );
+    await writeManifest("beta", "openclaw.plugin.json", JSON.stringify({ id: "beta" }));
     await fs.writeFile(path.join(repoRoot, "extensions", "alpha", "index.ts"), "export {};\n");
+    await fs.writeFile(path.join(repoRoot, "extensions", "beta", "index.ts"), "export {};\n");
     await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
     await fs.writeFile(
       path.join(repoRoot, "scripts", "run-node.mjs"),
@@ -961,6 +1554,7 @@ setInterval(() => {}, 1000);
         "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
         "fs.mkdirSync(outputDir, { recursive: true });",
         'fs.writeFileSync(path.join(outputDir, "env.txt"), process.env.OPENCLAW_BUNDLED_PLUGIN_BUILD_IDS ?? "", "utf8");',
+        'fs.writeFileSync(path.join(outputDir, "args.txt"), process.argv.slice(2).join("\\n"), "utf8");',
         `fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), ${JSON.stringify(qaSummaryJson)}, "utf8");`,
       ].join("\n"),
       "utf8",
@@ -991,7 +1585,63 @@ setInterval(() => {}, 1000);
     expect(result.status, result.stderr).toBe(0);
     await expect(
       fs.readFile(path.join(outputDir, "qa-suite", "chunk-00", "env.txt"), "utf8"),
-    ).resolves.toBe("alpha,qa-channel,qa-lab,qa-matrix");
+    ).resolves.toBe("alpha,beta,qa-channel,qa-lab,qa-matrix");
+    await expect(
+      fs.readFile(path.join(outputDir, "qa-suite", "chunk-00", "args.txt"), "utf8"),
+    ).resolves.toContain(["--enable-plugin", "beta", "--enable-plugin", "alpha"].join("\n"));
+  });
+
+  it("installs required plugins around a dependent plugin lifecycle probe", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    await writeManifest(
+      "alpha",
+      "openclaw.plugin.json",
+      JSON.stringify({ id: "alpha", requiresPlugins: ["beta"] }),
+    );
+    await writeManifest("beta", "openclaw.plugin.json", JSON.stringify({ id: "beta" }));
+    await fs.writeFile(path.join(repoRoot, "extensions", "alpha", "index.ts"), "export {};\n");
+    await fs.writeFile(path.join(repoRoot, "extensions", "beta", "index.ts"), "export {};\n");
+    await fs.mkdir(path.join(repoRoot, "dist"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "dist", "entry.js"),
+      "if (process.argv[3] === 'inspect') console.log('{}');\n",
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-qa",
+        "--skip-slash-help",
+        "--plugin",
+        "alpha",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stderr).toBe(0);
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.rows.map((row: { label: string }) => row.label)).toEqual([
+      "alpha-requires-beta-install",
+      "alpha-install",
+      "alpha-inspect",
+      "alpha-disable",
+      "alpha-enable",
+      "alpha-doctor",
+      "alpha-uninstall",
+      "alpha-requires-beta-uninstall",
+    ]);
   });
 
   it("fails successful QA chunks whose summary reports failed scenarios", async () => {
@@ -1075,6 +1725,161 @@ setInterval(() => {}, 1000);
         qaMetrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
       }),
     );
+    expect(summary.isolatedRunRootPreserved).toBe(true);
+    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+  });
+
+  it("fails successful QA chunks whose passed scenarios have no step evidence", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    const qaSummaryJson = JSON.stringify({
+      counts: { failed: 0, passed: 1, total: 1 },
+      metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
+      run: {
+        concurrency: 1,
+        fastMode: false,
+        finishedAt: "2026-05-30T00:00:01.000Z",
+        primaryModel: "mock-openai/gpt-5.5",
+        primaryModelName: "gpt-5.5",
+        primaryProvider: "mock-openai",
+        providerMode: "mock-openai",
+        scenarioIds: ["channel-chat-baseline"],
+        startedAt: "2026-05-30T00:00:00.000Z",
+      },
+      scenarios: [{ name: "channel-chat-baseline", status: "pass", steps: [] }],
+    });
+    await writeManifest("alpha", "openclaw.plugin.json", JSON.stringify({ id: "alpha" }));
+    await fs.writeFile(path.join(repoRoot, "extensions", "alpha", "index.ts"), "export {};\n");
+    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "scripts", "run-node.mjs"),
+      [
+        'import fs from "node:fs";',
+        'import path from "node:path";',
+        'const outputArgIndex = process.argv.indexOf("--output-dir");',
+        "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
+        "fs.mkdirSync(outputDir, { recursive: true });",
+        `fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), ${JSON.stringify(qaSummaryJson)}, "utf8");`,
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-slash-help",
+        "--plugin",
+        "alpha",
+        "--qa-scenario",
+        "channel-chat-baseline",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stdout).toBe(1);
+    expect(result.stdout).toContain("diagnostic=qa-summary-invalid");
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.failures).toEqual([
+      expect.objectContaining({
+        diagnosticDetail:
+          "QA suite summary passed scenario has no step evidence: channel-chat-baseline",
+        diagnosticFailure: "qa-summary-invalid",
+        phase: "qa:rpc",
+        pluginId: "alpha",
+        status: 0,
+      }),
+    ]);
+    expect(summary.isolatedRunRootPreserved).toBe(true);
+    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+  });
+
+  it("fails successful QA chunks whose scenario statuses disagree with counts", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    const qaSummaryJson = JSON.stringify({
+      counts: { failed: 0, passed: 1, total: 2 },
+      metrics: { gatewayCpuCoreRatio: 0, wallMs: 1 },
+      run: {
+        concurrency: 1,
+        fastMode: false,
+        finishedAt: "2026-05-30T00:00:01.000Z",
+        primaryModel: "mock-openai/gpt-5.5",
+        primaryModelName: "gpt-5.5",
+        primaryProvider: "mock-openai",
+        providerMode: "mock-openai",
+        scenarioIds: ["channel-chat-baseline", "gateway-restart-inflight-run"],
+        startedAt: "2026-05-30T00:00:00.000Z",
+      },
+      scenarios: [
+        { name: "channel-chat-baseline", status: "pass", steps: [] },
+        { name: "gateway-restart-inflight-run", status: "fail", steps: [] },
+      ],
+    });
+    await writeManifest("alpha", "openclaw.plugin.json", JSON.stringify({ id: "alpha" }));
+    await fs.writeFile(path.join(repoRoot, "extensions", "alpha", "index.ts"), "export {};\n");
+    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "scripts", "run-node.mjs"),
+      [
+        'import fs from "node:fs";',
+        'import path from "node:path";',
+        'const outputArgIndex = process.argv.indexOf("--output-dir");',
+        "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
+        "fs.mkdirSync(outputDir, { recursive: true });",
+        `fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), ${JSON.stringify(qaSummaryJson)}, "utf8");`,
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-slash-help",
+        "--plugin",
+        "alpha",
+        "--qa-scenario",
+        "channel-chat-baseline",
+        "--qa-scenario",
+        "gateway-restart-inflight-run",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+      },
+    );
+
+    expect(result.status, result.stdout).toBe(1);
+    expect(result.stdout).toContain("diagnostic=qa-summary-invalid");
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.failures).toEqual([
+      expect.objectContaining({
+        diagnosticDetail:
+          "QA suite summary failed count mismatch: counts.failed=0, failed scenarios=1",
+        diagnosticFailure: "qa-summary-invalid",
+        phase: "qa:rpc",
+        pluginId: "alpha",
+        status: 0,
+      }),
+    ]);
     expect(summary.isolatedRunRootPreserved).toBe(true);
     await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
   });
@@ -1190,6 +1995,68 @@ setInterval(() => {}, 1000);
     expect(summary.failures).toEqual([
       expect.objectContaining({
         diagnosticDetail: "QA suite summary missing scenarios array",
+        diagnosticFailure: "qa-summary-invalid",
+        phase: "qa:rpc",
+        pluginId: "alpha",
+        status: 0,
+      }),
+    ]);
+    expect(summary.isolatedRunRootPreserved).toBe(true);
+    await fs.rm(summary.isolatedRunRoot, { recursive: true, force: true });
+  });
+
+  it("fails successful QA chunks that write oversized summary JSON", async () => {
+    const outputDir = path.join(repoRoot, "artifacts");
+    await writeManifest("alpha", "openclaw.plugin.json", JSON.stringify({ id: "alpha" }));
+    await fs.writeFile(path.join(repoRoot, "extensions", "alpha", "index.ts"), "export {};\n");
+    await fs.mkdir(path.join(repoRoot, "scripts"), { recursive: true });
+    await fs.writeFile(
+      path.join(repoRoot, "scripts", "run-node.mjs"),
+      [
+        'import fs from "node:fs";',
+        'import path from "node:path";',
+        'const outputArgIndex = process.argv.indexOf("--output-dir");',
+        "const outputDir = path.resolve(process.cwd(), process.argv[outputArgIndex + 1]);",
+        "fs.mkdirSync(outputDir, { recursive: true });",
+        'fs.writeFileSync(path.join(outputDir, "qa-suite-summary.json"), JSON.stringify({ filler: "x".repeat(128) }), "utf8");',
+      ].join("\n"),
+      "utf8",
+    );
+
+    const result = spawnSync(
+      process.execPath,
+      [
+        path.resolve("scripts/check-plugin-gateway-gauntlet.mjs"),
+        "--repo-root",
+        repoRoot,
+        "--output-dir",
+        outputDir,
+        "--skip-prebuild",
+        "--skip-lifecycle",
+        "--skip-slash-help",
+        "--plugin",
+        "alpha",
+        "--qa-scenario",
+        "channel-chat-baseline",
+      ],
+      {
+        cwd: path.resolve("."),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_PLUGIN_GATEWAY_GAUNTLET_QA_SUMMARY_MAX_BYTES: "64",
+        },
+      },
+    );
+
+    expect(result.status, result.stdout).toBe(1);
+    expect(result.stdout).toContain("diagnostic=qa-summary-invalid");
+    const summary = JSON.parse(
+      await fs.readFile(path.join(outputDir, "plugin-gateway-gauntlet-summary.json"), "utf8"),
+    );
+    expect(summary.failures).toEqual([
+      expect.objectContaining({
+        diagnosticDetail: expect.stringContaining("QA suite summary exceeded 64 bytes"),
         diagnosticFailure: "qa-summary-invalid",
         phase: "qa:rpc",
         pluginId: "alpha",

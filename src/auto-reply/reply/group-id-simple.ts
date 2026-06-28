@@ -1,3 +1,4 @@
+// Derives stable group ids from simple channel and conversation facts.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 
 /** Extracts a simple group/channel id from stable group-like source ids. */

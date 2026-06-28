@@ -1,3 +1,8 @@
+/**
+ * Resolves package assets and per-user agent directories for the CLI/runtime.
+ *
+ * These helpers must work from source, dist, and Bun single-file binaries.
+ */
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -29,7 +34,7 @@ export const isBunBinary =
  * - For Node.js (dist/): returns currentDir (the dist/ directory)
  * - For tsx (src/): returns parent directory (the package root)
  */
-export function getPackageDir(): string {
+function getPackageDir(): string {
   // Allow override via environment variable (useful for Nix/Guix where store paths tokenize poorly)
   const envDir = process.env.OPENCLAW_PACKAGE_DIR;
   if (envDir) {
@@ -78,7 +83,7 @@ export function getThemesDir(): string {
 }
 
 /** Get path to package.json */
-export function getPackageJsonPath(): string {
+function getPackageJsonPath(): string {
   return join(getPackageDir(), "package.json");
 }
 
@@ -117,9 +122,9 @@ export const APP_NAME: string = openClawConfigName || "openclaw";
 export const CONFIG_DIR_NAME: string = pkg.openclawConfig?.configDir || ".openclaw";
 export const VERSION: string = pkg.version || "0.0.0";
 
-export const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_AGENT_DIR`;
+const ENV_AGENT_DIR = `${APP_NAME.toUpperCase()}_AGENT_DIR`;
 
-export function expandTildePath(path: string): string {
+function expandTildePath(path: string): string {
   if (path === "~") {
     return homedir();
   }

@@ -1,9 +1,13 @@
+/**
+ * Node-host exec command parameter contracts.
+ * Centralizes the full host/runtime boundary so node exec callers and handlers
+ * cannot drift on approval, routing, env, or timeout fields.
+ */
 import type { ExecAsk, ExecSecurity } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecElevatedDefaults } from "./bash-tools.exec-types.js";
 
-// Full parameter bundle for Node-hosted exec command execution. Keeping this
-// type centralized prevents the host/runtime boundary from drifting.
+/** Full parameter bundle for Node-hosted exec command execution. */
 export type ExecuteNodeHostCommandParams = {
   command: string;
   workdir: string | undefined;
@@ -12,7 +16,12 @@ export type ExecuteNodeHostCommandParams = {
   requestedNode?: string;
   boundNode?: string;
   sessionKey?: string;
+  /** Session UUID active when the approval was requested; pins the followup. */
+  sessionId?: string;
+  /** Session-store template, so the direct/denied followup can detect a rebind. */
+  sessionStore?: string;
   bashElevated?: ExecElevatedDefaults;
+  approvalReviewerDeviceId?: string;
   turnSourceChannel?: string;
   turnSourceTo?: string;
   turnSourceAccountId?: string;

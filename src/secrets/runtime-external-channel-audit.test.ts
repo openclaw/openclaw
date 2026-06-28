@@ -1,3 +1,4 @@
+/** Tests runtime secret auditing for externalized channel plugin surfaces. */
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -88,11 +89,7 @@ function externalChannelOrigins(records: readonly PluginManifestRecord[]) {
 function mockBundledPublicArtifactMiss() {
   loadBundledPluginPublicArtifactModuleSyncMock.mockImplementation(
     (params: { dirName: string; artifactBasename: string }) => {
-      if (
-        params.dirName === "googlechat" &&
-        (params.artifactBasename === "secret-contract-api.js" ||
-          params.artifactBasename === "contract-api.js")
-      ) {
+      if (params.dirName === "googlechat" && params.artifactBasename === "secret-contract-api.js") {
         return createGoogleChatSecretContractApi();
       }
       throw new Error(
@@ -199,12 +196,10 @@ function expectMetadataBackedContractsWereUsed(
       dirName: channelId,
       artifactBasename: "secret-contract-api.js",
     });
-    if (channelId !== "googlechat") {
-      expect(loadBundledPluginPublicArtifactModuleSyncMock).toHaveBeenCalledWith({
-        dirName: channelId,
-        artifactBasename: "contract-api.js",
-      });
-    }
+    expect(loadBundledPluginPublicArtifactModuleSyncMock).not.toHaveBeenCalledWith({
+      dirName: channelId,
+      artifactBasename: "contract-api.js",
+    });
   }
 }
 

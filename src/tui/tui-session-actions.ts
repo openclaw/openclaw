@@ -1,5 +1,7 @@
+// Implements TUI session actions such as switching, forking, and resuming.
 import type { TUI } from "@earendil-works/pi-tui";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveSessionInfoModelSelection } from "../agents/model-selection-display.js";
 import {
@@ -87,9 +89,15 @@ function sessionInfoUiEquals(left: SessionInfo, right: SessionInfo): boolean {
     left.outputTokens === right.outputTokens &&
     left.totalTokens === right.totalTokens &&
     left.responseUsage === right.responseUsage &&
+    left.effectiveResponseUsage === right.effectiveResponseUsage &&
     left.displayName === right.displayName &&
     goalEquals(left.goal, right.goal)
   );
+}
+
+function extractMessageTimestamp(message: Record<string, unknown>): number | null {
+  const raw = message.timestamp;
+  return asDateTimestampMs(typeof raw === "string" ? Date.parse(raw) : raw) ?? null;
 }
 
 export function createSessionActions(context: SessionActionContext) {
@@ -238,6 +246,9 @@ export function createSessionActions(context: SessionActionContext) {
     if (entry?.responseUsage !== undefined) {
       next.responseUsage = entry.responseUsage;
     }
+    if (entry?.effectiveResponseUsage !== undefined) {
+      next.effectiveResponseUsage = entry.effectiveResponseUsage;
+    }
     if (entry?.inputTokens !== undefined) {
       next.inputTokens = entry.inputTokens;
     }
@@ -246,6 +257,13 @@ export function createSessionActions(context: SessionActionContext) {
     }
     if (entry?.totalTokens !== undefined) {
       next.totalTokens = entry.totalTokens;
+      next.totalTokensFresh = entry.totalTokensFresh === true;
+    } else if (entry?.totalTokensFresh === true) {
+      // Fresh session: the total is known to be 0. The gateway strips the 0 via
+      // resolvePositiveNumber but still flags it fresh, so render 0 (not "?"),
+      // mirroring the /status fix in #93798. See followup to #93771.
+      next.totalTokens = 0;
+      next.totalTokensFresh = true;
     }
     if (params.clearMissingUsage) {
       if (entry?.inputTokens === undefined) {
@@ -254,8 +272,9 @@ export function createSessionActions(context: SessionActionContext) {
       if (entry?.outputTokens === undefined) {
         next.outputTokens = null;
       }
-      if (entry?.totalTokens === undefined) {
+      if (entry?.totalTokens === undefined && entry?.totalTokensFresh !== true) {
         next.totalTokens = null;
+        next.totalTokensFresh = undefined;
       }
     }
     if (hasEntryUpdate) {
@@ -412,10 +431,11 @@ export function createSessionActions(context: SessionActionContext) {
         sessionInfo?: SessionInfoEntry;
         defaults?: SessionInfoDefaults;
         thinkingLevel?: string;
-        fastMode?: boolean;
+        fastMode?: FastMode;
         verboseLevel?: string;
         traceLevel?: string;
         inFlightRun?: { runId?: unknown; text?: unknown };
+        runtimePluginsPrewarm?: { status?: string; error?: string };
       };
       const sessionInfo = record.sessionInfo;
       if (sessionInfo?.key && sessionInfo.key !== state.currentSessionKey) {
@@ -448,7 +468,8 @@ export function createSessionActions(context: SessionActionContext) {
         await refreshSessionInfo();
       }
       const showTools = (state.sessionInfo.verboseLevel ?? "off") !== "off";
-      chatLog.clearAll();
+      const historyUsers: Array<{ text: string; timestamp?: number | null }> = [];
+      chatLog.clearAll({ preservePendingUsers: true });
       btw.clear();
       chatLog.addSystem(`session ${state.currentSessionKey}`);
       for (const entry of record.messages ?? []) {
@@ -466,6 +487,10 @@ export function createSessionActions(context: SessionActionContext) {
         if (message.role === "user") {
           const text = extractTextFromMessage(message);
           if (text) {
+            historyUsers.push({
+              text,
+              timestamp: extractMessageTimestamp(message),
+            });
             chatLog.addUser(text);
           }
           continue;
@@ -500,6 +525,11 @@ export function createSessionActions(context: SessionActionContext) {
           );
         }
       }
+      const reconciledRunIds = chatLog.reconcilePendingUsers(historyUsers);
+      if (state.pendingSubmitDraft && reconciledRunIds.includes(state.pendingSubmitDraft.runId)) {
+        state.pendingSubmitDraft = null;
+      }
+      chatLog.restorePendingUsers();
       // Restore a run still streaming for this session+agent that the gateway
       // reports as in-flight. Its live deltas were delivered to a per-agent key
       // we stopped watching after switching away, so the persisted history above
@@ -519,6 +549,11 @@ export function createSessionActions(context: SessionActionContext) {
         setActivityStatus("streaming");
       }
       state.historyLoaded = true;
+      if (record.runtimePluginsPrewarm?.status === "failed") {
+        chatLog.addSystem(
+          `runtime prewarm failed: ${record.runtimePluginsPrewarm.error ?? "unknown"}`,
+        );
+      }
       void rememberSessionKey?.(state.currentSessionKey);
     } catch (err) {
       chatLog.addSystem(`history failed: ${String(err)}`);
@@ -533,12 +568,14 @@ export function createSessionActions(context: SessionActionContext) {
     state.activeChatRunId = null;
     state.pendingChatRunId = null;
     state.pendingOptimisticUserMessage = false;
+    state.pendingSubmitDraft = null;
     setActivityStatus("idle");
     state.currentSessionId = null;
     // Session keys can move backwards in updatedAt ordering; drop previous session freshness
     // so refresh data for the newly selected session isn't rejected as stale.
     state.sessionInfo.updatedAt = null;
     state.historyLoaded = false;
+    chatLog.clearPendingUsers();
     clearLocalRunIds?.();
     btw.clear();
     updateHeader();
@@ -553,6 +590,7 @@ export function createSessionActions(context: SessionActionContext) {
     state.activeChatRunId = null;
     state.pendingChatRunId = null;
     state.pendingOptimisticUserMessage = false;
+    state.pendingSubmitDraft = null;
     setActivityStatus("idle");
     state.currentSessionId = null;
     const defaults = lastSessionDefaults;
@@ -603,6 +641,7 @@ export function createSessionActions(context: SessionActionContext) {
     const abortsPendingRun = Boolean(
       state.pendingChatRunId && runIds.includes(state.pendingChatRunId),
     );
+    const pendingRunId = state.pendingChatRunId;
     try {
       for (const runId of runIds) {
         await client.abortChat({
@@ -614,6 +653,10 @@ export function createSessionActions(context: SessionActionContext) {
       state.pendingChatRunId = null;
       if (abortsPendingRun) {
         state.pendingOptimisticUserMessage = false;
+        if (pendingRunId && state.pendingSubmitDraft?.runId === pendingRunId) {
+          chatLog.dropPendingUser(pendingRunId);
+          state.pendingSubmitDraft = null;
+        }
       }
       setActivityStatus("aborted");
     } catch (err) {

@@ -1,6 +1,8 @@
+// Covers exec approvals store socket interactions.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { makeTempDir } from "./exec-approvals-test-helpers.js";
 
 const requestJsonlSocketMock = vi.hoisted(() => vi.fn());
@@ -18,18 +20,21 @@ let addDurableCommandApproval: ExecApprovalsModule["addDurableCommandApproval"];
 let ensureExecApprovals: ExecApprovalsModule["ensureExecApprovals"];
 let mergeExecApprovalsSocketDefaults: ExecApprovalsModule["mergeExecApprovalsSocketDefaults"];
 let normalizeExecApprovals: ExecApprovalsModule["normalizeExecApprovals"];
+let persistAllowAlwaysDecision: ExecApprovalsModule["persistAllowAlwaysDecision"];
 let persistAllowAlwaysPatterns: ExecApprovalsModule["persistAllowAlwaysPatterns"];
 let readExecApprovalsSnapshot: ExecApprovalsModule["readExecApprovalsSnapshot"];
 let recordAllowlistMatchesUse: ExecApprovalsModule["recordAllowlistMatchesUse"];
 let recordAllowlistUse: ExecApprovalsModule["recordAllowlistUse"];
 let requestExecApprovalViaSocket: ExecApprovalsModule["requestExecApprovalViaSocket"];
 let resolveExecApprovals: ExecApprovalsModule["resolveExecApprovals"];
+let resolveExecApprovalsDisplayPath: ExecApprovalsModule["resolveExecApprovalsDisplayPath"];
 let resolveExecApprovalsPath: ExecApprovalsModule["resolveExecApprovalsPath"];
 let resolveExecApprovalsSocketPath: ExecApprovalsModule["resolveExecApprovalsSocketPath"];
+let resolveExecApprovalsTranscriptPath: ExecApprovalsModule["resolveExecApprovalsTranscriptPath"];
 let saveExecApprovals: ExecApprovalsModule["saveExecApprovals"];
 
 const tempDirs: string[] = [];
-const originalOpenClawHome = process.env.OPENCLAW_HOME;
+const testEnvSnapshot = captureEnv(["OPENCLAW_HOME", "OPENCLAW_STATE_DIR"]);
 
 beforeAll(async () => {
   ({
@@ -38,14 +43,17 @@ beforeAll(async () => {
     ensureExecApprovals,
     mergeExecApprovalsSocketDefaults,
     normalizeExecApprovals,
+    persistAllowAlwaysDecision,
     persistAllowAlwaysPatterns,
     readExecApprovalsSnapshot,
     recordAllowlistMatchesUse,
     recordAllowlistUse,
     requestExecApprovalViaSocket,
     resolveExecApprovals,
+    resolveExecApprovalsDisplayPath,
     resolveExecApprovalsPath,
     resolveExecApprovalsSocketPath,
+    resolveExecApprovalsTranscriptPath,
     saveExecApprovals,
   } = await import("./exec-approvals.js"));
 });
@@ -56,11 +64,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  if (originalOpenClawHome === undefined) {
-    delete process.env.OPENCLAW_HOME;
-  } else {
-    process.env.OPENCLAW_HOME = originalOpenClawHome;
-  }
+  testEnvSnapshot.restore();
   for (const dir of tempDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -69,12 +73,17 @@ afterEach(() => {
 function createHomeDir(): string {
   const dir = makeTempDir();
   tempDirs.push(dir);
-  process.env.OPENCLAW_HOME = dir;
+  setTestEnvValue("OPENCLAW_HOME", dir);
+  deleteTestEnvValue("OPENCLAW_STATE_DIR");
   return dir;
 }
 
 function approvalsFilePath(homeDir: string): string {
   return path.join(homeDir, ".openclaw", "exec-approvals.json");
+}
+
+function stateApprovalsFilePath(stateDir: string): string {
+  return path.join(stateDir, "exec-approvals.json");
 }
 
 function readApprovalsFile(homeDir: string): ExecApprovalsFile {
@@ -120,6 +129,84 @@ describe("exec approvals store helpers", () => {
     expect(path.normalize(resolveExecApprovalsSocketPath())).toBe(
       path.normalize(path.join(dir, ".openclaw", "exec-approvals.sock")),
     );
+    expect(resolveExecApprovalsDisplayPath()).toBe("~/.openclaw/exec-approvals.json");
+  });
+
+  it("uses OPENCLAW_STATE_DIR for default file and socket paths", () => {
+    const dir = createHomeDir();
+    const stateDir = path.join(dir, "custom-state");
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+
+    expect(path.normalize(resolveExecApprovalsPath())).toBe(
+      path.normalize(stateApprovalsFilePath(stateDir)),
+    );
+    expect(path.normalize(resolveExecApprovalsSocketPath())).toBe(
+      path.normalize(path.join(stateDir, "exec-approvals.sock")),
+    );
+    expect(resolveExecApprovalsDisplayPath()).toBe(stateApprovalsFilePath(stateDir));
+    expect(resolveExecApprovalsTranscriptPath()).toBe("$OPENCLAW_STATE_DIR/exec-approvals.json");
+
+    const ensured = ensureExecApprovals();
+
+    expect(ensured.socket?.path).toBe(resolveExecApprovalsSocketPath());
+    expect(fs.existsSync(stateApprovalsFilePath(stateDir))).toBe(true);
+    expect(fs.existsSync(approvalsFilePath(dir))).toBe(false);
+  });
+
+  it("fails closed without writing target approvals before state migration runs", () => {
+    const dir = createHomeDir();
+    const stateDir = path.join(dir, "custom-state");
+    fs.mkdirSync(path.dirname(approvalsFilePath(dir)), { recursive: true });
+    fs.writeFileSync(
+      approvalsFilePath(dir),
+      `${JSON.stringify({
+        version: 1,
+        socket: {
+          path: path.join(dir, ".openclaw", "exec-approvals.sock"),
+          token: "legacy-token",
+        },
+        defaults: {
+          security: "deny",
+          ask: "always",
+        },
+        agents: {},
+      })}\n`,
+      "utf8",
+    );
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+
+    const resolved = resolveExecApprovals("main", {
+      security: "full",
+      ask: "off",
+    });
+
+    expect(resolved.agent.security).toBe("deny");
+    expect(resolved.agent.ask).toBe("always");
+    expect(resolved.token).toBe("");
+    expect(fs.existsSync(stateApprovalsFilePath(stateDir))).toBe(false);
+    expect(fs.existsSync(approvalsFilePath(dir))).toBe(true);
+
+    const ensured = ensureExecApprovals();
+
+    expect(ensured.defaults).toEqual({
+      security: "deny",
+      ask: "always",
+      askFallback: "deny",
+      autoAllowSkills: undefined,
+    });
+    expect(fs.existsSync(stateApprovalsFilePath(stateDir))).toBe(false);
+  });
+
+  it("keeps the default approvals path when only legacy state exists", () => {
+    const dir = createHomeDir();
+    fs.mkdirSync(path.join(dir, ".clawdbot"), { recursive: true });
+
+    expect(path.normalize(resolveExecApprovalsPath())).toBe(path.normalize(approvalsFilePath(dir)));
+
+    ensureExecApprovals();
+
+    expect(fs.existsSync(approvalsFilePath(dir))).toBe(true);
+    expect(fs.existsSync(path.join(dir, ".clawdbot", "exec-approvals.json"))).toBe(false);
   });
 
   it("merges socket defaults from normalized, current, and built-in fallback", () => {
@@ -561,7 +648,7 @@ describe("exec approvals store helpers", () => {
     const linkedHome = `${realHome}-link`;
     tempDirs.push(realHome, linkedHome);
     fs.symlinkSync(realHome, linkedHome, "dir");
-    process.env.OPENCLAW_HOME = linkedHome;
+    setTestEnvValue("OPENCLAW_HOME", linkedHome);
 
     saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} });
 
@@ -578,7 +665,7 @@ describe("exec approvals store helpers", () => {
     fs.mkdirSync(linkedStateTarget, { recursive: true });
     fs.symlinkSync(realHome, linkedHome, "dir");
     fs.symlinkSync(linkedStateTarget, path.join(realHome, ".openclaw"), "dir");
-    process.env.OPENCLAW_HOME = linkedHome;
+    setTestEnvValue("OPENCLAW_HOME", linkedHome);
 
     expect(() =>
       saveExecApprovals({ version: 1, defaults: { security: "full" }, agents: {} }),
@@ -610,6 +697,30 @@ describe("exec approvals store helpers", () => {
 
     const approvals = ensureExecApprovals();
     addDurableCommandApproval(approvals, "worker", 'printenv API_KEY="secret-value"');
+
+    const allowlist = allowlistEntries(dir, "worker");
+    expect(allowlist).toHaveLength(1);
+    expectAllowlistEntryFields(allowlist[0] ?? {}, {
+      source: "allow-always",
+      lastUsedAt: 321_000,
+    });
+    expect(allowlist[0]?.pattern).toMatch(/^=command:[0-9a-f]{16}$/i);
+    expect(allowlist[0]).not.toHaveProperty("commandText");
+  });
+
+  it("persists exact-command allow-always decisions as durable command approvals", () => {
+    const dir = createHomeDir();
+    vi.spyOn(Date, "now").mockReturnValue(321_000);
+
+    const approvals = ensureExecApprovals();
+    persistAllowAlwaysDecision({
+      approvals,
+      agentId: "worker",
+      decision: {
+        kind: "exact-command",
+        commandText: 'printenv API_KEY="secret-value"',
+      },
+    });
 
     const allowlist = allowlistEntries(dir, "worker");
     expect(allowlist).toHaveLength(1);
@@ -862,12 +973,8 @@ describe("exec approvals store helpers", () => {
       ],
     });
 
-    const echoPattern = partialPatterns[0]?.pattern;
-    expect(echoPattern).toMatch(/\/echo$/);
+    expect(partialPatterns).toEqual([]);
     allowlist = allowlistEntries(dir, "worker");
-    expect(
-      allowlist.map((entry) => entry.pattern).filter((pattern) => pattern === echoPattern),
-    ).toHaveLength(1);
     expect(
       allowlist.some(
         (entry) =>

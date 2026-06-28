@@ -1,3 +1,4 @@
+// Records structured diagnostics timeline events and spans.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
@@ -63,7 +64,7 @@ type DiagnosticsTimelineOptions = {
 };
 
 /** Active timeline span carried through async-local scope for nested diagnostics. */
-export type ActiveDiagnosticsTimelineSpan = {
+type ActiveDiagnosticsTimelineSpan = {
   name: string;
   phase?: string;
   spanId: string;
@@ -328,9 +329,4 @@ export function measureDiagnosticsTimelineSpanSync<T>(
     emitFailedDiagnosticsTimelineSpan(span, error);
     throw error;
   }
-}
-
-/** Lets tests await any future asynchronous timeline cleanup without changing call sites. */
-export async function flushDiagnosticsTimelineForTest(): Promise<void> {
-  await Promise.resolve();
 }

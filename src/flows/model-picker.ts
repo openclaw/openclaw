@@ -1,3 +1,4 @@
+// Model picker flow lets users select provider models for config defaults.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
@@ -79,7 +80,7 @@ function resolvePickerAgentDir(params: {
   return params.agentDir ?? resolveDefaultAgentDir(params.cfg, params.env ?? process.env);
 }
 
-export type PromptDefaultModelParams = {
+type PromptDefaultModelParams = {
   config: OpenClawConfig;
   prompter: WizardPrompter;
   allowKeep?: boolean;
@@ -96,8 +97,8 @@ export type PromptDefaultModelParams = {
   message?: string;
 };
 
-export type PromptDefaultModelResult = { model?: string; config?: OpenClawConfig };
-export type PromptModelAllowlistResult = { models?: string[]; scopeKeys?: string[] };
+type PromptDefaultModelResult = { model?: string; config?: OpenClawConfig };
+type PromptModelAllowlistResult = { models?: string[]; scopeKeys?: string[] };
 
 async function loadModelPickerRuntime() {
   return import("../commands/model-picker.runtime.js");
@@ -293,6 +294,11 @@ async function resolveLiteralPrefixProviderIds(params: {
   return ids;
 }
 
+function modelCatalogEntryKey(entry: { provider: string; id: string }): string {
+  const normalizedRef = normalizeModelRef(entry.provider, entry.id);
+  return modelKey(normalizedRef.provider, normalizedRef.model);
+}
+
 async function addModelSelectOption(params: {
   entry: {
     provider: string;
@@ -309,7 +315,7 @@ async function addModelSelectOption(params: {
   isVisibleProvider: (provider: string) => boolean;
 }) {
   const normalizedRef = normalizeModelRef(params.entry.provider, params.entry.id);
-  const key = modelKey(normalizedRef.provider, normalizedRef.model);
+  const key = modelCatalogEntryKey(params.entry);
   if (
     params.seen.has(key) ||
     HIDDEN_ROUTER_MODELS.has(key) ||
@@ -917,17 +923,23 @@ export async function promptDefaultModel(
     });
   }
 
+  const firstPreferredModel =
+    preferredProvider && hasPreferredProvider
+      ? filteredModels.find((entry) => matchesPreferredProvider?.(entry.provider))
+      : undefined;
+  const firstPreferredModelKey = firstPreferredModel
+    ? modelCatalogEntryKey(firstPreferredModel)
+    : undefined;
   let initialValue: string | undefined = allowKeep ? KEEP_VALUE : configuredKey || undefined;
-  if (
+  if (!allowKeep && firstPreferredModelKey) {
+    initialValue = firstPreferredModelKey;
+  } else if (
     allowKeep &&
-    hasPreferredProvider &&
+    firstPreferredModelKey &&
     preferredProvider &&
     !matchesPreferredProvider?.(resolved.provider)
   ) {
-    const firstModel = filteredModels[0];
-    if (firstModel) {
-      initialValue = modelKey(firstModel.provider, firstModel.id);
-    }
+    initialValue = firstPreferredModelKey;
   }
 
   const selection = await params.prompter.select({

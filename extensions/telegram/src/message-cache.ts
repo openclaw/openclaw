@@ -1,3 +1,4 @@
+// Telegram plugin module implements message cache behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import type { Message } from "grammy/types";
@@ -6,7 +7,10 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveTelegramPrimaryMedia } from "./bot/body-helpers.js";
+import {
+  resolveTelegramPrimaryMedia,
+  resolveTelegramRichMessagePlaceholder,
+} from "./bot/body-helpers.js";
 import {
   buildSenderName,
   extractTelegramLocation,
@@ -18,7 +22,8 @@ import { getOptionalTelegramRuntime } from "./runtime.js";
 
 export type TelegramReplyChainEntry = NonNullable<MsgContext["ReplyChain"]>[number];
 
-export type TelegramCachedMessageNode = TelegramReplyChainEntry & {
+export type TelegramCachedMessageNode = Omit<TelegramReplyChainEntry, "messageId"> & {
+  messageId: string;
   sourceMessage: Message;
 };
 
@@ -150,7 +155,9 @@ function resolveMessageBody(msg: Message): string | undefined {
   if (location) {
     return formatLocationText(location);
   }
-  return resolveTelegramPrimaryMedia(msg)?.placeholder;
+  return (
+    resolveTelegramRichMessagePlaceholder(msg) ?? resolveTelegramPrimaryMedia(msg)?.placeholder
+  );
 }
 
 function resolveMediaType(placeholder?: string): string | undefined {
@@ -771,11 +778,15 @@ function compareCachedMessageNodes(
 const SESSION_BOUNDARY_COMMAND_RE = /^\/(?:new|reset)(?:@[A-Za-z0-9_]+)?(?:\s|$)/i;
 const SOFT_RESET_COMMAND_RE = /^\/reset(?:@[A-Za-z0-9_]+)?\s+soft(?:\s|$)/i;
 
-function isSessionBoundaryCommandNode(node: TelegramCachedMessageNode): boolean {
-  const body = node.body?.trim();
+export function isTelegramSessionBoundaryCommandText(text: string | undefined): boolean {
+  const body = text?.trim();
   return Boolean(
     body && SESSION_BOUNDARY_COMMAND_RE.test(body) && !SOFT_RESET_COMMAND_RE.test(body),
   );
+}
+
+function isSessionBoundaryCommandNode(node: TelegramCachedMessageNode): boolean {
+  return isTelegramSessionBoundaryCommandText(node.body);
 }
 
 function isAfterSessionBoundary(
@@ -885,6 +896,7 @@ export async function buildTelegramConversationContext(params: {
   recentLimit: number;
   replyTargetWindowSize: number;
   minTimestampMs?: number;
+  includeNode?: (node: TelegramCachedMessageNode) => boolean;
 }): Promise<TelegramConversationContextNode[]> {
   const selected = new Map<string, TelegramConversationContextNode>();
   const replyTargetIds = new Set<string>();
@@ -892,13 +904,16 @@ export async function buildTelegramConversationContext(params: {
   const sessionBoundaryTimestamp = normalizeSessionBoundaryTimestamp(params.minTimestampMs);
   const addNode = (node: TelegramCachedMessageNode, flags?: { replyTarget?: boolean }) => {
     if (!node.messageId || node.messageId === params.messageId) {
-      return;
+      return false;
     }
     if (!isAfterSessionBoundary(node, sessionBoundary)) {
-      return;
+      return false;
     }
     if (!isAtOrAfterSessionBoundaryTimestamp(node, sessionBoundaryTimestamp)) {
-      return;
+      return false;
+    }
+    if (params.includeNode && !params.includeNode(node)) {
+      return false;
     }
     const existing = selected.get(node.messageId);
     const isReplyTarget = existing?.isReplyTarget === true || flags?.replyTarget === true;
@@ -906,6 +921,7 @@ export async function buildTelegramConversationContext(params: {
       node: existing?.node ?? node,
       isReplyTarget: isReplyTarget ? true : undefined,
     });
+    return true;
   };
   const addReplyTargetWindow = async (messageId: string) => {
     replyTargetIds.add(messageId);
@@ -929,18 +945,18 @@ export async function buildTelegramConversationContext(params: {
     limit: params.recentLimit,
   });
   for (const node of currentWindow) {
-    addNode(node);
-    if (node.replyToId) {
+    const added = addNode(node);
+    if (added && node.replyToId) {
       await addReplyTargetWindow(node.replyToId);
     }
   }
 
   for (const [index, node] of params.replyChainNodes.entries()) {
-    addNode(node, { replyTarget: index === 0 });
-    if (index === 0 && node.messageId) {
+    const added = addNode(node, { replyTarget: index === 0 });
+    if (added && index === 0 && node.messageId) {
       await addReplyTargetWindow(node.messageId);
     }
-    if (node.replyToId) {
+    if (added && node.replyToId) {
       replyTargetIds.add(node.replyToId);
     }
   }

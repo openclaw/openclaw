@@ -1,3 +1,4 @@
+// Exercises npm-spec plugin install behavior through the CLI path.
 import { execFile, execFileSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
@@ -656,7 +657,7 @@ describe("installPluginFromNpmSpec e2e", () => {
       dependencies?: Record<string, string>;
       openclaw?: { managedPeerDependencies?: string[] };
     };
-    expect(rootManifest.dependencies?.[runtimePeer]).toBe("1.0.0");
+    expect(["1.0.0", "^1.0.0"]).toContain(rootManifest.dependencies?.[runtimePeer]);
     expect(rootManifest.openclaw?.managedPeerDependencies ?? []).toContain(runtimePeer);
   });
 

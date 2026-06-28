@@ -1,3 +1,4 @@
+// Shared fetch and parsing helpers for provider usage endpoints.
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { parseFiniteNumber as parseFiniteNumberish } from "./parse-finite-number.js";
 import { PROVIDER_LABELS } from "./provider-usage.shared.js";
@@ -17,6 +18,12 @@ export async function fetchJson(
     return await fetchFn(url, { ...init, signal: controller.signal });
   } finally {
     clearTimeout(timer);
+  }
+}
+
+export async function discardUsageResponseBody(response: Response): Promise<void> {
+  if (!response.bodyUsed) {
+    await response.body?.cancel().catch(() => undefined);
   }
 }
 

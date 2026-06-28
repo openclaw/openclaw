@@ -1,3 +1,4 @@
+// Installs channel plugin fixtures for heartbeat runner tests.
 import { beforeEach } from "vitest";
 import {
   heartbeatRunnerSlackPlugin,

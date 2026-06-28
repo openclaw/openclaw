@@ -1,3 +1,4 @@
+// Control Ui I18N Report script supports OpenClaw repository automation.
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
@@ -17,6 +18,7 @@ const LOCALE_LABELS: Record<string, string> = {
   it: "Italian",
   "ja-JP": "Japanese",
   ko: "Korean",
+  hi: "Hindi",
   nl: "Dutch",
   pl: "Polish",
   "pt-BR": "Brazilian Portuguese",
@@ -26,6 +28,7 @@ const LOCALE_LABELS: Record<string, string> = {
   vi: "Vietnamese",
   "zh-CN": "Simplified Chinese",
   "zh-TW": "Traditional Chinese",
+  ru: "Russian",
 };
 const REPORT_LOCALES = new Set(Object.keys(LOCALE_LABELS));
 const PATH_LABELS: Record<string, string> = {
@@ -127,7 +130,7 @@ export function parseArgs(argv: string[]): ReportArgs {
 
 function readOptionValue(argv: string[], index: number, flag: string) {
   const value = argv[index];
-  if (!value || value.startsWith("--")) {
+  if (!value || value.startsWith("-")) {
     throw new Error(`${flag} requires a value`);
   }
   return value;

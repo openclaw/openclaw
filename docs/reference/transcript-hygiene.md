@@ -20,6 +20,7 @@ Scope includes:
 - Thinking signature cleanup
 - Image payload sanitization
 - Blank text-block cleanup before provider replay
+- Incomplete reasoning-only length-turn cleanup before provider replay
 - User-input provenance tagging (for inter-session routed prompts)
 - Empty assistant error-turn repair for Bedrock Converse replay
 
@@ -91,6 +92,21 @@ Implementation:
 
 ---
 
+## Global rule: incomplete reasoning-only turns
+
+Assistant turns that hit the provider output limit with only thinking or
+redacted-thinking content are omitted from the in-memory replay copy. Such turns
+contain incomplete provider state and may carry a partial thinking signature.
+
+Empty length turns remain unchanged, as do length turns with visible text, tool
+calls, or unknown content blocks. Stored transcripts are not rewritten.
+
+Implementation:
+
+- `normalizeAssistantReplayContent` in `src/agents/embedded-agent-runner/replay-history.ts`
+
+---
+
 ## Global rule: inter-session input provenance
 
 When an agent sends a prompt into another session via `sessions_send` (including
@@ -150,6 +166,13 @@ inter-session user turns that only have provenance metadata.
 - Turn validation (merge consecutive user turns to satisfy strict alternation).
 - Trailing assistant prefill turns are stripped from outgoing Anthropic Messages
   payloads when thinking is enabled, including Cloudflare AI Gateway routes.
+- Pre-compaction assistant thinking signatures are stripped before provider
+  replay when a session has been compacted. Thinking signatures are
+  cryptographically bound to the conversation prefix at generation time; after
+  compaction the prefix changes (summarized content is replaced by a compaction
+  summary), so replaying the original signatures causes Anthropic to reject the
+  request with "Invalid signature in thinking block". The thinking text is
+  preserved as an unsigned block and is then handled by the rule below.
 - Thinking blocks with missing, empty, or blank replay signatures are stripped
   before provider conversion. If that empties an assistant turn, OpenClaw keeps
   turn shape with non-empty omitted-reasoning text.
@@ -165,6 +188,9 @@ inter-session user turns that only have provenance metadata.
   repaired on disk before load.
 - Assistant stream-error turns that contain only blank text blocks are dropped
   from the in-memory replay copy instead of replaying an invalid blank block.
+- Pre-compaction assistant thinking signatures are stripped before Converse
+  replay when a session has been compacted, for the same reason as Anthropic
+  above.
 - Claude thinking blocks with missing, empty, or blank replay signatures are
   stripped before Converse replay. If that empties an assistant turn, OpenClaw
   keeps turn shape with non-empty omitted-reasoning text.

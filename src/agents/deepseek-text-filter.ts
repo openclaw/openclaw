@@ -1,8 +1,11 @@
+/**
+ * DeepSeek DSML streaming text filter.
+ * Removes provider-emitted DSML tool markup while buffering split tag prefixes
+ * across streamed chunks.
+ */
 const DSML_KINDS = ["tool_use_error", "tool_calls", "tool_call", "function_calls"] as const;
 const DSML_BARS = ["|", "｜"] as const;
 
-// Streaming filter for DeepSeek DSML tool markup. It removes complete markup
-// blocks while holding enough trailing bytes to recognize split open/close tags.
 const DSML_OPEN_TOKENS = DSML_BARS.flatMap((bar) =>
   DSML_KINDS.map((kind) => `<${bar}DSML${bar}${kind}>`),
 );
@@ -12,7 +15,7 @@ const DSML_CLOSE_TOKENS = DSML_BARS.flatMap((bar) =>
 const MAX_OPEN_TOKEN_LEN = Math.max(...DSML_OPEN_TOKENS.map((token) => token.length));
 const MAX_CLOSE_TOKEN_LEN = Math.max(...DSML_CLOSE_TOKENS.map((token) => token.length));
 
-export interface DeepSeekTextFilter {
+interface DeepSeekTextFilter {
   /** Push one streamed text chunk and receive any safe visible text segments. */
   push(chunk: string): string[];
   /** Flush buffered text at stream end, dropping any unterminated DSML block. */

@@ -1,3 +1,4 @@
+// Provides assertions for redacted snapshot tests.
 import { expect } from "vitest";
 import { restoreRedactedValues as restoreRedactedValues_orig } from "./redact-snapshot.js";
 import type { ConfigUiHints } from "./schema.js";

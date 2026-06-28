@@ -1,3 +1,4 @@
+// Tests session export command packaging, filesystem writes, and prompt bundle capture.
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { HandleCommandsParams } from "./commands-types.js";
@@ -264,12 +265,201 @@ describe("buildExportSessionReply", () => {
           header: null,
           entries: [],
           leafId: null,
+          hasLeafControl: false,
           systemPrompt: "system prompt",
           tools: [],
         }),
       ).toString("base64"),
     );
     expect(html).toContain('const base64 = document.getElementById("session-data").textContent;');
+  });
+
+  it("exports the active target selected by a terminal leaf control", async () => {
+    const entries = [
+      {
+        type: "message",
+        id: "active-tail",
+        parentId: null,
+        timestamp: "2026-06-15T00:00:01.000Z",
+        message: { role: "assistant", content: "active" },
+      },
+      {
+        type: "message",
+        id: "inactive-tail",
+        parentId: "active-tail",
+        timestamp: "2026-06-15T00:00:02.000Z",
+        message: { role: "assistant", content: "side delivery" },
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "inactive-tail",
+        timestamp: "2026-06-15T00:00:03.000Z",
+        targetId: "active-tail",
+      },
+    ];
+    hoisted.sessionTranscriptContent = entries.map((entry) => JSON.stringify(entry)).join("\n");
+
+    await buildExportSessionReply(makeParams());
+
+    expect(writtenHtml()).toContain(
+      Buffer.from(
+        JSON.stringify({
+          header: null,
+          entries: [entries[0], entries[1], { ...entries[2], parentId: "active-tail" }],
+          leafId: "active-tail",
+          hasLeafControl: true,
+          systemPrompt: "system prompt",
+          tools: [],
+        }),
+      ).toString("base64"),
+    );
+  });
+
+  it("normalizes a leaf control parent before exporting its active descendant", async () => {
+    const rawEntries = [
+      {
+        type: "message",
+        id: "active-tail",
+        parentId: null,
+        timestamp: "2026-06-15T00:00:01.000Z",
+        message: { role: "assistant", content: "active" },
+      },
+      {
+        type: "message",
+        id: "inactive-tail",
+        parentId: "active-tail",
+        timestamp: "2026-06-15T00:00:02.000Z",
+        message: { role: "assistant", content: "side delivery" },
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "inactive-tail",
+        timestamp: "2026-06-15T00:00:03.000Z",
+        targetId: "active-tail",
+      },
+      {
+        type: "message",
+        id: "replacement",
+        parentId: "active-leaf",
+        timestamp: "2026-06-15T00:00:04.000Z",
+        message: { role: "assistant", content: "replacement" },
+      },
+    ];
+    hoisted.sessionTranscriptContent = rawEntries.map((entry) => JSON.stringify(entry)).join("\n");
+
+    await buildExportSessionReply(makeParams());
+
+    expect(writtenHtml()).toContain(
+      Buffer.from(
+        JSON.stringify({
+          header: null,
+          entries: [
+            rawEntries[0],
+            rawEntries[1],
+            { ...rawEntries[2], parentId: "active-tail" },
+            { ...rawEntries[3], parentId: "active-tail" },
+          ],
+          leafId: "replacement",
+          hasLeafControl: true,
+          systemPrompt: "system prompt",
+          tools: [],
+        }),
+      ).toString("base64"),
+    );
+  });
+
+  it("normalizes parentless history addressed by a leaf control", async () => {
+    const rawEntries = [
+      {
+        type: "message",
+        id: "active-root",
+        timestamp: "2026-06-15T00:00:01.000Z",
+        message: { role: "user", content: "root" },
+      },
+      {
+        type: "message",
+        id: "active-tail",
+        timestamp: "2026-06-15T00:00:02.000Z",
+        message: { role: "assistant", content: "active" },
+      },
+      {
+        type: "message",
+        id: "inactive-tail",
+        parentId: "active-tail",
+        timestamp: "2026-06-15T00:00:03.000Z",
+        message: { role: "assistant", content: "side delivery" },
+      },
+      {
+        type: "leaf",
+        id: "active-leaf",
+        parentId: "inactive-tail",
+        timestamp: "2026-06-15T00:00:04.000Z",
+        targetId: "active-tail",
+      },
+    ];
+    hoisted.sessionTranscriptContent = rawEntries.map((entry) => JSON.stringify(entry)).join("\n");
+
+    await buildExportSessionReply(makeParams());
+
+    expect(writtenHtml()).toContain(
+      Buffer.from(
+        JSON.stringify({
+          header: null,
+          entries: [
+            { ...rawEntries[0], parentId: null },
+            { ...rawEntries[1], parentId: "active-root" },
+            rawEntries[2],
+            { ...rawEntries[3], parentId: "active-tail" },
+          ],
+          leafId: "active-tail",
+          hasLeafControl: true,
+          systemPrompt: "system prompt",
+          tools: [],
+        }),
+      ).toString("base64"),
+    );
+  });
+
+  it("preserves an explicitly empty branch selected by a terminal leaf control", async () => {
+    const entries = [
+      {
+        type: "message",
+        id: "inactive-tail",
+        parentId: null,
+        timestamp: "2026-06-15T00:00:01.000Z",
+        message: { role: "assistant", content: "inactive" },
+      },
+      {
+        type: "leaf",
+        id: "empty-leaf",
+        parentId: "inactive-tail",
+        timestamp: "2026-06-15T00:00:02.000Z",
+        targetId: null,
+      },
+      {
+        type: "metadata",
+        id: "opaque-after-leaf",
+        parentId: "inactive-tail",
+      },
+    ];
+    hoisted.sessionTranscriptContent = entries.map((entry) => JSON.stringify(entry)).join("\n");
+
+    await buildExportSessionReply(makeParams());
+
+    expect(writtenHtml()).toContain(
+      Buffer.from(
+        JSON.stringify({
+          header: null,
+          entries: [entries[0], { ...entries[1], parentId: null }, entries[2]],
+          leafId: null,
+          hasLeafControl: true,
+          systemPrompt: "system prompt",
+          tools: [],
+        }),
+      ).toString("base64"),
+    );
   });
 
   it("suffixes colliding default export filenames instead of overwriting", async () => {

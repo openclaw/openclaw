@@ -1,3 +1,4 @@
+/** Doctor checks and repairs for workspace memory files and legacy workspace hints. */
 import fs from "node:fs";
 import path from "node:path";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -24,6 +25,7 @@ export const MEMORY_SYSTEM_PROMPT = [
   "https://github.com/openclaw/openclaw/commit/7d1fee70e76f2f634f1b41fca927ee663914183a",
 ].join("\n");
 
+/** Returns true when the workspace appears to lack canonical memory guidance. */
 export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<boolean> {
   const entries = await listWorkspaceEntries(workspaceDir);
   if (entries.has(CANONICAL_ROOT_MEMORY_FILENAME)) {
@@ -48,28 +50,6 @@ export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<b
   }
 
   return true;
-}
-
-export type LegacyWorkspaceDetection = {
-  activeWorkspace: string;
-  legacyDirs: string[];
-};
-
-export function detectLegacyWorkspaceDirs(params: {
-  workspaceDir: string;
-}): LegacyWorkspaceDetection {
-  const activeWorkspace = path.resolve(params.workspaceDir);
-  const legacyDirs: string[] = [];
-  return { activeWorkspace, legacyDirs };
-}
-
-export function formatLegacyWorkspaceWarning(detection: LegacyWorkspaceDetection): string {
-  return [
-    "Extra workspace directories detected (may contain old agent files):",
-    ...detection.legacyDirs.map((dir) => `- ${shortenHomePath(dir)}`),
-    `Active workspace: ${shortenHomePath(detection.activeWorkspace)}`,
-    "If unused, archive or move to Trash.",
-  ].join("\n");
 }
 
 export type RootMemoryFilesDetection = {
@@ -113,6 +93,7 @@ async function listWorkspaceEntries(workspaceDir: string): Promise<Set<string>> 
   }
 }
 
+/** Detects canonical and legacy root memory files in a workspace. */
 export async function detectRootMemoryFiles(
   workspaceDir: string,
 ): Promise<RootMemoryFilesDetection> {
@@ -143,6 +124,7 @@ function formatBytes(bytes?: number): string {
   return typeof bytes === "number" ? `${bytes} bytes` : "size unknown";
 }
 
+/** Formats the warning for split canonical/legacy root memory files. */
 export function formatRootMemoryFilesWarning(detection: RootMemoryFilesDetection): string | null {
   if (detection.canonicalExists && detection.legacyExists) {
     return [
@@ -207,6 +189,7 @@ function buildMergedLegacyRootMemorySection(params: {
   ].join("\n");
 }
 
+/** Archives and merges a legacy root memory file into canonical memory. */
 export async function migrateLegacyRootMemoryFile(
   workspaceDir: string,
 ): Promise<RootMemoryMigrationResult> {
@@ -246,6 +229,7 @@ export async function migrateLegacyRootMemoryFile(
   };
 }
 
+/** Emits workspace root-memory health warnings. */
 export async function noteWorkspaceMemoryHealth(cfg: OpenClawConfig): Promise<void> {
   try {
     const agentId = resolveDefaultAgentId(cfg);
@@ -261,6 +245,7 @@ export async function noteWorkspaceMemoryHealth(cfg: OpenClawConfig): Promise<vo
   }
 }
 
+/** Prompts to merge legacy root memory into canonical memory when both files exist. */
 export async function maybeRepairWorkspaceMemoryHealth(params: {
   cfg: OpenClawConfig;
   prompter: DoctorPrompter;

@@ -1,3 +1,4 @@
+/** Detects directive-only turns that should skip the model. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MsgContext } from "../templating.js";
 import type { InlineDirectives } from "./directive-handling.parse.js";

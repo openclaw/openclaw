@@ -1,3 +1,4 @@
+// Video capability overlays merge config overrides into provider capabilities.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveVideoGenerationModeCapabilities } from "./capabilities.js";
 import type { GenerateVideoParams } from "./runtime-types.js";
@@ -110,7 +111,7 @@ function mergeVideoGenerationModeCapabilities<
   } as T;
 }
 
-export function mergeVideoGenerationProviderCapabilities(
+function mergeVideoGenerationProviderCapabilities(
   base: VideoGenerationProviderCapabilities,
   overlay: VideoGenerationProviderCapabilities,
 ): VideoGenerationProviderCapabilities {

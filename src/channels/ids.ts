@@ -1,3 +1,8 @@
+/**
+ * Built-in chat channel ids and aliases.
+ *
+ * Derives canonical ids from generated bundled channel metadata with runtime catalog fallback.
+ */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
 import { listBundledChannelCatalogEntries } from "./bundled-channel-catalog-read.js";
@@ -52,13 +57,6 @@ export const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.freeze
     ),
   ),
 ) as Record<string, ChatChannelId>;
-
-/**
- * Lists configured built-in chat channel aliases.
- */
-export function listChatChannelAliases(): string[] {
-  return Object.keys(CHAT_CHANNEL_ALIASES);
-}
 
 function listRuntimeBundledChatChannelEntries(): BundledChatChannelEntry[] {
   // Generated metadata is the hot-path source. The runtime catalog fallback covers

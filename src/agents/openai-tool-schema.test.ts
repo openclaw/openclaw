@@ -1,9 +1,13 @@
+// Verifies OpenAI strict tool schema normalization and cache behavior.
 import { beforeEach, describe, expect, it } from "vitest";
+import { projectOpenAITools } from "./openai-tool-projection.js";
 import {
   clearOpenAIToolSchemaCacheForTest,
+  findOpenAIStrictToolProjectionDiagnostics,
   isStrictOpenAIJsonSchemaCompatible,
+  normalizeOpenAIStrictToolParameters,
   normalizeStrictOpenAIJsonSchema,
-  resolveOpenAIStrictToolFlagForInventory,
+  resolveOpenAIProjectedToolsStrictToolFlag,
 } from "./openai-tool-schema.js";
 
 describe("OpenAI strict tool schema normalization", () => {
@@ -28,13 +32,11 @@ describe("OpenAI strict tool schema normalization", () => {
         additionalProperties: false,
       });
       expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(true);
-      expect(
-        resolveOpenAIStrictToolFlagForInventory([{ name: "empty", parameters: schema }], true),
-      ).toBe(true);
     }
   });
 
   it("does not close permissive nested object schemas implicitly", () => {
+    // Nested permissive objects stay incompatible unless callers make them strict.
     const schema = {
       type: "object",
       properties: {
@@ -54,7 +56,10 @@ describe("OpenAI strict tool schema normalization", () => {
     expect(normalized.properties?.metadata).not.toHaveProperty("additionalProperties");
     expect(isStrictOpenAIJsonSchemaCompatible(schema)).toBe(false);
     expect(
-      resolveOpenAIStrictToolFlagForInventory([{ name: "write", parameters: schema }], true),
+      resolveOpenAIProjectedToolsStrictToolFlag(
+        projectOpenAITools([{ name: "write", parameters: schema }]),
+        true,
+      ),
     ).toBe(false);
   });
 
@@ -69,6 +74,7 @@ describe("OpenAI strict tool schema normalization", () => {
   });
 
   it("reuses normalized strict schemas for stable tool schema objects", () => {
+    // Cache keys include unsupported-keyword policy, not just object identity.
     const schema = {
       type: "object",
       properties: {
@@ -90,5 +96,79 @@ describe("OpenAI strict tool schema normalization", () => {
         unsupportedToolSchemaKeywords: ["minimum"],
       }),
     ).toBe(third);
+  });
+
+  it("reports unreadable nested tool schemas instead of throwing", () => {
+    const unreadable = {
+      name: "broken",
+      parameters: {
+        type: "object",
+        get properties(): never {
+          throw new Error("properties exploded");
+        },
+      },
+    };
+
+    const projection = projectOpenAITools([unreadable]);
+
+    expect(findOpenAIStrictToolProjectionDiagnostics(projection)).toEqual([
+      {
+        toolIndex: 0,
+        toolName: "broken",
+        violations: ["broken.parameters is not JSON-serializable"],
+      },
+    ]);
+  });
+
+  it("keeps strict mode for emitted tools when unreadable tools are dropped", () => {
+    const projection = projectOpenAITools([
+      {
+        name: "broken",
+        parameters: {
+          type: "object",
+          get properties(): never {
+            throw new Error("properties exploded");
+          },
+        },
+      },
+      {
+        name: "lookup",
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+    ]);
+
+    expect(resolveOpenAIProjectedToolsStrictToolFlag(projection, true)).toBe(true);
+  });
+
+  it("reuses projected schemas for strict checks and normalization", () => {
+    let serializationCount = 0;
+    const projection = projectOpenAITools([
+      {
+        name: "lookup",
+        parameters: {
+          toJSON() {
+            serializationCount += 1;
+            return {
+              type: "object",
+              properties: {},
+              required: [],
+              additionalProperties: false,
+            };
+          },
+        },
+      },
+    ]);
+    const tool = projection.tools[0];
+    expect(tool).toBeDefined();
+
+    expect(resolveOpenAIProjectedToolsStrictToolFlag(projection, true)).toBe(true);
+    const normalized = normalizeOpenAIStrictToolParameters(tool?.parameters, true);
+    expect(normalizeOpenAIStrictToolParameters(tool?.parameters, true)).toBe(normalized);
+    expect(serializationCount).toBe(1);
   });
 });

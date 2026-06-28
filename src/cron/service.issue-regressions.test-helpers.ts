@@ -1,3 +1,4 @@
+// Cron issue regression helpers share mocks for service regression tests.
 import { vi } from "vitest";
 import {
   createDefaultIsolatedRunner,
@@ -9,7 +10,6 @@ import {
   createRunningCronServiceState,
   createDeferred,
   topOfHourOffsetMs,
-  writeCronJobs,
   writeCronStoreSnapshot,
 } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { CronService } from "./service.js";
@@ -28,7 +28,6 @@ export {
   createDeferred,
   noopLogger,
   topOfHourOffsetMs,
-  writeCronJobs,
   writeCronStoreSnapshot,
 };
 

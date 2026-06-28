@@ -1,3 +1,4 @@
+// Discord tests cover reply delivery plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -138,6 +139,21 @@ describe("deliverDiscordReply", () => {
     expect(sendOptions.cfg).toBe(params.cfg);
     expect(sendOptions.token).toBe("token");
     expect(sendOptions.rest).toBe(rest);
+  });
+
+  it("formats reasoning replies as visible Discord payloads before shared outbound", async () => {
+    await deliverDiscordReply({
+      replies: [{ text: "Because it helps", isReasoning: true }],
+      target: "channel:101",
+      token: "token",
+      accountId: "default",
+      runtime,
+      cfg,
+      textLimit: 2000,
+      kind: "block",
+    });
+
+    expect(firstDeliverParams().payloads).toEqual([{ text: "Thinking\n\n_Because it helps_" }]);
   });
 
   it("fails when shared outbound accepts a final reply but delivers no Discord message", async () => {

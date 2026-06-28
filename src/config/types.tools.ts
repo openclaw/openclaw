@@ -1,3 +1,4 @@
+// Defines tool availability and allowlist configuration types.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ChatType } from "../channels/chat-type.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
@@ -203,8 +204,8 @@ export type ToolSearchConfig =
   | {
       /** Enable compact search/call cataloging for large tool sets. */
       enabled?: boolean;
-      /** Exposed model surface. "code" exposes tool_search_code; "tools" exposes structured fallback tools. */
-      mode?: "code" | "tools";
+      /** Exposed model surface. "code" exposes tool_search_code; "tools" exposes structured fallback tools; "directory" keeps a bounded directory plus selected schemas visible while deferring the rest behind search/describe/call. */
+      mode?: "code" | "tools" | "directory";
       /** Timeout in milliseconds for one tool_search_code execution. Runtime clamps to 1s..60s. */
       codeTimeoutMs?: number;
       /** Default search result count when the model omits a limit. Runtime clamps to maxSearchLimit. */
@@ -510,7 +511,6 @@ export type MemorySearchConfig = {
   /** Index storage configuration. */
   store?: {
     driver?: "sqlite";
-    path?: string;
     fts?: {
       /** FTS5 tokenizer (default: "unicode61"). Use "trigram" for CJK text support. */
       tokenizer?: "unicode61" | "trigram";
@@ -621,7 +621,7 @@ export type ToolsConfig = {
       openaiCodex?: {
         /** Enable native Codex web search for eligible models. */
         enabled?: boolean;
-        /** Use cached or live external web access. Default: "cached". */
+        /** Prefer cached or explicitly request live access. Unrestricted Codex turns resolve cached to live. */
         mode?: "cached" | "live";
         /** Optional allowlist of domains passed to the native Codex tool. */
         allowedDomains?: string[];

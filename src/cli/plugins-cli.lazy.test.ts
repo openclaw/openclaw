@@ -1,3 +1,4 @@
+// Plugins CLI lazy tests cover lazy plugin command registration and imports.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,6 +18,7 @@ describe("plugins cli lazy runtime boundary", () => {
       runtimeLoaded();
       return {
         runPluginMarketplaceListCommand: vi.fn(),
+        runPluginMarketplaceRefreshCommand: vi.fn(),
         runPluginsDisableCommand: vi.fn(),
         runPluginsDoctorCommand: vi.fn(),
         runPluginsEnableCommand: vi.fn(),
@@ -49,6 +51,7 @@ describe("plugins cli lazy runtime boundary", () => {
       runtimeLoaded();
       return {
         runPluginMarketplaceListCommand: vi.fn(),
+        runPluginMarketplaceRefreshCommand: vi.fn(),
         runPluginsDisableCommand: vi.fn(),
         runPluginsDoctorCommand: vi.fn(),
         runPluginsEnableCommand: vi.fn(),
@@ -65,5 +68,40 @@ describe("plugins cli lazy runtime boundary", () => {
 
     expect(runtimeLoaded).toHaveBeenCalledTimes(1);
     expect(runPluginsRegistryCommand).toHaveBeenCalledWith(expect.objectContaining({ json: true }));
+  });
+
+  it("loads the plugins runtime for marketplace refresh", async () => {
+    const runPluginMarketplaceRefreshCommand = vi.fn().mockResolvedValue(undefined);
+    vi.doMock("./plugins-cli.runtime.js", () => ({
+      runPluginMarketplaceListCommand: vi.fn(),
+      runPluginMarketplaceRefreshCommand,
+      runPluginsDisableCommand: vi.fn(),
+      runPluginsDoctorCommand: vi.fn(),
+      runPluginsEnableCommand: vi.fn(),
+      runPluginsInstallAction: vi.fn(),
+      runPluginsRegistryCommand: vi.fn(),
+    }));
+
+    const { registerPluginsCli } = await import("./plugins-cli.js");
+    const program = new Command();
+    registerPluginsCli(program);
+
+    await program.parseAsync(
+      [
+        "plugins",
+        "marketplace",
+        "refresh",
+        "--feed-profile",
+        "acme",
+        "--expected-sha256",
+        "abc123",
+        "--json",
+      ],
+      { from: "user" },
+    );
+
+    expect(runPluginMarketplaceRefreshCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ feedProfile: "acme", expectedSha256: "abc123", json: true }),
+    );
   });
 });

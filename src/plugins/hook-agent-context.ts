@@ -1,5 +1,7 @@
+/** Builds plugin hook agent context snapshots from active session and model state. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { parseRawSessionConversationRef } from "../sessions/session-key-utils.js";
+import type { PluginHookChannelContext } from "./hook-channel-context.types.js";
 import type { PluginHookAgentContext } from "./hook-types.js";
 
 const TARGET_PREFIXES = new Set(["channel", "chat", "direct", "dm", "group", "thread", "user"]);
@@ -34,6 +36,34 @@ function stripConversationPrefix(
     return suffix;
   }
   return text;
+}
+
+function resolveAgentHookChannel(params: {
+  messageChannel?: string | null;
+  messageProvider?: string | null;
+}): string | undefined {
+  const messageChannel = normalizeOptionalString(params.messageChannel);
+  const provider = normalizeOptionalString(params.messageProvider);
+  if (!messageChannel) {
+    return provider;
+  }
+
+  const separatorIndex = messageChannel.indexOf(":");
+  if (separatorIndex === -1) {
+    return messageChannel;
+  }
+
+  const prefix = normalizeOptionalString(messageChannel.slice(0, separatorIndex));
+  if (!prefix) {
+    return provider;
+  }
+  if (
+    TARGET_PREFIXES.has(normalizeKey(prefix)) ||
+    normalizeKey(prefix) === normalizeKey(provider)
+  ) {
+    return provider;
+  }
+  return prefix;
 }
 
 /** Resolves the channel id exposed to plugin agent hooks. */
@@ -76,9 +106,53 @@ export function buildAgentHookContextChannelFields(params: {
   messageProvider?: string | null;
   currentChannelId?: string | null;
   messageTo?: string | null;
-}): Pick<PluginHookAgentContext, "channelId" | "messageProvider"> {
+  senderId?: string | null;
+}): Pick<
+  PluginHookAgentContext,
+  "channel" | "channelId" | "chatId" | "messageProvider" | "senderId"
+> {
+  const channel = resolveAgentHookChannel(params);
+  const channelId = resolveAgentHookChannelId(params);
   return {
+    channel,
     messageProvider: normalizeOptionalString(params.messageProvider),
-    channelId: resolveAgentHookChannelId(params),
+    channelId,
+    chatId: channelId,
+    senderId: normalizeOptionalString(params.senderId),
+  };
+}
+
+export function buildAgentHookContextIdentityFields(params: {
+  trigger?: string | null;
+  senderId?: string | null;
+  chatId?: string | null;
+  channelContext?: PluginHookChannelContext;
+}): Pick<PluginHookAgentContext, "senderId" | "chatId" | "channelContext"> {
+  const trigger = normalizeOptionalString(params.trigger);
+  if (trigger && trigger !== "user") {
+    return {};
+  }
+
+  const senderId = normalizeOptionalString(params.senderId);
+  const chatId = normalizeOptionalString(params.chatId);
+  const sender = senderId
+    ? { ...params.channelContext?.sender, id: senderId }
+    : params.channelContext?.sender;
+  const chat = chatId
+    ? { ...params.channelContext?.chat, id: chatId }
+    : params.channelContext?.chat;
+  const channelContext =
+    sender || chat || params.channelContext
+      ? {
+          ...params.channelContext,
+          ...(sender ? { sender } : {}),
+          ...(chat ? { chat } : {}),
+        }
+      : undefined;
+
+  return {
+    ...(senderId ? { senderId } : {}),
+    ...(chatId ? { chatId } : {}),
+    ...(channelContext ? { channelContext } : {}),
   };
 }

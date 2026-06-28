@@ -1,15 +1,15 @@
+// Browser tests cover server context.ensure browser available.waits for cdp ready plugin behavior.
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import "./server-context.chrome-test-harness.js";
-import {
-  PROFILE_ATTACH_RETRY_TIMEOUT_MS,
-  PROFILE_HTTP_REACHABILITY_TIMEOUT_MS,
-} from "./cdp-timeouts.js";
+import { PROFILE_ATTACH_RETRY_TIMEOUT_MS } from "./cdp-timeouts.js";
 import * as chromeModule from "./chrome.js";
 import { BrowserProfileUnavailableError } from "./errors.js";
 import { createBrowserRouteContext } from "./server-context.js";
 import { makeBrowserServerState, mockLaunchedChrome } from "./server-context.test-harness.js";
+
+const PROFILE_HTTP_REACHABILITY_TIMEOUT_MS = 300;
 
 function setupEnsureBrowserAvailableHarness() {
   vi.useFakeTimers();

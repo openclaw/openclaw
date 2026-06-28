@@ -1,3 +1,6 @@
+// Chat send input sanitizer for Gateway message payloads.
+
+/** Drop disallowed control characters while preserving tab and line breaks. */
 function stripDisallowedChatControlChars(message: string): string {
   let output = "";
   for (const char of message) {
@@ -9,6 +12,7 @@ function stripDisallowedChatControlChars(message: string): string {
   return output;
 }
 
+/** Normalize chat text and reject null bytes before routing to channels. */
 export function sanitizeChatSendMessageInput(
   message: string,
 ): { ok: true; message: string } | { ok: false; error: string } {

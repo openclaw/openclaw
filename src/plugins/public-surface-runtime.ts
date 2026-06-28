@@ -1,3 +1,4 @@
+// Loads plugin public runtime surfaces through documented entrypoints.
 import fs from "node:fs";
 import path from "node:path";
 import { resolveUserPath } from "../utils.js";

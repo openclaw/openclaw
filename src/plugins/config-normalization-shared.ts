@@ -1,3 +1,4 @@
+// Shares plugin config normalization helpers across control-plane paths.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,

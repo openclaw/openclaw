@@ -1,3 +1,4 @@
+// Qa Parity Report script supports OpenClaw repository automation.
 import { runQaParityReportCommand } from "../extensions/qa-lab/src/cli.runtime.ts";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mjs";
 
@@ -53,28 +54,33 @@ Options:
   ) as Options;
 }
 
-const opts = parseArgs(process.argv.slice(2));
-if (opts.runtimeAxis) {
-  if (!opts.summary) {
-    throw new Error("--summary is required when --runtime-axis is set.");
+try {
+  const opts = parseArgs(process.argv.slice(2));
+  if (opts.runtimeAxis) {
+    if (!opts.summary) {
+      throw new Error("--summary is required when --runtime-axis is set.");
+    }
+  } else {
+    if (!opts.candidateSummary) {
+      throw new Error("--candidate-summary is required.");
+    }
+    if (!opts.baselineSummary) {
+      throw new Error("--baseline-summary is required.");
+    }
   }
-} else {
-  if (!opts.candidateSummary) {
-    throw new Error("--candidate-summary is required.");
-  }
-  if (!opts.baselineSummary) {
-    throw new Error("--baseline-summary is required.");
-  }
-}
 
-await runQaParityReportCommand({
-  ...(opts.baselineSummary ? { baselineSummary: opts.baselineSummary } : {}),
-  ...(opts.candidateSummary ? { candidateSummary: opts.candidateSummary } : {}),
-  ...(opts.baselineLabel ? { baselineLabel: opts.baselineLabel } : {}),
-  ...(opts.candidateLabel ? { candidateLabel: opts.candidateLabel } : {}),
-  ...(opts.outputDir ? { outputDir: opts.outputDir } : {}),
-  ...(opts.repoRoot ? { repoRoot: opts.repoRoot } : {}),
-  ...(opts.runtimeAxis ? { runtimeAxis: opts.runtimeAxis } : {}),
-  ...(opts.summary ? { summary: opts.summary } : {}),
-  ...(opts.tokenEfficiency ? { tokenEfficiency: opts.tokenEfficiency } : {}),
-});
+  await runQaParityReportCommand({
+    ...(opts.baselineSummary ? { baselineSummary: opts.baselineSummary } : {}),
+    ...(opts.candidateSummary ? { candidateSummary: opts.candidateSummary } : {}),
+    ...(opts.baselineLabel ? { baselineLabel: opts.baselineLabel } : {}),
+    ...(opts.candidateLabel ? { candidateLabel: opts.candidateLabel } : {}),
+    ...(opts.outputDir ? { outputDir: opts.outputDir } : {}),
+    ...(opts.repoRoot ? { repoRoot: opts.repoRoot } : {}),
+    ...(opts.runtimeAxis ? { runtimeAxis: opts.runtimeAxis } : {}),
+    ...(opts.summary ? { summary: opts.summary } : {}),
+    ...(opts.tokenEfficiency ? { tokenEfficiency: opts.tokenEfficiency } : {}),
+  });
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exitCode = 1;
+}

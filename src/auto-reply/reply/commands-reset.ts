@@ -1,14 +1,20 @@
+/** Handles /new and /reset command flows, including soft reset and ACP-bound sessions. */
 import { clearBootstrapSnapshot } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions } from "../../agents/cli-session.js";
 import { resetConfiguredBindingTargetInPlace } from "../../channels/plugins/binding-targets.js";
-import { updateSessionStoreEntry } from "../../config/sessions/store.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { logVerbose } from "../../globals.js";
 import { isAcpSessionKey } from "../../routing/session-key.js";
 import { resolveBoundAcpThreadSessionKey } from "./commands-acp/targets.js";
 import { emitResetCommandHooks, type ResetCommandAction } from "./commands-reset-hooks.js";
 import { parseSoftResetCommand } from "./commands-reset-mode.js";
 import type { CommandHandlerResult, HandleCommandsParams } from "./commands-types.js";
+import type { ReplySessionBinding } from "./get-reply.types.js";
 import { isResetAuthorizedForContext } from "./reset-authorization.js";
+
+type InternalResetCommandOptions = NonNullable<HandleCommandsParams["opts"]> & {
+  onSessionPrepared?: (binding: ReplySessionBinding) => void;
+};
 
 function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: string): void {
   const mutableCtx = ctx as Record<string, unknown>;
@@ -18,6 +24,7 @@ function applyAcpResetTailContext(ctx: HandleCommandsParams["ctx"], resetTail: s
   mutableCtx.BodyForCommands = resetTail;
   mutableCtx.BodyForAgent = resetTail;
   mutableCtx.BodyStripped = resetTail;
+  // Mark the context so ACP dispatch continues with the post-reset tail, not the reset command.
   mutableCtx.AcpDispatchTailAfterReset = true;
 }
 
@@ -29,6 +36,7 @@ function isResetAuthorized(params: HandleCommandsParams): boolean {
   });
 }
 
+/** Handles reset/new commands or returns null when another command handler should continue. */
 export async function maybeHandleResetCommand(
   params: HandleCommandsParams,
 ): Promise<CommandHandlerResult | null> {
@@ -73,10 +81,12 @@ export async function maybeHandleResetCommand(
         params.sessionStore[params.sessionKey] = targetSessionEntry;
       }
       if (params.storePath && params.sessionKey) {
-        await updateSessionStoreEntry({
-          storePath: params.storePath,
-          sessionKey: params.sessionKey,
-          update: async (entry) => {
+        await updateSessionEntry(
+          {
+            storePath: params.storePath,
+            sessionKey: params.sessionKey,
+          },
+          async (entry) => {
             const next = { ...entry };
             clearAllCliSessions(next);
             return {
@@ -87,7 +97,7 @@ export async function maybeHandleResetCommand(
               lastInteractionAt: now,
             };
           },
-        });
+        );
       }
     }
 
@@ -136,6 +146,13 @@ export async function maybeHandleResetCommand(
       logVerbose(`acp reset failed for ${boundAcpKey}: ${resetResult.error ?? "unknown error"}`);
     }
     if (resetResult.ok) {
+      if (resetResult.sessionId) {
+        (params.opts as InternalResetCommandOptions | undefined)?.onSessionPrepared?.({
+          sessionKey: resetResult.sessionKey ?? boundAcpKey,
+          sessionId: resetResult.sessionId,
+          storePath: resetResult.storePath,
+        });
+      }
       params.command.resetHookTriggered = true;
       if (resetTail) {
         applyAcpResetTailContext(params.ctx, resetTail);

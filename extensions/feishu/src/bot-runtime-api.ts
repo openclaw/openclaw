@@ -1,3 +1,4 @@
+// Feishu API module exposes the plugin public contract.
 export {
   buildAgentMediaPayload,
   resolveChannelContextVisibilityMode,
@@ -9,4 +10,4 @@ export {
   filterSupplementalContextItems,
   normalizeAgentId,
 } from "../runtime-api.js";
-export { loadSessionStore, resolveSessionStoreEntry } from "../runtime-api.js";
+export { getSessionEntry } from "../runtime-api.js";

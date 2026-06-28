@@ -1,3 +1,4 @@
+/** Tests Code Mode tool registration, namespace filtering, and run lifecycle. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import { setPluginToolMeta } from "../plugins/tools.js";
@@ -27,6 +28,7 @@ import {
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 function fakeTool(name: string, description: string): AnyAgentTool {
+  // Minimal tool shape keeps Code Mode catalog tests runtime-free.
   return {
     name,
     label: name,
@@ -70,6 +72,7 @@ function mcpTool(params: {
   operation?: "tool" | "resources_list" | "resources_read" | "prompts_list" | "prompts_get";
   execute?: AnyAgentTool["execute"];
 }): AnyAgentTool {
+  // MCP metadata drives Code Mode grouping and raw tool routing.
   const tool: AnyAgentTool = {
     name: params.name,
     label: params.toolName,
@@ -138,6 +141,8 @@ async function runUntilCompleted(params: {
   code: string;
   language?: "javascript" | "typescript";
 }) {
+  // Code Mode may return a waiting state before completion; tests poll through
+  // the public wait tool instead of reaching into activeRuns.
   let details = resultDetails(
     await params.execTool.execute("code-call-1", {
       code: params.code,
@@ -774,6 +779,71 @@ describe("Code Mode", () => {
     expect(ticket.execute).toHaveBeenCalledTimes(1);
   });
 
+  it("uses tools recovery guidance for guessed tool ids", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    const writeTool = pluginTool("write", "Write a file to the workspace");
+    applyCodeModeCatalog({
+      tools: [...codeModeTools, writeTool],
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: `
+        try {
+          await tools.call("file_write", {
+            path: "memory/2026-05-22.md",
+            content: "remember this",
+          });
+          return "unexpected success";
+        } catch (error) {
+          return error.message;
+        }
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toBe(
+      "Unknown tool id: file_write. Did you mean: write? Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
+    );
+    expect(writeTool.execute).not.toHaveBeenCalled();
+  });
+
+  it("uses tools recovery guidance when no generic Code Mode suggestion matches", async () => {
+    const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
+    applyCodeModeCatalog({
+      tools: codeModeTools,
+      config,
+      sessionId: "session-code-mode",
+      sessionKey: "agent:main:main",
+      runId: "run-code-mode",
+      catalogRef,
+    });
+
+    const details = await runUntilCompleted({
+      execTool: codeModeTools[0],
+      waitTool: codeModeTools[1],
+      code: `
+        try {
+          await tools.call("missing_tool", {});
+          return "unexpected success";
+        } catch (error) {
+          return error.message;
+        }
+      `,
+    });
+
+    expect(details.status).toBe("completed");
+    expect(details.value).toBe(
+      "Unknown tool id: missing_tool. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
+    );
+  });
+
   it("exposes MCP tools only through the MCP namespace", async () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const githubCreate = mcpTool({
@@ -877,8 +947,10 @@ describe("Code Mode", () => {
       },
       searchHits: [],
       allHasMcp: false,
-      directDescribe: "Unknown tool id: github__create_issue",
-      directCall: "Unknown tool id: github__create_issue",
+      directDescribe:
+        "Unknown tool id: github__create_issue. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
+      directCall:
+        "Unknown tool id: github__create_issue. Use tools.search to find a tool, tools.describe to inspect it, then tools.call with the exact id or name.",
       hasMcp: true,
       apiSchemaTitle: "object",
       apiHeader: expect.stringContaining("function createIssue("),

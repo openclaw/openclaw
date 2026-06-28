@@ -1,3 +1,8 @@
+/**
+ * OpenAI provider routing decisions shared by model selection, auth profiles, and runtime setup.
+ *
+ * Custom OpenAI-compatible base URLs intentionally bypass Codex-runtime defaults.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
@@ -71,11 +76,6 @@ export function parseModelRefProvider(value: unknown): string | undefined {
     return undefined;
   }
   return normalizeProviderId(value.trim().slice(0, slashIndex));
-}
-
-/** Returns true when a model ref is explicitly OpenAI-qualified. */
-export function modelRefUsesOpenAIProvider(value: unknown): boolean {
-  return parseModelRefProvider(value) === OPENAI_PROVIDER_ID;
 }
 
 /** Returns true when selected model config should ensure the Codex plugin exists. */

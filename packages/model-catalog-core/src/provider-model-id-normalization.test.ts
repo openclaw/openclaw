@@ -1,3 +1,4 @@
+// Model Catalog Core tests cover provider model id normalization behavior.
 import { describe, expect, it } from "vitest";
 import {
   collectManifestModelIdNormalizationPolicies,
@@ -86,5 +87,36 @@ describe("provider model id policy normalization", () => {
     expect(stripSelfProviderModelPrefix("vercel-ai-gateway", "vercel-ai-gateway/opus-4.6")).toBe(
       "opus-4.6",
     );
+  });
+});
+
+describe("manifest stripPrefixes matches and slices on the same normalized value", () => {
+  function stripWith(stripPrefixes: string[], modelId: string): string {
+    const policies = collectManifestModelIdNormalizationPolicies([
+      {
+        modelIdNormalization: {
+          providers: {
+            openai: { stripPrefixes },
+          },
+        },
+      },
+    ]);
+    return normalizeStaticProviderModelIdWithPolicies("openai", modelId, policies);
+  }
+
+  it("strips a whitespace-free prefix exactly (control: no regression)", () => {
+    expect(stripWith(["openai/"], "openai/gpt-4")).toBe("gpt-4");
+  });
+
+  it("strips by the matched length when the manifest prefix has a leading space", () => {
+    expect(stripWith([" openai/"], "openai/gpt-4")).toBe("gpt-4");
+  });
+
+  it("strips by the matched length when the manifest prefix has a trailing space", () => {
+    expect(stripWith(["openai/ "], "openai/gpt-4")).toBe("gpt-4");
+  });
+
+  it("strips by the matched length when the manifest prefix differs in case and spacing", () => {
+    expect(stripWith([" OpenAI/ "], "openai/gpt-4")).toBe("gpt-4");
   });
 });

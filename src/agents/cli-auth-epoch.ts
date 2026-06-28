@@ -1,3 +1,7 @@
+/**
+ * Builds auth-state epochs for CLI-backed runtimes so reusable sessions reset
+ * when the owning local credential identity changes.
+ */
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
@@ -27,12 +31,17 @@ const defaultCliAuthEpochDeps: CliAuthEpochDeps = {
 
 const cliAuthEpochDeps: CliAuthEpochDeps = { ...defaultCliAuthEpochDeps };
 
-export const CLI_AUTH_EPOCH_VERSION = 5;
+/** Version salt for CLI auth epoch encoding semantics. */
+export const CLI_AUTH_EPOCH_VERSION = 6;
 
+const GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
+
+/** Overrides credential readers for auth-epoch unit tests. */
 export function setCliAuthEpochTestDeps(overrides: Partial<CliAuthEpochDeps>): void {
   Object.assign(cliAuthEpochDeps, overrides);
 }
 
+/** Restores default credential readers after auth-epoch unit tests. */
 export function resetCliAuthEpochTestDeps(): void {
   Object.assign(cliAuthEpochDeps, defaultCliAuthEpochDeps);
 }
@@ -152,7 +161,7 @@ function encodeAuthProfileEpochPart(
   credential: AuthProfileCredential,
 ): string {
   const credentialHash = hashCliAuthEpochPart(encodeAuthProfileCredential(credential));
-  if (hasOAuthAccountIdentity(credential)) {
+  if (hasOAuthAccountIdentity(credential) && credential.provider !== GEMINI_CLI_PROVIDER_ID) {
     return `profile:oauth-identity:${credentialHash}`;
   }
   return `profile:${authProfileId}:${credentialHash}`;
@@ -198,8 +207,10 @@ function getAuthProfileCredential(
   return store.profiles[authProfileId];
 }
 
+/** Resolves the stable auth epoch hash for a CLI runtime/provider session. */
 export async function resolveCliAuthEpoch(params: {
   provider: string;
+  agentDir?: string;
   authProfileId?: string;
   skipLocalCredential?: boolean;
 }): Promise<string | undefined> {
@@ -215,7 +226,7 @@ export async function resolveCliAuthEpoch(params: {
   }
 
   if (authProfileId) {
-    const store = cliAuthEpochDeps.loadAuthProfileStoreForRuntime(undefined, {
+    const store = cliAuthEpochDeps.loadAuthProfileStoreForRuntime(params.agentDir, {
       readOnly: true,
       allowKeychainPrompt: false,
     });

@@ -1,3 +1,8 @@
+/**
+ * Subagent list builder.
+ *
+ * Combines live registry runs and persisted session metadata for sessions_list/subagents views.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveSubagentLabel, sortSubagentRuns } from "../auto-reply/reply/subagents-utils.js";
 import { resolveStorePath } from "../config/sessions/paths.js";
@@ -29,8 +34,6 @@ import {
   shouldKeepSubagentRunChildLink,
 } from "./subagent-run-liveness.js";
 
-// Builds the sessions_list subagent view from registry runs and persisted
-// session metadata. The text and structured items share one indexing path.
 type SubagentListItem = {
   index: number;
   line: string;
@@ -140,7 +143,7 @@ export function buildLatestSubagentRunIndex(
 }
 
 /** Create a cached descendant counter for repeated list rendering checks. */
-export function createPendingDescendantCounter(runsSnapshot?: Map<string, SubagentRunRecord>) {
+function createPendingDescendantCounter(runsSnapshot?: Map<string, SubagentRunRecord>) {
   const pendingDescendantCache = new Map<string, number>();
   return (sessionKey: string) => {
     if (pendingDescendantCache.has(sessionKey)) {
@@ -154,7 +157,7 @@ export function createPendingDescendantCounter(runsSnapshot?: Map<string, Subage
 }
 
 /** Return whether a run should be shown in the active subagent section. */
-export function isActiveSubagentRun(
+function isActiveSubagentRun(
   entry: SubagentRunRecord,
   pendingDescendantCount: (sessionKey: string) => number,
 ) {

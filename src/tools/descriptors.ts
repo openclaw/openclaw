@@ -1,3 +1,4 @@
+// Defines built-in tool descriptors exposed to model planning.
 import type { ToolDescriptor } from "./types.js";
 
 /**

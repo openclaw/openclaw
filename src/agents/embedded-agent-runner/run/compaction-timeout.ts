@@ -1,7 +1,10 @@
+/**
+ * Computes run timeout behavior while compaction is in progress.
+ */
 import type { AgentMessage } from "../../runtime/index.js";
 
 /** Timeout state used to distinguish normal run deadlines from compaction stalls. */
-export type CompactionTimeoutSignal = {
+type CompactionTimeoutSignal = {
   isTimeout: boolean;
   isCompactionPendingOrRetrying: boolean;
   isCompactionInFlight: boolean;
@@ -31,16 +34,8 @@ export function resolveRunTimeoutDuringCompaction(params: {
   return params.graceAlreadyUsed ? "abort" : "extend";
 }
 
-/** Effective run timeout after adding the one-time compaction grace budget. */
-export function resolveRunTimeoutWithCompactionGraceMs(params: {
-  runTimeoutMs: number;
-  compactionTimeoutMs: number;
-}): number {
-  return params.runTimeoutMs + params.compactionTimeoutMs;
-}
-
 /** Candidate transcript snapshots available when a timeout fires during compaction. */
-export type SnapshotSelectionParams = {
+type SnapshotSelectionParams = {
   timedOutDuringCompaction: boolean;
   preCompactionSnapshot: AgentMessage[] | null;
   preCompactionSessionId: string;
@@ -49,7 +44,7 @@ export type SnapshotSelectionParams = {
 };
 
 /** Snapshot chosen for retry/replay after a compaction-related timeout. */
-export type SnapshotSelection = {
+type SnapshotSelection = {
   messagesSnapshot: AgentMessage[];
   sessionIdUsed: string;
   source: "pre-compaction" | "current";

@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements live transport scenarios behavior.
 import {
   LIVE_TRANSPORT_BASELINE_STANDARD_SCENARIO_IDS,
   collectLiveTransportStandardScenarioCoverage,
@@ -71,8 +72,14 @@ export const LIVE_TRANSPORT_COVERAGE_LANES: readonly LiveTransportCoverageLane[]
     commandName: "whatsapp",
     members: [
       { standardId: "canary", scenarioId: "whatsapp-canary" },
-      { standardId: "allowlist-block", scenarioId: "whatsapp-pairing-block" },
       { standardId: "mention-gating", scenarioId: "whatsapp-mention-gating" },
+      { standardId: "top-level-reply-shape", scenarioId: "whatsapp-top-level-reply-shape" },
+      { standardId: "restart-resume", scenarioId: "whatsapp-restart-resume" },
+      { standardId: "help-command", scenarioId: "whatsapp-help-command" },
+      { standardId: "quote-reply", scenarioId: "whatsapp-reply-to-message" },
+      { standardId: "quote-reply", scenarioId: "whatsapp-group-reply-to-message" },
+      { standardId: "reaction-observation", scenarioId: "whatsapp-status-reactions" },
+      { standardId: "allowlist-block", scenarioId: "whatsapp-group-allowlist-block" },
     ],
   },
 ] as const;

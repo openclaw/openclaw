@@ -1,3 +1,4 @@
+// Assertions for release user-journey E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -6,56 +7,87 @@ import {
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
 import { readBoundedResponseText as readBoundedResponseTextWithLimit } from "../bounded-response-text.mjs";
-import { applyMockOpenAiModelConfig } from "../fixtures/mock-openai-config.mjs";
+import {
+  applyMockOpenAiModelConfig,
+  parseMockOpenAiPort,
+} from "../fixtures/mock-openai-config.mjs";
 import { readPluginInstallRecords } from "../plugin-index-sqlite.mjs";
+import {
+  ERROR_DETAIL_TAIL_BYTES,
+  fileContainsText,
+  readJson,
+} from "../release-assertion-files.mjs";
+import { readTextFileTail } from "../text-file-utils.mjs";
 
 function clickClackHttpTimeoutMs() {
-  return readPositiveInt(process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS, 5000);
+  return readPositiveInt(
+    process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS,
+    5000,
+    "OPENCLAW_RELEASE_USER_JOURNEY_HTTP_TIMEOUT_MS",
+  );
 }
 
 function clickClackHttpBodyMaxBytes() {
   return readPositiveInt(
     process.env.OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES,
     1024 * 1024,
+    "OPENCLAW_RELEASE_USER_JOURNEY_HTTP_BODY_MAX_BYTES",
   );
 }
 
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, "utf8"));
-}
-
-function readPositiveInt(raw, fallback) {
+function readPositiveInt(raw, fallback, label) {
   const text = String(raw ?? "").trim();
-  if (!/^\d+$/u.test(text)) {
+  if (!text) {
     return fallback;
   }
+  if (!/^\d+$/u.test(text)) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
   const parsed = Number(text);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer. Got: ${JSON.stringify(text)}`);
+  }
+  return parsed;
 }
 
 async function withClickClackFixtureResponse(url, init, consume, options = {}) {
   const timeoutMs = options.timeoutMs ?? clickClackHttpTimeoutMs();
   const controller = new AbortController();
-  const timer = setTimeout(() => {
-    controller.abort();
-  }, timeoutMs);
+  const timeoutError = new Error(`${url} timed out after ${timeoutMs}ms`);
+  let timer;
+  let response;
+  const timeoutPromise = new Promise((_resolve, reject) => {
+    timer = setTimeout(() => {
+      controller.abort(timeoutError);
+      reject(timeoutError);
+    }, timeoutMs);
+  });
   try {
-    const response = await fetch(url, {
-      ...init,
-      signal: controller.signal,
-    });
-    return await consume(response);
+    response = await Promise.race([
+      fetch(url, {
+        ...init,
+        signal: controller.signal,
+      }),
+      timeoutPromise,
+    ]);
+    return await consume(response, { timeoutPromise });
   } finally {
     clearTimeout(timer);
+    await response?.body?.cancel?.().catch(() => undefined);
   }
 }
 
-async function readBoundedResponseText(response, label, byteLimit = clickClackHttpBodyMaxBytes()) {
-  return await readBoundedResponseTextWithLimit(response, label, byteLimit);
+async function readBoundedResponseText(
+  response,
+  label,
+  byteLimit = clickClackHttpBodyMaxBytes(),
+  options = {},
+) {
+  return await readBoundedResponseTextWithLimit(response, label, byteLimit, options.timeoutPromise);
 }
 
-async function readBoundedResponseJson(response, label) {
-  return JSON.parse(await readBoundedResponseText(response, label));
+async function readBoundedResponseJson(response, label, options = {}) {
+  return JSON.parse(await readBoundedResponseText(response, label, undefined, options));
 }
 
 function resolveHomePath(value) {
@@ -117,7 +149,7 @@ function assertOnboard() {
 }
 
 function configureMockModel() {
-  const mockPort = Number(process.argv[3]);
+  const mockPort = parseMockOpenAiPort(process.argv[3]);
   const cfg = readJson(configPath());
   applyMockOpenAiModelConfig(cfg, { mockPort });
   writeConfig(cfg);
@@ -134,8 +166,10 @@ function assertAgentTurn() {
 function assertFileContains() {
   const file = process.argv[3];
   const needle = process.argv[4];
-  const raw = fs.readFileSync(file, "utf8");
-  assert(raw.includes(needle), `${file} did not contain ${needle}. Output: ${raw}`);
+  assert(
+    fileContainsText(file, needle),
+    `${file} did not contain ${needle}. Output tail: ${readTextFileTail(file, ERROR_DETAIL_TAIL_BYTES)}`,
+  );
 }
 
 function rememberPluginInstallPath() {
@@ -259,8 +293,10 @@ async function postClickClackInbound() {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ body }),
     },
-    async (response) => {
-      const text = response.ok ? "" : await readBoundedResponseText(response, "ClickClack inbound");
+    async (response, options) => {
+      const text = response.ok
+        ? ""
+        : await readBoundedResponseText(response, "ClickClack inbound", undefined, options);
       assert(response.ok, `fixture inbound failed: ${response.status} ${text}`);
     },
   );
@@ -268,16 +304,20 @@ async function postClickClackInbound() {
 
 async function waitClickClackSocket() {
   const baseUrl = process.argv[3];
-  const timeoutSeconds = Number(process.argv[4] ?? 30);
+  const timeoutSeconds = readPositiveInt(
+    process.argv[4],
+    30,
+    "ClickClack websocket timeout seconds",
+  );
   const deadline = Date.now() + timeoutSeconds * 1000;
   while (Date.now() < deadline) {
     const remainingMs = Math.max(1, deadline - Date.now());
     const state = await withClickClackFixtureResponse(
       `${baseUrl}/fixture/state`,
       {},
-      async (response) =>
+      async (response, options) =>
         response.ok
-          ? await readBoundedResponseJson(response, "ClickClack fixture state")
+          ? await readBoundedResponseJson(response, "ClickClack fixture state", options)
           : undefined,
       {
         timeoutMs: Math.min(clickClackHttpTimeoutMs(), remainingMs),
@@ -307,7 +347,7 @@ function assertClickClackState() {
 async function waitClickClackReply() {
   const statePath = process.argv[3];
   const marker = process.argv[4];
-  const timeoutSeconds = Number(process.argv[5] ?? 30);
+  const timeoutSeconds = readPositiveInt(process.argv[5], 30, "ClickClack reply timeout seconds");
   const deadline = Date.now() + timeoutSeconds * 1000;
   while (Date.now() < deadline) {
     if (fs.existsSync(statePath)) {

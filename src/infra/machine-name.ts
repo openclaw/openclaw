@@ -1,3 +1,4 @@
+// Resolves a human-readable machine name for gateway display.
 import { execFile } from "node:child_process";
 import os from "node:os";
 import { promisify } from "node:util";

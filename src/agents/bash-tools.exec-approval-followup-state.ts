@@ -1,3 +1,8 @@
+/**
+ * Runtime handoff state for exec approval follow-up turns.
+ * Stores short-lived elevated defaults so an approved async exec can resume in
+ * the same session without persisting approval capabilities.
+ */
 import { randomUUID } from "node:crypto";
 import {
   isFutureDateTimestampMs,
@@ -6,14 +11,12 @@ import {
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ExecElevatedDefaults } from "./bash-tools.exec-types.js";
 
-// Short-lived in-memory handoff state for exec approval follow-up turns. The
-// handoff carries elevated defaults across the approval response without
-// persisting operator approval state longer than the TTL.
 const EXEC_APPROVAL_FOLLOWUP_IDEMPOTENCY_PREFIX = "exec-approval-followup:";
 const EXEC_APPROVAL_FOLLOWUP_IDEMPOTENCY_NONCE_MARKER = ":nonce:";
 const EXEC_APPROVAL_FOLLOWUP_RUNTIME_HANDOFF_TTL_MS = 5 * 60 * 1000;
 
-export type ExecApprovalFollowupRuntimeHandoff = {
+/** Single-use capability payload consumed by a follow-up agent turn. */
+type ExecApprovalFollowupRuntimeHandoff = {
   kind: "exec-approval-followup";
   approvalId: string;
   sessionKey: string;
@@ -21,7 +24,8 @@ export type ExecApprovalFollowupRuntimeHandoff = {
   bashElevated: ExecElevatedDefaults;
 };
 
-export type ExecApprovalFollowupRuntimeHandoffRegistration = {
+/** Registration handle returned to the gateway approval callback. */
+type ExecApprovalFollowupRuntimeHandoffRegistration = {
   handoffId: string;
   idempotencyKey: string;
 };
@@ -163,6 +167,21 @@ export function consumeExecApprovalFollowupRuntimeHandoff(params: {
   }
   execApprovalFollowupRuntimeHandoffs.delete(handoffId);
   return cloneExecApprovalFollowupRuntimeHandoff(entry);
+}
+
+/**
+ * A persisted exec-approval followup is stale when the session key it targeted
+ * has since been rebound to a different session id (via `/new` or `/reset`).
+ * Delivering it would leak the old approval result into the new session, so the
+ * gateway drops the followup instead of resuming the rebound session.
+ */
+export function isExecApprovalFollowupSessionRebound(params: {
+  expectedSessionId?: string;
+  resolvedSessionId?: string;
+}): boolean {
+  const expected = normalizeOptionalString(params.expectedSessionId);
+  const resolved = normalizeOptionalString(params.resolvedSessionId);
+  return Boolean(expected && resolved && expected !== resolved);
 }
 
 /** Clear exec approval follow-up handoffs between tests. */

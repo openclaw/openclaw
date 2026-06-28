@@ -1,3 +1,4 @@
+/** Normalizes ACP runtime turn event/result streams into manager-facing outcomes. */
 import type {
   AcpRuntime,
   AcpRuntimeEvent,
@@ -8,12 +9,13 @@ import { AcpRuntimeError } from "../runtime/errors.js";
 import { normalizeAcpErrorCode } from "./manager.utils.js";
 import { normalizeText } from "./runtime-options.js";
 
-export type AcpTurnEventGate = {
+/** Mutable gate used to suppress late events after timeout/cancel races. */
+type AcpTurnEventGate = {
   open: boolean;
 };
 
 /** Summary of whether a turn stream emitted user-visible output or terminal events. */
-export type AcpTurnStreamOutcome = {
+type AcpTurnStreamOutcome = {
   sawOutput: boolean;
   sawTerminalEvent: boolean;
 };
@@ -40,6 +42,7 @@ async function consumeAcpTurnEvents(params: {
       streamError = new AcpRuntimeError(
         normalizeAcpErrorCode(event.code),
         normalizeText(event.message) || "ACP turn failed before completion.",
+        event.detailCode ? { detailCode: event.detailCode } : undefined,
       );
     } else if (event.type === "text_delta" || event.type === "tool_call") {
       sawOutput = true;
@@ -62,6 +65,7 @@ function errorFromTurnResult(result: Extract<AcpRuntimeTurnResult, { status: "fa
   return new AcpRuntimeError(
     normalizeAcpErrorCode(result.error.code),
     normalizeText(result.error.message) || "ACP turn failed before completion.",
+    result.error.detailCode ? { detailCode: result.error.detailCode } : undefined,
   );
 }
 
@@ -104,6 +108,7 @@ async function notifyTerminalResult(params: {
   });
 }
 
+/** Consumes runtime turn APIs and emits normalized events while tracking output/terminal state. */
 export async function consumeAcpTurnStream(params: {
   runtime: AcpRuntime;
   turn: AcpRuntimeTurnInput;

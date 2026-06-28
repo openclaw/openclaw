@@ -1,3 +1,4 @@
+/** Builds web-tool secret metadata from config, plugins, and provider contracts. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -446,7 +447,9 @@ async function resolveBundledWebFetchProviders(params: {
   return resolvePluginWebFetchProviders({
     config: params.sourceConfig,
     env,
-    origin: "bundled",
+    // Runtime credential resolution may load only bundled providers or verified
+    // official installs. Arbitrary external providers must not gain SecretRef access.
+    sandboxed: true,
   });
 }
 
@@ -511,18 +514,18 @@ function readConfiguredFetchProviderCredentialFallback(params: {
 }
 
 function inactivePathsForFetchProvider(provider: PluginWebFetchProviderEntry): string[] {
-  if (provider.requiresCredential === false) {
-    return [];
-  }
   return provider.inactiveSecretPaths?.length
     ? provider.inactiveSecretPaths
-    : [provider.credentialPath];
+    : provider.credentialPath
+      ? [provider.credentialPath]
+      : [];
 }
 
 /**
  * Resolves runtime web search/fetch provider metadata and writes selected credentials into a
  * cloned runtime config without mutating the source config.
  */
+/** Resolves web search/fetch secret metadata from config, plugins, and fallback runtime providers. */
 export async function resolveRuntimeWebTools(params: {
   sourceConfig: OpenClawConfig;
   resolvedConfig: OpenClawConfig;
@@ -679,6 +682,7 @@ export async function resolveRuntimeWebTools(params: {
       resolvedConfig: params.resolvedConfig,
       context: params.context,
       defaults,
+      allowKeylessAutoSelect: false,
       deferKeylessFallback: true,
       fallbackUsedCode: "WEB_SEARCH_KEY_UNRESOLVED_FALLBACK_USED",
       noFallbackCode: "WEB_SEARCH_KEY_UNRESOLVED_NO_FALLBACK",
@@ -791,6 +795,7 @@ export async function resolveRuntimeWebTools(params: {
       resolvedConfig: params.resolvedConfig,
       context: params.context,
       defaults,
+      allowKeylessAutoSelect: true,
       deferKeylessFallback: false,
       fallbackUsedCode: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_FALLBACK_USED",
       noFallbackCode: "WEB_FETCH_PROVIDER_KEY_UNRESOLVED_NO_FALLBACK",

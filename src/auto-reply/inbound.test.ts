@@ -1,3 +1,4 @@
+/** Tests inbound auto-reply handling across channel message contexts. */
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -5,15 +6,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { GroupKeyResolution } from "../config/sessions.js";
 import { channelRouteDedupeKey } from "../plugin-sdk/channel-route.js";
-import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createInboundDebouncer } from "./inbound-debounce.js";
-import { installGroupRequireMentionTestPlugins } from "./inbound.group-require-mention-test-plugins.js";
 import { resolveGroupRequireMention } from "./reply/groups.js";
 import { finalizeInboundContext } from "./reply/inbound-context.js";
 import {
   buildInboundDedupeKey,
+  claimInboundDedupe,
+  commitInboundDedupe,
   resetInboundDedupe,
-  shouldSkipDuplicateInbound,
 } from "./reply/inbound-dedupe.js";
 import { normalizeInboundTextNewlines, sanitizeInboundSystemTags } from "./reply/inbound-text.js";
 import {
@@ -24,6 +26,131 @@ import {
 } from "./reply/mentions.js";
 import { initSessionState } from "./reply/session.js";
 import { applyTemplate, type MsgContext, type TemplateContext } from "./templating.js";
+
+type TestChannelGroupContext = {
+  cfg: OpenClawConfig;
+  groupId?: string | null;
+  groupChannel?: string | null;
+  groupSpace?: string | null;
+  accountId?: string | null;
+};
+
+function commitInboundForTest(ctx: MsgContext): string {
+  const claim = claimInboundDedupe(ctx);
+  expect(claim.status).toBe("claimed");
+  if (claim.status !== "claimed") {
+    throw new Error(`expected inbound dedupe claim, got ${claim.status}`);
+  }
+  commitInboundDedupe(claim.key);
+  return claim.key;
+}
+
+function normalizeTestSlug(raw?: string | null): string {
+  return raw?.trim().replace(/^#/, "").toLowerCase() ?? "";
+}
+
+function resolveDiscordRequireMentionForTest(params: TestChannelGroupContext): boolean {
+  const discordCfg = params.cfg.channels?.discord as
+    | {
+        guilds?: Record<
+          string,
+          {
+            requireMention?: boolean;
+            slug?: string;
+            channels?: Record<string, { requireMention?: boolean }>;
+          }
+        >;
+      }
+    | undefined;
+  const guilds = discordCfg?.guilds;
+  if (!guilds) {
+    return true;
+  }
+  const space = params.groupSpace?.trim() ?? "";
+  const spaceSlug = normalizeTestSlug(space);
+  const guild =
+    (space ? guilds[space] : undefined) ??
+    (spaceSlug ? guilds[spaceSlug] : undefined) ??
+    Object.values(guilds).find((entry) => normalizeTestSlug(entry?.slug) === spaceSlug) ??
+    guilds["*"];
+  const channelSlug = normalizeTestSlug(params.groupChannel);
+  const channel =
+    (params.groupId ? guild?.channels?.[params.groupId] : undefined) ??
+    (channelSlug ? guild?.channels?.[channelSlug] : undefined) ??
+    (channelSlug ? guild?.channels?.[`#${channelSlug}`] : undefined);
+  return channel?.requireMention ?? guild?.requireMention ?? true;
+}
+
+function resolveSlackRequireMentionForTest(params: TestChannelGroupContext): boolean {
+  const slackCfg = params.cfg.channels?.slack as
+    | {
+        defaultAccount?: string;
+        channels?: Record<string, { requireMention?: boolean }>;
+        accounts?: Record<string, { channels?: Record<string, { requireMention?: boolean }> }>;
+      }
+    | undefined;
+  if (!slackCfg) {
+    return true;
+  }
+  const accountId = params.accountId ?? slackCfg.defaultAccount;
+  const channels =
+    (accountId ? slackCfg.accounts?.[accountId]?.channels : undefined) ?? slackCfg.channels;
+  if (!channels) {
+    return true;
+  }
+  const channelName = params.groupChannel?.trim().replace(/^#/, "");
+  const channelSlug = normalizeTestSlug(channelName);
+  const candidates = [
+    params.groupId?.trim(),
+    channelName ? `#${channelName}` : undefined,
+    channelName,
+    channelSlug,
+    "*",
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) {
+      continue;
+    }
+    const entry = channels[candidate];
+    if (typeof entry?.requireMention === "boolean") {
+      return entry.requireMention;
+    }
+  }
+  return true;
+}
+
+function installGroupRequireMentionTestPlugins() {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "discord" }),
+          groups: { resolveRequireMention: resolveDiscordRequireMentionForTest },
+        },
+        source: "test",
+      },
+      {
+        pluginId: "slack",
+        plugin: {
+          ...createChannelTestPluginBase({ id: "slack" }),
+          groups: { resolveRequireMention: resolveSlackRequireMentionForTest },
+        },
+        source: "test",
+      },
+      {
+        pluginId: "line",
+        plugin: createChannelTestPluginBase({ id: "line" }),
+        source: "test",
+      },
+      {
+        pluginId: "imessage",
+        plugin: createChannelTestPluginBase({ id: "imessage" }),
+        source: "test",
+      },
+    ]),
+  );
+}
 
 describe("applyTemplate", () => {
   it("renders primitive values", () => {
@@ -310,8 +437,8 @@ describe("inbound dedupe", () => {
       OriginatingTo: "whatsapp:+1555",
       MessageSid: "msg-1",
     };
-    expect(shouldSkipDuplicateInbound(ctx, { now: 100 })).toBe(false);
-    expect(shouldSkipDuplicateInbound(ctx, { now: 200 })).toBe(true);
+    const key = commitInboundForTest(ctx);
+    expect(claimInboundDedupe(ctx)).toEqual({ status: "duplicate", key });
   });
 
   it("does not dedupe when the peer changes", () => {
@@ -321,12 +448,8 @@ describe("inbound dedupe", () => {
       OriginatingChannel: "whatsapp",
       MessageSid: "msg-1",
     };
-    expect(
-      shouldSkipDuplicateInbound({ ...base, OriginatingTo: "whatsapp:+1000" }, { now: 100 }),
-    ).toBe(false);
-    expect(
-      shouldSkipDuplicateInbound({ ...base, OriginatingTo: "whatsapp:+2000" }, { now: 200 }),
-    ).toBe(false);
+    commitInboundForTest({ ...base, OriginatingTo: "whatsapp:+1000" });
+    expect(claimInboundDedupe({ ...base, OriginatingTo: "whatsapp:+2000" }).status).toBe("claimed");
   });
 
   it("does not dedupe across agent ids", () => {
@@ -337,20 +460,14 @@ describe("inbound dedupe", () => {
       OriginatingTo: "whatsapp:+1555",
       MessageSid: "msg-1",
     };
+    const alphaKey = commitInboundForTest({ ...base, SessionKey: "agent:alpha:main" });
     expect(
-      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:alpha:main" }, { now: 100 }),
-    ).toBe(false);
-    expect(
-      shouldSkipDuplicateInbound(
-        { ...base, SessionKey: "agent:bravo:whatsapp:direct:+1555" },
-        {
-          now: 200,
-        },
-      ),
-    ).toBe(false);
-    expect(
-      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:alpha:main" }, { now: 300 }),
-    ).toBe(true);
+      claimInboundDedupe({ ...base, SessionKey: "agent:bravo:whatsapp:direct:+1555" }).status,
+    ).toBe("claimed");
+    expect(claimInboundDedupe({ ...base, SessionKey: "agent:alpha:main" })).toEqual({
+      status: "duplicate",
+      key: alphaKey,
+    });
   });
 
   it("dedupes when the same agent sees the same inbound message under different session keys", () => {
@@ -361,15 +478,10 @@ describe("inbound dedupe", () => {
       OriginatingTo: "telegram:7463849194",
       MessageSid: "msg-1",
     };
+    const key = commitInboundForTest({ ...base, SessionKey: "agent:main:main" });
     expect(
-      shouldSkipDuplicateInbound({ ...base, SessionKey: "agent:main:main" }, { now: 100 }),
-    ).toBe(false);
-    expect(
-      shouldSkipDuplicateInbound(
-        { ...base, SessionKey: "agent:main:telegram:direct:7463849194" },
-        { now: 200 },
-      ),
-    ).toBe(true);
+      claimInboundDedupe({ ...base, SessionKey: "agent:main:telegram:direct:7463849194" }),
+    ).toEqual({ status: "duplicate", key });
   });
 });
 

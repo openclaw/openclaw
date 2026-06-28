@@ -1,3 +1,8 @@
+/**
+ * Session-level auth profile override rotation.
+ * Keeps automatic profile choice stable within a session while still rotating
+ * across new sessions, compactions, provider changes, and cooldowns.
+ */
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -9,14 +14,14 @@ import {
 import { ensureAuthProfileStore, hasAnyAuthProfileStoreSource } from "../auth-profiles/store.js";
 import { isProfileInCooldown } from "../auth-profiles/usage.js";
 
-const sessionStoreRuntimeLoader = createLazyImportLoader(
-  () => import("../../config/sessions/store.runtime.js"),
+const sessionAccessorLoader = createLazyImportLoader(
+  () => import("../../config/sessions/session-accessor.js"),
 );
 
-// Session-store writes are lazy-loaded so read-only auth resolution paths do not
-// import persistence code unless an override must be updated.
-function loadSessionStoreRuntime() {
-  return sessionStoreRuntimeLoader.load();
+// Session accessor writes are lazy-loaded so read-only auth resolution paths do
+// not import persistence code unless an override must be updated.
+function loadSessionAccessor() {
+  return sessionAccessorLoader.load();
 }
 
 // Current session overrides are only valid when the selected provider can use
@@ -78,10 +83,12 @@ export async function clearSessionAuthProfileOverride(params: {
   sessionStore[sessionKey] = sessionEntry;
   if (storePath) {
     await (
-      await loadSessionStoreRuntime()
-    ).updateSessionStore(storePath, (store) => {
-      store[sessionKey] = sessionEntry;
-    });
+      await loadSessionAccessor()
+    ).patchSessionEntry(
+      { storePath, sessionKey },
+      () => sessionEntry,
+      { fallbackEntry: sessionEntry, replaceEntry: true },
+    );
   }
 }
 
@@ -231,10 +238,12 @@ export async function resolveSessionAuthProfileOverride(params: {
     sessionStore[sessionKey] = sessionEntry;
     if (storePath) {
       await (
-        await loadSessionStoreRuntime()
-      ).updateSessionStore(storePath, (storeLocal) => {
-        storeLocal[sessionKey] = sessionEntry;
-      });
+        await loadSessionAccessor()
+      ).patchSessionEntry(
+        { storePath, sessionKey },
+        () => sessionEntry,
+        { fallbackEntry: sessionEntry, replaceEntry: true },
+      );
     }
   }
 

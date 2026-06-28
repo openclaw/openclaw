@@ -1,3 +1,8 @@
+/**
+ * Generated plugin model catalog discovery.
+ *
+ * Catalog files live under agent profiles and let provider discovery reuse plugin-owned catalogs without loading runtimes.
+ */
 import { existsSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
@@ -18,7 +23,7 @@ export type PluginModelCatalogMetadataSnapshot = Pick<PluginMetadataSnapshot, "o
   normalizePluginId?: (pluginId: string) => string;
 };
 
-export type PluginModelCatalogFile = {
+type PluginModelCatalogFile = {
   path: string;
   pluginId: string;
   relativePath: string;

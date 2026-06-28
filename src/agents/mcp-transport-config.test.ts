@@ -1,3 +1,4 @@
+// Verifies MCP transport config normalization and startup-safety filtering.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { logWarn } from "../logger.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
@@ -48,6 +49,9 @@ describe("resolveMcpTransportConfig", () => {
   });
 
   it("drops dangerous env overrides from stdio config", () => {
+    // Stdio env is inherited executable process input. Block loader/shell hook
+    // variables and child-process config pivots while preserving explicit MCP
+    // credentials and ordinary scalar env values.
     const resolved = resolveMcpTransportConfig("probe", {
       command: "node",
       env: {
@@ -59,6 +63,8 @@ describe("resolveMcpTransportConfig", () => {
         NODE_OPTIONS: "--require=./evil.js",
         LD_PRELOAD: "/tmp/pwn.so",
         BASH_ENV: "/tmp/pwn.sh",
+        ANSIBLE_CONFIG: "/tmp/evil-ansible.cfg",
+        TF_CLI_CONFIG_FILE: "/tmp/evil-terraform.rc",
       },
     });
 
@@ -88,6 +94,12 @@ describe("resolveMcpTransportConfig", () => {
     );
     expect(logWarn).toHaveBeenCalledWith(
       'bundle-mcp: server "probe": env "BASH_ENV" is blocked for stdio startup safety and was ignored.',
+    );
+    expect(logWarn).toHaveBeenCalledWith(
+      'bundle-mcp: server "probe": env "ANSIBLE_CONFIG" is blocked for stdio startup safety and was ignored.',
+    );
+    expect(logWarn).toHaveBeenCalledWith(
+      'bundle-mcp: server "probe": env "TF_CLI_CONFIG_FILE" is blocked for stdio startup safety and was ignored.',
     );
   });
 
@@ -152,6 +164,8 @@ describe("resolveMcpTransportConfig", () => {
   });
 
   it("keeps HTTP header parsing unchanged for env-like names", () => {
+    // Header names are not process environment keys, so env safety filtering
+    // must not rewrite or drop them.
     const resolved = resolveMcpTransportConfig("probe", {
       url: "https://mcp.example.com/sse",
       headers: {

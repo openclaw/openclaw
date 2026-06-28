@@ -1,3 +1,4 @@
+// Defines shared agent configuration types across runtime schemas.
 import type {
   SandboxBrowserSettings,
   SandboxDockerSettings,
@@ -26,11 +27,6 @@ export type AgentToolModelConfig =
       /** Optional provider request timeout in milliseconds for capabilities that support it. */
       timeoutMs?: number;
     };
-
-export type AgentEmbeddedHarnessConfig = {
-  /** Agent runtime id. Omitted uses "openclaw"; "auto" opts into plugin harness auto-selection. */
-  runtime?: string;
-};
 
 /** Runtime selection policy attached to providers, models, and agent defaults. */
 export type AgentRuntimePolicyConfig = {

@@ -1,3 +1,4 @@
+// Builds plugin registry inputs from installed plugin index records.
 import { normalizePluginsConfig } from "./config-state.js";
 import {
   discoverOpenClawPlugins,

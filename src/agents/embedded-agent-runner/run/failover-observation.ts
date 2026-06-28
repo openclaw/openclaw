@@ -1,15 +1,18 @@
+/**
+ * Logs redacted failover decisions for embedded-agent attempts.
+ */
 import { redactIdentifier } from "../../../logging/redact-identifier.js";
 import type { AuthProfileFailureReason } from "../../auth-profiles.js";
+import { sanitizeForConsole } from "../../console-sanitize.js";
 import {
   buildApiErrorObservationFields,
-  sanitizeForConsole,
   shouldSuppressRawErrorConsoleSuffix,
 } from "../../embedded-agent-error-observation.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
 import { log } from "../logger.js";
 
 /** Structured fields emitted whenever embedded run failover chooses an action. */
-export type FailoverDecisionLoggerInput = {
+type FailoverDecisionLoggerInput = {
   stage: "prompt" | "assistant";
   decision: "rotate_profile" | "fallback_model" | "surface_error";
   runId?: string;
@@ -28,7 +31,7 @@ export type FailoverDecisionLoggerInput = {
 };
 
 /** Stable context captured before a concrete failover decision is known. */
-export type FailoverDecisionLoggerBase = Omit<FailoverDecisionLoggerInput, "decision" | "status">;
+type FailoverDecisionLoggerBase = Omit<FailoverDecisionLoggerInput, "decision" | "status">;
 
 /**
  * Derives timeout failure reasons for logs that were built from timeout state

@@ -1,3 +1,4 @@
+// Media fetch helpers download and validate remote media payloads.
 import { MAX_DOCUMENT_BYTES } from "@openclaw/media-core/constants";
 import { parseMediaContentLength } from "@openclaw/media-core/content-length";
 import { basenameFromAnyPath, extnameFromAnyPath } from "@openclaw/media-core/file-name";
@@ -6,7 +7,7 @@ import {
   readResponseTextSnippet,
   readResponseWithLimit,
 } from "@openclaw/media-core/read-response-with-limit";
-import { formatErrorMessage } from "../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import {
   fetchWithSsrFGuard,
   withStrictGuardedFetchMode,
@@ -424,7 +425,7 @@ async function readChunkWithIdleTimeout(
       (err: unknown) => {
         clear();
         if (!timedOut) {
-          reject(toLintErrorObject(err, "Non-Error rejection"));
+          reject(toErrorObject(err, "Non-Error rejection"));
         }
       },
     );
@@ -698,18 +699,4 @@ async function readRemoteMediaBufferOnce(options: FetchMediaOptions): Promise<Fe
       await release();
     }
   }
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

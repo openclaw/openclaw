@@ -1,3 +1,4 @@
+// Qa Lab plugin module implements token efficiency report behavior.
 import type { RuntimeId, RuntimeParityCell, RuntimeParityResult } from "./runtime-parity.js";
 
 export type TokenEfficiencyRuntimeUsage = {
@@ -180,6 +181,26 @@ function liveEvidenceFailures(row: TokenEfficiencyRow): string[] {
   return failures;
 }
 
+function liveUsageShapeFailures(
+  scenarioId: string,
+  runtime: RuntimeId,
+  usage: RuntimeParityCell["usage"],
+): string[] {
+  const failures: string[] = [];
+  for (const key of ["inputTokens", "outputTokens", "totalTokens"] as const) {
+    const value: unknown = usage[key];
+    if (
+      typeof value !== "number" ||
+      !Number.isFinite(value) ||
+      !Number.isInteger(value) ||
+      value < 0
+    ) {
+      failures.push(`${scenarioId} ${runtime} live usage ${key} must be a non-negative integer`);
+    }
+  }
+  return failures;
+}
+
 export function buildTokenEfficiencyReport(
   params: BuildTokenEfficiencyReportParams,
 ): TokenEfficiencyReport {
@@ -193,17 +214,18 @@ export function buildTokenEfficiencyReport(
     .filter((result): result is RuntimeParityResult => Boolean(result));
 
   if (parityResults.length === 0) {
+    const noCapturesReason = "No runtime parity captures were present in the suite summary.";
     return {
-      status: "skipped",
+      status: liveUsage ? "evaluated" : "skipped",
       runtimePair,
       generatedAt: params.generatedAt ?? new Date().toISOString(),
       ...(providerMode ? { providerMode } : {}),
       thresholdPercent,
       rows: [],
       aggregate: ZERO_AGGREGATE,
-      pass: true,
-      failures: [],
-      skipReason: "No runtime parity captures were present in the suite summary.",
+      pass: !liveUsage,
+      failures: liveUsage ? [noCapturesReason] : [],
+      ...(liveUsage ? {} : { skipReason: noCapturesReason }),
       notes: ["Token efficiency requires runtime-pair summaries with RuntimeParityResult cells."],
     };
   }
@@ -216,8 +238,16 @@ export function buildTokenEfficiencyReport(
     }),
   );
   const aggregate = buildAggregate(rows);
-  const failures = rows.flatMap((row) => {
-    const rowFailures = liveUsage ? liveEvidenceFailures(row) : [];
+  const failures = rows.flatMap((row, index) => {
+    const result = parityResults[index];
+    const rowFailures =
+      liveUsage && result
+        ? [
+            ...liveUsageShapeFailures(row.scenarioId, "openclaw", result.cells.openclaw.usage),
+            ...liveUsageShapeFailures(row.scenarioId, "codex", result.cells.codex.usage),
+            ...liveEvidenceFailures(row),
+          ]
+        : [];
     if (row.flagged) {
       rowFailures.push(
         `${row.scenarioId} token delta=${formatPercent(row.deltaPercent)} exceeds ${thresholdPercent.toFixed(1)}% Codex increase threshold`,

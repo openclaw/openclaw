@@ -1,3 +1,4 @@
+// Browser tests cover server context.existing session plugin behavior.
 import fs from "node:fs";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "../test-support/browser-security.mock.js";
@@ -32,6 +33,7 @@ const chromeMcp = chromeMcpMock;
 type ChromeLiveProfile = {
   driver?: string;
   name?: string;
+  cdpUrl?: string;
   userDataDir?: string;
 };
 
@@ -135,6 +137,30 @@ describe("browser server-context existing-session profile", () => {
     expect(listedProfile?.driver).toBe("existing-session");
     expect(listedProfile?.userDataDir).toBe("/tmp/brave-profile");
     expect(listOptions).toEqual({ ephemeral: true });
+  });
+
+  it("reports endpoint cdpUrl for existing-session profiles", async () => {
+    fs.mkdirSync("/tmp/brave-profile", { recursive: true });
+    const state = makeState();
+    state.resolved.profiles["chrome-live"] = {
+      ...state.resolved.profiles["chrome-live"],
+      cdpUrl: "http://openclaw:relay-token@127.0.0.1:9222",
+    };
+    const ctx = createBrowserRouteContext({ getState: () => state });
+
+    const profiles = await ctx.listProfiles();
+
+    expect(profiles).toHaveLength(1);
+    expect(profiles[0]?.transport).toBe("chrome-mcp");
+    expect(profiles[0]?.cdpPort).toBeNull();
+    expect(profiles[0]?.cdpUrl).toBe("http://127.0.0.1:9222");
+    const [, ensuredProfile] =
+      (
+        vi.mocked(chromeMcp.ensureChromeMcpAvailable).mock.calls as unknown as Array<
+          [string, ChromeLiveProfile, { ephemeral?: boolean; timeoutMs?: number }]
+        >
+      )[0] ?? [];
+    expect(ensuredProfile?.cdpUrl).toBe("http://openclaw:relay-token@127.0.0.1:9222");
   });
 
   it("keeps the next real attach on the normal sticky session path after an idle status probe", async () => {

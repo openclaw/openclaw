@@ -1,3 +1,6 @@
+/**
+ * Normalizes provider/model references and configured model ids.
+ */
 import {
   findNormalizedProviderKey as findNormalizedProviderKeyCore,
   findNormalizedProviderValue as findNormalizedProviderValueCore,
@@ -83,6 +86,7 @@ function normalizeProviderModelId(
   return (
     normalizeProviderModelIdWithRuntime({
       provider,
+      ...(options?.manifestPlugins ? { plugins: options.manifestPlugins } : {}),
       context: {
         provider,
         modelId: staticModelId,

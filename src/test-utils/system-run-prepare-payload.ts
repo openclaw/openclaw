@@ -1,3 +1,4 @@
+// Builds expected system-run payloads for execution approval tests.
 import { formatExecCommand } from "../infra/system-run-command.js";
 
 type SystemRunPrepareInput = {

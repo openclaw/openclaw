@@ -1,3 +1,4 @@
+/** Policy and execution pipeline for approved node-host system.run requests. */
 import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -8,27 +9,27 @@ import {
 } from "../infra/command-analysis/inline-eval.js";
 import { detectPolicyInlineEval } from "../infra/command-analysis/policy.js";
 import {
-  addDurableCommandApproval,
   commandRequiresSecurityAuditSuppressionApproval,
   hasDurableExecApproval,
   maxAsk,
   minSecurity,
-  persistAllowAlwaysPatterns,
+  persistAllowAlwaysDecision,
   recordAllowlistMatchesUse,
   resolveApprovalAuditTrustPath,
+  resolveAllowAlwaysPersistenceDecision,
   resolveExecApprovals,
   resolveExecModePolicy,
-  resolveExecPolicyForMode,
   type ExecAllowlistEntry,
   type ExecAsk,
   type ExecCommandSegment,
-  type ExecMode,
   type ExecSegmentSatisfiedBy,
   type ExecSecurity,
   type SkillBinTrustEntry,
 } from "../infra/exec-approvals.js";
+import type { ExecAuthorizationPlan } from "../infra/exec-authorization-plan.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { ExecHostRequest, ExecHostResponse, ExecHostRunResult } from "../infra/exec-host.js";
+import { applyExecPolicyLayer } from "../infra/exec-policy.js";
 import { resolveExecSafeBinRuntimePolicy } from "../infra/exec-safe-bin-runtime-policy.js";
 import {
   extractEnvAssignmentKeysFromDispatchWrappers,
@@ -128,6 +129,7 @@ type SystemRunPolicyPhase = SystemRunParsePhase & {
   autoAllowSkills: boolean;
   segments: ExecCommandSegment[];
   segmentSatisfiedBy: ExecSegmentSatisfiedBy[];
+  authorizationPlan: ExecAuthorizationPlan | undefined;
   plannedAllowlistArgv: string[] | undefined;
   isWindows: boolean;
   approvedCwdSnapshot: ApprovedCwdSnapshot | undefined;
@@ -142,12 +144,6 @@ const APPROVAL_SCRIPT_OPERAND_DRIFT_DENIED_MESSAGE =
   "SYSTEM_RUN_DENIED: approval script operand changed before execution";
 type ExecToolConfig = NonNullable<NonNullable<OpenClawConfig["tools"]>["exec"]>;
 
-type LayeredExecPolicy = {
-  mode?: ExecMode;
-  security: ExecSecurity;
-  ask: ExecAsk;
-};
-
 type EffectiveSystemRunExecPolicy = {
   agentExec: ExecToolConfig | undefined;
   globalExec: ExecToolConfig | undefined;
@@ -156,29 +152,6 @@ type EffectiveSystemRunExecPolicy = {
   ask: ExecAsk;
   autoReview: boolean;
 };
-
-function hasLegacyExecPolicyOverride(exec?: ExecToolConfig): boolean {
-  return exec?.security !== undefined || exec?.ask !== undefined;
-}
-
-function applyExecPolicyLayer(base: LayeredExecPolicy, layer?: ExecToolConfig): LayeredExecPolicy {
-  if (!layer) {
-    return base;
-  }
-  if (layer.mode) {
-    return {
-      mode: layer.mode,
-      ...resolveExecPolicyForMode(layer.mode),
-    };
-  }
-  if (hasLegacyExecPolicyOverride(layer)) {
-    return {
-      security: layer.security ?? base.security,
-      ask: layer.ask ?? base.ask,
-    };
-  }
-  return base;
-}
 
 function warnWritableTrustedDirOnce(message: string): void {
   if (safeBinTrustedDirWarningCache.has(message)) {
@@ -219,6 +192,7 @@ function resolveAgentExecConfig(
   return entry?.tools?.exec;
 }
 
+/** Resolves the effective exec security/ask policy for one system.run request. */
 export function resolveEffectiveSystemRunExecPolicy(params: {
   cfg: OpenClawConfig;
   agentId: string | undefined;
@@ -506,7 +480,7 @@ async function evaluateSystemRunPolicyPhase(
     onWarning: warnWritableTrustedDirOnce,
   });
   const bins = autoAllowSkills ? await opts.skillBins.current() : [];
-  const allowlistEvaluation = evaluateSystemRunAllowlist({
+  const allowlistEvaluation = await evaluateSystemRunAllowlist({
     shellCommand: parsed.shellPayload,
     argv: parsed.argv,
     approvals,
@@ -735,6 +709,7 @@ async function evaluateSystemRunPolicyPhase(
     autoAllowSkills,
     segments,
     segmentSatisfiedBy,
+    authorizationPlan: allowlistEvaluation.authorizationPlan,
     plannedAllowlistArgv: plannedAllowlistArgv ?? undefined,
     isWindows,
     approvedCwdSnapshot,
@@ -795,7 +770,7 @@ async function executeSystemRunPhase(
     return;
   }
 
-  const execArgv = resolveSystemRunExecArgv({
+  const execArgv = await resolveSystemRunExecArgv({
     plannedAllowlistArgv: phase.plannedAllowlistArgv,
     argv: phase.argv,
     security: phase.security,
@@ -810,6 +785,7 @@ async function executeSystemRunPhase(
     shellCommand: phase.shellPayload,
     segments: phase.segments,
     segmentSatisfiedBy: phase.segmentSatisfiedBy,
+    authorizationPlan: phase.authorizationPlan,
     cwd: phase.cwd,
     env: phase.env,
   });
@@ -861,22 +837,21 @@ async function executeSystemRunPhase(
     }
   }
 
-  if (phase.policy.approvalDecision === "allow-always" && phase.inlineEvalHit === null) {
-    const patterns = phase.policy.analysisOk
-      ? persistAllowAlwaysPatterns({
-          approvals: phase.approvals.file,
-          agentId: phase.agentId,
-          segments: phase.segments,
-          cwd: phase.cwd,
-          env: phase.env,
-          platform: process.platform,
-          commandText: phase.commandText,
-          strictInlineEval: phase.strictInlineEval,
-        })
-      : [];
-    if (patterns.length === 0) {
-      addDurableCommandApproval(phase.approvals.file, phase.agentId, phase.commandText);
-    }
+  if (phase.policy.approvalDecision === "allow-always") {
+    persistAllowAlwaysDecision({
+      approvals: phase.approvals.file,
+      agentId: phase.agentId,
+      decision: resolveAllowAlwaysPersistenceDecision({
+        segments: phase.segments,
+        cwd: phase.cwd,
+        env: phase.env,
+        platform: process.platform,
+        commandText: phase.commandText,
+        strictInlineEval: phase.strictInlineEval,
+        authorizationPlan: phase.authorizationPlan,
+        runtimePayload: phase.inlineEvalHit !== null,
+      }),
+    });
   }
 
   recordAllowlistMatchesUse({
@@ -912,6 +887,7 @@ async function executeSystemRunPhase(
   );
 }
 
+/** Executes a validated system.run request, emitting lifecycle events and approvals. */
 export async function handleSystemRunInvoke(opts: HandleSystemRunInvokeOptions): Promise<void> {
   const parsed = await parseSystemRunPhase(opts);
   if (!parsed) {

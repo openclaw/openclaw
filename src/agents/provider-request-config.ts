@@ -1,3 +1,8 @@
+/**
+ * Provider request configuration resolver.
+ *
+ * Normalizes operator request overrides into transport-ready auth, proxy, TLS, header, and SSRF policy state.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { ModelDefinitionConfig } from "../config/types.js";
 import type {
@@ -546,6 +551,47 @@ export function sanitizeRuntimeProviderRequestOverrides(
   };
 }
 
+/** Applies provider-prepared runtime auth overrides to a resolved model. */
+export function applyPreparedRuntimeAuthToModel<
+  T extends {
+    provider: string;
+    api?: RequestApi;
+    baseUrl?: string;
+    headers?: Record<string, string>;
+  },
+>(
+  model: T,
+  preparedAuth:
+    | { baseUrl?: string; request?: ModelProviderRequestTransportOverrides }
+    | null
+    | undefined,
+): T {
+  if (!preparedAuth?.baseUrl && !preparedAuth?.request) {
+    return model;
+  }
+  const providerHeaders = preparedAuth.request?.auth
+    ? Object.fromEntries(
+        Object.entries(model.headers ?? {}).filter(
+          ([key]) => !["authorization", "api-key", "x-api-key"].includes(key.toLowerCase()),
+        ),
+      )
+    : model.headers;
+  const requestConfig = resolveProviderRequestConfig({
+    provider: model.provider,
+    api: model.api,
+    baseUrl: preparedAuth.baseUrl ?? model.baseUrl,
+    providerHeaders,
+    request: sanitizeRuntimeProviderRequestOverrides(preparedAuth.request),
+    capability: "llm",
+    transport: "stream",
+  });
+  return {
+    ...model,
+    ...(preparedAuth.baseUrl ? { baseUrl: preparedAuth.baseUrl } : {}),
+    headers: requestConfig.headers,
+  };
+}
+
 function resolveProxyOverride(
   request: ProviderRequestTransportOverrides | undefined,
 ): ResolvedProviderRequestProxyConfig {
@@ -646,13 +692,6 @@ export function buildProviderRequestDispatcherPolicy(
     proxyUrl: request.proxy.proxyUrl,
     ...(proxiedTls ? { proxyTls: proxiedTls } : {}),
   };
-}
-
-/** Builds direct TLS client options for providers that own their transport client. */
-export function buildProviderRequestTlsClientOptions(
-  request: Pick<ResolvedProviderRequestConfig, "tls">,
-): Record<string, unknown> | undefined {
-  return toTlsConnectOptions(request.tls);
 }
 
 /** Resolves the full provider request policy, headers, auth, proxy, and TLS config. */

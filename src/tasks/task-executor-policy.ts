@@ -1,3 +1,4 @@
+// Decides task executor delivery, terminal update, and follow-up message policy.
 import type { TaskEventRecord, TaskRecord, TaskStatus } from "./task-registry.types.js";
 import { formatTaskStatusTitleText, sanitizeTaskStatusText } from "./task-status.js";
 

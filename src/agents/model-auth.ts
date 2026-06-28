@@ -1,3 +1,8 @@
+/**
+ * Resolves model-provider credentials from config, env, auth profiles, and
+ * provider synthetic auth hooks. This module is the shared auth boundary for
+ * runtime dispatch, setup checks, and model metadata reporting.
+ */
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -5,7 +10,11 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { formatCliCommand } from "../cli/command-format.js";
-import { getRuntimeConfigSnapshot } from "../config/config.js";
+import {
+  getRuntimeConfigSnapshot,
+  getRuntimeConfigSourceSnapshot,
+  selectApplicableRuntimeConfig,
+} from "../config/config.js";
 import type { ModelProviderAuthMode, ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef } from "../config/types.secrets.js";
@@ -68,6 +77,7 @@ export {
 export type { ResolvedProviderAuth } from "./model-auth-runtime-shared.js";
 export type ProviderCredentialPrecedence = "profile-first" | "env-first";
 
+/** Precomputed provider-auth lookup tables reused during one runtime turn. */
 export type RuntimeProviderAuthLookup = {
   envApiKey: Pick<
     EnvApiKeyLookupOptions,
@@ -145,6 +155,7 @@ function resolveProviderConfig(
   );
 }
 
+/** Builds stable env/synthetic auth lookup data for repeated provider checks. */
 export function createRuntimeProviderAuthLookup(params: {
   cfg?: OpenClawConfig;
   workspaceDir?: string;
@@ -213,6 +224,7 @@ function resolveRuntimeEnvApiKeyLookupOptions(params: {
   };
 }
 
+/** Reads a literal or env-secret marker for a custom provider entry. */
 export function getCustomProviderApiKey(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -254,6 +266,7 @@ function canResolveEnvSecretRefInReadOnlyPath(params: {
   return !allowlist || allowlist.includes(params.id);
 }
 
+/** Resolves custom provider API keys that are usable without mutating secret stores. */
 export function resolveUsableCustomProviderApiKey(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -330,6 +343,7 @@ export function resolveUsableCustomProviderApiKey(params: {
   return null;
 }
 
+/** True when a custom provider has a literal/env/local key available now. */
 export function hasUsableCustomProviderApiKey(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -338,6 +352,7 @@ export function hasUsableCustomProviderApiKey(
   return Boolean(resolveUsableCustomProviderApiKey({ cfg, provider, env }));
 }
 
+/** True when explicit provider config should outrank profile/environment auth. */
 export function shouldPreferExplicitConfigApiKeyAuth(
   cfg: OpenClawConfig | undefined,
   provider: string,
@@ -451,6 +466,7 @@ function isBearerProfileCredential(credential: AuthProfileCredential): boolean {
   return credential.type === "api_key" || credential.type === "token";
 }
 
+/** True when a bearer auth profile can safely satisfy a provider-entry apiKey reference. */
 export function canUseProfileAsProviderEntryApiKey(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -478,6 +494,7 @@ export function canUseProfileAsProviderEntryApiKey(params: {
   });
 }
 
+/** Classifies a provider entry apiKey as literal/profile/marker before resolving secrets. */
 export function resolveProviderEntryApiKeyProfileReference(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -526,6 +543,7 @@ export function resolveProviderEntryApiKeyProfileReference(params: {
   };
 }
 
+/** Resolves a provider-entry apiKey profile reference into runtime auth when possible. */
 export async function resolveProviderEntryApiKeyBinding(params: {
   cfg?: OpenClawConfig;
   provider: string;
@@ -640,6 +658,62 @@ function isManagedSecretRefApiKeyMarker(apiKey: string | undefined): boolean {
   return apiKey?.trim() === NON_ENV_SECRETREF_MARKER;
 }
 
+function hasManagedSecretRefProviderApiKey(
+  cfg: OpenClawConfig | undefined,
+  provider: string,
+): boolean {
+  const apiKey = resolveProviderConfig(cfg, provider)?.apiKey;
+  const ref = coerceSecretRef(apiKey);
+  if (ref) {
+    return ref.source !== "env";
+  }
+  return typeof apiKey === "string" && isManagedSecretRefApiKeyMarker(apiKey);
+}
+
+function resolveLiteralProviderConfigApiKeyAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): ResolvedProviderAuth | undefined {
+  const apiKey = normalizeOptionalSecretInput(
+    resolveProviderConfig(params.cfg, params.provider)?.apiKey,
+  );
+  if (!apiKey || isNonSecretApiKeyMarker(apiKey)) {
+    return undefined;
+  }
+  return {
+    apiKey,
+    source: `models.providers.${params.provider}`,
+    mode: "api-key",
+  };
+}
+
+function resolveManagedSecretRefRuntimeProviderAuth(params: {
+  cfg: OpenClawConfig | undefined;
+  provider: string;
+}): ResolvedProviderAuth | undefined {
+  if (!hasManagedSecretRefProviderApiKey(params.cfg, params.provider)) {
+    return undefined;
+  }
+  const runtimeConfig = getRuntimeConfigSnapshot();
+  const runtimeSourceConfig = getRuntimeConfigSourceSnapshot();
+  if (params.cfg && params.cfg !== runtimeConfig && !runtimeSourceConfig) {
+    return undefined;
+  }
+  const applicableConfig = selectApplicableRuntimeConfig({
+    inputConfig: params.cfg,
+    runtimeConfig,
+    runtimeSourceConfig,
+  });
+  if (!runtimeConfig || applicableConfig !== runtimeConfig) {
+    return undefined;
+  }
+  return resolveLiteralProviderConfigApiKeyAuth({
+    cfg: runtimeConfig,
+    provider: params.provider,
+  });
+}
+
+/** True when a custom local provider can use a synthetic no-auth placeholder. */
 export function hasSyntheticLocalProviderAuthConfig(params: {
   cfg: OpenClawConfig | undefined;
   provider: string;
@@ -705,6 +779,7 @@ function shouldResolvePluginSyntheticAuth(params: {
   return listProviderSyntheticAuthRefs(params).some((ref) => eligibleRefs.has(ref));
 }
 
+/** Fast auth-availability check for runtime provider/model selection. */
 export function hasRuntimeAvailableProviderAuth(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -740,6 +815,9 @@ export function hasRuntimeAvailableProviderAuth(params: {
   if (resolveUsableCustomProviderApiKey({ cfg: params.cfg, provider, env: params.env })) {
     return true;
   }
+  if (resolveManagedSecretRefRuntimeProviderAuth({ cfg: params.cfg, provider })) {
+    return true;
+  }
   if (hasSyntheticLocalProviderAuthConfig({ cfg: params.cfg, provider })) {
     return true;
   }
@@ -767,6 +845,14 @@ function resolveProviderSyntheticRuntimeAuth(params: {
   provider: string;
   modelApi?: string;
 }): SyntheticProviderAuthResolution {
+  const runtimeAuth = resolveManagedSecretRefRuntimeProviderAuth(params);
+  if (runtimeAuth) {
+    return { auth: runtimeAuth };
+  }
+  if (hasManagedSecretRefProviderApiKey(params.cfg, params.provider)) {
+    return { blockedOnManagedSecretRef: true };
+  }
+
   const resolveFromConfig = (
     config: OpenClawConfig | undefined,
   ): ResolvedProviderAuth | undefined => {
@@ -798,13 +884,13 @@ function resolveProviderSyntheticRuntimeAuth(params: {
     return { blockedOnManagedSecretRef: true };
   }
 
-  const runtimeAuth = resolveFromConfig(runtimeConfig);
-  const runtimeApiKey = runtimeAuth?.apiKey;
-  if (!runtimeAuth || !runtimeApiKey || isNonSecretApiKeyMarker(runtimeApiKey)) {
+  const runtimePluginAuth = resolveFromConfig(runtimeConfig);
+  const runtimeApiKey = runtimePluginAuth?.apiKey;
+  if (!runtimePluginAuth || !runtimeApiKey || isNonSecretApiKeyMarker(runtimeApiKey)) {
     return { blockedOnManagedSecretRef: true };
   }
   return {
-    auth: runtimeAuth,
+    auth: runtimePluginAuth,
   };
 }
 
@@ -919,6 +1005,7 @@ function resolveScopedAuthProfileStore(params: {
   });
 }
 
+/** Resolves the credential that should be used for one provider request. */
 export async function resolveApiKeyForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -1104,6 +1191,10 @@ export async function resolveApiKeyForProvider(params: {
   }
 
   if (shouldPreferExplicitConfigApiKeyAuth(cfg, provider)) {
+    const runtimeCustomKey = resolveManagedSecretRefRuntimeProviderAuth({ cfg, provider });
+    if (runtimeCustomKey) {
+      return runtimeCustomKey;
+    }
     const customKey = resolveUsableCustomProviderApiKey({ cfg, provider });
     if (customKey) {
       return {
@@ -1284,6 +1375,7 @@ export type ModelAuthMode = "api-key" | "oauth" | "token" | "mixed" | "aws-sdk" 
 export { resolveEnvApiKey } from "./model-auth-env.js";
 export type { EnvApiKeyResult } from "./model-auth-env.js";
 
+/** Reports the strongest configured auth mode for provider-list UI and diagnostics. */
 export function resolveModelAuthMode(
   provider?: string,
   cfg?: OpenClawConfig,
@@ -1349,6 +1441,7 @@ export function resolveModelAuthMode(
   return "unknown";
 }
 
+/** Checks provider auth availability, including profile fallback order. */
 export async function hasAvailableAuthForProvider(params: {
   provider: string;
   cfg?: OpenClawConfig;
@@ -1424,6 +1517,7 @@ export async function hasAvailableAuthForProvider(params: {
   return false;
 }
 
+/** Resolves request credentials from the provider attached to a model descriptor. */
 export async function getApiKeyForModel(params: {
   model: Model;
   cfg?: OpenClawConfig;
@@ -1449,6 +1543,7 @@ export async function getApiKeyForModel(params: {
   });
 }
 
+/** Clears auth for local OpenAI-compatible servers that explicitly use no auth. */
 export function applyLocalNoAuthHeaderOverride<T extends Model>(
   model: T,
   auth: ResolvedProviderAuth | null | undefined,

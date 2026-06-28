@@ -1,15 +1,20 @@
+/**
+ * Resolves model catalog entries visible to browse/UI surfaces. Visibility
+ * combines explicit policy, configured models, defaults, and runtime
+ * auth-backed availability.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
 import { createProviderAuthChecker } from "./model-provider-auth.js";
-import { modelKey } from "./model-selection-normalize.js";
-import { buildConfiguredModelCatalog } from "./model-selection-shared.js";
+import {
+  buildConfiguredModelCatalog,
+  dedupeModelCatalogEntries,
+} from "./model-selection-shared.js";
 import {
   RUNTIME_MODEL_VISIBILITY_NORMALIZATION,
   createModelVisibilityPolicy,
 } from "./model-visibility-policy.js";
 
-// Model catalog visibility resolver for browse/UI surfaces. It combines explicit
-// visibility policy with configured models and auth-backed runtime availability.
 type ModelCatalogVisibilityView = "default" | "configured" | "all";
 type ProviderAuthChecker = (provider: string, modelApi?: string) => boolean | Promise<boolean>;
 const OPENAI_PROVIDER_ID = "openai";
@@ -18,6 +23,7 @@ const OPENAI_CODEX_ROUTABLE_MODEL_IDS = new Set([
   "gpt-5.5",
   "gpt-5.5-pro",
   "gpt-5.4",
+  "gpt-5.4-codex",
   "gpt-5.4-pro",
   "gpt-5.4-mini",
 ]);
@@ -26,7 +32,7 @@ function isPromiseLike(value: boolean | Promise<boolean>): value is Promise<bool
   return typeof value === "object" && value !== null && typeof value.then === "function";
 }
 
-function isCodexRoutableOpenAIPlatformCatalogEntry(entry: ModelCatalogEntry): boolean {
+export function isCodexRoutableOpenAIPlatformCatalogEntry(entry: ModelCatalogEntry): boolean {
   // OpenAI platform entries for current Codex-routable ids can use the ChatGPT
   // Responses auth path even when their catalog API is not already that API.
   return (
@@ -49,7 +55,7 @@ async function resolveProviderAuthCheck(
   return isPromiseLike(result) ? await result : result;
 }
 
-async function providerHasAuth(
+async function modelCatalogEntryHasProviderAuth(
   providerAuthChecker: ProviderAuthChecker,
   entry: ModelCatalogEntry,
 ): Promise<boolean> {
@@ -71,22 +77,6 @@ function sortModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntr
   return entries.toSorted(
     (a, b) => a.provider.localeCompare(b.provider) || a.id.localeCompare(b.id),
   );
-}
-
-function dedupeModelCatalogEntries(entries: ModelCatalogEntry[]): ModelCatalogEntry[] {
-  // Preserve the first occurrence after precedence merging while removing
-  // provider/id duplicates from configured and auth-backed catalogs.
-  const seen = new Set<string>();
-  const next: ModelCatalogEntry[] = [];
-  for (const entry of entries) {
-    const key = modelKey(entry.provider, entry.id);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    next.push(entry);
-  }
-  return next;
 }
 
 /**
@@ -127,7 +117,7 @@ export async function resolveVisibleModelCatalog(params: {
       });
     const authBackedCatalog: ModelCatalogEntry[] = [];
     for (const entry of params.catalog) {
-      if (await providerHasAuth(hasAuth, entry)) {
+      if (await modelCatalogEntryHasProviderAuth(hasAuth, entry)) {
         authBackedCatalog.push(entry);
       }
     }

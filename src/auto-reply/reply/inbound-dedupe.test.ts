@@ -1,3 +1,4 @@
+// Tests inbound dedupe state for repeated message ids.
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import type { MsgContext } from "../templating.js";
@@ -29,28 +30,6 @@ function expectClaimed(result: InboundDedupeClaimResult, expectedKey: string): s
 describe("inbound dedupe", () => {
   afterEach(() => {
     resetInboundDedupe();
-  });
-
-  it("shares dedupe state across distinct module instances", async () => {
-    const inboundA = await importFreshModule<typeof import("./inbound-dedupe.js")>(
-      import.meta.url,
-      "./inbound-dedupe.js?scope=shared-a",
-    );
-    const inboundB = await importFreshModule<typeof import("./inbound-dedupe.js")>(
-      import.meta.url,
-      "./inbound-dedupe.js?scope=shared-b",
-    );
-
-    inboundA.resetInboundDedupe();
-    inboundB.resetInboundDedupe();
-
-    try {
-      expect(inboundA.shouldSkipDuplicateInbound(sharedInboundContext)).toBe(false);
-      expect(inboundB.shouldSkipDuplicateInbound(sharedInboundContext)).toBe(true);
-    } finally {
-      inboundA.resetInboundDedupe();
-      inboundB.resetInboundDedupe();
-    }
   });
 
   it("deduplicates inbound messages with equivalent numeric and string thread ids", () => {

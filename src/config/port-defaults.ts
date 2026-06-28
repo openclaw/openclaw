@@ -1,3 +1,4 @@
+// Defines default port ranges for gateway and service config.
 type PortRange = { start: number; end: number };
 
 function isValidPort(port: number): boolean {
@@ -13,9 +14,9 @@ function derivePort(base: number, offset: number, fallback: number): number {
 }
 
 /** Default browser-CDP sidecar port range used when no browser-control-relative range is safe. */
-export const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
+const DEFAULT_BROWSER_CDP_PORT_RANGE_START = 18800;
 /** Inclusive end of the default browser-CDP sidecar port range. */
-export const DEFAULT_BROWSER_CDP_PORT_RANGE_END = 18899;
+const DEFAULT_BROWSER_CDP_PORT_RANGE_END = 18899;
 const DEFAULT_BROWSER_CDP_PORT_RANGE_SPAN =
   DEFAULT_BROWSER_CDP_PORT_RANGE_END - DEFAULT_BROWSER_CDP_PORT_RANGE_START;
 

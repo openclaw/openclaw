@@ -1,3 +1,4 @@
+// Telegram plugin module implements polling session behavior.
 import { type RunOptions, run } from "@grammyjs/runner";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contract";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -18,8 +19,14 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { withTelegramApiErrorLogging } from "./api-logging.js";
+import {
+  runWithTelegramSpooledReplayUpdate,
+  type TelegramMessageProcessingResult,
+  type TelegramSpooledReplayDeferredParticipant,
+} from "./bot-processing-outcome.js";
 import { createTelegramBot } from "./bot.js";
 import type { TelegramTransport } from "./fetch.js";
+import { isTelegramMessageDispatchReplayForgetError } from "./message-dispatch-dedupe.js";
 import { isRecoverableTelegramNetworkError } from "./network-errors.js";
 import { TelegramPollingLivenessTracker } from "./polling-liveness.js";
 import { createTelegramPollingStatusPublisher } from "./polling-status.js";
@@ -27,15 +34,17 @@ import { TelegramPollingTransportState } from "./polling-transport-state.js";
 import { TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS } from "./request-timeouts.js";
 import { getTelegramSequentialKey } from "./sequential-key.js";
 import {
-  claimTelegramSpooledUpdate,
+  claimNextTelegramSpooledUpdate,
   deleteTelegramSpooledUpdate,
   failTelegramSpooledUpdateClaim,
   isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess,
   listTelegramSpooledUpdateClaims,
   listTelegramSpooledUpdates,
   recoverStaleTelegramSpooledUpdateClaims,
+  refreshTelegramSpooledUpdateClaim,
   releaseTelegramSpooledUpdateClaim,
   resolveTelegramIngressSpoolDir,
+  TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
   writeTelegramSpooledUpdate,
   type ClaimedTelegramSpooledUpdate,
   type TelegramSpooledUpdate,
@@ -109,6 +118,11 @@ function resolveTelegramRestartDelayMs(
   return { delayMs, stopTimeoutSuffix };
 }
 
+// Surfaced in logs and channel status when getUpdates returns 409; the only
+// user-fixable causes are a second poller on the same token or a stale webhook.
+const TELEGRAM_GET_UPDATES_CONFLICT_HINT =
+  " Another OpenClaw gateway, script, or Telegram poller may be using this bot token; stop the duplicate poller or switch this account to webhook mode.";
+
 const DEFAULT_POLL_STALL_THRESHOLD_MS = 120_000;
 const MIN_POLL_STALL_THRESHOLD_MS = 30_000;
 const MAX_POLL_STALL_THRESHOLD_MS = 600_000;
@@ -119,18 +133,23 @@ const TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS = 5_000;
 const TELEGRAM_SPOOLED_HANDLER_TIMEOUT_ENV = "OPENCLAW_TELEGRAM_SPOOLED_HANDLER_TIMEOUT_MS";
 const TELEGRAM_SPOOLED_DRAIN_START_LIMIT = 100;
 const TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT = TELEGRAM_SPOOLED_DRAIN_START_LIMIT * 10;
+const TELEGRAM_SPOOLED_CLAIM_REFRESH_INTERVAL_MS = 5 * 60 * 1000;
+const TELEGRAM_SPOOLED_CLAIM_HEALTH_GRACE_MS = 2 * TELEGRAM_SPOOLED_CLAIM_REFRESH_INTERVAL_MS;
+const TELEGRAM_SPOOLED_SESSION_INIT_CONFLICT_RETRY_BASE_MS = 5_000;
+const TELEGRAM_SPOOLED_SESSION_INIT_CONFLICT_RETRY_MAX_MS = 60_000;
 const TELEGRAM_POLLING_CLIENT_TIMEOUT_FLOOR_SECONDS = Math.ceil(
   TELEGRAM_GET_UPDATES_REQUEST_TIMEOUT_MS / 1000,
 );
 const MISSING_AGENT_HARNESS_ERROR_NAME = "MissingAgentHarnessError";
 const MISSING_AGENT_HARNESS_MESSAGE_RE = /Requested agent harness "[^"]+" is not registered\./u;
+const REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE = /reply session initialization conflicted for \S+/u;
 
 function normalizeTelegramAccountId(accountId?: string | null): string {
   return accountId?.trim() || "default";
 }
 
 type NonRetryableSpooledUpdateFailure = {
-  reason: "missing-agent-harness";
+  reason: "missing-agent-harness" | "dispatch-dedupe-rollback-failed";
   message: string;
 };
 
@@ -142,6 +161,11 @@ function resolveNonRetryableSpooledUpdateFailure(
     current.error,
   ])) {
     const message = formatErrorMessage(candidate);
+    if (isTelegramMessageDispatchReplayForgetError(candidate)) {
+      // A committed dispatch key that cannot be rolled back makes retry unsafe:
+      // the next replay can be duplicate-suppressed and then deleted.
+      return { reason: "dispatch-dedupe-rollback-failed", message };
+    }
     if (
       readErrorName(candidate) === MISSING_AGENT_HARNESS_ERROR_NAME ||
       MISSING_AGENT_HARNESS_MESSAGE_RE.test(message)
@@ -150,6 +174,24 @@ function resolveNonRetryableSpooledUpdateFailure(
     }
   }
   return null;
+}
+
+function resolveSpooledUpdateRetryDelayMs(update: TelegramSpooledUpdate, now = Date.now()): number {
+  const attempts = update.attempts ?? 0;
+  if (
+    !update.lastError ||
+    !REPLY_SESSION_INIT_CONFLICT_MESSAGE_RE.test(update.lastError) ||
+    update.lastAttemptAt === undefined ||
+    attempts <= 0
+  ) {
+    return 0;
+  }
+  const exponent = Math.min(attempts - 1, 8);
+  const delayMs = Math.min(
+    TELEGRAM_SPOOLED_SESSION_INIT_CONFLICT_RETRY_MAX_MS,
+    TELEGRAM_SPOOLED_SESSION_INIT_CONFLICT_RETRY_BASE_MS * 2 ** exponent,
+  );
+  return Math.max(0, update.lastAttemptAt + delayMs - now);
 }
 
 type TelegramBot = ReturnType<typeof createTelegramBot>;
@@ -253,9 +295,28 @@ type SpooledUpdateHandlerState = {
   update: ClaimedTelegramSpooledUpdate;
   updateId: number;
   startedAt: number;
+  stopClaimRefresh: () => void;
+  backlogStatusMessage?: string;
   timedOutAt?: number;
   timeoutMessage?: string;
 };
+
+type DeferredSpooledUpdateClaimState = {
+  claimKey: string;
+  laneKey: string;
+  task: Promise<void>;
+  timer?: ReturnType<typeof setTimeout>;
+  timedOutMessage?: string;
+  update: ClaimedTelegramSpooledUpdate;
+  updateId: number;
+  stopClaimRefresh: () => void;
+};
+
+const deferredSpooledUpdateClaimsByKey = new Map<string, DeferredSpooledUpdateClaimState>();
+
+function buildDeferredSpooledUpdateClaimKey(update: ClaimedTelegramSpooledUpdate): string {
+  return `${update.pendingPath}:${update.claim?.claimToken ?? update.claim?.processId ?? "claimed"}`;
+}
 
 type SpooledUpdateDrainResult = {
   blockedByLane: Set<string>;
@@ -265,6 +326,21 @@ type SpooledUpdateDrainResult = {
 // Account health restarts create a new session in the same process while an old
 // spooled handler may still be running after shutdown grace.
 const activeSpooledUpdateHandlersByLane = new Map<string, SpooledUpdateHandlerState>();
+type SpooledUpdateDrainHealth = {
+  lastCompletedAt: number;
+};
+
+const spooledUpdateDrainHealthBySpool = new Map<string, SpooledUpdateDrainHealth>();
+
+function getSpooledUpdateDrainHealth(spoolDir: string): SpooledUpdateDrainHealth {
+  const existing = spooledUpdateDrainHealthBySpool.get(spoolDir);
+  if (existing) {
+    return existing;
+  }
+  const created = { lastCompletedAt: Date.now() };
+  spooledUpdateDrainHealthBySpool.set(spoolDir, created);
+  return created;
+}
 
 function resolveSpooledUpdateHandlerTimeoutMs(params: {
   configured?: number;
@@ -298,6 +374,7 @@ export class TelegramPollingSession {
   #activeRunner: ReturnType<typeof run> | undefined;
   #activeFetchAbort: AbortController | undefined;
   #spooledUpdateHandlerKeys = new Set<string>();
+  #deferredSpooledUpdateClaimKeys = new Set<string>();
   #transportState: TelegramPollingTransportState;
   #status: ReturnType<typeof createTelegramPollingStatusPublisher>;
   #stallThresholdMs: number;
@@ -504,35 +581,110 @@ export class TelegramPollingSession {
     }
   }
 
-  async #claimSpooledUpdate(
-    update: TelegramSpooledUpdate,
-  ): Promise<ClaimedTelegramSpooledUpdate | null> {
+  async #claimNextSpooledUpdate(params: {
+    blockedLaneKeys: Set<string>;
+    candidateUpdateIds: readonly number[];
+    spoolDir: string;
+  }): Promise<ClaimedTelegramSpooledUpdate | null> {
     try {
-      return await claimTelegramSpooledUpdate(update);
+      return await claimNextTelegramSpooledUpdate({
+        spoolDir: params.spoolDir,
+        blockedLaneKeys: params.blockedLaneKeys,
+        botInfo: this.opts.botInfo,
+        candidateUpdateIds: params.candidateUpdateIds,
+        scanLimit: TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT,
+      });
     } catch (err) {
       this.opts.log(
-        `[telegram][diag] spooled update ${update.updateId} claim failed; keeping for retry: ${formatErrorMessage(err)}`,
+        `[telegram][diag] spooled update claim failed; keeping pending updates for retry: ${formatErrorMessage(err)}`,
       );
       return null;
     }
   }
 
+  #startSpooledUpdateClaimRefresh(
+    update: ClaimedTelegramSpooledUpdate,
+    isDrainHealthy: () => boolean,
+    onDrainUnhealthy: () => void,
+  ): () => void {
+    // Refresh only while this process owns useful work and its drain loop is making progress.
+    // Stopping the lease on a stalled drain lets another process recover the lane.
+    let stopped = false;
+    let refreshing = false;
+    const refresh = async (): Promise<void> => {
+      if (stopped || refreshing) {
+        return;
+      }
+      if (!isDrainHealthy()) {
+        onDrainUnhealthy();
+        stopped = true;
+        clearInterval(timer);
+        return;
+      }
+      refreshing = true;
+      try {
+        const refreshed = await refreshTelegramSpooledUpdateClaim(update);
+        if (!refreshed && !stopped) {
+          onDrainUnhealthy();
+          stopped = true;
+          clearInterval(timer);
+        }
+      } catch (err) {
+        this.opts.log(
+          `[telegram][diag] spooled update ${update.updateId} claim refresh failed: ${formatErrorMessage(err)}`,
+        );
+        if (!stopped) {
+          onDrainUnhealthy();
+          stopped = true;
+          clearInterval(timer);
+        }
+      } finally {
+        refreshing = false;
+      }
+    };
+    const timer = setInterval(() => {
+      void refresh();
+    }, TELEGRAM_SPOOLED_CLAIM_REFRESH_INTERVAL_MS);
+    timer.unref?.();
+    return () => {
+      if (stopped) {
+        return;
+      }
+      stopped = true;
+      clearInterval(timer);
+    };
+  }
+
   async #handleClaimedSpooledUpdate(params: {
     bot: TelegramBot;
+    stopClaimRefresh: () => void;
     update: ClaimedTelegramSpooledUpdate;
   }): Promise<boolean> {
+    let replay: { deferredWork?: TelegramSpooledReplayDeferredParticipant };
     try {
-      await params.bot.handleUpdate(
-        params.update.update as Parameters<typeof params.bot.handleUpdate>[0],
-      );
+      const update = params.update.update as Parameters<typeof params.bot.handleUpdate>[0];
+      replay = await runWithTelegramSpooledReplayUpdate(update, async () => {
+        await params.bot.handleUpdate(update);
+      });
     } catch (err) {
+      params.stopClaimRefresh();
       await this.#releaseFailedSpooledUpdate({
         err,
         update: params.update,
       });
       return false;
     }
+    if (replay.deferredWork) {
+      this.#registerDeferredSpooledUpdate({
+        deferredWork: replay.deferredWork,
+        laneKey: this.#spooledUpdateLaneKey(params.update),
+        stopClaimRefresh: params.stopClaimRefresh,
+        update: params.update,
+      });
+      return true;
+    }
     try {
+      params.stopClaimRefresh();
       await deleteTelegramSpooledUpdate(params.update);
       return true;
     } catch (err) {
@@ -541,6 +693,120 @@ export class TelegramPollingSession {
       );
       return false;
     }
+  }
+
+  #registerDeferredSpooledUpdate(params: {
+    deferredWork: TelegramSpooledReplayDeferredParticipant;
+    laneKey: string;
+    stopClaimRefresh: () => void;
+    update: ClaimedTelegramSpooledUpdate;
+  }): void {
+    const claimKey = buildDeferredSpooledUpdateClaimKey(params.update);
+    const previous = deferredSpooledUpdateClaimsByKey.get(claimKey);
+    if (previous) {
+      if (previous.timer) {
+        clearTimeout(previous.timer);
+      }
+      previous.stopClaimRefresh();
+      deferredSpooledUpdateClaimsByKey.delete(claimKey);
+    }
+    let settled = false;
+    const finish = async (result: TelegramMessageProcessingResult): Promise<void> => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (state.timer) {
+        clearTimeout(state.timer);
+      }
+      state.stopClaimRefresh();
+      if (deferredSpooledUpdateClaimsByKey.get(claimKey) === state) {
+        deferredSpooledUpdateClaimsByKey.delete(claimKey);
+      }
+      this.#deferredSpooledUpdateClaimKeys.delete(claimKey);
+      if (result.kind === "failed-retryable") {
+        if (state.timedOutMessage) {
+          await this.#failTimedOutDeferredSpooledUpdate(state);
+          return;
+        }
+        await this.#releaseFailedSpooledUpdate({
+          err: result.error,
+          update: params.update,
+        });
+        return;
+      }
+      try {
+        await deleteTelegramSpooledUpdate(params.update);
+      } catch (err) {
+        this.opts.log(
+          `[telegram][diag] spooled update ${params.update.updateId} completed after buffered processing but processing marker cleanup failed: ${formatErrorMessage(err)}`,
+        );
+      }
+    };
+    const state: DeferredSpooledUpdateClaimState = {
+      claimKey,
+      laneKey: params.laneKey,
+      task: params.deferredWork.task.then(finish, async (err: unknown) => {
+        await finish({ kind: "failed-retryable", error: err });
+      }),
+      update: params.update,
+      updateId: params.update.updateId,
+      stopClaimRefresh: params.stopClaimRefresh,
+    };
+    state.timer = setTimeout(() => {
+      const age = formatDurationPrecise(this.#spooledUpdateHandlerTimeoutMs);
+      state.timedOutMessage = `Telegram isolated polling spool buffered processing timed out behind update ${params.update.updateId} on lane ${params.laneKey} after ${age}; marking the update failed, aborting active reply work, and keeping the claim out of retry while the buffered task settles.`;
+      state.stopClaimRefresh();
+      params.deferredWork.settle({
+        kind: "failed-retryable",
+        error: new Error(state.timedOutMessage),
+      });
+    }, this.#spooledUpdateHandlerTimeoutMs);
+    state.timer.unref?.();
+    deferredSpooledUpdateClaimsByKey.set(claimKey, state);
+    this.#deferredSpooledUpdateClaimKeys.add(claimKey);
+  }
+
+  #isDeferredSpooledUpdateClaim(update: ClaimedTelegramSpooledUpdate): boolean {
+    return deferredSpooledUpdateClaimsByKey.has(buildDeferredSpooledUpdateClaimKey(update));
+  }
+
+  async #failTimedOutDeferredSpooledUpdate(state: DeferredSpooledUpdateClaimState): Promise<void> {
+    const message =
+      state.timedOutMessage ??
+      `Telegram isolated polling spool buffered processing timed out behind update ${state.updateId} on lane ${state.laneKey}; marking the update failed.`;
+    try {
+      const failed = await failTelegramSpooledUpdateClaim({
+        update: state.update,
+        reason: "handler-timeout",
+        message,
+      });
+      if (!failed) {
+        this.opts.log(
+          `[telegram][diag] timed out buffered spooled update ${state.updateId} no longer had a processing marker to fail.`,
+        );
+        this.#status.notePollingError(message);
+        return;
+      }
+    } catch (err) {
+      this.opts.log(
+        `[telegram][diag] timed out buffered spooled update ${state.updateId} could not be marked failed: ${formatErrorMessage(err)}`,
+      );
+      this.#status.notePollingError(message);
+      return;
+    }
+    const scopedReplyFenceLaneKey = buildTelegramReplyFenceLaneKey({
+      accountId: this.opts.accountId,
+      sequentialKey: state.laneKey,
+    });
+    const abortedReplyWork = supersedeTelegramReplyFenceLane(scopedReplyFenceLaneKey);
+    if (!abortedReplyWork) {
+      this.opts.log(
+        `[telegram][diag] timed out buffered spooled update ${state.updateId} had no active reply fence on lane ${state.laneKey}.`,
+      );
+    }
+    this.opts.log(`[telegram] ${message}`);
+    this.#status.notePollingError(message);
   }
 
   async #releaseFailedSpooledUpdate(params: {
@@ -572,7 +838,9 @@ export class TelegramPollingSession {
       }
     }
     try {
-      await releaseTelegramSpooledUpdateClaim(params.update);
+      await releaseTelegramSpooledUpdateClaim(params.update, {
+        lastError: formatErrorMessage(params.err),
+      });
     } catch (releaseErr) {
       this.opts.log(
         `[telegram][diag] spooled update ${params.update.updateId} failed and could not be requeued: ${formatErrorMessage(releaseErr)}`,
@@ -585,24 +853,42 @@ export class TelegramPollingSession {
   }
 
   async #waitForSpooledUpdateHandlers(): Promise<void> {
-    await Promise.allSettled(
-      [...this.#spooledUpdateHandlerKeys]
+    await Promise.allSettled([
+      ...[...this.#spooledUpdateHandlerKeys]
         .map((handlerKey) => activeSpooledUpdateHandlersByLane.get(handlerKey)?.task)
         .filter((task): task is Promise<boolean> => Boolean(task)),
-    );
+      ...[...this.#deferredSpooledUpdateClaimKeys]
+        .map((claimKey) => deferredSpooledUpdateClaimsByKey.get(claimKey)?.task)
+        .filter((task): task is Promise<void> => Boolean(task)),
+    ]);
   }
 
   #spooledUpdateLaneKey(update: TelegramSpooledUpdate): string {
+    return this.#rawSpooledUpdateLaneKey(update.update);
+  }
+
+  #rawSpooledUpdateLaneKey(update: unknown): string {
     return getTelegramSequentialKey({
-      update: update.update as Parameters<typeof getTelegramSequentialKey>[0]["update"],
+      update: update as Parameters<typeof getTelegramSequentialKey>[0]["update"],
       ...(this.opts.botInfo ? { me: this.opts.botInfo } : {}),
     });
   }
 
+  #activeSpooledUpdateHandlerKeysForSpool(spoolDir: string): Set<string> {
+    const handlerKeys = new Set<string>();
+    for (const handlerKey of activeSpooledUpdateHandlersByLane.keys()) {
+      if (isSpooledUpdateHandlerKeyForSpool(handlerKey, spoolDir)) {
+        handlerKeys.add(handlerKey);
+      }
+    }
+    return handlerKeys;
+  }
+
   #activeSpooledUpdateLaneKeysForSpool(spoolDir: string): Set<string> {
     const laneKeys = new Set<string>();
-    for (const [handlerKey, handler] of activeSpooledUpdateHandlersByLane) {
-      if (isSpooledUpdateHandlerKeyForSpool(handlerKey, spoolDir)) {
+    for (const handlerKey of this.#activeSpooledUpdateHandlerKeysForSpool(spoolDir)) {
+      const handler = activeSpooledUpdateHandlersByLane.get(handlerKey);
+      if (handler) {
         laneKeys.add(handler.laneKey);
       }
     }
@@ -611,6 +897,7 @@ export class TelegramPollingSession {
 
   async #drainSpooledUpdates(params: {
     bot: TelegramBot;
+    isDrainHealthy: () => boolean;
     spoolDir: string;
   }): Promise<SpooledUpdateDrainResult> {
     const activeLaneKeys = this.#activeSpooledUpdateLaneKeysForSpool(params.spoolDir);
@@ -618,42 +905,85 @@ export class TelegramPollingSession {
       spoolDir: params.spoolDir,
       staleMs: 0,
       shouldRecover: (claim) =>
+        !this.#isDeferredSpooledUpdateClaim(claim) &&
         !activeLaneKeys.has(this.#spooledUpdateLaneKey(claim)) &&
-        !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim),
+        !isTelegramSpooledUpdateClaimOwnedByOtherLiveProcess(claim, {
+          maxAgeMs: TELEGRAM_SPOOLED_UPDATE_CLAIM_LEASE_MS,
+        }),
     });
     const claimedLaneKeys = new Set(
       (
         await listTelegramSpooledUpdateClaims({
           spoolDir: params.spoolDir,
         })
-      ).map((claim) => this.#spooledUpdateLaneKey(claim)),
+      )
+        .filter((claim) => !this.#isDeferredSpooledUpdateClaim(claim))
+        .map((claim) => this.#spooledUpdateLaneKey(claim)),
     );
     const updates = await listTelegramSpooledUpdates({
       spoolDir: params.spoolDir,
       limit: TELEGRAM_SPOOLED_DRAIN_SCAN_LIMIT,
     });
+    const candidateUpdateIds = updates.map((update) => update.updateId);
     const blockedByLane = new Set<string>();
-    let started = 0;
+    const retryDelayedLaneKeys = new Set<string>();
     for (const update of updates) {
       const laneKey = this.#spooledUpdateLaneKey(update);
-      if (this.opts.abortSignal?.aborted) {
-        break;
-      }
       const handlerKey = buildSpooledUpdateHandlerKey({ spoolDir: params.spoolDir, laneKey });
       if (activeSpooledUpdateHandlersByLane.has(handlerKey)) {
         blockedByLane.add(handlerKey);
-        continue;
       }
-      if (claimedLaneKeys.has(laneKey)) {
-        continue;
+      if (resolveSpooledUpdateRetryDelayMs(update) > 0) {
+        retryDelayedLaneKeys.add(laneKey);
       }
-      const claimedUpdate = await this.#claimSpooledUpdate(update);
+    }
+    const blockedLaneKeys = new Set([
+      ...activeLaneKeys,
+      ...claimedLaneKeys,
+      ...retryDelayedLaneKeys,
+    ]);
+    let started = 0;
+    while (started < TELEGRAM_SPOOLED_DRAIN_START_LIMIT) {
+      if (this.opts.abortSignal?.aborted) {
+        break;
+      }
+      const claimedUpdate = await this.#claimNextSpooledUpdate({
+        blockedLaneKeys,
+        candidateUpdateIds,
+        spoolDir: params.spoolDir,
+      });
       if (!claimedUpdate) {
-        claimedLaneKeys.add(laneKey);
+        break;
+      }
+      const laneKey = this.#spooledUpdateLaneKey(claimedUpdate);
+      const handlerKey = buildSpooledUpdateHandlerKey({ spoolDir: params.spoolDir, laneKey });
+      if (activeSpooledUpdateHandlersByLane.has(handlerKey)) {
+        blockedByLane.add(handlerKey);
+        await releaseTelegramSpooledUpdateClaim(claimedUpdate, {
+          lastError: "active Telegram spool handler already owns this lane",
+        });
+        blockedLaneKeys.add(laneKey);
         continue;
       }
+      const stopClaimRefresh = this.#startSpooledUpdateClaimRefresh(
+        claimedUpdate,
+        params.isDrainHealthy,
+        () => {
+          const scopedReplyFenceLaneKey = buildTelegramReplyFenceLaneKey({
+            accountId: this.opts.accountId,
+            sequentialKey: laneKey,
+          });
+          const abortedReplyWork = supersedeTelegramReplyFenceLane(scopedReplyFenceLaneKey);
+          if (!abortedReplyWork) {
+            this.opts.log(
+              `[telegram][diag] spooled update ${claimedUpdate.updateId} drain heartbeat expired without an active reply fence on lane ${laneKey}; stopping claim refresh.`,
+            );
+          }
+        },
+      );
       const handler = this.#handleClaimedSpooledUpdate({
         bot: params.bot,
+        stopClaimRefresh,
         update: claimedUpdate,
       });
       const state: SpooledUpdateHandlerState = {
@@ -661,22 +991,25 @@ export class TelegramPollingSession {
         laneKey,
         task: handler,
         update: claimedUpdate,
-        updateId: update.updateId,
+        updateId: claimedUpdate.updateId,
         startedAt: Date.now(),
+        stopClaimRefresh,
       };
       activeSpooledUpdateHandlersByLane.set(handlerKey, state);
       this.#spooledUpdateHandlerKeys.add(handlerKey);
-      claimedLaneKeys.add(laneKey);
+      blockedLaneKeys.add(laneKey);
       void handler.finally(() => {
+        if (
+          !deferredSpooledUpdateClaimsByKey.has(buildDeferredSpooledUpdateClaimKey(claimedUpdate))
+        ) {
+          state.stopClaimRefresh();
+        }
         if (activeSpooledUpdateHandlersByLane.get(handlerKey) === state) {
           activeSpooledUpdateHandlersByLane.delete(handlerKey);
         }
         this.#spooledUpdateHandlerKeys.delete(handlerKey);
       });
       started += 1;
-      if (started >= TELEGRAM_SPOOLED_DRAIN_START_LIMIT) {
-        break;
-      }
     }
     return { blockedByLane, started };
   }
@@ -716,6 +1049,7 @@ export class TelegramPollingSession {
     }
     const age = formatDurationPrecise(timedOutHandler.ageMs);
     activeHandler.timedOutAt = Date.now();
+    activeHandler.stopClaimRefresh();
     const message = `Telegram isolated polling spool handler timed out behind update ${handler.updateId} on lane ${handler.laneKey} after ${age}; marking the update failed, aborting active reply work, and restarting isolated ingress so later updates can drain.`;
     activeHandler.timeoutMessage = message;
     try {
@@ -772,6 +1106,27 @@ export class TelegramPollingSession {
     return { handlerKey: handler.handlerKey, restart: true };
   }
 
+  #noteSpooledBacklogStalls(blockedHandlerKeys: Set<string>): Set<string> {
+    const stalled = new Set<string>();
+    const now = Date.now();
+    for (const handlerKey of blockedHandlerKeys) {
+      const handler = activeSpooledUpdateHandlersByLane.get(handlerKey);
+      if (!handler || handler.timedOutAt !== undefined) {
+        continue;
+      }
+      const ageMs = now - handler.startedAt;
+      if (ageMs < ISOLATED_INGRESS_BACKLOG_STALL_MS) {
+        continue;
+      }
+      stalled.add(handlerKey);
+      if (!handler.backlogStatusMessage) {
+        handler.backlogStatusMessage = `Telegram isolated polling spool backlog stalled behind update ${handler.updateId} on lane ${handler.laneKey} for ${formatDurationPrecise(ageMs)}; marking polling unhealthy until the backlog drains.`;
+        this.#status.notePollingError(handler.backlogStatusMessage);
+      }
+    }
+    return stalled;
+  }
+
   async #runIsolatedIngressCycle(bot: TelegramBot): Promise<"continue" | "exit"> {
     const ingress = this.opts.isolatedIngress;
     if (!ingress?.enabled) {
@@ -812,10 +1167,12 @@ export class TelegramPollingSession {
       offset: number | null;
       outcome: string;
       error?: string;
+      errorCode: number | null;
     } = {
       startedAt: null,
       offset: null,
       outcome: "not-started",
+      errorCode: null,
     };
     const liveness = new TelegramPollingLivenessTracker();
     let consecutiveDrainFailures = 0;
@@ -828,6 +1185,8 @@ export class TelegramPollingSession {
       forceCycleResolve = resolve;
     });
     const stalledBacklogKeys = new Set<string>();
+    let requestImmediateDrain: () => void = () => undefined;
+    let drainRequested = false;
     const unsubscribe = worker.onMessage((message) => {
       const ackSpooledUpdate = (
         requestId: string,
@@ -852,6 +1211,7 @@ export class TelegramPollingSession {
         pollState.offset = message.offset;
         pollState.outcome = "started";
         delete pollState.error;
+        pollState.errorCode = null;
         return;
       }
       if (message.type === "poll-success") {
@@ -870,15 +1230,18 @@ export class TelegramPollingSession {
         liveness.noteGetUpdatesFinished();
         pollState.outcome = "error";
         pollState.error = message.message;
+        pollState.errorCode = message.errorCode ?? null;
         return;
       }
       if (message.type === "update") {
         void writeTelegramSpooledUpdate({
           spoolDir,
           update: message.update,
+          laneKey: this.#rawSpooledUpdateLaneKey(message.update),
         }).then(
           (updateId) => {
             ackSpooledUpdate(message.requestId, { ok: true, updateId });
+            requestImmediateDrain();
           },
           (err: unknown) => {
             ackSpooledUpdate(message.requestId, {
@@ -891,6 +1254,7 @@ export class TelegramPollingSession {
       }
       if (message.type === "spooled") {
         liveness.noteGetUpdatesActivity();
+        requestImmediateDrain();
       }
     });
     const stopOnAbort = () => {
@@ -899,6 +1263,11 @@ export class TelegramPollingSession {
     this.opts.abortSignal?.addEventListener("abort", stopOnAbort, { once: true });
     const drainIntervalMs = Math.max(100, Math.floor(ingress.drainIntervalMs ?? 500));
     let drainActive = false;
+    const drainHealth = getSpooledUpdateDrainHealth(spoolDir);
+    // Fail closed when the spool stops making progress: keeping any claim live would
+    // prevent a healthy process from recovering a wedged drain.
+    const isDrainHealthy = () =>
+      Date.now() - drainHealth.lastCompletedAt <= TELEGRAM_SPOOLED_CLAIM_HEALTH_GRACE_MS;
     const stopBot = () => {
       return Promise.resolve(bot.stop())
         .then(() => undefined)
@@ -931,12 +1300,22 @@ export class TelegramPollingSession {
       }
     };
     const drainOnce = async () => {
-      if (restartRequested || drainActive || this.opts.abortSignal?.aborted) {
+      if (restartRequested || this.opts.abortSignal?.aborted) {
+        return;
+      }
+      if (drainActive) {
+        drainRequested = true;
         return;
       }
       drainActive = true;
+      drainRequested = false;
+      let drainCompleted = false;
       try {
-        const drain = await this.#drainSpooledUpdates({ bot, spoolDir });
+        const drain = await this.#drainSpooledUpdates({
+          bot,
+          isDrainHealthy,
+          spoolDir,
+        });
         consecutiveDrainFailures = 0;
         for (const handlerKey of stalledBacklogKeys) {
           if (
@@ -956,20 +1335,42 @@ export class TelegramPollingSession {
             this.#status.notePollingError(handler.timeoutMessage);
           }
         }
-        const timedOutRecovery = await this.#recoverTimedOutSpooledHandler(drain.blockedByLane);
+        for (const handlerKey of this.#noteSpooledBacklogStalls(drain.blockedByLane)) {
+          stalledBacklogKeys.add(handlerKey);
+        }
+        // Active handlers can outlive their owning session after shutdown grace.
+        // Recover every handler for this spool, including lone handlers with no backlog.
+        const timeoutCandidateHandlerKeys = this.#activeSpooledUpdateHandlerKeysForSpool(spoolDir);
+        for (const handlerKey of drain.blockedByLane) {
+          timeoutCandidateHandlerKeys.add(handlerKey);
+        }
+        const timedOutRecovery = await this.#recoverTimedOutSpooledHandler(
+          timeoutCandidateHandlerKeys,
+        );
         if (timedOutRecovery?.restart) {
           requestStopForRestart();
         } else if (timedOutRecovery) {
           stalledBacklogKeys.add(timedOutRecovery.handlerKey);
         }
+        drainCompleted = true;
       } catch (err) {
         consecutiveDrainFailures += 1;
         this.opts.log(
           `[telegram][diag] isolated polling spool drain failed (${consecutiveDrainFailures}): ${formatErrorMessage(err)}`,
         );
       } finally {
+        if (drainCompleted) {
+          drainHealth.lastCompletedAt = Date.now();
+        }
         drainActive = false;
+        if (drainRequested && !restartRequested && !this.opts.abortSignal?.aborted) {
+          drainRequested = false;
+          void drainOnce();
+        }
       }
+    };
+    requestImmediateDrain = () => {
+      void drainOnce();
     };
     await drainOnce();
     const drainTimer = setInterval(() => {
@@ -1001,14 +1402,24 @@ export class TelegramPollingSession {
         if (this.opts.abortSignal?.aborted) {
           return "exit";
         }
-        if (
+        // The worker only issues getUpdates, so a 409 is always a duplicate
+        // poller (or stale webhook) conflict. Mirror the classic polling
+        // cycle: re-clear the webhook, rotate the transport (#69787), and
+        // restart with backoff instead of crashing the whole account.
+        const isConflict = pollState.errorCode === 409;
+        if (isConflict) {
+          this.#webhookCleared = false;
+          this.#transportState.markDirty();
+        } else if (
           pollState.error &&
           !isRecoverableTelegramNetworkError(new Error(pollState.error), { context: "polling" })
         ) {
           this.#status.notePollingError(pollState.error);
           throw new Error(pollState.error, { cause: err });
         }
-        const message = formatErrorMessage(err);
+        const message = isConflict
+          ? `Telegram getUpdates conflict: ${pollState.error}.${TELEGRAM_GET_UPDATES_CONFLICT_HINT}`
+          : formatErrorMessage(err);
         this.opts.log(`[telegram][diag] isolated polling ingress failed: ${message}`);
         this.#status.notePollingError(message);
         clearForceCycleTimer();
@@ -1161,6 +1572,7 @@ export class TelegramPollingSession {
         this.#transportState.markDirty();
         stalledRestart = true;
         this.opts.log(`[telegram] ${stall.message}`);
+        this.#status.notePollingError(stall.message);
         requestStopForRestart();
       }
     }, POLL_WATCHDOG_INTERVAL_MS);
@@ -1209,12 +1621,16 @@ export class TelegramPollingSession {
       }
       const reason = isConflict ? "getUpdates conflict" : "network error";
       const errMsg = formatErrorMessage(err);
-      const conflictHint = isConflict
-        ? " Another OpenClaw gateway, script, or Telegram poller may be using this bot token; stop the duplicate poller or switch this account to webhook mode."
-        : "";
+      const conflictHint = isConflict ? TELEGRAM_GET_UPDATES_CONFLICT_HINT : "";
       this.opts.log(
         `[telegram][diag] polling cycle error reason=${reason} ${liveness.formatDiagnosticFields("lastGetUpdatesError")} err=${errMsg}${conflictHint}`,
       );
+      // Conflicts carry a user-fixable diagnosis, so surface them in channel
+      // status. Recoverable network blips stay log-only; the stall watchdog
+      // owns status for extended outages (see detectStall above).
+      if (isConflict) {
+        this.#status.notePollingError(`Telegram ${reason}: ${errMsg}.${conflictHint}`);
+      }
       clearForceCycleTimer();
       const shouldRestart = await this.#waitBeforeRestart(
         (delay) => `Telegram ${reason}: ${errMsg};${conflictHint} retrying in ${delay}.`,
@@ -1260,10 +1676,14 @@ const isGetUpdatesConflict = (err: unknown) => {
 export const testing = {
   resetActiveSpooledUpdateHandlersForTests: (): void => {
     activeSpooledUpdateHandlersByLane.clear();
+    spooledUpdateDrainHealthBySpool.clear();
   },
   createTelegramRestartBackoffState,
   resetTelegramRestartBackoffState,
   resolveTelegramRestartDelayMs,
+  resolveSpooledUpdateRetryDelayMs,
+  isolatedIngressBacklogStallMs: ISOLATED_INGRESS_BACKLOG_STALL_MS,
+  spooledClaimRefreshIntervalMs: TELEGRAM_SPOOLED_CLAIM_REFRESH_INTERVAL_MS,
   resolveSpooledUpdateHandlerAbortGraceMs: (valueMs: unknown): number =>
     resolvePositiveTimerTimeoutMs(valueMs, TELEGRAM_SPOOLED_HANDLER_ABORT_GRACE_MS),
 };

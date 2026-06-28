@@ -1,3 +1,4 @@
+/** Shared node-host request, result, event, and approval-bin provider contracts. */
 import type { SkillBinTrustEntry, SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 
 /**

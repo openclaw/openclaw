@@ -1,3 +1,4 @@
+// Unwraps shell wrappers so approval policy can inspect inline commands.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   MAX_DISPATCH_WRAPPER_DEPTH,

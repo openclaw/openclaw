@@ -1,3 +1,5 @@
+// Device pairing access helpers evaluate pairing scopes and role permissions.
+import { normalizeUniqueSingleOrTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { normalizeDeviceAuthScopes } from "./device-auth.js";
 
 export type DevicePairingAccessSummary = {
@@ -49,21 +51,10 @@ type PairedLike = {
 function normalizeRoleList(...items: Array<string | string[] | undefined>): string[] {
   const roles = new Set<string>();
   for (const item of items) {
-    if (!item) {
-      continue;
-    }
-    if (Array.isArray(item)) {
-      for (const role of item) {
-        const trimmed = role.trim();
-        if (trimmed) {
-          roles.add(trimmed);
-        }
-      }
-      continue;
-    }
-    const trimmed = item.trim();
-    if (trimmed) {
-      roles.add(trimmed);
+    // On-disk pairing records are blind-cast, so roles/role may be non-strings; the shared
+    // normalizer drops them instead of crashing on .trim() (matches the scopes path + mergeRoles).
+    for (const role of normalizeUniqueSingleOrTrimmedStringList(item)) {
+      roles.add(role);
     }
   }
   return [...roles].toSorted();

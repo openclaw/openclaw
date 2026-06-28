@@ -1,3 +1,4 @@
+// Telegram tests cover polling lease plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -25,6 +26,31 @@ describe("Telegram polling lease", () => {
     ).rejects.toThrow('refusing duplicate poller for account "ops"');
 
     first.release();
+  });
+
+  it("refuses an old active duplicate poller for the same bot token", async () => {
+    vi.useFakeTimers();
+    try {
+      const abort = new AbortController();
+      const first = await acquireTelegramPollingLease({
+        token: "123:abc",
+        accountId: "default",
+        abortSignal: abort.signal,
+      });
+
+      await vi.advanceTimersByTimeAsync(6 * 60 * 1_000);
+
+      await expect(
+        acquireTelegramPollingLease({
+          token: "123:abc",
+          accountId: "ops",
+        }),
+      ).rejects.toThrow('refusing duplicate poller for account "ops"');
+
+      first.release();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("allows concurrent pollers for different bot tokens", async () => {

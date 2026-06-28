@@ -1,3 +1,4 @@
+/** Collects core config secret refs during runtime preparation. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../config/types.tools.js";
@@ -211,17 +212,37 @@ function collectTalkAssignments(params: {
       talk.apiKey = value;
     },
   });
-  const providers = talk.providers;
-  if (!isRecord(providers)) {
+  collectTalkProviderApiKeyAssignments({
+    providers: talk.providers,
+    pathPrefix: "talk.providers",
+    defaults: params.defaults,
+    context: params.context,
+  });
+  const realtime = isRecord(talk.realtime) ? talk.realtime : undefined;
+  collectTalkProviderApiKeyAssignments({
+    providers: realtime?.providers,
+    pathPrefix: "talk.realtime.providers",
+    defaults: params.defaults,
+    context: params.context,
+  });
+}
+
+function collectTalkProviderApiKeyAssignments(params: {
+  providers: unknown;
+  pathPrefix: string;
+  defaults: SecretDefaults | undefined;
+  context: ResolverContext;
+}): void {
+  if (!isRecord(params.providers)) {
     return;
   }
-  for (const [providerId, providerConfig] of Object.entries(providers)) {
+  for (const [providerId, providerConfig] of Object.entries(params.providers)) {
     if (!isRecord(providerConfig)) {
       continue;
     }
     collectSecretInputAssignment({
       value: providerConfig.apiKey,
-      path: `talk.providers.${providerId}.apiKey`,
+      path: `${params.pathPrefix}.${providerId}.apiKey`,
       expected: "string",
       defaults: params.defaults,
       context: params.context,
@@ -641,6 +662,7 @@ function collectSandboxSshAssignments(params: {
 }
 
 /** Collects SecretRef assignments from core-owned config surfaces. */
+/** Collects SecretRef assignments from core non-plugin config surfaces. */
 export function collectCoreConfigAssignments(params: {
   config: OpenClawConfig;
   defaults: SecretDefaults | undefined;

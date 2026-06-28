@@ -1,3 +1,4 @@
+/** Doctor repairs for installed gateway service config and duplicate legacy services. */
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -32,6 +33,7 @@ import {
   uninstallLegacySystemdUnits,
   type SystemdUnitScope,
 } from "../daemon/systemd.js";
+import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { DEFAULT_GATEWAY_DAEMON_RUNTIME, type GatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -50,6 +52,7 @@ const EXECSTART_REPAIR_CODES = new Set<string>([
   SERVICE_AUDIT_CODES.gatewayCommandMissing,
   SERVICE_AUDIT_CODES.gatewayEntrypointMismatch,
 ]);
+const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
 
 function detectGatewayRuntime(programArguments: string[] | undefined): GatewayDaemonRuntime {
   const first = programArguments?.[0];
@@ -230,6 +233,45 @@ async function filterInactiveExtraGatewayServices(
   return activeOrLegacy;
 }
 
+export async function detectExtraGatewayServiceIssues(
+  options: Pick<DoctorOptions, "deep"> = {},
+): Promise<readonly ExtraGatewayService[]> {
+  const detectedExtraServices = await findExtraGatewayServices(process.env, {
+    deep: options.deep,
+  });
+  return await filterInactiveExtraGatewayServices(detectedExtraServices);
+}
+
+export function extraGatewayServiceToHealthFinding(service: ExtraGatewayService): HealthFinding {
+  return {
+    checkId: GATEWAY_SERVICES_EXTRA_CHECK_ID,
+    severity: service.legacy === true ? "warning" : "info",
+    message: `Other gateway-like service detected: ${service.label} (${service.scope}, ${service.detail})`,
+    source: service.platform,
+    target: service.label,
+    fixHint:
+      service.legacy === true
+        ? "Run openclaw doctor --fix to remove legacy gateway services."
+        : "Run a single gateway per machine unless this extra gateway is intentional.",
+  };
+}
+
+export function extraGatewayServiceToRepairEffects(
+  service: ExtraGatewayService,
+): readonly HealthRepairEffect[] {
+  if (service.legacy !== true) {
+    return [];
+  }
+  return [
+    {
+      kind: "service",
+      action: "would-remove-legacy-gateway-service",
+      target: service.label,
+      dryRunSafe: false,
+    },
+  ];
+}
+
 async function cleanupLegacyLaunchdService(params: {
   label: string;
   plistPath: string;
@@ -349,6 +391,12 @@ async function cleanupLegacyLinuxUserServices(
   return { removed, failed };
 }
 
+/**
+ * Audits and optionally rewrites the installed local gateway service configuration.
+ *
+ * The repair preserves managed env sources, avoids Nix/remote installs, and can stage service
+ * updates during updater repair mode instead of immediately installing them.
+ */
 export async function maybeRepairGatewayServiceConfig(
   cfg: OpenClawConfig,
   mode: "local" | "remote",
@@ -430,6 +478,7 @@ export async function maybeRepairGatewayServiceConfig(
     });
   }
   const needsNodeRuntime = needsNodeRuntimeMigration(audit.issues);
+  // Bun-hosted services cannot run some repair paths; migrate through a concrete Node binary.
   const systemNodeInfo = needsNodeRuntime
     ? await resolveSystemNodeInfo({ env: process.env })
     : null;
@@ -632,6 +681,7 @@ export async function maybeRepairGatewayServiceConfig(
     await (updateRepairMode ? service.stage : service.install)({
       env: serviceInstallEnv,
       stdout: process.stdout,
+      warn: (message) => note(message, "Gateway"),
       programArguments: updatedPlan.programArguments,
       workingDirectory: updatedPlan.workingDirectory,
       environment: updatedPlan.environment,
@@ -642,15 +692,15 @@ export async function maybeRepairGatewayServiceConfig(
   }
 }
 
+/**
+ * Reports duplicate gateway-like services and removes legacy user services after confirmation.
+ */
 export async function maybeScanExtraGatewayServices(
   options: DoctorOptions,
   runtime: RuntimeEnv,
   prompter: DoctorPrompter,
 ) {
-  const detectedExtraServices = await findExtraGatewayServices(process.env, {
-    deep: options.deep,
-  });
-  const extraServices = await filterInactiveExtraGatewayServices(detectedExtraServices);
+  const extraServices = await detectExtraGatewayServiceIssues(options);
   if (extraServices.length === 0) {
     return;
   }

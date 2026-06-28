@@ -1,9 +1,12 @@
+// E2E Helper Env Limits tests cover e2e helper env limits script behavior.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { createServer, type Server } from "node:http";
 import os from "node:os";
 import path from "node:path";
+import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it } from "vitest";
+import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const browserFixturePath = "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs";
 const clickclackFixturePath = "scripts/e2e/lib/release-user-journey/clickclack-fixture.mjs";
@@ -27,20 +30,20 @@ function runScriptAsync(
       env: { ...process.env, ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let stdout = "";
-    let stderr = "";
+    const stdout = createBoundedChildOutput();
+    const stderr = createBoundedChildOutput();
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      stdout += chunk;
+      stdout.append(chunk);
     });
     child.stderr.on("data", (chunk) => {
-      stderr += chunk;
+      stderr.append(chunk);
     });
     const timer = setTimeout(() => child.kill("SIGKILL"), timeout);
     child.on("exit", (status) => {
       clearTimeout(timer);
-      resolve({ stderr, stdout, status });
+      resolve({ stderr: stderr.text(), stdout: stdout.text(), status });
     });
   });
 }
@@ -128,20 +131,20 @@ describe("e2e helper numeric env limits", () => {
       },
       stdio: ["ignore", "pipe", "pipe"],
     });
-    let output = "";
+    const output = createBoundedChildOutput();
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (chunk) => {
-      output += chunk;
+      output.append(chunk);
     });
     child.stderr.on("data", (chunk) => {
-      output += chunk;
+      output.append(chunk);
     });
     try {
       await waitForOutput(
         child,
         (text) => text.includes(`clickclack fixture listening on ${port}`),
-        () => output,
+        () => output.text(),
       );
 
       const response = await fetch(`http://127.0.0.1:${port}/fixture/inbound`, {
@@ -168,6 +171,15 @@ describe("e2e helper numeric env limits", () => {
     expect(result.stderr).toContain("invalid OPENCLAW_HTTP_PROBE_TIMEOUT_MS: 8000ms");
   });
 
+  it("rejects loose Open WebUI HTTP probe expected statuses", () => {
+    const result = runScript(httpProbePath, ["http://127.0.0.1:9", "2e2"]);
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "expected status must be lt500 or a decimal HTTP status. Got: 2e2",
+    );
+  });
+
   it("keeps Open WebUI HTTP probe status checks working with strict timeouts", async () => {
     const server = createServer((_request, response) => {
       response.writeHead(204).end();
@@ -182,5 +194,73 @@ describe("e2e helper numeric env limits", () => {
     } finally {
       server.close();
     }
+  });
+
+  it("keeps Open WebUI HTTP probe lt500 status checks working", async () => {
+    const server = createServer((_request, response) => {
+      response.writeHead(404).end();
+    });
+    const url = await listen(server);
+    try {
+      const result = await runScriptAsync(httpProbePath, [url, "lt500"], {
+        OPENCLAW_HTTP_PROBE_TIMEOUT_MS: "500",
+      });
+
+      expect(result.status).toBe(0);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("cancels Open WebUI HTTP probe response bodies", async () => {
+    const { probeHttpStatus } = await import("../../scripts/e2e/lib/openwebui/http-probe.mjs");
+    let canceled = false;
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      expect(init.headers).toEqual({ authorization: "Bearer token-123" });
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          cancel() {
+            canceled = true;
+          },
+        }),
+        { status: 200 },
+      );
+    }) as typeof fetch;
+
+    await expect(
+      probeHttpStatus({
+        bearer: "token-123",
+        fetchImpl,
+        timeoutMs: 500,
+        url: "http://127.0.0.1/probe",
+      }),
+    ).resolves.toBe(true);
+    expect(canceled).toBe(true);
+  });
+
+  it("clamps oversized Open WebUI HTTP probe timers before scheduling", async () => {
+    const { probeHttpStatus } = await import("../../scripts/e2e/lib/openwebui/http-probe.mjs");
+    const fetchImpl = (async (_url: string, init: RequestInit) => {
+      await new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(resolve, 25);
+        init.signal?.addEventListener(
+          "abort",
+          () => {
+            clearTimeout(timer);
+            reject(new Error("aborted"));
+          },
+          { once: true },
+        );
+      });
+      return new Response(null, { status: 200 });
+    }) as typeof fetch;
+
+    await expect(
+      probeHttpStatus({
+        fetchImpl,
+        timeoutMs: MAX_TIMER_TIMEOUT_MS + 1,
+        url: "http://127.0.0.1/probe",
+      }),
+    ).resolves.toBe(true);
   });
 });

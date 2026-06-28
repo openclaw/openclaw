@@ -1,3 +1,7 @@
+/**
+ * Regression coverage for transcript replay policy resolution.
+ * Exercises provider-family fallbacks, plugin replay hooks, and policy caching.
+ */
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderRuntimePlugin } from "../plugins/provider-hook-runtime.js";
@@ -394,6 +398,7 @@ describe("resolveTranscriptPolicy", () => {
   it.each([
     "kimi-for-coding",
     "moonshotai/kimi-k2.6",
+    "moonshot/kimi-k2.7-code",
     "kimi-k2-thinking",
     "hf:moonshotai/kimi-k2-thinking",
     "xiaomi/mimo-v2.6-pro",

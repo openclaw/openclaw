@@ -1,3 +1,4 @@
+// End-to-end auth-profile rotation coverage for embedded runner retries.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -7,8 +8,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { redactIdentifier } from "../logging/redact-identifier.js";
 import type { AuthProfileFailureReason } from "./auth-profiles.js";
 import { ensureAuthProfileStore, saveAuthProfileStore } from "./auth-profiles/store.js";
-import { buildAttemptReplayMetadata } from "./embedded-agent-runner/run/incomplete-turn.js";
 import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
+import {
+  buildEmbeddedRunnerAssistant as buildAssistant,
+  makeEmbeddedRunnerAttempt as makeAttempt,
+} from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import {
   installEmbeddedRunnerBackoffE2eMocks,
   installEmbeddedRunnerBaseE2eMocks,
@@ -43,6 +47,8 @@ const installRunEmbeddedMocks = () => {
       };
     },
   });
+  // The model resolver stays deterministic so retry assertions only observe
+  // profile selection, cooldowns, and provider auth preparation.
   vi.doMock("./embedded-agent-runner/model.js", () => ({
     resolveModelAsync: async (provider: string, modelId: string) => ({
       model: {
@@ -137,69 +143,6 @@ afterEach(() => {
   setLoggerOverrideFn(null);
   resetLoggerFn();
 });
-
-const baseUsage = {
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-};
-
-const buildAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage => ({
-  role: "assistant",
-  content: [],
-  api: "openai-responses",
-  provider: "openai",
-  model: "mock-1",
-  usage: baseUsage,
-  stopReason: "stop",
-  timestamp: Date.now(),
-  ...overrides,
-});
-
-const makeAttempt = (overrides: Partial<EmbeddedRunAttemptResult>): EmbeddedRunAttemptResult => {
-  const toolMetas = overrides.toolMetas ?? [];
-  const didSendViaMessagingTool = overrides.didSendViaMessagingTool ?? false;
-  const messagingToolSentTexts = overrides.messagingToolSentTexts ?? [];
-  const messagingToolSentMediaUrls = overrides.messagingToolSentMediaUrls ?? [];
-  const messagingToolSentTargets = overrides.messagingToolSentTargets ?? [];
-  const successfulCronAdds = overrides.successfulCronAdds;
-  return {
-    aborted: false,
-    externalAbort: false,
-    timedOut: false,
-    idleTimedOut: false,
-    timedOutDuringCompaction: false,
-    timedOutDuringToolExecution: false,
-    promptError: null,
-    promptErrorSource: null,
-    sessionIdUsed: "session:test",
-    systemPromptReport: undefined,
-    messagesSnapshot: [],
-    assistantTexts: [],
-    toolMetas,
-    lastAssistant: undefined,
-    replayMetadata:
-      overrides.replayMetadata ??
-      buildAttemptReplayMetadata({
-        toolMetas,
-        didSendViaMessagingTool,
-        messagingToolSentTexts,
-        messagingToolSentMediaUrls,
-        messagingToolSentTargets,
-        successfulCronAdds,
-      }),
-    didSendViaMessagingTool,
-    messagingToolSentTexts,
-    messagingToolSentMediaUrls,
-    messagingToolSentTargets,
-    cloudCodeAssistFormatError: false,
-    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-    ...overrides,
-  };
-};
 
 const makeConfig = (opts?: {
   fallbacks?: string[];
@@ -331,6 +274,8 @@ const writeAuthStore = async (
     >;
   },
 ) => {
+  // Store order and usageStats are the persisted inputs the rotation picker
+  // uses to decide which profile should be cooled down or retried.
   saveAuthProfileStore(
     {
       version: 1,
@@ -478,6 +423,8 @@ async function runAutoPinnedRotationCase(params: {
   runEmbeddedAttemptMock.mockReset();
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
     await writeAuthStore(agentDir);
+    // First attempt fails on the auto-pinned profile; the second must use the
+    // next eligible profile without changing the caller-visible run contract.
     mockFailedThenSuccessfulAttempt(params.errorMessage);
     await runAutoPinnedOpenAiTurn({
       agentDir,
@@ -502,6 +449,8 @@ async function runAutoPinnedPromptErrorRotationCase(params: {
   runEmbeddedAttemptMock.mockReset();
   return withAgentWorkspace(async ({ agentDir, workspaceDir }) => {
     await writeAuthStore(agentDir);
+    // Prompt construction errors still rotate credentials because providers can
+    // surface auth failures before the transport attempt is created.
     mockPromptErrorThenSuccessfulAttempt(params.errorMessage);
     await runAutoPinnedOpenAiTurn({
       agentDir,

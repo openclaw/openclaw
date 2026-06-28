@@ -1,10 +1,10 @@
+// Verifies generated config documentation baselines against source metadata.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { withTempDir } from "../test-helpers/temp-dir.js";
 import {
   type ConfigDocBaselineEntry,
-  flattenConfigDocBaselineEntries,
   renderConfigDocBaselineArtifacts,
   writeConfigDocBaselineArtifacts,
 } from "./doc-baseline.js";
@@ -43,7 +43,13 @@ describe("config doc baseline integration", () => {
   function getSharedByPath() {
     sharedByPathPromise ??= getSharedRendered().then(
       ({ baseline }) =>
-        new Map(flattenConfigDocBaselineEntries(baseline).map((entry) => [entry.path, entry])),
+        new Map(
+          [
+            ...baseline.coreEntries,
+            ...baseline.channelEntries,
+            ...baseline.pluginEntries,
+          ].map((entry) => [entry.path, entry]),
+        ),
     );
     return sharedByPathPromise;
   }

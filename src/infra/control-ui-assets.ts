@@ -1,3 +1,4 @@
+// Resolves and checks packaged Control UI assets.
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -12,7 +13,7 @@ export function resolveControlUiDistIndexPathForRoot(root: string): string {
   return path.join(root, ...CONTROL_UI_DIST_PATH_SEGMENTS);
 }
 
-export type ControlUiDistIndexHealth = {
+type ControlUiDistIndexHealth = {
   indexPath: string | null;
   exists: boolean;
 };
@@ -139,7 +140,7 @@ export async function resolveControlUiDistIndexPath(
   return null;
 }
 
-export type ControlUiRootResolveOptions = {
+type ControlUiRootResolveOptions = {
   argv1?: string;
   moduleUrl?: string;
   cwd?: string;
@@ -269,7 +270,7 @@ export function isPackageProvenControlUiRootSync(
   return pathsMatchByRealpathOrResolve(root, packageDistRoot);
 }
 
-export type EnsureControlUiAssetsResult = {
+type EnsureControlUiAssetsResult = {
   ok: boolean;
   built: boolean;
   message?: string;

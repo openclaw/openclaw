@@ -1,3 +1,4 @@
+// Slack helper module supports monitor helpers behavior.
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import { vi } from "vitest";
 import type { Mock } from "vitest";
@@ -15,6 +16,8 @@ type SlackProviderMonitor = (params: {
 
 type SlackTestState = {
   config: Record<string, unknown>;
+  appStartMock: Mock<(...args: unknown[]) => Promise<unknown>>;
+  appStopMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   sendMock: Mock<(...args: unknown[]) => Promise<unknown>>;
   replyMock: Mock<(...args: unknown[]) => unknown>;
   updateLastRouteMock: Mock<(...args: unknown[]) => unknown>;
@@ -30,6 +33,8 @@ type SlackTestState = {
 
 const slackTestState: SlackTestState = vi.hoisted(() => ({
   config: {} as Record<string, unknown>,
+  appStartMock: vi.fn(),
+  appStopMock: vi.fn(),
   sendMock: vi.fn(),
   replyMock: vi.fn(),
   updateLastRouteMock: vi.fn(),
@@ -201,6 +206,8 @@ export const defaultSlackTestConfig = () => ({
 export function resetSlackTestState(config: Record<string, unknown> = defaultSlackTestConfig()) {
   clearSlackInboundDeliveryStateForTest();
   slackTestState.config = config;
+  slackTestState.appStartMock.mockReset().mockResolvedValue(undefined);
+  slackTestState.appStopMock.mockReset().mockResolvedValue(undefined);
   slackTestState.sendMock.mockReset().mockResolvedValue(undefined);
   slackTestState.replyMock.mockReset();
   slackTestState.updateLastRouteMock.mockReset();
@@ -337,8 +344,8 @@ vi.mock("@slack/bolt", () => {
     command() {
       /* no-op */
     }
-    start = vi.fn().mockResolvedValue(undefined);
-    stop = vi.fn().mockResolvedValue(undefined);
+    start = (...args: unknown[]) => slackTestState.appStartMock(...args);
+    stop = (...args: unknown[]) => slackTestState.appStopMock(...args);
   }
   class HTTPReceiver {
     requestListener = vi.fn();

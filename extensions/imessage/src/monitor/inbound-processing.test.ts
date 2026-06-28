@@ -1,3 +1,4 @@
+// Imessage tests cover inbound processing plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { sanitizeTerminalText } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -117,7 +118,10 @@ describe("resolveIMessageInboundDecision echo detection", () => {
         text: "<media:image>",
         messageId: "42",
       },
-      undefined,
+      {
+        includePendingText: false,
+        skipIdShortCircuit: undefined,
+      },
     );
   });
 

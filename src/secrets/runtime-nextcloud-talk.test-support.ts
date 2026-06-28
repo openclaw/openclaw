@@ -1,3 +1,4 @@
+/** Shared Nextcloud Talk secrets runtime fixtures. */
 import { vi } from "vitest";
 import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
 

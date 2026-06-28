@@ -1,10 +1,15 @@
+// Gateway plugin bootstrap helpers.
+// Applies activation config, installs runtime bindings, loads and pins plugins.
 import { primeConfiguredBindingRegistry } from "../channels/plugins/binding-registry.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginLookUpTable } from "../plugins/plugin-lookup-table.js";
 import type { PluginRegistryParams } from "../plugins/registry-types.js";
 import type { PluginRegistry } from "../plugins/registry.js";
-import { pinActivePluginChannelRegistry } from "../plugins/runtime.js";
+import {
+  pinActivePluginChannelRegistry,
+  pinActivePluginSessionExtensionRegistry,
+} from "../plugins/runtime.js";
 import {
   setGatewayNodesRuntime,
   setGatewaySubagentRuntime,
@@ -54,6 +59,11 @@ function installGatewayPluginRuntimeEnvironment(cfg: OpenClawConfig) {
   setPluginSubagentOverridePolicies(cfg);
   setGatewaySubagentRuntime(createGatewaySubagentRuntime());
   setGatewayNodesRuntime(createGatewayNodesRuntime());
+}
+
+function pinGatewayPluginRuntimeRegistries(pluginRegistry: PluginRegistry): void {
+  pinActivePluginChannelRegistry(pluginRegistry);
+  pinActivePluginSessionExtensionRegistry(pluginRegistry);
 }
 
 // Diagnostics are logged after registry priming so startup output contains
@@ -140,7 +150,7 @@ export function loadGatewayStartupPlugins(
 ) {
   return prepareGatewayPluginLoad({
     ...params,
-    beforePrimeRegistry: pinActivePluginChannelRegistry,
+    beforePrimeRegistry: pinGatewayPluginRuntimeRegistries,
   });
 }
 
@@ -153,6 +163,6 @@ export function reloadDeferredGatewayPlugins(
 ) {
   return prepareGatewayPluginLoad({
     ...params,
-    beforePrimeRegistry: pinActivePluginChannelRegistry,
+    beforePrimeRegistry: pinGatewayPluginRuntimeRegistries,
   });
 }

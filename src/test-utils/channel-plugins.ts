@@ -1,3 +1,4 @@
+// Constructs channel plugin registries and plugin fixtures for tests.
 import type {
   ChannelCapabilities,
   ChannelId,
@@ -95,42 +96,6 @@ export const createDirectOutboundTestAdapter = (params: {
   sendText: async () => ({ channel: params.channel, messageId: params.messageId ?? "msg-test" }),
   sendMedia: async () => ({ channel: params.channel, messageId: params.messageId ?? "msg-test" }),
 });
-
-export const createMSTeamsTestPluginBase = (): Pick<
-  ChannelPlugin,
-  "id" | "meta" | "capabilities" | "config"
-> => {
-  const base = createChannelTestPluginBase({
-    id: "msteams",
-    label: "Microsoft Teams",
-    docsPath: "/channels/msteams",
-    config: { listAccountIds: () => [], resolveAccount: () => ({}) },
-  });
-  return {
-    ...base,
-    meta: {
-      ...base.meta,
-      selectionLabel: "Microsoft Teams (Bot Framework)",
-      blurb: "Teams SDK; enterprise support.",
-      aliases: ["teams"],
-    },
-  };
-};
-
-export const createMSTeamsTestPlugin = (params?: {
-  aliases?: string[];
-  outbound?: ChannelOutboundAdapter;
-}): ChannelPlugin => {
-  const base = createMSTeamsTestPluginBase();
-  return {
-    ...base,
-    meta: {
-      ...base.meta,
-      ...(params?.aliases ? { aliases: params.aliases } : {}),
-    },
-    ...(params?.outbound ? { outbound: params.outbound } : {}),
-  };
-};
 
 export const createOutboundTestPlugin = (params: {
   id: ChannelId;

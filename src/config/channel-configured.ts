@@ -1,3 +1,4 @@
+// Determines whether a channel is configured from bootstrap and plugin state.
 import { getBootstrapChannelPlugin } from "../channels/plugins/bootstrap-registry.js";
 import { hasBundledChannelConfiguredState } from "../channels/plugins/configured-state.js";
 import {

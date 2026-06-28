@@ -1,3 +1,4 @@
+// Defines shared legacy config rule contracts for detection and migration.
 export type LegacyConfigRule = {
   path: string[];
   message: string;
@@ -19,7 +20,7 @@ export type LegacyConfigMigrationSpec = LegacyConfigMigration & {
 
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
 import { isRecord } from "../utils.js";
-import { isBlockedObjectKey } from "./prototype-keys.js";
+import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 
 export const getRecord = (value: unknown): Record<string, unknown> | null =>
   isRecord(value) ? value : null;

@@ -1,3 +1,4 @@
+// Covers security fixer behavior for supported audit findings.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -271,6 +272,7 @@ describe("security fix", () => {
     await fs.writeFile(authDatabasePath, "sqlite\n", "utf-8");
     await fs.writeFile(`${authDatabasePath}-wal`, "wal\n", "utf-8");
     await fs.writeFile(`${authDatabasePath}-shm`, "shm\n", "utf-8");
+    await fs.writeFile(`${authDatabasePath}-journal`, "journal\n", "utf-8");
     const authProfilesPath = path.join(agentDir, "auth-profiles.json");
     await fs.writeFile(authProfilesPath, "{}\n", "utf-8");
     await fs.chmod(authProfilesPath, 0o644);
@@ -305,6 +307,7 @@ describe("security fix", () => {
       { path: authDatabasePath, mode: 0o600, require: "file" },
       { path: `${authDatabasePath}-wal`, mode: 0o600, require: "file" },
       { path: `${authDatabasePath}-shm`, mode: 0o600, require: "file" },
+      { path: `${authDatabasePath}-journal`, mode: 0o600, require: "file" },
       { path: authProfilesPath, mode: 0o600, require: "file" },
       { path: sessionsDir, mode: 0o700, require: "dir" },
       { path: sessionsStorePath, mode: 0o600, require: "file" },

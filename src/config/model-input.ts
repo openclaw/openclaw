@@ -1,3 +1,4 @@
+// Normalizes model input config into provider and model references.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeGooglePreviewModelId,
@@ -5,32 +6,16 @@ import {
 } from "@openclaw/model-catalog-core/provider-model-id-normalize";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
   resolvePrimaryStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import { modelKey } from "../shared/model-key.js";
 import type { AgentModelConfig, AgentToolModelConfig } from "./types.agents-shared.js";
 
 type AgentModelListLike = {
   primary?: string;
   fallbacks?: string[];
 };
-
-function modelKeyForConfig(provider: string, model: string): string {
-  const providerId = provider.trim();
-  const modelId = model.trim();
-  if (!providerId) {
-    return modelId;
-  }
-  if (!modelId) {
-    return providerId;
-  }
-  return normalizeLowercaseStringOrEmpty(modelId).startsWith(
-    `${normalizeLowercaseStringOrEmpty(providerId)}/`,
-  )
-    ? modelId
-    : `${providerId}/${modelId}`;
-}
 
 type AgentModelInput = AgentModelConfig | AgentToolModelConfig;
 
@@ -89,7 +74,7 @@ export function normalizeAgentModelRefForConfig(model: string): string {
       : provider === "together"
         ? normalizeTogetherModelId(modelSuffix)
         : modelSuffix;
-  return modelKeyForConfig(provider, normalizedModel);
+  return modelKey(provider, normalizedModel);
 }
 
 function mergeAgentModelEntryForConfig(existing: unknown, incoming: unknown): unknown {

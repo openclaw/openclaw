@@ -1,10 +1,14 @@
+/**
+ * CLI session persistence helpers.
+ * Keeps provider-keyed session bindings, reuse fingerprints, and legacy
+ * Claude CLI state in one normalized session-store contract.
+ */
 import crypto from "node:crypto";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { CliSessionBinding, SessionEntry } from "../config/sessions.js";
-import { normalizeProviderId } from "./model-selection.js";
+export { getCliSessionBinding, getCliSessionId } from "../config/sessions/cli-session-binding.js";
 
-// CLI-backed agents persist reusable provider session IDs in the session store.
-// These helpers keep legacy Claude-only state and provider-keyed bindings aligned.
 const CLAUDE_CLI_BACKEND_ID = "claude-cli";
 
 /** Hash CLI session-sensitive text so reuse checks can compare stable fingerprints. */
@@ -14,54 +18,6 @@ export function hashCliSessionText(value: string | undefined): string | undefine
     return undefined;
   }
   return crypto.createHash("sha256").update(trimmed).digest("hex");
-}
-
-/** Read the stored CLI session binding for a provider, including legacy Claude state. */
-export function getCliSessionBinding(
-  entry: SessionEntry | undefined,
-  provider: string,
-): CliSessionBinding | undefined {
-  if (!entry) {
-    return undefined;
-  }
-  const normalized = normalizeProviderId(provider);
-  const fromBindings = entry.cliSessionBindings?.[normalized];
-  const bindingSessionId = normalizeOptionalString(fromBindings?.sessionId);
-  if (bindingSessionId) {
-    return {
-      sessionId: bindingSessionId,
-      ...(fromBindings?.forceReuse === true ? { forceReuse: true } : {}),
-      authProfileId: normalizeOptionalString(fromBindings?.authProfileId),
-      authEpoch: normalizeOptionalString(fromBindings?.authEpoch),
-      authEpochVersion: fromBindings?.authEpochVersion,
-      extraSystemPromptHash: normalizeOptionalString(fromBindings?.extraSystemPromptHash),
-      promptToolNamesHash: normalizeOptionalString(fromBindings?.promptToolNamesHash),
-      cwdHash: normalizeOptionalString(fromBindings?.cwdHash),
-      mcpConfigHash: normalizeOptionalString(fromBindings?.mcpConfigHash),
-      mcpResumeHash: normalizeOptionalString(fromBindings?.mcpResumeHash),
-    };
-  }
-  const fromMap = entry.cliSessionIds?.[normalized];
-  const normalizedFromMap = normalizeOptionalString(fromMap);
-  if (normalizedFromMap) {
-    return { sessionId: normalizedFromMap };
-  }
-  if (normalized === CLAUDE_CLI_BACKEND_ID) {
-    // Keep accepting the shipped Claude-only field until stored sessions migrate.
-    const legacy = normalizeOptionalString(entry.claudeCliSessionId);
-    if (legacy) {
-      return { sessionId: legacy };
-    }
-  }
-  return undefined;
-}
-
-/** Read just the reusable CLI session ID for a provider. */
-export function getCliSessionId(
-  entry: SessionEntry | undefined,
-  provider: string,
-): string | undefined {
-  return getCliSessionBinding(entry, provider)?.sessionId;
 }
 
 /** Store a reusable CLI session ID without extra reuse guards. */
@@ -96,6 +52,9 @@ export function setCliSessionBinding(
         : {}),
       ...(normalizeOptionalString(binding.extraSystemPromptHash)
         ? { extraSystemPromptHash: normalizeOptionalString(binding.extraSystemPromptHash) }
+        : {}),
+      ...(normalizeOptionalString(binding.messageToolPolicyHash)
+        ? { messageToolPolicyHash: normalizeOptionalString(binding.messageToolPolicyHash) }
         : {}),
       ...(normalizeOptionalString(binding.promptToolNamesHash)
         ? { promptToolNamesHash: normalizeOptionalString(binding.promptToolNamesHash) }
@@ -135,8 +94,13 @@ export function clearCliSession(entry: SessionEntry, provider: string): void {
   }
 }
 
+type MutableCliSessionFields = Pick<
+  SessionEntry,
+  "cliSessionBindings" | "cliSessionIds" | "claudeCliSessionId"
+>;
+
 /** Remove every CLI session binding from a session entry. */
-export function clearAllCliSessions(entry: SessionEntry): void {
+export function clearAllCliSessions(entry: Partial<MutableCliSessionFields>): void {
   entry.cliSessionBindings = undefined;
   entry.cliSessionIds = undefined;
   entry.claudeCliSessionId = undefined;
@@ -149,6 +113,7 @@ export function resolveCliSessionReuse(params: {
   authEpoch?: string;
   authEpochVersion: number;
   extraSystemPromptHash?: string;
+  messageToolPolicyHash?: string;
   promptToolNamesHash?: string;
   cwdHash?: string;
   mcpConfigHash?: string;
@@ -168,6 +133,7 @@ export function resolveCliSessionReuse(params: {
   const currentAuthProfileId = normalizeOptionalString(params.authProfileId);
   const currentAuthEpoch = normalizeOptionalString(params.authEpoch);
   const currentExtraSystemPromptHash = normalizeOptionalString(params.extraSystemPromptHash);
+  const currentMessageToolPolicyHash = normalizeOptionalString(params.messageToolPolicyHash);
   const currentPromptToolNamesHash = normalizeOptionalString(params.promptToolNamesHash);
   const currentCwdHash = normalizeOptionalString(params.cwdHash);
   const currentMcpConfigHash = normalizeOptionalString(params.mcpConfigHash);
@@ -192,6 +158,10 @@ export function resolveCliSessionReuse(params: {
   }
   const storedExtraSystemPromptHash = normalizeOptionalString(binding?.extraSystemPromptHash);
   if (storedExtraSystemPromptHash !== currentExtraSystemPromptHash) {
+    return { invalidatedReason: "system-prompt" };
+  }
+  const storedMessageToolPolicyHash = normalizeOptionalString(binding?.messageToolPolicyHash);
+  if (storedMessageToolPolicyHash !== currentMessageToolPolicyHash) {
     return { invalidatedReason: "system-prompt" };
   }
   const storedPromptToolNamesHash = normalizeOptionalString(binding?.promptToolNamesHash);

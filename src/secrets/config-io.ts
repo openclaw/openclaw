@@ -1,3 +1,4 @@
+/** Config IO adapter used by secrets apply/configure flows. */
 import { createConfigIO } from "../config/config.js";
 
 const silentConfigIoLogger = {

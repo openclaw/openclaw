@@ -1,3 +1,4 @@
+// Builds lazy native approval runtime adapters.
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import type {
   ChannelApprovalNativeAvailabilityAdapter,

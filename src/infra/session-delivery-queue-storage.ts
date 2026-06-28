@@ -1,3 +1,4 @@
+// Persists queued session deliveries for retry and recovery.
 import { createHash } from "node:crypto";
 import type { ChatType } from "../channels/chat-type.js";
 import {

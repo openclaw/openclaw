@@ -1,3 +1,4 @@
+// Extracts provider public artifacts from plugin metadata.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { ModelProviderConfig } from "../config/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -105,7 +106,9 @@ function pluginOwnsProviderPolicyRef(
   normalizedProviderId: string,
 ): boolean {
   const ownedProviders = new Set(
-    plugin.providers.map((provider) => normalizeProviderId(provider)).filter(Boolean),
+    [...plugin.providers, ...plugin.cliBackends]
+      .map((provider) => normalizeProviderId(provider))
+      .filter(Boolean),
   );
   if (ownedProviders.has(normalizedProviderId)) {
     return true;

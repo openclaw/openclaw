@@ -1,3 +1,4 @@
+// Control UI view renders markdown sidebar screen content.
 import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
@@ -42,16 +43,18 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
           props.allowExternalEmbedUrls ?? false,
         )
       : null;
+  const title =
+    content?.kind === "canvas"
+      ? content.title?.trim() || "Render Preview"
+      : content?.kind === "image"
+        ? content.title.trim() || "Image Preview"
+        : content?.kind === "markdown"
+          ? "Markdown Preview"
+          : "Tool Details";
   return html`
     <div class="sidebar-panel">
       <div class="sidebar-header">
-        <div class="sidebar-title">
-          ${content?.kind === "canvas"
-            ? content.title?.trim() || "Render Preview"
-            : content?.kind === "markdown"
-              ? "Markdown Preview"
-              : "Tool Details"}
-        </div>
+        <div class="sidebar-title">${title}</div>
         <button
           @click=${props.onClose}
           class="btn"
@@ -110,33 +113,57 @@ export function renderMarkdownSidebar(props: MarkdownSidebarProps) {
                       : nothing}
                   </div>
                 `
-              : html`
-                  <section class="sidebar-markdown-shell">
-                    <div class="sidebar-markdown-shell__toolbar">
-                      <div class="sidebar-markdown-shell__intro">
-                        <div class="sidebar-markdown-shell__eyebrow">
-                          ${icons.scrollText}
-                          <span>Rendered Markdown</span>
-                        </div>
-                        <div class="sidebar-markdown-shell__hint">
-                          Sanitized rich-text preview for quick reading.
-                        </div>
+              : content.kind === "image"
+                ? html`
+                    <div class="chat-tool-card__preview" data-kind="image">
+                      <div class="chat-tool-card__preview-panel" data-side="front">
+                        <img
+                          class="chat-tool-card__preview-image"
+                          src=${content.src}
+                          alt=${title}
+                          style="display:block;max-width:100%;height:auto;border-radius:8px;"
+                        />
                       </div>
-                      <button @click=${props.onViewRawText} class="btn btn--sm" type="button">
-                        View Raw Text
-                      </button>
+                      ${content.rawText?.trim()
+                        ? html`
+                            <div style="margin-top: 12px;">
+                              <button @click=${props.onViewRawText} class="btn" type="button">
+                                View Raw Text
+                              </button>
+                            </div>
+                          `
+                        : nothing}
                     </div>
-                    ${markdownHtml
-                      ? html`
-                          <article class="sidebar-markdown-reader sidebar-markdown">
-                            ${unsafeHTML(markdownHtml)}
-                          </article>
-                        `
-                      : html`
-                          <div class="sidebar-markdown-empty">No previewable markdown content.</div>
-                        `}
-                  </section>
-                `
+                  `
+                : html`
+                    <section class="sidebar-markdown-shell">
+                      <div class="sidebar-markdown-shell__toolbar">
+                        <div class="sidebar-markdown-shell__intro">
+                          <div class="sidebar-markdown-shell__eyebrow">
+                            ${icons.scrollText}
+                            <span>Rendered Markdown</span>
+                          </div>
+                          <div class="sidebar-markdown-shell__hint">
+                            Sanitized rich-text preview for quick reading.
+                          </div>
+                        </div>
+                        <button @click=${props.onViewRawText} class="btn btn--sm" type="button">
+                          View Raw Text
+                        </button>
+                      </div>
+                      ${markdownHtml
+                        ? html`
+                            <article class="sidebar-markdown-reader sidebar-markdown">
+                              ${unsafeHTML(markdownHtml)}
+                            </article>
+                          `
+                        : html`
+                            <div class="sidebar-markdown-empty">
+                              No previewable markdown content.
+                            </div>
+                          `}
+                    </section>
+                  `
             : html` <div class="muted">No content available</div> `}
       </div>
     </div>

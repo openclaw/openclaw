@@ -1,3 +1,4 @@
+// English wizard translations provide default onboarding copy.
 import type { WizardTranslationMap } from "../types.js";
 
 export const en = {
@@ -237,6 +238,9 @@ export const en = {
       authChoiceRequired: "auth choice is required",
       channelsTitle: "Channels",
       configHandling: "Config handling",
+      durationNote:
+        "We'll walk through model/auth, workspace, Gateway, channels, web search, skills, and optional plugin setup. QuickStart is usually only a few minutes, but provider sign-in, channel pairing, daemon install, network downloads, and optional dependencies can take longer. You can skip optional steps and return later with {command}.",
+      durationTitle: "Setup timeline",
       existingConfigTitle: "Existing config detected",
       flowAdvanced: "Manual setup",
       flowAdvancedHint: "Choose Gateway port, network exposure, Tailscale, and auth.",
@@ -997,6 +1001,7 @@ export const en = {
       webSearchGetKey: "Get your key at: {url}",
       webSearchAuthProfile: "Credential: existing {provider} auth profile.",
       webSearchKeyEnv: "API key: provided via {env} env var.",
+      webSearchKeyFree: "Web search is ready — this provider works with no API key.",
       webSearchKeyRef: "API key: configured via secret reference.",
       webSearchKeyStored: "API key: stored in config.",
       webSearchNeedsKey: "web_search will not work until a key is added.",

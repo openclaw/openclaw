@@ -1,3 +1,7 @@
+/**
+ * Waits for completion-required async tasks before finalizing an attempt.
+ */
+import { toErrorObject } from "../../../infra/errors.js";
 import { isCronRunSessionKey } from "../../../sessions/session-key-utils.js";
 import { isTerminalTaskStatus } from "../../../tasks/task-executor-policy.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
@@ -74,7 +78,7 @@ async function sleepWithAbort(
       },
       (err: unknown) => {
         signal.removeEventListener("abort", onAbort);
-        reject(toLintErrorObject(err, "Non-Error rejection"));
+        reject(toErrorObject(err, "Non-Error rejection"));
       },
     );
   });
@@ -157,6 +161,23 @@ export function requiresCompletionRequiredAsyncTaskWait(params: {
   );
 }
 
+/** Returns whether the current attempt should synchronously wait for media tasks. */
+export function shouldWaitForCompletionRequiredAsyncTasks(params: {
+  sessionKey: string | undefined;
+  toolMetas: readonly AsyncStartedToolMeta[];
+  yieldDetected?: boolean;
+}): boolean {
+  if (params.yieldDetected === true) {
+    // sessions_yield pauses the turn so the completion event can wake it later;
+    // waiting here would reuse the internal abort signal and turn the pause into AbortError.
+    return false;
+  }
+  return requiresCompletionRequiredAsyncTaskWait({
+    sessionKey: params.sessionKey,
+    toolMetas: params.toolMetas,
+  });
+}
+
 /**
  * Polls completion-required async tasks until they reach terminal state, time
  * out at the run deadline, or abort. Newly discovered task run ids are folded
@@ -224,18 +245,4 @@ export async function waitForCompletionRequiredAsyncTasks(params: {
       await sleepWithAbort(Math.min(pollIntervalMs, remainingMs), params.abortSignal, sleepFn);
     }
   }
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

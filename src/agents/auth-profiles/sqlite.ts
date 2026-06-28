@@ -1,3 +1,8 @@
+/**
+ * SQLite persistence adapter for auth profile secrets and runtime state.
+ * The public helpers expose raw JSON payloads so normalization stays in the
+ * store/state layers that own compatibility rules.
+ */
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -9,12 +14,13 @@ import {
   getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { resolveSqliteDatabaseFilePaths } from "../../infra/sqlite-files.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
-  openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../../state/openclaw-state-db.js";
 import { resolveUserPath } from "../../utils.js";
 import { resolveRegisteredAgentIdForDir } from "../agent-dir-registry.js";
 import { resolveDefaultAgentDir } from "../agent-scope-config.js";
@@ -61,8 +67,7 @@ export function resolveAuthProfileDatabasePath(agentDir?: string): string {
 
 /** Resolves the SQLite database and sidecar paths used by auth profiles. */
 export function resolveAuthProfileDatabaseFilePaths(agentDir?: string): string[] {
-  const databasePath = resolveAuthProfileDatabasePath(agentDir);
-  return [databasePath, `${databasePath}-wal`, `${databasePath}-shm`];
+  return resolveSqliteDatabaseFilePaths(resolveAuthProfileDatabasePath(agentDir));
 }
 
 // Read-only probes must tolerate old/corrupt/missing rows. Coercion happens
@@ -82,15 +87,14 @@ function getAuthProfileKysely(db: DatabaseSync) {
   return getNodeSqliteKysely<AuthProfileDatabase>(db);
 }
 
-/** Opens the auth profile SQLite database for an agent dir. */
-export function openAuthProfileDatabase(agentDir?: string): OpenClawAgentDatabase {
-  return openOpenClawAgentDatabase(resolveAuthProfileDatabaseOptions(agentDir));
-}
-
 function readAuthProfileJsonCellReadOnly(pathname: string, target: "store" | "state"): unknown {
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname, { readOnly: true });
   try {
+    // This short-lived reader bypasses the canonical agent DB bootstrap, but it
+    // must share its busy policy so brief rollback-journal locks do not look
+    // like missing credentials.
+    db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
     const kysely = getAuthProfileKysely(db);
     if (target === "store") {
       const row = executeSqliteQueryTakeFirstSync(
@@ -118,7 +122,7 @@ function readAuthProfileJsonCellReadOnly(pathname: string, target: "store" | "st
   }
 }
 
-/** Reads the raw persisted auth profile store payload. */
+/** Reads the raw persisted secrets-store payload without coercing the schema. */
 export function readPersistedAuthProfileStoreRaw(
   agentDir?: string,
   database?: OpenClawAgentDatabase,
@@ -141,7 +145,7 @@ export function readPersistedAuthProfileStoreRaw(
   return readAuthProfileJsonCellReadOnly(databasePath, "store");
 }
 
-/** Reads the raw persisted auth profile runtime state payload. */
+/** Reads the raw persisted runtime-state payload without coercing the schema. */
 export function readPersistedAuthProfileStateRaw(
   agentDir?: string,
   database?: OpenClawAgentDatabase,
@@ -164,7 +168,7 @@ export function readPersistedAuthProfileStateRaw(
   return readAuthProfileJsonCellReadOnly(databasePath, "state");
 }
 
-/** Writes the raw persisted auth profile store payload. */
+/** Writes the raw persisted secrets-store payload inside the auth database. */
 export function writePersistedAuthProfileStoreRaw(
   payload: unknown,
   agentDir?: string,
@@ -196,7 +200,7 @@ export function writePersistedAuthProfileStoreRaw(
   runOpenClawAgentWriteTransaction(write, resolveAuthProfileDatabaseOptions(agentDir));
 }
 
-/** Deletes the raw persisted auth profile store payload. */
+/** Deletes the persisted secrets-store row while leaving runtime state intact. */
 export function deletePersistedAuthProfileStoreRaw(
   agentDir?: string,
   database?: OpenClawAgentDatabase,
@@ -215,7 +219,7 @@ export function deletePersistedAuthProfileStoreRaw(
   runOpenClawAgentWriteTransaction(remove, resolveAuthProfileDatabaseOptions(agentDir));
 }
 
-/** Writes or deletes the raw persisted auth profile runtime state payload. */
+/** Writes or deletes the persisted runtime-state payload. */
 export function writePersistedAuthProfileStateRaw(
   payload: unknown,
   agentDir?: string,
@@ -254,7 +258,7 @@ export function writePersistedAuthProfileStateRaw(
   runOpenClawAgentWriteTransaction(write, resolveAuthProfileDatabaseOptions(agentDir));
 }
 
-/** Runs an auth-profile database write transaction. */
+/** Runs an auth-profile database write transaction for store/state updates. */
 export function runAuthProfileWriteTransaction<T>(
   agentDir: string | undefined,
   operation: (database: OpenClawAgentDatabase) => T,

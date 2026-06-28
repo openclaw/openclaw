@@ -1,13 +1,13 @@
+// Announce loop-guard tests prove deferred subagent delivery eventually gives
+// up instead of retrying forever after gateway delivery keeps returning false.
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-/**
- * Regression test for #18264: Gateway announcement delivery loop.
- *
- * When `runSubagentAnnounceFlow` repeatedly returns `false` (deferred),
- * `finalizeSubagentCleanup` must eventually give up rather than retrying
- * forever via the max-retry and expiration guards.
- */
+const sessionStore = vi.hoisted(() => ({
+  "agent:main:subagent:child-1": { sessionId: "sess-child-1", updatedAt: 1 },
+  "agent:main:subagent:expired-child": { sessionId: "sess-expired", updatedAt: 1 },
+  "agent:main:subagent:retry-budget": { sessionId: "sess-retry", updatedAt: 1 },
+}));
 
 const mocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(() => ({
@@ -31,11 +31,7 @@ vi.mock("../config/config.js", () => ({
 }));
 
 vi.mock("../config/sessions.js", () => ({
-  loadSessionStore: () => ({
-    "agent:main:subagent:child-1": { sessionId: "sess-child-1", updatedAt: 1 },
-    "agent:main:subagent:expired-child": { sessionId: "sess-expired", updatedAt: 1 },
-    "agent:main:subagent:retry-budget": { sessionId: "sess-retry", updatedAt: 1 },
-  }),
+  loadSessionStore: () => sessionStore,
   resolveAgentIdFromSessionKey: (key: string) => {
     const match = key.match(/^agent:([^:]+)/);
     return match?.[1] ?? "main";
@@ -43,6 +39,12 @@ vi.mock("../config/sessions.js", () => ({
   resolveMainSessionKey: () => "agent:main:main",
   resolveStorePath: () => "/tmp/test-store",
   updateSessionStore: mocks.updateSessionStore,
+}));
+
+vi.mock("../config/sessions/session-accessor.js", () => ({
+  loadSessionEntry: (scope: { sessionKey: keyof typeof sessionStore }) =>
+    sessionStore[scope.sessionKey],
+  patchSessionEntry: async () => null,
 }));
 
 vi.mock("../gateway/call.js", () => ({
@@ -200,7 +202,8 @@ describe("announce loop guard (#18264)", () => {
     const entry = createEntry(Date.now());
     mocks.loadSubagentRegistryFromSqlite.mockReturnValue(new Map([[entry.runId, entry]]));
 
-    // Initialization attempts resume once, then gives up for exhausted entries.
+    // Initialization attempts one resume, then relies on expiry/retry-budget
+    // guards so old pending rows do not loop after restart.
     const beforeInit = Date.now();
     registry.initSubagentRegistry();
     await flushAsync();

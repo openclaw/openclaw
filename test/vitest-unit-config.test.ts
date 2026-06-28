@@ -1,3 +1,4 @@
+// Vitest unit config tests validate unit test project configuration.
 import { afterEach, describe, expect, it } from "vitest";
 import { createPatternFileHelper } from "./helpers/pattern-file.js";
 import { normalizeConfigPath, normalizeConfigPaths } from "./helpers/vitest-config-paths.js";
@@ -5,7 +6,6 @@ import {
   createUnitVitestConfig,
   createUnitVitestConfigWithOptions,
   loadExtraExcludePatternsFromEnv,
-  loadIncludePatternsFromEnv,
   resolveDefaultUnitCoverageIncludePatterns,
 } from "./vitest/vitest.unit.config.ts";
 
@@ -20,27 +20,6 @@ function requireTestConfig<T extends { test?: unknown }>(config: T): NonNullable
 
 afterEach(() => {
   patternFiles.cleanup();
-});
-
-describe("loadIncludePatternsFromEnv", () => {
-  it("returns null when no include file is configured", () => {
-    expect(loadIncludePatternsFromEnv({})).toBeNull();
-  });
-
-  it("loads include patterns from a JSON file", () => {
-    const filePath = patternFiles.writePatternFile("include.json", [
-      "src/infra/update-runner.test.ts",
-      42,
-      "",
-      "ui/src/ui/views/chat.test.ts",
-    ]);
-
-    expect(
-      loadIncludePatternsFromEnv({
-        OPENCLAW_VITEST_INCLUDE_FILE: filePath,
-      }),
-    ).toEqual(["src/infra/update-runner.test.ts", "ui/src/ui/views/chat.test.ts"]);
-  });
 });
 
 describe("loadExtraExcludePatternsFromEnv", () => {

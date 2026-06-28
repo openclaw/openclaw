@@ -1,3 +1,4 @@
+// Runtime session types describe the store hooks shared across config, gateway, and channels.
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { ChannelRouteRef } from "../../plugin-sdk/channel-route.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -24,6 +25,7 @@ export type ResolvedSessionMaintenanceConfigRuntime = {
   mode: SessionMaintenanceMode;
   pruneAfterMs: number;
   maxEntries: number;
+  modelRunPruneAfterMs: number;
   resetArchiveRetentionMs: number | null;
   maxDiskBytes: number | null;
   highWaterBytes: number | null;
@@ -33,6 +35,7 @@ export type SessionMaintenanceApplyReportRuntime = {
   mode: SessionMaintenanceMode;
   beforeCount: number;
   afterCount: number;
+  modelRunPruned: number;
   pruned: number;
   capped: number;
   diskBudget: Record<string, unknown> | null;

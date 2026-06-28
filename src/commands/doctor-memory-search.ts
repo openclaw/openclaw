@@ -24,7 +24,6 @@ import {
   checkQmdBinaryAvailability,
   resolveQmdBinaryUnavailableReason,
 } from "../memory-host-sdk/engine-qmd.js";
-import { DEFAULT_LOCAL_MODEL } from "../memory-host-sdk/host/embedding-defaults.js";
 import { hasConfiguredMemorySecretInput } from "../memory-host-sdk/secret.js";
 import {
   auditDreamingArtifacts,
@@ -470,39 +469,34 @@ export async function noteMemorySearchHealth(
 
   if (provider === "local") {
     const suggestedRemoteProvider = resolveSuggestedRemoteMemoryProvider();
-    if (hasLocalEmbeddings(resolved.local, true)) {
-      // Model path looks valid (explicit file, hf: URL, or default model).
-      // If a gateway probe is available and reports not-ready, warn anyway —
-      // the model download or node-llama-cpp setup may have failed at runtime.
-      if (opts?.gatewayMemoryProbe?.checked && !opts.gatewayMemoryProbe.ready) {
-        const detail = opts.gatewayMemoryProbe.error?.trim();
-        note(
-          [
-            'Memory search provider is set to "local" and a model path is configured,',
-            "but the gateway reports local embeddings are not ready.",
-            detail ? `Gateway probe: ${detail}` : null,
-            "",
-            `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
-          ]
-            .filter(Boolean)
-            .join("\n"),
-          "Memory search",
-        );
-      }
+    if (opts?.gatewayMemoryProbe?.checked && opts.gatewayMemoryProbe.ready) {
       return;
     }
+    const hasExplicitLocalModel = hasLocalEmbeddings(resolved.local);
+    const hasUnavailableConfiguredLocalModel =
+      Boolean(normalizeOptionalString(resolved.local.modelPath)) && !hasExplicitLocalModel;
+    if (opts?.gatewayMemoryProbe?.skipped && !hasUnavailableConfiguredLocalModel) {
+      return;
+    }
+    const detail = opts?.gatewayMemoryProbe?.error?.trim();
     note(
       [
-        'Memory search provider is set to "local" but no local model file was found.',
+        hasExplicitLocalModel
+          ? 'Memory search provider is set to "local" and a local model path is configured, but local embeddings are not confirmed ready.'
+          : 'Memory search provider is set to "local", but local embeddings are not confirmed ready.',
+        detail ? `Gateway probe: ${detail}` : null,
         "",
         "Fix (pick one):",
-        `- Install node-llama-cpp and set a local model path in config`,
+        `- Install the llama.cpp provider plugin: ${formatCliCommand("openclaw plugins install @openclaw/llama-cpp-provider")}`,
+        `- Set a local GGUF model path in config`,
         suggestedRemoteProvider
           ? `- Switch to a remote provider: ${formatCliCommand(`openclaw config set agents.defaults.memorySearch.provider ${suggestedRemoteProvider}`)}`
           : `- Switch to a remote embedding provider in config`,
         "",
         `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
-      ].join("\n"),
+      ]
+        .filter(Boolean)
+        .join("\n"),
       "Memory search",
     );
     return;
@@ -612,15 +606,9 @@ export async function noteMemorySearchHealth(
 /**
  * Check whether local embeddings are available.
  *
- * When `useDefaultFallback` is true (explicit `provider: "local"`), an empty
- * modelPath is treated as available because the runtime falls back to
- * DEFAULT_LOCAL_MODEL (an auto-downloaded HuggingFace model).
- *
  */
-function hasLocalEmbeddings(local: { modelPath?: string }, useDefaultFallback = false): boolean {
-  const modelPath =
-    normalizeOptionalString(local.modelPath) ||
-    (useDefaultFallback ? DEFAULT_LOCAL_MODEL : undefined);
+function hasLocalEmbeddings(local: { modelPath?: string }): boolean {
+  const modelPath = normalizeOptionalString(local.modelPath);
   if (!modelPath) {
     return false;
   }

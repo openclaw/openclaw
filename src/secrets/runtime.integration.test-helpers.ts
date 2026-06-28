@@ -1,3 +1,4 @@
+/** Integration-test helpers for preparing secrets runtime fixtures. */
 import { vi } from "vitest";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
 import { clearPluginLoaderCache } from "../plugins/loader.js";

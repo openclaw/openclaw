@@ -1,7 +1,5 @@
-import {
-  createChannelApprovalCapability,
-  splitChannelApprovalCapability,
-} from "openclaw/plugin-sdk/approval-delivery-runtime";
+// Whatsapp plugin module implements approval native behavior.
+import { createChannelApprovalCapability } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
 import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
@@ -274,7 +272,3 @@ export const whatsappApprovalCapability: ChannelApprovalCapability =
           .whatsappApprovalNativeRuntime as unknown as ChannelApprovalNativeRuntimeAdapter,
     }),
   });
-
-export const whatsappNativeApprovalAdapter = splitChannelApprovalCapability(
-  whatsappApprovalCapability,
-);

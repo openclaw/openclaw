@@ -1,3 +1,4 @@
+// Runtime boundary for resolving provider auth choices from plugins.
 import {
   resolveProviderPluginChoice as resolveProviderPluginChoiceImpl,
   runProviderModelSelectedHook as runProviderModelSelectedHookImpl,

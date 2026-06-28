@@ -1,12 +1,15 @@
+/**
+ * Shared model-registry loader for agent paths that need auth storage and
+ * plugin metadata resolved together before model discovery.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { discoverAuthStorage, discoverModels } from "./agent-model-discovery.js";
 import { resolveDefaultAgentDir } from "./agent-scope.js";
 import { resolveModelPluginMetadataSnapshot } from "./model-discovery-context.js";
 import type { ModelRegistry } from "./sessions/index.js";
 
-// Shared model-registry loader for agent paths that need auth storage and plugin
-// metadata resolved together before model discovery.
-export type LoadAgentModelRegistryOptions = {
+/** Options controlling model discovery, credential reads, and normalization. */
+type LoadAgentModelRegistryOptions = {
   providerFilter?: string;
   normalizeModels?: boolean;
   readOnly?: boolean;

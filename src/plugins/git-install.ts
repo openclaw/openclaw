@@ -1,3 +1,4 @@
+/** Parses, clones, verifies, and installs plugin packages from Git specs. */
 import "../infra/fs-safe-defaults.js";
 import { createHash } from "node:crypto";
 import path from "node:path";
@@ -24,6 +25,11 @@ import {
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
 } from "./install.js";
+import {
+  emitPluginAuditSecurityEvent,
+  emitPluginInstallSecurityEvent,
+  pluginAuditOutcomeForReason,
+} from "./security-events.js";
 
 const GIT_SPEC_PREFIX = "git:";
 const DEFAULT_GIT_TIMEOUT_MS = 120_000;
@@ -34,6 +40,7 @@ type PluginInstallLogger = {
   warn?: (message: string) => void;
 };
 
+/** Resolved Git source metadata persisted into plugin install records. */
 export type GitPluginResolution = {
   url: string;
   ref?: string;
@@ -45,6 +52,7 @@ export type GitPluginInstallResult =
   | (Extract<InstallPluginResult, { ok: true }> & { git: GitPluginResolution })
   | Extract<InstallPluginResult, { ok: false }>;
 
+/** Normalized Git plugin install spec accepted by the Git installer. */
 export type ParsedGitPluginSpec = {
   input: string;
   url: string;
@@ -53,6 +61,7 @@ export type ParsedGitPluginSpec = {
   normalizedSpec: string;
 };
 
+/** Returns true for full commit SHAs that do not require branch/tag drift checks. */
 export function isImmutableGitCommitRef(ref: string | undefined): boolean {
   return FULL_GIT_COMMIT_PATTERN.test(ref ?? "");
 }
@@ -392,6 +401,17 @@ export async function installPluginFromGitSpec(
       sourcePath: repoDir,
     });
     if (preflight?.blocked) {
+      const reason =
+        preflight.blocked.code === "security_scan_failed"
+          ? "security_scan_failed"
+          : "security_scan_blocked";
+      emitPluginAuditSecurityEvent({
+        outcome: pluginAuditOutcomeForReason(reason),
+        reason,
+        pluginId: params.expectedPluginId,
+        mode: effectiveMode,
+        sourceFamily: "git",
+      });
       return buildBlockedGitInstallResult({ blocked: preflight.blocked });
     }
 
@@ -433,6 +453,7 @@ export async function installPluginFromGitSpec(
       expectedPluginId: params.expectedPluginId,
       logger: params.logger,
       mode: effectiveMode,
+      emitSuccessSecurityEvent: false,
       installPolicyRequest,
     });
     if (!result.ok) {
@@ -446,6 +467,14 @@ export async function installPluginFromGitSpec(
       if (!replaceResult.ok) {
         return replaceResult;
       }
+      emitPluginInstallSecurityEvent({
+        pluginId: result.pluginId,
+        mode: effectiveMode,
+        sourceFamily: "git",
+        extensionCount: result.extensions.length,
+        hasVersion: Boolean(result.version),
+        trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
+      });
     }
 
     return {

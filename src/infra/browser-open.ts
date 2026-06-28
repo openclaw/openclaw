@@ -1,3 +1,4 @@
+// Resolves platform-specific commands for best-effort browser opening.
 import path from "node:path";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { detectBinary } from "./detect-binary.js";

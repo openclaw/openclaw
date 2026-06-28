@@ -1,3 +1,8 @@
+/**
+ * pdf built-in tool.
+ *
+ * Loads local/web PDFs, extracts pages/text, and analyzes them with native or fallback media-understanding models.
+ */
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -76,12 +81,6 @@ export const PdfToolSchema = Type.Object({
   model: Type.Optional(Type.String()),
   maxBytesMb: optionalFiniteNumberSchema({ exclusiveMinimum: 0 }),
 });
-
-// ---------------------------------------------------------------------------
-// Model resolution (mirrors image tool pattern)
-// ---------------------------------------------------------------------------
-
-export { resolvePdfModelConfigForTool } from "./pdf-tool.model-config.js";
 
 function hasExplicitPdfToolModelConfig(config?: OpenClawConfig): boolean {
   return (

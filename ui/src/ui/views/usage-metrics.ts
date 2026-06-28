@@ -1,3 +1,4 @@
+// Control UI view renders usage metrics screen content.
 import { html } from "lit";
 import {
   buildUsageAggregateTail,
@@ -19,7 +20,16 @@ function formatTokens(n: number): string {
     return `${(n / 1_000_000).toFixed(1)}M`;
   }
   if (n >= 1_000) {
-    return `${(n / 1_000).toFixed(1)}K`;
+    // Values from 999,950-999,999 round to "1000.0" at one-decimal
+    // thousands precision, which would display the nonsensical "1000.0K"
+    // instead of rolling over to the M branch above. Re-check the
+    // rounded result before formatting. Mirrors the guard in
+    // formatCompactTokenCount (../chat/token-format.ts).
+    const thousands = (n / 1_000).toFixed(1);
+    if (Number(thousands) >= 1_000) {
+      return `${(n / 1_000_000).toFixed(1)}M`;
+    }
+    return `${thousands}K`;
   }
   return String(n);
 }
@@ -451,8 +461,19 @@ function parseYmdDate(dateStr: string): Date | null {
     return null;
   }
   const [, y, m, d] = match;
-  const date = new Date(Date.UTC(Number(y), Number(m) - 1, Number(d)));
-  return Number.isNaN(date.valueOf()) ? null : date;
+  const year = Number(y);
+  const monthIndex = Number(m) - 1;
+  const day = Number(d);
+  const date = new Date(year, monthIndex, day);
+  if (
+    Number.isNaN(date.valueOf()) ||
+    date.getFullYear() !== year ||
+    date.getMonth() !== monthIndex ||
+    date.getDate() !== day
+  ) {
+    return null;
+  }
+  return date;
 }
 
 function formatDayLabel(dateStr: string): string {

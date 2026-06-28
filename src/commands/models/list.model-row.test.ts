@@ -1,3 +1,4 @@
+// Model row tests cover per-model row normalization and capability labels.
 import { describe, expect, it } from "vitest";
 import { toModelRow } from "./list.model-row.js";
 
@@ -54,5 +55,23 @@ describe("toModelRow", () => {
 
       expect(row.local).toBe(true);
     }
+  });
+
+  it("keeps local provider rows available when registry availability omits the model key", () => {
+    const row = toModelRow({
+      model: {
+        ...OPENROUTER_MODEL,
+        provider: "ollama",
+        id: "qwen3.6:35b-a3b",
+        name: "qwen3.6:35b-a3b",
+        baseUrl: "http://127.0.0.1:11434",
+      } as never,
+      key: "ollama/qwen3.6:35b-a3b",
+      tags: [],
+      availableKeys: new Set(["ollama/llama3.2"]),
+    });
+
+    expect(row.local).toBe(true);
+    expect(row.available).toBe(true);
   });
 });

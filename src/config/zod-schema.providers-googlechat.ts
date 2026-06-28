@@ -1,3 +1,4 @@
+// Defines Google Chat provider schema fragments.
 import { z } from "zod";
 import { ChannelBotLoopProtectionSchema } from "./zod-schema.channels-config.js";
 import { ChannelHealthMonitorSchema } from "./zod-schema.channels.js";

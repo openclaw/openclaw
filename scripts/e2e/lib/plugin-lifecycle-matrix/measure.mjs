@@ -1,4 +1,5 @@
-import { spawn } from "node:child_process";
+// Measures plugin lifecycle matrix E2E command timings.
+import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -20,19 +21,64 @@ function readPositiveIntEnv(name, fallback) {
   return value;
 }
 
-const pageSize = readPositiveIntEnv("OPENCLAW_PROC_PAGE_SIZE", 4096);
-const clockTicks = readPositiveIntEnv("OPENCLAW_PROC_CLK_TCK", 100);
-const pollMs = readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_METRIC_POLL_MS", 100);
-const timeoutMs = readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS", 300000);
-const timeoutKillGraceMs = readPositiveIntEnv(
-  "OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS",
-  2000,
+function readPositiveIntEnvOrGetconf(name, variable) {
+  if (process.env[name] !== undefined) {
+    return readPositiveIntEnv(name, "");
+  }
+  const result = spawnSync("getconf", [variable], { encoding: "utf8" });
+  if (result.error || result.status !== 0) {
+    const details =
+      result.error?.message || result.stderr.trim() || `exit ${String(result.status)}`;
+    throw new Error(
+      `failed to derive ${name} from getconf ${variable}: ${details}; set ${name} explicitly`,
+    );
+  }
+  return readPositiveIntEnv(name, result.stdout);
+}
+
+function readPositiveNumberEnv(name, fallback) {
+  const text = String(process.env[name] ?? fallback).trim();
+  if (!/^\d+(?:\.\d+)?$/u.test(text)) {
+    throw new Error(`${name} must be a positive number; got: ${text}`);
+  }
+  const value = Number(text);
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error(`${name} must be a positive number; got: ${text}`);
+  }
+  return value;
+}
+
+const MAX_TIMER_TIMEOUT_MS = 2_147_000_000;
+
+function clampTimerTimeoutMs(valueMs) {
+  return Math.min(Math.max(Math.floor(valueMs), 1), MAX_TIMER_TIMEOUT_MS);
+}
+
+const pollMs = clampTimerTimeoutMs(
+  readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_METRIC_POLL_MS", 100),
 );
+const timeoutMs = clampTimerTimeoutMs(
+  readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_PHASE_TIMEOUT_MS", 300000),
+);
+const timeoutKillGraceMs = clampTimerTimeoutMs(
+  readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_TIMEOUT_KILL_GRACE_MS", 2000),
+);
+const maxRssKbThreshold = readPositiveIntEnv(
+  "OPENCLAW_PLUGIN_LIFECYCLE_MAX_RSS_KB",
+  4 * 1024 * 1024,
+);
+const maxWallMs = readPositiveIntEnv("OPENCLAW_PLUGIN_LIFECYCLE_MAX_WALL_MS", timeoutMs);
+const maxCpuCoreRatio = readPositiveNumberEnv("OPENCLAW_PLUGIN_LIFECYCLE_MAX_CPU_CORE_RATIO", 16);
 
 if (!fs.existsSync("/proc")) {
   console.error("plugin lifecycle resource sampler requires Linux /proc");
   process.exit(2);
 }
+
+// /proc RSS is in host pages and CPU times are in host clock ticks. Query the
+// live units so 64 KiB ARM kernels do not under-report resource use.
+const pageSize = readPositiveIntEnvOrGetconf("OPENCLAW_PROC_PAGE_SIZE", "PAGESIZE");
+const clockTicks = readPositiveIntEnvOrGetconf("OPENCLAW_PROC_CLK_TCK", "CLK_TCK");
 
 function readProcSnapshot() {
   const stats = new Map();
@@ -53,11 +99,13 @@ function readProcSnapshot() {
         .trim()
         .split(/\s+/u);
       const ppid = Number.parseInt(fields[1] ?? "", 10);
+      const pgrp = Number.parseInt(fields[2] ?? "", 10);
       const userTicks = Number.parseInt(fields[11] ?? "", 10);
       const systemTicks = Number.parseInt(fields[12] ?? "", 10);
       const rssPages = Number.parseInt(fields[21] ?? "", 10);
       if (
         !Number.isFinite(ppid) ||
+        !Number.isFinite(pgrp) ||
         !Number.isFinite(userTicks) ||
         !Number.isFinite(systemTicks) ||
         !Number.isFinite(rssPages)
@@ -66,6 +114,7 @@ function readProcSnapshot() {
       }
       stats.set(pid, {
         ppid,
+        pgrp,
         cpuTicks: userTicks + systemTicks,
         rssBytes: Math.max(0, rssPages) * pageSize,
       });
@@ -98,7 +147,10 @@ function descendantsOf(rootPid, stats) {
 
 function sample(rootPid) {
   const stats = readProcSnapshot();
-  const pids = descendantsOf(rootPid, stats);
+  const groupPids = new Set(
+    [...stats.entries()].filter(([, stat]) => stat.pgrp === rootPid).map(([pid]) => pid),
+  );
+  const pids = new Set([...descendantsOf(rootPid, stats), ...groupPids]);
   let rssBytes = 0;
   let cpuTicks = 0;
   for (const pid of pids) {
@@ -129,6 +181,10 @@ let forwardedParentSignal = null;
 let killTimer;
 let parentSignalTimer;
 let parentSignalPollTimer;
+let childGroupDrainTimer;
+// The leader can exit before descendants in its detached process group.
+// Keep the wrapper alive so timeout cleanup still owns those descendants.
+let childClosedResult = null;
 const updateMetrics = () => {
   if (!child.pid) {
     return;
@@ -138,11 +194,21 @@ const updateMetrics = () => {
   maxCpuTicks = Math.max(maxCpuTicks, current.cpuTicks);
 };
 
+function finishChildClosedResultIfGroupDrained() {
+  if (childClosedResult && !childGroupExists()) {
+    finish(childClosedResult.code, childClosedResult.signal);
+  }
+}
+
 updateMetrics();
 const interval = setInterval(updateMetrics, pollMs);
 const timeoutTimer =
   Number.isFinite(timeoutMs) && timeoutMs > 0
     ? setTimeout(() => {
+        if (childClosedResult && !childGroupExists()) {
+          finish(childClosedResult.code, childClosedResult.signal);
+          return;
+        }
         timedOut = true;
         terminateChildGroup("SIGTERM");
         killTimer = setTimeout(() => {
@@ -196,6 +262,9 @@ function clearRuntimeTimers() {
   if (parentSignalPollTimer) {
     clearInterval(parentSignalPollTimer);
   }
+  if (childGroupDrainTimer) {
+    clearInterval(childGroupDrainTimer);
+  }
 }
 
 function rethrowParentSignal(signal) {
@@ -224,11 +293,14 @@ function handleParentSignal(signal) {
     terminateChildGroup("SIGKILL");
     rethrowParentSignal(signal);
   }, timeoutKillGraceMs);
-  parentSignalPollTimer = setInterval(() => {
-    if (!childGroupExists()) {
-      rethrowParentSignal(signal);
-    }
-  }, Math.min(50, timeoutKillGraceMs));
+  parentSignalPollTimer = setInterval(
+    () => {
+      if (!childGroupExists()) {
+        rethrowParentSignal(signal);
+      }
+    },
+    Math.min(50, timeoutKillGraceMs),
+  );
 }
 
 for (const signal of ["SIGHUP", "SIGINT", "SIGTERM"]) {
@@ -260,6 +332,25 @@ function finish(code, signal) {
   console.log(
     `plugin lifecycle resource: phase=${phase} max_rss_kb=${maxRssKb} cpu_s=${cpuSeconds.toFixed(3)} wall_ms=${wallMs.toFixed(0)} cpu_core_ratio=${cpuCoreRatio.toFixed(3)} signal=${summarySignal}`,
   );
+  const violations = [];
+  if (maxRssKb > maxRssKbThreshold) {
+    violations.push(`max_rss_kb=${maxRssKb} > ${maxRssKbThreshold}`);
+  }
+  if (wallMs > maxWallMs) {
+    violations.push(`wall_ms=${wallMs.toFixed(0)} > ${maxWallMs}`);
+  }
+  if (cpuCoreRatio > maxCpuCoreRatio) {
+    violations.push(`cpu_core_ratio=${cpuCoreRatio.toFixed(3)} > ${maxCpuCoreRatio}`);
+  }
+  if (violations.length > 0) {
+    console.error(
+      `plugin lifecycle resource ceiling exceeded: phase=${phase} ${violations.join("; ")}`,
+    );
+    if (!timedOut && !signal && (code ?? 0) === 0) {
+      process.exit(1);
+      return;
+    }
+  }
   if (timedOut) {
     process.exit(124);
     return;
@@ -286,6 +377,11 @@ child.on("exit", (code, signal) => {
     return;
   }
   if (timedOut && killTimer) {
+    return;
+  }
+  if (childGroupExists()) {
+    childClosedResult = { code, signal };
+    childGroupDrainTimer = setInterval(finishChildClosedResultIfGroupDrained, Math.min(25, pollMs));
     return;
   }
   finish(code, signal);

@@ -1,3 +1,8 @@
+/**
+ * Shared web tool cache, timeout, and response helpers.
+ *
+ * Keeps web_fetch and web_search providers aligned on bounded IO and cache semantics.
+ */
 import {
   asDateTimestampMs,
   MAX_TIMER_TIMEOUT_SECONDS,
@@ -280,6 +285,9 @@ export async function readResponseText(
         // let cleanup turn a bounded read into a hung fetch.
         void reader.cancel().catch(() => undefined);
       }
+      try {
+        reader.releaseLock();
+      } catch {}
     }
 
     const bytes = concatBytes(parts, bytesRead);

@@ -1,3 +1,4 @@
+/** Small touch-aware cache for process-local ACP runtime handles. */
 import type {
   AcpRuntime,
   AcpRuntimeHandle,
@@ -21,13 +22,15 @@ type RuntimeCacheEntry = {
   lastTouchedAt: number;
 };
 
-export type CachedRuntimeSnapshot = {
+/** Snapshot entry used for idle eviction and cache diagnostics. */
+type CachedRuntimeSnapshot = {
   actorKey: string;
   state: CachedRuntimeState;
   lastTouchedAt: number;
   idleMs: number;
 };
 
+/** Map-backed cache that tracks last-touch time per actor key. */
 export class RuntimeCache {
   private readonly cache = new Map<string, RuntimeCacheEntry>();
 

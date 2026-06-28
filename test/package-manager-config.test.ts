@@ -1,3 +1,4 @@
+// Package manager config tests validate workspace package manager settings.
 import fs from "node:fs";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -60,6 +61,7 @@ describe("package manager build policy", () => {
 
     expect(packageJson.pnpm).toBeUndefined();
     expect(workspace.allowBuilds?.["@discordjs/opus"]).toBe(false);
+    expect(workspace.allowBuilds?.["node-llama-cpp"]).toBe(false);
     expect(workspace.blockExoticSubdeps).toBe(true);
     expect(workspace.onlyBuiltDependencies).toBeUndefined();
   });

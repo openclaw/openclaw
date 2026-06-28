@@ -1,3 +1,4 @@
+// Qa Coverage Report script supports OpenClaw repository automation.
 import { runQaCoverageReportCommand } from "../extensions/qa-lab/src/cli.runtime.ts";
 import { booleanFlag, parseFlagArgs, stringFlag, stringListFlag } from "./lib/arg-utils.mjs";
 
@@ -44,12 +45,17 @@ Options:
   ) as Options;
 }
 
-const opts = parseArgs(process.argv.slice(2));
-await runQaCoverageReportCommand({
-  ...(opts.json ? { json: true } : {}),
-  ...(opts.match ? { match: opts.match } : {}),
-  ...(opts.output ? { output: opts.output } : {}),
-  ...(opts.repoRoot ? { repoRoot: opts.repoRoot } : {}),
-  ...(opts.summary ? { summary: opts.summary } : {}),
-  ...(opts.tools ? { tools: true } : {}),
-});
+try {
+  const opts = parseArgs(process.argv.slice(2));
+  await runQaCoverageReportCommand({
+    ...(opts.json ? { json: true } : {}),
+    ...(opts.match ? { match: opts.match } : {}),
+    ...(opts.output ? { output: opts.output } : {}),
+    ...(opts.repoRoot ? { repoRoot: opts.repoRoot } : {}),
+    ...(opts.summary ? { summary: opts.summary } : {}),
+    ...(opts.tools ? { tools: true } : {}),
+  });
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exitCode = 1;
+}

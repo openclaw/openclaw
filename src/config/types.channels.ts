@@ -1,3 +1,4 @@
+// Defines channel configuration types shared by channel plugins.
 import type { ContextVisibilityMode, GroupPolicy } from "./types.base.js";
 import type { ChannelBotLoopProtectionConfig } from "./types.bot-loop-protection.js";
 import type {
@@ -32,7 +33,7 @@ export type ChannelDefaultsConfig = {
   botLoopProtection?: ChannelBotLoopProtectionConfig;
 };
 
-/** Provider/channel/target model override map used by channel dispatch. */
+/** Provider/channel/target model override map used by channel dispatch. Keys are channel-specific group IDs, thread IDs, channel names, or DM peer identifiers (see docs/gateway/config-channels.md). */
 export type ChannelModelByChannelConfig = Record<string, Record<string, string>>;
 
 export type ExtensionNestedPolicyConfig = {
@@ -126,7 +127,7 @@ export type ExtensionChannelConfig = {
 export interface ChannelsConfig {
   /** Shared defaults inherited by channel sections unless they override them. */
   defaults?: ChannelDefaultsConfig;
-  /** Map provider -> channel id -> model override. */
+  /** Map provider -> channel id / DM peer id -> model override. See docs/gateway/config-channels.md for supported key forms. */
   modelByChannel?: ChannelModelByChannelConfig;
   discord?: DiscordConfig;
   googlechat?: GoogleChatConfig;

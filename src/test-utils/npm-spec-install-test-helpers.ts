@@ -1,3 +1,4 @@
+// Helpers for package install tests that inspect npm spec output.
 import fs from "node:fs";
 import path from "node:path";
 import { expect } from "vitest";

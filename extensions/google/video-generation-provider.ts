@@ -1,3 +1,4 @@
+// Google provider module implements model/runtime integration.
 import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   createProviderOperationDeadline,
@@ -27,6 +28,7 @@ const DEFAULT_TIMEOUT_MS = 180_000;
 const POLL_INTERVAL_MS = 10_000;
 const MAX_POLL_ATTEMPTS = 120;
 const DEFAULT_GENERATED_VIDEO_MAX_BYTES = 16 * 1024 * 1024;
+const GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES = 16 * 1024 * 1024;
 const GOOGLE_VIDEO_EMPTY_RESULT_MESSAGE =
   "Google video generation response missing generated videos";
 
@@ -348,7 +350,15 @@ async function requestGoogleVideoJson(params: {
           signal: controller.signal,
         });
         try {
-          const text = await response.text();
+          const buffer = await readResponseWithLimit(
+            response,
+            GOOGLE_VIDEO_OPERATION_RESPONSE_MAX_BYTES,
+            {
+              onOverflow: ({ maxBytes }) =>
+                new Error(`Google video operation response exceeds ${maxBytes} bytes`),
+            },
+          );
+          const text = new TextDecoder().decode(buffer);
           if (!response.ok) {
             let detail: unknown = text;
             if (text) {

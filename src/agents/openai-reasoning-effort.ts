@@ -1,11 +1,14 @@
+/**
+ * OpenAI-compatible reasoning-effort normalization. Different GPT families
+ * expose different accepted effort enums, so callers map requested values here
+ * before constructing provider payloads.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import {
   normalizeStringEntries,
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 
-// OpenAI-compatible reasoning-effort normalization. Different GPT families
-// expose different accepted effort enums, so callers map requested values here.
 export type OpenAIReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh";
 
 export type OpenAIApiReasoningEffort = OpenAIReasoningEffort | (string & {});
@@ -13,6 +16,7 @@ export type OpenAIApiReasoningEffort = OpenAIReasoningEffort | (string & {});
 type OpenAIReasoningModel = {
   provider?: unknown;
   id?: unknown;
+  name?: unknown;
   api?: unknown;
   baseUrl?: unknown;
   compat?: unknown;
@@ -36,6 +40,13 @@ function normalizeModelId(id: string | null | undefined): string {
 export function isOpenAIGpt54MiniModel(model: OpenAIReasoningModel): boolean {
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
   return /^gpt-5\.4-mini(?:-|$)/u.test(id);
+}
+
+/** Return whether a model is the GPT-5.5 family. */
+export function isOpenAIGpt55Model(model: OpenAIReasoningModel): boolean {
+  const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);
+  const name = normalizeModelId(typeof model.name === "string" ? model.name : undefined);
+  return /^gpt-5\.5(?:-|$)/u.test(id) || /^gpt-5\.5(?:\s|\(|-|$)/u.test(name);
 }
 
 /** Normalize user-facing reasoning effort names to API effort names. */

@@ -1,3 +1,4 @@
+// Defines view-model shapes for approval prompts and resolutions.
 import type { InteractiveReplyButton } from "../interactive/payload.js";
 import type { ChannelApprovalKind } from "./approval-types.js";
 import type { CommandExplanationSummary } from "./command-analysis/explain.js";

@@ -1,3 +1,4 @@
+/** Loads bundled channel plugin runtime entries and setup metadata. */
 import fs from "node:fs";
 import path from "node:path";
 import { resolveBundledPluginGeneratedPath } from "./bundled-plugin-metadata.js";

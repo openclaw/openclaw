@@ -1,3 +1,5 @@
+// Exec approval gateway methods create, list, inspect, and resolve command
+// approval requests, including iOS push delivery and requester visibility.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import {
@@ -19,7 +21,7 @@ import {
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
   DEFAULT_EXEC_APPROVAL_TIMEOUT_MS,
-  resolveExecApprovalAllowedDecisions,
+  normalizeExecApprovalUnavailableDecisions,
   resolveExecApprovalRequestAllowedDecisions,
   type ExecApprovalRequest,
   type ExecApprovalResolved,
@@ -34,6 +36,7 @@ import {
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
   bindApprovalRequesterMetadata,
+  bindApprovalReviewerDeviceIds,
   buildRequestedApprovalEvent,
   handleApprovalResolve,
   isApprovalRecordVisibleToClient,
@@ -167,6 +170,7 @@ export function createExecApprovalHandlers(
         security?: string;
         ask?: string;
         warningText?: string | null;
+        unavailableDecisions?: string[];
         commandSpans?: {
           startIndex: number;
           endIndex: number;
@@ -178,6 +182,7 @@ export function createExecApprovalHandlers(
         turnSourceTo?: string;
         turnSourceAccountId?: string;
         turnSourceThreadId?: string | number;
+        approvalReviewerDeviceIds?: string[];
         requireDeliveryRoute?: boolean;
         suppressDelivery?: boolean;
         timeoutMs?: number;
@@ -268,7 +273,7 @@ export function createExecApprovalHandlers(
         return;
       }
       const sanitizedCommandText = sanitizedCommandDisplay.text;
-      const commandAnalysis = resolveCommandAnalysisSummaryForDisplay({
+      const commandAnalysis = await resolveCommandAnalysisSummaryForDisplay({
         host,
         commandText: effectiveCommandText,
         commandArgv: effectiveCommandArgv,
@@ -297,6 +302,9 @@ export function createExecApprovalHandlers(
         );
         return;
       }
+      const unavailableDecisions = normalizeExecApprovalUnavailableDecisions(
+        p.unavailableDecisions,
+      );
       const request = {
         command: sanitizedCommandText,
         commandPreview:
@@ -315,7 +323,11 @@ export function createExecApprovalHandlers(
         warningText: warningText ? sanitizeExecApprovalWarningText(warningText) : null,
         commandAnalysis,
         commandSpans,
-        allowedDecisions: resolveExecApprovalAllowedDecisions({ ask: p.ask ?? null }),
+        unavailableDecisions: unavailableDecisions.length > 0 ? unavailableDecisions : undefined,
+        allowedDecisions: resolveExecApprovalRequestAllowedDecisions({
+          ask: p.ask ?? null,
+          unavailableDecisions,
+        }),
         agentId: effectiveAgentId ?? null,
         resolvedPath: p.resolvedPath ?? null,
         sessionKey: effectiveSessionKey ?? null,
@@ -326,6 +338,14 @@ export function createExecApprovalHandlers(
       };
       const record = manager.create(request, timeoutMs, explicitId);
       bindApprovalRequesterMetadata({ record, client });
+      if (client?.internal?.approvalRuntime === true) {
+        // Reviewer ids widen approval visibility, so only the server-trusted
+        // approval runtime may bind them onto a pending exec approval.
+        bindApprovalReviewerDeviceIds({
+          record,
+          deviceIds: p.approvalReviewerDeviceIds,
+        });
+      }
       // Use register() to synchronously add to pending map before sending any response.
       // This ensures the approval ID is valid immediately after the "accepted" response.
       const decisionPromise = registerPendingApprovalRecord({

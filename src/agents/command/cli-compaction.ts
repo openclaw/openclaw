@@ -1,8 +1,16 @@
+/**
+ * CLI turn compaction lifecycle.
+ *
+ * This module decides when CLI-backed sessions need context compaction, chooses
+ * native harness or context-engine compaction, and records resulting session state.
+ */
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { AgentCompactionMode } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { buildGenericCliContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import { ensureContextEnginesInitialized as ensureContextEnginesInitializedImpl } from "../../context-engine/init.js";
 import { resolveContextEngine as resolveContextEngineImpl } from "../../context-engine/registry.js";
+import { buildContextEngineRuntimeSettings } from "../../context-engine/runtime-settings.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SkillSnapshot } from "../../skills/types.js";
@@ -123,10 +131,12 @@ const cliCompactionDeps: CliCompactionDeps = {
   recordCliCompactionInStore: recordCliCompactionInStoreImpl,
 };
 
+/** Overrides CLI compaction dependencies for focused tests. */
 export function setCliCompactionTestDeps(overrides: Partial<typeof cliCompactionDeps>): void {
   Object.assign(cliCompactionDeps, overrides);
 }
 
+/** Restores production CLI compaction dependencies after tests. */
 export function resetCliCompactionTestDeps(): void {
   Object.assign(cliCompactionDeps, {
     openSessionManager: (sessionFile: string) => SessionManager.open(sessionFile),
@@ -276,6 +286,18 @@ async function compactCliTranscript(params: {
     contextTokenBudget: params.contextTokenBudget,
     trigger: "cli_budget",
   });
+  const runtimeSettings = buildContextEngineRuntimeSettings({
+    contextEngineHost: buildGenericCliContextEngineHostSupport({
+      backendId: params.provider,
+      capabilities: ["compact", "maintain"],
+    }),
+    provider: params.provider,
+    requestedModel: params.model,
+    resolvedModel: params.model,
+    selectedContextEngineId: params.contextEngine.info.id,
+    contextEngineSelectionSource: "configured",
+    promptTokenBudget: params.contextTokenBudget,
+  });
 
   let compactResult: Awaited<ReturnType<typeof params.contextEngine.compact>>;
   try {
@@ -290,6 +312,7 @@ async function compactCliTranscript(params: {
         force: true,
         compactionTarget: "budget",
         runtimeContext,
+        runtimeSettings,
       },
       resolveCompactionTimeoutMs(params.cfg),
     );
@@ -329,6 +352,7 @@ async function compactCliTranscript(params: {
       reason: "compaction",
       sessionManager: params.sessionManager,
       runtimeContext,
+      runtimeSettings,
       config: params.cfg,
     });
   } catch (error) {
@@ -458,6 +482,8 @@ async function compactNativeHarnessCliTranscript(params: {
     const recoverableBindingFailure = isRecoverableNativeHarnessBindingFailure(result);
     const fallbackToContextEngine =
       isUnsupportedNativeHarnessCompaction(result) || recoverableBindingFailure;
+    // Native harness binding failures can be repaired by clearing the stored CLI
+    // session binding and falling back to the context engine for this turn.
     log.warn(
       `CLI native harness compaction did not reduce context for ${params.provider}/${params.model}: ${reason}`,
     );
@@ -472,6 +498,7 @@ async function compactNativeHarnessCliTranscript(params: {
   return { compacted: true, result };
 }
 
+/** Runs pre-turn compaction for a CLI session and returns the updated session entry. */
 export async function runCliTurnCompactionLifecycle(params: {
   cfg: OpenClawConfig;
   sessionId: string;
@@ -551,6 +578,8 @@ export async function runCliTurnCompactionLifecycle(params: {
       return;
     }
     autoCompactionGuardApplied = true;
+    // Apply once for the selected compaction path; settings are shared between
+    // native-harness and context-engine fallback attempts.
     await cliCompactionDeps.applyAgentAutoCompactionGuard({
       settingsManager,
       contextEngineInfo: contextEngine.info,
@@ -588,6 +617,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       nativeCompactionResult = nativeOutcome.result;
       useContextEngineCompaction = false;
     } else if (nativeOutcome.fallbackToContextEngine) {
+      // Unsupported or recoverable native compaction should not abort the CLI turn.
       nativeFallbackToContextEngine = true;
       nativeFallbackNeedsBindingClear = nativeOutcome.clearCliSessionBinding === true;
     } else if (nativeOutcome.failureReason) {
@@ -649,6 +679,7 @@ export async function runCliTurnCompactionLifecycle(params: {
         sessionKey: params.sessionKey,
         sessionStore: params.sessionStore,
         storePath: params.storePath,
+        expectedSessionId: params.sessionId,
       })) ?? params.sessionEntry
     );
   }
@@ -666,6 +697,7 @@ export async function runCliTurnCompactionLifecycle(params: {
       tokensAfter: nativeCompactionResult?.result?.tokensAfter,
       newSessionId: nativeCompactionResult?.result?.sessionId,
       newSessionFile: nativeCompactionResult?.result?.sessionFile,
+      expectedSessionId: params.sessionId,
     })) ?? params.sessionEntry
   );
 }

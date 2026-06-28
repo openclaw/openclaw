@@ -1,3 +1,4 @@
+// Formats finalized message context into prompt-visible text.
 import type { FinalizedMsgContext } from "../templating.js";
 
 /** Message context fields that can carry user-visible command text. */

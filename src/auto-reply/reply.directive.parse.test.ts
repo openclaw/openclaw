@@ -1,3 +1,4 @@
+/** Tests parsing of inline reply directives and command tags. */
 import { describe, expect, it } from "vitest";
 import { parseInlineDirectives } from "./reply/directive-handling.parse.js";
 import {
@@ -67,6 +68,12 @@ describe("directive parsing", () => {
     const res = extractFastDirective("/fast on please");
     expect(res.hasDirective).toBe(true);
     expect(res.fastMode).toBe(true);
+  });
+
+  it("matches auto fast directive", () => {
+    const res = extractFastDirective("/fast auto please");
+    expect(res.hasDirective).toBe(true);
+    expect(res.fastMode).toBe("auto");
   });
 
   it("parses default thinking and fast directives as override clears", () => {
@@ -210,6 +217,24 @@ describe("directive parsing", () => {
     expect(think.cleaned).toBe("please sync now");
     expect(think.hasThinkDirective).toBe(true);
     expect(think.thinkLevel).toBe("high");
+  });
+
+  it("keeps --persist as ordinary text for inline directives", () => {
+    const model = parseInlineDirectives("please sync /model openai/gpt-4.1-mini --persist now");
+    expect(model.cleaned).toBe("please sync --persist now");
+    expect(model.hasModelDirective).toBe(true);
+    expect(model.rawModelDirective).toBe("openai/gpt-4.1-mini");
+
+    const think = parseInlineDirectives("/think high --persist");
+    expect(think.cleaned).toBe("--persist");
+    expect(think.hasThinkDirective).toBe(true);
+    expect(think.thinkLevel).toBe("high");
+  });
+
+  it("keeps --persist in ordinary messages", () => {
+    const parsed = parseInlineDirectives("please keep --persist in this text");
+
+    expect(parsed.cleaned).toBe("please keep --persist in this text");
   });
 
   it("preserves spacing when stripping think directives before paths", () => {

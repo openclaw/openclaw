@@ -1,3 +1,6 @@
+/**
+ * Builds the system prompt inputs for a single embedded-agent attempt.
+ */
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ProviderTransformSystemPromptContext } from "../../../plugins/types.js";
 import { buildEmbeddedSystemPrompt } from "../system-prompt.js";
@@ -10,7 +13,7 @@ type ProviderSystemPromptTransform = (params: {
   context: ProviderTransformSystemPromptContext;
 }) => string;
 
-export type BuildAttemptSystemPromptParams = {
+type BuildAttemptSystemPromptParams = {
   isRawModelRun: boolean;
   embeddedSystemPrompt: EmbeddedSystemPromptParams;
   transformProviderSystemPrompt: ProviderSystemPromptTransform;
@@ -23,7 +26,7 @@ export type BuildAttemptSystemPromptParams = {
 };
 
 /** System prompt pair used by an attempt: untransformed base plus provider-ready prompt. */
-export type AttemptSystemPrompt = {
+type AttemptSystemPrompt = {
   baseSystemPrompt: string;
   systemPrompt: string;
 };

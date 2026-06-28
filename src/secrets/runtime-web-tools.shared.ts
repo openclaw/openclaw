@@ -1,3 +1,4 @@
+/** Shared helpers for web-tool secret metadata resolution. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveSecretInputRef } from "../config/types.secrets.js";
@@ -65,6 +66,8 @@ export type RuntimeWebProviderSelectionParams<
   resolvedConfig: OpenClawConfig;
   context: ResolverContext;
   defaults: SecretDefaults | undefined;
+  /** Allow keyless providers to be selected when no provider is explicitly configured. */
+  allowKeylessAutoSelect: boolean;
   /** Defer keyless providers until credential-bearing auto-detect candidates are exhausted. */
   deferKeylessFallback: boolean;
   fallbackUsedCode: RuntimeWebWarningCode;
@@ -338,11 +341,17 @@ export async function resolveRuntimeWebProviderSurface<
     params.rawProvider,
     params.normalizeConfiguredProviderAgainstActiveProviders ? providers : allProviders,
   );
+  const invalidConfiguredProvider =
+    params.normalizeConfiguredProviderAgainstActiveProviders === true &&
+    Boolean(params.rawProvider) &&
+    !configuredProvider;
 
   if (params.rawProvider && !configuredProvider) {
     const diagnostic: RuntimeWebDiagnostic = {
       code: params.invalidAutoDetectCode,
-      message: `${params.providerPath} is "${params.rawProvider}". Falling back to auto-detect precedence.`,
+      message: invalidConfiguredProvider
+        ? `${params.providerPath} is "${params.rawProvider}". No provider will be selected.`
+        : `${params.providerPath} is "${params.rawProvider}". Falling back to auto-detect precedence.`,
       path: params.providerPath,
     };
     params.diagnostics.push(diagnostic);
@@ -358,7 +367,9 @@ export async function resolveRuntimeWebProviderSurface<
     providers,
     configuredProvider,
     enabled:
-      hasConfiguredSurface && (!isRecord(params.toolConfig) || params.toolConfig.enabled !== false),
+      hasConfiguredSurface &&
+      !invalidConfiguredProvider &&
+      (!isRecord(params.toolConfig) || params.toolConfig.enabled !== false),
     hasConfiguredSurface,
   };
 }
@@ -393,18 +404,15 @@ export async function resolveRuntimeWebProviderSelection<
     let keylessFallbackProvider: TProvider | undefined;
 
     for (const provider of candidates) {
-      if (provider.requiresCredential === false) {
+      const isKeyless = provider.requiresCredential === false;
+      if (isKeyless) {
+        if (!params.configuredProvider && !params.allowKeylessAutoSelect) {
+          continue;
+        }
         if (params.deferKeylessFallback && !params.configuredProvider) {
           keylessFallbackProvider ||= provider;
           continue;
         }
-        selectedProvider = provider.id;
-        selectedResolution = {
-          source: "missing" as TSource,
-          secretRefConfigured: false,
-          fallbackUsedAfterRefFailure: false,
-        };
-        break;
       }
 
       const path = params.inactivePathsForProvider(provider)[0] ?? "";
@@ -493,7 +501,37 @@ export async function resolveRuntimeWebProviderSelection<
         });
       }
 
+      if (
+        isKeyless &&
+        selectedCandidateResolution.secretRefConfigured &&
+        !selectedCandidateResolution.value
+      ) {
+        continue;
+      }
+
+      if (isKeyless && !params.configuredProvider && !selectedCandidateResolution.value) {
+        continue;
+      }
+
       if (params.configuredProvider) {
+        selectedProvider = provider.id;
+        selectedResolution = selectedCandidateResolution;
+        if (selectedCandidateResolution.value) {
+          setResolvedCredentialPath({
+            resolvedConfig: params.resolvedConfig,
+            path: selectedCandidatePath,
+            value: selectedCandidateResolution.value,
+          });
+          params.setResolvedCredential({
+            resolvedConfig: params.resolvedConfig,
+            provider,
+            value: selectedCandidateResolution.value,
+          });
+        }
+        break;
+      }
+
+      if (isKeyless) {
         selectedProvider = provider.id;
         selectedResolution = selectedCandidateResolution;
         if (selectedCandidateResolution.value) {
@@ -528,7 +566,7 @@ export async function resolveRuntimeWebProviderSelection<
       }
     }
 
-    if (!selectedProvider && keylessFallbackProvider) {
+    if (!selectedProvider && keylessFallbackProvider && params.allowKeylessAutoSelect) {
       selectedProvider = keylessFallbackProvider.id;
       selectedResolution = {
         source: "missing" as TSource,
@@ -569,7 +607,7 @@ export async function resolveRuntimeWebProviderSelection<
         );
         const selectedDetails =
           selectedProviderEntry?.requiresCredential === false
-            ? `${params.scopePath} auto-detected keyless provider "${selectedProvider}" as the default fallback.`
+            ? `${params.scopePath} auto-detected keyless provider "${selectedProvider}".`
             : `${params.scopePath} auto-detected provider "${selectedProvider}" from available credentials.`;
         const diagnostic: RuntimeWebDiagnostic = {
           code: params.autoDetectSelectedCode,

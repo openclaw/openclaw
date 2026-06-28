@@ -1,3 +1,5 @@
+// Shared provider HTTP/audio helpers for media-understanding integrations,
+// including guarded fetches, deadlines, retries, and multipart upload bodies.
 import path from "node:path";
 import {
   assertOkOrThrowHttpError,
@@ -39,12 +41,12 @@ export { normalizeBaseUrl } from "../agents/provider-request-config.js";
 export { sanitizeConfiguredModelProviderRequest } from "../agents/provider-request-config.js";
 
 const DEFAULT_GUARDED_HTTP_TIMEOUT_MS = 60_000;
-const MAX_ERROR_CHARS = 300;
-const MAX_ERROR_RESPONSE_BYTES = 4096;
 const MAX_AUDIT_CONTEXT_CHARS = 80;
 
 /** Resolves the multipart upload filename, mapping AAC inputs to provider-friendly `.m4a`. */
 export function resolveAudioTranscriptionUploadFileName(fileName?: string, mime?: string): string {
+  // Some providers reject raw `.aac` names even when the bytes are AAC; `.m4a`
+  // preserves intent while matching their accepted upload extensions.
   const trimmed = fileName?.trim();
   const baseName = trimmed ? path.basename(trimmed) : "audio";
   const lowerMime = mime?.trim().toLowerCase();
@@ -643,62 +645,6 @@ export async function postMultipartRequest(params: GuardedPostRequestParams<Body
     retryStage: params.retryStage,
     retry: params.retry,
   });
-}
-
-export async function readErrorResponse(res: Response): Promise<string | undefined> {
-  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
-  try {
-    if (!res.body) {
-      return undefined;
-    }
-    reader = res.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    let sawBytes = false;
-    while (total < MAX_ERROR_RESPONSE_BYTES) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (!value || value.length === 0) {
-        continue;
-      }
-      sawBytes = true;
-      const remaining = MAX_ERROR_RESPONSE_BYTES - total;
-      const chunk = value.length <= remaining ? value : value.subarray(0, remaining);
-      chunks.push(chunk);
-      total += chunk.length;
-      if (chunk.length < value.length) {
-        break;
-      }
-    }
-    if (!sawBytes) {
-      return undefined;
-    }
-    const bytes = new Uint8Array(total);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.length;
-    }
-    const text = new TextDecoder().decode(bytes);
-    const collapsed = text.replace(/\s+/g, " ").trim();
-    if (!collapsed) {
-      return undefined;
-    }
-    if (collapsed.length <= MAX_ERROR_CHARS) {
-      return collapsed;
-    }
-    return `${collapsed.slice(0, MAX_ERROR_CHARS)}…`;
-  } catch {
-    return undefined;
-  } finally {
-    try {
-      await reader?.cancel();
-    } catch {
-      // Ignore stream-cancel failures while reporting the original HTTP error.
-    }
-  }
 }
 
 export function requireTranscriptionText(

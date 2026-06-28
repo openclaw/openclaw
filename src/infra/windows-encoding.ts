@@ -1,17 +1,29 @@
+// Detects and decodes Windows console output encodings.
 import { spawnSync } from "node:child_process";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { getWindowsCmdExePath } from "./windows-install-roots.js";
 
 const WINDOWS_CODEPAGE_ENCODING_MAP: Record<number, string> = {
   65001: "utf-8",
   54936: "gb18030",
+  874: "windows-874",
   936: "gbk",
   950: "big5",
   932: "shift_jis",
   949: "euc-kr",
+  1250: "windows-1250",
+  1251: "windows-1251",
   1252: "windows-1252",
+  1253: "windows-1253",
+  1254: "windows-1254",
+  1255: "windows-1255",
+  1256: "windows-1256",
+  1257: "windows-1257",
+  1258: "windows-1258",
 };
 
 let cachedWindowsConsoleEncoding: string | null | undefined;
+let cachedWindowsSystemEncoding: string | null | undefined;
 
 /** Extracts a Windows console code page number from localized `chcp` output. */
 export function parseWindowsCodePage(raw: string): number | null {
@@ -38,7 +50,7 @@ export function resolveWindowsConsoleEncoding(): string | null {
     return cachedWindowsConsoleEncoding;
   }
   try {
-    const result = spawnSync("cmd.exe", ["/d", "/s", "/c", "chcp"], {
+    const result = spawnSync(getWindowsCmdExePath(), ["/d", "/s", "/c", "chcp"], {
       windowsHide: true,
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
@@ -53,11 +65,62 @@ export function resolveWindowsConsoleEncoding(): string | null {
   return cachedWindowsConsoleEncoding;
 }
 
+/** Resolves and caches the Windows system encoding used by legacy text files. */
+export function resolveWindowsSystemEncoding(): string | null {
+  if (process.platform !== "win32") {
+    return null;
+  }
+  if (cachedWindowsSystemEncoding !== undefined) {
+    return cachedWindowsSystemEncoding;
+  }
+  try {
+    const result = spawnSync(
+      "powershell.exe",
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "[Text.Encoding]::Default.CodePage"],
+      {
+        windowsHide: true,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    const raw = `${result.stdout ?? ""}\n${result.stderr ?? ""}`;
+    const codePage = parseWindowsCodePage(raw);
+    cachedWindowsSystemEncoding =
+      codePage !== null ? (WINDOWS_CODEPAGE_ENCODING_MAP[codePage] ?? null) : null;
+  } catch {
+    cachedWindowsSystemEncoding = null;
+  }
+  return cachedWindowsSystemEncoding;
+}
+
 /** Decodes one complete subprocess output buffer, preferring valid UTF-8 before legacy code pages. */
 export function decodeWindowsOutputBuffer(params: {
   buffer: Buffer;
   platform?: NodeJS.Platform;
   windowsEncoding?: string | null;
+}): string {
+  return decodeWindowsBufferWithFallback({
+    ...params,
+    resolveFallbackEncoding: () => params.windowsEncoding ?? resolveWindowsConsoleEncoding(),
+  });
+}
+
+/** Decodes a text file, preferring valid UTF-8 before the Windows system encoding. */
+export function decodeWindowsTextFileBuffer(params: {
+  buffer: Buffer;
+  platform?: NodeJS.Platform;
+  windowsEncoding?: string | null;
+}): string {
+  return decodeWindowsBufferWithFallback({
+    ...params,
+    resolveFallbackEncoding: () => params.windowsEncoding ?? resolveWindowsSystemEncoding(),
+  });
+}
+
+function decodeWindowsBufferWithFallback(params: {
+  buffer: Buffer;
+  platform?: NodeJS.Platform;
+  resolveFallbackEncoding: () => string | null;
 }): string {
   const platform = params.platform ?? process.platform;
   if (platform !== "win32") {
@@ -69,7 +132,7 @@ export function decodeWindowsOutputBuffer(params: {
     return utf8;
   }
 
-  const encoding = params.windowsEncoding ?? resolveWindowsConsoleEncoding();
+  const encoding = params.resolveFallbackEncoding();
   if (!encoding || normalizeLowercaseStringOrEmpty(encoding) === "utf-8") {
     return params.buffer.toString("utf8");
   }

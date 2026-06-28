@@ -1,10 +1,11 @@
+// Provides plugin command discovery and handler registration helpers.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 
 /** Parsed `/plugins` command variants accepted by auto-reply command handling. */
-export type PluginsCommand =
+type PluginsCommand =
   | { action: "list" }
   | { action: "inspect"; name?: string }
   | { action: "install"; spec: string }

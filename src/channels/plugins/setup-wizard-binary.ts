@@ -1,5 +1,10 @@
+/**
+ * Setup wizard binary helpers.
+ *
+ * Builds status and text-input helpers for channel setup flows that need local binaries.
+ */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { detectBinary as defaultDetectBinary } from "../../plugins/setup-binary.js";
+import { detectBinary as defaultDetectBinary } from "../../infra/detect-binary.js";
 import type {
   ChannelSetupWizard,
   ChannelSetupWizardStatus,

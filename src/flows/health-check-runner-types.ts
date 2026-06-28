@@ -1,3 +1,4 @@
+// Health check runner types describe execution state for doctor health checks.
 import type {
   HealthCheck,
   HealthCheckContext,
@@ -24,18 +25,23 @@ export interface HealthCheckRunResult extends Omit<HealthRepairResult, "changes"
   readonly effects?: readonly HealthRepairEffect[];
 }
 
+/** Internal runner selection metadata. This is intentionally not part of the public SDK type. */
+export interface HealthCheckSelectionOptions {
+  readonly defaultEnabled?: boolean;
+}
+
+export type SplitHealthCheckInput = HealthCheck & HealthCheckSelectionOptions;
+
 /** Health-check implementation that owns its own detect/repair orchestration. */
-export interface RunnableHealthCheck extends Pick<
-  HealthCheck,
-  "id" | "kind" | "description" | "source"
-> {
+export interface RunnableHealthCheck
+  extends Pick<HealthCheck, "id" | "kind" | "description" | "source">, HealthCheckSelectionOptions {
   run(ctx: HealthCheckRunContext, scope?: HealthCheckScope): Promise<HealthCheckRunResult>;
 }
 
-export type HealthCheckInput = HealthCheck | RunnableHealthCheck;
+export type HealthCheckInput = SplitHealthCheckInput | RunnableHealthCheck;
 
 /** Normalized check contract consumed by lint and repair runners. */
-export interface RegisteredHealthCheck extends HealthCheck {
+export interface RegisteredHealthCheck extends HealthCheck, HealthCheckSelectionOptions {
   readonly sourceContract: "split" | "run";
   run(ctx: HealthCheckRunContext, scope?: HealthCheckScope): Promise<HealthCheckRunResult>;
 }

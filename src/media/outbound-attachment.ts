@@ -1,3 +1,4 @@
+// Outbound attachment helpers prepare media attachments for channel delivery.
 import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "./load-options.js";
 import { saveMediaBuffer } from "./store.js";
 import { loadWebMedia } from "./web-media.js";
@@ -28,6 +29,25 @@ export async function resolveOutboundAttachmentFromUrl(
     "outbound",
     maxBytes,
     media.fileName,
+  );
+  return { path: saved.path, contentType: saved.contentType };
+}
+
+/** Stages an in-memory attachment buffer into the outbound media store. */
+export async function resolveOutboundAttachmentFromBuffer(
+  buffer: Buffer,
+  maxBytes: number,
+  options?: {
+    contentType?: string;
+    filename?: string;
+  },
+): Promise<{ path: string; contentType?: string }> {
+  const saved = await saveMediaBuffer(
+    buffer,
+    options?.contentType,
+    "outbound",
+    maxBytes,
+    options?.filename,
   );
   return { path: saved.path, contentType: saved.contentType };
 }

@@ -1,3 +1,4 @@
+// Provides config cache helpers with filesystem freshness checks.
 import fs from "node:fs";
 import { parseStrictNonNegativeInteger } from "../infra/parse-finite-number.js";
 

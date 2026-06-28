@@ -1,5 +1,7 @@
+// Launchd tests cover macOS service plist generation and command handling.
 import { PassThrough } from "node:stream";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
 import {
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
@@ -13,14 +15,11 @@ import {
   disableCurrentOpenClawUpdateLaunchdJob,
   disableOpenClawUpdateLaunchdJob,
   findStaleOpenClawUpdateLaunchdJobs,
-  isLaunchAgentListed,
-  isOpenClawUpdateLaunchdLabel,
   parseLaunchctlPrint,
   parseLaunchctlListOpenClawUpdateJobs,
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
   repairLaunchAgentBootstrap,
-  removeOpenClawUpdateLaunchdJob,
   restartLaunchAgent,
   resolveLaunchAgentPlistPath,
   stopLaunchAgent,
@@ -66,6 +65,9 @@ const cleanStaleGatewayProcessesSync = vi.hoisted(() =>
 const inspectPortUsage = vi.hoisted(() =>
   vi.fn(async () => ({ port: 18789, status: "free", listeners: [], hints: [] })),
 );
+const probePortUsage = vi.hoisted(() =>
+  vi.fn<typeof import("../infra/ports-probe.js").probePortUsage>(async () => "free"),
+);
 const formatPortDiagnostics = vi.hoisted(() => vi.fn(() => ["Port 18789 is already in use."]));
 const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
 
@@ -95,9 +97,9 @@ async function withProcessEnv<T>(
     previous.set(key, process.env[key]);
     const value = overrides[key];
     if (value === undefined) {
-      delete process.env[key];
+      deleteTestEnvValue(key);
     } else {
-      process.env[key] = value;
+      setTestEnvValue(key, value);
     }
   }
   try {
@@ -105,9 +107,9 @@ async function withProcessEnv<T>(
   } finally {
     for (const [key, value] of previous) {
       if (value === undefined) {
-        delete process.env[key];
+        deleteTestEnvValue(key);
       } else {
-        process.env[key] = value;
+        setTestEnvValue(key, value);
       }
     }
   }
@@ -263,6 +265,10 @@ vi.mock("../infra/ports.js", () => ({
   formatPortDiagnostics,
 }));
 
+vi.mock("../infra/ports-probe.js", () => ({
+  probePortUsage,
+}));
+
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
   const wrapped = {
@@ -355,6 +361,8 @@ beforeEach(() => {
   cleanStaleGatewayProcessesSync.mockReturnValue([]);
   inspectPortUsage.mockReset();
   inspectPortUsage.mockResolvedValue({ port: 18789, status: "free", listeners: [], hints: [] });
+  probePortUsage.mockReset();
+  probePortUsage.mockResolvedValue("free");
   formatPortDiagnostics.mockReset();
   formatPortDiagnostics.mockReturnValue(["Port 18789 is already in use."]);
   launchdRestartHandoffState.scheduleDetachedLaunchdRestartHandoff.mockReset();
@@ -427,6 +435,23 @@ describe("launchd runtime state", () => {
     expect(runtime.detail).toBe("Could not find service");
   });
 
+  it.each([
+    "Bootstrap failed: 125: Domain does not support specified action",
+    "Could not find domain for user gui: 999999",
+  ])("marks installed LaunchAgents unavailable when launchd reports %s", async (detail) => {
+    const env = createDefaultLaunchdEnv();
+    state.files.set(resolveLaunchAgentPlistPath(env), "<plist/>");
+    state.printError = detail;
+    state.printFailuresRemaining = 1;
+
+    const runtime = await readLaunchAgentRuntime(env);
+
+    expect(runtime.status).toBe("unknown");
+    expect(runtime.missingSupervision).toBe(true);
+    expect(runtime.missingGuiSession).toBe(true);
+    expect(runtime.detail).toBe(detail);
+  });
+
   it("marks a missing unit when launchd has no job and no plist exists", async () => {
     const env = createDefaultLaunchdEnv();
     state.serviceLoaded = false;
@@ -438,22 +463,6 @@ describe("launchd runtime state", () => {
 });
 
 describe("launchctl list detection", () => {
-  it("detects the resolved label in launchctl list", async () => {
-    state.listOutput = "123 0 ai.openclaw.gateway\n";
-    const listed = await isLaunchAgentListed({
-      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
-    });
-    expect(listed).toBe(true);
-  });
-
-  it("returns false when the label is missing", async () => {
-    state.listOutput = "123 0 com.other.service\n";
-    const listed = await isLaunchAgentListed({
-      env: { HOME: "/Users/test", OPENCLAW_PROFILE: "default" },
-    });
-    expect(listed).toBe(false);
-  });
-
   it("parses stale OpenClaw updater jobs from launchctl list", () => {
     const jobs = parseLaunchctlListOpenClawUpdateJobs(
       [
@@ -523,24 +532,6 @@ describe("launchctl list detection", () => {
       ]);
     },
   );
-
-  it("recognizes only OpenClaw updater launchd labels", () => {
-    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.update.2026.5.12")).toBe(true);
-    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.manual-update.1717168800")).toBe(true);
-    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.gateway")).toBe(false);
-    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.manual-update.gateway")).toBe(false);
-    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.manual-update.profile")).toBe(false);
-    expect(isOpenClawUpdateLaunchdLabel("ai.openclaw.manual-updater.1717168800")).toBe(false);
-    expect(isOpenClawUpdateLaunchdLabel("com.example.update")).toBe(false);
-  });
-
-  it.runIf(process.platform === "darwin")("removes legacy updater launchd jobs", async () => {
-    await expect(removeOpenClawUpdateLaunchdJob(" ai.openclaw.update.2026.5.12 ")).resolves.toBe(
-      true,
-    );
-
-    expect(state.launchctlCalls).toContainEqual(["remove", "ai.openclaw.update.2026.5.12"]);
-  });
 
   it.runIf(process.platform === "darwin")(
     "disables the current legacy updater launchd job",
@@ -778,6 +769,24 @@ describe("launchd bootstrap repair", () => {
     expect(launchctlCommandNames()).not.toContain("kickstart");
   });
 
+  it.each([
+    "Bootstrap failed: 125: Domain does not support specified action",
+    "Could not find domain for user gui: 999999",
+  ])("classifies %s separately from generic not-loaded repair", async (detail) => {
+    state.bootstrapError = detail;
+    const env = createDefaultLaunchdEnv();
+
+    const repair = await repairLaunchAgentBootstrap({ env });
+
+    expect(repair).toEqual({
+      ok: false,
+      status: "gui-session-unavailable",
+      detail,
+      domain: typeof process.getuid === "function" ? `gui/${process.getuid()}` : "gui/501",
+    });
+    expect(launchctlCommandNames()).not.toContain("kickstart");
+  });
+
   it("returns a typed kickstart failure when already-loaded recovery cannot nudge the service", async () => {
     state.bootstrapError = "Service already loaded";
     state.bootstrapCode = 130;
@@ -844,6 +853,81 @@ describe("launchd install", () => {
     expect(command?.environment?.OPENAI_API_KEY).toBe(apiKey);
     expect(command?.environmentValueSources?.TMPDIR).toBe("file");
     expect(command?.environmentValueSources?.OPENAI_API_KEY).toBe("file");
+  });
+
+  it("warns before overwriting a customized generated LaunchAgent env wrapper", async () => {
+    const env = createDefaultLaunchdEnv();
+    const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+    });
+    const generatedWrapper = state.files.get(wrapperPath);
+    if (!generatedWrapper) {
+      throw new Error("expected generated wrapper");
+    }
+    state.files.set(
+      wrapperPath,
+      generatedWrapper.replace('exec "$@"', 'echo "custom-secret-provider-marker"\nexec "$@"'),
+    );
+
+    const stdout = new PassThrough();
+    let output = "";
+    stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString("utf8");
+    });
+
+    await installLaunchAgent({
+      env,
+      stdout,
+      programArguments: defaultProgramArguments,
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+    });
+
+    expect(output).toContain("Warning:");
+    expect(output).toContain("contains custom behavior and will be overwritten");
+    expect(output).toContain("openclaw gateway install --wrapper <path>");
+    expect(output).toContain("OPENCLAW_WRAPPER");
+    expect(state.files.get(wrapperPath)).toBe(generatedWrapper);
+  });
+
+  it("warns before overwriting a customized generated LaunchAgent env wrapper during restart rewrite", async () => {
+    const env = createDefaultLaunchdEnv();
+    const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
+    await installLaunchAgent({
+      env,
+      stdout: new PassThrough(),
+      programArguments: defaultProgramArguments,
+      environment: { OPENCLAW_GATEWAY_PORT: "18789" },
+    });
+    const generatedWrapper = state.files.get(wrapperPath);
+    if (!generatedWrapper) {
+      throw new Error("expected generated wrapper");
+    }
+    state.files.set(
+      wrapperPath,
+      generatedWrapper.replace('exec "$@"', 'echo "custom-secret-provider-marker"\nexec "$@"'),
+    );
+    state.launchctlCalls.length = 0;
+
+    const stdout = new PassThrough();
+    let output = "";
+    stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString("utf8");
+    });
+
+    await restartLaunchAgent({
+      env,
+      stdout,
+    });
+
+    expect(output).toContain("Warning:");
+    expect(output).toContain("contains custom behavior and will be overwritten");
+    expect(output).toContain("openclaw gateway install --wrapper <path>");
+    expect(output).toContain("OPENCLAW_WRAPPER");
+    expect(state.files.get(wrapperPath)).toBe(generatedWrapper);
   });
 
   it("repairs a mangled label-derived service-env wrapper path on restart", async () => {
@@ -1112,6 +1196,42 @@ describe("launchd install", () => {
     expect(output).toContain("Stopped LaunchAgent");
   });
 
+  it("waits for the configured gateway port to finish releasing after bootout", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "19009",
+    };
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 19009,
+      status: "busy",
+      listeners: [],
+      hints: [],
+    });
+
+    await runStopLaunchAgentWithFakeTimers({ env, stdout: new PassThrough() });
+
+    expect(inspectPortUsage).toHaveBeenCalledTimes(1);
+    expect(probePortUsage).toHaveBeenCalledWith(19009);
+  });
+
+  it("keeps waiting until a bind probe explicitly confirms port release", async () => {
+    const env = {
+      ...createDefaultLaunchdEnv(),
+      OPENCLAW_GATEWAY_PORT: "19010",
+    };
+    inspectPortUsage.mockResolvedValueOnce({
+      port: 19010,
+      status: "busy",
+      listeners: [],
+      hints: [],
+    });
+    probePortUsage.mockResolvedValueOnce("busy").mockResolvedValueOnce("unknown");
+
+    await runStopLaunchAgentWithFakeTimers({ env, stdout: new PassThrough() });
+
+    expect(probePortUsage).toHaveBeenCalledTimes(3);
+  });
+
   it("resolves the stop postcondition port from the stored LaunchAgent environment", async () => {
     const env = createDefaultLaunchdEnv();
     await installLaunchAgent({
@@ -1144,9 +1264,10 @@ describe("launchd install", () => {
       listeners: [],
       hints: [],
     });
+    probePortUsage.mockResolvedValue("busy");
     formatPortDiagnostics.mockReturnValue(["Port 19004 is held by pid 4242."]);
 
-    await expect(stopLaunchAgent({ env, stdout })).rejects.toThrow(
+    await expect(runStopLaunchAgentWithFakeTimers({ env, stdout })).rejects.toThrow(
       "gateway port 19004 is still busy after LaunchAgent stop\nPort 19004 is held by pid 4242.",
     );
 
@@ -1289,9 +1410,10 @@ describe("launchd install", () => {
       listeners: [],
       hints: [],
     });
+    probePortUsage.mockResolvedValue("busy");
     formatPortDiagnostics.mockReturnValue(["Port 19008 is held by pid 4242."]);
 
-    await expect(stopLaunchAgent({ env, stdout, disable: true })).rejects.toThrow(
+    await expect(runStopLaunchAgentWithFakeTimers({ env, stdout, disable: true })).rejects.toThrow(
       "gateway port 19008 is still busy after LaunchAgent stop\nPort 19008 is held by pid 4242.",
     );
 

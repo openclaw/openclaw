@@ -160,11 +160,12 @@ Codex `0.124.0`, while pinning OpenClaw to the newer tested stable line.
 
 ### Tool-result middleware
 
-Bundled plugins can attach runtime-neutral tool-result middleware through
+Bundled plugins and explicitly enabled installed plugins with matching manifest
+contracts can attach runtime-neutral tool-result middleware through
 `api.registerAgentToolResultMiddleware(...)` when their manifest declares the
 targeted runtime ids in `contracts.agentToolResultMiddleware`. This trusted
-seam is for async tool-result transforms that must run before OpenClaw or Codex feeds
-tool output back into the model.
+seam is for async tool-result transforms that must run before OpenClaw or Codex
+feeds tool output back into the model.
 
 Legacy bundled plugins can still use
 `api.registerCodexAppServerExtensionFactory(...)` for Codex app-server-only
@@ -179,8 +180,38 @@ Native harnesses that own their own protocol projection can use
 `openclaw/plugin-sdk/agent-harness-runtime` when a completed turn produced no
 visible assistant text. The helper returns `empty`, `reasoning-only`, or
 `planning-only` so OpenClaw's fallback policy can decide whether to retry on a
-different model. It intentionally leaves prompt errors, in-flight turns, and
-intentional silent replies such as `NO_REPLY` unclassified.
+different model. `planning-only` requires the harness's explicit `planText`
+field; OpenClaw does not infer it from assistant prose. The helper intentionally
+leaves prompt errors, in-flight turns, and intentional silent replies such as
+`NO_REPLY` unclassified.
+
+### Agent-end side effects
+
+Native harnesses must call `runAgentEndSideEffects(...)` from
+`openclaw/plugin-sdk/agent-harness-runtime` after they finalize an attempt. It
+dispatches the portable `agent_end` hook and OpenClaw's research capture without
+delaying interactive replies. Use `awaitAgentEndSideEffects(...)` for local,
+non-interactive runs where the attempt must not resolve until those side effects
+finish. Both helpers accept the same `{ event, ctx }` payload as
+`runAgentHarnessAgentEndHook(...)`; their failures do not alter the completed
+attempt result.
+
+### User input and tool surfaces
+
+Native harnesses that expose a runtime-level user-input request should use the
+user-input helpers from `openclaw/plugin-sdk/agent-harness-runtime` to format
+the prompt, deliver it through OpenClaw's blocking reply path, and normalize
+choice/free-form answers back into the runtime's native response shape. The
+helper keeps channel/TUI presentation consistent while each harness keeps its
+own protocol parsing and pending-request lifecycle.
+
+Native harnesses that need PI-like compact tool routing should use
+`createAgentHarnessToolSurfaceRuntime(...)` from
+`openclaw/plugin-sdk/agent-harness-tool-runtime`. It owns
+tool-search/code-mode control selection, local-model lean defaults,
+runtime-compatible schema filtering, hidden catalog execution, directory
+hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
+conversion and native execution callback.
 
 ### Native Codex harness mode
 

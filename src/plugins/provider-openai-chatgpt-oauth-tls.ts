@@ -1,3 +1,4 @@
+/** TLS helpers for ChatGPT OAuth provider discovery in plugin runtime code. */
 import path from "node:path";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
@@ -104,8 +105,9 @@ export async function runOpenAIOAuthTlsPreflight(options?: {
 }): Promise<OpenAIOAuthTlsPreflightResult> {
   const timeoutMs = resolveTimerTimeoutMs(options?.timeoutMs, 5000);
   const fetchImpl = options?.fetchImpl ?? fetch;
+  let response: Response | undefined;
   try {
-    await fetchImpl(OPENAI_AUTH_PROBE_URL, {
+    response = await fetchImpl(OPENAI_AUTH_PROBE_URL, {
       method: "GET",
       redirect: "manual",
       signal: AbortSignal.timeout(timeoutMs),
@@ -119,6 +121,10 @@ export async function runOpenAIOAuthTlsPreflight(options?: {
       code: failure.code,
       message: failure.message,
     };
+  } finally {
+    if (response?.bodyUsed !== true) {
+      await response?.body?.cancel().catch(() => undefined);
+    }
   }
 }
 

@@ -1,3 +1,4 @@
+// Defines capability checks for music generation providers and models.
 import type {
   MusicGenerationEditCapabilities,
   MusicGenerationMode,

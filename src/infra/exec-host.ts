@@ -1,3 +1,4 @@
+// Sends HMAC-protected exec host requests over the local socket.
 import crypto from "node:crypto";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 

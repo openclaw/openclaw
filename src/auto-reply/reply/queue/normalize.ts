@@ -1,3 +1,4 @@
+// Normalizes queue config values from user and persisted settings.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { QueueDropPolicy, QueueMode } from "./types.js";
 

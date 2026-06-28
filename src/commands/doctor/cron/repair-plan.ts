@@ -1,14 +1,58 @@
+// Cron doctor repair planning helpers for previewing and merging legacy rows.
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "../../../../packages/normalization-core/src/string-coerce.js";
 import { normalizeCronJobInput } from "../../../cron/normalize.js";
 import type { CronJob } from "../../../cron/types.js";
 
-export type CronLegacyIssueCounts = Partial<Record<string, number>>;
+type CronLegacyIssueCounts = Partial<Record<string, number>>;
 
 function pluralize(count: number, noun: string) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
+function formatJobNameList(names: string[]): string {
+  const preview = names.slice(0, 5).map((name) => `\`${name}\``);
+  const remaining = names.length - preview.length;
+  return remaining > 0 ? `: ${preview.join(", ")} (+${remaining} more)` : `: ${preview.join(", ")}`;
+}
+
+/**
+ * Advisory for isolated agentTurn cron jobs that describe a command but cannot access shell tools.
+ * These need operator attention, but `doctor --fix` cannot safely infer whether to grant tool
+ * access or recreate them as command cron jobs.
+ */
+export function formatUnresolvedCommandPromptAdvisory(names: string[]): string | null {
+  if (names.length === 0) {
+    return null;
+  }
+  const describeVerb = names.length === 1 ? "describes" : "describe";
+  const accessVerb = names.length === 1 ? "lacks" : "lack";
+  return [
+    `${pluralize(names.length, "isolated cron job")} ${describeVerb} a shell command in the agent prompt but ${accessVerb} shell/process tool access${formatJobNameList(names)}.`,
+    "- This is not the supported shell-tool prompt shape, so doctor cannot prove the job will execute the requested command.",
+    '- Recreate the job as a command cron job (`openclaw cron add ... --command "<shell>"`) or grant explicit shell/process tool access before relying on it.',
+  ].join("\n");
+}
+
+/**
+ * Advisory for isolated agentTurn cron jobs that drive shell/process tools from the prompt.
+ * These keep running and are not a legacy store row, so `doctor --fix` cannot rewrite them;
+ * routing this through the auto-repair preview made the finding persist after every --fix.
+ */
+export function formatUnresolvedShellPromptAdvisory(names: string[]): string | null {
+  if (names.length === 0) {
+    return null;
+  }
+  const verb = names.length === 1 ? "drives" : "drive";
+  const keepVerb = names.length === 1 ? "keeps" : "keep";
+  return [
+    `${pluralize(names.length, "isolated cron job")} ${verb} shell/process tools from the agent prompt and ${keepVerb} running as-is${formatJobNameList(names)}.`,
+    "- This is a supported shape, not a legacy store row, so the doctor fix path cannot convert it and the finding is informational only.",
+    '- For a deterministic run, recreate the job as a command cron job (`openclaw cron add ... --command "<shell>"`).',
+  ].join("\n");
+}
+
+/** Convert legacy cron issue counts into doctor preview lines. */
 export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[] {
   const lines: string[] = [];
   if (issues.jobId) {
@@ -34,6 +78,11 @@ export function formatLegacyIssuePreview(issues: CronLegacyIssueCounts): string[
   if (issues.legacyPayloadCodexModel) {
     lines.push(
       `- ${pluralize(issues.legacyPayloadCodexModel, "job")} still uses legacy \`openai-codex/*\` cron model refs`,
+    );
+  }
+  if (issues.legacyAgentTurnCommandPayload) {
+    lines.push(
+      `- ${pluralize(issues.legacyAgentTurnCommandPayload, "job")} uses an agent prompt to run a shell command`,
     );
   }
   if (issues.legacyPayloadProvider) {
@@ -73,6 +122,7 @@ function cronJobMigrationKey(job: Record<string, unknown>): string | undefined {
   return normalizeOptionalString(job.id) ?? normalizeOptionalString(job.jobId);
 }
 
+/** Merge legacy JSON jobs into current jobs without duplicating matching ids/jobIds. */
 export function mergeLegacyCronJobs(params: {
   currentJobs: Array<Record<string, unknown>>;
   legacyJobs: Array<Record<string, unknown>>;
@@ -98,6 +148,7 @@ export function mergeLegacyCronJobs(params: {
   return { jobs: merged, importedCount };
 }
 
+/** Attach runtime SQLite state columns back onto a config-defined cron job row. */
 export function mergeRuntimeEntryIntoConfigJob(params: {
   job: Record<string, unknown>;
   runtimeEntry?: { updatedAtMs?: number; state?: Record<string, unknown> };
@@ -111,6 +162,7 @@ export function mergeRuntimeEntryIntoConfigJob(params: {
   };
 }
 
+/** Return true when a SQLite cron projection row no longer matches config JSON. */
 export function needsSqliteProjectionBackfill(params: {
   configJob: Record<string, unknown>;
   projectedJob?: CronJob;

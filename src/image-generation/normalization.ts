@@ -1,3 +1,4 @@
+/** Normalizes image generation request overrides against provider/model capabilities. */
 import {
   hasMediaNormalizationEntry,
   resolveClosestAspectRatio,
@@ -37,6 +38,7 @@ function finalizeImageNormalization(
     : undefined;
 }
 
+/** Returns supported image overrides plus ignored/normalized override metadata for replies. */
 export function resolveImageGenerationOverrides(params: {
   provider: ImageGenerationProvider;
   model?: string;

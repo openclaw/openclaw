@@ -56,6 +56,11 @@ export type {
   UnifiedModelCatalogProviderPlugin,
 } from "../plugins/types.js";
 export type {
+  PluginHookChannelChatContext,
+  PluginHookChannelContext,
+  PluginHookChannelSenderContext,
+} from "../plugins/types.js";
+export type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogKind,
   UnifiedModelCatalogSource,
@@ -125,7 +130,11 @@ export type {
   ContextEngineInfo,
   ContextEngineMaintenanceResult,
   ContextEngineOperation,
+  ContextEngineRuntimeReasonCode,
   ContextEngineRuntimeContext,
+  ContextEngineRuntimeMode,
+  ContextEngineRuntimeSettings,
+  ContextEngineSelectionSource,
   IngestBatchResult,
   IngestResult,
   SubagentEndReason,
@@ -137,6 +146,10 @@ export type {
 
 export { emptyPluginConfigSchema } from "../plugins/config-schema.js";
 export { registerContextEngine } from "../context-engine/registry.js";
+export {
+  ContextEngineRuntimeSettingsUnavailableError,
+  ContextEngineRuntimeSettingsUnsupportedError,
+} from "../context-engine/types.js";
 export { assertContextEngineHostSupport } from "../context-engine/host-compat.js";
 export {
   buildMemorySystemPromptAddition,

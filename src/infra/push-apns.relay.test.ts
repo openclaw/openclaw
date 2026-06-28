@@ -1,3 +1,4 @@
+// Covers APNs relay request signing, config, and response handling.
 import { generateKeyPairSync } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,6 +9,7 @@ import {
 } from "./device-identity.js";
 import {
   DEFAULT_APNS_RELAY_BASE_URL,
+  DEFAULT_APNS_SANDBOX_RELAY_BASE_URL,
   resolveApnsRelayConfigFromEnv,
   sendApnsRelayPush,
 } from "./push-apns.relay.js";
@@ -72,6 +74,18 @@ describe("push-apns.relay", () => {
         }),
         {
           baseUrl: DEFAULT_APNS_RELAY_BASE_URL,
+          timeoutMs: 10_000,
+        },
+      );
+    });
+
+    it("defaults to the sandbox hosted relay when the registration was minted there", () => {
+      expectRelayConfig(
+        resolveApnsRelayConfigFromEnv({} as NodeJS.ProcessEnv, undefined, {
+          registrationRelayOrigin: `${DEFAULT_APNS_SANDBOX_RELAY_BASE_URL}/`,
+        }),
+        {
+          baseUrl: DEFAULT_APNS_SANDBOX_RELAY_BASE_URL,
           timeoutMs: 10_000,
         },
       );
@@ -273,7 +287,7 @@ describe("push-apns.relay", () => {
       expect(result.ok).toBe(false);
       expect(result.status).toBe(302);
       expect(result.reason).toBe("RelayRedirectNotAllowed");
-      expect(result.environment).toBe("production");
+      expect(result.environment).toBeUndefined();
     });
 
     it("falls back to fetch status when the relay body is not JSON", async () => {
@@ -289,7 +303,6 @@ describe("push-apns.relay", () => {
         status: 202,
         apnsId: undefined,
         reason: undefined,
-        environment: "production",
         tokenSuffix: undefined,
       });
     });
@@ -313,7 +326,29 @@ describe("push-apns.relay", () => {
         status: 410,
         apnsId: "relay-apns-id",
         reason: "Unregistered",
-        environment: "production",
+        tokenSuffix: "abcd1234",
+      });
+    });
+
+    it("normalizes sandbox relay response metadata", async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          environment: "sandbox",
+          tokenSuffix: " abcd1234 ",
+        }),
+      });
+      vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+
+      await expect(sendApnsRelayPush(createRelayPushParams())).resolves.toEqual({
+        ok: true,
+        status: 200,
+        apnsId: undefined,
+        reason: undefined,
+        environment: "sandbox",
         tokenSuffix: "abcd1234",
       });
     });

@@ -1,3 +1,4 @@
+/** Classifies model-provider request headers that should be treated as credential material. */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 
 /** Exact header names that always carry credential material for model provider requests. */

@@ -1,3 +1,4 @@
+// Produces task registry audit summaries for diagnostics and maintenance.
 import {
   compareTaskAuditFindingSortKeys,
   createEmptyTaskAuditSummary,

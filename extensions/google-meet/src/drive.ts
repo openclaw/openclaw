@@ -1,3 +1,4 @@
+// Google Meet plugin module implements drive behavior.
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { googleApiError } from "./google-api-errors.js";
 
@@ -57,10 +58,8 @@ export async function exportGoogleDriveDocumentText(params: {
   });
   try {
     if (!response.ok) {
-      const detail = await response.text();
       throw await googleApiError({
         response,
-        detail,
         prefix: "Google Drive files.export",
         scopes: [GOOGLE_DRIVE_MEET_SCOPE],
       });

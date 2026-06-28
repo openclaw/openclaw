@@ -1,7 +1,7 @@
+// Telegram plugin module implements inbound event delivery behavior.
 import { stripTelegramInternalPrefixes } from "./targets.js";
 
 export type TelegramInboundEventDeliveryEnd = () => void;
-export type TelegramInboundEventDeliveryKind = "user_request" | "room_event";
 
 type ActiveInboundEvent = {
   outboundTo: string;

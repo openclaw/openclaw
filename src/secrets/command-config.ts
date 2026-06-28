@@ -1,3 +1,4 @@
+/** Collects and analyzes command-scoped secret assignments from OpenClaw config. */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, resolveSecretInputRef } from "../config/types.secrets.js";
 import { getPath } from "./path-utils.js";
@@ -5,6 +6,7 @@ import { isExpectedResolvedSecretValue } from "./secret-value.js";
 import { discoverConfigSecretTargetsByIds } from "./target-registry.js";
 
 /** One resolved SecretRef value ready to inject into a command-scoped config view. */
+/** One command config path whose value can be resolved from a SecretRef. */
 export type CommandSecretAssignment = {
   path: string;
   pathSegments: string[];
@@ -34,6 +36,7 @@ export type AnalyzeAssignmentsFromSnapshotResult = {
 /**
  * Compares source SecretRefs with the active resolved snapshot for command-time assignments.
  */
+/** Analyzes command secret assignments without mutating the source config. */
 export function analyzeCommandSecretAssignmentsFromSnapshot(params: {
   sourceConfig: OpenClawConfig;
   resolvedConfig: OpenClawConfig;

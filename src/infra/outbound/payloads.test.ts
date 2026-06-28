@@ -1,3 +1,5 @@
+// Covers outbound payload normalization across text, media, presentation,
+// interactive blocks, mirror text, and suppressed relay status payloads.
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { describe, expect, it } from "vitest";
 import type { ReplyPayload } from "../../auto-reply/types.js";
@@ -264,6 +266,33 @@ describe("normalizeReplyPayloadsForDelivery", () => {
     ]);
     const twice = normalizeReplyPayloadsForDelivery(once);
     expect(twice).toEqual(once);
+  });
+
+  it("parses Telegram reaction directives into channel data without visible text", () => {
+    expect(
+      normalizeReplyPayloadsForDelivery([
+        {
+          text: "[[react_to_current:🔥]] Thanks",
+          channelData: { telegram: { quoteText: "quoted" } },
+        },
+      ]),
+    ).toEqual([
+      {
+        text: "Thanks",
+        mediaUrls: undefined,
+        mediaUrl: undefined,
+        replyToId: undefined,
+        replyToCurrent: true,
+        replyToTag: false,
+        audioAsVoice: false,
+        channelData: {
+          telegram: {
+            quoteText: "quoted",
+            reaction: { emoji: "🔥", replyToCurrent: true },
+          },
+        },
+      },
+    ]);
   });
 
   it("captures a tricky payload matrix snapshot", () => {

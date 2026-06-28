@@ -1,3 +1,4 @@
+// Holds current plugin metadata snapshots for process-scoped consumers.
 let currentPluginMetadataSnapshot: unknown;
 let currentPluginMetadataSnapshotConfigFingerprint: string | undefined;
 let currentPluginMetadataSnapshotCompatiblePolicyHashes: readonly string[] | undefined;

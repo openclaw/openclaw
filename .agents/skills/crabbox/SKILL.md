@@ -54,6 +54,13 @@ pnpm crabbox:run -- --help | sed -n '1,120p'
 - For broad OpenClaw maintainer `pnpm` gates, prefer the repo wrapper with
   `--provider blacksmith-testbox` or the repo Testbox helpers when the standing
   Testbox policy applies.
+- Cold Testbox acquisition and hydration often take tens of seconds. When broad
+  remote proof is likely, immediately start
+  `node scripts/crabbox-wrapper.mjs warmup --provider blacksmith-testbox --keep --timing-json`
+  in a background command session while inspecting, editing, and running
+  focused local tests. Poll later, reuse the returned `tbx_...` with
+  `--provider blacksmith-testbox --id <tbx_id>`, and stop it before handoff.
+  Do not warm speculatively when remote proof is unlikely.
 - Always report the actual provider and id. `cbx_...` means AWS Crabbox;
   `tbx_...` means Blacksmith Testbox through Crabbox. If the output only says
   `blacksmith testbox list`, use `blacksmith testbox list --all` before

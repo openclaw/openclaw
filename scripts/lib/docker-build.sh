@@ -51,17 +51,18 @@ docker_build_args_need_buildx() {
 docker_build_transient_failure() {
   local log_file="$1"
   grep -Eqi \
-    'frontend grpc server closed unexpectedly|failed to dial gRPC|no active session|buildkit.*connection.*closed|rpc error: code = Unavailable' \
+    'frontend grpc server closed unexpectedly|failed to dial gRPC|no active session|buildkit.*connection.*closed|rpc error: code = Unavailable|failed to fetch oauth token:.*(5[0-9][0-9]|Gateway Timeout)|unexpected status from .*: 5[0-9][0-9]|TLS handshake timeout|net/http: TLS handshake timeout|i/o timeout|connection reset by peer' \
     "$log_file"
 }
 
 docker_build_retry_count() {
   local configured="${OPENCLAW_DOCKER_BUILD_RETRIES:-2}"
   if [[ "$configured" =~ ^[0-9]+$ ]]; then
-    echo "$configured"
+    echo "$((10#$configured))"
     return 0
   fi
-  echo 2
+  echo "invalid OPENCLAW_DOCKER_BUILD_RETRIES: $configured" >&2
+  return 2
 }
 
 docker_build_timeout_required() {
@@ -86,9 +87,10 @@ docker_build_heartbeat_seconds() {
   local configured="${OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS:-30}"
   if [[ "$configured" =~ ^[0-9]+$ ]] && [ "$configured" -ge 1 ]; then
     echo "$((10#$configured))"
-    return
+    return 0
   fi
-  echo 30
+  echo "invalid OPENCLAW_DOCKER_BUILD_HEARTBEAT_SECONDS: $configured" >&2
+  return 2
 }
 
 docker_build_run_command() {
@@ -152,9 +154,10 @@ docker_build_run_logged() {
         fi
       done < <(pgrep -P "$process_id" 2>/dev/null || true)
     fi
-    kill -s "$signal" -- "-$process_id" 2>/dev/null ||
-      kill -s "$signal" "$process_id" 2>/dev/null ||
-      true
+    # A successful group signal does not prove this exact PID was in that group;
+    # send both so timeout/build wrappers cannot exit while their command stays alive.
+    kill -s "$signal" -- "-$process_id" 2>/dev/null || true
+    kill -s "$signal" "$process_id" 2>/dev/null || true
   }
 
   docker_build_stop_tracked_build() {
@@ -204,7 +207,8 @@ docker_build_with_retries() {
   local label="$1"
   shift
   local retries
-  retries="$(docker_build_retry_count)"
+  retries="$(docker_build_retry_count)" || return $?
+  docker_build_heartbeat_seconds >/dev/null || return $?
   local attempt=1
   local max_attempts=$((retries + 1))
   local log_file
@@ -235,7 +239,7 @@ docker_build_with_retries() {
       return 1
     fi
 
-    echo "Docker build failed with a transient BuildKit transport error; retrying ($attempt/$retries)..." >&2
+    echo "Docker build failed with a transient Docker/registry error; retrying ($attempt/$retries)..." >&2
     docker_e2e_print_log "$log_file"
     rm -f "$log_file"
     attempt=$((attempt + 1))

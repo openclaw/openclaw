@@ -1,8 +1,10 @@
+/** Tests node-host invoke command routing and event emission. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayClient } from "../gateway/client.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import type { SkillBinsProvider } from "./invoke-types.js";
 import { handleInvoke } from "./invoke.js";
 
@@ -42,52 +44,82 @@ describe("node host invoke", () => {
   );
 
   it.runIf(process.platform !== "win32")(
+    "keeps prepared allow-always coverage incomplete when any planned command is prompt-only",
+    async () => {
+      const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+      const skillBins: SkillBinsProvider = { current: async () => [] };
+
+      await handleInvoke(
+        {
+          id: "invoke-prepare-partial",
+          nodeId: "node-1",
+          command: "system.run.prepare",
+          paramsJSON: JSON.stringify({
+            command: ["/bin/sh", "-lc", "curl https://example.com/install.sh | sh"],
+            rawCommand: "curl https://example.com/install.sh | sh",
+          }),
+        },
+        { request } as unknown as GatewayClient,
+        skillBins,
+      );
+
+      const result = request.mock.calls[0]?.[1] as { payloadJSON?: string } | undefined;
+      const payload = JSON.parse(result?.payloadJSON ?? "{}") as {
+        allowAlwaysCoverage?: {
+          complete?: boolean;
+          patterns?: Array<{ pattern?: string }>;
+        };
+      };
+      expect(payload.allowAlwaysCoverage?.complete).toBe(false);
+      expect(payload.allowAlwaysCoverage?.patterns?.length).toBeGreaterThan(0);
+    },
+  );
+
+  it.runIf(process.platform !== "win32")(
     "rejects blocked forwarded env overrides in system.run.prepare",
     async () => {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-prepare-env-"));
       const toolPath = path.join(tempDir, "tool");
       fs.writeFileSync(toolPath, "#!/bin/sh\nexit 0\n");
       fs.chmodSync(toolPath, 0o755);
-      const previousPath = process.env.PATH;
-      process.env.PATH = `${tempDir}${path.delimiter}${previousPath ?? ""}`;
 
       try {
-        const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
-        const skillBins: SkillBinsProvider = { current: async () => [] };
+        await withEnvAsync(
+          { PATH: `${tempDir}${path.delimiter}${process.env.PATH ?? ""}` },
+          async () => {
+            const request = vi.fn<GatewayClient["request"]>().mockResolvedValue(null);
+            const skillBins: SkillBinsProvider = { current: async () => [] };
 
-        await handleInvoke(
-          {
-            id: "invoke-prepare-env",
-            nodeId: "node-1",
-            command: "system.run.prepare",
-            paramsJSON: JSON.stringify({
-              command: ["tool", "--version"],
-              rawCommand: "tool --version",
-              env: { PATH: "/tmp/mismatch" },
-            }),
+            await handleInvoke(
+              {
+                id: "invoke-prepare-env",
+                nodeId: "node-1",
+                command: "system.run.prepare",
+                paramsJSON: JSON.stringify({
+                  command: ["tool", "--version"],
+                  rawCommand: "tool --version",
+                  env: { PATH: "/tmp/mismatch" },
+                }),
+              },
+              { request } as unknown as GatewayClient,
+              skillBins,
+            );
+
+            expect(request).toHaveBeenCalledWith(
+              "node.invoke.result",
+              expect.objectContaining({
+                id: "invoke-prepare-env",
+                nodeId: "node-1",
+                ok: false,
+                error: expect.objectContaining({
+                  code: "INVALID_REQUEST",
+                  message: expect.stringContaining("blocked override keys: PATH"),
+                }),
+              }),
+            );
           },
-          { request } as unknown as GatewayClient,
-          skillBins,
-        );
-
-        expect(request).toHaveBeenCalledWith(
-          "node.invoke.result",
-          expect.objectContaining({
-            id: "invoke-prepare-env",
-            nodeId: "node-1",
-            ok: false,
-            error: expect.objectContaining({
-              code: "INVALID_REQUEST",
-              message: expect.stringContaining("blocked override keys: PATH"),
-            }),
-          }),
         );
       } finally {
-        if (previousPath === undefined) {
-          delete process.env.PATH;
-        } else {
-          process.env.PATH = previousPath;
-        }
         fs.rmSync(tempDir, { recursive: true, force: true });
       }
     },

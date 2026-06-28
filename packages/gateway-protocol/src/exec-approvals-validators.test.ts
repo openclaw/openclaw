@@ -1,3 +1,4 @@
+// Gateway Protocol tests cover exec approvals validators behavior.
 import { describe, expect, it } from "vitest";
 import {
   validateExecApprovalRequestParams,
@@ -104,5 +105,28 @@ describe("exec approvals protocol validators", () => {
         commandSpans: [{ startIndex: -1, endIndex: 4 }],
       }),
     ).toBe(false);
+  });
+
+  it("accepts only optional unavailable approval decisions", () => {
+    expect(
+      validateExecApprovalRequestParams({
+        command: "echo hi",
+        unavailableDecisions: ["allow-always"],
+      }),
+    ).toBe(true);
+
+    for (const unavailableDecisions of [
+      [],
+      ["allow-always", "allow-always"],
+      ["allow-once"],
+      ["deny"],
+    ]) {
+      expect(
+        validateExecApprovalRequestParams({
+          command: "echo hi",
+          unavailableDecisions,
+        }),
+      ).toBe(false);
+    }
   });
 });

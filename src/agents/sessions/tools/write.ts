@@ -1,3 +1,8 @@
+/**
+ * Built-in write session tool.
+ *
+ * Writes files through queued local or injected operations with readback/idempotency metadata.
+ */
 import {
   mkdir as fsMkdir,
   readFile as fsReadFile,
@@ -10,6 +15,7 @@ import { Type } from "typebox";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { getLanguageFromPath, highlightCode } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
+import { textResult } from "../../tools/common.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import { withFileMutationQueue } from "./file-mutation-queue.js";
 import { resolveToCwd } from "./path-utils.js";
@@ -23,7 +29,9 @@ import {
 import { wrapToolDefinition } from "./tool-definition-wrapper.js";
 
 const writeSchema = Type.Object({
-  path: Type.String({ description: "Path to the file to write (relative or absolute)" }),
+  path: Type.String({
+    description: "Path to the file to write (relative or absolute)",
+  }),
   content: Type.String({ description: "Content to write to the file" }),
 });
 export type { WriteToolInput } from "./tool-contracts.js";
@@ -232,7 +240,12 @@ function formatWriteCall(
 
 function formatWriteResult(
   result: {
-    content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
+    content: Array<{
+      type: string;
+      text?: string;
+      data?: string;
+      mimeType?: string;
+    }>;
     isError?: boolean;
   },
   theme: typeof import("../../modes/interactive/theme/theme.js").theme,
@@ -292,7 +305,10 @@ async function readOriginalWriteState(
     const originalText = Buffer.isBuffer(originalContent)
       ? originalContent.toString("utf8")
       : originalContent;
-    return { state: originalText === content ? "same" : "different", beforeStat: stat };
+    return {
+      state: originalText === content ? "same" : "different",
+      beforeStat: stat,
+    };
   } catch {
     return { state: "unknown", beforeStat: stat };
   }
@@ -388,10 +404,20 @@ export function createWriteToolDefinition(
       const dir = dirname(absolutePath);
       return withFileMutationQueue(absolutePath, async () => {
         const precheck = await readOriginalWriteState(absolutePath, content, ops);
+        if (signal?.aborted) {
+          throw new Error("Operation aborted");
+        }
+        // Terminal no-op: file already has identical content.
+        if (precheck.state === "same") {
+          return {
+            ...textResult(
+              `No changes made to ${path}. The file already has identical content.`,
+              undefined,
+            ),
+            terminate: true,
+          };
+        }
         try {
-          if (signal?.aborted) {
-            throw new Error("Operation aborted");
-          }
           await ops.mkdir(dir);
           if (signal?.aborted) {
             throw new Error("Operation aborted");

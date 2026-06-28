@@ -1,3 +1,4 @@
+// Fal provider module implements model/runtime integration.
 import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
@@ -162,6 +163,21 @@ function readFalQueueResponse(payload: unknown): FalQueueResponse {
     response: payload.response === undefined ? undefined : readFalVideoPayload(payload.response),
     prompt: normalizeOptionalString(payload.prompt),
     error: isRecord(error) ? { message: normalizeOptionalString(error.message) } : undefined,
+  };
+}
+
+function readFalCompletedQueueResult(payload: unknown): FalQueueResponse {
+  if (!isRecord(payload)) {
+    throw new Error(FAL_VIDEO_MALFORMED_RESPONSE);
+  }
+  if (
+    payload.response !== undefined ||
+    (payload.video === undefined && payload.videos === undefined)
+  ) {
+    return readFalQueueResponse(payload);
+  }
+  return {
+    response: readFalVideoPayload(payload),
   };
 }
 
@@ -508,7 +524,7 @@ async function waitForFalQueueResult(params: {
     }
     lastStatus = status;
     if (status === "COMPLETED") {
-      return readFalQueueResponse(
+      return readFalCompletedQueueResult(
         await fetchFalJson({
           url: params.responseUrl,
           init: {

@@ -1,3 +1,4 @@
+// Defines task registry records, statuses, delivery state, and parser helpers.
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 
 /** Runtime family that owns a task run lifecycle. */
@@ -124,6 +125,9 @@ export type TaskRecord = {
   parentFlowId?: string;
   parentTaskId?: string;
   agentId?: string;
+  /** Agent store for requester transcripts whose session key is unscoped, such as `global`.
+   * Task authorization remains keyed by ownerKey. */
+  requesterAgentId?: string;
   runId?: string;
   label?: string;
   task: string;
@@ -139,9 +143,4 @@ export type TaskRecord = {
   progressSummary?: string;
   terminalSummary?: string;
   terminalOutcome?: TaskTerminalOutcome;
-};
-
-export type TaskRegistrySnapshot = {
-  tasks: TaskRecord[];
-  deliveryStates: TaskDeliveryState[];
 };

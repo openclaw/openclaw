@@ -1,3 +1,4 @@
+// Validates and normalizes provider asset attachments for music generation.
 import { maxBytesForKind } from "@openclaw/media-core/constants";
 import { extensionForMime } from "@openclaw/media-core/mime";
 import { readResponseWithLimit } from "@openclaw/media-core/read-response-with-limit";

@@ -1,3 +1,4 @@
+// Slack plugin module implements progress blocks behavior.
 import { createHash } from "node:crypto";
 import type { AnyChunk } from "@slack/types";
 import type { Block, KnownBlock } from "@slack/web-api";
@@ -58,7 +59,12 @@ function compactChunkText(value: string): string {
 }
 
 function lineDetailParts(line: ChannelProgressDraftLine): string[] {
-  return [line.detail, line.status && !line.detail?.includes(line.status) ? line.status : undefined]
+  return [
+    line.detail,
+    line.status && line.status !== "completed" && !line.detail?.includes(line.status)
+      ? line.status
+      : undefined,
+  ]
     .map((part) => part?.trim())
     .filter((part): part is string => Boolean(part));
 }
@@ -74,7 +80,7 @@ function legacyLineDetail(line: ChannelProgressDraftLine, maxChars: number): str
 
 function lineTaskTitle(line: ChannelProgressDraftLine, maxLineChars: number): string {
   const label = line.label.replace(/\s+/g, " ").trim() || line.toolName || line.kind || "Update";
-  const detail = lineDetailParts(line).join(" · ");
+  const detail = lineDetailParts(line).join(" · ") || line.status?.trim();
   const fallback = line.text.replace(/\s+/g, " ").trim();
   if (detail) {
     return compactTitle(`${label} — ${compactDetail(detail, maxLineChars)}`);

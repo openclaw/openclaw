@@ -1,3 +1,7 @@
+/**
+ * Snapshot, navigation, viewport, close, and PDF helpers for Playwright-backed
+ * browser tools.
+ */
 import { parseFiniteNumber, resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -100,7 +104,12 @@ function buildStoredAriaRefs(
     const key = `${role}:${name ?? ""}`;
     const nth = counts.get(key) ?? 0;
     counts.set(key, nth + 1);
-    refsByKey.set(key, [...(refsByKey.get(key) ?? []), node.ref]);
+    const refsForKey = refsByKey.get(key);
+    if (refsForKey) {
+      refsForKey.push(node.ref);
+    } else {
+      refsByKey.set(key, [node.ref]);
+    }
     refs[node.ref] = {
       role,
       ...(name ? { name } : {}),
@@ -122,6 +131,7 @@ function buildStoredAriaRefs(
   return refs;
 }
 
+/** Stores aria snapshot refs so later tool calls can resolve stable element refs. */
 export async function storeAriaSnapshotRefsViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -174,6 +184,7 @@ async function prepareSnapshotPageViaPlaywright(opts: {
   return page;
 }
 
+/** Captures a raw accessibility tree snapshot and stores matching role refs. */
 export async function snapshotAriaViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -231,6 +242,7 @@ export async function snapshotAriaViaPlaywright(opts: {
   return { nodes: formatted };
 }
 
+/** Captures Playwright's AI aria snapshot with optional URL appendix and truncation. */
 export async function snapshotAiViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -305,6 +317,7 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
   };
 }
 
+/** Captures a role-ref snapshot used by model-facing browser interaction tools. */
 export async function snapshotRoleViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -370,6 +383,7 @@ export async function snapshotRoleViaPlaywright(opts: {
   });
 }
 
+/** Navigates the target page while enforcing browser SSRF policy before and after load. */
 export async function navigateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -426,6 +440,7 @@ export async function navigateViaPlaywright(opts: {
     await forceDisconnectPlaywrightForTarget({
       cdpUrl: opts.cdpUrl,
       targetId: opts.targetId,
+      ssrfPolicy: opts.ssrfPolicy,
       reason: "retry navigate after detached frame",
     }).catch(() => {});
     page = await getPageForTargetId(opts);
@@ -455,6 +470,7 @@ export async function navigateViaPlaywright(opts: {
   return { url: finalUrl };
 }
 
+/** Resizes the target page viewport within the browser action policy bounds. */
 export async function resizeViewportViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -469,6 +485,7 @@ export async function resizeViewportViaPlaywright(opts: {
   });
 }
 
+/** Closes the target Playwright page. */
 export async function closePageViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -478,6 +495,7 @@ export async function closePageViaPlaywright(opts: {
   await page.close();
 }
 
+/** Renders the target page to a PDF buffer. */
 export async function pdfViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;

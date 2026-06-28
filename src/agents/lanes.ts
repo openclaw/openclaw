@@ -1,3 +1,6 @@
+/**
+ * Resolves command queue lane names for nested, cron, and subagent work.
+ */
 import { CommandLane } from "../process/lanes.js";
 
 /** Default lane for nested agent work. */
@@ -7,15 +10,6 @@ export const AGENT_LANE_SUBAGENT = CommandLane.Subagent;
 const AGENT_LANE_CRON: string = CommandLane.Cron;
 const NESTED_LANE = "nested";
 const NESTED_LANE_PREFIX = `${NESTED_LANE}:`;
-
-/** Resolves the lane for nested agent work. */
-export function resolveNestedAgentLane(lane?: string): string {
-  const trimmed = lane?.trim();
-  if (!trimmed) {
-    return AGENT_LANE_NESTED;
-  }
-  return trimmed;
-}
 
 /** Resolves the lane for agent work started from cron. */
 export function resolveCronAgentLane(lane?: string): string {

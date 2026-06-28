@@ -1,3 +1,4 @@
+// Test provider implementation for chat-style runtime interactions.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /** Test-only speech provider identity used by talk config assertions. */

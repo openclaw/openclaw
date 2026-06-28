@@ -1,3 +1,4 @@
+// Register maintenance tests cover maintenance command registration in the CLI program.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerMaintenanceCommands } from "./register.maintenance.js";
@@ -111,6 +112,7 @@ describe("registerMaintenanceCommands doctor action", () => {
       "--json",
       "--severity-min",
       "error",
+      "--all",
       "--skip",
       "a",
       "--only",
@@ -122,9 +124,11 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(runDoctorLintCli).toHaveBeenCalledWith(runtime, {
       json: true,
       severityMin: "error",
+      includeAllChecks: true,
       skipIds: ["a"],
       onlyIds: ["b"],
       allowExec: true,
+      deep: false,
     });
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
@@ -133,6 +137,17 @@ describe("registerMaintenanceCommands doctor action", () => {
     await runMaintenanceCli(["doctor", "--fix", "--only", "policy/channels-denied-provider"]);
 
     expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runtime.error).toHaveBeenCalledWith(
+      "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
+    );
+    expect(runtime.exit).toHaveBeenCalledWith(2);
+  });
+
+  it("rejects --all outside doctor lint mode", async () => {
+    await runMaintenanceCli(["doctor", "--all"]);
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
     expect(runtime.error).toHaveBeenCalledWith(
       "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
     );

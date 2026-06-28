@@ -1,3 +1,4 @@
+// Provides manual transcript source entries for user-supplied transcript text.
 import type { TranscriptSourceProvider } from "./provider-types.js";
 
 /**

@@ -1,3 +1,4 @@
+// Stores the process-local embedded mode flag.
 let embeddedModeValue = false;
 
 /** Sets the process-local embedded-mode flag used by UI and hosted runtimes. */

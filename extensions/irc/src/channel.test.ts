@@ -1,3 +1,4 @@
+// Irc tests cover channel plugin behavior.
 import { afterEach, describe, expect, it } from "vitest";
 import { ircOutboundBaseAdapter } from "./outbound-base.js";
 import { clearIrcRuntime } from "./runtime.js";
@@ -12,5 +13,23 @@ describe("irc outbound chunking", () => {
     expect(ircOutboundBaseAdapter.deliveryMode).toBe("direct");
     expect(ircOutboundBaseAdapter.chunkerMode).toBe("markdown");
     expect(ircOutboundBaseAdapter.textChunkLimit).toBe(350);
+  });
+});
+
+describe("irc outbound sanitizeText", () => {
+  afterEach(() => {
+    clearIrcRuntime();
+  });
+
+  it("strips internal tool-trace banners before outbound delivery", () => {
+    const text = "Done.\n⚠️ 🛠️ `search repos (agent)` failed";
+
+    expect(ircOutboundBaseAdapter.sanitizeText({ text })).toBe("Done.");
+  });
+
+  it("preserves ordinary assistant prose while sanitizing", () => {
+    const text = "The pipeline has 3 open deals.";
+
+    expect(ircOutboundBaseAdapter.sanitizeText({ text })).toBe(text);
   });
 });

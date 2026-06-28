@@ -1,3 +1,4 @@
+// Builds exec approval context from prepared system-run payloads.
 import type {
   AllowAlwaysPattern,
   ExecAsk,

@@ -1,3 +1,4 @@
+// Text chunking helpers split long outbound text while preserving readable line boundaries.
 import { chunkTextByBreakResolver } from "../shared/text-chunking.js";
 
 /**
@@ -24,6 +25,7 @@ export {
   type MarkdownParseOptions,
   type MarkdownStyle,
   type MarkdownStyleSpan,
+  type MarkdownTableCell,
   type MarkdownTableMeta,
 } from "../../packages/markdown-core/src/ir.js";
 /** Render-size-aware Markdown chunking for channel payload limits. */

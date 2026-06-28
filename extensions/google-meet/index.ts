@@ -1,3 +1,4 @@
+// Google Meet plugin entrypoint registers its OpenClaw integration.
 import {
   optionalPositiveIntegerSchema,
   readPositiveIntegerParam,
@@ -34,6 +35,10 @@ import {
   fetchGoogleMeetSpace,
 } from "./src/meet.js";
 import { handleGoogleMeetNodeHostCommand } from "./src/node-host.js";
+import {
+  createGoogleMeetChromeNodeInvokePolicy,
+  GOOGLE_MEET_CHROME_NODE_COMMAND,
+} from "./src/node-invoke-policy.js";
 import { GoogleMeetRuntime } from "./src/runtime.js";
 import { isGoogleMeetBrowserManualActionError } from "./src/transports/chrome-create.js";
 
@@ -1195,10 +1200,12 @@ export default definePluginEntry({
     );
 
     api.registerNodeHostCommand({
-      command: "googlemeet.chrome",
+      command: GOOGLE_MEET_CHROME_NODE_COMMAND,
       cap: "google-meet",
+      dangerous: true,
       handle: handleGoogleMeetNodeHostCommand,
     });
+    api.registerNodeInvokePolicy(createGoogleMeetChromeNodeInvokePolicy(config));
 
     api.registerCli(
       async ({ program }) => {

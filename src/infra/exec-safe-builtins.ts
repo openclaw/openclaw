@@ -1,3 +1,4 @@
+// Classifies closed POSIX shell builtins for exec allowlist checks.
 import { isWindowsPlatform, type ExecCommandSegment } from "./exec-approvals-analysis.js";
 
 // POSIX shell builtins that cannot execute external code or mutate environment state on their
@@ -27,7 +28,7 @@ export function isSafeBuiltinSegment(params: {
     return false;
   }
   if (head === "[") {
-    return params.segment.argv.at(-1) === "]";
+    return params.segment.argv.at(-1) === "]" || params.segment.raw.trim().endsWith("]");
   }
   return DEFAULT_SAFE_BUILTINS.has(head);
 }

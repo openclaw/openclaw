@@ -1,3 +1,4 @@
+// Workboard tests cover cli plugin behavior.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerWorkboardCli } from "./cli.js";
@@ -103,6 +104,40 @@ describe("registerWorkboardCli", () => {
     expect(showOutput).not.toContain("secret-token");
     expect(listOutput).toContain("[redacted]");
     expect(showOutput).toContain("[redacted]");
+  });
+
+  it("hides archived cards from text output by default and reveals them with --include-archived", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    await store.create({ title: "Active card" });
+    const archived = await store.create({ title: "Archived card" });
+    await store.archive(archived.id, true);
+    const program = createProgram(store);
+
+    const defaultOutput = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list"], { from: "user" });
+    });
+    const includeOutput = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list", "--include-archived"], { from: "user" });
+    });
+
+    expect(defaultOutput).toContain("Active card");
+    expect(defaultOutput).not.toContain("Archived card");
+    expect(includeOutput).toContain("Active card");
+    expect(includeOutput).toContain("Archived card");
+  });
+
+  it("preserves archived cards in JSON list output by default", async () => {
+    const store = new WorkboardStore(createMemoryStore());
+    const archived = await store.create({ title: "Archived card" });
+    await store.archive(archived.id, true);
+    const program = createProgram(store);
+
+    const output = await captureStdout(async () => {
+      await program.parseAsync(["workboard", "list", "--json"], { from: "user" });
+    });
+
+    expect(output).toContain(archived.id);
+    expect(output).toContain("archivedAt");
   });
 
   it("does not fall back to local dispatch for explicit gateway targets", async () => {

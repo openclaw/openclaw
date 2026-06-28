@@ -1,3 +1,4 @@
+// Tests exported HTML transcript escaping and template safety.
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -12,6 +13,8 @@ type SessionEntry = {
   message?: unknown;
   summary?: string;
   content?: unknown;
+  targetId?: string | null;
+  appendParentId?: string | null;
   display?: boolean;
   customType?: string;
   provider?: string;
@@ -22,7 +25,8 @@ type SessionEntry = {
 type SessionData = {
   header: { id: string; timestamp: string };
   entries: SessionEntry[];
-  leafId: string;
+  leafId: string | null;
+  hasLeafControl?: boolean;
   systemPrompt: string;
   tools: unknown[];
 };
@@ -208,6 +212,36 @@ describe("export html sidebar trigger affordance", () => {
 });
 
 describe("export html security hardening", () => {
+  it("renders an explicitly selected empty branch without inactive messages", async () => {
+    const session: SessionData = {
+      header: { id: "session-empty", timestamp: now() },
+      entries: [
+        {
+          id: "inactive-tail",
+          parentId: null,
+          timestamp: now(),
+          type: "message",
+          message: { role: "assistant", content: "inactive history" },
+        },
+        {
+          id: "empty-leaf",
+          parentId: "inactive-tail",
+          timestamp: now(),
+          type: "leaf",
+          targetId: null,
+        },
+      ],
+      leafId: null,
+      hasLeafControl: true,
+      systemPrompt: "",
+      tools: [],
+    };
+
+    const { document } = await renderTemplate(session);
+    const messages = requireElement(document.getElementById("messages"), "messages root missing");
+    expect(messages.textContent).not.toContain("inactive history");
+  });
+
   it("escapes raw HTML from markdown blocks", async () => {
     const attack = "<img src=x onerror=alert(1)>";
     const session: SessionData = {

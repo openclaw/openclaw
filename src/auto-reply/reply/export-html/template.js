@@ -1,3 +1,4 @@
+// Interactive transcript export template used by auto-reply HTML reports.
 (function () {
   "use strict";
 
@@ -12,7 +13,15 @@
     bytes[i] = binary.charCodeAt(i);
   }
   const data = JSON.parse(new TextDecoder("utf-8").decode(bytes));
-  const { header, entries, leafId: defaultLeafId, systemPrompt, tools, renderedTools } = data;
+  const {
+    header,
+    entries,
+    leafId: defaultLeafId,
+    hasLeafControl = false,
+    systemPrompt,
+    tools,
+    renderedTools,
+  } = data;
 
   // ============================================================
   // URL PARAMETER HANDLING
@@ -1951,6 +1960,9 @@
     } else {
       navigateTo(leafId, "none");
     }
+  } else if (hasLeafControl) {
+    // A null leaf selected by a control record is an intentional empty branch.
+    navigateTo(null, "none");
   } else if (entries.length > 0) {
     // Fallback: use last entry if no leafId
     navigateTo(entries[entries.length - 1].id, "none");

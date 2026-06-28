@@ -1,3 +1,4 @@
+// Identifies whether an ESM module is running as the process entry point.
 import fs from "node:fs";
 import path from "node:path";
 

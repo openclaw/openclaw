@@ -1,9 +1,10 @@
+// Verifies exec shell snapshots capture safe startup state without leaking secrets.
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { captureEnv } from "../test-utils/env.js";
+import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   maybeWrapCommandWithShellSnapshot,
   resetShellSnapshotCacheForTests,
@@ -38,9 +39,10 @@ function setSnapshotStateForTest(
   stateDir: string,
   options: { home?: string; zdotdir?: string } = {},
 ): void {
-  process.env.OPENCLAW_STATE_DIR = stateDir;
+  // Snapshot tests mutate trusted process env, not per-command untrusted env.
+  setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
   if (options.home) {
-    process.env.HOME = options.home;
+    setTestEnvValue("HOME", options.home);
   }
   if (options.zdotdir) {
     process.env.ZDOTDIR = options.zdotdir;
@@ -89,7 +91,7 @@ describe("exec shell snapshots", () => {
     const home = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-snapshot-disabled-home-"));
     tempDirs.push(stateDir, home);
     setSnapshotStateForTest(stateDir, { home });
-    process.env[EXEC_SHELL_SNAPSHOT_ENV] = "0";
+    setTestEnvValue(EXEC_SHELL_SNAPSHOT_ENV, "0");
     const command = "echo unchanged";
     const wrapped = await maybeWrapCommandWithShellSnapshot({
       command,
@@ -106,6 +108,7 @@ describe("exec shell snapshots", () => {
   });
 
   it("does not honor per-call env for selecting the snapshot state dir", async () => {
+    // Per-call env may be model/tool-controlled, so snapshot roots come from process env.
     const trustedStateDir = fs.mkdtempSync(
       path.join(os.tmpdir(), "openclaw-snapshot-trusted-state-"),
     );

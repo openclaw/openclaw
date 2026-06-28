@@ -1,3 +1,4 @@
+// Control UI module implements cron payload behavior.
 import type { CronJob, CronPayload } from "./types.ts";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -13,6 +14,9 @@ export function isCronPayload(value: unknown): value is CronPayload {
   }
   if (value.kind === "agentTurn") {
     return typeof value.message === "string";
+  }
+  if (value.kind === "command") {
+    return Array.isArray(value.argv) && value.argv.every((arg) => typeof arg === "string");
   }
   return false;
 }

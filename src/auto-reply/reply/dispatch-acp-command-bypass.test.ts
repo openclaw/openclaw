@@ -1,3 +1,4 @@
+// Tests ACP command bypass detection before normal dispatch.
 import { beforeEach, describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -68,6 +69,18 @@ describe("shouldBypassAcpDispatchForCommand", () => {
       CommandBody: "/status",
       BodyForCommands: "/status",
       BodyForAgent: "/status",
+    });
+
+    expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);
+  });
+
+  it("returns true for local status plugin commands", () => {
+    const ctx = buildTestCtx({
+      Provider: "discord",
+      Surface: "discord",
+      CommandBody: "/STATUS plugins",
+      BodyForCommands: "/STATUS plugins",
+      BodyForAgent: "/STATUS plugins",
     });
 
     expect(shouldBypassAcpDispatchForCommand(ctx, {} as OpenClawConfig)).toBe(true);

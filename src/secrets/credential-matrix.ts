@@ -1,3 +1,4 @@
+/** Generates the documented matrix of user-supplied credential fields that accept SecretRefs. */
 import { getSourceSecretTargetRegistry } from "./target-registry-data.js";
 import { getUnsupportedSecretRefSurfacePatterns } from "./unsupported-surface-policy.js";
 

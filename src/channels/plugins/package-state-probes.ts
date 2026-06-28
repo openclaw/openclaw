@@ -1,3 +1,8 @@
+/**
+ * Bundled channel package-state probes.
+ *
+ * Resolves lightweight configured/auth state checkers from package metadata and source overlays.
+ */
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -17,10 +22,6 @@ import {
 } from "../../plugins/plugin-module-loader-cache.js";
 import { loadChannelPluginModule, resolveExistingPluginModulePath } from "./module-loader.js";
 
-/**
- * Package-state probes for bundled channel configured/auth state metadata.
- */
-
 type ChannelPackageStateChecker = (params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
@@ -38,7 +39,7 @@ type ChannelPackageStateMetadata = {
 /**
  * Metadata keys that can declare a lightweight package-state checker.
  */
-export type ChannelPackageStateMetadataKey = "configuredState" | "persistedAuthState";
+type ChannelPackageStateMetadataKey = "configuredState" | "persistedAuthState";
 
 const log = createSubsystemLogger("channels");
 const sourcePackageStateLoaderCache: PluginModuleLoaderCache = new Map();

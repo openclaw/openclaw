@@ -1,3 +1,4 @@
+/** Reads ACP session status from the runtime and reconciles persisted identity metadata. */
 import { resolveSessionIdentityFromMeta } from "@openclaw/acp-core/runtime/session-identity";
 import type {
   AcpRuntime,

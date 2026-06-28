@@ -11935,6 +11935,10 @@ var __runInitializers = function(thisArg, initializers, value) {
 	};
 	return _classThis;
 })();
+/**
+* Canvas A2UI browser bootstrap that installs theme overrides and native bridge
+* helpers.
+*/
 const modalStyles = i$10`
   dialog {
     position: fixed;

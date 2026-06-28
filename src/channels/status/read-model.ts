@@ -1,3 +1,4 @@
+// Read-model helpers that merge gateway channel status with local config snapshots.
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -5,13 +6,11 @@ import { DEFAULT_ACCOUNT_ID } from "../../routing/session-key.js";
 import { hasConfiguredUnavailableCredentialStatus } from "../account-snapshot-fields.js";
 import type { ChannelAccountSnapshot } from "../plugins/types.public.js";
 
-// Read-model helpers for merging gateway channel status with local config
-// snapshots. Keep input handling tolerant because gateway payloads are external.
 export type RuntimeChannelStatusPayload = {
   channelAccounts?: unknown;
 };
 
-export type RuntimeChannelAccount = Record<string, unknown>;
+type RuntimeChannelAccount = Record<string, unknown>;
 
 const CREDENTIAL_STATUS_KEYS = [
   "tokenStatus",
@@ -57,7 +56,7 @@ export function normalizeRuntimeChannelAccountSnapshots(
 }
 
 /** Resolves a stable account id from runtime status record fallbacks. */
-export function resolveRuntimeChannelAccountId(account: RuntimeChannelAccount): string {
+function resolveRuntimeChannelAccountId(account: RuntimeChannelAccount): string {
   return (
     normalizeOptionalString(account.accountId) ??
     normalizeOptionalString(account.id) ??
@@ -67,7 +66,7 @@ export function resolveRuntimeChannelAccountId(account: RuntimeChannelAccount): 
 }
 
 /** Finds a runtime account, including singleton default-account fallback. */
-export function findRuntimeChannelAccount(params: {
+function findRuntimeChannelAccount(params: {
   liveAccounts: RuntimeChannelAccount[];
   accountId: string;
 }): RuntimeChannelAccount | null {

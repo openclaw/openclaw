@@ -1,3 +1,4 @@
+/** Resolves provider environment variable candidates and auth evidence from core/plugin metadata. */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveProviderAuthAliasMap } from "../agents/provider-auth-aliases.js";
@@ -16,6 +17,7 @@ import {
 } from "../plugins/plugin-metadata-snapshot.js";
 import { listSetupProviderIds } from "../plugins/setup-descriptors.js";
 import { hasKind } from "../plugins/slots.js";
+import { appendUniqueEnvVarCandidates } from "../shared/env-var-candidates.js";
 
 const CORE_PROVIDER_AUTH_ENV_VAR_CANDIDATES = {
   anthropic: ["ANTHROPIC_OAUTH_TOKEN", "ANTHROPIC_API_KEY"],
@@ -93,27 +95,6 @@ function shouldUsePluginProviderAuthEvidence(
   // Auth evidence can point at local credential files, so workspace plugins must be explicitly
   // trusted through config before their evidence participates in auth discovery.
   return isWorkspacePluginTrustedForProviderEnvVars(plugin, params?.config);
-}
-
-function appendUniqueEnvVarCandidates(
-  target: Record<string, string[]>,
-  providerId: string,
-  keys: readonly string[],
-) {
-  const normalizedProviderId = providerId.trim();
-  if (!normalizedProviderId || keys.length === 0) {
-    return;
-  }
-  const bucket = (target[normalizedProviderId] ??= []);
-  const seen = new Set(bucket);
-  for (const key of keys) {
-    const normalizedKey = key.trim();
-    if (!normalizedKey || seen.has(normalizedKey)) {
-      continue;
-    }
-    seen.add(normalizedKey);
-    bucket.push(normalizedKey);
-  }
 }
 
 function appendUniqueAuthEvidence(
@@ -310,6 +291,7 @@ function resolveManifestSetupProviderFallbackRefsFromSnapshot(
 }
 
 /** Resolves provider env-var candidates used by generic auth lookup. */
+/** Resolves provider auth env-var candidates from core fallbacks and plugin metadata. */
 export function resolveProviderAuthEnvVarCandidates(
   params?: ProviderEnvVarLookupParams,
 ): Record<string, readonly string[]> {
@@ -436,6 +418,7 @@ export const testing = {
   },
 };
 
+/** Returns known env var candidates for a provider id or alias. */
 export function getProviderEnvVars(
   providerId: string,
   params?: ProviderEnvVarLookupParams,

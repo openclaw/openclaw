@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+// Development runner that rebuilds OpenClaw, runs runtime postbuild steps, and
+// restarts the CLI when watched source or metadata changes.
 import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
@@ -40,6 +42,7 @@ const buildScript = "scripts/tsdown-build.mjs";
 const bundledPluginAssetsScript = "scripts/bundled-plugin-assets.mjs";
 const compilerArgs = [buildScript, "--no-clean"];
 const bundledPluginAssetBuildArgs = [bundledPluginAssetsScript, "--phase", "build"];
+const RUN_NODE_SIGNAL_FORCE_KILL_AFTER_MS = 5_000;
 
 const runtimePostBuildWatchedPaths = [
   "scripts/copy-bundled-plugin-metadata.mjs",
@@ -498,6 +501,7 @@ const listRequiredCoreRuntimePostBuildOutputs = (deps) =>
     path.join(deps.cwd, normalizePath(relativePath)),
   );
 
+/** Lists runtime postbuild outputs that must exist before the dev CLI starts. */
 export const listRequiredRuntimePostBuildOutputs = (deps) => {
   const builtPluginEntries = listBuiltBundledPluginEntries(deps);
   return [
@@ -514,6 +518,7 @@ const hasMissingRequiredRuntimePostBuildOutput = (deps) =>
     (filePath) => statMtime(filePath, deps.fs) == null,
   );
 
+/** Decides whether source changes require a new dev build. */
 export const resolveBuildRequirement = (deps) => {
   if (deps.env.OPENCLAW_FORCE_BUILD === "1") {
     return { shouldBuild: true, reason: "force_build" };
@@ -571,6 +576,7 @@ export const resolveBuildRequirement = (deps) => {
   return { shouldBuild: false, reason: "clean" };
 };
 
+/** Decides whether runtime postbuild artifacts need to be regenerated. */
 export const resolveRuntimePostBuildRequirement = (deps) => {
   if (deps.env.OPENCLAW_FORCE_RUNTIME_POSTBUILD === "1") {
     return { shouldSync: true, reason: "force_runtime_postbuild" };
@@ -924,10 +930,37 @@ const resolveRunNodeDiagnosticArgs = (deps) => {
   return args;
 };
 
+const shouldUseRunNodeChildProcessGroup = (deps) =>
+  deps.platform !== "win32" && deps.process.stdin?.isTTY !== true;
+
+const signalSpawnedProcess = (childProcess, signal, useProcessGroup, deps) => {
+  if (useProcessGroup && typeof childProcess.pid === "number") {
+    try {
+      deps.signalProcess(-childProcess.pid, signal);
+      return;
+    } catch (error) {
+      if (error?.code === "ESRCH" || error?.code === "EPERM") {
+        return;
+      }
+    }
+  }
+  try {
+    childProcess.kill?.(signal);
+  } catch {
+    // Best-effort only. Exit handling still happens via the child "exit" event.
+  }
+};
+
 const waitForSpawnedProcess = async (childProcess, deps) => {
   let forwardedSignal = null;
+  let forceKillTimer = null;
+  let cleanedForwardedSignalGroup = false;
+  const useProcessGroup = shouldUseRunNodeChildProcessGroup(deps);
 
   const cleanupSignals = () => {
+    if (forceKillTimer) {
+      clearTimeout(forceKillTimer);
+    }
     if (onSigInt) {
       deps.process.off("SIGINT", onSigInt);
     }
@@ -941,11 +974,11 @@ const waitForSpawnedProcess = async (childProcess, deps) => {
       return;
     }
     forwardedSignal = signal;
-    try {
-      childProcess.kill?.(signal);
-    } catch {
-      // Best-effort only. Exit handling still happens via the child "exit" event.
-    }
+    signalSpawnedProcess(childProcess, signal, useProcessGroup, deps);
+    forceKillTimer = setTimeout(() => {
+      forceKillTimer = null;
+      signalSpawnedProcess(childProcess, "SIGKILL", useProcessGroup, deps);
+    }, RUN_NODE_SIGNAL_FORCE_KILL_AFTER_MS);
   };
 
   const onSigInt = () => {
@@ -973,6 +1006,10 @@ const waitForSpawnedProcess = async (childProcess, deps) => {
         settle({ exitCode: 1, exitSignal: null, forwardedSignal });
       });
       childProcess.on("exit", (exitCode, exitSignal) => {
+        if (forwardedSignal && !cleanedForwardedSignalGroup) {
+          cleanedForwardedSignalGroup = true;
+          signalSpawnedProcess(childProcess, "SIGKILL", useProcessGroup, deps);
+        }
         settle({ exitCode, exitSignal, forwardedSignal });
       });
     });
@@ -993,8 +1030,10 @@ const getInterruptedSpawnExitCode = (res) => {
 
 const runOpenClaw = async (deps) => {
   const diagnosticArgs = resolveRunNodeDiagnosticArgs(deps);
+  const useProcessGroup = shouldUseRunNodeChildProcessGroup(deps);
   const nodeProcess = deps.spawn(deps.execPath, [...diagnosticArgs, "openclaw.mjs", ...deps.args], {
     cwd: deps.cwd,
+    detached: useProcessGroup,
     env: deps.env,
     stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
   });
@@ -1142,6 +1181,7 @@ const removeStaleBuildLock = (deps, lockDir, staleMs) => {
   }
 };
 
+/** Acquires the dev-build lock used to serialize local rebuilds. */
 export const acquireRunNodeBuildLock = async (deps) => {
   const lockRoot = path.join(deps.cwd, ".artifacts");
   const lockDir = path.join(lockRoot, "run-node-build.lock");
@@ -1347,11 +1387,13 @@ const shouldRunQaCoverageReportFromSource = (deps, buildRequirement) =>
 
 const runQaParityReportFromSource = async (deps) => {
   const sourceEntrypoint = path.join(deps.cwd, "scripts", "qa-parity-report.ts");
+  const useProcessGroup = shouldUseRunNodeChildProcessGroup(deps);
   const nodeProcess = deps.spawn(
     deps.execPath,
     ["--import", "tsx", sourceEntrypoint, ...deps.args.slice(2)],
     {
       cwd: deps.cwd,
+      detached: useProcessGroup,
       env: deps.env,
       stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
     },
@@ -1367,11 +1409,13 @@ const runQaParityReportFromSource = async (deps) => {
 
 const runQaCoverageReportFromSource = async (deps) => {
   const sourceEntrypoint = path.join(deps.cwd, "scripts", "qa-coverage-report.ts");
+  const useProcessGroup = shouldUseRunNodeChildProcessGroup(deps);
   const nodeProcess = deps.spawn(
     deps.execPath,
     ["--import", "tsx", sourceEntrypoint, ...deps.args.slice(2)],
     {
       cwd: deps.cwd,
+      detached: useProcessGroup,
       env: deps.env,
       stdio: deps.outputTee ? ["inherit", "pipe", "pipe"] : "inherit",
     },
@@ -1385,6 +1429,9 @@ const runQaCoverageReportFromSource = async (deps) => {
   return res.exitCode ?? 1;
 };
 
+/**
+ * Runs the dev build/watch loop and keeps the child CLI in sync with changes.
+ */
 export async function runNodeMain(params = {}) {
   const deps = {
     spawn: params.spawn ?? spawn,
@@ -1397,6 +1444,8 @@ export async function runNodeMain(params = {}) {
     cwd: params.cwd ?? process.cwd(),
     args: params.args ?? process.argv.slice(2),
     env: params.env ? { ...params.env } : { ...process.env },
+    platform: params.platform ?? process.platform,
+    signalProcess: params.signalProcess ?? ((pid, signal) => process.kill(pid, signal)),
     runRuntimePostBuild: params.runRuntimePostBuild ?? runRuntimePostBuild,
   };
 
@@ -1487,6 +1536,7 @@ export async function runNodeMain(params = {}) {
         async () => {
           const assetBuild = deps.spawn(buildCmd, bundledPluginAssetBuildArgs, {
             cwd: deps.cwd,
+            detached: shouldUseRunNodeChildProcessGroup(deps),
             env: deps.env,
             stdio: ["inherit", "pipe", "pipe"],
           });
@@ -1502,6 +1552,7 @@ export async function runNodeMain(params = {}) {
 
           const build = deps.spawn(buildCmd, compilerArgs, {
             cwd: deps.cwd,
+            detached: shouldUseRunNodeChildProcessGroup(deps),
             env: {
               ...deps.env,
               [RUN_NODE_SKIP_DTS_BUILD_ENV]: deps.env[RUN_NODE_SKIP_DTS_BUILD_ENV] ?? "1",

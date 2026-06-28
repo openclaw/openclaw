@@ -1,6 +1,13 @@
+/**
+ * Session write-lock error types and guards.
+ *
+ * Session persistence uses stable error codes so callers can distinguish lock
+ * contention or stale lock cleanup from ordinary write failures.
+ */
 const SESSION_WRITE_LOCK_TIMEOUT_CODE = "OPENCLAW_SESSION_WRITE_LOCK_TIMEOUT";
 const SESSION_WRITE_LOCK_STALE_CODE = "OPENCLAW_SESSION_WRITE_LOCK_STALE";
 
+/** Error thrown when a session write lock cannot be acquired before timeout. */
 export class SessionWriteLockTimeoutError extends Error {
   readonly code = SESSION_WRITE_LOCK_TIMEOUT_CODE;
   readonly timeoutMs: number;
@@ -18,6 +25,7 @@ export class SessionWriteLockTimeoutError extends Error {
   }
 }
 
+/** Error thrown when an existing session write lock is stale and needs cleanup. */
 export class SessionWriteLockStaleError extends Error {
   readonly code = SESSION_WRITE_LOCK_STALE_CODE;
   readonly owner: string;
@@ -36,7 +44,8 @@ export class SessionWriteLockStaleError extends Error {
   }
 }
 
-export function isSessionWriteLockTimeoutError(err: unknown): boolean {
+/** Returns whether an error is a session write-lock timeout. */
+function isSessionWriteLockTimeoutError(err: unknown): boolean {
   return (
     err instanceof SessionWriteLockTimeoutError ||
     Boolean(
@@ -47,7 +56,8 @@ export function isSessionWriteLockTimeoutError(err: unknown): boolean {
   );
 }
 
-export function isSessionWriteLockStaleError(err: unknown): boolean {
+/** Returns whether an error is a stale session write-lock failure. */
+function isSessionWriteLockStaleError(err: unknown): boolean {
   return (
     err instanceof SessionWriteLockStaleError ||
     Boolean(
@@ -58,6 +68,7 @@ export function isSessionWriteLockStaleError(err: unknown): boolean {
   );
 }
 
+/** Returns whether an error is any session write-lock acquisition failure. */
 export function isSessionWriteLockAcquireError(err: unknown): boolean {
   return isSessionWriteLockTimeoutError(err) || isSessionWriteLockStaleError(err);
 }

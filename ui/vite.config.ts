@@ -1,3 +1,4 @@
+// Control UI config module wires vite behavior.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -178,6 +179,10 @@ export function resolveTsconfigPathAliasesForVite(): ControlUiViteAlias[] {
   });
 }
 
+function normalizeViteImporterPath(importer: string): string {
+  return path.normalize(importer.replace(/[?#].*$/u, ""));
+}
+
 export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
   const browserRedactPath = path.join(here, "src/ui/browser-redact.ts");
   const sharedRedactImporters = new Set([
@@ -192,7 +197,7 @@ export function controlUiBrowserOnlySharedModuleAliases(): Plugin {
       if (
         source === "../logging/redact.js" &&
         importer &&
-        sharedRedactImporters.has(path.normalize(importer))
+        sharedRedactImporters.has(normalizeViteImporterPath(importer))
       ) {
         return browserRedactPath;
       }
@@ -223,6 +228,7 @@ function controlUiServiceWorkerBuildIdPlugin(buildId: string): Plugin {
 export default function controlUiViteConfig(): UserConfig {
   const envBase = process.env.OPENCLAW_CONTROL_UI_BASE_PATH?.trim();
   const base = envBase ? normalizeBase(envBase) : "./";
+  const bootstrapConfigPath = base === "./" ? "/control-ui-config.json" : `${base}control-ui-config.json`;
   const controlUiBuildId = resolveControlUiBuildId();
   return {
     base,
@@ -268,7 +274,7 @@ export default function controlUiViteConfig(): UserConfig {
       {
         name: "control-ui-dev-stubs",
         configureServer(server) {
-          server.middlewares.use("/__openclaw/control-ui-config.json", (_req, res) => {
+          server.middlewares.use(bootstrapConfigPath, (_req, res) => {
             res.setHeader("Content-Type", "application/json");
             res.end(
               JSON.stringify({

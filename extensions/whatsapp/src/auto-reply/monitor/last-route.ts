@@ -1,3 +1,4 @@
+// Whatsapp plugin module implements last route behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { formatError } from "../../session.js";
@@ -49,13 +50,4 @@ export function updateLastRouteInBackground(params: {
     );
   });
   trackBackgroundTask(params.backgroundTasks, task);
-}
-
-export function awaitBackgroundTasks(backgroundTasks: Set<Promise<unknown>>) {
-  if (backgroundTasks.size === 0) {
-    return Promise.resolve();
-  }
-  return Promise.allSettled(backgroundTasks).then(() => {
-    backgroundTasks.clear();
-  });
 }

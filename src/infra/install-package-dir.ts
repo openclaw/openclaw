@@ -1,3 +1,4 @@
+// Installs package directories under canonical plugin roots.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
@@ -373,7 +374,10 @@ export async function installPackageDirWithManifestDeps(params: {
   depsLogMessage: string;
   manifestDependencies?: Record<string, unknown>;
   afterCopy?: (installedDir: string) => void | Promise<void>;
-}): Promise<{ ok: true } | { ok: false; error: string }> {
+  afterInstall?: (
+    installedDir: string,
+  ) => Promise<{ ok: true } | { ok: false; error: string; code?: string }>;
+}): Promise<{ ok: true } | { ok: false; error: string; code?: string }> {
   const hasDeps = Object.keys(params.manifestDependencies ?? {}).length > 0;
   return installPackageDir({
     ...params,

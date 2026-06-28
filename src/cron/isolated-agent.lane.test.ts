@@ -1,10 +1,11 @@
+// Isolated agent lane tests cover lane selection for scheduled agent runs.
 import { describe, expect, it } from "vitest";
 import { resolveCronAgentLane } from "../agents/lanes.js";
 import {
-  makeIsolatedAgentTurnJob,
-  makeIsolatedAgentTurnParams,
-  setupRunCronIsolatedAgentTurnSuite,
-} from "./isolated-agent/run.suite-helpers.js";
+  makeIsolatedAgentJobFixture,
+  makeIsolatedAgentParamsFixture,
+} from "./isolated-agent/job-fixtures.js";
+import { setupRunCronIsolatedAgentTurnSuite } from "./isolated-agent/run.suite-helpers.js";
 import {
   loadRunCronIsolatedAgentTurn,
   mockRunCronFallbackPassthrough,
@@ -27,8 +28,8 @@ async function runLaneCase(lane?: string) {
   mockRunCronFallbackPassthrough();
 
   await runCronIsolatedAgentTurn(
-    makeIsolatedAgentTurnParams({
-      job: makeIsolatedAgentTurnJob({
+    makeIsolatedAgentParamsFixture({
+      job: makeIsolatedAgentJobFixture({
         delivery: { mode: "none" },
         payload: { kind: "agentTurn", message: "do it" },
       }),

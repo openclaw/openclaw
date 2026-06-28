@@ -1,6 +1,8 @@
+// Persists managed task-flow records through the OpenClaw SQLite state database.
 import type { DatabaseSync } from "node:sqlite";
 import type { Insertable, Selectable } from "kysely";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
@@ -35,13 +37,6 @@ type FlowRegistryDatabase = {
 // SQLite-backed task-flow store mirrors the in-process registry into openclaw-state.db.
 let cachedDatabase: FlowRegistryDatabase | null = null;
 
-function normalizeNumber(value: number | bigint | null): number | undefined {
-  if (typeof value === "bigint") {
-    return Number(value);
-  }
-  return typeof value === "number" ? value : undefined;
-}
-
 function serializeJson(value: unknown): string | null {
   return value === undefined ? null : JSON.stringify(value);
 }
@@ -67,8 +62,8 @@ function rowToSyncMode(row: FlowRegistryRow): TaskFlowSyncMode {
 }
 
 function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
-  const endedAt = normalizeNumber(row.ended_at);
-  const cancelRequestedAt = normalizeNumber(row.cancel_requested_at);
+  const endedAt = normalizeSqliteNumber(row.ended_at);
+  const cancelRequestedAt = normalizeSqliteNumber(row.cancel_requested_at);
   const requesterOrigin = parseDeliveryContextJson(row.requester_origin_json);
   const stateJson = parseJsonValue(row.state_json);
   const waitJson = parseJsonValue(row.wait_json);
@@ -78,7 +73,7 @@ function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
     ownerKey: row.owner_key,
     ...(requesterOrigin ? { requesterOrigin } : {}),
     ...(row.controller_id ? { controllerId: row.controller_id } : {}),
-    revision: normalizeNumber(row.revision) ?? 0,
+    revision: normalizeSqliteNumber(row.revision) ?? 0,
     status: parseTaskFlowStatus(row.status),
     notifyPolicy: parseTaskNotifyPolicy(row.notify_policy),
     goal: row.goal,
@@ -88,8 +83,8 @@ function rowToFlowRecord(row: FlowRegistryRow): TaskFlowRecord {
     ...(stateJson !== undefined ? { stateJson } : {}),
     ...(waitJson !== undefined ? { waitJson } : {}),
     ...(cancelRequestedAt != null ? { cancelRequestedAt } : {}),
-    createdAt: normalizeNumber(row.created_at) ?? 0,
-    updatedAt: normalizeNumber(row.updated_at) ?? 0,
+    createdAt: normalizeSqliteNumber(row.created_at) ?? 0,
+    updatedAt: normalizeSqliteNumber(row.updated_at) ?? 0,
     ...(endedAt != null ? { endedAt } : {}),
   };
 }

@@ -1,3 +1,4 @@
+// Resolves agent-specific config and workspace directories.
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";

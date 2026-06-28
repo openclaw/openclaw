@@ -1,3 +1,4 @@
+// Snapshot hydration helpers merge saved runtime skill snapshots into live state.
 type SnapshotWithRuntimeSkills = {
   resolvedSkills?: unknown;
 };
@@ -17,14 +18,4 @@ export function hydrateResolvedSkills<T extends SnapshotWithRuntimeSkills>(
     return snapshot;
   }
   return { ...snapshot, resolvedSkills: rebuild().resolvedSkills };
-}
-
-export async function hydrateResolvedSkillsAsync<T extends SnapshotWithRuntimeSkills>(
-  snapshot: T,
-  rebuild: () => Promise<SnapshotRebuild<T>>,
-): Promise<T> {
-  if (snapshot.resolvedSkills !== undefined) {
-    return snapshot;
-  }
-  return { ...snapshot, resolvedSkills: (await rebuild()).resolvedSkills };
 }

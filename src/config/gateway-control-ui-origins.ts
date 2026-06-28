@@ -1,3 +1,4 @@
+// Resolves allowed Control UI origins for gateway access.
 import { DEFAULT_GATEWAY_PORT } from "./paths.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 

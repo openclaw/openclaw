@@ -1,3 +1,4 @@
+// Telegram tests cover channel actions plugin behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramMessageActions, telegramMessageActionRuntime } from "./channel-actions.js";
@@ -23,6 +24,15 @@ describe("telegramMessageActions", () => {
   it("executes message actions in the gateway when a gateway is available", () => {
     for (const action of ["send", "poll", "react", "delete", "edit"] as const) {
       expect(telegramMessageActions.resolveExecutionMode?.({ action })).toBe("gateway");
+    }
+  });
+
+  it("classifies provider-native mutation actions", () => {
+    for (const action of ["sendMessage", "editMessage", "deleteMessage", "react", "topic-edit"]) {
+      expect(telegramMessageActions.isToolDeliveryAction?.({ args: { action } })).toBe(true);
+    }
+    for (const action of ["searchSticker", "stickerCacheStats"]) {
+      expect(telegramMessageActions.isToolDeliveryAction?.({ args: { action } })).toBe(false);
     }
   });
 

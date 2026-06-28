@@ -11,14 +11,24 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 import { defaultRuntime } from "../../runtime.js";
 import { shortenHomeInString } from "../../utils.js";
+import { formatCliCommand } from "../command-format.js";
 import { parseDurationMs } from "../parse-duration.js";
-import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
+import { quoteCliArg } from "../quote-cli-arg.js";
+import { formatConnectionFlagReminder, getNodesTheme, runNodesCommand } from "./cli-utils.js";
 import { formatPermissions, parseNodeList, parsePairingList } from "./format.js";
 import { renderPendingPairingRequestsTable } from "./pairing-render.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import {
+  callGatewayCli,
+  callNodeDiagnosticsGatewayCli,
+  nodesCallOpts,
+  resolveNodeDiagnosticsId,
+} from "./rpc.js";
 import type { NodeListNode, NodesRpcOpts, PairedNode } from "./types.js";
 
 type PairedNodeListRow = PairedNode & Partial<NodeListNode>;
+type NodeApprovalState = NonNullable<NodeListNode["approvalState"]>;
+
+const DEFAULT_NODES_RPC_TIMEOUT_MS = 10_000;
 
 function formatVersionLabel(raw: string) {
   const trimmed = raw.trim();
@@ -96,6 +106,44 @@ function formatClientLabel(node: { clientId?: string; clientMode?: string }): st
 function formatNodeTerminalLabel(node: { nodeId: string; displayName?: string }): string {
   const label = node.displayName?.trim() ? node.displayName.trim() : node.nodeId;
   return sanitizeTerminalText(label);
+}
+
+function formatNodeApprovalState(raw: unknown): NodeApprovalState | null {
+  return raw === "approved" ||
+    raw === "pending-approval" ||
+    raw === "pending-reapproval" ||
+    raw === "unapproved"
+    ? raw
+    : null;
+}
+
+function formatApprovalStateLabel(state: NodeApprovalState): string {
+  if (state === "pending-approval") {
+    return "approval pending";
+  }
+  if (state === "pending-reapproval") {
+    return "reapproval pending";
+  }
+  return state;
+}
+
+function isPendingApprovalState(
+  state: NodeApprovalState | null,
+): state is "pending-approval" | "pending-reapproval" {
+  return state === "pending-approval" || state === "pending-reapproval";
+}
+
+function formatPendingApprovalCommand(raw: unknown, opts: NodesRpcOpts): string | null {
+  const requestId = normalizeOptionalString(raw);
+  if (!requestId) {
+    return null;
+  }
+  const args = ["openclaw", "nodes", "approve", requestId];
+  const timeout = normalizeOptionalString(opts.timeout);
+  if (timeout && timeout !== String(DEFAULT_NODES_RPC_TIMEOUT_MS)) {
+    args.push("--timeout", timeout);
+  }
+  return formatCliCommand(args.map(quoteCliArg).join(" "));
 }
 
 function parseSinceMs(raw: unknown, label: string): number | undefined {
@@ -194,7 +242,7 @@ export function registerNodesStatusCommands(nodes: Command) {
         await runNodesCommand("status", async () => {
           const connectedOnly = Boolean(opts.connected);
           const sinceMs = parseSinceMs(opts.lastConnected, "Invalid --last-connected");
-          const result = await callGatewayCli("node.list", opts, {});
+          const result = await callNodeDiagnosticsGatewayCli("node.list", opts, {});
           const obj: Record<string, unknown> =
             typeof result === "object" && result !== null ? result : {};
           const { ok, warn, muted } = getNodesTheme();
@@ -268,6 +316,15 @@ export function registerNodesStatusCommands(nodes: Command) {
               : "?";
             const paired = n.paired ? ok("paired") : warn("unpaired");
             const connected = n.connected ? ok("connected") : muted("disconnected");
+            const approvalState = formatNodeApprovalState(n.approvalState);
+            const approval =
+              approvalState === "approved"
+                ? ok("approved")
+                : isPendingApprovalState(approvalState)
+                  ? warn(formatApprovalStateLabel(approvalState))
+                  : approvalState === "unapproved"
+                    ? warn("unapproved")
+                    : null;
             const since =
               typeof n.connectedAtMs === "number"
                 ? ` (${formatTimeAgo(Math.max(0, now - n.connectedAtMs))})`
@@ -278,7 +335,7 @@ export function registerNodesStatusCommands(nodes: Command) {
               ID: sanitizeTerminalText(n.nodeId),
               IP: sanitizeTerminalText(n.remoteIp ?? ""),
               Detail: detailParts.join(" · "),
-              Status: `${paired} · ${connected}${since}`,
+              Status: `${paired} · ${connected}${since}${approval ? ` · ${approval}` : ""}`,
               Caps: caps,
             };
           });
@@ -297,6 +354,22 @@ export function registerNodesStatusCommands(nodes: Command) {
               rows,
             }).trimEnd(),
           );
+          for (const node of filtered) {
+            const approvalState = formatNodeApprovalState(node.approvalState);
+            const approveCommand = formatPendingApprovalCommand(node.pendingRequestId, opts);
+            if (isPendingApprovalState(approvalState) && approveCommand) {
+              const action = approvalState === "pending-reapproval" ? "Reapproval" : "Approval";
+              defaultRuntime.log(
+                warn(
+                  `${action} pending for ${formatNodeTerminalLabel(node)}. Run ${sanitizeTerminalText(approveCommand)}`,
+                ),
+              );
+              const connectionReminder = formatConnectionFlagReminder(opts);
+              if (connectionReminder) {
+                defaultRuntime.log(warn(connectionReminder));
+              }
+            }
+          }
         });
       }),
   );
@@ -308,8 +381,8 @@ export function registerNodesStatusCommands(nodes: Command) {
       .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
       .action(async (opts: NodesRpcOpts) => {
         await runNodesCommand("describe", async () => {
-          const nodeId = await resolveNodeId(opts, opts.node ?? "");
-          const result = await callGatewayCli("node.describe", opts, {
+          const nodeId = await resolveNodeDiagnosticsId(opts, opts.node ?? "");
+          const result = await callNodeDiagnosticsGatewayCli("node.describe", opts, {
             nodeId,
           });
           if (opts.json) {
@@ -329,6 +402,19 @@ export function registerNodesStatusCommands(nodes: Command) {
             ? obj.commands.map(String).filter(Boolean).toSorted()
             : [];
           const perms = formatPermissions(obj.permissions);
+          const approvalState = formatNodeApprovalState(obj.approvalState);
+          const pendingRequestId = normalizeOptionalString(obj.pendingRequestId);
+          const pendingCaps = Array.isArray(obj.pendingDeclaredCaps)
+            ? obj.pendingDeclaredCaps.map(String).filter(Boolean).toSorted()
+            : null;
+          const pendingCommands = Array.isArray(obj.pendingDeclaredCommands)
+            ? obj.pendingDeclaredCommands.map(String).filter(Boolean).toSorted()
+            : [];
+          const pendingPerms = formatPermissions(obj.pendingDeclaredPermissions);
+          const approveCommand = isPendingApprovalState(approvalState)
+            ? formatPendingApprovalCommand(pendingRequestId, opts)
+            : null;
+          const connectionReminder = approveCommand ? formatConnectionFlagReminder(opts) : null;
           const family = typeof obj.deviceFamily === "string" ? obj.deviceFamily : null;
           const model = typeof obj.modelIdentifier === "string" ? obj.modelIdentifier : null;
           const client = formatClientLabel(obj as { clientId?: string; clientMode?: string });
@@ -359,6 +445,27 @@ export function registerNodesStatusCommands(nodes: Command) {
             versions ? { Field: "Version", Value: sanitizeTerminalText(versions) } : null,
             pathEnv ? { Field: "PATH", Value: sanitizeTerminalText(pathEnv) } : null,
             { Field: "Status", Value: status },
+            approvalState
+              ? { Field: "Approval", Value: formatApprovalStateLabel(approvalState) }
+              : null,
+            pendingRequestId
+              ? { Field: "Pending request", Value: sanitizeTerminalText(pendingRequestId) }
+              : null,
+            pendingCaps
+              ? { Field: "Pending caps", Value: sanitizeTerminalText(pendingCaps.join(", ")) }
+              : null,
+            pendingPerms
+              ? { Field: "Pending perms", Value: sanitizeTerminalText(pendingPerms) }
+              : null,
+            approveCommand
+              ? {
+                  Field: approvalState === "pending-reapproval" ? "Reapprove" : "Approve",
+                  Value: sanitizeTerminalText(approveCommand),
+                }
+              : null,
+            approveCommand && connectionReminder
+              ? { Field: "Connection reminder", Value: connectionReminder }
+              : null,
             { Field: "Caps", Value: caps ? sanitizeTerminalText(caps.join(", ")) : "?" },
           ].filter(Boolean) as Array<{ Field: string; Value: string }>;
 
@@ -376,11 +483,18 @@ export function registerNodesStatusCommands(nodes: Command) {
           defaultRuntime.log("");
           defaultRuntime.log(heading("Commands"));
           if (commands.length === 0) {
-            defaultRuntime.log(muted("- (none reported)"));
-            return;
+            defaultRuntime.log(muted("- (none effective)"));
+          } else {
+            for (const c of commands) {
+              defaultRuntime.log(`- ${c}`);
+            }
           }
-          for (const c of commands) {
-            defaultRuntime.log(`- ${c}`);
+          if (pendingCommands.length > 0) {
+            defaultRuntime.log("");
+            defaultRuntime.log(heading("Pending commands"));
+            for (const command of pendingCommands) {
+              defaultRuntime.log(`- ${sanitizeTerminalText(command)}`);
+            }
           }
         });
       }),

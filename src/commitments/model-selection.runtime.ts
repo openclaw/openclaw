@@ -1,3 +1,4 @@
+// Resolves model choices for commitment extraction and follow-up checks.
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import type { OpenClawConfig } from "../config/config.js";
 

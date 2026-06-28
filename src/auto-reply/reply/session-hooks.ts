@@ -1,3 +1,4 @@
+// Emits session lifecycle hooks for channel plugins and agent runtimes.
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
@@ -7,7 +8,7 @@ import type {
 } from "../../plugins/hook-types.js";
 
 /** Session identity attached to plugin session hook payloads. */
-export type SessionHookContext = {
+type SessionHookContext = {
   sessionId: string;
   sessionKey: string;
   agentId: string;

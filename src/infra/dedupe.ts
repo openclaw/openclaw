@@ -1,3 +1,4 @@
+// Provides small process-local dedupe caches.
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { pruneMapToMaxSize } from "./map-size.js";
 import { resolveNonNegativeIntegerOption } from "./numeric-options.js";

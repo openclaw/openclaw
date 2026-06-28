@@ -1,3 +1,4 @@
+// Resolves bundled plugin load-path aliases for package output.
 import path from "node:path";
 import { isPathInside } from "./path-safety.js";
 

@@ -1,3 +1,4 @@
+/** Test support for inactive channel variants in secrets runtime scenarios. */
 import { vi } from "vitest";
 import { loadBundledChannelSecretContractApi } from "./channel-contract-api.js";
 

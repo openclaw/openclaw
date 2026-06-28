@@ -1,3 +1,5 @@
+// Message-action input normalization infers channel/target context and rewrites
+// legacy target fields before dispatch validation.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   ChannelMessageActionName,
@@ -41,7 +43,9 @@ export function normalizeMessageActionInput(params: {
     actionRequiresTarget(action) &&
     !actionHasTarget(action, normalizedArgs, { channel: inferredChannel })
   ) {
-    const inferredTarget = normalizeOptionalString(toolContext?.currentChannelId);
+    const inferredTarget =
+      normalizeOptionalString(toolContext?.currentChannelId) ??
+      normalizeOptionalString(toolContext?.currentMessagingTarget);
     if (inferredTarget) {
       normalizedArgs.target = inferredTarget;
     }

@@ -1,3 +1,5 @@
+// Effective tools methods resolve the tools available to a session by combining
+// bundled tools, MCP tools, plugin policy, model context, and cache state.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
@@ -457,7 +459,10 @@ function resolveTrustedToolsEffectiveContext(params: {
 }) {
   // The effective tools request is read-only but security-sensitive. Derive
   // routing/account/model context from the persisted session, not client params.
-  const loaded = loadSessionEntry(params.sessionKey);
+  const loaded = loadSessionEntry(
+    params.sessionKey,
+    params.requestedAgentId ? { agentId: params.requestedAgentId } : undefined,
+  );
   if (!loaded.entry) {
     params.respond(
       false,
@@ -467,9 +472,18 @@ function resolveTrustedToolsEffectiveContext(params: {
     return null;
   }
 
+  // Only a canonical `global` key may adopt the client-requested agent: global
+  // stores are shared, so the requested agent selects which agent's global store
+  // to read. Non-global keys encode their owning agent, so the requested agent
+  // must stay subject to the mismatch guard below instead of overriding session
+  // ownership — otherwise `{ sessionKey: "agent:main:x", agentId: "work" }` would
+  // resolve under `work` and silently bypass the guard.
+  const canonicalKey = loaded.canonicalKey ?? params.sessionKey;
+  const allowRequestedAgentOverride = canonicalKey === "global" && Boolean(params.requestedAgentId);
   const sessionAgentId = resolveSessionAgentId({
-    sessionKey: loaded.canonicalKey ?? params.sessionKey,
+    sessionKey: canonicalKey,
     config: loaded.cfg,
+    ...(allowRequestedAgentOverride ? { agentId: params.requestedAgentId } : {}),
   });
   if (params.requestedAgentId && params.requestedAgentId !== sessionAgentId) {
     params.respond(

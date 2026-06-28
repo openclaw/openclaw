@@ -1,3 +1,4 @@
+// Runs security checks over plugin install candidates before activation.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   InstallPolicyOrigin,
@@ -85,6 +86,7 @@ export async function scanPackageInstallSource(
     manifestId?: string;
     version?: string;
     source?: InstallPolicySource;
+    trustedSourceLinkedOfficialInstall?: boolean;
   },
 ): Promise<InstallSecurityScanResult | undefined> {
   const { scanPackageInstallSourceRuntime } = await loadInstallSecurityScanRuntime();

@@ -1,3 +1,4 @@
+// Codex tests cover attempt startup plugin behavior.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -115,10 +116,12 @@ function startThreadWithHarness(
     effectiveWorkspace: paths.workspaceDir,
     effectiveCwd: paths.cwd,
     dynamicTools: [],
+    webSearchAllowed: false,
     developerInstructions: undefined,
     finalConfigPatch: undefined,
     bundleMcpThreadConfig,
     nativeToolSurfaceEnabled: true,
+    nativeProviderWebSearchSupport: "supported",
     sandboxExecServerEnabled: false,
     sandbox: null,
     contextEngineProjection: undefined,

@@ -1,3 +1,4 @@
+// ACPX tests cover codex auth bridge plugin behavior.
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -249,6 +250,15 @@ describe("prepareAcpxCodexAuthConfig", () => {
     );
     expect(wrapper).not.toMatch(
       /forceKillTimer = setTimeout\(\(\) => killChildTree\("SIGKILL"\), 1_500\);\s*forceKillTimer\.unref\?\.\(\);\s*process\.exit\(1\);/s,
+    );
+    // Orphan detection must trigger on any PPID change, not only when the new
+    // PPID is init (1). Systemd user services and container init reparent
+    // orphaned processes to a session manager or container init (PID != 1),
+    // and the older `process.ppid !== 1` guard would silently leak the codex
+    // adapter tree there.
+    expect(wrapper).not.toContain("process.ppid !== 1");
+    expect(wrapper).toMatch(
+      /setInterval\(\(\) => \{[\s\S]*?if \(process\.ppid === originalParentPid\) \{\s*return;\s*\}/,
     );
   });
 

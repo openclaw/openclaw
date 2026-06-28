@@ -1,3 +1,4 @@
+// Transcript provider contracts for external and manual transcript sources.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 /**

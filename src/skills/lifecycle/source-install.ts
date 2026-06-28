@@ -1,3 +1,4 @@
+// Source install helpers install skills from source directories and repositories.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
@@ -33,7 +34,7 @@ type SkillSourceOrigin = {
   };
 };
 
-export type SkillSourceInstallResult =
+type SkillSourceInstallResult =
   | {
       ok: true;
       slug: string;

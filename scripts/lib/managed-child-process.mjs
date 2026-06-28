@@ -1,6 +1,8 @@
-import { spawn } from "node:child_process";
+// Runs child commands with process-group signal forwarding and Windows shell normalization.
+import { spawn, spawnSync } from "node:child_process";
 import { constants as osConstants } from "node:os";
-import { buildCmdExeCommandLine } from "../windows-cmd-helpers.mjs";
+import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "../windows-cmd-helpers.mjs";
+import { resolveWindowsTaskkillPath } from "./windows-taskkill.mjs";
 
 const FORWARDED_SIGNALS = ["SIGINT", "SIGTERM", "SIGHUP"];
 const FORCE_KILL_DELAY_MS = 5_000;
@@ -8,6 +10,8 @@ const managedChildren = new Set();
 const signalHandlers = new Map();
 
 /**
+ * Return conventional shell exit code for a signal.
+ *
  * @param {NodeJS.Signals} signal
  * @returns {number}
  */
@@ -19,14 +23,19 @@ export function signalExitCode(signal) {
 /**
  * @param {import("node:child_process").ChildProcess} child
  * @param {NodeJS.Signals} [signal]
+ * @param {{ platform?: NodeJS.Platform; runTaskkill?: typeof spawnSync }} [options]
  */
-function terminateManagedChild(child, signal = "SIGTERM") {
+export function terminateManagedChild(
+  child,
+  signal = "SIGTERM",
+  { platform = process.platform, runTaskkill = spawnSync } = {},
+) {
   if (!child.pid) {
     return;
   }
 
   try {
-    if (process.platform !== "win32") {
+    if (platform !== "win32") {
       process.kill(-child.pid, signal);
       return;
     }
@@ -41,10 +50,30 @@ function terminateManagedChild(child, signal = "SIGTERM") {
     return;
   }
 
+  if (platform === "win32") {
+    const taskkillPath = resolveWindowsTaskkillPath();
+    const args = ["/PID", String(child.pid), "/T"];
+    if (signal === "SIGKILL") {
+      args.push("/F");
+    }
+    const result = runTaskkill(taskkillPath, args, { stdio: "ignore" });
+    if (!result?.error && result?.status === 0) {
+      return;
+    }
+    if (signal !== "SIGKILL") {
+      const forceResult = runTaskkill(taskkillPath, [...args, "/F"], { stdio: "ignore" });
+      if (!forceResult?.error && forceResult?.status === 0) {
+        return;
+      }
+    }
+  }
+
   child.kill(signal);
 }
 
 /**
+ * Run a child command while forwarding termination signals to the managed process group.
+ *
  * @param {{
  *   bin: string;
  *   args?: string[];
@@ -65,9 +94,9 @@ export async function runManagedCommand({
   cwd,
   env,
   stdio = "inherit",
-  shell = process.platform === "win32",
-  windowsVerbatimArguments,
   platform = process.platform,
+  shell = platform === "win32",
+  windowsVerbatimArguments,
   comSpec,
   onReady,
 }) {
@@ -98,6 +127,9 @@ export async function runManagedCommand({
         if (managedChild.forceKillTimer) {
           clearTimeout(managedChild.forceKillTimer);
         }
+        if (managedChild.receivedSignal) {
+          terminateManagedChild(child, "SIGKILL");
+        }
         resolve(
           managedChild.receivedSignal
             ? signalExitCode(managedChild.receivedSignal)
@@ -113,6 +145,8 @@ export async function runManagedCommand({
 }
 
 /**
+ * Build the spawn command, args, and options used by managed command execution.
+ *
  * @param {{
  *   child: import("node:child_process").ChildProcess;
  *   forceKillTimer: ReturnType<typeof setTimeout> | null;
@@ -125,6 +159,8 @@ function addManagedChild(managedChild) {
 }
 
 /**
+ * Build a normalized command invocation, including cmd.exe wrapping on Windows.
+ *
  * @param {{
  *   child: import("node:child_process").ChildProcess;
  *   forceKillTimer: ReturnType<typeof setTimeout> | null;
@@ -188,9 +224,9 @@ export function createManagedCommandSpawnSpec({
   cwd,
   env,
   stdio = "inherit",
-  shell = process.platform === "win32",
-  windowsVerbatimArguments,
   platform = process.platform,
+  shell = platform === "win32",
+  windowsVerbatimArguments,
   comSpec,
 }) {
   const invocation = createManagedCommandInvocation({
@@ -232,15 +268,15 @@ export function createManagedCommandInvocation({
   bin,
   args = [],
   env,
-  shell = process.platform === "win32",
-  windowsVerbatimArguments,
   platform = process.platform,
+  shell = platform === "win32",
+  windowsVerbatimArguments,
   comSpec,
 }) {
   if (platform === "win32" && shell && args.length > 0) {
     return {
       args: ["/d", "/s", "/c", buildCmdExeCommandLine(bin, args)],
-      command: comSpec ?? env?.ComSpec ?? env?.COMSPEC ?? process.env.ComSpec ?? "cmd.exe",
+      command: comSpec ?? resolveWindowsCmdExePath(env ?? process.env),
       shell: false,
       windowsVerbatimArguments: true,
     };

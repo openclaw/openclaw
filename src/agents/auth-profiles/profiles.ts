@@ -1,10 +1,15 @@
+/**
+ * Auth profile mutation helpers.
+ * Updates profile order, last-good state, usage stats, and provider profile
+ * records through locked or immediate store writes.
+ */
 import {
   findNormalizedProviderKey,
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
-import { normalizeSecretInput } from "../../utils/normalize-secret-input.js";
 import { resolveProviderIdForAuth } from "../provider-auth-aliases.js";
+import { normalizeAuthProfileCredential } from "./credential-normalize.js";
 import { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
 import {
   ensureAuthProfileStoreForLocalUpdate,
@@ -12,7 +17,11 @@ import {
   updateAuthProfileStoreWithLock,
 } from "./store.js";
 import type { AuthProfileCredential, AuthProfileStore, ProfileUsageStats } from "./types.js";
-export { dedupeProfileIds, listProfilesForProvider } from "./profile-list.js";
+export {
+  dedupeProfileIds,
+  listProfilesForProvider,
+  resolveSubscriptionAuthModeForProfiles,
+} from "./profile-list.js";
 
 // Auth profile order/lastGood keys may be stored as aliases. Resolve through
 // auth provider normalization before updating per-provider state.
@@ -148,31 +157,6 @@ export async function promoteAuthProfileInOrder(params: {
   });
 }
 
-// Upsert paths normalize literal secret strings but preserve SecretRef-backed
-// credentials for the secret resolver.
-function normalizeAuthProfileCredential(credential: AuthProfileCredential): AuthProfileCredential {
-  if (credential.type === "api_key") {
-    if (typeof credential.key !== "string") {
-      return credential;
-    }
-    const { key: _key, ...rest } = credential;
-    const key = normalizeSecretInput(credential.key);
-    return {
-      ...rest,
-      ...(key ? { key } : {}),
-    };
-  }
-  if (credential.type === "token") {
-    if (typeof credential.token !== "string") {
-      return credential;
-    }
-    const { token: _token, ...rest } = credential;
-    const token = normalizeSecretInput(credential.token);
-    return { ...rest, ...(token ? { token } : {}) };
-  }
-  return credential;
-}
-
 /** Upserts an auth profile immediately into the local store. */
 export function upsertAuthProfile(params: {
   profileId: string;
@@ -252,7 +236,7 @@ export async function removeProviderAuthProfilesWithLock(params: {
   });
 }
 
-/** Clears lastGood for a provider when it points at the supplied profile. */
+/** Clear the last-good profile pointer for a provider under the store lock. */
 export async function clearLastGoodProfileWithLock(params: {
   provider: string;
   profileId: string;
@@ -275,7 +259,7 @@ export async function clearLastGoodProfileWithLock(params: {
   });
 }
 
-/** Marks an auth profile as successful and updates lastGood/usage state. */
+/** Mark a profile as successfully used and update ordering/usage metadata. */
 export async function markAuthProfileSuccess(params: {
   store: AuthProfileStore;
   provider: string;

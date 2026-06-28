@@ -1,3 +1,4 @@
+// Test helper for simulating symlink rebind races around filesystem reads.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";

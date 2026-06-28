@@ -1,11 +1,13 @@
+// Covers safety timeouts around embedded-agent compaction calls.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CompactResult, ContextEngine } from "../context-engine/types.js";
 import {
   compactContextEngineWithSafetyTimeout,
   compactWithSafetyTimeout,
-  EMBEDDED_COMPACTION_TIMEOUT_MS,
   resolveCompactionTimeoutMs,
 } from "./embedded-agent-runner/compaction-safety-timeout.js";
+
+const EMBEDDED_COMPACTION_TIMEOUT_MS = 180_000;
 
 describe("compactWithSafetyTimeout", () => {
   beforeEach(() => {
@@ -19,6 +21,7 @@ describe("compactWithSafetyTimeout", () => {
   });
 
   it("rejects with timeout when compaction never settles", async () => {
+    // Hung compaction must not stall the agent turn indefinitely.
     vi.useFakeTimers();
     const compactPromise = compactWithSafetyTimeout(() => new Promise<never>(() => {}));
     const timeoutAssertion = expect(compactPromise).rejects.toThrow("Compaction timed out");
@@ -71,6 +74,8 @@ describe("compactWithSafetyTimeout", () => {
   });
 
   it("aborts early on external abort signal and calls onCancel once", async () => {
+    // Run-level aborts should win over the safety timer and still trigger one
+    // cancellation path.
     vi.useFakeTimers();
     const controller = new AbortController();
     const onCancel = vi.fn();
@@ -121,6 +126,14 @@ describe("resolveCompactionTimeoutMs", () => {
   });
 
   it("converts timeoutSeconds to milliseconds", () => {
+    expect(
+      resolveCompactionTimeoutMs({
+        agents: { defaults: { compaction: { timeoutSeconds: 120 } } },
+      }),
+    ).toBe(120_000);
+  });
+
+  it("preserves explicit timeoutSeconds above 600", () => {
     expect(
       resolveCompactionTimeoutMs({
         agents: { defaults: { compaction: { timeoutSeconds: 1800 } } },
@@ -210,6 +223,8 @@ describe("compactContextEngineWithSafetyTimeout", () => {
   });
 
   it("threads a signal that follows the run abort signal into the plugin compact() params", async () => {
+    // Plugin context engines receive an abort signal derived from the run signal
+    // so they can stop work promptly.
     vi.useFakeTimers();
     const controller = new AbortController();
     const reason = new Error("run aborted");
@@ -239,6 +254,8 @@ describe("compactContextEngineWithSafetyTimeout", () => {
   });
 
   it("threads the host timeout abort signal into the plugin compact() params", async () => {
+    // Timeout cancellation is delivered through the same plugin abort signal as
+    // external run cancellation.
     vi.useFakeTimers();
     let compactAbortSignal: AbortSignal | undefined;
     const compact = vi.fn<CompactFn>((params) => {

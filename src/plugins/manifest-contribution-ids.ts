@@ -1,3 +1,4 @@
+/** Lists manifest contribution ids from installed plugin registry snapshots. */
 import {
   listPluginContributionIds,
   loadPluginRegistrySnapshot,

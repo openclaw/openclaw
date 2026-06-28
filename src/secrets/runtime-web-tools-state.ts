@@ -1,3 +1,4 @@
+/** Stores active web-tool metadata for the secrets runtime snapshot. */
 import type { RuntimeWebToolsMetadata } from "./runtime-web-tools.types.js";
 
 let activeRuntimeWebToolsMetadata: RuntimeWebToolsMetadata | null = null;

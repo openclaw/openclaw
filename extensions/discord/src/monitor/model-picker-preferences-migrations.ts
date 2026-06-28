@@ -1,3 +1,4 @@
+// Discord plugin module implements model picker preferences migrations behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -194,7 +195,10 @@ export const detectDiscordLegacyStateMigrations: BundledChannelLegacyStateMigrat
         )) {
           const normalized = normalizePersistedBinding(rawKey, rawEntry);
           if (normalized) {
-            out.push({ key: toBindingRecordKey(normalized), value: normalized });
+            out.push({
+              key: toBindingRecordKey(normalized),
+              value: normalized,
+            });
           }
         }
         return out;

@@ -1,3 +1,4 @@
+// MCP CLI tests cover MCP command registration and server configuration behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -157,6 +158,24 @@ describe("mcp cli", () => {
         connectTimeout: 3,
         supportsParallelToolCalls: true,
       });
+    });
+  });
+
+  it("labels listed MCP servers as OpenClaw-managed", async () => {
+    await withTempHome("openclaw-cli-mcp-home-", async () => {
+      const workspaceDir = await createWorkspace();
+      vi.spyOn(process, "cwd").mockReturnValue(workspaceDir);
+
+      await runMcpCommand(["mcp", "set", "context7", '{"command":"uvx","args":["context7-mcp"]}']);
+      mockLog.mockClear();
+
+      await runMcpCommand(["mcp", "list"]);
+
+      const output = mockLog.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(output).toContain("OpenClaw-managed MCP servers (");
+      expect(output).toContain("- context7");
+      expect(output).toContain("OpenClaw-managed mcp.servers entries");
+      expect(output).toContain("does not include mcporter servers from config/mcporter.json");
     });
   });
 
@@ -639,7 +658,9 @@ describe("mcp cli", () => {
 
       mockLog.mockClear();
       await runMcpCommand(["mcp", "list"]);
-      expect(lastLogLine()).toContain("No MCP servers configured in ");
+      const output = mockLog.mock.calls.map((call) => String(call[0])).join("\n");
+      expect(output).toContain("No OpenClaw-managed MCP servers configured in ");
+      expect(output).toContain("does not include mcporter servers from config/mcporter.json");
     });
   });
 

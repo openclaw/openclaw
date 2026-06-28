@@ -1,3 +1,4 @@
+// Registers provider plugins into the provider registry.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
@@ -36,6 +37,10 @@ type NormalizedPluginsConfig = ReturnType<typeof normalizePluginsConfigWithRegis
 type ProviderRegistryLoadParams = ProviderManifestLoadParams & {
   onlyPluginIds?: readonly string[];
 };
+export type ProviderRefOwnership =
+  | { status: "unowned" }
+  | { status: "owned"; pluginIds: string[] }
+  | { status: "ambiguous"; pluginIds: string[] };
 
 function loadProviderRegistrySnapshot(params: ProviderManifestLoadParams): PluginRegistrySnapshot {
   if (params.registry) {
@@ -517,6 +522,16 @@ function dedupeSortedPluginIds(values: Iterable<string>): string[] {
   return sortUniqueStrings(values);
 }
 
+function classifyProviderRefOwnership(pluginIds: string[] | undefined): ProviderRefOwnership {
+  if (!pluginIds || pluginIds.length === 0) {
+    return { status: "unowned" };
+  }
+  if (pluginIds.length === 1) {
+    return { status: "owned", pluginIds };
+  }
+  return { status: "ambiguous", pluginIds };
+}
+
 function listNormalizedOwnerMapPluginIds(
   owners: ReadonlyMap<string, readonly string[]>,
   normalizedId: string,
@@ -701,6 +716,31 @@ export function resolveOwningPluginIdsForProviderRef(params: {
   );
 }
 
+export function resolveProviderRefOwnership(params: {
+  provider: string;
+  config?: PluginLoadOptions["config"];
+  workspaceDir?: string;
+  env?: PluginLoadOptions["env"];
+  manifestRegistry?: PluginManifestRegistry;
+  metadataSnapshot?: Pick<PluginMetadataSnapshot, "owners" | "manifestRegistry" | "byPluginId">;
+}): ProviderRefOwnership {
+  const providerOwnerIds = resolveOwningPluginIdsForProvider(params);
+  const providerOwnership = classifyProviderRefOwnership(providerOwnerIds);
+  if (providerOwnership.status !== "unowned") {
+    return providerOwnership;
+  }
+  return classifyProviderRefOwnership(
+    resolveOwningPluginIdsForCliBackend({
+      backend: params.provider,
+      config: params.config,
+      workspaceDir: params.workspaceDir,
+      env: params.env,
+      manifestRegistry: params.manifestRegistry,
+      metadataSnapshot: params.metadataSnapshot,
+    }),
+  );
+}
+
 export function resolveOwningPluginIdsForModelRef(params: {
   model: string;
   config?: PluginLoadOptions["config"];
@@ -776,27 +816,6 @@ export function resolveOwningPluginIdsForModelRefs(params: {
           ...(registry ? { registry } : {}),
         }) ?? [],
     ),
-  );
-}
-
-export function resolveNonBundledProviderPluginIds(params: {
-  config?: PluginLoadOptions["config"];
-  workspaceDir?: string;
-  env?: PluginLoadOptions["env"];
-}): string[] {
-  const registry = loadProviderRegistrySnapshot(params);
-  const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
-  return listRegistryPluginIds(
-    registry,
-    (plugin) =>
-      plugin.origin !== "bundled" &&
-      providerSurfacePluginIds.has(plugin.pluginId) &&
-      resolveEffectiveRegistryPluginActivation({
-        plugin,
-        normalizedConfig,
-        rootConfig: params.config,
-      }).activated,
   );
 }
 

@@ -1,3 +1,4 @@
+// Verifies OpenClaw-owned tool hooks preserve adjusted params and telemetry.
 import type { AgentTool } from "openclaw/plugin-sdk/agent-core";
 import {
   installOpenClawOwnedToolHooks,
@@ -33,6 +34,7 @@ type ToolExecutionStartEvent = Parameters<typeof handleToolExecutionStart>[1];
 type ToolExecutionEndEvent = Parameters<typeof handleToolExecutionEnd>[1];
 
 function createToolHandlerCtx(): ToolHandlerContext {
+  // Minimal embedded-agent tool handler context used to drive start/end events.
   return {
     params: {
       runId: "run-contract",
@@ -92,6 +94,7 @@ function createToolExtensionContext(): ExtensionContext {
 async function waitForAfterToolCall(hooks: {
   afterToolCall: { mock: { calls: unknown[][] } };
 }): Promise<[Record<string, unknown>, Record<string, unknown>]> {
+  // after_tool_call fires asynchronously after the execution-end event is processed.
   await vi.waitFor(() => {
     expect(hooks.afterToolCall).toHaveBeenCalledTimes(1);
   });
@@ -231,7 +234,7 @@ describe("OpenClaw-owned tool runtime contract - embedded agent adapter", () => 
 
   it("commits successful embedded agent messaging text, media, and target telemetry", async () => {
     const hooks = installOpenClawOwnedToolHooks();
-    const execute = vi.fn(async () => textToolResult("sent"));
+    const execute = vi.fn(async () => textToolResult("sent", { deliveryStatus: "sent" }));
     const tool = wrapToolWithBeforeToolCallHook(createContractTool("message", execute), {
       agentId: "agent-1",
       sessionId: "session-1",

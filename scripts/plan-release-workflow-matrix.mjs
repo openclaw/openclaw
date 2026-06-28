@@ -1,3 +1,4 @@
+// Plans release workflow matrix entries from profile and suite inputs.
 const DOCKER_E2E_CHUNKS = [
   {
     chunk_id: "core",
@@ -99,7 +100,14 @@ const LIVE_MODEL_PROVIDERS = [
   {
     provider_label: "MiniMax",
     providers: "minimax",
+    models: "minimax/MiniMax-M2.7,minimax-portal/MiniMax-M2.7",
+    max_models: "2",
     profiles: "stable full",
+  },
+  {
+    provider_label: "Moonshot",
+    providers: "moonshot",
+    profiles: "full",
   },
   {
     provider_label: "OpenAI",
@@ -162,6 +170,9 @@ function planProfileMatrix(entries, profile, enabled, disabledReason, labelForEn
   };
 }
 
+/**
+ * Creates the Docker E2E/live model matrix plan for a release profile.
+ */
 export function createReleaseWorkflowMatrixPlan(options = {}) {
   const releaseProfile = options.releaseProfile ?? "stable";
   const dockerE2eEnabled =

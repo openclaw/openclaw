@@ -1,13 +1,11 @@
+// Shared session-store writer queue state and test-only drains.
 import {
   clearStoreWriterQueuesForTest,
   drainStoreWriterQueuesForTest,
   type StoreWriterQueue,
-  type StoreWriterTask,
 } from "../../shared/store-writer-queue.js";
 import { clearSessionStoreCaches } from "./store-cache.js";
 
-/** Queued session store write task type. */
-export type SessionStoreWriterTask = StoreWriterTask;
 export type SessionStoreWriterQueue = StoreWriterQueue;
 
 export const WRITER_QUEUES = new Map<string, SessionStoreWriterQueue>();

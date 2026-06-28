@@ -1,3 +1,4 @@
+// Resolves trusted tool policy for plugins from runtime config.
 import { getRuntimeConfig } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isPlainObject } from "../utils.js";
@@ -17,6 +18,7 @@ import type {
 import { getActivePluginRegistry } from "./runtime.js";
 
 type TrustedPolicyRegistration = PluginTrustedToolPolicyRegistryRegistration;
+type TrustedToolPolicyRegistry = Pick<PluginRegistry, "trustedToolPolicies"> | null | undefined;
 
 /** Diagnostic entry for an installed trusted tool policy. */
 export type TrustedToolPolicyDiagnosticEntry = {
@@ -25,9 +27,11 @@ export type TrustedToolPolicyDiagnosticEntry = {
   pluginName?: string;
 };
 
-/** True when the active plugin registry has trusted tool policies. */
-export function hasTrustedToolPolicies(): boolean {
-  return copyTrustedPolicyRegistrations(getActivePluginRegistry()).length > 0;
+/** True when the supplied or active plugin registry has trusted tool policies. */
+export function hasTrustedToolPolicies(
+  registry: TrustedToolPolicyRegistry = getActivePluginRegistry(),
+): boolean {
+  return copyTrustedPolicyRegistrations(registry).length > 0;
 }
 
 function unreadableTrustedPolicyRegistration(): TrustedPolicyRegistration {
@@ -41,7 +45,7 @@ function unreadableTrustedPolicyRegistration(): TrustedPolicyRegistration {
 }
 
 function copyTrustedPolicyRegistrations(
-  registry: PluginRegistry | null | undefined,
+  registry: TrustedToolPolicyRegistry,
 ): TrustedPolicyRegistration[] {
   let policies: unknown;
   try {
@@ -130,8 +134,10 @@ function trustedPolicyFailureResult(
 }
 
 /** Lists trusted tool policies for status and diagnostics. */
-export function getTrustedToolPolicyDiagnosticEntries(): TrustedToolPolicyDiagnosticEntry[] {
-  return copyTrustedPolicyRegistrations(getActivePluginRegistry()).map((registration) => {
+export function getTrustedToolPolicyDiagnosticEntries(
+  registry: TrustedToolPolicyRegistry = getActivePluginRegistry(),
+): TrustedToolPolicyDiagnosticEntry[] {
+  return copyTrustedPolicyRegistrations(registry).map((registration) => {
     const entry: TrustedToolPolicyDiagnosticEntry = {
       id: readTrustedPolicyId(registration),
       pluginId: trustedPolicyDiagnosticPluginId(registration),
@@ -183,9 +189,10 @@ export async function runTrustedToolPolicies(
           ctx?: Pick<PluginHookToolContext, "toolKind" | "toolInputKind">;
         }
       | undefined;
+    registry?: TrustedToolPolicyRegistry;
   },
 ): Promise<PluginHookBeforeToolCallResult | undefined> {
-  const policies = copyTrustedPolicyRegistrations(getActivePluginRegistry());
+  const policies = copyTrustedPolicyRegistrations(options?.registry ?? getActivePluginRegistry());
   let adjustedParams = event.params;
   let hasAdjustedParams = false;
   let approval: PluginHookBeforeToolCallResult["requireApproval"];

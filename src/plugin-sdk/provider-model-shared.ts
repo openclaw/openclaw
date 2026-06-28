@@ -1,3 +1,4 @@
+// Provider model helpers normalize model catalog entries shared by provider plugins.
 import { normalizeProviderId as normalizeProviderIdCore } from "@openclaw/model-catalog-core/provider-id";
 import {
   normalizeAntigravityPreviewModelId as normalizeAntigravityPreviewModelIdCore,
@@ -19,13 +20,20 @@ import type {
   ProviderReasoningOutputModeContext,
   ProviderReplayPolicyContext,
   ProviderSanitizeReplayHistoryContext,
-  ProviderThinkingProfile,
 } from "./plugin-entry.js";
 
 export type {
   ModelApi,
   ModelProviderDeclarationConfig as ModelProviderConfig,
 } from "../config/types.models.js";
+export {
+  resolveClaudeFable5ModelIdentity,
+  resolveClaudeModelIdentity,
+  resolveClaudeNativeThinkingLevelMap,
+  supportsClaudeAdaptiveThinking,
+  supportsClaudeNativeMaxEffort,
+  supportsClaudeNativeXhighEffort,
+} from "@openclaw/llm-core";
 export type {
   UnifiedModelCatalogEntry,
   UnifiedModelCatalogKind,
@@ -99,21 +107,10 @@ export {
 } from "../plugins/provider-model-helpers.js";
 import { normalizeOptionalLowercaseString } from "../../packages/normalization-core/src/string-coerce.js";
 
-const CLAUDE_OPUS_48_MODEL_PREFIXES = ["claude-opus-4-8", "claude-opus-4.8"] as const;
-const CLAUDE_OPUS_47_MODEL_PREFIXES = ["claude-opus-4-7", "claude-opus-4.7"] as const;
-const CLAUDE_ADAPTIVE_THINKING_DEFAULT_MODEL_PREFIXES = [
-  "claude-opus-4-6",
-  "claude-opus-4.6",
-  "claude-sonnet-4-6",
-  "claude-sonnet-4.6",
-] as const;
-const BASE_CLAUDE_THINKING_LEVELS = [
-  { id: "off" },
-  { id: "minimal" },
-  { id: "low" },
-  { id: "medium" },
-  { id: "high" },
-] as const satisfies ProviderThinkingProfile["levels"];
+export {
+  isClaudeAdaptiveThinkingDefaultModelId,
+  resolveClaudeThinkingProfile,
+} from "../plugins/provider-claude-thinking.js";
 
 function getModelProviderHint(modelId: string): string | null {
   const trimmed = normalizeOptionalLowercaseString(modelId);
@@ -133,53 +130,6 @@ export function isProxyReasoningUnsupportedModelHint(
   modelId: string,
 ): boolean {
   return getModelProviderHint(modelId) === "x-ai";
-}
-
-function matchesClaudeModelPrefix(modelId: string, prefixes: readonly string[]): boolean {
-  const lower = normalizeOptionalLowercaseString(modelId);
-  return Boolean(lower && prefixes.some((prefix) => lower.startsWith(prefix)));
-}
-
-function isClaudeOpus47ModelId(modelId: string): boolean {
-  return matchesClaudeModelPrefix(modelId, CLAUDE_OPUS_47_MODEL_PREFIXES);
-}
-
-function isClaudeOpus48ModelId(modelId: string): boolean {
-  return matchesClaudeModelPrefix(modelId, CLAUDE_OPUS_48_MODEL_PREFIXES);
-}
-
-/** @deprecated Anthropic provider-owned model helper; do not use from third-party plugins. */
-export function isClaudeAdaptiveThinkingDefaultModelId(
-  /** Claude model id to check against adaptive-thinking default families. */
-  modelId: string,
-): boolean {
-  return matchesClaudeModelPrefix(modelId, CLAUDE_ADAPTIVE_THINKING_DEFAULT_MODEL_PREFIXES);
-}
-
-/** @deprecated Anthropic provider-owned model helper; do not use from third-party plugins. */
-export function resolveClaudeThinkingProfile(
-  /** Claude model id used to choose available thinking levels and defaults. */
-  modelId: string,
-): ProviderThinkingProfile {
-  if (isClaudeOpus48ModelId(modelId)) {
-    return {
-      levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
-      defaultLevel: "off",
-    };
-  }
-  if (isClaudeOpus47ModelId(modelId)) {
-    return {
-      levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "xhigh" }, { id: "adaptive" }, { id: "max" }],
-      defaultLevel: "off",
-    };
-  }
-  if (isClaudeAdaptiveThinkingDefaultModelId(modelId)) {
-    return {
-      levels: [...BASE_CLAUDE_THINKING_LEVELS, { id: "adaptive" }],
-      defaultLevel: "adaptive",
-    };
-  }
-  return { levels: BASE_CLAUDE_THINKING_LEVELS };
 }
 
 /**
@@ -224,6 +174,8 @@ type BuildProviderReplayFamilyHooksOptions =
       family: "openai-compatible";
       /** Whether replay policy should rewrite tool call ids for provider compatibility. */
       sanitizeToolCallIds?: boolean;
+      /** Optional output style for repeated tool call ids. */
+      duplicateToolCallIdStyle?: "openai";
       /** Whether replay policy should strip reasoning blocks from history. */
       dropReasoningFromHistory?: boolean;
     }
@@ -260,6 +212,7 @@ export function buildProviderReplayFamilyHooks(
     case "openai-compatible": {
       const policyOptions = {
         sanitizeToolCallIds: options.sanitizeToolCallIds,
+        duplicateToolCallIdStyle: options.duplicateToolCallIdStyle,
         dropReasoningFromHistory: options.dropReasoningFromHistory,
       };
       return {

@@ -1,8 +1,31 @@
+// Discord tests cover api plugin behavior.
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DiscordApiError, fetchDiscord, requestDiscord } from "./api.js";
 import { jsonResponse } from "./test-http-helpers.js";
+
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
 
 describe("fetchDiscord", () => {
   beforeEach(() => {
@@ -45,6 +68,31 @@ describe("fetchDiscord", () => {
         retry: { attempts: 1 },
       }),
     ).rejects.toThrow("Discord API /users/@me/guilds failed (404): Not Found");
+  });
+
+  it("bounds Discord API error bodies without using response.text()", async () => {
+    const tracked = cancelTrackedResponse(`${"discord api unavailable ".repeat(1024)}tail`, {
+      status: 503,
+      headers: { "content-type": "text/plain" },
+    });
+    const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+    const fetcher = withFetchPreconnect(async () => tracked.response);
+
+    let error: unknown;
+    try {
+      await fetchDiscord("/users/@me/guilds", "test", fetcher, {
+        retry: { attempts: 1 },
+      });
+    } catch (err) {
+      error = err;
+    }
+
+    expect(error).toBeInstanceOf(DiscordApiError);
+    expect(String(error)).toContain("Discord API /users/@me/guilds failed (503)");
+    expect(String(error)).toContain("discord api unavailable");
+    expect(String(error)).not.toContain("tail");
+    expect(tracked.wasCanceled()).toBe(true);
+    expect(textSpy).not.toHaveBeenCalled();
   });
 
   it("sanitizes Cloudflare HTML rate limits and applies a fallback cooldown", async () => {

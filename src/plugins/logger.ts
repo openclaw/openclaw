@@ -1,3 +1,4 @@
+// Builds plugin-scoped loggers for runtime and setup code.
 import type { PluginLogger } from "./types.js";
 
 type LoggerLike = {

@@ -1,3 +1,4 @@
+// Normalizes plugin allowlist config used by loading and validation.
 type PluginAllowlistConfigCarrier = {
   plugins?: {
     allow?: string[];

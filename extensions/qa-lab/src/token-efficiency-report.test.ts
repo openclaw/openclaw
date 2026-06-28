@@ -1,3 +1,4 @@
+// Qa Lab tests cover token efficiency report plugin behavior.
 import { describe, expect, it } from "vitest";
 import type {
   RuntimeId,
@@ -131,6 +132,56 @@ describe("token efficiency report", () => {
       "missing-live-usage openclaw live usage totalTokens=0",
       "missing-live-usage codex live usage totalTokens=0",
     ]);
+  });
+
+  it("fails live reports with non-integer token usage evidence", () => {
+    const report = buildTokenEfficiencyReport({
+      summary: makeLiveSummary([
+        makeRuntimeParity(
+          "fractional-live-usage",
+          makeCell("openclaw", { inputTokens: 100.5, outputTokens: 0, totalTokens: 100.5 }),
+          makeCell("codex", { inputTokens: 101, outputTokens: 0, totalTokens: 101 }),
+        ),
+      ]),
+    });
+
+    expect(report.pass).toBe(false);
+    expect(report.failures).toEqual([
+      "fractional-live-usage openclaw live usage inputTokens must be a non-negative integer",
+      "fractional-live-usage openclaw live usage totalTokens must be a non-negative integer",
+    ]);
+  });
+
+  it("fails empty live runtime summaries instead of treating them as skipped proof", () => {
+    const report = buildTokenEfficiencyReport({
+      generatedAt: "2026-05-10T00:00:00.000Z",
+      summary: makeLiveSummary([]),
+    });
+
+    expect(report.status).toBe("evaluated");
+    expect(report.pass).toBe(false);
+    expect(report.failures).toEqual([
+      "No runtime parity captures were present in the suite summary.",
+    ]);
+    expect(report.rows).toEqual([]);
+    expect(report.skipReason).toBeUndefined();
+    expect(renderTokenEfficiencyMarkdownReport(report)).toContain("- Verdict: fail");
+  });
+
+  it("keeps empty mock runtime summaries skipped as non-live estimates", () => {
+    const report = buildTokenEfficiencyReport({
+      summary: {
+        scenarios: [],
+        run: {
+          providerMode: "mock-openai",
+          runtimePair: ["openclaw", "codex"],
+        },
+      },
+    });
+
+    expect(report.status).toBe("skipped");
+    expect(report.pass).toBe(true);
+    expect(report.failures).toEqual([]);
   });
 
   it("labels mock-estimated Codex increases as regressions without failing the live gate", () => {

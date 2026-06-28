@@ -1,3 +1,8 @@
+/**
+ * Guarded provider fetch transport utilities.
+ *
+ * Applies request timeouts, proxy/TLS overrides, SSRF policy, local-service leases, retry hints, and SSE normalization.
+ */
 import {
   isCloudMetadataIpAddress,
   isLinkLocalIpAddress,
@@ -38,7 +43,19 @@ import {
 } from "./provider-request-config.js";
 
 const DEFAULT_MAX_SDK_RETRY_WAIT_SECONDS = 60;
+const OPENAI_SDK_STREAM_CONTENT_SNIFF_BYTES = 2 * 1024;
 const log = createSubsystemLogger("provider-transport-fetch");
+
+/** Max bytes for an entire JSON body synthesized into SSE frames. Prevents OOM
+ *  when a hostile streaming endpoint returns a never-ending JSON response
+ *  without Content-Length. */
+const SSE_SYNTHESIZE_JSON_MAX_BYTES = 16 * 1024 * 1024;
+
+/** Max bytes for the internal SSE sanitization buffer between event boundaries.
+ *  A response that cannot find a \n\n boundary within this many characters is
+ *  almost certainly hostile or broken — cap the buffer rather than let it grow. */
+const SSE_SANITIZE_BUFFER_MAX_BYTES = 64 * 1024;
+
 const BLOCKED_EXACT_ORIGIN_TRUST_HOSTNAME_LABELS = new Set(["instance-data"]);
 const PLAIN_DECIMAL_NUMBER_RE = /^\d+(?:\.\d+)?$/;
 const RETRY_AFTER_HTTP_DATE_RE =
@@ -96,6 +113,7 @@ function sanitizeOpenAISdkSseResponse(
     const encoder = new TextEncoder();
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     let buffer = "";
+    let totalBytes = 0;
     const sseBody = new ReadableStream<Uint8Array>({
       start() {
         reader = source.getReader();
@@ -114,9 +132,17 @@ function sanitizeOpenAISdkSseResponse(
               controller.close();
               return;
             }
+            const nextTotalBytes = totalBytes + chunk.value.byteLength;
+            if (nextTotalBytes > SSE_SYNTHESIZE_JSON_MAX_BYTES) {
+              throw new Error(
+                `Streaming JSON body exceeded ${SSE_SYNTHESIZE_JSON_MAX_BYTES} bytes while synthesizing SSE frames`,
+              );
+            }
+            totalBytes = nextTotalBytes;
             buffer += decoder.decode(chunk.value, { stream: true });
           }
         } catch (error) {
+          await reader?.cancel(error).catch(() => {});
           controller.error(error);
         }
       },
@@ -151,6 +177,11 @@ function sanitizeOpenAISdkSseResponse(
     for (;;) {
       const boundary = findSseEventBoundary(buffer);
       if (!boundary) {
+        if (buffer.length > SSE_SANITIZE_BUFFER_MAX_BYTES) {
+          throw new Error(
+            `SSE response exceeded max buffer size (${SSE_SANITIZE_BUFFER_MAX_BYTES} bytes) without event boundary`,
+          );
+        }
         return enqueued;
       }
       const block = buffer.slice(0, boundary.index);
@@ -161,6 +192,7 @@ function sanitizeOpenAISdkSseResponse(
       if (hasReadableSseData(block)) {
         controller.enqueue(encoder.encode(`${block}${separator}`));
         enqueued += 1;
+        return enqueued;
       }
     }
   };
@@ -172,6 +204,10 @@ function sanitizeOpenAISdkSseResponse(
     async pull(controller) {
       try {
         for (;;) {
+          const pending = enqueueSanitized(controller, "");
+          if (pending > 0) {
+            return;
+          }
           const chunk = await reader?.read();
           if (!chunk || chunk.done) {
             const tail = decoder.decode();
@@ -194,6 +230,7 @@ function sanitizeOpenAISdkSseResponse(
           }
         }
       } catch (error) {
+        await reader?.cancel(error).catch(() => {});
         controller.error(error);
       }
     },
@@ -228,15 +265,93 @@ function isOpenAISdkStreamContentType(contentType: string): boolean {
   return /\btext\/event-stream\b/i.test(contentType) || isJsonContentType(contentType);
 }
 
-async function assertOpenAISdkStreamContentType(params: {
+type OpenAISdkStreamBodyKind = "html" | "json" | "sse" | "unknown";
+
+function classifyOpenAISdkStreamBodyPrefix(text: string): OpenAISdkStreamBodyKind {
+  const trimmed = text.replace(/^\uFEFF/u, "").trimStart();
+  if (!trimmed) {
+    return "unknown";
+  }
+  if (trimmed.startsWith("<")) {
+    return "html";
+  }
+  if (trimmed.startsWith("{") || trimmed.startsWith("[")) {
+    return "json";
+  }
+  if (/^(?::|(?:data|event|id|retry)(?::|\r?\n|\r))/u.test(trimmed)) {
+    return "sse";
+  }
+  const boundary = findSseEventBoundary(text);
+  if (boundary && hasReadableSseData(text.slice(0, boundary.index))) {
+    return "sse";
+  }
+  return "unknown";
+}
+
+async function classifyOpenAISdkStreamBody(response: Response): Promise<OpenAISdkStreamBodyKind> {
+  const reader = response.clone().body?.getReader();
+  if (!reader) {
+    return "unknown";
+  }
+
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = "";
+  try {
+    while (total < OPENAI_SDK_STREAM_CONTENT_SNIFF_BYTES) {
+      const { value, done } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (!value || value.byteLength === 0) {
+        continue;
+      }
+      const remaining = OPENAI_SDK_STREAM_CONTENT_SNIFF_BYTES - total;
+      const chunk = value.byteLength > remaining ? value.subarray(0, remaining) : value;
+      total += chunk.byteLength;
+      text += decoder.decode(chunk, { stream: true });
+      const kind = classifyOpenAISdkStreamBodyPrefix(text);
+      if (kind !== "unknown") {
+        return kind;
+      }
+    }
+    text += decoder.decode();
+    return classifyOpenAISdkStreamBodyPrefix(text);
+  } finally {
+    void reader.cancel().catch(() => undefined);
+  }
+}
+
+function withOpenAISdkStreamContentType(response: Response, contentType: string): Response {
+  const headers = new Headers(response.headers);
+  headers.set("content-type", contentType);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+async function normalizeOpenAISdkStreamContentType(params: {
   response: Response;
   model: Model;
   release: () => Promise<void>;
   localServiceLease?: ProviderLocalServiceLease;
-}): Promise<void> {
+}): Promise<Response> {
   const contentType = params.response.headers.get("content-type") ?? "";
   if (!params.response.ok || !params.response.body || isOpenAISdkStreamContentType(contentType)) {
-    return;
+    return params.response;
+  }
+  if (!contentType.trim()) {
+    // ChatGPT Codex can stream valid SSE with no content-type header. Sniff a
+    // clone so the SDK still receives the original body once we normalize it.
+    const kind = await classifyOpenAISdkStreamBody(params.response).catch(() => "unknown" as const);
+    if (kind === "sse") {
+      return withOpenAISdkStreamContentType(params.response, "text/event-stream; charset=utf-8");
+    }
+    if (kind === "json") {
+      return withOpenAISdkStreamContentType(params.response, "application/json; charset=utf-8");
+    }
   }
   const body = await readResponseTextLimited(params.response).catch(() => "");
   await params.release().catch(() => undefined);
@@ -755,7 +870,7 @@ export function buildGuardedModelFetch(
       });
     }
     if (synthesizeJsonAsSse && options?.sanitizeSse !== false) {
-      await assertOpenAISdkStreamContentType({
+      response = await normalizeOpenAISdkStreamContentType({
         response,
         model,
         release: result.release,

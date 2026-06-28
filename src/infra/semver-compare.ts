@@ -1,3 +1,4 @@
+// Compares semantic versions for package and runtime compatibility checks.
 type ComparableSemver = {
   major: number;
   minor: number;

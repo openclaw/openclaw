@@ -1,8 +1,14 @@
+/**
+ * Applies runtime-plan or provider fallback tool schema policy. The helpers
+ * normalize tool schemas, preserve owner metadata across cloned definitions,
+ * and emit provider diagnostics.
+ */
 import type { TSchema } from "typebox";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRuntimePluginHandle } from "../../plugins/provider-hook-runtime.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { copyPluginToolMeta } from "../../plugins/tools.js";
+import { copyBeforeToolCallHookMarker } from "../before-tool-call-metadata.js";
 import { copyChannelAgentToolMeta } from "../channel-tools.js";
 import {
   logProviderToolSchemaDiagnostics,
@@ -13,10 +19,9 @@ import {
   filterProviderNormalizableTools,
   type RuntimeToolSchemaDiagnostic,
 } from "../tool-schema-projection.js";
+import { copyToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import type { AgentRuntimePlan } from "./types.js";
 
-// Shared by normalization and diagnostics so the same provider/model/runtime
-// context reaches both runtime-plan hooks and provider fallback code.
 type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult = unknown> = {
   runtimePlan?: AgentRuntimePlan;
   tools: AgentTool<TSchemaType, TResult>[];
@@ -29,6 +34,10 @@ type AgentRuntimeToolPolicyParams<TSchemaType extends TSchema = TSchema, TResult
   model?: ProviderRuntimeModel;
   runtimeHandle?: ProviderRuntimePluginHandle;
   allowProviderRuntimePluginLoad?: boolean;
+  /**
+   * Invoked on every normalization, including with an empty list, so
+   * consumers can observe the all-clear and retire stale quarantine state.
+   */
   onPreNormalizationSchemaDiagnostics?: (
     diagnostics: readonly RuntimeToolSchemaDiagnostic[],
     tools: readonly AgentTool<TSchemaType, TResult>[],
@@ -48,14 +57,16 @@ function runtimePlanToolContext(params: {
   };
 }
 
-// Normalizers may return cloned tool definitions. Copy plugin/channel metadata
-// so downstream inventory, delivery, and attribution still know the owner.
+// Normalizers may return cloned tool definitions. Preserve owner and private
+// execution metadata so downstream dispatch keeps the same policy and result contract.
 function copyRuntimeToolMetadata(source: AgentTool, target: AgentTool): void {
   if (source === target) {
     return;
   }
   copyPluginToolMeta(source as never, target as never);
   copyChannelAgentToolMeta(source as never, target as never);
+  copyBeforeToolCallHookMarker(source as never, target as never);
+  copyToolTerminalPresentation(source as never, target as never);
 }
 
 // Duplicate names cannot be matched by map lookup alone, so same-index matches
@@ -95,12 +106,10 @@ export function normalizeAgentRuntimeTools<
 >(params: AgentRuntimeToolPolicyParams<TSchemaType, TResult>): AgentTool<TSchemaType, TResult>[] {
   const planContext = runtimePlanToolContext(params);
   const normalizableToolProjection = filterProviderNormalizableTools(params.tools);
-  if (normalizableToolProjection.diagnostics.length > 0) {
-    params.onPreNormalizationSchemaDiagnostics?.(
-      normalizableToolProjection.diagnostics,
-      params.tools,
-    );
-  }
+  params.onPreNormalizationSchemaDiagnostics?.(
+    normalizableToolProjection.diagnostics,
+    params.tools,
+  );
   const normalizableTools = [...normalizableToolProjection.tools] as AgentTool<
     TSchemaType,
     TResult

@@ -1,3 +1,4 @@
+// Web media helpers load local and remote media for web-facing surfaces.
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { maxBytesForKind, type MediaKind } from "@openclaw/media-core/constants";
@@ -32,6 +33,7 @@ import {
   readImageMetadataFromHeader,
   readImageProbeFromHeader,
 } from "./media-services.js";
+import { extractOriginalFilename, getMediaDir } from "./store.js";
 
 export { getDefaultLocalRoots, LocalMediaAccessError };
 export type { LocalMediaAccessErrorCode };
@@ -281,6 +283,13 @@ function isPathInsideRoot(filePath: string | undefined, root: string): boolean {
   return (
     relative === "" || (relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative))
   );
+}
+
+function resolveLocalMediaFileName(filePath: string): string | undefined {
+  const fileName = basenameFromAnyPath(filePath) || undefined;
+  return fileName && isPathInsideRoot(filePath, getMediaDir())
+    ? extractOriginalFilename(fileName)
+    : fileName;
 }
 
 function hasHtmlDocumentShape(text: string): boolean {
@@ -1073,7 +1082,7 @@ async function loadWebMediaInternal(
       trustedGeneratedHtmlPath,
     });
   }
-  let fileName = basenameFromAnyPath(mediaUrl) || undefined;
+  let fileName = resolveLocalMediaFileName(mediaUrl);
   if (fileName && !extnameFromAnyPath(fileName) && mime) {
     const ext = extensionForMime(mime);
     if (ext) {

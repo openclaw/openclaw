@@ -1,3 +1,4 @@
+// Mocks provider usage fetching for tests that assert accounting behavior.
 import { vi } from "vitest";
 import { withFetchPreconnect } from "./fetch-mock.js";
 

@@ -1,3 +1,4 @@
+// Memory Wiki tests cover markdown plugin behavior.
 import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
@@ -5,6 +6,7 @@ import {
   renderWikiMarkdown,
   slugifyWikiSegment,
   toWikiPageSummary,
+  WIKI_RAW_SOURCE_MARKER,
 } from "./markdown.js";
 
 describe("slugifyWikiSegment", () => {
@@ -49,6 +51,280 @@ describe("slugifyWikiSegment", () => {
 });
 
 describe("toWikiPageSummary", () => {
+  it("marks raw and generated source body metadata", () => {
+    const rawSource = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/raw-alpha.md",
+      relativePath: "sources/raw-alpha.md",
+      raw: `# Raw Alpha Source\n\n${WIKI_RAW_SOURCE_MARKER}\n\nRaw source notes.\n`,
+    });
+    const rawSourceWithImportWords = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/raw-import-words.md",
+      relativePath: "sources/raw-import-words.md",
+      raw: "# Raw Source\n\nsourceType: memory-bridge\n\n## Bridge Source\n",
+    });
+    const rawSourceWithIndentedMarker = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/raw-indented-marker.md",
+      relativePath: "sources/raw-indented-marker.md",
+      raw: `# Raw Source\n\n    ${WIKI_RAW_SOURCE_MARKER}\n`,
+    });
+    const rawSourceWithQuotedWrapper = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/raw-quoted-wrapper.md",
+      relativePath: "sources/raw-quoted-wrapper.md",
+      raw: [
+        "# Raw Source",
+        "",
+        "Copied import example:",
+        "",
+        "# Memory Bridge: Alpha",
+        "",
+        "## Bridge Source",
+        "",
+        "## Content",
+        "alpha",
+        "",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+    });
+    const rawSourceWithQuotedLocalFileWrapper = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/raw-quoted-local-file-wrapper.md",
+      relativePath: "sources/raw-quoted-local-file-wrapper.md",
+      raw: [
+        "# Raw Source",
+        "",
+        WIKI_RAW_SOURCE_MARKER,
+        "",
+        "Copied local-file import example:",
+        "",
+        "## Source",
+        "- Type: `local-file`",
+        "",
+        "## Content",
+        "alpha",
+        "",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+    });
+    const bridgeSource = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/bridge-alpha.md",
+      relativePath: "sources/bridge-alpha.md",
+      raw: [
+        "# Memory Bridge: Alpha",
+        "",
+        "## Bridge Source",
+        "",
+        "## Content",
+        "alpha",
+        "",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+    });
+    const unsafeLocalSource = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/unsafe-alpha.md",
+      relativePath: "sources/unsafe-alpha.md",
+      raw: [
+        "# Unsafe Local Import: alpha.md",
+        "",
+        "## Unsafe Local Source",
+        "",
+        "## Content",
+        "alpha",
+        "",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+    });
+    const localFileSource = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/local-alpha.md",
+      relativePath: "sources/local-alpha.md",
+      raw: [
+        "# Alpha",
+        "",
+        "## Source",
+        "- Type: `local-file`",
+        "- Path: `/tmp/alpha.md`",
+        "",
+        "## Content",
+        "alpha",
+        "",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+    });
+    const markedLocalFileSource = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/local-marked-alpha.md",
+      relativePath: "sources/local-marked-alpha.md",
+      raw: [
+        "# Alpha",
+        "",
+        WIKI_RAW_SOURCE_MARKER,
+        "",
+        "## Source",
+        "- Type: `local-file`",
+        "- Path: `/tmp/source.md`",
+        "",
+        "## Content",
+        "alpha",
+        "",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+    });
+    const leadingMarkedLocalFileSource = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/local-leading-marked-alpha.md",
+      relativePath: "sources/local-leading-marked-alpha.md",
+      raw: [
+        WIKI_RAW_SOURCE_MARKER,
+        "",
+        "# Alpha",
+        "",
+        "## Source",
+        "- Type: `local-file`",
+        "- Path: `/tmp/source.md`",
+        "",
+        "## Content",
+        "alpha",
+        "",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+    });
+    const partialFrontmatterLocalFileSource = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/local-partial-frontmatter-alpha.md",
+      relativePath: "sources/local-partial-frontmatter-alpha.md",
+      raw: renderWikiMarkdown({
+        frontmatter: {
+          id: "source.partial",
+          title: "Partial Source",
+        },
+        body: [
+          WIKI_RAW_SOURCE_MARKER,
+          "",
+          "# Alpha",
+          "",
+          "## Source",
+          "- Type: `local-file`",
+          "- Path: `/tmp/source.md`",
+          "",
+          "## Content",
+          "alpha",
+          "",
+          "## Notes",
+          "<!-- openclaw:human:start -->",
+          "<!-- openclaw:human:end -->",
+          "",
+        ].join("\n"),
+      }),
+    });
+    const chatGptSource = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/chatgpt-alpha.md",
+      relativePath: "sources/chatgpt-alpha.md",
+      raw: [
+        "# ChatGPT Export: Alpha",
+        "",
+        "## Source",
+        "- Conversation id: `abc123`",
+        "- Export file: `/tmp/conversations.json`",
+        "",
+        "## Active Branch Transcript",
+        "### User",
+        "alpha",
+        "",
+        "## Notes",
+        "<!-- openclaw:human:start -->",
+        "<!-- openclaw:human:end -->",
+        "",
+      ].join("\n"),
+    });
+    const structuredSource = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/structured-alpha.md",
+      relativePath: "sources/structured-alpha.md",
+      raw: renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          id: "source.alpha",
+          title: "Alpha Source",
+        },
+        body: "# Alpha Source\n",
+      }),
+    });
+    const rawSourceWithNativeFrontmatter = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/native-frontmatter.md",
+      relativePath: "sources/native-frontmatter.md",
+      raw: `---\ntags:\n  - alpha\n---\n\n# Native Frontmatter\n\n${WIKI_RAW_SOURCE_MARKER}\n\nRaw notes.\n`,
+    });
+    const wikiSourceWithRawMarker = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/wiki-frontmatter.md",
+      relativePath: "sources/wiki-frontmatter.md",
+      raw: renderWikiMarkdown({
+        frontmatter: {
+          pageType: "source",
+          title: "Damaged Wiki Source",
+        },
+        body: `# Damaged Wiki Source\n\n${WIKI_RAW_SOURCE_MARKER}\n`,
+      }),
+    });
+    const crlfStructuredSource = toWikiPageSummary({
+      absolutePath: "/tmp/wiki/sources/crlf-structured-alpha.md",
+      relativePath: "sources/crlf-structured-alpha.md",
+      raw: "---\r\npageType: source\r\nid: source.crlf\r\ntitle: CRLF Source\r\n---\r\n\r\n# CRLF Source\r\n",
+    });
+
+    expect(rawSource?.hasFrontmatter).toBe(false);
+    expect(rawSource?.importedSourceBody).toBeUndefined();
+    expect(rawSource?.generatedSourceBody).toBeUndefined();
+    expect(rawSource?.unmanagedRawSourceBody).toBe(true);
+    expect(rawSourceWithImportWords?.importedSourceBody).toBeUndefined();
+    expect(rawSourceWithImportWords?.generatedSourceBody).toBeUndefined();
+    expect(rawSourceWithImportWords?.unmanagedRawSourceBody).toBeUndefined();
+    expect(rawSourceWithIndentedMarker?.unmanagedRawSourceBody).toBeUndefined();
+    expect(rawSourceWithQuotedWrapper?.importedSourceBody).toBeUndefined();
+    expect(rawSourceWithQuotedWrapper?.generatedSourceBody).toBeUndefined();
+    expect(rawSourceWithQuotedWrapper?.unmanagedRawSourceBody).toBeUndefined();
+    expect(rawSourceWithQuotedLocalFileWrapper?.generatedSourceBody).toBeUndefined();
+    expect(rawSourceWithQuotedLocalFileWrapper?.unmanagedRawSourceBody).toBe(true);
+    expect(bridgeSource?.hasFrontmatter).toBe(false);
+    expect(bridgeSource?.importedSourceBody).toBe("bridge");
+    expect(bridgeSource?.generatedSourceBody).toBe("bridge");
+    expect(unsafeLocalSource?.hasFrontmatter).toBe(false);
+    expect(unsafeLocalSource?.importedSourceBody).toBe("unsafe-local");
+    expect(unsafeLocalSource?.generatedSourceBody).toBe("unsafe-local");
+    expect(localFileSource?.generatedSourceBody).toBe("local-file");
+    expect(markedLocalFileSource?.generatedSourceBody).toBe("local-file");
+    expect(markedLocalFileSource?.unmanagedRawSourceBody).toBeUndefined();
+    expect(leadingMarkedLocalFileSource?.generatedSourceBody).toBe("local-file");
+    expect(leadingMarkedLocalFileSource?.unmanagedRawSourceBody).toBeUndefined();
+    expect(partialFrontmatterLocalFileSource?.generatedSourceBody).toBe("local-file");
+    expect(partialFrontmatterLocalFileSource?.unmanagedRawSourceBody).toBeUndefined();
+    expect(chatGptSource?.generatedSourceBody).toBe("chatgpt-export");
+    expect(structuredSource?.hasFrontmatter).toBe(true);
+    expect(structuredSource?.importedSourceBody).toBeUndefined();
+    expect(structuredSource?.generatedSourceBody).toBeUndefined();
+    expect(structuredSource?.unmanagedRawSourceBody).toBeUndefined();
+    expect(rawSourceWithNativeFrontmatter?.hasFrontmatter).toBe(true);
+    expect(rawSourceWithNativeFrontmatter?.unmanagedRawSourceBody).toBe(true);
+    expect(wikiSourceWithRawMarker?.hasFrontmatter).toBe(true);
+    expect(wikiSourceWithRawMarker?.unmanagedRawSourceBody).toBeUndefined();
+    expect(crlfStructuredSource?.hasFrontmatter).toBe(true);
+    expect(crlfStructuredSource?.pageType).toBe("source");
+  });
+
   it("normalizes agent-facing people wiki metadata", () => {
     const raw = renderWikiMarkdown({
       frontmatter: {

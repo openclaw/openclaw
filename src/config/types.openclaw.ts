@@ -1,3 +1,4 @@
+// Defines the top-level OpenClaw configuration type.
 import type { SilentReplyPolicyShape } from "../shared/silent-reply-policy.js";
 import type { TranscriptsConfig } from "../transcripts/config.js";
 import type { AccessGroupsConfig } from "./types.access-groups.js";
@@ -14,6 +15,7 @@ import type { CrestodianConfig } from "./types.crestodian.js";
 import type { CronConfig } from "./types.cron.js";
 import type { DiscoveryConfig, GatewayConfig, TalkConfig } from "./types.gateway.js";
 import type { HooksConfig } from "./types.hooks.js";
+import type { MarketplacesConfig } from "./types.marketplaces.js";
 import type { McpConfig } from "./types.mcp.js";
 import type { MemoryConfig } from "./types.memory.js";
 import type {
@@ -165,8 +167,18 @@ export type OpenClawConfig = {
       avatar?: string;
     };
   };
+  /** Terminal UI display settings. */
+  tui?: {
+    /** Footer display settings for the terminal UI. */
+    footer?: {
+      /** Show the remote Gateway hostname in the footer for non-local URL-backed connections. */
+      showRemoteHost?: boolean;
+    };
+  };
   /** Secret providers, defaults, and ref-resolution settings. */
   secrets?: SecretsConfig;
+  /** Marketplace feed and local package source profile configuration. */
+  marketplaces?: MarketplacesConfig;
   /** Skill loading and bundled skill configuration. */
   skills?: SkillsConfig;
   /** Plugin registry/install/runtime configuration. */

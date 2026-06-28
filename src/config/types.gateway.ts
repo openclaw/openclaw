@@ -1,3 +1,4 @@
+// Defines gateway runtime and networking configuration types.
 import type { SecretInput } from "./types.secrets.js";
 
 /** Gateway bind-address policy for local server startup. */

@@ -1,3 +1,4 @@
+// Tracks detached task runtime state and spawned process handles.
 import type {
   DetachedTaskLifecycleRuntime,
   DetachedTaskLifecycleRuntimeRegistration,

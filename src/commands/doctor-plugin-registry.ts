@@ -1,9 +1,11 @@
+/** Doctor repairs for stale plugin registry entries, managed npm shadows, and peer links. */
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import { saveJsonFile } from "../infra/json-file.js";
 import { tryReadJsonSync } from "../infra/json-files.js";
 import type { BundledPluginSource } from "../plugins/bundled-sources.js";
@@ -13,9 +15,11 @@ import {
   type InstalledPluginIndexRecordStoreOptions,
 } from "../plugins/installed-plugin-index-records.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
+import { hasRetainedManagedNpmInstallMarker } from "../plugins/managed-npm-retention.js";
 import { listManagedPluginNpmRootsSync } from "../plugins/npm-project-roots.js";
 import {
   auditOpenClawPeerDependenciesInManagedNpmRoot,
+  type OpenClawPeerLinkAuditIssue,
   relinkOpenClawPeerDependenciesInManagedNpmRoot,
 } from "../plugins/plugin-peer-link.js";
 import { refreshPluginRegistry } from "../plugins/plugin-registry.js";
@@ -31,6 +35,8 @@ import {
   preflightPluginRegistryInstallMigration,
   type PluginRegistryInstallMigrationParams,
 } from "./doctor/shared/plugin-registry-migration.js";
+
+const PLUGIN_REGISTRY_CHECK_ID = "core/doctor/plugin-registry";
 
 type PluginRegistryDoctorRepairParams = Omit<PluginRegistryInstallMigrationParams, "config"> &
   InstalledPluginIndexRecordStoreOptions & {
@@ -50,6 +56,31 @@ type PluginRegistryDoctorNoteLogger = {
   info: (message: string) => void;
   warn: (message: string) => void;
 };
+
+export type PluginRegistryHealthIssue =
+  | {
+      kind: "registry-missing-or-stale";
+      path: string;
+    }
+  | {
+      kind: "stale-managed-npm-bundled-plugin";
+      pluginId: string;
+      packageName: string;
+      packageDir: string;
+      npmRoot: string;
+      version?: string;
+    }
+  | {
+      kind: "stale-local-bundled-plugin-install-record";
+      pluginId: string;
+      stalePath: string;
+    }
+  | {
+      kind: "managed-npm-openclaw-peer-link";
+      packageName: string;
+      packageDir: string;
+      reason: string;
+    };
 
 function readJsonObject(filePath: string): Record<string, unknown> | null {
   const parsed = tryReadJsonSync(filePath);
@@ -125,6 +156,9 @@ function listStaleManagedNpmBundledPlugins(
         continue;
       }
       const packageDir = path.join(npmRoot, "node_modules", ...packageName.split("/"));
+      if (hasRetainedManagedNpmInstallMarker(packageDir)) {
+        continue;
+      }
       const pluginId = readPluginManifestId(packageDir);
       if (!pluginId || pluginId !== bundled.pluginId) {
         continue;
@@ -246,6 +280,7 @@ function removeManagedNpmPackageLockDependency(params: {
   }
 }
 
+/** Removes managed npm packages that shadow current bundled plugins when repair is enabled. */
 export function maybeRepairStaleManagedNpmBundledPlugins(
   params: PluginRegistryDoctorRepairParams,
 ): boolean {
@@ -285,6 +320,7 @@ export function maybeRepairStaleManagedNpmBundledPlugins(
   return true;
 }
 
+/** Removes local install records that shadow current bundled plugin sources. */
 export async function maybeRepairStaleLocalBundledPluginInstallRecords(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<string[]> {
@@ -315,6 +351,7 @@ export async function maybeRepairStaleLocalBundledPluginInstallRecords(
   return stale.map((record) => record.pluginId);
 }
 
+/** Relinks managed npm plugin packages to the current OpenClaw host packages. */
 export async function maybeRepairManagedNpmOpenClawPeerLinks(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<boolean> {
@@ -382,6 +419,151 @@ async function loadInstallRecordsWithoutPluginIds(
   return records;
 }
 
+async function listManagedNpmOpenClawPeerLinkIssues(
+  params: PluginRegistryDoctorRepairParams,
+): Promise<OpenClawPeerLinkAuditIssue[]> {
+  const audits = await Promise.all(
+    listManagedPluginNpmRoots(params).map((npmRoot) =>
+      auditOpenClawPeerDependenciesInManagedNpmRoot({ npmRoot }),
+    ),
+  );
+  return audits.flatMap((audit) => audit.issues);
+}
+
+export async function detectPluginRegistryHealthIssues(
+  params: PluginRegistryDoctorRepairParams,
+): Promise<PluginRegistryHealthIssue[]> {
+  const preflight = preflightPluginRegistryInstallMigration(params);
+  const issues: PluginRegistryHealthIssue[] = [];
+  if (preflight.action === "migrate") {
+    issues.push({
+      kind: "registry-missing-or-stale",
+      path: preflight.filePath,
+    });
+  }
+  for (const plugin of listStaleManagedNpmBundledPlugins(params)) {
+    issues.push({
+      kind: "stale-managed-npm-bundled-plugin",
+      pluginId: plugin.pluginId,
+      packageName: plugin.packageName,
+      packageDir: plugin.packageDir,
+      npmRoot: plugin.npmRoot,
+      ...(plugin.version ? { version: plugin.version } : {}),
+    });
+  }
+  for (const record of await listStaleLocalBundledPluginInstallRecordShadows(params)) {
+    issues.push({
+      kind: "stale-local-bundled-plugin-install-record",
+      pluginId: record.pluginId,
+      stalePath: record.stalePath,
+    });
+  }
+  for (const issue of await listManagedNpmOpenClawPeerLinkIssues(params)) {
+    issues.push({
+      kind: "managed-npm-openclaw-peer-link",
+      packageName: issue.packageName,
+      packageDir: issue.packageDir,
+      reason: issue.reason,
+    });
+  }
+  return issues;
+}
+
+export function pluginRegistryIssueToHealthFinding(
+  issue: PluginRegistryHealthIssue,
+): HealthFinding {
+  switch (issue.kind) {
+    case "registry-missing-or-stale":
+      return {
+        checkId: PLUGIN_REGISTRY_CHECK_ID,
+        severity: "warning",
+        message: "Persisted plugin registry is missing or stale.",
+        path: issue.path,
+        fixHint: "Run `openclaw doctor --fix` to rebuild the plugin registry from enabled plugins.",
+      };
+    case "stale-managed-npm-bundled-plugin":
+      return {
+        checkId: PLUGIN_REGISTRY_CHECK_ID,
+        severity: "warning",
+        message: `Managed npm package ${issue.packageName}${
+          issue.version ? `@${issue.version}` : ""
+        } shadows bundled plugin ${issue.pluginId}.`,
+        path: issue.packageDir,
+        target: issue.pluginId,
+        fixHint:
+          "Run `openclaw doctor --fix` to remove stale managed npm packages and rebuild the plugin registry.",
+      };
+    case "stale-local-bundled-plugin-install-record":
+      return {
+        checkId: PLUGIN_REGISTRY_CHECK_ID,
+        severity: "warning",
+        message: `Local install record for bundled plugin ${issue.pluginId} points at a stale path.`,
+        path: issue.stalePath,
+        target: issue.pluginId,
+        fixHint:
+          "Run `openclaw doctor --fix` to remove stale local install records and rebuild the plugin registry.",
+      };
+    case "managed-npm-openclaw-peer-link":
+      return {
+        checkId: PLUGIN_REGISTRY_CHECK_ID,
+        severity: "warning",
+        message: `Managed npm package ${issue.packageName} has a broken OpenClaw peer link: ${issue.reason}.`,
+        path: issue.packageDir,
+        target: issue.packageName,
+        fixHint: "Run `openclaw doctor --fix` to relink managed npm plugin packages.",
+      };
+  }
+  return assertNeverPluginRegistryIssue(issue);
+}
+
+export function pluginRegistryIssueToRepairEffect(
+  issue: PluginRegistryHealthIssue,
+): HealthRepairEffect {
+  switch (issue.kind) {
+    case "registry-missing-or-stale":
+      return {
+        kind: "state",
+        action: "would-rebuild-plugin-registry",
+        target: issue.path,
+        dryRunSafe: false,
+      };
+    case "stale-managed-npm-bundled-plugin":
+      return {
+        kind: "package",
+        action: "would-remove-stale-managed-npm-bundled-plugin",
+        target: issue.packageDir,
+        dryRunSafe: false,
+      };
+    case "stale-local-bundled-plugin-install-record":
+      return {
+        kind: "state",
+        action: "would-remove-stale-local-bundled-plugin-install-record",
+        target: issue.pluginId,
+        dryRunSafe: false,
+      };
+    case "managed-npm-openclaw-peer-link":
+      return {
+        kind: "package",
+        action: "would-relink-managed-npm-openclaw-peer",
+        target: issue.packageDir,
+        dryRunSafe: false,
+      };
+  }
+  return assertNeverPluginRegistryIssue(issue);
+}
+
+function assertNeverPluginRegistryIssue(issue: never): never {
+  throw new Error(
+    `Unhandled plugin registry issue kind: ${String((issue as { kind?: unknown }).kind)}`,
+  );
+}
+
+/**
+ * Runs plugin registry doctor repairs and refreshes the persisted plugin index when needed.
+ *
+ * Stale bundled shadows are removed before registry migration so the rebuilt index resolves the
+ * current bundled source instead of an obsolete managed/local install record.
+ */
 export async function maybeRepairPluginRegistryState(
   params: PluginRegistryDoctorRepairParams,
 ): Promise<OpenClawConfig> {

@@ -11,6 +11,7 @@ import {
   isSubagentEnvelopeSession,
   resolveSubagentCapabilityStore,
 } from "../agents/subagent-capabilities.js";
+import { buildDeclaredToolAllowlistContext } from "../agents/tool-policy-declared-context.js";
 import {
   applyToolPolicyPipeline,
   buildDefaultToolPolicyPipelineSteps,
@@ -24,12 +25,19 @@ import {
   resolveToolProfilePolicy,
 } from "../agents/tool-policy.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import {
+  replaceWithEffectiveCronCreatorToolAllowlist,
+  type CronCreatorToolAllowlistEntry,
+} from "../agents/tools/cron-tool.js";
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { logWarn } from "../logger.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
-import { DEFAULT_GATEWAY_HTTP_TOOL_DENY } from "../security/dangerous-tools.js";
+import {
+  DEFAULT_GATEWAY_HTTP_TOOL_DENY,
+  GATEWAY_OWNER_ONLY_CORE_TOOLS,
+} from "../security/dangerous-tools.js";
 
 type GatewayScopedToolSurface = "http" | "loopback";
 
@@ -37,6 +45,8 @@ type GatewayScopedToolSurface = "http" | "loopback";
 export function resolveGatewayScopedTools(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
+  sessionId?: string;
+  onYield?: (message: string) => Promise<void> | void;
   messageProvider?: string;
   currentChannelId?: string;
   currentThreadTs?: string;
@@ -45,6 +55,7 @@ export function resolveGatewayScopedTools(params: {
   accountId?: string;
   inboundEventKind?: InboundEventKind;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  requireExplicitMessageTarget?: boolean;
   agentTo?: string;
   agentThreadId?: string;
   senderIsOwner?: boolean;
@@ -113,7 +124,11 @@ export function resolveGatewayScopedTools(params: {
     surface === "http"
       ? DEFAULT_GATEWAY_HTTP_TOOL_DENY.filter((name) => !gatewayToolsCfg?.allow?.includes(name))
       : [];
-  // HTTP callers start with a stricter denylist than loopback callers because they cross auth only.
+  const ownerOnlyGatewayDeny =
+    params.senderIsOwner === false || (surface === "http" && params.senderIsOwner !== true)
+      ? [...GATEWAY_OWNER_ONLY_CORE_TOOLS]
+      : [];
+  // HTTP callers start with additional surface denies because they cross auth only.
   const workspaceDir = resolveAgentWorkspaceDir(
     params.cfg,
     agentId ?? resolveDefaultAgentId(params.cfg),
@@ -129,12 +144,14 @@ export function resolveGatewayScopedTools(params: {
     subagentPolicy,
     inheritedToolPolicy,
     defaultGatewayDeny.length > 0 ? { deny: defaultGatewayDeny } : undefined,
+    ownerOnlyGatewayDeny.length > 0 ? { deny: ownerOnlyGatewayDeny } : undefined,
     Array.isArray(gatewayToolsCfg?.deny) ? { deny: gatewayToolsCfg.deny } : undefined,
   ]);
   const inheritedToolDenylist = [...explicitDenylist];
   // Passed by reference to sessions_spawn and populated after the final policy
   // pass so child sessions inherit the actual parent tool surface.
   const inheritedToolAllowlist: string[] = [];
+  const cronCreatorToolAllowlist: CronCreatorToolAllowlistEntry[] = [];
   const shouldInheritEffectiveToolAllowlist = [
     profilePolicy,
     providerProfilePolicy,
@@ -147,6 +164,10 @@ export function resolveGatewayScopedTools(params: {
     inheritedToolPolicy,
     gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
   ].some(hasRestrictiveAllowPolicy);
+  const shouldCaptureCronCreatorToolAllowlist =
+    shouldInheritEffectiveToolAllowlist ||
+    explicitDenylist.length > 0 ||
+    excludedToolNames.length > 0;
 
   const allTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
@@ -160,6 +181,9 @@ export function resolveGatewayScopedTools(params: {
     currentThreadTs: params.currentThreadTs ?? params.agentThreadId,
     currentMessageId: params.currentMessageId,
     currentInboundAudio: params.currentInboundAudio,
+    sessionId: params.sessionId,
+    onYield: params.onYield,
+    requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     senderIsOwner: params.senderIsOwner,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
@@ -180,6 +204,9 @@ export function resolveGatewayScopedTools(params: {
       gatewayRequestedTools.length > 0 ? { allow: gatewayRequestedTools } : undefined,
     ]),
     pluginToolDenylist: explicitDenylist,
+    cronCreatorToolAllowlist: shouldCaptureCronCreatorToolAllowlist
+      ? cronCreatorToolAllowlist
+      : undefined,
     inheritedToolAllowlist,
     inheritedToolDenylist,
   });
@@ -206,16 +233,27 @@ export function resolveGatewayScopedTools(params: {
       { policy: subagentPolicy, label: "subagent tools.allow" },
       { policy: inheritedToolPolicy, label: "inherited tools" },
     ],
+    declaredToolAllowlist: buildDeclaredToolAllowlistContext({
+      config: params.cfg,
+      workspaceDir,
+      toolDenylist: explicitDenylist,
+    }),
   });
 
   const gatewayDenySet = new Set([
     ...defaultGatewayDeny,
+    ...ownerOnlyGatewayDeny,
     ...(Array.isArray(gatewayToolsCfg?.deny) ? gatewayToolsCfg.deny : []),
     ...excludedToolNames,
   ]);
   const tools = policyFiltered.filter((tool) => !gatewayDenySet.has(tool.name));
   if (shouldInheritEffectiveToolAllowlist) {
     replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, tools);
+  }
+  if (shouldCaptureCronCreatorToolAllowlist) {
+    replaceWithEffectiveCronCreatorToolAllowlist(cronCreatorToolAllowlist, tools, (tool) =>
+      getPluginToolMeta(tool),
+    );
   }
 
   return {

@@ -1,3 +1,4 @@
+/** SQLite column codec for cron failure-alert configuration. */
 import type { CronFailureAlert } from "../types.js";
 import { booleanToInteger, integerToBoolean, normalizeNumber } from "./scalar-codec.js";
 import type { CronJobInsert, CronJobRow } from "./schema.js";
@@ -45,6 +46,7 @@ export function failureAlertFromRow(row: CronJobRow): CronFailureAlert | false |
   if (row.failure_alert_disabled === 1) {
     return false;
   }
+  const failureAlertExplicitlyEnabled = row.failure_alert_disabled === 0;
   if (
     row.failure_alert_after == null &&
     !row.failure_alert_channel &&
@@ -52,7 +54,8 @@ export function failureAlertFromRow(row: CronJobRow): CronFailureAlert | false |
     row.failure_alert_cooldown_ms == null &&
     row.failure_alert_include_skipped == null &&
     !row.failure_alert_mode &&
-    !row.failure_alert_account_id
+    !row.failure_alert_account_id &&
+    !failureAlertExplicitlyEnabled
   ) {
     return undefined;
   }

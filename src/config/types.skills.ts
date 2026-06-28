@@ -63,6 +63,8 @@ export type SkillsWorkshopConfig = {
     /** Allow agents to create pending proposals from durable conversation signals. */
     enabled?: boolean;
   };
+  /** Allow Skill Workshop apply to write through trusted skill symlink targets. */
+  allowSymlinkTargetWrites?: boolean;
   /** Whether proposal lifecycle actions need explicit approval. */
   approvalPolicy?: "pending" | "auto";
   /** Maximum pending/quarantined proposals retained per workspace. */

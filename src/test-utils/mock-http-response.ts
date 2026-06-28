@@ -1,3 +1,4 @@
+// Provides a lightweight ServerResponse mock for HTTP handler tests.
 import type { ServerResponse } from "node:http";
 import { lowercasePreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 

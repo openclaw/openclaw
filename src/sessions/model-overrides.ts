@@ -1,3 +1,4 @@
+// Session model override helpers normalize per-session provider model choices.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../config/sessions.js";
 
@@ -90,6 +91,14 @@ export function applyModelOverrideToSessionEntry(params: {
       delete entry.modelProvider;
       updated = true;
     }
+  }
+
+  // When switching back to the default model without override fields to delete
+  // (e.g. model comes from steering/fallback runtime fields), the isDefault
+  // branch at line 42 won't set selectionUpdated. Mark it here so that
+  // liveModelSwitchPending can still be set below when runtime is misaligned.
+  if (selection.isDefault && runtimePresent && !runtimeAligned) {
+    selectionUpdated = true;
   }
 
   // contextTokens are derived from the active session model. When the selected

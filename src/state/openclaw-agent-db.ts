@@ -1,3 +1,4 @@
+// OpenClaw agent database stores agent-scoped persisted runtime state.
 import { chmodSync, existsSync, mkdirSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
@@ -7,8 +8,13 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
+import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
-import { configureSqliteWalMaintenance, type SqliteWalMaintenance } from "../infra/sqlite-wal.js";
+import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
+import {
+  configureSqliteConnectionPragmas,
+  type SqliteWalMaintenance,
+} from "../infra/sqlite-wal.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
@@ -16,7 +22,6 @@ import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.generated.js"
 import type { DB as OpenClawStateKyselyDatabase } from "./openclaw-state-db.generated.js";
 import {
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
-  openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
@@ -32,7 +37,6 @@ export { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 const OPENCLAW_AGENT_SCHEMA_VERSION = 1;
 const OPENCLAW_AGENT_DB_DIR_MODE = 0o700;
 const OPENCLAW_AGENT_DB_FILE_MODE = 0o600;
-const OPENCLAW_AGENT_DB_SIDECAR_SUFFIXES = ["", "-shm", "-wal"] as const;
 
 /** Open per-agent SQLite database handle plus lifecycle maintenance. */
 export type OpenClawAgentDatabase = {
@@ -47,15 +51,6 @@ export type OpenClawAgentDatabaseOptions = OpenClawStateDatabaseOptions & {
   agentId: string;
 };
 
-/** Shared-state registry row describing an agent database seen by this process. */
-export type OpenClawRegisteredAgentDatabase = {
-  agentId: string;
-  path: string;
-  schemaVersion: number;
-  lastSeenAt: number;
-  sizeBytes: number | null;
-};
-
 type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
 type OpenClawAgentRegistryDatabase = Pick<OpenClawStateKyselyDatabase, "agent_databases">;
 
@@ -65,11 +60,6 @@ type ExistingSchemaMeta = {
   agentId: string | null;
   role: string | null;
 };
-
-function readSqliteUserVersion(db: DatabaseSync): number {
-  const row = db.prepare("PRAGMA user_version").get() as { user_version?: unknown } | undefined;
-  return Number(row?.user_version ?? 0);
-}
 
 function assertSupportedAgentSchemaVersion(db: DatabaseSync, pathname: string): void {
   const userVersion = readSqliteUserVersion(db);
@@ -96,8 +86,7 @@ function ensureOpenClawAgentDatabasePermissions(
   if (isDefaultAgentDatabase || !dirExisted) {
     chmodSync(dir, OPENCLAW_AGENT_DB_DIR_MODE);
   }
-  for (const suffix of OPENCLAW_AGENT_DB_SIDECAR_SUFFIXES) {
-    const candidate = `${pathname}${suffix}`;
+  for (const candidate of resolveSqliteDatabaseFilePaths(pathname)) {
     if (existsSync(candidate)) {
       chmodSync(candidate, OPENCLAW_AGENT_DB_FILE_MODE);
     }
@@ -179,6 +168,22 @@ function ensureAgentSchema(db: DatabaseSync, agentId: string, pathname: string):
   );
 }
 
+/** Initialize agent schema/ownership metadata on an independently managed connection. */
+export function ensureOpenClawAgentDatabaseSchema(
+  db: DatabaseSync,
+  options: OpenClawAgentDatabaseOptions & { register?: boolean },
+): void {
+  const agentId = normalizeAgentId(options.agentId);
+  const databaseOptions = { ...options, agentId };
+  const pathname = resolveOpenClawAgentSqlitePath(databaseOptions);
+  ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
+  ensureAgentSchema(db, agentId, pathname);
+  ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
+  if (options.register === true) {
+    registerAgentDatabase({ agentId, path: pathname, env: options.env });
+  }
+}
+
 function registerAgentDatabase(params: {
   agentId: string;
   path: string;
@@ -218,25 +223,6 @@ function registerAgentDatabase(params: {
   );
 }
 
-/** List agent databases recorded in the shared OpenClaw state registry. */
-export function listOpenClawRegisteredAgentDatabases(
-  options: OpenClawStateDatabaseOptions = {},
-): OpenClawRegisteredAgentDatabase[] {
-  const database = openOpenClawStateDatabase(options);
-  const db = getNodeSqliteKysely<OpenClawAgentRegistryDatabase>(database.db);
-  const rows = executeSqliteQuerySync(
-    database.db,
-    db.selectFrom("agent_databases").selectAll().orderBy("agent_id", "asc").orderBy("path", "asc"),
-  ).rows;
-  return rows.map((row) => ({
-    agentId: normalizeAgentId(row.agent_id),
-    path: row.path,
-    schemaVersion: row.schema_version,
-    lastSeenAt: row.last_seen_at,
-    sizeBytes: row.size_bytes,
-  }));
-}
-
 /** Open or return a cached per-agent database after schema and owner validation. */
 export function openOpenClawAgentDatabase(
   options: OpenClawAgentDatabaseOptions,
@@ -264,20 +250,24 @@ export function openOpenClawAgentDatabase(
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const sqlite = requireNodeSqlite();
   const db = new sqlite.DatabaseSync(pathname);
-  const walMaintenance = configureSqliteWalMaintenance(db, {
-    databaseLabel: `openclaw-agent:${agentId}`,
-    databasePath: pathname,
-  });
-  db.exec("PRAGMA synchronous = NORMAL;");
-  db.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
-  db.exec("PRAGMA foreign_keys = ON;");
-  try {
-    ensureAgentSchema(db, agentId, pathname);
-  } catch (err) {
-    walMaintenance.close();
-    db.close();
-    throw err;
-  }
+  const walMaintenance = (() => {
+    let maintenance: SqliteWalMaintenance | undefined;
+    try {
+      maintenance = configureSqliteConnectionPragmas(db, {
+        busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+        databaseLabel: `openclaw-agent:${agentId}`,
+        databasePath: pathname,
+        foreignKeys: true,
+        synchronous: "NORMAL",
+      });
+      ensureAgentSchema(db, agentId, pathname);
+      return maintenance;
+    } catch (err) {
+      maintenance?.close();
+      db.close();
+      throw err;
+    }
+  })();
   ensureOpenClawAgentDatabasePermissions(pathname, databaseOptions);
   const database = { agentId, db, path: pathname, walMaintenance };
   cachedDatabases.set(pathname, database);

@@ -1,3 +1,5 @@
+// MCP loopback runtime scope cache.
+// Resolves Gateway-visible tools for MCP clients with short-lived schema caching.
 import type { SourceReplyDeliveryMode } from "../auto-reply/get-reply-options.types.js";
 import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,6 +14,7 @@ import { resolveGatewayScopedTools } from "./tool-resolution.js";
 // context and caches the expensive schema projection for short bursts of tool
 // list/call traffic from the same MCP client.
 const TOOL_CACHE_TTL_MS = 30_000;
+const TOOL_CACHE_MAX_ENTRIES = 256;
 const NATIVE_TOOL_EXCLUDE = new Set(["read", "write", "edit", "apply_patch", "exec", "process"]);
 
 type CachedScopedTools = {
@@ -25,6 +28,9 @@ type CachedScopedTools = {
 type McpLoopbackScopeParams = {
   cfg: OpenClawConfig;
   sessionKey: string;
+  sessionId?: string;
+  yieldContextCacheKey?: string;
+  onYield?: (message: string) => Promise<void> | void;
   messageProvider: string | undefined;
   currentChannelId: string | undefined;
   currentThreadTs: string | undefined;
@@ -33,6 +39,7 @@ type McpLoopbackScopeParams = {
   accountId: string | undefined;
   inboundEventKind: InboundEventKind | undefined;
   sourceReplyDeliveryMode: SourceReplyDeliveryMode | undefined;
+  requireExplicitMessageTarget?: boolean;
   senderIsOwner: boolean | undefined;
 };
 
@@ -59,6 +66,8 @@ export class McpLoopbackToolCache {
   resolve(params: McpLoopbackScopeParams): CachedScopedTools {
     const cacheKey = [
       params.sessionKey,
+      params.sessionId ?? "",
+      params.yieldContextCacheKey ?? "",
       params.messageProvider ?? "",
       params.currentChannelId ?? "",
       params.currentThreadTs ?? "",
@@ -67,9 +76,19 @@ export class McpLoopbackToolCache {
       params.accountId ?? "",
       params.inboundEventKind ?? "",
       params.sourceReplyDeliveryMode ?? "",
-      params.senderIsOwner === true ? "owner" : "non-owner",
+      params.requireExplicitMessageTarget === true ? "explicit-message-target" : "",
+      params.senderIsOwner === true
+        ? "owner"
+        : params.senderIsOwner === false
+          ? "non-owner"
+          : "unknown-owner",
     ].join("\u0000");
     const now = Date.now();
+    for (const [key, entry] of this.#entries) {
+      if (now - entry.time >= TOOL_CACHE_TTL_MS) {
+        this.#entries.delete(key);
+      }
+    }
     const cached = this.#entries.get(cacheKey);
     // Config object identity is part of the cache contract so explicit gateway
     // reloads invalidate tool scope and schema without filesystem polling.
@@ -86,10 +105,12 @@ export class McpLoopbackToolCache {
       time: now,
     };
     this.#entries.set(cacheKey, nextEntry);
-    for (const [key, entry] of this.#entries) {
-      if (now - entry.time >= TOOL_CACHE_TTL_MS) {
-        this.#entries.delete(key);
+    while (this.#entries.size > TOOL_CACHE_MAX_ENTRIES) {
+      const oldestKey = this.#entries.keys().next().value;
+      if (oldestKey === undefined) {
+        break;
       }
+      this.#entries.delete(oldestKey);
     }
     return nextEntry;
   }

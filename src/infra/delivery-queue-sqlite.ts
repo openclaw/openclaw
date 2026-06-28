@@ -1,3 +1,4 @@
+// Stores durable delivery queue entries in SQLite.
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {

@@ -1,3 +1,4 @@
+// Covers asynchronous extra security audit checks.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -277,7 +278,12 @@ description: test skill
     const agentDir = path.join(stateDir, "agents", "main", "agent");
     await fs.mkdir(agentDir, { recursive: true });
     const databasePath = path.join(agentDir, "openclaw-agent.sqlite");
-    for (const targetPath of [databasePath, `${databasePath}-wal`, `${databasePath}-shm`]) {
+    for (const targetPath of [
+      databasePath,
+      `${databasePath}-wal`,
+      `${databasePath}-shm`,
+      `${databasePath}-journal`,
+    ]) {
       await fs.writeFile(targetPath, "sqlite\n", "utf-8");
       await fs.chmod(targetPath, 0o644);
     }
@@ -297,6 +303,7 @@ description: test skill
         expect.stringContaining("openclaw-agent.sqlite"),
         expect.stringContaining("openclaw-agent.sqlite-wal"),
         expect.stringContaining("openclaw-agent.sqlite-shm"),
+        expect.stringContaining("openclaw-agent.sqlite-journal"),
       ]),
     );
   });

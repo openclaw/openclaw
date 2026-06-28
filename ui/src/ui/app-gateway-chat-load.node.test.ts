@@ -209,6 +209,7 @@ function createHost(tab: Tab) {
     assistantAgentId: null,
     serverVersion: null,
     pendingUpdateExpectedVersion: null,
+    pendingUpdateHandoff: false,
     updateStatusBanner: null,
     sessionKey: "main",
     chatRunId: null,

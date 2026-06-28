@@ -1,3 +1,4 @@
+// Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
 import { GatewayClientIdSchema, GatewayClientModeSchema, NonEmptyString } from "./primitives.js";
 import { SnapshotSchema, StateVersionSchema } from "./snapshot.js";
@@ -69,6 +70,7 @@ export const ConnectParamsSchema = Type.Object(
           deviceToken: Type.Optional(Type.String()),
           password: Type.Optional(Type.String()),
           approvalRuntimeToken: Type.Optional(Type.String()),
+          agentRuntimeIdentityToken: Type.Optional(Type.String()),
         },
         { additionalProperties: false },
       ),

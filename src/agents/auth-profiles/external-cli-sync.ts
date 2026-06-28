@@ -1,3 +1,8 @@
+/**
+ * External CLI OAuth synchronization.
+ * Reads supported CLI credential stores, decides whether those credentials can
+ * safely bootstrap local auth profiles, and returns runtime/persisted overlays.
+ */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import {
   readClaudeCliCredentialsCached,
@@ -11,6 +16,7 @@ import {
   OPENAI_CODEX_DEFAULT_PROFILE_ID,
 } from "./constants.js";
 import { log } from "./constants.js";
+import { isSafeToCopyOAuthIdentity } from "./oauth-identity.js";
 import {
   areOAuthCredentialsEquivalent,
   hasUsableOAuthCredential,
@@ -56,16 +62,8 @@ type ExternalCliSyncProvider = {
   bootstrapOnly?: boolean;
 };
 
-function normalizeAuthIdentityToken(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
-function normalizeAuthEmailToken(value: string | undefined): string | undefined {
-  return normalizeAuthIdentityToken(value)?.toLowerCase();
-}
-
 // Keep this gate aligned with the canonical identity-copy rule in oauth.ts.
+/** Return true when imported CLI credentials match an existing profile identity. */
 export function isSafeToUseExternalCliCredential(
   existing: OAuthCredential | undefined,
   imported: OAuthCredential,
@@ -76,24 +74,7 @@ export function isSafeToUseExternalCliCredential(
   if (existing.provider !== imported.provider) {
     return false;
   }
-
-  const existingAccountId = normalizeAuthIdentityToken(existing.accountId);
-  const importedAccountId = normalizeAuthIdentityToken(imported.accountId);
-  const existingEmail = normalizeAuthEmailToken(existing.email);
-  const importedEmail = normalizeAuthEmailToken(imported.email);
-
-  if (existingAccountId !== undefined && importedAccountId !== undefined) {
-    return existingAccountId === importedAccountId;
-  }
-  if (existingEmail !== undefined && importedEmail !== undefined) {
-    return existingEmail === importedEmail;
-  }
-
-  const existingHasIdentity = existingAccountId !== undefined || existingEmail !== undefined;
-  if (existingHasIdentity) {
-    return false;
-  }
-  return true;
+  return isSafeToCopyOAuthIdentity(existing, imported);
 }
 
 const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
@@ -193,6 +174,7 @@ function hasInlineOAuthTokenMaterial(credential: OAuthCredential): boolean {
   );
 }
 
+/** Read a CLI credential only for safe bootstrap of an unusable local profile. */
 export function readExternalCliBootstrapCredential(params: {
   profileId: string;
   credential: OAuthCredential;
@@ -216,8 +198,7 @@ export function readExternalCliBootstrapCredential(params: {
   );
 }
 
-export const readManagedExternalCliCredential = readExternalCliBootstrapCredential;
-
+/** Read a CLI credential as a fallback for refresh/runtime auth recovery. */
 export function readExternalCliFallbackCredential(params: {
   profileId: string;
   credential: OAuthCredential;
@@ -318,6 +299,7 @@ function listScopedExternalCliProfileIds(params: {
   return options?.providerIds ? [providerConfig.profileId] : [];
 }
 
+/** Resolve scoped external CLI auth profiles available to overlay or persist. */
 export function resolveExternalCliAuthProfiles(
   store: AuthProfileStore,
   options?: ExternalCliAuthProfileOptions,

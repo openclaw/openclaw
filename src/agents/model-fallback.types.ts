@@ -1,3 +1,6 @@
+/**
+ * Shared candidate and attempt types for model fallback execution.
+ */
 import type { FailoverReason } from "./embedded-agent-helpers/types.js";
 
 // Shared model fallback record types used by selection, observation, and retry
@@ -12,6 +15,7 @@ export type FallbackAttempt = {
   model: string;
   error: string;
   reason?: FailoverReason;
+  authMode?: string;
   status?: number;
   code?: string;
 };

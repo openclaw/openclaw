@@ -1,3 +1,4 @@
+// Resolves npm project roots for plugin package inspection.
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";

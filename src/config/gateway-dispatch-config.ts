@@ -1,3 +1,4 @@
+// Loads gateway dispatch config from runtime state and files.
 import fs from "node:fs";
 import path from "node:path";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";

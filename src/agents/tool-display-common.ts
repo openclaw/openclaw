@@ -1,19 +1,24 @@
+/**
+ * Shared compact tool-call display helpers.
+ * Redacts and summarizes arguments into short labels/details for chat and UI
+ * tool update streams.
+ */
+import { asOptionalObjectRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { parseStrictFiniteNumber } from "../infra/parse-finite-number.js";
 import { redactToolPayloadText } from "../logging/redact.js";
+import { sliceUtf16Safe } from "../shared/utf16-slice.js";
 import { resolveExecDetail, type ToolDetailMode } from "./tool-display-exec.js";
-import { asRecord } from "./tool-display-record.js";
 
-// Shared formatting helpers for compact tool-call display labels. Display text
-// is redacted and summarized so tool updates stay readable in chat/UI streams.
 type ToolDisplayActionSpec = {
   label?: string;
   detailKeys?: string[];
 };
 
+/** Display metadata for a tool and optional per-action labels/details. */
 export type ToolDisplaySpec = {
   title?: string;
   label?: string;
@@ -21,7 +26,8 @@ export type ToolDisplaySpec = {
   actions?: Record<string, ToolDisplayActionSpec>;
 };
 
-export type ToolSearchCodeDisplayTarget = {
+/** Normalized display target for code/search bridge tools. */
+type ToolSearchCodeDisplayTarget = {
   toolName: string;
   displayToolName?: string;
   displayArgs?: Record<string, unknown>;
@@ -129,7 +135,7 @@ function coerceDisplayValue(
     const firstLine = redactToolPayloadText(rawLine);
     if (firstLine.length > maxStringChars) {
       const half = Math.floor((maxStringChars - 1) / 2);
-      return `${firstLine.slice(0, half)}…${firstLine.slice(-(maxStringChars - 1 - half))}`;
+      return `${sliceUtf16Safe(firstLine, 0, half)}…${sliceUtf16Safe(firstLine, -(maxStringChars - 1 - half))}`;
     }
     return firstLine;
   }
@@ -345,8 +351,13 @@ function collectWebSearchQueries(record: Record<string, unknown>): string[] {
   add(record.q);
   add(record.search);
   add(record.input);
+  // Parallel's `web_search` provider uses the native Parallel Search shape
+  // (`objective` + `search_queries`). Surface those so CLI progress and
+  // Codex activity metadata render the query context instead of a bare
+  // `search`.
+  add(record.objective);
 
-  for (const key of ["search_query", "image_query", "queries"]) {
+  for (const key of ["search_query", "image_query", "queries", "search_queries"]) {
     const value = record[key];
     if (!Array.isArray(value)) {
       continue;

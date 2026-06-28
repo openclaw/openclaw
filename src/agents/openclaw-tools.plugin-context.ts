@@ -1,3 +1,8 @@
+/**
+ * Runtime context resolver for OpenClaw plugin tools.
+ *
+ * Normalizes workspace, delivery, browser, sandbox, and active-model inputs before plugin tool invocation.
+ */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeDeliveryContext } from "../utils/delivery-context.js";
 import type { GatewayMessageChannel } from "../utils/message-channel.js";
@@ -22,6 +27,11 @@ export type OpenClawPluginToolOptions = {
   requesterSenderId?: string | null;
   requesterAgentIdOverride?: string;
   sessionId?: string;
+  /**
+   * Explicit one-shot local CLI runs should not keep plugin-owned process
+   * resources alive after emitting their result.
+   */
+  oneShotCliRun?: boolean;
   sandboxBrowserBridgeUrl?: string;
   allowHostBrowserControl?: boolean;
   sandboxed?: boolean;
@@ -86,6 +96,7 @@ export function resolveOpenClawPluginToolInputs(params: {
       deliveryContext,
       requesterSenderId: options?.requesterSenderId ?? undefined,
       sandboxed: options?.sandboxed,
+      oneShotCliRun: options?.oneShotCliRun,
     },
     allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
   };

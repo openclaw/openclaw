@@ -1,10 +1,10 @@
+// Root --profile/--dev parsing and environment projection for profile-specific state.
 import os from "node:os";
 import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { isValueToken } from "../infra/cli-root-options.js";
 import { resolveRequiredHomeDir } from "../infra/home-dir.js";
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { isValidProfileName } from "./profile-utils.js";
@@ -15,12 +15,8 @@ type CliProfileParseResult =
   | { ok: true; profile: string | null; argv: string[] }
   | { ok: false; error: string };
 
-function isCommandLocalProfileOption(out: string[]): boolean {
-  const [primary, secondary] = resolveCliArgvInvocation(out).commandPath;
-  return primary === "qa" && secondary === "matrix";
-}
-
 export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
+  // Root profile flags are stripped before Commander sees argv, except command-local cases.
   let profile: string | null = null;
   let sawDev = false;
 
@@ -39,19 +35,19 @@ export function parseCliProfileArgs(argv: string[]): CliProfileParseResult {
     }
 
     if (arg === "--profile" || arg.startsWith("--profile=")) {
-      if (isCommandLocalProfileOption(out)) {
+      const next = args[index + 1];
+      const { value, consumedNext } = takeCliRootOptionValue(arg, next);
+      const [primary, secondary] = resolveCliArgvInvocation(out).commandPath;
+      if (primary === "qa" && secondary === "matrix") {
         out.push(arg);
-        if (arg === "--profile" && isValueToken(args[index + 1])) {
-          out.push(args[index + 1]);
-          return { kind: "handled", consumedNext: true };
+        if (consumedNext) {
+          out.push(next);
         }
-        return { kind: "handled" };
+        return { kind: "handled", consumedNext };
       }
       if (sawDev) {
         return { kind: "error", error: "Cannot combine --dev with --profile" };
       }
-      const next = args[index + 1];
-      const { value, consumedNext } = takeCliRootOptionValue(arg, next);
       if (!value) {
         return { kind: "error", error: "--profile requires a value" };
       }

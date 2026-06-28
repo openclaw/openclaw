@@ -1,3 +1,4 @@
+// Cron service test harness builds isolated stores, timers, and delivery fixtures.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -175,7 +176,7 @@ export async function withCronServiceForTest(
 
 export function createRunningCronServiceState(params: {
   storePath: string;
-  log: ReturnType<typeof createNoopLogger>;
+  log: CronServiceDeps["log"];
   nowMs: () => number;
   jobs: CronJob[];
 }) {
@@ -232,6 +233,10 @@ export function createMockCronStateForJobs(params: {
   return {
     store: { version: 1, jobs: params.jobs },
     running: false,
+    stopped: false,
+    restartRecoveryPending: false,
+    activeManualRunJobIds: new Set<string>(),
+    manualSetupTimeoutNotified: false,
     timer: null,
     storeLoadedAtMs: nowMs,
     op: Promise.resolve(),

@@ -1,3 +1,5 @@
+// Claude CLI session history importer.
+// Converts Claude project JSONL into OpenClaw transcript-compatible messages.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,7 +12,7 @@ import {
   type ToolContentBlock,
 } from "../chat/tool-content.js";
 import type { SessionEntry } from "../config/sessions.js";
-import { attachOpenClawTranscriptMeta } from "./session-utils.fs.js";
+import { attachOpenClawTranscriptMeta } from "./session-transcript-readers.js";
 
 export const CLAUDE_CLI_PROVIDER = "claude-cli";
 const CLAUDE_PROJECTS_RELATIVE_DIR = path.join(".claude", "projects");
@@ -117,6 +119,8 @@ function normalizeClaudeCliContent(
     const block = cloneJsonValue(item as ToolContentBlock);
     const type = typeof block.type === "string" ? block.type : "";
     if (type === "tool_use") {
+      // Claude stores tool calls as `tool_use` with `input`; OpenClaw history
+      // expects `toolcall` plus `arguments` so replay remains provider-neutral.
       const id = normalizeOptionalString(block.id) ?? "";
       const name = normalizeOptionalString(block.name) ?? "";
       if (id && name) {
@@ -312,6 +316,7 @@ export function resolveClaudeCliSessionFilePath(params: {
   return undefined;
 }
 
+/** Reads visible messages for a bound Claude CLI session. */
 export function readClaudeCliSessionMessages(params: {
   cliSessionId: string;
   homeDir?: string;
@@ -431,6 +436,8 @@ export function readClaudeCliFallbackSeed(params: {
     }
 
     if (isCompactBoundary(parsed)) {
+      // Compact boundaries split Claude history into context windows. Keep the
+      // latest summary plus only post-boundary turns for fallback seeding.
       lastSummary = pendingSummary;
       pendingSummary = undefined;
       lastBoundaryFallback = extractCompactBoundaryFallbackText(parsed) ?? lastBoundaryFallback;

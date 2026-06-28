@@ -1,3 +1,4 @@
+// Workboard plugin module implements cli behavior.
 import type { Command } from "commander";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { addGatewayClientOptions, callGatewayFromCli } from "openclaw/plugin-sdk/gateway-runtime";
@@ -15,6 +16,7 @@ type GatewayOptions = JsonOptions & {
   token?: string;
   timeout?: string;
   expectFinal?: boolean;
+  board?: string;
 };
 
 function writeJson(value: unknown): void {
@@ -128,14 +130,28 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
     .description("List Workboard cards")
     .option("--board <id>", "Board id")
     .option("--status <status>", "Filter by status")
+    .option("--include-archived", "Include archived cards (default false)")
     .option("--json", "Print JSON", false)
-    .action(async (options: JsonOptions & { board?: string; status?: string }) => {
-      let cards = await params.store.list({ boardId: options.board });
-      if (options.status) {
-        cards = cards.filter((card) => card.status === options.status);
-      }
-      writeCards(cards, options);
-    });
+    .action(
+      async (
+        options: JsonOptions & {
+          board?: string;
+          status?: string;
+          includeArchived?: boolean;
+        },
+      ) => {
+        // Text output hides archived cards like /workboard list, while --json
+        // keeps the shipped full-card contract for existing scripts.
+        let cards = await params.store.list({ boardId: options.board });
+        if (!options.json && options.includeArchived !== true) {
+          cards = cards.filter((card) => !card.metadata?.archivedAt);
+        }
+        if (options.status) {
+          cards = cards.filter((card) => card.status === options.status);
+        }
+        writeCards(cards, options);
+      },
+    );
 
   workboard
     .command("create")
@@ -202,10 +218,13 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
     workboard
       .command("dispatch")
       .description("Promote ready cards and start worker runs through the Gateway")
+      .option("--board <id>", "Dispatch a single board")
       .option("--json", "Print JSON", false),
   ).action(async (options: GatewayOptions) => {
     try {
-      const result = await callWorkboardGateway("workboard.cards.dispatch", options, {});
+      const result = await callWorkboardGateway("workboard.cards.dispatch", options, {
+        boardId: options.board,
+      });
       if (options.json) {
         writeJson(result);
       } else {
@@ -222,7 +241,7 @@ export function registerWorkboardCli(params: { program: Command; store: Workboar
       ) {
         throw error;
       }
-      const result = redactDispatchResult(await params.store.dispatch());
+      const result = redactDispatchResult(await params.store.dispatch({ boardId: options.board }));
       if (options.json) {
         writeJson({ ...result, gatewayUnavailable: true });
       } else {

@@ -1,3 +1,4 @@
+// Program test mocks provide shared CLI command doubles and typed Vitest helpers.
 import { vi, type Mock } from "vitest";
 
 type AnyMock = Mock<(...args: unknown[]) => unknown>;
@@ -109,7 +110,3 @@ vi.mock("./program/config-guard.js", () => ({
   ensureConfigReady: programMocks.ensureConfigReady,
 }));
 vi.mock("./preaction.js", () => ({ registerPreActionHooks: () => {} }));
-
-export function installBaseProgramMocks() {}
-
-export function installSmokeProgramMocks() {}

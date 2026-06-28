@@ -1,3 +1,4 @@
+// Stores and streams transcript files for later summary and replay.
 import { createReadStream } from "node:fs";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";
@@ -149,14 +150,6 @@ export class TranscriptsStore {
     return session ? { session, sessionDir: dir } : undefined;
   }
 
-  /** Append an utterance by session id, creating a dated session directory if needed. */
-  async appendUtterance(sessionId: string, utterance: TranscriptUtterance): Promise<void> {
-    const dir =
-      (await this.findSessionDir(sessionId)) ??
-      path.join(this.rootDir, dateSegment(sessionId), safeSegment(sessionId));
-    await this.appendUtteranceToDir(dir, sessionId, utterance);
-  }
-
   /** Append an utterance for an exact session descriptor. */
   async appendUtteranceForSession(
     session: TranscriptSessionDescriptor,
@@ -192,18 +185,6 @@ export class TranscriptsStore {
     options: { maxUtterances?: number } = {},
   ): Promise<TranscriptUtterance[]> {
     return await this.readUtterancesFromDir(sessionDir, options);
-  }
-
-  /** Read utterances by session id or qualified date/id selector. */
-  async readUtterances(
-    sessionId: string,
-    options: { maxUtterances?: number } = {},
-  ): Promise<TranscriptUtterance[]> {
-    const dir = await this.findSessionDir(sessionId);
-    if (!dir) {
-      return [];
-    }
-    return await this.readUtterancesFromDir(dir, options);
   }
 
   private async readUtterancesFromDir(

@@ -1,3 +1,4 @@
+// Builds the trust plan for exec wrappers before commands are launched.
 import {
   MAX_DISPATCH_WRAPPER_DEPTH,
   resolveDispatchWrapperTrustPlan,
@@ -41,7 +42,6 @@ function finalizeExecWrapperTrustPlan(
   policyArgv: string[],
   wrapperChain: string[],
   policyBlocked: boolean,
-  blockedWrapper?: string,
 ): ExecWrapperTrustPlan {
   const rawExecutable = argv[0]?.trim() ?? "";
   const shellWrapperExecutable =
@@ -56,9 +56,6 @@ function finalizeExecWrapperTrustPlan(
       ? extractBindableShellWrapperInlineCommand(argv)
       : null,
   };
-  if (blockedWrapper !== undefined) {
-    plan.blockedWrapper = blockedWrapper;
-  }
   return plan;
 }
 

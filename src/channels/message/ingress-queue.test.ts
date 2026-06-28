@@ -1,3 +1,4 @@
+// Ingress queue tests cover durable queueing for inbound channel messages.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -8,7 +9,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
-import { createChannelIngressQueue } from "./ingress-queue.js";
+import { createChannelIngressQueue, createStateDirEnv } from "./ingress-queue.js";
 
 type ChannelIngressTestDatabase = Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">;
 
@@ -25,6 +26,33 @@ async function withTempState<T>(fn: (stateDir: string) => Promise<T>): Promise<T
 describe("channel ingress queue", () => {
   afterEach(() => {
     closeOpenClawStateDatabaseForTest();
+  });
+
+  it("opens a custom state database without copying the full process env", async () => {
+    const baseEnv: NodeJS.ProcessEnv = {
+      HOME: "/home/openclaw",
+      PATH: "/usr/local/bin:/usr/bin",
+    };
+    for (let index = 0; index < 10_000; index += 1) {
+      baseEnv[`KUBERNETES_SERVICE_${index}`] = "tcp://10.0.0.1:443";
+    }
+    const inheritedEnv = new Proxy(baseEnv, {
+      ownKeys() {
+        throw new Error("inherited env should not be enumerated");
+      },
+    });
+
+    await withTempState(async (stateDir) => {
+      const env = createStateDirEnv(stateDir, inheritedEnv);
+
+      expect(env.OPENCLAW_STATE_DIR).toBe(stateDir);
+      expect(env.HOME).toBe("/home/openclaw");
+      expect(Object.getPrototypeOf(env)).toBe(inheritedEnv);
+      expect(Object.keys(env)).toEqual(["OPENCLAW_STATE_DIR"]);
+
+      const database = openOpenClawStateDatabase({ env });
+      expect(database.path).toBe(path.join(stateDir, "state", "openclaw.sqlite"));
+    });
   });
 
   it("deduplicates pending and completed ingress events", async () => {
@@ -223,6 +251,107 @@ describe("channel ingress queue", () => {
     });
   });
 
+  it("claims next pending row by id when requested", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => clock++,
+      });
+
+      await queue.enqueue("0002", { text: "second" }, { receivedAt: 1 });
+      await queue.enqueue("0001", { text: "first" }, { receivedAt: 2 });
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        orderBy: "id",
+      });
+
+      expect(claimed?.id).toBe("0001");
+    });
+  });
+
+  it("claims next only from candidate ids when provided", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => clock++,
+      });
+
+      await queue.enqueue("a", { text: "outside snapshot" }, { receivedAt: 1 });
+      await queue.enqueue("b", { text: "inside snapshot" }, { receivedAt: 2 });
+
+      expect(
+        await queue.claimNext({
+          ownerId: "worker",
+          candidateIds: ["b"],
+        }),
+      ).toMatchObject({ id: "b" });
+      expect(await queue.claimNext({ candidateIds: [] })).toBeNull();
+    });
+  });
+
+  it("derives missing lane keys before claiming next", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createChannelIngressQueue<{ lane: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => clock++,
+      });
+
+      await queue.enqueue("a", { lane: "blocked" }, { receivedAt: 1 });
+      await queue.enqueue("b", { lane: "open" }, { receivedAt: 2 });
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        blockedLaneKeys: ["blocked"],
+        deriveLaneKey: (record) => record.payload.lane,
+      });
+
+      expect(claimed?.id).toBe("b");
+      expect(claimed?.laneKey).toBe("open");
+      expect(
+        (await queue.listPending()).find((record) => record.id === "a")?.laneKey,
+      ).toBeUndefined();
+    });
+  });
+
+  it("blocks lanes claimed by candidate rows before claiming later candidates", async () => {
+    await withTempState(async (stateDir) => {
+      let clock = 1;
+      const queue = createChannelIngressQueue<{ lane: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => clock++,
+      });
+
+      await queue.enqueue("a", { lane: "chat-1" }, { receivedAt: 1 });
+      await queue.enqueue("b", { lane: "chat-1" }, { receivedAt: 2 });
+      await queue.enqueue("c", { lane: "chat-2" }, { receivedAt: 3 });
+      await queue.claim("a", { ownerId: "sibling-worker" });
+
+      const claimed = await queue.claimNext({
+        ownerId: "worker",
+        candidateIds: ["a", "b", "c"],
+        orderBy: "id",
+        deriveLaneKey: (record) => record.payload.lane,
+      });
+
+      expect(claimed?.id).toBe("c");
+      expect(claimed?.laneKey).toBe("chat-2");
+      const sameLanePending = (await queue.listPending()).find((record) => record.id === "b");
+      expect(sameLanePending?.laneKey).toBeUndefined();
+    });
+  });
+
   it("requires claim tokens before mutating claimed rows", async () => {
     await withTempState(async (stateDir) => {
       const queue = createChannelIngressQueue<{ text: string }>({
@@ -246,6 +375,105 @@ describe("channel ingress queue", () => {
       expect(await queue.complete(claimed, { completedAt: 20 })).toBe(true);
       const duplicate = await queue.enqueue("event-1", { text: "duplicate" });
       expect(duplicate.kind).toBe("completed");
+    });
+  });
+
+  it("refreshes claimed rows only with the active claim token", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => 10,
+      });
+
+      await queue.enqueue("event-1", { text: "claimed" });
+      const claimed = await queue.claim("event-1", { ownerId: "worker" });
+      if (!claimed) {
+        throw new Error("Expected a claimed ingress event");
+      }
+
+      expect(await queue.refreshClaim?.(claimed, { refreshedAt: 20 })).toBe(true);
+      expect(
+        (await queue.listClaims()).map((claim) => ({
+          id: claim.id,
+          claimedAt: claim.claim.claimedAt,
+          updatedAt: claim.updatedAt,
+        })),
+      ).toEqual([{ id: "event-1", claimedAt: 20, updatedAt: 20 }]);
+
+      expect(
+        await queue.refreshClaim?.(
+          { id: "event-1", claim: { token: "wrong" } },
+          {
+            refreshedAt: 30,
+          },
+        ),
+      ).toBe(false);
+      expect((await queue.listClaims())[0]?.claim.claimedAt).toBe(20);
+    });
+  });
+
+  it("does not let old claim tokens refresh recovered and reclaimed rows", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => 10,
+      });
+
+      await queue.enqueue("event-1", { text: "claimed" });
+      const oldClaim = await queue.claim("event-1", { ownerId: "worker-1" });
+      if (!oldClaim) {
+        throw new Error("Expected a claimed ingress event");
+      }
+      expect(await queue.recoverStaleClaims({ staleMs: 5, now: 20 })).toBe(1);
+      const newClaim = await queue.claim("event-1", { ownerId: "worker-2" });
+      if (!newClaim) {
+        throw new Error("Expected reclaimed ingress event");
+      }
+
+      expect(await queue.refreshClaim?.(oldClaim, { refreshedAt: 30 })).toBe(false);
+      expect(await queue.refreshClaim?.(newClaim, { refreshedAt: 40 })).toBe(true);
+      expect((await queue.listClaims())[0]?.claim).toMatchObject({
+        ownerId: "worker-2",
+        claimedAt: 40,
+      });
+    });
+  });
+
+  it("does not recover a claim refreshed after stale recovery snapshots it", async () => {
+    await withTempState(async (stateDir) => {
+      const queue = createChannelIngressQueue<{ text: string }>({
+        channelId: "test",
+        accountId: "account",
+        stateDir,
+        now: () => 10,
+      });
+
+      await queue.enqueue("event-1", { text: "claimed" });
+      const claimed = await queue.claim("event-1", { ownerId: "worker" });
+      if (!claimed) {
+        throw new Error("Expected a claimed ingress event");
+      }
+
+      expect(
+        await queue.recoverStaleClaims({
+          staleMs: 5,
+          now: 20,
+          shouldRecover: async (claim) => {
+            expect(claim.id).toBe("event-1");
+            expect(await queue.refreshClaim?.(claim, { refreshedAt: 20 })).toBe(true);
+            return true;
+          },
+        }),
+      ).toBe(0);
+      expect((await queue.listPending()).map((record) => record.id)).toEqual([]);
+      expect((await queue.listClaims())[0]?.claim).toMatchObject({
+        ownerId: "worker",
+        claimedAt: 20,
+      });
     });
   });
 
@@ -283,7 +511,7 @@ describe("channel ingress queue", () => {
       await queue.complete("retry", { completedAt: 27 });
 
       const database = openOpenClawStateDatabase({
-        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+        env: createStateDirEnv(stateDir),
       });
       const kysely = getNodeSqliteKysely<ChannelIngressTestDatabase>(database.db);
       const rows = executeSqliteQuerySync(

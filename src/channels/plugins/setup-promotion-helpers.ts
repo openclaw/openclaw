@@ -1,3 +1,8 @@
+/**
+ * Channel setup promotion helpers.
+ *
+ * Moves legacy single-account channel config into account-scoped config records.
+ */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/session-key.js";
 import { getBundledChannelPlugin, hasBundledChannelPackageSetupFeature } from "./bundled.js";
@@ -6,10 +11,6 @@ import {
   collectSingleAccountPromotionEntries,
   isCommonSingleAccountPromotionKey,
 } from "./setup-promotion-keys.js";
-
-/**
- * Helpers for promoting legacy single-account channel config into `accounts`.
- */
 
 type ChannelSectionBase = {
   defaultAccount?: string;
@@ -41,33 +42,6 @@ function getBundledChannelSetupPromotionSurface(
     return null;
   }
   return asPromotionSurface(getBundledChannelPlugin(channelKey)?.setup);
-}
-
-/**
- * Returns whether one root-level channel key should move into account config.
- */
-export function shouldMoveSingleAccountChannelKey(params: {
-  channelKey: string;
-  key: string;
-}): boolean {
-  // Common keys move for every channel; channel-owned setup surfaces can add
-  // plugin-specific keys without teaching core about that channel's schema.
-  if (isCommonSingleAccountPromotionKey(params.key)) {
-    return true;
-  }
-  const loadedContractKeys = getLoadedChannelSetupPromotionSurface(
-    params.channelKey,
-  )?.singleAccountKeysToMove;
-  if (loadedContractKeys?.includes(params.key)) {
-    return true;
-  }
-  const bundledContractKeys = getBundledChannelSetupPromotionSurface(
-    params.channelKey,
-  )?.singleAccountKeysToMove;
-  if (bundledContractKeys?.includes(params.key)) {
-    return true;
-  }
-  return false;
 }
 
 /**

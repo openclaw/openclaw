@@ -1,3 +1,4 @@
+// Bounded Response script supports OpenClaw repository automation.
 type BoundedResponseTextOptions = {
   createTooLargeError?: (message: string) => Error;
   formatTooLargeMessage?: (label: string, maxBytes: number) => string;
@@ -14,6 +15,15 @@ function cancelReaderSoon(reader: ReadableStreamDefaultReader<Uint8Array>): void
   void Promise.resolve()
     .then(() => reader.cancel())
     .catch(() => undefined);
+}
+
+function parseContentLengthHeader(headers: Headers): number | undefined {
+  const raw = headers.get("content-length");
+  if (!raw || !/^\d+$/u.test(raw)) {
+    return undefined;
+  }
+  const parsed = Number(raw);
+  return Number.isSafeInteger(parsed) ? parsed : Number.POSITIVE_INFINITY;
 }
 
 async function readResponseChunk(
@@ -98,8 +108,8 @@ export async function readBoundedResponseText(
   const formatTooLargeMessage = options.formatTooLargeMessage ?? defaultTooLargeMessage;
   const createTooLargeError = options.createTooLargeError ?? defaultTooLargeError;
   const tooLargeError = () => createTooLargeError(formatTooLargeMessage(label, maxBytes));
-  const contentLength = Number(response.headers.get("content-length") ?? "");
-  if (Number.isSafeInteger(contentLength) && contentLength > maxBytes) {
+  const contentLength = parseContentLengthHeader(response.headers);
+  if (contentLength !== undefined && contentLength > maxBytes) {
     await response.body?.cancel().catch(() => undefined);
     throw tooLargeError();
   }

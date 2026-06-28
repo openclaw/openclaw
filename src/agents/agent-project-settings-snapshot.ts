@@ -1,3 +1,4 @@
+/** Builds embedded-agent settings snapshots from global, bundle, and project settings. */
 import path from "node:path";
 import { applyMergePatch } from "../config/merge-patch.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -25,9 +26,11 @@ const log = createSubsystemLogger("embedded-agent-settings");
 export const DEFAULT_EMBEDDED_AGENT_PROJECT_SETTINGS_POLICY = "sanitize";
 const SANITIZED_PROJECT_AGENT_KEYS = ["shellPath", "shellCommandPrefix"] as const;
 
-export type EmbeddedAgentProjectSettingsPolicy = "trusted" | "sanitize" | "ignore";
+/** Policy for whether workspace project settings can influence embedded-agent behavior. */
+type EmbeddedAgentProjectSettingsPolicy = "trusted" | "sanitize" | "ignore";
 
-export type AgentSettingsSnapshot = ReturnType<SettingsManager["getGlobalSettings"]> & {
+/** Merged settings snapshot consumed by embedded agent settings managers. */
+type AgentSettingsSnapshot = ReturnType<SettingsManager["getGlobalSettings"]> & {
   mcpServers?: Record<string, BundleMcpServerConfig>;
 };
 
@@ -185,7 +188,7 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
   return snapshot;
 }
 
-/** Resolve how project-local embedded-agent settings should be applied. */
+/** Resolves the configured project-settings trust policy for embedded agents. */
 export function resolveEmbeddedAgentProjectSettingsPolicy(
   cfg?: OpenClawConfig,
 ): EmbeddedAgentProjectSettingsPolicy {
@@ -196,7 +199,7 @@ export function resolveEmbeddedAgentProjectSettingsPolicy(
   return DEFAULT_EMBEDDED_AGENT_PROJECT_SETTINGS_POLICY;
 }
 
-/** Build the final embedded-agent settings snapshot in merge-precedence order. */
+/** Merges global, plugin, and project settings according to the selected trust policy. */
 export function buildEmbeddedAgentSettingsSnapshot(params: {
   globalSettings: AgentSettingsSnapshot;
   pluginSettings?: AgentSettingsSnapshot;

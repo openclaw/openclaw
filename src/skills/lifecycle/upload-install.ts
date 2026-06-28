@@ -1,3 +1,4 @@
+// Upload install helpers install skills from staged uploaded archives.
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ArchiveLogger } from "../../infra/archive.js";
 import { formatErrorMessage } from "../../infra/errors.js";
@@ -14,7 +15,7 @@ import {
 } from "./upload-store.js";
 
 /** Error classes exposed by uploaded skill archive install attempts. */
-export type UploadedSkillInstallErrorKind = "invalid-request" | "unavailable";
+type UploadedSkillInstallErrorKind = "invalid-request" | "unavailable";
 
 /** User-facing disabled message for archive upload installs. */
 export const UPLOADED_SKILL_ARCHIVES_DISABLED_MESSAGE =
@@ -24,7 +25,7 @@ export function areUploadedSkillArchivesEnabled(config: OpenClawConfig): boolean
   return config.skills?.install?.allowUploadedArchives === true;
 }
 
-export type UploadedSkillInstallResult =
+type UploadedSkillInstallResult =
   | {
       ok: true;
       message: string;

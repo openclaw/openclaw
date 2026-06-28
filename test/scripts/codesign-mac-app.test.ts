@@ -1,3 +1,4 @@
+// Codesign Mac App tests cover codesign mac app script behavior.
 import { spawnSync } from "node:child_process";
 import {
   chmodSync,
@@ -114,6 +115,26 @@ describe("codesign-mac-app temp file hygiene", () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("App bundle not found");
+    expect(entitlementTemps(tempRoot)).toEqual([]);
+  });
+
+  it("rejects unknown options before app validation", () => {
+    const tempRoot = makeTempDir("openclaw-codesign-unknown-");
+    const result = runCodesign(["--wat"], tempRoot);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim()).toBe("ERROR: Unknown codesign option: --wat");
+    expect(entitlementTemps(tempRoot)).toEqual([]);
+  });
+
+  it("rejects extra app bundle arguments before signing", () => {
+    const tempRoot = makeTempDir("openclaw-codesign-extra-");
+    const app = path.join(tempRoot, "Fake.app");
+    mkdirSync(path.join(app, "Contents", "MacOS"), { recursive: true });
+    const result = runCodesign([app, "extra"], tempRoot);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr.trim()).toBe("ERROR: Unexpected codesign argument: extra");
     expect(entitlementTemps(tempRoot)).toEqual([]);
   });
 

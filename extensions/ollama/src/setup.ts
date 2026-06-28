@@ -1,3 +1,4 @@
+// Ollama setup module handles plugin onboarding behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type {
   OpenClawConfig,
@@ -369,10 +370,14 @@ async function promptForOllamaCloudCredential(params: {
   prompter: WizardPrompter;
   secretInputMode?: SecretInputMode;
   allowSecretRefPrompt?: boolean;
-}): Promise<{ credential: SecretInput; credentialMode?: SecretInputMode }> {
+}): Promise<{
+  credential: SecretInput;
+  credentialMode?: SecretInputMode;
+  discoveryApiKey: string;
+}> {
   const captured: { credential?: SecretInput; credentialMode?: SecretInputMode } = {};
   const optionToken = normalizeOptionalSecretInput(params.opts?.ollamaApiKey);
-  await ensureApiKeyFromOptionEnvOrPrompt({
+  const discoveryApiKey = await ensureApiKeyFromOptionEnvOrPrompt({
     token: optionToken ?? normalizeOptionalSecretInput(params.opts?.token),
     tokenProvider: optionToken
       ? "ollama"
@@ -404,7 +409,11 @@ async function promptForOllamaCloudCredential(params: {
   ) {
     throw new Error("Cloud-only Ollama setup requires a real OLLAMA_API_KEY.");
   }
-  return { credential: captured.credential, credentialMode: captured.credentialMode };
+  return {
+    credential: captured.credential,
+    credentialMode: captured.credentialMode,
+    discoveryApiKey,
+  };
 }
 
 function buildOllamaModelsConfig(
@@ -591,7 +600,7 @@ export async function promptAndConfigureOllama(params: {
     ],
   })) as OllamaInteractiveMode;
   if (mode === "cloud-only") {
-    const { credential, credentialMode } = await promptForOllamaCloudCredential({
+    const { credential, credentialMode, discoveryApiKey } = await promptForOllamaCloudCredential({
       cfg: params.cfg,
       env: params.env,
       opts: params.opts,
@@ -599,7 +608,9 @@ export async function promptAndConfigureOllama(params: {
       secretInputMode: params.secretInputMode,
       allowSecretRefPrompt: params.allowSecretRefPrompt,
     });
-    const { models: rawDiscoveredModels } = await fetchOllamaModels(OLLAMA_CLOUD_BASE_URL);
+    const { models: rawDiscoveredModels } = await fetchOllamaModels(OLLAMA_CLOUD_BASE_URL, {
+      apiKey: discoveryApiKey,
+    });
     const discoveredModels = rawDiscoveredModels.slice(0, OLLAMA_CLOUD_MAX_DISCOVERED_MODELS);
     const discoveredModelNames = discoveredModels.map((model) => model.name);
     const modelNames =

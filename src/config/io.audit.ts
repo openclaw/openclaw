@@ -1,3 +1,4 @@
+// Audits config paths and values for diagnostics and safety checks.
 import path from "node:path";
 import { redactSecrets, redactToolPayloadText } from "../logging/redact.js";
 import { resolveStateDir } from "./paths.js";
@@ -53,10 +54,7 @@ const SECRET_FLAG_NAMES = new Set([
 const SECRET_FLAG_SUFFIX_PATTERN =
   /^--(?:[a-z0-9]+(?:-[a-z0-9]+)*-)?(?:token|secret|password|passwd|api[-_]?key|api[-_]?secret|webhook|credential|bearer|pat|private[-_]?key|recovery[-_]?key|signing[-_]?key|encryption[-_]?key|master[-_]?key|session[-_]?key|gateway[-_]?key|service[-_]?key|hook[-_]?key)$/;
 
-function isSecretFlagName(flagName: string | null): boolean {
-  if (flagName === null) {
-    return false;
-  }
+function isSecretFlagName(flagName: string): boolean {
   if (SECRET_FLAG_NAMES.has(flagName)) {
     return true;
   }
@@ -64,7 +62,7 @@ function isSecretFlagName(flagName: string | null): boolean {
 }
 
 function parseFlagName(arg: string): string | null {
-  if (typeof arg !== "string" || !arg.startsWith("--")) {
+  if (!arg.startsWith("--")) {
     return null;
   }
   const eq = arg.indexOf("=");
@@ -87,11 +85,6 @@ export function redactConfigAuditArgv(argv: readonly string[]): string[] {
   const result: string[] = [];
   let redactNext = false;
   for (const current of argv) {
-    if (typeof current !== "string") {
-      result.push(current);
-      redactNext = false;
-      continue;
-    }
     if (redactNext) {
       redactNext = false;
       result.push("***");

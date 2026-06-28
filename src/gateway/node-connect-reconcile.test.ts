@@ -174,6 +174,50 @@ describe("reconcileNodePairingOnConnect", () => {
     expect(result.pendingPairing?.request.requestId).toBe("req-caps");
   });
 
+  it("keeps the approved surface when paired-node reapproval is throttled", async () => {
+    const requestPairing = vi.fn(async () => null);
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        caps: ["camera", "screen"],
+        commands: [],
+      }),
+      pairedNode: makePairedNode({
+        caps: ["camera"],
+        commands: [],
+      }),
+      requestPairing,
+    });
+
+    expect(requestPairing).toHaveBeenCalledOnce();
+    expect(result.effectiveCaps).toEqual(["camera"]);
+    expect(result.effectiveCommands).toEqual([]);
+    expect(result.declaredCaps).toEqual(["camera", "screen"]);
+    expect(result.pendingPairing).toBeUndefined();
+    expect(result.shouldClearPendingPairings).toBeUndefined();
+  });
+
+  it("defers stale pending reapproval cleanup when the node returns to its approved surface", async () => {
+    const requestPairing = makePendingPairingRequest("req-unused");
+
+    const result = await reconcileNodePairingOnConnect({
+      cfg: {} as never,
+      connectParams: makeNodeConnectParams({
+        caps: ["camera"],
+        commands: ["canvas.snapshot"],
+      }),
+      pairedNode: makePairedNode({
+        caps: ["camera"],
+        commands: ["canvas.snapshot"],
+      }),
+      requestPairing,
+    });
+
+    expect(requestPairing).not.toHaveBeenCalled();
+    expect(result.shouldClearPendingPairings).toBe(true);
+  });
+
   it("requires a fresh pairing request when paired node permissions change", async () => {
     const requestPairing = makePendingPairingRequest("req-permissions");
 

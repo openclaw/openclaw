@@ -1,3 +1,9 @@
+/**
+ * Chrome MCP existing-session adapter.
+ *
+ * Manages chrome-devtools-mcp processes and sessions, maps Browser actions to
+ * MCP tools, and exposes tab/snapshot/action helpers for logged-in browsers.
+ */
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
@@ -54,6 +60,7 @@ type ChromeMcpCallOptions = {
   signal?: AbortSignal;
 };
 
+/** Browser profile options used to connect or launch chrome-devtools-mcp. */
 export type ChromeMcpProfileOptions = {
   userDataDir?: string;
   cdpUrl?: string;
@@ -96,11 +103,13 @@ type PendingChromeMcpSessionLease = {
   release: (closeIfLastWaiter: boolean) => Promise<boolean>;
 };
 
+/** Minimal process info used when cleaning up MCP child process trees. */
 export type ChromeMcpProcessInfo = {
   pid: number;
   ppid: number;
 };
 
+/** Injectable process cleanup dependencies for platform-specific tests. */
 export type ChromeMcpProcessCleanupDeps = {
   listProcesses?: () => Promise<ChromeMcpProcessInfo[]>;
   killProcess?: (pid: number, signal: NodeJS.Signals) => void;
@@ -134,6 +143,9 @@ const CHROME_MCP_HANDSHAKE_TIMEOUT_MS = 30_000;
 const CHROME_MCP_STDERR_MAX_BYTES = 8 * 1024;
 const CHROME_MCP_PROCESS_EXIT_GRACE_MS = 250;
 const CDP_URL_IN_TEXT_RE = /\b(?:https?|wss?):\/\/[^\s"'<>`]+/gi;
+const DEVTOOLS_ACTIVE_PORT_RE = /\bDevToolsActivePort\b/i;
+const CHROME_CONNECTION_TOOL_ERROR_RE =
+  /(?:Could not connect to Chrome|DevToolsActivePort|ECONNREFUSED|ECONNRESET|websocket|timed out)/i;
 const STALE_SELECTED_PAGE_ERROR =
   "The selected page has been closed. Call list_pages to see open pages.";
 
@@ -143,6 +155,7 @@ const pendingSessions = new Map<string, PendingChromeMcpSession>();
 let sessionFactory: ChromeMcpSessionFactory | null = null;
 let chromeMcpProcessCleanupDepsForTest: ChromeMcpProcessCleanupDeps | null = null;
 
+/** Decode a bounded UTF-8-safe stderr tail for Chrome MCP diagnostics. */
 export function decodeChromeMcpStderrTail(buffer: Buffer): string {
   if (buffer.length <= CHROME_MCP_STDERR_MAX_BYTES) {
     return buffer.toString("utf8").trim();
@@ -255,6 +268,41 @@ function extractMessageText(result: ChromeMcpToolResult): string {
 function extractToolErrorMessage(result: ChromeMcpToolResult, name: string): string {
   const message = extractMessageText(result).trim();
   return message || `Chrome MCP tool "${name}" failed.`;
+}
+
+function formatChromeMcpEndpointForDiagnostic(browserUrl: string): string {
+  return redactToolPayloadText(redactCdpUrl(browserUrl) ?? browserUrl);
+}
+
+function formatChromeMcpToolErrorMessage(params: {
+  profileName: string;
+  options: NormalizedChromeMcpProfileOptions;
+  toolName: string;
+  message: string;
+}): string {
+  const detail = redactChromeMcpDiagnosticTextWithLocalPaths(params.message);
+  const profileLabel = redactChromeMcpProfileLabelForDiagnostic(params.profileName);
+  if (params.options.browserUrl && CHROME_CONNECTION_TOOL_ERROR_RE.test(params.message)) {
+    return (
+      `Chrome MCP tool "${params.toolName}" failed for profile "${profileLabel}" while using ` +
+      `the configured Chrome endpoint (${formatChromeMcpEndpointForDiagnostic(params.options.browserUrl)}). ` +
+      `Details: ${detail}`
+    );
+  }
+  if (
+    !params.options.browserUrl &&
+    params.options.userDataDir &&
+    DEVTOOLS_ACTIVE_PORT_RE.test(params.message)
+  ) {
+    const cdpUrlPath = path.isAbsolute(params.profileName)
+      ? "this existing-session profile's cdpUrl"
+      : `browser.profiles.${params.profileName}.cdpUrl`;
+    return (
+      `${detail} If this browser was started with --remote-debugging-port, set ${cdpUrlPath} ` +
+      "to that DevTools endpoint instead of relying on Chrome MCP auto-connect."
+    );
+  }
+  return detail;
 }
 
 function shouldReconnectForToolError(name: string, message: string): boolean {
@@ -412,10 +460,6 @@ function buildChromeMcpArgsFromOptions(options: NormalizedChromeMcpProfileOption
     ...buildChromeMcpUserDataDirArgs(options),
     ...options.extraArgs,
   ];
-}
-
-export function buildChromeMcpArgs(input?: string | ChromeMcpProfileOptions): string[] {
-  return buildChromeMcpArgsFromOptions(normalizeChromeMcpOptions(input));
 }
 
 function drainStderr(transport: StdioClientTransport): () => string {
@@ -1183,9 +1227,10 @@ async function callTool(
   if (signal?.aborted) {
     throw signal.reason ?? new Error("aborted");
   }
+  const normalizedProfileOptions = normalizeChromeMcpOptions(profileOptions);
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const lease = await leaseSession(profileName, profileOptions, options);
+    const lease = await leaseSession(profileName, normalizedProfileOptions, options);
     const rawCall = lease.session.client.callTool({
       name,
       arguments: args,
@@ -1262,7 +1307,14 @@ async function callTool(
           continue;
         }
       }
-      throw new Error(message);
+      throw new Error(
+        formatChromeMcpToolErrorMessage({
+          profileName,
+          options: normalizedProfileOptions,
+          toolName: name,
+          message,
+        }),
+      );
     }
     return result;
   }
@@ -1292,6 +1344,7 @@ async function findPageById(
   return page;
 }
 
+/** Ensure a Chrome MCP session can be started for the profile. */
 export async function ensureChromeMcpAvailable(
   profileName: string,
   profileOptions?: string | ChromeMcpProfileOptions,
@@ -1303,6 +1356,7 @@ export async function ensureChromeMcpAvailable(
   }
 }
 
+/** Return the cached Chrome MCP process pid for a profile, when present. */
 export function getChromeMcpPid(profileName: string): number | null {
   for (const [key, session] of sessions.entries()) {
     if (cacheKeyMatchesProfileName(key, profileName)) {
@@ -1312,10 +1366,12 @@ export function getChromeMcpPid(profileName: string): number | null {
   return null;
 }
 
+/** Close cached Chrome MCP sessions for one profile. */
 export async function closeChromeMcpSession(profileName: string): Promise<boolean> {
   return await closeChromeMcpSessionsForProfile(profileName);
 }
 
+/** Close every cached Chrome MCP session. */
 export async function stopAllChromeMcpSessions(): Promise<void> {
   const names = uniqueStrings([...sessions.keys()].map((key) => JSON.parse(key)[0] as string));
   for (const name of names) {
@@ -1323,6 +1379,7 @@ export async function stopAllChromeMcpSessions(): Promise<void> {
   }
 }
 
+/** List raw Chrome MCP pages for a profile. */
 export async function listChromeMcpPages(
   profileName: string,
   profileOptions?: string | ChromeMcpProfileOptions,
@@ -1332,6 +1389,7 @@ export async function listChromeMcpPages(
   return extractStructuredPages(result);
 }
 
+/** List Chrome MCP pages converted to BrowserTab records. */
 export async function listChromeMcpTabs(
   profileName: string,
   profileOptions?: string | ChromeMcpProfileOptions,
@@ -1340,6 +1398,7 @@ export async function listChromeMcpTabs(
   return toBrowserTabs(await listChromeMcpPages(profileName, profileOptions, options));
 }
 
+/** Open a new Chrome MCP tab and navigate it to the requested URL. */
 export async function openChromeMcpTab(
   profileName: string,
   url: string,
@@ -1377,6 +1436,7 @@ export async function openChromeMcpTab(
   };
 }
 
+/** Bring a Chrome MCP page to the foreground. */
 export async function focusChromeMcpTab(
   profileName: string,
   targetId: string,
@@ -1388,6 +1448,7 @@ export async function focusChromeMcpTab(
   });
 }
 
+/** Close a Chrome MCP page by target id. */
 export async function closeChromeMcpTab(
   profileName: string,
   targetId: string,
@@ -1396,6 +1457,7 @@ export async function closeChromeMcpTab(
   await callTool(profileName, profileOptions, "close_page", { pageId: parsePageId(targetId) });
 }
 
+/** Navigate a Chrome MCP page and return its resolved URL. */
 export async function navigateChromeMcpPage(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1426,10 +1488,12 @@ export async function navigateChromeMcpPage(params: {
   return { url: page.url ?? params.url };
 }
 
+/** Add call-level grace around the MCP navigate timeout. */
 export function resolveChromeMcpNavigateCallTimeoutMs(timeoutMs: number): number {
   return addTimerTimeoutGraceMs(timeoutMs) ?? 1;
 }
 
+/** Take a structured Chrome MCP snapshot for one page. */
 export async function takeChromeMcpSnapshot(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1449,6 +1513,7 @@ export async function takeChromeMcpSnapshot(params: {
   return extractSnapshot(result);
 }
 
+/** Take a screenshot via Chrome MCP and return the image bytes. */
 export async function takeChromeMcpScreenshot(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1478,6 +1543,7 @@ export async function takeChromeMcpScreenshot(params: {
   });
 }
 
+/** Click a Chrome MCP snapshot element by uid. */
 export async function clickChromeMcpElement(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1504,6 +1570,7 @@ export async function clickChromeMcpElement(params: {
   );
 }
 
+/** Dispatch mouse events at page coordinates through an in-page script. */
 export async function clickChromeMcpCoords(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1565,6 +1632,7 @@ export async function clickChromeMcpCoords(params: {
   });
 }
 
+/** Fill one Chrome MCP element by uid. */
 export async function fillChromeMcpElement(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1580,6 +1648,7 @@ export async function fillChromeMcpElement(params: {
   });
 }
 
+/** Fill multiple Chrome MCP form elements in one tool call. */
 export async function fillChromeMcpForm(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1593,6 +1662,7 @@ export async function fillChromeMcpForm(params: {
   });
 }
 
+/** Hover a Chrome MCP snapshot element by uid. */
 export async function hoverChromeMcpElement(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1606,6 +1676,7 @@ export async function hoverChromeMcpElement(params: {
   });
 }
 
+/** Drag between two Chrome MCP snapshot element uids. */
 export async function dragChromeMcpElement(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1621,6 +1692,7 @@ export async function dragChromeMcpElement(params: {
   });
 }
 
+/** Upload a local file into a Chrome MCP file input by uid. */
 export async function uploadChromeMcpFile(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1636,6 +1708,7 @@ export async function uploadChromeMcpFile(params: {
   });
 }
 
+/** Press a keyboard key in a Chrome MCP page. */
 export async function pressChromeMcpKey(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1649,6 +1722,7 @@ export async function pressChromeMcpKey(params: {
   });
 }
 
+/** Resize a Chrome MCP page viewport. */
 export async function resizeChromeMcpPage(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1664,21 +1738,7 @@ export async function resizeChromeMcpPage(params: {
   });
 }
 
-export async function handleChromeMcpDialog(params: {
-  profileName: string;
-  profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
-  targetId: string;
-  action: "accept" | "dismiss";
-  promptText?: string;
-}): Promise<void> {
-  await callTool(params.profileName, chromeMcpProfileOptionsFromParams(params), "handle_dialog", {
-    pageId: parsePageId(params.targetId),
-    action: params.action,
-    ...(params.promptText ? { promptText: params.promptText } : {}),
-  });
-}
-
+/** Evaluate a JavaScript function in a Chrome MCP page. */
 export async function evaluateChromeMcpScript(params: {
   profileName: string;
   profile?: ChromeMcpProfileOptions;
@@ -1700,31 +1760,19 @@ export async function evaluateChromeMcpScript(params: {
   return extractJsonMessage(result);
 }
 
-export async function waitForChromeMcpText(params: {
-  profileName: string;
-  profile?: ChromeMcpProfileOptions;
-  userDataDir?: string;
-  targetId: string;
-  text: string[];
-  timeoutMs?: number;
-}): Promise<void> {
-  await callTool(params.profileName, chromeMcpProfileOptionsFromParams(params), "wait_for", {
-    pageId: parsePageId(params.targetId),
-    text: params.text,
-    ...(typeof params.timeoutMs === "number" ? { timeout: params.timeoutMs } : {}),
-  });
-}
-
+/** Replace Chrome MCP session creation for focused tests. */
 export function setChromeMcpSessionFactoryForTest(factory: ChromeMcpSessionFactory | null): void {
   sessionFactory = factory;
 }
 
+/** Replace process cleanup hooks for focused tests. */
 export function setChromeMcpProcessCleanupDepsForTest(
   deps: ChromeMcpProcessCleanupDeps | null,
 ): void {
   chromeMcpProcessCleanupDepsForTest = deps;
 }
 
+/** Reset cached sessions and test hooks. */
 export async function resetChromeMcpSessionsForTest(): Promise<void> {
   sessionFactory = null;
   for (const pending of pendingSessions.values()) {

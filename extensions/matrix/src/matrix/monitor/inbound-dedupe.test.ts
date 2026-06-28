@@ -1,3 +1,4 @@
+// Matrix tests cover inbound dedupe plugin behavior.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -46,6 +47,7 @@ describe("Matrix inbound event dedupe", () => {
     accessToken: "token",
     deviceId: "DEVICE",
   } as const;
+  const persistenceTestTtlMs = 60_000;
 
   it("persists committed events across restarts", async () => {
     const storagePath = createStoragePath();
@@ -122,7 +124,9 @@ describe("Matrix inbound event dedupe", () => {
     const first = await createMatrixInboundEventDeduper({
       auth: auth as never,
       storagePath,
-      ttlMs: 20,
+      // Plugin-state TTL uses real wall-clock time; keep restart/import tests
+      // away from millisecond expiry races while fake nowMs drives dedupe pruning.
+      ttlMs: persistenceTestTtlMs,
       nowMs: () => now,
     });
 
@@ -137,7 +141,7 @@ describe("Matrix inbound event dedupe", () => {
     const second = await createMatrixInboundEventDeduper({
       auth: auth as never,
       storagePath,
-      ttlMs: 20,
+      ttlMs: persistenceTestTtlMs,
       nowMs: () => now,
     });
     expect(second.claimEvent({ roomId: "!room:example.org", eventId: "$backlog" })).toBe(false);
@@ -157,7 +161,9 @@ describe("Matrix inbound event dedupe", () => {
     const first = await createMatrixInboundEventDeduper({
       auth: auth as never,
       storagePath,
-      ttlMs: 20,
+      // Plugin-state TTL uses real wall-clock time; this test proves migration
+      // durability after the legacy JSON file is gone, not expiry behavior.
+      ttlMs: persistenceTestTtlMs,
       nowMs: () => 100,
     });
     expect(first.claimEvent({ roomId: "!room:example.org", eventId: "$legacy" })).toBe(false);
@@ -166,7 +172,7 @@ describe("Matrix inbound event dedupe", () => {
     const second = await createMatrixInboundEventDeduper({
       auth: auth as never,
       storagePath,
-      ttlMs: 20,
+      ttlMs: persistenceTestTtlMs,
       nowMs: () => 100,
     });
     expect(second.claimEvent({ roomId: "!room:example.org", eventId: "$legacy" })).toBe(false);

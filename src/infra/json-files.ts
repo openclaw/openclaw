@@ -1,3 +1,4 @@
+// Wraps fs-safe JSON reads and atomic writes with OpenClaw defaults.
 import "./fs-safe-defaults.js";
 import {
   JsonFileReadError,

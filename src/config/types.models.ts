@@ -1,3 +1,4 @@
+// Defines model selection and provider configuration types.
 import type {
   AnthropicMessagesCompat,
   OpenAICompletionsCompat,
@@ -35,6 +36,7 @@ type SupportedOpenAICompatFields = Pick<
   | "requiresToolResultName"
   | "requiresAssistantAfterToolResult"
   | "requiresThinkingAsText"
+  | "requiresReasoningContentOnAssistantMessages"
   | "openRouterRouting"
   | "vercelGatewayRouting"
   | "zaiToolStream"

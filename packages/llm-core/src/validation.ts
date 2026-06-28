@@ -1,3 +1,4 @@
+// LLM Core module implements validation behavior.
 import { Compile } from "typebox/compile";
 import type { TLocalizedValidationError } from "typebox/error";
 import { Value } from "typebox/value";
@@ -204,6 +205,21 @@ function applySchemaArrayCoercion(value: unknown[], schema: JsonSchemaObject): v
 }
 
 function coerceWithUnionSchema(value: unknown, schemas: JsonSchemaObject[]): unknown {
+  // When value is null, check if any union member accepts null directly
+  // (type: "null") before falling through to coercion.  Without this check,
+  // anyOf [{type: "string"}, {type: "null"}] coerces null → "" via the
+  // string branch and never reaches the null branch.
+  if (value === null) {
+    for (const schema of schemas) {
+      const types = getSchemaTypes(schema);
+      if (types.includes("null")) {
+        const validator = getSubSchemaValidator(schema);
+        if (!validator || validator.Check(value)) {
+          return value;
+        }
+      }
+    }
+  }
   for (const schema of schemas) {
     const candidate = structuredClone(value);
     const coerced = coerceWithJsonSchema(candidate, schema);

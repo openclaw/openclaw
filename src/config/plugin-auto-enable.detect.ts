@@ -1,3 +1,4 @@
+// Detects plugin auto-enable candidates from config and discovery results.
 import type { PluginDiscoveryResult } from "../plugins/discovery.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {

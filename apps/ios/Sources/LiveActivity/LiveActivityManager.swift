@@ -7,7 +7,7 @@ import os
 final class LiveActivityManager {
     static let shared = LiveActivityManager()
 
-    private let logger = Logger(subsystem: "ai.openclaw.ios", category: "LiveActivity")
+    private let logger = Logger(subsystem: "ai.openclawfoundation.app", category: "LiveActivity")
     private let connectingStaleSeconds: TimeInterval = 120
     private let hydrationStaleSeconds: TimeInterval = 300
     private var currentActivity: Activity<OpenClawActivityAttributes>?
@@ -15,15 +15,6 @@ final class LiveActivityManager {
 
     private init() {
         self.hydrateCurrentAndPruneDuplicates()
-    }
-
-    var isActive: Bool {
-        guard let activity = self.currentActivity else { return false }
-        guard activity.activityState == .active else {
-            self.currentActivity = nil
-            return false
-        }
-        return true
     }
 
     func showConnecting(statusText: String = "Connecting...", agentName: String, sessionKey: String) {
@@ -94,10 +85,6 @@ final class LiveActivityManager {
 
     func handleReconnect() {
         self.endActivity(reason: "connected")
-    }
-
-    func handleDisconnect() {
-        self.endActivity(reason: "disconnected")
     }
 
     func endActivity(reason: String) {
@@ -178,15 +165,6 @@ final class LiveActivityManager {
         OpenClawActivityAttributes.ContentState(
             statusText: statusText,
             isIdle: false,
-            isDisconnected: false,
-            isConnecting: false,
-            startedAt: self.activityStartDate)
-    }
-
-    private func idleState() -> OpenClawActivityAttributes.ContentState {
-        OpenClawActivityAttributes.ContentState(
-            statusText: "Idle",
-            isIdle: true,
             isDisconnected: false,
             isConnecting: false,
             startedAt: self.activityStartDate)

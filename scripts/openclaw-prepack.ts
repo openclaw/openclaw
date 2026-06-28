@@ -1,4 +1,5 @@
 #!/usr/bin/env -S node --import tsx
+// Openclaw Prepack script supports OpenClaw repository automation.
 
 import { spawnSync, type SpawnSyncOptions } from "node:child_process";
 import { existsSync, readdirSync } from "node:fs";
@@ -116,6 +117,18 @@ export function resolvePrepackCommandTimeoutMs(env: NodeJS.ProcessEnv = process.
   );
 }
 
+export function resolvePrepackCommandStdio(
+  options: SpawnSyncOptions,
+  env: NodeJS.ProcessEnv = process.env,
+): SpawnSyncOptions["stdio"] {
+  const requestedStdio = options.stdio ?? "inherit";
+  const npmJsonOutput = env.npm_config_json === "true" || env.npm_config_json === "1";
+  if (npmJsonOutput && requestedStdio === "inherit") {
+    return ["inherit", 2, "inherit"];
+  }
+  return requestedStdio;
+}
+
 export function runPrepackCommand(
   command: string,
   args: string[],
@@ -123,10 +136,10 @@ export function runPrepackCommand(
 ): ReturnType<typeof spawnSync> {
   const env = options.env ?? process.env;
   return spawnSync(command, args, {
-    stdio: "inherit",
     ...options,
     env,
     killSignal: options.killSignal ?? "SIGKILL",
+    stdio: resolvePrepackCommandStdio(options, env),
     timeout: options.timeout ?? resolvePrepackCommandTimeoutMs(env),
   });
 }

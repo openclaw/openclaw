@@ -1,3 +1,8 @@
+/**
+ * Shared web-search provider helpers.
+ *
+ * Handles provider config, credential normalization, guarded endpoint calls, caching, and filters.
+ */
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { normalizeResolvedSecretInputString } from "../../config/types.secrets.js";
@@ -189,9 +194,9 @@ const BRAVE_FRESHNESS_SHORTCUTS = new Set(["pd", "pw", "pm", "py"]);
 const BRAVE_FRESHNESS_RANGE = /^(\d{4}-\d{2}-\d{2})to(\d{4}-\d{2}-\d{2})$/;
 const PERPLEXITY_RECENCY_VALUES = new Set(["day", "week", "month", "year"]);
 
-export type WebSearchFreshnessProvider = "brave" | "perplexity";
-export type WebSearchRecencyFreshness = "day" | "week" | "month" | "year";
-export type ParsedWebSearchFreshness<Provider extends WebSearchFreshnessProvider> =
+type WebSearchFreshnessProvider = "brave" | "perplexity";
+type WebSearchRecencyFreshness = "day" | "week" | "month" | "year";
+type ParsedWebSearchFreshness<Provider extends WebSearchFreshnessProvider> =
   Provider extends "perplexity" ? WebSearchRecencyFreshness : string;
 
 export const FRESHNESS_TO_RECENCY: Record<string, string> = {

@@ -1,3 +1,4 @@
+/** Per-session async queue wrapper used by ACP manager operations. */
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 
 /** Per-session async queue that serializes ACP runtime operations and exposes queue depth. */
@@ -15,10 +16,6 @@ export class SessionActorQueue {
       total += count;
     }
     return total;
-  }
-
-  getPendingCountForSession(actorKey: string): number {
-    return this.pendingBySession.get(actorKey) ?? 0;
   }
 
   async run<T>(actorKey: string, op: () => Promise<T>): Promise<T> {

@@ -1,3 +1,4 @@
+/** Collects text-to-speech secret refs from runtime config. */
 import {
   collectSecretInputAssignment,
   type ResolverContext,

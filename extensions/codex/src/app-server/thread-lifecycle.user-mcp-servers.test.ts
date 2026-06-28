@@ -1,3 +1,4 @@
+// Codex tests cover thread lifecycle.user mcp servers plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -299,6 +300,7 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
       cwd: workspaceDir,
       model: "gpt-5.4-codex",
       modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
     });
     const request = vi.fn(async (method: string, _params: unknown) => {
       if (method === "thread/start") {
@@ -335,6 +337,87 @@ describe("startOrResumeThread — user mcp.servers projection (regression: #8081
     expect(startParams?.config?.mcp_servers).toBeUndefined();
     const preservedBinding = await readCodexAppServerBinding(sessionFile);
     expect(preservedBinding?.threadId).toBe("thread-native");
+  });
+
+  it("preserves MCP-mismatched bindings across transient native-tool-disabled turns", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-native",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+      mcpServersFingerprint: "mcp-v1",
+    });
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-restricted");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+      mcpServersFingerprint: undefined,
+      mcpServersFingerprintEvaluated: true,
+      nativeCodeModeEnabled: false,
+      userMcpServersEnabled: false,
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    const startParams = request.mock.calls[0]?.[1] as {
+      config?: {
+        "features.code_mode"?: boolean;
+        mcp_servers?: Record<string, unknown>;
+      };
+    };
+    expect(startParams?.config?.["features.code_mode"]).toBe(false);
+    expect(startParams?.config?.mcp_servers).toBeUndefined();
+    const preservedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(preservedBinding?.threadId).toBe("thread-native");
+    expect(preservedBinding?.mcpServersFingerprint).toBe("mcp-v1");
+  });
+
+  it("preserves MCP-mismatched bindings when provider web-search support is unknown", async () => {
+    const sessionFile = path.join(tempDir, "session.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-native",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      dynamicToolsFingerprint: "[]",
+      webSearchThreadConfigFingerprint: "web-search-v1",
+      mcpServersFingerprint: "mcp-v1",
+    });
+    const request = vi.fn(async (method: string, _params: unknown) => {
+      if (method === "thread/start") {
+        return threadStartResult("thread-fallback");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+
+    await startOrResumeThread({
+      client: { request } as never,
+      params: createParams(sessionFile, workspaceDir),
+      cwd: workspaceDir,
+      dynamicTools: [],
+      appServer: createAppServerOptions(),
+      mcpServersFingerprint: undefined,
+      mcpServersFingerprintEvaluated: true,
+      nativeProviderWebSearchSupport: "unknown",
+      userMcpServersEnabled: false,
+    });
+
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["thread/start"]);
+    const preservedBinding = await readCodexAppServerBinding(sessionFile);
+    expect(preservedBinding?.threadId).toBe("thread-native");
+    expect(preservedBinding?.mcpServersFingerprint).toBe("mcp-v1");
   });
 
   it("starts a new thread without user MCP servers when runtime policy disables them", async () => {

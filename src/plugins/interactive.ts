@@ -1,3 +1,4 @@
+// Resolves interactive plugin entries from registry metadata.
 import { resolvePluginInteractiveNamespaceMatch } from "./interactive-registry.js";
 import {
   claimPluginInteractiveCallbackDedupe,

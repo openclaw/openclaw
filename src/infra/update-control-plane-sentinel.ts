@@ -1,3 +1,4 @@
+// Persists update-control-plane sentinel files used by updater coordination.
 import fs from "node:fs/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -117,8 +118,8 @@ export async function readControlPlaneUpdateSentinelMeta(
 export async function writeControlPlaneUpdateRestartSentinel(params: {
   result: UpdateRunResult;
   meta: UpdateRestartSentinelMeta;
-}): Promise<string> {
-  return await writeRestartSentinel(
+}): Promise<void> {
+  await writeRestartSentinel(
     buildUpdateRestartSentinelPayload({
       result: params.result,
       meta: params.meta,

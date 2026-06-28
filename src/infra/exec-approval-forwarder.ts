@@ -1,3 +1,4 @@
+// Forwards exec approval requests between runtime sessions and approval handlers.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ReplyPayload } from "../auto-reply/types.js";

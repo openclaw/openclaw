@@ -1,3 +1,4 @@
+/** Shared types and dependency wiring for the ACP session manager control plane. */
 import type {
   AcpRuntime,
   AcpRuntimeCapabilities,
@@ -39,6 +40,7 @@ export type AcpSessionResolution =
       meta: SessionAcpMeta;
     };
 
+/** Input required to create or resume an ACP runtime session. */
 export type AcpInitializeSessionInput = {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -55,6 +57,7 @@ export type AcpTurnAttachment = {
   data: string;
 };
 
+/** Input for one ACP prompt turn routed through the manager. */
 export type AcpRunTurnInput = {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -67,11 +70,12 @@ export type AcpRunTurnInput = {
   onEvent?: (event: AcpRuntimeEvent) => Promise<void> | void;
 };
 
-export type AcpTurnLifecycleEvent = {
+type AcpTurnLifecycleEvent = {
   type: "prompt_submitted";
   at: number;
 };
 
+/** Input for closing, resetting, or cleaning up an ACP session. */
 export type AcpCloseSessionInput = {
   cfg: OpenClawConfig;
   sessionKey: string;
@@ -88,6 +92,7 @@ export type AcpCloseSessionResult = {
   metaCleared: boolean;
 };
 
+/** User-facing session status assembled from persisted metadata and runtime status. */
 export type AcpSessionStatus = {
   sessionKey: string;
   backend: string;
@@ -102,6 +107,7 @@ export type AcpSessionStatus = {
   lastError?: string;
 };
 
+/** Process-local ACP manager counters exposed for diagnostics. */
 export type AcpManagerObservabilitySnapshot = {
   runtimeCache: {
     activeSessions: number;

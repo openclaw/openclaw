@@ -23,6 +23,7 @@ export type {
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "../plugin-state/plugin-state-store.js";
+export { createPluginStateSyncKeyedStore } from "../plugin-state/plugin-state-store.js";
 export { removePluginFromConfig } from "../plugins/uninstall.js";
 export type {
   PluginDoctorStateMigration,

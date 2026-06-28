@@ -1,3 +1,4 @@
+// Doctor core checks collect environment, config, and runtime readiness diagnostics.
 import path from "node:path";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import {
@@ -12,7 +13,15 @@ import {
   shellCompletionStatusToHealthFindings,
   shellCompletionStatusToRepairEffects,
 } from "../commands/doctor-completion.js";
-import { disableUnavailableSkillsInConfig } from "../commands/doctor-skills-core.js";
+import {
+  detectStaleSessionLocks,
+  sessionLockToHealthFinding,
+  sessionLockToRepairEffect,
+} from "../commands/doctor-session-locks.js";
+import {
+  disableUnavailableSkillsInConfig,
+  formatMissingSkillSummary,
+} from "../commands/doctor-skills-core.js";
 import {
   detectUiProtocolFreshnessIssues,
   uiProtocolFreshnessIssueToHealthFinding,
@@ -27,11 +36,29 @@ import { resolveGatewayAuth } from "../gateway/auth.js";
 import { getSkippedExecRefStaticError } from "../secrets/exec-resolution-policy.js";
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { registerHealthCheck } from "./health-check-registry.js";
-import type { HealthCheck, HealthCheckContext, HealthFinding } from "./health-checks.js";
+import type { SplitHealthCheckInput } from "./health-check-runner-types.js";
+import type {
+  HealthCheck,
+  HealthCheckContext,
+  HealthFinding,
+  HealthRepairContext,
+} from "./health-checks.js";
 
 const BROWSER_CLAWD_PROFILE_RESIDUE_CHECK_ID = "core/doctor/browser-clawd-profile-residue";
 const CODEX_SESSION_ROUTES_CHECK_ID = "core/doctor/codex-session-routes";
 const FINAL_CONFIG_VALIDATION_CHECK_ID = "core/doctor/final-config-validation";
+const GATEWAY_DAEMON_CHECK_ID = "core/doctor/gateway-daemon";
+const GATEWAY_HEALTH_CHECK_ID = "core/doctor/gateway-health";
+const GATEWAY_SERVICES_EXTRA_CHECK_ID = "core/doctor/gateway-services/extra";
+const SESSION_LOCKS_CHECK_ID = "core/doctor/session-locks";
+
+type CoreHealthCheckContext = HealthCheckContext & {
+  readonly deep?: boolean;
+};
+
+type CoreHealthRepairContext = HealthRepairContext & {
+  readonly deep?: boolean;
+};
 
 const loadDoctorCoreChecksRuntimeModule = async () =>
   await import("./doctor-core-checks.runtime.js");
@@ -45,6 +72,12 @@ export type CoreHealthCheckDeps = {
     ctx: HealthCheckContext,
   ) => Promise<readonly HealthFinding[]>;
   readonly collectProviderCatalogProjectionFindings: (
+    ctx: HealthCheckContext,
+  ) => Promise<readonly HealthFinding[]>;
+  readonly collectGatewayHealthFindings: (
+    ctx: HealthCheckContext,
+  ) => Promise<readonly HealthFinding[]>;
+  readonly collectGatewayDaemonFindings: (
     ctx: HealthCheckContext,
   ) => Promise<readonly HealthFinding[]>;
 };
@@ -91,12 +124,28 @@ async function collectProviderCatalogProjectionFindingsWithRuntime(
   return runtime.collectProviderCatalogProjectionFindings(ctx.cfg);
 }
 
+async function collectGatewayHealthFindingsWithRuntime(
+  ctx: HealthCheckContext,
+): Promise<readonly HealthFinding[]> {
+  const runtime = await loadDoctorCoreChecksRuntimeModule();
+  return runtime.collectGatewayHealthFindings(ctx);
+}
+
+async function collectGatewayDaemonFindingsWithRuntime(
+  ctx: HealthCheckContext,
+): Promise<readonly HealthFinding[]> {
+  const runtime = await loadDoctorCoreChecksRuntimeModule();
+  return runtime.collectGatewayDaemonFindings(ctx);
+}
+
 const defaultCoreHealthCheckDeps: CoreHealthCheckDeps = {
   detectUnavailableSkills: detectUnavailableSkillsWithRuntime,
   collectSecurityWarnings: collectSecurityWarningsWithRuntime,
   collectWorkspaceSuggestionNotes: collectWorkspaceSuggestionNotesWithRuntime,
   collectRuntimeToolSchemaFindings: collectRuntimeToolSchemaFindingsWithRuntime,
   collectProviderCatalogProjectionFindings: collectProviderCatalogProjectionFindingsWithRuntime,
+  collectGatewayHealthFindings: collectGatewayHealthFindingsWithRuntime,
+  collectGatewayDaemonFindings: collectGatewayDaemonFindingsWithRuntime,
 };
 
 export function configValidationIssuesToHealthFindings(
@@ -351,15 +400,26 @@ const legacyStateCheck: HealthCheck = {
   async detect(ctx) {
     const { detectLegacyStateMigrations } = await import("../commands/doctor-state-migrations.js");
     const detected = await detectLegacyStateMigrations({ cfg: ctx.cfg });
-    return detected.preview.map(
-      (line): HealthFinding => ({
-        checkId: "core/doctor/legacy-state",
-        severity: "warning",
-        message: line.replace(/^- /, ""),
-        path: detected.stateDir,
-        fixHint: "Run `openclaw doctor --fix` to migrate legacy state.",
-      }),
-    );
+    return [
+      ...detected.preview.map(
+        (line): HealthFinding => ({
+          checkId: "core/doctor/legacy-state",
+          severity: "warning",
+          message: line.replace(/^- /, ""),
+          path: detected.stateDir,
+          fixHint: "Run `openclaw doctor --fix` to migrate legacy state.",
+        }),
+      ),
+      ...detected.warnings.map(
+        (warning): HealthFinding => ({
+          checkId: "core/doctor/legacy-state",
+          severity: "warning",
+          message: warning,
+          path: detected.stateDir,
+          fixHint: "Resolve the warning, then rerun `openclaw doctor --fix`.",
+        }),
+      ),
+    ];
   },
 };
 
@@ -577,7 +637,7 @@ const openAIOAuthTlsCheck: HealthCheck = {
       formatOpenAIOAuthTlsPreflightFix,
       runOpenAIOAuthTlsPreflight,
       shouldRunOpenAIOAuthTlsPrerequisites,
-    } = await import("../commands/oauth-tls-preflight.js");
+    } = await import("../plugins/provider-openai-chatgpt-oauth-tls.js");
     if (!shouldRunOpenAIOAuthTlsPrerequisites({ cfg: ctx.cfg, deep: ctx.mode === "doctor" })) {
       return [];
     }
@@ -603,7 +663,7 @@ const legacyWhatsAppCrontabCheck: HealthCheck = {
   source: "doctor",
   async detect() {
     const { collectLegacyWhatsAppCrontabHealthWarning } =
-      await import("../commands/doctor-cron.js");
+      await import("../commands/doctor/cron/index.js");
     const warning = await collectLegacyWhatsAppCrontabHealthWarning();
     if (!warning) {
       return [];
@@ -649,6 +709,38 @@ const codexSessionRoutesCheck: HealthCheck = {
   },
 };
 
+const gatewayServicesExtraCheck: HealthCheck = {
+  id: GATEWAY_SERVICES_EXTRA_CHECK_ID,
+  kind: "core",
+  description: "Extra gateway-like services are represented as structured findings.",
+  source: "doctor",
+  async detect(ctx) {
+    const coreCtx = ctx as CoreHealthCheckContext;
+    const { detectExtraGatewayServiceIssues, extraGatewayServiceToHealthFinding } =
+      await import("../commands/doctor-gateway-services.js");
+    return (await detectExtraGatewayServiceIssues({ deep: coreCtx.deep === true })).map(
+      extraGatewayServiceToHealthFinding,
+    );
+  },
+  async repair(ctx) {
+    const coreCtx = ctx as CoreHealthRepairContext;
+    const { detectExtraGatewayServiceIssues, extraGatewayServiceToRepairEffects } =
+      await import("../commands/doctor-gateway-services.js");
+    const effects = (
+      await detectExtraGatewayServiceIssues({ deep: coreCtx.deep === true })
+    ).flatMap(extraGatewayServiceToRepairEffects);
+    if (ctx.dryRun === true) {
+      return { status: "repaired", changes: [], effects };
+    }
+    return {
+      status: "skipped",
+      reason: "legacy doctor gateway service contribution owns cleanup",
+      changes: [],
+      effects,
+    };
+  },
+};
+
 const gatewayPlatformNotesCheck: HealthCheck = {
   id: "core/doctor/gateway-services/platform-notes",
   kind: "core",
@@ -668,6 +760,59 @@ const gatewayPlatformNotesCheck: HealthCheck = {
   },
 };
 
+function createGatewayHealthCheck(deps: CoreHealthCheckDeps): SplitHealthCheckInput {
+  return {
+    id: GATEWAY_HEALTH_CHECK_ID,
+    kind: "core",
+    description: "Gateway reachability is represented as structured findings.",
+    source: "doctor",
+    defaultEnabled: false,
+    async detect(ctx) {
+      return deps.collectGatewayHealthFindings(ctx);
+    },
+  };
+}
+
+function createGatewayDaemonCheck(deps: CoreHealthCheckDeps): SplitHealthCheckInput {
+  return {
+    id: GATEWAY_DAEMON_CHECK_ID,
+    kind: "core",
+    description: "Local Gateway daemon service state is represented as structured findings.",
+    source: "doctor",
+    defaultEnabled: false,
+    async detect(ctx) {
+      return deps.collectGatewayDaemonFindings(ctx);
+    },
+  };
+}
+
+const sessionLocksCheck: SplitHealthCheckInput = {
+  id: SESSION_LOCKS_CHECK_ID,
+  kind: "core",
+  description: "Stale session lock files are represented as structured findings.",
+  source: "doctor",
+  defaultEnabled: false,
+  async detect(ctx) {
+    return (await detectStaleSessionLocks({ config: ctx.cfg, env: process.env })).map(
+      sessionLockToHealthFinding,
+    );
+  },
+  async repair(ctx) {
+    const effects = (await detectStaleSessionLocks({ config: ctx.cfg, env: process.env })).map(
+      sessionLockToRepairEffect,
+    );
+    if (ctx.dryRun === true) {
+      return { status: "repaired", changes: [], effects };
+    }
+    return {
+      status: "skipped",
+      reason: "legacy doctor session lock contribution owns cleanup",
+      changes: [],
+      effects,
+    };
+  },
+};
+
 const browserCheck: HealthCheck = {
   id: "core/doctor/browser",
   kind: "core",
@@ -677,33 +822,6 @@ const browserCheck: HealthCheck = {
     const collector = createNoteCollector("core/doctor/browser");
     await noteChromeMcpBrowserReadiness(ctx.cfg, { noteFn: collector.noteFn });
     return collector.findings;
-  },
-};
-
-const workspaceStatusCheck: HealthCheck = {
-  id: "core/doctor/workspace-status",
-  kind: "core",
-  description: "Workspace directory exists and has no legacy duplicates.",
-  source: "doctor",
-  async detect(ctx) {
-    const { detectLegacyWorkspaceDirs } = await loadDoctorWorkspaceModule();
-    const workspaceDir = resolveAgentWorkspaceDir(ctx.cfg, resolveDefaultAgentId(ctx.cfg));
-    const legacy = detectLegacyWorkspaceDirs({ workspaceDir });
-    if (legacy.legacyDirs.length === 0) {
-      return [];
-    }
-    return [
-      {
-        checkId: "core/doctor/workspace-status",
-        severity: "info",
-        message: `Detected ${legacy.legacyDirs.length} legacy workspace director${
-          legacy.legacyDirs.length === 1 ? "y" : "ies"
-        } alongside the active workspace.`,
-        path: workspaceDir,
-        fixHint:
-          "Inspect the legacy directories and migrate or remove them; see `openclaw doctor` for the detailed migration prompt.",
-      },
-    ];
   },
 };
 
@@ -940,16 +1058,22 @@ function createWorkspaceSuggestionsCheck(deps: CoreHealthCheckDeps): HealthCheck
   };
 }
 
-function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly HealthCheck[] {
+function createConvertedWorkflowChecks(
+  deps: CoreHealthCheckDeps,
+): readonly SplitHealthCheckInput[] {
   return [
     claudeCliCheck,
     gatewayAuthCheck,
     legacyStateCheck,
     legacyWhatsAppCrontabCheck,
     codexSessionRoutesCheck,
+    sessionLocksCheck,
     shellCompletionCheck,
     uiProtocolFreshnessCheck,
+    gatewayServicesExtraCheck,
     gatewayPlatformNotesCheck,
+    createGatewayHealthCheck(deps),
+    createGatewayDaemonCheck(deps),
     createSecurityCheck(deps),
     browserCheck,
     openAIOAuthTlsCheck,
@@ -963,6 +1087,7 @@ function createConvertedWorkflowChecks(deps: CoreHealthCheckDeps): readonly Heal
 
 let registered = false;
 
+/** @deprecated Core doctor flows use ordered doctor contributions; keep this only for SDK compatibility. */
 export function registerCoreHealthChecks(): void {
   if (registered) {
     return;
@@ -979,36 +1104,15 @@ export function resetCoreHealthChecksForTest(): void {
 
 export function createCoreHealthChecks(
   deps: CoreHealthCheckDeps = defaultCoreHealthCheckDeps,
-): readonly HealthCheck[] {
+): readonly SplitHealthCheckInput[] {
   return [
     gatewayConfigCheck,
     ...createConvertedWorkflowChecks(deps),
     commandOwnerCheck,
-    workspaceStatusCheck,
     createSkillsReadinessCheck(deps),
     browserClawdProfileResidueCheck,
     finalConfigValidationCheck,
   ];
 }
 
-export const CORE_HEALTH_CHECKS: readonly HealthCheck[] = createCoreHealthChecks();
-
-function formatMissingSkillSummary(skill: SkillStatusEntry): string {
-  const missing: string[] = [];
-  if (skill.missing.bins.length > 0) {
-    missing.push(`bins: ${skill.missing.bins.join(", ")}`);
-  }
-  if (skill.missing.anyBins.length > 0) {
-    missing.push(`any bins: ${skill.missing.anyBins.join(", ")}`);
-  }
-  if (skill.missing.env.length > 0) {
-    missing.push(`env: ${skill.missing.env.join(", ")}`);
-  }
-  if (skill.missing.config.length > 0) {
-    missing.push(`config: ${skill.missing.config.join(", ")}`);
-  }
-  if (skill.missing.os.length > 0) {
-    missing.push(`os: ${skill.missing.os.join(", ")}`);
-  }
-  return missing.join("; ") || "unknown requirement";
-}
+export const CORE_HEALTH_CHECKS: readonly SplitHealthCheckInput[] = createCoreHealthChecks();

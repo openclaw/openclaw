@@ -512,9 +512,10 @@ The agent-facing `gateway` runtime tool still refuses to rewrite
 `tools.exec.ask` or `tools.exec.security`; legacy `tools.bash.*` aliases are
 normalized to the same protected exec paths before the write.
 Agent-driven `gateway config.apply` and `gateway config.patch` edits are
-fail-closed by default: only a narrow set of prompt, model, and mention-gating
-paths are agent-tunable. New sensitive config trees are therefore protected
-unless they are deliberately added to the allowlist.
+fail-closed by default: only a narrow set of low-risk runtime tuning,
+mention-gating, and visible-reply paths are agent-tunable. Global model defaults
+and prompt overlays stay operator-controlled. New sensitive config trees are
+therefore protected unless they are deliberately added to the allowlist.
 
 For any agent/surface that handles untrusted content, deny these by default:
 
@@ -950,7 +951,7 @@ Important boundary note:
 - Treat credentials that can call `/v1/chat/completions`, `/v1/responses`, plugin routes such as `/api/v1/admin/rpc`, or `/api/channels/*` as full-access operator secrets for that gateway.
 - On the OpenAI-compatible HTTP surface, shared-secret bearer auth restores the full default operator scopes (`operator.admin`, `operator.approvals`, `operator.pairing`, `operator.read`, `operator.talk.secrets`, `operator.write`) and owner semantics for agent turns; narrower `x-openclaw-scopes` values do not reduce that shared-secret path.
 - Per-request scope semantics on HTTP only apply when the request comes from an identity-bearing mode such as trusted proxy auth, or from an explicitly no-auth private ingress.
-- In those identity-bearing modes, omitting `x-openclaw-scopes` falls back to the normal operator default scope set; send the header explicitly when you want a narrower scope set.
+- In those identity-bearing modes, omitting `x-openclaw-scopes` falls back to the normal operator default scope set; send the header explicitly when you want a narrower scope set. Owner-level OpenAI-compatible headers such as `x-openclaw-model` require `operator.admin` when scopes are narrowed.
 - `/tools/invoke` and HTTP session history endpoints follow the same shared-secret rule: token/password bearer auth is treated as full operator access there too, while identity-bearing modes still honor declared scopes.
 - Do not share these credentials with untrusted callers; prefer separate gateways per trust boundary.
 

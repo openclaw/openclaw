@@ -1,5 +1,5 @@
+/** Command authorization helpers for owner and allowlist checks. */
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
@@ -18,6 +18,7 @@ import {
   normalizeMessageChannel,
 } from "../utils/message-channel.js";
 import { isNativeCommandTurn, resolveCommandTurnContext } from "./command-turn-context.js";
+import { shouldUseFromAsSenderFallback } from "./sender-identity.js";
 import type { MsgContext } from "./templating.js";
 
 export type CommandAuthorization = {
@@ -458,32 +459,6 @@ function resolveCommandSenderAuthorization(params: {
     );
   }
   return params.commandAuthorized && (params.isOwnerForCommands || params.nativeCommandAuthorized);
-}
-
-function isConversationLikeIdentity(value: string): boolean {
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (!normalized) {
-    return false;
-  }
-  if (normalized.startsWith("chat_id:")) {
-    return true;
-  }
-  return /(^|:)(channel|group|thread|topic|room|space|spaces):/.test(normalized);
-}
-
-function shouldUseFromAsSenderFallback(params: {
-  from?: string | null;
-  chatType?: string | null;
-}): boolean {
-  const from = normalizeOptionalString(params.from) ?? "";
-  if (!from) {
-    return false;
-  }
-  const chatType = normalizeLowercaseStringOrEmpty(params.chatType);
-  if (chatType && chatType !== "direct") {
-    return false;
-  }
-  return !isConversationLikeIdentity(from);
 }
 
 function resolveSenderCandidates(params: {

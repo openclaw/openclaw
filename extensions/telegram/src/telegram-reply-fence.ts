@@ -1,3 +1,4 @@
+// Telegram plugin module implements telegram reply fence behavior.
 import {
   isExplicitCommandTurn,
   type CommandTurnContext,
@@ -231,10 +232,6 @@ export function shouldSupersedeTelegramReplyFence(ctxPayload: {
     return false;
   }
   return true;
-}
-
-export function getTelegramReplyFenceSizeForTests(): number {
-  return telegramReplyFenceByKey.size;
 }
 
 export function resetTelegramReplyFenceForTests(): void {

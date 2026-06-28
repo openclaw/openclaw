@@ -1,3 +1,4 @@
+// Qa Channel plugin module implements gateway behavior.
 import { pollQaBus } from "./bus-client.js";
 import { handleQaInbound } from "./inbound.js";
 import type { ChannelGatewayContext } from "./runtime-api.js";
@@ -47,9 +48,10 @@ export async function startQaGatewayAccount(
     if (!(error instanceof Error) || error.name !== "AbortError") {
       throw error;
     }
+  } finally {
+    ctx.setStatus({
+      accountId: account.accountId,
+      running: false,
+    });
   }
-  ctx.setStatus({
-    accountId: account.accountId,
-    running: false,
-  });
 }

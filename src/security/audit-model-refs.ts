@@ -1,3 +1,4 @@
+// Audits configured model references for risky provider or model choices.
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { modelKey } from "../agents/model-selection-normalize.js";
 import {

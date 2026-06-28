@@ -1,5 +1,7 @@
+// Coordinates restart requests around active embedded agent runs.
 import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/run-state.js";
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import { getActiveCronJobCount } from "../cron/active-jobs.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import {
   getInspectableActiveTaskRestartBlockers,
@@ -13,12 +15,13 @@ export type SafeGatewayRestartCounts = {
   queueSize: number;
   pendingReplies: number;
   embeddedRuns: number;
+  cronRuns: number;
   activeTasks: number;
   totalActive: number;
 };
 
 export type SafeGatewayRestartBlocker = {
-  kind: "queue" | "reply" | "embedded-run" | "task";
+  kind: "queue" | "reply" | "embedded-run" | "cron-run" | "task";
   count: number;
   message: string;
   task?: ActiveTaskRestartBlocker;
@@ -42,6 +45,7 @@ type SafeRestartInspectors = {
   getQueueSize: () => number;
   getPendingReplies: () => number;
   getEmbeddedRuns: () => number;
+  getCronRuns: () => number;
   getActiveTasks: () => number;
   getTaskBlockers: () => ActiveTaskRestartBlocker[];
 };
@@ -50,6 +54,7 @@ const defaultInspectors: SafeRestartInspectors = {
   getQueueSize: getTotalQueueSize,
   getPendingReplies: getTotalPendingReplies,
   getEmbeddedRuns: getActiveEmbeddedRunCount,
+  getCronRuns: getActiveCronJobCount,
   getActiveTasks: () => getInspectableActiveTaskRestartBlockers().length,
   getTaskBlockers: getInspectableActiveTaskRestartBlockers,
 };
@@ -87,11 +92,16 @@ export function createSafeGatewayRestartPreflight(
     queueSize: normalizeCount(resolved.getQueueSize()),
     pendingReplies: normalizeCount(resolved.getPendingReplies()),
     embeddedRuns: normalizeCount(resolved.getEmbeddedRuns()),
+    cronRuns: normalizeCount(resolved.getCronRuns()),
     activeTasks: normalizeCount(resolved.getActiveTasks()),
     totalActive: 0,
   };
   counts.totalActive =
-    counts.queueSize + counts.pendingReplies + counts.embeddedRuns + counts.activeTasks;
+    counts.queueSize +
+    counts.pendingReplies +
+    counts.embeddedRuns +
+    counts.cronRuns +
+    counts.activeTasks;
 
   const blockers: SafeGatewayRestartBlocker[] = [];
   if (counts.queueSize > 0) {
@@ -113,6 +123,13 @@ export function createSafeGatewayRestartPreflight(
       kind: "embedded-run",
       count: counts.embeddedRuns,
       message: `${counts.embeddedRuns} active embedded run(s)`,
+    });
+  }
+  if (counts.cronRuns > 0) {
+    blockers.push({
+      kind: "cron-run",
+      count: counts.cronRuns,
+      message: `${counts.cronRuns} active cron run(s)`,
     });
   }
   if (counts.activeTasks > 0) {
@@ -155,6 +172,7 @@ export function requestSafeGatewayRestart(
     reason?: string;
     delayMs?: number;
     skipDeferral?: boolean;
+    preservePendingEmitHooks?: boolean;
     inspect?: Partial<SafeRestartInspectors>;
   } = {},
 ): SafeGatewayRestartRequestResult {
@@ -163,6 +181,9 @@ export function requestSafeGatewayRestart(
   const restart = scheduleGatewaySigusr1Restart({
     delayMs: opts.delayMs ?? 0,
     reason: opts.reason ?? "gateway.restart.safe",
+    ...(opts.preservePendingEmitHooks === true || skipDeferral
+      ? { preservePendingEmitHooksOnDeferralBypass: true }
+      : {}),
     ...(skipDeferral ? { skipDeferral: true } : {}),
   });
   const status = restart.coalesced
