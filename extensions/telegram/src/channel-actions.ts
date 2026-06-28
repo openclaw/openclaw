@@ -20,7 +20,11 @@ import {
   resolveTelegramPollActionGateState,
 } from "./accounts.js";
 import { isTelegramInlineButtonsEnabled } from "./inline-buttons.js";
-import { createTelegramPollExtraToolSchemas } from "./message-tool-schema.js";
+import {
+  createTelegramButtonsExtraToolSchemas,
+  createTelegramMediaExtraToolSchemas,
+  createTelegramPollExtraToolSchemas,
+} from "./message-tool-schema.js";
 
 let telegramActionRuntimePromise: Promise<typeof import("./action-runtime.js")> | null = null;
 
@@ -180,6 +184,16 @@ function describeTelegramMessageTool({
   if (discovery.pollEnabled) {
     schema.push({
       properties: createTelegramPollExtraToolSchemas(),
+      visibility: "all-configured",
+    });
+  }
+  schema.push({
+    properties: createTelegramMediaExtraToolSchemas(),
+    visibility: "all-configured",
+  });
+  if (discovery.buttonsEnabled) {
+    schema.push({
+      properties: createTelegramButtonsExtraToolSchemas(),
       visibility: "all-configured",
     });
   }
