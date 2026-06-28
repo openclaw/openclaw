@@ -48,7 +48,7 @@ describe("oauth refresh failure hints", () => {
       reason: "sign_in_again",
     });
     expect(buildOAuthRefreshFailureLoginCommand("claude-cli")).toBe(
-      "openclaw models auth login --provider claude-cli",
+      "openclaw models auth login --provider anthropic --method cli",
     );
   });
 });

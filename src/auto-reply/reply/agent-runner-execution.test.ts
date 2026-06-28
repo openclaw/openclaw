@@ -7066,7 +7066,7 @@ describe("runAgentTurnWithFallback", () => {
     expect(result.kind).toBe("final");
     if (result.kind === "final") {
       expect(result.payload.text).toBe(
-        "⚠️ Model login expired on the gateway for claude-cli. Re-auth with `openclaw models auth login --provider claude-cli`, then try again.",
+        "⚠️ Model login expired on the gateway for claude-cli. Re-auth with `openclaw models auth login --provider anthropic --method cli`, then try again.",
       );
     }
   });
