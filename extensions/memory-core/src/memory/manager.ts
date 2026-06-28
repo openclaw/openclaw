@@ -46,7 +46,11 @@ import {
   resolveSingletonManagedCache,
 } from "./manager-cache.js";
 import { closeMemoryDatabase } from "./manager-db.js";
-import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
+import {
+  MemoryManagerEmbeddingOps,
+  resolveEmbeddingTimeoutMs,
+  runEmbeddingOperationWithTimeout,
+} from "./manager-embedding-ops.js";
 import { isLocalEmbeddingWorkerFailure } from "./manager-local-worker-errors.js";
 import {
   createDegradedMemoryProviderLifecycle,
@@ -519,7 +523,10 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
    * fully restarted. SIGUSR1 in-process restarts and config soft-reloads do
    * not clear the latch because the singleton manager instance is reused.
    */
-  private async attemptPrimaryProviderRecovery(params: { force?: boolean }): Promise<boolean> {
+  private async attemptPrimaryProviderRecovery(params: {
+    force?: boolean;
+    signal?: AbortSignal;
+  }): Promise<boolean> {
     const nowMs = Date.now();
     if (
       !shouldAttemptPrimaryProviderRecovery({
@@ -563,8 +570,28 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
       pendingProvider = primaryResult.provider;
       // Probe the freshly-built primary with a ping before adopting it so a
       // provider that resolved but cannot reach its backend does not evict a
-      // working fallback.
-      await primaryResult.provider.embedBatch(["ping"]);
+      // working fallback. Bound the probe with the same batch timeout the
+      // index path uses and the caller's cancellation signal so a slow or
+      // hung recovered primary cannot stall the user search that triggered
+      // recovery.
+      const pingProvider = primaryResult.provider;
+      const pingRuntime = primaryResult.runtime;
+      const pingTimeoutMs = resolveEmbeddingTimeoutMs({
+        kind: "batch",
+        providerId: pingProvider.id,
+        providerRuntime: pingRuntime
+          ? {
+              inlineQueryTimeoutMs: pingRuntime.inlineQueryTimeoutMs,
+              inlineBatchTimeoutMs: pingRuntime.inlineBatchTimeoutMs,
+            }
+          : undefined,
+      });
+      await runEmbeddingOperationWithTimeout({
+        timeoutMs: pingTimeoutMs,
+        message: `memory embeddings recovery ping timed out after ${Math.round(pingTimeoutMs / 1000)}s`,
+        signal: params.signal,
+        run: async (signal) => await pingProvider.embedBatch(["ping"], { signal }),
+      });
       const previousProvider = this.provider;
       this.applyProviderResult(primaryResult);
       this.providerKey = this.computeProviderKey();
@@ -766,7 +793,9 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
     // fallback" state from issue #96534. Skipped when the index is already
     // valid for the fallback (e.g. an explicit identity repair rebuilt it).
     if (this.fallbackFrom && indexIdentity.status !== "valid" && !opts?.signal?.aborted) {
-      const recovered = await this.attemptPrimaryProviderRecovery({}).catch((err: unknown) => {
+      const recovered = await this.attemptPrimaryProviderRecovery({
+        signal: opts?.signal,
+      }).catch((err: unknown) => {
         log.debug(`memory search: primary provider recovery failed: ${formatErrorMessage(err)}`);
         return false;
       });
