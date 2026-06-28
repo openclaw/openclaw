@@ -74,17 +74,19 @@ internal image endpoints remain blocked by default.
 
 ## Common routes
 
-| Goal                                                 | Model ref                                          | Auth                                   |
-| ---------------------------------------------------- | -------------------------------------------------- | -------------------------------------- |
-| OpenAI image generation with API billing             | `openai/gpt-image-2`                               | `OPENAI_API_KEY`                       |
-| OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                               | OpenAI ChatGPT/Codex OAuth             |
-| OpenAI transparent-background PNG/WebP               | `openai/gpt-image-1.5`                             | `OPENAI_API_KEY` or OpenAI Codex OAuth |
-| DeepInfra image generation                           | `deepinfra/black-forest-labs/FLUX-1-schnell`       | `DEEPINFRA_API_KEY`                    |
-| fal Krea 2 expressive/style-directed generation      | `fal/krea/v2/medium/text-to-image`                 | `FAL_KEY`                              |
-| OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image-preview` | `OPENROUTER_API_KEY`                   |
-| LiteLLM image generation                             | `litellm/gpt-image-2`                              | `LITELLM_API_KEY`                      |
-| Microsoft Foundry MAI image generation               | `microsoft-foundry/<deployment-name>`              | `AZURE_OPENAI_API_KEY` or Entra ID     |
-| Google Gemini image generation                       | `google/gemini-3.1-flash-image-preview`            | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
+| Goal                                                 | Model ref                                    | Auth                                   |
+| ---------------------------------------------------- | -------------------------------------------- | -------------------------------------- |
+| OpenAI image generation with API billing             | `openai/gpt-image-2`                         | `OPENAI_API_KEY`                       |
+| OpenAI image generation with Codex subscription auth | `openai/gpt-image-2`                         | OpenAI ChatGPT/Codex OAuth             |
+| OpenAI transparent-background PNG/WebP               | `openai/gpt-image-1.5`                       | `OPENAI_API_KEY` or OpenAI Codex OAuth |
+| DeepInfra image generation                           | `deepinfra/black-forest-labs/FLUX-1-schnell` | `DEEPINFRA_API_KEY`                    |
+| fal Krea 2 expressive/style-directed generation      | `fal/krea/v2/medium/text-to-image`           | `FAL_KEY`                              |
+| OpenRouter image generation                          | `openrouter/google/gemini-3.1-flash-image`   | `OPENROUTER_API_KEY`                   |
+| OpenRouter Pro image generation                      | `openrouter/google/gemini-3-pro-image`       | `OPENROUTER_API_KEY`                   |
+| LiteLLM image generation                             | `litellm/gpt-image-2`                        | `LITELLM_API_KEY`                      |
+| Microsoft Foundry MAI image generation               | `microsoft-foundry/<deployment-name>`        | `AZURE_OPENAI_API_KEY` or Entra ID     |
+| Google Gemini image generation                       | `google/gemini-3.1-flash-image`              | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
+| Google Gemini Pro image generation                   | `google/gemini-3-pro-image`                  | `GEMINI_API_KEY` or `GOOGLE_API_KEY`   |
 
 The same `image_generate` tool handles text-to-image and reference-image
 editing. Use `image` for one reference or `images` for multiple references.
@@ -98,19 +100,19 @@ backend emits it.
 
 ## Supported providers
 
-| Provider          | Default model                           | Edit support                       | Auth                                                  |
-| ----------------- | --------------------------------------- | ---------------------------------- | ----------------------------------------------------- |
-| ComfyUI           | `workflow`                              | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
-| DeepInfra         | `black-forest-labs/FLUX-1-schnell`      | Yes (1 image)                      | `DEEPINFRA_API_KEY`                                   |
-| fal               | `fal-ai/flux/dev`                       | Yes (model-specific limits)        | `FAL_KEY`                                             |
-| Google            | `gemini-3.1-flash-image-preview`        | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
-| LiteLLM           | `gpt-image-2`                           | Yes (up to 5 input images)         | `LITELLM_API_KEY`                                     |
-| Microsoft Foundry | `<deployment-name>`                     | Yes (MAI-Image-2.5 models only)    | `AZURE_OPENAI_API_KEY` or Entra ID (`az login`)       |
-| MiniMax           | `image-01`                              | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
-| OpenAI            | `gpt-image-2`                           | Yes (up to 4 images)               | `OPENAI_API_KEY` or OpenAI ChatGPT/Codex OAuth        |
-| OpenRouter        | `google/gemini-3.1-flash-image-preview` | Yes (up to 5 input images)         | `OPENROUTER_API_KEY`                                  |
-| Vydra             | `grok-imagine`                          | No                                 | `VYDRA_API_KEY`                                       |
-| xAI               | `grok-imagine-image`                    | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
+| Provider          | Default model                      | Edit support                       | Auth                                                  |
+| ----------------- | ---------------------------------- | ---------------------------------- | ----------------------------------------------------- |
+| ComfyUI           | `workflow`                         | Yes (1 image, workflow-configured) | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` for cloud    |
+| DeepInfra         | `black-forest-labs/FLUX-1-schnell` | Yes (1 image)                      | `DEEPINFRA_API_KEY`                                   |
+| fal               | `fal-ai/flux/dev`                  | Yes (model-specific limits)        | `FAL_KEY`                                             |
+| Google            | `gemini-3.1-flash-image`           | Yes                                | `GEMINI_API_KEY` or `GOOGLE_API_KEY`                  |
+| LiteLLM           | `gpt-image-2`                      | Yes (up to 5 input images)         | `LITELLM_API_KEY`                                     |
+| Microsoft Foundry | `<deployment-name>`                | Yes (MAI-Image-2.5 models only)    | `AZURE_OPENAI_API_KEY` or Entra ID (`az login`)       |
+| MiniMax           | `image-01`                         | Yes (subject reference)            | `MINIMAX_API_KEY` or MiniMax OAuth (`minimax-portal`) |
+| OpenAI            | `gpt-image-2`                      | Yes (up to 4 images)               | `OPENAI_API_KEY` or OpenAI ChatGPT/Codex OAuth        |
+| OpenRouter        | `google/gemini-3.1-flash-image`    | Yes (up to 5 input images)         | `OPENROUTER_API_KEY`                                  |
+| Vydra             | `grok-imagine`                     | No                                 | `VYDRA_API_KEY`                                       |
+| xAI               | `grok-imagine-image`               | Yes (up to 5 images)               | `XAI_API_KEY`                                         |
 
 Use `action: "list"` to inspect available providers and models at runtime:
 
@@ -210,8 +212,8 @@ translation.
         primary: "openai/gpt-image-2",
         timeoutMs: 180_000,
         fallbacks: [
-          "openrouter/google/gemini-3.1-flash-image-preview",
-          "google/gemini-3.1-flash-image-preview",
+          "openrouter/google/gemini-3.1-flash-image",
+          "google/gemini-3.1-flash-image",
           "fal/fal-ai/flux/dev",
         ],
       },
@@ -389,7 +391,7 @@ to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
       agents: {
         defaults: {
           imageGenerationModel: {
-            primary: "openrouter/google/gemini-3.1-flash-image-preview",
+            primary: "openrouter/google/gemini-3.1-flash-image",
           },
         },
       },
@@ -399,8 +401,8 @@ to 10 for GPT Image 2 edits, up to 10 style references for Krea 2, and up to
     OpenClaw forwards `prompt`, `count`, reference images, and
     Gemini-compatible `aspectRatio` / `resolution` hints to OpenRouter.
     Current built-in OpenRouter image model shortcuts include
-    `google/gemini-3.1-flash-image-preview`,
-    `google/gemini-3-pro-image-preview`, and `openai/gpt-5.4-image-2`. Use
+    `google/gemini-3.1-flash-image`,
+    `google/gemini-3-pro-image`, and `openai/gpt-5.4-image-2`. Use
     `action: "list"` to see what your configured plugin exposes.
 
   </Accordion>

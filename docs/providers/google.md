@@ -194,9 +194,10 @@ Setting thinking to `off` preserves thinking disabled instead of mapping to
 ## Image generation
 
 The bundled `google` image-generation provider defaults to
-`google/gemini-3.1-flash-image-preview`.
+`google/gemini-3.1-flash-image`.
 
-- Also supports `google/gemini-3-pro-image-preview`
+- Also supports `google/gemini-3.1-flash-image`
+- Also supports `google/gemini-3-pro-image`
 - Generate: up to 4 images per request
 - Edit mode: enabled, up to 5 input images
 - Geometry controls: `size`, `aspectRatio`, and `resolution`
@@ -208,7 +209,7 @@ To use Google as the default image provider:
   agents: {
     defaults: {
       imageGenerationModel: {
-        primary: "google/gemini-3.1-flash-image-preview",
+        primary: "google/gemini-3.1-flash-image",
       },
     },
   },

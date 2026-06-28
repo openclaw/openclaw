@@ -876,7 +876,7 @@ export function normalizeLegacyNanoBananaSkill(
   changes: string[],
 ): OpenClawConfig {
   const NANO_BANANA_SKILL_KEY = "nano-banana-pro";
-  const NANO_BANANA_MODEL = "google/gemini-3-pro-image-preview";
+  const NANO_BANANA_MODEL = "google/gemini-3.1-flash-image";
   const rawSkills = cfg.skills;
   if (!isRecord(rawSkills)) {
     return cfg;

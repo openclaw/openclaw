@@ -236,7 +236,7 @@ describe("image-generation runtime", () => {
       },
       {
         id: "google",
-        defaultModel: "gemini-3.1-flash-image-preview",
+        defaultModel: "gemini-3.1-flash-image",
         capabilities: {
           generate: {},
           edit: { enabled: true },
@@ -245,7 +245,7 @@ describe("image-generation runtime", () => {
         async generateImage() {
           return {
             images: [{ buffer: Buffer.from("png-bytes"), mimeType: "image/png" }],
-            model: "gemini-3.1-flash-image-preview",
+            model: "gemini-3.1-flash-image",
           };
         },
       },
@@ -257,7 +257,7 @@ describe("image-generation runtime", () => {
     });
 
     expect(result.provider).toBe("google");
-    expect(result.model).toBe("gemini-3.1-flash-image-preview");
+    expect(result.model).toBe("gemini-3.1-flash-image");
     expect(result.attempts).toEqual([
       {
         provider: "openai",

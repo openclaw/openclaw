@@ -22,13 +22,13 @@ import {
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
 
-const DEFAULT_MODEL = "google/gemini-3.1-flash-image-preview";
+const DEFAULT_MODEL = "google/gemini-3.1-flash-image";
 const DEFAULT_TIMEOUT_MS = 180_000;
 const MAX_IMAGE_RESULTS = 4;
 const MB = 1024 * 1024;
 const SUPPORTED_MODELS = [
   DEFAULT_MODEL,
-  "google/gemini-3-pro-image-preview",
+  "google/gemini-3-pro-image",
   "openai/gpt-5.4-image-2",
 ] as const;
 const SUPPORTED_ASPECT_RATIOS = [

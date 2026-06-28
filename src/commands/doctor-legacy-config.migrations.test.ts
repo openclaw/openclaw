@@ -611,7 +611,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     });
 
     expect(res.config.agents?.defaults?.imageGenerationModel).toEqual({
-      primary: "google/gemini-3-pro-image-preview",
+      primary: "google/gemini-3.1-flash-image",
     });
     expect(res.config.models?.providers?.google?.apiKey).toEqual({
       source: "env",
@@ -624,7 +624,7 @@ describe("normalizeCompatibilityConfigValues", () => {
     expect(res.config.models?.providers?.google?.models).toStrictEqual([]);
     expect(res.config.skills?.entries).toBeUndefined();
     expect(res.changes).toEqual([
-      "Moved skills.entries.nano-banana-pro → agents.defaults.imageGenerationModel.primary (google/gemini-3-pro-image-preview).",
+      "Moved skills.entries.nano-banana-pro → agents.defaults.imageGenerationModel.primary (google/gemini-3.1-flash-image).",
       "Moved skills.entries.nano-banana-pro.apiKey → models.providers.google.apiKey.",
       "Removed legacy skills.entries.nano-banana-pro.",
     ]);

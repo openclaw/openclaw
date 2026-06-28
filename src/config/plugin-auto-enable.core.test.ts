@@ -537,7 +537,7 @@ describe("applyPluginAutoEnable core", () => {
           defaults: {
             imageGenerationModel: {
               primary: "openai/gpt-image-1",
-              fallbacks: ["google/gemini-3-pro-image-preview"],
+              fallbacks: ["google/gemini-3.1-flash-image"],
             },
             videoGenerationModel: {
               primary: "openai/sora-2",
@@ -568,7 +568,7 @@ describe("applyPluginAutoEnable core", () => {
     expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual(["openai", "google", "minimax"]);
     expect(result.changes).toEqual([
-      "google/gemini-3-pro-image-preview model configured, enabled automatically.",
+      "google/gemini-3.1-flash-image model configured, enabled automatically.",
       "minimax/MiniMax-Hailuo-2.3 model configured, enabled automatically.",
     ]);
   });

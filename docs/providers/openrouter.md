@@ -100,7 +100,7 @@ OpenRouter can also back the `image_generate` tool. Use an OpenRouter image mode
   agents: {
     defaults: {
       imageGenerationModel: {
-        primary: "openrouter/google/gemini-3.1-flash-image-preview",
+        primary: "openrouter/google/gemini-3.1-flash-image",
         timeoutMs: 180_000,
       },
     },

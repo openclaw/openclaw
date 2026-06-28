@@ -3098,7 +3098,7 @@ describe("resolveModel", () => {
 
   it("preloads OpenRouter capabilities before first async resolve of an unknown model", async () => {
     mockLoadOpenRouterModelCapabilities.mockImplementation(async (modelId) => {
-      if (modelId === "google/gemini-3.1-flash-image-preview") {
+      if (modelId === "google/gemini-3.1-flash-image") {
         mockGetOpenRouterModelCapabilities.mockReturnValue({
           name: "Google: Nano Banana 2 (Gemini 3.1 Flash Image Preview)",
           input: ["text", "image"],
@@ -3112,17 +3112,17 @@ describe("resolveModel", () => {
 
     const result = await resolveModelAsyncForTest(
       "openrouter",
-      "google/gemini-3.1-flash-image-preview",
+      "google/gemini-3.1-flash-image",
       "/tmp/agent",
     );
 
     expect(mockLoadOpenRouterModelCapabilities).toHaveBeenCalledWith(
-      "google/gemini-3.1-flash-image-preview",
+      "google/gemini-3.1-flash-image",
     );
     expect(result.error).toBeUndefined();
     expectRecordFields(result.model, {
       provider: "openrouter",
-      id: "google/gemini-3.1-flash-image-preview",
+      id: "google/gemini-3.1-flash-image",
       reasoning: true,
       input: ["text", "image"],
       contextWindow: 65536,

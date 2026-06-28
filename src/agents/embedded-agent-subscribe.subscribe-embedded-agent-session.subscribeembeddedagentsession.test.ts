@@ -430,7 +430,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         content: [
           {
             type: "text",
-            text: "Generated 1 image with google/gemini-3.1-flash-image-preview.\nMEDIA:/tmp/generated.png",
+            text: "Generated 1 image with google/gemini-3.1-flash-image.\nMEDIA:/tmp/generated.png",
           },
         ],
         details: {
@@ -489,7 +489,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         content: [
           {
             type: "text",
-            text: "Generated 1 image with google/gemini-3.1-flash-image-preview.\nMEDIA:/tmp/generated.png",
+            text: "Generated 1 image with google/gemini-3.1-flash-image.\nMEDIA:/tmp/generated.png",
           },
         ],
         details: {
@@ -543,7 +543,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         content: [
           {
             type: "text",
-            text: "Generated 1 image with google/gemini-3.1-flash-image-preview.\nMEDIA:/tmp/generated.png",
+            text: "Generated 1 image with google/gemini-3.1-flash-image.\nMEDIA:/tmp/generated.png",
           },
         ],
         details: {
