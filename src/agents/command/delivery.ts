@@ -15,7 +15,7 @@ import { createReplyPrefixContext } from "../../channels/reply-prefix.js";
 import { createOutboundSendDeps, type CliDeps } from "../../cli/outbound-send-deps.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { formatErrorMessage } from "../../infra/errors.js";
+import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
 import {
   resolveAgentDeliveryPlanWithSessionRoute,
   resolveAgentOutboundTarget,
@@ -66,10 +66,10 @@ function createRestartOnlyAbortSignal(source: AbortSignal | undefined): {
 }
 
 /** Per-payload durable delivery status. */
-export type AgentCommandDeliveryPayloadStatus = "sent" | "suppressed" | "failed";
+type AgentCommandDeliveryPayloadStatus = "sent" | "suppressed" | "failed";
 
 /** Delivery outcome for one normalized outbound payload. */
-export type AgentCommandDeliveryPayloadOutcome = {
+type AgentCommandDeliveryPayloadOutcome = {
   index: number;
   status: AgentCommandDeliveryPayloadStatus;
   reason?: string;
@@ -84,7 +84,7 @@ export type AgentCommandDeliveryPayloadOutcome = {
 };
 
 /** Aggregate delivery status for an agent command result. */
-export type AgentCommandDeliveryStatus = {
+type AgentCommandDeliveryStatus = {
   requested: true;
   attempted: boolean;
   status: "sent" | "suppressed" | "partial_failed" | "failed";
@@ -100,7 +100,7 @@ export type AgentCommandDeliveryStatus = {
 };
 
 /** Agent command result after payload normalization and optional delivery. */
-export type AgentCommandDeliveryResult = {
+type AgentCommandDeliveryResult = {
   payloads: ReturnType<typeof projectOutboundPayloadPlanForJson>;
   meta: EmbeddedAgentRunMeta & AgentCommandResultMetaOverrides;
   didSendViaMessagingTool?: boolean;
@@ -702,7 +702,7 @@ export async function deliverAgentCommandResult(
   };
   if (strictPreDeliveryError) {
     emitJsonEnvelope(deliveryStatus);
-    throw toLintErrorObject(strictPreDeliveryError, "Non-Error thrown");
+    throw toErrorObject(strictPreDeliveryError, "Non-Error thrown");
   }
 
   const deliveryPayloads = projectOutboundPayloadPlanForOutbound(outboundPayloadPlan);
@@ -801,18 +801,4 @@ export async function deliverAgentCommandResult(
     deliverySucceeded,
     deliveryStatus,
   });
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

@@ -69,52 +69,10 @@ export function sleep(ms: number) {
   });
 }
 
-function isHighSurrogate(codeUnit: number): boolean {
-  return codeUnit >= 0xd800 && codeUnit <= 0xdbff;
-}
-
-function isLowSurrogate(codeUnit: number): boolean {
-  return codeUnit >= 0xdc00 && codeUnit <= 0xdfff;
-}
-
-/** Slices a UTF-16 string without returning dangling surrogate halves at either edge. */
-export function sliceUtf16Safe(input: string, start: number, end?: number): string {
-  const len = input.length;
-
-  let from = start < 0 ? Math.max(len + start, 0) : Math.min(start, len);
-  let to = end === undefined ? len : end < 0 ? Math.max(len + end, 0) : Math.min(end, len);
-
-  if (to < from) {
-    const tmp = from;
-    from = to;
-    to = tmp;
-  }
-
-  if (from > 0 && from < len) {
-    const codeUnit = input.charCodeAt(from);
-    if (isLowSurrogate(codeUnit) && isHighSurrogate(input.charCodeAt(from - 1))) {
-      from += 1;
-    }
-  }
-
-  if (to > 0 && to < len) {
-    const codeUnit = input.charCodeAt(to - 1);
-    if (isHighSurrogate(codeUnit) && isLowSurrogate(input.charCodeAt(to))) {
-      to -= 1;
-    }
-  }
-
-  return input.slice(from, to);
-}
-
-/** Truncates a UTF-16 string without cutting a surrogate pair in half. */
-export function truncateUtf16Safe(input: string, maxLen: number): string {
-  const limit = Math.max(0, Math.floor(maxLen));
-  if (input.length <= limit) {
-    return input;
-  }
-  return sliceUtf16Safe(input, 0, limit);
-}
+// Surrogate-safe slicing helpers live in a node-free leaf module so browser/UI
+// bundles can import them without pulling in filesystem code. Re-exported here
+// to preserve the historical `utils.ts` import surface.
+export { sliceUtf16Safe, truncateUtf16Safe } from "./shared/utf16-slice.js";
 
 /** Resolves `~` and OpenClaw home-relative paths with injectable env/home sources. */
 export function resolveUserPath(
@@ -211,8 +169,14 @@ export function displayString(input: string): string {
   return shortenHomeInString(input);
 }
 
-// Configuration root; can be overridden via OPENCLAW_STATE_DIR.
-export const CONFIG_DIR = resolveConfigDir();
+// Gateway startup re-pins this live binding after config/state selection converges so modules
+// imported during early CLI bootstrap cannot keep using the superseded configuration root.
+export let CONFIG_DIR = resolveConfigDir();
+
+export function pinConfigDir(env: NodeJS.ProcessEnv = process.env): string {
+  CONFIG_DIR = resolveConfigDir(env);
+  return CONFIG_DIR;
+}
 /**
  * Check if a file or directory exists at the given path.
  */

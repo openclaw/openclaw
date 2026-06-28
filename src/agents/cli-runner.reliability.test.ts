@@ -12,11 +12,23 @@ import {
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  markMcpLoopbackRequestClassified,
+  markMcpLoopbackRequestFinished,
+  markMcpLoopbackRequestStarted,
+  markMcpLoopbackToolCallFinished,
+  markMcpLoopbackToolCallStarted,
+  recordMcpLoopbackToolCallResult,
+  resolveMcpLoopbackYieldContext,
+  updateMcpLoopbackToolCallCapture,
+} from "../gateway/mcp-http.loopback-runtime.js";
 import { getGlobalHookRunner } from "../plugins/hook-runner-global.js";
+import type { getProcessSupervisor } from "../process/supervisor/index.js";
 import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import { runSkillResearchAutoCapture } from "../skills/research/autocapture.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { runPreparedCliAgent } from "./cli-runner.js";
 import {
@@ -39,11 +51,16 @@ vi.mock("../plugins/hook-runner-global.js", () => ({
   getGlobalHookRunner: vi.fn(() => null),
 }));
 
+vi.mock("../skills/research/autocapture.js", () => ({
+  runSkillResearchAutoCapture: vi.fn(async () => undefined),
+}));
+
 vi.mock("../tts/tts.js", () => ({
   buildTtsSystemPromptHint: vi.fn(() => undefined),
 }));
 
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
+const mockAutoCapture = vi.mocked(runSkillResearchAutoCapture);
 const hookRunnerGlobalStateKey = Symbol.for("openclaw.plugins.hook-runner-global-state");
 let sessionFileEnvSnapshot: ReturnType<typeof captureEnv> | undefined;
 
@@ -281,6 +298,8 @@ describe("runCliAgent reliability", () => {
   afterEach(() => {
     replyRunTesting.resetReplyRunRegistry();
     mockGetGlobalHookRunner.mockReset();
+    mockAutoCapture.mockReset();
+    mockAutoCapture.mockResolvedValue(undefined);
     setHookRunnerForTest(null);
     vi.unstubAllEnvs();
     sessionFileEnvSnapshot?.restore();
@@ -570,6 +589,725 @@ describe("runCliAgent reliability", () => {
 
     expect(result.payloads).toEqual([{ text: "hello from fresh cli" }]);
     expect(supervisorSpawnMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not retry or fail over after a confirmed message send", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureKey = input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "";
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey,
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "telegram",
+          target: "chat123",
+          message: "done",
+          mediaUrl: "https://example.com/done.png",
+        },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected message delivery capture");
+      }
+      setTimeout(() => {
+        recordMcpLoopbackToolCallResult({
+          captureHandle,
+          toolName: "message",
+          args: {
+            action: "send",
+            channel: "telegram",
+            target: "chat123",
+            message: "done",
+            mediaUrl: "https://example.com/done.png",
+          },
+          result: { status: "sent" },
+          isError: false,
+        });
+        markMcpLoopbackToolCallFinished(captureHandle);
+      }, 10);
+      return createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      });
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:delivered-timeout",
+      runId: "run-delivered-timeout",
+      cliSessionId: "stale-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.mcpDeliveryCapture = true;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.messagingToolSentTexts).toEqual(["done"]);
+    expect(result.messagingToolSentMediaUrls).toEqual(["https://example.com/done.png"]);
+    expect(result.messagingToolSentTargets).toEqual([
+      expect.objectContaining({ tool: "message", provider: "telegram", to: "chat123" }),
+    ]);
+    expect(result.meta.executionTrace?.attempts?.[0]?.result).toBe("error");
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("preserves first-turn delivery through cleanup without binding the OpenClaw session id", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: {
+          action: "send",
+          message: "sent before failure",
+        },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected message delivery capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle,
+        toolName: "message",
+        args: {
+          action: "send",
+          message: "sent before failure",
+        },
+        result: {
+          details: {
+            deliveryStatus: "sent",
+            sourceReplySink: "internal-ui",
+            sourceReply: { text: "sent before failure" },
+          },
+        },
+        isError: false,
+      });
+      markMcpLoopbackToolCallFinished(captureHandle);
+      return createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      });
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:first-turn-delivered",
+      runId: "run-first-turn-delivered",
+      provider: "claude-cli",
+      model: "opus",
+    });
+    context.mcpDeliveryCapture = true;
+    context.params.sourceReplyDeliveryMode = "message_tool_only";
+    context.preparedBackend.cleanup = async () => {
+      throw new Error("cleanup failed");
+    };
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(result.messagingToolSourceReplyPayloads).toEqual([{ text: "sent before failure" }]);
+    expect(result.payloads).toEqual([{ text: "sent before failure" }]);
+    expect(getReplyPayloadMetadata(result.payloads?.[0] as object)).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplyTranscriptMirror: {
+        sessionKey: "agent:main:first-turn-delivered",
+        text: "sent before failure",
+        idempotencyKey: "run-first-turn-delivered:internal-source-reply:0",
+      },
+    });
+    expect(result.meta.agentMeta?.sessionId).toBe("");
+    expect(result.meta.agentMeta?.clearCliSessionBinding).toBeUndefined();
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns only the source-reply mirror after a successful CLI turn", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: {
+          action: "send",
+          message: "sent through source reply",
+        },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected message delivery capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle,
+        toolName: "message",
+        args: {
+          action: "send",
+          message: "sent through source reply",
+        },
+        result: {
+          details: {
+            deliveryStatus: "sent",
+            sourceReplySink: "internal-ui",
+            sourceReply: { text: "sent through source reply" },
+          },
+        },
+        isError: false,
+      });
+      markMcpLoopbackToolCallFinished(captureHandle);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ordinary final should stay private",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:successful-source-reply",
+      runId: "run-successful-source-reply",
+      provider: "claude-cli",
+      model: "opus",
+    });
+    context.mcpDeliveryCapture = true;
+    context.params.sourceReplyDeliveryMode = "message_tool_only";
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toEqual([{ text: "sent through source reply" }]);
+    expect(getReplyPayloadMetadata(result.payloads?.[0] as object)).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+      sourceReplyTranscriptMirror: {
+        sessionKey: "agent:main:successful-source-reply",
+        text: "sent through source reply",
+        idempotencyKey: "run-successful-source-reply:internal-source-reply:0",
+      },
+    });
+    expect(result.meta.finalAssistantVisibleText).toBe("sent through source reply");
+  });
+
+  it("hooks the visible source reply without pre-persisting its dispatch mirror", async () => {
+    const { dir, sessionFile, storePath } = createSessionFile();
+    const hookRunner = {
+      hasHooks: vi.fn((hookName: string) => ["llm_output", "agent_end"].includes(hookName)),
+      runLlmInput: vi.fn(async () => undefined),
+      runLlmOutput: vi.fn(async () => undefined),
+      runAgentEnd: vi.fn(async () => undefined),
+    };
+    setHookRunnerForTest(hookRunner);
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: {
+          action: "send",
+          message: "visible source reply",
+        },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected message delivery capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle,
+        toolName: "message",
+        args: {
+          action: "send",
+          message: "visible source reply",
+        },
+        result: {
+          details: {
+            deliveryStatus: "sent",
+            sourceReplySink: "internal-ui",
+            sourceReply: { text: "visible source reply" },
+          },
+        },
+        isError: false,
+      });
+      markMcpLoopbackToolCallFinished(captureHandle);
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "private terminal confirmation",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:main",
+      runId: "run-visible-source-reply",
+      provider: "claude-cli",
+      model: "opus",
+    });
+    context.mcpDeliveryCapture = true;
+    context.params.sourceReplyDeliveryMode = "message_tool_only";
+    context.params.sessionFile = sessionFile;
+    context.params.storePath = storePath;
+    context.params.persistAssistantTranscript = true;
+
+    try {
+      await runPreparedCliAgent(context);
+
+      const transcriptMessages = readTranscriptMessages(sessionFile);
+      expect(transcriptMessages).toHaveLength(0);
+      const llmOutputEvent = requireRecord(
+        callArg(hookRunner.runLlmOutput, 0, 0, "llm_output event"),
+        "llm_output event",
+      );
+      expect(llmOutputEvent.assistantTexts).toEqual(["visible source reply"]);
+      const agentEndEvent = requireRecord(
+        callArg(hookRunner.runAgentEnd, 0, 0, "agent_end event"),
+        "agent_end event",
+      );
+      const messages = requireArray(agentEndEvent.messages, "agent_end messages");
+      const lastMessage = requireRecord(messages.at(-1), "agent_end assistant message");
+      expect(lastMessage.role).toBe("assistant");
+      expect(lastMessage.content).toEqual([{ type: "text", text: "visible source reply" }]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts empty terminal output after a confirmed message delivery", async () => {
+    supervisorSpawnMock.mockClear();
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "telegram",
+          target: "chat123",
+          message: "sent without a terminal reply",
+        },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected message delivery capture");
+      }
+      recordMcpLoopbackToolCallResult({
+        captureHandle,
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "telegram",
+          target: "chat123",
+          message: "sent without a terminal reply",
+        },
+        result: { status: "sent" },
+        isError: false,
+      });
+      markMcpLoopbackToolCallFinished(captureHandle);
+      input.onStdout?.(
+        `${JSON.stringify({ type: "result", session_id: "claude-session", result: "" })}\n`,
+      );
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:successful-empty-delivery",
+      runId: "run-successful-empty-delivery",
+      provider: "claude-cli",
+      model: "opus",
+    });
+    context.backendResolved.config.output = "jsonl";
+    context.mcpDeliveryCapture = true;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.meta.executionTrace?.attempts?.[0]?.result).toBe("success");
+  });
+
+  it("keeps unresolved internal source replies retryable", async () => {
+    vi.useFakeTimers();
+    supervisorSpawnMock.mockClear();
+    let captureStarted: (() => void) | undefined;
+    const captureStartedPromise = new Promise<void>((resolve) => {
+      captureStarted = resolve;
+    });
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: {
+          action: "send",
+          message: "pending internal source reply",
+        },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected internal source reply capture");
+      }
+      updateMcpLoopbackToolCallCapture(captureHandle, {
+        toolName: "message",
+        args: {
+          action: "send",
+          message: "pending internal source reply",
+        },
+      });
+      captureStarted?.();
+      return createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      });
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:unresolved-internal-source-reply",
+      runId: "run-unresolved-internal-source-reply",
+      provider: "claude-cli",
+      model: "opus",
+    });
+    context.mcpDeliveryCapture = true;
+    context.params.config = {};
+    context.params.messageChannel = "webchat";
+    context.params.sourceReplyDeliveryMode = "message_tool_only";
+
+    const resultPromise = runPreparedCliAgent(context);
+    const resultAssertion = expect(resultPromise).rejects.toThrow("CLI produced no output");
+    await captureStartedPromise;
+    await vi.runAllTimersAsync();
+    await resultAssertion;
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when an unresolved implicit send resolves to an external session route", async () => {
+    vi.useFakeTimers();
+    supervisorSpawnMock.mockClear();
+    let captureStarted: (() => void) | undefined;
+    const captureStartedPromise = new Promise<void>((resolve) => {
+      captureStarted = resolve;
+    });
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: {
+          action: "send",
+          message: "pending external session reply",
+        },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected external session reply capture");
+      }
+      updateMcpLoopbackToolCallCapture(captureHandle, {
+        toolName: "message",
+        args: {
+          action: "send",
+          message: "pending external session reply",
+        },
+      });
+      captureStarted?.();
+      return createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      });
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:telegram:direct:123456789",
+      runId: "run-unresolved-external-session-reply",
+      provider: "claude-cli",
+      model: "opus",
+    });
+    context.mcpDeliveryCapture = true;
+    context.params.config = {};
+    context.params.messageChannel = "webchat";
+    context.params.sourceReplyDeliveryMode = "message_tool_only";
+
+    const resultPromise = runPreparedCliAgent(context);
+    await captureStartedPromise;
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("surfaces prepared backend cleanup failures when nothing was delivered", async () => {
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "ok",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:cleanup-failure",
+      runId: "run-cleanup-failure",
+    });
+    context.preparedBackend.cleanup = async () => {
+      throw new Error("cleanup failed");
+    };
+
+    await expect(runPreparedCliAgent(context)).rejects.toThrow("cleanup failed");
+  });
+
+  it("bounds unresolved message sends and does not retry them", async () => {
+    vi.useFakeTimers();
+    supervisorSpawnMock.mockClear();
+    let captureStarted: (() => void) | undefined;
+    const captureStartedPromise = new Promise<void>((resolve) => {
+      captureStarted = resolve;
+    });
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: {
+          action: "react",
+          channel: "telegram",
+          target: "chat123",
+        },
+      });
+      if (!captureHandle) {
+        throw new Error("Expected message delivery capture");
+      }
+      updateMcpLoopbackToolCallCapture(captureHandle, {
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "telegram",
+          target: "chat123",
+          message: "possibly sent",
+        },
+      });
+      captureStarted?.();
+      return createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      });
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:unresolved-send",
+      runId: "run-unresolved-send",
+      cliSessionId: "stale-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.mcpDeliveryCapture = true;
+
+    const resultPromise = runPreparedCliAgent(context);
+    await captureStartedPromise;
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds admitted requests that have not finished uploading", async () => {
+    vi.useFakeTimers();
+    supervisorSpawnMock.mockClear();
+    let captureStarted: (() => void) | undefined;
+    const captureStartedPromise = new Promise<void>((resolve) => {
+      captureStarted = resolve;
+    });
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackRequestStarted(
+        input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+      );
+      if (!captureHandle) {
+        throw new Error("Expected request delivery capture");
+      }
+      captureStarted?.();
+      return createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      });
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:unresolved-request",
+      runId: "run-unresolved-request",
+      cliSessionId: "stale-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.mcpDeliveryCapture = true;
+
+    const resultPromise = runPreparedCliAgent(context);
+    await captureStartedPromise;
+    await vi.runAllTimersAsync();
+    const result = await resultPromise;
+
+    expect(result.payloads).toBeUndefined();
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not treat classified non-message requests as delivery", async () => {
+    vi.useFakeTimers();
+    supervisorSpawnMock.mockClear();
+    let captureStarted: (() => void) | undefined;
+    const captureStartedPromise = new Promise<void>((resolve) => {
+      captureStarted = resolve;
+    });
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const requestCaptureHandle = markMcpLoopbackRequestStarted(
+        input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+      );
+      if (!requestCaptureHandle) {
+        throw new Error("Expected request delivery capture");
+      }
+      markMcpLoopbackToolCallStarted({
+        requestCaptureHandle,
+        toolName: "exec",
+        args: { command: "sleep 30" },
+      });
+      markMcpLoopbackRequestClassified(requestCaptureHandle);
+      captureStarted?.();
+      return createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      });
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:unresolved-non-message-request",
+      runId: "run-unresolved-non-message-request",
+      cliSessionId: "stale-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.mcpDeliveryCapture = true;
+
+    const resultPromise = runPreparedCliAgent(context);
+    const resultAssertion = expect(resultPromise).rejects.toThrow("produced no output");
+    await captureStartedPromise;
+    await vi.runAllTimersAsync();
+    await resultAssertion;
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails normally after an unresolved prepared dry-run send", async () => {
+    vi.useFakeTimers();
+    supervisorSpawnMock.mockClear();
+    let captureStarted: (() => void) | undefined;
+    const captureStartedPromise = new Promise<void>((resolve) => {
+      captureStarted = resolve;
+    });
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackToolCallStarted({
+        captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "telegram",
+          target: "chat123",
+          message: "preview",
+        },
+      });
+      updateMcpLoopbackToolCallCapture(captureHandle, {
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "telegram",
+          target: "chat123",
+          message: "preview",
+          dryRun: true,
+        },
+      });
+      captureStarted?.();
+      return createManagedRun({
+        reason: "no-output-timeout",
+        exitCode: null,
+        exitSignal: "SIGKILL",
+        durationMs: 200,
+        stdout: "",
+        stderr: "",
+        timedOut: true,
+        noOutputTimedOut: true,
+      });
+    });
+    const context = buildPreparedContext({
+      sessionKey: "agent:main:unresolved-dry-run",
+      runId: "run-unresolved-dry-run",
+      cliSessionId: "stale-cli-session",
+      provider: "claude-cli",
+      model: "opus",
+      openClawHistoryPrompt: CLI_RESEED_PROMPT,
+    });
+    context.mcpDeliveryCapture = true;
+
+    const resultPromise = runPreparedCliAgent(context);
+    const resultAssertion = expect(resultPromise).rejects.toThrow("produced no output");
+    await captureStartedPromise;
+    await vi.runAllTimersAsync();
+    await resultAssertion;
+
+    expect(supervisorSpawnMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not retry an unclassified CLI failure with diagnostic output", async () => {
@@ -959,6 +1697,41 @@ describe("runCliAgent reliability", () => {
     expect(completion.refusal).toBe(false);
   });
 
+  it("marks CLI runs as paused after sessions_yield", async () => {
+    supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
+      const input = args[0] as Parameters<ReturnType<typeof getProcessSupervisor>["spawn"]>[0];
+      const captureHandle = markMcpLoopbackRequestStarted(input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY);
+      await resolveMcpLoopbackYieldContext(captureHandle)?.onYield("waiting on subagents");
+      markMcpLoopbackRequestFinished(captureHandle);
+      input.onStdout?.("yield acknowledged");
+      return createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      });
+    });
+    const context = buildPreparedContext();
+    context.mcpDeliveryCapture = true;
+
+    const result = await runPreparedCliAgent(context);
+
+    expect(result.meta).toMatchObject({
+      yielded: true,
+      livenessState: "paused",
+      stopReason: "end_turn",
+      completion: {
+        finishReason: "end_turn",
+        stopReason: "end_turn",
+        refusal: false,
+      },
+    });
+  });
+
   it("seeds fresh CLI sessions from the OpenClaw transcript", async () => {
     supervisorSpawnMock.mockResolvedValueOnce(
       createManagedRun({
@@ -1132,6 +1905,12 @@ describe("runCliAgent reliability", () => {
           messageProvider: "acp",
           messageChannel: "telegram",
           trigger: "user",
+          senderId: "sender-1",
+          chatId: "chat-1",
+          channelContext: {
+            sender: { id: "sender-1" },
+            chat: { id: "chat-1" },
+          },
         },
       });
 
@@ -1165,7 +1944,14 @@ describe("runCliAgent reliability", () => {
       expect(llmInputContext.workspaceDir).toBe(dir);
       expect(llmInputContext.messageProvider).toBe("acp");
       expect(llmInputContext.trigger).toBe("user");
+      expect(llmInputContext.channel).toBe("telegram");
       expect(llmInputContext.channelId).toBe("telegram");
+      expect(llmInputContext.senderId).toBe("sender-1");
+      expect(llmInputContext.chatId).toBe("chat-1");
+      expect(llmInputContext.channelContext).toEqual({
+        sender: { id: "sender-1" },
+        chat: { id: "chat-1" },
+      });
 
       const llmOutputEvent = requireRecord(
         callArg(hookRunner.runLlmOutput, 0, 0, "llm_output event"),
@@ -1203,7 +1989,16 @@ describe("runCliAgent reliability", () => {
       const assistantMessage = requireRecord(messages[1], "assistant message");
       expect(assistantMessage.role).toBe("assistant");
       expect(assistantMessage.content).toEqual([{ type: "text", text: "hello from cli" }]);
-      expect(callArg(hookRunner.runAgentEnd, 0, 1, "agent_end context")).toBeTypeOf("object");
+      const agentEndContext = requireRecord(
+        callArg(hookRunner.runAgentEnd, 0, 1, "agent_end context"),
+        "agent_end context",
+      );
+      expect(agentEndContext.senderId).toBe("sender-1");
+      expect(agentEndContext.chatId).toBe("chat-1");
+      expect(agentEndContext.channelContext).toEqual({
+        sender: { id: "sender-1" },
+        chat: { id: "chat-1" },
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1248,6 +2043,71 @@ describe("runCliAgent reliability", () => {
     expect(resolved).toBe(false);
 
     releaseAgentEnd();
+    await expect(run).resolves.toMatchObject({
+      payloads: [{ text: "hello from cli" }],
+    });
+    expect(resolved).toBe(true);
+  });
+
+  it("waits for eligible Skill Research auto-capture before resolving direct CLI runs", async () => {
+    let releaseAutoCapture: () => void = () => undefined;
+    const autoCaptureSettled = new Promise<void>((resolve) => {
+      releaseAutoCapture = resolve;
+    });
+    mockAutoCapture.mockReturnValueOnce(autoCaptureSettled);
+
+    supervisorSpawnMock.mockResolvedValueOnce(
+      createManagedRun({
+        reason: "exit",
+        exitCode: 0,
+        exitSignal: null,
+        durationMs: 50,
+        stdout: "hello from cli",
+        stderr: "",
+        timedOut: false,
+        noOutputTimedOut: false,
+      }),
+    );
+
+    const context = buildPreparedContext({ sessionKey: "agent:main:main" });
+    let resolved = false;
+    const run = runPreparedCliAgent({
+      ...context,
+      params: {
+        ...context.params,
+        agentId: "main",
+        trigger: "user",
+        config: {
+          skills: {
+            workshop: {
+              autonomous: {
+                enabled: true,
+              },
+            },
+          },
+        },
+      },
+    }).then((result) => {
+      resolved = true;
+      return result;
+    });
+
+    await vi.waitFor(() => {
+      expect(mockAutoCapture).toHaveBeenCalledTimes(1);
+    });
+    await Promise.resolve();
+    expect(resolved).toBe(false);
+    expect(mockAutoCapture).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({
+          agentId: "main",
+          sessionKey: "agent:main:main",
+          trigger: "user",
+        }),
+      }),
+    );
+
+    releaseAutoCapture();
     await expect(run).resolves.toMatchObject({
       payloads: [{ text: "hello from cli" }],
     });
@@ -1974,7 +2834,7 @@ describe("runCliAgent reliability", () => {
         callArg(hookRunner.runBeforeAgentRun, 0, 1, "before_agent_run context"),
         "before_agent_run context",
       );
-      expect(beforeRunContext.channel).toBe("telegram");
+      expect(beforeRunContext.messageProvider).toBe("telegram");
       expect(beforeRunContext.chatId).toBe("chat-1");
       expect(beforeRunContext.channelId).toBe("chat-1");
       expect(beforeRunContext.senderId).toBe("user-42");

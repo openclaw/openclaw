@@ -232,6 +232,8 @@ export const SessionsResolveParamsSchema = Type.Object(
     spawnedBy: Type.Optional(NonEmptyString),
     includeGlobal: Type.Optional(Type.Boolean()),
     includeUnknown: Type.Optional(Type.Boolean()),
+    /** Return a successful `{ ok: false }` response when the selector does not match a session. */
+    allowMissing: Type.Optional(Type.Boolean()),
   },
   { additionalProperties: false },
 );
@@ -300,7 +302,7 @@ export const SessionsPatchParamsSchema = Type.Object(
     agentId: Type.Optional(NonEmptyString),
     label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
     thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
-    fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Null()])),
+    fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Null()])),
     verboseLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     traceLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     reasoningLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

@@ -163,10 +163,11 @@ If the provider does not support this cache mode, `cacheRetention` has no effect
   OpenClaw manages a provider-native `cachedContents` resource rather than
   injecting cache markers into the request.
 
-### Gemini CLI JSON usage
+### Gemini CLI usage
 
-- Gemini CLI JSON output can also surface cache hits through `stats.cached`;
-  OpenClaw maps that to `cacheRead`.
+- Gemini CLI `stream-json` output can surface cache hits through `stats.cached`;
+  OpenClaw maps that to `cacheRead`. Legacy `--output-format json` overrides use
+  the same usage normalization.
 - If the CLI omits a direct `stats.input` value, OpenClaw derives input tokens
   from `stats.input_tokens - stats.cached`.
 - This is usage normalization only. It does not mean OpenClaw is creating

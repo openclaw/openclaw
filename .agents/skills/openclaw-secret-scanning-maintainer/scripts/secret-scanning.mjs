@@ -4,12 +4,12 @@
  * Usage: node secret-scanning.mjs <command> [options]
  */
 
-import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { spawnPlainGh } from "../../../../scripts/lib/plain-gh.mjs";
 
 const REPO = "openclaw/openclaw";
 const REPO_URL = `https://github.com/${REPO}`;
@@ -29,7 +29,7 @@ function tmpFile(purpose) {
 }
 
 function gh(args, { json = true, allowFailure = false } = {}) {
-  const proc = spawnSync("gh", args, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
+  const proc = spawnPlainGh(args, { encoding: "utf8", maxBuffer: 10 * 1024 * 1024 });
   if (proc.status !== 0 && !allowFailure) {
     fail(`gh ${args.slice(0, 3).join(" ")} failed:\n${(proc.stderr || proc.stdout || "").trim()}`);
   }

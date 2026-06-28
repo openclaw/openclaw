@@ -107,7 +107,7 @@ const richChatConfig = {
 function expectCrossContextPolicyResult(params: {
   cfg: OpenClawConfig;
   channel: string;
-  action: "send" | "upload-file";
+  action: ChannelMessageActionName;
   to: string;
   currentChannelId: string;
   currentChannelProvider: string;
@@ -228,6 +228,56 @@ describe("outbound policy helpers", () => {
   ])("enforces cross-context policy for %j", (params) => {
     expectCrossContextPolicyResult(params);
   });
+
+  it.each(["edit", "delete", "pin", "unpin"] satisfies ChannelMessageActionName[])(
+    "blocks cross-provider %s actions by default",
+    (action) => {
+      expectCrossContextPolicyResult({
+        cfg: workspaceConfig,
+        channel: "forum",
+        action,
+        to: "forum:@ops",
+        currentChannelId: "C12345678",
+        currentChannelProvider: "workspace",
+        expected: /target provider "forum" while bound to "workspace"/,
+      });
+    },
+  );
+
+  it.each(["edit", "delete", "pin", "unpin"] satisfies ChannelMessageActionName[])(
+    "allows cross-provider %s actions when explicitly enabled",
+    (action) => {
+      expectCrossContextPolicyResult({
+        cfg: {
+          ...workspaceConfig,
+          tools: {
+            message: { crossContext: { allowAcrossProviders: true } },
+          },
+        } as OpenClawConfig,
+        channel: "forum",
+        action,
+        to: "forum:@ops",
+        currentChannelId: "C12345678",
+        currentChannelProvider: "workspace",
+        expected: "allow",
+      });
+    },
+  );
+
+  it.each(["edit", "delete", "pin", "unpin"] satisfies ChannelMessageActionName[])(
+    "allows current-context %s actions without cross-provider opt-in",
+    (action) => {
+      expectCrossContextPolicyResult({
+        cfg: workspaceConfig,
+        channel: "workspace",
+        action,
+        to: "C12345678",
+        currentChannelId: "C12345678",
+        currentChannelProvider: "workspace",
+        expected: "allow",
+      });
+    },
+  );
 
   it("allows a routable alias of the native current channel", () => {
     expect(() =>

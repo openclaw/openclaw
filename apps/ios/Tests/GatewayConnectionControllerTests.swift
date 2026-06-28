@@ -371,15 +371,18 @@ import UIKit
     }
 
     @Test @MainActor func loadLastConnectionReadsSavedValues() {
-        let prior = KeychainStore.loadString(service: "ai.openclaw.gateway", account: "lastConnection")
+        let prior = KeychainStore.loadString(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
         defer {
             if let prior {
-                _ = KeychainStore.saveString(prior, service: "ai.openclaw.gateway", account: "lastConnection")
+                _ = KeychainStore.saveString(
+                    prior,
+                    service: "ai.openclawfoundation.app.gateway",
+                    account: "lastConnection")
             } else {
-                _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+                _ = KeychainStore.delete(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
             }
         }
-        _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+        _ = KeychainStore.delete(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
 
         GatewaySettingsStore.saveLastGatewayConnectionManual(
             host: "gateway.example.com",
@@ -395,15 +398,18 @@ import UIKit
     }
 
     @Test @MainActor func loadLastConnectionReturnsNilForInvalidData() {
-        let prior = KeychainStore.loadString(service: "ai.openclaw.gateway", account: "lastConnection")
+        let prior = KeychainStore.loadString(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
         defer {
             if let prior {
-                _ = KeychainStore.saveString(prior, service: "ai.openclaw.gateway", account: "lastConnection")
+                _ = KeychainStore.saveString(
+                    prior,
+                    service: "ai.openclawfoundation.app.gateway",
+                    account: "lastConnection")
             } else {
-                _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+                _ = KeychainStore.delete(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
             }
         }
-        _ = KeychainStore.delete(service: "ai.openclaw.gateway", account: "lastConnection")
+        _ = KeychainStore.delete(service: "ai.openclawfoundation.app.gateway", account: "lastConnection")
 
         // Plant legacy UserDefaults with invalid host/port to exercise migration + validation.
         withUserDefaults([

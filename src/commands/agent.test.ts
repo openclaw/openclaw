@@ -7,6 +7,7 @@ import "./agent-command.test-mocks.js";
 import { testing as acpManagerTesting } from "../acp/control-plane/manager.js";
 import * as authProfileStoreModule from "../agents/auth-profiles/store.js";
 import * as attemptExecutionRuntime from "../agents/command/attempt-execution.runtime.js";
+import { deliverAgentCommandResult } from "../agents/command/delivery.runtime.js";
 import { runEmbeddedAgent } from "../agents/embedded-agent.js";
 import { loadManifestModelCatalog, loadModelCatalog } from "../agents/model-catalog.js";
 import * as modelSelectionModule from "../agents/model-selection.js";
@@ -24,7 +25,11 @@ import {
 import type { PluginProviderRegistration } from "../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { createTestRegistry } from "../test-utils/channel-plugins.js";
+import {
+  createDirectOutboundTestAdapter,
+  createOutboundTestPlugin,
+  createTestRegistry,
+} from "../test-utils/channel-plugins.js";
 import { agentCommand, agentCommandFromIngress, testing as agentCommandTesting } from "./agent.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -62,6 +67,10 @@ vi.mock("../agents/auth-profiles/store.js", () => {
   };
 });
 
+vi.mock("../agents/auth-profiles/source-check.js", () => ({
+  hasAnyAuthProfileStoreSource: vi.fn(() => false),
+}));
+
 vi.mock("../agents/command/session-store.runtime.js", () => {
   return {
     updateSessionStoreAfterAgentRun: vi.fn(async () => undefined),
@@ -84,12 +93,14 @@ vi.mock("../agents/command/attempt-execution.runtime.js", () => {
     emitAcpLifecycleEnd: vi.fn(),
     emitAcpLifecycleError: vi.fn(),
     emitAcpLifecycleStart: vi.fn(),
-    persistAcpTurnTranscript: vi.fn(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
-    ),
-    persistCliTurnTranscript: vi.fn(
-      async (params: { sessionEntry?: unknown }) => params.sessionEntry,
-    ),
+    persistAcpTurnTranscript: vi.fn(async (params: { sessionEntry?: unknown }) => ({
+      kind: "persisted",
+      sessionEntry: params.sessionEntry,
+    })),
+    persistCliTurnTranscript: vi.fn(async (params: { sessionEntry?: unknown }) => ({
+      kind: "persisted",
+      sessionEntry: params.sessionEntry,
+    })),
     runAgentAttempt: vi.fn(async (params: Record<string, unknown>) => {
       const opts = params.opts as Record<string, unknown>;
       const runContext = params.runContext as Record<string, unknown>;
@@ -335,8 +346,8 @@ function mockModelCatalogOnce(entries: ReturnType<typeof loadManifestModelCatalo
   vi.mocked(loadModelCatalog).mockResolvedValueOnce(entries);
 }
 
-function installThinkingTestProviders() {
-  const registry = createTestRegistry();
+function installThinkingTestProviders(channels: Parameters<typeof createTestRegistry>[0] = []) {
+  const registry = createTestRegistry(channels);
   registry.providers = ["anthropic", "codex", "ollama", "openai", "openrouter"].map(
     (providerId): PluginProviderRegistration => ({
       pluginId: providerId,
@@ -1278,6 +1289,59 @@ describe("agentCommand", () => {
       expect(callArgs?.agentId).toBe("ops");
       expect(callArgs?.sessionKey).toBe("agent:ops:global");
       expect(callArgs?.sessionFile).toContain(`${path.sep}agents${path.sep}ops${path.sep}sessions`);
+    });
+  });
+
+  it("rejects agent-scoped to session selectors that conflict with the requested agent", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: { sessionId: "wechat-session", updatedAt: Date.now() },
+      });
+      mockConfig(home, store, undefined, undefined, [{ id: "main" }, { id: "work" }]);
+
+      await expect(
+        agentCommand({ message: "hi", agentId: "work", to: sessionKey }, runtime),
+      ).rejects.toThrow('Agent id "work" does not match session key agent "main".');
+      expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    });
+  });
+
+  it("does not forward agent-scoped to session selectors as delivery targets", async () => {
+    await withTempHome(async (home) => {
+      const store = path.join(home, "sessions.json");
+      const sessionKey = "agent:main:openclaw-weixin:direct:o9cq802hhmfc@im.wechat";
+      writeSessionStoreSeed(store, {
+        [sessionKey]: {
+          sessionId: "wechat-session",
+          updatedAt: Date.now(),
+          lastChannel: "telegram",
+          lastTo: "+1555",
+        },
+      });
+      mockConfig(home, store);
+      installThinkingTestProviders([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "telegram",
+            outbound: createDirectOutboundTestAdapter({ channel: "telegram" }),
+          }),
+        },
+      ]);
+
+      await agentCommand(
+        { message: "hi", to: sessionKey, deliver: true, channel: "telegram" },
+        runtime,
+      );
+
+      const deliveryCall = vi.mocked(deliverAgentCommandResult).mock.calls.at(-1)?.[0] as
+        | { opts?: { to?: string }; sessionEntry?: { lastTo?: string } }
+        | undefined;
+      expect(deliveryCall?.opts?.to).toBeUndefined();
+      expect(deliveryCall?.sessionEntry?.lastTo).toBe("+1555");
     });
   });
 

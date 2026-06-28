@@ -15,7 +15,7 @@ import { resolveEffectiveToolFsWorkspaceOnly } from "./tool-fs-policy.js";
 type AgentSystemPromptRenderParams = Parameters<typeof buildAgentSystemPrompt>[0];
 
 /** Config-derived system prompt fields passed into the prompt renderer. */
-export type ResolvedAgentSystemPromptConfig = Pick<
+type ResolvedAgentSystemPromptConfig = Pick<
   AgentSystemPromptRenderParams,
   | "ownerDisplay"
   | "ownerDisplaySecret"
@@ -26,7 +26,7 @@ export type ResolvedAgentSystemPromptConfig = Pick<
   | "fsWorkspaceOnly"
 >;
 
-export type ConfiguredAgentSystemPromptParams = AgentSystemPromptRenderParams & {
+type ConfiguredAgentSystemPromptParams = AgentSystemPromptRenderParams & {
   config?: OpenClawConfig;
   agentId?: string;
 };

@@ -8,6 +8,8 @@ import { access as fsAccess, readFile as fsReadFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, relative, resolve as resolvePath, sep } from "node:path";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { toErrorObject } from "../../../infra/errors.js";
+import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
 import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
 import {
   classifyMediaReferenceSource,
@@ -56,6 +58,8 @@ const COMPACT_RESOURCE_FILE_NAMES = new Set(["AGENTS.md", "AGENTS.MD", "CLAUDE.m
 export interface ReadOperations {
   /** Resolve a user-supplied path for this read backend. */
   resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
+  /** Decode text bytes for this backend. Custom backends default to UTF-8. */
+  decodeText?: (params: { buffer: Buffer; absolutePath: string }) => string;
   /** Read file contents as a Buffer */
   readFile: (absolutePath: string) => Promise<Buffer>;
   /** Check if file is readable (throw if not) */
@@ -66,6 +70,7 @@ export interface ReadOperations {
 
 const defaultReadOperations: ReadOperations = {
   resolvePath: resolveLocalReadPath,
+  decodeText: ({ buffer }) => decodeWindowsTextFileBuffer({ buffer }),
   readFile: (path) => fsReadFile(path),
   access: (path) => fsAccess(path, constants.R_OK),
   detectImageMimeType: detectSupportedImageMimeTypeFromFile,
@@ -339,7 +344,8 @@ export function createReadToolDefinition(
             } else {
               // Read text content.
               const buffer = await ops.readFile(absolutePath);
-              const textContent = buffer.toString("utf-8");
+              const textContent =
+                ops.decodeText?.({ buffer, absolutePath }) ?? buffer.toString("utf8");
               const allLines = textContent.split("\n");
               const totalFileLines = allLines.length;
               // Apply offset if specified. Convert from 1-indexed input to 0-indexed array access.
@@ -404,7 +410,7 @@ export function createReadToolDefinition(
           } catch (error: unknown) {
             signal?.removeEventListener("abort", onAbort);
             if (!aborted) {
-              reject(toLintErrorObject(error, "Non-Error rejection"));
+              reject(toErrorObject(error, "Non-Error rejection"));
             }
           }
         })();
@@ -445,18 +451,4 @@ export function createReadTool(
   options?: ReadToolOptions,
 ): AgentTool<typeof readSchema> {
   return wrapToolDefinition(createReadToolDefinition(cwd, options));
-}
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
 }

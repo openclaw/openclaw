@@ -225,7 +225,7 @@ See [Skill Workshop](/tools/skill-workshop) for the full proposal lifecycle.
     metadata:
 
     ```bash
-    openclaw skills install clawhub-publish
+    openclaw skills install @openclaw/clawhub-publish
     ```
 
   </Step>

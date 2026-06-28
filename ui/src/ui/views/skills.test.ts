@@ -2,7 +2,7 @@
 
 import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SkillStatusEntry, SkillStatusReport } from "../types.ts";
+import type { AgentsListResult, SkillStatusEntry, SkillStatusReport } from "../types.ts";
 import { renderSkills, type SkillsProps } from "./skills.ts";
 
 const dialogRestores: Array<() => void> = [];
@@ -26,6 +26,7 @@ function createSkill(overrides: Partial<SkillStatusEntry> = {}): SkillStatusEntr
     always: false,
     disabled: false,
     blockedByAllowlist: false,
+    blockedByAgentFilter: false,
     eligible: true,
     requirements: {
       bins: [],
@@ -51,11 +52,22 @@ function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     managedSkillsDir: "/tmp/skills",
     skills: [createSkill()],
   };
+  const agentsList: AgentsListResult = {
+    defaultId: "main",
+    mainKey: "main",
+    scope: "project",
+    agents: [
+      { id: "main", name: "Main" },
+      { id: "research", identity: { name: "Research", avatar: "R" } },
+    ],
+  };
 
   return {
     connected: true,
     loading: false,
     report,
+    agentsList,
+    selectedAgentId: "main",
     error: null,
     filter: "",
     statusFilter: "all",
@@ -80,6 +92,7 @@ function createProps(overrides: Partial<SkillsProps> = {}): SkillsProps {
     clawhubDetailError: null,
     clawhubInstallSlug: null,
     clawhubInstallMessage: null,
+    onAgentChange: () => undefined,
     onFilterChange: () => undefined,
     onStatusFilterChange: () => undefined,
     onRefresh: () => undefined,
@@ -104,6 +117,37 @@ describe("renderSkills", () => {
     while (dialogRestores.length > 0) {
       dialogRestores.pop()?.();
     }
+  });
+
+  it("renders the agent selector and routes agent changes", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    const onAgentChange = vi.fn();
+
+    render(
+      renderSkills(
+        createProps({
+          selectedAgentId: "research",
+          onAgentChange,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const selector = container.querySelector<HTMLSelectElement>('select[name="skills-agent"]');
+    expect(selector).toBeInstanceOf(HTMLSelectElement);
+    expect(selector?.value).toBe("research");
+    expect(Array.from(selector!.options).map((option) => option.textContent?.trim())).toEqual([
+      "Main (default)",
+      "Research",
+    ]);
+
+    selector!.value = "main";
+    selector!.dispatchEvent(new Event("change", { bubbles: true }));
+
+    expect(onAgentChange).toHaveBeenCalledWith("main");
   });
 
   it("does not transfer toggle state when a skill leaves the disabled tab", async () => {
@@ -151,6 +195,39 @@ describe("renderSkills", () => {
     const updatedToggles = container.querySelectorAll<HTMLInputElement>(".skill-toggle");
     expect(updatedToggles).toHaveLength(1);
     expect(updatedToggles[0].checked).toBe(false);
+  });
+
+  it("treats skills blocked by the selected agent filter as needing setup", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    installDialogMethod("showModal", function (this: HTMLDialogElement) {
+      this.setAttribute("open", "");
+    });
+    const report: SkillStatusReport = {
+      workspaceDir: "/tmp/workspace",
+      managedSkillsDir: "/tmp/skills",
+      skills: [createSkill({ blockedByAgentFilter: true })],
+    };
+
+    render(renderSkills(createProps({ report, statusFilter: "ready" })), container);
+    await Promise.resolve();
+
+    expect(container.querySelectorAll(".list-item")).toHaveLength(0);
+    expect(normalizeText(container)).toContain("Ready0");
+    expect(normalizeText(container)).toContain("Needs Setup1");
+
+    render(
+      renderSkills(createProps({ report, statusFilter: "needs-setup", detailKey: "repo-skill" })),
+      container,
+    );
+    await Promise.resolve();
+
+    expect(container.querySelector(".list-item .statusDot")?.classList.contains("warn")).toBe(true);
+    expect(normalizeText(container)).toContain("Reason: blocked by agent filter");
+    expect(
+      Array.from(container.querySelectorAll(".chip")).map((chip) => normalizeText(chip)),
+    ).toContain("blocked");
   });
 
   it("defers detail dialog opening until the dialog is connected", async () => {
@@ -305,6 +382,38 @@ describe("renderSkills", () => {
     expect(onClawHubInstall).toHaveBeenCalledWith("github");
   });
 
+  it("renders ClawHub acknowledgement retry actions", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    const onClawHubInstall = vi.fn();
+
+    render(
+      renderSkills(
+        createProps({
+          clawhubInstallMessage: {
+            kind: "error",
+            text: "REVIEW REQUIRED - ClawHub found suspicious behavior.",
+            acknowledgeSlug: "github",
+            acknowledgeVersion: "1.2.3",
+          },
+          onClawHubInstall,
+        }),
+      ),
+      container,
+    );
+
+    const retryButton = container.querySelector<HTMLButtonElement>(".callout button");
+    expect(normalizeText(container.querySelector(".callout")!)).toBe(
+      "REVIEW REQUIRED - ClawHub found suspicious behavior. Acknowledge risk and install",
+    );
+    expect(retryButton).toBeInstanceOf(HTMLButtonElement);
+    retryButton!.click();
+
+    expect(onClawHubInstall).toHaveBeenCalledTimes(1);
+    expect(onClawHubInstall).toHaveBeenCalledWith("github", true, "1.2.3");
+  });
+
   it("renders installed ClawHub verdicts and the local Skill Card tab", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -353,7 +462,7 @@ describe("renderSkills", () => {
               slug: "agentreceipt",
               version: "1.2.3",
               securityAuditUrl:
-                "https://clawhub.ai/openclaw/agentreceipt/security-audit?version=1.2.3",
+                "https://clawhub.ai/openclaw/skills/agentreceipt/security-audit?version=1.2.3",
               securityStatus: "suspicious",
               securityPassed: false,
             },
@@ -388,7 +497,7 @@ describe("renderSkills", () => {
               requestedSlug: "agentreceipt",
               requestedVersion: "1.2.3",
               securityAuditUrl:
-                "https://clawhub.ai/openclaw/agentreceipt/security-audit?version=1.2.3",
+                "https://clawhub.ai/openclaw/skills/agentreceipt/security-audit?version=1.2.3",
               securityStatus: "suspicious",
               securityPassed: false,
             },

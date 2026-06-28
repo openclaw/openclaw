@@ -526,7 +526,52 @@ export function resolveNpmGlobalPrefixLayoutFromPrefix(prefix: string): NpmGloba
   };
 }
 
-function resolvePreferredNpmCommand(pkgRoot?: string | null): string | null {
+function splitNormalizedPathParts(value: string): string[] {
+  return path
+    .resolve(value)
+    .split(path.sep)
+    .filter(Boolean)
+    .map((part) => normalizeLowercaseStringOrEmpty(part));
+}
+
+function isNodeVersionPathPart(value: string | undefined): boolean {
+  return value !== undefined && /^v?\d+(?:\.\d+){0,3}(?:[-+][0-9a-z.-]+)?$/u.test(value);
+}
+
+function hasPathSequence(parts: readonly string[], sequence: readonly string[]): boolean {
+  const lastStart = parts.length - sequence.length;
+  for (let index = 0; index <= lastStart; index += 1) {
+    if (sequence.every((part, offset) => parts[index + offset] === part)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function isEphemeralNodeManagedNpmPrefix(prefix: string): boolean {
+  const parts = splitNormalizedPathParts(prefix);
+  const basename = parts.at(-1);
+  const parent = parts.at(-2);
+  const grandparent = parts.at(-3);
+
+  if (isNodeVersionPathPart(basename) && grandparent === "cellar") {
+    return true;
+  }
+  if (
+    isNodeVersionPathPart(basename) &&
+    (hasPathSequence(parts, [".nvm", "versions", "node"]) ||
+      hasPathSequence(parts, ["n", "versions", "node"]) ||
+      hasPathSequence(parts, [".asdf", "installs", "nodejs"]) ||
+      hasPathSequence(parts, [".volta", "tools", "image", "node"]))
+  ) {
+    return true;
+  }
+  return (
+    basename === "installation" && isNodeVersionPathPart(parent) && grandparent === "node-versions"
+  );
+}
+
+function resolveNpmCommandBesidePackageRoot(pkgRoot?: string | null): string | null {
   const prefix = inferNpmPrefixFromPackageRoot(pkgRoot);
   if (!prefix) {
     return null;
@@ -534,6 +579,14 @@ function resolvePreferredNpmCommand(pkgRoot?: string | null): string | null {
   const candidate =
     process.platform === "win32" ? path.join(prefix, "npm.cmd") : path.join(prefix, "bin", "npm");
   return fsSync.existsSync(candidate) ? candidate : null;
+}
+
+function resolvePreferredNpmCommand(pkgRoot?: string | null): string | null {
+  const prefix = inferNpmPrefixFromPackageRoot(pkgRoot);
+  if (prefix && isEphemeralNodeManagedNpmPrefix(prefix)) {
+    return null;
+  }
+  return resolveNpmCommandBesidePackageRoot(pkgRoot);
 }
 
 function inferGlobalRootFromPackageRoot(pkgRoot?: string | null): string | null {
@@ -690,20 +743,6 @@ export async function resolveGlobalRoot(
   return root || null;
 }
 
-/** Resolves the OpenClaw package root under a package manager's global root. */
-export async function resolveGlobalPackageRoot(
-  managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
-  runCommand: CommandRunner,
-  timeoutMs: number,
-  pkgRoot?: string | null,
-): Promise<string | null> {
-  const root = await resolveGlobalRoot(managerOrCommand, runCommand, timeoutMs, pkgRoot);
-  if (!root) {
-    return null;
-  }
-  return path.join(root, PRIMARY_PACKAGE_NAME);
-}
-
 /**
  * Resolves the effective global install target, honoring an existing package
  * root when requested and detecting pnpm or bun layouts before command probes.
@@ -809,7 +848,7 @@ export async function detectGlobalInstallManagerForRoot(
     }
   }
 
-  if (resolvePreferredNpmCommand(pkgRoot)) {
+  if (resolveNpmCommandBesidePackageRoot(pkgRoot)) {
     return "npm";
   }
 

@@ -25,6 +25,7 @@ type MatrixQaScenarioId =
   | "matrix-room-partial-streaming-preview"
   | "matrix-room-quiet-streaming-preview"
   | "matrix-room-tool-progress-preview"
+  | "matrix-room-tool-progress-command-preview"
   | "matrix-room-tool-progress-preview-opt-out"
   | "matrix-room-tool-progress-error"
   | "matrix-room-tool-progress-mention-safety"
@@ -416,6 +417,15 @@ export const MATRIX_QA_SCENARIOS: MatrixQaScenarioDefinition[] = [
     id: "matrix-room-tool-progress-preview",
     timeoutMs: 60_000,
     title: "Matrix streaming folds tool progress into the preview message",
+    configOverrides: {
+      streaming: "quiet",
+      toolProfile: "coding",
+    },
+  },
+  {
+    id: "matrix-room-tool-progress-command-preview",
+    timeoutMs: 60_000,
+    title: "Matrix streaming replaces command progress lines inside the preview message",
     configOverrides: {
       streaming: "quiet",
       toolProfile: "coding",

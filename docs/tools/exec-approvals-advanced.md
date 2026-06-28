@@ -89,10 +89,11 @@ reduced to a small explicit allowlist (`TERM`, `LANG`, `LC_*`, `COLORTERM`,
 `NO_COLOR`, `FORCE_COLOR`).
 
 For `allow-always` decisions in allowlist mode, known dispatch wrappers (`env`,
-`nice`, `nohup`, `stdbuf`, `timeout`) persist the inner executable path instead
-of the wrapper path. Shell multiplexers (`busybox`, `toybox`) are unwrapped for
-shell applets (`sh`, `ash`, etc.) the same way. If a wrapper or multiplexer
-cannot be safely unwrapped, no allowlist entry is persisted automatically.
+`flock`, `nice`, `nohup`, `stdbuf`, `timeout`) persist the inner executable path
+instead of the wrapper path. Shell multiplexers (`busybox`, `toybox`) are
+unwrapped for shell applets (`sh`, `ash`, etc.) the same way. If a wrapper or
+multiplexer cannot be safely unwrapped, no allowlist entry is persisted
+automatically.
 
 If you allowlist interpreters like `python3` or `node`, prefer
 `tools.exec.strictInlineEval=true` so inline eval still requires an explicit

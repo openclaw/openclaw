@@ -15,6 +15,7 @@ export type FallbackAttempt = {
   model: string;
   error: string;
   reason?: FailoverReason;
+  authMode?: string;
   status?: number;
   code?: string;
 };

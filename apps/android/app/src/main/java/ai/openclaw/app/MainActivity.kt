@@ -1,5 +1,6 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.ui.AndroidScreenshotModeScreen
 import ai.openclaw.app.ui.OpenClawTheme
 import ai.openclaw.app.ui.RootScreen
 import android.content.Intent
@@ -51,6 +52,12 @@ class MainActivity : ComponentActivity() {
     pendingIntent = intent
     WindowCompat.setDecorFitsSystemWindows(window, false)
     permissionRequester = PermissionRequester(this)
+    if (BuildConfig.DEBUG) {
+      parseAndroidScreenshotModeIntent(intent)?.let { scene ->
+        enterScreenshotMode(scene)
+        return
+      }
+    }
 
     setContent {
       var activeViewModel by remember { mutableStateOf<MainViewModel?>(null) }
@@ -76,6 +83,12 @@ class MainActivity : ComponentActivity() {
           RootScreen(viewModel = currentViewModel)
         }
       }
+    }
+  }
+
+  private fun enterScreenshotMode(scene: AndroidScreenshotScene) {
+    setContent {
+      AndroidScreenshotModeScreen(scene = scene)
     }
   }
 

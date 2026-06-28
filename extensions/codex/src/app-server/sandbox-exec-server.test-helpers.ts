@@ -228,11 +228,6 @@ export async function waitForHttpBodyDeltas(
   throw new Error(`expected ${count} http body deltas`);
 }
 
-/** Quotes a value for POSIX shell snippets embedded in sandbox test commands. */
-export function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'"'"'`)}'`;
-}
-
 /** Sends one JSON-RPC request and resolves/rejects from the matching response id. */
 export function rpc(socket: WebSocket, method: string, params: unknown): Promise<unknown> {
   const id = Math.floor(Math.random() * 1_000_000);

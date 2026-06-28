@@ -2285,6 +2285,36 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(runLlmInput).not.toHaveBeenCalled();
   });
 
+  it("flushes the embedded session transcript before afterTurn", async () => {
+    const events: string[] = [];
+    const afterTurn = vi.fn(async () => {
+      events.push("afterTurn");
+    });
+    hoisted.sessionManager.rewriteFile.mockImplementation(() => {
+      events.push("flush");
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createTestContextEngine({ afterTurn }),
+      sessionKey,
+      tempPaths,
+      attemptOverrides: {
+        currentInboundEventKind: "room_event",
+        currentInboundContext: { text: "[OpenClaw room event]" },
+        suppressNextUserMessagePersistence: true,
+        transcriptPrompt: "",
+      },
+      sessionPrompt: async (session) => {
+        session.messages = [...session.messages, doneMessage];
+      },
+    });
+
+    const afterTurnIndex = events.indexOf("afterTurn");
+    expect(afterTurn).toHaveBeenCalledTimes(1);
+    expect(afterTurnIndex).not.toBe(-1);
+    expect(events.slice(0, afterTurnIndex)).toContain("flush");
+  });
+
   it("forwards sessionKey to bootstrap, assemble, and afterTurn", async () => {
     const { bootstrap, assemble } = createContextEngineBootstrapAndAssemble();
     const afterTurn = vi.fn(async (_params: { sessionKey?: string }) => {});
@@ -2840,7 +2870,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
     ).toBe(1_000_000);
   });
 
-  it("bounds aggregate tool-result prompt history without rewriting append results", async () => {
+  it("preserves the cacheable prefix while bounding current prompt results", async () => {
     const toolText = "process output ".repeat(70);
     const sessionMessages: AgentMessage[] = [{ role: "user", content: "seed", timestamp: 1 }];
     for (let index = 0; index < 8; index += 1) {
@@ -2880,7 +2910,7 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
           agents: {
             defaults: {
               contextLimits: {
-                toolResultMaxChars: 1_000,
+                toolResultMaxChars: 2_000,
               },
             },
             list: [{ id: "main" }],
@@ -2902,6 +2932,18 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
           };
         };
         session.prompt = async (_prompt, options) => {
+          for (let index = 0; index < 8; index += 1) {
+            session.messages.push({
+              role: "toolResult",
+              toolCallId: `current_call_${index}`,
+              toolName: "process",
+              content: [
+                { type: "text", text: `current ${index}: ${"current output ".repeat(300)}` },
+              ],
+              isError: false,
+              timestamp: 100 + index,
+            } as AgentMessage);
+          }
           promptHandlerMessages = session.messages.map((message) => message as AgentMessage);
           options?.preflightResult?.(true);
           await session.agent.streamFn?.({} as never, { messages: session.messages } as never, {});
@@ -2913,8 +2955,13 @@ describe("runEmbeddedAttempt tool-result guard budget wiring", () => {
 
     expect(sumToolResultTextChars(sessionMessages)).toBeGreaterThan(4_000);
     expect(sumToolResultTextChars(promptHandlerMessages)).toBeGreaterThan(4_000);
-    expect(sumToolResultTextChars(submittedMessages)).toBeLessThanOrEqual(4_000);
-    expect(JSON.stringify(submittedMessages)).toContain("truncated");
+    const submittedCurrentPromptMessages = submittedMessages.slice(sessionMessages.length);
+    expect(
+      submittedMessages
+        .filter((message) => message.role === "toolResult")
+        .every((message) => sumToolResultTextChars([message]) <= 2_000),
+    ).toBe(true);
+    expect(JSON.stringify(submittedCurrentPromptMessages)).toContain("truncated");
     expect(afterTurn).toHaveBeenCalledTimes(1);
     expect(sumToolResultTextChars(afterTurnMessages)).toBeGreaterThan(4_000);
     expect(JSON.stringify(afterTurnMessages)).not.toContain("truncated");

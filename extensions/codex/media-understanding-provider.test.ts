@@ -229,6 +229,7 @@ describe("codex media understanding provider", () => {
       undefined,
       "/tmp/openclaw-agent",
       cfg,
+      { timeoutMs: 30_000 },
     );
     expect(requests[1]?.params).toEqual({
       model: "gpt-5.4",
@@ -240,8 +241,14 @@ describe("codex media understanding provider", () => {
       developerInstructions:
         "You are OpenClaw's bounded image-understanding worker. Describe only the provided image content. Do not call tools, edit files, or ask follow-up questions.",
       config: {
+        "features.apps": false,
         "features.code_mode": false,
         "features.code_mode_only": false,
+        "features.image_generation": false,
+        "features.multi_agent": false,
+        "features.plugins": false,
+        "features.standalone_web_search": false,
+        web_search: "disabled",
       },
       environments: [],
       dynamicTools: [],
@@ -279,9 +286,49 @@ describe("codex media understanding provider", () => {
       agentDir: " ",
     });
 
-    expect(clientFactory).toHaveBeenCalledWith(expect.any(Object), undefined, undefined, cfg);
+    expect(clientFactory).toHaveBeenCalledWith(expect.any(Object), undefined, undefined, cfg, {
+      timeoutMs: 30_000,
+    });
     expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: process.cwd() }));
     expect(requests[2]?.params).toEqual(expect.objectContaining({ cwd: process.cwd() }));
+  });
+
+  it("preserves configured WebSocket transport for media turns", async () => {
+    const { client, requests } = createFakeClient();
+    const clientFactory = vi.fn(async () => client);
+    const provider = buildCodexMediaUnderstandingProvider({
+      pluginConfig: {
+        appServer: {
+          transport: "websocket",
+          url: "ws://127.0.0.1:4501",
+        },
+      },
+      clientFactory,
+    });
+
+    await provider.describeImage?.({
+      buffer: Buffer.from("image-bytes"),
+      fileName: "image.png",
+      mime: "image/png",
+      provider: "codex",
+      model: "gpt-5.4",
+      timeoutMs: 30_000,
+      cfg: {},
+      agentDir: "/tmp/openclaw-agent",
+    });
+
+    expect(clientFactory).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transport: "websocket",
+        url: "ws://127.0.0.1:4501",
+      }),
+      undefined,
+      "/tmp/openclaw-agent",
+      {},
+      { timeoutMs: 30_000 },
+    );
+    expect(requests[1]?.params).toEqual(expect.objectContaining({ cwd: "/tmp/openclaw-agent" }));
+    expect(requests[2]?.params).toEqual(expect.objectContaining({ cwd: "/tmp/openclaw-agent" }));
   });
 
   it("passes the scoped auth store into isolated app-server startup", async () => {
@@ -486,8 +533,14 @@ describe("codex media understanding provider", () => {
       developerInstructions:
         "You are OpenClaw's bounded structured-extraction worker. Return only the requested extraction. Do not call tools, edit files, ask follow-up questions, or include secrets.",
       config: {
+        "features.apps": false,
         "features.code_mode": false,
         "features.code_mode_only": false,
+        "features.image_generation": false,
+        "features.multi_agent": false,
+        "features.plugins": false,
+        "features.standalone_web_search": false,
+        web_search: "disabled",
       },
       environments: [],
       dynamicTools: [],

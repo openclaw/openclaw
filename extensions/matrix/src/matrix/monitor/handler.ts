@@ -16,7 +16,6 @@ import {
   createChannelProgressDraftGate,
   type ChannelProgressDraftLine,
   formatChannelProgressDraftLine,
-  formatChannelProgressDraftLineForEntry,
   formatChannelProgressDraftText,
   isChannelProgressDraftWorkToolName,
   mergeChannelProgressDraftLine,
@@ -41,10 +40,7 @@ import {
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import { resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
-import {
-  loadSessionStore,
-  resolveSessionStoreEntry,
-} from "openclaw/plugin-sdk/session-store-runtime";
+import { getSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type {
   CoreConfig,
@@ -348,12 +344,11 @@ function resolveMatrixSharedDmContextNotice(params: {
   }
 
   try {
-    const store = loadSessionStore(params.storePath);
     const currentSession = resolveMatrixStoredSessionMeta(
-      resolveSessionStoreEntry({
-        store,
+      getSessionEntry({
+        storePath: params.storePath,
         sessionKey: params.sessionKey,
-      }).existing,
+      }),
     );
     if (!currentSession) {
       return null;
@@ -1933,10 +1928,12 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
           onToolStart: async (payload) => {
             const toolName = payload.name?.trim();
             await pushPreviewToolProgress(
-              formatChannelProgressDraftLineForEntry(
+              buildChannelProgressDraftLineForEntry(
                 progressConfigEntry,
                 {
                   event: "tool",
+                  itemId: payload.itemId,
+                  toolCallId: payload.toolCallId,
                   name: toolName,
                   phase: payload.phase,
                   args: payload.args,
@@ -1951,6 +1948,7 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               buildChannelProgressDraftLineForEntry(progressConfigEntry, {
                 event: "item",
                 itemId: payload.itemId,
+                toolCallId: payload.toolCallId,
                 itemKind: payload.kind,
                 title: payload.title,
                 name: payload.name,
@@ -1996,8 +1994,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               return;
             }
             await pushPreviewToolProgress(
-              formatChannelProgressDraftLine({
+              buildChannelProgressDraftLineForEntry(progressConfigEntry, {
                 event: "command-output",
+                itemId: payload.itemId,
+                toolCallId: payload.toolCallId,
                 phase: payload.phase,
                 title: payload.title,
                 name: payload.name,
@@ -2011,8 +2011,10 @@ export function createMatrixRoomMessageHandler(params: MatrixMonitorHandlerParam
               return;
             }
             await pushPreviewToolProgress(
-              formatChannelProgressDraftLine({
+              buildChannelProgressDraftLineForEntry(progressConfigEntry, {
                 event: "patch",
+                itemId: payload.itemId,
+                toolCallId: payload.toolCallId,
                 phase: payload.phase,
                 title: payload.title,
                 name: payload.name,

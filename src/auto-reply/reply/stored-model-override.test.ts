@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { resolveStoredModelOverride } from "./stored-model-override.js";
 
@@ -8,6 +8,32 @@ const parentSession: SessionEntry = {
 } as unknown as SessionEntry;
 
 describe("resolveStoredModelOverride", () => {
+  it("loads parent overrides without requiring a whole session store", () => {
+    const loadSessionEntry = vi.fn((sessionKey: string) =>
+      sessionKey === "agent:main:telegram:dm:parent"
+        ? {
+            sessionId: "parent-session",
+            updatedAt: 1782259200000,
+            providerOverride: "anthropic",
+            modelOverride: "claude-sonnet-4-7",
+          }
+        : undefined,
+    );
+
+    expect(
+      resolveStoredModelOverride({
+        defaultProvider: "openai",
+        loadSessionEntry,
+        sessionKey: "agent:main:telegram:dm:parent:thread:child",
+      }),
+    ).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-7",
+      source: "parent",
+    });
+    expect(loadSessionEntry).toHaveBeenCalledWith("agent:main:telegram:dm:parent");
+  });
+
   it("returns the child entry's own override before considering the parent", () => {
     const child: SessionEntry = {
       providerOverride: "openai",
@@ -27,7 +53,7 @@ describe("resolveStoredModelOverride", () => {
     });
   });
 
-  it("inherits the parent override for non-subagent child sessions (e.g. topic threads)", () => {
+  it("inherits the parent override for non-subagent child sessions", () => {
     const child: SessionEntry = {} as unknown as SessionEntry;
     const out = resolveStoredModelOverride({
       sessionEntry: child,
@@ -43,7 +69,7 @@ describe("resolveStoredModelOverride", () => {
     });
   });
 
-  it("does not inherit a parent /model override for spawned subagent sessions (subagentRole)", () => {
+  it("does not inherit a parent /model override for spawned subagent sessions", () => {
     const child: SessionEntry = {
       subagentRole: "orchestrator",
       spawnDepth: 1,
@@ -70,7 +96,7 @@ describe("resolveStoredModelOverride", () => {
     expect(out).toBeNull();
   });
 
-  it("still returns the subagent child's own direct override even when the parent has one", () => {
+  it("still returns the subagent child's own direct override", () => {
     const child: SessionEntry = {
       subagentRole: "leaf",
       spawnDepth: 2,

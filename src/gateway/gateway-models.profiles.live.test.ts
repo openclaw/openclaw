@@ -58,7 +58,8 @@ import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
 import type { ProviderThinkingModelCompat } from "../plugins/provider-thinking.types.js";
 import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
-import { containsFinalTag, stripFinalTags } from "../shared/text/final-tags.js";
+import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
+import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import {
@@ -67,9 +68,10 @@ import {
   isLikelyToolNonceRefusal,
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
-} from "./live-tool-probe-utils.js";
+} from "./live-tool-probe.test-helpers.js";
 import { startGatewayServer } from "./server.impl.js";
-import { loadSessionEntry, readSessionMessagesAsync } from "./session-utils.js";
+import { readSessionMessagesAsync } from "./session-transcript-readers.js";
+import { loadSessionEntry } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
@@ -343,7 +345,11 @@ function isGatewayLiveProbeTimeout(error: string): boolean {
 }
 
 function isGatewayLiveModelTimeout(error: string): boolean {
-  return /model timeout after \d+ms/i.test(error);
+  return (
+    /model timeout after \d+ms/i.test(error) ||
+    (/\bagent\.wait timeout for runId=/i.test(error) &&
+      /\btimeoutPhase=(?:preflight|provider|post_turn)\b/i.test(error))
+  );
 }
 
 function assertGatewayLiveDidNotSkipAllDueToTimeout(params: {
@@ -565,9 +571,9 @@ function restoreProductionEnvForLiveRun(previous: {
 
 function restoreOptionalEnv(key: string, value: string | undefined): void {
   if (value === undefined) {
-    delete process.env[key];
+    deleteTestEnvValue(key);
   } else {
-    process.env[key] = value;
+    setTestEnvValue(key, value);
   }
 }
 
@@ -597,7 +603,7 @@ function assertNoReasoningTags(params: {
   if (!params.text) {
     return;
   }
-  if (THINKING_TAG_RE.test(params.text) || containsFinalTag(params.text)) {
+  if (THINKING_TAG_RE.test(params.text) || findFinalTagMatches(params.text).length > 0) {
     const snippet = params.text.length > 200 ? `${params.text.slice(0, 200)}…` : params.text;
     throw new Error(
       `[${params.label}] reasoning tag leak (${params.model} / ${params.phase}): ${snippet}`,
@@ -891,6 +897,24 @@ describe("resolveGatewayLiveProviderTimeoutSeconds", () => {
   });
 });
 
+describe("isGatewayLiveModelTimeout", () => {
+  it("matches provider-attributed agent wait timeouts", () => {
+    expect(
+      isGatewayLiveModelTimeout(
+        "minimax/MiniMax-M3: prompt: agent.wait timeout for runId=idem-1 (timeoutPhase=provider, providerStarted=true, stopReason=rpc, error=aborted)",
+      ),
+    ).toBe(true);
+  });
+
+  it("does not match wait-layer agent wait timeouts", () => {
+    expect(
+      isGatewayLiveModelTimeout(
+        "minimax/MiniMax-M3: prompt: agent.wait timeout for runId=idem-1 (timeoutPhase=queue, providerStarted=false, stopReason=rpc, error=aborted)",
+      ),
+    ).toBe(false);
+  });
+});
+
 describe("formatGatewayLiveAgentWaitFailure", () => {
   it("includes terminal attribution fields without requiring transcript text", () => {
     expect(
@@ -1060,9 +1084,9 @@ describe("resolveGatewayLiveMaxModels", () => {
   const originalSharedMax = process.env.OPENCLAW_LIVE_MAX_MODELS;
   function restoreEnvValue(name: string, value: string | undefined): void {
     if (value === undefined) {
-      delete process.env[name];
+      deleteTestEnvValue(name);
     } else {
-      process.env[name] = value;
+      setTestEnvValue(name, value);
     }
   }
 
@@ -2124,10 +2148,18 @@ async function readSessionAssistantTexts(sessionKey: string, modelKey?: string):
   if (!entry?.sessionId) {
     return [];
   }
-  const messages = await readSessionMessagesAsync(entry.sessionId, storePath, entry.sessionFile, {
-    mode: "full",
-    reason: "live model assistant text verification",
-  });
+  const messages = await readSessionMessagesAsync(
+    {
+      sessionEntry: entry,
+      sessionId: entry.sessionId,
+      sessionKey,
+      storePath,
+    },
+    {
+      mode: "full",
+      reason: "live model assistant text verification",
+    },
+  );
   const assistantTexts: string[] = [];
   for (const message of messages) {
     if (!message || typeof message !== "object") {
@@ -2847,10 +2879,8 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     lastGood: hostStore.lastGood ? { ...hostStore.lastGood } : undefined,
     usageStats: hostStore.usageStats ? { ...hostStore.usageStats } : undefined,
   });
-  const tempStateDir: string | undefined = await fs.mkdtemp(
-    path.join(os.tmpdir(), "openclaw-live-state-"),
-  );
-  process.env.OPENCLAW_STATE_DIR = tempStateDir;
+  const tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-state-"));
+  setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
   const tempAgentDir: string | undefined = path.join(
     tempStateDir,
     "agents",
@@ -2862,7 +2892,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   if (tempSessionAgentDir !== tempAgentDir) {
     saveAuthProfileStore(sanitizedStore, tempSessionAgentDir);
   }
-  process.env.OPENCLAW_AGENT_DIR = tempAgentDir;
+  setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
 
   const workspaceDir = resolveAgentWorkspaceDir(params.cfg, agentId);
   await fs.mkdir(workspaceDir, { recursive: true });
@@ -2897,7 +2927,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-"));
   const tempConfigPath = path.join(tempDir, "openclaw.json");
   await fs.writeFile(tempConfigPath, `${JSON.stringify(nextCfg, null, 2)}\n`);
-  process.env.OPENCLAW_CONFIG_PATH = tempConfigPath;
+  setTestEnvValue("OPENCLAW_CONFIG_PATH", tempConfigPath);
 
   const liveProviders = nextCfg.models?.providers;
   if (liveProviders && Object.keys(liveProviders).length > 0) {

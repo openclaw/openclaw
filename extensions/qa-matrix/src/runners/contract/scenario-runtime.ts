@@ -109,6 +109,7 @@ import {
   runThreadNestedReplyShapeScenario,
   runThreadRootPreservationScenario,
   runToolProgressErrorScenario,
+  runToolProgressCommandPreviewScenario,
   runToolProgressMentionSafetyScenario,
   runToolProgressPreviewOptOutScenario,
   runToolProgressPreviewScenario,
@@ -235,6 +236,8 @@ export async function runMatrixQaScenario(
       return await runQuietStreamingPreviewScenario(context);
     case "matrix-room-tool-progress-preview":
       return await runToolProgressPreviewScenario(context);
+    case "matrix-room-tool-progress-command-preview":
+      return await runToolProgressCommandPreviewScenario(context);
     case "matrix-room-tool-progress-preview-opt-out":
       return await runToolProgressPreviewOptOutScenario(context);
     case "matrix-room-tool-progress-error":

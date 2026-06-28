@@ -50,6 +50,8 @@ Use `messages.groupChat.visibleReplies: "message_tool"` when a shared room shoul
 
 Use `"automatic"` for weaker models or runtimes that do not reliably understand tool-only delivery. In automatic mode, the agent's final assistant text is the visible source reply path, so a model that cannot consistently call `message(action=send)` can still answer normally.
 
+In automatic mode, normal text final replies are posted directly to the room. If the visible reply needs files, images, or other attachments, the agent may still use `message(action=send)` for that attachment instead of trying to force it through the final text reply.
+
 If the message tool is unavailable under the active tool policy, OpenClaw falls
 back to automatic visible replies instead of silently suppressing the response.
 `openclaw doctor` warns about this mismatch.
