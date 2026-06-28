@@ -1,6 +1,6 @@
 // Covers tool availability evaluation and disabled-tool reasons.
 import { describe, expect, it } from "vitest";
-import { evaluateToolAvailability } from "./availability.js";
+import { evaluateToolAvailability, isToolAvailabilityExpression } from "./availability.js";
 import type { ToolDescriptor } from "./types.js";
 
 const baseDescriptor: ToolDescriptor = {
@@ -269,5 +269,18 @@ describe("evaluateToolAvailability", () => {
     expect(evaluateToolAvailability({ descriptor }).map((entry) => entry.reason)).toEqual([
       "unsupported-signal",
     ]);
+  });
+
+  it("treats an expression that reuses the same signal object across siblings as valid shape", () => {
+    // Reusing one object in sibling branches is not a cycle. The active-recursion
+    // stack must clear it between branches; otherwise shape validation rejects the
+    // descriptor and buildToolPlan hides it. A genuine self-cycle still returns false.
+    const auth = { kind: "auth", providerId: "openai" } as const;
+    expect(isToolAvailabilityExpression({ allOf: [auth, auth] })).toBe(true);
+    expect(isToolAvailabilityExpression({ anyOf: [auth, { allOf: [auth, auth] }] })).toBe(true);
+
+    const cyclic: { allOf: unknown[] } = { allOf: [] };
+    cyclic.allOf.push(cyclic);
+    expect(isToolAvailabilityExpression(cyclic)).toBe(false);
   });
 });
