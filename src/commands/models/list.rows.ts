@@ -41,6 +41,7 @@ export type RowBuilderContext = {
   configuredByKey: ConfiguredByKey;
   discoveredKeys: Set<string>;
   filter: RowFilter;
+  browse?: boolean;
   skipRuntimeModelSuppression?: boolean;
   metadataSnapshot?: PluginMetadataSnapshot;
   workspaceDir?: string;
@@ -81,6 +82,9 @@ function matchesProviderFilter(context: RowBuilderContext, provider: string): bo
 }
 
 function isProviderAllowed(context: RowBuilderContext, provider: string): boolean {
+  if (context.browse) {
+    return true;
+  }
   if (context.cfg.models?.mode !== "replace") {
     return true;
   }
@@ -411,6 +415,9 @@ export async function appendAuthenticatedCatalogRows(params: {
     metadataSnapshot: params.context.metadataSnapshot,
   });
   for (const entry of catalog) {
+    if (!isProviderAllowed(params.context, entry.provider)) {
+      continue;
+    }
     if (!params.context.authIndex.hasProviderAuth(entry.provider)) {
       continue;
     }

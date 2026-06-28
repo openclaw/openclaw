@@ -175,6 +175,7 @@ export async function modelsListCommand(
       provider: providerFilter,
       local: opts.local,
     },
+    browse: enableSourcePlanCascade,
     skipRuntimeModelSuppression,
     metadataSnapshot,
     workspaceDir,
