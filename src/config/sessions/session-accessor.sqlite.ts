@@ -81,7 +81,10 @@ import {
   shouldRunSessionEntryMaintenance,
   type ResolvedSessionMaintenanceConfig,
 } from "./store-maintenance.js";
-import type { ResetSessionEntryLifecycleMutation } from "./store.js";
+import type {
+  ResetSessionEntryLifecycleMutation,
+  SessionArchivedTranscriptCleanupRule,
+} from "./store.js";
 import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { serializeJsonlLines } from "./transcript-jsonl.js";
 import {
@@ -97,6 +100,14 @@ import {
   mergeSessionEntryPreserveActivity,
   resolveFreshSessionTotalTokens,
 } from "./types.js";
+
+type SessionArchiveRuntime = typeof import("../../gateway/session-archive.runtime.js");
+let sessionArchiveRuntimePromise: Promise<SessionArchiveRuntime> | undefined;
+
+function loadSessionArchiveRuntime() {
+  sessionArchiveRuntimePromise ??= import("../../gateway/session-archive.runtime.js");
+  return sessionArchiveRuntimePromise;
+}
 
 type SessionSqliteDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -751,6 +762,11 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
   activeSessionKey?: string;
   maintenanceOverride?: Partial<ResolvedSessionMaintenanceConfig>;
   skipMaintenance?: boolean;
+  cleanupArchivedTranscripts?: {
+    rules: SessionArchivedTranscriptCleanupRule[];
+    nowMs?: number;
+  };
+  captureArtifactCleanupError?: boolean;
 }): Promise<SessionEntryLifecycleMutationResult> {
   const resolved = resolveSqliteStoreScope(params.storePath);
   return await runExclusiveSqliteSessionWrite(resolved, async () => {
@@ -760,7 +776,15 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
     const removedEntriesToArchive: SessionEntry[] = [];
     const upsertedEntries: Array<{ sessionKey: string; entry: SessionEntry }> = [];
     const archivedTranscripts: SessionLifecycleArchivedTranscript[] = [];
+    let artifactCleanupError: unknown;
     let afterCount = 0;
+    const captureArtifactCleanupError = (error: unknown): void => {
+      if (params.captureArtifactCleanupError === true) {
+        artifactCleanupError ??= error;
+        return;
+      }
+      throw error;
+    };
     for (const removal of params.removals ?? []) {
       const sessionKey = removal.sessionKey.trim();
       if (!sessionKey) {
@@ -815,29 +839,47 @@ export async function applySqliteSessionEntryLifecycleMutation(params: {
       const referencedSessionIds = readReferencedSqliteSessionIds(transactionDb);
       for (const entry of removedEntriesToArchive) {
         for (const sessionId of collectSqliteSessionStateIdsForEntry(entry)) {
-          const archived = deleteSqliteSessionStateIfUnreferenced({
-            archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
-            database: transactionDb,
-            referencedSessionIds,
-            sessionId,
-          });
-          if (archived) {
-            archivedTranscripts.push(archived);
+          try {
+            const archived = deleteSqliteSessionStateIfUnreferenced({
+              archiveDirectory: resolveSqliteTranscriptArchiveDirectory(resolved),
+              database: transactionDb,
+              referencedSessionIds,
+              sessionId,
+            });
+            if (archived) {
+              archivedTranscripts.push(archived);
+            }
+          } catch (error) {
+            captureArtifactCleanupError(error);
           }
         }
       }
       afterCount = Object.keys(readSqliteSessionEntryStore(database)).length;
     }, toDatabaseOptions(resolved));
     emitArchivedSqliteTranscriptUpdates(archivedTranscripts);
+    const archivedTranscriptDirectories = uniqueStrings(
+      archivedTranscripts.map((transcript) => path.dirname(transcript.archivedPath)),
+    ).toSorted();
+    if (archivedTranscriptDirectories.length > 0 && params.cleanupArchivedTranscripts) {
+      try {
+        const { cleanupArchivedSessionTranscripts } = await loadSessionArchiveRuntime();
+        await cleanupArchivedSessionTranscripts({
+          directories: archivedTranscriptDirectories,
+          rules: params.cleanupArchivedTranscripts.rules,
+          nowMs: params.cleanupArchivedTranscripts.nowMs,
+        });
+      } catch (error) {
+        captureArtifactCleanupError(error);
+      }
+    }
     return {
       removedEntries: removedSessionKeys.length,
       removedSessionKeys,
-      archivedTranscriptDirectories: uniqueStrings(
-        archivedTranscripts.map((transcript) => path.dirname(transcript.archivedPath)),
-      ).toSorted(),
+      archivedTranscriptDirectories,
       unreferencedArtifacts: null,
       maintenanceReport: null,
       afterCount,
+      artifactCleanupError,
     };
   });
 }
