@@ -114,13 +114,21 @@ function tryMatchModel(modelPattern: string, availableModels: Model[]): Model | 
   const aliases = matches.filter((m) => isAlias(m.id));
   const datedVersions = matches.filter((m) => !isAlias(m.id));
 
+  // Numeric-aware collation so version-suffixed ids like `claude-opus-4-10`
+  // sort above `claude-opus-4-9`. Plain localeCompare treats digits as text,
+  // so `9` ranks above `10` once a family crosses into double-digit minors.
+  // Dated `-YYYYMMDD` suffixes are fixed-width so text and numeric order
+  // agree today, but using the same comparator keeps the contract consistent.
+  const numericSort = (a: Model, b: Model) =>
+    b.id.localeCompare(a.id, undefined, { numeric: true });
+
   if (aliases.length > 0) {
     // Prefer alias - if multiple aliases, pick the one that sorts highest
-    aliases.sort((a, b) => b.id.localeCompare(a.id));
+    aliases.sort(numericSort);
     return aliases[0];
   }
   // No alias found, pick latest dated version
-  datedVersions.sort((a, b) => b.id.localeCompare(a.id));
+  datedVersions.sort(numericSort);
   return datedVersions[0];
 }
 

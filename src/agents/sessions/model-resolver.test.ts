@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import type { Model } from "../../llm/types.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../defaults.js";
 import type { ModelRegistry } from "./model-registry.js";
-import { findInitialModel, restoreModelFromSession } from "./model-resolver.js";
+import { findInitialModel, parseModelPattern, restoreModelFromSession } from "./model-resolver.js";
 
 function model(provider: string, id: string): Model {
   return {
@@ -55,5 +55,38 @@ describe("model resolver fallback selection", () => {
     );
 
     expect(result.model).toBe(firstAvailable);
+  });
+});
+
+describe("parseModelPattern alias ordering", () => {
+  it("picks the numerically newest version when an alias hits double-digit minors (#96588)", () => {
+    // Plain localeCompare would order `4-9` above `4-10` because the digit
+    // `9` ranks above `1` lexicographically. Numeric-aware collation keeps
+    // the numerically newer version on top.
+    const v9 = model("anthropic", "claude-opus-4-9");
+    const v10 = model("anthropic", "claude-opus-4-10");
+    const result = parseModelPattern("opus", [v9, v10]);
+
+    expect(result.model).toBe(v10);
+  });
+
+  it("picks the numerically newest version regardless of input order", () => {
+    // Test lists in both orderings to prove the comparator (not list order)
+    // is responsible for the result.
+    const v9 = model("anthropic", "claude-opus-4-9");
+    const v10 = model("anthropic", "claude-opus-4-10");
+    const reversed = parseModelPattern("opus", [v10, v9]);
+
+    expect(reversed.model).toBe(v10);
+  });
+
+  it("keeps single-digit behavior unchanged (regression guard)", () => {
+    // Today's shipped catalogs use single-digit minors where text and numeric
+    // order agree; the fix must not change the existing selection.
+    const v7 = model("anthropic", "claude-opus-4-7");
+    const v8 = model("anthropic", "claude-opus-4-8");
+    const result = parseModelPattern("opus", [v7, v8]);
+
+    expect(result.model).toBe(v8);
   });
 });
