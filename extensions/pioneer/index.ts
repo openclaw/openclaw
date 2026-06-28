@@ -45,11 +45,11 @@ export default defineSingleProviderPluginEntry({
         provider: buildPioneerProvider(),
       }),
     },
-    normalizeModelId: ({ modelId }) => {
-      // Pioneer API requires the "pioneer/" prefix for routing models like "auto".
-      // Without it, the API rejects the bare model ID.
-      if (modelId.toLowerCase() === "auto") {
-        return `pioneer/${modelId}`;
+    normalizeResolvedModel: ({ model }) => {
+      // Pioneer API requires the "pioneer/" prefix for routing aliases like "auto".
+      // model.id is the bare catalog id; rewrite it so the transport sends "pioneer/auto".
+      if (model.id.toLowerCase() === "auto") {
+        return { ...model, id: `pioneer/${model.id}` };
       }
       return undefined;
     },

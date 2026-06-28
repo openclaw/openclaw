@@ -46,4 +46,38 @@ describe("pioneer provider plugin", () => {
     expect(pioneerProviderDiscovery.catalog?.run).toBeTypeOf("function");
     expect(pioneerProviderDiscovery.staticCatalog?.run).toBeTypeOf("function");
   });
+
+  it("rewrites bare 'auto' model id to 'pioneer/auto' at transport time", async () => {
+    const provider = await registerSingleProviderPlugin(pioneerPlugin);
+
+    const normalized = provider.normalizeResolvedModel?.({
+      modelId: "auto",
+      model: {
+        provider: "pioneer",
+        id: "auto",
+        name: "Pioneer Auto",
+        api: "openai-completions",
+        baseUrl: "https://api.pioneer.ai/v1",
+      },
+    } as never);
+
+    expect(normalized?.id).toBe("pioneer/auto");
+  });
+
+  it("does not rewrite non-auto model ids at transport time", async () => {
+    const provider = await registerSingleProviderPlugin(pioneerPlugin);
+
+    const normalized = provider.normalizeResolvedModel?.({
+      modelId: "claude-sonnet-4-6",
+      model: {
+        provider: "pioneer",
+        id: "claude-sonnet-4-6",
+        name: "Claude Sonnet 4.6",
+        api: "openai-completions",
+        baseUrl: "https://api.pioneer.ai/v1",
+      },
+    } as never);
+
+    expect(normalized).toBeUndefined();
+  });
 });

@@ -157,8 +157,8 @@ function readLiveModelInput(row: unknown): ModelDefinitionConfig["input"] | unde
 
 // Pioneer API uses "anthropic/pioneer/" as a namespace for some model IDs.
 // Strip this prefix so they don't double-prefix when OpenClaw adds the
-// "pioneer/" provider namespace. "pioneer/auto" is kept as-is — the API
-// requires the full prefix and the normalizeModelId hook handles transport.
+// "pioneer/" provider namespace. The normalizeResolvedModel hook rewrites
+// bare "auto" → "pioneer/auto" at transport time.
 function normalizePioneerLiveModelId(rawId: string): string {
   for (const prefix of ["anthropic/pioneer/", "pioneer/pioneer/"] as const) {
     if (rawId.startsWith(prefix)) {
