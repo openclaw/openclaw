@@ -1552,6 +1552,71 @@ describe("ollama plugin", () => {
     expect((payloadSeen?.options as Record<string, unknown> | undefined)?.num_ctx).toBe(202752);
   });
 
+  it("keeps tool_calls.function.arguments as a JSON string on outbound OpenAI-compat payloads", () => {
+    const provider = registerProvider();
+    let payloadSeen: Record<string, unknown> | undefined;
+    const baseStreamFn = vi.fn((_model, _context, options) => {
+      // OpenAI-completions already emits arguments as a JSON string (per OpenAI spec).
+      const payload: Record<string, unknown> = {
+        options: { temperature: 0.1 },
+        messages: [
+          {
+            role: "assistant",
+            tool_calls: [
+              {
+                id: "call_1",
+                type: "function",
+                function: {
+                  name: "config_get",
+                  arguments: '{"action":"config.get","path":"gateway.port"}',
+                },
+              },
+            ],
+          },
+        ],
+      };
+      options?.onPayload?.(payload, _model);
+      payloadSeen = payload;
+      return {} as never;
+    });
+
+    const wrapped = provider.wrapStreamFn?.({
+      config: {
+        models: {
+          providers: {
+            ollama: {
+              api: "openai-completions",
+              baseUrl: "http://127.0.0.1:11434/v1",
+              models: [],
+            },
+          },
+        },
+      },
+      provider: "ollama",
+      modelId: "glm-5.2:cloud",
+      model: {
+        api: "openai-completions",
+        provider: "ollama",
+        id: "glm-5.2:cloud",
+        baseUrl: "http://127.0.0.1:11434/v1",
+        contextWindow: 128_000,
+      },
+      streamFn: baseStreamFn,
+    });
+
+    if (!wrapped) {
+      throw new Error("expected Ollama OpenAI-compatible stream wrapper");
+    }
+    void wrapped({} as never, {} as never, {});
+
+    const messages = payloadSeen?.messages as
+      | Array<{ tool_calls: Array<{ function: { arguments: unknown } }> }>
+      | undefined;
+    const args = messages?.[0]?.tool_calls?.[0]?.function.arguments;
+    expect(typeof args).toBe("string");
+    expect(args).toBe('{"action":"config.get","path":"gateway.port"}');
+  });
+
   it("owns replay policy for OpenAI-compatible and native Ollama routes", () => {
     const provider = registerProvider();
 
