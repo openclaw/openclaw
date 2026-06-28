@@ -445,6 +445,42 @@ describe("registerStatusHealthSessionsCommands", () => {
     });
   });
 
+  it("rejects an inherited parent --store for diagnose instead of inspecting a different gateway store", async () => {
+    await runCli([
+      "sessions",
+      "--store",
+      "/tmp/other-sessions.json",
+      "diagnose",
+      "--session-key",
+      "agent:main:main",
+    ]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("sessions diagnose"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--store"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsDiagnoseCommand).not.toHaveBeenCalled();
+  });
+
+  it("rejects other unsupported inherited parent list options for diagnose", async () => {
+    await runCli([
+      "sessions",
+      "--all-agents",
+      "--active",
+      "120",
+      "--limit",
+      "25",
+      "--verbose",
+      "diagnose",
+    ]);
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--all-agents"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--active"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--limit"));
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--verbose"));
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(sessionsDiagnoseCommand).not.toHaveBeenCalled();
+  });
+
   it("runs sessions tail with forwarded progress options", async () => {
     await runCli([
       "sessions",
