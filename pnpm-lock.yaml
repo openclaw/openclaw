@@ -1289,12 +1289,6 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
-  extensions/pioneer:
-    devDependencies:
-      '@openclaw/plugin-sdk':
-        specifier: workspace:*
-        version: link:../../packages/plugin-sdk
-
   extensions/pixverse:
     devDependencies:
       '@openclaw/plugin-sdk':

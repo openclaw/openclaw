@@ -346,7 +346,6 @@ export async function loadProviderCatalogModelsForList(params: {
   const scopedPluginIds = onlyPluginIds
     ? onlyPluginIds.filter((pluginId) => bundledPluginIdSet.has(pluginId))
     : bundledPluginIds;
-  const scopedPluginIdSet = new Set(bundledPluginIds);
   if (scopedPluginIds.length === 0) {
     return [];
   }

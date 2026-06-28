@@ -22,7 +22,6 @@ function applyPioneerProviderConfig(cfg: OpenClawConfig): OpenClawConfig {
     providerId: "pioneer",
     api: "openai-completions",
     baseUrl: PIONEER_BASE_URL,
-    defaultModelId: PIONEER_DEFAULT_MODEL_ID,
     catalogModels: PIONEER_MODEL_CATALOG.map(buildPioneerModelDefinition),
   });
 }
