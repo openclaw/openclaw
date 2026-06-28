@@ -5,9 +5,12 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { closeQaHttpServer } from "../../bus-server.js";
+import { QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY } from "../../qa-web-search-provider.js";
 import { writeJson } from "../shared/http-json.js";
 
 type ResponsesInputItem = Record<string, unknown>;
+
+let mockFunctionCallSequence = 0;
 
 type StreamEvent =
   | { type: "response.output_item.added"; item: Record<string, unknown> }
@@ -219,7 +222,7 @@ function subagentFanoutTaskForProvider(
 
 const MOCK_OPENAI_MAX_BODY_BYTES = 16 * 1024 * 1024;
 const MOCK_OPENAI_BODY_TIMEOUT_MS = 30_000;
-const MOCK_OPENAI_DEBUG_REQUEST_LIMIT = 200;
+const MOCK_OPENAI_DEBUG_REQUEST_LIMIT = 2_000;
 
 function readBody(req: IncomingMessage): Promise<string> {
   return readRequestBodyWithLimit(req, {
@@ -772,8 +775,10 @@ function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
     .update(serialized)
     .digest("hex")
     .slice(0, 10);
-  const callId = `call_mock_${name}_${callSuffix}`;
-  const itemId = `fc_mock_${name}_${callSuffix}`;
+  const sequence = ++mockFunctionCallSequence;
+  const uniqueSuffix = `${callSuffix}_${sequence}`;
+  const callId = `call_mock_${name}_${uniqueSuffix}`;
+  const itemId = `fc_mock_${name}_${uniqueSuffix}`;
   const item = {
     type: "function_call",
     id: itemId,
@@ -785,7 +790,7 @@ function buildMockFunctionCall(name: string, args: Record<string, unknown>) {
     callId,
     item,
     itemId,
-    responseId: `resp_mock_${name}_${callSuffix}`,
+    responseId: `resp_mock_${name}_${uniqueSuffix}`,
     serialized,
   };
 }
@@ -860,6 +865,9 @@ function extractToolSearchTarget(text: string): string | null {
 }
 
 function buildQaToolSearchArgs(targetTool: string, failureMode: boolean): Record<string, unknown> {
+  if (failureMode && targetTool === "web_search") {
+    return { query: QA_LAB_WEB_SEARCH_DENIED_INPUT_QUERY };
+  }
   if (failureMode) {
     return { __qaFailureMode: "denied-input" };
   }
@@ -1351,7 +1359,10 @@ function buildAssistantText(
     return "Protocol note: I do not have enough context to say what you usually want for QA movie night.";
   }
   if (/qa private final reply warning check/i.test(prompt)) {
-    return "QA-STRANDED-85714 is present in this private final reply and I am not calling the message tool. This second sentence makes the omitted delivery substantive enough for the warning check.";
+    return [
+      "QA-STRANDED-85714 confirms this is a substantive private final reply that intentionally stays outside the message tool path for the warning check.",
+      "The response is long enough to exercise message_tool_only private-final detection while remaining private to the agent transcript.",
+    ].join(" ");
   }
   if (/tool continuity check/i.test(prompt) && toolOutput) {
     return `Protocol note: model switch handoff confirmed on ${model || "the requested model"}. QA mission from QA_KICKOFF_TASK.md still applies: understand this OpenClaw repo from source + docs before acting.`;
@@ -1532,49 +1543,57 @@ function buildToolCallEvents(prompt: string): StreamEvent[] {
 function buildReleaseAuditJson() {
   return `${JSON.stringify(
     {
-      verified: true,
+      verified: false,
       findings: [
         {
           id: "REL-GATEWAY-417",
           source: "src/gateway/reconnect.ts",
           status: "retry jitter verified, resume token fallback still needs manual spot check",
+          verified: true,
         },
         {
           id: "REL-CHANNEL-238",
           source: "src/channels/delivery.ts",
           status: "thread replies preserve ordering, root-channel fallback needs handoff note",
+          verified: true,
         },
         {
           id: "REL-CRON-904",
           source: "src/scheduling/cron.ts",
           status: "single-run lock verified for restart wakeups",
+          verified: true,
         },
         {
           id: "REL-MEMORY-552",
           source: "src/memory/recall.ts",
           status:
             "fallback summary survives empty memory search; ranking sample needs second reviewer",
+          verified: true,
         },
         {
           id: "REL-PLUGIN-319",
           source: "src/plugins/runtime.ts",
           status: "bundled runtime manifest loads cleanly after restart",
+          verified: true,
         },
         {
           id: "REL-INSTALL-846",
           source: "install/update.ts",
           status: "update smoke passed from previous stable tag",
+          verified: true,
         },
         {
           id: "REL-DOCS-611",
           source: "docs/operator-notes.md",
           status:
             "docs mention reconnect, cron, memory, plugin, and installer checks; channel ordering and UI notes need maintainer handoff",
+          verified: true,
         },
         {
           id: "REL-UI-BLOCKED",
           source: "ui/control-panel.ts",
           status: "blocked: source file was referenced by checklist but missing from the fixture",
+          verified: false,
         },
       ],
     },
@@ -2593,8 +2612,8 @@ async function buildResponsesPayload(
       });
     }
   }
-  if (/memory tools check/i.test(prompt)) {
-    if (!toolOutput) {
+  if (/memory tools check/i.test(allInputText)) {
+    if (!scenarioToolOutput) {
       return buildToolCallEventsWithArgs("memory_search", {
         query: "project codename ORBIT-9",
         maxResults: 3,
@@ -2604,10 +2623,7 @@ async function buildResponsesPayload(
       ? (toolJson.results as Array<Record<string, unknown>>)
       : [];
     const first = results[0];
-    if (
-      typeof first?.path === "string" &&
-      (typeof first.startLine === "number" || typeof first.endLine === "number")
-    ) {
+    if (typeof first?.path === "string") {
       const from =
         typeof first.startLine === "number"
           ? Math.max(1, first.startLine)

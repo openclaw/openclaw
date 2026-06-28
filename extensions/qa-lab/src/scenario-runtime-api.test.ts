@@ -59,6 +59,7 @@ function createDeps(overrides?: Partial<QaScenarioRuntimeDeps>): QaScenarioRunti
     resolveGeneratedImagePath: fn,
     startAgentRun: fn,
     waitForAgentRun: fn,
+    waitForAgentHistoryReply: fn,
     listCronJobs: fn,
     waitForCronRunCompletion: fn,
     findManagedDreamingCronJob: fn,
@@ -164,6 +165,7 @@ describe("createQaScenarioRuntimeApi", () => {
     expect(api.config).toEqual({ expected: "value" });
     expect(api.waitForCondition).toBe(waitForCondition);
     expect(api.waitForChannelReady).toBe(api.waitForTransportReady);
+    expect(api.waitForAgentHistoryReply).toBe(deps.waitForAgentHistoryReply);
     expect(api.markGatewayLogCursor).toBe(deps.markGatewayLogCursor);
     expect(api.assertNoGatewayLogSentinels).toBe(deps.assertNoGatewayLogSentinels);
     expect(api.readSessionTranscriptSummary).toBe(deps.readSessionTranscriptSummary);

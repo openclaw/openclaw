@@ -796,6 +796,15 @@ const SPLIT_NODE_SHARDS = new Map([
         runner: "blacksmith-4vcpu-ubuntu-2404",
       },
       {
+        shardName: "core-runtime-tui-pty",
+        configs: ["test/vitest/vitest.tui-pty.config.ts"],
+        env: {
+          OPENCLAW_TUI_PTY_INCLUDE_LOCAL: "1",
+        },
+        requiresDist: false,
+        runner: "blacksmith-4vcpu-ubuntu-2404",
+      },
+      {
         shardName: "core-runtime-media-ui",
         configs: [
           "test/vitest/vitest.media.config.ts",
@@ -941,6 +950,7 @@ export function createNodeTestShards(options = {}) {
             checkName: formatNodeTestShardCheckName(splitShard.shardName),
             shardName: splitShard.shardName,
             configs: splitConfigs,
+            ...(splitShard.env ? { env: splitShard.env } : {}),
             ...(splitShard.includePatterns ? { includePatterns: splitShard.includePatterns } : {}),
             runner: splitShard.runner ?? DEFAULT_NODE_TEST_RUNNER,
             requiresDist: splitShard.requiresDist,
@@ -1067,6 +1077,7 @@ function createCompactNodeTestShardBundles(options = {}) {
     const groups = groupsByRunner.get(key) ?? [];
     groups.push({
       configs: shard.configs,
+      ...(shard.env ? { env: shard.env } : {}),
       ...(shard.includePatterns ? { includePatterns: shard.includePatterns } : {}),
       requiresDist: shard.requiresDist,
       runner,

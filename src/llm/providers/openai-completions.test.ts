@@ -248,6 +248,121 @@ describe("OpenAI-compatible completions params", () => {
     expect(capturedPayload?.tools).toEqual([]);
   });
 
+  it("replays update_plan-style empty non-image tool results as no output", async () => {
+    let capturedMessages:
+      | Array<{ role?: string; content?: unknown; tool_call_id?: string }>
+      | undefined;
+    const stream = streamOpenAICompletions(
+      model,
+      {
+        messages: [
+          {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "call_plan", name: "update_plan", arguments: {} }],
+            timestamp: 1,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_plan",
+            toolName: "update_plan",
+            content: [],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } as never,
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: typeof capturedMessages }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedMessages?.find((message) => message.role === "tool")).toMatchObject({
+      role: "tool",
+      content: "(no output)",
+      tool_call_id: "call_plan",
+    });
+  });
+
+  it("preserves image-bearing tool results with image placeholders and attachments", async () => {
+    let capturedMessages:
+      | Array<{ role?: string; content?: unknown; tool_call_id?: string }>
+      | undefined;
+    const stream = streamOpenAICompletions(
+      { ...model, input: ["text", "image"] },
+      {
+        messages: [
+          {
+            role: "assistant",
+            api: model.api,
+            provider: model.provider,
+            model: model.id,
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            content: [{ type: "toolCall", id: "call_shot", name: "screenshot", arguments: {} }],
+            timestamp: 1,
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_shot",
+            toolName: "screenshot",
+            content: [{ type: "image", mimeType: "image/png", data: "aW1n" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+      } as never,
+      {
+        apiKey: "sk-test",
+        onPayload(payload) {
+          capturedMessages = (payload as { messages?: typeof capturedMessages }).messages;
+          throw new Error("stop before network");
+        },
+      },
+    );
+
+    const result = await stream.result();
+
+    expect(result.stopReason).toBe("error");
+    expect(capturedMessages?.find((message) => message.role === "tool")).toMatchObject({
+      role: "tool",
+      content: "(see attached image)",
+      tool_call_id: "call_shot",
+    });
+    expect(capturedMessages?.find((message) => Array.isArray(message.content))).toMatchObject({
+      role: "user",
+      content: [
+        { type: "text", text: "Attached image(s) from tool result:" },
+        { type: "image_url", image_url: { url: "data:image/png;base64,aW1n" } },
+      ],
+    });
+  });
+
   it("does not reread an unreadable tool inventory length", async () => {
     let capturedPayload: Record<string, unknown> | undefined;
     const tools = new Proxy([], {
@@ -872,6 +987,57 @@ describe("openai-completions stop-reason tool-call guard", () => {
     expect(toolCallStartIndex).toBeGreaterThanOrEqual(0);
     expect(thinkingEndIndex).toBeLessThan(toolCallStartIndex);
     expect(eventTypes.filter((type) => type === "thinking_end")).toHaveLength(1);
+  });
+
+  it("attaches encrypted reasoning details to the matching streamed tool call", async () => {
+    mockChunksRef.chunks = [
+      makeToolCallChunk("call_1", "first", '{"value":1}'),
+      {
+        id: "chatcmpl-test",
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index: 1,
+                  id: "call_2",
+                  function: { name: "second", arguments: '{"value":2}' },
+                  type: "function",
+                },
+              ],
+              reasoning_details: [
+                {
+                  type: "reasoning.encrypted",
+                  id: "call_1",
+                  data: "encrypted",
+                },
+              ],
+            } as OpenAICompatibleDelta & {
+              reasoning_details: Array<Record<string, string>>;
+            },
+          },
+        ],
+      },
+      makeFinishChunk("tool_calls"),
+    ];
+
+    const stream = streamOpenAICompletions(model, context, {
+      apiKey: "sk-test",
+    });
+    const result = await stream.result();
+    const toolCalls = result.content.filter((block) => block.type === "toolCall");
+
+    expect(toolCalls).toHaveLength(2);
+    expect(toolCalls[0]).toMatchObject({
+      id: "call_1",
+      thoughtSignature: JSON.stringify({
+        type: "reasoning.encrypted",
+        id: "call_1",
+        data: "encrypted",
+      }),
+    });
+    expect(toolCalls[1]).not.toHaveProperty("thoughtSignature");
   });
 
   it("keeps one native reasoning block when content and reasoning co-occur", async () => {

@@ -2311,7 +2311,7 @@ export const agentHandlers: GatewayRequestHandlers = {
       let resolvedTo = deliveryPlan.resolvedTo;
       let effectivePlan = deliveryPlan;
       let deliveryDowngradeReason: string | null = null;
-      let deliveryTargetResolutionError: Error | undefined;
+      let deliveryTargetResolutionError: Error | undefined = deliveryPlan.targetResolutionError;
 
       if (wantsDelivery && resolvedChannel === INTERNAL_MESSAGE_CHANNEL) {
         const cfgResolved = cfgForAgent ?? cfg;
@@ -2337,6 +2337,27 @@ export const agentHandlers: GatewayRequestHandlers = {
           }
           deliveryDowngradeReason = String(err);
         }
+      }
+
+      if (wantsDelivery && deliveryTargetResolutionError) {
+        if (!bestEffortDeliver) {
+          respond(
+            false,
+            undefined,
+            errorShape(ErrorCodes.INVALID_REQUEST, String(deliveryTargetResolutionError)),
+          );
+          return;
+        }
+        deliveryDowngradeReason = String(deliveryTargetResolutionError);
+        resolvedChannel = INTERNAL_MESSAGE_CHANNEL;
+        deliveryTargetMode = undefined;
+        resolvedTo = undefined;
+        effectivePlan = {
+          ...deliveryPlan,
+          resolvedChannel,
+          resolvedTo,
+          deliveryTargetMode,
+        };
       }
 
       if (!resolvedTo && isDeliverableMessageChannel(resolvedChannel)) {

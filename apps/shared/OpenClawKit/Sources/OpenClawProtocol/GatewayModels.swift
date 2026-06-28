@@ -7191,17 +7191,20 @@ public struct ChatHistoryParams: Codable, Sendable {
     public let sessionkey: String
     public let agentid: String?
     public let limit: Int?
+    public let offset: Int?
     public let maxchars: Int?
 
     public init(
         sessionkey: String,
         agentid: String? = nil,
         limit: Int?,
+        offset: Int? = nil,
         maxchars: Int?)
     {
         self.sessionkey = sessionkey
         self.agentid = agentid
         self.limit = limit
+        self.offset = offset
         self.maxchars = maxchars
     }
 
@@ -7209,6 +7212,7 @@ public struct ChatHistoryParams: Codable, Sendable {
         case sessionkey = "sessionKey"
         case agentid = "agentId"
         case limit
+        case offset
         case maxchars = "maxChars"
     }
 }

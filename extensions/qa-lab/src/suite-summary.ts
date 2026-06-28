@@ -5,6 +5,7 @@ import { QaSuiteArtifactError } from "./errors.js";
 import type { QaEvidenceSummaryJson } from "./evidence-summary.js";
 import type { QaProviderMode } from "./model-selection.js";
 import type { RuntimeId, RuntimeParityResult } from "./runtime-parity.js";
+import type { QaScorecardChannelDriver } from "./scorecard-taxonomy.js";
 
 type QaSuiteSummaryScenario = {
   name: string;
@@ -55,6 +56,10 @@ export type QaSuiteSummaryJson = {
     alternateModelName: string | null;
     fastMode: boolean;
     concurrency: number;
+    channelDriver: QaScorecardChannelDriver | null;
+    channel: string | null;
+    channelCapabilityMatrixPath: string | null;
+    channelDriverSmokePath: string | null;
     scenarioIds: string[] | null;
     runtimePair?: [RuntimeId, RuntimeId] | null;
   };

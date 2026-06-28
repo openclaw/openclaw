@@ -252,7 +252,7 @@ export function isGifMedia(opts: {
   contentType?: string | null;
   fileName?: string | null;
 }): boolean {
-  if (opts.contentType?.toLowerCase() === "image/gif") {
+  if (normalizeMimeType(opts.contentType) === "image/gif") {
     return true;
   }
   const ext = getFileExtension(opts.fileName);

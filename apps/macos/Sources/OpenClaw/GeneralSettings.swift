@@ -680,7 +680,6 @@ struct GeneralSettings: View {
         case .missingNode, .missingGateway, .incompatible, .error: .orange
         }
     }
-
 }
 
 private enum RemoteStatus: Equatable {

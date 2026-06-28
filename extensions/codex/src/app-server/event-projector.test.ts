@@ -18,6 +18,7 @@ import {
   resetGlobalHookRunner,
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   CodexAppServerEventProjector,
@@ -743,6 +744,47 @@ describe("CodexAppServerEventProjector", () => {
     expect(result.toolMediaUrls?.[0]).not.toBe(savedPath);
   });
 
+  it("prefers gateway-managed image media when the typed event arrives first", async () => {
+    await withTempDir("openclaw-codex-media-state-", async (stateDir) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const projector = await createProjector();
+      const savedPath = "/home/dev-user/.codex/generated_images/session-1/ig_123.png";
+
+      await projector.handleNotification(
+        forCurrentTurn("item/completed", {
+          item: {
+            type: "imageGeneration",
+            id: "ig_123",
+            status: "completed",
+            revisedPrompt: "A tiny blue square",
+            result: tinyPngBase64,
+            savedPath,
+          },
+        }),
+      );
+      await projector.handleNotification(
+        forCurrentTurn("rawResponseItem/completed", {
+          item: {
+            type: "image_generation_call",
+            id: "ig_123",
+            status: "generating",
+            result: tinyPngBase64,
+          },
+        }),
+      );
+
+      const result = projector.buildResult(buildEmptyToolTelemetry());
+      const mediaUrl = result.toolMediaUrls?.[0];
+
+      expect(result.toolMediaUrls).toHaveLength(1);
+      expect(mediaUrl).not.toBe(savedPath);
+      expect(mediaUrl).toContain(`${path.sep}media${path.sep}tool-image-generation${path.sep}`);
+      await expect(fs.readFile(mediaUrl ?? "")).resolves.toEqual(
+        Buffer.from(tinyPngBase64, "base64"),
+      );
+    });
+  });
+
   it("preserves distinct raw image-generation items with identical image bytes", async () => {
     const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-media-state-"));
     tempDirs.add(stateDir);
@@ -792,6 +834,19 @@ describe("CodexAppServerEventProjector", () => {
     });
 
     expect(result.toolMediaUrls).toStrictEqual([]);
+  });
+
+  it("propagates message-tool-only source reply delivery telemetry", async () => {
+    const projector = await createProjector();
+
+    const result = projector.buildResult({
+      ...buildEmptyToolTelemetry(),
+      didSendViaMessagingTool: true,
+      didDeliverSourceReplyViaMessageTool: true,
+    });
+
+    expect(result.didSendViaMessagingTool).toBe(true);
+    expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
   });
 
   it("does not promote repeated tool progress text to the final assistant reply", async () => {

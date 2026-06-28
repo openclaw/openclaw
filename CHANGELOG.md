@@ -2,6 +2,100 @@
 
 Docs: https://docs.openclaw.ai
 
+## Unreleased
+
+### Fixes
+
+- **WeChat account routing:** `startAccount` preserves session routing by resolving manifest channel account config from raw account keys with opaque provider ids, while still ignoring manifest account keys that normalize to blocked object keys. (#93686) Thanks @zhangguiping-xydt.
+
+## 2026.6.10
+
+Automatic fast mode starts short conversations quickly, then returns longer or fallback work to normal mode without losing visible state. Provider routing, channel progress, session identity, and trusted tool policies are more reliable, with smaller improvements spanning provider setup, diagnostics, and transcript tooling.
+
+### Highlights
+
+#### Automatic fast mode
+
+- Adds [`/fast auto`](https://docs.openclaw.ai/tools/thinking) so short conversational calls can start quickly, while longer or fallback work returns to normal mode with the effective state still visible. [PR #85104](https://github.com/openclaw/openclaw/pull/85104), [Issue #85087](https://github.com/openclaw/openclaw/issues/85087). Thanks @alexph-dev and @vincentkoc.
+- Shows the effective automatic fast-mode state in status instead of reducing it to on/off, and avoids carrying a cleared Codex service-tier choice into later runs. [8845f2f](https://github.com/openclaw/openclaw/commit/8845f2fd6143becc37110ab5021dd5e1517f0cdc). Thanks @vincentkoc.
+- Keeps automatic fast-mode timing consistent when a turn switches to a fallback model. [075091d](https://github.com/openclaw/openclaw/commit/075091d0cab94053ff094268efc0acb225d514f4). Thanks @vincentkoc.
+- Keeps the original fast-mode timing and progress behavior when a live model switch retries a turn. [d1e190f](https://github.com/openclaw/openclaw/commit/d1e190fbe822ad6ae4e660ce376b60ec9fdb0fba). Thanks @vincentkoc.
+- Keeps automatic fast-mode progress and reset behavior distinct from explicit fast mode after a run switches modes. [20aec98](https://github.com/openclaw/openclaw/commit/20aec985545db7a24ea066e5bff1c47b789cbded). Thanks @vincentkoc.
+- Shows the effective fast-mode value in connected-agent sessions instead of the configured value, so status reflects what the session is actually using. [9509aa0](https://github.com/openclaw/openclaw/commit/9509aa063c0ef3e32be1516fcb0c23606b6d5c7b). Thanks @vincentkoc.
+- Keeps the effective automatic fast-mode setting visible through fallback transitions in connected-agent sessions. [7f5423c](https://github.com/openclaw/openclaw/commit/7f5423ca97174a3f16c211db54a6c96e5b3a6089). Thanks @vincentkoc.
+- Keeps automatic fast-mode timing and progress consistent when reply and [scheduled-agent runs](https://docs.openclaw.ai/automation/cron-jobs) retry or switch models. [6c29f88](https://github.com/openclaw/openclaw/commit/6c29f88913796bfe05696556cd82246670b126f0). Thanks @vincentkoc.
+- Keeps fast-mode cleanup and status consistent when a run switches between fallback models. [c4694f8](https://github.com/openclaw/openclaw/commit/c4694f84ffd52064f89609098cc4f8570fb72e1b). Thanks @vincentkoc.
+- Shows the automatic fast-mode reset only when fallback work is finished, so status messages match the end of the transition. [f4d93c8](https://github.com/openclaw/openclaw/commit/f4d93c855bff6930f5e5d739b95e0c2612ec4899). Thanks @vincentkoc.
+- Shows reset and delivery progress at the right time when auto-reply or other follow-up runs retry or leave automatic fast mode. [684e440](https://github.com/openclaw/openclaw/commit/684e44013778bd47d159e64b2595e4d09a92ebea). Thanks @vincentkoc.
+
+### Channels and Messaging
+
+#### Channel delivery and progress updates
+
+- Prevents the next turn after a [scheduled message](https://docs.openclaw.ai/automation/cron-jobs) from losing what was delivered or whether delivery failed, so replies can use that context without exposing cron details in the channel. [PR #93580](https://github.com/openclaw/openclaw/pull/93580). Thanks @jalehman and @scotthuang.
+- Prevents streamed channel progress from dropping a repeated status that represents a separate step, so each meaningful step remains visible in the draft. [2d42e52](https://github.com/openclaw/openclaw/commit/2d42e52ac5513e0bd824b8a0e069db83e04bc056). Thanks @vincentkoc.
+- Prevents keyed streamed progress from staying on an older status, so viewers see the latest state instead of stale text. [8bb6472](https://github.com/openclaw/openclaw/commit/8bb6472c4de2eea06f1ba31d6ed679e2ac4581b0). Thanks @vincentkoc.
+
+### Providers and Models
+
+#### Provider model catalogs and reasoning controls
+
+- Treats Zhipu/GLM overload responses as overloads, so a configured fallback is selected for the right reason instead of following the wrong failover path. [PR #93241](https://github.com/openclaw/openclaw/pull/93241), [Issue #93211](https://github.com/openclaw/openclaw/issues/93211). Thanks @0xghost42 and @zhengli0922.
+- Prevents Telegram, Slack, and Discord `/think` menus for live Ollama models from hiding supported levels, so users can choose valid reasoning settings without guessing. [PR #94067](https://github.com/openclaw/openclaw/pull/94067), [Issue #93835](https://github.com/openclaw/openclaw/issues/93835). Thanks @civiltox and @openperf.
+- Expands [`zai/glm-5.2` thinking choices](https://docs.openclaw.ai/tools/thinking) beyond binary on/off and sends high or max requests as the intended Z.AI reasoning effort. [PR #94136](https://github.com/openclaw/openclaw/pull/94136). Thanks @borclaw.
+- Prevents bundled [Z.ai GLM-5 models](https://docs.openclaw.ai/providers/zai) from falling through to OpenAI and producing misleading API-key errors, so they use Z.AI by default. [PR #94461](https://github.com/openclaw/openclaw/pull/94461), [Issue #94269](https://github.com/openclaw/openclaw/issues/94269). Thanks @chrysb and @pandah97.
+- Adds GLM-5.2 and Kimi K2.7 Code to the [OpenCode Go catalog](https://docs.openclaw.ai/providers/opencode-go) with current limits, so users can select the models from OpenClaw. [66f84a9](https://github.com/openclaw/openclaw/commit/66f84a9bf1082de26f92b2b3741cc2f34aba34fa). Thanks @samson1357924.
+- Corrects `kimi-k2.7-code` capability listings so OpenCode Go users are not offered unsupported video prompts when the model accepts text and images. [715dc71](https://github.com/openclaw/openclaw/commit/715dc718fc5a2a5d6f7e9ec16e0269382b726e83).
+
+#### Provider plugin onboarding
+
+- Prevents first-run setup from skipping the selected provider's credential prompt after plugin installation, so onboarding continues with that provider instead of falling back to OpenAI. [PR #95792](https://github.com/openclaw/openclaw/pull/95792), [Issue #95765](https://github.com/openclaw/openclaw/issues/95765). Thanks @snowzlmbot.
+
+### Memory, Sessions, and State
+
+#### Session transcript SDK helpers
+
+- Adds a durable [session-transcript SDK contract](https://docs.openclaw.ai/plugins/sdk-runtime) so plugins can read, append, publish, and lock the intended transcript without treating [legacy file paths](https://docs.openclaw.ai/plugins/sdk-subpaths) as identity. [PR #95030](https://github.com/openclaw/openclaw/pull/95030). Thanks @jalehman.
+
+#### Cross-channel session identity
+
+- Prevents a shared direct-message [session](https://docs.openclaw.ai/concepts/session) from carrying the previous [channel's identity](https://docs.openclaw.ai/channels/channel-routing) after a switch, so status, reactions, threads, and message references target the current channel. [PR #95328](https://github.com/openclaw/openclaw/pull/95328), [Issue #95325](https://github.com/openclaw/openclaw/issues/95325). Thanks @gorkem2020, @jalehman, and @zengwen-dt.
+
+### Gateway, Security, and Trust
+
+#### Prompt context boundaries
+
+- Keeps empty prompts separate from hook-added context during compaction or session reuse in [Copilot and Codex sessions](https://docs.openclaw.ai/plugins/copilot), so prompt boundaries remain consistent. [PR #94838](https://github.com/openclaw/openclaw/pull/94838). Thanks @vincentkoc.
+
+#### Trusted tool policy enforcement
+
+- Keeps [approval-sensitive Gateway and plugin tools](https://docs.openclaw.ai/plugins/hooks) protected when connected extensions change, so configured safeguards continue to apply. [PR #94545](https://github.com/openclaw/openclaw/pull/94545). Thanks @jesse-merhi.
+
+#### Trusted package redirects
+
+- Prevents authenticated package-source tokens from being sent to an allowed redirect on another origin, while the valid redirected download still completes. [b0df6dc](https://github.com/openclaw/openclaw/commit/b0df6dc10eb5b9e9fdca93063a16316f8589954e).
+
+### Clients and Interfaces
+
+#### Docker and Podman setup timeouts
+
+- Prevents [Docker](https://docs.openclaw.ai/install/docker) and [Podman](https://docs.openclaw.ai/install/podman) setup from running unbounded on hosts where GNU timeout is installed as `gtimeout`, so image pulls, builds, and detached startup receive the intended guard. [62b2e9e](https://github.com/openclaw/openclaw/commit/62b2e9ef14b4be6fd396621c8e5e248331f08695).
+
+### Plugins and Packaging
+
+#### Codex service-tier clearing
+
+- Prevents cleared [Codex service tiers](https://docs.openclaw.ai/tools/thinking) from being persisted as explicit stale state, so resumed or switched conversations use the normal default instead. [cd32d9f](https://github.com/openclaw/openclaw/commit/cd32d9ff91caf84c0ead38796ef096cdc5bea06e). Thanks @vincentkoc.
+
+#### StepFun provider installation
+
+- Restores [ClawHub discovery](https://docs.openclaw.ai/plugins/reference/stepfun) for the [StepFun provider](https://docs.openclaw.ai/providers/stepfun) plugin, so operators can install it through either ClawHub or npm. [ecb82f1](https://github.com/openclaw/openclaw/commit/ecb82f1be93024be23c1b191ebea92c63230b6c0). Thanks @vincentkoc.
+
+### Docs and Operator Workflows
+
+#### Doctor check ordering
+
+- Keeps core [`openclaw doctor`](https://docs.openclaw.ai/gateway/doctor) diagnostics in their normal order before extension checks, making lint and repair output easier to follow. [PR #86627](https://github.com/openclaw/openclaw/pull/86627). Thanks @giodl73-repo.
 ## 2026.6.9
 
 ### Highlights
@@ -37,6 +131,7 @@ This audited record covers the complete v2026.6.8..HEAD history: 423 merged PRs.
 
 #### Pull requests
 
+- **PR #92154** fix(qqbot): gate private group commands and close strict command visibility gaps. Thanks @sliverp.
 - **PR #90463** refactor: add session accessor seam with gateway consumer. Thanks @jalehman.
 - **PR #88656** Drop reasoning-only length turns from replay. Thanks @abel-zer0.
 - **PR #92856** feat(webui): add session workspace rail. Thanks @Solvely-Colin.

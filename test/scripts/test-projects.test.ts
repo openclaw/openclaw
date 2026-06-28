@@ -17,6 +17,7 @@ import {
   createVitestRunSpecs,
   findUnmatchedExplicitTestTargets,
   formatFailedShardDigest,
+  formatNoChangedTestTargetLines,
   listFullExtensionVitestProjectConfigs,
   orderFullSuiteSpecsForParallelRun,
   shouldAcquireLocalHeavyCheckLock,
@@ -1282,6 +1283,34 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
+  it("keeps Mantis proof workflow edits on workflow evidence regression tests", () => {
+    const packageAcceptanceTargets = [
+      "test/scripts/package-acceptance-workflow.test.ts",
+      "test/scripts/ci-workflow-guards.test.ts",
+    ];
+    const workflowTargets = new Map([
+      [".github/workflows/mantis-discord-smoke.yml", packageAcceptanceTargets],
+      [".github/workflows/mantis-discord-status-reactions.yml", packageAcceptanceTargets],
+      [".github/workflows/mantis-discord-thread-attachment.yml", packageAcceptanceTargets],
+      [".github/workflows/mantis-slack-desktop-smoke.yml", packageAcceptanceTargets],
+      [
+        ".github/workflows/mantis-telegram-desktop-proof.yml",
+        [
+          "test/scripts/mantis-telegram-desktop-proof-workflow.test.ts",
+          "test/scripts/package-acceptance-workflow.test.ts",
+          "test/scripts/ci-workflow-guards.test.ts",
+        ],
+      ],
+    ]);
+
+    for (const [workflowPath, targets] of workflowTargets) {
+      expect(resolveChangedTestTargetPlan([workflowPath])).toEqual({
+        mode: "targets",
+        targets,
+      });
+    }
+  });
+
   it("keeps release-check workflow edits on release workflow regression tests", () => {
     expect(resolveChangedTestTargetPlan([".github/workflows/openclaw-release-checks.yml"])).toEqual(
       {
@@ -2413,7 +2442,7 @@ describe("scripts/test-projects changed-target routing", () => {
     }
   });
 
-  it("routes MCP Docker E2E script targets instead of skipping changed tests", () => {
+  it("routes MCP and cron Docker E2E script targets instead of skipping changed tests", () => {
     const targets = [
       "scripts/e2e/mcp-channels-docker.sh",
       "scripts/e2e/mcp-channels-docker-client.ts",
@@ -2426,6 +2455,7 @@ describe("scripts/test-projects changed-target routing", () => {
       "scripts/e2e/agent-bundle-mcp-tools-docker.sh",
       "scripts/e2e/agent-bundle-mcp-tools-docker-client.ts",
       "scripts/mcp-code-mode-gateway-e2e.ts",
+      "scripts/e2e/cron-cli-docker.sh",
       "scripts/e2e/cron-mcp-cleanup-docker.sh",
       "scripts/e2e/cron-mcp-cleanup-docker-client.ts",
       "scripts/e2e/cron-mcp-cleanup-seed.ts",
@@ -2963,26 +2993,12 @@ describe("scripts/test-projects changed-target routing", () => {
   });
 
   it("explains changed paths that need explicit broad fallback before skipping", () => {
-    withTinyGitRepo({ "package.json": '{"scripts":{}}\n' }, (cwd) => {
-      commitTinyGitRepo(cwd);
-      fs.writeFileSync(path.join(cwd, "package.json"), '{"scripts":{"test":"node"}}\n');
-
-      const result = spawnSync(
-        process.execPath,
-        [path.resolve(process.cwd(), "scripts/test-projects.mjs"), "--changed", "HEAD"],
-        {
-          cwd,
-          encoding: "utf8",
-        },
-      );
-
-      expect(result.status).toBe(0);
-      expect(result.stderr).toContain("[test] no precise changed test targets; skipping Vitest.");
-      expect(result.stderr).toContain("[test]   package.json");
-      expect(result.stderr).toContain(
-        "[test] run `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` for broad coverage.",
-      );
-    });
+    expect(formatNoChangedTestTargetLines(["unknown-root-surface.txt"])).toEqual([
+      "[test] no precise changed test targets; skipping Vitest.",
+      "[test] 1 changed path require broad Vitest fallback:",
+      "[test]   unknown-root-surface.txt",
+      "[test] run `OPENCLAW_TEST_CHANGED_BROAD=1 pnpm test:changed` for broad coverage.",
+    ]);
   });
 
   it("keeps the broad changed run available for unknown root surfaces", () => {

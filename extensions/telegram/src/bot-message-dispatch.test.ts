@@ -69,23 +69,26 @@ const createChannelMessageReplyPipeline = vi.hoisted(() =>
   })),
 );
 const wasSentByBot = vi.hoisted(() => vi.fn(() => false));
-const appendSessionTranscriptMessage = vi.hoisted(() =>
-  vi.fn(async ({ message }: { message?: unknown }) => ({
+const appendAssistantMirrorMessageByIdentity = vi.hoisted(() =>
+  vi.fn<
+    (
+      params?: unknown,
+    ) => Promise<
+      | { ok: true; sessionFile: string; messageId: string }
+      | { ok: false; reason: string; code?: "blocked" | "session-rebound" }
+    >
+  >(async () => ({
+    ok: true,
+    sessionFile: "/tmp/sessions/s1.jsonl",
     messageId: "m1",
-    message,
-    appended: true,
   })),
 );
-const emitSessionTranscriptUpdate = vi.hoisted(() => vi.fn());
+const getSessionEntry = vi.hoisted(() => vi.fn());
 const loadSessionStore = vi.hoisted(() => vi.fn());
-const readLatestAssistantTextFromSessionTranscript = vi.hoisted(() => vi.fn());
-const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
-const resolveAndPersistSessionFile = vi.hoisted(() =>
-  vi.fn(async () => ({
-    sessionFile: "/tmp/session.jsonl",
-    sessionEntry: { sessionId: "s1", sessionFile: "/tmp/session.jsonl" },
-  })),
+const readLatestAssistantTextByIdentity = vi.hoisted(() =>
+  vi.fn<() => Promise<{ text: string; timestamp?: number } | undefined>>(async () => undefined),
 );
+const resolveStorePath = vi.hoisted(() => vi.fn(() => "/tmp/sessions.json"));
 const generateTopicLabel = vi.hoisted(() => vi.fn());
 const describeStickerImage = vi.hoisted(() => vi.fn(async (): Promise<string | null> => null));
 const loadModelCatalog = vi.hoisted(() => vi.fn(async () => ({})));
@@ -100,12 +103,6 @@ const getAgentScopedMediaLocalRoots = vi.hoisted(() =>
 );
 const resolveChunkMode = vi.hoisted(() => vi.fn(() => undefined));
 const resolveMarkdownTableMode = vi.hoisted(() => vi.fn(() => "preserve"));
-const resolveSessionStoreEntry = vi.hoisted(() =>
-  vi.fn(({ store, sessionKey }: { store: Record<string, unknown>; sessionKey: string }) => ({
-    existing: store[sessionKey],
-  })),
-);
-const updateSessionStoreEntry = vi.hoisted(() => vi.fn(async () => null));
 
 vi.mock("./draft-stream.js", () => ({
   createTelegramDraftStream,
@@ -119,12 +116,13 @@ vi.mock("openclaw/plugin-sdk/channel-outbound", async (importOriginal) => {
   };
 });
 
-vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>();
+vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/session-transcript-runtime")>();
   return {
     ...actual,
-    appendSessionTranscriptMessage,
-    emitSessionTranscriptUpdate,
+    appendAssistantMirrorMessageByIdentity,
+    readLatestAssistantTextByIdentity,
   };
 });
 
@@ -151,16 +149,12 @@ vi.mock("./send.js", () => ({
 
 vi.mock("./bot-message-dispatch.runtime.js", () => ({
   generateTopicLabel,
+  getSessionEntry,
   getAgentScopedMediaLocalRoots,
-  loadSessionStore,
-  readLatestAssistantTextFromSessionTranscript,
-  resolveAndPersistSessionFile,
   resolveAutoTopicLabelConfig: resolveAutoTopicLabelConfigRuntime,
   resolveChunkMode,
   resolveMarkdownTableMode,
-  resolveSessionStoreEntry,
   resolveStorePath,
-  updateSessionStoreEntry,
 }));
 
 vi.mock("./bot-message-dispatch.agent.runtime.js", () => ({
@@ -204,6 +198,7 @@ function installTelegramStateRuntimeForTest(): void {
 const telegramDepsForTest: TelegramBotDeps = {
   getRuntimeConfig: loadConfig as TelegramBotDeps["getRuntimeConfig"],
   resolveStorePath: resolveStorePath as TelegramBotDeps["resolveStorePath"],
+  getSessionEntry: getSessionEntry as TelegramBotDeps["getSessionEntry"],
   loadSessionStore: loadSessionStore as TelegramBotDeps["loadSessionStore"],
   readChannelAllowFromStore:
     readChannelAllowFromStore as TelegramBotDeps["readChannelAllowFromStore"],
@@ -265,19 +260,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
     listSkillCommandsForAgents.mockReset();
     createChannelMessageReplyPipeline.mockReset();
     wasSentByBot.mockReset();
-    appendSessionTranscriptMessage.mockReset();
-    emitSessionTranscriptUpdate.mockReset();
-    readLatestAssistantTextFromSessionTranscript.mockReset();
+    appendAssistantMirrorMessageByIdentity.mockReset();
+    readLatestAssistantTextByIdentity.mockReset();
+    getSessionEntry.mockReset();
     loadSessionStore.mockReset();
     resolveStorePath.mockReset();
-    resolveAndPersistSessionFile.mockReset();
-    updateSessionStoreEntry.mockReset();
     generateTopicLabel.mockReset();
     getAgentScopedMediaLocalRoots.mockClear();
     resolveChunkMode.mockClear();
     resolveMarkdownTableMode.mockClear();
-    resolveSessionStoreEntry.mockClear();
-    updateSessionStoreEntry.mockClear();
     describeStickerImage.mockReset();
     loadModelCatalog.mockReset();
     findModelInCatalog.mockReset();
@@ -323,11 +314,17 @@ describe("dispatchTelegramMessage draft streaming", () => {
     });
     wasSentByBot.mockReturnValue(false);
     resolveStorePath.mockReturnValue("/tmp/sessions.json");
-    resolveAndPersistSessionFile.mockResolvedValue({
-      sessionFile: "/tmp/session.jsonl",
-      sessionEntry: { sessionId: "s1", sessionFile: "/tmp/session.jsonl" },
+    readLatestAssistantTextByIdentity.mockResolvedValue(undefined);
+    appendAssistantMirrorMessageByIdentity.mockResolvedValue({
+      ok: true,
+      sessionFile: "/tmp/sessions/s1.jsonl",
+      messageId: "m1",
     });
     loadSessionStore.mockReturnValue({});
+    getSessionEntry.mockImplementation(
+      ({ sessionKey }: { sessionKey: string }) =>
+        (loadSessionStore() as Record<string, unknown>)[sessionKey],
+    );
     generateTopicLabel.mockResolvedValue("Topic label");
     describeStickerImage.mockResolvedValue(null);
     loadModelCatalog.mockResolvedValue({});
@@ -356,6 +353,15 @@ describe("dispatchTelegramMessage draft streaming", () => {
       .mockImplementationOnce(() => answerDraftStream)
       .mockImplementationOnce(() => reasoningDraftStream);
     return { answerDraftStream, reasoningDraftStream };
+  }
+
+  function mockDefaultSessionEntry(entry: Record<string, unknown> = { sessionId: "s1" }) {
+    loadSessionStore.mockReturnValue({
+      "agent:default:telegram:direct:123": {
+        updatedAt: 1,
+        ...entry,
+      },
+    });
   }
 
   function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
@@ -706,7 +712,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const preview = renderText?.("| A | B |\n| --- | --- |\n| 1 | 2 |");
     expect(preview?.richMessage).toEqual(
       expect.objectContaining({
-        html: expect.stringContaining("<table>"),
+        html: expect.stringContaining("<table bordered striped>"),
       }),
     );
   });
@@ -1720,9 +1726,7 @@ describe("dispatchTelegramMessage draft streaming", () => {
     setupDraftStreams({ answerMessageId: 2001 });
     const context = createContext();
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
-    loadSessionStore.mockReturnValue({
-      "agent:default:telegram:direct:123": { sessionId: "s1" },
-    });
+    mockDefaultSessionEntry();
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
       return { queuedFinal: true };
@@ -1730,29 +1734,73 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context });
 
-    const transcriptCall = expectRecordFields(mockCallArg(appendSessionTranscriptMessage), {
-      transcriptPath: "/tmp/session.jsonl",
-    });
-    expectRecordFields(transcriptCall.message, {
-      role: "assistant",
-      provider: "openclaw",
-      model: "delivery-mirror",
-      content: [{ type: "text", text: "Final answer" }],
-    });
-    expectRecordFields(mockCallArg(emitSessionTranscriptUpdate), {
-      sessionFile: "/tmp/session.jsonl",
+    const mirrorCall = expectRecordFields(mockCallArg(appendAssistantMirrorMessageByIdentity), {
+      agentId: "default",
+      sessionId: "s1",
+      idempotencyKey: expect.stringContaining("telegram-final:agent:default:telegram:direct:123:"),
       sessionKey: "agent:default:telegram:direct:123",
-      messageId: "m1",
+      storePath: "/tmp/sessions.json",
+      text: "Final answer",
+    });
+    expect(mirrorCall.deliveryMirror).toEqual({
+      kind: "channel-final",
+      sourceMessageId: mirrorCall.idempotencyKey,
     });
   });
 
-  it("advances the session marker after mirroring preview-finalized finals", async () => {
+  it("keeps same-millisecond transcript mirror keys distinct per inbound message", async () => {
+    createTelegramDraftStream.mockImplementation(() => createDraftStream(2001));
+    const dateNow = vi.spyOn(Date, "now").mockReturnValue(1234567890);
+    const firstContext = createContext({
+      ctxPayload: {
+        MessageSid: "456",
+        SessionKey: "agent:default:telegram:direct:123",
+      } as TelegramMessageContext["ctxPayload"],
+    });
+    const secondContext = createContext({
+      ctxPayload: {
+        MessageSid: "457",
+        SessionKey: "agent:default:telegram:direct:123",
+      } as TelegramMessageContext["ctxPayload"],
+      msg: { message_id: 457 } as TelegramMessageContext["msg"],
+    });
+    mockDefaultSessionEntry();
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    try {
+      await dispatchWithContext({ context: firstContext });
+      await dispatchWithContext({ context: secondContext });
+    } finally {
+      dateNow.mockRestore();
+    }
+
+    const firstMirrorCall = expectRecordFields(
+      mockCallArg(appendAssistantMirrorMessageByIdentity),
+      {
+        idempotencyKey: expect.stringContaining(
+          "telegram-final:agent:default:telegram:direct:123:123:456:",
+        ),
+      },
+    );
+    const secondMirrorCall = expectRecordFields(
+      mockCallArg(appendAssistantMirrorMessageByIdentity, 1),
+      {
+        idempotencyKey: expect.stringContaining(
+          "telegram-final:agent:default:telegram:direct:123:123:457:",
+        ),
+      },
+    );
+    expect(firstMirrorCall.idempotencyKey).not.toBe(secondMirrorCall.idempotencyKey);
+  });
+
+  it("skips transcript mirroring when the scoped session is absent", async () => {
     setupDraftStreams({ answerMessageId: 2001 });
     const context = createContext();
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
-    loadSessionStore.mockReturnValue({
-      "agent:default:telegram:direct:123": { sessionId: "s1" },
-    });
+    loadSessionStore.mockReturnValue({});
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
       await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
       return { queuedFinal: true };
@@ -1760,21 +1808,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context });
 
-    const markerUpdateCall = expectRecordFields(mockCallArg(updateSessionStoreEntry), {
-      storePath: "/tmp/sessions.json",
-      sessionKey: "agent:default:telegram:direct:123",
-    });
-    const update = markerUpdateCall.update as (entry: { sessionId?: string }) => unknown;
-    expect(update({ sessionId: "s1" })).toEqual({ updatedAt: expect.any(Number) });
-    expect(update({ sessionId: "new-session" })).toBeNull();
+    expect(appendAssistantMirrorMessageByIdentity).not.toHaveBeenCalled();
   });
 
   it("does not mirror non-final tool progress into the session transcript", async () => {
     const context = createContext();
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
-    loadSessionStore.mockReturnValue({
-      "agent:default:telegram:direct:123": { sessionId: "s1" },
-    });
+    mockDefaultSessionEntry();
     deliverReplies.mockImplementation(
       async (params: {
         replies?: Array<{ text?: string }>;
@@ -1806,15 +1846,13 @@ describe("dispatchTelegramMessage draft streaming", () => {
       transcriptMirror: undefined,
     });
     expect(typeof mockCallArg(deliverReplies, 1).transcriptMirror).toBe("function");
-    expect(appendSessionTranscriptMessage).toHaveBeenCalledTimes(1);
-    const transcriptCall = expectRecordFields(mockCallArg(appendSessionTranscriptMessage), {
-      transcriptPath: "/tmp/session.jsonl",
-    });
-    expectRecordFields(transcriptCall.message, {
-      role: "assistant",
-      provider: "openclaw",
-      model: "delivery-mirror",
-      content: [{ type: "text", text: "Final answer" }],
+    expect(appendAssistantMirrorMessageByIdentity).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(appendAssistantMirrorMessageByIdentity), {
+      agentId: "default",
+      sessionId: "s1",
+      sessionKey: "agent:default:telegram:direct:123",
+      storePath: "/tmp/sessions.json",
+      text: "Final answer",
     });
   });
 
@@ -1822,13 +1860,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
     const repeatedText = "Final answer";
     const context = createContext();
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
-    loadSessionStore.mockReturnValue({
-      "agent:default:telegram:direct:123": { sessionId: "s1" },
-    });
-    readLatestAssistantTextFromSessionTranscript.mockResolvedValue({
-      text: repeatedText,
-      timestamp: 1,
-    });
+    mockDefaultSessionEntry();
+    readLatestAssistantTextByIdentity.mockResolvedValue({ text: repeatedText, timestamp: 1 });
     deliverReplies.mockImplementation(
       async (params: {
         replies?: Array<{ text?: string }>;
@@ -1849,15 +1882,14 @@ describe("dispatchTelegramMessage draft streaming", () => {
 
     await dispatchWithContext({ context });
 
-    expect(appendSessionTranscriptMessage).toHaveBeenCalledTimes(1);
-    const transcriptCall = expectRecordFields(mockCallArg(appendSessionTranscriptMessage), {
-      transcriptPath: "/tmp/session.jsonl",
-    });
-    expectRecordFields(transcriptCall.message, {
-      role: "assistant",
-      provider: "openclaw",
-      model: "delivery-mirror",
-      content: [{ type: "text", text: repeatedText }],
+    expect(appendAssistantMirrorMessageByIdentity).toHaveBeenCalledTimes(1);
+    expectRecordFields(mockCallArg(appendAssistantMirrorMessageByIdentity), {
+      agentId: "default",
+      sessionId: "s1",
+      idempotencyKey: expect.stringContaining("telegram-final:agent:default:telegram:direct:123:"),
+      sessionKey: "agent:default:telegram:direct:123",
+      storePath: "/tmp/sessions.json",
+      text: repeatedText,
     });
   });
 
@@ -1869,10 +1901,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
       "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man...";
     const context = createContext();
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
-    loadSessionStore.mockReturnValue({
-      "agent:default:telegram:direct:123": { sessionId: "s1" },
-    });
-    readLatestAssistantTextFromSessionTranscript.mockResolvedValue({
+    mockDefaultSessionEntry();
+    readLatestAssistantTextByIdentity.mockResolvedValue({
       text: fullAnswer,
       timestamp: Date.now() + 1_000,
     });
@@ -1892,67 +1922,38 @@ describe("dispatchTelegramMessage draft streaming", () => {
       content: fullAnswer,
       messageId: 2001,
     });
-    const transcriptCall = expectRecordFields(mockCallArg(appendSessionTranscriptMessage), {
-      transcriptPath: "/tmp/session.jsonl",
-    });
-    expectRecordFields(transcriptCall.message, {
-      role: "assistant",
-      provider: "openclaw",
-      model: "delivery-mirror",
-      content: [{ type: "text", text: fullAnswer }],
+    expectRecordFields(mockCallArg(appendAssistantMirrorMessageByIdentity), {
+      agentId: "default",
+      sessionId: "s1",
+      sessionKey: "agent:default:telegram:direct:123",
+      storePath: "/tmp/sessions.json",
+      text: fullAnswer,
     });
   });
 
-  it("emits the redacted appended message in transcript updates", async () => {
+  it("treats session rebound mirror skips as non-fatal", async () => {
     setupDraftStreams({ answerMessageId: 2001 });
     const context = createContext();
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
-    loadSessionStore.mockReturnValue({
-      "agent:default:telegram:direct:123": { sessionId: "s1" },
+    mockDefaultSessionEntry();
+    appendAssistantMirrorMessageByIdentity.mockResolvedValueOnce({
+      ok: false,
+      code: "session-rebound",
+      reason: "session rebound for sessionKey: agent:default:telegram:direct:123",
     });
-    appendSessionTranscriptMessage.mockImplementationOnce(async ({ message }) => ({
-      messageId: "m1",
-      appended: true,
-      message: {
-        ...(message as Record<string, unknown>),
-        content: [{ type: "text", text: "Final sk-abc…0xyz" }],
-      },
-    }));
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
-      await dispatcherOptions.deliver({ text: "Final sk-abcdef1234567890xyz" }, { kind: "final" });
+      await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
       return { queuedFinal: true };
     });
 
     await dispatchWithContext({ context });
 
-    expectRecordFields(mockCallArg(emitSessionTranscriptUpdate), {
-      sessionFile: "/tmp/session.jsonl",
+    expectRecordFields(mockCallArg(appendAssistantMirrorMessageByIdentity), {
+      agentId: "default",
+      sessionId: "s1",
       sessionKey: "agent:default:telegram:direct:123",
-      messageId: "m1",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "Final sk-abc…0xyz" }],
-        api: "openai-responses",
-        provider: "openclaw",
-        model: "delivery-mirror",
-        usage: {
-          input: 0,
-          output: 0,
-          total: 0,
-          prompt_tokens: 0,
-          completion_tokens: 0,
-          total_tokens: 0,
-          cache: {
-            read: 0,
-            write: 0,
-            cacheRead: 0,
-            cacheWrite: 0,
-            total: 0,
-          },
-        },
-        stopReason: "stop",
-        timestamp: expect.any(Number),
-      },
+      storePath: "/tmp/sessions.json",
+      text: "Final answer",
     });
   });
 
@@ -2901,10 +2902,8 @@ describe("dispatchTelegramMessage draft streaming", () => {
       "Ja. Hier nochmal sauber Schritt fuer Schritt. Einen API Key kopiert man...";
     const context = createContext();
     context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
-    loadSessionStore.mockReturnValue({
-      "agent:default:telegram:direct:123": { sessionId: "s1" },
-    });
-    readLatestAssistantTextFromSessionTranscript.mockResolvedValue({
+    mockDefaultSessionEntry();
+    readLatestAssistantTextByIdentity.mockResolvedValue({
       text: fullAnswer,
       timestamp: Date.now() + 1_000,
     });

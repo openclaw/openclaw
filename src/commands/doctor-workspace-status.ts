@@ -3,7 +3,10 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginVersionDriftReport } from "../plugins/plugin-version-drift.js";
+import {
+  resolvePluginVersionDriftUpdateCommand,
+  type PluginVersionDriftReport,
+} from "../plugins/plugin-version-drift.js";
 import {
   buildPluginCompatibilityWarnings,
   buildPluginRegistrySnapshotReport,
@@ -62,6 +65,9 @@ function notePluginVersionDrift(drift: PluginVersionDriftReport | undefined) {
     return;
   }
   const singleDrift = drift.drifts.length === 1 ? drift.drifts[0] : undefined;
+  const updateCommands = drift.drifts.map((entry) =>
+    formatCliCommand(resolvePluginVersionDriftUpdateCommand(entry)),
+  );
   const lines = [
     `${drift.drifts.length} active official plugin${
       drift.drifts.length === 1 ? "" : "s"
@@ -71,12 +77,12 @@ function notePluginVersionDrift(drift: PluginVersionDriftReport | undefined) {
       return `- ${entry.pluginId}: ${entry.installedVersion} (${sourceLabel}) -> expected ${drift.gatewayVersion}`;
     }),
     singleDrift
-      ? `Fix: ${formatCliCommand(
-          `openclaw plugins update ${singleDrift.pluginId}`,
-        )} && ${formatCliCommand("openclaw gateway restart")}.`
-      : `Fix: ${formatCliCommand(
-          "openclaw plugins update <plugin-id>",
-        )} for each drifted plugin, then ${formatCliCommand("openclaw gateway restart")}.`,
+      ? `Fix: ${updateCommands[0]} && ${formatCliCommand("openclaw gateway restart")}.`
+      : [
+          "Fix each drifted plugin:",
+          ...updateCommands.map((command) => `- ${command}`),
+          `Then run ${formatCliCommand("openclaw gateway restart")}.`,
+        ].join("\n"),
   ];
   note(lines.join("\n"), "Plugin version drift");
 }
