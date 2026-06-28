@@ -151,6 +151,14 @@ export type GatewayControlUiConfig = {
   allowInsecureAuth?: boolean;
   /** DANGEROUS: Disable device identity checks for the Control UI (default: false). */
   dangerouslyDisableDeviceAuth?: boolean;
+  /**
+   * Unified session mode: when true, a Control-UI/web request without an explicit
+   * `x-openclaw-session-key` joins the agent's single main session
+   * (`agent:{agentId}:main`) instead of a fresh per-request session, so the web
+   * surface shares one conversation with the agent's channel DMs. Default false
+   * (per-request sessions, unchanged). Additive flag — no migration.
+   */
+  unifiedSession?: boolean;
 };
 
 /** Gateway authentication strategy for WebSocket and HTTP clients. */

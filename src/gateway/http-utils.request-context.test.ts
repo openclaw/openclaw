@@ -2,7 +2,9 @@
  * Tests HTTP request context extraction for gateway auth and routing.
  */
 import type { IncomingMessage } from "node:http";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   authorizeOpenAiCompatibleHttpModelOverride,
   GatewaySessionKeyOverrideError,
@@ -113,6 +115,58 @@ describe("resolveGatewayRequestContext", () => {
         defaultMessageChannel: "webchat",
       }),
     ).toThrow("Unknown agent '!!!'.");
+  });
+});
+
+describe("resolveGatewayRequestContext — unified session (SESS-01/02)", () => {
+  afterEach(() => {
+    resetConfigRuntimeState();
+  });
+
+  it("joins agent:{agentId}:main when controlUi.unifiedSession is true and no explicit key", () => {
+    const cfg = { gateway: { controlUi: { unifiedSession: true } } } as OpenClawConfig;
+    setRuntimeConfigSnapshot(cfg, cfg);
+
+    const result = resolveGatewayRequestContext({
+      req: createReq(),
+      model: "openclaw",
+      user: "alice",
+      sessionPrefix: "openai",
+      defaultMessageChannel: "webchat",
+    });
+
+    // Unified: per-request user/uuid scoping is bypassed for the agent's main session.
+    expect(result.sessionKey).toBe(`agent:${result.agentId}:main`);
+  });
+
+  it("keeps per-request session keys when unifiedSession is false (SESS-02 regression)", () => {
+    const cfg = { gateway: { controlUi: { unifiedSession: false } } } as OpenClawConfig;
+    setRuntimeConfigSnapshot(cfg, cfg);
+
+    const result = resolveGatewayRequestContext({
+      req: createReq(),
+      model: "openclaw",
+      user: "alice",
+      sessionPrefix: "openai",
+      defaultMessageChannel: "webchat",
+    });
+
+    expect(result.sessionKey).toContain("openai-user:alice");
+    expect(result.sessionKey).not.toBe(`agent:${result.agentId}:main`);
+  });
+
+  it("honors an explicit x-openclaw-session-key even when unifiedSession is true", () => {
+    const cfg = { gateway: { controlUi: { unifiedSession: true } } } as OpenClawConfig;
+    setRuntimeConfigSnapshot(cfg, cfg);
+
+    const result = resolveGatewayRequestContext({
+      req: createReq({ "x-openclaw-session-key": "explicit-key-123" }),
+      model: "openclaw",
+      sessionPrefix: "openai",
+      defaultMessageChannel: "webchat",
+    });
+
+    expect(result.sessionKey).toBe("explicit-key-123");
   });
 });
 

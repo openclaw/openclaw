@@ -23,4 +23,10 @@ export type ControlUiBootstrapConfig = {
   seamColor?: string;
   /** Resolved `agents.defaults.timeFormat`; "auto" keeps the browser locale default. */
   timeFormat?: "auto" | "12" | "24";
+  /**
+   * When true, the Control UI joins the agent's unified main session
+   * (`agent:{agentId}:main`) instead of per-conversation sessions. Mirrors
+   * gateway.controlUi.unifiedSession. Default false/absent.
+   */
+  unifiedSession?: boolean;
 };

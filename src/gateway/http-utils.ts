@@ -198,6 +198,7 @@ function resolveSessionKey(params: {
   agentId: string;
   user?: string | undefined;
   prefix: string;
+  unifiedSession?: boolean;
 }): string {
   const explicit = getHeader(params.req, "x-openclaw-session-key")?.trim();
   if (explicit) {
@@ -205,6 +206,13 @@ function resolveSessionKey(params: {
       throw new GatewaySessionKeyOverrideError();
     }
     return explicit;
+  }
+
+  // Unified session: a web/Control-UI request without an explicit key joins the
+  // agent's single main session instead of a fresh per-request session, so the web
+  // surface shares one conversation with channel DMs (gateway.controlUi.unifiedSession).
+  if (params.unifiedSession) {
+    return buildAgentMainSessionKey({ agentId: params.agentId });
   }
 
   const user = params.user?.trim();
@@ -234,11 +242,13 @@ export function resolveGatewayRequestContext(params: {
   useMessageChannelHeader?: boolean;
 }): { agentId: string; sessionKey: string; messageChannel: string } {
   const agentId = resolveAgentIdForRequest({ req: params.req, model: params.model });
+  const unifiedSession = getRuntimeConfig().gateway?.controlUi?.unifiedSession === true;
   const sessionKey = resolveSessionKey({
     req: params.req,
     agentId,
     user: params.user,
     prefix: params.sessionPrefix,
+    unifiedSession,
   });
 
   const messageChannel = params.useMessageChannelHeader

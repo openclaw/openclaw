@@ -38,6 +38,8 @@ export type ControlUiBootstrapState = {
   embedSandboxMode: ControlUiEmbedSandboxMode;
   allowExternalEmbedUrls: boolean;
   chatMessageMaxWidth?: string | null;
+  /** Unified-session mode from gateway.controlUi.unifiedSession (default false). */
+  unifiedSession?: boolean;
   sessionKey?: string | null;
   hello?: { auth?: { deviceToken?: string | null } | null } | null;
   settings?: { token?: string | null } | null;
@@ -184,6 +186,7 @@ export async function loadControlUiBootstrapConfig(
           ? "strict"
           : "scripts";
     state.allowExternalEmbedUrls = parsed.allowExternalEmbedUrls === true;
+    state.unifiedSession = parsed.unifiedSession === true;
     state.chatMessageMaxWidth =
       typeof parsed.chatMessageMaxWidth === "string" && parsed.chatMessageMaxWidth.trim()
         ? parsed.chatMessageMaxWidth

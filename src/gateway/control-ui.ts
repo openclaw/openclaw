@@ -997,6 +997,7 @@ export async function handleControlUiHttpRequest(
       chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
       seamColor: config?.ui?.seamColor,
       timeFormat: config?.agents?.defaults?.timeFormat,
+      unifiedSession: config?.gateway?.controlUi?.unifiedSession === true,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }
