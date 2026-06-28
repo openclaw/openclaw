@@ -1,6 +1,12 @@
 /** Persists hosted official external plugin catalog snapshots in OpenClaw state. */
 import { existsSync } from "node:fs";
 import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "../infra/kysely-sync.js";
+import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
@@ -27,6 +33,11 @@ type HostedCatalogSnapshotRow = {
   checksum: string;
   saved_at: string;
 };
+
+type HostedCatalogSnapshotDatabase = Pick<
+  OpenClawStateKyselyDatabase,
+  "official_external_plugin_catalog_snapshots"
+>;
 
 function resolveStoreEnv(
   options: HostedOfficialExternalPluginCatalogSnapshotStoreOptions,
@@ -90,46 +101,46 @@ export function createSqliteHostedOfficialExternalPluginCatalogSnapshotStore(
         return null;
       }
       const database = openOpenClawStateDatabase(resolveStateDatabaseOptions(options));
-      const row = database.db
-        .prepare(
-          `
-            SELECT feed_url, body, status, etag, last_modified, checksum, saved_at
-              FROM official_external_plugin_catalog_snapshots
-             WHERE feed_url = ?
-          `,
-        )
-        .get(url) as HostedCatalogSnapshotRow | undefined;
+      const stateDb = getNodeSqliteKysely<HostedCatalogSnapshotDatabase>(database.db);
+      const row = executeSqliteQueryTakeFirstSync(
+        database.db,
+        stateDb
+          .selectFrom("official_external_plugin_catalog_snapshots")
+          .select(["feed_url", "body", "status", "etag", "last_modified", "checksum", "saved_at"])
+          .where("feed_url", "=", url),
+      ) as HostedCatalogSnapshotRow | undefined;
       return rowToSnapshot(row);
     },
     async write(snapshot) {
       const now = Date.now();
-      runOpenClawStateWriteTransaction(({ db }) => {
-        db.prepare(
-          `
-            INSERT INTO official_external_plugin_catalog_snapshots (
-              feed_url, body, status, etag, last_modified, checksum, saved_at, updated_at_ms
-            ) VALUES (
-              @feed_url, @body, @status, @etag, @last_modified, @checksum, @saved_at, @updated_at_ms
-            )
-            ON CONFLICT(feed_url) DO UPDATE SET
-              body = excluded.body,
-              status = excluded.status,
-              etag = excluded.etag,
-              last_modified = excluded.last_modified,
-              checksum = excluded.checksum,
-              saved_at = excluded.saved_at,
-              updated_at_ms = excluded.updated_at_ms
-          `,
-        ).run({
-          feed_url: snapshot.metadata.url,
-          body: snapshot.body,
-          status: snapshot.metadata.status,
-          etag: snapshot.metadata.etag ?? null,
-          last_modified: snapshot.metadata.lastModified ?? null,
-          checksum: snapshot.metadata.checksum,
-          saved_at: snapshot.savedAt,
-          updated_at_ms: now,
-        });
+      runOpenClawStateWriteTransaction((database) => {
+        const stateDb = getNodeSqliteKysely<HostedCatalogSnapshotDatabase>(database.db);
+        executeSqliteQuerySync(
+          database.db,
+          stateDb
+            .insertInto("official_external_plugin_catalog_snapshots")
+            .values({
+              feed_url: snapshot.metadata.url,
+              body: snapshot.body,
+              status: snapshot.metadata.status,
+              etag: snapshot.metadata.etag ?? null,
+              last_modified: snapshot.metadata.lastModified ?? null,
+              checksum: snapshot.metadata.checksum,
+              saved_at: snapshot.savedAt,
+              updated_at_ms: now,
+            })
+            .onConflict((conflict) =>
+              conflict.column("feed_url").doUpdateSet({
+                body: snapshot.body,
+                status: snapshot.metadata.status,
+                etag: snapshot.metadata.etag ?? null,
+                last_modified: snapshot.metadata.lastModified ?? null,
+                checksum: snapshot.metadata.checksum,
+                saved_at: snapshot.savedAt,
+                updated_at_ms: now,
+              }),
+            ),
+        );
       }, resolveStateDatabaseOptions(options));
     },
   };
