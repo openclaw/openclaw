@@ -464,6 +464,24 @@ export async function noteMemorySearchHealth(
         "Memory search",
       );
     }
+    if (resolved.sources?.includes("sessions") && cfg.memory?.qmd?.sessions?.enabled !== true) {
+      note(
+        [
+          "QMD memory backend is configured and the default agent resolves memorySearch.sources with sessions,",
+          "but QMD session transcript export is not enabled (memory.qmd.sessions.enabled is not true).",
+          "Session transcript hits will not appear in QMD-backed memory search until QMD session export is enabled.",
+          "",
+          "Fix (pick one):",
+          `- Enable QMD session export: ${formatCliCommand(
+            "openclaw config set memory.qmd.sessions.enabled true",
+          )}`,
+          "- Or remove sessions from the default agent's memorySearch.sources if QMD session recall is not intended.",
+          "",
+          `Verify: ${formatCliCommand("openclaw memory status --deep")}`,
+        ].join("\n"),
+        "Memory search",
+      );
+    }
     return;
   }
 

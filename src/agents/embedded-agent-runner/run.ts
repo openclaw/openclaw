@@ -31,6 +31,7 @@ import {
 import { sleepWithAbort } from "../../infra/backoff.js";
 import { freezeDiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { redactIdentifier } from "../../logging/redact-identifier.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { resolveProviderAuthProfileId } from "../../plugins/provider-runtime.js";
@@ -598,6 +599,8 @@ function resolveInitialEmbeddedRunModel(params: {
     modelId: configuredDefault.model || DEFAULT_MODEL,
   };
 }
+
+const POST_RUN_AUTH_PROFILE_SUCCESS_SLOW_MS = 1_000;
 
 export function runEmbeddedAgent(
   paramsInput: RunEmbeddedAgentParams,
@@ -1741,6 +1744,48 @@ async function runEmbeddedAgentInternal(
           runId: params.runId,
           modelId: failure.modelId,
         });
+      };
+      const markAuthProfileSuccessAfterRun = () => {
+        if (!lastProfileId) {
+          return;
+        }
+        const successProfileId = lastProfileId;
+        const safeSuccessProfileId = redactIdentifier(successProfileId, { len: 12 });
+        const successProvider = resolveAuthProfileStateProvider(
+          profileFailureStore,
+          successProfileId,
+          provider,
+        );
+        const successStarted = Date.now();
+        void markAuthProfileSuccess({
+          store: profileFailureStore,
+          provider: successProvider,
+          profileId: successProfileId,
+          agentDir: params.agentDir,
+        })
+          .then(() => {
+            const durationMs = Date.now() - successStarted;
+            if (durationMs >= POST_RUN_AUTH_PROFILE_SUCCESS_SLOW_MS) {
+              log.warn(
+                `post-run auth-profile success bookkeeping completed after ${durationMs}ms: ` +
+                  `runId=${params.runId} sessionId=${params.sessionId} ` +
+                  `provider=${sanitizeForLog(successProvider)} profileId=${safeSuccessProfileId}`,
+              );
+            } else if (log.isEnabled("trace")) {
+              log.trace(
+                `post-run auth-profile success bookkeeping completed: ` +
+                  `runId=${params.runId} sessionId=${params.sessionId} durationMs=${durationMs}`,
+              );
+            }
+          })
+          .catch((err: unknown) => {
+            log.warn(
+              `post-run auth-profile success bookkeeping failed: ` +
+                `runId=${params.runId} sessionId=${params.sessionId} ` +
+                `provider=${sanitizeForLog(successProvider)} profileId=${safeSuccessProfileId} ` +
+                `error=${formatErrorMessage(err)}`,
+            );
+          });
       };
       const resolveRunAuthProfileFailureReason = (
         failoverReason: FailoverReason | null,
@@ -4045,18 +4090,7 @@ async function runEmbeddedAgentInternal(
           log.debug(
             `embedded run done: runId=${params.runId} sessionId=${params.sessionId} durationMs=${Date.now() - started} aborted=${aborted}`,
           );
-          if (lastProfileId) {
-            await markAuthProfileSuccess({
-              store: profileFailureStore,
-              provider: resolveAuthProfileStateProvider(
-                profileFailureStore,
-                lastProfileId,
-                provider,
-              ),
-              profileId: lastProfileId,
-              agentDir: params.agentDir,
-            });
-          }
+          markAuthProfileSuccessAfterRun();
           const replayInvalid = resolveReplayInvalidForAttempt(null);
           const livenessState = attempt.yieldDetected
             ? "paused"

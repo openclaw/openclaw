@@ -81,6 +81,7 @@ vi.mock("./status.summary.runtime.js", () => ({
     })),
     resolveSessionRuntimeLabel: vi.fn(() => "OpenClaw Default"),
     resolveContextTokensForModel: vi.fn(() => 200_000),
+    waitForContextWindowCacheLoad: vi.fn(async () => "idle" as const),
   },
 }));
 
@@ -359,6 +360,7 @@ describe("getStatusSummary", () => {
   it("does not trigger async context warmup while building status summaries", async () => {
     await getStatusSummary();
 
+    expect(statusSummaryRuntime.waitForContextWindowCacheLoad).toHaveBeenCalledTimes(1);
     const contextCall = vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock
       .calls[0]?.[0];
     expect(contextCall?.allowAsyncLoad).toBe(false);
@@ -508,6 +510,40 @@ describe("getStatusSummary", () => {
       .mock.calls.map(([params]) => params.sessionKey);
     expect(hydratedKeys).not.toContain("agent:main:session-1");
     expect(hydratedKeys).not.toContain("agent:main:session-2");
+  });
+
+  it("preserves store order for tied recent session timestamps", async () => {
+    const store = Object.fromEntries(
+      Array.from({ length: 11 }, (_, index) => {
+        const number = index + 1;
+        return [
+          `agent:main:session-${number}`,
+          {
+            sessionId: `session-${number}`,
+            updatedAt: 1,
+          },
+        ];
+      }),
+    );
+    statusSummaryMocks.listSessionEntries.mockReturnValue(toSessionEntrySummaries(store));
+
+    const summary = await getStatusSummary();
+
+    expect(summary.sessions.recent.map((session) => session.key)).toEqual([
+      "agent:main:session-1",
+      "agent:main:session-2",
+      "agent:main:session-3",
+      "agent:main:session-4",
+      "agent:main:session-5",
+      "agent:main:session-6",
+      "agent:main:session-7",
+      "agent:main:session-8",
+      "agent:main:session-9",
+      "agent:main:session-10",
+    ]);
+    expect(summary.sessions.byAgent[0]?.recent.map((session) => session.key)).toEqual(
+      summary.sessions.recent.map((session) => session.key),
+    );
   });
 
   it("passes agent scope when listing configured agent session stores", async () => {

@@ -102,23 +102,28 @@ const buildChatItemsMock = vi.hoisted(() =>
   }),
 );
 const renderMessageGroupMock = vi.hoisted(() =>
-  vi.fn((group: { messages: Array<{ message: unknown }> }) => {
-    const element = document.createElement("div");
-    element.className = "chat-group";
-    element.textContent = group.messages
-      .map(({ message }) => {
-        if (typeof message === "object" && message !== null && "content" in message) {
-          const content = (message as { content?: unknown }).content;
-          if (typeof content === "string") {
-            return content;
+  vi.fn(
+    (
+      group: { messages: Array<{ message: unknown }> },
+      _opts?: { onAssistantAttachmentLoaded?: () => void },
+    ) => {
+      const element = document.createElement("div");
+      element.className = "chat-group";
+      element.textContent = group.messages
+        .map(({ message }) => {
+          if (typeof message === "object" && message !== null && "content" in message) {
+            const content = (message as { content?: unknown }).content;
+            if (typeof content === "string") {
+              return content;
+            }
+            return content == null ? "" : JSON.stringify(content);
           }
-          return content == null ? "" : JSON.stringify(content);
-        }
-        return String(message);
-      })
-      .join("\n");
-    return element;
-  }),
+          return String(message);
+        })
+        .join("\n");
+      return element;
+    },
+  ),
 );
 const assistantAttachmentRenderVersionMock = vi.hoisted(() => ({ value: 0 }));
 
@@ -393,6 +398,7 @@ function createChatHeaderState(
     chatMessages: [],
     chatLoading: false,
     chatThinkingLevel: null,
+    chatVerboseLevel: null,
     lastError: null,
     chatAvatarUrl: null,
     basePath: "",
@@ -1142,6 +1148,20 @@ describe("chat transcript rendering cache", () => {
     );
 
     expect(renderMessageGroupMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("passes assistant attachment load callbacks to transcript groups", () => {
+    const onAssistantAttachmentLoaded = vi.fn();
+
+    renderChatView({
+      messages: [{ role: "assistant", content: "MEDIA:https://example.com/voice.ogg" }],
+      onAssistantAttachmentLoaded,
+    });
+
+    expect(renderMessageGroupMock).toHaveBeenCalledTimes(1);
+    expect(renderMessageGroupMock.mock.calls[0]?.[1]).toMatchObject({
+      onAssistantAttachmentLoaded,
+    });
   });
 
   it("rebuilds transcript items when the transcript reference changes", () => {

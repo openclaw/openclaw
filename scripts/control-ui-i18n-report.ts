@@ -18,6 +18,7 @@ const LOCALE_LABELS: Record<string, string> = {
   it: "Italian",
   "ja-JP": "Japanese",
   ko: "Korean",
+  hi: "Hindi",
   nl: "Dutch",
   pl: "Polish",
   "pt-BR": "Brazilian Portuguese",
@@ -27,6 +28,7 @@ const LOCALE_LABELS: Record<string, string> = {
   vi: "Vietnamese",
   "zh-CN": "Simplified Chinese",
   "zh-TW": "Traditional Chinese",
+  ru: "Russian",
 };
 const REPORT_LOCALES = new Set(Object.keys(LOCALE_LABELS));
 const PATH_LABELS: Record<string, string> = {
