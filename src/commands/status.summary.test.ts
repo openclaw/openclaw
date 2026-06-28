@@ -356,12 +356,11 @@ describe("getStatusSummary", () => {
     expect(resolveLinkChannelContext).not.toHaveBeenCalled();
   });
 
-  it("does not trigger async context warmup while building status summaries", async () => {
+  it("fires background context warmup while building status summaries", async () => {
     await getStatusSummary();
 
     const contextCall = vi.mocked(statusSummaryRuntime.resolveContextTokensForModel).mock
       .calls[0]?.[0];
-    expect(contextCall?.allowAsyncLoad).toBe(false);
     expect(contextCall).toMatchObject({
       modelContextWindow: 1_000_000,
       modelContextTokens: 272_000,
@@ -404,7 +403,6 @@ describe("getStatusSummary", () => {
       provider: "google",
       model: "gemini-3.1-pro-preview",
       modelContextWindow: 1_048_576,
-      allowAsyncLoad: false,
     });
   });
 
@@ -429,7 +427,6 @@ describe("getStatusSummary", () => {
       provider: "google-gemini-cli",
       model: "google/gemini-3.1-pro-preview",
       modelContextWindow: 1_048_576,
-      allowAsyncLoad: false,
     });
   });
 

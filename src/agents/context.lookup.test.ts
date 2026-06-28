@@ -1,6 +1,7 @@
 // Covers context-token lookup caches, catalog warmup, and provider-qualified
 // model resolution.
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { DEFAULT_CONTEXT_TOKENS } from "../agents/defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
 type DiscoveredModel = {
@@ -638,5 +639,133 @@ describe("lookupContextTokens", () => {
       model: "glm-5",
     });
     expect(result).toBeUndefined();
+  });
+
+  it("fires context window cache warming when skipRuntimeConfigLoad=true and allowAsyncLoad is unspecified", async () => {
+    mockDiscoveryDeps([
+      {
+        provider: "openrouter",
+        id: "openrouter/claude-sonnet",
+        contextWindow: 200_000,
+      },
+      {
+        provider: "anthropic",
+        id: "anthropic/claude-opus-4.7-20260219",
+        contextWindow: 200_000,
+      },
+    ]);
+
+    contextTestState.loadModelCatalog.mockClear();
+    const cfg = createContextOverrideConfig("openrouter", "openrouter/claude-sonnet", 200_000);
+    const { resolveContextTokensForModel } = await importContextModule();
+
+    // Act: call with cfg but no allowAsyncLoad
+    resolveContextTokensForModel({
+      cfg: cfg as never,
+      provider: "openrouter",
+      model: "openrouter/claude-sonnet",
+    });
+
+    // Warming is fire-and-forget. Flush microtasks to let it run.
+    await flushAsyncWarmup();
+
+    // Assert: warming triggered catalog loading
+    expect(contextTestState.loadModelCatalog).toHaveBeenCalled();
+    // Assert: discovered tokens now populate cache
+    const { lookupContextTokens } = await importContextModule();
+    const discoveredTokens = lookupContextTokens("anthropic/claude-opus-4.7-20260219");
+    // ANTHROPIC_CONTEXT_1M_TOKENS = 1_048_576
+    expect(discoveredTokens).toBe(1_048_576);
+  });
+
+  it("does not fire cache warming when allowAsyncLoad=false even with skipRuntimeConfigLoad=true", async () => {
+    contextTestState.loadModelCatalog.mockClear();
+    const cfg = createContextOverrideConfig("openrouter", "openrouter/claude-sonnet", 200_000);
+    const { resolveContextTokensForModel } = await importContextModule();
+
+    // Act: call with cfg AND explicit allowAsyncLoad: false
+    const result = resolveContextTokensForModel({
+      cfg: cfg as never,
+      provider: "openrouter",
+      model: "openrouter/claude-sonnet",
+      allowAsyncLoad: false,
+    });
+
+    // Assert: synchronous result from config scan (not warming)
+    expect(result).toBe(200_000);
+
+    // Assert: catalog was NEVER loaded — warming did not fire
+    await flushAsyncWarmup();
+    expect(contextTestState.loadModelCatalog).not.toHaveBeenCalled();
+  });
+
+  it("returns discovered context tokens on second call after first triggers warming", async () => {
+    mockDiscoveryDeps([
+      {
+        provider: "anthropic",
+        id: "anthropic/claude-opus-4.7-20260219",
+        contextWindow: 200_000,
+      },
+    ]);
+
+    const cfg = createContextOverrideConfig("anthropic", "claude-opus-4.7-20260219", 200_000);
+    const { resolveContextTokensForModel } = await importContextModule();
+
+    // Act 1: First call with cfg triggers warming (allowAsyncLoad not set)
+    const firstResult = resolveContextTokensForModel({
+      cfg: cfg as never,
+      provider: "anthropic",
+      model: "claude-opus-4.7-20260219",
+      fallbackContextTokens: 200_000,
+    });
+
+    // First call result is from the configured window (config is 200k)
+    expect(firstResult).toBe(200_000);
+
+    // Let warming complete
+    await flushAsyncWarmup();
+
+    // Act 2: Second call without cfg — reads from warmed cache
+    const secondResult = resolveContextTokensForModel({
+      provider: "anthropic",
+      model: "claude-opus-4.7-20260219",
+    });
+
+    // discovered 200k is upgraded to 1M by the fixed anthropic 1M logic
+    expect(secondResult).toBe(1_048_576);
+  });
+
+  it("startup warming followed by status call returns discovered tokens not default 200K", async () => {
+    mockDiscoveryDeps([
+      {
+        provider: "anthropic",
+        id: "anthropic/claude-opus-4.7-20260219",
+        contextWindow: 200_000,
+      },
+    ]);
+
+    // Simulate startup: ensureContextWindowCacheLoaded is called and awaited
+    const { ensureContextWindowCacheLoaded, resolveContextTokensForModel } =
+      await importFreshContextModule();
+    await ensureContextWindowCacheLoaded();
+
+    // After deterministic warming: call without cfg reads from warmed cache
+    const firstStatusResult = resolveContextTokensForModel({
+      provider: "anthropic",
+      model: "claude-opus-4.7-20260219",
+    });
+
+    // The discovered 200k should be upgraded to 1M via Anthropic fixed window
+    expect(firstStatusResult).not.toBe(DEFAULT_CONTEXT_TOKENS);
+    expect(firstStatusResult).toBe(1_048_576);
+
+    // Status path with explicit config override still respects the configured window
+    const cfg = createContextOverrideConfig("anthropic", "claude-opus-4.7-20260219", 200_000);
+    const configuredResult = resolveContextTokensForModel({
+      cfg: cfg as never,
+      provider: "anthropic",
+      model: "claude-opus-4.7-20260219",
+    });
+    expect(configuredResult).toBe(200_000);
   });
 });

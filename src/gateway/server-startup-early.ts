@@ -1,3 +1,4 @@
+import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 // Gateway early-startup runtime helpers.
 // Starts discovery, remote skills, task maintenance, and delayed maintenance setup.
 import type { GatewayTailscaleMode } from "../config/types.gateway.js";
@@ -124,7 +125,10 @@ export async function startGatewayEarlyRuntime(params: {
         ]),
       );
     setSkillsRemoteRegistry(params.nodeRegistry);
+    // Prime remote skills cache in background (non-blocking)
     void primeRemoteSkillsCache();
+    // Await context window cache warming so first /status is deterministic
+    await ensureContextWindowCacheLoaded();
     // Task registry maintenance is authoritative in the Gateway process so
     // restart-blocker counts reflect the same cron store as runtime execution.
     taskRegistryMaintenance.configureTaskRegistryMaintenance({
