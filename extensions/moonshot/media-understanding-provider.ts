@@ -67,7 +67,7 @@ export async function describeMoonshotVideo(
     await assertOkOrThrowHttpError(res, "Moonshot video description failed");
     const payload = await readProviderJsonResponse<OpenAiCompatibleVideoPayload>(
       res,
-      "moonshot.video-description",
+      "Moonshot video description failed",
     );
     const text = coerceOpenAiCompatibleVideoText(payload);
     if (!text) {
