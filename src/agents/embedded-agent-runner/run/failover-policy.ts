@@ -76,12 +76,15 @@ type RunFailoverDecisionParams =
   | AssistantDecisionParams;
 
 function shouldEscalateRetryLimit(reason: FailoverReason | null): boolean {
+  // model_not_found is intentionally allowed to escalate to the configured
+  // fallback chain: a primary model that was previously valid but has been
+  // decommissioned by the provider is exactly the case configured fallbacks
+  // exist for. Pure-typo single-model configs still fail loudly because
+  // retry-limit only escalates when fallbackConfigured is true at the call
+  // site, and the fallback chain itself filters out same-model candidates so
+  // an exhausted/no-distinct-fallback chain still surfaces the error.
   return Boolean(
-    reason &&
-    reason !== "timeout" &&
-    reason !== "model_not_found" &&
-    reason !== "format" &&
-    reason !== "session_expired",
+    reason && reason !== "timeout" && reason !== "format" && reason !== "session_expired",
   );
 }
 

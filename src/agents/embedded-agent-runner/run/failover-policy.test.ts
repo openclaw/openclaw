@@ -32,6 +32,38 @@ describe("resolveRunFailoverDecision", () => {
     });
   });
 
+  it("escalates retry-limit model_not_found to model fallback when fallbacks are configured (#97564)", () => {
+    // A previously-valid primary model that the provider decommissioned mid-life
+    // should engage the configured fallback chain instead of returning a hard
+    // error. The fallback chain itself filters same-model candidates, so this
+    // policy only needs to allow the escalation.
+    expect(
+      resolveRunFailoverDecision({
+        stage: "retry_limit",
+        fallbackConfigured: true,
+        failoverReason: "model_not_found",
+      }),
+    ).toEqual({
+      action: "fallback_model",
+      reason: "model_not_found",
+    });
+  });
+
+  it("surfaces retry-limit model_not_found as a local error when no fallback is configured (#97564)", () => {
+    // Single-model configs (or chains with no remaining distinct candidate)
+    // must still fail loudly so a pure typo surfaces instead of silently
+    // resolving to nothing.
+    expect(
+      resolveRunFailoverDecision({
+        stage: "retry_limit",
+        fallbackConfigured: false,
+        failoverReason: "model_not_found",
+      }),
+    ).toEqual({
+      action: "return_error_payload",
+    });
+  });
+
   it("prefers prompt-side profile rotation before fallback", () => {
     // Prompt construction can fail before any model output exists, so rotate
     // the current provider profile before spending the configured fallback.
