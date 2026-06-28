@@ -2753,9 +2753,9 @@ describe("spawnAcpDirect", () => {
             accountId: "default",
           },
           spawnedBy: "agent:main:subagent:parent",
-          spawnDepth: 2,
-          subagentRole: "leaf",
-          subagentControlScope: "none",
+          spawnDepth: 1,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
         },
       };
       return new Proxy(store, {

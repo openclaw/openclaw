@@ -87,10 +87,13 @@ function isSameAgentSessionStore(leftSessionKey: string, rightSessionKey: string
   return Boolean(leftAgentId) && leftAgentId === rightAgentId;
 }
 
-function readSessionStore(storePath: string): Record<string, SessionCapabilityEntry> {
+function readSessionStore(
+  storePath: string,
+  agentId: string,
+): Record<string, SessionCapabilityEntry> {
   try {
     return Object.fromEntries(
-      listSessionEntries({ storePath, clone: false }).map(({ sessionKey, entry }) => [
+      listSessionEntries({ agentId, storePath, clone: false }).map(({ sessionKey, entry }) => [
         sessionKey,
         entry,
       ]),
@@ -135,7 +138,7 @@ function resolveSessionCapabilityEntry(params: {
     return undefined;
   }
   const storePath = resolveStorePath(params.cfg.session?.store, { agentId: parsed.agentId });
-  const store = readSessionStore(storePath);
+  const store = readSessionStore(storePath, parsed.agentId);
   return store[params.sessionKey] ?? findEntryBySessionId(store, params.sessionKey);
 }
 
@@ -162,7 +165,7 @@ export function resolveSubagentCapabilityStore(
     return undefined;
   }
   const storePath = resolveStorePath(opts.cfg.session?.store, { agentId: parsed.agentId });
-  return readSessionStore(storePath);
+  return readSessionStore(storePath, parsed.agentId);
 }
 
 /** Resolve depth-derived role/scope booleans for a subagent position. */
