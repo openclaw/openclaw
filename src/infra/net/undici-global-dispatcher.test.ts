@@ -943,7 +943,6 @@ describe("forceResetGlobalDispatcher", () => {
       destroy?: (cb?: () => void) => void;
     };
     let proxyClosed = false;
-    let bypassClosed = false;
     // The proxy dispatcher's close is called with a callback;
     // verify the bypass agent close is also fired (fire-and-forget).
     const proxyCloseSpy = vi.spyOn(dispatcher, "close").mockImplementation((cb) => {
