@@ -67,6 +67,7 @@ describe("tool-catalog", () => {
       "session_status",
       "message",
       "bundle-mcp",
+      "group:plugins",
     ]);
     expect(requirePolicyAllow("minimal")).toEqual(["session_status"]);
   });

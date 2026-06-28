@@ -10,12 +10,15 @@ function ok(value: unknown) {
   return { content: [{ type: "text" as const, text: JSON.stringify(value) }] };
 }
 
-export function createTelegramLocationTools(cfg: OpenClawConfig): ChannelAgentTool[] {
+function requireToken(cfg: OpenClawConfig): string {
   const { token } = resolveTelegramToken(cfg, {});
   if (!token) {
-    return [];
+    throw new Error("Telegram bot token is not configured. Run openclaw onboard to set it up.");
   }
+  return token;
+}
 
+export function createTelegramLocationTools(cfg: OpenClawConfig): ChannelAgentTool[] {
   const sendLocation: ChannelAgentTool = {
     name: "telegram_send_location",
     label: "Send Location (Telegram)",
@@ -42,6 +45,7 @@ export function createTelegramLocationTools(cfg: OpenClawConfig): ChannelAgentTo
       ),
     }),
     execute: async (_toolCallId, args) => {
+      const token = requireToken(cfg);
       const params = args as Record<string, unknown>;
       const to = readStringParam(params, "to", { required: true });
       const latitude = readNumberParam(params, "latitude", { required: true });
@@ -71,6 +75,7 @@ export function createTelegramLocationTools(cfg: OpenClawConfig): ChannelAgentTo
       googlePlaceId: Type.Optional(Type.String({ description: "Google Places ID (optional)." })),
     }),
     execute: async (_toolCallId, args) => {
+      const token = requireToken(cfg);
       const params = args as Record<string, unknown>;
       const to = readStringParam(params, "to", { required: true });
       const latitude = readNumberParam(params, "latitude", { required: true });
@@ -107,6 +112,7 @@ export function createTelegramLocationTools(cfg: OpenClawConfig): ChannelAgentTo
       }),
     }),
     execute: async (_toolCallId, args) => {
+      const token = requireToken(cfg);
       const params = args as Record<string, unknown>;
       const to = readStringParam(params, "to", { required: true });
       const mediaUrl = readStringParam(params, "mediaUrl", { required: true });
