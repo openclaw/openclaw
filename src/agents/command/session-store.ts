@@ -114,6 +114,7 @@ export async function updateSessionStoreAfterAgentRun(params: {
 
   const preserveUserFacingRunState = params.preserveUserFacingSessionModelState === true;
   const preserveRuntimeModel = params.preserveRuntimeModel === true || preserveUserFacingRunState;
+  const hadPreExistingEntry = sessionStore[sessionKey] !== undefined;
   const entry = sessionStore[sessionKey] ?? {
     sessionId,
     updatedAt: now,
@@ -292,13 +293,13 @@ export async function updateSessionStoreAfterAgentRun(params: {
     },
     (_currentEntry, context) => {
       if (
+        (!context.existingEntry && hadPreExistingEntry) ||
         (!preserveUserFacingRunState &&
           context.existingEntry &&
-          context.existingEntry.sessionId !== entry.sessionId) ||
-        (preserveUserFacingRunState && !context.existingEntry && sessionStore[sessionKey])
+          context.existingEntry.sessionId !== entry.sessionId)
       ) {
-        // A normal run may rotate its session id, so compare to the pre-run entry.
-        // User-facing state preservation only touches an existing visible row.
+        // Normal runs may rotate session ids, but stale finalizers must not
+        // recreate rows that were reset/deleted while the run was active.
         return null;
       }
       return metadataPatch;

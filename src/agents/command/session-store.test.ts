@@ -1872,6 +1872,51 @@ describe("updateSessionStoreAfterAgentRun", () => {
     });
   });
 
+  it("does not recreate a missing persisted row after a normal run with a preloaded entry", async () => {
+    await withTempSessionStore(async ({ storePath }) => {
+      const cfg = {} as OpenClawConfig;
+      const sessionKey = "agent:main:explicit:deleted-normal-row";
+      const sessionId = "deleted-normal-row-session";
+      const sessionStore: Record<string, SessionEntry> = {
+        [sessionKey]: {
+          sessionId,
+          updatedAt: 1,
+          modelProvider: "openai",
+          model: "gpt-5.5",
+        },
+      };
+
+      await updateSessionStoreAfterAgentRun({
+        cfg,
+        sessionId,
+        sessionKey,
+        storePath,
+        sessionStore,
+        defaultProvider: "openai",
+        defaultModel: "gpt-5.5",
+        result: {
+          meta: {
+            durationMs: 1,
+            agentMeta: {
+              sessionId,
+              provider: "openai",
+              model: "gpt-5.5",
+              usage: { input: 100, output: 20 },
+            },
+          },
+        },
+      });
+
+      expect(sessionStore[sessionKey]).toEqual({
+        sessionId,
+        updatedAt: 1,
+        modelProvider: "openai",
+        model: "gpt-5.5",
+      });
+      expect(loadPersistedSessionEntry(storePath, sessionKey)).toBeUndefined();
+    });
+  });
+
   it("does not overwrite a replacement persisted row after a normal run", async () => {
     await withTempSessionStore(async ({ storePath }) => {
       const cfg = {} as OpenClawConfig;
