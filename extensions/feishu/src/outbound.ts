@@ -26,7 +26,7 @@ import { resolveFeishuAccount } from "./accounts.js";
 import { createFeishuClient } from "./client.js";
 import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
-import { deliverCommentThreadText } from "./drive.js";
+import { deliverCommentThreadText, type FeishuCommentAutoReplyContext } from "./drive.js";
 import { sendMediaFeishu, shouldSuppressFeishuTextForVoiceMedia } from "./media.js";
 import { chunkTextForOutbound, type ChannelOutboundAdapter } from "./outbound-runtime-api.js";
 import { buildFeishuPresentationCardElements } from "./presentation-card.js";
@@ -396,12 +396,16 @@ async function sendCommentThreadReply(params: {
   const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
   const client = createFeishuClient(account);
   const replyId = params.replyId?.trim();
+  const autoReplyContext: FeishuCommentAutoReplyContext | undefined = replyId
+    ? { refer_reply_id: replyId, ai_reply_source_type: 2 }
+    : undefined;
   try {
     const result = await deliverCommentThreadText(client, {
       file_token: target.fileToken,
       file_type: target.fileType,
       comment_id: target.commentId,
       content: params.text,
+      ...(autoReplyContext ? { auto_reply_context: autoReplyContext } : {}),
     });
     return {
       messageId:

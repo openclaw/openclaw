@@ -649,6 +649,7 @@ describe("registerFeishuDriveTools", () => {
           },
         ],
       },
+      extra: '{"refer_reply_id":"reply_ambient_1","ai_reply_source_type":2}',
     });
     const cleanupRequest = mockCallArg<{
       client?: unknown;
@@ -725,6 +726,7 @@ describe("registerFeishuDriveTools", () => {
     expect(request.data).toEqual({
       file_type: "docx",
       reply_elements: [{ type: "text", text: "ambient top-level comment" }],
+      extra: '{"refer_reply_id":"reply_ambient_1","ai_reply_source_type":2}',
     });
     const cleanupRequest = mockCallArg<{
       client?: unknown;
@@ -924,6 +926,71 @@ describe("registerFeishuDriveTools", () => {
       },
     });
     expect(firstLogMessage(infoSpy)).toContain("whole-comment compatibility path");
+    const details = result.details as {
+      comment_id?: string;
+      delivery_mode?: string;
+      success?: boolean;
+    };
+    expect(details.success).toBe(true);
+    expect(details.comment_id).toBe("c2");
+    expect(details.delivery_mode).toBe("add_comment");
+  });
+
+  it("adds auto-reply extra when a whole-document event reply uses add_comment compatibility", async () => {
+    const registerTool = vi.fn();
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    registerFeishuDriveTools(
+      createDriveToolApi({
+        config: {
+          channels: {
+            feishu: {
+              enabled: true,
+              appId: "app_id",
+              appSecret: "app_secret", // pragma: allowlist secret
+              tools: { drive: true },
+            },
+          },
+        },
+        registerTool,
+      }),
+    );
+
+    const toolFactory = firstToolFactory(registerTool);
+    const tool = toolFactory({
+      agentAccountId: undefined,
+      deliveryContext: {
+        channel: "feishu",
+        to: "comment:docx:doc_1:c1",
+        threadId: "1778586476090009089",
+      },
+    });
+
+    requestMock
+      .mockResolvedValueOnce({
+        code: 0,
+        data: {
+          items: [{ comment_id: "c1", is_whole: true }],
+        },
+      })
+      .mockResolvedValueOnce({
+        code: 0,
+        data: { comment_id: "c2" },
+      });
+
+    const result = await tool.execute("call-whole-event", {
+      action: "reply_comment",
+      content: "whole comment follow-up",
+    });
+
+    expectRequestCall(requestMock, 1, {
+      method: "POST",
+      url: "/open-apis/drive/v1/files/doc_1/new_comments",
+      data: {
+        file_type: "docx",
+        reply_elements: [{ type: "text", text: "whole comment follow-up" }],
+        extra: '{"refer_reply_id":1778586476090009089,"ai_reply_source_type":2}',
+      },
+    });
     const details = result.details as {
       comment_id?: string;
       delivery_mode?: string;

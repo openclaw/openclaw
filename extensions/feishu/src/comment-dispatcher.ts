@@ -10,7 +10,7 @@ import {
 } from "./comment-dispatcher-runtime-api.js";
 import { createCommentTypingReactionLifecycle } from "./comment-reaction.js";
 import type { CommentFileType } from "./comment-target.js";
-import { deliverCommentThreadText } from "./drive.js";
+import { deliverCommentThreadText, type FeishuCommentAutoReplyContext } from "./drive.js";
 import { getFeishuRuntime } from "./runtime.js";
 
 type CreateFeishuCommentReplyDispatcherParams = {
@@ -54,6 +54,9 @@ export function createFeishuCommentReplyDispatcher(
     accountId: params.accountId,
     runtime: params.runtime,
   });
+  const autoReplyContext: FeishuCommentAutoReplyContext | undefined = params.replyId?.trim()
+    ? { refer_reply_id: params.replyId.trim(), ai_reply_source_type: 2 }
+    : undefined;
 
   const { dispatcher, replyOptions, markDispatchIdle, markRunComplete } =
     core.channel.reply.createReplyDispatcherWithTyping({
@@ -84,6 +87,7 @@ export function createFeishuCommentReplyDispatcher(
             comment_id: params.commentId,
             content: chunk,
             is_whole_comment: params.isWholeComment,
+            ...(autoReplyContext ? { auto_reply_context: autoReplyContext } : {}),
           });
         }
       },

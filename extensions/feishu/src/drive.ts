@@ -117,6 +117,43 @@ type FeishuDriveToolContext = {
 };
 
 const FEISHU_DRIVE_REQUEST_TIMEOUT_MS = 30_000;
+const FEISHU_AI_REPLY_SOURCE_TYPE = 2;
+
+export type FeishuCommentAutoReplyContext = {
+  refer_reply_id: string;
+  ai_reply_source_type: 2;
+};
+
+function createFeishuCommentAutoReplyContext(
+  replyId: string | number | undefined,
+): FeishuCommentAutoReplyContext | undefined {
+  const normalized = typeof replyId === "number" ? String(replyId) : replyId?.trim();
+  if (!normalized) {
+    return undefined;
+  }
+  return {
+    refer_reply_id: normalized,
+    ai_reply_source_type: FEISHU_AI_REPLY_SOURCE_TYPE,
+  };
+}
+
+function buildFeishuCommentAutoReplyExtra(
+  context: FeishuCommentAutoReplyContext | undefined,
+): string | undefined {
+  if (!context) {
+    return undefined;
+  }
+  const referReplyId = context.refer_reply_id.trim();
+  if (!referReplyId) {
+    return undefined;
+  }
+  const referReplyIdLiteral = /^(?:0|[1-9]\d*)$/u.test(referReplyId)
+    ? referReplyId
+    : JSON.stringify(referReplyId);
+  // `extra` is itself a JSON string. Preserve int64 reply ids as JSON digits
+  // without converting them to JS numbers.
+  return `{"refer_reply_id":${referReplyIdLiteral},"ai_reply_source_type":${context.ai_reply_source_type}}`;
+}
 
 function getDriveInternalClient(client: Lark.Client): FeishuDriveInternalClient {
   return client as FeishuDriveInternalClient;
@@ -210,6 +247,37 @@ function applyAmbientCommentDefaults<
     file_type: params.file_type ?? ambient.fileType,
     comment_id: params.comment_id?.trim() || ambient.commentId,
   };
+}
+
+function resolveAmbientCommentAutoReplyContext(
+  params: {
+    file_token?: string;
+    file_type?: CommentFileType;
+    comment_id?: string;
+  },
+  context: FeishuDriveToolContext | undefined,
+): FeishuCommentAutoReplyContext | undefined {
+  const ambient = resolveAmbientCommentTarget(context);
+  if (!ambient) {
+    return undefined;
+  }
+  const referReplyId = createFeishuCommentAutoReplyContext(context?.deliveryContext?.threadId);
+  if (!referReplyId) {
+    return undefined;
+  }
+  const fileToken = params.file_token?.trim();
+  if (fileToken && fileToken !== ambient.fileToken) {
+    return undefined;
+  }
+  const fileType = params.file_type;
+  if (fileType && fileType !== ambient.fileType) {
+    return undefined;
+  }
+  const commentId = params.comment_id?.trim();
+  if (commentId && commentId !== ambient.commentId) {
+    return undefined;
+  }
+  return referReplyId;
 }
 
 function applyAddCommentAmbientDefaults<
@@ -529,11 +597,13 @@ async function addComment(
     file_type: "doc" | "docx";
     content: string;
     block_id?: string;
+    auto_reply_context?: FeishuCommentAutoReplyContext;
   },
 ): Promise<{ success: true } & Record<string, unknown>> {
   if (params.block_id?.trim() && params.file_type !== "docx") {
     throw new Error("block_id is only supported for docx comments");
   }
+  const extra = buildFeishuCommentAutoReplyExtra(params.auto_reply_context);
   const response = assertDriveApiSuccess(
     await requestDriveApi<FeishuDriveApiResponse<Record<string, unknown>>>({
       client,
@@ -543,6 +613,7 @@ async function addComment(
         file_type: params.file_type,
         reply_elements: buildReplyElements(params.content),
         ...(params.block_id?.trim() ? { anchor: { block_id: params.block_id.trim() } } : {}),
+        ...(extra ? { extra } : {}),
       },
     }),
   );
@@ -587,12 +658,14 @@ export async function replyComment(
     file_type: CommentFileType;
     comment_id: string;
     content: string;
+    auto_reply_context?: FeishuCommentAutoReplyContext;
   },
 ): Promise<{ success: true; reply_id?: string } & Record<string, unknown>> {
   const url = `/open-apis/drive/v1/files/${encodeURIComponent(params.file_token)}/comments/${encodeURIComponent(
     params.comment_id,
   )}/replies`;
   const query = { file_type: params.file_type };
+  const extra = buildFeishuCommentAutoReplyExtra(params.auto_reply_context);
   try {
     const response = await requestDriveApi<FeishuDriveApiResponse<Record<string, unknown>>>({
       client,
@@ -610,6 +683,7 @@ export async function replyComment(
             },
           ],
         },
+        ...(extra ? { extra } : {}),
       },
     });
     if (response.code === 0) {
@@ -658,6 +732,7 @@ export async function deliverCommentThreadText(
     comment_id: string;
     content: string;
     is_whole_comment?: boolean;
+    auto_reply_context?: FeishuCommentAutoReplyContext;
   },
 ): Promise<
   | ({ success: true; reply_id?: string } & Record<string, unknown> & {
@@ -698,6 +773,7 @@ export async function deliverCommentThreadText(
         file_token: params.file_token,
         file_type: wholeCommentFileType,
         content: params.content,
+        auto_reply_context: params.auto_reply_context,
       })),
     };
   }
@@ -723,6 +799,7 @@ export async function deliverCommentThreadText(
           file_token: params.file_token,
           file_type: fallbackFileType,
           content: params.content,
+          auto_reply_context: params.auto_reply_context,
         })),
       };
     }
@@ -794,8 +871,14 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
               }
               case "add_comment": {
                 const resolved = applyAddCommentDefaults(applyAddCommentAmbientDefaults(p, ctx));
+                const autoReplyContext = resolveAmbientCommentAutoReplyContext(resolved, ctx);
                 try {
-                  return jsonToolResult(await addComment(client, resolved));
+                  return jsonToolResult(
+                    await addComment(client, {
+                      ...resolved,
+                      ...(autoReplyContext ? { auto_reply_context: autoReplyContext } : {}),
+                    }),
+                  );
                 } finally {
                   void cleanupAmbientCommentTypingReaction({
                     client: getDriveInternalClient(client),
@@ -808,8 +891,14 @@ export function registerFeishuDriveTools(api: OpenClawPluginApi) {
                   applyAmbientCommentDefaults(p, ctx),
                   "reply_comment",
                 );
+                const autoReplyContext = resolveAmbientCommentAutoReplyContext(resolved, ctx);
                 try {
-                  return jsonToolResult(await deliverCommentThreadText(client, resolved));
+                  return jsonToolResult(
+                    await deliverCommentThreadText(client, {
+                      ...resolved,
+                      ...(autoReplyContext ? { auto_reply_context: autoReplyContext } : {}),
+                    }),
+                  );
                 } finally {
                   void cleanupAmbientCommentTypingReaction({
                     client: getDriveInternalClient(client),
