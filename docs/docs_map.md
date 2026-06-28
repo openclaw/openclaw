@@ -3437,8 +3437,8 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
 - Route: /gateway/gateway-lock
 - Headings:
   - H2: Why
-  - H2: Two layers
-  - H3: File lock
+  - H2: Three layers
+  - H3: State and config locks
   - H3: Socket bind
   - H2: Operational notes
   - H2: Related
@@ -7250,6 +7250,7 @@ Do not edit it by hand; run `pnpm docs:map:gen`.
   - H2: Existing outbound adapters
   - H2: Durable sends
   - H2: Deferred delivery admission
+  - H2: Post-Send Validation
   - H2: Compatibility dispatch
 
 ## plugins/sdk-channel-plugins.md

@@ -166,6 +166,21 @@ other asynchronous I/O. Contract tests should exercise both phases and both
 result variants through `ChannelMessageDurableFinalAdapter` from
 `openclaw/plugin-sdk/channel-outbound`.
 
+## Post-Send Validation
+
+Raw outbound adapters may define `validateDeliveryResults({ cfg, target, payload, results })`
+when the channel needs provider-confirmed proof that core cannot infer from the
+generic delivery result shape. Core calls this hook after a payload produces at
+least one platform send result and before it records the payload as sent,
+mirrors it, pins it, or runs `afterDeliverPayload`.
+
+Throw from this hook only for intentional fail-closed checks, such as provider
+proof showing that a message landed in the wrong native thread. Because the
+hook runs after the platform send, a thrown error can turn an already-sent
+payload into a `partial_failed` or failed delivery outcome. Do not use it for
+best-effort telemetry, cleanup, or advisory diagnostics; put those in
+`afterDeliverPayload` instead.
+
 ## Compatibility dispatch
 
 Assemble inbound reply dispatch through `dispatchChannelInboundReply(...)`

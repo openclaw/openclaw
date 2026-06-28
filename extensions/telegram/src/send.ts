@@ -166,6 +166,21 @@ type TelegramSendResult = {
   messageId: string;
   chatId: string;
   receipt?: MessageReceipt;
+  meta?: {
+    telegram?: {
+      chatId?: string;
+      messageThreadId?: number;
+      requestedMessageThreadId?: number;
+      messages?: TelegramDeliveryProof[];
+    };
+  };
+};
+
+type TelegramDeliveryProof = {
+  messageId: string;
+  chatId?: string;
+  messageThreadId?: number;
+  requestedMessageThreadId?: number;
 };
 
 type TelegramLocationSendOpts = Pick<
@@ -227,6 +242,65 @@ function resolveTelegramMessageIdOrThrow(
     return Math.trunc(result.message_id);
   }
   throw new Error(`Telegram ${context} returned no message_id`);
+}
+
+function resolveTelegramMessageThreadId(result: TelegramMessageLike | null | undefined) {
+  return typeof result?.message_thread_id === "number" && Number.isFinite(result.message_thread_id)
+    ? Math.trunc(result.message_thread_id)
+    : undefined;
+}
+
+function resolveTelegramProviderChatId(result: TelegramMessageLike | null | undefined) {
+  return result?.chat?.id != null ? String(result.chat.id) : undefined;
+}
+
+function buildTelegramDeliveryProof(params: {
+  messageId: string | number;
+  response: TelegramMessageLike | null | undefined;
+  requestedMessageThreadId?: number;
+}): TelegramDeliveryProof {
+  const chatId = resolveTelegramProviderChatId(params.response);
+  const messageThreadId = resolveTelegramMessageThreadId(params.response);
+  return {
+    messageId: String(params.messageId),
+    ...(chatId !== undefined ? { chatId } : {}),
+    ...(messageThreadId !== undefined ? { messageThreadId } : {}),
+    ...(params.requestedMessageThreadId !== undefined
+      ? { requestedMessageThreadId: params.requestedMessageThreadId }
+      : {}),
+  };
+}
+
+function readTelegramDeliveryProofMessages(
+  meta: TelegramSendResult["meta"],
+): TelegramDeliveryProof[] {
+  return meta?.telegram?.messages ?? [];
+}
+
+function buildTelegramDeliveryMeta(
+  messages: readonly TelegramDeliveryProof[],
+): TelegramSendResult["meta"] | undefined {
+  const normalizedMessages = messages.filter(
+    (message) =>
+      message.messageId &&
+      (message.messageThreadId !== undefined || message.requestedMessageThreadId !== undefined),
+  );
+  if (normalizedMessages.length === 0) {
+    return undefined;
+  }
+  const lastMessage = normalizedMessages.at(-1);
+  return {
+    telegram: {
+      messages: [...normalizedMessages],
+      ...(lastMessage?.chatId !== undefined ? { chatId: lastMessage.chatId } : {}),
+      ...(lastMessage?.messageThreadId !== undefined
+        ? { messageThreadId: lastMessage.messageThreadId }
+        : {}),
+      ...(lastMessage?.requestedMessageThreadId !== undefined
+        ? { requestedMessageThreadId: lastMessage.requestedMessageThreadId }
+        : {}),
+    },
+  };
 }
 
 // Test-only handle: the plain-text splitter is internal, but its surrogate-safe
@@ -839,10 +913,12 @@ async function sendMessageTelegramWithContext(
     verbose: opts.verbose,
     gatewayClientScopes: opts.gatewayClientScopes,
   });
-  const reportDelivery = async (messageId: string | number, deliveredChatId: string | number) => {
+  const reportDelivery = async (proof: TelegramDeliveryProof, deliveredChatId: string | number) => {
+    const meta = buildTelegramDeliveryMeta([proof]);
     await opts.onDeliveryResult?.({
-      messageId: String(messageId),
-      chatId: String(deliveredChatId),
+      messageId: proof.messageId,
+      chatId: proof.chatId ?? String(deliveredChatId),
+      ...(meta ? { meta } : {}),
     });
   };
   const recordDeliveredPromptContext = async (
@@ -1028,6 +1104,7 @@ async function sendMessageTelegramWithContext(
     let lastAcceptedParams: TelegramThreadScopedParams | undefined;
     let acceptedReplyToMessageId: number | undefined;
     const messageIds: string[] = [];
+    const telegramMessages: TelegramDeliveryProof[] = [];
     let sentChunkCount = 0;
     for (let index = 0; index < chunks.length; index += 1) {
       const chunk = chunks[index];
@@ -1044,8 +1121,13 @@ async function sendMessageTelegramWithContext(
         ),
       );
       const messageId = resolveTelegramMessageIdOrThrow(res, context);
+      const deliveryProof = buildTelegramDeliveryProof({
+        messageId,
+        response: res,
+        requestedMessageThreadId: acceptedParams?.message_thread_id,
+      });
       recordSentMessage(chatId, messageId, cfg);
-      await reportDelivery(messageId, res?.chat?.id ?? chatId);
+      await reportDelivery(deliveryProof, res?.chat?.id ?? chatId);
       await recordDeliveredPromptContext(
         {
           message: res,
@@ -1062,6 +1144,7 @@ async function sendMessageTelegramWithContext(
       lastAcceptedParams = acceptedParams;
       acceptedReplyToMessageId ??= resolveAcceptedReplyToMessageId(acceptedParams);
       messageIds.push(lastMessageId);
+      telegramMessages.push(deliveryProof);
       sentChunkCount += 1;
     }
     if (lastMessageId) {
@@ -1083,10 +1166,12 @@ async function sendMessageTelegramWithContext(
       messageThreadId: lastAcceptedParams?.message_thread_id,
       replyToMessageId: acceptedReplyToMessageId,
     });
+    const meta = buildTelegramDeliveryMeta(telegramMessages);
     return {
       messageId: lastMessageId,
       chatId: lastChatId,
       ...(receipt ? { receipt } : {}),
+      ...(meta ? { meta } : {}),
     };
   };
 
@@ -1163,6 +1248,7 @@ async function sendMessageTelegramWithContext(
       | undefined;
     let acceptedReplyToMessageId: number | undefined;
     const messageIds: string[] = [];
+    const telegramMessages: TelegramDeliveryProof[] = [];
     let sentChunkCount = 0;
     for (let index = 0; index < chunks.length; index += 1) {
       const chunk = chunks[index];
@@ -1235,8 +1321,13 @@ async function sendMessageTelegramWithContext(
             fallbackParams,
           );
           const fallbackMessageId = resolveTelegramMessageIdOrThrow(plainResult.result, context);
+          const fallbackProof = buildTelegramDeliveryProof({
+            messageId: fallbackMessageId,
+            response: plainResult.result,
+            requestedMessageThreadId: plainResult.acceptedParams?.message_thread_id,
+          });
           recordSentMessage(chatId, fallbackMessageId, cfg);
-          await reportDelivery(fallbackMessageId, plainResult.result?.chat?.id ?? chatId);
+          await reportDelivery(fallbackProof, plainResult.result?.chat?.id ?? chatId);
           await recordDeliveredPromptContext(
             {
               message: plainResult.result,
@@ -1253,13 +1344,19 @@ async function sendMessageTelegramWithContext(
           lastAcceptedParams = plainResult.acceptedParams;
           acceptedReplyToMessageId ??= resolveAcceptedReplyToMessageId(plainResult.acceptedParams);
           messageIds.push(lastMessageId);
+          telegramMessages.push(fallbackProof);
           sentChunkCount += 1;
         }
         continue;
       }
       const messageId = resolveTelegramMessageIdOrThrow(result, context);
+      const deliveryProof = buildTelegramDeliveryProof({
+        messageId,
+        response: result,
+        requestedMessageThreadId: recordedParams?.message_thread_id,
+      });
       recordSentMessage(chatId, messageId, cfg);
-      await reportDelivery(messageId, result?.chat?.id ?? chatId);
+      await reportDelivery(deliveryProof, result?.chat?.id ?? chatId);
       await recordDeliveredPromptContext(
         {
           message: result,
@@ -1276,6 +1373,7 @@ async function sendMessageTelegramWithContext(
       lastAcceptedParams = recordedParams;
       acceptedReplyToMessageId ??= resolveAcceptedReplyToMessageId(recordedParams);
       messageIds.push(lastMessageId);
+      telegramMessages.push(deliveryProof);
       sentChunkCount += 1;
     }
     if (lastMessageId) {
@@ -1297,10 +1395,12 @@ async function sendMessageTelegramWithContext(
       messageThreadId: lastAcceptedParams?.message_thread_id,
       replyToMessageId: acceptedReplyToMessageId,
     });
+    const meta = buildTelegramDeliveryMeta(telegramMessages);
     return {
       messageId: lastMessageId,
       chatId: lastChatId,
       ...(receipt ? { receipt } : {}),
+      ...(meta ? { meta } : {}),
     };
   };
 
@@ -1533,8 +1633,13 @@ async function sendMessageTelegramWithContext(
     const acceptedMediaParams = toAcceptedThreadScopedParams(mediaDelivery.acceptedParams);
     const mediaMessageId = resolveTelegramMessageIdOrThrow(result, "media send");
     const resolvedChatId = String(result?.chat?.id ?? chatId);
+    const mediaProof = buildTelegramDeliveryProof({
+      messageId: mediaMessageId,
+      response: result,
+      requestedMessageThreadId: acceptedMediaParams?.message_thread_id,
+    });
     recordSentMessage(chatId, mediaMessageId, cfg);
-    await reportDelivery(mediaMessageId, resolvedChatId);
+    await reportDelivery(mediaProof, resolvedChatId);
     await recordDeliveredPromptContext(
       {
         message: result,
@@ -1571,13 +1676,19 @@ async function sendMessageTelegramWithContext(
       const textResult = await sendChunkedText(followUpText, "text follow-up send", {
         replyToAlreadyUsed: singleUseReplyTo && mediaUsedReplyTo,
       });
-      return {
-        ...textResult,
-        chatId: resolvedChatId,
-      };
+      const meta = buildTelegramDeliveryMeta([
+        mediaProof,
+        ...readTelegramDeliveryProofMessages(textResult.meta),
+      ]);
+      return { ...textResult, chatId: resolvedChatId, ...(meta ? { meta } : {}) };
     }
 
-    return { messageId: String(mediaMessageId), chatId: resolvedChatId };
+    const mediaMeta = buildTelegramDeliveryMeta([mediaProof]);
+    return {
+      messageId: String(mediaMessageId),
+      chatId: resolvedChatId,
+      ...(mediaMeta ? { meta: mediaMeta } : {}),
+    };
   }
 
   if (!text || !text.trim()) {
@@ -2484,6 +2595,13 @@ async function sendStickerTelegramWithContext(
 
   const messageId = resolveTelegramMessageIdOrThrow(result, "sticker send");
   const resolvedChatId = String(result?.chat?.id ?? chatId);
+  const meta = buildTelegramDeliveryMeta([
+    buildTelegramDeliveryProof({
+      messageId,
+      response: result,
+      requestedMessageThreadId: stickerParams?.message_thread_id,
+    }),
+  ]);
   recordSentMessage(chatId, messageId, opts.cfg);
   recordChannelActivity({
     channel: "telegram",
@@ -2491,7 +2609,7 @@ async function sendStickerTelegramWithContext(
     direction: "outbound",
   });
 
-  return { messageId: String(messageId), chatId: resolvedChatId };
+  return { messageId: String(messageId), chatId: resolvedChatId, ...(meta ? { meta } : {}) };
 }
 
 type TelegramPollOpts = {
@@ -2522,7 +2640,7 @@ export async function sendPollTelegram(
   to: string,
   poll: PollInput,
   opts: TelegramPollOpts,
-): Promise<{ messageId: string; chatId: string; pollId?: string }> {
+): Promise<TelegramSendResult & { pollId?: string }> {
   const context = resolveTelegramApiContext(opts);
   return withTelegramApiContextLease(context, sendPollTelegramWithContext(to, poll, opts, context));
 }
@@ -2532,7 +2650,7 @@ async function sendPollTelegramWithContext(
   poll: PollInput,
   opts: TelegramPollOpts,
   context: TelegramApiContext,
-): Promise<{ messageId: string; chatId: string; pollId?: string }> {
+): Promise<TelegramSendResult & { pollId?: string }> {
   const { cfg, account, api } = context;
   const target = parseTelegramTarget(to);
   const chatId = await resolveAndPersistChatId({
@@ -2599,6 +2717,13 @@ async function sendPollTelegramWithContext(
   const messageId = resolveTelegramMessageIdOrThrow(result, "poll send");
   const resolvedChatId = String(result?.chat?.id ?? chatId);
   const pollId = result?.poll?.id;
+  const meta = buildTelegramDeliveryMeta([
+    buildTelegramDeliveryProof({
+      messageId,
+      response: result,
+      requestedMessageThreadId: pollParams.message_thread_id,
+    }),
+  ]);
   recordSentMessage(chatId, messageId, opts.cfg);
 
   recordChannelActivity({
@@ -2607,7 +2732,12 @@ async function sendPollTelegramWithContext(
     direction: "outbound",
   });
 
-  return { messageId: String(messageId), chatId: resolvedChatId, pollId };
+  return {
+    messageId: String(messageId),
+    chatId: resolvedChatId,
+    ...(pollId ? { pollId } : {}),
+    ...(meta ? { meta } : {}),
+  };
 }
 
 // ---------------------------------------------------------------------------
