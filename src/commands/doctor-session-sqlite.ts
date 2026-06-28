@@ -212,6 +212,7 @@ async function inspectOrMigrateTarget(params: {
     validateLegacySessionRecord(params.target, record, report);
   }
   if (params.mode === "import" && report.issues.length === 0) {
+    archiveImportedTranscripts(params.target, records, report);
     archiveUnreferencedJsonlFiles(params.target, report, [...referencedTranscriptFiles]);
   }
   report.unreferencedJsonlFiles = listUnreferencedJsonlFiles(params.target.storePath, [
@@ -343,9 +344,6 @@ async function importLegacySessionRecord(
   });
   report.importedEntries += 1;
   report.importedTranscriptEvents += imported.transcriptEvents;
-  if (record.transcriptPath && result.status === "ok") {
-    archiveImportedTranscript(target, record, report);
-  }
 }
 
 function normalizeImportedSqliteSessionEntry(
@@ -394,6 +392,21 @@ function archiveImportedTranscript(
       message: `${record.transcriptPath}: ${String(err)}`,
       sessionKey: record.sessionKey,
     });
+  }
+}
+
+function archiveImportedTranscripts(
+  target: SessionStoreTarget,
+  records: readonly LegacySessionRecord[],
+  report: DoctorSessionSqliteTargetReport,
+): void {
+  const archivedTranscriptPaths = new Set<string>();
+  for (const record of records) {
+    if (!record.transcriptPath || archivedTranscriptPaths.has(record.transcriptPath)) {
+      continue;
+    }
+    archiveImportedTranscript(target, record, report);
+    archivedTranscriptPaths.add(record.transcriptPath);
   }
 }
 

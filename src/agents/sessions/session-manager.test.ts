@@ -144,6 +144,43 @@ describe("SessionManager.open", () => {
     );
   });
 
+  it("persists user turns when a SQLite marker has no external recorder", async () => {
+    const dir = await makeTempDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "sqlite-direct-user-session";
+    const sessionKey = "agent:main:voice:direct-user";
+    const marker = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    await upsertSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionFile: marker,
+        sessionId,
+        updatedAt: 10,
+      },
+    );
+
+    const sessionManager = SessionManager.open(marker, dir, dir);
+    const userId = sessionManager.appendMessage({
+      role: "user",
+      content: "voice prompt",
+      timestamp: Date.now(),
+    });
+
+    await expect(
+      loadTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }),
+    ).resolves.toContainEqual(
+      expect.objectContaining({
+        id: userId,
+        message: expect.objectContaining({ content: "voice prompt", role: "user" }),
+        type: "message",
+      }),
+    );
+  });
+
   it("recovers a corrupted first-line header without truncating later messages", async () => {
     // A damaged header should be repairable without treating valid later
     // message entries as disposable transcript state.

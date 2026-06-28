@@ -199,6 +199,45 @@ describe("runDoctorSessionSqlite", () => {
     ).toHaveLength(2);
   });
 
+  it("imports aliases that share one legacy transcript before archiving it", async () => {
+    const store = createLegacyStore();
+    const legacyStore = JSON.parse(fs.readFileSync(store.storePath, "utf-8")) as Record<
+      string,
+      unknown
+    >;
+    legacyStore["agent:main:alias"] = legacyStore["agent:main:main"];
+    fs.writeFileSync(store.storePath, `${JSON.stringify(legacyStore, null, 2)}\n`, { mode: 0o600 });
+
+    const report = await runDoctorSessionSqlite({
+      env: store.env,
+      mode: "import",
+      store: store.storePath,
+    });
+
+    expect(report.totals).toMatchObject({
+      archivedTranscriptFiles: 2,
+      importedEntries: 2,
+      importedTranscriptEvents: 2,
+      issues: 0,
+      sqliteEntries: 2,
+    });
+    expect(fs.existsSync(store.transcriptPath)).toBe(false);
+    expect(
+      loadExactSqliteSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:main",
+        storePath: store.storePath,
+      })?.entry.sessionId,
+    ).toBe("session-1");
+    expect(
+      loadExactSqliteSessionEntry({
+        agentId: "main",
+        sessionKey: "agent:main:alias",
+        storePath: store.storePath,
+      })?.entry.sessionId,
+    ).toBe("session-1");
+  });
+
   it("imports explicit stores into the agent database owned by the path", async () => {
     const store = createLegacyStore({ agentDirName: "codex-proof" });
 
