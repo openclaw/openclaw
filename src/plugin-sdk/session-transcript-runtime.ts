@@ -13,6 +13,7 @@ import {
   type TranscriptUpdatePayload,
 } from "../config/sessions/session-accessor.js";
 import { resolveMirroredTranscriptText } from "../config/sessions/transcript-mirror.js";
+import { selectVisibleTranscriptEvents } from "../config/sessions/transcript-visible-events.js";
 import type {
   LatestAssistantTranscriptText,
   SessionTranscriptAppendResult,
@@ -167,7 +168,11 @@ export async function appendAssistantMirrorMessageByIdentity(
     const target = await resolveSessionTranscriptRuntimeReadTarget(scope);
     const latestEquivalentAssistantId =
       !params.idempotencyKey && isDeliveryMirrorAssistantMessage(message)
-        ? findLatestEquivalentAssistantMessageId(await locked.readEvents(), message, params.config)
+        ? findLatestEquivalentAssistantMessageId(
+            selectVisibleTranscriptEvents(await locked.readEvents()),
+            message,
+            params.config,
+          )
         : undefined;
     if (latestEquivalentAssistantId) {
       return {
