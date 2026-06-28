@@ -9,6 +9,7 @@ import {
   fetchProviderDownloadResponse,
   fetchProviderOperationResponse,
   postJsonRequest,
+  readProviderJsonResponse,
   resolveProviderOperationTimeoutMs,
   resolveProviderHttpRequestConfig,
   waitProviderOperationPollInterval,
@@ -67,12 +68,10 @@ type VideoGenerationSourceInput = {
 };
 
 async function readXaiVideoJson(response: Response): Promise<Record<string, unknown>> {
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
-  }
+  const payload = await readProviderJsonResponse<unknown>(
+    response,
+    "xAI video generation response",
+  );
   if (!isRecord(payload)) {
     throw new Error(XAI_VIDEO_MALFORMED_RESPONSE);
   }
