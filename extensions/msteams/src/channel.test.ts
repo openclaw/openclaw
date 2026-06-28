@@ -382,6 +382,52 @@ describe("msteams config schema", () => {
     expect(res.success).toBe(false);
   });
 
+  it("rejects simultaneous root and canonical default account alias identity definitions", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      appId: "root-app-id",
+      appPassword: "root-secret",
+      tenantId: "tenant-id",
+      accounts: {
+        Default: {
+          appId: "default-app-id",
+          appPassword: "default-secret",
+          webhook: { port: 3978 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+    if (!res.success) {
+      expect(res.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            path: ["accounts", "Default"],
+            message: expect.stringContaining("default Teams identity"),
+          }),
+        ]),
+      );
+    }
+  });
+
+  it("treats canonical default account aliases as default account config", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      accounts: {
+        Default: {
+          appId: "default-app-id",
+          appPassword: "default-secret",
+        },
+        secondary: {
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
+          webhook: { port: 3979 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
   it("rejects duplicate enabled account webhook ports", () => {
     const res = MSTeamsConfigSchema.safeParse({
       tenantId: "tenant-id",

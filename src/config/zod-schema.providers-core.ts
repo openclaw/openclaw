@@ -3,7 +3,7 @@ import { isValidInboundPathRootPattern } from "@openclaw/media-core/inbound-path
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { isSafeScpRemoteHost } from "../infra/scp-host.js";
-import { normalizeAccountId } from "../routing/account-id.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/account-id.js";
 import {
   normalizeCommandDescription,
   normalizeSlashCommandName,
@@ -1811,7 +1811,9 @@ export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
     const rootDefaultIdentityFields = [value.appId, value.appPassword, value.webhook?.port].some(
       (field) => field !== undefined && field !== null && field !== "",
     );
-    const accountsDefault = value.accounts?.default;
+    const defaultAccountKey = accountKeys.get(DEFAULT_ACCOUNT_ID);
+    const accountsDefault = defaultAccountKey ? value.accounts?.[defaultAccountKey] : undefined;
+    const accountsDefaultPath = ["accounts", defaultAccountKey ?? DEFAULT_ACCOUNT_ID];
     const accountsDefaultIdentityFields = [
       accountsDefault?.appId,
       accountsDefault?.appPassword,
@@ -1820,7 +1822,7 @@ export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
     if (rootDefaultIdentityFields && accountsDefaultIdentityFields) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ["accounts", "default"],
+        path: accountsDefaultPath,
         message:
           "channels.msteams can define the default Teams identity either at the root or in accounts.default, not both",
       });
@@ -1845,6 +1847,7 @@ export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
       if (!account) {
         continue;
       }
+      const canonicalAccountId = normalizeAccountId(accountId);
       const path = ["accounts", accountId];
       const effectiveDmPolicy = account.dmPolicy ?? value.dmPolicy;
       const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
@@ -1915,7 +1918,7 @@ export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
       }
 
       const accountEnabled = value.enabled !== false && account.enabled !== false;
-      if (accountId !== "default" && accountEnabled) {
+      if (canonicalAccountId !== DEFAULT_ACCOUNT_ID && accountEnabled) {
         if (!account.appId?.trim()) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
