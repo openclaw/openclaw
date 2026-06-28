@@ -74,38 +74,82 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
     expect(second.removedCount).toBe(0);
   });
 
-  it("prunes stale unsafe-local pages when configured files disappear", async () => {
+  it("prunes stale unsafe-local pages when a file inside a readable directory is deleted", async () => {
     const privateDir = await createPrivateDir("private-prune");
 
-    const secretPath = path.join(privateDir, "secret.md");
-    await fs.writeFile(secretPath, "# private\n", "utf8");
+    const keptPath = path.join(privateDir, "kept.md");
+    const removedPath = path.join(privateDir, "removed.md");
+    await fs.writeFile(keptPath, "# kept\n", "utf8");
+    await fs.writeFile(removedPath, "# removed\n", "utf8");
 
-    const { rootDir: vaultDir, config } = await createVault({
+    const { config } = await createVault({
       rootDir: nextCaseRoot("prune-vault"),
       config: {
         vaultMode: "unsafe-local",
         unsafeLocal: {
           allowPrivateMemoryCoreAccess: true,
-          paths: [secretPath],
+          paths: [privateDir],
         },
       },
     });
 
     const first = await syncMemoryWikiUnsafeLocalSources(config);
-    const firstPagePath = first.pagePaths[0] ?? "";
-    await expect(fs.readFile(path.join(vaultDir, firstPagePath), "utf8")).resolves.toContain(
-      "# private",
-    );
+    expect(first.artifactCount).toBe(2);
+    expect(first.importedCount).toBe(2);
 
-    await fs.rm(secretPath);
+    // The configured directory stays readable, so removing one file in it is a
+    // genuine deletion and the matching page must be pruned.
+    await fs.rm(removedPath);
     const second = await syncMemoryWikiUnsafeLocalSources(config);
 
-    expect(second.artifactCount).toBe(0);
+    expect(second.artifactCount).toBe(1);
     expect(second.removedCount).toBe(1);
-    await expect(fs.stat(path.join(vaultDir, firstPagePath))).rejects.toHaveProperty(
-      "code",
-      "ENOENT",
+  });
+
+  it("keeps imported pages and human notes when a configured directory is transiently unreadable", async () => {
+    const privateDir = await createPrivateDir("private-transient");
+    await fs.writeFile(path.join(privateDir, "ideas.md"), "# ideas\n", "utf8");
+
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("transient-vault"),
+      config: {
+        vaultMode: "unsafe-local",
+        unsafeLocal: {
+          allowPrivateMemoryCoreAccess: true,
+          paths: [privateDir],
+        },
+      },
+    });
+
+    const first = await syncMemoryWikiUnsafeLocalSources(config);
+    const pagePath = first.pagePaths[0] ?? "";
+    expect(first.importedCount).toBe(1);
+
+    // Write a user note into the page's human-notes block, then take the source
+    // directory offline the way an undocked drive / unmounted NAS presents.
+    const pageAbsPath = path.join(vaultDir, pagePath);
+    const original = await fs.readFile(pageAbsPath, "utf8");
+    const noted = original.replace(
+      "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+      "<!-- openclaw:human:start -->\nMY PERSONAL NOTE\n<!-- openclaw:human:end -->",
     );
+    expect(noted).not.toBe(original);
+    await fs.writeFile(pageAbsPath, noted, "utf8");
+
+    const offlinePath = `${privateDir}-offline`;
+    await fs.rename(privateDir, offlinePath);
+    const duringOutage = await syncMemoryWikiUnsafeLocalSources(config);
+
+    // A transient outage must not prune; the page and its human notes survive.
+    expect(duringOutage.artifactCount).toBe(0);
+    expect(duringOutage.removedCount).toBe(0);
+    await expect(fs.readFile(pageAbsPath, "utf8")).resolves.toContain("MY PERSONAL NOTE");
+
+    // Re-mount and re-sync: clean reconciliation, notes still intact.
+    await fs.rename(offlinePath, privateDir);
+    const afterRestore = await syncMemoryWikiUnsafeLocalSources(config);
+    expect(afterRestore.removedCount).toBe(0);
+    await expect(fs.readFile(pageAbsPath, "utf8")).resolves.toContain("MY PERSONAL NOTE");
   });
 
   it("caps composed unsafe-local filenames to the filesystem component limit", async () => {
