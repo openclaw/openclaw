@@ -53,8 +53,8 @@ async function withCrossAgentResumeFixture(
   run: (params: { sessionId: string; sessionKey: string; cfg: OpenClawConfig }) => Promise<void>,
 ): Promise<void> {
   await withTempHome(async (home) => {
-    const storePattern = path.join(home, "sessions", "{agentId}", "sessions.json");
-    const execStore = path.join(home, "sessions", "exec", "sessions.json");
+    const storePattern = path.join(home, "agents", "{agentId}", "sessions", "sessions.json");
+    const execStore = path.join(home, "agents", "exec", "sessions", "sessions.json");
     const sessionId = "session-exec-hook";
     const sessionKey = "agent:exec:hook:gmail:thread-1";
     await writeSessionStoreSeed(execStore, {
@@ -100,9 +100,9 @@ describe("agent session resolution", () => {
 
   it("resolves duplicate cross-agent sessionIds deterministically", async () => {
     await withTempHome(async (home) => {
-      const storePattern = path.join(home, "sessions", "{agentId}", "sessions.json");
-      const otherStore = path.join(home, "sessions", "other", "sessions.json");
-      const retiredStore = path.join(home, "sessions", "retired", "sessions.json");
+      const storePattern = path.join(home, "agents", "{agentId}", "sessions", "sessions.json");
+      const otherStore = path.join(home, "agents", "other", "sessions", "sessions.json");
+      const retiredStore = path.join(home, "agents", "retired", "sessions", "sessions.json");
       await writeSessionStoreSeed(otherStore, {
         "agent:other:main": {
           sessionId: "run-dup",
