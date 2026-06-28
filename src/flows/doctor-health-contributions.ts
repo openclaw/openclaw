@@ -1679,6 +1679,16 @@ export function resolveDoctorHealthContributions(): DoctorHealthContribution[] {
     createDoctorHealthContribution({
       id: "doctor:workspace-status",
       label: "Workspace status",
+      healthChecks: {
+        id: "core/doctor/workspace-status",
+        description: "Workspace plugin/status diagnostics are exposed as findings.",
+        defaultEnabled: false,
+        async detect(ctx) {
+          const { collectWorkspaceStatusHealthFindings } =
+            await import("../commands/doctor-workspace-status.js");
+          return collectWorkspaceStatusHealthFindings(ctx.cfg);
+        },
+      },
       run: runWorkspaceStatusHealth,
     }),
     createDoctorHealthContribution({
