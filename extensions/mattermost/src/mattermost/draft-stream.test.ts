@@ -227,6 +227,7 @@ describe("createMattermostDraftStream", () => {
     const sent = message as string;
     // The straddling emoji must be dropped whole, leaving no dangling surrogate half.
     expect(/[\uD800-\uDFFF]/u.test(sent)).toBe(false);
+    expect(sent.length).toBeLessThanOrEqual(12);
     expect(sent).toBe("aaaaaaaa...");
   });
 
