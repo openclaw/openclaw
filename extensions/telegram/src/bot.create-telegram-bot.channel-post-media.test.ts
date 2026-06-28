@@ -83,6 +83,7 @@ function setOpenChannelPostConfig() {
     channels: {
       telegram: {
         groupPolicy: "open",
+        botToBot: { enabled: true, allowUsernames: ["wake_channel"] },
         groups: {
           "-100777111222": {
             enabled: true,
@@ -160,7 +161,12 @@ function createChannelPostContext(params: {
   const photoFileId = params.photoFileId;
   return {
     channelPost: {
-      chat: { id: -100777111222, type: "channel", title: params.title ?? "Wake Channel" },
+      chat: {
+        id: -100777111222,
+        type: "channel",
+        title: params.title ?? "Wake Channel",
+        username: "wake_channel",
+      },
       message_id: params.messageId,
       date: params.date,
       ...(params.caption ? { caption: params.caption } : {}),
@@ -300,6 +306,7 @@ describe("createTelegramBot channel_post media", () => {
         telegram: {
           groupPolicy: "open",
           mediaGroupFlushMs: 75,
+          botToBot: { enabled: true, allowUsernames: ["wake_channel"] },
           groups: {
             "-100777111222": {
               enabled: true,
@@ -345,7 +352,12 @@ describe("createTelegramBot channel_post media", () => {
 
       await handler({
         channelPost: {
-          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+          chat: {
+            id: -100777111222,
+            type: "channel",
+            title: "Wake Channel",
+            username: "wake_channel",
+          },
           message_id: 301,
           date: 1736380800,
           text: part1,
@@ -356,7 +368,12 @@ describe("createTelegramBot channel_post media", () => {
 
       await handler({
         channelPost: {
-          chat: { id: -100777111222, type: "channel", title: "Wake Channel" },
+          chat: {
+            id: -100777111222,
+            type: "channel",
+            title: "Wake Channel",
+            username: "wake_channel",
+          },
           message_id: 302,
           date: 1736380801,
           text: part2,
