@@ -2684,8 +2684,8 @@ describe("oversized transcript line guards", () => {
         parentId: "root-msg",
         message: {
           role: "assistant",
-          idempotencyKey: "oversized-key",
           content: oversizedContent,
+          idempotencyKey: "oversized-key",
         },
       }),
     ];

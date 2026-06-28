@@ -299,23 +299,62 @@ async function readRecentTranscriptTailLinesAsync(
 
 const MAX_TRANSCRIPT_PARSE_LINE_BYTES = 256 * 1024;
 const OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS = 64 * 1024;
+const OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS = 64 * 1024;
 const TRANSCRIPT_OVERSIZED_MESSAGE_PLACEHOLDER = "[chat.history omitted: message too large]";
 
 function isOversizedTranscriptLine(line: string): boolean {
   return Buffer.byteLength(line, "utf8") > MAX_TRANSCRIPT_PARSE_LINE_BYTES;
 }
 
+function isJsonObjectFieldToken(source: string, tokenIndex: number): boolean {
+  for (let index = tokenIndex - 1; index >= 0; index--) {
+    const char = source[index];
+    if (/\s/.test(char)) {
+      continue;
+    }
+    return char === "{" || char === ",";
+  }
+  return true;
+}
+
+function extractJsonStringFieldWindow(
+  source: string,
+  field: string,
+  startIndex = 0,
+  endIndex = source.length,
+): string | undefined {
+  const fieldToken = JSON.stringify(field);
+  let searchIndex = startIndex;
+  while (searchIndex < endIndex) {
+    const tokenIndex = source.indexOf(fieldToken, searchIndex);
+    if (tokenIndex < 0 || tokenIndex >= endIndex) {
+      return undefined;
+    }
+    searchIndex = tokenIndex + fieldToken.length;
+    if (!isJsonObjectFieldToken(source, tokenIndex)) {
+      continue;
+    }
+    const match = /^\s*:\s*"((?:\\.|[^"\\])*)"/.exec(source.slice(searchIndex, endIndex));
+    if (!match) {
+      continue;
+    }
+    try {
+      const decoded = JSON.parse(`"${match[1]}"`) as unknown;
+      return normalizeTailEntryString(decoded);
+    } catch {
+      return undefined;
+    }
+  }
+  return undefined;
+}
+
 function extractJsonStringFieldPrefix(prefix: string, field: string): string | undefined {
-  const match = new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`).exec(prefix);
-  if (!match) {
-    return undefined;
-  }
-  try {
-    const decoded = JSON.parse(`"${match[1]}"`) as unknown;
-    return normalizeTailEntryString(decoded);
-  } catch {
-    return undefined;
-  }
+  return extractJsonStringFieldWindow(prefix, field);
+}
+
+function extractJsonStringFieldSuffix(source: string, field: string): string | undefined {
+  const startIndex = Math.max(0, source.length - OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS);
+  return extractJsonStringFieldWindow(source, field, startIndex);
 }
 
 function extractJsonNullableStringFieldPrefix(
@@ -350,7 +389,9 @@ function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
     extractJsonStringFieldPrefix(recordPrefix, "timestamp") ??
     extractJsonNumberFieldPrefix(recordPrefix, "timestamp");
   const role = extractJsonStringFieldPrefix(prefix, "role") ?? "assistant";
-  const idempotencyKey = extractJsonStringFieldPrefix(prefix, "idempotencyKey");
+  const idempotencyKey =
+    extractJsonStringFieldPrefix(prefix, "idempotencyKey") ??
+    extractJsonStringFieldSuffix(line, "idempotencyKey");
   const record: Record<string, unknown> = {
     ...(type ? { type } : {}),
     ...(id ? { id } : {}),
