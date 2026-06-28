@@ -2019,7 +2019,6 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
     }
   });
 
-<<<<<<< HEAD
   it("uses loopback-scoped tools when building bundled MCP CLI prompts", async () => {
     const { dir, sessionFile } = createSessionFile();
     try {
@@ -2198,17 +2197,10 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
   });
 
   it("passes current turn kind into bundle MCP loopback env", async () => {
-=======
-  it("does not expose OPENCLAW_MCP_* placeholder env when tools are disabled even if a user MCP server opts in to caller context", async () => {
-    // Disabled-tools runs must keep bundle MCP fully off — including the
-    // OPENCLAW_MCP_* placeholder env that would otherwise carry x-session-key
-    // and caller IDs to a remote MCP server the operator opted in elsewhere.
->>>>>>> 3bb4a01d77e (Fixes)
     const { dir, sessionFile } = createSessionFile();
     try {
       const getActiveMcpLoopbackRuntime = vi.fn(() => ({
         port: 31783,
-<<<<<<< HEAD
         ownerToken: "loopback-owner-token",
         nonOwnerToken: "loopback-non-owner-token",
       }));
@@ -2330,24 +2322,11 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
         ],
       });
 
-=======
-        ownerToken: "owner-token",
-        nonOwnerToken: "non-owner-token",
-      }));
-      setCliRunnerPrepareTestDeps({
-        getActiveMcpLoopbackRuntime,
-        ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
-        createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
-      });
-
-      const baseConfig = createCliBackendConfig({ bundleMcp: true });
->>>>>>> 3bb4a01d77e (Fixes)
       const context = await prepareCliRunContext({
         sessionId: "session-test",
         sessionFile,
         workspaceDir: dir,
         prompt: "latest ask",
-<<<<<<< HEAD
         provider: "claude-cli",
         model: "test-model",
         timeoutMs: 1_000,
@@ -2394,7 +2373,34 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       );
 
       expect(getActiveMcpLoopbackRuntime).not.toHaveBeenCalled();
-=======
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not expose OPENCLAW_MCP_* placeholder env when tools are disabled even if a user MCP server opts in to caller context", async () => {
+    // Disabled-tools runs must keep bundle MCP fully off — including the
+    // OPENCLAW_MCP_* placeholder env that would otherwise carry x-session-key
+    // and caller IDs to a remote MCP server the operator opted in elsewhere.
+    const { dir, sessionFile } = createSessionFile();
+    try {
+      const getActiveMcpLoopbackRuntime = vi.fn(() => ({
+        port: 31783,
+        ownerToken: "owner-token",
+        nonOwnerToken: "non-owner-token",
+      }));
+      setCliRunnerPrepareTestDeps({
+        getActiveMcpLoopbackRuntime,
+        ensureMcpLoopbackServer: vi.fn(createTestMcpLoopbackServer),
+        createMcpLoopbackServerConfig: vi.fn(createTestMcpLoopbackServerConfig),
+      });
+
+      const baseConfig = createCliBackendConfig({ bundleMcp: true });
+      const context = await prepareCliRunContext({
+        sessionId: "session-test",
+        sessionFile,
+        workspaceDir: dir,
+        prompt: "latest ask",
         provider: "test-cli",
         model: "test-model",
         timeoutMs: 1_000,
@@ -2423,7 +2429,6 @@ describe("shouldSkipLocalCliCredentialEpoch", () => {
       expect(context.preparedBackend.env?.OPENCLAW_MCP_ACCOUNT_ID).toBeUndefined();
       expect(context.preparedBackend.env?.OPENCLAW_MCP_MESSAGE_CHANNEL).toBeUndefined();
       expect(context.preparedBackend.env?.OPENCLAW_MCP_TOKEN).toBeUndefined();
->>>>>>> 3bb4a01d77e (Fixes)
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
