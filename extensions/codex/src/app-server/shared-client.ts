@@ -57,6 +57,7 @@ function getSharedCodexAppServerClientState(): SharedCodexAppServerClientState {
 export type CodexAppServerClientOptions = {
   startOptions?: CodexAppServerStartOptions;
   timeoutMs?: number;
+  initializeTimeoutDeadlineMs?: number;
   authProfileId?: string | null;
   agentDir?: string;
   config?: Parameters<typeof resolveCodexAppServerAuthProfileIdForAgent>[0]["config"];
@@ -80,6 +81,15 @@ type ResolvedCodexAppServerClientStartContext = {
   authProfileStore: AuthProfileStore | undefined;
   startOptions: CodexAppServerStartOptions;
 };
+
+function resolveCodexAppServerInitializeTimeoutMs(
+  options: CodexAppServerClientOptions | undefined,
+): number {
+  const deadlineMs = options?.initializeTimeoutDeadlineMs;
+  return typeof deadlineMs === "number" && Number.isFinite(deadlineMs)
+    ? Math.max(1, deadlineMs - Date.now())
+    : (options?.timeoutMs ?? 0);
+}
 
 async function resolveCodexAppServerClientStartContext(
   options?: IsolatedCodexAppServerClientOptions,
@@ -202,6 +212,8 @@ async function acquireSharedCodexAppServerClient(
         agentDir,
         authProfileId: usesNativeAuth ? null : authProfileId,
         config: options?.config,
+        timeoutMs: options?.timeoutMs,
+        initializeTimeoutDeadlineMs: options?.initializeTimeoutDeadlineMs,
         onStartedClient: (startedClient) => {
           entry.client = startedClient;
           options?.onStartedClient?.(startedClient);
@@ -212,11 +224,14 @@ async function acquireSharedCodexAppServerClient(
       return client;
     })());
   try {
-    const client = await withTimeout(
-      sharedPromise,
-      options?.timeoutMs ?? 0,
-      "codex app-server initialize timed out",
-    );
+    const client =
+      options?.initializeTimeoutDeadlineMs === undefined
+        ? await withTimeout(
+            sharedPromise,
+            options?.timeoutMs ?? 0,
+            "codex app-server initialize timed out",
+          )
+        : await sharedPromise;
     if (entry.closeError) {
       throw entry.closeError;
     }
@@ -227,6 +242,7 @@ async function acquireSharedCodexAppServerClient(
       authProfileId: usesNativeAuth ? undefined : authProfileId,
       config: options?.config,
     });
+    client.setActiveSharedLeaseCountProviderForUnscopedNotifications(() => entry.activeLeases);
     const release = leaseOptions?.leased ? retainSharedClientEntry(entry) : undefined;
     return release ? { client, release } : { client };
   } catch (error) {
@@ -254,6 +270,7 @@ export async function createIsolatedCodexAppServerClient(
     authProfileStore,
     config: options?.config,
     timeoutMs: options?.timeoutMs,
+    initializeTimeoutDeadlineMs: options?.initializeTimeoutDeadlineMs,
     onStartedClient: options?.onStartedClient,
   });
 }
@@ -265,6 +282,7 @@ async function startInitializedCodexAppServerClient(params: {
   authProfileStore?: AuthProfileStore;
   config?: CodexAppServerClientOptions["config"];
   timeoutMs?: number;
+  initializeTimeoutDeadlineMs?: number;
   onStartedClient?: (client: CodexAppServerClient) => void;
 }): Promise<CodexAppServerClient> {
   const startOptionsCandidates = resolveManagedFallbackStartOptions(params.startOptions);
@@ -274,7 +292,11 @@ async function startInitializedCodexAppServerClient(params: {
     params.onStartedClient?.(client);
     const initialize = client.initialize();
     try {
-      await withTimeout(initialize, params.timeoutMs ?? 0, "codex app-server initialize timed out");
+      await withTimeout(
+        initialize,
+        resolveCodexAppServerInitializeTimeoutMs(params),
+        "codex app-server initialize timed out",
+      );
     } catch (error) {
       client.close();
       void initialize.catch(() => undefined);
