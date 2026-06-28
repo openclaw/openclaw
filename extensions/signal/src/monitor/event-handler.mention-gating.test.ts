@@ -4,9 +4,41 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-type SignalMsgContext = Pick<MsgContext, "Body" | "WasMentioned"> & {
+type SignalMsgContext = Pick<
+  MsgContext,
+  | "Body"
+  | "CanDetectMention"
+  | "WasMentioned"
+  | "HasAnyMention"
+  | "RequireMention"
+  | "EffectiveWasMentioned"
+  | "MentionSource"
+  | "SourceActor"
+  | "SourceActorId"
+  | "SourceActorPeerId"
+  | "SourceActorDisplayName"
+  | "SourceActorRole"
+  | "SourceActorContext"
+> & {
   Body?: string;
+  CanDetectMention?: boolean;
   WasMentioned?: boolean;
+  HasAnyMention?: boolean;
+  RequireMention?: boolean;
+  EffectiveWasMentioned?: boolean;
+  MentionSource?: string;
+  SourceActor?: {
+    id?: string;
+    peerId?: string;
+    displayName?: string;
+    role?: string;
+    context?: string;
+  };
+  SourceActorId?: string;
+  SourceActorPeerId?: string;
+  SourceActorDisplayName?: string;
+  SourceActorRole?: string;
+  SourceActorContext?: string;
 };
 
 let capturedCtx: SignalMsgContext | undefined;
@@ -41,7 +73,7 @@ vi.mock("openclaw/plugin-sdk/reply-runtime", async () => {
 const [
   { createBaseSignalEventHandlerDeps, createSignalReceiveEvent },
   { createSignalEventHandler },
-  { renderSignalMentions },
+  { renderSignalMentions, resolveSignalNativeMentionFacts },
 ] = await Promise.all([
   import("./event-handler.test-harness.js"),
   import("./event-handler.js"),
@@ -74,9 +106,11 @@ function makeGroupEvent(opts: GroupEventOpts) {
 
 function createMentionHandler(params: {
   requireMention: boolean;
-  mentionPattern?: string;
+  mentionPattern?: string | null;
   historyLimit?: number;
   groupHistories?: ReturnType<typeof createBaseSignalEventHandlerDeps>["groupHistories"];
+  account?: string;
+  accountUuid?: string;
 }) {
   return createSignalEventHandler(
     createBaseSignalEventHandlerDeps({
@@ -86,6 +120,8 @@ function createMentionHandler(params: {
       }),
       ...(typeof params.historyLimit === "number" ? { historyLimit: params.historyLimit } : {}),
       ...(params.groupHistories ? { groupHistories: params.groupHistories } : {}),
+      ...(params.account ? { account: params.account } : {}),
+      ...(params.accountUuid ? { accountUuid: params.accountUuid } : {}),
     }),
   );
 }
@@ -96,11 +132,12 @@ function createMentionGatedHistoryHandler() {
   return { handler, groupHistories };
 }
 
-function createSignalConfig(params: { requireMention: boolean; mentionPattern?: string }) {
+function createSignalConfig(params: { requireMention: boolean; mentionPattern?: string | null }) {
+  const mentionPatterns = params.mentionPattern === null ? [] : [params.mentionPattern ?? "@bot"];
   return {
     messages: {
       inbound: { debounceMs: 0 },
-      groupChat: { mentionPatterns: [params.mentionPattern ?? "@bot"] },
+      groupChat: { mentionPatterns },
     },
     channels: {
       signal: {
@@ -136,7 +173,12 @@ describe("signal mention gating", () => {
     const handler = createMentionHandler({ requireMention: true });
 
     await handler(makeGroupEvent({ message: "hey @bot what's up" }));
+    expect(getCapturedCtx().CanDetectMention).toBe(true);
     expect(getCapturedCtx().WasMentioned).toBe(true);
+    expect(getCapturedCtx().HasAnyMention).toBe(true);
+    expect(getCapturedCtx().MentionSource).toBe("mention_pattern");
+    expect(getCapturedCtx().RequireMention).toBe(true);
+    expect(getCapturedCtx().EffectiveWasMentioned).toBe(true);
   });
 
   it("sets WasMentioned=false for group messages without mention when requireMention is off", async () => {
@@ -292,6 +334,115 @@ describe("signal mention gating", () => {
 
     expect(getCapturedCtx()?.Body ?? "").toContain("@123e4567");
     expect(getCapturedCtx().WasMentioned).toBe(true);
+    expect(getCapturedCtx().HasAnyMention).toBe(true);
+    expect(getCapturedCtx().MentionSource).toBe("mention_pattern");
+  });
+
+  it("allows native bot UUID mentions without a text mention pattern", async () => {
+    const handler = createMentionHandler({
+      requireMention: true,
+      mentionPattern: null,
+      accountUuid: "bot-uuid",
+    });
+    const placeholder = "\uFFFC";
+
+    await handler(
+      makeGroupEvent({
+        message: `${placeholder} ping`,
+        mentions: [{ uuid: "bot-uuid", start: 0, length: placeholder.length }],
+      }),
+    );
+
+    expect(getCapturedCtx()?.Body ?? "").toContain("@bot-uuid ping");
+    expect(getCapturedCtx().CanDetectMention).toBe(true);
+    expect(getCapturedCtx().WasMentioned).toBe(true);
+    expect(getCapturedCtx().HasAnyMention).toBe(true);
+    expect(getCapturedCtx().RequireMention).toBe(true);
+    expect(getCapturedCtx().EffectiveWasMentioned).toBe(true);
+    expect(getCapturedCtx().MentionSource).toBe("native");
+    expect(getCapturedCtx().SourceActor).toEqual({
+      id: "+15550001111",
+      peerId: "+15550001111",
+      displayName: "Alice",
+      role: "participant",
+      context: "signal",
+    });
+    expect(getCapturedCtx().SourceActorPeerId).toBe("+15550001111");
+    expect(getCapturedCtx().SourceActorDisplayName).toBe("Alice");
+  });
+
+  it("allows native bot phone mentions after E.164 normalization", async () => {
+    const handler = createMentionHandler({
+      requireMention: true,
+      mentionPattern: null,
+      account: "+15550002222",
+    });
+    const placeholder = "\uFFFC";
+
+    await handler(
+      makeGroupEvent({
+        message: `please ${placeholder}`,
+        mentions: [{ number: "1 (555) 000-2222", start: 7, length: placeholder.length }],
+      }),
+    );
+
+    expect(getCapturedCtx()?.Body ?? "").toContain("@1 (555) 000-2222");
+    expect(getCapturedCtx().WasMentioned).toBe(true);
+    expect(getCapturedCtx().HasAnyMention).toBe(true);
+    expect(getCapturedCtx().MentionSource).toBe("native");
+  });
+
+  it("keeps native mentions of other participants silent while recording pending context", async () => {
+    const groupHistories = new Map();
+    const handler = createMentionHandler({
+      requireMention: true,
+      mentionPattern: null,
+      accountUuid: "bot-uuid",
+      groupHistories,
+    });
+    const placeholder = "\uFFFC";
+
+    await handler(
+      makeGroupEvent({
+        message: `${placeholder} can you check?`,
+        mentions: [{ uuid: "other-user", start: 0, length: placeholder.length }],
+      }),
+    );
+
+    expect(capturedCtx).toBeUndefined();
+    const entries = getGroupHistoryEntries(groupHistories);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].body).toBe("@other-user can you check?");
+  });
+
+  it("does not accept malformed matching native mention metadata as a bot mention", async () => {
+    const groupHistories = new Map();
+    const handler = createMentionHandler({
+      requireMention: true,
+      mentionPattern: null,
+      accountUuid: "bot-uuid",
+      groupHistories,
+    });
+
+    await handler(
+      makeGroupEvent({
+        message: "plain ping",
+        mentions: [{ uuid: "bot-uuid", start: 0, length: 5 }],
+      }),
+    );
+
+    expect(capturedCtx).toBeUndefined();
+    const entries = getGroupHistoryEntries(groupHistories);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].body).toBe("plain ping");
+  });
+
+  it("preserves no-detector behavior when no text pattern or bot identity is configured", async () => {
+    const handler = createMentionHandler({ requireMention: true, mentionPattern: null });
+
+    await handler(makeGroupEvent({ message: "hello everyone" }));
+
+    expect(getCapturedCtx().WasMentioned).toBe(false);
   });
 });
 
@@ -330,5 +481,64 @@ describe("renderSignalMentions", () => {
     const normalized = renderSignalMentions(message, [{ uuid: "valid", start: -0.7, length: 1.9 }]);
 
     expect(normalized).toBe("@valid ping");
+  });
+});
+
+describe("resolveSignalNativeMentionFacts", () => {
+  const PLACEHOLDER = "\uFFFC";
+
+  it("reports bot, any, and capability facts for valid UUID metadata", () => {
+    expect(
+      resolveSignalNativeMentionFacts({
+        message: `${PLACEHOLDER} ping`,
+        mentions: [{ uuid: "bot-uuid", start: 0, length: 1 }],
+        accountUuid: "bot-uuid",
+      }),
+    ).toEqual({
+      canDetectBotMention: true,
+      hasAnyMention: true,
+      mentionsBot: true,
+    });
+  });
+
+  it("reports unrelated valid metadata without treating it as a bot mention", () => {
+    expect(
+      resolveSignalNativeMentionFacts({
+        message: `${PLACEHOLDER} ping`,
+        mentions: [{ uuid: "other-user", start: 0, length: 1 }],
+        accountUuid: "bot-uuid",
+      }),
+    ).toEqual({
+      canDetectBotMention: true,
+      hasAnyMention: true,
+      mentionsBot: false,
+    });
+  });
+
+  it("ignores matching metadata when the referenced body span is not a Signal mention", () => {
+    expect(
+      resolveSignalNativeMentionFacts({
+        message: "plain ping",
+        mentions: [{ uuid: "bot-uuid", start: 0, length: 5 }],
+        accountUuid: "bot-uuid",
+      }),
+    ).toEqual({
+      canDetectBotMention: true,
+      hasAnyMention: false,
+      mentionsBot: false,
+    });
+  });
+
+  it("keeps mention facts but no bot detection capability without account identity", () => {
+    expect(
+      resolveSignalNativeMentionFacts({
+        message: `${PLACEHOLDER} ping`,
+        mentions: [{ uuid: "bot-uuid", start: 0, length: 1 }],
+      }),
+    ).toEqual({
+      canDetectBotMention: false,
+      hasAnyMention: true,
+      mentionsBot: false,
+    });
   });
 });

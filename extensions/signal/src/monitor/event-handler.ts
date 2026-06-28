@@ -63,7 +63,7 @@ import type {
   SignalReceivePayload,
 } from "./event-handler.types.js";
 import { resolveSignalQuoteContext } from "./inbound-context.js";
-import { renderSignalMentions } from "./mentions.js";
+import { renderSignalMentions, resolveSignalNativeMentionFacts } from "./mentions.js";
 
 function formatAttachmentKindCount(kind: string, count: number): string {
   if (kind === "attachment") {
@@ -121,6 +121,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     mediaTypes?: string[];
     commandAuthorized: boolean;
     wasMentioned?: boolean;
+    mentionFacts?: {
+      canDetectMention: boolean;
+      wasMentioned: boolean;
+      hasAnyMention?: boolean;
+      mentionSource?: "mention_pattern" | "native";
+      requireMention?: boolean;
+      effectiveWasMentioned?: boolean;
+      shouldSkip?: boolean;
+    };
     replyToBody?: string;
     replyToSender?: string;
     replyToIsQuote?: boolean;
@@ -222,6 +231,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       sender: {
         id: entry.senderDisplay,
         name: entry.senderName,
+        sourceActor: {
+          id: entry.senderPeerId,
+          peerId: entry.senderPeerId,
+          displayName: entry.senderName,
+          role: "participant",
+          context: "signal",
+        },
       },
       conversation: {
         kind: entry.isGroup ? "group" : "direct",
@@ -246,7 +262,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       access: {
         ...(entry.isGroup
           ? {
-              mentions: {
+              mentions: entry.mentionFacts ?? {
                 canDetectMention: true,
                 wasMentioned: entry.wasMentioned === true,
               },
@@ -724,7 +740,15 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       senderPeerId,
     });
     const mentionRegexes = buildMentionRegexes(deps.cfg, route.agentId);
-    const wasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    const textWasMentioned = isGroup && matchesMentionPatterns(messageText, mentionRegexes);
+    const nativeMentionFacts = resolveSignalNativeMentionFacts({
+      message: rawMessage,
+      mentions: dataMessage?.mentions,
+      account: deps.account,
+      accountUuid: deps.accountUuid,
+    });
+    const hasAnyMention = textWasMentioned ? true : nativeMentionFacts.hasAnyMention;
+    const wasMentioned = isGroup && (textWasMentioned || nativeMentionFacts.mentionsBot);
     const requireMention =
       isGroup &&
       resolveChannelGroupRequireMention({
@@ -734,12 +758,12 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         accountId: deps.accountId,
         configuredGroupDefaultsToNoMention: true,
       });
-    const canDetectMention = mentionRegexes.length > 0;
+    const canDetectMention = mentionRegexes.length > 0 || nativeMentionFacts.canDetectBotMention;
     const mentionDecision = resolveInboundMentionDecision({
       facts: {
         canDetectMention,
         wasMentioned,
-        hasAnyMention: false,
+        hasAnyMention,
         implicitMentionKinds: [],
       },
       policy: {
@@ -751,6 +775,22 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       },
     });
     const effectiveWasMentioned = mentionDecision.effectiveWasMentioned;
+    const mentionSource: "mention_pattern" | "native" | undefined = nativeMentionFacts.mentionsBot
+      ? "native"
+      : textWasMentioned
+        ? "mention_pattern"
+        : undefined;
+    const mentionFacts = isGroup
+      ? {
+          canDetectMention,
+          wasMentioned,
+          ...(hasAnyMention !== undefined ? { hasAnyMention } : {}),
+          ...(mentionSource ? { mentionSource } : {}),
+          requireMention,
+          effectiveWasMentioned,
+          shouldSkip: mentionDecision.shouldSkip,
+        }
+      : undefined;
     if (isGroup && requireMention && canDetectMention && mentionDecision.shouldSkip) {
       logInboundDrop({
         log: logVerbose,
@@ -933,6 +973,7 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       mediaTypes: mediaTypes.length > 0 ? mediaTypes : undefined,
       commandAuthorized,
       wasMentioned: effectiveWasMentioned,
+      mentionFacts,
       replyToBody: visibleQuoteText || undefined,
       replyToSender: visibleQuoteSender,
       replyToIsQuote: visibleQuoteText ? true : undefined,

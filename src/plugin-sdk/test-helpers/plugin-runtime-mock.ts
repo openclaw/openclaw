@@ -313,6 +313,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
   ) as unknown as PluginRuntime["channel"]["inbound"]["run"];
   const buildChannelInboundEventContextMock = vi.fn((params: BuildContextParams) => {
     const untrustedStructuredContext = resolveMockUntrustedStructuredContext(params);
+    const sourceActor = params.sender.sourceActor;
     return {
       Body: params.message.body ?? params.message.rawBody,
       BodyForAgent: params.message.bodyForAgent ?? params.message.rawBody,
@@ -335,8 +336,23 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       SenderName: params.sender.name ?? params.sender.displayLabel,
       SenderId: params.sender.id,
       SenderUsername: params.sender.username,
+      SourceActor: sourceActor,
+      SourceActorId: sourceActor?.id,
+      SourceActorPeerId: sourceActor?.peerId,
+      SourceActorDisplayName: sourceActor?.displayName,
+      SourceActorRole: sourceActor?.role,
+      SourceActorContext: sourceActor?.context,
+      CanDetectMention: params.access?.mentions?.canDetectMention,
       Timestamp: params.timestamp,
       WasMentioned: params.access?.mentions?.wasMentioned,
+      HasAnyMention: params.access?.mentions?.hasAnyMention,
+      ExplicitlyMentionedBot: params.access?.mentions?.explicitlyMentionedBot,
+      MentionedUserIds: params.access?.mentions?.mentionedUserIds,
+      MentionedSubteamIds: params.access?.mentions?.mentionedSubteamIds,
+      ImplicitMentionKinds: params.access?.mentions?.implicitMentionKinds,
+      RequireMention: params.access?.mentions?.requireMention,
+      EffectiveWasMentioned: params.access?.mentions?.effectiveWasMentioned,
+      MentionSource: params.access?.mentions?.mentionSource,
       GroupSystemPrompt: params.supplemental?.groupSystemPrompt,
       Provider: params.provider ?? params.channel,
       Surface: params.surface ?? params.provider ?? params.channel,

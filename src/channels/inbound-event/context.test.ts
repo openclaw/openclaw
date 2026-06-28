@@ -51,6 +51,13 @@ describe("buildChannelInboundEventContext", () => {
         username: "userone",
         tag: "User#0001",
         roles: ["admin"],
+        sourceActor: {
+          id: "person-1",
+          peerId: "peer-1",
+          displayName: "User One",
+          role: "participant",
+          context: "test-room",
+        },
       },
       conversation: {
         kind: "group",
@@ -86,10 +93,14 @@ describe("buildChannelInboundEventContext", () => {
         mentions: {
           canDetectMention: true,
           wasMentioned: true,
+          hasAnyMention: true,
           explicitlyMentionedBot: true,
           mentionSource: "explicit_bot",
           mentionedUserIds: ["bot-1"],
           implicitMentionKinds: ["reply_to_bot"],
+          requireMention: true,
+          effectiveWasMentioned: true,
+          shouldSkip: false,
         },
       },
       commandTurn: {
@@ -163,13 +174,29 @@ describe("buildChannelInboundEventContext", () => {
       SenderUsername: "userone",
       SenderTag: "User#0001",
       MemberRoleIds: ["admin"],
+      SourceActor: {
+        id: "person-1",
+        peerId: "peer-1",
+        displayName: "User One",
+        role: "participant",
+        context: "test-room",
+      },
+      SourceActorId: "person-1",
+      SourceActorPeerId: "peer-1",
+      SourceActorDisplayName: "User One",
+      SourceActorRole: "participant",
+      SourceActorContext: "test-room",
       Timestamp: 123,
       Provider: "test-provider",
       Surface: "test-surface",
+      CanDetectMention: true,
       WasMentioned: true,
+      HasAnyMention: true,
       ExplicitlyMentionedBot: true,
       MentionedUserIds: ["bot-1"],
       ImplicitMentionKinds: ["reply_to_bot"],
+      RequireMention: true,
+      EffectiveWasMentioned: true,
       MentionSource: "explicit_bot",
       CommandAuthorized: true,
       CommandSource: "text",
@@ -192,6 +219,13 @@ describe("buildChannelInboundEventContext", () => {
     for (const [key, value] of Object.entries(expectedFields)) {
       expect(ctx[key as keyof typeof ctx]).toEqual(value);
     }
+
+    expect(ctx.SourceActor).toBeDefined();
+    expect(ctx.SourceActorId).toBe(ctx.SourceActor?.id);
+    expect(ctx.SourceActorPeerId).toBe(ctx.SourceActor?.peerId);
+    expect(ctx.SourceActorDisplayName).toBe(ctx.SourceActor?.displayName);
+    expect(ctx.SourceActorRole).toBe(ctx.SourceActor?.role);
+    expect(ctx.SourceActorContext).toBe(ctx.SourceActor?.context);
   });
 
   it("preserves channel-owned hook context without rendering it as prompt text", () => {

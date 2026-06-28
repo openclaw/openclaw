@@ -18,9 +18,20 @@ export type MentionSource =
   | "explicit_bot"
   | "subteam"
   | "mention_pattern"
+  | "native"
   | "implicit_thread"
   | "command_bypass"
   | "none";
+
+export type SourceActorRole = "operator" | "participant" | "self" | "system" | "external";
+
+export type SourceActorContext = {
+  id: string;
+  peerId?: string;
+  displayName?: string;
+  role?: SourceActorRole;
+  context?: string;
+};
 
 export type InboundSourceModality = "text" | "voice" | "audio" | "image" | "video" | "document";
 
@@ -251,6 +262,13 @@ export type MsgContext = {
   SenderUsername?: string;
   SenderTag?: string;
   SenderE164?: string;
+  /** Stable participant/source actor attribution for hooks, memory, and diagnostics. */
+  SourceActor?: SourceActorContext;
+  SourceActorId?: string;
+  SourceActorPeerId?: string;
+  SourceActorDisplayName?: string;
+  SourceActorRole?: SourceActorRole;
+  SourceActorContext?: string;
   Timestamp?: number;
   LocationLat?: number;
   LocationLon?: number;
@@ -267,6 +285,14 @@ export type MsgContext = {
   /** Platform bot username when command mentions should be normalized. */
   BotUsername?: string;
   WasMentioned?: boolean;
+  /** True when this channel can decide whether the current bot target was mentioned. */
+  CanDetectMention?: boolean;
+  /** True when provider mention metadata or mention-pattern text was present. */
+  HasAnyMention?: boolean;
+  /** True when the current channel policy requires a mention before replying. */
+  RequireMention?: boolean;
+  /** Final mention decision after native/text detection and policy fallback. */
+  EffectiveWasMentioned?: boolean;
   /** True when this turn explicitly mentioned the current bot target. */
   ExplicitlyMentionedBot?: boolean;
   /** Provider-native explicit user mention ids present on this turn. */

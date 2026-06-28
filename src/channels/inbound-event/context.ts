@@ -473,6 +473,7 @@ export function buildChannelInboundEventContext(
     message: params.message,
     access: params.access,
   });
+  const sourceActor = params.sender.sourceActor;
 
   const context = {
     Body: body,
@@ -504,14 +505,24 @@ export function buildChannelInboundEventContext(
     SenderUsername: params.sender.username,
     SenderTag: params.sender.tag,
     MemberRoleIds: params.sender.roles,
+    SourceActor: sourceActor,
+    SourceActorId: sourceActor?.id,
+    SourceActorPeerId: sourceActor?.peerId,
+    SourceActorDisplayName: sourceActor?.displayName,
+    SourceActorRole: sourceActor?.role,
+    SourceActorContext: sourceActor?.context,
     Timestamp: params.timestamp,
     Provider: params.provider ?? params.channel,
     Surface: params.surface ?? params.provider ?? params.channel,
+    CanDetectMention: params.access?.mentions?.canDetectMention,
     WasMentioned: params.access?.mentions?.wasMentioned,
+    HasAnyMention: params.access?.mentions?.hasAnyMention,
     ExplicitlyMentionedBot: params.access?.mentions?.explicitlyMentionedBot,
     MentionedUserIds: params.access?.mentions?.mentionedUserIds,
     MentionedSubteamIds: params.access?.mentions?.mentionedSubteamIds,
     ImplicitMentionKinds: params.access?.mentions?.implicitMentionKinds,
+    RequireMention: params.access?.mentions?.requireMention,
+    EffectiveWasMentioned: params.access?.mentions?.effectiveWasMentioned,
     MentionSource: params.access?.mentions?.mentionSource,
     CommandAuthorized: resolveAccessFactsCommandAuthorized(params.access) === true,
     CommandTurn: commandTurn,
