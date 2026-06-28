@@ -31,6 +31,7 @@ import {
   extractJsonNullableStringFieldPrefix,
   extractJsonNumberFieldPrefix,
   extractJsonStringFieldPrefix,
+  normalizeOptionalString,
 } from "./session-transcript-json.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
@@ -350,7 +351,7 @@ function extractJsonStringFieldWindow(
     }
     try {
       const decoded = JSON.parse(`"${match[1]}"`) as unknown;
-      return normalizeTailEntryString(decoded);
+      return normalizeOptionalString(decoded);
     } catch {
       return undefined;
     }
@@ -358,38 +359,9 @@ function extractJsonStringFieldWindow(
   return undefined;
 }
 
-function extractJsonStringFieldPrefix(prefix: string, field: string): string | undefined {
-  return extractJsonStringFieldWindow(prefix, field);
-}
-
 function extractJsonStringFieldSuffix(source: string, field: string): string | undefined {
   const startIndex = Math.max(0, source.length - OVERSIZED_TRANSCRIPT_METADATA_SUFFIX_CHARS);
   return extractJsonStringFieldWindow(source, field, startIndex);
-}
-
-function extractJsonNullableStringFieldPrefix(
-  prefix: string,
-  field: string,
-): string | null | undefined {
-  if (new RegExp(`"${escapeRegExp(field)}"\\s*:\\s*null`).test(prefix)) {
-    return null;
-  }
-  return extractJsonStringFieldPrefix(prefix, field);
-}
-
-function extractJsonNumberFieldPrefix(prefix: string, field: string): number | undefined {
-  const match = new RegExp(
-    `"${escapeRegExp(field)}"\\s*:\\s*(-?\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?)`,
-  ).exec(prefix);
-  if (!match) {
-    return undefined;
-  }
-  const decoded = Number(match[1]);
-  return Number.isFinite(decoded) ? decoded : undefined;
-}
-
-function normalizeTailEntryString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
