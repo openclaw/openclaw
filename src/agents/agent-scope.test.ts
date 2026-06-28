@@ -1365,6 +1365,31 @@ describe("resolveAgentSkillsFilter", () => {
     expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual(["github", "summarize", "docs-search"]);
   });
 
+  it("treats agents.list[].skillsMerge without defaults as an explicit allowlist", () => {
+    const cfg: OpenClawConfig = {
+      agents: {
+        list: [
+          {
+            id: "writer",
+            skillsMerge: {
+              add: ["docs-search"],
+              remove: ["dangerous"],
+            },
+          },
+          {
+            id: "restricted",
+            skillsMerge: {
+              remove: ["dangerous"],
+            },
+          },
+        ],
+      },
+    };
+
+    expect(resolveAgentSkillsFilter(cfg, "writer")).toEqual(["docs-search"]);
+    expect(resolveAgentSkillsFilter(cfg, "restricted")).toStrictEqual([]);
+  });
+
   it("keeps agents.list[].skills replacement ahead of skillsMerge", () => {
     const cfg: OpenClawConfig = {
       agents: {
