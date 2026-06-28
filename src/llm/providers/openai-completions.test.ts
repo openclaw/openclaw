@@ -40,7 +40,11 @@ vi.mock("openai", () => {
   return { default: MockOpenAI };
 });
 
-import { streamOpenAICompletions, streamSimpleOpenAICompletions } from "./openai-completions.js";
+import {
+  convertMessages,
+  streamOpenAICompletions,
+  streamSimpleOpenAICompletions,
+} from "./openai-completions.js";
 
 const model = {
   id: "gpt-5.5",
@@ -1057,5 +1061,34 @@ describe("openai-completions stop-reason tool-call guard", () => {
 
     expect(result.stopReason).toBe("stop");
     expect(result.content.filter((b) => b.type === "toolCall")).toStrictEqual([]);
+  });
+});
+
+describe("convertMessages", () => {
+  it("serializes structured tool results as tool text", () => {
+    const params = convertMessages(
+      model,
+      {
+        messages: [
+          {
+            role: "toolResult",
+            toolCallId: "call_1",
+            toolName: "session_status",
+            content: [{ type: "json", payload: { sessionKey: "current", status: "ok" } }],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      } as Context,
+      false,
+    );
+
+    expect(params).toContainEqual(
+      expect.objectContaining({
+        role: "tool",
+        tool_call_id: "call_1",
+        content: '{"type":"json","payload":{"sessionKey":"current","status":"ok"}}',
+      }),
+    );
   });
 });
