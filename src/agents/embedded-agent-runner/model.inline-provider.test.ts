@@ -298,4 +298,26 @@ describe("resolveProviderModelInput", () => {
       }),
     ).toEqual(["text"]);
   });
+
+  it("preserves audio and video model inputs from validated catalogs", () => {
+    expect(
+      resolveProviderModelInput({
+        provider: "minimax",
+        modelId: "MiniMax-M3",
+        modelName: "MiniMax M3",
+        input: ["text", "image", "video", "audio"],
+      }),
+    ).toEqual(["text", "image", "video", "audio"]);
+  });
+
+  it("adds legacy Foundry image compatibility without dropping audio and video inputs", () => {
+    expect(
+      resolveProviderModelInput({
+        provider: "microsoft-foundry",
+        modelId: "gpt-5.4",
+        modelName: "GPT 5.4",
+        input: ["text", "audio", "video"],
+      }),
+    ).toEqual(["text", "audio", "video", "image"]);
+  });
 });

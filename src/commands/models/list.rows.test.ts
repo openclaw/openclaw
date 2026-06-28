@@ -241,4 +241,44 @@ describe("appendConfiguredProviderRows", () => {
     expect(mocks.normalizeProviderResolvedModelWithPlugin).toHaveBeenCalledOnce();
     expect(requireOnlyRow(rows).input).toBe("text+image");
   });
+
+  it("preserves audio and video inputs for configured-only provider models", async () => {
+    const rows: ModelRow[] = [];
+
+    await appendConfiguredProviderRows({
+      rows,
+      seenKeys: new Set(),
+      context: {
+        cfg: {
+          models: {
+            providers: {
+              minimax: {
+                api: "openai-completions",
+                baseUrl: "https://api.minimaxi.com/v1",
+                models: [
+                  {
+                    id: "MiniMax-M3",
+                    name: "MiniMax M3",
+                    reasoning: false,
+                    input: ["text", "image", "audio", "video"],
+                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                    contextWindow: 200_000,
+                    maxTokens: 8192,
+                  },
+                ],
+              },
+            },
+          },
+        },
+        agentDir: "/tmp/openclaw-agent",
+        authIndex,
+        configuredByKey: new Map(),
+        discoveredKeys: new Set(),
+        filter: { provider: "minimax", local: false },
+        skipRuntimeModelSuppression: true,
+      },
+    });
+
+    expect(requireOnlyRow(rows).input).toBe("text+image+audio+video");
+  });
 });
