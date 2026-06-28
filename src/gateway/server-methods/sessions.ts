@@ -184,9 +184,6 @@ function inheritSessionRuntimeSelection(
       : {}),
     ...(parentEntry.modelProvider ? { modelProvider: parentEntry.modelProvider } : {}),
     ...(parentEntry.model ? { model: parentEntry.model } : {}),
-    ...(typeof parentEntry.contextTokens === "number"
-      ? { contextTokens: parentEntry.contextTokens }
-      : {}),
     ...(parentEntry.thinkingLevel ? { thinkingLevel: parentEntry.thinkingLevel } : {}),
     ...(parentEntry.fastMode !== undefined ? { fastMode: parentEntry.fastMode } : {}),
     ...(parentEntry.verboseLevel ? { verboseLevel: parentEntry.verboseLevel } : {}),
