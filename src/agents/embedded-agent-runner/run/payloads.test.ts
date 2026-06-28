@@ -150,7 +150,7 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
         role: "assistant",
         stopReason: "stop",
         content: "Visible prefix <think>private reasoning tail",
-      } as AssistantMessage,
+      } as unknown as AssistantMessage,
     });
 
     expectSinglePayloadText(payloads, "Visible prefix");
