@@ -438,6 +438,53 @@ describe("user turn transcript persistence", () => {
       expect(persistedMessages[0]).not.toHaveProperty("inboundDecorated");
       expect(hookCalls).toBe(1);
     });
+
+    it("drops trusted bare body when before_message_write spreads and rewrites content", async () => {
+      // A redaction hook that returns `{ ...message, content }` would otherwise
+      // carry the original trusted `bareBody`/`inboundDecorated` through the
+      // spread, so downstream UI/replay/memory consumers would trust text the
+      // hook meant to redact. The persisted turn must clear those trusted
+      // inbound fields whenever the hook rewrites the content.
+      initializeGlobalHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName: "before_message_write",
+            handler: (event) => {
+              const current = (event as { message: Record<string, unknown> }).message;
+              return {
+                message: castAgentMessage({
+                  ...current,
+                  role: "user",
+                  content: "[redacted by hook]",
+                }),
+              };
+            },
+          },
+        ]),
+      );
+      const dir = createTempDir("openclaw-user-turn-redacted-spread-");
+      const transcriptPath = path.join(dir, "session.jsonl");
+
+      await appendUserTurnTranscriptMessage({
+        transcriptPath,
+        input: {
+          text: "secret prompt",
+          bareBody: "secret prompt",
+          inboundDecorated: true,
+        },
+        beforeMessageWrite: runAgentHarnessBeforeMessageWriteHook,
+      });
+
+      const persistedMessages = readTranscriptMessages(transcriptPath);
+      expect(persistedMessages).toEqual([
+        expect.objectContaining({
+          role: "user",
+          content: "[redacted by hook]",
+        }),
+      ]);
+      expect(persistedMessages[0]).not.toHaveProperty("bareBody");
+      expect(persistedMessages[0]).not.toHaveProperty("inboundDecorated");
+    });
   });
 
   describe("persistUserTurnTranscript", () => {

@@ -51,18 +51,26 @@ export type TrustedInboundDecoratedMessage = {
   BareBody?: unknown;
 };
 
-/** Returns the host-authored bare body for a decorated inbound message, when present. */
+/**
+ * Returns the host-authored bare body for a decorated inbound message, when
+ * present. The decorated marker and trusted bare body are runtime-attached
+ * fields that do not belong to any static message type, so the input accepts
+ * any message-like object and reads the fields defensively by key.
+ */
 export function resolveTrustedInboundBareBody(
-  message: TrustedInboundDecoratedMessage | null | undefined,
+  message: object | null | undefined,
 ): string | undefined {
-  const decorated = message?.inboundDecorated === true || message?.InboundDecorated === true;
+  const record = message as unknown as TrustedInboundDecoratedMessage | null | undefined;
+  const decorated = record?.inboundDecorated === true || record?.InboundDecorated === true;
   if (!decorated) {
     return undefined;
   }
-  if (typeof message?.bareBody === "string") {
-    return message.bareBody;
+  const bareBody = record?.bareBody;
+  if (typeof bareBody === "string") {
+    return bareBody;
   }
-  return typeof message?.BareBody === "string" ? message.BareBody : undefined;
+  const legacyBareBody = record?.BareBody;
+  return typeof legacyBareBody === "string" ? legacyBareBody : undefined;
 }
 
 /** Fast check for whether text contains any inbound metadata sentinel. */
