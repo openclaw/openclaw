@@ -183,6 +183,27 @@ describe("edit tool", () => {
     expect(message).not.toContain("tail-marker");
   });
 
+  it("does not scan past long unterminated lines for mismatch candidates", async () => {
+    const longUnterminatedLine = `const hugeLine = ${"x".repeat(300_000)}`;
+    const filePath = await createTempFile(`${longUnterminatedLine}\nconst nearbyNeedle = 1;`);
+    const tool = createEditTool(tmpDir);
+
+    const message = await expectRejectedMessage(
+      tool.execute(
+        "call-1",
+        {
+          path: filePath,
+          edits: [{ oldText: "const nearbyNeedle = 2;", newText: "const nearbyNeedle = 3;" }],
+        },
+        undefined,
+      ),
+    );
+
+    expect(message).toContain("Closest candidate lines for oldText:");
+    expect(message).not.toContain("- line 2:");
+    expect(message).not.toContain('found:    "const nearbyNeedle = 1;"');
+  });
+
   it("does not attach candidates from the wrong edit list for mixed no-op mismatches", async () => {
     const filePath = await createTempFile("const alpha = 1;\nconst beta = 2;\n");
     const tool = createEditTool(tmpDir);

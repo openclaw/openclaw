@@ -83,6 +83,8 @@ const EDIT_MISMATCH_SCAN_LINE_LIMIT = 2000;
 const EDIT_MISMATCH_LINE_DISPLAY_LIMIT = 140;
 // Keep one extra char so formatting can still show that the source line was truncated.
 const EDIT_MISMATCH_LINE_STORAGE_LIMIT = EDIT_MISMATCH_LINE_DISPLAY_LIMIT + 1;
+const EDIT_MISMATCH_SCAN_BYTE_LIMIT =
+  EDIT_MISMATCH_SCAN_LINE_LIMIT * EDIT_MISMATCH_LINE_STORAGE_LIMIT;
 const EDIT_INDEXED_MISMATCH_RE = /\bCould not find edits\[\d+\] in /u;
 
 /**
@@ -264,6 +266,7 @@ function findClosestMismatchLines(
     currentContent,
     EDIT_MISMATCH_SCAN_LINE_LIMIT,
     EDIT_MISMATCH_LINE_STORAGE_LIMIT,
+    EDIT_MISMATCH_SCAN_BYTE_LIMIT,
   )
     .map((line, index) => ({
       lineNumber: index + 1,
@@ -279,11 +282,13 @@ function collectNormalizedLines(
   content: string,
   lineLimit: number,
   lineLengthLimit: number,
+  scanByteLimit: number,
 ): string[] {
   const lines: string[] = [];
   let lineStart = 0;
+  const scanEnd = Math.min(content.length, scanByteLimit);
 
-  for (let index = 0; index < content.length && lines.length < lineLimit; index += 1) {
+  for (let index = 0; index < scanEnd && lines.length < lineLimit; index += 1) {
     const char = content[index];
     if (char !== "\n" && char !== "\r") {
       continue;
@@ -296,8 +301,8 @@ function collectNormalizedLines(
     lineStart = index + 1;
   }
 
-  if (lines.length < lineLimit) {
-    lines.push(content.slice(lineStart, lineStart + lineLengthLimit));
+  if (lines.length < lineLimit && lineStart <= scanEnd) {
+    lines.push(content.slice(lineStart, Math.min(scanEnd, lineStart + lineLengthLimit)));
   }
 
   return lines;
