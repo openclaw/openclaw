@@ -50,6 +50,13 @@ function hasExplicitMessageRoute(args: Record<string, unknown>): boolean {
   return Array.isArray(args.targets) && args.targets.some((value) => hasStringValue(value));
 }
 
+function isMessageToolSourceReplyActionName(action: unknown): boolean {
+  if (isMessageToolSendActionName(action)) {
+    return true;
+  }
+  return typeof action === "string" && action.trim().toLowerCase() === "reply";
+}
+
 function normalizeStatus(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim().toLowerCase() : undefined;
 }
@@ -547,6 +554,7 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
   result?: unknown;
   hookResult?: unknown;
   isError?: boolean;
+  allowExplicitSourceRoute?: boolean;
 }): boolean {
   if (params.sourceReplyDeliveryMode !== "message_tool_only") {
     return false;
@@ -555,7 +563,12 @@ export function isDeliveredMessageToolOnlySourceReplyResult(params: {
     return false;
   }
   const args = asRecord(params.args);
-  if (!isMessageToolSendActionName(args.action) || hasExplicitMessageRoute(args)) {
+  const sourceRouteReplyAction =
+    params.allowExplicitSourceRoute === true && isMessageToolSourceReplyActionName(args.action);
+  if (!isMessageToolSendActionName(args.action) && !sourceRouteReplyAction) {
+    return false;
+  }
+  if (hasExplicitMessageRoute(args) && params.allowExplicitSourceRoute !== true) {
     return false;
   }
   return isDeliveredMessagingToolResult(params);
