@@ -46,6 +46,7 @@ function expectModelsJsonPrewarmCall(cfg: OpenClawConfig) {
 
 describe("gateway startup primary model warmup", () => {
   beforeAll(async () => {
+    vi.resetModules();
     ({
       testing: { prewarmConfiguredPrimaryModel, shouldSkipStartupModelPrewarm },
     } = await import("./server-startup-post-attach.js"));

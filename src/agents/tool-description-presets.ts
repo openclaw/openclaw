@@ -23,7 +23,8 @@ export function describeSessionsListTool(): string {
 export function describeSessionsHistoryTool(): string {
   return [
     "Fetch sanitized history for visible session.",
-    "Use before replying, debugging, resuming; supports limit, offset pagination, and tool-message inclusion.",
+    "Use before replying, debugging, resuming; supports limit, offset pagination, tool-message inclusion, and includeFamily for a bounded reset-family tail.",
+    "Do not combine includeFamily with offset.",
   ].join(" ");
 }
 
