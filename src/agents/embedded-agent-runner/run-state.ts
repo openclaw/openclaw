@@ -8,7 +8,9 @@ import {
   listActiveReplyRunSessionIds,
   resolveActiveReplyRunSessionId,
 } from "../../auto-reply/reply/reply-run-registry.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
+import type { DeliveryContext } from "../../utils/delivery-context.shared.js";
 
 /**
  * Shared process state for embedded-agent runs, queues, and snapshots.
@@ -30,7 +32,9 @@ export type EmbeddedAgentQueueHandle = {
 export type EmbeddedAgentQueueMessageOptions = {
   steeringMode?: "all";
   debounceMs?: number;
+  deliveryContext?: DeliveryContext;
   deliveryTimeoutMs?: number;
+  inputProvenance?: InputProvenance;
   waitForTranscriptCommit?: boolean;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 };
