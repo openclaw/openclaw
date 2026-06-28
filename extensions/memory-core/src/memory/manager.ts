@@ -585,6 +585,11 @@ export class MemoryIndexManager extends MemoryManagerEmbeddingOps implements Mem
               inlineBatchTimeoutMs: pingRuntime.inlineBatchTimeoutMs,
             }
           : undefined,
+        // Honor the operator-configured inline batch timeout for the recovery
+        // probe, matching the normal batch embedding path. Otherwise operators
+        // who shortened `sync.embeddingBatchTimeoutSeconds` to bound user-facing
+        // search latency would see recovery wait on provider/runtime defaults.
+        configuredBatchTimeoutSeconds: this.settings.sync.embeddingBatchTimeoutSeconds,
       });
       await runEmbeddingOperationWithTimeout({
         timeoutMs: pingTimeoutMs,

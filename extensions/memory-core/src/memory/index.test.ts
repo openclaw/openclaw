@@ -370,6 +370,7 @@ describe("memory index", () => {
     minScore?: number;
     onSearch?: boolean;
     hybrid?: { enabled: boolean; vectorWeight?: number; textWeight?: number };
+    embeddingBatchTimeoutSeconds?: number;
   }): TestCfg {
     return {
       agents: {
@@ -383,7 +384,14 @@ describe("memory index", () => {
             store: { vector: { enabled: params.vectorEnabled ?? false } },
             // Perf: keep test indexes to a single chunk to reduce sqlite work.
             chunking: { tokens: 4000, overlap: 0 },
-            sync: { watch: false, onSessionStart: false, onSearch: params.onSearch ?? true },
+            sync: {
+              watch: false,
+              onSessionStart: false,
+              onSearch: params.onSearch ?? true,
+              ...(params.embeddingBatchTimeoutSeconds !== undefined
+                ? { embeddingBatchTimeoutSeconds: params.embeddingBatchTimeoutSeconds }
+                : {}),
+            },
             remote: params.batchEnabled
               ? {
                   nonBatchConcurrency: 1,
