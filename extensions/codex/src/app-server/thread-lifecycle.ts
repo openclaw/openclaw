@@ -1119,7 +1119,7 @@ export function buildThreadStartParams(
     ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
-    approvalsReviewer: options.appServer.approvalsReviewer,
+    approvalsReviewer: resolveCodexThreadApprovalsReviewer(options.appServer, options.config),
     ...codexThreadSandboxOrPermissions(options.appServer),
     ...(options.appServer.serviceTier !== undefined
       ? { serviceTier: options.appServer.serviceTier }
@@ -1201,7 +1201,7 @@ export function buildThreadResumeParams(
     model: modelSelection.model,
     ...(modelSelection.modelProvider ? { modelProvider: modelSelection.modelProvider } : {}),
     approvalPolicy: options.appServer.approvalPolicy,
-    approvalsReviewer: options.appServer.approvalsReviewer,
+    approvalsReviewer: resolveCodexThreadApprovalsReviewer(options.appServer, options.config),
     ...codexThreadSandboxOrPermissions(options.appServer),
     ...(options.appServer.serviceTier !== undefined
       ? { serviceTier: options.appServer.serviceTier }
@@ -1405,6 +1405,7 @@ export function buildTurnStartParams(
     threadId: string;
     cwd: string;
     appServer: CodexAppServerRuntimeOptions;
+    approvalsReviewer?: CodexAppServerRuntimeOptions["approvalsReviewer"];
     promptText?: string;
     sandboxPolicy?: CodexSandboxPolicy;
     environmentSelection?: CodexTurnEnvironmentParams[];
@@ -1430,7 +1431,7 @@ export function buildTurnStartParams(
     input: buildUserInput(params, options.promptText),
     cwd: options.cwd,
     approvalPolicy: options.appServer.approvalPolicy,
-    approvalsReviewer: options.appServer.approvalsReviewer,
+    approvalsReviewer: options.approvalsReviewer ?? options.appServer.approvalsReviewer,
     ...(useThreadPermissionProfile
       ? {}
       : {
@@ -1453,6 +1454,13 @@ export function buildTurnStartParams(
       heartbeatCollaborationInstructions: options.heartbeatCollaborationInstructions,
     }),
   };
+}
+
+function resolveCodexThreadApprovalsReviewer(
+  appServer: CodexAppServerRuntimeOptions,
+  config?: JsonObject,
+): CodexAppServerRuntimeOptions["approvalsReviewer"] {
+  return config?.approvals_reviewer === "user" ? "user" : appServer.approvalsReviewer;
 }
 
 function codexThreadSandboxOrPermissions(

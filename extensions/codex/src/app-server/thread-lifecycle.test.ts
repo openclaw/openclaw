@@ -561,6 +561,45 @@ describe("Codex app-server native code mode config", () => {
     expect(request.personality).toBe("none");
   });
 
+  it("routes plugin thread start and resume approvals to the user", () => {
+    const appServer = {
+      ...createAppServerOptions(),
+      approvalsReviewer: "auto_review" as const,
+    };
+    const config = { approvals_reviewer: "user" };
+
+    const started = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
+      cwd: "/repo",
+      dynamicTools: [],
+      appServer: appServer as never,
+      developerInstructions: "test instructions",
+      config,
+    });
+    const resumed = buildThreadResumeParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      appServer: appServer as never,
+      developerInstructions: "test instructions",
+      config,
+    });
+
+    expect(started.approvalsReviewer).toBe("user");
+    expect(resumed.approvalsReviewer).toBe("user");
+  });
+
+  it("allows plugin turns to override the runtime approval reviewer", () => {
+    const request = buildTurnStartParams(createAttemptParams({ provider: "openai" }), {
+      threadId: "thread-1",
+      cwd: "/repo",
+      appServer: {
+        ...createAppServerOptions(),
+        approvalsReviewer: "auto_review",
+      } as never,
+      approvalsReviewer: "user",
+    });
+
+    expect(request.approvalsReviewer).toBe("user");
+  });
+
   it("allows thread config to opt into Codex code-mode-only", () => {
     const request = buildThreadStartParams(createAttemptParams({ provider: "openai" }), {
       cwd: "/repo",
