@@ -847,12 +847,21 @@ export async function startGatewaySidecars(params: {
     log: params.log,
     run: async (isStopped) => {
       if (isStopped()) return;
-      const { loadGatewayModelCatalog } = await import("./server-model-catalog.js");
+      const { loadGatewayModelCatalog, markGatewayModelCatalogStaleForReload } =
+        await import("./server-model-catalog.js");
       // Warm read-only cache first (used by models.list RPC), then full cache
       // (runs provider catalog.run hooks like Pioneer's live discovery and writes sidecars).
+      // Then re-run full discovery every 30 minutes so new provider models appear
+      // without requiring a gateway restart.
       await loadGatewayModelCatalog({ readOnly: true });
       if (isStopped()) return;
       await loadGatewayModelCatalog({ readOnly: false });
+      while (!isStopped()) {
+        await sleep(30 * 60 * 1000);
+        if (isStopped()) return;
+        markGatewayModelCatalogStaleForReload();
+        await loadGatewayModelCatalog({ readOnly: false });
+      }
     },
   });
 
