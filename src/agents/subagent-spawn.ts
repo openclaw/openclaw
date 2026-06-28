@@ -359,6 +359,33 @@ function buildDirectChildSessionPatch(patch: Record<string, unknown>): Partial<S
   return entry;
 }
 
+function shouldPersistSubagentModelOverride(patch: Record<string, unknown>): boolean {
+  if (patch.modelOverrideSource === "user") {
+    return true;
+  }
+  return Boolean(
+    normalizeOptionalString(patch.modelOverrideFallbackOriginProvider) &&
+    normalizeOptionalString(patch.modelOverrideFallbackOriginModel),
+  );
+}
+
+function buildSubagentRunModelOverride(params: {
+  resolvedModel?: string;
+  initialSessionPatch: Record<string, unknown>;
+}): { provider?: string; model: string } | undefined {
+  if (!shouldPersistSubagentModelOverride(params.initialSessionPatch)) {
+    return undefined;
+  }
+  const { provider, model } = splitModelRef(params.resolvedModel);
+  if (!model) {
+    return undefined;
+  }
+  return {
+    ...(provider ? { provider } : {}),
+    model,
+  };
+}
+
 function loadSubagentConfig() {
   return subagentSpawnDeps.getRuntimeConfig();
 }
@@ -367,6 +394,10 @@ async function persistInitialChildSessionRuntimeModel(params: {
   cfg: OpenClawConfig;
   childSessionKey: string;
   resolvedModel?: string;
+  persistOverride?: boolean;
+  modelOverrideSource?: unknown;
+  modelOverrideFallbackOriginProvider?: string;
+  modelOverrideFallbackOriginModel?: string;
 }): Promise<string | undefined> {
   const { provider, model } = splitModelRef(params.resolvedModel);
   if (!model) {
@@ -386,6 +417,20 @@ async function persistInitialChildSessionRuntimeModel(params: {
       store[target.canonicalKey] = mergeSessionEntry(store[target.canonicalKey], {
         model,
         ...(provider ? { modelProvider: provider } : {}),
+        ...(params.persistOverride
+          ? {
+              modelOverride: model,
+              modelOverrideSource: params.modelOverrideSource === "auto" ? "auto" : "user",
+              ...(provider ? { providerOverride: provider } : {}),
+              ...(params.modelOverrideFallbackOriginProvider &&
+              params.modelOverrideFallbackOriginModel
+                ? {
+                    modelOverrideFallbackOriginProvider: params.modelOverrideFallbackOriginProvider,
+                    modelOverrideFallbackOriginModel: params.modelOverrideFallbackOriginModel,
+                  }
+                : {}),
+            }
+          : {}),
       });
     });
     return undefined;
@@ -1366,6 +1411,14 @@ export async function spawnSubagentDirect(
       cfg,
       childSessionKey,
       resolvedModel,
+      persistOverride: shouldPersistSubagentModelOverride(initialChildSessionPatch),
+      modelOverrideSource: initialChildSessionPatch.modelOverrideSource,
+      modelOverrideFallbackOriginProvider: normalizeOptionalString(
+        initialChildSessionPatch.modelOverrideFallbackOriginProvider,
+      ),
+      modelOverrideFallbackOriginModel: normalizeOptionalString(
+        initialChildSessionPatch.modelOverrideFallbackOriginModel,
+      ),
     });
     if (runtimeModelPersistError) {
       try {
@@ -1543,6 +1596,10 @@ export async function spawnSubagentDirect(
   const shouldAnnounceCompletion = deliverInitialChildRunDirectly
     ? false
     : expectsCompletionMessage;
+  const runModelOverride = buildSubagentRunModelOverride({
+    resolvedModel,
+    initialSessionPatch: initialChildSessionPatch,
+  });
   try {
     const {
       spawnedBy: _spawnedBy,
@@ -1551,9 +1608,11 @@ export async function spawnSubagentDirect(
     } = spawnedMetadata;
     const response = await callSubagentGateway({
       method: "agent",
+      ...(runModelOverride ? { scopes: [ADMIN_SCOPE] } : {}),
       params: {
         message: childTaskMessage,
         sessionKey: childSessionKey,
+        ...(runModelOverride ?? {}),
         channel: childSessionOrigin?.channel,
         to: childSessionOrigin?.to ?? undefined,
         accountId: childSessionOrigin?.accountId ?? undefined,

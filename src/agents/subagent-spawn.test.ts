@@ -312,8 +312,11 @@ describe("spawnSubagentDirect seam flow", () => {
       operations.lastIndexOf("store:update"),
     );
     const agentRequest = gatewayRequest("agent");
+    expect(agentRequest.scopes).toEqual(["operator.admin"]);
     const agentParams = requireRecord(agentRequest.params);
     expect(agentParams.sessionKey).toBe(childSessionKey);
+    expect(agentParams.provider).toBe("openai");
+    expect(agentParams.model).toBe("gpt-5.4");
     expect(agentParams.cleanupBundleMcpOnRunEnd).toBe(true);
   });
 
@@ -925,11 +928,15 @@ describe("spawnSubagentDirect seam flow", () => {
   });
 
   it("pins admin-only methods to operator.admin and preserves least-privilege for others (#59428)", async () => {
-    const capturedCalls: Array<{ method?: string; scopes?: string[] }> = [];
+    const capturedCalls: Array<{ method?: string; scopes?: string[]; params?: unknown }> = [];
 
     hoisted.callGatewayMock.mockImplementation(
-      async (request: { method?: string; scopes?: string[] }) => {
-        capturedCalls.push({ method: request.method, scopes: request.scopes });
+      async (request: { method?: string; scopes?: string[]; params?: unknown }) => {
+        capturedCalls.push({
+          method: request.method,
+          scopes: request.scopes,
+          params: request.params,
+        });
         if (request.method === "agent") {
           return { runId: "run-1" };
         }
@@ -962,8 +969,15 @@ describe("spawnSubagentDirect seam flow", () => {
       if (call.method === "sessions.patch" || call.method === "sessions.delete") {
         // Admin-only methods must be pinned to operator.admin.
         expect(call.scopes).toEqual(["operator.admin"]);
+      } else if (call.method === "agent") {
+        const params = requireRecord(call.params);
+        if (params.provider || params.model) {
+          // Explicit per-run model override must be admin-scoped or Gateway rejects it.
+          expect(call.scopes).toEqual(["operator.admin"]);
+        } else {
+          expect(call.scopes).toBeUndefined();
+        }
       } else {
-        // Non-admin methods (e.g. "agent") must NOT be forced to admin scope.
         expect(call.scopes).toBeUndefined();
       }
     }
