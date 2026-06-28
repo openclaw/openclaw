@@ -330,7 +330,6 @@ describe("flex cards", () => {
 });
 
 describe("action label/data surrogate-safe truncation", () => {
-  const loneHighSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
   // 19 ASCII chars + 😀 (U+1F600, two UTF-16 code units) = 21 code units; a raw
   // .slice(0, 20) would keep the first 19 chars plus the lone high surrogate.
   const labelWithEmoji = "1234567890123456789😀";
