@@ -547,6 +547,18 @@ terminal summary, and sanitized error text. `agentId` identifies the agent
 executing the task; `sessionKey` and `ownerKey` preserve requester and control
 context.
 
+### Durable coordination RPCs
+
+Operator clients may inspect native Durable Core coordination state through a
+bounded projection instead of reading the durable SQLite store directly.
+
+- `durable.coordination.get` requires `operator.read`.
+  - Params: `{ "workflowRunId": string }`.
+  - Result: `{ "projection": DurableCoordinationProjection }`.
+  - The projection includes workflow identity, status, recovery state, current
+    step, waiting reason, external task/session/run bindings, child counts, ref
+    summaries, and supported controls.
+
 ### Operator helper methods
 
 - Operators may call `commands.list` (`operator.read`) to fetch the runtime
