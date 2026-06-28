@@ -28,7 +28,7 @@ scenario:
             queryMode: recent
             maxSummaryChars: 220
   successCriteria:
-    - With Active Memory off, the session shows no Active Memory plugin activity.
+    - With Active Memory off after doctor migrates the legacy session toggle, the session shows no Active Memory plugin activity.
     - With Active Memory on, plugin-owned evidence shows the Active Memory sub-agent searched memory before the main reply.
     - Live lane proves the first user-visible reply uses the recalled preference.
   docsRefs:
@@ -36,12 +36,14 @@ scenario:
     - docs/concepts/memory-search.md
   codeRefs:
     - extensions/active-memory/index.ts
+    - extensions/active-memory/doctor-contract-api.ts
     - extensions/qa-lab/src/suite.ts
     - extensions/qa-lab/src/mock-openai-server.ts
   execution:
     kind: flow
     summary: Verify Active Memory stays off when session-toggled off, runs memory search/get when enabled, and helps a live model answer with the recalled preference in the first visible reply.
     config:
+      requiredChannelDriver: qa-channel
       baselineConversationId: qa-active-memory-off
       activeConversationId: qa-active-memory-on
       memoryFact: "Stable QA movie night usual favorite snack preference: lemon pepper wings with blue cheese."
@@ -107,6 +109,19 @@ flow:
             - ref: toggleStorePath
             - expr: "`${JSON.stringify({ sessions: { [baselineSessionKey]: { disabled: true, updatedAt: Date.now() } } }, null, 2)}\\n`"
             - utf8
+        - call: runQaCli
+          saveAs: doctorFixOutput
+          args:
+            - ref: env
+            - - doctor
+              - --fix
+              - --yes
+            - timeoutMs:
+                expr: liveTurnTimeoutMs(env, 60000)
+        - assert:
+            expr: "String(doctorFixOutput).includes('Migrated 1 Active Memory session toggle entry')"
+            message:
+              expr: "`doctor --fix did not migrate the Active Memory session toggle: ${doctorFixOutput}`"
         - set: requestCountBeforeBaseline
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
@@ -150,11 +165,6 @@ flow:
         - set: requestCountBeforeActive
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests`)).length : 0"
-        - call: fs.writeFile
-          args:
-            - ref: toggleStorePath
-            - expr: "'{}\\n'"
-            - utf8
         - set: activeStartIndex
           value:
             expr: "state.getSnapshot().messages.length"

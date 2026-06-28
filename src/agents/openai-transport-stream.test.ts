@@ -44,6 +44,7 @@ function createDeepSeekCompletionsModel(): Model<"openai-completions"> {
     api: "openai-completions",
     provider: "deepseek",
     baseUrl: "https://api.deepseek.com",
+    compat: { thinkingFormat: "deepseek" },
     reasoning: true,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -435,6 +436,216 @@ describe("openai transport stream", () => {
     ]);
   });
 
+  it("collapses cumulative message snapshot items into one text block (#91959)", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const pushSpy = vi.fn();
+    const snapshot1 = "Scaled dot-product attention";
+    const snapshot2 = "Scaled dot-product attention divides by sqrt(d_k)";
+    const snapshot3 = "Scaled dot-product attention divides by sqrt(d_k) before softmax.";
+    const messageItem = (id: string, text: string) => ({
+      type: "message",
+      id,
+      phase: "final_answer",
+      content: [{ type: "output_text", text }],
+    });
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_1", phase: "final_answer" },
+        },
+        { type: "response.output_text.delta", delta: snapshot1 },
+        { type: "response.output_item.done", item: messageItem("msg_1", snapshot1) },
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_2", phase: "final_answer" },
+        },
+        { type: "response.output_item.done", item: messageItem("msg_2", snapshot2) },
+        {
+          type: "response.output_item.added",
+          item: { type: "message", id: "msg_3", phase: "final_answer" },
+        },
+        { type: "response.output_item.done", item: messageItem("msg_3", snapshot3) },
+        {
+          type: "response.completed",
+          response: { id: "resp-snapshots", status: "completed" },
+        },
+      ]),
+      output,
+      { push: pushSpy },
+      model,
+    );
+
+    expect(output.content).toEqual([
+      {
+        type: "text",
+        text: snapshot3,
+        textSignature: '{"v":1,"id":"msg_3","phase":"final_answer"}',
+      },
+    ]);
+    // Balanced lifecycle: one text_start, all events on index 0, and each
+    // collapsed snapshot re-ends the same block.
+    const textEvents = pushSpy.mock.calls
+      .map(([event]) => event as { type: string; contentIndex?: number })
+      .filter((event) => event.type.startsWith("text_"));
+    expect(textEvents.map((event) => [event.type, event.contentIndex])).toEqual([
+      ["text_start", 0],
+      ["text_delta", 0],
+      ["text_end", 0],
+      ["text_end", 0],
+      ["text_end", 0],
+    ]);
+  });
+
+  it("keeps prefix-nested message items separated by a tool call as separate blocks", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+    const messageEvents = (id: string, text: string) => [
+      { type: "response.output_item.added", item: { type: "message", id } },
+      {
+        type: "response.output_item.done",
+        item: { type: "message", id, content: [{ type: "output_text", text }] },
+      },
+    ];
+
+    await testing.processResponsesStream(
+      streamChunks([
+        ...messageEvents("msg_1", "Done."),
+        {
+          type: "response.output_item.added",
+          item: {
+            type: "function_call",
+            id: "fc_1",
+            call_id: "call_1",
+            name: "write",
+            arguments: "{}",
+          },
+        },
+        {
+          type: "response.output_item.done",
+          item: {
+            type: "function_call",
+            id: "fc_1",
+            call_id: "call_1",
+            name: "write",
+            arguments: "{}",
+          },
+        },
+        ...messageEvents("msg_2", "Done."),
+        {
+          type: "response.completed",
+          response: { id: "resp-tool-boundary", status: "completed" },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    // The post-tool message is a real reply, not a snapshot of the pre-tool one.
+    expect(output.content.map((block) => block.type)).toEqual(["text", "toolCall", "text"]);
+    expect(output.content[2]).toMatchObject({ type: "text", text: "Done." });
+  });
+
+  it("collapses cumulative message snapshots in completed-response backfill (#91959)", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp-backfill-snapshots",
+            status: "completed",
+            output: [
+              {
+                type: "message",
+                id: "msg_1",
+                role: "assistant",
+                content: [{ type: "output_text", text: "The answer" }],
+              },
+              {
+                type: "message",
+                id: "msg_2",
+                role: "assistant",
+                content: [{ type: "output_text", text: "The answer is 42." }],
+              },
+              {
+                type: "message",
+                id: "msg_3",
+                role: "assistant",
+                content: [{ type: "output_text", text: "The answer" }],
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    // msg_2 strictly extends msg_1 and collapses into it; msg_3 shrinks back
+    // and is an independently identified message, so it stays a real block.
+    expect(output.content).toEqual([
+      {
+        type: "text",
+        text: "The answer is 42.",
+        textSignature: '{"v":1,"id":"msg_2"}',
+      },
+      {
+        type: "text",
+        text: "The answer",
+        textSignature: '{"v":1,"id":"msg_3"}',
+      },
+    ]);
+  });
+
+  it("keeps backfill message items separated by a reasoning item as distinct blocks", async () => {
+    const model = createAzureResponsesModel();
+    const output = createResponsesAssistantOutput(model);
+
+    await testing.processResponsesStream(
+      streamChunks([
+        {
+          type: "response.completed",
+          response: {
+            id: "resp-backfill-reasoning-boundary",
+            status: "completed",
+            output: [
+              {
+                type: "message",
+                id: "msg_1",
+                role: "assistant",
+                content: [{ type: "output_text", text: "Step one." }],
+              },
+              { type: "reasoning", id: "rs_1", summary: [] },
+              {
+                type: "message",
+                id: "msg_2",
+                role: "assistant",
+                content: [{ type: "output_text", text: "Step one. Step two." }],
+              },
+            ],
+          },
+        },
+      ]),
+      output,
+      { push: vi.fn() },
+      model,
+    );
+
+    // A reasoning item is a real boundary even in backfill: msg_2 must not
+    // collapse into msg_1 despite being a strict extension (mirrors streaming).
+    expect(output.content).toEqual([
+      { type: "text", text: "Step one.", textSignature: '{"v":1,"id":"msg_1"}' },
+      { type: "text", text: "Step one. Step two.", textSignature: '{"v":1,"id":"msg_2"}' },
+    ]);
+  });
+
   it("backfills Azure Responses completed function calls when item events are absent", async () => {
     const model = createAzureResponsesModel();
     const output = createResponsesAssistantOutput(model);
@@ -665,6 +876,50 @@ describe("openai transport stream", () => {
       version: "2026.3.22",
       "User-Agent": "openclaw/2026.3.22",
     });
+    expect(headers.Accept).toBeUndefined();
+    expect(headers.accept).toBeUndefined();
+  });
+
+  it("adds SSE Accept only to native ChatGPT/Codex Responses stream requests", () => {
+    const codexModel = {
+      id: "gpt-5.5",
+      name: "GPT-5.5",
+      api: "openai-chatgpt-responses",
+      provider: "openai",
+      baseUrl: "https://chatgpt.com/backend-api/codex",
+      reasoning: true,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 400000,
+      maxTokens: 128000,
+    } satisfies Model<"openai-chatgpt-responses">;
+    const transportAliasModel = {
+      ...codexModel,
+      api: "openclaw-openai-responses-transport" as Api,
+    } satisfies Model;
+    const nonNativeChatGPTModel = {
+      ...codexModel,
+      baseUrl: "https://api.openai.com/v1",
+    } satisfies Model<"openai-chatgpt-responses">;
+    const openAIModel = {
+      ...codexModel,
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    } satisfies Model<"openai-responses">;
+
+    expect(testing.buildOpenAISdkRequestOptions(codexModel, undefined, { stream: true })).toEqual({
+      headers: { Accept: "text/event-stream" },
+    });
+    expect(
+      testing.buildOpenAISdkRequestOptions(transportAliasModel, undefined, { stream: true }),
+    ).toEqual({ headers: { Accept: "text/event-stream" } });
+    expect(testing.buildOpenAISdkRequestOptions(codexModel)).toBeUndefined();
+    expect(
+      testing.buildOpenAISdkRequestOptions(nonNativeChatGPTModel, undefined, { stream: true }),
+    ).toBeUndefined();
+    expect(
+      testing.buildOpenAISdkRequestOptions(openAIModel, undefined, { stream: true }),
+    ).toBeUndefined();
   });
 
   it("moves Azure OpenAI completions api-version headers into default query params", () => {
@@ -1214,7 +1469,7 @@ describe("openai transport stream", () => {
       name: "qwen-coder-plus",
       api: "openai-completions",
       provider: "qwen",
-      baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      baseUrl: "",
       reasoning: false,
       input: ["text"],
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -2546,6 +2801,165 @@ describe("openai transport stream", () => {
       },
     ]);
     expect(JSON.stringify(events)).not.toContain("DSML");
+  });
+
+  it.each([
+    { finishReason: "length", stopReason: "length" },
+    { finishReason: "content_filter", stopReason: "error" },
+  ])(
+    "does not authorize recovered DeepSeek DSML calls after $finishReason",
+    async ({ finishReason, stopReason }) => {
+      const model = createDeepSeekCompletionsModel();
+      const output = createAssistantOutput(model);
+      expect(testing.getCompat(model).thinkingFormat).toBe("deepseek");
+
+      await testing.processOpenAICompletionsStream(
+        streamChunks([
+          {
+            id: "chatcmpl-deepseek-dsml-terminal",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: model.id,
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  content:
+                    '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/partial.md"}</|DSML|invoke></|DSML|tool_calls>',
+                },
+                logprobs: null,
+                finish_reason: finishReason,
+              },
+            ],
+          },
+        ]),
+        output,
+        model,
+        { push() {} },
+      );
+
+      expect(output.stopReason).toBe(stopReason);
+      expect(output.content).toEqual([]);
+    },
+  );
+
+  it("does not authorize recovered DeepSeek DSML calls when the stream omits a terminal", async () => {
+    const model = createDeepSeekCompletionsModel();
+    const output = createAssistantOutput(model);
+
+    await testing.processOpenAICompletionsStream(
+      streamChunks([
+        {
+          id: "chatcmpl-deepseek-dsml-no-terminal",
+          object: "chat.completion.chunk",
+          created: 1,
+          model: model.id,
+          choices: [
+            {
+              index: 0,
+              delta: {
+                content:
+                  '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/partial.md"}</|DSML|invoke></|DSML|tool_calls>',
+              },
+              logprobs: null,
+              finish_reason: null,
+            },
+          ],
+        },
+      ]),
+      output,
+      model,
+      { push() {} },
+    );
+
+    expect(output.stopReason).toBe("stop");
+    expect(output.content).toEqual([]);
+  });
+
+  it("emits recovered DeepSeek content-filter terminals as errors", async () => {
+    const server = createServer((req, res) => {
+      req.resume();
+      req.on("end", () => {
+        res.writeHead(200, {
+          "content-type": "text/event-stream; charset=utf-8",
+          "cache-control": "no-cache",
+          connection: "keep-alive",
+        });
+        res.write(
+          `data: ${JSON.stringify({
+            id: "chatcmpl-deepseek-dsml-content-filter",
+            object: "chat.completion.chunk",
+            created: 1,
+            model: "deepseek-v4-pro",
+            choices: [
+              {
+                index: 0,
+                delta: {
+                  content:
+                    '<|DSML|tool_calls><|DSML|invoke name="read">{"path":"/tmp/partial.md"}</|DSML|invoke></|DSML|tool_calls>',
+                },
+                finish_reason: "content_filter",
+              },
+            ],
+          })}\n\n`,
+        );
+        res.end("data: [DONE]\n\n");
+      });
+    });
+
+    await new Promise<void>((resolve) => {
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("Missing loopback server address");
+      }
+      const model = {
+        ...createDeepSeekCompletionsModel(),
+        baseUrl: `http://127.0.0.1:${address.port}/v1`,
+      } satisfies Model<"openai-completions">;
+      const stream = createOpenAICompletionsTransportStreamFn()(
+        model,
+        {
+          systemPrompt: "system",
+          messages: [{ role: "user", content: "Read the file", timestamp: Date.now() }],
+          tools: [],
+        } as never,
+        { apiKey: "test-key" } as never,
+      );
+
+      const terminalEvents: Array<{
+        type: string;
+        reason?: string;
+        error?: Record<string, unknown>;
+      }> = [];
+      for await (const event of stream as AsyncIterable<{
+        type: string;
+        reason?: string;
+        error?: Record<string, unknown>;
+      }>) {
+        if (event.type === "done" || event.type === "error") {
+          terminalEvents.push(event);
+        }
+      }
+
+      expect(terminalEvents).toEqual([
+        expect.objectContaining({
+          type: "error",
+          reason: "error",
+          error: expect.objectContaining({
+            stopReason: "error",
+            errorMessage: "Provider finish_reason: content_filter",
+            content: [],
+          }),
+        }),
+      ]);
+    } finally {
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
   });
 
   it("parses repeated DeepSeek DSML name attributes consistently", async () => {
@@ -4661,6 +5075,122 @@ describe("openai transport stream", () => {
     }
   });
 
+  it("replays update_plan-style empty non-image Responses tool results as no output", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "openai",
+            model: "gpt-5.5",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [{ type: "toolCall", id: "call_plan", name: "update_plan", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_plan",
+            toolName: "update_plan",
+            content: [],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as {
+      input?: Array<{ type?: string; call_id?: string; output?: unknown }>;
+    };
+
+    expect(params.input?.find((item) => item.type === "function_call_output")).toMatchObject({
+      type: "function_call_output",
+      call_id: "call_plan",
+      output: "(no output)",
+    });
+  });
+
+  it("preserves image-bearing Responses tool results as image input parts", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.5",
+        name: "GPT-5.5",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text", "image"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [
+          {
+            role: "assistant",
+            api: "openai-responses",
+            provider: "openai",
+            model: "gpt-5.5",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              totalTokens: 0,
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+            },
+            stopReason: "toolUse",
+            timestamp: 1,
+            content: [{ type: "toolCall", id: "call_shot", name: "screenshot", arguments: {} }],
+          },
+          {
+            role: "toolResult",
+            toolCallId: "call_shot",
+            toolName: "screenshot",
+            content: [{ type: "image", mimeType: "image/png", data: "aW1n" }],
+            isError: false,
+            timestamp: 2,
+          },
+        ],
+        tools: [],
+      } as never,
+      { sessionId: "session-123" },
+    ) as {
+      input?: Array<{ type?: string; output?: unknown }>;
+    };
+
+    expect(params.input?.find((item) => item.type === "function_call_output")?.output).toEqual([
+      {
+        type: "input_image",
+        detail: "auto",
+        image_url: "data:image/png;base64,aW1n",
+      },
+    ]);
+  });
+
   it("omits distinct overlong Copilot Responses replay item ids when store is disabled", () => {
     const sharedToolItemPrefix = "iVec" + "A".repeat(160);
     const firstToolCallId = `call_first|${sharedToolItemPrefix}Aa`;
@@ -5639,6 +6169,66 @@ describe("openai transport stream", () => {
     expect(params.tools?.[0]).not.toHaveProperty("strict");
   });
 
+  it("keeps native responses strict mode for projected tools after dropping bad schemas", () => {
+    const params = buildOpenAIResponsesParams(
+      {
+        id: "gpt-5.4",
+        name: "GPT-5.4",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-responses">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "broken",
+            description: "Broken",
+            parameters: {
+              type: "object",
+              get properties(): never {
+                throw new Error("properties exploded");
+              },
+            },
+          },
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: {},
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      tools?: Array<{
+        name?: string;
+        strict?: boolean;
+        parameters?: Record<string, unknown>;
+      }>;
+    };
+
+    expect(params.tools).toEqual([
+      {
+        type: "function",
+        name: "lookup_weather",
+        description: "Get forecast",
+        strict: true,
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+    ]);
+  });
+
   it("still normalizes responses tool parameters when strict is omitted", () => {
     const params = buildOpenAIResponsesParams(
       {
@@ -6402,6 +6992,7 @@ describe("openai transport stream", () => {
         api: "openai-completions",
         provider: "qwen",
         baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+        compat: { supportsUsageInStreaming: true },
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -6431,6 +7022,7 @@ describe("openai transport stream", () => {
         api: "openai-completions",
         provider: "generic",
         baseUrl: "https://coding.dashscope.aliyuncs.com/v1",
+        compat: { supportsUsageInStreaming: true },
         reasoning: true,
         input: ["text"],
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
@@ -7355,6 +7947,67 @@ describe("openai transport stream", () => {
     ) as { tools?: Array<{ function?: { strict?: boolean } }> };
 
     expect(params.tools?.[0]?.function?.strict).toBe(true);
+  });
+
+  it("keeps native completions strict mode for projected tools after dropping bad schemas", () => {
+    const params = buildOpenAICompletionsParams(
+      {
+        id: "gpt-5",
+        name: "GPT-5",
+        api: "openai-completions",
+        provider: "openai",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 200000,
+        maxTokens: 8192,
+      } satisfies Model<"openai-completions">,
+      {
+        systemPrompt: "system",
+        messages: [],
+        tools: [
+          {
+            name: "broken",
+            description: "Broken",
+            parameters: {
+              type: "object",
+              get properties(): never {
+                throw new Error("properties exploded");
+              },
+            },
+          },
+          {
+            name: "lookup_weather",
+            description: "Get forecast",
+            parameters: {},
+          },
+        ],
+      } as never,
+      undefined,
+    ) as {
+      tools?: Array<{
+        function?: {
+          name?: string;
+          strict?: boolean;
+          parameters?: Record<string, unknown>;
+        };
+      }>;
+    };
+
+    expect(params.tools?.map((tool) => tool.function)).toEqual([
+      {
+        name: "lookup_weather",
+        description: "Get forecast",
+        strict: true,
+        parameters: {
+          type: "object",
+          properties: {},
+          required: [],
+          additionalProperties: false,
+        },
+      },
+    ]);
   });
 
   it("falls back to completions strict:false when a native OpenAI tool schema is not strict-compatible", () => {

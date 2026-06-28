@@ -36,7 +36,7 @@ import type {
 } from "./types.js";
 
 /** Legacy auth.json store shape before auth-profiles.json/SQLite. */
-export type LegacyAuthStore = Record<string, AuthProfileCredential>;
+type LegacyAuthStore = Record<string, AuthProfileCredential>;
 
 type LoadPersistedAuthProfileStoreOptions = {
   allowKeychainPrompt?: boolean;

@@ -1,7 +1,7 @@
 // Qqbot tests cover stt plugin behavior.
 import * as fs from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ssrfRuntimeMocks = vi.hoisted(() => ({
@@ -18,6 +18,58 @@ afterAll(() => {
 });
 
 import { resolveSTTConfig, transcribeAudio } from "./stt.js";
+
+function cancelTrackedResponse(
+  text: string,
+  init: ResponseInit,
+): {
+  response: Response;
+  wasCanceled: () => boolean;
+} {
+  let canceled = false;
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text));
+    },
+    cancel() {
+      canceled = true;
+    },
+  });
+  return {
+    response: new Response(stream, init),
+    wasCanceled: () => canceled,
+  };
+}
+
+function largeTranscriptionJsonResponse(params: { chunkCount: number; chunkSize: number }): {
+  response: Response;
+  getReadCount: () => number;
+} {
+  let chunkIndex = 0;
+  const encoder = new TextEncoder();
+  const chunks = [
+    '{"text":"',
+    ...Array.from({ length: params.chunkCount }, () => "a".repeat(params.chunkSize)),
+    '"}',
+  ];
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (chunkIndex >= chunks.length) {
+        controller.close();
+        return;
+      }
+      controller.enqueue(encoder.encode(chunks[chunkIndex]));
+      chunkIndex += 1;
+    },
+  });
+  return {
+    response: new Response(stream, {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    }),
+    getReadCount: () => chunkIndex,
+  };
+}
 
 function requireFirstSsrfRequest(): {
   url?: unknown;
@@ -110,47 +162,128 @@ describe("engine/utils/stt", () => {
   });
 
   it("posts audio to OpenAI-compatible transcription endpoint", async () => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-qqbot-stt-"));
-    const audioPath = path.join(tmpDir, "voice.wav");
-    fs.writeFileSync(audioPath, Buffer.from([1, 2, 3, 4]));
+    await withTempDir("openclaw-qqbot-stt-", async (tmpDir) => {
+      const audioPath = path.join(tmpDir, "voice.wav");
+      fs.writeFileSync(audioPath, Buffer.from([1, 2, 3, 4]));
 
-    const release = vi.fn(async () => {});
-    ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-      response: Response.json({
-        text: "hello from audio",
-      }),
-      release,
-    });
+      const release = vi.fn(async () => {});
+      ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: Response.json({
+          text: "hello from audio",
+        }),
+        release,
+      });
 
-    const transcript = await transcribeAudio(audioPath, {
-      channels: {
-        qqbot: {
-          stt: {
-            baseUrl: "https://api.example.test/v1/",
-            apiKey: "secret",
-            model: "whisper-1",
+      const transcript = await transcribeAudio(audioPath, {
+        channels: {
+          qqbot: {
+            stt: {
+              baseUrl: "https://api.example.test/v1/",
+              apiKey: "secret",
+              model: "whisper-1",
+            },
           },
         },
-      },
-    });
+      });
 
-    expect(transcript).toBe("hello from audio");
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
-    const request = requireFirstSsrfRequest();
-    expect(request.url).toBe("https://api.example.test/v1/audio/transcriptions");
-    expect(request.auditContext).toBe("qqbot-stt");
-    expect(request.init?.method).toBe("POST");
-    expect(request.init?.headers).toEqual({ Authorization: "Bearer secret" });
-    expect(request.init?.body).toBeInstanceOf(FormData);
-    const body = request.init?.body as FormData;
-    expect(body.get("model")).toBe("whisper-1");
-    const file = body.get("file");
-    expect(file).toBeInstanceOf(File);
-    expect((file as File).name).toBe("voice.wav");
-    expect((file as File).type).toBe("audio/wav");
-    expect(new Uint8Array(await (file as File).arrayBuffer())).toEqual(
-      new Uint8Array([1, 2, 3, 4]),
-    );
-    expect(release).toHaveBeenCalledTimes(1);
+      expect(transcript).toBe("hello from audio");
+      expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+      const request = requireFirstSsrfRequest();
+      expect(request.url).toBe("https://api.example.test/v1/audio/transcriptions");
+      expect(request.auditContext).toBe("qqbot-stt");
+      expect(request.init?.method).toBe("POST");
+      expect(request.init?.headers).toEqual({ Authorization: "Bearer secret" });
+      expect(request.init?.body).toBeInstanceOf(FormData);
+      const body = request.init?.body as FormData;
+      expect(body.get("model")).toBe("whisper-1");
+      const file = body.get("file");
+      expect(file).toBeInstanceOf(File);
+      expect((file as File).name).toBe("voice.wav");
+      expect((file as File).type).toBe("audio/wav");
+      expect(new Uint8Array(await (file as File).arrayBuffer())).toEqual(
+        new Uint8Array([1, 2, 3, 4]),
+      );
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("bounds successful STT JSON responses before parsing", async () => {
+    await withTempDir("openclaw-qqbot-stt-success-limit-", async (tmpDir) => {
+      const audioPath = path.join(tmpDir, "voice.wav");
+      fs.writeFileSync(audioPath, Buffer.from([1, 2, 3, 4]));
+
+      const release = vi.fn(async () => {});
+      const streamed = largeTranscriptionJsonResponse({
+        chunkCount: 18,
+        chunkSize: 1024 * 1024,
+      });
+      ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: streamed.response,
+        release,
+      });
+
+      let error: unknown;
+      try {
+        await transcribeAudio(audioPath, {
+          channels: {
+            qqbot: {
+              stt: {
+                baseUrl: "https://api.example.test/v1/",
+                apiKey: "secret",
+                model: "whisper-1",
+              },
+            },
+          },
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(String(error)).toContain("qqbot.stt: JSON response exceeds 16777216 bytes");
+      expect(streamed.getReadCount()).toBeLessThan(20);
+      expect(release).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("bounds STT error bodies without using response.text()", async () => {
+    await withTempDir("openclaw-qqbot-stt-error-", async (tmpDir) => {
+      const audioPath = path.join(tmpDir, "voice.wav");
+      fs.writeFileSync(audioPath, Buffer.from([1, 2, 3, 4]));
+
+      const release = vi.fn(async () => {});
+      const tracked = cancelTrackedResponse(`${"stt provider unavailable ".repeat(1024)}tail`, {
+        status: 503,
+        statusText: "Service Unavailable",
+        headers: { "content-type": "text/plain" },
+      });
+      const textSpy = vi.spyOn(tracked.response, "text").mockRejectedValue(new Error("unbounded"));
+      ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
+        response: tracked.response,
+        release,
+      });
+
+      let error: unknown;
+      try {
+        await transcribeAudio(audioPath, {
+          channels: {
+            qqbot: {
+              stt: {
+                baseUrl: "https://api.example.test/v1/",
+                apiKey: "secret",
+                model: "whisper-1",
+              },
+            },
+          },
+        });
+      } catch (caught) {
+        error = caught;
+      }
+
+      expect(String(error)).toContain("STT failed (HTTP 503): stt provider unavailable");
+      expect(String(error)).not.toContain("tail");
+      expect(tracked.wasCanceled()).toBe(true);
+      expect(textSpy).not.toHaveBeenCalled();
+      expect(release).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -509,6 +509,35 @@ describe("runSetupWizard", () => {
     expect(healthCommand).not.toHaveBeenCalled();
     expect(runTui).not.toHaveBeenCalled();
   });
+
+  it("shows setup duration expectations before the security acknowledgement", async () => {
+    const note: WizardPrompter["note"] = vi.fn(async () => {});
+    const confirm = vi.fn(async () => true) as unknown as WizardPrompter["confirm"];
+    const prompter = buildWizardPrompter({ note, confirm });
+    const runtime = createRuntime({ throwsOnExit: true });
+
+    await runSetupWizard(
+      {
+        flow: "quickstart",
+        authChoice: "skip",
+        installDaemon: false,
+        skipProviders: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    const calls = getWizardNoteCalls(note);
+    expect(calls[0]?.[1]).toBe("Setup timeline");
+    expect(calls[0]?.[0]).toContain("model/auth, workspace, Gateway, channels");
+    expect(calls[0]?.[0]).toContain("openclaw configure");
+    expect(calls[1]?.[1]).toBe("Security disclaimer");
+  });
+
   it("persists skipBootstrap and skips workspace bootstrap creation when requested", async () => {
     ensureWorkspaceAndSessions.mockClear();
     replaceConfigFile.mockClear();
@@ -977,6 +1006,51 @@ describe("runSetupWizard", () => {
     const call = getMockCallArg(applyAuthChoice, 0, 0, "openai auth choice");
     const opts = (call as { opts?: Record<string, unknown> }).opts ?? {};
     expect(opts.openaiApiKey).toBe("sk-flag-value");
+  });
+
+  it("passes preserveExistingDefaultModel to applyAuthChoice to protect existing default model", async () => {
+    applyAuthChoice.mockReset();
+    applyAuthChoice.mockResolvedValueOnce({
+      config: {
+        agents: {
+          defaults: {
+            model: {
+              primary: "google/gemini-3.1-pro-preview",
+            },
+          },
+        },
+      },
+    });
+
+    const prompter = buildWizardPrompter({});
+    const runtime = createRuntime();
+
+    await runSetupWizard(
+      {
+        acceptRisk: true,
+        flow: "quickstart",
+        authChoice: "google-api-key",
+        installDaemon: false,
+        skipChannels: true,
+        skipSkills: true,
+        skipSearch: true,
+        skipHealth: true,
+        skipUi: true,
+      },
+      runtime,
+      prompter,
+    );
+
+    expect(applyAuthChoice).toHaveBeenCalledTimes(1);
+    const call = getMockCallArg(applyAuthChoice, 0, 0, "google auth choice");
+    // Preserve the user's existing default model when a new provider is
+    // configured through the setup wizard, matching the contract already
+    // used in configure.gateway-auth.ts. Without this flag, configuring a
+    // paid Google Gemini key would silently overwrite the user's default
+    // model, causing existing heartbeat turns to consume paid API quota.
+    expect((call as { preserveExistingDefaultModel?: boolean }).preserveExistingDefaultModel).toBe(
+      true,
+    );
   });
 
   it("shows plugin compatibility notices for an existing valid config", async () => {

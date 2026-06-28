@@ -3,7 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { runAgentHarnessBeforeMessageWriteHook } from "../../../agents/harness/hook-helpers.js";
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { resolveStorePath } from "../../../config/sessions.js";
-import { readSessionEntry } from "../../../config/sessions/store-load.js";
+import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 // Drains queued follow-up runs while preserving route and session identity.
 import {
   channelRouteCompactKey,
@@ -71,6 +71,7 @@ type OriginRoutingMetadata = Pick<
   | "originatingTo"
   | "originatingAccountId"
   | "originatingThreadId"
+  | "originatingChatId"
   | "originatingReplyToId"
   | "originatingReplyToMode"
   | "originatingChatType"
@@ -85,6 +86,7 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
         item.originatingTo ||
         item.originatingAccountId ||
         item.originatingThreadId != null ||
+        item.originatingChatId ||
         item.originatingReplyToId ||
         item.originatingReplyToMode ||
         item.originatingChatType,
@@ -97,6 +99,7 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
     originatingTo: source.originatingTo,
     originatingAccountId: source.originatingAccountId,
     originatingThreadId: source.originatingThreadId,
+    originatingChatId: source.originatingChatId,
     originatingReplyToId: source.originatingReplyToId,
     originatingReplyToMode: source.originatingReplyToMode,
     originatingChatType: source.originatingChatType,
@@ -112,6 +115,7 @@ function resolveOriginRoutingMetadata(items: FollowupRun[]): OriginRoutingMetada
 export function resolveFollowupAuthorizationKey(run: FollowupRun["run"]): string {
   return JSON.stringify([
     run.senderId ?? "",
+    JSON.stringify(run.channelContext ?? null),
     run.senderE164 ?? "",
     run.senderIsOwner === true,
     run.execOverrides?.host ?? "",
@@ -134,6 +138,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
       accountId: run.originatingAccountId,
       threadId: run.originatingThreadId,
     }),
+    run.originatingChatId ?? "",
     resolveFollowupReplyAnchor(run) ?? "",
     run.originatingReplyToMode ?? "",
     normalizeChatType(run.originatingChatType) ?? "",
@@ -454,7 +459,14 @@ function resolveCrossChannelKey(item: FollowupRun): { cross?: true; key?: string
   const threadId = item.originatingThreadId;
   const replyToId = resolveFollowupReplyAnchor(item);
   const chatType = normalizeChatType(item.originatingChatType);
-  if (!channel && !to && !accountId && (threadId == null || threadId === "") && !replyToId) {
+  if (
+    !channel &&
+    !to &&
+    !accountId &&
+    (threadId == null || threadId === "") &&
+    !item.originatingChatId &&
+    !replyToId
+  ) {
     return chatType ? { key: JSON.stringify(["unresolved", chatType]) } : {};
   }
   if (!isRoutableChannel(channel) || !to) {
@@ -502,6 +514,7 @@ export function createOverflowSummaryRetrySource(source: FollowupRun): FollowupR
     originatingTo: source.originatingTo,
     originatingAccountId: source.originatingAccountId,
     originatingThreadId: source.originatingThreadId,
+    originatingChatId: source.originatingChatId,
     originatingReplyToId: source.originatingReplyToId,
     originatingReplyToMode: source.originatingReplyToMode,
     originatingChatType: source.originatingChatType,
@@ -553,7 +566,11 @@ async function runSyntheticOverflowSummary(params: {
           config: params.source.run.config,
         };
       }
-      const sessionEntry = readSessionEntry(storePath, sessionKey);
+      const sessionEntry = loadSessionEntry({
+        storePath,
+        sessionKey,
+        clone: false,
+      });
       return {
         sessionId: sessionEntry?.sessionId ?? params.source.run.sessionId,
         sessionKey,

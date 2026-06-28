@@ -256,10 +256,6 @@ function resolveSkillsLimits(config?: OpenClawConfig, agentId?: string): Resolve
   };
 }
 
-export function resolveSkillRootScanLimit(config?: OpenClawConfig): number {
-  return config?.skills?.limits?.maxCandidatesPerRoot ?? DEFAULT_MAX_CANDIDATES_PER_ROOT;
-}
-
 function listChildDirectories(
   dir: string,
   opts?: {
@@ -1696,13 +1692,6 @@ export async function syncSkillsToWorkspace(params: {
       }
     }
   });
-}
-
-export function filterWorkspaceSkillEntries(
-  entries: SkillEntry[],
-  config?: OpenClawConfig,
-): SkillEntry[] {
-  return filterSkillEntries(entries, config);
 }
 
 export function filterWorkspaceSkillEntriesWithOptions(

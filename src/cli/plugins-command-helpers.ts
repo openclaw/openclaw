@@ -6,17 +6,10 @@ import type { PluginKind } from "../plugins/plugin-kind.types.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { applyExclusiveSlotSelection } from "../plugins/slots.js";
 import { buildPluginDiagnosticsReport } from "../plugins/status.js";
-import type { PluginLogger } from "../plugins/types.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
+export { quietPluginJsonLogger } from "./plugins-json-logger.js";
 
 type HookInternalEntryLike = Record<string, unknown> & { enabled?: boolean };
-
-export const quietPluginJsonLogger: PluginLogger = {
-  debug: () => undefined,
-  info: () => undefined,
-  warn: () => undefined,
-  error: () => undefined,
-};
 
 type SlotSelectionPlugin = {
   id: string;
@@ -134,7 +127,7 @@ export function createPluginInstallLogger(runtime: RuntimeEnv = defaultRuntime):
 } {
   return {
     info: (msg) => runtime.log(msg),
-    warn: (msg) => runtime.log(theme.warn(msg)),
+    warn: (msg) => runtime.log(msg.includes("╭─") ? msg : theme.warn(msg)),
   };
 }
 

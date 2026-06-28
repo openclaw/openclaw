@@ -71,7 +71,7 @@ const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 const controlUiAssistantMediaTicketSecret = randomBytes(32);
 
-export type ControlUiRequestOptions = {
+type ControlUiRequestOptions = {
   basePath?: string;
   config?: OpenClawConfig;
   agentId?: string;
@@ -154,7 +154,22 @@ const CONTROL_UI_ROOT_PUBLIC_ASSETS = new Set([
   "sw.js",
 ]);
 
-export type ControlUiAvatarResolution =
+/** Rewrites root-absolute Control UI public asset hrefs for configured base paths. */
+export function rewriteControlUiIndexHtmlPublicAssetHrefs(html: string, basePath: string): string {
+  const normalized = normalizeControlUiBasePath(basePath);
+  if (!normalized) {
+    return html;
+  }
+  let next = html;
+  for (const asset of CONTROL_UI_ROOT_PUBLIC_ASSETS) {
+    const rootHref = `href="/${asset}"`;
+    const baseHref = `href="${normalized}/${asset}"`;
+    next = next.split(rootHref).join(baseHref);
+  }
+  return next;
+}
+
+type ControlUiAvatarResolution =
   | { kind: "none"; reason: string; source?: string | null }
   | { kind: "local"; filePath: string; source?: string | null }
   | { kind: "remote"; url: string; source?: string | null }
@@ -743,8 +758,9 @@ function serveResolvedFile(res: ServerResponse, filePath: string, body: Buffer) 
   res.end(body);
 }
 
-function serveResolvedIndexHtml(res: ServerResponse, body: string) {
-  const hashes = computeInlineScriptHashes(body);
+function serveResolvedIndexHtml(res: ServerResponse, body: string, basePath?: string) {
+  const prepared = rewriteControlUiIndexHtmlPublicAssetHrefs(body, basePath ?? "");
+  const hashes = computeInlineScriptHashes(prepared);
   if (hashes.length > 0) {
     res.setHeader(
       "Content-Security-Policy",
@@ -753,7 +769,7 @@ function serveResolvedIndexHtml(res: ServerResponse, body: string) {
   }
   res.setHeader("Content-Type", "text/html; charset=utf-8");
   res.setHeader("Cache-Control", "no-cache");
-  res.end(body);
+  res.end(prepared);
 }
 
 function readOpenedFile(fd: number): Promise<Buffer> {
@@ -979,6 +995,7 @@ export async function handleControlUiHttpRequest(
             : "scripts",
       allowExternalEmbedUrls: config?.gateway?.controlUi?.allowExternalEmbedUrls === true,
       chatMessageMaxWidth: config?.gateway?.controlUi?.chatMessageMaxWidth,
+      timeFormat: config?.agents?.defaults?.timeFormat,
     } satisfies ControlUiBootstrapConfig);
     return true;
   }
@@ -1068,7 +1085,7 @@ export async function handleControlUiHttpRequest(
         return true;
       }
       if (path.basename(safeFile.path) === "index.html") {
-        serveResolvedIndexHtml(res, await readOpenedFileText(safeFile.fd));
+        serveResolvedIndexHtml(res, await readOpenedFileText(safeFile.fd), basePath);
         return true;
       }
       serveResolvedFile(res, safeFile.path, await readOpenedFile(safeFile.fd));
@@ -1096,7 +1113,7 @@ export async function handleControlUiHttpRequest(
       if (respondHeadForFile(req, res, safeIndex.path)) {
         return true;
       }
-      serveResolvedIndexHtml(res, await readOpenedFileText(safeIndex.fd));
+      serveResolvedIndexHtml(res, await readOpenedFileText(safeIndex.fd), basePath);
       return true;
     } finally {
       fs.closeSync(safeIndex.fd);

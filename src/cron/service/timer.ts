@@ -227,7 +227,9 @@ export async function executeJobCoreWithTimeout(
     const triggerTimeout = (reason: string) => {
       timeoutReason = reason;
       if (!runAbortController.signal.aborted) {
-        runAbortController.abort(reason);
+        const timeoutError = new Error(reason);
+        timeoutError.name = "TimeoutError";
+        runAbortController.abort(timeoutError);
       }
       resolveTimeout?.(timeoutMarker);
     };
@@ -342,7 +344,6 @@ export function maybeNotifyIsolatedAgentSetupTimeout(
   if (!notified) {
     return false;
   }
-  state.restartRecoveryPending = true;
   return true;
 }
 
@@ -891,7 +892,10 @@ export function applyJobResult(
         }
       }
       // Apply exponential backoff for errored jobs to prevent retry storms.
-      const backoff = errorBackoffMs(job.state.consecutiveErrors ?? 1);
+      const backoff = errorBackoffMs(
+        job.state.consecutiveErrors ?? 1,
+        state.deps.cronConfig?.retry?.backoffMs ?? DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
+      );
       normalNext = computeNormalNext();
       const backoffNext = result.endedAt + backoff;
       // Use whichever is later: the natural next run or the backoff delay.
@@ -1595,13 +1599,13 @@ function deferPendingBackoffMissedCronSlots(
 export async function runMissedJobs(
   state: CronServiceState,
   opts?: { skipJobIds?: ReadonlySet<string>; deferAgentTurnJobs?: boolean },
-) {
+): Promise<ReadonlySet<string>> {
   if (state.stopped) {
-    return;
+    return new Set();
   }
   const plan = await planStartupCatchup(state, opts);
   if (plan.candidates.length === 0 && plan.deferredJobs.length === 0) {
-    return;
+    return new Set();
   }
 
   const outcomes = await executeStartupCatchupPlan(state, plan);
@@ -1609,6 +1613,7 @@ export async function runMissedJobs(
   for (const outcome of finalizedOutcomes) {
     maybeNotifyIsolatedAgentSetupTimeout(state, outcome);
   }
+  return new Set(plan.deferredJobs.map((deferred) => deferred.jobId));
 }
 
 async function planStartupCatchup(
@@ -2156,56 +2161,6 @@ async function executeDetachedCronJob(
     provider: res.provider,
     usage: res.usage,
   };
-}
-
-/** Executes a cron job and applies the resulting state transitions in memory. */
-export async function executeJob(
-  state: CronServiceState,
-  job: CronJob,
-  _nowMs: number,
-  _opts: { forced: boolean },
-) {
-  if (!job.state) {
-    job.state = {};
-  }
-  const startedAt = state.deps.nowMs();
-  job.state.runningAtMs = startedAt;
-  job.state.lastError = undefined;
-  const activeJobMarker = markCronJobActive(job.id, {
-    preserveAcrossGenerationAdvance: job.sessionTarget === "main",
-  });
-  emit(state, { jobId: job.id, action: "started", job, runAtMs: startedAt });
-
-  let coreResult: {
-    status: CronRunStatus;
-    delivered?: boolean;
-    delivery?: CronDeliveryTrace;
-  } & CronRunOutcome &
-    CronRunTelemetry;
-  try {
-    coreResult = await executeJobCoreWithTimeout(state, job, { activeJobMarker });
-  } catch (err) {
-    coreResult = { status: "error", error: String(err) };
-  }
-
-  const endedAt = state.deps.nowMs();
-  const shouldDelete = applyJobResult(state, job, {
-    status: coreResult.status,
-    error: coreResult.error,
-    diagnostics: coreResult.diagnostics,
-    delivered: coreResult.delivered,
-    provider: coreResult.provider,
-    startedAt,
-    endedAt,
-  });
-
-  emitJobFinished(state, job, coreResult, startedAt);
-
-  if (shouldDelete && state.store) {
-    state.store.jobs = state.store.jobs.filter((j) => j.id !== job.id);
-    emit(state, { jobId: job.id, action: "removed", job });
-  }
-  clearCronJobActive(job.id, activeJobMarker);
 }
 
 function emitJobFinished(

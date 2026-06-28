@@ -25,6 +25,7 @@ function createMockContext(overrides?: {
       toolResultFormat: overrides?.toolResultFormat,
     },
     state: {
+      replayState: { replayInvalid: false, hadPotentialSideEffects: false },
       toolMetaById: new Map(),
       toolMetas: [],
       toolSummaryById: new Set(),

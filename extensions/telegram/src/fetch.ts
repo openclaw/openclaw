@@ -488,9 +488,10 @@ export type TelegramTransport = {
   dispatcherAttempts?: TelegramDispatcherAttempt[];
   /**
    * Promote this transport to its next fallback dispatcher before the next
-   * request. Returns false when no fallback path exists.
+   * request. The original error, when available, is retained in diagnostics.
+   * Returns false when no fallback path exists.
    */
-  forceFallback?: (reason: string) => boolean;
+  forceFallback?: (reason: string, err?: unknown) => boolean;
   /**
    * Release all dispatchers owned by this transport and the TCP sockets they
    * hold. Safe to call multiple times; subsequent calls resolve immediately.
@@ -563,7 +564,8 @@ function createTelegramTransportAttempts(params: {
     },
     exportAttempt: { dispatcherPolicy: fallbackIpPolicy },
     logLevel: "warn",
-    logMessage: "fetch fallback: DNS-resolved IP unreachable; trying alternative Telegram API IP",
+    logMessage:
+      "fetch fallback: primary connection path failed; trying alternative Telegram API IP",
   });
 
   return attempts;
@@ -864,8 +866,8 @@ export function resolveTelegramTransport(
     fetch: resolvedFetch,
     sourceFetch,
     dispatcherAttempts: transportAttempts.map((attempt) => attempt.exportAttempt),
-    forceFallback: (reason: string) =>
-      promoteStickyAttempt(stickyAttemptIndex + 1, new Error("forced fallback"), reason),
+    forceFallback: (reason: string, err?: unknown) =>
+      promoteStickyAttempt(stickyAttemptIndex + 1, err ?? new Error("forced fallback"), reason),
     close,
   };
 }

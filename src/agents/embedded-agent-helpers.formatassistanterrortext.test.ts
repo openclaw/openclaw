@@ -650,6 +650,33 @@ describe("formatRawAssistantErrorForUi", () => {
       "The provider returned an HTML error page instead of an API response. This usually means a CDN or gateway (e.g. Cloudflare) blocked the request. Retry in a moment or check provider status.",
     );
   });
+
+  it("truncates fallback raw error text on UTF-16 code-point boundary without dangling surrogates", () => {
+    // 601 UTF-16 code units: emoji (surrogate pair) straddles the 600-unit truncation boundary
+    const prefix = "x".repeat(599);
+    const emoji = "🎉"; // U+1F389 — high surrogate 0xD83C + low surrogate 0xDF89
+    const raw = prefix + emoji; // 601 code units total
+
+    const result = formatRawAssistantErrorForUi(raw);
+
+    // Result must end with "…" after truncation
+    expect(result).toMatch(/…$/);
+
+    // Verify the truncated portion contains no dangling surrogates
+    for (let i = 0; i < result.length - 1; i++) {
+      const codeUnit = result.charCodeAt(i);
+      // High surrogate (0xD800-0xDBFF) must be followed by a low surrogate
+      if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+        const next = result.charCodeAt(i + 1);
+        expect(next >= 0xdc00 && next <= 0xdfff).toBe(true);
+      }
+      // Low surrogate (0xDC00-0xDFFF) must be preceded by a high surrogate
+      if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+        const prev = i > 0 ? result.charCodeAt(i - 1) : -1;
+        expect(prev >= 0xd800 && prev <= 0xdbff).toBe(true);
+      }
+    }
+  });
 });
 
 describe("raw API error payload helpers", () => {
@@ -670,6 +697,38 @@ describe("raw API error payload helpers", () => {
     expect(formatRawAssistantErrorForUi(raw)).toBe(
       "LLM error insufficient_balance: Insufficient MBT balance. Top up or upgrade your subscription to continue.",
     );
+  });
+});
+
+describe("formatBillingErrorMessage — authMode neutral copy (#80877)", () => {
+  // OAuth/Max users should NOT see "API key" or "top up" language.
+  it("returns neutral copy for oauth authMode — no 'API key' text", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "oauth");
+    expect(result).not.toMatch(/api key/i);
+    expect(result).not.toMatch(/top up/i);
+    expect(result).toContain("check your account");
+  });
+
+  it("returns neutral copy for token authMode — no 'API key' text", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "token");
+    expect(result).not.toMatch(/api key/i);
+    expect(result).not.toMatch(/top up/i);
+  });
+
+  it("REGRESSION: api_key authMode still returns 'API key' copy", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5", "api_key");
+    expect(result).toMatch(/api key/i);
+    expect(result).toMatch(/top up/i);
+  });
+
+  it("REGRESSION: undefined authMode (legacy call-sites) still returns 'API key' copy", () => {
+    const result = formatBillingErrorMessage("Anthropic", "claude-sonnet-4-5");
+    expect(result).toMatch(/api key/i);
+  });
+
+  it("REGRESSION: no-provider call still returns generic 'API key' copy", () => {
+    const result = formatBillingErrorMessage();
+    expect(result).toMatch(/api key/i);
   });
 });
 

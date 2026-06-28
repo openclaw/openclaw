@@ -43,9 +43,17 @@ export type BrowserServerState = {
   stopUnhandledRejectionHandler?: () => void;
 };
 
+export type EnsureTabAvailableOptions = {
+  /** Allow a target-id-only tab when the caller can continue through Playwright. */
+  allowPlaywrightFallback?: boolean;
+};
+
 type BrowserProfileActions = {
   ensureBrowserAvailable: (opts?: { headless?: boolean }) => Promise<void>;
-  ensureTabAvailable: (targetId?: string) => Promise<BrowserTab>;
+  ensureTabAvailable: (
+    targetId?: string,
+    options?: EnsureTabAvailableOptions,
+  ) => Promise<BrowserTab>;
   isHttpReachable: (timeoutMs?: number) => Promise<boolean>;
   isTransportAvailable: (timeoutMs?: number) => Promise<boolean>;
   isReachable: (

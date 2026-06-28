@@ -237,7 +237,9 @@ function parseFeishuCardActionEventPayload(value: unknown): FeishuCardActionEven
   );
   const tag = readString(action.tag);
   const actionValue = action.value;
-  const openMessageId = firstString(value.open_message_id, context.open_message_id);
+  // Prefer context.open_message_id (original card message) over value.open_message_id
+  // which may be a temporary card-action-c-* ID that is not a valid Feishu message ID.
+  const openMessageId = firstString(context.open_message_id, value.open_message_id);
   const contextOpenId = firstString(context.open_id, openId);
   const contextUserId = firstString(context.user_id, userId);
   const chatId = firstString(context.chat_id, context.open_chat_id);
@@ -305,6 +307,9 @@ function registerEventHandlers(
     }),
     "im.message.message_read_v1": async () => {
       // Ignore read receipts
+    },
+    "im.chat.access_event.bot_p2p_chat_entered_v1": async () => {
+      // Ignore p2p chat entry notifications — no action needed
     },
     "im.chat.member.bot.added_v1": async (data) => {
       try {

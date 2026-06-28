@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { getIMessageRuntime } from "../runtime.js";
+import { stripLeadingEchoTextCorruptionMarkers } from "./echo-text-corruption.js";
 
 type PersistedEchoEntry = {
   scope: string;
@@ -26,7 +27,14 @@ export const IMESSAGE_SENT_ECHOES_MAX_ENTRIES = 256;
 type PersistedEchoStore = PluginStateSyncKeyedStore<PersistedEchoEntry>;
 
 function normalizeText(text: string | undefined): string | undefined {
-  const normalized = text?.replace(/\r\n?/g, "\n").trim();
+  if (!text) {
+    return undefined;
+  }
+  // Match the in-memory echo-cache key so a reflected echo with a leading attributedBody
+  // corruption marker still matches the clean stored send (the persisted sibling of #93511).
+  const normalized = stripLeadingEchoTextCorruptionMarkers(
+    text.replace(/\r\n?/g, "\n").trim(),
+  ).trim();
   return normalized || undefined;
 }
 

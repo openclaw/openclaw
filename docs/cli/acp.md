@@ -63,7 +63,7 @@ Quick rule:
   fallback and do not reconstruct historic tool calls or system notices.
 - If multiple ACP clients share the same Gateway session key, event and cancel
   routing are best-effort rather than strictly isolated per client. Prefer the
-  default isolated `acp:<uuid>` sessions when you need clean editor-local
+  default isolated `acp-bridge:<uuid>` sessions when you need clean editor-local
   turns.
 - Gateway stop states are translated into ACP stop reasons, but that mapping is
   less expressive than a fully ACP-native runtime.
@@ -206,7 +206,7 @@ openclaw acp --session agent:qa:bug-123
 ```
 
 Each ACP session maps to a single Gateway session key. One agent can have many
-sessions; ACP defaults to an isolated `acp:<uuid>` session unless you override
+sessions; ACP defaults to an isolated `acp-bridge:<uuid>` session unless you override
 the key or label.
 
 Per-session `mcpServers` are not supported in bridge mode. If an ACP client
@@ -309,8 +309,10 @@ In Zed, open the Agent panel and select "OpenClaw ACP" to start a thread.
 
 ## Session mapping
 
-By default, ACP sessions get an isolated Gateway session key with an `acp:` prefix.
-To reuse a known session, pass a session key or label:
+By default, ACP bridge sessions get an isolated Gateway session key with an
+`acp-bridge:` prefix. These normal-model bridge sessions are synthetic and
+subject to stale-entry pruning and entry-count caps. To reuse a known session,
+pass a session key or label:
 
 - `--session <key>`: use a specific Gateway session key.
 - `--session-label <label>`: resolve an existing session by label.

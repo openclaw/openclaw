@@ -6,6 +6,7 @@ import {
   logLaneEnqueue,
 } from "../logging/diagnostic-runtime.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { clampPositiveTimerTimeoutMs } from "../shared/number-coercion.js";
 import type { CommandQueueEnqueueOptions } from "./command-queue.types.js";
 import { CommandLane } from "./lanes.js";
 /**
@@ -70,6 +71,9 @@ type QueueEntry = {
   activeAheadAtEnqueue: number;
   taskTimeoutMs?: number;
   taskTimeoutProgressAtMs?: () => number | undefined;
+  taskTimeoutAbortSignal?: AbortSignal;
+  taskTimeoutAbortGraceMs?: number;
+  taskTimeoutReleaseSignal?: AbortSignal;
   onWait?: (waitMs: number, queuedAhead: number) => void;
 };
 
@@ -253,7 +257,7 @@ function normalizeTaskTimeoutMs(value: number | undefined): number | undefined {
   if (value === undefined || !Number.isFinite(value) || value <= 0) {
     return undefined;
   }
-  return Math.max(1, Math.floor(value));
+  return clampPositiveTimerTimeoutMs(value);
 }
 
 function resolveQueuePriority(priority: CommandQueueEnqueueOptions["priority"]): number {
@@ -289,6 +293,8 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
     return await taskPromise;
   }
 
+  const taskTimeoutAbortGraceMs =
+    normalizeTaskTimeoutMs(entry.taskTimeoutAbortGraceMs) ?? taskTimeoutMs;
   const startedAtMs = Date.now();
   const readLastProgressAtMs = () => {
     let value: number | undefined;
@@ -302,20 +308,64 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
       : startedAtMs;
   };
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let removeAbortListener: (() => void) | undefined;
+  let removeReleaseListener: (() => void) | undefined;
   let timedOut = false;
   const timeoutPromise = new Promise<never>((_, reject) => {
-    const armTimeout = () => {
+    const rejectForTimeout = () => {
+      timedOut = true;
+      reject(new CommandLaneTaskTimeoutError(lane, taskTimeoutMs));
+    };
+    const armTimer = (delayMs: number, onTimeout: () => void) => {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+      if (delayMs <= 0) {
+        onTimeout();
+        return;
+      }
+      timeoutHandle = setTimeout(onTimeout, delayMs);
+      timeoutHandle.unref?.();
+    };
+    const armProgressTimeout = () => {
       const elapsedMs = Math.max(0, Date.now() - readLastProgressAtMs());
       const remainingMs = taskTimeoutMs - elapsedMs;
       if (remainingMs <= 0) {
-        timedOut = true;
-        reject(new CommandLaneTaskTimeoutError(lane, taskTimeoutMs));
+        rejectForTimeout();
         return;
       }
-      timeoutHandle = setTimeout(armTimeout, remainingMs);
-      timeoutHandle.unref?.();
+      armTimer(remainingMs, armProgressTimeout);
     };
-    armTimeout();
+    const armAbortTimeout = () => {
+      armTimer(taskTimeoutAbortGraceMs, rejectForTimeout);
+    };
+    const abortSignal = entry.taskTimeoutAbortSignal;
+    const releaseSignal = entry.taskTimeoutReleaseSignal;
+    const onRelease = () => {
+      removeReleaseListener?.();
+      rejectForTimeout();
+    };
+    if (releaseSignal?.aborted) {
+      onRelease();
+      return;
+    }
+    if (abortSignal?.aborted) {
+      armAbortTimeout();
+      return;
+    }
+    armProgressTimeout();
+    if (abortSignal) {
+      const onAbort = () => {
+        removeAbortListener?.();
+        armAbortTimeout();
+      };
+      abortSignal.addEventListener("abort", onAbort, { once: true });
+      removeAbortListener = () => abortSignal.removeEventListener("abort", onAbort);
+    }
+    if (releaseSignal) {
+      releaseSignal.addEventListener("abort", onRelease, { once: true });
+      removeReleaseListener = () => releaseSignal.removeEventListener("abort", onRelease);
+    }
   });
 
   try {
@@ -330,9 +380,11 @@ async function runQueueEntryTask(lane: string, entry: QueueEntry): Promise<unkno
     }
     throw err;
   } finally {
-    if (!timedOut && timeoutHandle) {
+    if (timeoutHandle) {
       clearTimeout(timeoutHandle);
     }
+    removeAbortListener?.();
+    removeReleaseListener?.();
   }
 }
 
@@ -467,18 +519,14 @@ export function enqueueCommandInLane<T>(
       activeAheadAtEnqueue: 0,
       taskTimeoutMs: normalizeTaskTimeoutMs(opts?.taskTimeoutMs),
       taskTimeoutProgressAtMs: opts?.taskTimeoutProgressAtMs,
+      taskTimeoutAbortSignal: opts?.taskTimeoutAbortSignal,
+      taskTimeoutAbortGraceMs: normalizeTaskTimeoutMs(opts?.taskTimeoutAbortGraceMs),
+      taskTimeoutReleaseSignal: opts?.taskTimeoutReleaseSignal,
       onWait: opts?.onWait,
     });
     logLaneEnqueue(cleaned, getLaneDepth(state));
     drainLane(cleaned);
   });
-}
-
-export function enqueueCommand<T>(
-  task: () => Promise<T>,
-  opts?: CommandQueueEnqueueOptions,
-): Promise<T> {
-  return enqueueCommandInLane(CommandLane.Main, task, opts);
 }
 
 export function getQueueSize(lane: string = CommandLane.Main) {

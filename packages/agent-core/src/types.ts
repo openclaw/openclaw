@@ -528,4 +528,6 @@ export type AgentEvent =
       toolName: string;
       result: unknown;
       isError: boolean;
+      /** False when resolution, argument preparation, validation, or policy blocked execution. */
+      executionStarted?: boolean;
     };

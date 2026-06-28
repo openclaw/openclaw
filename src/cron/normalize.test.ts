@@ -5,7 +5,8 @@ import {
   validateCronUpdateParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeCronJobCreate, normalizeCronJobPatch } from "./normalize.js";
-import { DEFAULT_TOP_OF_HOUR_STAGGER_MS } from "./stagger.js";
+
+const DEFAULT_TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1000;
 
 function expectNormalizedAtSchedule(scheduleInput: Record<string, unknown>) {
   const normalized = normalizeCronJobCreate({
@@ -475,6 +476,38 @@ describe("normalizeCronJobCreate", () => {
     expect(validateCronAddParams(normalized)).toBe(true);
   });
 
+  it("promotes implicit text payloads with agentTurn hints to agentTurn create jobs", () => {
+    const normalized = normalizeCronJobCreate({
+      name: "implicit-agent-turn",
+      schedule: { kind: "every", everyMs: 60_000 },
+      payload: {
+        text: " summarize the build ",
+        model: " openai/gpt-5 ",
+        fallbacks: [" anthropic/claude-haiku-3-5 "],
+        thinking: " high ",
+        timeoutSeconds: 45,
+        lightContext: true,
+        toolsAllow: [" read "],
+        allowUnsafeExternalContent: true,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.sessionTarget).toBe("isolated");
+    expect((normalized.delivery as Record<string, unknown>).mode).toBe("announce");
+    expect(normalized.payload).toEqual({
+      kind: "agentTurn",
+      message: "summarize the build",
+      model: "openai/gpt-5",
+      fallbacks: ["anthropic/claude-haiku-3-5"],
+      thinking: "high",
+      timeoutSeconds: 45,
+      lightContext: true,
+      toolsAllow: ["read"],
+      allowUnsafeExternalContent: true,
+    });
+    expect(validateCronAddParams(normalized)).toBe(true);
+  });
+
   it("prunes agentTurn-only payload fields from systemEvent create jobs", () => {
     const normalized = normalizeCronJobCreate({
       name: "system-event-prune",
@@ -840,6 +873,36 @@ describe("normalizeCronJobPatch", () => {
     const payload = normalized.payload as Record<string, unknown>;
     expect(payload.kind).toBe("agentTurn");
     expect(payload.toolsAllow).toBeNull();
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
+  it("preserves null fallback lists so patches can clear the fallback override", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        kind: "agentTurn",
+        fallbacks: null,
+      },
+    }) as unknown as Record<string, unknown>;
+
+    const payload = normalized.payload as Record<string, unknown>;
+    expect(payload.kind).toBe("agentTurn");
+    expect(payload.fallbacks).toBeNull();
+    expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
+  });
+
+  it("promotes implicit text payloads with agentTurn hints to agentTurn patches", () => {
+    const normalized = normalizeCronJobPatch({
+      payload: {
+        text: " continue the report ",
+        toolsAllow: [" read "],
+      },
+    }) as unknown as Record<string, unknown>;
+
+    expect(normalized.payload).toEqual({
+      kind: "agentTurn",
+      message: "continue the report",
+      toolsAllow: ["read"],
+    });
     expect(validateCronUpdateParams({ id: "job-1", patch: normalized })).toBe(true);
   });
 

@@ -1,6 +1,7 @@
 // Fetches and normalizes DeepSeek provider usage records.
 import {
   buildUsageHttpErrorSnapshot,
+  discardUsageResponseBody,
   fetchJson,
   parseFiniteNumber,
   readUsageJson,
@@ -73,6 +74,7 @@ export async function fetchDeepSeekUsage(
   );
 
   if (!res.ok) {
+    await discardUsageResponseBody(res);
     return buildUsageHttpErrorSnapshot({
       provider: "deepseek",
       status: res.status,

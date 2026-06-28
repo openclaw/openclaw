@@ -18,10 +18,24 @@ import {
 } from "node:fs";
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { isProxy } from "node:util/types";
 import {
   appendJsonlEntrySync,
+  appendSerializedJsonlEntrySync,
+  serializeJsonlEntry,
+  serializeJsonlLine,
   writeJsonlEntriesSync,
 } from "../../config/sessions/transcript-jsonl.js";
+import {
+  isSessionTranscriptSideAppendEntry,
+  selectSessionTranscriptLeafControlledPath,
+} from "../../config/sessions/transcript-tree.js";
+import {
+  canAdvanceOwnedSessionEntryCache,
+  type OwnedSessionTranscriptCacheSnapshot,
+  type OwnedSessionTranscriptPublishedEntry,
+  publishOwnedSessionFileSnapshot,
+} from "../../config/sessions/transcript-write-context.js";
 import { CURRENT_SESSION_VERSION } from "../../config/sessions/version.js";
 import type { ImageContent, Message, TextContent } from "../../llm/types.js";
 import { getAgentDir as getDefaultAgentDir, getSessionsDir } from "../config.js";
@@ -31,9 +45,13 @@ import {
   type SessionTreeEntry as CoreSessionTreeEntry,
   uuidv7,
 } from "../runtime/index.js";
+import { invalidateSessionFileRepairCache } from "../session-file-repair.js";
 import type { BashExecutionMessage, CustomMessage } from "./messages.js";
 
 export { CURRENT_SESSION_VERSION };
+
+const SESSION_HEADER_READ_CHUNK_BYTES = 4096;
+const MAX_SESSION_HEADER_BYTES = 64 * 1024;
 
 export interface SessionHeader {
   type: "session";
@@ -54,6 +72,8 @@ export interface SessionEntryBase {
   id: string;
   parentId: string | null;
   timestamp: string;
+  /** This row consumes the raw side cursor instead of the visible leaf. */
+  appendMode?: "side";
 }
 
 export interface SessionMessageEntry extends SessionEntryBase {
@@ -122,6 +142,24 @@ export interface SessionInfoEntry extends SessionEntryBase {
   name?: string;
 }
 
+interface PromptReleasedOpaqueEntry {
+  type: "prompt_released_opaque";
+  record: unknown;
+}
+
+type PromptReleasedSessionEntry =
+  | SessionMessageEntry
+  | CustomEntry
+  | LabelEntry
+  | SessionInfoEntry
+  | PromptReleasedOpaqueEntry;
+
+type PromptReleasedSessionMergeResult = {
+  sessionFileSnapshot: OwnedSessionTranscriptCacheSnapshot;
+  publishedEntries?: readonly OwnedSessionTranscriptPublishedEntry[];
+  requiresReload?: true;
+};
+
 /**
  * Custom message entry for extensions to inject messages into LLM context.
  * Use customType to identify your extension's entries.
@@ -156,6 +194,10 @@ export type SessionEntry =
 
 /** Raw file entry (includes header) */
 export type FileEntry = SessionHeader | SessionEntry;
+
+type AppendPersistenceOptions = {
+  invalidateSerializedPrefixCache?: boolean;
+};
 
 /** Tree node for getTree() - defensive copy of session structure */
 export interface SessionTreeNode {
@@ -223,7 +265,10 @@ function generateId(byId: { has(id: string): boolean }): string {
 }
 
 /** Migrate v1 → v2: add id/parentId tree structure. Mutates in place. */
-function migrateV1ToV2(entries: FileEntry[]): void {
+function migrateV1ToV2(
+  entries: FileEntry[],
+  entriesByOriginalIndex?: readonly (FileEntry | undefined)[],
+): void {
   const ids = new Set<string>();
   let prevId: string | null = null;
 
@@ -242,7 +287,8 @@ function migrateV1ToV2(entries: FileEntry[]): void {
     if (entry.type === "compaction") {
       const comp = entry as CompactionEntry & { firstKeptEntryIndex?: number };
       if (typeof comp.firstKeptEntryIndex === "number") {
-        const targetEntry = entries[comp.firstKeptEntryIndex];
+        const targetEntry =
+          entriesByOriginalIndex?.[comp.firstKeptEntryIndex] ?? entries[comp.firstKeptEntryIndex];
         if (targetEntry && targetEntry.type !== "session") {
           comp.firstKeptEntryId = targetEntry.id;
         }
@@ -274,7 +320,10 @@ function migrateV2ToV3(entries: FileEntry[]): void {
  * Run all necessary migrations to bring entries to current version.
  * Mutates entries in place. Returns true if any migration was applied.
  */
-function migrateToCurrentVersion(entries: FileEntry[]): boolean {
+function migrateToCurrentVersion(
+  entries: FileEntry[],
+  entriesByOriginalIndex?: readonly (FileEntry | undefined)[],
+): boolean {
   const header = entries.find((e) => e.type === "session");
   const version = header?.version ?? 1;
 
@@ -283,7 +332,7 @@ function migrateToCurrentVersion(entries: FileEntry[]): boolean {
   }
 
   if (version < 2) {
-    migrateV1ToV2(entries);
+    migrateV1ToV2(entries, entriesByOriginalIndex);
   }
   if (version < 3) {
     migrateV2ToV3(entries);
@@ -336,11 +385,20 @@ export function buildSessionContext(
   leafId?: string | null,
   byIdInput?: Map<string, SessionEntry>,
 ): SessionContext {
-  let byId = byIdInput;
+  let contextEntries = entries;
+  let contextById = byIdInput;
+  if (leafId === undefined) {
+    const selectedEntries = selectSessionTranscriptLeafControlledPath(entries);
+    if (selectedEntries !== undefined) {
+      contextEntries = selectedEntries;
+      contextById = undefined;
+    }
+  }
+  let byId = contextById;
   // Build uuid index if not available
   if (!byId) {
     byId = new Map<string, SessionEntry>();
-    for (const entry of entries) {
+    for (const entry of contextEntries) {
       byId.set(entry.id, entry);
     }
   }
@@ -356,7 +414,7 @@ export function buildSessionContext(
   }
   if (!leaf) {
     // Fallback to last entry (when leafId is undefined)
-    leaf = entries[entries.length - 1];
+    leaf = contextEntries[contextEntries.length - 1];
   }
 
   if (!leaf) {
@@ -393,19 +451,502 @@ export function loadEntriesFromFile(filePath: string): FileEntry[] {
     return [];
   }
 
-  const content = readFileSync(filePath, "utf8");
-  const entries = parseJsonlEntries(content);
+  const entries = parseJsonlEntries(readFileSync(filePath, "utf8"));
+  return hasReadableSessionHeader(entries) ? entries : [];
+}
 
-  // Validate session header
-  if (entries.length === 0) {
+function loadEntriesFromFileWithSnapshot(filePath: string): {
+  entries: FileEntry[];
+  snapshot: SessionFileSnapshot | undefined;
+} {
+  const resolvedPath = resolve(filePath);
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    let beforeReadSnapshot: SessionFileSnapshot;
+    try {
+      beforeReadSnapshot = readSessionFileSnapshot(resolvedPath);
+    } catch {
+      sessionEntriesCache.delete(resolvedPath);
+      return { entries: [], snapshot: undefined };
+    }
+
+    const cached = sessionEntriesCache.get(resolvedPath);
+    if (cached && isSameSessionFileSnapshot(cached.snapshot, beforeReadSnapshot)) {
+      const afterCacheSnapshot = readSessionFileSnapshotIfExists(resolvedPath);
+      if (afterCacheSnapshot && isSameSessionFileSnapshot(beforeReadSnapshot, afterCacheSnapshot)) {
+        return { entries: copyFileEntries(cached.entries), snapshot: afterCacheSnapshot };
+      }
+      continue;
+    }
+
+    const content = readFileSync(resolvedPath, "utf8");
+    const entries = parseJsonlEntries(content);
+    const afterParseSnapshot = readSessionFileSnapshotIfExists(resolvedPath);
+    if (afterParseSnapshot && isSameSessionFileSnapshot(beforeReadSnapshot, afterParseSnapshot)) {
+      return {
+        entries: rememberSessionEntries(
+          resolvedPath,
+          afterParseSnapshot,
+          entries,
+          content.endsWith("\n"),
+        ),
+        snapshot: afterParseSnapshot,
+      };
+    }
+  }
+
+  sessionEntriesCache.delete(resolvedPath);
+  throw new Error(`session file changed repeatedly while loading: ${resolvedPath}`);
+}
+
+interface SessionFileSnapshot {
+  dev: bigint;
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+  ctimeNs: bigint;
+}
+
+interface CachedSessionEntries {
+  snapshot: SessionFileSnapshot;
+  entries: FileEntry[];
+  endsWithNewline: boolean;
+}
+
+const MAX_CACHED_SESSION_FILES = 8;
+// Bound approximate retained payload bytes as well as file count; parsed JSON
+// has higher overhead than the transcript bytes used for this conservative cap.
+const MAX_CACHED_SESSION_BYTES = 32n * 1024n * 1024n;
+const sessionEntriesCache = new Map<string, CachedSessionEntries>();
+
+function readSessionFileSnapshot(filePath: string): SessionFileSnapshot {
+  const fileStat = statSync(filePath, { bigint: true });
+  return {
+    dev: fileStat.dev,
+    ino: fileStat.ino,
+    size: fileStat.size,
+    mtimeNs: fileStat.mtimeNs,
+    ctimeNs: fileStat.ctimeNs,
+  };
+}
+
+function isSameSessionFileSnapshot(left: SessionFileSnapshot, right: SessionFileSnapshot): boolean {
+  return (
+    left.dev === right.dev &&
+    left.ino === right.ino &&
+    left.size === right.size &&
+    left.mtimeNs === right.mtimeNs &&
+    left.ctimeNs === right.ctimeNs
+  );
+}
+
+function rememberSessionEntries(
+  filePath: string,
+  snapshot: SessionFileSnapshot,
+  entries: FileEntry[],
+  endsWithNewline: boolean,
+): FileEntry[] {
+  if (!hasReadableSessionHeader(entries)) {
+    sessionEntriesCache.delete(filePath);
+    return entries.length === 0 ? entries : [];
+  }
+  // Cache only current transcripts. Older versions still go through migration
+  // with fresh mutable entries so cache hits never share objects that migrate.
+  if (!hasCacheableSessionHeader(entries)) {
+    sessionEntriesCache.delete(filePath);
     return entries;
+  }
+  if (snapshot.size > MAX_CACHED_SESSION_BYTES) {
+    sessionEntriesCache.delete(filePath);
+    return copyFileEntries(entries.map(freezeFileEntry));
+  }
+
+  // Current-version session entries are append-only after load. Freeze the
+  // cached snapshot so warm hits cannot drift away from the file metadata that
+  // validated the cache key.
+  const cachedEntries = entries.map((entry) => {
+    if (Object.isFrozen(entry)) {
+      return entry;
+    }
+    return freezeFileEntry(entry);
+  });
+  const cached: CachedSessionEntries = {
+    snapshot,
+    entries: cachedEntries,
+    endsWithNewline,
+  };
+  sessionEntriesCache.delete(filePath);
+  sessionEntriesCache.set(filePath, cached);
+  trimSessionEntriesCache();
+  return copyFileEntries(cachedEntries);
+}
+
+function trimSessionEntriesCache(): void {
+  let cachedBytes = 0n;
+  for (const cached of sessionEntriesCache.values()) {
+    cachedBytes += cached.snapshot.size;
+  }
+  while (
+    sessionEntriesCache.size > MAX_CACHED_SESSION_FILES ||
+    cachedBytes > MAX_CACHED_SESSION_BYTES
+  ) {
+    const oldestKey = sessionEntriesCache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    cachedBytes -= sessionEntriesCache.get(oldestKey)?.snapshot.size ?? 0n;
+    sessionEntriesCache.delete(oldestKey);
+  }
+}
+
+function hasCacheableSessionHeader(entries: FileEntry[]): boolean {
+  if (entries.length === 0) {
+    return true;
   }
   const header = entries[0];
   if (header.type !== "session" || typeof (header as { id?: unknown }).id !== "string") {
-    return [];
+    return false;
   }
 
-  return entries;
+  return header.version === CURRENT_SESSION_VERSION;
+}
+
+function rememberWrittenSessionEntries(
+  filePath: string,
+  expectedContent?: string,
+): { snapshot: SessionFileSnapshot | undefined; verifiedWrite: boolean; stableRead: boolean } {
+  const resolvedPath = resolve(filePath);
+  // Full rewrites break append continuity used by the pre-run repair cache,
+  // even when the filesystem preserves the inode and the rewritten file grows.
+  invalidateSessionFileRepairCache(resolvedPath);
+  let beforeReadSnapshot: SessionFileSnapshot;
+  try {
+    beforeReadSnapshot = readSessionFileSnapshot(resolvedPath);
+  } catch {
+    sessionEntriesCache.delete(resolvedPath);
+    return { snapshot: undefined, verifiedWrite: false, stableRead: false };
+  }
+  if (beforeReadSnapshot.size > MAX_CACHED_SESSION_BYTES) {
+    sessionEntriesCache.delete(resolvedPath);
+    return { snapshot: beforeReadSnapshot, verifiedWrite: false, stableRead: false };
+  }
+
+  let content: string;
+  let afterReadSnapshot: SessionFileSnapshot;
+  try {
+    content = readFileSync(resolvedPath, "utf8");
+    afterReadSnapshot = readSessionFileSnapshot(resolvedPath);
+  } catch {
+    sessionEntriesCache.delete(resolvedPath);
+    return { snapshot: undefined, verifiedWrite: false, stableRead: false };
+  }
+  if (
+    (expectedContent !== undefined && content !== expectedContent) ||
+    !isSameSessionFileSnapshot(beforeReadSnapshot, afterReadSnapshot)
+  ) {
+    sessionEntriesCache.delete(resolvedPath);
+    return { snapshot: afterReadSnapshot, verifiedWrite: false, stableRead: false };
+  }
+  rememberSessionEntries(
+    resolvedPath,
+    afterReadSnapshot,
+    parseJsonlEntries(content),
+    content.endsWith("\n"),
+  );
+  return {
+    snapshot: afterReadSnapshot,
+    verifiedWrite: expectedContent !== undefined,
+    stableRead: true,
+  };
+}
+
+function rememberAppendedSessionEntry(
+  filePath: string,
+  previousSnapshot: SessionFileSnapshot | undefined,
+  beforeAppendSnapshot: SessionFileSnapshot | undefined,
+  serializedAppend: string,
+  cacheOwnedAppend: boolean,
+  publishOwnedAppend: boolean,
+  invalidateSerializedPrefixCache: boolean,
+): {
+  snapshot: SessionFileSnapshot | undefined;
+  cacheAdvanced: boolean;
+  ownedAppendVerified: boolean;
+} {
+  const resolvedPath = resolve(filePath);
+  const appendedByteLength = BigInt(Buffer.byteLength(serializedAppend, "utf8"));
+  const isVerifiedOwnedAppend = (snapshot: SessionFileSnapshot | undefined) =>
+    Boolean(
+      publishOwnedAppend &&
+      beforeAppendSnapshot &&
+      snapshot &&
+      snapshot.dev === beforeAppendSnapshot.dev &&
+      snapshot.ino === beforeAppendSnapshot.ino &&
+      snapshot.size === beforeAppendSnapshot.size + appendedByteLength,
+    );
+  if (!cacheOwnedAppend) {
+    sessionEntriesCache.delete(resolvedPath);
+    invalidateSessionFileRepairCache(resolvedPath);
+    const snapshot = readSessionFileSnapshotIfExists(resolvedPath);
+    return {
+      snapshot,
+      cacheAdvanced: false,
+      ownedAppendVerified: isVerifiedOwnedAppend(snapshot),
+    };
+  }
+  if (
+    !previousSnapshot ||
+    !beforeAppendSnapshot ||
+    !isSameSessionFileSnapshot(previousSnapshot, beforeAppendSnapshot)
+  ) {
+    sessionEntriesCache.delete(resolvedPath);
+    invalidateSessionFileRepairCache(resolvedPath);
+    return {
+      snapshot: readSessionFileSnapshotIfExists(resolvedPath),
+      cacheAdvanced: false,
+      ownedAppendVerified: false,
+    };
+  }
+
+  const cached = sessionEntriesCache.get(resolvedPath);
+  const snapshot = readSessionFileSnapshotIfExists(resolvedPath);
+  // Owned transcript writes serialize appenders under the session lock. Plain
+  // appends can advance by stat identity/size; extension-owned message payloads
+  // may run JSON hooks that rewrite same-size prefix bytes, so they drop cache.
+  const expectedSize = beforeAppendSnapshot.size + appendedByteLength;
+  if (
+    !snapshot ||
+    !cached ||
+    cached.snapshot.dev !== previousSnapshot.dev ||
+    cached.snapshot.ino !== previousSnapshot.ino ||
+    snapshot.dev !== beforeAppendSnapshot.dev ||
+    snapshot.ino !== beforeAppendSnapshot.ino ||
+    snapshot.size !== expectedSize ||
+    !isSameSessionFileSnapshot(cached.snapshot, previousSnapshot)
+  ) {
+    sessionEntriesCache.delete(resolvedPath);
+    invalidateSessionFileRepairCache(resolvedPath);
+    return { snapshot, cacheAdvanced: false, ownedAppendVerified: false };
+  }
+  if (invalidateSerializedPrefixCache) {
+    sessionEntriesCache.delete(resolvedPath);
+    invalidateSessionFileRepairCache(resolvedPath);
+    return { snapshot, cacheAdvanced: false, ownedAppendVerified: true };
+  }
+  if (snapshot.size > MAX_CACHED_SESSION_BYTES) {
+    sessionEntriesCache.delete(resolvedPath);
+    return { snapshot, cacheAdvanced: false, ownedAppendVerified: true };
+  }
+
+  const persistedEntry = JSON.parse(
+    serializedAppend.startsWith("\n") ? serializedAppend.slice(1) : serializedAppend,
+  ) as FileEntry;
+  cached.entries.push(freezeFileEntry(persistedEntry));
+  cached.snapshot = snapshot;
+  cached.endsWithNewline = true;
+  sessionEntriesCache.delete(resolvedPath);
+  sessionEntriesCache.set(resolvedPath, cached);
+  trimSessionEntriesCache();
+  return { snapshot, cacheAdvanced: true, ownedAppendVerified: true };
+}
+
+function publishRememberedSessionFileSnapshot(
+  filePath: string,
+  snapshot: SessionFileSnapshot | undefined,
+): void {
+  if (!snapshot) {
+    return;
+  }
+  const published = publishOwnedSessionFileSnapshot({ sessionFile: filePath, snapshot });
+  if (published === false) {
+    sessionEntriesCache.delete(resolve(filePath));
+    invalidateSessionFileRepairCache(filePath);
+  }
+}
+
+function jsonSerializationCanRunUserCode(value: unknown, ancestors = new Set<object>()): boolean {
+  if (typeof value === "bigint") {
+    return Object.getOwnPropertyDescriptor(BigInt.prototype, "toJSON") !== undefined;
+  }
+  if ((typeof value !== "object" && typeof value !== "function") || value === null) {
+    return false;
+  }
+
+  try {
+    if (isProxy(value) || ancestors.has(value)) {
+      return true;
+    }
+    const prototype = Object.getPrototypeOf(value);
+    if (prototype !== Object.prototype && prototype !== Array.prototype && prototype !== null) {
+      return true;
+    }
+    const descriptors = Object.getOwnPropertyDescriptors(value);
+    if (
+      descriptors.toJSON ||
+      (prototype !== null && Object.getOwnPropertyDescriptor(prototype, "toJSON")) ||
+      Object.values(descriptors).some(
+        (descriptor) => descriptor.get !== undefined || descriptor.set !== undefined,
+      )
+    ) {
+      return true;
+    }
+
+    ancestors.add(value);
+    try {
+      if (Array.isArray(value)) {
+        for (let index = 0; index < value.length; index += 1) {
+          const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+          if (
+            !descriptor ||
+            descriptor.get !== undefined ||
+            descriptor.set !== undefined ||
+            ("value" in descriptor && jsonSerializationCanRunUserCode(descriptor.value, ancestors))
+          ) {
+            return true;
+          }
+        }
+        return false;
+      }
+
+      return Object.values(descriptors).some(
+        (descriptor) =>
+          descriptor.enumerable &&
+          "value" in descriptor &&
+          jsonSerializationCanRunUserCode(descriptor.value, ancestors),
+      );
+    } finally {
+      ancestors.delete(value);
+    }
+  } catch {
+    return true;
+  }
+}
+
+function hasOwnProperty(value: object, key: string): boolean {
+  return Object.hasOwn(value, key);
+}
+
+function hasAssistantToolCallArguments(message: Extract<Message, { role: "assistant" }>): boolean {
+  if (!Array.isArray(message.content)) {
+    return false;
+  }
+  return message.content.some(
+    (part) => part.type === "toolCall" && hasOwnProperty(part, "arguments"),
+  );
+}
+
+function messageSerializesOwnedValues(
+  message: Message | CustomMessage | BashExecutionMessage,
+): boolean {
+  if (message.role === "toolResult") {
+    return hasOwnProperty(message, "details");
+  }
+  if (message.role === "assistant") {
+    return hasAssistantToolCallArguments(message);
+  }
+  if (message.role === "custom") {
+    return hasOwnProperty(message, "details");
+  }
+  return false;
+}
+
+function readSessionFileSnapshotIfExists(filePath: string): SessionFileSnapshot | undefined {
+  try {
+    return readSessionFileSnapshot(filePath);
+  } catch {
+    return undefined;
+  }
+}
+
+function sessionFileNeedsAppendSeparator(
+  filePath: string,
+  snapshot: SessionFileSnapshot | undefined,
+): boolean {
+  if (!snapshot || snapshot.size === 0n) {
+    return false;
+  }
+
+  const resolvedPath = resolve(filePath);
+  const cached = sessionEntriesCache.get(resolvedPath);
+  if (cached && isSameSessionFileSnapshot(cached.snapshot, snapshot)) {
+    return !cached.endsWithNewline;
+  }
+
+  const fileDescriptor = openSync(resolvedPath, "r");
+  try {
+    const lastByte = Buffer.allocUnsafe(1);
+    const bytesRead = readSync(fileDescriptor, lastByte, 0, 1, snapshot.size - 1n);
+    return bytesRead === 1 && lastByte[0] !== 0x0a;
+  } finally {
+    closeSync(fileDescriptor);
+  }
+}
+
+function revalidateLoadedSessionFile(
+  filePath: string,
+  loaded: {
+    entries: FileEntry[];
+    snapshot: SessionFileSnapshot | undefined;
+  },
+): {
+  entries: FileEntry[];
+  snapshot: SessionFileSnapshot | undefined;
+} {
+  const currentSnapshot = readSessionFileSnapshotIfExists(resolve(filePath));
+  if (
+    loaded.snapshot &&
+    currentSnapshot &&
+    isSameSessionFileSnapshot(loaded.snapshot, currentSnapshot)
+  ) {
+    return loaded;
+  }
+  if (!loaded.snapshot && !currentSnapshot) {
+    return loaded;
+  }
+  return loadEntriesFromFileWithSnapshot(filePath);
+}
+
+// Cached entries are deep-frozen so warm hits cannot drift from the file bytes
+// that validated the cache key. The session header (entries[0]) is the one entry
+// callers legitimately mutate in place — `prepareSessionManagerForRun` rewrites
+// its id/cwd before an embedded run. Return a mutable clone of just the header so
+// that mutation does not throw on a frozen object, while the append-only message
+// entries stay shared frozen (preserving cache performance and preventing caller
+// mutations from leaking back into the cache).
+function copyFileEntries(entries: readonly FileEntry[]): FileEntry[] {
+  const copy = entries.slice();
+  if (copy.length > 0 && copy[0].type === "session" && Object.isFrozen(copy[0])) {
+    copy[0] = cloneFileEntry(copy[0]);
+  }
+  return copy;
+}
+
+function cloneFileEntry(entry: FileEntry): FileEntry {
+  return structuredClone(entry);
+}
+
+function freezeFileEntry(entry: FileEntry): FileEntry {
+  freezeJsonLikeValue(entry);
+  return entry;
+}
+
+// The cache key proves only the file bytes at a specific stat snapshot. Freezing
+// cached JSONL objects prevents caller mutations from creating transcript state
+// that was never read from or written to disk.
+function freezeJsonLikeValue(value: unknown, seen = new WeakSet<object>()): void {
+  if (typeof value !== "object" || value === null || seen.has(value)) {
+    return;
+  }
+  seen.add(value);
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      freezeJsonLikeValue(item, seen);
+    }
+  } else {
+    for (const item of Object.values(value as Record<string, unknown>)) {
+      freezeJsonLikeValue(item, seen);
+    }
+  }
+  Object.freeze(value);
 }
 
 function parseJsonlEntries(content: string): FileEntry[] {
@@ -430,6 +971,143 @@ function parseJsonlEntries(content: string): FileEntry[] {
 function hasReadableSessionHeader(entries: FileEntry[]): boolean {
   const header = entries[0];
   return header?.type === "session" && typeof (header as { id?: unknown }).id === "string";
+}
+
+function isJsonRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isSessionEntryType(type: unknown): boolean {
+  switch (type) {
+    case "message":
+    case "thinking_level_change":
+    case "model_change":
+    case "compaction":
+    case "branch_summary":
+    case "custom":
+    case "custom_message":
+    case "label":
+    case "session_info":
+      return true;
+    default:
+      return false;
+  }
+}
+
+function isIndexedSessionEntry(entry: unknown): entry is SessionEntry {
+  if (!isJsonRecord(entry)) {
+    return false;
+  }
+  return isSessionEntryType(entry.type) && typeof entry.id === "string" && entry.id.length > 0;
+}
+
+type PreservedOpaqueFileEntry = {
+  index: number;
+  record: unknown;
+};
+
+type SessionLeafControl = {
+  type: "leaf";
+  id: string;
+  parentId: string | null;
+  timestamp: string;
+  targetId: string | null;
+  appendParentId?: string | null;
+  appendMode?: "side";
+};
+
+function parseParentLinkedOpaqueEntry(
+  record: unknown,
+): { id: string; parentId: string | null } | undefined {
+  if (
+    !isJsonRecord(record) ||
+    record.type === "session" ||
+    record.type === "leaf" ||
+    typeof record.id !== "string" ||
+    record.id.length === 0 ||
+    (record.parentId !== null && typeof record.parentId !== "string")
+  ) {
+    return undefined;
+  }
+  return { id: record.id, parentId: record.parentId };
+}
+
+function parseOpaqueLeafEntry(record: unknown):
+  | {
+      id: string;
+      parentId: string | null;
+      targetId: string | null;
+      appendParentId?: string | null;
+      appendMode?: "side";
+    }
+  | undefined {
+  if (
+    !isJsonRecord(record) ||
+    record.type !== "leaf" ||
+    typeof record.id !== "string" ||
+    record.id.length === 0 ||
+    (record.parentId !== null && typeof record.parentId !== "string")
+  ) {
+    return undefined;
+  }
+  if (record.targetId !== null && typeof record.targetId !== "string") {
+    return undefined;
+  }
+  if (
+    record.appendParentId !== undefined &&
+    record.appendParentId !== null &&
+    typeof record.appendParentId !== "string"
+  ) {
+    return undefined;
+  }
+  if (record.appendMode !== undefined && record.appendMode !== "side") {
+    return undefined;
+  }
+  return {
+    id: record.id,
+    parentId: record.parentId,
+    targetId: record.targetId,
+    ...(record.appendParentId !== undefined ? { appendParentId: record.appendParentId } : {}),
+    ...(record.appendMode === "side" ? { appendMode: record.appendMode } : {}),
+  };
+}
+
+function partitionSessionFileEntries(entries: readonly FileEntry[]): {
+  fileEntries: FileEntry[];
+  opaqueEntries: PreservedOpaqueFileEntry[];
+  fileEntriesByOriginalIndex: Array<FileEntry | undefined>;
+} {
+  const fileEntries: FileEntry[] = [];
+  const opaqueEntries: PreservedOpaqueFileEntry[] = [];
+  const fileEntriesByOriginalIndex: Array<FileEntry | undefined> = [];
+  const header = entries.find(
+    (entry) => isJsonRecord(entry) && entry.type === "session" && typeof entry.id === "string",
+  ) as SessionHeader | undefined;
+  const acceptsLegacyEntries = (header?.version ?? 1) < 2;
+  let hasHeader = false;
+  for (const [originalIndex, entry] of entries.entries()) {
+    if (
+      !hasHeader &&
+      isJsonRecord(entry) &&
+      entry.type === "session" &&
+      typeof entry.id === "string"
+    ) {
+      fileEntries.push(entry as unknown as SessionHeader);
+      fileEntriesByOriginalIndex[originalIndex] = entry;
+      hasHeader = true;
+      continue;
+    }
+    if (
+      isIndexedSessionEntry(entry) ||
+      (acceptsLegacyEntries && isJsonRecord(entry) && isSessionEntryType(entry.type))
+    ) {
+      fileEntries.push(entry);
+      fileEntriesByOriginalIndex[originalIndex] = entry;
+      continue;
+    }
+    opaqueEntries.push({ index: fileEntries.length, record: entry });
+  }
+  return { fileEntries, opaqueEntries, fileEntriesByOriginalIndex };
 }
 
 function buildCorruptSessionBackupPath(filePath: string): string {
@@ -466,13 +1144,36 @@ function recoverCorruptSessionEntries(filePath: string, cwd: string): FileEntry[
   return [header, ...recoveredEntries];
 }
 
+function readFirstSessionFileLine(filePath: string): string | undefined {
+  const fd = openSync(filePath, "r");
+  try {
+    const chunks: Buffer[] = [];
+    let totalBytes = 0;
+    while (totalBytes < MAX_SESSION_HEADER_BYTES) {
+      const buffer = Buffer.alloc(
+        Math.min(SESSION_HEADER_READ_CHUNK_BYTES, MAX_SESSION_HEADER_BYTES - totalBytes),
+      );
+      const bytesRead = readSync(fd, buffer, 0, buffer.length, totalBytes);
+      if (bytesRead === 0) {
+        break;
+      }
+      const newlineIndex = buffer.indexOf(0x0a);
+      if (newlineIndex >= 0 && newlineIndex < bytesRead) {
+        chunks.push(buffer.subarray(0, newlineIndex));
+        return Buffer.concat(chunks).toString("utf8");
+      }
+      chunks.push(buffer.subarray(0, bytesRead));
+      totalBytes += bytesRead;
+    }
+    return chunks.length > 0 ? Buffer.concat(chunks).toString("utf8") : undefined;
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function isValidSessionFile(filePath: string): boolean {
   try {
-    const fd = openSync(filePath, "r");
-    const buffer = Buffer.alloc(512);
-    const bytesRead = readSync(fd, buffer, 0, 512, 0);
-    closeSync(fd);
-    const firstLine = buffer.toString("utf8", 0, bytesRead).split("\n")[0];
+    const firstLine = readFirstSessionFileLine(filePath);
     if (!firstLine) {
       return false;
     }
@@ -743,17 +1444,30 @@ export class SessionManager {
   private shouldPersist: boolean;
   private flushed = false;
   private fileEntries: FileEntry[] = [];
+  private opaqueFileEntries: PreservedOpaqueFileEntry[] = [];
   private byId: Map<string, SessionEntry> = new Map();
+  private opaqueParentsById: Map<string, string | null> = new Map();
+  private logicalParentsById: Map<string, string | null> = new Map();
+  private invalidLeafControlIds: Set<string> = new Set();
   private labelsById: Map<string, string> = new Map();
   private labelTimestampsById: Map<string, string> = new Map();
   private leafId: string | null = null;
+  private appendParentId: string | null = null;
+  // Owned writes can publish in separate callbacks while one prompt is released.
+  // Ordinary appends/navigation clear this cursor before the next prompt.
+  private promptReleasedSideBranchParentId: string | null | undefined;
   private recoveredCorruptHeader = false;
+  private sessionFileSnapshot: SessionFileSnapshot | undefined;
 
   private constructor(
     cwd: string,
     sessionDir: string,
     sessionFile: string | undefined,
     persist: boolean,
+    loadedSessionFile?: {
+      entries: FileEntry[];
+      snapshot: SessionFileSnapshot | undefined;
+    },
   ) {
     this.cwd = cwd;
     this.sessionDir = sessionDir;
@@ -763,7 +1477,10 @@ export class SessionManager {
     }
 
     if (sessionFile) {
-      this.setSessionFile(sessionFile);
+      this.setLoadedSessionFile(
+        sessionFile,
+        loadedSessionFile ?? loadEntriesFromFileWithSnapshot(sessionFile),
+      );
     } else {
       this.newSession();
     }
@@ -771,19 +1488,36 @@ export class SessionManager {
 
   /** Switch to a different session file (used for resume and branching) */
   setSessionFile(sessionFile: string): void {
+    this.setLoadedSessionFile(sessionFile, loadEntriesFromFileWithSnapshot(sessionFile));
+  }
+
+  private setLoadedSessionFile(
+    sessionFile: string,
+    loaded: {
+      entries: FileEntry[];
+      snapshot: SessionFileSnapshot | undefined;
+    },
+  ): void {
     this.sessionFile = resolve(sessionFile);
+    this.sessionFileSnapshot = undefined;
     this.recoveredCorruptHeader = false;
     if (existsSync(this.sessionFile)) {
-      this.fileEntries = loadEntriesFromFile(this.sessionFile);
+      const partitioned = partitionSessionFileEntries(loaded.entries);
+      this.fileEntries = partitioned.fileEntries;
+      this.opaqueFileEntries = partitioned.opaqueEntries;
+      this.sessionFileSnapshot = loaded.snapshot;
 
       // If file was empty or corrupted (no valid header), truncate and start fresh
       // to avoid appending messages without a session header (which breaks the session)
       if (this.fileEntries.length === 0) {
         const recoveredEntries = recoverCorruptSessionEntries(this.sessionFile, this.cwd);
         if (recoveredEntries && hasReadableSessionHeader(recoveredEntries)) {
-          this.fileEntries = recoveredEntries;
+          const recovered = partitionSessionFileEntries(recoveredEntries);
+          this.fileEntries = recovered.fileEntries;
+          this.opaqueFileEntries = recovered.opaqueEntries;
           const header = this.fileEntries.find((e) => e.type === "session");
           this.sessionId = header?.id ?? createSessionId();
+          migrateToCurrentVersion(this.fileEntries, recovered.fileEntriesByOriginalIndex);
           this.buildIndex();
           this.rewriteFile();
           this.recoveredCorruptHeader = true;
@@ -802,11 +1536,15 @@ export class SessionManager {
       const header = this.fileEntries.find((e) => e.type === "session");
       this.sessionId = header?.id ?? createSessionId();
 
-      if (migrateToCurrentVersion(this.fileEntries)) {
+      const migrated = migrateToCurrentVersion(
+        this.fileEntries,
+        partitioned.fileEntriesByOriginalIndex,
+      );
+      this.buildIndex();
+      if (migrated) {
         this.rewriteFile();
       }
 
-      this.buildIndex();
       this.flushed = true;
     } else {
       const explicitPath = this.sessionFile;
@@ -817,6 +1555,7 @@ export class SessionManager {
 
   newSession(options?: NewSessionOptions): string | undefined {
     this.recoveredCorruptHeader = false;
+    this.sessionFileSnapshot = undefined;
     this.sessionId = options?.id ?? createSessionId();
     const timestamp = new Date().toISOString();
     const header: SessionHeader = {
@@ -828,9 +1567,15 @@ export class SessionManager {
       parentSession: options?.parentSession,
     };
     this.fileEntries = [header];
+    this.opaqueFileEntries = [];
     this.byId.clear();
+    this.opaqueParentsById.clear();
+    this.logicalParentsById.clear();
+    this.invalidLeafControlIds.clear();
     this.labelsById.clear();
     this.leafId = null;
+    this.appendParentId = null;
+    this.promptReleasedSideBranchParentId = undefined;
     this.flushed = false;
 
     if (this.shouldPersist) {
@@ -840,17 +1585,114 @@ export class SessionManager {
     return this.sessionFile;
   }
 
+  private resolveOpaqueLeafTargetId(targetId: string | null): string | null {
+    if (targetId === null || this.byId.has(targetId)) {
+      return targetId;
+    }
+    return this.resolveCanonicalParentId(targetId);
+  }
+
+  private resolveOpaqueAppendParentId(parentId: string | null): string | null {
+    if (parentId === null || this.byId.has(parentId) || this.opaqueParentsById.has(parentId)) {
+      return parentId;
+    }
+    return this.resolveCanonicalParentId(parentId);
+  }
+
+  private resolveOpaqueLeafControl(
+    leafEntry: ReturnType<typeof parseOpaqueLeafEntry>,
+  ): { leafId: string | null; appendParentId: string | null; appendMode?: "side" } | undefined {
+    if (!leafEntry) {
+      return undefined;
+    }
+    const isKnownReference = (id: string | null): boolean =>
+      id === null ||
+      this.byId.has(id) ||
+      (this.opaqueParentsById.has(id) && !this.invalidLeafControlIds.has(id));
+    if (
+      !isKnownReference(leafEntry.targetId) ||
+      (leafEntry.appendParentId !== undefined && !isKnownReference(leafEntry.appendParentId))
+    ) {
+      return undefined;
+    }
+    const leafId = this.resolveOpaqueLeafTargetId(leafEntry.targetId);
+    return {
+      leafId,
+      appendParentId:
+        leafEntry.appendParentId === undefined
+          ? leafId
+          : this.resolveOpaqueAppendParentId(leafEntry.appendParentId),
+      ...(leafEntry.appendMode ? { appendMode: leafEntry.appendMode } : {}),
+    };
+  }
+
   private buildIndex(): void {
     this.byId.clear();
+    this.opaqueParentsById.clear();
+    this.logicalParentsById.clear();
+    this.invalidLeafControlIds.clear();
     this.labelsById.clear();
     this.labelTimestampsById.clear();
     this.leafId = null;
-    for (const entry of this.fileEntries) {
-      if (entry.type === "session") {
+    this.appendParentId = null;
+    this.promptReleasedSideBranchParentId = undefined;
+    let opaqueIndex = 0;
+    for (let index = 0; index <= this.fileEntries.length; index += 1) {
+      while (this.opaqueFileEntries[opaqueIndex]?.index === index) {
+        const opaqueRecord = this.opaqueFileEntries[opaqueIndex]?.record;
+        const leafEntry = parseOpaqueLeafEntry(opaqueRecord);
+        if (leafEntry) {
+          const leafState = this.resolveOpaqueLeafControl(leafEntry);
+          if (!leafState) {
+            // Ignore invalid controls while keeping their marker transparent
+            // for canonical descendants serialized after the opaque row.
+            this.invalidLeafControlIds.add(leafEntry.id);
+            this.opaqueParentsById.set(
+              leafEntry.id,
+              this.resolveOpaqueAppendParentId(leafEntry.parentId),
+            );
+            opaqueIndex += 1;
+            continue;
+          }
+          this.opaqueParentsById.set(leafEntry.id, leafState.leafId);
+          this.leafId = leafState.leafId;
+          this.appendParentId = leafState.appendParentId;
+          this.promptReleasedSideBranchParentId =
+            leafState.appendMode === "side" ? leafState.appendParentId : undefined;
+          opaqueIndex += 1;
+          continue;
+        }
+        const link = parseParentLinkedOpaqueEntry(opaqueRecord);
+        if (link) {
+          this.opaqueParentsById.set(link.id, link.parentId);
+          this.appendParentId = link.id;
+          if (this.promptReleasedSideBranchParentId !== undefined) {
+            this.promptReleasedSideBranchParentId = link.id;
+          }
+        }
+        opaqueIndex += 1;
+      }
+      const entry = this.fileEntries[index];
+      if (!isIndexedSessionEntry(entry)) {
         continue;
       }
+      const hasSerializedParent = Object.hasOwn(entry, "parentId");
+      if (
+        !hasSerializedParent ||
+        (!isSessionTranscriptSideAppendEntry(entry) &&
+          entry.parentId === this.appendParentId &&
+          this.leafId !== this.appendParentId)
+      ) {
+        this.logicalParentsById.set(entry.id, this.leafId);
+      }
       this.byId.set(entry.id, entry);
-      this.leafId = entry.id;
+      this.appendParentId = entry.id;
+      if (isSessionTranscriptSideAppendEntry(entry)) {
+        this.promptReleasedSideBranchParentId = entry.id;
+      } else {
+        this.leafId = entry.id;
+        this.promptReleasedSideBranchParentId = undefined;
+      }
       if (entry.type === "label") {
         if (entry.label) {
           this.labelsById.set(entry.targetId, entry.label);
@@ -863,11 +1705,239 @@ export class SessionManager {
     }
   }
 
-  private rewriteFile(): void {
+  private resolveCanonicalParentId(parentId: string | null): string | null {
+    const seen = new Set<string>();
+    let currentId = parentId;
+    while (currentId && !this.byId.has(currentId)) {
+      if (seen.has(currentId)) {
+        return null;
+      }
+      seen.add(currentId);
+      currentId = this.opaqueParentsById.get(currentId) ?? null;
+    }
+    return currentId;
+  }
+
+  private normalizeEntryParent(entry: SessionEntry): SessionEntry {
+    const parentId = this.logicalParentsById.has(entry.id)
+      ? (this.logicalParentsById.get(entry.id) ?? null)
+      : this.resolveCanonicalParentId(entry.parentId);
+    let normalized = parentId === entry.parentId ? entry : { ...entry, parentId };
+    if (
+      normalized.type === "compaction" &&
+      !this.byId.has(normalized.firstKeptEntryId) &&
+      this.opaqueParentsById.has(normalized.firstKeptEntryId)
+    ) {
+      const resolvedFirstKeptParent = this.resolveCanonicalParentId(normalized.firstKeptEntryId);
+      const firstKeptEntryId =
+        resolvedFirstKeptParent ??
+        this.findFirstCanonicalDescendantOnBranch(
+          normalized.firstKeptEntryId,
+          normalized.parentId,
+        ) ??
+        this.findFirstCanonicalDescendant(normalized.firstKeptEntryId) ??
+        parentId;
+      if (firstKeptEntryId && firstKeptEntryId !== normalized.firstKeptEntryId) {
+        normalized = { ...normalized, firstKeptEntryId };
+      }
+    }
+    return normalized;
+  }
+
+  private findFirstCanonicalDescendantOnBranch(
+    opaqueId: string,
+    leafId: string | null,
+  ): string | undefined {
+    const seen = new Set<string>();
+    let currentId = leafId;
+    let firstCanonicalDescendant: string | undefined;
+    while (currentId && !seen.has(currentId)) {
+      if (currentId === opaqueId) {
+        return firstCanonicalDescendant;
+      }
+      seen.add(currentId);
+      const entry = this.byId.get(currentId);
+      if (entry) {
+        firstCanonicalDescendant = entry.id;
+        currentId = entry.parentId;
+      } else {
+        currentId = this.opaqueParentsById.get(currentId) ?? null;
+      }
+    }
+    return undefined;
+  }
+
+  private findFirstCanonicalDescendant(opaqueId: string): string | undefined {
+    for (const entry of this.fileEntries) {
+      if (!isIndexedSessionEntry(entry)) {
+        continue;
+      }
+      const seen = new Set<string>();
+      let parentId = entry.parentId;
+      while (parentId && this.opaqueParentsById.has(parentId) && !seen.has(parentId)) {
+        if (parentId === opaqueId) {
+          return entry.id;
+        }
+        seen.add(parentId);
+        parentId = this.opaqueParentsById.get(parentId) ?? null;
+      }
+    }
+    return undefined;
+  }
+
+  private resolveBranchTargetId(branchFromId: string): string | null | undefined {
+    if (this.byId.has(branchFromId)) {
+      return branchFromId;
+    }
+    if (!this.opaqueParentsById.has(branchFromId)) {
+      return undefined;
+    }
+    return this.resolveCanonicalParentId(branchFromId);
+  }
+
+  private clampOpaqueFileEntryIndexes(): void {
+    let previousOpaqueIndex = 0;
+    for (const opaqueEntry of this.opaqueFileEntries) {
+      opaqueEntry.index = Math.max(
+        previousOpaqueIndex,
+        Math.min(opaqueEntry.index, this.fileEntries.length),
+      );
+      previousOpaqueIndex = opaqueEntry.index;
+    }
+  }
+
+  private createLeafControl(
+    parentId: string | null,
+    appendParentId: string | null = this.appendParentId,
+    appendMode?: "side",
+  ): SessionLeafControl {
+    return {
+      type: "leaf",
+      id: generateId({
+        has: (id) => this.byId.has(id) || this.opaqueParentsById.has(id),
+      }),
+      parentId,
+      timestamp: new Date().toISOString(),
+      targetId: this.leafId,
+      ...(appendParentId !== this.leafId ? { appendParentId } : {}),
+      ...(appendMode ? { appendMode } : {}),
+    };
+  }
+
+  private rememberLeafControl(leafEntry: SessionLeafControl): void {
+    this.opaqueFileEntries.push({
+      index: this.fileEntries.length,
+      record: leafEntry,
+    });
+    this.opaqueParentsById.set(leafEntry.id, this.leafId);
+  }
+
+  private getPersistedFileEntries(
+    leafAppendParentId: string | null = this.appendParentId,
+    leafAppendMode?: "side",
+  ): unknown[] {
+    // Tail cleanup removes canonical entries before rewriting. Clamp opaque
+    // anchors now so later appends stay after records that the rewrite moved
+    // to the new tail instead of crossing them on the next full rewrite.
+    this.clampOpaqueFileEntryIndexes();
+
+    const entries: unknown[] = [];
+    let opaqueIndex = 0;
+    for (let index = 0; index <= this.fileEntries.length; index += 1) {
+      while (this.opaqueFileEntries[opaqueIndex]?.index === index) {
+        entries.push(this.opaqueFileEntries[opaqueIndex]?.record);
+        opaqueIndex += 1;
+      }
+      const entry = this.fileEntries[index];
+      if (entry) {
+        entries.push(entry);
+      }
+    }
+    while (opaqueIndex < this.opaqueFileEntries.length) {
+      entries.push(this.opaqueFileEntries[opaqueIndex]?.record);
+      opaqueIndex += 1;
+    }
+    let persistedLeafId: string | null = null;
+    let persistedAppendParentId: string | null = null;
+    let rawTailId: string | null = null;
+    for (const entry of entries) {
+      const leafEntry = parseOpaqueLeafEntry(entry);
+      if (leafEntry) {
+        rawTailId = leafEntry.id;
+        if (this.invalidLeafControlIds.has(leafEntry.id)) {
+          continue;
+        }
+        const targetId = this.resolveOpaqueLeafTargetId(leafEntry.targetId);
+        persistedLeafId = targetId;
+        persistedAppendParentId =
+          leafEntry.appendParentId === undefined
+            ? targetId
+            : this.resolveOpaqueAppendParentId(leafEntry.appendParentId);
+        continue;
+      }
+      if (isIndexedSessionEntry(entry)) {
+        persistedLeafId = entry.id;
+        persistedAppendParentId = entry.id;
+        rawTailId = entry.id;
+        continue;
+      }
+      const opaqueLink = parseParentLinkedOpaqueEntry(entry);
+      if (opaqueLink) {
+        persistedAppendParentId = opaqueLink.id;
+        rawTailId = opaqueLink.id;
+      }
+    }
+    if (persistedLeafId !== this.leafId || persistedAppendParentId !== this.appendParentId) {
+      // Full rewrites preserve side branches in file order. Encode the active
+      // branch explicitly so reopening does not adopt the serialized side tail.
+      const leafEntry = this.createLeafControl(rawTailId, leafAppendParentId, leafAppendMode);
+      this.rememberLeafControl(leafEntry);
+      entries.push(leafEntry);
+    }
+    return entries;
+  }
+
+  getSerializedFileLinesForRewrite(): string[] {
+    return this.getPersistedFileEntries().map(serializeJsonlLine);
+  }
+
+  clearPreservedOpaqueFileEntries(): void {
+    this.opaqueFileEntries = [];
+    this.opaqueParentsById.clear();
+    this.invalidLeafControlIds.clear();
+    this.appendParentId = null;
+    this.promptReleasedSideBranchParentId = undefined;
+  }
+
+  private writeFullFile(
+    leafAppendParentId: string | null = this.appendParentId,
+    leafAppendMode?: "side",
+  ): string {
+    if (!this.sessionFile) {
+      return "";
+    }
+    return writeJsonlEntriesSync(
+      this.sessionFile,
+      this.getPersistedFileEntries(leafAppendParentId, leafAppendMode),
+    );
+  }
+
+  private rewriteFile(options?: {
+    publishSnapshot?: boolean;
+    leafAppendParentId?: string | null;
+    leafAppendMode?: "side";
+  }): void {
     if (!this.shouldPersist || !this.sessionFile) {
       return;
     }
-    writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
+    const leafAppendParentId =
+      options?.leafAppendParentId === undefined ? this.appendParentId : options.leafAppendParentId;
+    const content = this.writeFullFile(leafAppendParentId, options?.leafAppendMode);
+    const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, content);
+    this.sessionFileSnapshot = rememberedWrite.snapshot;
+    if (rememberedWrite.verifiedWrite && options?.publishSnapshot !== false) {
+      publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
+    }
   }
 
   isPersisted(): boolean {
@@ -894,7 +1964,126 @@ export class SessionManager {
     return this.sessionFile;
   }
 
-  persist(entry: SessionEntry): void {
+  /**
+   * Remove matching entries near the canonical tail and rewrite once.
+   * Declared trailing metadata can survive above the removed entries; all
+   * surviving canonical/opaque children are reparented to the retained branch.
+   */
+  removeTrailingEntries(
+    predicate: (entry: SessionEntry) => boolean,
+    options?: { preserveTrailing?: (entry: SessionEntry) => boolean },
+  ): number {
+    let preservedStart = this.fileEntries.length;
+    while (preservedStart > 1) {
+      const entry = this.fileEntries[preservedStart - 1];
+      if (!isIndexedSessionEntry(entry) || !options?.preserveTrailing?.(entry)) {
+        break;
+      }
+      preservedStart -= 1;
+    }
+
+    let removeStart = preservedStart;
+    while (removeStart > 1) {
+      const entry = this.fileEntries[removeStart - 1];
+      if (!isIndexedSessionEntry(entry) || !predicate(entry)) {
+        break;
+      }
+      removeStart -= 1;
+    }
+    if (removeStart === preservedStart) {
+      return 0;
+    }
+
+    const shiftOpaqueIndexesAfterRemoval = (start: number, count: number): void => {
+      for (const opaqueEntry of this.opaqueFileEntries) {
+        const removedBeforeOpaque = Math.max(0, Math.min(count, opaqueEntry.index - start));
+        opaqueEntry.index -= removedBeforeOpaque;
+      }
+    };
+    const removedCount = preservedStart - removeStart;
+    shiftOpaqueIndexesAfterRemoval(removeStart, removedCount);
+    const removedEntries = this.fileEntries.splice(removeStart, removedCount) as SessionEntry[];
+    const removedParentById = new Map(
+      removedEntries.map((entry) => [entry.id, entry.parentId] as const),
+    );
+    for (let index = removeStart; index < this.fileEntries.length; ) {
+      const entry = this.fileEntries[index];
+      if (
+        isIndexedSessionEntry(entry) &&
+        entry.type === "label" &&
+        removedParentById.has(entry.targetId)
+      ) {
+        removedParentById.set(entry.id, entry.parentId);
+        shiftOpaqueIndexesAfterRemoval(index, 1);
+        this.fileEntries.splice(index, 1);
+        continue;
+      }
+      index += 1;
+    }
+
+    const resolveRetainedParentId = (parentId: string | null): string | null => {
+      const seen = new Set<string>();
+      let currentId = parentId;
+      while (currentId && removedParentById.has(currentId) && !seen.has(currentId)) {
+        seen.add(currentId);
+        currentId = removedParentById.get(currentId) ?? null;
+      }
+      return currentId;
+    };
+    const replacementParentId = resolveRetainedParentId(removedEntries[0]?.parentId ?? null);
+    this.fileEntries = this.fileEntries.map((entry) => {
+      if (!isIndexedSessionEntry(entry)) {
+        return entry;
+      }
+      const parentId = resolveRetainedParentId(entry.parentId);
+      return parentId === entry.parentId ? entry : ({ ...entry, parentId } as SessionEntry);
+    });
+    this.opaqueFileEntries = this.opaqueFileEntries.map((opaqueEntry) => {
+      if (!isJsonRecord(opaqueEntry.record)) {
+        return opaqueEntry;
+      }
+      const record = opaqueEntry.record;
+      const parentId =
+        record.parentId === null || typeof record.parentId === "string"
+          ? resolveRetainedParentId(record.parentId)
+          : undefined;
+      const leafEntry = parseOpaqueLeafEntry(record);
+      const targetId = leafEntry ? resolveRetainedParentId(leafEntry.targetId) : undefined;
+      const appendParentId =
+        leafEntry?.appendParentId !== undefined
+          ? resolveRetainedParentId(leafEntry.appendParentId)
+          : undefined;
+      if (
+        (parentId === undefined || parentId === record.parentId) &&
+        (targetId === undefined || targetId === leafEntry?.targetId) &&
+        (appendParentId === undefined || appendParentId === leafEntry?.appendParentId)
+      ) {
+        return opaqueEntry;
+      }
+      return {
+        ...opaqueEntry,
+        record: {
+          ...record,
+          ...(parentId !== undefined ? { parentId } : {}),
+          ...(targetId !== undefined ? { targetId } : {}),
+          ...(appendParentId !== undefined ? { appendParentId } : {}),
+        },
+      };
+    });
+
+    this.clampOpaqueFileEntryIndexes();
+    this.buildIndex();
+    this.leafId = this.resolveCanonicalParentId(replacementParentId);
+    this.appendParentId = replacementParentId;
+    this.rewriteFile();
+    return removedEntries.length;
+  }
+
+  private persistRecord(
+    entry: unknown,
+    options?: AppendPersistenceOptions,
+    publishSnapshot = true,
+  ): void {
     if (!this.shouldPersist || !this.sessionFile) {
       return;
     }
@@ -909,18 +2098,230 @@ export class SessionManager {
     }
 
     if (!this.flushed) {
-      writeJsonlEntriesSync(this.sessionFile, this.fileEntries);
+      const content = this.writeFullFile();
       this.flushed = true;
+      const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, content);
+      this.sessionFileSnapshot = rememberedWrite.snapshot;
+      if (rememberedWrite.verifiedWrite && publishSnapshot) {
+        publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
+      }
     } else {
-      appendJsonlEntrySync(this.sessionFile, entry);
+      // Serialization can execute extension/provider code through toJSON or
+      // getters. A same-size rewrite from that code can preserve the stat key,
+      // so only inert plain JSON entries may advance the metadata-keyed cache.
+      const serializationCanRunUserCode = jsonSerializationCanRunUserCode(entry);
+      const serializedEntry = serializeJsonlEntry(entry);
+      const beforeAppendSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
+      const invalidateSerializedPrefixCache =
+        options?.invalidateSerializedPrefixCache === true || serializationCanRunUserCode;
+      const canPublishOwnedAppend =
+        !serializationCanRunUserCode &&
+        Boolean(
+          beforeAppendSnapshot &&
+          canAdvanceOwnedSessionEntryCache({
+            sessionFile: this.sessionFile,
+            snapshot: beforeAppendSnapshot,
+          }),
+        );
+      const cacheOwnedAppend = canPublishOwnedAppend && !invalidateSerializedPrefixCache;
+      const serializedAppend = appendSerializedJsonlEntrySync(this.sessionFile, serializedEntry, {
+        prefixNewline: sessionFileNeedsAppendSeparator(this.sessionFile, beforeAppendSnapshot),
+      });
+      const rememberedAppend = rememberAppendedSessionEntry(
+        this.sessionFile,
+        this.sessionFileSnapshot,
+        beforeAppendSnapshot,
+        serializedAppend,
+        cacheOwnedAppend,
+        canPublishOwnedAppend,
+        invalidateSerializedPrefixCache,
+      );
+      this.sessionFileSnapshot = rememberedAppend.snapshot;
+      if (rememberedAppend.ownedAppendVerified && publishSnapshot) {
+        publishRememberedSessionFileSnapshot(this.sessionFile, rememberedAppend.snapshot);
+      } else if (cacheOwnedAppend) {
+        this.setLoadedSessionFile(
+          this.sessionFile,
+          revalidateLoadedSessionFile(this.sessionFile, {
+            entries: this.fileEntries,
+            snapshot: beforeAppendSnapshot,
+          }),
+        );
+      }
     }
   }
 
-  private appendEntry(entry: SessionEntry): void {
+  persist(entry: SessionEntry, options?: AppendPersistenceOptions): void {
+    this.persistRecord(entry, options);
+  }
+
+  /**
+   * Resync the in-memory snapshot/cache after the transcript file was rewritten
+   * out-of-band (for example the embedded-run header normalization in
+   * prepareSessionManagerForRun). Without this the cached sessionFileSnapshot
+   * still describes the pre-rewrite file, so the first append takes the
+   * snapshot-mismatch branch in rememberAppendedSessionEntry, drops the warm
+   * cache, and the next open reparses the whole transcript.
+   */
+  syncSnapshotAfterHeaderRewrite(expectedContent?: string): void {
+    if (!this.sessionFile) {
+      return;
+    }
+    const rememberedWrite = rememberWrittenSessionEntries(this.sessionFile, expectedContent);
+    this.sessionFileSnapshot = rememberedWrite.snapshot;
+    if (rememberedWrite.verifiedWrite) {
+      publishRememberedSessionFileSnapshot(this.sessionFile, rememberedWrite.snapshot);
+    }
+  }
+
+  /**
+   * Preserve entries appended while the active prompt released its file lock.
+   * Attach them as a side branch so rewrites retain external state without
+   * moving the prepared reply branch or adding delivery mirrors to its context.
+   */
+  mergePromptReleasedSessionEntries(
+    entries: readonly PromptReleasedSessionEntry[],
+    options?: { persistLeaf?: boolean },
+  ): PromptReleasedSessionMergeResult | undefined {
+    let sideBranchParentId =
+      this.promptReleasedSideBranchParentId === undefined
+        ? this.leafId
+        : this.promptReleasedSideBranchParentId;
+    let persistedLeafId = this.leafId;
+    let persistedAppendParentId = this.appendParentId;
+    let persistedAppendMode: "active" | "side" =
+      this.promptReleasedSideBranchParentId === undefined ? "active" : "side";
+    let sawPersistedStateUpdate = false;
+    let rawTailId: string | null = null;
+    for (const sourceEntry of entries) {
+      if (sourceEntry.type === "prompt_released_opaque") {
+        this.opaqueFileEntries.push({
+          index: this.fileEntries.length,
+          record: sourceEntry.record,
+        });
+        const leafEntry = parseOpaqueLeafEntry(sourceEntry.record);
+        if (leafEntry) {
+          rawTailId = leafEntry.id;
+          const leafState = this.resolveOpaqueLeafControl(leafEntry);
+          if (!leafState) {
+            this.invalidLeafControlIds.add(leafEntry.id);
+            this.opaqueParentsById.set(
+              leafEntry.id,
+              this.resolveOpaqueAppendParentId(leafEntry.parentId),
+            );
+            continue;
+          }
+          this.opaqueParentsById.set(leafEntry.id, leafState.leafId);
+          sideBranchParentId = leafState.appendParentId;
+          persistedLeafId = leafState.leafId;
+          persistedAppendParentId = leafState.appendParentId;
+          persistedAppendMode = leafState.appendMode === "side" ? "side" : "active";
+          sawPersistedStateUpdate = true;
+          continue;
+        }
+        const link = parseParentLinkedOpaqueEntry(sourceEntry.record);
+        if (link) {
+          this.opaqueParentsById.set(link.id, link.parentId);
+          sideBranchParentId = link.id;
+          persistedAppendParentId = link.id;
+          sawPersistedStateUpdate = true;
+          rawTailId = link.id;
+        }
+        continue;
+      }
+      if (this.byId.has(sourceEntry.id)) {
+        throw new Error(`Entry ${sourceEntry.id} already exists`);
+      }
+      if (sourceEntry.type === "label" && !this.byId.has(sourceEntry.targetId)) {
+        throw new Error(`Entry ${sourceEntry.targetId} not found`);
+      }
+      const entry: PromptReleasedSessionEntry = {
+        ...sourceEntry,
+        parentId: sideBranchParentId,
+      };
+      this.fileEntries.push(entry);
+      this.byId.set(entry.id, entry);
+      sideBranchParentId = entry.id;
+      persistedAppendParentId = entry.id;
+      if (isSessionTranscriptSideAppendEntry(entry)) {
+        persistedAppendMode = "side";
+      } else {
+        persistedLeafId = entry.id;
+        persistedAppendMode = "active";
+      }
+      sawPersistedStateUpdate = true;
+      rawTailId = entry.id;
+      if (entry.type === "label") {
+        if (entry.label) {
+          this.labelsById.set(entry.targetId, entry.label);
+          this.labelTimestampsById.set(entry.targetId, entry.timestamp);
+        } else {
+          this.labelsById.delete(entry.targetId);
+          this.labelTimestampsById.delete(entry.targetId);
+        }
+      }
+    }
+    this.promptReleasedSideBranchParentId = sideBranchParentId;
+    if (this.sessionFile) {
+      this.sessionFileSnapshot = readSessionFileSnapshotIfExists(this.sessionFile);
+    }
+    if (
+      options?.persistLeaf !== true ||
+      !this.shouldPersist ||
+      !this.sessionFile ||
+      !sawPersistedStateUpdate ||
+      (persistedLeafId === this.leafId &&
+        persistedAppendParentId === sideBranchParentId &&
+        persistedAppendMode === "side")
+    ) {
+      return undefined;
+    }
+
+    const hasAssistant = this.fileEntries.some(
+      (entry) => entry.type === "message" && entry.message.role === "assistant",
+    );
+    if (!this.flushed || !hasAssistant) {
+      this.rewriteFile({
+        publishSnapshot: false,
+        leafAppendParentId: sideBranchParentId,
+        leafAppendMode: "side",
+      });
+      this.flushed = true;
+      if (!this.sessionFileSnapshot) {
+        throw new Error(`Unable to snapshot restored session file: ${this.sessionFile}`);
+      }
+      // The rewrite can materialize an unflushed user turn as well as the leaf,
+      // so peer controllers must reload the trusted final file instead of
+      // attempting to replay an append-only entry delta.
+      return { sessionFileSnapshot: this.sessionFileSnapshot, requiresReload: true };
+    }
+
+    const leafEntry = this.createLeafControl(rawTailId, sideBranchParentId, "side");
+    this.persistRecord(leafEntry, undefined, false);
+    this.rememberLeafControl(leafEntry);
+    if (!this.sessionFileSnapshot) {
+      throw new Error(`Unable to snapshot restored session file: ${this.sessionFile}`);
+    }
+    return {
+      sessionFileSnapshot: this.sessionFileSnapshot,
+      publishedEntries: [{ kind: "id", id: leafEntry.id }],
+    };
+  }
+
+  private appendEntry(entry: SessionEntry, options?: AppendPersistenceOptions): void {
+    if (
+      !isSessionTranscriptSideAppendEntry(entry) &&
+      entry.parentId === this.appendParentId &&
+      this.leafId !== this.appendParentId
+    ) {
+      this.logicalParentsById.set(entry.id, this.leafId);
+    }
     this.fileEntries.push(entry);
     this.byId.set(entry.id, entry);
     this.leafId = entry.id;
-    this.persist(entry);
+    this.appendParentId = entry.id;
+    this.promptReleasedSideBranchParentId = undefined;
+    this.persist(entry, options);
   }
 
   /** Append a message as child of current leaf, then advance leaf. Returns entry id.
@@ -929,15 +2330,23 @@ export class SessionManager {
    * so it is easier to find them.
    * These need to be appended via appendCompaction() and appendBranchSummary() methods.
    */
-  appendMessage(message: Message | CustomMessage | BashExecutionMessage): string {
+  appendMessage(
+    message: Message | CustomMessage | BashExecutionMessage,
+    options?: AppendPersistenceOptions,
+  ): string {
+    const invalidateSerializedPrefixCache =
+      options?.invalidateSerializedPrefixCache === true || messageSerializesOwnedValues(message);
     const entry: SessionMessageEntry = {
       type: "message",
       id: generateId(this.byId),
-      parentId: this.leafId,
+      parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       message,
     };
-    this.appendEntry(entry);
+    this.appendEntry(entry, {
+      ...options,
+      invalidateSerializedPrefixCache,
+    });
     return entry.id;
   }
 
@@ -946,7 +2355,7 @@ export class SessionManager {
     const entry: ThinkingLevelChangeEntry = {
       type: "thinking_level_change",
       id: generateId(this.byId),
-      parentId: this.leafId,
+      parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       thinkingLevel,
     };
@@ -959,7 +2368,7 @@ export class SessionManager {
     const entry: ModelChangeEntry = {
       type: "model_change",
       id: generateId(this.byId),
-      parentId: this.leafId,
+      parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       provider,
       modelId,
@@ -979,7 +2388,7 @@ export class SessionManager {
     const entry: CompactionEntry = {
       type: "compaction",
       id: generateId(this.byId),
-      parentId: this.leafId,
+      parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       summary,
       firstKeptEntryId,
@@ -987,7 +2396,9 @@ export class SessionManager {
       details,
       fromHook,
     };
-    this.appendEntry(entry);
+    this.appendEntry(entry, {
+      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
+    });
     return entry.id;
   }
 
@@ -998,10 +2409,10 @@ export class SessionManager {
       customType,
       data,
       id: generateId(this.byId),
-      parentId: this.leafId,
+      parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
     };
-    this.appendEntry(entry);
+    this.appendEntry(entry, { invalidateSerializedPrefixCache: true });
     return entry.id;
   }
 
@@ -1010,7 +2421,7 @@ export class SessionManager {
     const entry: SessionInfoEntry = {
       type: "session_info",
       id: generateId(this.byId),
-      parentId: this.leafId,
+      parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       name: name.trim(),
     };
@@ -1053,10 +2464,10 @@ export class SessionManager {
       display,
       details,
       id: generateId(this.byId),
-      parentId: this.leafId,
+      parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
     };
-    this.appendEntry(entry);
+    this.appendEntry(entry, { invalidateSerializedPrefixCache: true });
     return entry.id;
   }
 
@@ -1069,11 +2480,12 @@ export class SessionManager {
   }
 
   getLeafEntry(): SessionEntry | undefined {
-    return this.leafId ? this.byId.get(this.leafId) : undefined;
+    return this.leafId ? this.getEntry(this.leafId) : undefined;
   }
 
   getEntry(id: string): SessionEntry | undefined {
-    return this.byId.get(id);
+    const entry = this.byId.get(id);
+    return entry ? this.normalizeEntryParent(entry) : undefined;
   }
 
   /**
@@ -1082,8 +2494,9 @@ export class SessionManager {
   getChildren(parentId: string): SessionEntry[] {
     const children: SessionEntry[] = [];
     for (const entry of this.byId.values()) {
-      if (entry.parentId === parentId) {
-        children.push(entry);
+      const normalizedEntry = this.normalizeEntryParent(entry);
+      if (normalizedEntry.parentId === parentId) {
+        children.push(normalizedEntry);
       }
     }
     return children;
@@ -1108,7 +2521,7 @@ export class SessionManager {
     const entry: LabelEntry = {
       type: "label",
       id: generateId(this.byId),
-      parentId: this.leafId,
+      parentId: this.appendParentId,
       timestamp: new Date().toISOString(),
       targetId,
       label,
@@ -1132,10 +2545,18 @@ export class SessionManager {
   getBranch(fromId?: string): SessionEntry[] {
     const path: SessionEntry[] = [];
     const startId = fromId ?? this.leafId;
-    let current = startId ? this.byId.get(startId) : undefined;
-    while (current) {
-      path.unshift(current);
-      current = current.parentId ? this.byId.get(current.parentId) : undefined;
+    const seen = new Set<string>();
+    let currentId = startId;
+    while (currentId && !seen.has(currentId)) {
+      seen.add(currentId);
+      const current = this.byId.get(currentId);
+      if (current) {
+        const normalizedCurrent = this.normalizeEntryParent(current);
+        path.unshift(normalizedCurrent);
+        currentId = normalizedCurrent.parentId;
+      } else {
+        currentId = this.opaqueParentsById.get(currentId) ?? null;
+      }
     }
     return path;
   }
@@ -1145,7 +2566,7 @@ export class SessionManager {
    * Uses tree traversal from current leaf.
    */
   buildSessionContext(): SessionContext {
-    return buildSessionContext(this.getEntries(), this.leafId, this.byId);
+    return buildCoreSessionContext(this.getBranch() as CoreSessionTreeEntry[]) as SessionContext;
   }
 
   /**
@@ -1162,7 +2583,9 @@ export class SessionManager {
    * change the leaf pointer. Entries cannot be modified or deleted.
    */
   getEntries(): SessionEntry[] {
-    return this.fileEntries.filter((e): e is SessionEntry => e.type !== "session");
+    return this.fileEntries
+      .filter((entry): entry is SessionEntry => entry.type !== "session")
+      .map((entry) => this.normalizeEntryParent(entry));
   }
 
   /**
@@ -1185,10 +2608,11 @@ export class SessionManager {
     // Build tree
     for (const entry of entries) {
       const node = nodeMap.get(entry.id)!;
-      if (entry.parentId === null || entry.parentId === entry.id) {
+      const parentId = this.resolveCanonicalParentId(entry.parentId);
+      if (parentId === null || parentId === entry.id) {
         roots.push(node);
       } else {
-        const parent = nodeMap.get(entry.parentId);
+        const parent = nodeMap.get(parentId);
         if (parent) {
           parent.children.push(node);
         } else {
@@ -1223,10 +2647,13 @@ export class SessionManager {
    * are not modified or deleted.
    */
   branch(branchFromId: string): void {
-    if (!this.byId.has(branchFromId)) {
+    const branchTargetId = this.resolveBranchTargetId(branchFromId);
+    if (branchTargetId === undefined) {
       throw new Error(`Entry ${branchFromId} not found`);
     }
-    this.leafId = branchFromId;
+    this.leafId = branchTargetId;
+    this.appendParentId = branchTargetId;
+    this.promptReleasedSideBranchParentId = undefined;
   }
 
   /**
@@ -1236,6 +2663,8 @@ export class SessionManager {
    */
   resetLeaf(): void {
     this.leafId = null;
+    this.appendParentId = null;
+    this.promptReleasedSideBranchParentId = undefined;
   }
 
   /**
@@ -1249,22 +2678,111 @@ export class SessionManager {
     details?: unknown,
     fromHook?: boolean,
   ): string {
-    if (branchFromId !== null && !this.byId.has(branchFromId)) {
+    const branchTargetId = branchFromId === null ? null : this.resolveBranchTargetId(branchFromId);
+    if (branchTargetId === undefined) {
       throw new Error(`Entry ${branchFromId} not found`);
     }
-    this.leafId = branchFromId;
+    this.leafId = branchTargetId;
+    this.appendParentId = branchTargetId;
     const entry: BranchSummaryEntry = {
       type: "branch_summary",
       id: generateId(this.byId),
-      parentId: branchFromId,
+      parentId: branchTargetId,
       timestamp: new Date().toISOString(),
-      fromId: branchFromId ?? "root",
+      fromId: branchTargetId ?? "root",
       summary,
       details,
       fromHook,
     };
-    this.appendEntry(entry);
+    this.appendEntry(entry, {
+      invalidateSerializedPrefixCache: fromHook === true || details !== undefined,
+    });
     return entry.id;
+  }
+
+  private collectBranchedSessionPath(leafId: string): {
+    entries: SessionEntry[];
+    opaqueEntries: PreservedOpaqueFileEntry[];
+    tailId: string | null;
+    usedIds: Set<string>;
+  } {
+    type BranchNode =
+      | { type: "entry"; entry: SessionEntry }
+      | { type: "opaque"; id: string; record: Record<string, unknown> };
+
+    const opaqueById = new Map<string, Record<string, unknown>>();
+    for (const opaqueEntry of this.opaqueFileEntries) {
+      const leafEntry = parseOpaqueLeafEntry(opaqueEntry.record);
+      const link = leafEntry ?? parseParentLinkedOpaqueEntry(opaqueEntry.record);
+      if (link && isJsonRecord(opaqueEntry.record)) {
+        opaqueById.set(link.id, opaqueEntry.record);
+      }
+    }
+
+    const reversedNodes: BranchNode[] = [];
+    const seen = new Set<string>();
+    let currentId: string | null = leafId;
+    while (currentId && !seen.has(currentId)) {
+      seen.add(currentId);
+      const entry = this.byId.get(currentId);
+      if (entry) {
+        reversedNodes.push({ type: "entry", entry });
+        if (this.logicalParentsById.has(entry.id)) {
+          let physicalId = entry.parentId;
+          while (physicalId && !seen.has(physicalId)) {
+            const physicalRecord = opaqueById.get(physicalId);
+            if (!physicalRecord || !this.opaqueParentsById.has(physicalId)) {
+              break;
+            }
+            seen.add(physicalId);
+            reversedNodes.push({ type: "opaque", id: physicalId, record: physicalRecord });
+            physicalId = this.opaqueParentsById.get(physicalId) ?? null;
+          }
+          currentId = this.logicalParentsById.get(entry.id) ?? null;
+        } else {
+          currentId = entry.parentId;
+        }
+        continue;
+      }
+      const record = opaqueById.get(currentId);
+      if (!record || !this.opaqueParentsById.has(currentId)) {
+        break;
+      }
+      reversedNodes.push({ type: "opaque", id: currentId, record });
+      currentId = this.opaqueParentsById.get(currentId) ?? null;
+    }
+
+    const entries: SessionEntry[] = [];
+    const opaqueEntries: PreservedOpaqueFileEntry[] = [];
+    const usedIds = new Set<string>();
+    let tailId: string | null = null;
+    for (const node of reversedNodes.toReversed()) {
+      if (node.type === "entry") {
+        if (node.entry.type === "label") {
+          continue;
+        }
+        const branchEntry: SessionEntry =
+          node.entry.parentId === tailId
+            ? node.entry
+            : ({ ...node.entry, parentId: tailId } as SessionEntry);
+        entries.push(branchEntry);
+        usedIds.add(branchEntry.id);
+        tailId = branchEntry.id;
+        continue;
+      }
+      if (parseOpaqueLeafEntry(node.record)) {
+        // A fork already materializes one selected path. Drop navigation-only
+        // leaf markers so regenerated labels cannot leave dangling targetIds.
+        continue;
+      }
+      opaqueEntries.push({
+        index: entries.length + 1,
+        record: { ...node.record, parentId: tailId },
+      });
+      usedIds.add(node.id);
+      tailId = node.id;
+    }
+    return { entries, opaqueEntries, tailId, usedIds };
   }
 
   /**
@@ -1274,13 +2792,10 @@ export class SessionManager {
    */
   createBranchedSession(leafId: string): string | undefined {
     const previousSessionFile = this.sessionFile;
-    const path = this.getBranch(leafId);
-    if (path.length === 0) {
+    const branchPath = this.collectBranchedSessionPath(leafId);
+    if (branchPath.entries.length === 0) {
       throw new Error(`Entry ${leafId} not found`);
     }
-
-    // Filter out LabelEntry from path - we'll recreate them from the resolved map
-    const pathWithoutLabels = path.filter((e) => e.type !== "label");
 
     const newSessionId = createSessionId();
     const timestamp = new Date().toISOString();
@@ -1297,7 +2812,7 @@ export class SessionManager {
     };
 
     // Collect labels for entries in the path
-    const pathEntryIds = new Set(pathWithoutLabels.map((e) => e.id));
+    const pathEntryIds = new Set(branchPath.entries.map((entry) => entry.id));
     const labelsToWrite: Array<{ targetId: string; label: string; timestamp: string }> = [];
     for (const [targetId, label] of this.labelsById) {
       if (pathEntryIds.has(targetId)) {
@@ -1307,26 +2822,27 @@ export class SessionManager {
 
     if (this.shouldPersist) {
       // Build label entries
-      const lastEntryId = pathWithoutLabels[pathWithoutLabels.length - 1]?.id || null;
-      let parentId = lastEntryId;
+      let parentId = branchPath.tailId;
       const labelEntries: LabelEntry[] = [];
       for (const { targetId, label, timestamp: labelTimestamp } of labelsToWrite) {
         const labelEntry: LabelEntry = {
           type: "label",
-          id: generateId(new Set(pathEntryIds)),
+          id: generateId(branchPath.usedIds),
           parentId,
           timestamp: labelTimestamp,
           targetId,
           label,
         };
-        pathEntryIds.add(labelEntry.id);
+        branchPath.usedIds.add(labelEntry.id);
         labelEntries.push(labelEntry);
         parentId = labelEntry.id;
       }
 
-      this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
+      this.fileEntries = [header, ...branchPath.entries, ...labelEntries];
+      this.opaqueFileEntries = branchPath.opaqueEntries;
       this.sessionId = newSessionId;
       this.sessionFile = newSessionFile;
+      this.sessionFileSnapshot = undefined;
       this.buildIndex();
 
       // Only write the file now if it contains an assistant message.
@@ -1349,20 +2865,22 @@ export class SessionManager {
 
     // In-memory mode: replace current session with the path + labels
     const labelEntries: LabelEntry[] = [];
-    let parentId = pathWithoutLabels[pathWithoutLabels.length - 1]?.id || null;
+    let parentId = branchPath.tailId;
     for (const { targetId, label, timestamp: labelTimestamp } of labelsToWrite) {
       const labelEntry: LabelEntry = {
         type: "label",
-        id: generateId(new Set([...pathEntryIds, ...labelEntries.map((e) => e.id)])),
+        id: generateId(branchPath.usedIds),
         parentId,
         timestamp: labelTimestamp,
         targetId,
         label,
       };
+      branchPath.usedIds.add(labelEntry.id);
       labelEntries.push(labelEntry);
       parentId = labelEntry.id;
     }
-    this.fileEntries = [header, ...pathWithoutLabels, ...labelEntries];
+    this.fileEntries = [header, ...branchPath.entries, ...labelEntries];
+    this.opaqueFileEntries = branchPath.opaqueEntries;
     this.sessionId = newSessionId;
     this.buildIndex();
     return undefined;
@@ -1385,13 +2903,15 @@ export class SessionManager {
    * @param cwdOverride Optional cwd override instead of the session header cwd.
    */
   static open(path: string, sessionDir?: string, cwdOverride?: string): SessionManager {
-    // Extract cwd from session header if possible, otherwise use process.cwd()
-    const entries = loadEntriesFromFile(path);
-    const header = entries.find((e) => e.type === "session");
+    // Re-stat before construction so the single parsed load cannot become
+    // stale while deriving cwd/session metadata. Stable warm opens pay only
+    // the extra stat; changed files retry through the normal loader.
+    const loaded = revalidateLoadedSessionFile(path, loadEntriesFromFileWithSnapshot(path));
+    const header = loaded.entries.find((e) => e.type === "session");
     const cwd = cwdOverride ?? header?.cwd ?? process.cwd();
     // If no sessionDir provided, derive from file's parent directory
     const dir = sessionDir ?? resolve(path, "..");
-    return new SessionManager(cwd, dir, path, true);
+    return new SessionManager(cwd, dir, path, true, loaded);
   }
 
   /**

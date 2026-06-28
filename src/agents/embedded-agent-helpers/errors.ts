@@ -14,6 +14,7 @@ import {
   isGenericProviderInternalError,
   parseApiErrorInfo,
 } from "../../shared/assistant-error-format.js";
+import { truncateUtf16Safe } from "../../shared/utf16-slice.js";
 export {
   extractLeadingHttpStatus,
   formatRawAssistantErrorForUi,
@@ -75,6 +76,10 @@ export {
 const log = createSubsystemLogger("errors");
 const sandboxToolPolicyAuditMessages = new WeakSet<AssistantMessage>();
 export const GENERIC_ASSISTANT_ERROR_TEXT = "LLM request failed.";
+export const AUTH_INVALID_TOKEN_USER_TEXT =
+  "Authentication failed (provider returned HTTP 401). " +
+  "Your provider token may have expired — try the request again in a moment. " +
+  "If the failure persists, re-authenticate this provider.";
 const PROVIDER_SCHEMA_REJECTION_USER_TEXT =
   "LLM request failed: provider rejected the request schema or tool payload.";
 const MODEL_NOT_FOUND_USER_TEXT =
@@ -1324,7 +1329,15 @@ export function classifyAssistantFailoverReason(
 
 export function formatAssistantErrorText(
   msg: AssistantMessage,
-  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
+  opts?: {
+    cfg?: OpenClawConfig;
+    sessionKey?: string;
+    provider?: string;
+    model?: string;
+    /** Credential auth mode (e.g. "oauth", "token", "api_key", "aws-sdk").
+     * When "oauth" or "token", billing copy omits API-key language (#80877). */
+    authMode?: string;
+  },
 ): string | undefined {
   // Also format errors if errorMessage is present, even if stopReason isn't "error"
   const raw = (msg.errorMessage ?? "").trim();
@@ -1411,11 +1424,7 @@ export function formatAssistantErrorText(
   }
 
   if (providerRuntimeFailureKind === "auth_invalid_token") {
-    return (
-      "Authentication failed (provider returned HTTP 401). " +
-      "Your provider token may have expired — try the request again in a moment. " +
-      "If the failure persists, re-authenticate this provider."
-    );
+    return AUTH_INVALID_TOKEN_USER_TEXT;
   }
 
   if (providerRuntimeFailureKind === "upstream_html") {
@@ -1481,10 +1490,10 @@ export function formatAssistantErrorText(
     isOpenRouterKeyLimitExceededError(raw, opts?.provider) ||
     isOpenRouterKeyBudgetLimitExceededError(raw, opts?.provider)
   ) {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
   if (isBilling429MessageForProvider(raw, opts?.provider)) {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
 
   const transientCopy = formatRateLimitOrOverloadedErrorCopy(raw);
@@ -1506,7 +1515,7 @@ export function formatAssistantErrorText(
   }
 
   if (isBillingErrorMessage(raw)) {
-    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model);
+    return formatBillingErrorMessage(opts?.provider, opts?.model ?? msg.model, opts?.authMode);
   }
 
   if (providerRuntimeFailureKind === "schema") {
@@ -1532,7 +1541,7 @@ export function formatAssistantErrorText(
   if (raw.length > 600) {
     log.warn(`Long error truncated: ${raw.slice(0, 200)}`);
   }
-  return raw.length > 600 ? `${raw.slice(0, 600)}…` : raw;
+  return raw.length > 600 ? `${truncateUtf16Safe(raw, 600)}…` : raw;
 }
 
 export function isRawAssistantErrorPassthrough(params: {
@@ -1552,7 +1561,7 @@ export function isRawAssistantErrorPassthrough(params: {
     friendlyError.startsWith("HTTP ");
   return (
     friendlyError === rawError ||
-    (rawError.length > 600 && friendlyError === `${rawError.slice(0, 600)}…`) ||
+    (rawError.length > 600 && friendlyError === `${truncateUtf16Safe(rawError, 600)}…`) ||
     Boolean(parsedMessage && hasRawDerivedProviderPrefix) ||
     Boolean(leadingStatusRest && friendlyError.startsWith("HTTP "))
   );
@@ -1560,7 +1569,14 @@ export function isRawAssistantErrorPassthrough(params: {
 
 export function formatUserFacingAssistantErrorText(
   msg: AssistantMessage,
-  opts?: { cfg?: OpenClawConfig; sessionKey?: string; provider?: string; model?: string },
+  opts?: {
+    cfg?: OpenClawConfig;
+    sessionKey?: string;
+    provider?: string;
+    model?: string;
+    /** Credential auth mode for billing copy (#80877). */
+    authMode?: string;
+  },
 ): string {
   const friendlyError = formatAssistantErrorText(msg, opts);
   const rawError = msg.errorMessage?.trim();
@@ -1708,8 +1724,6 @@ export function isAuthAssistantError(msg: AssistantMessage | undefined): boolean
   }
   return isAuthErrorMessage(msg.errorMessage ?? "");
 }
-
-export { isModelNotFoundErrorMessage };
 
 function isCliSessionExpiredErrorMessage(raw: string): boolean {
   if (!raw) {

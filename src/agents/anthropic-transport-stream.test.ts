@@ -4,7 +4,7 @@
  * provider transport hooks.
  */
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { attachModelProviderRequestTransport } from "./provider-request-config.js";
 
 const { buildGuardedModelFetchMock, guardedFetchMock } = vi.hoisted(() => ({
@@ -196,6 +196,10 @@ describe("anthropic transport stream", () => {
     guardedFetchMock.mockResolvedValue(createSseResponse());
   });
 
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("uses the guarded fetch transport for api-key Anthropic requests", async () => {
     const model = makeAnthropicTransportModel({
       headers: { "X-Provider": "anthropic" },
@@ -264,6 +268,81 @@ describe("anthropic transport stream", () => {
     expect(headers.get("api-key")).toBeNull();
     expect(headers.get("x-api-key")).toBeNull();
     expect(headers.get("X-Provider")).toBe("foundry");
+  });
+
+  it("bounds streamed Anthropic error responses without content-length", async () => {
+    const encoder = new TextEncoder();
+    let pullCount = 0;
+    let cancelCount = 0;
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(controller) {
+            pullCount += 1;
+            if (pullCount === 1) {
+              controller.enqueue(encoder.encode("x".repeat(8 * 1024)));
+              return;
+            }
+            controller.enqueue(encoder.encode("y"));
+          },
+          cancel() {
+            cancelCount += 1;
+          },
+        }),
+        { status: 500 },
+      ),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe(`${"x".repeat(400)}…`);
+    expect(pullCount).toBeGreaterThanOrEqual(2);
+    expect(cancelCount).toBe(1);
+  });
+
+  it("aborts stalled streamed Anthropic error responses", async () => {
+    vi.useFakeTimers();
+    const encoder = new TextEncoder();
+    let cancelReason: unknown;
+    guardedFetchMock.mockResolvedValueOnce(
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode("partial failure detail"));
+          },
+          cancel(reason) {
+            cancelReason = reason;
+          },
+        }),
+        { status: 500 },
+      ),
+    );
+
+    const resultPromise = runTransportStream(
+      makeAnthropicTransportModel(),
+      {
+        messages: [{ role: "user", content: "hello" }],
+      } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    const result = await resultPromise;
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toBe(
+      "Anthropic Messages error response stalled: no data received for 10000ms",
+    );
+    expect(cancelReason).toBeInstanceOf(Error);
+    expect((cancelReason as Error).message).toBe(result.errorMessage);
   });
 
   it("honors ANTHROPIC_BASE_URL when model base URL is blank", async () => {
@@ -989,6 +1068,56 @@ describe("anthropic transport stream", () => {
       thinking: signedThinking,
       thinkingSignature: "sig_2sig_3",
     });
+  });
+
+  it("routes interleaved active content blocks by their event indexes", async () => {
+    guardedFetchMock.mockResolvedValueOnce(
+      createSseResponse([
+        {
+          type: "message_start",
+          message: { id: "msg_interleaved", usage: { input_tokens: 1, output_tokens: 0 } },
+        },
+        {
+          type: "content_block_start",
+          index: 0,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "content_block_start",
+          index: 1,
+          content_block: { type: "text", text: "" },
+        },
+        {
+          type: "content_block_delta",
+          index: 1,
+          delta: { type: "text_delta", text: "second" },
+        },
+        {
+          type: "content_block_delta",
+          index: 0,
+          delta: { type: "text_delta", text: "first" },
+        },
+        { type: "content_block_stop", index: 1 },
+        { type: "content_block_stop", index: 0 },
+        {
+          type: "message_delta",
+          delta: { stop_reason: "end_turn" },
+          usage: { input_tokens: 1, output_tokens: 2 },
+        },
+        { type: "message_stop" },
+      ]),
+    );
+
+    const result = await runTransportStream(
+      makeAnthropicTransportModel(),
+      { messages: [{ role: "user", content: "hello" }] } as AnthropicStreamContext,
+      { apiKey: "sk-ant-api" } as AnthropicStreamOptions,
+    );
+
+    expect(result.content).toEqual([
+      { type: "text", text: "first" },
+      { type: "text", text: "second" },
+    ]);
   });
 
   it("preserves provider-seeded thinking signatures when no signature_delta follows", async () => {
