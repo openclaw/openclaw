@@ -27,6 +27,7 @@ import {
 } from "./dynamic-tool-profile.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import {
+  buildCodexPluginAppsConfigPatchFromPolicyContext,
   isCodexPluginThreadBindingStale,
   mergeCodexThreadConfigs,
   type CodexPluginThreadConfig,
@@ -630,9 +631,16 @@ export async function startOrResumeThread(params: {
           configPatch: params.finalConfigPatch,
           nativeHookRelayGeneration: params.nativeHookRelayGeneration,
         };
+        // Codex rebuilds effective config on thread/resume, so replay the app
+        // allowlist persisted at thread/start or plugin tools disappear after one turn.
+        const pluginAppsConfigPatch =
+          params.pluginThreadConfig?.enabled && resumeBinding.pluginAppPolicyContext
+            ? buildCodexPluginAppsConfigPatchFromPolicyContext(resumeBinding.pluginAppPolicyContext)
+            : undefined;
         const resumeConfig = mergeCodexThreadConfigs(
           params.config,
           userMcpServersConfigPatch,
+          pluginAppsConfigPatch,
           finalConfigPatch.configPatch,
         );
         const resumeParams = lifecycleTiming.measureSync("thread-resume-params", () =>

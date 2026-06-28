@@ -54,6 +54,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
@@ -170,7 +171,7 @@ describe("Codex plugin thread config", () => {
     });
   });
 
-  it("exposes destructive app access while clearing only durable approval overrides for always mode", async () => {
+  it("routes destructive approvals to the user while clearing durable overrides for always mode", async () => {
     const appCache = new CodexAppInventoryCache();
     await appCache.refreshNow({
       key: "runtime",
@@ -262,6 +263,7 @@ describe("Codex plugin thread config", () => {
       open_world_enabled: true,
       default_tools_approval_mode: "auto",
     });
+    expect(config.configPatch).toMatchObject({ approvals_reviewer: "user" });
     expect(config.policyContext.apps["google-calendar-app"]).toMatchObject({
       allowDestructiveActions: true,
       destructiveApprovalMode: "always",
@@ -351,6 +353,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
@@ -445,6 +448,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
@@ -517,6 +521,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
@@ -655,6 +660,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
@@ -839,6 +845,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
@@ -900,6 +907,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
@@ -958,6 +966,7 @@ describe("Codex plugin thread config", () => {
       request,
     });
 
+    expect(config.configPatch).toMatchObject({ approvals_reviewer: "user" });
     expect(config.configPatch?.apps).toEqual({
       _default: {
         enabled: false,
@@ -1049,6 +1058,7 @@ describe("Codex plugin thread config", () => {
       request,
     });
 
+    expect(config.configPatch).toMatchObject({ approvals_reviewer: "user" });
     expect(config.configPatch?.apps).toEqual({
       _default: {
         enabled: false,
@@ -1204,6 +1214,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
@@ -1251,6 +1262,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,
@@ -1307,6 +1319,7 @@ describe("Codex plugin thread config", () => {
     });
 
     expect(config.configPatch).toEqual({
+      approvals_reviewer: "user",
       apps: {
         _default: {
           enabled: false,

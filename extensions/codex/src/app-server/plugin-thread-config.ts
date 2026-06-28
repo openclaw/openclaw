@@ -281,7 +281,7 @@ export async function buildCodexPluginThreadConfig(
     }
   }
 
-  const configPatch = { apps };
+  const configPatch = { approvals_reviewer: "user", apps };
   const policyContext = buildPluginAppPolicyContext(policyApps, pluginAppIds);
   return {
     enabled: true,
@@ -367,6 +367,30 @@ function buildDisabledAppsConfigPatch(): JsonObject {
       },
     },
   };
+}
+
+/** Rebuilds the safe per-thread apps patch persisted with a Codex thread binding. */
+export function buildCodexPluginAppsConfigPatchFromPolicyContext(
+  policyContext: PluginAppPolicyContext,
+): JsonObject {
+  const apps: JsonObject = {
+    _default: {
+      enabled: false,
+      destructive_enabled: false,
+      open_world_enabled: false,
+    },
+  };
+  for (const [appId, policy] of Object.entries(policyContext.apps).toSorted(([left], [right]) =>
+    left.localeCompare(right),
+  )) {
+    apps[appId] = {
+      enabled: true,
+      destructive_enabled: policy.allowDestructiveActions,
+      open_world_enabled: true,
+      default_tools_approval_mode: "auto",
+    };
+  }
+  return { approvals_reviewer: "user", apps };
 }
 
 function buildPluginAppPolicyContext(
