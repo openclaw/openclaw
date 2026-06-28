@@ -933,7 +933,11 @@ function normalizeDeepSeekV4CandidateId(modelId: unknown): string | undefined {
 }
 
 function isDeepSeekV4OpenAICompatibleModel(model: Parameters<StreamFn>[0]): boolean {
-  return isDeepSeekV4OpenAICompletionsModel(model) && !isMicrosoftFoundryProviderId(model.provider);
+  return (
+    isDeepSeekV4OpenAICompletionsModel(model) &&
+    !isMicrosoftFoundryProviderId(model.provider) &&
+    !isOpenRouterProviderId(model.provider)
+  );
 }
 
 function isDeepSeekV4OpenAICompletionsModel(model: Parameters<StreamFn>[0]): boolean {
@@ -953,6 +957,18 @@ function isMicrosoftFoundryProviderId(provider: unknown): boolean {
     normalizedProvider === "microsoft-foundry" ||
     normalizedProvider.startsWith("microsoft-foundry-")
   );
+}
+
+// OpenRouter-routed DeepSeek V4 uses the broker's nested `reasoning.effort` wire format
+// (auto-detected as `thinkingFormat: "openrouter"` in openai-completions). The native
+// DeepSeek wrapper would additionally inject `thinking` + top-level `reasoning_effort`,
+// causing HTTP 400 ("reasoning_effort" and "reasoning.effort" both provided) — see #97196.
+function isOpenRouterProviderId(provider: unknown): boolean {
+  if (typeof provider !== "string") {
+    return false;
+  }
+  const normalizedProvider = provider.trim().toLowerCase();
+  return normalizedProvider === "openrouter";
 }
 
 /**

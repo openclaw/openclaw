@@ -981,6 +981,31 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).not.toHaveProperty("thinking");
   });
 
+  it("does not add DeepSeek V4 native thinking params on the OpenRouter route", () => {
+    // OpenRouter already emits the broker's nested `reasoning.effort` wire format
+    // (auto-detected as `thinkingFormat: "openrouter"` in openai-completions).
+    // The native DeepSeek wrapper must not additionally inject `thinking` or
+    // top-level `reasoning_effort` — that combination raises HTTP 400 — see #97196.
+    const payload = runResponsesPayloadMutationCase({
+      applyProvider: "openrouter",
+      applyModelId: "deepseek-v4-pro",
+      thinkingLevel: "high",
+      model: {
+        api: "openai-completions",
+        provider: "openrouter",
+        id: "deepseek-v4-pro",
+      } as Model<"openai-completions">,
+      payload: {
+        reasoning: { effort: "high" },
+        messages: [{ role: "user", content: "hello" }],
+      },
+    });
+
+    expect(payload.reasoning).toEqual({ effort: "high" });
+    expect(payload).not.toHaveProperty("reasoning_effort");
+    expect(payload).not.toHaveProperty("thinking");
+  });
+
   it("fills MiMo V2.6 reasoning_content for unowned OpenAI-compatible proxy models", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "opencode",
