@@ -692,6 +692,78 @@ describe("RequestClient", () => {
     expect(metrics.invalidRequestCountByStatus).toEqual({ 403: 1 });
   });
 
+  it("bounds oversized REST response bodies instead of buffering them unbounded", async () => {
+    const encoder = new TextEncoder();
+    let pullCount = 0;
+    let cancelCount = 0;
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            pull(controller) {
+              pullCount += 1;
+              // Flood far past the cap so an unbounded reader would OOM.
+              controller.enqueue(encoder.encode("x".repeat(4 * 1024 * 1024)));
+            },
+            cancel() {
+              cancelCount += 1;
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    const client = new RequestClient("test-token", { fetch: fetchSpy, queueRequests: false });
+
+    await expect(client.get("/channels/c1/messages")).rejects.toThrow(
+      /Discord REST response body exceeds 8388608 bytes/,
+    );
+    // The reader was cancelled at the cap rather than draining the whole flood:
+    // only a handful of 4 MiB chunks are pulled before the cap is hit.
+    expect(cancelCount).toBe(1);
+    expect(pullCount).toBeLessThanOrEqual(4);
+  });
+
+  it("aborts stalled REST response bodies after the idle timeout", async () => {
+    const encoder = new TextEncoder();
+    let cancelReason: unknown;
+    const fetchSpy = vi.fn(
+      async () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              // Emit a partial chunk, then stall forever so the idle timeout
+              // (request timeout) must fire and cancel the stream.
+              controller.enqueue(encoder.encode("partial payload"));
+            },
+            cancel(reason) {
+              cancelReason = reason;
+            },
+          }),
+          { status: 200 },
+        ),
+    );
+    const client = new RequestClient("test-token", {
+      fetch: fetchSpy,
+      queueRequests: false,
+      timeout: 50,
+    });
+
+    await expect(client.get("/channels/c1/messages")).rejects.toThrow(
+      "Discord REST response stalled: no data received for 50ms",
+    );
+    expect(cancelReason).toBeInstanceOf(Error);
+    expect((cancelReason as Error).message).toBe(
+      "Discord REST response stalled: no data received for 50ms",
+    );
+  });
+
+  it("still parses normal-sized REST response payloads under the cap", async () => {
+    const fetchSpy = vi.fn(async () => createJsonResponse({ id: "channel", name: "general" }));
+    const client = new RequestClient("test-token", { fetch: fetchSpy, queueRequests: false });
+
+    await expect(client.get("/channels/c1")).resolves.toEqual({ id: "channel", name: "general" });
+  });
+
   it("serializes message multipart uploads with payload_json", () => {
     const headers = new Headers();
     const body = serializeRequestBody(
