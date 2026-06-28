@@ -172,6 +172,42 @@ describe("status.command-sections", () => {
     ]);
   });
 
+  it("detects model mismatch when modelSelectionReason is null (fallback / auto-selection)", () => {
+    const lines = buildStatusModelSelectionLines({
+      recent: [
+        {
+          key: "agent:main:telegram:chat-2",
+          kind: "direct",
+          updatedAt: 1,
+          age: 5_000,
+          model: "qwen3.6-blue",
+          configuredModel: "minimax/MiniMax-M3",
+          selectedModel: "ollama/qwen3.6-blue:35b-a3b",
+          modelSelectionReason: null,
+          runtime: "OpenClaw Default",
+          totalTokens: null,
+          totalTokensFresh: false,
+          remainingTokens: null,
+          percentUsed: null,
+          contextTokens: null,
+          flags: [],
+        },
+      ],
+      shortenText: (value) => value,
+      warn: (value) => `warn(${value})`,
+      muted: (value) => `muted(${value})`,
+    });
+
+    expect(lines).toEqual([
+      "warn(Session agent:main:telegram:chat-2 is pinned to ollama/qwen3.6-blue:35b-a3b; config primary minimax/MiniMax-M3 will apply to new/unpinned sessions.)",
+      "  Configured default: minimax/MiniMax-M3",
+      "  Session selected: ollama/qwen3.6-blue:35b-a3b",
+      "  Reason: session override",
+      "  Clear with: /model default",
+      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-behavior",
+    ]);
+  });
+
   it("maps health channel detail lines into status rows", () => {
     const rows = buildStatusHealthRows({
       health: { durationMs: 42 } as HealthSummary,

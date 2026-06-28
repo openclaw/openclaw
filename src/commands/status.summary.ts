@@ -407,8 +407,9 @@ export async function getStatusSummary(
           selectedModelLabel != null &&
           selectedModelLabel !== configuredSessionModelLabel &&
           !areRuntimeModelRefsEquivalent(selectedModelLabel, configuredSessionModelLabel) &&
-          hasUserPinnedModelSelection(entry);
-        // Session rows show the live selected model but warn only for user-pinned differences.
+          entry?.modelOverride != null;
+        // Session rows show the live selected model and warn for user-pinned
+        // differences as well as runtime fallback selections (#96126).
         const contextTokens =
           resolveContextTokensForModel({
             cfg,
@@ -468,7 +469,9 @@ export async function getStatusSummary(
           model,
           configuredModel: configuredSessionModelLabel,
           selectedModel: selectedModelLabel,
-          modelSelectionReason: modelSelectionDiffers ? "session override" : null,
+          modelSelectionReason: modelSelectionDiffers
+            ? (hasUserPinnedModelSelection(entry) ? "session override" : "fallback selected")
+            : null,
           runtime,
           contextTokens,
           flags: buildFlags(entry),
