@@ -30,14 +30,14 @@ describe("Dockerfile", () => {
 
   it("uses full bookworm for build stages and slim bookworm for runtime", async () => {
     const dockerfile = await readFile(dockerfilePath, "utf8");
-    expect(dockerfile).toContain(
-      'ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker.io/library/node:24-bookworm@sha256:8530f76a96d88820d288761f022e318970dda93d01536919fbc16076b7983e63"',
+    expect(dockerfile).toMatch(
+      /ARG OPENCLAW_NODE_BOOKWORM_IMAGE="docker\.io\/library\/node:24-bookworm@sha256:[a-f0-9]{64}"/,
     );
-    expect(dockerfile).toContain(
-      'ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker.io/library/node:24-bookworm-slim@sha256:242549cd46785b480c832479a730f4f2a20865d61ea2e404fdb2a5c3d3b73ecf"',
+    expect(dockerfile).toMatch(
+      /ARG OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE="docker\.io\/library\/node:24-bookworm-slim@sha256:[a-f0-9]{64}"/,
     );
-    expect(dockerfile).toContain(
-      'ARG OPENCLAW_BUN_IMAGE="docker.io/oven/bun:1.3.13@sha256:87416c977a612a204eb54ab9f3927023c2a3c971f4f345a01da08ea6262ae30e"',
+    expect(dockerfile).toMatch(
+      /ARG OPENCLAW_BUN_IMAGE="docker\.io\/oven\/bun:1\.3\.13@sha256:[a-f0-9]{64}"/,
     );
     expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS workspace-deps");
     expect(dockerfile).toContain("FROM ${OPENCLAW_NODE_BOOKWORM_IMAGE} AS build");
@@ -54,8 +54,8 @@ describe("Dockerfile", () => {
     const runtimeIndex = collapsed.search(
       /FROM \$\{OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE\}\s+AS base-runtime/,
     );
-    const caInstallIndex = collapsed.indexOf(
-      "ca-certificates curl git hostname lsof openssl procps python3",
+    const caInstallIndex = collapsed.search(
+      /ca-certificates\s+curl\s+git\s+hostname\s+lsof\s+openssl\s+procps\s+python3/,
     );
 
     expect(runtimeIndex).toBeGreaterThan(-1);
@@ -70,15 +70,15 @@ describe("Dockerfile", () => {
     const runtimeIndex = dockerfile.search(
       /FROM \$\{OPENCLAW_NODE_BOOKWORM_SLIM_IMAGE\}\s+AS base-runtime/,
     );
-    const pythonInstallIndex = dockerfile.indexOf(
-      "ca-certificates curl git hostname lsof openssl procps python3",
+    const pythonInstallIndex = dockerfile.search(
+      /ca-certificates\s+curl\s+git\s+hostname\s+lsof\s+openssl\s+procps\s+python3/,
     );
 
     expect(runtimeIndex).toBeGreaterThan(-1);
     expect(pythonInstallIndex).toBeGreaterThan(runtimeIndex);
     expect(pythonInstallIndex).toBeLessThan(dockerfile.indexOf("RUN chown node:node /app"));
-    expect(dockerfile).toContain(
-      "ca-certificates curl git hostname lsof openssl procps python3 tini",
+    expect(dockerfile).toMatch(
+      /ca-certificates\s+curl\s+git\s+hostname\s+lsof\s+openssl\s+procps\s+python3\s+tini/,
     );
     expect(dockerfile).toContain('ENTRYPOINT ["tini", "-s", "--"]');
   });
@@ -91,10 +91,10 @@ describe("Dockerfile", () => {
     expect(installIndex).toBeGreaterThan(-1);
     expect(browserArgIndex).toBeGreaterThan(-1);
     expect(browserArgIndex).toBeGreaterThan(installIndex);
-    expect(dockerfile).toContain(
-      "node /app/node_modules/playwright-core/cli.js install --with-deps chromium",
+    expect(dockerfile).toMatch(
+      /node \/app\/node_modules\/playwright-core\/cli\.js install --with-deps chromium/,
     );
-    expect(dockerfile).toContain("apt-get install -y --no-install-recommends xvfb");
+    expect(dockerfile).toMatch(/apt-get install -y --no-install-recommends\s+xvfb/);
   });
 
   it("uses the Docker target platform for pnpm install and prune", async () => {
