@@ -8,7 +8,6 @@ import { resolveSessionFilePath } from "../config/sessions/paths.js";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.js";
 import {
   importSqliteSessionRows,
-  listSqliteSessionEntries,
   loadExactSqliteSessionEntry,
   loadSqliteTranscriptEventsSync,
 } from "../config/sessions/session-accessor.sqlite.js";
@@ -23,6 +22,7 @@ import {
 } from "../config/sessions/targets.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 
 export type DoctorSessionSqliteMode = "dry-run" | "import" | "validate" | "inspect";
@@ -82,6 +82,14 @@ type LegacySessionRecord = {
   sessionKey: string;
   transcriptPath?: string;
 };
+type ReadOnlySqliteSessionSummary = {
+  entry: SessionEntry;
+  sessionKey: string;
+};
+type ReadOnlySqliteSessionEntriesResult =
+  | { exists: false; ok: true; summaries: [] }
+  | { exists: true; ok: true; summaries: ReadOnlySqliteSessionSummary[] }
+  | { error: unknown; exists: true; ok: false };
 
 const JSONL_READ_CHUNK_BYTES = 64 * 1024;
 
@@ -558,20 +566,15 @@ function appendActiveSqliteTranscriptFileIssues(
   target: SessionStoreTarget,
   report: DoctorSessionSqliteTargetReport,
 ): void {
-  let summaries: ReturnType<typeof listSqliteSessionEntries>;
-  try {
-    summaries = listSqliteSessionEntries({
-      agentId: target.agentId,
-      storePath: target.storePath,
-    });
-  } catch (err) {
+  const result = readOnlySqliteSessionEntries(target);
+  if (!result.ok) {
     report.issues.push({
       code: "sqlite_active_transcript_scan_failed",
-      message: `Could not scan SQLite-backed sessions for active JSONL transcript files: ${String(err)}`,
+      message: `Could not scan SQLite-backed sessions for active JSONL transcript files: ${String(result.error)}`,
     });
     return;
   }
-  for (const summary of summaries) {
+  for (const summary of result.summaries) {
     const transcriptPath = resolveActiveSqliteTranscriptFile(target, summary.entry);
     if (!transcriptPath) {
       continue;
@@ -695,13 +698,57 @@ function canonicalFilePath(filePath: string): string {
 }
 
 function readSqliteEntryCount(target: SessionStoreTarget): number {
+  const result = readOnlySqliteSessionEntries(target);
+  return result.ok ? result.summaries.length : 0;
+}
+
+function readOnlySqliteSessionEntries(
+  target: SessionStoreTarget,
+): ReadOnlySqliteSessionEntriesResult {
+  const sqlitePath = resolveTargetSqlitePath(target);
+  if (!fs.existsSync(sqlitePath)) {
+    return { exists: false, ok: true, summaries: [] };
+  }
+  // Doctor diagnostic modes must not bootstrap agent storage. Use a raw
+  // read-only connection instead of the runtime accessor, which owns schema
+  // initialization, chmod repair, and registry side effects.
+  const sqlite = requireNodeSqlite();
+  let database: InstanceType<typeof sqlite.DatabaseSync> | undefined;
   try {
-    return listSqliteSessionEntries({
-      agentId: target.agentId,
-      storePath: target.storePath,
-    }).length;
+    database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+    const table = database
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?")
+      .get("session_entries");
+    if (!table) {
+      return { exists: true, ok: true, summaries: [] };
+    }
+    const rows = database
+      .prepare("SELECT session_key, entry_json FROM session_entries ORDER BY session_key ASC")
+      .all() as Array<{ entry_json?: unknown; session_key?: unknown }>;
+    return {
+      exists: true,
+      ok: true,
+      summaries: rows.flatMap((row) => {
+        if (typeof row.session_key !== "string" || typeof row.entry_json !== "string") {
+          return [];
+        }
+        const entry = parseSqliteSessionEntry(row.entry_json);
+        return entry ? [{ entry, sessionKey: row.session_key }] : [];
+      }),
+    };
+  } catch (error) {
+    return { error, exists: true, ok: false };
+  } finally {
+    database?.close();
+  }
+}
+
+function parseSqliteSessionEntry(entryJson: string): SessionEntry | undefined {
+  try {
+    const parsed = JSON.parse(entryJson) as unknown;
+    return isRecord(parsed) ? (parsed as SessionEntry) : undefined;
   } catch {
-    return 0;
+    return undefined;
   }
 }
 
