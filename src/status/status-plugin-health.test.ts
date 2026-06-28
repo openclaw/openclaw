@@ -309,4 +309,18 @@ describe("plugin health status formatting", () => {
     expect(text).toContain("Loaded: 1 (runtime-ok)");
     expect(text).toContain("Installed (not active): 1 (installed-idle)");
   });
+
+  it("lists runtime-loaded plugins even when absent from the merged plugin records", () => {
+    // A plugin live only via a pinned runtime surface is in runtimeLoadedPluginIds
+    // but not in snapshot.plugins; it must still show under Loaded, not be dropped.
+    const text = formatDetailedPluginHealth({
+      plugins: [{ id: "active-ok", status: "loaded", enabled: true }],
+      diagnostics: [],
+      contextEngineQuarantines: [],
+      runtimeLoadedPluginIds: ["active-ok", "pinned-only"],
+    });
+
+    expect(text).toContain("Loaded: 2 (active-ok, pinned-only)");
+    expect(text).not.toContain("Installed (not active):");
+  });
 });

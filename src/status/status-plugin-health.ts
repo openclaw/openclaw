@@ -246,17 +246,14 @@ function byLocale(left: string, right: string): number {
 export function formatDetailedPluginHealth(snapshot: StatusPluginHealthSnapshot): string {
   const statusLoaded = snapshot.plugins.filter((plugin) => plugin.status === "loaded");
   // "Loaded" must mean runtime-confirmed loaded. When the snapshot carries runtime
-  // provenance, split the status-loaded records into runtime-loaded vs installed
-  // inventory the runtime did not load; otherwise fall back to the raw status so
-  // hand-built/compact snapshots render as before.
-  const runtimeLoaded = snapshot.runtimeLoadedPluginIds
-    ? new Set(snapshot.runtimeLoadedPluginIds)
-    : undefined;
-  const loaded = (
-    runtimeLoaded ? statusLoaded.filter((plugin) => runtimeLoaded.has(plugin.id)) : statusLoaded
-  )
-    .map((plugin) => plugin.id)
-    .toSorted(byLocale);
+  // provenance, render that authoritative id set directly (it spans all live
+  // registry surfaces, so a plugin live only via a pinned surface still lists even
+  // when it is absent from the merged records); installed-but-not-active is then
+  // the status-loaded records the runtime did not load. Fall back to the raw
+  // status when provenance is absent (hand-built/compact snapshots).
+  const runtimeLoadedIds = snapshot.runtimeLoadedPluginIds;
+  const runtimeLoaded = runtimeLoadedIds ? new Set(runtimeLoadedIds) : undefined;
+  const loaded = (runtimeLoadedIds ?? statusLoaded.map((plugin) => plugin.id)).toSorted(byLocale);
   const installedNotActive = runtimeLoaded
     ? statusLoaded
         .filter((plugin) => !runtimeLoaded.has(plugin.id))
