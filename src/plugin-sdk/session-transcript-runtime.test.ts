@@ -148,6 +148,53 @@ describe("session transcript runtime SDK", () => {
     ).resolves.toMatchObject({ ok: false, code: "session-rebound" });
   });
 
+  it("dedupes unkeyed assistant mirrors against only the visible SQLite branch", async () => {
+    const scope = {
+      agentId: "main",
+      sessionId: "visible-branch-mirror-session",
+      sessionKey: "agent:main:main",
+      storePath,
+    };
+
+    await upsertSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 10 });
+    const active = await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "visible branch reply" }],
+      },
+    });
+    const inactive = await appendSessionTranscriptMessageByIdentity({
+      ...scope,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "inactive mirror reply" }],
+      },
+    });
+    if (!active || !inactive) {
+      throw new Error("expected branch setup messages");
+    }
+    await appendTranscriptEvent(scope, {
+      type: "leaf",
+      id: "select-active-branch",
+      parentId: inactive.messageId,
+      targetId: active.messageId,
+    });
+
+    const result = await appendAssistantMirrorMessageByIdentity({
+      ...scope,
+      text: "inactive mirror reply",
+    });
+
+    expect(result).toMatchObject({ ok: true, messageId: expect.any(String) });
+    expect(result.ok ? result.messageId : undefined).not.toBe(inactive.messageId);
+    const assistantMessages = (await readSessionTranscriptEvents(scope)).filter((event) => {
+      const message = (event as { message?: { role?: unknown } }).message;
+      return message?.role === "assistant";
+    });
+    expect(assistantMessages).toHaveLength(3);
+  });
+
   it("publishes assistant mirror updates only for newly appended notified rows", async () => {
     const scope = {
       agentId: "main",
