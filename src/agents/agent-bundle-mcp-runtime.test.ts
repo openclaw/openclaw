@@ -35,6 +35,7 @@ type RuntimeFactoryOptions = NonNullable<
 type RuntimeFactory = NonNullable<RuntimeFactoryOptions["createRuntime"]>;
 const LIST_TOOLS_SERVER_LOG_TIMEOUT_MS = 2_000;
 const LIST_TOOLS_TEST_DEADLINE_MS = 4_000;
+const SHA256_HEX_PATTERN = /^[0-9a-f]{64}$/;
 
 async function writeListToolsMcpServer(params: {
   filePath: string;
@@ -1505,6 +1506,9 @@ process.on("SIGINT", shutdown);`,
     );
 
     expect(runtimeA).not.toBe(runtimeB);
+    expect(runtimeA.configFingerprint).toMatch(SHA256_HEX_PATTERN);
+    expect(runtimeB.configFingerprint).toMatch(SHA256_HEX_PATTERN);
+    expect(runtimeA.configFingerprint).not.toBe(runtimeB.configFingerprint);
     const contentA = resultA.content[0];
     const contentB = resultB.content[0];
     if (contentA?.type !== "text" || contentB?.type !== "text") {
