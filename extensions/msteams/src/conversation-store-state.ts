@@ -31,6 +31,8 @@ export const MSTEAMS_MAX_CONVERSATIONS = 1000;
 export const MSTEAMS_SQLITE_MAX_CONVERSATION_ROWS = MSTEAMS_MAX_CONVERSATIONS + 1000;
 export const MSTEAMS_CONVERSATION_TTL_MS = 365 * 24 * 60 * 60 * 1000;
 const CONVERSATION_LOCK_FILENAME = "msteams-conversations.sqlite.lock";
+const ACCOUNT_SCOPED_CONVERSATION_PREFIX = "\u0000openclaw:msteams:account:";
+const ACCOUNT_SCOPED_CONVERSATION_SEPARATOR = "\u0000conversation:";
 
 type MSTeamsConversationStoreStateOptions = {
   env?: NodeJS.ProcessEnv;
@@ -233,10 +235,24 @@ export function createAccountScopedMSTeamsConversationStore(
   store: MSTeamsConversationStore,
   accountId: string,
 ): MSTeamsConversationStore {
+  const isAccountScopedId = (conversationId: string) =>
+    conversationId.startsWith(ACCOUNT_SCOPED_CONVERSATION_PREFIX);
   if (accountId === DEFAULT_ACCOUNT_ID) {
-    return store;
+    const listDefault = async () =>
+      (await store.list()).filter((entry) => !isAccountScopedId(entry.conversationId));
+    return {
+      upsert: store.upsert,
+      get: async (conversationId) =>
+        isAccountScopedId(conversationId) ? null : await store.get(conversationId),
+      remove: async (conversationId) =>
+        isAccountScopedId(conversationId) ? false : await store.remove(conversationId),
+      list: listDefault,
+      findPreferredDmByUserId: async (id) =>
+        findPreferredDmConversationByUserId(await listDefault(), id),
+      findByUserId: async (id) => findPreferredDmConversationByUserId(await listDefault(), id),
+    };
   }
-  const prefix = `${accountId}:`;
+  const prefix = `${ACCOUNT_SCOPED_CONVERSATION_PREFIX}${encodeURIComponent(accountId)}${ACCOUNT_SCOPED_CONVERSATION_SEPARATOR}`;
   const scopedId = (conversationId: string) => `${prefix}${conversationId}`;
   const unscopedId = (conversationId: string) =>
     conversationId.startsWith(prefix) ? conversationId.slice(prefix.length) : conversationId;

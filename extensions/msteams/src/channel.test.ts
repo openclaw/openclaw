@@ -85,6 +85,81 @@ describe("msteamsPlugin", () => {
     ).toContain("upload-file");
   });
 
+  it("does not advertise message tools for disabled or unconfigured named accounts", () => {
+    const previousEnv = {
+      appId: process.env.MSTEAMS_APP_ID,
+      appPassword: process.env.MSTEAMS_APP_PASSWORD,
+      tenantId: process.env.MSTEAMS_TENANT_ID,
+    };
+    process.env.MSTEAMS_APP_ID = "env-app-id";
+    process.env.MSTEAMS_APP_PASSWORD = "env-secret";
+    process.env.MSTEAMS_TENANT_ID = "env-tenant-id";
+    try {
+      const cfg = {
+        channels: {
+          msteams: {
+            enabled: true,
+            tenantId: "tenant-id",
+            accounts: {
+              disabled: {
+                enabled: false,
+                appId: "disabled-app-id",
+                appPassword: "disabled-secret",
+                webhook: { port: 3979 },
+              },
+              unconfigured: {
+                appId: "unconfigured-app-id",
+                webhook: { port: 3980 },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        msteamsPlugin.actions?.describeMessageTool?.({
+          cfg,
+          accountId: "disabled",
+        })?.actions,
+      ).toEqual([]);
+      expect(
+        msteamsPlugin.actions?.describeMessageTool?.({
+          cfg,
+          accountId: "unconfigured",
+        })?.actions,
+      ).toEqual([]);
+    } finally {
+      if (previousEnv.appId === undefined) {
+        delete process.env.MSTEAMS_APP_ID;
+      } else {
+        process.env.MSTEAMS_APP_ID = previousEnv.appId;
+      }
+      if (previousEnv.appPassword === undefined) {
+        delete process.env.MSTEAMS_APP_PASSWORD;
+      } else {
+        process.env.MSTEAMS_APP_PASSWORD = previousEnv.appPassword;
+      }
+      if (previousEnv.tenantId === undefined) {
+        delete process.env.MSTEAMS_TENANT_ID;
+      } else {
+        process.env.MSTEAMS_TENANT_ID = previousEnv.tenantId;
+      }
+    }
+  });
+
+  it("does not resolve legacy root credentials for arbitrary named accounts", () => {
+    const cfg = createConfiguredMSTeamsCfg();
+    const resolved = resolveMSTeamsAccountConfig(cfg, "typo-account");
+
+    expect(resolved.appId).toBeUndefined();
+    expect(resolved.appPassword).toBeUndefined();
+    expect(resolved.tenantId).toBe("tenant-id");
+    expect(resolveMSTeamsAccount({ cfg, accountId: "typo-account" })).toMatchObject({
+      accountId: "typo-account",
+      configured: false,
+    });
+  });
+
   it("reuses the shared Teams target-id matcher for explicit targets", () => {
     const looksLikeId = msteamsPlugin.messaging?.targetResolver?.looksLikeId;
 
@@ -245,6 +320,20 @@ describe("msteams config schema", () => {
     expect(res.success).toBe(false);
   });
 
+  it("rejects enabled named accounts without an effective tenant ID", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      accounts: {
+        support: {
+          appId: "support-app-id",
+          appPassword: "support-secret",
+          webhook: { port: 3979 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+  });
+
   it("rejects simultaneous root and accounts.default identity definitions", () => {
     const res = MSTeamsConfigSchema.safeParse({
       appId: "root-app-id",
@@ -280,6 +369,127 @@ describe("msteams config schema", () => {
     });
 
     expect(res.success).toBe(false);
+  });
+
+  it("rejects named accounts that collide with accounts.default implicit webhook port", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      tenantId: "tenant-id",
+      accounts: {
+        default: {
+          appId: "primary-app-id",
+          appPassword: "primary-secret",
+        },
+        secondary: {
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
+          webhook: { port: 3978 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+  });
+
+  it("rejects named accounts that collide with the implicit default webhook port", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      appId: "primary-app-id",
+      appPassword: "primary-secret",
+      tenantId: "tenant-id",
+      accounts: {
+        secondary: {
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
+          webhook: { port: 3978 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+  });
+
+  it("rejects named accounts that collide with a metadata-only default account implicit port", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      appId: "primary-app-id",
+      appPassword: "primary-secret",
+      tenantId: "tenant-id",
+      accounts: {
+        default: {
+          name: "Primary",
+        },
+        secondary: {
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
+          webhook: { port: 3978 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(false);
+  });
+
+  it("allows metadata-only default account when named accounts use different ports", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      appId: "primary-app-id",
+      appPassword: "primary-secret",
+      tenantId: "tenant-id",
+      accounts: {
+        default: {
+          name: "Primary",
+        },
+        secondary: {
+          appId: "secondary-app-id",
+          appPassword: "secondary-secret",
+          webhook: { port: 3979 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("deletes the default account identity without leaving a root webhook port", () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          appId: "primary-app-id",
+          appPassword: "primary-secret",
+          tenantId: "tenant-id",
+          webhook: {
+            port: 3978,
+            path: "/api/messages",
+          },
+          accounts: {
+            default: {
+              name: "Primary",
+            },
+            support: {
+              appId: "support-app-id",
+              appPassword: "support-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    const next = msteamsPlugin.config?.deleteAccount?.({
+      cfg,
+      accountId: "default",
+    });
+
+    expect(next?.channels?.msteams).toEqual({
+      tenantId: "tenant-id",
+      webhook: {
+        path: "/api/messages",
+      },
+      accounts: {
+        support: {
+          appId: "support-app-id",
+          appPassword: "support-secret",
+          webhook: { port: 3979 },
+        },
+      },
+    });
   });
 
   it("allows duplicate webhook ports when one account is disabled", () => {
@@ -336,6 +546,26 @@ describe("msteams config schema", () => {
           enabled: false,
           appId: "shared-app-id",
           appPassword: "secondary-secret",
+          webhook: { port: 3979 },
+        },
+      },
+    });
+
+    expect(res.success).toBe(true);
+  });
+
+  it("allows a named account to reuse the root app ID when accounts.default is disabled", () => {
+    const res = MSTeamsConfigSchema.safeParse({
+      appId: "shared-app-id",
+      appPassword: "legacy-secret",
+      tenantId: "tenant-id",
+      accounts: {
+        default: {
+          enabled: false,
+        },
+        support: {
+          appId: "shared-app-id",
+          appPassword: "support-secret",
           webhook: { port: 3979 },
         },
       },
@@ -434,6 +664,7 @@ describe("msteams account config", () => {
       channels: {
         msteams: {
           enabled: true,
+          defaultAccount: "secondary",
           appId: "secondary-app-id",
           appPassword: "secondary-secret",
           tenantId: "tenant-id",
@@ -595,5 +826,55 @@ describe("msteams directory contract", () => {
         runtime: {} as never,
       }),
     ).resolves.toEqual([{ id: "conversation:19:support-channel", kind: "group" }]);
+  });
+
+  it("does not use default env credentials for named directory accounts", async () => {
+    const previousEnv = {
+      appId: process.env.MSTEAMS_APP_ID,
+      appPassword: process.env.MSTEAMS_APP_PASSWORD,
+      tenantId: process.env.MSTEAMS_TENANT_ID,
+    };
+    process.env.MSTEAMS_APP_ID = "env-default-app";
+    process.env.MSTEAMS_APP_PASSWORD = "env-default-secret";
+    process.env.MSTEAMS_TENANT_ID = "env-default-tenant";
+    try {
+      const cfg = {
+        channels: {
+          msteams: {
+            accounts: {
+              support: {
+                appId: "support-app-id",
+                tenantId: "support-tenant-id",
+                webhook: { port: 3979 },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      await expect(
+        msteamsDirectoryContractPlugin.directory.self?.({
+          cfg,
+          accountId: "support",
+          runtime: {} as never,
+        }),
+      ).resolves.toBeNull();
+    } finally {
+      if (previousEnv.appId === undefined) {
+        delete process.env.MSTEAMS_APP_ID;
+      } else {
+        process.env.MSTEAMS_APP_ID = previousEnv.appId;
+      }
+      if (previousEnv.appPassword === undefined) {
+        delete process.env.MSTEAMS_APP_PASSWORD;
+      } else {
+        process.env.MSTEAMS_APP_PASSWORD = previousEnv.appPassword;
+      }
+      if (previousEnv.tenantId === undefined) {
+        delete process.env.MSTEAMS_TENANT_ID;
+      } else {
+        process.env.MSTEAMS_TENANT_ID = previousEnv.tenantId;
+      }
+    }
   });
 });

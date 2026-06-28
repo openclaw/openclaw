@@ -93,6 +93,39 @@ describe("msteams secret contract", () => {
     expect(resolved.warnings).toStrictEqual([]);
   });
 
+  it("resolves top-level default appPassword SecretRefs when named accounts also exist", async () => {
+    const resolved = await resolveMSTeamsSecretAssignments(
+      {
+        channels: {
+          msteams: {
+            enabled: true,
+            appId: "default-app-id",
+            appPassword: { source: "env", provider: "default", id: "MSTEAMS_APP_PASSWORD" },
+            tenantId: "tenant-id",
+            accounts: {
+              support: {
+                enabled: true,
+                appId: "support-app-id",
+                appPassword: { source: "env", provider: "default", id: "SUPPORT_MSTEAMS_SECRET" },
+                webhook: { port: 3979 },
+              },
+            },
+          },
+        },
+      } as OpenClawConfig,
+      {
+        MSTEAMS_APP_PASSWORD: "resolved-default-secret",
+        SUPPORT_MSTEAMS_SECRET: "resolved-support-secret",
+      },
+    );
+
+    expect(resolved.config.channels?.msteams?.appPassword).toBe("resolved-default-secret");
+    expect(resolved.config.channels?.msteams?.accounts?.support?.appPassword).toBe(
+      "resolved-support-secret",
+    );
+    expect(resolved.warnings).toStrictEqual([]);
+  });
+
   it("warns instead of resolving disabled account appPassword SecretRefs", async () => {
     const resolved = await resolveMSTeamsSecretAssignments(
       {

@@ -36,7 +36,18 @@ function deleteMSTeamsDefaultAccountIdentity(cfg: OpenClawConfig): OpenClawConfi
   if (!msteams) {
     return cfg;
   }
-  const { appId: _appId, appPassword: _appPassword, webhook, ...rest } = msteams;
+  const {
+    appId: _appId,
+    appPassword: _appPassword,
+    accounts,
+    defaultAccount,
+    webhook,
+    ...rest
+  } = msteams;
+  const nextAccounts = accounts ? { ...accounts } : undefined;
+  if (nextAccounts) {
+    delete nextAccounts[DEFAULT_ACCOUNT_ID];
+  }
   const nextWebhook = webhook ? { ...webhook } : undefined;
   if (nextWebhook) {
     delete nextWebhook.port;
@@ -47,6 +58,8 @@ function deleteMSTeamsDefaultAccountIdentity(cfg: OpenClawConfig): OpenClawConfi
       ...cfg.channels,
       msteams: {
         ...rest,
+        ...(defaultAccount && defaultAccount !== DEFAULT_ACCOUNT_ID ? { defaultAccount } : {}),
+        ...(nextAccounts && Object.keys(nextAccounts).length > 0 ? { accounts: nextAccounts } : {}),
         ...(nextWebhook && Object.keys(nextWebhook).length > 0 ? { webhook: nextWebhook } : {}),
       },
     },

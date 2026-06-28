@@ -1603,7 +1603,7 @@ function isAzureChinaBotFrameworkServiceUrl(value: string): boolean {
   }
 }
 
-const MSTeamsAccountConfigSchema = z
+const MSTeamsAccountConfigBaseSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
@@ -1635,11 +1635,11 @@ const MSTeamsAccountConfigSchema = z
       })
       .strict()
       .optional(),
-    dmPolicy: DmPolicySchema.optional().default("pairing"),
+    dmPolicy: DmPolicySchema.optional(),
     allowFrom: z.array(z.string()).optional(),
     defaultTo: z.string().optional(),
     groupAllowFrom: z.array(z.string()).optional(),
-    groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+    groupPolicy: GroupPolicySchema.optional(),
     contextVisibility: ContextVisibilityModeSchema.optional(),
     textChunkLimit: z.number().int().positive().optional(),
     chunkMode: z.enum(["length", "newline"]).optional(),
@@ -1685,8 +1685,13 @@ const MSTeamsAccountConfigSchema = z
   })
   .strict();
 
+const MSTeamsAccountConfigSchema = MSTeamsAccountConfigBaseSchema.extend({
+  dmPolicy: DmPolicySchema.optional().default("pairing"),
+  groupPolicy: GroupPolicySchema.optional().default("allowlist"),
+});
+
 export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
-  accounts: z.record(z.string(), MSTeamsAccountConfigSchema.optional()).optional(),
+  accounts: z.record(z.string(), MSTeamsAccountConfigBaseSchema.optional()).optional(),
   defaultAccount: z.string().optional(),
 })
   .strict()
@@ -1804,8 +1809,20 @@ export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
       });
     }
 
-    recordWebhookPort(value.webhook?.port, ["webhook", "port"]);
-    recordAppId(value.appId, ["appId"]);
+    const rootDefaultAccountEnabled = value.enabled !== false && accountsDefault?.enabled !== false;
+    if (rootDefaultAccountEnabled && rootDefaultIdentityFields) {
+      recordWebhookPort(value.webhook?.port ?? 3978, ["webhook", "port"]);
+    }
+    if (
+      accountsDefault?.enabled !== false &&
+      accountsDefaultIdentityFields &&
+      accountsDefault?.webhook?.port === undefined
+    ) {
+      recordWebhookPort(3978, ["accounts", "default", "webhook", "port"]);
+    }
+    if (rootDefaultAccountEnabled) {
+      recordAppId(value.appId, ["appId"]);
+    }
 
     for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
       if (!account) {
@@ -1880,13 +1897,22 @@ export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
         });
       }
 
-      if (accountId !== "default" && account.enabled !== false) {
+      const accountEnabled = value.enabled !== false && account.enabled !== false;
+      if (accountId !== "default" && accountEnabled) {
         if (!account.appId?.trim()) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: [...path, "appId"],
             message:
               "channels.msteams.accounts.*.appId is required for named Microsoft Teams bot accounts",
+          });
+        }
+        if (!(account.tenantId ?? value.tenantId)?.trim()) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [...path, "tenantId"],
+            message:
+              "channels.msteams.accounts.*.tenantId or channels.msteams.tenantId is required for named Microsoft Teams bot accounts",
           });
         }
         const effectiveAuthType = account.authType ?? value.authType ?? "secret";
@@ -1919,7 +1945,7 @@ export const MSTeamsConfigSchema = MSTeamsAccountConfigSchema.extend({
           });
         }
       }
-      if (account.enabled !== false) {
+      if (accountEnabled) {
         recordAppId(account.appId, [...path, "appId"]);
         recordWebhookPort(account.webhook?.port, [...path, "webhook", "port"]);
       }

@@ -73,8 +73,15 @@ export function makeMSTeamsSsoTokenStoreKey(
   userId: string,
   accountId?: string | null,
 ): string {
+  const normalizedAccountId = normalizeSsoAccountId(accountId);
   return `${STORE_KEY_VERSION_PREFIX}${createHash("sha256")
-    .update(JSON.stringify([normalizeSsoAccountId(accountId), connectionName, userId]))
+    .update(
+      JSON.stringify(
+        normalizedAccountId === "default"
+          ? [connectionName, userId]
+          : [normalizedAccountId, connectionName, userId],
+      ),
+    )
     .digest("hex")}`;
 }
 

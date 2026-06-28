@@ -11,6 +11,7 @@ import {
   type OpenClawConfig,
   type RuntimeEnv,
 } from "../runtime-api.js";
+import { resolveMSTeamsAccountConfig } from "./accounts.js";
 import { resolveMSTeamsSdkCloudOptions } from "./cloud.js";
 import {
   createAccountScopedMSTeamsConversationStore,
@@ -74,8 +75,8 @@ export async function monitorMSTeamsProvider(
   const log = core.logging.getChildLogger({ name: "msteams" });
   const accountId = opts.accountId ?? DEFAULT_ACCOUNT_ID;
   let cfg = opts.cfg;
-  let msteamsCfg = opts.msteamsCfg ?? cfg.channels?.msteams;
-  if (!msteamsCfg?.enabled) {
+  let msteamsCfg = opts.msteamsCfg ?? resolveMSTeamsAccountConfig(cfg, accountId);
+  if (!msteamsCfg || msteamsCfg.enabled === false) {
     log.debug?.("msteams provider disabled");
     return { app: null, shutdown: async () => {} };
   }

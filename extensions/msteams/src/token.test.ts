@@ -120,6 +120,26 @@ describe("token – secret credentials", () => {
     expect(resolveMSTeamsCredentials(undefined, { allowEnvFallback: false })).toBeUndefined();
   });
 
+  it("does not inherit env auth type when env fallback is disabled", () => {
+    process.env.MSTEAMS_AUTH_TYPE = "federated";
+
+    expect(
+      resolveMSTeamsCredentials(
+        {
+          appId: "named-app-id",
+          appPassword: "named-app-pw",
+          tenantId: "tenant-id",
+        } as any,
+        { allowEnvFallback: false },
+      ),
+    ).toEqual({
+      type: "secret",
+      appId: "named-app-id",
+      appPassword: "named-app-pw",
+      tenantId: "tenant-id",
+    });
+  });
+
   it("returns undefined when appPassword is missing", () => {
     const cfg = { appId: "app-id", tenantId: "tenant-id" } as any;
     expect(resolveMSTeamsCredentials(cfg)).toBeUndefined();

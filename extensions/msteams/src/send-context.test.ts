@@ -196,6 +196,40 @@ describe("resolveMSTeamsSendContext", () => {
       { cloud: "Public" },
     );
   });
+
+  it("treats omitted account enabled as enabled for proactive sends", async () => {
+    sendContextMockState.store.get.mockResolvedValue(
+      channelRef({
+        serviceUrl: "https://smba.trafficmanager.net/amer/",
+      }),
+    );
+
+    const cfg = {
+      channels: {
+        msteams: {
+          tenantId: "tenant-id",
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-app-password",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    await expect(
+      resolveMSTeamsSendContext({
+        cfg,
+        accountId: "secondary",
+        to: "conversation:19:channel@thread.tacv2",
+      }),
+    ).resolves.toMatchObject({
+      appId: "secondary-app-id",
+      conversationId: "19:channel@thread.tacv2",
+    });
+  });
 });
 
 describe("resolveMSTeamsProactiveReplyStyle", () => {

@@ -445,8 +445,7 @@ export async function reactMessageMSTeams(
   params: ReactMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
   const reactionType = normalizeReactionType(params.reactionType);
-  const cfg = resolveMSTeamsGraphConfig(params.cfg, params.accountId);
-  const token = await resolveGraphToken(cfg, {
+  const token = await resolveGraphToken(params.cfg, {
     accountId: params.accountId,
     preferDelegated: true,
   });
@@ -470,8 +469,7 @@ export async function unreactMessageMSTeams(
   params: ReactMessageMSTeamsParams,
 ): Promise<{ ok: true }> {
   const reactionType = normalizeReactionType(params.reactionType);
-  const cfg = resolveMSTeamsGraphConfig(params.cfg, params.accountId);
-  const token = await resolveGraphToken(cfg, {
+  const token = await resolveGraphToken(params.cfg, {
     accountId: params.accountId,
     preferDelegated: true,
   });

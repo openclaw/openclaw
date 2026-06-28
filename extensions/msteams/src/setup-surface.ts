@@ -117,11 +117,13 @@ async function promptMSTeamsAllowFrom(params: {
 }
 
 function withMSTeamsAccountConfig(cfg: OpenClawConfig, accountId?: string | null): OpenClawConfig {
+  const msteams = resolveMSTeamsAccountConfig(cfg, accountId);
   return {
     ...cfg,
     channels: {
       ...cfg.channels,
-      msteams: resolveMSTeamsAccountConfig(cfg, accountId),
+      msteams:
+        accountId && accountId !== "default" ? { ...msteams, defaultAccount: accountId } : msteams,
     },
   };
 }

@@ -38,13 +38,16 @@ export type MSTeamsCredentials = MSTeamsSecretCredentials | MSTeamsFederatedCred
 
 // ── Helpers ────────────────────────────────────────────────────────────────
 
-function resolveAuthType(cfg?: MSTeamsConfig): "secret" | "federated" {
+function resolveAuthType(
+  cfg?: MSTeamsConfig,
+  options?: { allowEnvFallback?: boolean },
+): "secret" | "federated" {
   const fromCfg = cfg?.authType;
   if (fromCfg === "secret" || fromCfg === "federated") {
     return fromCfg;
   }
 
-  const fromEnv = process.env.MSTEAMS_AUTH_TYPE;
+  const fromEnv = options?.allowEnvFallback === false ? undefined : process.env.MSTEAMS_AUTH_TYPE;
   if (fromEnv === "federated") {
     return "federated";
   }
@@ -90,7 +93,7 @@ export function resolveMSTeamsCredentials(
 ): MSTeamsCredentials | undefined {
   const allowEnvFallback = options?.allowEnvFallback ?? true;
   const pathPrefix = options?.pathPrefix ?? "channels.msteams";
-  const authType = resolveAuthType(cfg);
+  const authType = resolveAuthType(cfg, { allowEnvFallback });
 
   const appId =
     normalizeSecretInputString(cfg?.appId) ||

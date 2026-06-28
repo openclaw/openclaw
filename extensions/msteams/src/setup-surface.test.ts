@@ -391,6 +391,66 @@ describe("msteams setup surface", () => {
     });
   });
 
+  it("finalize keeps existing federated named account credentials", async () => {
+    resolveMSTeamsCredentials.mockReturnValue({
+      type: "federated",
+      appId: "support-app",
+      tenantId: "tenant-id",
+      certificatePath: "/secure/support.pem",
+    });
+    hasConfiguredMSTeamsCredentials.mockReturnValue(false);
+    const confirm = vi.fn(async () => true);
+    const text = vi.fn();
+
+    const result = await msteamsSetupWizard.finalize?.({
+      cfg: {
+        channels: {
+          msteams: {
+            accounts: {
+              support: {
+                authType: "federated",
+                appId: "support-app",
+                tenantId: "tenant-id",
+                certificatePath: "/secure/support.pem",
+                webhook: { port: 3979 },
+              },
+            },
+          },
+        },
+      },
+      accountId: "support",
+      prompter: {
+        confirm,
+        note: vi.fn(async () => {}),
+        text,
+      },
+    } as never);
+
+    expect(result).toEqual({
+      accountId: "support",
+      cfg: {
+        channels: {
+          msteams: {
+            accounts: {
+              support: {
+                authType: "federated",
+                appId: "support-app",
+                tenantId: "tenant-id",
+                certificatePath: "/secure/support.pem",
+                webhook: { port: 3979 },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(confirm).toHaveBeenCalledWith({
+      message: "MS Teams credentials already configured. Keep them?",
+      initialValue: true,
+    });
+    expect(text).not.toHaveBeenCalled();
+  });
+
   it("finalize stores delegated auth under the resolved named account", async () => {
     resolveMSTeamsCredentials.mockReturnValue({
       type: "secret",

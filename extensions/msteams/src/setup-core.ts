@@ -147,6 +147,16 @@ function hasConfiguredCredentialsForSetup(cfg: OpenClawConfig, accountId: string
   if (accountId === DEFAULT_ACCOUNT_ID) {
     return hasConfiguredMSTeamsCredentials(accountConfig);
   }
+  if (resolveCredentialsForSetup(cfg, accountId)) {
+    return true;
+  }
+  if (accountConfig.authType === "federated") {
+    return Boolean(
+      normalizeSecretInputString(accountConfig.appId) &&
+      normalizeSecretInputString(accountConfig.tenantId) &&
+      (accountConfig.certificatePath || accountConfig.useManagedIdentity),
+    );
+  }
   return Boolean(
     normalizeSecretInputString(accountConfig.appId) &&
     normalizeSecretInputString(accountConfig.tenantId) &&

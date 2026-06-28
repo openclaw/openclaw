@@ -1,11 +1,12 @@
 // Msteams tests cover sso token store plugin behavior.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { beforeEach, describe, expect, it } from "vitest";
 import { setMSTeamsRuntime } from "./runtime.js";
-import { createMSTeamsSsoTokenStoreFs } from "./sso-token-store.js";
+import { createMSTeamsSsoTokenStoreFs, makeMSTeamsSsoTokenStoreKey } from "./sso-token-store.js";
 import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
 describe("msteams sso token store (plugin state)", () => {
@@ -107,6 +108,20 @@ describe("msteams sso token store (plugin state)", () => {
       ...namedToken,
       accountId: "secondary",
     });
+  });
+
+  it("keeps the default account on the legacy plugin-state key", () => {
+    const legacyKey = `v2:${createHash("sha256")
+      .update(JSON.stringify(["graph", "aad-user"]))
+      .digest("hex")}`;
+
+    expect(makeMSTeamsSsoTokenStoreKey("graph", "aad-user")).toBe(legacyKey);
+    expect(makeMSTeamsSsoTokenStoreKey("graph", "aad-user")).toBe(
+      makeMSTeamsSsoTokenStoreKey("graph", "aad-user", "default"),
+    );
+    expect(makeMSTeamsSsoTokenStoreKey("graph", "aad-user", "support")).not.toBe(
+      makeMSTeamsSsoTokenStoreKey("graph", "aad-user"),
+    );
   });
 
   it("keeps plugin-state keys bounded for long Teams identifiers", async () => {

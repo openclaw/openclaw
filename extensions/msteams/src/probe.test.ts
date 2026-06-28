@@ -79,6 +79,18 @@ describe("msteams probe", () => {
     });
   });
 
+  it("does not use default env credentials when probing a named account", async () => {
+    vi.stubEnv("MSTEAMS_APP_ID", "default-env-app");
+    vi.stubEnv("MSTEAMS_APP_PASSWORD", "default-env-password");
+    vi.stubEnv("MSTEAMS_TENANT_ID", "default-env-tenant");
+    const cfg = { enabled: true, tenantId: "tenant" } as unknown as MSTeamsConfig;
+
+    await expect(probeMSTeams(cfg, { accountId: "support" })).resolves.toEqual({
+      ok: false,
+      error: "missing credentials (appId, appPassword, tenantId)",
+    });
+  });
+
   it("validates credentials by acquiring a token", async () => {
     const cfg = {
       enabled: true,

@@ -1,7 +1,9 @@
 // Msteams plugin module implements secret contract behavior.
 import {
-  collectSimpleChannelFieldAssignments,
+  collectSecretInputAssignment,
   getChannelSurface,
+  hasOwnProperty,
+  isBaseFieldActiveForChannelSurface,
   type ResolverContext,
   type SecretDefaults,
   type SecretTargetRegistryEntry,
@@ -42,16 +44,56 @@ export function collectRuntimeConfigAssignments(params: {
     return;
   }
   const { channel: msteams, surface } = resolved;
-  collectSimpleChannelFieldAssignments({
-    channelKey: "msteams",
-    field: "appPassword",
-    channel: msteams,
-    surface,
+
+  collectSecretInputAssignment({
+    value: msteams.appPassword,
+    path: "channels.msteams.appPassword",
+    expected: "string",
     defaults: params.defaults,
     context: params.context,
-    topInactiveReason: "no enabled account inherits this top-level Microsoft Teams appPassword.",
-    accountInactiveReason: "Microsoft Teams account is disabled.",
+    active:
+      isBaseFieldActiveForChannelSurface(surface, "appPassword") ||
+      isRootDefaultIdentityActive(msteams),
+    inactiveReason: "no enabled account inherits this top-level Microsoft Teams appPassword.",
+    apply: (value) => {
+      msteams.appPassword = value;
+    },
   });
+
+  if (!surface.hasExplicitAccounts) {
+    return;
+  }
+  for (const { accountId, account, enabled } of surface.accounts) {
+    if (!hasOwnProperty(account, "appPassword")) {
+      continue;
+    }
+    collectSecretInputAssignment({
+      value: account.appPassword,
+      path: `channels.msteams.accounts.${accountId}.appPassword`,
+      expected: "string",
+      defaults: params.defaults,
+      context: params.context,
+      active: enabled,
+      inactiveReason: "Microsoft Teams account is disabled.",
+      apply: (value) => {
+        account.appPassword = value;
+      },
+    });
+  }
+}
+
+function isConfiguredIdentityField(value: unknown): boolean {
+  if (typeof value === "string") {
+    return value.trim().length > 0;
+  }
+  return value !== undefined && value !== null;
+}
+
+function isRootDefaultIdentityActive(channel: Record<string, unknown>): boolean {
+  return (
+    channel.enabled !== false &&
+    (isConfiguredIdentityField(channel.appId) || isConfiguredIdentityField(channel.appPassword))
+  );
 }
 
 export const channelSecrets = {

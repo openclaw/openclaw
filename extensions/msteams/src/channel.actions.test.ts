@@ -123,7 +123,8 @@ function requireMSTeamsHandleAction() {
 
 async function runAction(params: {
   action: string;
-  cfg?: Record<string, unknown>;
+  cfg?: OpenClawConfig | Record<string, unknown>;
+  accountId?: string;
   params?: Record<string, unknown>;
   toolContext?: Record<string, unknown>;
   mediaLocalRoots?: readonly string[];
@@ -137,6 +138,7 @@ async function runAction(params: {
     channel: "msteams",
     action: params.action,
     cfg: params.cfg ?? {},
+    accountId: params.accountId,
     params: params.params ?? {},
     mediaLocalRoots: params.mediaLocalRoots,
     mediaReadFile: params.mediaReadFile,
@@ -187,9 +189,10 @@ function expectActionSuccess(
 function expectActionRuntimeCall(
   mockFn: ReturnType<typeof vi.fn>,
   params: Record<string, unknown>,
+  cfg: OpenClawConfig | Record<string, unknown> = {},
 ) {
   expect(mockFn).toHaveBeenCalledWith({
-    cfg: {},
+    cfg,
     ...params,
   });
 }
@@ -198,6 +201,8 @@ async function expectSuccessfulAction(params: {
   mockFn: ReturnType<typeof vi.fn>;
   mockResult: unknown;
   action: Parameters<typeof runAction>[0]["action"];
+  cfg?: Parameters<typeof runAction>[0]["cfg"];
+  accountId?: Parameters<typeof runAction>[0]["accountId"];
   actionParams?: Parameters<typeof runAction>[0]["params"];
   toolContext?: Parameters<typeof runAction>[0]["toolContext"];
   mediaLocalRoots?: Parameters<typeof runAction>[0]["mediaLocalRoots"];
@@ -212,6 +217,8 @@ async function expectSuccessfulAction(params: {
   params.mockFn.mockResolvedValue(params.mockResult);
   const result = await runAction({
     action: params.action,
+    cfg: params.cfg,
+    accountId: params.accountId,
     params: params.actionParams,
     mediaLocalRoots: params.mediaLocalRoots,
     mediaReadFile: params.mediaReadFile,
@@ -220,7 +227,7 @@ async function expectSuccessfulAction(params: {
     senderIsOwner: params.senderIsOwner,
     gatewayClientScopes: params.gatewayClientScopes,
   });
-  expectActionRuntimeCall(params.mockFn, params.runtimeParams);
+  expectActionRuntimeCall(params.mockFn, params.runtimeParams, params.cfg);
   expectActionSuccess(result, params.details, params.contentDetails);
 }
 
@@ -715,6 +722,78 @@ describe("msteamsPlugin message actions", () => {
         conversationId: "conv-card-1",
       },
     });
+  });
+
+  it("preserves the named default account for presentation-card actions", async () => {
+    const cfg = {
+      channels: {
+        msteams: {
+          tenantId: "tenant-id",
+          defaultAccount: "secondary",
+          accounts: {
+            secondary: {
+              appId: "secondary-app-id",
+              appPassword: "secondary-secret",
+              webhook: { port: 3979 },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    sendAdaptiveCardMSTeamsMock.mockResolvedValue({
+      messageId: "msg-card-secondary",
+      conversationId: "conv-card-secondary",
+    });
+
+    const result = await runAction({
+      cfg,
+      action: "send",
+      params: {
+        to: targetChannelId,
+        message: "Deploy finished",
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [{ label: "Open", value: "open" }],
+            },
+          ],
+        },
+      },
+    });
+
+    expect(sendAdaptiveCardMSTeamsMock).toHaveBeenCalledWith({
+      cfg: {
+        channels: {
+          msteams: {
+            tenantId: "tenant-id",
+            defaultAccount: "secondary",
+            appId: "secondary-app-id",
+            appPassword: "secondary-secret",
+            webhook: { port: 3979 },
+          },
+        },
+      },
+      accountId: "secondary",
+      to: targetChannelId,
+      card: {
+        type: "AdaptiveCard",
+        version: "1.4",
+        body: [{ type: "TextBlock", text: "Deploy finished", wrap: true }],
+        actions: [{ type: "Action.Submit", title: "Open", data: { value: "open", label: "Open" } }],
+      },
+    });
+    expectActionSuccess(
+      result,
+      { ok: true, channel: "msteams", messageId: "msg-card-secondary" },
+      {
+        ok: true,
+        channel: "msteams",
+        messageId: "msg-card-secondary",
+        conversationId: "conv-card-secondary",
+      },
+    );
   });
 
   it("downgrades select blocks when sending presentation cards", async () => {

@@ -142,6 +142,38 @@ describe("msteams conversation store (plugin state)", () => {
     });
   });
 
+  it("does not let account ids collide with raw Teams conversation id prefixes", async () => {
+    const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
+    const baseStore = createMSTeamsConversationStoreState({ stateDir });
+
+    await baseStore.upsert("19:default@thread.tacv2", {
+      conversation: { conversationType: "personal" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com/default",
+      user: { id: "default-user" },
+    });
+
+    const accountStore = createAccountScopedMSTeamsConversationStore(baseStore, "19");
+    await accountStore.upsert("19:account@thread.tacv2", {
+      conversation: { conversationType: "personal" },
+      channelId: "msteams",
+      serviceUrl: "https://service.example.com/account",
+      user: { id: "account-user" },
+    });
+
+    await expect(accountStore.findPreferredDmByUserId("default-user")).resolves.toBeNull();
+    await expect(accountStore.findPreferredDmByUserId("account-user")).resolves.toMatchObject({
+      conversationId: "19:account@thread.tacv2",
+      reference: {
+        conversation: { id: "19:account@thread.tacv2" },
+        user: { id: "account-user" },
+      },
+    });
+    await expect(accountStore.list()).resolves.toEqual([
+      expect.objectContaining({ conversationId: "19:account@thread.tacv2" }),
+    ]);
+  });
+
   it("serializes concurrent upserts so sparse activities do not drop preserved fields", async () => {
     const stateDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "openclaw-msteams-store-"));
     const store = createMSTeamsConversationStoreState({ stateDir });
@@ -211,6 +243,17 @@ describe("msteams conversation store (plugin state)", () => {
         user: { id: "secondary-user", aadObjectId: "aad-shared" },
       },
     });
+    await expect(defaultStore.findPreferredDmByUserId("aad-shared")).resolves.toMatchObject({
+      conversationId: "default-dm",
+      reference: {
+        conversation: { id: "default-dm", conversationType: "personal" },
+        serviceUrl: "https://default.example.com",
+        user: { id: "default-user", aadObjectId: "aad-shared" },
+      },
+    });
+    await expect(defaultStore.list()).resolves.toEqual([
+      expect.objectContaining({ conversationId: "default-dm" }),
+    ]);
   });
 
   it("keeps newest conversations by lastSeenAt at the row cap", async () => {
