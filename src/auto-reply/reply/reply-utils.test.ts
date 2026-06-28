@@ -1147,6 +1147,31 @@ describe("block reply coalescer", () => {
     coalescer.stop();
   });
 
+  it("merges buffered text into document media payloads", async () => {
+    const { flushes, coalescer } = createPayloadCoalescerHarness<{
+      text?: string;
+      mediaUrls?: string[];
+      forceDocument?: boolean;
+    }>((payload) => ({
+      text: payload.text,
+      mediaUrls: payload.mediaUrls,
+      forceDocument: payload.forceDocument,
+    }));
+
+    coalescer.enqueue({ text: "Here is your render" });
+    coalescer.enqueue({ mediaUrls: ["https://example.com/a.png"], forceDocument: true });
+    await coalescer.flush({ force: true });
+
+    expect(flushes).toEqual([
+      {
+        text: "Here is your render",
+        mediaUrls: ["https://example.com/a.png"],
+        forceDocument: true,
+      },
+    ]);
+    coalescer.stop();
+  });
+
   it("keeps reasoning text separate from media payloads", async () => {
     const { flushes, coalescer } = createPayloadCoalescerHarness<{
       text?: string;

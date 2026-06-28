@@ -106,7 +106,6 @@ export function createBlockReplyCoalescer(params: {
     !flushOnEnqueue &&
     !bufferAudioAsVoice &&
     !payload.audioAsVoice &&
-    !payload.forceDocument &&
     !payload.isReasoning &&
     !isReplyPayloadStatusNotice(payload) &&
     !bufferIsReasoning &&
