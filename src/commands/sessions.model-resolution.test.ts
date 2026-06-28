@@ -1,11 +1,15 @@
 // Sessions model resolution tests cover displayed model metadata for stored session records.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   mockSessionsConfig,
   resetMockSessionsConfig,
   runSessionsJson,
   setMockSessionsConfig,
-  writeStore,
 } from "./sessions.test-helpers.js";
 
 mockSessionsConfig();
@@ -25,7 +29,8 @@ async function resolveSubagentModel(
   runtimeFields: Record<string, unknown>,
   sessionId: string,
 ): Promise<string | null | undefined> {
-  const store = writeStore(
+  return await withSqliteStore(
+    "sessions-model",
     {
       "agent:research:subagent:demo": {
         sessionId,
@@ -33,11 +38,30 @@ async function resolveSubagentModel(
         ...runtimeFields,
       },
     },
-    "sessions-model",
+    async (store) => {
+      const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+      return payload.sessions?.find((row) => row.key === "agent:research:subagent:demo")?.model;
+    },
   );
+}
 
-  const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
-  return payload.sessions?.find((row) => row.key === "agent:research:subagent:demo")?.model;
+async function withSqliteStore<T>(
+  prefix: string,
+  entries: Record<string, SessionEntry>,
+  run: (storePath: string) => Promise<T>,
+): Promise<T> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), `${prefix}-`));
+  const storePath = path.join(dir, "sessions.json");
+  try {
+    await Promise.all(
+      Object.entries(entries).map(([sessionKey, entry]) =>
+        replaceSessionEntry({ sessionKey, storePath }, entry),
+      ),
+    );
+    return await run(storePath);
+  } finally {
+    fs.rmSync(dir, { force: true, recursive: true });
+  }
 }
 
 describe("sessionsCommand model resolution", () => {
@@ -80,7 +104,8 @@ describe("sessionsCommand model resolution", () => {
         },
       },
     }));
-    const store = writeStore(
+    await withSqliteStore(
+      "sessions-claude-runtime",
       {
         "agent:main:main": {
           sessionId: "main-session",
@@ -89,18 +114,18 @@ describe("sessionsCommand model resolution", () => {
           model: "claude-opus-4-7",
         },
       },
-      "sessions-claude-runtime",
+      async (store) => {
+        const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+        const session = payload.sessions?.find((row) => row.key === "agent:main:main");
+
+        expect(session?.modelProvider).toBe("anthropic");
+        expect(session?.model).toBe("claude-opus-4-7");
+        expect(session?.agentRuntime).toEqual({
+          id: "claude-cli",
+          source: "model",
+        });
+      },
     );
-
-    const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
-    const session = payload.sessions?.find((row) => row.key === "agent:main:main");
-
-    expect(session?.modelProvider).toBe("anthropic");
-    expect(session?.model).toBe("claude-opus-4-7");
-    expect(session?.agentRuntime).toEqual({
-      id: "claude-cli",
-      source: "model",
-    });
   });
 
   it("infers canonical provider for bare CLI models before default-provider fallback", async () => {
@@ -115,7 +140,8 @@ describe("sessionsCommand model resolution", () => {
         },
       },
     }));
-    const store = writeStore(
+    await withSqliteStore(
+      "sessions-claude-runtime-openai-default",
       {
         "agent:main:main": {
           sessionId: "main-session",
@@ -124,13 +150,13 @@ describe("sessionsCommand model resolution", () => {
           model: "claude-opus-4-7",
         },
       },
-      "sessions-claude-runtime-openai-default",
+      async (store) => {
+        const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
+        const session = payload.sessions?.find((row) => row.key === "agent:main:main");
+
+        expect(session?.modelProvider).toBe("anthropic");
+        expect(session?.model).toBe("claude-opus-4-7");
+      },
     );
-
-    const payload = await runSessionsJson<SessionsJsonPayload>(sessionsCommand, store);
-    const session = payload.sessions?.find((row) => row.key === "agent:main:main");
-
-    expect(session?.modelProvider).toBe("anthropic");
-    expect(session?.model).toBe("claude-opus-4-7");
   });
 });
