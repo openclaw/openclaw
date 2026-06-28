@@ -9,6 +9,7 @@ import {
   buildMultimodalChunkForIndexing,
   chunkMarkdown,
   ensureDir,
+  hashText,
   isMemoryPath,
   listMemoryFiles,
   MEMORY_CHUNKER_ALGORITHM_VERSION,
@@ -273,5 +274,26 @@ describe("memory host SDK package internals", () => {
     // output for the same input changes.
     expect(typeof MEMORY_CHUNKER_ALGORITHM_VERSION).toBe("string");
     expect(MEMORY_CHUNKER_ALGORITHM_VERSION.length).toBeGreaterThan(0);
+  });
+
+  it("mixes chunker version into markdown source hash so a version bump invalidates persisted chunks", async () => {
+    // End-to-end behavior proof for the upgrade-invalidation claim: buildFileEntry
+    // hashes `${VERSION}\n${content}`, and manager-sync-ops.ts skips rebuild only
+    // when existingHashes.get(path) === entry.hash. If a version bump leaves the
+    // hash unchanged for the same content, the skip-if-unchanged check would
+    // short-circuit and old (pre-fix) chunks would keep surfacing. Prove the hash
+    // actually varies with the version literal.
+    const tmpDir = getTmpDir();
+    const notePath = path.join(tmpDir, "note.md");
+    fsSync.writeFileSync(notePath, "hello world", "utf-8");
+    const entry = expectFileEntry(await buildFileEntry(notePath, tmpDir));
+    const sameContentHash = hashText(`\nhello world`);
+    const versionedHash = hashText(`${MEMORY_CHUNKER_ALGORITHM_VERSION}\nhello world`);
+    expect(entry.hash).toBe(versionedHash);
+    expect(entry.hash).not.toBe(sameContentHash);
+    // Pin that the current version literal is different from any other candidate,
+    // so an upgrade that changes the literal mechanically produces a different hash.
+    const hypotheticalFutureHash = hashText(`v3-hypothetical\nhello world`);
+    expect(entry.hash).not.toBe(hypotheticalFutureHash);
   });
 });
