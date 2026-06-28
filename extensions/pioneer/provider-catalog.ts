@@ -254,7 +254,7 @@ function buildLivePioneerModelDefinition(
 
 // Model IDs present in the static catalog but not returned by the live API —
 // routing aliases that must always be available regardless of discovery results.
-const PIONEER_STATIC_ONLY_MODEL_IDS = new Set(["pioneer/auto"]);
+const PIONEER_STATIC_ONLY_MODEL_IDS = new Set(["auto"]);
 
 function buildPioneerModelsFromLiveRows(rows: readonly unknown[]): ModelDefinitionConfig[] {
   const staticModels = buildPioneerModels();

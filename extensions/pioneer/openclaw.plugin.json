@@ -56,7 +56,7 @@
             }
           },
           {
-            "id": "pioneer/auto",
+            "id": "auto",
             "name": "Pioneer Auto",
             "reasoning": false,
             "input": ["text"],

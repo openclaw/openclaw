@@ -37,8 +37,8 @@ openclaw gateway restart
     openclaw onboard --auth-choice pioneer-api-key
     ```
 
-    This prompts for your API key and sets `pioneer/claude-sonnet-4-6` as the
-    default model.
+    This prompts for your API key and sets `pioneer/auto` as the
+    default model, which routes each request to the best available Pioneer model automatically.
 
   </Step>
   <Step title="Verify live models">
