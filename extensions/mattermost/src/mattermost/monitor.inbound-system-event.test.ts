@@ -104,7 +104,6 @@ vi.mock("./client.js", async () => {
 });
 
 vi.mock("./draft-stream.js", () => ({
-  buildMattermostToolStatusText: () => "Working",
   createMattermostDraftStream: mockState.createMattermostDraftStream,
 }));
 

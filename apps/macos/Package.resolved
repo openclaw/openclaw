@@ -108,24 +108,6 @@
         "revision" : "7c6ad0fc39d0763e0b699210e4124afd5041c5df",
         "version" : "1.6.4"
       }
-    },
-    {
-      "identity" : "swiftui-math",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/gonzalezreal/swiftui-math",
-      "state" : {
-        "revision" : "0b5c2cfaaec8d6193db206f675048eeb5ce95f71",
-        "version" : "0.1.0"
-      }
-    },
-    {
-      "identity" : "textual",
-      "kind" : "remoteSourceControl",
-      "location" : "https://github.com/gonzalezreal/textual",
-      "state" : {
-        "revision" : "5b06b811c0f5313b6b84bbef98c635a630638c38",
-        "version" : "0.3.1"
-      }
     }
   ],
   "version" : 3

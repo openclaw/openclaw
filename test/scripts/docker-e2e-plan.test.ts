@@ -397,7 +397,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
         name: "kitchen-sink-rpc",
         resources: ["docker", "service", "npm"],
         stateScenario: "empty",
-        timeoutMs: 900_000,
+        timeoutMs: 1_500_000,
         weight: 3,
       },
       {
@@ -623,6 +623,7 @@ describe("scripts/lib/docker-e2e-plan", () => {
 
     expect(plan.lanes.map((lane) => lane.name)).toEqual([
       "published-upgrade-survivor-2026.4.29",
+      "published-upgrade-survivor-2026.4.29-acpx-openclaw-tools-bridge",
       "published-upgrade-survivor-2026.4.29-feishu-channel",
       "published-upgrade-survivor-2026.4.29-bootstrap-persona",
       "published-upgrade-survivor-2026.4.29-channel-post-core-restore",
@@ -637,12 +638,13 @@ describe("scripts/lib/docker-e2e-plan", () => {
   it("skips plugin dependency cleanup for baselines without packaged plugin dirs", () => {
     const plan = planFor({
       selectedLaneNames: ["published-upgrade-survivor"],
-      upgradeSurvivorBaselines: "2026.4.29 2026.3.13",
+      upgradeSurvivorBaselines: "2026.4.29 2026.4.22 2026.4.21 2026.3.13",
       upgradeSurvivorScenarios: "reported-issues",
     });
 
     expect(plan.lanes.map((lane) => lane.name)).toEqual([
       "published-upgrade-survivor-2026.4.29",
+      "published-upgrade-survivor-2026.4.29-acpx-openclaw-tools-bridge",
       "published-upgrade-survivor-2026.4.29-feishu-channel",
       "published-upgrade-survivor-2026.4.29-bootstrap-persona",
       "published-upgrade-survivor-2026.4.29-channel-post-core-restore",
@@ -651,6 +653,23 @@ describe("scripts/lib/docker-e2e-plan", () => {
       "published-upgrade-survivor-2026.4.29-stale-source-plugin-shadow",
       "published-upgrade-survivor-2026.4.29-tilde-log-path",
       "published-upgrade-survivor-2026.4.29-versioned-runtime-deps",
+      "published-upgrade-survivor-2026.4.22",
+      "published-upgrade-survivor-2026.4.22-acpx-openclaw-tools-bridge",
+      "published-upgrade-survivor-2026.4.22-feishu-channel",
+      "published-upgrade-survivor-2026.4.22-bootstrap-persona",
+      "published-upgrade-survivor-2026.4.22-channel-post-core-restore",
+      "published-upgrade-survivor-2026.4.22-configured-plugin-installs",
+      "published-upgrade-survivor-2026.4.22-stale-source-plugin-shadow",
+      "published-upgrade-survivor-2026.4.22-tilde-log-path",
+      "published-upgrade-survivor-2026.4.22-versioned-runtime-deps",
+      "published-upgrade-survivor-2026.4.21",
+      "published-upgrade-survivor-2026.4.21-feishu-channel",
+      "published-upgrade-survivor-2026.4.21-bootstrap-persona",
+      "published-upgrade-survivor-2026.4.21-channel-post-core-restore",
+      "published-upgrade-survivor-2026.4.21-configured-plugin-installs",
+      "published-upgrade-survivor-2026.4.21-stale-source-plugin-shadow",
+      "published-upgrade-survivor-2026.4.21-tilde-log-path",
+      "published-upgrade-survivor-2026.4.21-versioned-runtime-deps",
       "published-upgrade-survivor-2026.3.13",
       "published-upgrade-survivor-2026.3.13-feishu-channel",
       "published-upgrade-survivor-2026.3.13-bootstrap-persona",
@@ -711,6 +730,17 @@ describe("scripts/lib/docker-e2e-plan", () => {
     for (const { credentials, name } of cases) {
       expect(planFor({ selectedLaneNames: [name] }).credentials, name).toEqual(credentials);
     }
+  });
+
+  it("marks the aggregate Gemini CLI backend lane advisory for auth drift", () => {
+    const plan = planFor({ selectedLaneNames: ["live-cli-backend-gemini"] });
+    const lane = requireFirstLane(plan);
+
+    expect(lane.command).toContain("OPENCLAW_LIVE_CLI_BACKEND_ADVISORY=1");
+    expect(lane.command).toContain("OPENCLAW_LIVE_CLI_BACKEND_ALLOW_PROVIDER_SKIP=1");
+    expect(lane.command).toContain(
+      "OPENCLAW_LIVE_CLI_BACKEND_MODEL=google-gemini-cli/gemini-3-flash-preview",
+    );
   });
 
   it("plans Codex harness Docker-all lanes for API-key Testbox auth", () => {

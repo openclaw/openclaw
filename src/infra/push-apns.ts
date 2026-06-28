@@ -9,7 +9,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import type { DeviceIdentity } from "./device-identity.js";
-import { formatErrorMessage } from "./errors.js";
+import { formatErrorMessage, toErrorObject } from "./errors.js";
 import { createAsyncLock, tryReadJson, writeJson } from "./json-files.js";
 import {
   APNS_HTTP2_CANCEL_CODE,
@@ -45,7 +45,7 @@ type RelayApnsRegistration = {
   sendGrant: string;
   installationId: string;
   topic: string;
-  environment: "production";
+  environment: ApnsEnvironment;
   distribution: "official";
   updatedAtMs: number;
   relayOrigin?: string;
@@ -350,7 +350,7 @@ function normalizeRelayRegistration(
     !sendGrant ||
     !installationId ||
     !isValidTopic(topic) ||
-    environment !== "production" ||
+    !environment ||
     distribution !== "official"
   ) {
     return null;
@@ -465,8 +465,8 @@ export async function registerApnsRegistration(
       const environment = normalizeApnsEnvironment(params.environment);
       const distribution = normalizeDistribution(params.distribution);
       const relayOrigin = normalizeRelayOrigin(params.relayOrigin);
-      if (environment !== "production") {
-        throw new Error("relay registrations must use production environment");
+      if (!environment) {
+        throw new Error("relay registrations must use valid APNs environment");
       }
       if (distribution !== "official") {
         throw new Error("relay registrations must use official distribution");
@@ -506,20 +506,6 @@ export async function registerApnsRegistration(
   });
 }
 
-/** Backward-compatible helper for storing a direct APNs token registration. */
-export async function registerApnsToken(params: {
-  nodeId: string;
-  token: string;
-  topic: string;
-  environment?: unknown;
-  baseDir?: string;
-}): Promise<DirectApnsRegistration> {
-  return (await registerApnsRegistration({
-    ...params,
-    transport: "direct",
-  })) as DirectApnsRegistration;
-}
-
 /** Loads one normalized APNs registration by node id. */
 export async function loadApnsRegistration(
   nodeId: string,
@@ -553,23 +539,6 @@ export async function loadApnsRegistrations(
   return registrations;
 }
 
-/** Removes a stored APNs registration by node id. */
-export async function clearApnsRegistration(nodeId: string, baseDir?: string): Promise<boolean> {
-  const normalizedNodeId = normalizeNodeId(nodeId);
-  if (!normalizedNodeId) {
-    return false;
-  }
-  return await withLock(async () => {
-    const state = await loadRegistrationsState(baseDir);
-    if (!(normalizedNodeId in state.registrationsByNodeId)) {
-      return false;
-    }
-    delete state.registrationsByNodeId[normalizedNodeId];
-    await persistRegistrationsState(state, baseDir);
-    return true;
-  });
-}
-
 function isSameApnsRegistration(a: ApnsRegistration, b: ApnsRegistration): boolean {
   if (
     a.nodeId !== b.nodeId ||
@@ -589,6 +558,7 @@ function isSameApnsRegistration(a: ApnsRegistration, b: ApnsRegistration): boole
       a.sendGrant === b.sendGrant &&
       a.installationId === b.installationId &&
       a.distribution === b.distribution &&
+      a.relayOrigin === b.relayOrigin &&
       a.tokenDebugSuffix === b.tokenDebugSuffix
     );
   }
@@ -731,7 +701,7 @@ async function sendApnsRequest(params: {
       }
       settled = true;
       client.destroy();
-      reject(toLintErrorObject(err, "Non-Error rejection"));
+      reject(toErrorObject(err, "Non-Error rejection"));
     };
     const finish = (result: { status: number; apnsId?: string; body: string }) => {
       if (settled) {
@@ -869,7 +839,7 @@ function toPushResult(params: {
         "tokenSuffix" in response ? response : undefined,
       ),
     topic: params.registration.topic,
-    environment: params.registration.transport === "relay" ? "production" : response.environment,
+    environment: response.environment ?? params.registration.environment,
     transport: params.registration.transport,
   };
 }
@@ -1219,17 +1189,3 @@ export async function sendApnsExecApprovalResolvedWake(
 }
 
 export { type ApnsRelayConfig, resolveApnsRelayConfigFromEnv };
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

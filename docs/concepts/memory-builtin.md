@@ -84,7 +84,8 @@ Set `memorySearch.provider` to switch away from OpenAI.
 OpenClaw indexes `MEMORY.md` and `memory/*.md` into chunks (~400 tokens with
 80-token overlap) and stores them in a per-agent SQLite database.
 
-- **Index location:** `~/.openclaw/memory/<agentId>.sqlite`
+- **Index location:** the owning agent database at
+  `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
 - **Storage maintenance:** SQLite WAL sidecars are bounded with periodic and
   shutdown checkpoints.
 - **File watching:** changes to memory files trigger a debounced reindex (1.5s).

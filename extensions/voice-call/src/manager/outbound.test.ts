@@ -155,11 +155,12 @@ describe("voice-call outbound helpers", () => {
         fromNumber: "+14155550100",
         tts: { provider: "openai", providers: { openai: { voice: "nova" } } },
       },
+      coreSession: { mainKey: "work" },
       storePath: "/tmp/voice-call.json",
       webhookUrl: "https://example.com/webhook",
     };
 
-    const result = await initiateCall(ctx as never, "+14155550123", "session-1", {
+    const result = await initiateCall(ctx as never, "+14155550123", "main", {
       mode: "notify",
       message: "hello there",
     });
@@ -178,7 +179,7 @@ describe("voice-call outbound helpers", () => {
       inlineTwiml: "<Response />",
     });
     expect(ctx.providerCallIdMap.get("provider-1")).toBe(callId);
-    expect(ctx.activeCalls.get(callId)?.sessionKey).toBe("session-1");
+    expect(ctx.activeCalls.get(callId)?.sessionKey).toBe("agent:main:work");
     expect(persistCallRecordMock).toHaveBeenCalledTimes(2);
   });
 
@@ -203,7 +204,9 @@ describe("voice-call outbound helpers", () => {
     expect(result.success).toBe(true);
     expect(result.callId).toBeTypeOf("string");
     expect(result.callId).not.toBe("");
-    expect(ctx.activeCalls.get(result.callId)?.sessionKey).toBe(`voice:call:${result.callId}`);
+    expect(ctx.activeCalls.get(result.callId)?.sessionKey).toBe(
+      `agent:main:voice:call:${result.callId}`,
+    );
   });
 
   it("initiates conversation calls with pre-connect DTMF TwiML", async () => {
@@ -404,6 +407,7 @@ describe("voice-call outbound helpers", () => {
     const call = {
       callId: "call-1",
       providerCallId: "provider-1",
+      direction: "inbound",
       state: "active",
       to: "+15550002222",
       metadata: { numberRouteKey: "+15550002222" },
@@ -435,6 +439,40 @@ describe("voice-call outbound helpers", () => {
       providerCallId: "provider-1",
       text: "hello",
       voice: "alloy",
+    });
+  });
+
+  it("keeps top-level TTS for outbound calls to a number with an inbound route", async () => {
+    const call = {
+      callId: "call-1",
+      providerCallId: "provider-1",
+      direction: "outbound",
+      state: "active",
+      to: "+15550002222",
+    };
+    const playTts = vi.fn(async () => {});
+    const ctx = {
+      activeCalls: new Map([["call-1", call]]),
+      providerCallIdMap: new Map(),
+      provider: { name: "twilio", playTts },
+      config: {
+        tts: { provider: "openai", providers: { openai: { voice: "coral" } } },
+        numbers: {
+          "+15550002222": {
+            tts: { providers: { openai: { voice: "alloy" } } },
+          },
+        },
+      },
+      storePath: "/tmp/voice-call.json",
+    };
+
+    await expect(speak(ctx as never, "call-1", "hello")).resolves.toEqual({ success: true });
+
+    expect(playTts).toHaveBeenCalledWith({
+      callId: "call-1",
+      providerCallId: "provider-1",
+      text: "hello",
+      voice: "coral",
     });
   });
 

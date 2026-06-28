@@ -1,5 +1,6 @@
 // Public facade for session stores, metadata, lifecycle, reset, transcript, and cleanup APIs.
 export * from "./sessions/combined-store-gateway.js";
+export * from "./sessions/compaction-session-file.js";
 export * from "./sessions/group.js";
 export * from "./sessions/goals.js";
 export * from "./sessions/artifacts.js";
@@ -10,12 +11,18 @@ export * from "./sessions/lifecycle.js";
 export * from "./sessions/paths.js";
 export * from "./sessions/reset.js";
 export {
+  canonicalizeSessionEntryAliases,
   deleteSessionEntryLifecycle,
+  patchSessionEntryWithKey,
   resetSessionEntryLifecycle,
+  resolveSessionEntryCandidateTarget,
+  type CanonicalizeSessionEntryAliasesResult,
   type DeleteSessionEntryLifecycleParams,
   type DeleteSessionEntryLifecycleResult,
+  type ResolvedSessionEntryCandidateTarget,
   type ResetSessionEntryLifecycleParams,
   type ResetSessionEntryLifecycleResult,
+  type SessionEntryCandidateAccessScope,
   type SessionLifecycleArchivedTranscript,
   type SessionLifecycleStoreTarget,
 } from "./sessions/session-accessor.js";
@@ -25,6 +32,7 @@ export * from "./sessions/types.js";
 export * from "./sessions/transcript.js";
 export * from "./sessions/session-file.js";
 export * from "./sessions/session-file-rotation.js";
+export * from "./sessions/session-registry-maintenance.js";
 export * from "./sessions/delivery-info.js";
 export * from "./sessions/disk-budget.js";
 export * from "./sessions/targets.js";

@@ -44,7 +44,7 @@ function buildEventStreamFn(events: unknown[]): StreamFn {
 
 function captureWrappedModelId(params: {
   modelId: string;
-  fastMode: boolean;
+  fastMode: boolean | (() => boolean | undefined);
   api?: XaiStreamApi;
 }): string {
   let capturedModelId = "";
@@ -158,6 +158,30 @@ describe("xai stream wrappers", () => {
     expect(captureWrappedModelId({ modelId: "grok-3", fastMode: false })).toBe("grok-3");
   });
 
+  it("resolves dynamic fast mode for each xai stream call", () => {
+    const capturedModelIds: string[] = [];
+    const baseStreamFn: StreamFn = (model) => {
+      capturedModelIds.push(model.id);
+      return {
+        result: async () => ({}),
+        async *[Symbol.asyncIterator]() {},
+      } as unknown as ReturnType<StreamFn>;
+    };
+    let enabled = true;
+    const wrapped = createXaiFastModeWrapper(baseStreamFn, () => enabled);
+    const model = {
+      api: "openai-responses",
+      provider: "xai",
+      id: "grok-4",
+    } as Model<XaiStreamApi>;
+
+    void wrapped(model, { messages: [] } as Context, {});
+    enabled = false;
+    void wrapped(model, { messages: [] } as Context, {});
+
+    expect(capturedModelIds).toEqual(["grok-4-fast", "grok-4"]);
+  });
+
   it("composes the xai provider stream chain from extra params", () => {
     const capture = createXaiPayloadCaptureStream();
 
@@ -261,6 +285,33 @@ describe("xai stream wrappers", () => {
     });
   });
 
+  it("resolves dynamic fast mode in the composed xai provider stream chain", () => {
+    const capturedModelIds: string[] = [];
+    const baseStreamFn: StreamFn = (model) => {
+      capturedModelIds.push(model.id);
+      return {
+        result: async () => ({}),
+        async *[Symbol.asyncIterator]() {},
+      } as unknown as ReturnType<StreamFn>;
+    };
+    let enabled = true;
+    const wrapped = wrapXaiProviderStream({
+      streamFn: baseStreamFn,
+      extraParams: { fastMode: () => enabled },
+    } as never);
+    const model = {
+      api: "openai-responses",
+      provider: "xai",
+      id: "grok-4",
+    } as Model<XaiStreamApi>;
+
+    void wrapped?.(model, { messages: [] } as Context, {});
+    enabled = false;
+    void wrapped?.(model, { messages: [] } as Context, {});
+
+    expect(capturedModelIds).toEqual(["grok-4-fast", "grok-4"]);
+  });
+
   it("strips unsupported strict and reasoning controls from tool payloads", () => {
     const payload = {
       reasoning: "high",
@@ -342,6 +393,55 @@ describe("xai stream wrappers", () => {
     expect(payload).not.toHaveProperty("reasoning");
     expect(payload).not.toHaveProperty("reasoningEffort");
     expect(payload).not.toHaveProperty("reasoning_effort");
+  });
+
+  it("still requests encrypted reasoning include when effort is unsupported", () => {
+    const payload: Record<string, unknown> = {
+      reasoning: { effort: "high" },
+      input: [],
+    };
+    const baseStreamFn: StreamFn = (model, _context, options) => {
+      options?.onPayload?.(payload, model);
+      return {} as ReturnType<StreamFn>;
+    };
+    const wrapped = createXaiToolPayloadCompatibilityWrapper(baseStreamFn);
+
+    void wrapped(
+      {
+        api: "openai-responses",
+        provider: "xai",
+        id: "grok-build-0.1",
+        reasoning: true,
+        compat: { supportsReasoningEffort: false },
+      } as unknown as Model<"openai-responses">,
+      { messages: [] } as Context,
+      {},
+    );
+
+    expect(payload).not.toHaveProperty("reasoning");
+    expect(payload.include).toEqual(["reasoning.encrypted_content"]);
+  });
+
+  it("merges encrypted reasoning include with existing include entries", () => {
+    const payload: Record<string, unknown> = {
+      include: ["file_search_call.results"],
+    };
+    runXaiToolPayloadWrapper({
+      payload,
+      modelId: "grok-build-0.1",
+    });
+
+    expect(payload.include).toEqual(["file_search_call.results", "reasoning.encrypted_content"]);
+  });
+
+  it("does not request encrypted reasoning include for non-reasoning xai models", () => {
+    const payload: Record<string, unknown> = {};
+    runXaiToolPayloadWrapper({
+      payload,
+      modelId: "grok-4-fast-non-reasoning",
+    });
+
+    expect(payload).not.toHaveProperty("include");
   });
 
   it("keeps native xAI Responses thinking efforts before the shared runtime dispatches payloads", async () => {

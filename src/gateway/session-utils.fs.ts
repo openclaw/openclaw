@@ -15,7 +15,6 @@ import {
 import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { hasInterSessionUserProvenance } from "../sessions/input-provenance.js";
 import { extractAssistantVisibleText } from "../shared/chat-message-content.js";
-import { escapeRegExp } from "../shared/regexp.js";
 import { estimateStringChars, estimateTokensFromChars } from "../utils/cjk-chars.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { extractToolCallNames, hasToolCall } from "../utils/transcript-tools.js";
@@ -28,6 +27,11 @@ import {
   readSessionTranscriptIndex,
   type IndexedTranscriptEntry,
 } from "./session-transcript-index.fs.js";
+import {
+  extractJsonNullableStringFieldPrefix,
+  extractJsonNumberFieldPrefix,
+  extractJsonStringFieldPrefix,
+} from "./session-transcript-json.js";
 import type { SessionPreviewItem } from "./session-utils.types.js";
 
 type SessionTitleFields = {
@@ -181,6 +185,12 @@ export type ReadRecentSessionMessagesOptions = {
   maxMessages: number;
   maxBytes?: number;
   maxLines?: number;
+  allowResetArchiveFallback?: boolean;
+};
+
+export type ReadSessionMessagesPageOptions = {
+  offset: number;
+  maxMessages: number;
   allowResetArchiveFallback?: boolean;
 };
 
@@ -378,6 +388,10 @@ function extractJsonNumberFieldPrefix(prefix: string, field: string): number | u
   return Number.isFinite(decoded) ? decoded : undefined;
 }
 
+function normalizeTailEntryString(value: unknown): string | undefined {
+  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
+}
+
 function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
   const prefix = line.slice(0, OVERSIZED_TRANSCRIPT_METADATA_PREFIX_CHARS);
   const messageMatch = /"message"\s*:/.exec(prefix);
@@ -405,10 +419,6 @@ function buildOversizedTranscriptRecord(line: string): TailTranscriptRecord {
     },
   };
   return { record };
-}
-
-function normalizeTailEntryString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value : undefined;
 }
 
 function parseTailTranscriptRecord(line: string): TailTranscriptRecord | null {
@@ -728,22 +738,7 @@ export async function readSessionMessageCountAsync(
   if (!filePath) {
     return 0;
   }
-  let stat: fs.Stats | null = null;
-  try {
-    stat = await fs.promises.stat(filePath);
-    const cached = getCachedTranscriptMessageCount(filePath, stat);
-    if (typeof cached === "number") {
-      return cached;
-    }
-  } catch {
-    // Count from the transcript reader below when stat metadata is unavailable.
-  }
-  const index = await readSessionTranscriptIndex(filePath);
-  const count = index?.entries.length ?? 0;
-  if (stat) {
-    setCachedTranscriptMessageCount(filePath, stat, count);
-  }
-  return count;
+  return await readSessionMessageCountFromPathAsync(filePath);
 }
 
 export function readRecentSessionMessagesWithStats(
@@ -850,6 +845,38 @@ export async function readRecentSessionMessagesWithStatsAsync(
     attachOpenClawTranscriptMeta(message, { seq: firstSeq + index }),
   );
   return { messages: messagesWithSeq, totalMessages, transcriptPath: filePath };
+}
+
+export async function readSessionMessagesPageWithStatsAsync(
+  sessionId: string,
+  storePath: string | undefined,
+  sessionFile: string | undefined,
+  opts: ReadSessionMessagesPageOptions,
+  agentId?: string,
+): Promise<ReadRecentSessionMessagesResult> {
+  const filePath =
+    opts.allowResetArchiveFallback === true
+      ? await findExistingTranscriptHistoryPathAsync(sessionId, storePath, sessionFile, agentId)
+      : findExistingTranscriptPath(sessionId, storePath, sessionFile, agentId);
+  if (!filePath) {
+    return { messages: [], totalMessages: 0 };
+  }
+  const index = await readSessionTranscriptIndex(filePath);
+  if (!index) {
+    return { messages: [], totalMessages: 0, transcriptPath: filePath };
+  }
+  const totalMessages = index.entries.length;
+  const offset = Math.min(resolveNonNegativeIntegerOption(opts.offset, 0), totalMessages);
+  const maxMessages = resolveNonNegativeIntegerOption(opts.maxMessages, 0);
+  const endExclusive = Math.max(0, totalMessages - offset);
+  const start = Math.max(0, endExclusive - maxMessages);
+  return {
+    messages: index.entries
+      .slice(start, endExclusive)
+      .flatMap((entry) => indexedTranscriptEntryToMessages(entry)),
+    totalMessages,
+    transcriptPath: filePath,
+  };
 }
 
 export function readRecentSessionTranscriptLines(params: {

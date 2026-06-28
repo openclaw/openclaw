@@ -10,6 +10,7 @@ import {
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "./runtime/index.js";
+import { isThinkingLikeBlock } from "./thinking-block.js";
 import {
   extractToolCallsFromAssistant,
   extractToolResultId,
@@ -39,14 +40,6 @@ const RAW_TOOL_CALL_BLOCK_TYPES = new Set([
   "tool_use",
   "function_call",
 ]);
-
-function isThinkingLikeBlock(block: unknown): boolean {
-  if (!block || typeof block !== "object") {
-    return false;
-  }
-  const type = (block as { type?: unknown }).type;
-  return type === "thinking" || type === "redacted_thinking";
-}
 
 function isRawToolCallBlock(block: unknown): block is RawToolCallBlock {
   if (!block || typeof block !== "object") {
@@ -561,14 +554,15 @@ function assistantHasToolCalls(message: AgentMessage): boolean {
   return extractToolCallsFromAssistant(message).length > 0;
 }
 
-function findLaterMatchingToolResult(params: {
+function collectLaterMatchingToolResults(params: {
   messages: AgentMessage[];
   startIndex: number;
-  toolCallId: string;
-  toolName?: string;
   toolCalls: Array<{ id: string; name?: string }>;
+  toolNamesById: Map<string, string>;
   seenToolResultIds: Set<string>;
-}): Extract<AgentMessage, { role: "toolResult" }> | undefined {
+}): Map<string, Extract<AgentMessage, { role: "toolResult" }>> {
+  const resultsById = new Map<string, Extract<AgentMessage, { role: "toolResult" }>>();
+  const toolCallIds = new Set(params.toolCalls.map((toolCall) => toolCall.id));
   for (let index = params.startIndex; index < params.messages.length; index += 1) {
     const candidate = params.messages[index];
     if (!candidate || typeof candidate !== "object" || candidate.role !== "toolResult") {
@@ -576,12 +570,15 @@ function findLaterMatchingToolResult(params: {
     }
     const normalizedLegacyResult = normalizeLegacyToolResultId(candidate, params.toolCalls);
     const id = extractToolResultId(normalizedLegacyResult);
-    if (!id || id !== params.toolCallId || params.seenToolResultIds.has(id)) {
+    if (!id || !toolCallIds.has(id) || params.seenToolResultIds.has(id) || resultsById.has(id)) {
       continue;
     }
-    return normalizeToolResultName(normalizedLegacyResult, params.toolName);
+    resultsById.set(
+      id,
+      normalizeToolResultName(normalizedLegacyResult, params.toolNamesById.get(id)),
+    );
   }
-  return undefined;
+  return resultsById;
 }
 
 export function repairToolUseResultPairing(
@@ -776,20 +773,21 @@ export function repairToolUseResultPairing(
       changed = true;
     }
 
+    const laterResultsById = collectLaterMatchingToolResults({
+      messages,
+      startIndex: j,
+      toolCalls,
+      toolNamesById: toolCallNamesById,
+      seenToolResultIds,
+    });
     for (const call of toolCalls) {
       const existing = spanResultsById.get(call.id);
       if (existing) {
         pushToolResult(existing);
       } else {
-        const laterResult = findLaterMatchingToolResult({
-          messages,
-          startIndex: j,
-          toolCallId: call.id,
-          toolName: call.name,
-          toolCalls,
-          seenToolResultIds,
-        });
+        const laterResult = laterResultsById.get(call.id);
         if (laterResult) {
+          laterResultsById.delete(call.id);
           moved = true;
           changed = true;
           pushToolResult(laterResult);

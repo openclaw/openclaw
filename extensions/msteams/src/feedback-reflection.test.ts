@@ -19,6 +19,11 @@ import { msteamsRuntimeStub } from "./test-support/runtime.js";
 
 const previousStateDir = process.env.OPENCLAW_STATE_DIR;
 
+// Matches an unpaired UTF-16 surrogate (lone high or lone low), without relying
+// on the ES2024 String.prototype.isWellFormed() runtime API.
+const UNPAIRED_SURROGATE_RE =
+  /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+
 describe("buildFeedbackEvent", () => {
   it("builds a well-formed custom event", () => {
     const event = buildFeedbackEvent({
@@ -71,6 +76,26 @@ describe("buildReflectionPrompt", () => {
 
     expect(prompt).toContain("...");
     expect(prompt.length).toBeLessThan(longResponse.length + 500);
+  });
+
+  it("does not split UTF-16 surrogate pairs when truncating a thumbed-down response", () => {
+    const thumbedDownResponse = `${"a".repeat(499)}🦞${"b".repeat(20)}`;
+
+    const prompt = buildReflectionPrompt({ thumbedDownResponse });
+
+    expect(prompt).not.toMatch(UNPAIRED_SURROGATE_RE);
+    expect(prompt).toContain(`${"a".repeat(499)}...`);
+    expect(prompt).not.toContain("\ud83e");
+    expect(prompt).not.toContain("\udd9e");
+  });
+
+  it("keeps a boundary emoji when it fully fits before the truncation cap", () => {
+    const thumbedDownResponse = `${"a".repeat(498)}🦞${"b".repeat(20)}`;
+
+    const prompt = buildReflectionPrompt({ thumbedDownResponse });
+
+    expect(prompt).not.toMatch(UNPAIRED_SURROGATE_RE);
+    expect(prompt).toContain(`${"a".repeat(498)}🦞...`);
   });
 
   it("includes user comment when provided", () => {

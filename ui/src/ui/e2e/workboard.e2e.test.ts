@@ -26,10 +26,10 @@ const baseTime = Date.parse("2026-06-01T18:00:00.000Z");
 const linkedSessionKey = "agent:main:workboard-proof";
 const linkedSessionName = "Implementation session";
 
-let browser: Browser;
 let server: ControlUiE2eServer;
 
 type RecordedPage = {
+  browser: Browser;
   context: BrowserContext;
   page: Page;
   rawVideoDir: string;
@@ -215,18 +215,29 @@ async function newRecordedPage(label: string): Promise<RecordedPage> {
   const rawVideoDir = path.join(artifactDir, `${label}-raw`);
   await rm(rawVideoDir, { force: true, recursive: true });
   await mkdir(rawVideoDir, { recursive: true });
-  const context = await browser.newContext({
-    locale: "en-US",
-    recordVideo: {
-      dir: rawVideoDir,
-      size: viewport,
-    },
-    serviceWorkers: "block",
-    viewport,
-  });
-  const page = await context.newPage();
-  page.setDefaultTimeout(10_000);
-  return { context, page, rawVideoDir };
+  const browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+  let context: BrowserContext | undefined;
+  let page: Page | undefined;
+  try {
+    context = await browser.newContext({
+      locale: "en-US",
+      recordVideo: {
+        dir: rawVideoDir,
+        size: viewport,
+      },
+      serviceWorkers: "block",
+      viewport,
+    });
+    page = await context.newPage();
+    page.setDefaultTimeout(10_000);
+    return { browser, context, page, rawVideoDir };
+  } catch (error) {
+    await page?.close().catch(() => {});
+    await context?.close().catch(() => {});
+    await browser.close().catch(() => {});
+    await rm(rawVideoDir, { force: true, recursive: true });
+    throw error;
+  }
 }
 
 async function captureScreenshot(
@@ -255,6 +266,7 @@ async function closeRecordedPage(
     await copyFile(rawVideoPath, videoPath);
     artifacts.videos.push(videoPath);
   } finally {
+    await recorded.browser.close().catch(() => {});
     await rm(recorded.rawVideoDir, { force: true, recursive: true });
   }
 }
@@ -267,11 +279,9 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
       );
     }
     server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
   });
 
   afterAll(async () => {
-    await browser?.close();
     await server?.close();
   });
 
@@ -315,16 +325,15 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
     });
 
     const writable = await newRecordedPage("workboard-writable");
-    const writableGateway = await installMockGateway(writable.page, {
-      methodResponses: {
-        "config.get": workboardConfigSnapshot(),
-        "sessions.list": sessionsListResponse([sessionRow()]),
-        "tasks.list": { nextCursor: null, tasks: [] },
-        "workboard.cards.list": cardsListResponse([]),
-      },
-    });
-
     try {
+      const writableGateway = await installMockGateway(writable.page, {
+        methodResponses: {
+          "config.get": workboardConfigSnapshot(),
+          "sessions.list": sessionsListResponse([sessionRow()]),
+          "tasks.list": { nextCursor: null, tasks: [] },
+          "workboard.cards.list": cardsListResponse([]),
+        },
+      });
       const response = await writable.page.goto(`${server.baseUrl}workboard`);
       expect(response?.status()).toBe(200);
       await statusColumn(writable.page, "Todo").waitFor({ state: "visible" });
@@ -489,19 +498,18 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
     }
 
     const readOnly = await newRecordedPage("workboard-read-only");
-    const readOnlyGateway = await installMockGateway(readOnly.page, {
-      methodResponses: {
-        connect: readOnlyConnectResponse(),
-        "config.get": workboardConfigSnapshot(),
-        "sessions.list": sessionsListResponse([
-          sessionRow({ hasActiveRun: false, status: "done", updatedAt: baseTime + 4 }),
-        ]),
-        "tasks.list": { nextCursor: null, tasks: [] },
-        "workboard.cards.list": cardsListResponse([runningCard]),
-      },
-    });
-
     try {
+      const readOnlyGateway = await installMockGateway(readOnly.page, {
+        methodResponses: {
+          connect: readOnlyConnectResponse(),
+          "config.get": workboardConfigSnapshot(),
+          "sessions.list": sessionsListResponse([
+            sessionRow({ hasActiveRun: false, status: "done", updatedAt: baseTime + 4 }),
+          ]),
+          "tasks.list": { nextCursor: null, tasks: [] },
+          "workboard.cards.list": cardsListResponse([runningCard]),
+        },
+      });
       const response = await readOnly.page.goto(`${server.baseUrl}workboard`);
       expect(response?.status()).toBe(200);
       await cardInColumn(readOnly.page, "Running", editedCard.title).waitFor({
@@ -553,16 +561,15 @@ describeControlUiE2e("Control UI Workboard mocked Gateway E2E", () => {
     );
 
     const recorded = await newRecordedPage("workboard-overflow");
-    await installMockGateway(recorded.page, {
-      methodResponses: {
-        "config.get": workboardConfigSnapshot(),
-        "sessions.list": sessionsListResponse([sessionRow()]),
-        "tasks.list": { nextCursor: null, tasks: [] },
-        "workboard.cards.list": cardsListResponse(crowdedCards),
-      },
-    });
-
     try {
+      await installMockGateway(recorded.page, {
+        methodResponses: {
+          "config.get": workboardConfigSnapshot(),
+          "sessions.list": sessionsListResponse([sessionRow()]),
+          "tasks.list": { nextCursor: null, tasks: [] },
+          "workboard.cards.list": cardsListResponse(crowdedCards),
+        },
+      });
       // Constrain the height so the Todo column must overflow its visible area.
       await recorded.page.setViewportSize({ height: 720, width: 1400 });
       const response = await recorded.page.goto(`${server.baseUrl}workboard`);
