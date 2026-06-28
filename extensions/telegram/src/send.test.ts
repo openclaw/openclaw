@@ -1056,7 +1056,7 @@ describe("sendMessageTelegram", () => {
     expect(richHtml).toContain("nested<br>line");
   });
 
-  it("materializes bullet and paragraph line breaks in rich Markdown sends", async () => {
+  it("materializes bullet paragraph spacing in rich Markdown sends", async () => {
     botApi.sendMessage.mockResolvedValue({ message_id: 60, chat: { id: "123" } });
 
     await sendMessageTelegram(
@@ -1067,7 +1067,7 @@ describe("sendMessageTelegram", () => {
 
     expect(botRawApi.sendRichMessage).toHaveBeenCalledTimes(1);
     expect(botRawApi.sendRichMessage.mock.calls[0]?.[0]?.rich_message.html).toBe(
-      "Start here:<br><br>• Florist - Red Bird<br>• Tomberlin - Seventeen",
+      "Start here:<br><br>• Florist - Red Bird<br><br>• Tomberlin - Seventeen",
     );
   });
 

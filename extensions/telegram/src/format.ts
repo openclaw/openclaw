@@ -115,8 +115,20 @@ function isTelegramBulletLine(line: string): boolean {
   return /^[ \t]*(?:[•*+-])[ \t]+\S/.test(line);
 }
 
+function isTelegramOrderedListLine(line: string): boolean {
+  return /^[ \t]*\d+\.[ \t]+\S/.test(line);
+}
+
+function isTelegramMarkdownListItemLine(line: string): boolean {
+  return isTelegramBulletLine(line) || isTelegramOrderedListLine(line);
+}
+
+function isTelegramBoldSectionHeaderLine(line: string): boolean {
+  return /^[ \t]*\*\*[^*\n]+:\*\*(?:[ \t]*$|[ \t]+\S)/.test(line);
+}
+
 function isTelegramListBoundaryLine(line: string): boolean {
-  return /^[ \t]*(?:\d+\.|#{1,6})[ \t]+\S/.test(line);
+  return isTelegramOrderedListLine(line) || /^[ \t]*#{1,6}[ \t]+\S/.test(line);
 }
 
 function isMarkdownIndentedCodeLine(line: string): boolean {
@@ -133,7 +145,27 @@ function shouldPreserveTelegramListBoundarySpacing(previous: string, next: strin
   );
 }
 
-function preserveTelegramListBoundarySpacing(markdown: string): string {
+function shouldPreserveTelegramRichStructuredSpacing(previous: string, next: string): boolean {
+  if (
+    isMarkdownIndentedCodeLine(previous) ||
+    isMarkdownIndentedCodeLine(next) ||
+    !previous.trim()
+  ) {
+    return false;
+  }
+  if (isTelegramMarkdownListItemLine(previous) && isTelegramMarkdownListItemLine(next)) {
+    return leadingWhitespaceLength(next) <= leadingWhitespaceLength(previous);
+  }
+  return (
+    isTelegramBoldSectionHeaderLine(next) &&
+    leadingWhitespaceLength(next) <= leadingWhitespaceLength(previous)
+  );
+}
+
+function preserveTelegramListBoundarySpacing(
+  markdown: string,
+  options: { richStructuredSpacing?: boolean } = {},
+): string {
   const lines = markdown.split("\n");
   const out: string[] = [];
   let inFence = false;
@@ -142,7 +174,12 @@ function preserveTelegramListBoundarySpacing(markdown: string): string {
   for (const line of lines) {
     const normalizedLine = line.replace(/\r$/, "");
     const isFenceLine = /^[ \t]*(?:```|~~~)/.test(normalizedLine);
-    if (!inFence && shouldPreserveTelegramListBoundarySpacing(previousLine, normalizedLine)) {
+    if (
+      !inFence &&
+      (shouldPreserveTelegramListBoundarySpacing(previousLine, normalizedLine) ||
+        (options.richStructuredSpacing === true &&
+          shouldPreserveTelegramRichStructuredSpacing(previousLine, normalizedLine)))
+    ) {
       out.push("");
     }
     out.push(line);
@@ -1127,7 +1164,7 @@ export function markdownToTelegramRichHtml(
   const tableMode = options.tableMode ?? "block";
   const normalized = normalizeTelegramRichMarkdownMedia(markdown ?? "");
   const { ir, tables } = markdownToIRWithMeta(
-    preserveTelegramListBoundarySpacing(normalized.markdown),
+    preserveTelegramListBoundarySpacing(normalized.markdown, { richStructuredSpacing: true }),
     {
       linkify: options.skipEntityDetection !== true,
       enableSpoilers: true,

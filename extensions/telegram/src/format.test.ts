@@ -89,6 +89,30 @@ describe("markdownToTelegramHtml", () => {
     expect(markdownToTelegramRichHtml("<sup>1</sup>")).toBe("<sup>1</sup>");
   });
 
+  it("adds rich paragraph spacing between Markdown list items", () => {
+    const html = markdownToTelegramRichHtml("- First item\n- Second item\n- Third item");
+
+    expect(html).toBe("• First item\n\n• Second item\n\n• Third item");
+    expect(materializeTelegramRichHtmlLineBreaks(html)).toBe(
+      "• First item<br><br>• Second item<br><br>• Third item",
+    );
+    expect(markdownToTelegramHtml("- First item\n- Second item\n- Third item")).toBe(
+      "• First item\n• Second item\n• Third item",
+    );
+  });
+
+  it("adds rich paragraph spacing before bold section headers", () => {
+    const html = markdownToTelegramRichHtml("Intro line\n**Section:**\nDetail line");
+
+    expect(html).toBe("Intro line\n\n<b>Section:</b>\nDetail line");
+    expect(materializeTelegramRichHtmlLineBreaks(html)).toBe(
+      "Intro line<br><br><b>Section:</b><br>Detail line",
+    );
+    expect(markdownToTelegramHtml("Intro line\n**Section:**\nDetail line")).toBe(
+      "Intro line\n<b>Section:</b>\nDetail line",
+    );
+  });
+
   it("materializes inline and paragraph newlines as <br> for rich messages", () => {
     // The exact reported symptom: literal "• " bullets (not Markdown list markers)
     // joined by soft breaks, which Bot API 10.1 rich messages collapse without <br>.
