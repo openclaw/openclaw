@@ -49,6 +49,10 @@ type QmdManagerOpenFailure = {
   retryAfterMs: number;
 };
 
+type MemorySearchTimeoutOptions = Parameters<
+  NonNullable<MemorySearchManager["getSearchTimeoutMs"]>
+>[0];
+
 type MemorySearchManagerCacheState =
   | "cached-full-hit"
   | "cached-full-miss"
@@ -184,8 +188,11 @@ async function runFallbackMemorySearchWithDeadline<T>(params: {
   }
 }
 
-function resolveFallbackMemorySearchTimeoutMs(manager: MemorySearchManager): number {
-  const timeoutMs = manager.getSearchTimeoutMs?.();
+function resolveFallbackMemorySearchTimeoutMs(
+  manager: MemorySearchManager,
+  opts?: MemorySearchTimeoutOptions,
+): number {
+  const timeoutMs = manager.getSearchTimeoutMs?.(opts);
   return Math.min(
     DEFAULT_MEMORY_MANAGER_SEARCH_TIMEOUT_MS,
     typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
@@ -678,7 +685,7 @@ class FallbackMemoryManager implements MemorySearchManager {
     const fallback = await this.ensureFallback();
     if (fallback) {
       return await runFallbackMemorySearchWithDeadline({
-        timeoutMs: resolveFallbackMemorySearchTimeoutMs(fallback),
+        timeoutMs: resolveFallbackMemorySearchTimeoutMs(fallback, opts),
         signal: opts?.signal,
         run: async (fallbackSignal) =>
           await fallback.search(query, { ...opts, signal: fallbackSignal }),
@@ -687,12 +694,14 @@ class FallbackMemoryManager implements MemorySearchManager {
     throw new Error(this.lastError ?? "memory search unavailable");
   }
 
-  getSearchTimeoutMs(): number {
+  getSearchTimeoutMs(opts?: MemorySearchTimeoutOptions): number {
     this.ensureOpen();
     if (!this.primaryFailed) {
-      return this.deps.primary.getSearchTimeoutMs?.() ?? DEFAULT_MEMORY_MANAGER_SEARCH_TIMEOUT_MS;
+      return (
+        this.deps.primary.getSearchTimeoutMs?.(opts) ?? DEFAULT_MEMORY_MANAGER_SEARCH_TIMEOUT_MS
+      );
     }
-    return this.fallback?.getSearchTimeoutMs?.() ?? DEFAULT_MEMORY_MANAGER_SEARCH_TIMEOUT_MS;
+    return this.fallback?.getSearchTimeoutMs?.(opts) ?? DEFAULT_MEMORY_MANAGER_SEARCH_TIMEOUT_MS;
   }
 
   async readFile(params: { relPath: string; from?: number; lines?: number }) {

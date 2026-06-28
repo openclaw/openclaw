@@ -332,6 +332,33 @@ describe("getMemorySearchManager caching", () => {
     expect(second.debug?.qmdIdentityHash).toBe(first.debug?.qmdIdentityHash);
   });
 
+  it("forwards timeout mode overrides through cached full qmd manager", async () => {
+    const agentId = "cached-qmd-timeout-opts";
+    const cfg = createQmdCfg(agentId);
+    const getSearchTimeoutMs = vi.fn(
+      (opts?: { qmdSearchModeOverride?: "query" | "search" | "vsearch" }) =>
+        opts?.qmdSearchModeOverride === "vsearch" ? 123_000 : 15_000,
+    );
+    (
+      mockPrimary as typeof mockPrimary & {
+        getSearchTimeoutMs: typeof getSearchTimeoutMs;
+      }
+    ).getSearchTimeoutMs = getSearchTimeoutMs;
+
+    try {
+      const first = await getMemorySearchManager({ cfg, agentId });
+      const second = await getMemorySearchManager({ cfg, agentId });
+      const manager = requireManager(second);
+
+      expect(first.manager).toBe(second.manager);
+      expect(second.debug?.managerCacheState).toBe("cached-full-hit");
+      expect(manager.getSearchTimeoutMs?.({ qmdSearchModeOverride: "vsearch" })).toBe(123_000);
+      expect(getSearchTimeoutMs).toHaveBeenLastCalledWith({ qmdSearchModeOverride: "vsearch" });
+    } finally {
+      delete (mockPrimary as Partial<{ getSearchTimeoutMs: unknown }>).getSearchTimeoutMs;
+    }
+  });
+
   it("keeps the cached QMD manager active when the caller cancels a search", async () => {
     const agentId = "cancelled-search";
     const cfg = createQmdCfg(agentId);
