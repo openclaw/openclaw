@@ -10,7 +10,7 @@ import {
 import type { ResolvedSlackAccount } from "../../accounts.js";
 import type { SlackMessageEvent } from "../../types.js";
 import { resolveSlackAllowListMatch } from "../allow-list.js";
-import { resolveChannelResetConfig } from "../config.runtime.js";
+import { readSessionUpdatedAt, resolveChannelResetConfig } from "../config.runtime.js";
 import type { SlackMonitorContext } from "../context.js";
 import type { SlackMediaResult } from "../media-types.js";
 import { resolveSlackThreadHistory, type SlackThreadStarter } from "../thread.js";
@@ -169,10 +169,19 @@ export async function resolveSlackThreadContextData(params: {
           sessionKey: params.sessionKey,
         })
       : undefined;
+  const threadSessionPreviousTimestamp =
+    params.isThreadReply && params.threadTs && !threadSessionFreshness
+      ? readSessionUpdatedAt({
+          storePath: params.storePath,
+          sessionKey: params.sessionKey,
+        })
+      : undefined;
   const shouldSeedInitialThreadContext = Boolean(
     params.isThreadReply &&
     params.threadTs &&
-    (!threadSessionFreshness || threadSessionFreshness.state !== "fresh"),
+    (threadSessionFreshness
+      ? threadSessionFreshness.state !== "fresh"
+      : threadSessionPreviousTimestamp === undefined),
   );
   const shouldLoadInitialThreadHistory =
     shouldSeedInitialThreadContext || params.forceInitialHistory === true;

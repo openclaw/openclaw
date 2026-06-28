@@ -1908,6 +1908,58 @@ Second paragraph should still reach the agent after Slack's preview cutoff.`;
     expect(replies).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves existing thread fallback when channel runtime is omitted", async () => {
+    const { storePath } = storeFixture.makeTmpStorePath();
+    const cfg = {
+      session: { store: storePath },
+      channels: { slack: { enabled: true, replyToMode: "all", groupPolicy: "open" } },
+    } as OpenClawConfig;
+    const route = resolveAgentRoute({
+      cfg,
+      channel: "slack",
+      accountId: "default",
+      teamId: "T1",
+      peer: { kind: "channel", id: "C123" },
+    });
+    const threadKeys = resolveThreadSessionKeys({
+      baseSessionKey: route.sessionKey,
+      threadId: "250.000",
+    });
+    const now = Date.now();
+    await saveSessionStore(
+      storePath,
+      {
+        [threadKeys.sessionKey]: {
+          sessionId: "direct-monitor-existing-thread-session",
+          updatedAt: now - 2 * 24 * 60 * 60 * 1000,
+          sessionStartedAt: now - 2 * 24 * 60 * 60 * 1000,
+          lastInteractionAt: now - 2 * 24 * 60 * 60 * 1000,
+        },
+      },
+      { skipMaintenance: true },
+    );
+
+    const replies = vi.fn().mockResolvedValueOnce({
+      messages: [{ text: "starter", user: "U2", ts: "250.000" }],
+    });
+    const slackCtx = createThreadSlackCtx({ cfg, replies });
+    slackCtx.channelRuntime = undefined;
+    slackCtx.resolveUserName = async () => ({ name: "Alice" });
+    slackCtx.resolveChannelName = async () => ({ name: "general", type: "channel" });
+
+    const prepared = await prepareThreadMessage(slackCtx, {
+      text: "direct monitor reply in old thread",
+      ts: "251.000",
+      thread_ts: "250.000",
+    });
+
+    assertPrepared(prepared);
+    expect(prepared.ctxPayload.IsFirstThreadTurn).toBeUndefined();
+    expect(prepared.ctxPayload.ThreadHistoryBody).toBeUndefined();
+    expect(prepared.ctxPayload.ThreadStarterBody).toBeUndefined();
+    expect(replies).toHaveBeenCalledTimes(1);
+  });
+
   it("loads bounded thread history for existing thread sessions stale under reset policy", async () => {
     const { storePath } = storeFixture.makeTmpStorePath();
     const now = Date.now();
