@@ -20,6 +20,8 @@ import { logVerbose } from "../../globals.js";
 import { measureDiagnosticsTimelineSpan } from "../../infra/diagnostics-timeline.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
+import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
 import {
   buildAgentHookContextChannelFields,
   buildAgentHookContextIdentityFields,
@@ -60,6 +62,7 @@ import { sanitizePendingFinalDeliveryText } from "./pending-final-delivery.js";
 import { createReplyTimingTracker } from "./reply-timing-tracker.js";
 import { isContinuationHeartbeatEquivalent, resolveReplyHookTrigger } from "./run-provenance.js";
 import { initSessionState } from "./session.js";
+import { stageRemoteInboundMediaIfNeeded } from "./stage-remote-inbound-media.js";
 import {
   isStaleHeartbeatAutoFallbackOverride,
   resolveStoredModelOverride,
@@ -70,6 +73,7 @@ type ResetCommandAction = "new" | "reset";
 
 type RuntimeInternalGetReplyOptions = BaseInternalGetReplyOptions & {
   onSessionPrepared?: (binding: ReplySessionBinding) => void;
+  extractedFileImages?: ExtractedFileImage[];
 };
 
 function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number) {
@@ -184,51 +188,33 @@ async function applyMediaUnderstandingIfNeeded(params: {
   agentDir?: string;
   workspaceDir?: string;
   activeModel: { provider: string; model: string };
-}): Promise<boolean> {
+}): Promise<ApplyMediaUnderstandingResult | undefined> {
   if (!hasInboundMediaForUnderstanding(params.ctx)) {
-    return false;
+    return undefined;
   }
   try {
     const { applyMediaUnderstanding } = await loadMediaUnderstandingApplyRuntime();
-    await applyMediaUnderstanding(params);
-    return true;
+    return await applyMediaUnderstanding(params);
   } catch (err) {
     mediaUnderstandingApplyRuntimeLoader.clear();
     logVerbose(
       `media understanding failed, proceeding with raw content: ${formatErrorMessage(err)}`,
     );
-    return false;
+    return undefined;
   }
 }
 
-async function stageRemoteInboundMediaBeforeUnderstandingIfNeeded(params: {
-  ctx: MsgContext;
-  cfg: OpenClawConfig;
-  sessionKey?: string;
-  workspaceDir: string;
-}): Promise<boolean> {
-  if (
-    !params.sessionKey ||
-    params.ctx.MediaStaged ||
-    !normalizeOptionalString(params.ctx.MediaRemoteHost) ||
-    !hasInboundMedia(params.ctx)
-  ) {
-    return false;
+function withExtractedFileImages(
+  opts: RuntimeInternalGetReplyOptions | undefined,
+  extractedFileImages: ExtractedFileImage[] | undefined,
+): RuntimeInternalGetReplyOptions | undefined {
+  if (!extractedFileImages || extractedFileImages.length === 0) {
+    return opts;
   }
-
-  const { stageSandboxMedia } = await loadStageSandboxMediaRuntime();
-  const result = await stageSandboxMedia({
-    ctx: params.ctx,
-    sessionCtx: params.ctx,
-    cfg: params.cfg,
-    sessionKey: params.sessionKey,
-    workspaceDir: params.workspaceDir,
-  });
-  if (result.staged.size > 0) {
-    params.ctx.MediaStaged = true;
-    return true;
-  }
-  return false;
+  return {
+    ...opts,
+    extractedFileImages: [...(opts?.extractedFileImages ?? []), ...extractedFileImages],
+  };
 }
 
 async function applyLinkUnderstandingIfNeeded(params: {
@@ -333,6 +319,7 @@ export async function getReplyFromConfig(
   const resolvedOpts =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
   const internalResolvedOpts = resolvedOpts as RuntimeInternalGetReplyOptions | undefined;
+  let extractedFileImages: ExtractedFileImage[] | undefined;
   const agentCfg = cfg.agents?.defaults;
   const sessionCfg = cfg.session;
   const { defaultProvider, defaultModel, aliasIndex } = resolverTiming.measureSync(
@@ -443,7 +430,7 @@ export async function getReplyFromConfig(
     hasInboundMedia(finalized)
   ) {
     await traceGetReplyPhase("reply.stage_remote_media_pre_understanding", () =>
-      stageRemoteInboundMediaBeforeUnderstandingIfNeeded({
+      stageRemoteInboundMediaIfNeeded({
         ctx: finalized,
         cfg,
         sessionKey: agentSessionKey,
@@ -452,7 +439,7 @@ export async function getReplyFromConfig(
     );
   }
   if (!isFastTestEnv && hasInboundMediaForUnderstanding(finalized)) {
-    await traceGetReplyPhase("reply.apply_media_understanding", () =>
+    const mediaResult = await traceGetReplyPhase("reply.apply_media_understanding", () =>
       applyMediaUnderstandingIfNeeded({
         ctx: finalized,
         cfg,
@@ -462,6 +449,9 @@ export async function getReplyFromConfig(
         activeModel: { provider, model },
       }),
     );
+    if (mediaResult?.extractedFileImages.length) {
+      extractedFileImages = mediaResult.extractedFileImages;
+    }
   }
   if (!isFastTestEnv && hasLinkCandidate(finalized)) {
     await traceGetReplyPhase("reply.apply_link_understanding", () =>
@@ -741,7 +731,7 @@ export async function getReplyFromConfig(
         perMessageQueueMode: undefined,
         perMessageQueueOptions: undefined,
         typing,
-        opts: resolvedOpts,
+        opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
         defaultModel,
         timeoutMs,
         isNewSession,
@@ -790,7 +780,7 @@ export async function getReplyFromConfig(
       model,
       hasResolvedHeartbeatModelOverride,
       typing,
-      opts: resolvedOpts,
+      opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
       skillFilter: mergedSkillFilter,
     }),
   );
@@ -868,7 +858,7 @@ export async function getReplyFromConfig(
       sessionScope,
       workspaceDir,
       isGroup,
-      opts: resolvedOpts,
+      opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
       typing,
       allowTextCommands,
       inlineStatusRequested,
@@ -1059,7 +1049,7 @@ export async function getReplyFromConfig(
       perMessageQueueMode,
       perMessageQueueOptions,
       typing,
-      opts: resolvedOpts,
+      opts: withExtractedFileImages(resolvedOpts, extractedFileImages),
       defaultModel,
       timeoutMs,
       isNewSession,

@@ -6,6 +6,7 @@ import officialExternalChannelCatalog from "../../scripts/lib/official-external-
 import officialExternalPluginCatalog from "../../scripts/lib/official-external-plugin-catalog.json" with { type: "json" };
 import officialExternalProviderCatalog from "../../scripts/lib/official-external-provider-catalog.json" with { type: "json" };
 import { MANIFEST_KEY } from "../compat/legacy-names.js";
+import { normalizeClawHubSha256Integrity } from "../infra/clawhub.js";
 import { isRecord } from "../utils.js";
 import type {
   PluginManifestChannelConfig,
@@ -71,7 +72,7 @@ export type OfficialExternalPluginCatalogManifest = {
   };
   providers?: readonly OfficialExternalProviderCatalogProvider[];
   webSearchProviders?: readonly OfficialExternalWebSearchProvider[];
-  install?: PluginPackageInstall;
+  install?: PluginPackageInstall & { sourceRef?: string };
   contracts?: PluginManifestContracts;
   channelConfigs?: Record<string, PluginManifestChannelConfig>;
 };
@@ -101,6 +102,32 @@ export type OfficialExternalPluginCatalogInstallCandidate = {
   package?: string;
   version?: string;
   integrity?: string;
+  repo?: string;
+  path?: string;
+  commit?: string;
+};
+
+export type OfficialExternalPluginCatalogSourceProfile =
+  | {
+      type: "npm";
+      registry?: string;
+    }
+  | {
+      type: "clawhub";
+      baseUrl?: string;
+    }
+  | {
+      type: "git";
+      baseUrl?: string;
+    };
+
+export type OfficialExternalPluginCatalogFeedProfile = {
+  url: string;
+};
+
+export type OfficialExternalPluginCatalogProfileConfig = {
+  feeds?: Record<string, OfficialExternalPluginCatalogFeedProfile>;
+  sources?: Record<string, OfficialExternalPluginCatalogSourceProfile>;
 };
 
 /** Feed-shaped wrapper used by the bundled external plugin catalog fallback. */
@@ -171,9 +198,30 @@ const OFFICIAL_CATALOG_SOURCES = [
   officialExternalPluginCatalog,
 ] as const;
 
-const OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSIONS = new Set<unknown>([1, 2]);
+const SUPPORTED_OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSIONS = new Set([1, 2]);
 export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL =
   "https://clawhub.ai/v1/feeds/plugins";
+export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE = "clawhub-public";
+export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_SOURCE_REF = "public-clawhub";
+export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_NPM_SOURCE_REF = "public-npm";
+export const DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG: OfficialExternalPluginCatalogProfileConfig =
+  {
+    feeds: {
+      [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE]: {
+        url: DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL,
+      },
+    },
+    sources: {
+      [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_SOURCE_REF]: {
+        type: "clawhub",
+        baseUrl: "https://clawhub.ai",
+      },
+      [DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_NPM_SOURCE_REF]: {
+        type: "npm",
+        registry: "https://registry.npmjs.org/",
+      },
+    },
+  };
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_TIMEOUT_MS = 5000;
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_MAX_BYTES = 1024 * 1024;
 const DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CHUNK_TIMEOUT_MS = 5000;
@@ -188,7 +236,8 @@ export function isOfficialExternalPluginCatalogFeed(
   const sequence = raw.sequence;
   const entries = raw.entries;
   return (
-    OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSIONS.has(raw.schemaVersion) &&
+    typeof raw.schemaVersion === "number" &&
+    SUPPORTED_OFFICIAL_EXTERNAL_CATALOG_FEED_SCHEMA_VERSIONS.has(raw.schemaVersion) &&
     typeof raw.id === "string" &&
     raw.id.trim().length > 0 &&
     typeof raw.generatedAt === "string" &&
@@ -233,21 +282,182 @@ function sha256Hex(value: string): string {
   return `sha256:${createHash("sha256").update(value).digest("hex")}`;
 }
 
-function resolveHostedCatalogFeedUrl(feedUrl: string | undefined): URL {
-  const raw = feedUrl?.trim() || DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL;
+function resolveHostedCatalogFeedUrl(raw: string): URL {
   let parsed: URL;
   try {
-    parsed = new URL(raw);
+    parsed = new URL(raw.trim());
   } catch {
     throw new Error("hosted catalog feed URL is invalid");
   }
   if (parsed.protocol !== "https:") {
     throw new Error("hosted catalog feed URL must use HTTPS");
   }
-  if (!OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST.includes(parsed.hostname)) {
-    throw new Error("hosted catalog feed URL hostname is not allowed");
-  }
   return parsed;
+}
+
+function resolveOfficialExternalPluginCatalogProfileConfig(
+  config?: OfficialExternalPluginCatalogProfileConfig,
+): Required<OfficialExternalPluginCatalogProfileConfig> {
+  return {
+    feeds: {
+      ...DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG.feeds,
+      ...config?.feeds,
+    },
+    sources: {
+      ...DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_PROFILE_CONFIG.sources,
+      ...config?.sources,
+    },
+  };
+}
+
+function resolveHostedCatalogFeedSource(params: {
+  feedUrl?: string;
+  feedProfile?: string;
+  catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
+}): { url: URL; hostnameAllowlist: string[] } {
+  const profileConfig = resolveOfficialExternalPluginCatalogProfileConfig(params.catalogConfig);
+  const explicitFeedUrl = normalizeOptionalString(params.feedUrl);
+  if (explicitFeedUrl) {
+    const url = resolveHostedCatalogFeedUrl(explicitFeedUrl);
+    if (!OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST.includes(url.hostname)) {
+      throw new Error("hosted catalog feed URL hostname is not allowed");
+    }
+    return { url, hostnameAllowlist: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST };
+  }
+  const profileName =
+    normalizeOptionalString(params.feedProfile) ??
+    DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE;
+  const profile = profileConfig.feeds[profileName];
+  if (!profile) {
+    throw new Error(`hosted catalog feed profile "${profileName}" is not configured`);
+  }
+  const url = resolveHostedCatalogFeedUrl(profile.url);
+  return {
+    url,
+    hostnameAllowlist: uniqueStrings([
+      ...OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST,
+      url.hostname,
+    ]),
+  };
+}
+
+function getOfficialExternalPluginCatalogSourceRefs(
+  config?: OfficialExternalPluginCatalogProfileConfig,
+): Set<string> {
+  return new Set(Object.keys(resolveOfficialExternalPluginCatalogProfileConfig(config).sources));
+}
+
+function getFeedEntryInstallCandidateRecords(
+  entry: OfficialExternalPluginCatalogEntry,
+): OfficialExternalPluginCatalogInstallCandidate[] {
+  const install = isRecord(entry.install) ? entry.install : undefined;
+  const candidates = install?.candidates;
+  if (!Array.isArray(candidates)) {
+    return [];
+  }
+  return candidates.filter(
+    (candidate): candidate is OfficialExternalPluginCatalogInstallCandidate => isRecord(candidate),
+  );
+}
+
+function getFeedEntryInstallCandidates(
+  entry: OfficialExternalPluginCatalogEntry,
+): OfficialExternalPluginCatalogInstallCandidate[] {
+  const state = normalizeOptionalString(entry.state);
+  if (state !== "available") {
+    return [];
+  }
+  const publisherTrust = normalizeOptionalString(entry.publisher?.trust);
+  if (publisherTrust !== "official") {
+    return [];
+  }
+  return getFeedEntryInstallCandidateRecords(entry);
+}
+
+function shouldRequireManifestInstallSourceRef(params: {
+  feedProfile?: string;
+  catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
+}): boolean {
+  const profileName =
+    normalizeOptionalString(params.feedProfile) ??
+    DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE;
+  if (profileName !== DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_PROFILE) {
+    return true;
+  }
+  const profileConfig = resolveOfficialExternalPluginCatalogProfileConfig(params.catalogConfig);
+  const profileUrl = normalizeOptionalString(profileConfig.feeds[profileName]?.url);
+  try {
+    return (
+      resolveHostedCatalogFeedUrl(profileUrl ?? DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL)
+        .href !==
+      resolveHostedCatalogFeedUrl(DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_URL).href
+    );
+  } catch {
+    return true;
+  }
+}
+
+function getManifestInstallSourceRefCandidate(
+  entry: OfficialExternalPluginCatalogEntry,
+): OfficialExternalPluginCatalogInstallCandidate | undefined {
+  const install = getOfficialExternalPluginCatalogManifest(entry)?.install;
+  if (!install) {
+    return undefined;
+  }
+  const hasInstallSpec = Boolean(
+    normalizeOptionalString(install.clawhubSpec) ||
+    normalizeOptionalString(install.npmSpec) ||
+    normalizeOptionalString(install.localPath),
+  );
+  if (!hasInstallSpec) {
+    return undefined;
+  }
+  return {
+    sourceRef: normalizeOptionalString(install.sourceRef),
+    package:
+      normalizeOptionalString(install.npmSpec) ?? normalizeOptionalString(install.clawhubSpec),
+  };
+}
+
+export function validateOfficialExternalPluginCatalogEntrySourceRefs(
+  entry: OfficialExternalPluginCatalogEntry,
+  params?: {
+    catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
+    requireManifestInstallSourceRef?: boolean;
+  },
+): string[] {
+  const configuredSourceRefs = getOfficialExternalPluginCatalogSourceRefs(params?.catalogConfig);
+  const errors: string[] = [];
+  let candidates = getFeedEntryInstallCandidateRecords(entry);
+  if (params?.requireManifestInstallSourceRef) {
+    const manifestCandidate = getManifestInstallSourceRefCandidate(entry);
+    if (manifestCandidate) {
+      candidates = [...candidates, manifestCandidate];
+    } else if (candidates.length === 0) {
+      candidates = [{}];
+    }
+  }
+  for (const candidate of candidates) {
+    const sourceRef = normalizeOptionalString(candidate.sourceRef);
+    if (!sourceRef) {
+      errors.push("feed install candidate is missing sourceRef");
+    } else if (!configuredSourceRefs.has(sourceRef)) {
+      errors.push(`feed install candidate references unknown sourceRef "${sourceRef}"`);
+    }
+  }
+  return errors;
+}
+
+export function filterOfficialExternalPluginCatalogEntriesBySourceRefs(
+  entries: OfficialExternalPluginCatalogEntry[],
+  params?: {
+    catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
+    requireManifestInstallSourceRef?: boolean;
+  },
+): OfficialExternalPluginCatalogEntry[] {
+  return entries.filter(
+    (entry) => validateOfficialExternalPluginCatalogEntrySourceRefs(entry, params).length === 0,
+  );
 }
 
 function parseHostedCatalogContentLength(raw: string | null, maxBytes: number): void {
@@ -353,7 +563,9 @@ async function readHostedCatalogResponseText(params: {
 
 function bundledOfficialExternalPluginCatalogEntries(): OfficialExternalPluginCatalogEntry[] {
   return OFFICIAL_CATALOG_SOURCES.flatMap((source) =>
-    parseOfficialExternalPluginCatalogEntries(source),
+    filterOfficialExternalPluginCatalogEntriesBySourceRefs(
+      parseOfficialExternalPluginCatalogEntries(source),
+    ),
   );
 }
 
@@ -410,6 +622,8 @@ function loadHostedCatalogSnapshotResult(params: {
   expectedSha256?: string;
   ifNoneMatch?: string;
   ifModifiedSince?: string;
+  catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
+  requireManifestInstallSourceRef?: boolean;
 }): HostedOfficialExternalPluginCatalogLoadResult {
   assertSnapshotMatchesRequestValidators({
     snapshot: params.snapshot,
@@ -425,12 +639,18 @@ function loadHostedCatalogSnapshotResult(params: {
   }
   const raw = JSON.parse(params.snapshot.body) as unknown;
   if (!isOfficialExternalPluginCatalogFeed(raw)) {
-    throw new Error("hosted catalog snapshot did not match schema version 1");
+    throw new Error("hosted catalog snapshot did not match a supported schema version");
   }
   return {
     source: "hosted-snapshot",
     entries: dedupeOfficialExternalPluginCatalogEntries(
-      parseOfficialExternalPluginCatalogEntries(raw),
+      filterOfficialExternalPluginCatalogEntriesBySourceRefs(
+        parseOfficialExternalPluginCatalogEntries(raw),
+        {
+          catalogConfig: params.catalogConfig,
+          requireManifestInstallSourceRef: params.requireManifestInstallSourceRef,
+        },
+      ),
     ),
     feed: raw,
     metadata: params.snapshot.metadata,
@@ -464,6 +684,8 @@ async function snapshotOrBundledFallbackResult(params: {
   expectedSha256?: string;
   ifNoneMatch?: string;
   ifModifiedSince?: string;
+  catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
+  requireManifestInstallSourceRef?: boolean;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
   if (params.snapshotStore) {
     try {
@@ -475,6 +697,8 @@ async function snapshotOrBundledFallbackResult(params: {
           expectedSha256: params.expectedSha256,
           ifNoneMatch: params.ifNoneMatch,
           ifModifiedSince: params.ifModifiedSince,
+          catalogConfig: params.catalogConfig,
+          requireManifestInstallSourceRef: params.requireManifestInstallSourceRef,
         });
       }
     } catch (snapshotErr) {
@@ -504,8 +728,28 @@ export function createInMemoryHostedOfficialExternalPluginCatalogSnapshotStore(
   };
 }
 
+async function resolveHostedCatalogSnapshotStore(params: {
+  snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore | null;
+  env?: NodeJS.ProcessEnv;
+  stateDir?: string;
+  stateDatabasePath?: string;
+}): Promise<HostedOfficialExternalPluginCatalogSnapshotStore | undefined> {
+  if (params.snapshotStore !== undefined) {
+    return params.snapshotStore ?? undefined;
+  }
+  const { createSqliteHostedOfficialExternalPluginCatalogSnapshotStore } =
+    await import("./official-external-plugin-catalog-snapshot-store.js");
+  return createSqliteHostedOfficialExternalPluginCatalogSnapshotStore({
+    ...(params.env ? { env: params.env } : {}),
+    ...(params.stateDir ? { stateDir: params.stateDir } : {}),
+    ...(params.stateDatabasePath ? { stateDatabasePath: params.stateDatabasePath } : {}),
+  });
+}
+
 export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   feedUrl?: string;
+  feedProfile?: string;
+  catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
   fetchImpl?: FetchLike;
   timeoutMs?: number;
   maxBytes?: number;
@@ -513,15 +757,29 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
   ifNoneMatch?: string;
   ifModifiedSince?: string;
   expectedSha256?: string;
-  snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore;
+  snapshotStore?: HostedOfficialExternalPluginCatalogSnapshotStore | null;
+  env?: NodeJS.ProcessEnv;
+  stateDir?: string;
+  stateDatabasePath?: string;
   now?: () => Date;
 }): Promise<HostedOfficialExternalPluginCatalogLoadResult> {
-  let url: URL;
+  let source: { url: URL; hostnameAllowlist: string[] };
   try {
-    url = resolveHostedCatalogFeedUrl(params?.feedUrl);
+    source = resolveHostedCatalogFeedSource({
+      feedUrl: params?.feedUrl,
+      feedProfile: params?.feedProfile,
+      catalogConfig: params?.catalogConfig,
+    });
   } catch (err) {
     return bundledFallbackResult(err);
   }
+  const { url } = source;
+  const snapshotStore = await resolveHostedCatalogSnapshotStore({
+    snapshotStore: params?.snapshotStore,
+    env: params?.env,
+    stateDir: params?.stateDir,
+    stateDatabasePath: params?.stateDatabasePath,
+  });
   const headers = new Headers();
   const ifNoneMatch = normalizeOptionalString(params?.ifNoneMatch);
   const ifModifiedSince = normalizeOptionalString(params?.ifModifiedSince);
@@ -553,7 +811,7 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
       requireHttps: true,
       maxRedirects: 2,
       timeoutMs: params?.timeoutMs ?? DEFAULT_HOSTED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_TIMEOUT_MS,
-      policy: { hostnameAllowlist: OFFICIAL_EXTERNAL_PLUGIN_CATALOG_FEED_HOSTNAME_ALLOWLIST },
+      policy: { hostnameAllowlist: source.hostnameAllowlist },
       auditContext: "official-external-plugin-catalog-feed",
     });
     response = guarded.response;
@@ -562,23 +820,33 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     if (response.status === 304) {
       return await snapshotOrBundledFallbackResult({
         error: "hosted catalog feed returned HTTP 304",
-        snapshotStore: params?.snapshotStore,
+        snapshotStore,
         url: url.href,
         metadata: base,
         expectedSha256,
         ifNoneMatch,
         ifModifiedSince,
+        catalogConfig: params?.catalogConfig,
+        requireManifestInstallSourceRef: shouldRequireManifestInstallSourceRef({
+          feedProfile: params?.feedProfile,
+          catalogConfig: params?.catalogConfig,
+        }),
       });
     }
     if (!response.ok) {
       return await snapshotOrBundledFallbackResult({
         error: `hosted catalog feed returned HTTP ${response.status}`,
-        snapshotStore: params?.snapshotStore,
+        snapshotStore,
         url: url.href,
         metadata: base,
         expectedSha256,
         ifNoneMatch,
         ifModifiedSince,
+        catalogConfig: params?.catalogConfig,
+        requireManifestInstallSourceRef: shouldRequireManifestInstallSourceRef({
+          feedProfile: params?.feedProfile,
+          catalogConfig: params?.catalogConfig,
+        }),
       });
     }
     const body = await readHostedCatalogResponseText({
@@ -592,49 +860,72 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
     if (expectedSha256 && expectedSha256 !== checksum) {
       return await snapshotOrBundledFallbackResult({
         error: `hosted catalog feed checksum mismatch: expected ${expectedSha256}`,
-        snapshotStore: params?.snapshotStore,
+        snapshotStore,
         url: url.href,
         metadata,
         expectedSha256,
         ifNoneMatch,
         ifModifiedSince,
+        catalogConfig: params?.catalogConfig,
+        requireManifestInstallSourceRef: shouldRequireManifestInstallSourceRef({
+          feedProfile: params?.feedProfile,
+          catalogConfig: params?.catalogConfig,
+        }),
       });
     }
     const raw = JSON.parse(body) as unknown;
     if (!isOfficialExternalPluginCatalogFeed(raw)) {
       return await snapshotOrBundledFallbackResult({
         error: "hosted catalog feed did not match a supported schema version",
-        snapshotStore: params?.snapshotStore,
+        snapshotStore,
         url: url.href,
         metadata,
         expectedSha256,
         ifNoneMatch,
         ifModifiedSince,
+        catalogConfig: params?.catalogConfig,
+        requireManifestInstallSourceRef: shouldRequireManifestInstallSourceRef({
+          feedProfile: params?.feedProfile,
+          catalogConfig: params?.catalogConfig,
+        }),
       });
     }
-    await params?.snapshotStore
+    const entries = filterOfficialExternalPluginCatalogEntriesBySourceRefs(
+      parseOfficialExternalPluginCatalogEntries(raw),
+      {
+        catalogConfig: params?.catalogConfig,
+        requireManifestInstallSourceRef: shouldRequireManifestInstallSourceRef({
+          feedProfile: params?.feedProfile,
+          catalogConfig: params?.catalogConfig,
+        }),
+      },
+    );
+    await snapshotStore
       ?.write({
         body,
         metadata,
-        savedAt: (params.now?.() ?? new Date()).toISOString(),
+        savedAt: (params?.now?.() ?? new Date()).toISOString(),
       })
       .catch(() => undefined);
     return {
       source: "hosted",
-      entries: dedupeOfficialExternalPluginCatalogEntries(
-        parseOfficialExternalPluginCatalogEntries(raw),
-      ),
+      entries: dedupeOfficialExternalPluginCatalogEntries(entries),
       feed: raw,
       metadata,
     };
   } catch (err) {
     return await snapshotOrBundledFallbackResult({
       error: err,
-      snapshotStore: params?.snapshotStore,
+      snapshotStore,
       url: url.href,
       expectedSha256,
       ifNoneMatch,
       ifModifiedSince,
+      catalogConfig: params?.catalogConfig,
+      requireManifestInstallSourceRef: shouldRequireManifestInstallSourceRef({
+        feedProfile: params?.feedProfile,
+        catalogConfig: params?.catalogConfig,
+      }),
     });
   } finally {
     if (response?.bodyUsed !== true) {
@@ -646,6 +937,100 @@ export async function loadHostedOfficialExternalPluginCatalogEntries(params?: {
 
 function normalizeDefaultChoice(value: unknown): PluginPackageInstall["defaultChoice"] | undefined {
   return value === "clawhub" || value === "npm" || value === "local" ? value : undefined;
+}
+
+function formatFeedInstallCandidateSpec(
+  candidate: OfficialExternalPluginCatalogInstallCandidate,
+): string | undefined {
+  const packageName = normalizeOptionalString(candidate.package);
+  if (!packageName) {
+    return undefined;
+  }
+  const version = normalizeOptionalString(candidate.version);
+  if (!version || packageName.endsWith(`@${version}`)) {
+    return packageName;
+  }
+  return `${packageName}@${version}`;
+}
+
+function getFeedEntryCandidateSourceType(
+  candidate: OfficialExternalPluginCatalogInstallCandidate,
+  config?: OfficialExternalPluginCatalogProfileConfig,
+): OfficialExternalPluginCatalogSourceProfile["type"] | undefined {
+  const sourceRef = normalizeOptionalString(candidate.sourceRef);
+  if (!sourceRef) {
+    return undefined;
+  }
+  return resolveOfficialExternalPluginCatalogProfileConfig(config).sources[sourceRef]?.type;
+}
+
+function getPreferredFeedEntryInstallCandidate(params: {
+  entry: OfficialExternalPluginCatalogEntry;
+  catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
+}): OfficialExternalPluginCatalogInstallCandidate | undefined {
+  const candidates = getFeedEntryInstallCandidates(params.entry).filter((candidate) =>
+    Boolean(normalizeOptionalString(candidate.package)),
+  );
+  return (
+    candidates.find(
+      (candidate) =>
+        normalizeOptionalString(candidate.sourceRef) ===
+        DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_CLAWHUB_SOURCE_REF,
+    ) ??
+    candidates.find(
+      (candidate) =>
+        normalizeOptionalString(candidate.sourceRef) ===
+        DEFAULT_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_NPM_SOURCE_REF,
+    ) ??
+    candidates.find((candidate) =>
+      Boolean(getFeedEntryCandidateSourceType(candidate, params.catalogConfig)),
+    )
+  );
+}
+
+function resolveFeedEntryInstallCandidate(params: {
+  entry: OfficialExternalPluginCatalogEntry;
+  catalogConfig?: OfficialExternalPluginCatalogProfileConfig;
+}): PluginPackageInstall | null {
+  const candidate = getPreferredFeedEntryInstallCandidate(params);
+  if (!candidate) {
+    return null;
+  }
+  const spec = formatFeedInstallCandidateSpec(candidate);
+  if (!spec) {
+    return null;
+  }
+  const sourceType = getFeedEntryCandidateSourceType(candidate, params.catalogConfig);
+  if (sourceType === "clawhub") {
+    const expectedIntegrity = normalizeClawHubSha256ExpectedIntegrity(candidate.integrity);
+    return {
+      clawhubSpec: `clawhub:${spec}`,
+      defaultChoice: "clawhub",
+      ...(expectedIntegrity ? { expectedIntegrity } : {}),
+    };
+  }
+  if (sourceType === "npm") {
+    const expectedIntegrity = normalizeNpmExpectedIntegrity(candidate.integrity);
+    return {
+      npmSpec: spec,
+      defaultChoice: "npm",
+      ...(expectedIntegrity ? { expectedIntegrity } : {}),
+    };
+  }
+  return null;
+}
+
+function normalizeClawHubSha256ExpectedIntegrity(value: unknown): string | undefined {
+  const integrity = normalizeOptionalString(value);
+  return integrity ? (normalizeClawHubSha256Integrity(integrity) ?? undefined) : undefined;
+}
+
+function normalizeNpmExpectedIntegrity(value: unknown): string | undefined {
+  const integrity = normalizeOptionalString(value);
+  if (!integrity || !/^[a-z0-9]+-[A-Za-z0-9+/=]+$/i.test(integrity)) {
+    return undefined;
+  }
+  return integrity;
 }
 
 /** Returns manifest metadata from an official external catalog entry when present. */
@@ -663,7 +1048,8 @@ export function resolveOfficialExternalPluginId(
   return (
     normalizeOptionalString(manifest?.plugin?.id) ??
     normalizeOptionalString(manifest?.channel?.id) ??
-    normalizeOptionalString(manifest?.providers?.[0]?.id)
+    normalizeOptionalString(manifest?.providers?.[0]?.id) ??
+    normalizeOptionalString(entry.id)
   );
 }
 
@@ -692,6 +1078,7 @@ export function resolveOfficialExternalPluginLabel(
     normalizeOptionalString(manifest?.plugin?.label) ??
     normalizeOptionalString(manifest?.channel?.label) ??
     normalizeOptionalString(manifest?.providers?.[0]?.name) ??
+    normalizeOptionalString(entry.title) ??
     normalizeOptionalString(entry.name) ??
     resolveOfficialExternalPluginId(entry) ??
     "plugin"
@@ -700,18 +1087,36 @@ export function resolveOfficialExternalPluginLabel(
 
 export function resolveOfficialExternalPluginInstall(
   entry: OfficialExternalPluginCatalogEntry,
+  params?: { catalogConfig?: OfficialExternalPluginCatalogProfileConfig },
 ): PluginPackageInstall | null {
   const manifest = getOfficialExternalPluginCatalogManifest(entry);
   const install = manifest?.install;
   const clawhubSpec = normalizeOptionalString(install?.clawhubSpec);
-  const npmSpec = normalizeOptionalString(install?.npmSpec) ?? normalizeOptionalString(entry.name);
+  const manifestNpmSpec = normalizeOptionalString(install?.npmSpec);
   const localPath = normalizeOptionalString(install?.localPath);
-  if (!clawhubSpec && !npmSpec && !localPath) {
-    return null;
+  const candidateInstall = resolveFeedEntryInstallCandidate({
+    entry,
+    catalogConfig: params?.catalogConfig,
+  });
+  if (candidateInstall) {
+    return {
+      ...candidateInstall,
+      ...(install?.minHostVersion ? { minHostVersion: install.minHostVersion } : {}),
+      ...(install?.expectedIntegrity && !candidateInstall.expectedIntegrity
+        ? { expectedIntegrity: install.expectedIntegrity }
+        : {}),
+      ...(install?.allowInvalidConfigRecovery === true ? { allowInvalidConfigRecovery: true } : {}),
+    };
   }
+  const hasFeedInstallCandidates = getFeedEntryInstallCandidateRecords(entry).length > 0;
+  const npmSpec =
+    manifestNpmSpec ?? (hasFeedInstallCandidates ? undefined : normalizeOptionalString(entry.name));
   const defaultChoice =
     normalizeDefaultChoice(install?.defaultChoice) ??
     (npmSpec ? "npm" : clawhubSpec ? "clawhub" : localPath ? "local" : undefined);
+  if (!clawhubSpec && !npmSpec && !localPath) {
+    return null;
+  }
   return {
     ...(clawhubSpec ? { clawhubSpec } : {}),
     ...(npmSpec ? { npmSpec } : {}),

@@ -1708,15 +1708,15 @@ None of these systems combine agent-elected continuation with persistent convers
 
 ### B.3 `continue_delegate()` compared with `sessions_spawn`
 
-| Dimension        | `sessions_spawn`                           | `continue_delegate()`                                                                                  |
-| ---------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
-| Initiation       | visible, human-user- or agent-invoked task | continuation-specific delegated follow-up                                                              |
-| Visibility       | always announced                           | supports `silent`, `silent-wake`, and `post-compaction`                                                |
-| Cost model       | independent child sessions                 | chain-aware cost and depth guards                                                                      |
-| Timing           | immediate                                  | immediate or delayed                                                                                   |
-| Model selection  | optional `model` override (inherits parent when omitted) | optional `model` override (inherits parent when omitted) — parity with `sessions_spawn`  |
-| Return semantics | normal announce                            | default, explicit target, multi-recipient, tree/all fan-out, silent, wake-on-return, lifecycle release |
-| Best fit         | explicit visible tasks                     | background enrichment and continuation-carrying work                                                   |
+| Dimension        | `sessions_spawn`                                         | `continue_delegate()`                                                                                  |
+| ---------------- | -------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Initiation       | visible, human-user- or agent-invoked task               | continuation-specific delegated follow-up                                                              |
+| Visibility       | always announced                                         | supports `silent`, `silent-wake`, and `post-compaction`                                                |
+| Cost model       | independent child sessions                               | chain-aware cost and depth guards                                                                      |
+| Timing           | immediate                                                | immediate or delayed                                                                                   |
+| Model selection  | optional `model` override (inherits parent when omitted) | optional `model` override (inherits parent when omitted) — parity with `sessions_spawn`                |
+| Return semantics | normal announce                                          | default, explicit target, multi-recipient, tree/all fan-out, silent, wake-on-return, lifecycle release |
+| Best fit         | explicit visible tasks                                   | background enrichment and continuation-carrying work                                                   |
 
 `requestHeartbeatNow()` remains lighter than either, but it carries no task payload and no chain state. It is a wake signal, not a continuation-bearing result channel.
 
