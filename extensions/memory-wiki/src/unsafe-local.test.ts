@@ -135,4 +135,49 @@ describe("syncMemoryWikiUnsafeLocalSources", () => {
       "# very private",
     );
   });
+
+  it("preserves imported pages when configured path becomes transiently unavailable", async () => {
+    // Use a nested path where the parent becomes empty after removal,
+    // simulating a NAS mount point or removable drive being undocked.
+    const mountPoint = nextCaseRoot("nas-mount");
+    await fs.mkdir(mountPoint, { recursive: true });
+    const sourceDir = path.join(mountPoint, "source");
+    await fs.mkdir(sourceDir, { recursive: true });
+    const filePath = path.join(sourceDir, "notes.md");
+    await fs.writeFile(filePath, "# my notes\n", "utf8");
+
+    const { rootDir: vaultDir, config } = await createVault({
+      rootDir: nextCaseRoot("transient-vault"),
+      config: {
+        vaultMode: "unsafe-local",
+        unsafeLocal: {
+          allowPrivateMemoryCoreAccess: true,
+          paths: [sourceDir],
+        },
+      },
+    });
+
+    const first = await syncMemoryWikiUnsafeLocalSources(config);
+    expect(first.importedCount).toBe(1);
+    expect(first.removedCount).toBe(0);
+    const firstPagePath = first.pagePaths[0] ?? "";
+
+    // Simulate the path becoming transiently unavailable (drive undocked, NAS
+    // rebooting). Remove both sourceDir and mountPoint so the parent of the
+    // configured path is inaccessible.
+    await fs.rm(mountPoint, { recursive: true, force: true });
+    const second = await syncMemoryWikiUnsafeLocalSources(config);
+    expect(second.artifactCount).toBe(0);
+    expect(second.removedCount).toBe(0);
+    await expect(fs.readFile(path.join(vaultDir, firstPagePath), "utf8")).resolves.toContain(
+      "# my notes",
+    );
+
+    // Restore the path — next sync should re-reconcile cleanly.
+    await fs.mkdir(mountPoint, { recursive: true });
+    await fs.mkdir(sourceDir, { recursive: true });
+    await fs.writeFile(filePath, "# my notes\n", "utf8");
+    const third = await syncMemoryWikiUnsafeLocalSources(config);
+    expect(third.removedCount).toBe(0);
+  });
 });
