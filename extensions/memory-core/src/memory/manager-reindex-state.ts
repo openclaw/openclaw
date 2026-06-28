@@ -1,9 +1,5 @@
 // Memory Core plugin module implements manager reindex state behavior.
-import {
-  hashText,
-  normalizeExtraMemoryPaths,
-  type MemorySource,
-} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { hashText, type MemorySource } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 
 export type MemoryIndexMeta = {
   model: string;
@@ -101,20 +97,17 @@ function configuredMetaSourcesDiffer(params: {
 }
 
 export function resolveConfiguredScopeHash(params: {
-  workspaceDir: string;
-  extraPaths?: string[];
   multimodal: {
     enabled: boolean;
     modalities: string[];
     maxFileBytes: number;
   };
 }): string {
-  const extraPaths = normalizeExtraMemoryPaths(params.workspaceDir, params.extraPaths)
-    .map((value) => value.replace(/\\/g, "/"))
-    .toSorted();
+  // Note: extraPaths intentionally excluded from scope hash.
+  // They are an index filter scope, not a store identity —
+  // changing extraPaths should not trigger a full reindex.
   return hashText(
     JSON.stringify({
-      extraPaths,
       multimodal: {
         enabled: params.multimodal.enabled,
         modalities: [...params.multimodal.modalities].toSorted(),

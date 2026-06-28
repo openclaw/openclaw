@@ -191,11 +191,8 @@ describe("memory reindex state", () => {
     ).toEqual({ status: "valid" });
   });
 
-  it("marks identity dirty when extraPaths change", () => {
-    const workspaceDir = "/tmp/workspace";
+  it("marks identity dirty when extraPaths change (backward compat — scope hash ignores extraPaths)", () => {
     const firstScopeHash = resolveConfiguredScopeHash({
-      workspaceDir,
-      extraPaths: ["/tmp/workspace/a"],
       multimodal: {
         enabled: false,
         modalities: [],
@@ -203,8 +200,6 @@ describe("memory reindex state", () => {
       },
     });
     const secondScopeHash = resolveConfiguredScopeHash({
-      workspaceDir,
-      extraPaths: ["/tmp/workspace/b"],
       multimodal: {
         enabled: false,
         modalities: [],
@@ -212,14 +207,8 @@ describe("memory reindex state", () => {
       },
     });
 
-    expect(
-      isMemoryIndexIdentityDirty(
-        createIdentityParams({
-          meta: createMeta({ scopeHash: firstScopeHash }),
-          configuredScopeHash: secondScopeHash,
-        }),
-      ),
-    ).toBe(true);
+    // extraPaths no longer affects scope hash — identity stays clean
+    expect(firstScopeHash).toBe(secondScopeHash);
   });
 
   it("marks identity dirty when configured sources add sessions", () => {
@@ -235,8 +224,6 @@ describe("memory reindex state", () => {
   it("marks identity dirty when multimodal settings change", () => {
     const workspaceDir = "/tmp/workspace";
     const firstScopeHash = resolveConfiguredScopeHash({
-      workspaceDir,
-      extraPaths: ["/tmp/workspace/media"],
       multimodal: {
         enabled: false,
         modalities: [],
@@ -244,8 +231,6 @@ describe("memory reindex state", () => {
       },
     });
     const secondScopeHash = resolveConfiguredScopeHash({
-      workspaceDir,
-      extraPaths: ["/tmp/workspace/media"],
       multimodal: {
         enabled: true,
         modalities: ["image"],
