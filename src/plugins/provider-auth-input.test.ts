@@ -279,6 +279,23 @@ describe("maybeApplyApiKeyFromOption", () => {
     expect(result).toBeUndefined();
     expect(setCredential).not.toHaveBeenCalled();
   });
+
+  it("rejects malformed command-shaped option keys before storing them", async () => {
+    const setCredential = vi.fn(async () => undefined);
+
+    await expect(
+      maybeApplyApiKeyFromOption({
+        token:
+          "openclaw onboard --non-interactive --auth-choice=zai-coding-global --zai-api-key $ZAI_API_KEY",
+        tokenProvider: "zai",
+        expectedProviders: ["zai"],
+        normalize: normalizeApiKeyInput,
+        validate: validateApiKeyInput,
+        setCredential,
+      }),
+    ).rejects.toThrow("Paste the API key value, not an OpenClaw onboarding command.");
+    expect(setCredential).not.toHaveBeenCalled();
+  });
 });
 
 describe("ensureApiKeyFromEnvOrPrompt", () => {
