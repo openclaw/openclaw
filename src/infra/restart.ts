@@ -340,12 +340,39 @@ function formatRestartSessionKeyForLog(value: string | undefined): string {
   return `<redacted:${fingerprint}>`;
 }
 
+function isRestartAuditSensitiveKey(key: string): boolean {
+  return /(?:session[_-]?key|authorization|token|secret|credential|api[_-]?key|cookie)/i.test(key);
+}
+
+function sanitizeRestartAuditValueForStorage(value: unknown, keyHint?: string): unknown {
+  if (typeof value === "string") {
+    if (keyHint && /session[_-]?key/i.test(keyHint)) {
+      return formatRestartSessionKeyForLog(value);
+    }
+    if (keyHint && isRestartAuditSensitiveKey(keyHint)) {
+      return "<redacted>";
+    }
+    return value;
+  }
+  if (value === null || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map((entry) => sanitizeRestartAuditValueForStorage(entry, keyHint));
+  }
+  const sanitized: Record<string, unknown> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    sanitized[key] = sanitizeRestartAuditValueForStorage(entry, key);
+  }
+  return sanitized;
+}
+
 function serializeRestartAuditJson(value: unknown): string | null {
   if (value === undefined || value === null) {
     return null;
   }
   try {
-    const text = JSON.stringify(value);
+    const text = JSON.stringify(sanitizeRestartAuditValueForStorage(value));
     return text.length > 20_000 ? `${text.slice(0, 20_000)}…` : text;
   } catch {
     return JSON.stringify({ error: "unserializable" });
@@ -398,7 +425,10 @@ function writeGatewayRestartAuditEventSync(opts: {
             preflight_json: preflightJson,
             reason: normalizeRestartIntentReason(opts.reason) ?? null,
             session_key:
-              normalizeRestartAuditString(opts.sessionKey ?? opts.audit?.sessionKey, 512) ?? null,
+              formatRestartSessionKeyForLog(opts.sessionKey ?? opts.audit?.sessionKey) ===
+              "unspecified"
+                ? null
+                : formatRestartSessionKeyForLog(opts.sessionKey ?? opts.audit?.sessionKey),
             source: normalizeRestartAuditString(opts.source ?? opts.audit?.source) ?? null,
           }),
         );
