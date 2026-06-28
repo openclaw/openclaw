@@ -23,12 +23,25 @@ import {
   messageAction,
 } from "./template-messages.js";
 
+const loneHighSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
+
 describe("createConfirmTemplate", () => {
   it("truncates text to 240 characters", () => {
     const longText = "x".repeat(300);
     const template = createConfirmTemplate(longText, messageAction("Yes"), messageAction("No"));
 
     expect((template.template as { text: string }).text.length).toBe(240);
+  });
+
+  it("drops a surrogate-pair emoji from fallback altText instead of splitting it", () => {
+    const template = createConfirmTemplate(
+      `${"x".repeat(399)}😀`,
+      messageAction("Yes"),
+      messageAction("No"),
+    );
+
+    expect(template.altText).toBe("x".repeat(399));
+    expect(loneHighSurrogate.test(template.altText)).toBe(false);
   });
 });
 
@@ -45,6 +58,25 @@ describe("createButtonTemplate", () => {
     const template = createButtonTemplate(longTitle, "Text", [messageAction("OK")]);
 
     expect((template.template as { title: string }).title.length).toBe(40);
+  });
+
+  it("drops a surrogate-pair emoji from the title instead of splitting it", () => {
+    // 39 chars + an emoji land the truncation boundary inside the surrogate pair;
+    // a raw code-unit slice would keep only the lone high surrogate.
+    const template = createButtonTemplate(`${"x".repeat(39)}😀`, "Text", [messageAction("OK")]);
+    const title = (template.template as { title: string }).title;
+
+    expect(title).toBe("x".repeat(39));
+    expect(loneHighSurrogate.test(title)).toBe(false);
+  });
+
+  it("drops a surrogate-pair emoji from explicit altText instead of splitting it", () => {
+    const template = createButtonTemplate("Title", "Text", [messageAction("OK")], {
+      altText: `${"x".repeat(399)}😀`,
+    });
+
+    expect(template.altText).toBe("x".repeat(399));
+    expect(loneHighSurrogate.test(template.altText)).toBe(false);
   });
 
   it("truncates text to 60 chars when no thumbnail is provided", () => {
@@ -96,6 +128,17 @@ describe("createCarouselColumn", () => {
     });
 
     expect(column.text.length).toBe(60);
+  });
+
+  it("drops a surrogate-pair emoji from the title instead of splitting it", () => {
+    const column = createCarouselColumn({
+      title: `${"x".repeat(39)}😀`,
+      text: "Text",
+      actions: [messageAction("OK")],
+    });
+
+    expect(column.title).toBe("x".repeat(39));
+    expect(loneHighSurrogate.test(column.title ?? "")).toBe(false);
   });
 
   it("does not split an emoji grapheme at the 60-code-unit boundary", () => {
@@ -164,6 +207,16 @@ describe("carousel column limits", () => {
   ])("limits columns to 10", ({ createTemplate }) => {
     const template = createTemplate();
     expect((template.template as { columns: unknown[] }).columns.length).toBe(10);
+  });
+
+  it("drops a surrogate-pair emoji from image-carousel altText instead of splitting it", () => {
+    const template = createImageCarousel(
+      [createImageCarouselColumn("https://example.com/0.jpg", messageAction("View"))],
+      `${"x".repeat(399)}😀`,
+    );
+
+    expect(template.altText).toBe("x".repeat(399));
+    expect(loneHighSurrogate.test(template.altText)).toBe(false);
   });
 });
 
