@@ -5,6 +5,12 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 
 const MIN_DUPLICATE_TEXT_LENGTH = 10;
 const MIN_REVERSE_SUBSTRING_DUPLICATE_RATIO = 0.5;
+const MAX_POST_TOOL_SEND_META_ACK_LENGTH = 80;
+const POST_TOOL_SEND_META_ACK_PATTERNS: readonly RegExp[] = [
+  /^(?:已发(?:送|出|完毕)?|回复已发(?:送|出)?|主回复已发|消息已发(?:送|出)?)(?:[\s,，。.!！:：-]*(?:[#＃][\p{L}\p{N}_-]+|\d+))?[\s。.!！]*$/iu,
+  /^(?:核心回答如下|总结如下|答案如下|不再追加(?:内容|回复)?)[\s。.!！:：]*$/u,
+  /^(?:sent(?:\s+(?:above|already|[#＃][\p{L}\p{N}_-]+))?|posted|done|ok(?:ay)?|roger|got\s+it|ack(?:nowledged)?|replied\s+above)[\s。.!！]*$/iu,
+];
 
 /**
  * Normalize text for duplicate comparison.
@@ -18,6 +24,14 @@ export function normalizeTextForComparison(text: string): string {
     .replace(/\p{Emoji_Presentation}|\p{Extended_Pictographic}/gu, "")
     .replace(/\s+/g, " ")
     .trim();
+}
+
+export function isPostToolSendMetaAck(text: string): boolean {
+  const normalized = normalizeTextForComparison(text);
+  if (!normalized || normalized.length > MAX_POST_TOOL_SEND_META_ACK_LENGTH) {
+    return false;
+  }
+  return POST_TOOL_SEND_META_ACK_PATTERNS.some((pattern) => pattern.test(normalized));
 }
 
 /** Compare already-normalized message text against prior sends. */

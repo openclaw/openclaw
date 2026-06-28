@@ -272,6 +272,30 @@ describe("resolveFollowupDeliveryPayloads", () => {
     ).toEqual([{ text: "hello world!" }]);
   });
 
+  it("drops short trailing meta acknowledgements after a same-route message tool send", () => {
+    expect(
+      resolveFollowupDeliveryPayloads({
+        cfg: baseConfig,
+        payloads: [
+          { text: "已发 #22141" },
+          { text: "Sent above" },
+          { text: "核心回答如下" },
+          { text: "OK" },
+        ],
+        messageProvider: "telegram",
+        originatingTo: "telegram:123",
+        sentTargets: [
+          {
+            tool: "message",
+            provider: "telegram",
+            to: "telegram:123",
+            text: "完整主回复内容已经通过 message tool 发出",
+          },
+        ],
+      }),
+    ).toStrictEqual([]);
+  });
+
   it("dedupes duplicate replies when a messaging tool already sent to the same provider and target", () => {
     expect(
       resolveFollowupDeliveryPayloads({

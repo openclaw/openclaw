@@ -64,6 +64,7 @@ export { sanitizeSessionMessagesImages } from "./embedded-agent-helpers/images.j
 export {
   isMessagingToolDuplicate,
   isMessagingToolDuplicateNormalized,
+  isPostToolSendMetaAck,
   normalizeTextForComparison,
 } from "./embedded-agent-helpers/messaging-dedupe.js";
 
