@@ -11,7 +11,7 @@ import type {
 import type { AgentModelConfig, AgentSandboxConfig } from "./types.agents-shared.js";
 import type { DmScope, HumanDelayConfig, IdentityConfig } from "./types.base.js";
 import type { GroupChatConfig } from "./types.messages.js";
-import type { SkillFilterMergeConfig, SkillsLimitsConfig } from "./types.skills.js";
+import type { SkillsLimitsConfig } from "./types.skills.js";
 import type { AgentToolsConfig, MemorySearchConfig } from "./types.tools.js";
 import type { TtsConfig } from "./types.tts.js";
 
@@ -117,7 +117,12 @@ export type AgentConfig = {
   /** Optional allowlist of skills for this agent; omitting it inherits agents.defaults.skills when set, and an explicit list replaces defaults instead of merging. */
   skills?: string[];
   /** Optional delta applied to agents.defaults.skills when skills is omitted. */
-  skillsMerge?: SkillFilterMergeConfig;
+  skillsMerge?: {
+    /** Skill names to append to the inherited filter. */
+    add?: string[];
+    /** Skill names to remove from the inherited filter after additions are applied. */
+    remove?: string[];
+  };
   memorySearch?: MemorySearchConfig;
   /** Human-like delay between block replies for this agent. */
   humanDelay?: HumanDelayConfig;
