@@ -650,6 +650,362 @@ describe("createConfiguredOllamaCompatStreamWrapper", () => {
       },
     );
   });
+
+  it("skips unreadable native Ollama tool schemas while preserving healthy siblings", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const model = {
+          api: "ollama",
+          provider: "ollama",
+          id: "qwen3:32b",
+          contextWindow: 131072,
+        };
+        const unreadableProperties = new Proxy(
+          {},
+          {
+            ownKeys() {
+              throw new Error("properties unavailable");
+            },
+          },
+        );
+        const unreadableParameters = Object.defineProperties(
+          {},
+          {
+            name: { value: "broken_parameters" },
+            description: { value: "broken parameters" },
+            parameters: {
+              get() {
+                throw new Error("parameters unavailable");
+              },
+            },
+          },
+        );
+        const revoked = Proxy.revocable({}, {});
+        revoked.revoke();
+
+        const stream = await Promise.resolve(
+          streamFn(
+            model as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+              tools: [
+                {
+                  name: "broken",
+                  description: "broken",
+                  parameters: {
+                    type: "object",
+                    properties: unreadableProperties,
+                  },
+                },
+                unreadableParameters,
+                {
+                  name: "revoked",
+                  description: "revoked",
+                  parameters: revoked.proxy,
+                },
+                {
+                  name: "search",
+                  description: "search",
+                  parameters: {
+                    type: "object",
+                    properties: {
+                      query: { type: "string" },
+                    },
+                    required: ["query"],
+                  },
+                },
+              ],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          tools?: Array<{ function?: { name?: string } }>;
+        };
+        expect(requestBody.tools?.map((tool) => tool.function?.name)).toEqual(["search"]);
+      },
+    );
+  });
+
+  it("preserves large native Ollama scalar schema arrays", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const model = {
+          api: "ollama",
+          provider: "ollama",
+          id: "qwen3:32b",
+          contextWindow: 131072,
+        };
+
+        const stream = await Promise.resolve(
+          streamFn(
+            model as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+              tools: [
+                {
+                  name: "oversized",
+                  description: "oversized",
+                  parameters: {
+                    type: "object",
+                    properties: {
+                      choice: {
+                        type: "string",
+                        enum: Array.from({ length: 129 }, (_value, index) => `value-${index}`),
+                      },
+                    },
+                    required: ["choice"],
+                  },
+                },
+                {
+                  name: "search",
+                  description: "search",
+                  parameters: {
+                    type: "object",
+                    properties: {
+                      query: { type: "string" },
+                    },
+                    required: ["query"],
+                  },
+                },
+              ],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          tools?: Array<{
+            function?: {
+              name?: string;
+              parameters?: {
+                properties?: {
+                  choice?: { enum?: string[] };
+                };
+              };
+            };
+          }>;
+        };
+        expect(requestBody.tools?.map((tool) => tool.function?.name)).toEqual([
+          "oversized",
+          "search",
+        ]);
+        expect(requestBody.tools?.[0]?.function?.parameters?.properties?.choice?.enum).toHaveLength(
+          129,
+        );
+      },
+    );
+  });
+
+  it("preserves large native Ollama tool schema property maps", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const model = {
+          api: "ollama",
+          provider: "ollama",
+          id: "qwen3:32b",
+          contextWindow: 131072,
+        };
+        const properties = Object.fromEntries(
+          Array.from({ length: 257 }, (_value, index) => [`field_${index}`, { type: "string" }]),
+        );
+
+        const stream = await Promise.resolve(
+          streamFn(
+            model as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+              tools: [
+                {
+                  name: "wide_schema",
+                  description: "wide schema",
+                  parameters: {
+                    type: "object",
+                    properties,
+                  },
+                },
+              ],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          tools?: Array<{
+            function?: {
+              name?: string;
+              parameters?: { properties?: Record<string, unknown> };
+            };
+          }>;
+        };
+        expect(requestBody.tools?.[0]?.function?.name).toBe("wide_schema");
+        expect(
+          Object.keys(requestBody.tools?.[0]?.function?.parameters?.properties ?? {}),
+        ).toHaveLength(257);
+      },
+    );
+  });
+
+  it("preserves shared native Ollama tool subschema instances", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const model = {
+          api: "ollama",
+          provider: "ollama",
+          id: "qwen3:32b",
+          contextWindow: 131072,
+        };
+        const sharedStringSchema = { type: "string" };
+
+        const stream = await Promise.resolve(
+          streamFn(
+            model as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+              tools: [
+                {
+                  name: "route",
+                  description: "route",
+                  parameters: {
+                    type: "object",
+                    properties: {
+                      from: sharedStringSchema,
+                      to: sharedStringSchema,
+                    },
+                    required: ["from", "to"],
+                  },
+                },
+              ],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          tools?: Array<{
+            function?: {
+              name?: string;
+              parameters?: { properties?: Record<string, { type?: string }> };
+            };
+          }>;
+        };
+        expect(requestBody.tools?.[0]?.function?.name).toBe("route");
+        expect(requestBody.tools?.[0]?.function?.parameters?.properties).toMatchObject({
+          from: { type: "string" },
+          to: { type: "string" },
+        });
+      },
+    );
+  });
+
+  it("skips cyclic native Ollama tool schemas while preserving healthy siblings", async () => {
+    await withMockNdjsonFetch(
+      [
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":"ok"},"done":false}',
+        '{"model":"m","created_at":"t","message":{"role":"assistant","content":""},"done":true,"prompt_eval_count":1,"eval_count":1}',
+      ],
+      async (fetchMock) => {
+        const streamFn = createOllamaStreamFn("http://ollama-host:11434");
+        const model = {
+          api: "ollama",
+          provider: "ollama",
+          id: "qwen3:32b",
+          contextWindow: 131072,
+        };
+        const cyclicSchema: Record<string, unknown> = {
+          type: "object",
+          properties: {
+            value: { type: "string" },
+          },
+        };
+        cyclicSchema.$defs = { self: cyclicSchema };
+
+        const stream = await Promise.resolve(
+          streamFn(
+            model as never,
+            {
+              messages: [{ role: "user", content: "hello" }],
+              tools: [
+                {
+                  name: "cyclic",
+                  description: "cyclic",
+                  parameters: cyclicSchema,
+                },
+                {
+                  name: "search",
+                  description: "search",
+                  parameters: {
+                    type: "object",
+                    properties: {
+                      query: { type: "string" },
+                    },
+                    required: ["query"],
+                  },
+                },
+              ],
+            } as never,
+            {} as never,
+          ),
+        );
+
+        await collectStreamEvents(stream);
+
+        const requestInit = getGuardedFetchCall(fetchMock).init ?? {};
+        if (typeof requestInit.body !== "string") {
+          throw new Error("Expected string request body");
+        }
+        const requestBody = JSON.parse(requestInit.body) as {
+          tools?: Array<{ function?: { name?: string } }>;
+        };
+        expect(requestBody.tools?.map((tool) => tool.function?.name)).toEqual(["search"]);
+      },
+    );
+  });
 });
 
 describe("convertToOllamaMessages", () => {

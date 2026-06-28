@@ -60,9 +60,16 @@ const GARBLED_VISIBLE_TEXT_MODEL_RE = /\b(?:glm|kimi)\b/i;
 const GARBLED_VISIBLE_TEXT_MIN_CHARS = 80;
 const GARBLED_VISIBLE_TEXT_SYMBOL_RE = /[$#%&="'_~`^|\\/*+\-[\]{}()<>:;,.!?]/gu;
 const LETTER_OR_DIGIT_RE = /[\p{L}\p{N}]/gu;
+const OLLAMA_TOOL_SCHEMA_MAX_DEPTH = 12;
+const OLLAMA_TOOL_SCHEMA_MAX_NODES = 8192;
 
 type OllamaStreamCooperativeScheduler = {
   afterEvent: () => Promise<void>;
+};
+
+type OllamaToolSchemaReadState = {
+  nodes: number;
+  stack: WeakSet<object>;
 };
 
 function throwIfOllamaStreamAborted(signal?: AbortSignal): void {
@@ -781,15 +788,132 @@ function normalizeOllamaCompatMessageToolArgs(payloadRecord: Record<string, unkn
   }
 }
 
+function readSchemaProperty(schema: Record<string, unknown>, key: string): unknown {
+  try {
+    return schema[key];
+  } catch {
+    return undefined;
+  }
+}
+
+function readRecordEntries(record: Record<string, unknown>): Array<[string, unknown]> | undefined {
+  const entries: Array<[string, unknown]> = [];
+  try {
+    for (const key in record) {
+      if (!Object.hasOwn(record, key)) {
+        continue;
+      }
+      entries.push([key, record[key]]);
+    }
+    return entries;
+  } catch {
+    return undefined;
+  }
+}
+
+function readArrayEntries(value: unknown[]): Array<[number, unknown]> | undefined {
+  const entries: Array<[number, unknown]> = [];
+  try {
+    for (let index = 0; index < value.length; index += 1) {
+      entries.push([index, value[index]]);
+    }
+    return entries;
+  } catch {
+    return undefined;
+  }
+}
+
+function enterOllamaSchemaObject(value: object, state: OllamaToolSchemaReadState): boolean {
+  if (state.stack.has(value)) {
+    return false;
+  }
+  state.nodes += 1;
+  if (state.nodes > OLLAMA_TOOL_SCHEMA_MAX_NODES) {
+    return false;
+  }
+  state.stack.add(value);
+  return true;
+}
+
+function leaveOllamaSchemaObject(value: object, state: OllamaToolSchemaReadState): void {
+  state.stack.delete(value);
+}
+
+function copyOllamaSchemaJsonValue(
+  value: unknown,
+  depth: number,
+  state: OllamaToolSchemaReadState,
+): unknown {
+  if (
+    value == null ||
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean"
+  ) {
+    return value;
+  }
+  if (depth > OLLAMA_TOOL_SCHEMA_MAX_DEPTH) {
+    return undefined;
+  }
+  if (Array.isArray(value)) {
+    if (!enterOllamaSchemaObject(value, state)) {
+      return undefined;
+    }
+    try {
+      const entries = readArrayEntries(value);
+      if (!entries) {
+        return undefined;
+      }
+      const result: unknown[] = [];
+      for (const [_index, entry] of entries) {
+        const copied = copyOllamaSchemaJsonValue(entry, depth + 1, state);
+        if (copied === undefined && (Array.isArray(entry) || isRecord(entry))) {
+          return undefined;
+        }
+        result.push(copied);
+      }
+      return result;
+    } finally {
+      leaveOllamaSchemaObject(value, state);
+    }
+  }
+  if (isRecord(value)) {
+    if (!enterOllamaSchemaObject(value, state)) {
+      return undefined;
+    }
+    try {
+      const entries = readRecordEntries(value);
+      if (!entries) {
+        return undefined;
+      }
+      const result: Record<string, unknown> = {};
+      for (const [key, entry] of entries) {
+        const copied = copyOllamaSchemaJsonValue(entry, depth + 1, state);
+        if (copied !== undefined) {
+          result[key] = copied;
+        } else if (Array.isArray(entry) || isRecord(entry)) {
+          return undefined;
+        }
+      }
+      return result;
+    } finally {
+      leaveOllamaSchemaObject(value, state);
+    }
+  }
+  return undefined;
+}
+
 function inferOllamaSchemaType(schema: Record<string, unknown>): string | undefined {
-  if (schema.properties && isRecord(schema.properties)) {
+  const properties = readSchemaProperty(schema, "properties");
+  if (properties && isRecord(properties)) {
     return "object";
   }
-  if (schema.items) {
+  if (readSchemaProperty(schema, "items")) {
     return "array";
   }
-  if (Array.isArray(schema.enum) && schema.enum.length > 0) {
-    const values = schema.enum.filter((value) => value !== null);
+  const enumValues = readSchemaProperty(schema, "enum");
+  if (Array.isArray(enumValues) && enumValues.length > 0) {
+    const values = enumValues.filter((value) => value !== null);
     if (values.length > 0 && values.every((value) => typeof value === "string")) {
       return "string";
     }
@@ -801,7 +925,7 @@ function inferOllamaSchemaType(schema: Record<string, unknown>): string | undefi
     }
   }
   for (const unionKey of ["anyOf", "oneOf"] as const) {
-    const variants = schema[unionKey];
+    const variants = readSchemaProperty(schema, unionKey);
     if (!Array.isArray(variants)) {
       continue;
     }
@@ -830,50 +954,116 @@ function inferOllamaSchemaType(schema: Record<string, unknown>): string | undefi
   return undefined;
 }
 
-function normalizeOllamaToolSchema(schema: unknown, isRoot = false): Record<string, unknown> {
+function normalizeOllamaToolSchema(
+  schema: unknown,
+  isRoot = false,
+  depth = 0,
+  state: OllamaToolSchemaReadState = { nodes: 0, stack: new WeakSet() },
+): Record<string, unknown> | undefined {
   if (!isRecord(schema)) {
     return {
       type: "object",
       properties: {},
     };
   }
-
-  const normalized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(schema)) {
-    if (key === "properties" && isRecord(value)) {
-      normalized.properties = Object.fromEntries(
-        Object.entries(value).map(([propertyName, propertySchema]) => [
-          propertyName,
-          normalizeOllamaToolSchema(propertySchema),
-        ]),
-      );
-      continue;
-    }
-    if (key === "items") {
-      normalized.items = Array.isArray(value)
-        ? value.map((entry) => normalizeOllamaToolSchema(entry))
-        : normalizeOllamaToolSchema(value);
-      continue;
-    }
-    if ((key === "anyOf" || key === "oneOf" || key === "allOf") && Array.isArray(value)) {
-      normalized[key] = value.map((entry) => normalizeOllamaToolSchema(entry));
-      continue;
-    }
-    normalized[key] = value;
+  if (depth > OLLAMA_TOOL_SCHEMA_MAX_DEPTH) {
+    return undefined;
+  }
+  if (!enterOllamaSchemaObject(schema, state)) {
+    return undefined;
   }
 
-  const schemaType = normalized.type;
-  if (
-    typeof schemaType !== "string" &&
-    (!Array.isArray(schemaType) ||
-      !schemaType.some((entry) => typeof entry === "string" && entry !== "null"))
-  ) {
-    normalized.type = inferOllamaSchemaType(normalized) ?? (isRoot ? "object" : "string");
+  try {
+    const entries = readRecordEntries(schema);
+    if (!entries) {
+      return undefined;
+    }
+    const normalized: Record<string, unknown> = {};
+    for (const [key, value] of entries) {
+      if (key === "properties" && isRecord(value)) {
+        const propertyEntries = readRecordEntries(value);
+        if (!propertyEntries) {
+          return undefined;
+        }
+        const normalizedProperties: Record<string, unknown> = {};
+        for (const [propertyName, propertySchema] of propertyEntries) {
+          const normalizedProperty = normalizeOllamaToolSchema(
+            propertySchema,
+            false,
+            depth + 1,
+            state,
+          );
+          if (!normalizedProperty) {
+            return undefined;
+          }
+          normalizedProperties[propertyName] = normalizedProperty;
+        }
+        normalized.properties = normalizedProperties;
+        continue;
+      }
+      if (key === "items") {
+        if (Array.isArray(value)) {
+          const itemEntries = readArrayEntries(value);
+          if (!itemEntries) {
+            return undefined;
+          }
+          const normalizedItems: Array<Record<string, unknown>> = [];
+          for (const [_index, entry] of itemEntries) {
+            const normalizedItem = normalizeOllamaToolSchema(entry, false, depth + 1, state);
+            if (!normalizedItem) {
+              return undefined;
+            }
+            normalizedItems.push(normalizedItem);
+          }
+          normalized.items = normalizedItems;
+        } else {
+          const normalizedItems = normalizeOllamaToolSchema(value, false, depth + 1, state);
+          if (!normalizedItems) {
+            return undefined;
+          }
+          normalized.items = normalizedItems;
+        }
+        continue;
+      }
+      if ((key === "anyOf" || key === "oneOf" || key === "allOf") && Array.isArray(value)) {
+        const variantEntries = readArrayEntries(value);
+        if (!variantEntries) {
+          return undefined;
+        }
+        const normalizedVariants: Array<Record<string, unknown>> = [];
+        for (const [_index, entry] of variantEntries) {
+          const normalizedVariant = normalizeOllamaToolSchema(entry, false, depth + 1, state);
+          if (!normalizedVariant) {
+            return undefined;
+          }
+          normalizedVariants.push(normalizedVariant);
+        }
+        normalized[key] = normalizedVariants;
+        continue;
+      }
+      const copied = copyOllamaSchemaJsonValue(value, depth + 1, state);
+      if (copied !== undefined) {
+        normalized[key] = copied;
+      } else if (Array.isArray(value) || isRecord(value)) {
+        return undefined;
+      }
+    }
+
+    const schemaType = readSchemaProperty(normalized, "type");
+    if (
+      typeof schemaType !== "string" &&
+      (!Array.isArray(schemaType) ||
+        !schemaType.some((entry) => typeof entry === "string" && entry !== "null"))
+    ) {
+      normalized.type = inferOllamaSchemaType(normalized) ?? (isRoot ? "object" : "string");
+    }
+    if (readSchemaProperty(normalized, "type") === "object" && !isRecord(normalized.properties)) {
+      normalized.properties = {};
+    }
+    return normalized;
+  } finally {
+    leaveOllamaSchemaObject(schema, state);
   }
-  if (normalized.type === "object" && !isRecord(normalized.properties)) {
-    normalized.properties = {};
-  }
-  return normalized;
 }
 
 type OllamaToolCallNameOptions = {
@@ -927,11 +1117,37 @@ function buildOllamaToolNameSet(tools: Tool[] | undefined): ReadonlySet<string> 
   }
   const names = new Set<string>();
   for (const tool of tools) {
-    if (typeof tool.name === "string" && tool.name.trim()) {
-      names.add(tool.name.trim());
+    const name = readToolStringField(tool, "name");
+    if (name?.trim()) {
+      names.add(name.trim());
     }
   }
   return names.size > 0 ? names : undefined;
+}
+
+function readToolStringField(tool: Tool, field: "description" | "name"): string | undefined {
+  try {
+    const value = (tool as unknown as Record<string, unknown>)[field];
+    return typeof value === "string" ? value : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function readToolParameters(tool: Tool): { ok: true; value: unknown } | { ok: false } {
+  try {
+    return { ok: true, value: tool.parameters };
+  } catch {
+    return { ok: false };
+  }
+}
+
+function safeNormalizeOllamaToolSchema(schema: unknown): Record<string, unknown> | undefined {
+  try {
+    return normalizeOllamaToolSchema(schema, true);
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeOllamaToolCallName(
@@ -1019,15 +1235,26 @@ function extractOllamaTools(tools: Tool[] | undefined): OllamaTool[] {
   }
   const result: OllamaTool[] = [];
   for (const tool of tools) {
-    if (typeof tool.name !== "string" || !tool.name) {
+    const name = readToolStringField(tool, "name");
+    if (!name) {
+      continue;
+    }
+    const rawParameters = readToolParameters(tool);
+    if (!rawParameters.ok) {
+      log.warn(`Skipping Ollama tool "${name}" because its input schema could not be read.`);
+      continue;
+    }
+    const parameters = safeNormalizeOllamaToolSchema(rawParameters.value);
+    if (!parameters) {
+      log.warn(`Skipping Ollama tool "${name}" because its input schema could not be read.`);
       continue;
     }
     result.push({
       type: "function",
       function: {
-        name: tool.name,
-        description: typeof tool.description === "string" ? tool.description : "",
-        parameters: normalizeOllamaToolSchema(tool.parameters, true),
+        name,
+        description: readToolStringField(tool, "description") ?? "",
+        parameters,
       },
     });
   }
