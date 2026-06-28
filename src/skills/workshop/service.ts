@@ -684,10 +684,17 @@ function assertCompleteSkillUpdateDraft(params: {
     "add the following subsection",
     "add this subsection",
   ];
+  const strongProposalLikeMarkers = [
+    /^#\s+.*\bupdate proposal\b/im,
+    /^#{2,}\s+proposed changes\s+to\s+`?skill\.md`?\b/im,
+  ];
   const proposalMarkerHits = proposalLikeMarkers.filter((marker) =>
     proposedBodyLower.includes(marker),
   ).length;
-  if (proposalMarkerHits >= 2) {
+  const hasStrongProposalMarker = strongProposalLikeMarkers.some((marker) =>
+    marker.test(proposedBody),
+  );
+  if (hasStrongProposalMarker || proposalMarkerHits >= 2) {
     throw new Error(
       "Skill update proposal content appears to be a delta/proposal note, " +
         "not a complete replacement SKILL.md. Revise the proposal with the full " +

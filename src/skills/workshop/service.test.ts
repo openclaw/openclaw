@@ -233,6 +233,55 @@ describe("skill workshop proposals", () => {
     expect((await inspectSkillProposal(proposal.record.id))?.record.status).toBe("pending");
   });
 
+  it("rejects update proposal wrappers with proposed changes to SKILL.md", async () => {
+    const workspaceDir = await makeWorkspace();
+    const skillDir = path.join(workspaceDir, "skills", "ppt-deck-builder");
+    await writeSkill({
+      dir: skillDir,
+      name: "ppt-deck-builder",
+      description: "Build and validate decks",
+      body: [
+        "# PPT Deck Builder",
+        "",
+        "Use a route-first workflow.",
+        "",
+        "## Route the request before editing slides",
+        "Keep mode selection here.",
+        "",
+        "## Optional visual support",
+        "Generate supporting visuals only when appropriate.",
+        "",
+        "## Validation",
+        "Render and inspect outputs.",
+        "",
+      ].join("\n"),
+    });
+    const proposal = await proposeUpdateSkill({
+      workspaceDir,
+      skillName: "ppt-deck-builder",
+      description: "Add image lane and evidence loop",
+      content: [
+        "# ppt-deck-builder update proposal: image lane + evidence-first artifact loop",
+        "",
+        "## Intent",
+        "Keep `ppt-deck-builder` as the primary deck skill while adding an optional image lane.",
+        "",
+        "## Proposed changes to `SKILL.md`",
+        "",
+        "### 1) Add a route under mode selection",
+        "Use this lane only when full-slide images are acceptable.",
+        "",
+      ].join("\n"),
+    });
+
+    await expect(
+      applySkillProposal({ workspaceDir, proposalId: proposal.record.id }),
+    ).rejects.toThrow("delta/proposal note, not a complete replacement SKILL.md");
+    await expect(fs.readFile(path.join(skillDir, "SKILL.md"), "utf8")).resolves.toContain(
+      "## Validation",
+    );
+  });
+
   it("applies complete update proposals that intentionally rewrite section structure", async () => {
     const workspaceDir = await makeWorkspace();
     const skillDir = path.join(workspaceDir, "skills", "sectioned-skill");
