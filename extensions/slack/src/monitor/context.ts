@@ -2,6 +2,7 @@
 import type { App } from "@slack/bolt";
 import { resolveDefaultAgentId } from "openclaw/plugin-sdk/agent-runtime";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
+import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
 import type {
   OpenClawConfig,
   SlackReactionNotificationMode,
@@ -97,6 +98,7 @@ export type SlackMonitorContext = {
   botToken: string;
   app: App;
   runtime: RuntimeEnv;
+  channelRuntime?: ChannelRuntimeSurface;
 
   botUserId: string;
   botId?: string;
@@ -184,6 +186,7 @@ export function createSlackMonitorContext(params: {
   botToken: string;
   app: App;
   runtime: RuntimeEnv;
+  channelRuntime?: ChannelRuntimeSurface;
 
   botUserId: string;
   botId?: string;
@@ -601,6 +604,7 @@ export function createSlackMonitorContext(params: {
     botToken: params.botToken,
     app: params.app,
     runtime: params.runtime,
+    channelRuntime: params.channelRuntime,
     botUserId: params.botUserId,
     botId: params.botId,
     teamId: params.teamId,

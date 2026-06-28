@@ -378,6 +378,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts = {}) {
     botToken,
     app,
     runtime,
+    channelRuntime: opts.channelRuntime,
     botUserId,
     botId,
     teamId,

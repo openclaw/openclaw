@@ -68,6 +68,7 @@ import {
   resolveStorePath,
   updateLastRoute,
 } from "../../config/sessions.js";
+import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
 import { readSessionUpdatedAt } from "../../config/sessions/session-accessor.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
 import {
@@ -87,6 +88,14 @@ import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.
 import type { PluginRuntime } from "./types.js";
 
 export function createRuntimeChannel(): PluginRuntime["channel"] {
+  const sessionRuntime = {
+    resolveStorePath,
+    readSessionUpdatedAt,
+    recordSessionMetaFromInbound,
+    recordInboundSession,
+    updateLastRoute,
+    resolveEntryResetFreshness: resolveSessionEntryResetFreshness,
+  };
   const channelRuntime = {
     text: {
       chunkByNewline,
@@ -143,13 +152,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       record: recordChannelActivity,
       get: getChannelActivity,
     },
-    session: {
-      resolveStorePath,
-      readSessionUpdatedAt,
-      recordSessionMetaFromInbound,
-      recordInboundSession,
-      updateLastRoute,
-    },
+    session: sessionRuntime,
     mentions: {
       buildMentionRegexes,
       matchesMentionPatterns,
